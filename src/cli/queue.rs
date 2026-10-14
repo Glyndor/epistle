@@ -111,7 +111,7 @@ pub(super) fn run(
 			e.release(now);
 		}),
 		QueueCli::Destinations { json } => destinations::list(&spool, now, json, out),
-		QueueCli::ReleaseDestination(target) => destinations::release(&spool, &target, out),
+		QueueCli::ReleaseDestination(target) => destinations::release(&spool, &target, now, out),
 		QueueCli::Remove { id, yes } => {
 			let envelope = match spool.load_envelope(id) {
 				Ok(envelope) => envelope,

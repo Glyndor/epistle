@@ -19,7 +19,7 @@
 //! An entry is settled ([`Worker::finish`]) once every job it had in the
 //! scan has ended: expiry, failure reports, the delay warning, removal.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
@@ -29,9 +29,10 @@ use uuid::Uuid;
 use super::Worker;
 use super::claims::{Claim, Full, Guarded};
 use super::conversation::Conversation;
-use super::waiting::{Job, SenderJobs, Waiting};
-use crate::queue::backoff;
+use super::waiting::{Job, Sender, SenderJobs, Waiting};
+use crate::queue::backoff::Holds;
 use crate::queue::client::DeliveryError;
+use crate::queue::destination::Destination;
 use crate::smtp::address::Address;
 use crate::storage::{RecipientStatus, SpoolEntry};
 
@@ -72,24 +73,6 @@ impl<'a> Schedule<'a> {
 	}
 }
 
-/// Whose message an entry is, for the per-sender share of the slots and
-/// of the holds: the account the server recorded as submitting it when it
-/// accepted the message (from the authenticated session or API key, never
-/// from anything the client wrote). Mail the server sends on its own
-/// (bounces, delay warnings, auto-replies, forwards, alerts) has no account
-/// and shares one system bucket, with one share like any account: nothing
-/// a remote sender writes, such as the reverse path, picks the bucket.
-pub(super) fn sender_of(envelope: &crate::storage::Envelope) -> String {
-	match envelope
-		.account
-		.as_deref()
-		.filter(|account| !account.is_empty())
-	{
-		Some(account) => format!("account:{account}"),
-		None => "system".to_string(),
-	}
-}
-
 /// The next conversation of `running` to end, or `None` when none runs.
 pub(super) fn next_done<'a, 'b>(
 	running: &'b mut Vec<Running<'a>>,
@@ -113,13 +96,10 @@ impl Worker {
 	/// in `schedule` yet, grouped by domain.
 	pub(super) fn scan<'a>(&'a self, schedule: &mut Schedule<'a>) -> std::io::Result<()> {
 		let now = self.now_epoch();
-		// Holds that cannot be read hold everything.
-		let Some(holds) = self.holds() else {
-			return Ok(());
-		};
-		// The domains some mail still waits for: a hold that ran out on any
-		// other has nothing left to slow down.
-		let mut queued: HashSet<String> = HashSet::new();
+		// Read every entry first: the holds come from all of them, entries
+		// that are not due included, before any is scheduled.
+		let mut holds = Holds::default();
+		let mut due_entries = Vec::new();
 		for id in self.spool.list()? {
 			// The CLI edits entries on disk while this runs, so `held` and
 			// `next_attempt` are read from the file on every scan, never kept
@@ -131,80 +111,88 @@ impl Worker {
 					continue;
 				}
 			};
-			for recipient in envelope.pending() {
-				if let Some((_, domain)) = recipient.rsplit_once('@') {
-					queued.insert(domain.to_ascii_lowercase());
-				}
-			}
+			holds.add_envelope(&envelope);
 			// Skip entries already in hand, held, or still backing off.
-			if schedule.rounds.contains_key(&id)
-				|| envelope.held.is_some()
-				|| envelope.next_attempt > now
+			if !schedule.rounds.contains_key(&id)
+				&& envelope.held.is_none()
+				&& envelope.next_attempt <= now
 			{
-				continue;
-			}
-			// A sender on hold (its mail filled the room for holds) waits.
-			let sender = sender_of(&envelope);
-			if backoff::is_held(&holds, &backoff::sender_key(&sender), now) {
-				continue;
-			}
-			let due: Vec<String> = envelope
-				.due(now)
-				.into_iter()
-				.filter(|recipient| !self.claims.holds(id, recipient))
-				.collect();
-			if due.is_empty() && self.claims.holds_any(id) {
-				// Another pass has this entry in hand and will settle it.
-				continue;
-			}
-			let count = due.len();
-			let due = self.skip_suppressed(id, &envelope, due)?;
-			let mut changed = due.len() != count;
-			let mut by_domain: Vec<(String, Vec<String>)> = Vec::new();
-			let mut index: HashMap<String, usize> = HashMap::new();
-			let mut unparseable = Vec::new();
-			for recipient in due {
-				let Ok(address) = Address::parse(&recipient) else {
-					unparseable.push(recipient);
-					continue;
-				};
-				let domain = address.domain().to_ascii_lowercase();
-				// A destination on hold is not contacted, and its recipients
-				// wait without an attempt counted.
-				if backoff::is_held(&holds, &domain, now) {
-					continue;
-				}
-				match index.get(&domain) {
-					Some(&at) => by_domain[at].1.push(recipient),
-					None => {
-						index.insert(domain.clone(), by_domain.len());
-						by_domain.push((domain, vec![recipient]));
-					}
-				}
-			}
-			if !unparseable.is_empty() {
-				self.refuse_unparseable(id, &unparseable)?;
-				changed = true;
-			}
-			if by_domain.is_empty() && !changed && count > 0 {
-				// Everything due waits for a destination on hold.
-				continue;
-			}
-			if by_domain.is_empty() {
-				self.settle(schedule, id, false);
-				continue;
-			}
-			schedule.rounds.insert(id, (by_domain.len(), false));
-			for (domain, recipients) in by_domain {
-				schedule.waiting.push_back(Job {
-					id,
-					domain,
-					sender: sender.clone(),
-					recipients,
-				});
+				due_entries.push((id, envelope));
 			}
 		}
-		self.prune_holds(&holds, &queued, now);
+		*self.holds() = holds.clone();
+		for (id, envelope) in due_entries {
+			self.queue_entry(schedule, &holds, id, &envelope, now)?;
+		}
+		Ok(())
+	}
+
+	/// Queue the due recipients of one entry, one job per destination,
+	/// leaving out those whose destination is on hold.
+	fn queue_entry<'a>(
+		&'a self,
+		schedule: &mut Schedule<'a>,
+		holds: &Holds,
+		id: Uuid,
+		envelope: &crate::storage::Envelope,
+		now: u64,
+	) -> std::io::Result<()> {
+		let due: Vec<String> = envelope
+			.due(now)
+			.into_iter()
+			.filter(|recipient| !self.claims.holds(id, recipient))
+			.collect();
+		if due.is_empty() && self.claims.holds_any(id) {
+			// Another pass has this entry in hand and will settle it.
+			return Ok(());
+		}
+		let count = due.len();
+		let due = self.skip_suppressed(id, envelope, due)?;
+		let mut changed = due.len() != count;
+		let mut by_destination: Vec<(Destination, Vec<String>)> = Vec::new();
+		let mut index: HashMap<Destination, usize> = HashMap::new();
+		let mut unparseable = Vec::new();
+		for recipient in due {
+			if Address::parse(&recipient).is_err() {
+				unparseable.push(recipient);
+				continue;
+			}
+			let destination = Destination::of_recipient(&recipient);
+			// A destination on hold is not contacted, and its recipients
+			// wait without an attempt counted.
+			if holds.held(&destination, now).is_some() {
+				continue;
+			}
+			match index.get(&destination) {
+				Some(&at) => by_destination[at].1.push(recipient),
+				None => {
+					index.insert(destination.clone(), by_destination.len());
+					by_destination.push((destination, vec![recipient]));
+				}
+			}
+		}
+		if !unparseable.is_empty() {
+			self.refuse_unparseable(id, &unparseable)?;
+			changed = true;
+		}
+		if by_destination.is_empty() && !changed && count > 0 {
+			// Everything due waits for a destination on hold.
+			return Ok(());
+		}
+		if by_destination.is_empty() {
+			self.settle(schedule, id, false);
+			return Ok(());
+		}
+		schedule.rounds.insert(id, (by_destination.len(), false));
+		let sender = Sender::of(envelope);
+		for (destination, recipients) in by_destination {
+			schedule.waiting.push_back(Job {
+				id,
+				domain: destination,
+				sender: sender.clone(),
+				recipients,
+			});
+		}
 		Ok(())
 	}
 
@@ -226,21 +214,13 @@ impl Worker {
 			return;
 		}
 		let now = self.now_epoch();
-		let Some(holds) = self.holds() else {
-			return;
-		};
+		// Nothing below writes the holds: they are read under the lock.
+		let holds = self.holds();
 		let mut aside = Vec::new();
 		while self.claims.has_room(self.limits) {
 			let Some((sender, mut jobs)) = schedule.waiting.next_sender() else {
 				break;
 			};
-			if backoff::is_held(&holds, &backoff::sender_key(&sender), now) {
-				for job in jobs.by_domain.into_values().flatten() {
-					schedule.examined += 1;
-					self.job_ended(schedule, job.id, false);
-				}
-				continue;
-			}
 			match self.start_next(schedule, &mut jobs, &holds, now) {
 				true => schedule.waiting.put_back(sender, jobs, true),
 				false => aside.push((sender, jobs)),
@@ -258,7 +238,7 @@ impl Worker {
 		&'a self,
 		schedule: &mut Schedule<'a>,
 		jobs: &mut SenderJobs,
-		holds: &crate::storage::DestinationHolds,
+		holds: &Holds,
 		now: u64,
 	) -> bool {
 		let mut at_cap = Vec::new();
@@ -269,7 +249,7 @@ impl Worker {
 			let mut waiting = jobs.by_domain.remove(&domain).unwrap_or_default();
 			// A conversation of this pass may have put the destination on
 			// hold since its jobs were queued.
-			if backoff::is_held(holds, &domain, now) {
+			if holds.held(&domain, now).is_some() {
 				for job in waiting {
 					schedule.examined += 1;
 					self.job_ended(schedule, job.id, false);
@@ -321,7 +301,7 @@ impl Worker {
 		let taken = self.claims.take(
 			self.limits,
 			job.id,
-			(&job.domain, &job.sender),
+			(job.domain.as_str(), job.sender.as_str()),
 			&job.recipients,
 		);
 		let claim = match taken {
@@ -351,7 +331,11 @@ impl Worker {
 			return Started::Dropped(job.id);
 		}
 		Started::Running(Box::pin(async move {
-			let talk = Guarded(Box::pin(self.converse(&entry, &job.domain, &recipients)));
+			let talk = Guarded(Box::pin(self.converse(
+				&entry,
+				job.domain.as_str(),
+				&recipients,
+			)));
 			let conversation = talk.await.unwrap_or_else(|()| {
 				tracing::error!(id = %job.id, domain = %job.domain, "outbound conversation panicked; its recipients wait for the next attempt");
 				let reason = DeliveryError::Transient("internal error during delivery".into());
@@ -377,7 +361,6 @@ impl Worker {
 		} = done;
 		let delivered = conversation.delivered();
 		let now = self.now_epoch();
-		self.pace(&job, &conversation, now);
 		match self.record(job.id, &entry, &conversation, now) {
 			Ok(()) => {}
 			// An operator removed the entry while it was in conversation.

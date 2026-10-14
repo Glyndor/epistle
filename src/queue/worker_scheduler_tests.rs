@@ -26,11 +26,26 @@ fn worker(dir: &std::path::Path) -> Worker {
 	Worker::new(spool, Arc::new(Broken), "mail.sender.example").with_concurrency(8, 1)
 }
 
-fn job(domain: &str, sender: &str) -> Job {
+/// The sender of a message `account` submitted.
+fn sender(account: &str) -> Sender {
+	let envelope: crate::storage::Envelope = serde_json::from_value(serde_json::json!({
+		"id": Uuid::now_v7(),
+		"reverse_path": "someone@sender.example",
+		"recipients": ["x@example.org"],
+		"attempts": 0,
+		"next_attempt": 0,
+		"require_tls": false,
+		"account": account,
+	}))
+	.expect("envelope");
+	Sender::of(&envelope)
+}
+
+fn job(domain: &str, account: &str) -> Job {
 	Job {
 		id: Uuid::now_v7(),
-		domain: domain.to_string(),
-		sender: sender.to_string(),
+		domain: Destination::new(domain),
+		sender: sender(account),
 		recipients: vec![format!("user@{domain}")],
 	}
 }
@@ -140,11 +155,9 @@ fn a_sender_at_its_share_is_set_aside_after_one_look() {
 	for n in 0..JOBS {
 		schedule
 			.waiting
-			.push_back(job(&format!("d{n}.example"), "account:flood"));
+			.push_back(job(&format!("d{n}.example"), "flood"));
 	}
-	schedule
-		.waiting
-		.push_back(job("ok.example", "account:other"));
+	schedule.waiting.push_back(job("ok.example", "other"));
 
 	for _ in 0..JOBS {
 		worker.fill(&mut schedule);
@@ -208,27 +221,57 @@ async fn a_conversation_that_panics_gives_back_its_slot_and_recipients() {
 #[test]
 fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let worker = worker(dir.path());
-	let busy = job("busy.example", "account:alice");
+	let mut worker = worker(dir.path());
+	worker.set_jitter(|| 1.0);
+	let mut ids = Vec::new();
+	for recipient in ["a@busy.example", "b@busy.example"] {
+		let id = worker
+			.spool
+			.store(
+				&AcceptedMessage {
+					reverse_path: "alice@sender.example".into(),
+					recipients: vec![recipient.into()],
+					data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+					require_tls: false,
+					mailbox: None,
+					tlsrpt_verified: false,
+					sender_verified: false,
+					no_dsn: Vec::new(),
+				},
+				Some("alice"),
+				&std::collections::BTreeMap::new(),
+			)
+			.expect("store");
+		ids.push(id);
+	}
 	let throttled = Conversation::all(
 		&["a@busy.example".to_string()],
 		Some("mx.busy.example".into()),
 		DeliveryError::Transient("421 4.7.0 slow down".into()),
 	);
-	worker.pace(&busy, &throttled, 1000);
 	let delivered = Conversation {
 		remote: Some("mx.busy.example".into()),
 		results: vec![("b@busy.example".to_string(), Ok(()))],
 		slowed: None,
 		held_until: None,
 	};
+	let entry = |id| worker.spool.load(id).expect("entry");
 
-	worker.pace(&busy, &delivered, 1030);
+	worker
+		.record(ids[0], &entry(ids[0]), &throttled, 1000)
+		.expect("record");
+	worker
+		.record(ids[1], &entry(ids[1]), &delivered, 1030)
+		.expect("record");
 
-	let holds = worker.spool.load_holds().expect("holds");
-	assert!(backoff::is_held(&holds, "busy.example", 1030));
-	assert!(backoff::is_held(&holds, "mx:mx.busy.example", 1030));
-
-	worker.pace(&busy, &delivered, 1060);
-	assert!(worker.spool.load_holds().expect("holds").is_empty());
+	let holds = crate::queue::backoff::Holds::read(&worker.spool).expect("holds");
+	for key in ["busy.example", "mx.busy.example"] {
+		let held = holds.held(&Destination::new(key), 1030);
+		assert_eq!(held.map(|hold| hold.until), Some(1060), "{key}");
+	}
+	assert!(
+		holds
+			.held(&Destination::new("busy.example"), 1060)
+			.is_none()
+	);
 }

@@ -39,6 +39,17 @@ fn greeting(reply: &str) -> Script {
 	}
 }
 
+/// The hold of `key` now, as the spool shows it.
+fn hold(worker: &Worker, key: &str) -> Option<crate::queue::backoff::Hold> {
+	crate::queue::backoff::Holds::read(&worker.spool)
+		.expect("holds")
+		.held(
+			&crate::queue::destination::Destination::new(key),
+			worker.now_epoch(),
+		)
+		.cloned()
+}
+
 fn state(worker: &Worker) -> crate::storage::RecipientState {
 	let id = worker.spool.list().expect("list")[0];
 	worker
@@ -69,8 +80,9 @@ async fn a_4xx_greeting_moves_on_to_the_next_exchanger() {
 	);
 	assert_eq!(remote.connections("mx1.multi.example"), 1);
 	assert!(worker.spool.list().expect("list").is_empty());
-	assert!(
-		worker.spool.load_holds().expect("holds").is_empty(),
+	assert_eq!(
+		hold(&worker, DOMAIN),
+		None,
 		"the domain delivered, so it is not held off"
 	);
 }
@@ -116,13 +128,8 @@ async fn when_every_exchanger_turns_the_session_away_the_recipient_waits() {
 	);
 	assert_eq!(state.last_error.as_deref(), Some("421 4.7.0 slow down"));
 	assert_eq!(state.remote.as_deref(), Some("mx2.multi.example"));
-	assert!(
-		worker
-			.spool
-			.load_holds()
-			.expect("holds")
-			.contains_key(DOMAIN)
-	);
+	assert!(hold(&worker, DOMAIN).is_some());
+	assert!(hold(&worker, "mx2.multi.example").is_some());
 }
 
 #[tokio::test(start_paused = true)]
@@ -140,15 +147,16 @@ async fn a_slow_down_from_an_earlier_exchanger_still_holds_the_domain() {
 
 	worker.pass().await.expect("pass");
 
+	// The recipient waits for the slow-down, recorded against the
+	// exchanger that asked, though the last one tried timed out.
+	let state = state(&worker);
+	assert_eq!(state.last_error.as_deref(), Some("421 4.7.0 slow down"));
+	assert_eq!(state.remote.as_deref(), Some("mx1.multi.example"));
 	assert_eq!(
-		state(&worker).last_error.as_deref(),
-		Some("timed out after 300s waiting for the greeting")
+		hold(&worker, DOMAIN).map(|hold| hold.reason),
+		Some("421 4.7.0 slow down".to_string())
 	);
-	let holds = worker.spool.load_holds().expect("holds");
-	assert_eq!(
-		holds.get(DOMAIN).map(|hold| hold.reason.as_str()),
-		Some("421 4.7.0 slow down")
-	);
+	assert!(hold(&worker, "mx1.multi.example").is_some());
 }
 
 #[tokio::test]

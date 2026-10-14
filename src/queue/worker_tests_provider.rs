@@ -4,7 +4,7 @@
 //! and a conversation that was already under way and delivered does not
 //! lift a hold still in force.
 
-use super::tests_backoff::{greeting, store, worker_for};
+use super::tests_backoff::{greeting, hold, store, worker_for};
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::storage::RecipientStatus;
@@ -40,11 +40,11 @@ async fn another_domain_on_a_held_exchanger_waits_for_the_hold() {
 
 	worker.pass().await.expect("pass");
 
-	let holds = worker.spool.load_holds().expect("holds");
-	let key = crate::queue::backoff::exchanger_key(PROVIDER);
-	let until = holds[&key].until;
+	let until = hold(&worker, PROVIDER, now)
+		.expect("the exchanger is held")
+		.until;
 	assert_eq!(until, now + 60);
-	assert!(holds.contains_key("a.example"));
+	assert!(hold(&worker, "a.example", now).is_some());
 
 	// The provider would take mail for b.example, but it asked to slow down.
 	remote.hosted("b.example", PROVIDER, Script::default());
@@ -71,5 +71,6 @@ async fn another_domain_on_a_held_exchanger_waits_for_the_hold() {
 	worker.pass().await.expect("pass");
 	assert_eq!(remote.copies("bob@b.example"), 1);
 	assert_eq!(remote.copies("alice@a.example"), 1);
-	assert!(worker.spool.load_holds().expect("holds").is_empty());
+	assert!(worker.spool.list().expect("list").is_empty());
+	assert_eq!(hold(&worker, PROVIDER, now), None);
 }

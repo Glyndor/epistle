@@ -1,9 +1,7 @@
 //! The jobs waiting for a conversation slot, kept so that starting what
 //! fits is fair and cheap.
 //!
-//! Jobs are grouped by sender (the account that submitted the message, or
-//! the domain of an unauthenticated reverse path), and within a sender by
-//! recipient domain. Senders take turns: each turn starts one job and sends
+//! Jobs are grouped by [`Sender`], and within a sender by destination. Senders take turns: each turn starts one job and sends
 //! the sender to the back, so a sender with thousands of messages queued
 //! ahead of another's one does not make it wait for all of them. Within a
 //! sender, its domains take turns the same way. A sender or a domain at its
@@ -13,21 +11,53 @@ use std::collections::{HashMap, VecDeque};
 
 use uuid::Uuid;
 
+use crate::queue::destination::Destination;
+use crate::storage::Envelope;
+
+/// Whose message an entry is, for the fair share of the conversation
+/// slots: the account the server recorded as submitting it when it
+/// accepted the message (from the authenticated SMTP session, the API key
+/// or the JMAP session, never from anything the client wrote). Mail the
+/// server sends on its own (bounces, delay warnings, auto-replies,
+/// forwards, alerts) has no account and shares one system share, whatever
+/// its reverse path says. [`Sender::of`] is the only way to build one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct Sender(String);
+
+impl Sender {
+	/// The sender of `envelope`.
+	pub(super) fn of(envelope: &Envelope) -> Self {
+		match envelope
+			.account
+			.as_deref()
+			.filter(|account| !account.is_empty())
+		{
+			Some(account) => Sender(format!("account:{account}")),
+			None => Sender("system".to_string()),
+		}
+	}
+
+	/// The key the claims count conversations under.
+	pub(super) fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
 /// The recipients of one entry in one domain, waiting for a slot.
 pub(super) struct Job {
 	pub(super) id: Uuid,
-	pub(super) domain: String,
+	pub(super) domain: Destination,
 	/// Whose message it is, for the per-sender share of the slots.
-	pub(super) sender: String,
+	pub(super) sender: Sender,
 	pub(super) recipients: Vec<String>,
 }
 
 /// One sender's waiting jobs, by domain.
 #[derive(Default)]
 pub(super) struct SenderJobs {
-	pub(super) by_domain: HashMap<String, VecDeque<Job>>,
+	pub(super) by_domain: HashMap<Destination, VecDeque<Job>>,
 	/// Domains with waiting jobs, each once, in turn.
-	pub(super) order: VecDeque<String>,
+	pub(super) order: VecDeque<Destination>,
 }
 
 impl SenderJobs {
@@ -53,9 +83,9 @@ impl SenderJobs {
 /// Every waiting job, by sender.
 #[derive(Default)]
 pub(super) struct Waiting {
-	senders: HashMap<String, SenderJobs>,
+	senders: HashMap<Sender, SenderJobs>,
 	/// Senders with waiting jobs, each once, in turn.
-	turn: VecDeque<String>,
+	turn: VecDeque<Sender>,
 }
 
 impl Waiting {
@@ -88,7 +118,7 @@ impl Waiting {
 	}
 
 	/// Take out the sender whose turn it is, with its jobs.
-	pub(super) fn next_sender(&mut self) -> Option<(String, SenderJobs)> {
+	pub(super) fn next_sender(&mut self) -> Option<(Sender, SenderJobs)> {
 		let sender = self.turn.pop_front()?;
 		let jobs = self.senders.remove(&sender).unwrap_or_default();
 		Some((sender, jobs))
@@ -97,7 +127,7 @@ impl Waiting {
 	/// Put back a sender taken out with [`Waiting::next_sender`]: last in
 	/// turn after it started a job, first when it is set aside. A sender
 	/// with nothing left is forgotten.
-	pub(super) fn put_back(&mut self, sender: String, jobs: SenderJobs, last: bool) {
+	pub(super) fn put_back(&mut self, sender: Sender, jobs: SenderJobs, last: bool) {
 		if jobs.is_empty() {
 			return;
 		}

@@ -4,6 +4,8 @@
 //! recipients to another transaction at once.
 
 use super::*;
+use crate::queue::backoff::{Hold, Holds};
+use crate::queue::destination::Destination;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::{DeliveryLog, DeliveryOutcome, RecipientStatus};
@@ -51,6 +53,14 @@ pub(super) fn worker_for(
 	(worker, created + 1)
 }
 
+/// The hold of `key` at `now`, as the spool shows it.
+pub(super) fn hold(worker: &Worker, key: &str, now: u64) -> Option<Hold> {
+	Holds::read(&worker.spool)
+		.expect("holds")
+		.held(&Destination::new(key), now)
+		.cloned()
+}
+
 pub(super) fn greeting(reply: &str) -> Script {
 	Script {
 		greeting: Some(reply.to_string()),
@@ -67,11 +77,18 @@ async fn a_421_greeting_holds_the_destination_and_its_other_mail_waits() {
 
 	worker.pass().await.expect("pass");
 
-	let holds = worker.spool.load_holds().expect("holds");
-	let hold = holds.get(DOMAIN).expect("the destination is on hold");
 	assert_eq!(
-		(hold.until, hold.level, hold.reason.as_str()),
-		(now + 60, 0, "421 4.7.0 slow down")
+		hold(&worker, DOMAIN, now),
+		Some(Hold {
+			until: now + 60,
+			deferrals: 1,
+			reason: "421 4.7.0 slow down".into(),
+		}),
+		"the destination is on hold"
+	);
+	assert_eq!(
+		hold(&worker, HOST, now).map(|hold| hold.until),
+		Some(now + 60)
 	);
 
 	// Mail for the held destination waits, without an attempt counted.
@@ -104,22 +121,19 @@ async fn deferring_again_after_the_hold_moves_to_the_next_step_and_success_reset
 
 	worker.set_now(now + 60);
 	worker.pass().await.expect("pass");
-	let hold = worker.spool.load_holds().expect("holds")[DOMAIN].clone();
-	assert_eq!((hold.until, hold.level, hold.since), (now + 360, 1, now));
+	let held = hold(&worker, DOMAIN, now + 60).expect("held");
+	assert_eq!((held.until, held.deferrals), (now + 360, 2));
 
 	worker.set_now(now + 360);
 	worker.pass().await.expect("pass");
-	let hold = worker.spool.load_holds().expect("holds")[DOMAIN].clone();
-	assert_eq!((hold.until, hold.level), (now + 1260, 2));
+	let held = hold(&worker, DOMAIN, now + 360).expect("held");
+	assert_eq!((held.until, held.deferrals), (now + 1260, 3));
 
 	remote.script(DOMAIN, Script::default());
 	worker.set_now(now + 1260);
 	worker.pass().await.expect("pass");
 	assert_eq!(remote.copies("bob@busy.example"), 1);
-	assert!(
-		worker.spool.load_holds().expect("holds").is_empty(),
-		"a delivery ends the hold"
-	);
+	assert_eq!(hold(&worker, DOMAIN, now), None, "a delivery ends the hold");
 	assert_eq!(remote.connections(HOST), 4);
 }
 
@@ -133,8 +147,10 @@ async fn a_rate_limit_reply_to_rcpt_holds_the_destination() {
 	);
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
-	let holds = worker.spool.load_holds().expect("holds");
-	assert_eq!(holds.get(DOMAIN).map(|hold| hold.until), Some(now + 60));
+	assert_eq!(
+		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		Some(now + 60)
+	);
 }
 
 #[tokio::test]
@@ -150,8 +166,10 @@ async fn a_rate_limit_reply_to_the_message_holds_the_destination() {
 	);
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
-	let holds = worker.spool.load_holds().expect("holds");
-	assert_eq!(holds.get(DOMAIN).map(|hold| hold.until), Some(now + 60));
+	assert_eq!(
+		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		Some(now + 60)
+	);
 }
 
 #[tokio::test]
@@ -162,9 +180,9 @@ async fn an_ordinary_deferral_does_not_hold_the_destination() {
 		DOMAIN,
 		Script::rcpt("bob@busy.example", "450 4.2.0 mailbox busy"),
 	);
-	let (worker, _) = worker_for(dir.path(), &["bob@busy.example"], &remote);
+	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
-	assert!(worker.spool.load_holds().expect("holds").is_empty());
+	assert_eq!(hold(&worker, DOMAIN, now), None);
 }
 
 #[tokio::test]
@@ -176,13 +194,13 @@ async fn the_steps_are_configurable() {
 	let worker = worker.with_backoff(vec![120, 600]);
 	worker.pass().await.expect("pass");
 	assert_eq!(
-		worker.spool.load_holds().expect("holds")[DOMAIN].until,
-		now + 120
+		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		Some(now + 120)
 	);
 }
 
 #[tokio::test]
-async fn a_hold_survives_a_restart_and_a_release_lifts_it() {
+async fn a_hold_survives_a_restart() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let remote = FakeRemote::default();
 	remote.script(DOMAIN, greeting("421 4.7.0 slow down"));
@@ -206,15 +224,8 @@ async fn a_hold_survives_a_restart_and_a_release_lifts_it() {
 		"still on hold after the restart"
 	);
 
-	// The operator releases the domain and its exchanger: the next pass
-	// goes ahead.
-	restarted
-		.spool
-		.update_holds(|holds| {
-			holds.remove(DOMAIN);
-			holds.remove(&crate::queue::backoff::exchanger_key(HOST));
-		})
-		.expect("release");
+	// The hold ends: the next pass goes ahead.
+	restarted.set_now(now + 60);
 	restarted.pass().await.expect("pass");
 	assert_eq!(remote.copies("carol@busy.example"), 1);
 }
@@ -252,7 +263,6 @@ async fn the_extra_recipients_of_a_452_go_out_at_once_and_are_not_failures() {
 		assert_eq!(remote.copies(recipient), 1, "{recipient}");
 	}
 	assert!(worker.spool.list().expect("list").is_empty());
-	assert!(worker.spool.load_holds().expect("holds").is_empty());
 	let log = DeliveryLog::open(dir.path(), 30)
 		.list(None, |_| true)
 		.expect("log");

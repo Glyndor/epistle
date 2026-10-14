@@ -16,8 +16,6 @@ mod attempt;
 mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
-#[path = "worker_pace.rs"]
-mod pace;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -84,9 +82,10 @@ pub struct Worker {
 	backoff_steps: Vec<u64>,
 	/// The longest one delivery attempt to one domain may take.
 	attempt_limit: Duration,
-	/// Holds that could not be written to the spool yet, applied from
-	/// memory until they are.
-	unwritten_holds: std::sync::Mutex<crate::storage::DestinationHolds>,
+	/// The destinations on hold, as the spool shows them: rebuilt from the
+	/// spool at every scan and kept in step with what this worker writes
+	/// there, so it never allows what the spool would defer.
+	holds: std::sync::Mutex<super::backoff::Holds>,
 }
 
 impl Worker {
@@ -115,7 +114,7 @@ impl Worker {
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
 			attempt_limit: super::timeouts::ATTEMPT,
-			unwritten_holds: Default::default(),
+			holds: Default::default(),
 		}
 	}
 
@@ -331,6 +330,13 @@ impl Worker {
 		}
 	}
 
+	/// The destinations on hold.
+	fn holds(&self) -> std::sync::MutexGuard<'_, super::backoff::Holds> {
+		self.holds
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
 	/// Write one conversation's outcome to the envelope, then act on it.
 	fn record(
 		&self,
@@ -340,6 +346,7 @@ impl Worker {
 		now: u64,
 	) -> std::io::Result<()> {
 		let retry_now = conversation.retry_now();
+		let slow = self.slow_down(entry, conversation, now);
 		self.spool.update_envelope(id, |envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
@@ -359,7 +366,19 @@ impl Worker {
 						state.attempts += 1;
 						state.next_attempt = self.retry_at(now, state.attempts);
 						state.last_error = Some(reason.clone());
-						envelope.last_error = Some(reason.chars().take(512).collect());
+						state.throttled = 0;
+						if let Some(slow) = &slow {
+							// The destination asked to slow down: wait for
+							// the next step of the backoff, at the least.
+							state.next_attempt = state.next_attempt.max(slow.until);
+							state.throttled = slow.deferrals;
+							state.last_error = Some(slow.reason.clone());
+							state.remote = slow.host.clone().or(state.remote);
+						}
+						envelope.last_error = state
+							.last_error
+							.as_ref()
+							.map(|reason| reason.chars().take(512).collect());
 					}
 					Err(DeliveryError::Permanent(reason)) => {
 						state.status = RecipientStatus::Failed;
@@ -370,6 +389,18 @@ impl Worker {
 			}
 			envelope.settle();
 		})?;
+		if let Some(slow) = slow {
+			let mut holds = self.holds();
+			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
+			if let Some(host) = &slow.host {
+				holds.note(
+					super::destination::Destination::new(host),
+					slow.until,
+					slow.deferrals,
+					&slow.reason,
+				);
+			}
+		}
 		self.after_conversation(id, entry, conversation);
 		Ok(())
 	}
@@ -485,5 +516,5 @@ mod tests_recipient_kinds;
 mod tests_fairness;
 
 #[cfg(test)]
-#[path = "worker_tests_fail_closed.rs"]
-mod tests_fail_closed;
+#[path = "worker_tests_spool_holds.rs"]
+mod tests_spool_holds;

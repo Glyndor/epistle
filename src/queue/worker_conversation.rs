@@ -4,6 +4,7 @@
 use super::Worker;
 use super::attempt::{Route, Session};
 use crate::queue::client::{DeliveryError, RecipientResult};
+use crate::queue::destination::Destination;
 use crate::queue::limits::MAX_EXCHANGERS;
 use crate::queue::tls_outcome::{STS_POLICY_FETCH_ERROR, TlsOutcome};
 use crate::storage::SpoolEntry;
@@ -244,13 +245,6 @@ impl Worker {
 		let mut last: Option<Conversation> = None;
 		let mut slowed: Option<(String, String)> = None;
 		let now = self.now_epoch();
-		let Some(holds) = self.holds() else {
-			// Holds that cannot be read hold every exchanger.
-			let reason = DeliveryError::Transient("destination holds cannot be read".into());
-			let mut waiting = Conversation::all(route.recipients, None, reason);
-			waiting.held_until = Some(now.saturating_add(60));
-			return waiting;
-		};
 		let mut held: Option<Conversation> = None;
 		loop {
 			if tried.len() >= MAX_EXCHANGERS {
@@ -279,8 +273,9 @@ impl Worker {
 			tried.push(connection.host.clone());
 			// An exchanger on hold (its provider asked to slow down for
 			// another of its domains) is left before a word is said.
-			let key = crate::queue::backoff::exchanger_key(&connection.host);
-			if let Some(hold) = holds.get(&key).filter(|hold| hold.active(now)) {
+			let exchanger = Destination::new(&connection.host);
+			let hold = self.holds().held(&exchanger, now).cloned();
+			if let Some(hold) = hold {
 				let reason = format!("{} is on hold: {}", connection.host, hold.reason);
 				let mut waiting =
 					Conversation::all(route.recipients, None, DeliveryError::Transient(reason));
@@ -304,5 +299,67 @@ impl Worker {
 			});
 			last = Some(conversation);
 		}
+	}
+}
+
+/// What follows from a conversation a destination asked to slow down.
+pub(super) struct SlowDown {
+	/// The recipient domain.
+	pub(super) domain: Destination,
+	/// The exchanger that asked, when the conversation reached one.
+	pub(super) host: Option<String>,
+	/// When its recipients are due again.
+	pub(super) until: u64,
+	/// Their slow-down deferrals in a row, this one included.
+	pub(super) deferrals: u32,
+	/// The reply that asked.
+	pub(super) reason: String,
+}
+
+impl Worker {
+	/// How `conversation` asked to slow down, if it did: its recipients
+	/// wait for the step after the most deferrals in a row of any of them,
+	/// of the domain, or of the exchanger. A deferral while the destination
+	/// is still on hold (another conversation of the same burst) keeps that
+	/// hold instead of growing it.
+	pub(super) fn slow_down(
+		&self,
+		entry: &SpoolEntry,
+		conversation: &Conversation,
+		now: u64,
+	) -> Option<SlowDown> {
+		if conversation.held_until.is_some() {
+			return None;
+		}
+		let (host, reason) = conversation.throttled_by()?;
+		let (first, _) = conversation.results.first()?;
+		let domain = Destination::of_recipient(first);
+		let host = host.filter(|host| !host.is_empty()).map(str::to_string);
+		let exchanger = host.as_deref().map(Destination::new);
+		let holds = self.holds();
+		let own = conversation
+			.results
+			.iter()
+			.map(|(recipient, _)| entry.envelope.recipient_state(recipient).throttled)
+			.max()
+			.unwrap_or(0);
+		let keys = std::iter::once(&domain).chain(exchanger.as_ref());
+		let running = keys
+			.clone()
+			.filter_map(|key| holds.held(key, now))
+			.max_by_key(|hold| hold.until)
+			.map(|hold| (hold.until, hold.deferrals));
+		let behind = keys.map(|key| holds.deferrals(key)).fold(own, u32::max);
+		let (until, deferrals) = running.unwrap_or_else(|| {
+			let wait = crate::queue::backoff::step(&self.backoff_steps, behind);
+			(now.saturating_add(wait), behind.saturating_add(1))
+		});
+		Some(SlowDown {
+			domain,
+			host,
+			until,
+			deferrals: deferrals.max(own.saturating_add(1)),
+			reason: reason.chars().take(200).collect(),
+		})
 	}
 }

@@ -3,21 +3,28 @@
 //! Large receivers answer a sender that goes too fast with a 421 (often at
 //! the greeting), a 4.7.x status, or a 451 or 452 that says the sender hit a
 //! rate limit. Retrying each message on its own schedule would keep hitting
-//! them; instead the whole recipient domain is put on hold, and so is the
-//! exchanger host that answered ([`exchanger_key`]): a provider that hosts
-//! many domains limits the sender on its own hosts, so no other domain it
-//! serves gets a fresh conversation with that host either. Every message to
-//! a held destination waits. The hold grows with each deferral in a row,
-//! through the configured steps (1, 5, 15 and 60 minutes by default), also
-//! when a hold ran out without a delivery in between, and only a
-//! conversation that delivers after the hold has run out ends it.
+//! them; instead the recipients that got such a reply wait for the next
+//! step of the backoff (1, 5, 15 and 60 minutes by default), and every
+//! other message to the same destination waits with them.
+//!
+//! The spool is the only record of it. A recipient deferred that way keeps
+//! its `next_attempt` at the end of the wait and counts its deferrals in a
+//! row in `throttled`, which only goes back to zero when the recipient gets
+//! another answer. A destination, the recipient domain or the exchanger host
+//! that asked (a provider that hosts many domains limits the sender on its
+//! own hosts), is on hold while any pending recipient deferred by it still
+//! waits. [`Holds`] reads that from the spool; it holds nothing the spool
+//! does not, and the worker rebuilds it at every scan.
 //!
 //! A `452 4.5.3` (too many recipients) is different: the remote took some
 //! recipients and asks for the rest in another transaction. Those are not
 //! failures and are retried at once, not held off.
 
 use crate::queue::reply::parse_enhanced;
-use crate::storage::{DestinationHold, DestinationHolds};
+use std::collections::HashMap;
+
+use super::destination::Destination;
+use crate::storage::{Envelope, RecipientStatus};
 
 /// The default backoff, in seconds: 1, 5, 15 and 60 minutes.
 pub const DEFAULT_STEPS: [u64; 4] = [60, 300, 900, 3600];
@@ -78,160 +85,106 @@ pub fn throttled(reason: &str) -> bool {
 	}
 }
 
-/// The hold of a destination that deferred for `reason` at `now`, given
-/// the hold it had (if any). A hold still running is kept as it is: two
-/// conversations deferred by the same burst count as one deferral. One
-/// that ran out moves to the next step.
-pub fn next_hold(
-	steps: &[u64],
-	previous: Option<&DestinationHold>,
-	reason: &str,
-	now: u64,
-) -> DestinationHold {
-	if let Some(previous) = previous.filter(|hold| hold.active(now)) {
-		return previous.clone();
-	}
-	let level = previous.map_or(0, |hold| hold.level.saturating_add(1));
-	let step = steps
+/// The wait after `level` slow-down deferrals in a row: the step at that
+/// position, the last one repeating.
+pub fn step(steps: &[u64], level: u32) -> u64 {
+	steps
 		.get(level as usize)
 		.or(steps.last())
 		.copied()
-		.unwrap_or(DEFAULT_STEPS[0]);
-	DestinationHold {
-		until: now.saturating_add(step),
-		level,
-		reason: reason.chars().take(200).collect(),
-		since: previous.map_or(now, |hold| hold.since),
-		sender: previous.and_then(|hold| hold.sender.clone()),
-	}
+		.unwrap_or(DEFAULT_STEPS[0])
 }
 
-/// The most destinations kept on hold at once. Anyone who can make the
-/// server send to many domains that all defer could otherwise grow the
-/// holds file, read on every scheduling decision, without bound.
-pub const MAX_HOLDS: usize = 1024;
-
-/// The key under which an exchanger host is held, next to the recipient
-/// domains: many domains hosted by one provider share its exchangers, and
-/// the provider's rate limit is on its own hosts, not on each domain.
-pub fn exchanger_key(host: &str) -> String {
-	format!("mx:{}", host.trim_end_matches('.').to_ascii_lowercase())
+/// A destination on hold, as the spool shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hold {
+	/// Epoch seconds until which the destination is not contacted.
+	pub until: u64,
+	/// The most slow-down deferrals in a row of any recipient waiting for
+	/// it: the next deferral takes the step after.
+	pub deferrals: u32,
+	/// The reply that asked to slow down, of the recipient waiting longest.
+	pub reason: String,
 }
 
-/// The most holds one sender's conversations may have created, a quarter
-/// of [`MAX_HOLDS`]: one account sending to many deferring domains fills
-/// its own quota, not the room every other sender's holds need.
-pub const MAX_HOLDS_PER_SENDER: usize = MAX_HOLDS / 4;
+/// Every destination with a recipient waiting after a slow-down reply,
+/// read from the spool. It keeps nothing of its own: dropping it and
+/// reading it again from the spool gives the same holds.
+#[derive(Debug, Clone, Default)]
+pub struct Holds(HashMap<Destination, Hold>);
 
-/// How long a hold is remembered after it ran out with no delivery since:
-/// a week. Until then a new deferral continues the run of steps; after a
-/// week without a single deferral there is nothing left to slow down.
-pub const HOLD_MEMORY_SECS: u64 = 7 * 86_400;
-
-/// The longest destination key a hold is recorded under. Recipient
-/// domains and host names are at most 255 bytes; anything longer is not a
-/// destination, and is held through its sender instead.
-pub const MAX_KEY_BYTES: usize = 300;
-
-/// The key under which a sender (an account, or the system bucket) is
-/// held when a destination its mail deferred at could not be held itself.
-pub fn sender_key(sender: &str) -> String {
-	format!("sender:{sender}")
-}
-
-/// Record in `holds` that `key` (a recipient domain or an
-/// [`exchanger_key`]) deferred a conversation of `sender` for `reason` at
-/// `now`, and return the key it is held under and its hold.
-///
-/// A hold is forgotten when its destination delivers again after it ran
-/// out, when the operator releases it, [`HOLD_MEMORY_SECS`] after it ran
-/// out, or once it ran out and no mail waits for its destination
-/// ([`prune_idle`]), so the backoff keeps growing through deferrals that
-/// come after a hold ran out while mail still waits.
-///
-/// Room is shared out by sender, never taken from a quiet sender. Past
-/// [`MAX_HOLDS_PER_SENDER`] set by `sender`'s mail, or for a key longer
-/// than [`MAX_KEY_BYTES`], `sender` itself is held instead
-/// ([`sender_key`]): the destination is never left free to send to, and
-/// the sender that filled its share is the one that waits. Past
-/// [`MAX_HOLDS`] in all, the sender with the most holds gives one of its
-/// own up (one that has run out if it has any), so senders flooding the
-/// map with junk destinations lose their own holds, never another
-/// sender's, and never block another sender's new destination.
-pub fn record_hold(
-	holds: &mut DestinationHolds,
-	steps: &[u64],
-	(key, sender): (&str, &str),
-	reason: &str,
-	now: u64,
-) -> (String, DestinationHold) {
-	holds.retain(|_, hold| hold.active(now) || hold.until.saturating_add(HOLD_MEMORY_SECS) > now);
-	let mut key = key.to_string();
-	if !holds.contains_key(&key) {
-		let by_sender = destination_holds(holds)
-			.filter(|(_, hold)| hold.sender.as_deref() == Some(sender))
-			.count();
-		if key.len() > MAX_KEY_BYTES || by_sender >= MAX_HOLDS_PER_SENDER {
-			key = sender_key(sender);
-		} else if destination_holds(holds).count() >= MAX_HOLDS {
-			give_up_one(holds, now);
+impl Holds {
+	/// Add what `envelope` says: each pending recipient deferred by a
+	/// slow-down reply holds its domain, and the exchanger that sent it,
+	/// until its own next attempt.
+	pub fn add_envelope(&mut self, envelope: &Envelope) {
+		for recipient in &envelope.recipients {
+			let state = envelope.recipient_state(recipient);
+			if state.status != RecipientStatus::Pending || state.throttled == 0 {
+				continue;
+			}
+			let reason = state.last_error.clone().unwrap_or_default();
+			self.note(
+				Destination::of_recipient(recipient),
+				state.next_attempt,
+				state.throttled,
+				&reason,
+			);
+			if let Some(host) = &state.remote {
+				self.note(
+					Destination::new(host),
+					state.next_attempt,
+					state.throttled,
+					&reason,
+				);
+			}
 		}
 	}
-	let mut hold = next_hold(steps, holds.get(&key), reason, now);
-	hold.sender.get_or_insert_with(|| sender.to_string());
-	holds.insert(key.clone(), hold.clone());
-	(key, hold)
-}
 
-/// The holds of destinations (domains and exchangers), not of senders.
-fn destination_holds(
-	holds: &DestinationHolds,
-) -> impl Iterator<Item = (&String, &DestinationHold)> {
-	holds.iter().filter(|(key, _)| !key.starts_with("sender:"))
-}
-
-/// Remove one destination hold of the sender with the most of them: one
-/// that has run out if it has any, else the one ending soonest.
-fn give_up_one(holds: &mut DestinationHolds, now: u64) {
-	let mut counts: std::collections::HashMap<Option<&str>, usize> = Default::default();
-	for (_, hold) in destination_holds(holds) {
-		*counts.entry(hold.sender.as_deref()).or_default() += 1;
+	/// Count `destination` as held until `until` after `deferrals` in a
+	/// row, keeping the longest wait and the most deferrals seen.
+	pub fn note(&mut self, destination: Destination, until: u64, deferrals: u32, reason: &str) {
+		let hold = self.0.entry(destination).or_insert_with(|| Hold {
+			until,
+			deferrals,
+			reason: reason.to_string(),
+		});
+		if until > hold.until {
+			hold.until = until;
+			hold.reason = reason.to_string();
+		}
+		hold.deferrals = hold.deferrals.max(deferrals);
 	}
-	let Some((heaviest, _)) = counts.into_iter().max_by_key(|(_, count)| *count) else {
-		return;
-	};
-	let heaviest = heaviest.map(str::to_string);
-	let victim = destination_holds(holds)
-		.filter(|(_, hold)| hold.sender == heaviest)
-		.min_by_key(|(_, hold)| (hold.active(now), hold.until))
-		.map(|(key, _)| key.clone());
-	if let Some(victim) = victim {
-		holds.remove(&victim);
+
+	/// Every hold the spool shows. An entry that cannot be read is left
+	/// out, as the worker leaves it out of its scan.
+	pub fn read(spool: &crate::storage::FsSpool) -> std::io::Result<Self> {
+		let mut holds = Holds::default();
+		for id in spool.list()? {
+			if let Ok(envelope) = spool.load_envelope(id) {
+				holds.add_envelope(&envelope);
+			}
+		}
+		Ok(holds)
 	}
-}
 
-/// Forget every hold that has run out and has nothing left to slow down:
-/// a domain with no mail waiting for it (`queued` says which have some),
-/// or a held sender. Exchanger holds stay for [`HOLD_MEMORY_SECS`], since
-/// which domains they serve is not known here. Holds in force always stay.
-pub fn prune_idle(holds: &mut DestinationHolds, queued: impl Fn(&str) -> bool, now: u64) {
-	holds.retain(|key, hold| hold.active(now) || key.starts_with("mx:") || queued(key));
-}
-
-/// Forget the hold of `key` after a delivery, unless it is still in
-/// force: a destination that set a hold for all senders' conversations
-/// keeps it until it ends, even when one that was already under way got
-/// through. Returns whether a hold was removed.
-pub fn clear_after_success(holds: &mut DestinationHolds, key: &str, now: u64) -> bool {
-	match holds.get(key) {
-		Some(hold) if !hold.active(now) => holds.remove(key).is_some(),
-		_ => false,
+	/// The hold of `destination` when it is in force at `now`.
+	pub fn held(&self, destination: &Destination, now: u64) -> Option<&Hold> {
+		self.0.get(destination).filter(|hold| hold.until > now)
 	}
-}
 
-/// Whether `domain` is on hold at `now`.
-pub fn is_held(holds: &DestinationHolds, domain: &str, now: u64) -> bool {
-	holds.get(domain).is_some_and(|hold| hold.active(now))
+	/// The slow-down deferrals in a row `destination` has behind it, in
+	/// force or not.
+	pub fn deferrals(&self, destination: &Destination) -> u32 {
+		self.0.get(destination).map_or(0, |hold| hold.deferrals)
+	}
+
+	/// The holds in force at `now`, by destination.
+	pub fn in_force(&self, now: u64) -> Vec<(&Destination, &Hold)> {
+		let mut held: Vec<_> = self.0.iter().filter(|(_, hold)| hold.until > now).collect();
+		held.sort_by(|a, b| a.0.cmp(b.0));
+		held
+	}
 }
 
 #[cfg(test)]
@@ -276,26 +229,13 @@ mod tests {
 	}
 
 	#[test]
-	fn an_exchanger_is_held_under_its_own_key() {
-		assert_eq!(
-			exchanger_key("MX1.Provider.Example."),
-			"mx:mx1.provider.example"
-		);
-	}
-
-	#[test]
-	fn holds_grow_through_the_steps_and_stay_at_the_last() {
+	fn the_steps_grow_and_stay_at_the_last() {
 		let steps = [60, 300, 900];
-		let first = next_hold(&steps, None, "421 busy", 1000);
-		assert_eq!((first.until, first.level, first.since), (1060, 0, 1000));
-		// A deferral while the hold runs keeps it.
-		assert_eq!(next_hold(&steps, Some(&first), "421 again", 1030), first);
-		let second = next_hold(&steps, Some(&first), "421 again", 1060);
-		assert_eq!((second.until, second.level, second.since), (1360, 1, 1000));
-		let third = next_hold(&steps, Some(&second), "421 again", 1400);
-		assert_eq!((third.until, third.level), (2300, 2));
-		let fourth = next_hold(&steps, Some(&third), "421 again", 2300);
-		assert_eq!((fourth.until, fourth.level), (3200, 3));
+		assert_eq!(
+			(0..5).map(|level| step(&steps, level)).collect::<Vec<_>>(),
+			[60, 300, 900, 900, 900]
+		);
+		assert_eq!(step(&[], 0), DEFAULT_STEPS[0]);
 	}
 }
 

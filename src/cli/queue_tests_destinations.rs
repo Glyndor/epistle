@@ -1,9 +1,8 @@
 //! `epistle queue destinations` and `release-destination` against the
-//! holds file the worker reads.
+//! holds the spool shows: recipients that wait after a slow-down reply.
 
 use super::*;
 use crate::cli::{Cli, Command};
-use crate::storage::DestinationHold;
 use clap::Parser;
 
 const NOW: u64 = 1_800_000_000;
@@ -20,33 +19,74 @@ fn run_args(dir: &Path, args: &[&str]) -> (ExitCode, String) {
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
+/// Queue a message to `recipient` that waits until `until` after
+/// `deferrals` slow-down replies in a row from `remote`.
+fn throttled(
+	spool: &FsSpool,
+	recipient: &str,
+	(until, deferrals): (u64, u32),
+	reason: &str,
+	remote: &str,
+) -> Uuid {
+	let id = spool
+		.store(
+			&crate::smtp::session::AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec![recipient.into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
+		.expect("store");
+	spool
+		.update_envelope(id, |envelope| {
+			let mut state = envelope.recipient_state(recipient);
+			state.next_attempt = until;
+			state.throttled = deferrals;
+			state.attempts = deferrals;
+			state.last_error = Some(reason.into());
+			state.remote = Some(remote.into());
+			envelope.set_recipient_state(recipient, state);
+			envelope.settle();
+		})
+		.expect("throttle");
+	id
+}
+
 fn held(dir: &Path) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("spool");
+	throttled(
+		&spool,
+		"bob@busy.example",
+		(NOW + 300, 2),
+		"421 4.7.0 slow down",
+		"mx.busy.example",
+	);
+	throttled(
+		&spool,
+		"carol@over.example",
+		(NOW - 1, 1),
+		"421 busy",
+		"mx.over.example",
+	);
 	spool
-		.update_holds(|holds| {
-			holds.insert(
-				"busy.example".into(),
-				DestinationHold {
-					until: NOW + 300,
-					level: 1,
-					reason: "421 4.7.0 slow down".into(),
-					since: NOW - 120,
-					sender: None,
-				},
-			);
-			holds.insert(
-				"over.example".into(),
-				DestinationHold {
-					until: NOW - 1,
-					level: 0,
-					reason: "421 busy".into(),
-					since: NOW - 61,
-					sender: None,
-				},
-			);
-		})
-		.expect("holds");
+}
+
+fn state_of(spool: &FsSpool, recipient: &str) -> crate::storage::RecipientState {
 	spool
+		.list()
+		.expect("list")
+		.into_iter()
+		.map(|id| spool.load_envelope(id).expect("envelope"))
+		.find(|envelope| envelope.recipients.iter().any(|r| r == recipient))
+		.expect("entry")
+		.recipient_state(recipient)
 }
 
 #[test]
@@ -60,9 +100,10 @@ fn destinations_lists_the_holds_in_force_and_why() {
 	assert_eq!(
 		out,
 		format!(
-			"busy.example\tuntil={} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
-			 1 destinations on hold\n",
-			NOW + 300
+			"busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
+			 mx.busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
+			 2 destinations on hold\n",
+			until = NOW + 300
 		)
 	);
 }
@@ -77,19 +118,19 @@ fn destinations_json_is_one_array() {
 	assert_eq!(code, ExitCode::SUCCESS);
 	let value: serde_json::Value = serde_json::from_str(&out).expect("json");
 	assert_eq!(
-		value,
-		serde_json::json!([{
+		value[0],
+		serde_json::json!({
 			"domain": "busy.example",
 			"until": NOW + 300,
-			"since": NOW - 120,
 			"deferrals": 2,
 			"reason": "421 4.7.0 slow down",
-		}])
+		})
 	);
+	assert_eq!(value.as_array().map(Vec::len), Some(2));
 }
 
 #[test]
-fn release_destination_lifts_one_hold_and_refuses_an_unknown_one() {
+fn release_destination_makes_the_waiting_recipients_due_and_refuses_an_unknown_one() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = held(dir.path());
 
@@ -98,18 +139,9 @@ fn release_destination_lifts_one_hold_and_refuses_an_unknown_one() {
 		(code, out.as_str()),
 		(ExitCode::SUCCESS, "released busy.example\n")
 	);
-	assert!(
-		!spool
-			.load_holds()
-			.expect("holds")
-			.contains_key("busy.example")
-	);
-	assert!(
-		spool
-			.load_holds()
-			.expect("holds")
-			.contains_key("over.example")
-	);
+	let bob = state_of(&spool, "bob@busy.example");
+	assert_eq!((bob.next_attempt, bob.throttled), (NOW, 0));
+	assert_eq!(state_of(&spool, "carol@over.example").throttled, 1);
 
 	let (code, out) = run_args(dir.path(), &["release-destination", "busy.example"]);
 	assert_eq!(code, crate::cli::exit::refused("test"));
@@ -120,7 +152,32 @@ fn release_destination_lifts_one_hold_and_refuses_an_unknown_one() {
 		(code, out.as_str()),
 		(ExitCode::SUCCESS, "released 1 destinations\n")
 	);
-	assert!(spool.load_holds().expect("holds").is_empty());
+	assert_eq!(state_of(&spool, "carol@over.example").throttled, 0);
+}
+
+#[test]
+fn release_destination_by_exchanger_frees_every_domain_waiting_for_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	for recipient in ["a@one.example", "b@two.example"] {
+		throttled(
+			&spool,
+			recipient,
+			(NOW + 60, 1),
+			"421 slow down",
+			"MX.Provider.Example",
+		);
+	}
+
+	let (code, out) = run_args(dir.path(), &["release-destination", "mx.provider.example."]);
+
+	assert_eq!(
+		(code, out.as_str()),
+		(ExitCode::SUCCESS, "released mx.provider.example\n")
+	);
+	for recipient in ["a@one.example", "b@two.example"] {
+		assert_eq!(state_of(&spool, recipient).next_attempt, NOW, "{recipient}");
+	}
 }
 
 #[test]
@@ -143,27 +200,23 @@ fn release_destination_needs_a_domain_or_all() {
 fn the_queue_listing_names_the_destinations_on_hold() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
-	spool
-		.update_holds(|holds| {
-			holds.insert(
-				"busy.example".into(),
-				DestinationHold {
-					until: now_epoch() + 3600,
-					level: 0,
-					reason: "421 4.7.0 slow down".into(),
-					since: now_epoch(),
-					sender: None,
-				},
-			);
-		})
-		.expect("holds");
+	throttled(
+		&spool,
+		"bob@busy.example",
+		(now_epoch() + 3600, 1),
+		"421 4.7.0 slow down",
+		"mx.busy.example",
+	);
 	let mut out = Vec::new();
 
 	assert_eq!(list(dir.path(), &mut out), ExitCode::SUCCESS);
 
 	let out = String::from_utf8(out).expect("utf8");
 	assert!(
-		out.ends_with("1 destinations on hold: busy.example (see `epistle queue destinations`)\n"),
+		out.ends_with(
+			"2 destinations on hold: busy.example, mx.busy.example \
+			 (see `epistle queue destinations`)\n"
+		),
 		"{out}"
 	);
 }
@@ -173,20 +226,13 @@ fn a_remote_reply_cannot_drive_the_terminal() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let reply = "421 \u{1b}[2J\u{1b}[31mslow\r\nfake line\tand \u{9b}31m";
-	spool
-		.update_holds(|holds| {
-			holds.insert(
-				"mx:evil\u{1b}]0;title\u{7}.example".into(),
-				DestinationHold {
-					until: NOW + 60,
-					level: 0,
-					reason: reply.into(),
-					since: NOW,
-					sender: None,
-				},
-			);
-		})
-		.expect("holds");
+	throttled(
+		&spool,
+		"bob@busy.example",
+		(NOW + 60, 1),
+		reply,
+		"evil\u{1b}]0;title\u{7}.example",
+	);
 
 	let (_, text) = run_args(dir.path(), &["destinations"]);
 	assert!(
@@ -195,13 +241,13 @@ fn a_remote_reply_cannot_drive_the_terminal() {
 			.any(|c| c.is_control() && c != '\t' && c != '\n'),
 		"{text:?}"
 	);
-	assert_eq!(text.lines().count(), 2, "{text:?}");
+	assert_eq!(text.lines().count(), 3, "{text:?}");
 	assert!(
 		text.contains("421 \\u{1b}[2J\\u{1b}[31mslow\\r\\nfake line\\tand \\u{9b}31m"),
 		"{text:?}"
 	);
 	assert!(
-		text.contains("mx:evil\\u{1b}]0;title\\u{7}.example"),
+		text.contains("evil\\u{1b}]0;title\\u{7}.example"),
 		"{text:?}"
 	);
 
@@ -214,22 +260,13 @@ fn a_remote_reply_cannot_drive_the_terminal() {
 fn queue_show_escapes_the_last_error() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
-	let id = spool
-		.store(
-			&crate::smtp::session::AcceptedMessage {
-				reverse_path: "alice@example.org".into(),
-				recipients: vec!["bob@remote.example".into()],
-				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-				require_tls: false,
-				mailbox: None,
-				tlsrpt_verified: false,
-				no_dsn: Vec::new(),
-				sender_verified: false,
-			},
-			None,
-			&std::collections::BTreeMap::new(),
-		)
-		.expect("store");
+	let id = throttled(
+		&spool,
+		"bob@remote.example",
+		(0, 0),
+		"450 x",
+		"mx.remote.example",
+	);
 	spool
 		.update_envelope(id, |envelope| {
 			envelope.last_error = Some("450 \u{1b}[2Jgone\r\nfake: line".into());
@@ -243,32 +280,4 @@ fn queue_show_escapes_the_last_error() {
 		"{text:?}"
 	);
 	assert!(!text.contains('\u{1b}'), "{text:?}");
-}
-
-#[test]
-fn a_held_sender_is_released_by_its_key_as_written() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	spool
-		.update_holds(|holds| {
-			holds.insert(
-				"sender:account:Bob".into(),
-				DestinationHold {
-					until: NOW + 60,
-					level: 0,
-					reason: "421 busy".into(),
-					since: NOW,
-					sender: Some("account:Bob".into()),
-				},
-			);
-		})
-		.expect("holds");
-
-	let (code, out) = run_args(dir.path(), &["release-destination", "sender:account:Bob"]);
-
-	assert_eq!(
-		(code, out.as_str()),
-		(ExitCode::SUCCESS, "released sender:account:Bob\n")
-	);
-	assert!(spool.load_holds().expect("holds").is_empty());
 }

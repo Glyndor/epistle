@@ -1,23 +1,28 @@
 //! `epistle queue destinations` and `epistle queue release-destination`:
-//! the recipient domains the outbound queue holds off because they asked it
-//! to slow down, why, and lifting such a hold.
+//! the destinations (recipient domains and exchanger hosts) the outbound
+//! queue holds off because they asked it to slow down, why, and lifting
+//! such a hold.
 //!
-//! The worker reads the holds from disk each time it decides whether to
-//! contact a destination, so a release takes effect at its next decision,
-//! without a restart.
+//! The holds are read from the spool, where the recipients that wait for
+//! them keep their next attempt (see [`crate::queue::backoff`]). A release
+//! makes those recipients due at once and starts their backoff over; the
+//! running worker reads it at its next scan.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Args;
 
 use crate::cli::term::sanitize;
-use crate::storage::{DestinationHold, FsSpool};
+use crate::queue::backoff::{Hold, Holds};
+use crate::queue::destination::Destination;
+use crate::storage::{FsSpool, RecipientStatus};
 
-/// One destination by domain, or every held destination with `--all`.
+/// One destination by name, or every held destination with `--all`.
 #[derive(Debug, Args)]
 pub struct DestinationTarget {
-	/// The recipient domain to release.
+	/// The recipient domain or exchanger host to release.
 	#[arg(required_unless_present = "all", conflicts_with = "all")]
 	domain: Option<String>,
 	/// Release every destination on hold.
@@ -25,48 +30,47 @@ pub struct DestinationTarget {
 	all: bool,
 }
 
-/// The holds still in force at `now`, by domain.
-fn active(spool: &FsSpool, now: u64) -> std::io::Result<Vec<(String, DestinationHold)>> {
-	Ok(spool
-		.load_holds()?
+/// The holds in force at `now`, by destination.
+fn in_force(spool: &FsSpool, now: u64) -> std::io::Result<Vec<(Destination, Hold)>> {
+	let holds = Holds::read(spool)?;
+	Ok(holds
+		.in_force(now)
 		.into_iter()
-		.filter(|(_, hold)| hold.active(now))
+		.map(|(destination, hold)| (destination.clone(), hold.clone()))
 		.collect())
 }
 
 /// `queue destinations`: every destination on hold, until when, after how
 /// many deferrals in a row, and the reply that put it there.
 pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) -> ExitCode {
-	let held = match active(spool, now) {
+	let held = match in_force(spool, now) {
 		Ok(held) => held,
-		Err(error) => return super::fail(format_args!("reading destination holds: {error}")),
+		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
 	};
 	if json {
 		let rows: Vec<serde_json::Value> = held
 			.iter()
-			.map(|(domain, hold)| {
+			.map(|(destination, hold)| {
 				serde_json::json!({
-					"domain": domain,
+					"domain": destination.as_str(),
 					"until": hold.until,
-					"since": hold.since,
-					"deferrals": hold.level.saturating_add(1),
+					"deferrals": hold.deferrals,
 					"reason": hold.reason,
 				})
 			})
 			.collect();
 		return crate::cli::json_out::print(out, &serde_json::Value::Array(rows));
 	}
-	// The domain, an exchanger's name and the reply all come from remote
-	// servers: their control characters are shown escaped, never sent to
-	// the terminal.
-	for (domain, hold) in &held {
+	// The name and the reply come from remote servers: their control
+	// characters are shown escaped, never sent to the terminal.
+	for (destination, hold) in &held {
 		let _ = writeln!(
 			out,
 			"{}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
-			sanitize(domain),
+			sanitize(destination.as_str()),
 			hold.until,
 			hold.until.saturating_sub(now),
-			hold.level.saturating_add(1),
+			hold.deferrals,
 			sanitize(&hold.reason)
 		);
 	}
@@ -77,11 +81,14 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 /// The line `queue list` adds when destinations are on hold, so the
 /// operator sees why their messages wait. `None` when none is.
 pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
-	let held = active(spool, now).ok()?;
+	let held = in_force(spool, now).ok()?;
 	if held.is_empty() {
 		return None;
 	}
-	let names: Vec<String> = held.iter().map(|(domain, _)| sanitize(domain)).collect();
+	let names: Vec<String> = held
+		.iter()
+		.map(|(destination, _)| sanitize(destination.as_str()))
+		.collect();
 	Some(format!(
 		"{} destinations on hold: {} (see `epistle queue destinations`)",
 		held.len(),
@@ -89,42 +96,84 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 	))
 }
 
-/// `queue release-destination`: forget the hold of one destination, or of
-/// all, so the queue contacts it again at its next decision. The run of
-/// deferrals is forgotten too: a new deferral starts again at the first
-/// step.
+/// The destination whose hold `recipient` of `envelope` waits for, when it
+/// is `wanted` (or any, without `wanted`).
+fn released_by(
+	envelope: &crate::storage::Envelope,
+	recipient: &str,
+	wanted: Option<&Destination>,
+) -> Option<Destination> {
+	let state = envelope.recipient_state(recipient);
+	if state.status != RecipientStatus::Pending || state.throttled == 0 {
+		return None;
+	}
+	let domain = Destination::of_recipient(recipient);
+	let host = state.remote.as_deref().map(Destination::new);
+	match wanted {
+		None => Some(domain),
+		Some(wanted) if *wanted == domain => Some(domain),
+		Some(wanted) if host.as_ref() == Some(wanted) => host,
+		Some(_) => None,
+	}
+}
+
+/// `queue release-destination`: make every recipient waiting for the hold
+/// of one destination (or of all, with `--all`) due now, and start its
+/// backoff over.
 pub(super) fn release(
 	spool: &FsSpool,
 	target: &DestinationTarget,
+	now: u64,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let domain = target.domain.as_deref().map(|domain| match domain.trim() {
-		// A held sender is named by its account, kept as written.
-		sender if sender.starts_with("sender:") => sender.to_string(),
-		domain => domain.trim_end_matches('.').to_ascii_lowercase(),
-	});
-	let mut released = 0usize;
-	let written = spool.update_holds(|holds| match &domain {
-		Some(domain) => released = usize::from(holds.remove(domain).is_some()),
-		None => {
-			released = holds.len();
-			holds.clear();
+	let wanted = target.domain.as_deref().map(Destination::new);
+	let ids = match spool.list() {
+		Ok(ids) => ids,
+		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
+	};
+	let mut released: BTreeSet<Destination> = BTreeSet::new();
+	for id in ids {
+		// Only entries with a recipient waiting for the hold are written.
+		let waits = spool.load_envelope(id).is_ok_and(|envelope| {
+			envelope
+				.recipients
+				.iter()
+				.any(|recipient| released_by(&envelope, recipient, wanted.as_ref()).is_some())
+		});
+		if !waits {
+			continue;
 		}
-	});
-	if let Err(error) = written {
-		return super::fail(format_args!("writing destination holds: {error}"));
+		let edited = spool.update_envelope(id, |envelope| {
+			for recipient in envelope.recipients.clone() {
+				let Some(matched) = released_by(envelope, &recipient, wanted.as_ref()) else {
+					continue;
+				};
+				released.insert(matched);
+				let mut state = envelope.recipient_state(&recipient);
+				state.throttled = 0;
+				state.next_attempt = now;
+				envelope.set_recipient_state(&recipient, state);
+			}
+			envelope.settle();
+		});
+		match edited {
+			Ok(_) => {}
+			// The worker delivered or dropped it since the listing.
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return super::fail(format_args!("queue entry {id}: {error}")),
+		}
 	}
-	match domain {
-		Some(domain) if released == 0 => crate::cli::exit::refused(format_args!(
+	match wanted {
+		Some(wanted) if released.is_empty() => crate::cli::exit::refused(format_args!(
 			"no destination on hold: {}",
-			sanitize(&domain)
+			sanitize(wanted.as_str())
 		)),
-		Some(domain) => {
-			let _ = writeln!(out, "released {}", sanitize(&domain));
+		Some(wanted) => {
+			let _ = writeln!(out, "released {}", sanitize(wanted.as_str()));
 			ExitCode::SUCCESS
 		}
 		None => {
-			let _ = writeln!(out, "released {released} destinations");
+			let _ = writeln!(out, "released {} destinations", released.len());
 			ExitCode::SUCCESS
 		}
 	}
