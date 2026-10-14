@@ -11,10 +11,6 @@ mod tests_values;
 mod keys;
 pub use keys::Key;
 
-#[path = "limits_tenant_keys.rs"]
-mod tenant_keys;
-pub(super) use tenant_keys::TenantKey;
-
 use crate::config::Config;
 use std::io::Write;
 use std::path::Path;
@@ -40,10 +36,17 @@ fn edit_document(
 		.map(|input| values::parse_value(input, key.unit(), key.max()))
 		.transpose()
 		.map_err(|error| format!("{}: {error}", key.name()))?;
-	let value_i64 = match value {
-		Some(value) => Some(value as i64),
-		None => None,
-	};
+	// The limiter reads a zero cap as no limit at all, the opposite of what
+	// `set submission-rate 0` looks like it asks for. Removing the limit is
+	// `unset`; a cap of zero is refused rather than silently lifting it.
+	if matches!(key, Key::SubmissionRate) && value == Some(0) {
+		return Err(format!(
+			"{}: 0 would remove the limit; use `unset` to remove it",
+			key.name()
+		));
+	}
+	// `parse_value` caps every key at or below `i64::MAX`.
+	let value_i64 = value.map(|value| i64::try_from(value).unwrap_or(i64::MAX));
 	let map = match (domain, tenant, key) {
 		(Some(_), Some(_), _) => {
 			return Err("--domain and --tenant cannot be combined".into());
@@ -63,9 +66,7 @@ fn edit_document(
 	};
 	let mut document = super::config_edit::ConfigDocument::open(path)?;
 	match (map, domain, value_i64) {
-		(Some(map), Some(domain), Some(value)) => {
-			document.set_map_entry(map, domain, value)?
-		}
+		(Some(map), Some(domain), Some(value)) => document.set_map_entry(map, domain, value)?,
 		(Some(map), Some(domain), None) => document.remove_map_entry(map, domain)?,
 		(_, _, Some(value)) => document.set_scalar(key.field(), value)?,
 		(_, _, None) => document.remove_scalar(key.field()),
@@ -112,9 +113,7 @@ fn edit_tenant_document(
 	let tenant = match tenant {
 		Some(name) => name,
 		None => {
-			return Err(
-			 "--tenant is required to edit a per-tenant limit".to_string(),
-			);
+			return Err("--tenant is required to edit a per-tenant limit".to_string());
 		}
 	};
 	edit_tenant(path, tenant, key, value)
@@ -135,13 +134,8 @@ fn edit_tenant(
 	}
 	let mut document = super::config_edit::ConfigDocument::open(path)?;
 	let toml_value = value.map(toml_edit::Value::from);
-	let edited = document.edit_array_entry_field(
-		&["tenant"],
-		tenant,
-		"name",
-		key.field(),
-		toml_value,
-	)?;
+	let edited =
+		document.edit_array_entry_field(&["tenant"], tenant, "name", key.field(), toml_value)?;
 	if !edited {
 		return Err(format!("tenant \"{tenant}\" not found in config"));
 	}
@@ -224,7 +218,10 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	}
 	// Per-domain overrides for quota and submission-rate.
 	let mut domain_overrides = serde_json::Map::new();
-	for domain in config.domains.iter().chain(config.domain_quotas.keys())
+	for domain in config
+		.domains
+		.iter()
+		.chain(config.domain_quotas.keys())
 		.chain(config.domain_submission_limits.keys())
 	{
 		let entry = serde_json::json!({
@@ -233,7 +230,10 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 		});
 		domain_overrides.insert(domain.clone(), entry);
 	}
-	limits.insert("domain-overrides".to_string(), serde_json::Value::Object(domain_overrides));
+	limits.insert(
+		"domain-overrides".to_string(),
+		serde_json::Value::Object(domain_overrides),
+	);
 	// Per-tenant aggregate submission-rate. Other per-tenant limits (quota,
 	// max_accounts, max_domains) are accounted for under `[[tenant]]` in the
 	// config itself; the CLI surfaces only the operator-editable dial here.
@@ -383,7 +383,10 @@ fn run_with_restart(
 				"value": value.clone().and_then(|raw| values::parse_value(&raw, key.unit(), key.max()).ok()),
 			});
 			writeln!(out, "{payload}").map_err(|error| error.to_string())?;
-			return Ok(ExitCode::SUCCESS);
+			// The running server applies the change the same way with or
+			// without `--json`; its notices go to the status stream, so
+			// stdout stays one JSON object.
+			return super::config_edit::after_change_with(&config, outcome, true, status, restart);
 		}
 		writeln!(
 			status,

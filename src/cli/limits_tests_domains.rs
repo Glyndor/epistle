@@ -39,10 +39,16 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let modified = std::fs::metadata(file.path()).unwrap().modified().unwrap();
 	assert_eq!(
-		edit_document(file.path(), Key::Quota, Some("example.org"), None, Some("10G"))
-			.unwrap()
-			.commit()
-			.unwrap(),
+		edit_document(
+			file.path(),
+			Key::Quota,
+			Some("example.org"),
+			None,
+			Some("10G")
+		)
+		.unwrap()
+		.commit()
+		.unwrap(),
 		super::super::config_edit::Outcome::Unchanged
 	);
 	assert_eq!(

@@ -187,14 +187,18 @@ fn limits_show_json_lists_every_domain_override_and_every_tenant_entry() {
 	assert_eq!(submission["source"], "default");
 }
 
-/// `epistle limits set --json` must emit a single JSON object on
-/// stdout and skip the human-readable status line on stderr, so an
-/// operator's pipeline can parse the result without touching a TTY.
+/// `epistle limits set --json` emits a single JSON object on stdout and
+/// still applies the change to the running server: a JSON caller gets the
+/// same restart as everyone else, not a saved file the server ignores.
 #[test]
-fn limits_set_with_json_emits_only_the_confirmation_object() {
-	let (_dir, file) = config_file();
+fn limits_set_with_json_emits_only_the_confirmation_object_and_restarts() {
+	let (dir, file) = config_file();
+	let compose = crate::cli::init::compose_file_path(&dir.path().canonicalize().unwrap());
+	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	std::fs::write(&compose, "services: {}\n").unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
+	let mut restarted = false;
 	let code = super::run_with_restart(
 		file.path(),
 		super::Action::Set {
@@ -207,20 +211,57 @@ fn limits_set_with_json_emits_only_the_confirmation_object() {
 		false,
 		&mut out,
 		&mut status,
-		|_, _| panic!("json path must not restart"),
+		|_, _| {
+			restarted = true;
+			ExitCode::SUCCESS
+		},
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(restarted, "the running server must pick up the change");
 	assert!(
 		status.is_empty(),
-		"json path must not write the human-readable status line"
+		"nothing but the restart on the status stream"
 	);
-	let payload: serde_json::Value =
-		serde_json::from_slice(out.as_slice()).expect("json payload");
+	let payload: serde_json::Value = serde_json::from_slice(out.as_slice()).expect("json payload");
 	assert_eq!(payload["result"], "saved");
 	assert_eq!(payload["key"], "submission-rate");
 	assert_eq!(payload["action"], "set");
 	assert_eq!(payload["scope"]["type"], "global");
 	assert_eq!(payload["value"], 120_u64);
+}
+
+/// A submission rate of zero is refused at every scope: the limiter reads
+/// zero as no limit, so accepting it would lift the cap it looks like it
+/// tightens. `unset` is how a limit is removed.
+#[test]
+fn a_zero_submission_rate_is_refused() {
+	let (_dir, file) = config_file();
+	let before = std::fs::read_to_string(file.path()).unwrap();
+	for (domain, tenant) in [
+		(None, None),
+		(Some("example.org"), None),
+		(None, Some("acme")),
+	] {
+		let mut status = Vec::new();
+		let code = super::run_with_restart(
+			file.path(),
+			super::Action::Set {
+				key: Key::SubmissionRate,
+				domain: domain.map(str::to_string),
+				tenant: tenant.map(str::to_string),
+				value: "0".into(),
+				json: false,
+			},
+			false,
+			&mut Vec::new(),
+			&mut status,
+			|_, _| panic!("nothing was saved"),
+		);
+		assert_eq!(code, ExitCode::FAILURE);
+		let status = String::from_utf8(status).unwrap();
+		assert!(status.contains("use `unset`"), "{status}");
+	}
+	assert_eq!(std::fs::read_to_string(file.path()).unwrap(), before);
 }
 
 /// `epistle limits set --json` carries the domain and tenant scope
@@ -248,8 +289,7 @@ fn limits_set_with_json_records_domain_and_tenant_scope() {
 		&mut status,
 		|_, _| panic!("must not restart"),
 	);
-	let payload: serde_json::Value =
-		serde_json::from_slice(out.as_slice()).expect("json payload");
+	let payload: serde_json::Value = serde_json::from_slice(out.as_slice()).expect("json payload");
 	assert_eq!(payload["scope"]["type"], "domain");
 	assert_eq!(payload["scope"]["name"], "example.org");
 	assert_eq!(payload["value"], 20_u64);

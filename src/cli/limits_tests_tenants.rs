@@ -43,14 +43,8 @@ fn tenant_submission_rate_set_unset_round_trip() {
 			.expect("config");
 	assert_eq!(config.tenants.len(), 1);
 	assert_eq!(config.tenants[0].submission_rate_limit_per_min, Some(120));
-	let doc = edit_document(
-		file.path(),
-		Key::SubmissionRate,
-		None,
-		Some("acme"),
-		None,
-	)
-	.expect("unset tenant submission-rate");
+	let doc = edit_document(file.path(), Key::SubmissionRate, None, Some("acme"), None)
+		.expect("unset tenant submission-rate");
 	assert_eq!(
 		doc.commit().unwrap(),
 		super::super::config_edit::Outcome::Changed
@@ -59,11 +53,9 @@ fn tenant_submission_rate_set_unset_round_trip() {
 		Config::parse_text(&std::fs::read_to_string(file.path()).unwrap(), file.path())
 			.expect("config");
 	assert_eq!(config.tenants[0].submission_rate_limit_per_min, None);
-	let restored = std::fs::read_to_string(file.path()).unwrap();
-	let mut file_handle = file.as_file();
-	file_handle.set_len(0).unwrap();
-	file_handle.rewind().unwrap();
-	file_handle.write_all(original.as_bytes()).unwrap();
+	let now: toml::Value = toml::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+	let before: toml::Value = toml::from_str(&original).unwrap();
+	assert_eq!(now, before, "set then unset leaves the config as it was");
 }
 
 #[test]
