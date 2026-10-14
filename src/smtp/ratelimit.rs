@@ -10,20 +10,29 @@
 //!
 //! ## Bounded memory and constant per-call work
 //!
-//! The `entries` map is capped at [`MAX_ENTRIES`] keys. A key already in the
-//! map is handled in place, so an active sender keeps its budget while the
-//! map sits at the cap. A key that is not in the map needs a free slot: the
-//! `windows` queue records `(key, window_start)` in the order windows began,
-//! so its first live record is the entry whose window is the oldest. That
-//! entry is dropped when its window is over. When it is still running the
-//! limiter either refuses the new key ([`WindowLimiter::refusing_new_keys`],
-//! used for the submission limits, whose keys are server-authenticated
-//! accounts and tenants: an active window is never reset by somebody else's
-//! traffic) or evicts it ([`WindowLimiter::new`], used for the inbound limits,
-//! whose keys come from the network: refusing there would let a flood of
-//! fresh keys defer every new sender). Records whose window has since been
-//! replaced are skipped and the queue is compacted once it holds twice the
-//! cap, so each call does O(1) amortized work and memory stays bounded.
+//! A key already in the map is handled in place, so an active sender keeps
+//! its budget however full the map is. The `windows` queue records
+//! `(key, window_start)` in the order windows began, so its first live
+//! record is the entry whose window is the oldest. Records whose window has
+//! since been replaced are skipped, and the queue is compacted once it holds
+//! twice the larger of the map and [`MAX_ENTRIES`], so each call does O(1)
+//! amortized work.
+//!
+//! What happens to an unseen key once the map holds [`MAX_ENTRIES`] keys
+//! depends on who chooses the keys:
+//!
+//! - [`WindowLimiter::new`], for the inbound limits, whose keys come from
+//!   the network (client IPs, envelope senders). The map is capped: the
+//!   oldest window makes room, running or not, because refusing would let a
+//!   flood of fresh keys defer every new sender.
+//! - [`WindowLimiter::for_authenticated_keys`], for the submission limits,
+//!   whose keys are accounts and tenants the server authenticated, a set the
+//!   directory bounds. A new key is always admitted and a running window is
+//!   never dropped for it: refusing would lock every account that had not
+//!   sent yet out of submission once [`MAX_ENTRIES`] accounts had sent in
+//!   one window, and evicting would reset a sender's window. Past the cap
+//!   each new key still drops the oldest window if it is over, so the map
+//!   stays near the number of accounts sending inside one window.
 //!
 //! `limit == 0` is treated as "no limit" (always allowed): the policy layer
 //! is expected to skip the call when the resolved limit is `None`, so a
@@ -32,11 +41,9 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
-/// Hard cap on the `entries` map. Once [`MAX_ENTRIES`] distinct keys are
-/// tracked, an unseen key takes the slot of the entry whose window is the
-/// oldest, provided that window is over (or the limiter evicts active
-/// entries); a live sender keeps its budget through every call that hits
-/// a full map.
+/// Size of the `entries` map past which an unseen key makes room: by
+/// evicting the oldest window ([`WindowLimiter::new`]), or by dropping it
+/// only when it is over ([`WindowLimiter::for_authenticated_keys`]).
 pub const MAX_ENTRIES: usize = 10_000;
 
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
@@ -48,9 +55,10 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub struct WindowLimiter {
 	/// Window length in seconds.
 	window_secs: u64,
-	/// What an unseen key does when the map is full and the oldest window
-	/// is still running: `true` refuses the key, `false` evicts that entry.
-	refuse_when_full: bool,
+	/// The keys are authenticated accounts and tenants, bounded by the
+	/// directory: past the cap, a new key is admitted without evicting a
+	/// running window. `false` caps the map by evicting the oldest window.
+	authenticated_keys: bool,
 	/// The shared mutable map plus the window-order queue. Both are
 	/// guarded by a single mutex so `check` cannot deadlock with itself
 	/// across the two structures.
@@ -77,11 +85,13 @@ struct StateInner {
 
 impl StateInner {
 	/// Record that `key` started a window at `start`, compacting the queue
-	/// when dead records make it twice the size of the cap. A compaction
-	/// is O(cap) and follows at least `cap` pushes, so O(1) amortized.
+	/// when dead records make it twice the size of the map (or of the cap,
+	/// when the map is smaller). A compaction is O(queue) and leaves one
+	/// record per entry, so the next one follows at least as many pushes:
+	/// O(1) amortized.
 	fn record_window(&mut self, key: String, start: u64) {
 		self.windows.push_back((key, start));
-		if self.windows.len() > 2 * MAX_ENTRIES {
+		if self.windows.len() > 2 * self.entries.len().max(MAX_ENTRIES) {
 			let entries = &self.entries;
 			self.windows
 				.retain(|(key, start)| entries.get(key).is_some_and(|entry| entry.0 == *start));
@@ -95,7 +105,7 @@ impl StateInner {
 		loop {
 			let Some((key, start)) = self.windows.front() else {
 				// The queue is empty but the map is full: an entry
-				// escaped its record. Refuse rather than panic.
+				// escaped its record. Free nothing rather than panic.
 				return false;
 			};
 			#[cfg(test)]
@@ -144,20 +154,21 @@ impl WindowLimiter {
 	pub fn new(window_secs: u64) -> Self {
 		WindowLimiter {
 			window_secs: window_secs.max(1),
-			refuse_when_full: false,
+			authenticated_keys: false,
 			state: Mutex::new(StateInner::default()),
 		}
 	}
 
-	/// Like [`new`](Self::new), but with the map full of running windows
-	/// an unseen key is refused instead of evicting one. Used for the
-	/// submission limits: their keys are accounts and tenants the server
-	/// authenticated, so no amount of traffic from one sender can reset
-	/// another sender's running window, and a sender cannot reset its
-	/// own by pushing others out.
-	pub fn refusing_new_keys(window_secs: u64) -> Self {
+	/// Like [`new`](Self::new), for keys the server authenticated
+	/// (accounts and tenants), whose number the directory bounds. A new key
+	/// is always admitted and never evicts a running window, so no amount
+	/// of traffic resets a sender's window, and no number of accounts
+	/// sending at once locks the others out. Windows that are over still
+	/// make room, which keeps the map near the number of keys active in
+	/// one window.
+	pub fn for_authenticated_keys(window_secs: u64) -> Self {
 		WindowLimiter {
-			refuse_when_full: true,
+			authenticated_keys: true,
 			..Self::new(window_secs)
 		}
 	}
@@ -202,10 +213,13 @@ impl WindowLimiter {
 		if count > limit {
 			return false;
 		}
-		if state.entries.len() >= MAX_ENTRIES
-			&& !state.free_slot(now, self.window_secs, !self.refuse_when_full)
-		{
-			return false;
+		if state.entries.len() >= MAX_ENTRIES {
+			let freed = state.free_slot(now, self.window_secs, !self.authenticated_keys);
+			// The network-keyed map is capped; an authenticated key is
+			// admitted whether or not a slot was freed.
+			if !freed && !self.authenticated_keys {
+				return false;
+			}
 		}
 		state.entries.insert(key_lc.clone(), (now, count));
 		state.record_window(key_lc, now);

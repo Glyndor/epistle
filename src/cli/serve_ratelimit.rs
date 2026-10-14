@@ -31,10 +31,10 @@ pub(super) struct RateLimiters {
 pub(super) fn build_rate_limiters(config: &Config) -> RateLimiters {
 	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
 		|| !config.domain_submission_limits.is_empty();
-	// Keyed by authenticated account: a full map refuses a new account
-	// rather than reset a running window (see `refusing_new_keys`).
+	// Keyed by authenticated account: never refuses an account for map
+	// size and never resets a running window (see `for_authenticated_keys`).
 	let send_limiter =
-		has_any_submission_limit.then(|| Arc::new(SendLimiter::refusing_new_keys(60)));
+		has_any_submission_limit.then(|| Arc::new(SendLimiter::for_authenticated_keys(60)));
 	let inbound_ip_limit = config
 		.inbound_rate_limit_per_ip_per_min
 		.map(|per_min| InboundLimit {

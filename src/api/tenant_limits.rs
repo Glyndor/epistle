@@ -54,7 +54,7 @@ impl TenantRuntime {
 		// number travels to `check` instead of into `new`.
 		let send_limiter = config
 			.submission_rate_limit_per_min
-			.map(|_| Arc::new(SendLimiter::refusing_new_keys(60)));
+			.map(|_| Arc::new(SendLimiter::for_authenticated_keys(60)));
 		TenantRuntime {
 			config,
 			send_limiter,

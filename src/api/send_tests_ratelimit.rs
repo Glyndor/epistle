@@ -69,7 +69,7 @@ fn draft(to: &str, text: &str) -> String {
 #[tokio::test]
 async fn the_account_limit_is_one_budget_across_smtp_rest_and_jmap() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let limiter = Arc::new(SendLimiter::refusing_new_keys(60));
+	let limiter = Arc::new(SendLimiter::for_authenticated_keys(60));
 	assert!(limiter.check("alice", 3, now()), "SMTP spends one unit");
 	let app = router(limited(dir.path(), &limiter, 3));
 	let (status, body) = api_send(&app, &["bob@elsewhere.example"], "hi").await;
@@ -91,7 +91,7 @@ async fn the_account_limit_is_one_budget_across_smtp_rest_and_jmap() {
 #[tokio::test]
 async fn a_first_send_wider_than_the_limit_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let limiter = Arc::new(SendLimiter::refusing_new_keys(60));
+	let limiter = Arc::new(SendLimiter::for_authenticated_keys(60));
 	let app = router(limited(dir.path(), &limiter, 2));
 	let three = [
 		"a@elsewhere.example",
@@ -115,7 +115,7 @@ fn scanned(dir: &std::path::Path, clamd: &FakeClamd) -> ApiState {
 	let split = SplitDelivery::new(dir, directory).expect("sink");
 	let hook = Arc::new(ClamdHook::new(clamd.socket.clone()));
 	let sink = ScanningSink::wrap(true, Arc::new(split), Some(hook), None, None).expect("sink");
-	let limiter = Arc::new(SendLimiter::refusing_new_keys(60));
+	let limiter = Arc::new(SendLimiter::for_authenticated_keys(60));
 	limited(dir, &limiter, 1).with_outbound(sink)
 }
 
@@ -147,7 +147,7 @@ async fn a_send_refused_on_the_way_out_costs_nothing() {
 #[tokio::test]
 async fn jmap_sends_to_and_charges_the_deduplicated_to_cc_and_bcc_only() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let limiter = Arc::new(SendLimiter::refusing_new_keys(60));
+	let limiter = Arc::new(SendLimiter::for_authenticated_keys(60));
 	let app = router(limited(dir.path(), &limiter, 2));
 	let raw = "From: alice@example.org\r\nTo: bob@elsewhere.example\r\n\
 		Cc: bob@ELSEWHERE.example, carol@elsewhere.example\r\n\
