@@ -296,10 +296,10 @@ impl ApiState {
 	/// apply the operator's `[server] max_message_size`. Must be set
 	/// before the state is shared. `0` keeps the default.
 	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
-		if let Some(inner) = Arc::get_mut(&mut self.inner) {
-			if bytes > 0 {
-				inner.max_message_size = bytes;
-			}
+		if let Some(inner) = Arc::get_mut(&mut self.inner)
+			&& bytes > 0
+		{
+			inner.max_message_size = bytes;
 		}
 		self
 	}
