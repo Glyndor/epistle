@@ -80,6 +80,9 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 	ExitCode::SUCCESS
 }
 
+/// The most destinations the `queue list` summary names.
+const SUMMARY_NAMES: usize = 10;
+
 /// The line `queue list` adds when destinations are on hold, so the
 /// operator sees why their messages wait. `None` when none is.
 pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
@@ -87,8 +90,11 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 	if held.is_empty() {
 		return None;
 	}
+	// A few names, not one line as long as the spool is wide: the full list
+	// is what `queue destinations` is for.
 	let names: Vec<String> = held
 		.iter()
+		.take(SUMMARY_NAMES)
 		.map(|(destination, _)| {
 			format!(
 				"{} {}",
@@ -97,8 +103,12 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 			)
 		})
 		.collect();
+	let more = match held.len().saturating_sub(SUMMARY_NAMES) {
+		0 => String::new(),
+		left => format!(" and {left} more"),
+	};
 	Some(format!(
-		"{} destinations on hold: {} (see `epistle queue destinations`)",
+		"{} destinations on hold: {}{more} (see `epistle queue destinations`)",
 		held.len(),
 		names.join(", ")
 	))

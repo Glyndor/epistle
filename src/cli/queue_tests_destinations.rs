@@ -210,6 +210,35 @@ fn releasing_an_exchanger_frees_the_mail_of_other_domains_waiting_for_it() {
 }
 
 #[test]
+fn the_queue_listing_names_a_few_holds_however_many_there_are() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	for n in 0..30 {
+		throttled(
+			&spool,
+			&format!("bob@d{n:02}.example"),
+			(now_epoch() + 3600, 1),
+			"421 slow down",
+			"mx.provider.example",
+		);
+	}
+	let mut out = Vec::new();
+
+	assert_eq!(list(dir.path(), &mut out), ExitCode::SUCCESS);
+
+	let out = String::from_utf8(out).expect("utf8");
+	let line = out.lines().last().expect("summary");
+	assert!(
+		line.starts_with("31 destinations on hold: domain d00.example, "),
+		"{line}"
+	);
+	assert!(
+		line.ends_with("domain d09.example and 21 more (see `epistle queue destinations`)"),
+		"{line}"
+	);
+}
+
+#[test]
 fn release_destination_needs_a_domain_or_all() {
 	for args in [
 		vec!["epistle", "queue", "release-destination"],
