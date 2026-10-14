@@ -2,6 +2,7 @@
 
 pub mod bounce;
 pub mod client;
+pub mod limits;
 pub mod reply;
 pub(crate) mod resolver;
 pub mod schedule;

@@ -73,20 +73,19 @@ impl Worker {
 		out
 	}
 
-	/// The recipients of `entry` due at `now`, minus those on a suppression
+	/// The `due` recipients of an entry, minus those on a suppression
 	/// list (globally or for the sending account). Those hard-bounced before:
 	/// they are recorded as failed with no second report, and never contacted.
 	pub(super) fn skip_suppressed(
 		&self,
 		id: uuid::Uuid,
-		entry: &SpoolEntry,
-		now: u64,
+		envelope: &crate::storage::Envelope,
+		due: Vec<String>,
 	) -> std::io::Result<Vec<String>> {
-		let due = entry.envelope.due(now);
 		let Some(suppression) = &self.suppression else {
 			return Ok(due);
 		};
-		let account = &entry.envelope.reverse_path;
+		let account = &envelope.reverse_path;
 		let (skipped, due): (Vec<String>, Vec<String>) = due.into_iter().partition(|recipient| {
 			suppression.is_suppressed(recipient)
 				|| suppression.is_suppressed_for(account, recipient)
@@ -105,14 +104,14 @@ impl Worker {
 			})?;
 			for recipient in &skipped {
 				self.log_outcome(
-					&entry.envelope,
+					envelope,
 					recipient,
 					DeliveryOutcome::Suppressed,
 					None,
 					Some("recipient is on the suppression list"),
 					0,
 				);
-				self.notify_suppressed(id, recipient, &entry.envelope.extra);
+				self.notify_suppressed(id, recipient, &envelope.extra);
 			}
 		}
 		Ok(due)

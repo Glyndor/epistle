@@ -58,6 +58,8 @@ pub struct Script {
 	pub starttls: bool,
 	/// Where the exchanger stops answering.
 	pub hang: Option<Hang>,
+	/// How long the exchanger takes to answer the final dot.
+	pub delay: Option<std::time::Duration>,
 }
 
 impl Script {
@@ -371,6 +373,9 @@ async fn serve(
 				}
 				if hang_on(Hang::DataEnd) {
 					return stall().await;
+				}
+				if let Some(delay) = script.delay {
+					tokio::time::sleep(delay).await;
 				}
 				let reply = script
 					.data

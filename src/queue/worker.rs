@@ -1,10 +1,8 @@
 //! The queue worker: drains the outbound spool.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::smtp::address::Address;
 use crate::smtp::sink::MessageSink;
 use crate::storage::{FsSpool, RecipientStatus, SpoolEntry};
 
@@ -16,6 +14,8 @@ use conversation::Conversation;
 mod conversation;
 #[path = "worker_reports.rs"]
 mod reports;
+#[path = "worker_scheduler.rs"]
+mod scheduler;
 
 /// Default give-up window: a message older than this is bounced (RFC 5321
 /// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
@@ -64,6 +64,13 @@ pub struct Worker {
 	/// (`[storage] delivery_log_days = 0`); the writer is then a no-op
 	/// and no records are produced.
 	delivery_log: Option<crate::storage::DeliveryLog>,
+	/// How many conversations run at once, overall and per domain.
+	limits: super::limits::Limits,
+	/// Recipients in conversation, and the slots in use.
+	claims: scheduler::Claims,
+	/// Held while an entry is settled, so two passes never send the same
+	/// failure report twice.
+	settling: std::sync::Mutex<()>,
 }
 
 impl Worker {
@@ -87,7 +94,17 @@ impl Worker {
 			schedule: super::RetrySchedule::default(),
 			jitter: super::schedule::random_factor,
 			delivery_log: None,
+			limits: super::limits::Limits::default(),
+			claims: scheduler::Claims::default(),
+			settling: std::sync::Mutex::new(()),
 		}
+	}
+
+	/// Run up to `total` conversations at once, and up to `per_domain` of
+	/// them with any one recipient domain. Zero keeps the default.
+	pub fn with_concurrency(mut self, total: usize, per_domain: usize) -> Self {
+		self.limits = super::limits::Limits::new(total, per_domain);
+		self
 	}
 
 	/// Enable the per-recipient delivery log. A `0`-retention `log` is
@@ -238,86 +255,46 @@ impl Worker {
 		now.saturating_sub(created)
 	}
 
-	/// Run forever, scanning the spool periodically.
+	/// Run forever: scan the spool every `interval`, and start waiting
+	/// conversations as soon as running ones end, so a slow destination
+	/// never holds up the next scan.
 	pub async fn run(self: Arc<Self>, interval: Duration) {
+		let worker: &Worker = &self;
+		let mut ticks = tokio::time::interval(interval);
+		ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+		let mut schedule = scheduler::Schedule::default();
 		loop {
-			if let Err(error) = self.pass().await {
-				tracing::warn!(%error, "queue pass failed");
-			}
-			tokio::time::sleep(interval).await;
-		}
-	}
-
-	/// One pass over the spool. Returns the number of entries that had at
-	/// least one recipient delivered in this pass.
-	pub async fn pass(&self) -> std::io::Result<usize> {
-		let now = self.now_epoch();
-		let mut delivered = 0;
-		for id in self.spool.list()? {
-			// The CLI edits entries on disk while this runs, so `held` and
-			// `next_attempt` are read from the file on every pass, never kept in
-			// memory. Skip held entries and entries still backing off.
-			match self.spool.load_envelope(id) {
-				Ok(envelope) if envelope.held.is_some() || envelope.next_attempt > now => continue,
-				Ok(_) => {}
-				Err(error) => {
-					tracing::warn!(%id, %error, "cannot read spool entry");
-					continue;
+			let done = tokio::select! {
+				_ = ticks.tick() => None,
+				done = scheduler::next_done(schedule.running_mut()), if !schedule.is_idle() => done,
+			};
+			match done {
+				Some(done) => worker.complete(&mut schedule, done),
+				None => {
+					if let Err(error) = worker.scan(&mut schedule) {
+						tracing::warn!(%error, "queue scan failed");
+					}
 				}
 			}
-			if self.process(id, now).await? {
-				delivered += 1;
+			worker.fill(&mut schedule);
+			if let Some(error) = schedule.error.take() {
+				tracing::warn!(%error, "queue pass failed");
 			}
 		}
-		Ok(delivered)
 	}
 
-	/// Attempt the due recipients of one entry, one conversation per domain,
-	/// then settle what is final. Returns whether any recipient was delivered.
-	///
-	/// Each conversation's outcome is written to the envelope (atomically,
-	/// under the spool lock) as soon as it ends, before the next domain is
-	/// tried. The only window for a duplicate is between the remote's reply
-	/// to DATA and that write: a crash there leaves the recipients of that one
-	/// conversation pending, and the restarted worker sends them the message
-	/// once more. Recipients of earlier conversations are already recorded and
-	/// are not sent again.
-	async fn process(&self, id: uuid::Uuid, now: u64) -> std::io::Result<bool> {
-		let entry = match self.spool.load(id) {
-			Ok(entry) => entry,
-			Err(error) => {
-				tracing::warn!(%id, %error, "cannot read spool entry");
-				return Ok(false);
-			}
-		};
-		let due = self.skip_suppressed(id, &entry, now)?;
-		let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-		let mut unparseable = Vec::new();
-		for recipient in due {
-			match Address::parse(&recipient) {
-				Ok(address) => by_domain
-					.entry(address.domain().to_string())
-					.or_default()
-					.push(recipient),
-				Err(_) => unparseable.push(recipient),
-			}
+	/// One pass over the spool: every due recipient is attempted, in
+	/// conversations that run side by side within the caps, and the pass
+	/// returns once they have all ended. Returns the number of entries that
+	/// had at least one recipient delivered in this pass.
+	pub async fn pass(&self) -> std::io::Result<usize> {
+		let mut schedule = scheduler::Schedule::default();
+		self.scan(&mut schedule)?;
+		self.drain(&mut schedule).await;
+		match schedule.error.take() {
+			Some(error) => Err(error),
+			None => Ok(schedule.delivered),
 		}
-		let mut delivered = false;
-		if !unparseable.is_empty() {
-			let reason = DeliveryError::Permanent("unparseable recipient address".into());
-			let conversation = Conversation::all(&unparseable, None, reason);
-			self.record(id, &entry, &conversation, now)?;
-		}
-		for (domain, recipients) in by_domain {
-			let conversation = self.converse(&entry, &domain, &recipients).await;
-			self.record(id, &entry, &conversation, now)?;
-			delivered |= conversation
-				.results
-				.iter()
-				.any(|(_, result)| result.is_ok());
-		}
-		self.finish(id, now, delivered)?;
-		Ok(delivered)
 	}
 
 	/// Write one conversation's outcome to the envelope, then act on it.
@@ -356,13 +333,25 @@ impl Worker {
 	/// Settle an entry after its conversations: expire it when too old, send
 	/// the failure report for recipients that failed, warn about a long
 	/// delay, and remove it once no recipient is pending.
+	///
+	/// Recipients another conversation holds right now are left alone: they
+	/// are neither expired nor reported until that conversation ends.
 	fn finish(&self, id: uuid::Uuid, now: u64, delivered: bool) -> std::io::Result<()> {
+		let _settling = self
+			.settling
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
 		let envelope = self.spool.load_envelope(id)?;
 		let age = self.message_age(id, now).saturating_sub(envelope.held_secs);
-		if !envelope.pending().is_empty() && age >= self.max_age_secs {
+		let idle: Vec<String> = envelope
+			.pending()
+			.into_iter()
+			.filter(|recipient| !self.claims.holds(id, recipient))
+			.collect();
+		if !idle.is_empty() && age >= self.max_age_secs {
 			// Give up by message age, not attempt count: a recipient down for
 			// hours must not lose mail (RFC 5321 §4.5.4.1).
-			self.expire(id, &envelope.pending())?;
+			self.expire(id, &idle)?;
 		}
 		if delivered {
 			self.metric(|m| m.relayed());
@@ -426,3 +415,7 @@ mod tests_schedule;
 #[cfg(test)]
 #[path = "worker_tests_delivery_log.rs"]
 mod tests_delivery_log;
+
+#[cfg(test)]
+#[path = "worker_tests_parallel.rs"]
+mod tests_parallel;
