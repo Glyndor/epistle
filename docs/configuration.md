@@ -213,6 +213,10 @@ hostname. Supply that certificate and its private key with `--cert` and `--key`.
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
+Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on every listener: SMTP, submission, IMAP, POP3, ManageSieve, the HTTPS API and autoconfig, and DAV. Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
+
+The DANE TLSA record (`_25._tcp.<hostname>`, `3 0 1 <sha256 of the certificate>`) changes with the certificate. When a `[dns]` provider is configured, the server publishes the new record through it, as ACME renewal does. Without one, or when the provider refuses, it logs a warning with the record to publish by hand. `epistle status` fails the `tls` check while a DNSSEC-signed TLSA record does not match the certificate in use, and warns when the certificate expires within 14 days and nothing renews it. With `[acme]`, ACME renews and reloads its own pair and the files are not watched.
+
 | Key | Meaning |
 |---|---|
 | `cert_file` | PEM certificate chain. |
