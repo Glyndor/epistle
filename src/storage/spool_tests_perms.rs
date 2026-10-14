@@ -2,7 +2,12 @@
 //!
 //! Every spool file is created with mode 0600 and every spool directory with
 //! 0700, regardless of the umask. A file already on disk with looser
-//! permissions is retightened on open, and the count is logged once.
+//! permissions is retightened by the start-up audit.
+//!
+//! The tests never change the umask: it is process-wide, and the lib suite
+//! runs thousands of tests in parallel that create files. Under the usual
+//! 022 or 002 umask a create without an explicit mode yields 0644/0664 and
+//! 0755/0775, which the exact-mode assertions below reject.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -30,18 +35,11 @@ fn chmod_dir(path: &Path, mode: u32) {
 	}
 }
 
-/// A freshly written spool entry's files and directories are 0600/0700 even
-/// when nothing else is changing the umask for the process.
+/// A freshly written spool entry's files and directories are exactly
+/// 0600/0700, not whatever the umask leaves.
 #[test]
 fn spool_files_are_owner_only_on_a_permissive_process() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	// Force every newly created file or directory to come out world-writable.
-	// The libc umask is process-wide, so guard the test with the lockfile
-	// pattern this codebase already uses elsewhere.
-	#[allow(unsafe_code)]
-	unsafe {
-		libc::umask(0o000);
-	}
 	let spool = FsSpool::open(dir.path()).expect("open");
 	let id = spool
 		.store(&sample_message_owned(), None, &Default::default())
@@ -99,15 +97,11 @@ fn open_retightens_loose_files_and_logs_once() {
 	assert_eq!(fixed_again, 0, "audit must be idempotent");
 }
 
-/// Even on a confined umask that strips everything, the spool keeps files
-/// owner-readable, so the server itself can read them back after a reload.
+/// The pinned mode keeps files owner-readable, so the server itself reads
+/// them back after a reload.
 #[test]
-fn spool_files_stay_readable_under_a_restrictive_umask() {
+fn spool_files_stay_readable_by_the_owner() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	#[allow(unsafe_code)]
-	unsafe {
-		libc::umask(0o077);
-	}
 	let spool = FsSpool::open(dir.path()).expect("open");
 	let id = spool
 		.store(&sample_message_owned(), None, &Default::default())
@@ -125,10 +119,6 @@ fn spool_files_stay_readable_under_a_restrictive_umask() {
 #[test]
 fn update_envelope_writes_owner_only_staging_files() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	#[allow(unsafe_code)]
-	unsafe {
-		libc::umask(0o000);
-	}
 	let spool = FsSpool::open(dir.path()).expect("open");
 	let id = spool
 		.store(&sample_message_owned(), None, &Default::default())

@@ -1,6 +1,6 @@
 //! `epistle status` reports spool-level security state.
 //!
-//! Two pieces of state the brief calls out, and that an operator cannot
+//! Two pieces of spool state an operator cannot
 //! otherwise read at a glance: whether `encrypt_at_rest` is on (so the
 //! envelope and message body are sealed under the AEAD), and whether every
 //! spool file and directory is currently owner-only (loose permissions on a
@@ -98,7 +98,7 @@ fn a_clean_spool_with_encryption_on_reports_sealed_yes() {
 #[test]
 fn a_loose_file_in_the_spool_warns() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let crypto = crate::storage::MessageCrypto::for_test(&[3u8; 32]);
+	let crypto = crate::storage::MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open");
 	let id = spool
 		.store(
@@ -155,7 +155,7 @@ fn a_loose_file_in_the_spool_warns() {
 #[test]
 fn a_sealed_envelope_after_migration_is_still_sealed_yes() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let crypto = crate::storage::MessageCrypto::for_test(&[3u8; 32]);
+	let crypto = crate::storage::MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open");
 	let _id = spool
 		.store(

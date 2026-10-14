@@ -1,8 +1,8 @@
 //! Envelope at-rest encryption and migration of legacy plaintext envelopes.
 //!
 //! With `encrypt_at_rest = true` the spool binds each `<id>.json` envelope to
-//! the message id with the same ChaCha20-Poly1305 key as the body, so an
-//! envelope cannot be swapped onto another message's body. A spool created
+//! the message id with the same ChaCha20-Poly1305 key as the body, so one
+//! message's envelope is never read as another's. A spool created
 //! before encryption was turned on is migrated on first read: the plaintext
 //! is rewritten encrypted (and atomically renamed in place) so subsequent
 //! loads go through the AEAD. Tampering or attaching the wrong envelope id
@@ -18,7 +18,7 @@ use crate::smtp::session::AcceptedMessage;
 use crate::storage::crypto::MessageCrypto;
 
 fn key() -> [u8; 32] {
-	[7u8; 32]
+	crate::test_fixtures::bytes::<32>()
 }
 
 fn sample() -> AcceptedMessage {
@@ -210,46 +210,37 @@ fn tampered_envelope_fails_closed() {
 	);
 }
 
-/// `load_envelope` decodes the same way and also fails closed on tamper; the
-/// operator CLI cannot sneak a tampered envelope past it either.
+/// `load_envelope` decodes the same way and also fails closed on a swap and
+/// on tamper: the sealed envelope of message A copied over message B's
+/// envelope on disk is refused, not returned as B's.
 #[test]
 fn load_envelope_is_also_aad_bound() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let crypto = MessageCrypto::for_test(&key());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open");
-	let id = spool
+	let id_a = spool
 		.store(&sample(), None, &BTreeMap::new())
-		.expect("store");
+		.expect("store a");
+	let id_b = spool
+		.store(&sample(), None, &BTreeMap::new())
+		.expect("store b");
+	assert_eq!(spool.load_envelope(id_b).expect("load b").id, id_b);
 
-	// Direct load works.
-	let envelope = spool.load_envelope(id).expect("load envelope");
-	assert_eq!(envelope.id, id);
+	let new_dir = dir.path().join("spool/new");
+	std::fs::copy(
+		new_dir.join(format!("{id_a}.json")),
+		new_dir.join(format!("{id_b}.json")),
+	)
+	.expect("swap a over b");
+	let swapped = spool.load_envelope(id_b).expect_err("a swapped envelope must fail");
+	assert!(swapped.to_string().contains("authentication failed"));
 
-	// Rewrite the envelope on disk with a different id's bytes swapped in:
-	// a load must fail rather than return the wrong envelope.
-	let json_a = dir.path().join("spool/new").join(format!("{id}.json"));
-	let mut bytes = std::fs::read(&json_a).expect("read a");
-	let other = Uuid::now_v7();
-	let other_bytes = other.as_bytes();
-	// The AAD is the id, but it isn't written into the envelope, only bound
-	// at seal time. To prove the AAD binding we try to decode the on-disk
-	// bytes under the wrong id through the crypto directly.
-	let crypto = MessageCrypto::for_test(&key());
-	let resealed = std::fs::read(&json_a).expect("read a again");
-	let wrong = crypto.decode_with_aad(&resealed, other_bytes);
-	assert!(
-		matches!(
-			wrong,
-			Err(crate::storage::CryptoAuthError::AuthenticationFailed)
-		),
-		"a wrong-id decode must not succeed"
-	);
-
-	// And a trivial tamper still fails.
+	let path_a = new_dir.join(format!("{id_a}.json"));
+	let mut bytes = std::fs::read(&path_a).expect("read a");
 	let last = bytes.len() - 1;
 	bytes[last] ^= 0x01;
-	std::fs::write(&json_a, &bytes).expect("tamper");
-	let err = spool.load_envelope(id).expect_err("tamper fails");
+	std::fs::write(&path_a, &bytes).expect("tamper");
+	let err = spool.load_envelope(id_a).expect_err("tamper fails");
 	assert!(err.to_string().contains("authentication failed"));
 }
 
