@@ -154,6 +154,15 @@ impl SpoolDir {
 	}
 }
 
+/// How an envelope file was stored on disk: sealed under the AEAD with the
+/// message id as AAD, or the legacy plaintext written before at-rest
+/// encryption covered envelopes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodedEnvelope {
+	Sealed,
+	Plaintext,
+}
+
 impl FsSpool {
 	/// The path of one spooled file. The id is a [`Uuid`] and the extension a
 	/// closed set, so nothing but a plain file name is ever joined onto the root.
@@ -214,7 +223,10 @@ impl FsSpool {
 	}
 
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
-	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
+	/// (`.eml`) files and the envelope (`.json`) sidecar through `crypto`. The
+	/// envelope is sealed with ChaCha20-Poly1305 and bound to the message id as
+	/// associated data, so it cannot be silently swapped onto another message's
+	/// body.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool { root, crypto };
@@ -226,7 +238,7 @@ impl FsSpool {
 	/// Persist one message crash-safely and return its spool id.
 	///
 	/// Both files are first written and fsynced under `tmp/`, then renamed
-	/// into `new/` — envelope last, so a visible envelope guarantees a
+	/// into `new/` , envelope last, so a visible envelope guarantees a
 	/// complete message file next to it. `account` is the local account that
 	/// submitted the message (used by the delivery log); pass `None` for the
 	/// SMTP relay hop that has none. The caller-supplied `extra` correlation
@@ -279,7 +291,10 @@ impl FsSpool {
 
 		write_sync(&tmp_message, &self.crypto.encode(&message.data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
-		write_sync(&tmp_envelope, &envelope_bytes)?;
+		let envelope_sealed = self
+			.crypto
+			.encode_with_aad(&envelope_bytes, id.as_bytes())?;
+		write_sync(&tmp_envelope, &envelope_sealed)?;
 
 		fs::rename(&tmp_message, &final_message)?;
 		fs::rename(&tmp_envelope, &final_envelope)?;
@@ -288,10 +303,7 @@ impl FsSpool {
 
 	/// Load one spooled entry by id.
 	pub fn load(&self, id: Uuid) -> std::io::Result<SpoolEntry> {
-		let envelope_bytes =
-			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		let envelope: Envelope =
-			serde_json::from_slice(&envelope_bytes).map_err(std::io::Error::other)?;
+		let envelope = self.load_envelope(id)?;
 		let body = self.entry_file(SpoolDir::New, id, MessageExt::Eml)?;
 		let data = self.crypto.decode(&crate::util::fs_walk::read(body)?)?;
 		Ok(SpoolEntry { envelope, data })
@@ -323,10 +335,19 @@ impl FsSpool {
 
 	/// Load only the envelope of an entry, never the message body. This is
 	/// what `queue show` uses, so an operator command cannot print mail.
+	///
+	/// Accepts envelopes sealed with the AEAD as well as the legacy plaintext
+	/// form written before `encrypt_at_rest` was turned on. When a plaintext
+	/// envelope is read under encryption-enabled, it is rewritten encrypted in
+	/// place atomically, so subsequent loads go through the AEAD path.
 	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
 		let bytes =
 			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+		let (envelope, decrypted) = self.decode_envelope_bytes(id, &bytes)?;
+		if decrypted == DecodedEnvelope::Plaintext {
+			self.maybe_migrate_envelope(id, &bytes)?;
+		}
+		Ok(envelope)
 	}
 
 	/// Read-modify-write one envelope under the spool lock and return the
@@ -345,19 +366,93 @@ impl FsSpool {
 		edit: impl FnOnce(&mut Envelope),
 	) -> std::io::Result<Envelope> {
 		let _guard = self.lock()?;
-		let mut envelope = self.load_envelope(id)?;
+		let mut envelope = self.read_envelope_unlocked(id)?;
 		edit(&mut envelope);
 		let tmp = self.path_in(
 			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
 		)?;
 		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
-		let written = write_sync(&tmp, &bytes)
+		let sealed = self.crypto.encode_with_aad(&bytes, id.as_bytes())?;
+		let written = write_sync(&tmp, &sealed)
 			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
 		if let Err(error) = written {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);
 		}
 		Ok(envelope)
+	}
+
+	/// Read an envelope file's bytes and decode it. The returned flag tells
+	/// the caller whether the bytes were plaintext (caller should migrate)
+	/// or already sealed (nothing to do).
+	fn decode_envelope_bytes(
+		&self,
+		id: Uuid,
+		bytes: &[u8],
+	) -> std::io::Result<(Envelope, DecodedEnvelope)> {
+		if bytes.starts_with(crate::storage::MAGIC) {
+			let plaintext = self
+				.crypto
+				.decode_with_aad(bytes, id.as_bytes())
+				.map_err(|error| {
+					std::io::Error::other(format!("envelope authentication failed: {error}"))
+				})?;
+			let envelope: Envelope =
+				serde_json::from_slice(&plaintext).map_err(std::io::Error::other)?;
+			Ok((envelope, DecodedEnvelope::Sealed))
+		} else {
+			let envelope: Envelope =
+				serde_json::from_slice(bytes).map_err(std::io::Error::other)?;
+			Ok((envelope, DecodedEnvelope::Plaintext))
+		}
+	}
+
+	/// Read an envelope without holding the lock. Used by `update_envelope`,
+	/// which holds the lock itself, and by `read_envelope_unlocked` which is
+	/// the only path used outside `update_envelope`.
+	fn read_envelope_unlocked(&self, id: Uuid) -> std::io::Result<Envelope> {
+		let bytes =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
+		let (envelope, decrypted) = self.decode_envelope_bytes(id, &bytes)?;
+		if decrypted == DecodedEnvelope::Plaintext {
+			self.maybe_migrate_envelope(id, &bytes)?;
+		}
+		Ok(envelope)
+	}
+
+	/// If encryption is on and the on-disk envelope is plaintext, rewrite it
+	/// encrypted in place. The rewrite goes through `tmp/<uuid>.<uuid>.json`
+	/// and is renamed over the old one, so a reader that happens to look at
+	/// the file mid-rewrite sees either the old plaintext or the new sealed
+	/// envelope, never a half-written file.
+	fn maybe_migrate_envelope(&self, id: Uuid, plain: &[u8]) -> std::io::Result<()> {
+		if !self.crypto.enabled() {
+			return Ok(());
+		}
+		let _guard = self.lock()?;
+		let on_disk =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
+		if on_disk.starts_with(crate::storage::MAGIC) {
+			// Another writer migrated it between our decode and our write.
+			return Ok(());
+		}
+		if on_disk != plain {
+			// The envelope on disk no longer matches what we just decoded
+			// (someone wrote a newer one). Skip: rewriting over a newer
+			// envelope would be a lost update.
+			return Ok(());
+		}
+		let tmp = self.path_in(
+			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
+		)?;
+		let sealed = self.crypto.encode_with_aad(plain, id.as_bytes())?;
+		let written = write_sync(&tmp, &sealed)
+			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
+		if let Err(error) = written {
+			let _ = fs::remove_file(&tmp);
+			return Err(error);
+		}
+		Ok(())
 	}
 
 	/// Take the exclusive spool lock; it is released when the guard drops. The
@@ -428,9 +523,9 @@ impl MessageSink for FsSpool {
 }
 
 /// Create the spool root directory (if missing) along with its `tmp/` and
-/// `new/` children, all at mode 0700. The mode is pinned at create time —
+/// `new/` children, all at mode 0700. The mode is pinned at create time,
 /// `DirBuilder::mode(0o700)` plus `DirBuilder::recursive(true)` so missing
-/// parents are created — so the resulting tree is owner-only regardless of
+/// parents are created , so the resulting tree is owner-only regardless of
 /// the process umask.
 fn create_spool_dir(root: &std::path::Path) -> std::io::Result<()> {
 	let mut builder = std::fs::DirBuilder::new();
@@ -668,3 +763,7 @@ mod tests_edit;
 #[cfg(all(test, unix))]
 #[path = "spool_tests_perms.rs"]
 mod tests_perms;
+
+#[cfg(test)]
+#[path = "spool_tests_env_crypto.rs"]
+mod tests_env_crypto;
