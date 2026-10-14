@@ -16,7 +16,7 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 		return Err(bad());
 	}
 	let rest = rest.trim();
-	let (flags, date, literal) = parse_flags_and_literal(rest, &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(tag, rest, &bad)?;
 	let utf8 = utf8_data_item(rest);
 	Ok(Command::Append {
 		mailbox,
@@ -73,7 +73,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, date, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(tag, rest.trim(), &bad)?;
 	Ok(Command::Replace {
 		sequence,
 		mailbox,
@@ -92,6 +92,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 /// (RFC 7888): for the non-synchronizing `{n+}` form the bytes arrive even
 /// when the command is rejected, and the server must consume them.
 fn parse_flags_and_literal(
+	tag: &str,
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
 ) -> Result<(Vec<String>, Option<InternalDate>, LiteralAnnouncement), ParseError> {
@@ -110,8 +111,13 @@ fn parse_flags_and_literal(
 
 	let (date, literal_text) = split_date_time(literal_text).map_err(|()| bad())?;
 	let literal = literal_announcement(literal_text).ok_or_else(bad)?;
-	if literal.size == 0 || literal.size > MAX_APPEND_SIZE {
+	if literal.size == 0 {
 		return Err(bad());
+	}
+	// RFC 7889 §3: a message above the advertised APPENDLIMIT is refused
+	// with TOOBIG, which tells the client not to retry it unchanged.
+	if literal.size > MAX_APPEND_SIZE {
+		return Err(ParseError::TooBig(tag.to_string()));
 	}
 	Ok((flags, date, literal))
 }
@@ -141,12 +147,18 @@ pub(crate) fn literal_announcement_in_tail(line: &str) -> Option<LiteralAnnounce
 	literal_announcement(line)
 }
 
-/// Find the literal announcement in a full command line, but only for
-/// commands that actually carry literals (`APPEND` / `REPLACE`). The
-/// parser may have rejected the line; in that case the session uses this
-/// to know how many bytes (RFC 7888 §4) the network layer must discard.
+/// Find the literal announcement in a full tagged command line, but only
+/// for commands that actually carry literals (`APPEND`, `REPLACE` and
+/// `UID REPLACE`). The parser may have rejected the line; in that case the
+/// session uses this to know how many bytes (RFC 7888 §4) the network
+/// layer must discard.
 pub(crate) fn literal_announcement_in_line(line: &str) -> Option<LiteralAnnouncement> {
-	let (verb, args) = line.split_once(' ')?;
+	let (_tag, command) = line.split_once(' ')?;
+	let command = match command.split_once(' ') {
+		Some((verb, rest)) if verb.eq_ignore_ascii_case("UID") => rest,
+		_ => command,
+	};
+	let (verb, args) = command.split_once(' ')?;
 	if !verb.eq_ignore_ascii_case("APPEND") && !verb.eq_ignore_ascii_case("REPLACE") {
 		return None;
 	}

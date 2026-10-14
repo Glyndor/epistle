@@ -1,6 +1,6 @@
 use super::parse::parse_astring;
 use super::search_key::parse_search_key;
-use super::{Command, ParseError, ReturnOpt, SearchScope, SortKey};
+use super::{Command, ParseError, ReturnOpt, SearchScope, SortKey, ThreadAlgorithm};
 
 /// Parse `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 pub(super) fn parse_sort(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
@@ -29,14 +29,20 @@ pub(super) fn parse_sort(tag: &str, args: &str, uid: bool) -> Result<Command, Pa
 	})
 }
 
-/// Parse `THREAD <algorithm> <charset> <search-criteria>` (RFC 5256). Only the
-/// ORDEREDSUBJECT algorithm is supported.
+/// Parse `THREAD <algorithm> <charset> <search-criteria>` (RFC 5256).
+/// ORDEREDSUBJECT and REFERENCES are both supported; the parser only
+/// accepts what the capability list advertises, so the dispatch step
+/// can rely on the discriminant.
 pub(super) fn parse_thread(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (algorithm, after) = args.trim().split_once(' ').ok_or_else(bad)?;
-	if !algorithm.eq_ignore_ascii_case("ORDEREDSUBJECT") {
+	let algorithm = if algorithm.eq_ignore_ascii_case("ORDEREDSUBJECT") {
+		ThreadAlgorithm::OrderedSubject
+	} else if algorithm.eq_ignore_ascii_case("REFERENCES") {
+		ThreadAlgorithm::References
+	} else {
 		return Err(bad());
-	}
+	};
 	// A charset token precedes the search criteria; accept and ignore it.
 	let (_charset, criteria_text) = after.trim_start().split_once(' ').ok_or_else(bad)?;
 	let mut criteria = Vec::new();
@@ -49,7 +55,11 @@ pub(super) fn parse_thread(tag: &str, args: &str, uid: bool) -> Result<Command, 
 	if criteria.is_empty() {
 		return Err(bad());
 	}
-	Ok(Command::Thread { criteria, uid })
+	Ok(Command::Thread {
+		algorithm,
+		criteria,
+		uid,
+	})
 }
 
 fn parse_sort_keys(text: &str) -> Option<Vec<(bool, SortKey)>> {

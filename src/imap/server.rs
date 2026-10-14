@@ -382,14 +382,7 @@ impl Server {
 				continue;
 			};
 
-			let announcement = line.split_once(' ').and_then(|(_, command)| {
-				let command = match command.split_once(' ') {
-					Some((verb, rest)) if verb.eq_ignore_ascii_case("UID") => rest,
-					_ => command,
-				};
-				super::command::literal_announcement_in_line(command)
-			});
-			if announcement.is_some_and(|literal| literal.size > super::command::MAX_APPEND_SIZE) {
+			if discard::oversized_sent_literal(&line) {
 				stream.write_all(b"* BYE literal too large\r\n").await?;
 				stream.flush().await?;
 				return Ok(());

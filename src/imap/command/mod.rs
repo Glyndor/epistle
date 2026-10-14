@@ -250,11 +250,16 @@ pub enum Command {
 		/// Whether to return UIDs (`UID SORT`) rather than sequence numbers.
 		uid: bool,
 	},
-	/// `THREAD ORDEREDSUBJECT <charset> <search-criteria>` (RFC 5256).
+	/// `THREAD <algorithm> <charset> <search-criteria>` (RFC 5256).
 	Thread {
+		/// The threading algorithm the client asked for
+		/// (`ORDEREDSUBJECT` or `REFERENCES`). Both are accepted; the
+		/// capability list tells the client which ones are wired up.
+		algorithm: ThreadAlgorithm,
 		/// Criteria to AND together.
 		criteria: Vec<SearchKey>,
-		/// Whether to return UIDs (`UID THREAD`) rather than sequence numbers.
+		/// Whether to return UIDs (`UID THREAD`) rather than sequence
+		/// numbers.
 		uid: bool,
 	},
 	/// `STATUS <mailbox> (<items>...)`: mailbox-level counters.
@@ -413,6 +418,20 @@ pub enum StatusItem {
 	MailboxId,
 	/// `HIGHESTMODSEQ`: the mailbox's highest mod-sequence (RFC 7162 §3.1.6).
 	HighestModseq,
+	/// `APPENDLIMIT` (RFC 7889 §4): the largest message, in octets, an
+	/// APPEND to the mailbox may carry.
+	AppendLimit,
+}
+
+/// The threading algorithm a `THREAD` command asked for. The parser
+/// accepts only the algorithms we advertise in CAPABILITY, so the
+/// caller can rely on the discriminant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadAlgorithm {
+	/// `THREAD=ORDEREDSUBJECT` (RFC 5256 §3).
+	OrderedSubject,
+	/// `THREAD=REFERENCES` (RFC 5256 §3).
+	References,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).
@@ -596,6 +615,9 @@ pub enum ParseError {
 	Unknown(String),
 	/// Valid tag, known command, bad arguments: tagged `BAD`.
 	BadArguments(String),
+	/// Valid tag, APPEND or REPLACE whose literal exceeds the advertised
+	/// APPENDLIMIT: tagged `NO [TOOBIG]` (RFC 7889 §3).
+	TooBig(String),
 }
 
 /// Parse `1`, `1:5`, `1:*`, `*`, comma-separated, or the SEARCHRES `$`
