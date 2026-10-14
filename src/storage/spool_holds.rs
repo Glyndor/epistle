@@ -35,6 +35,10 @@ pub struct DestinationHold {
 	/// Epoch seconds the destination was first held in this run of
 	/// deferrals.
 	pub since: u64,
+	/// The sender whose conversation first put the destination on hold,
+	/// counted against that sender's share of the holds.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sender: Option<String>,
 }
 
 impl DestinationHold {
@@ -96,6 +100,7 @@ mod tests {
 			level: 0,
 			reason: "421 4.7.0 slow down".into(),
 			since: 100,
+			sender: None,
 		}
 	}
 

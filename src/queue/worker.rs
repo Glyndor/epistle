@@ -20,6 +20,8 @@ mod conversation;
 mod reports;
 #[path = "worker_scheduler.rs"]
 mod scheduler;
+#[path = "worker_waiting.rs"]
+mod waiting;
 
 /// Default give-up window: a message older than this is bounced (RFC 5321
 /// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
@@ -471,3 +473,7 @@ mod tests_provider;
 #[cfg(test)]
 #[path = "worker_tests_recipient_kinds.rs"]
 mod tests_recipient_kinds;
+
+#[cfg(test)]
+#[path = "worker_tests_fairness.rs"]
+mod tests_fairness;

@@ -29,7 +29,35 @@ struct ClaimState {
 	/// Conversations running per recipient domain. A domain with none has
 	/// no key.
 	domains: HashMap<String, usize>,
+	/// Conversations running per sender. A sender with none has no key.
+	senders: HashMap<String, usize>,
 	running: usize,
+}
+
+/// Which cap kept a conversation from starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Full {
+	/// Every slot is in use.
+	Total,
+	/// The recipient domain has its share.
+	Domain,
+	/// The sender has its share.
+	Sender,
+}
+
+/// Count one more conversation under `key`.
+fn count_in(counts: &mut HashMap<String, usize>, key: &str) {
+	*counts.entry(key.to_string()).or_default() += 1;
+}
+
+/// Count one conversation less under `key`, forgetting it at zero.
+fn count_out(counts: &mut HashMap<String, usize>, key: &str) {
+	if let Some(count) = counts.get_mut(key) {
+		*count = count.saturating_sub(1);
+		if *count == 0 {
+			counts.remove(key);
+		}
+	}
 }
 
 /// Recipients of one entry claimed for one conversation, and its slot.
@@ -38,6 +66,7 @@ pub(super) struct Claim<'a> {
 	claims: &'a Claims,
 	id: Uuid,
 	domain: String,
+	sender: String,
 	pub(super) recipients: Vec<String>,
 }
 
@@ -66,19 +95,25 @@ impl Claims {
 		self.state().running < limits.total
 	}
 
-	/// Take a slot for `domain` and claim those of `recipients` nobody holds.
-	/// `None` when no slot is free; the claim may hold no recipient.
+	/// Take a slot for a conversation of `sender` with `domain`, and claim
+	/// those of `recipients` nobody holds. The cap that is full when no
+	/// slot is free; the claim may hold no recipient.
 	pub(super) fn take(
 		&self,
 		limits: Limits,
 		id: Uuid,
-		domain: &str,
+		(domain, sender): (&str, &str),
 		recipients: &[String],
-	) -> Option<Claim<'_>> {
+	) -> Result<Claim<'_>, Full> {
 		let mut state = self.state();
-		let in_domain = state.domains.get(domain).copied().unwrap_or(0);
-		if state.running >= limits.total || in_domain >= limits.per_domain {
-			return None;
+		if state.running >= limits.total {
+			return Err(Full::Total);
+		}
+		if state.domains.get(domain).copied().unwrap_or(0) >= limits.per_domain {
+			return Err(Full::Domain);
+		}
+		if state.senders.get(sender).copied().unwrap_or(0) >= limits.per_sender() {
+			return Err(Full::Sender);
 		}
 		let held = state.recipients.entry(id).or_default();
 		let free: Vec<String> = recipients
@@ -90,11 +125,13 @@ impl Claims {
 			state.recipients.remove(&id);
 		}
 		state.running += 1;
-		*state.domains.entry(domain.to_string()).or_default() += 1;
-		Some(Claim {
+		count_in(&mut state.domains, domain);
+		count_in(&mut state.senders, sender);
+		Ok(Claim {
 			claims: self,
 			id,
 			domain: domain.to_string(),
+			sender: sender.to_string(),
 			recipients: free,
 		})
 	}
@@ -112,12 +149,8 @@ impl Drop for Claim<'_> {
 			}
 		}
 		state.running = state.running.saturating_sub(1);
-		if let Some(count) = state.domains.get_mut(&self.domain) {
-			*count = count.saturating_sub(1);
-			if *count == 0 {
-				state.domains.remove(&self.domain);
-			}
-		}
+		count_out(&mut state.domains, &self.domain);
+		count_out(&mut state.senders, &self.sender);
 	}
 }
 

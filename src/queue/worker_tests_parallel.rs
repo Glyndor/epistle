@@ -104,6 +104,8 @@ async fn one_destination_gets_two_conversations_at_a_time_by_default() {
 
 #[tokio::test(start_paused = true)]
 async fn the_per_destination_and_total_caps_are_configurable() {
+	// Every message is from a sender of its own, so the per-sender share
+	// (three of the four slots) does not come into it.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let recipients = [
 		"a@one.example",
@@ -115,7 +117,24 @@ async fn the_per_destination_and_total_caps_are_configurable() {
 		"g@four.example",
 		"h@five.example",
 	];
-	let spool = spool_each(dir.path(), &recipients);
+	let spool = FsSpool::open(dir.path()).expect("open spool");
+	for (n, recipient) in recipients.iter().enumerate() {
+		spool
+			.store(
+				&AcceptedMessage {
+					reverse_path: format!("s@sender{n}.example"),
+					recipients: vec![recipient.to_string()],
+					data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+					require_tls: false,
+					mailbox: None,
+					tlsrpt_verified: false,
+					no_dsn: Vec::new(),
+				},
+				None,
+				&std::collections::BTreeMap::new(),
+			)
+			.expect("store");
+	}
 	let remote = FakeRemote::default();
 	for domain in [
 		"one.example",
@@ -136,6 +155,23 @@ async fn the_per_destination_and_total_caps_are_configurable() {
 	for recipient in recipients {
 		assert_eq!(remote.copies(recipient), 1, "{recipient}");
 	}
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_sender_alone_runs_its_share_of_the_slots() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let recipients: Vec<String> = (0..12).map(|n| format!("r@d{n}.example")).collect();
+	let refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
+	let spool = spool_each(dir.path(), &refs);
+	let remote = FakeRemote::default();
+	for n in 0..12 {
+		remote.script(&format!("d{n}.example"), slow(10));
+	}
+	let worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example");
+
+	assert_eq!(worker.pass().await.expect("pass"), 12);
+
+	assert_eq!(remote.most_at_once_total(), 6, "three quarters of eight");
 }
 
 #[tokio::test(start_paused = true)]

@@ -42,6 +42,14 @@ impl Default for Limits {
 }
 
 impl Limits {
+	/// The most conversations one sender (an account, or the domain of an
+	/// unauthenticated reverse path) runs at once: three quarters of the
+	/// total, at least one, so one sender queueing thousands of messages to
+	/// slow destinations always leaves slots for everyone else.
+	pub fn per_sender(&self) -> usize {
+		(self.total * 3 / 4).max(1)
+	}
+
 	/// The caps from configured values; zero keeps the default.
 	pub fn new(total: usize, per_domain: usize) -> Self {
 		let defaults = Limits::default();

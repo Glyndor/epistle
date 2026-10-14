@@ -19,7 +19,7 @@
 //! An entry is settled ([`Worker::finish`]) once every job it had in the
 //! scan has ended: expiry, failure reports, the delay warning, removal.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
@@ -27,19 +27,13 @@ use std::task::Poll;
 use uuid::Uuid;
 
 use super::Worker;
-use super::claims::{Claim, Guarded};
+use super::claims::{Claim, Full, Guarded};
 use super::conversation::Conversation;
+use super::waiting::{Job, SenderJobs, Waiting};
 use crate::queue::backoff;
 use crate::queue::client::DeliveryError;
 use crate::smtp::address::Address;
 use crate::storage::{RecipientStatus, SpoolEntry};
-
-/// The recipients of one entry in one domain, waiting for a slot.
-pub(super) struct Job {
-	id: Uuid,
-	domain: String,
-	recipients: Vec<String>,
-}
 
 /// What a finished conversation hands back to the scheduler.
 pub(super) struct Done<'a> {
@@ -52,17 +46,11 @@ pub(super) struct Done<'a> {
 type Running<'a> = Pin<Box<dyn Future<Output = Done<'a>> + Send + 'a>>;
 
 /// Jobs still to start, and the conversations running, of one scheduler.
-///
-/// Waiting jobs are kept by domain, and the domains with any in the order
-/// their first job arrived, so starting what fits looks at the jobs it
-/// starts and at the few domains already at their cap, never at the whole
-/// queue: a spool of thousands of messages to one slow destination costs
-/// each completion a constant amount of work, not a walk of the spool.
+/// The waiting jobs are kept so that starting what fits is fair across
+/// senders and never walks the queue (see [`Waiting`]).
 #[derive(Default)]
 pub(super) struct Schedule<'a> {
-	queued: HashMap<String, VecDeque<Job>>,
-	/// Domains with waiting jobs, each once.
-	order: VecDeque<String>,
+	waiting: Waiting,
 	/// Jobs not yet ended per entry, and whether any delivered.
 	rounds: HashMap<Uuid, (usize, bool)>,
 	running: Vec<Running<'a>>,
@@ -82,23 +70,22 @@ impl<'a> Schedule<'a> {
 	pub(super) fn running_mut(&mut self) -> &mut Vec<Running<'a>> {
 		&mut self.running
 	}
+}
 
-	/// Queue `job` after the others of its domain.
-	fn push_back(&mut self, job: Job) {
-		let waiting = self.queued.entry(job.domain.clone()).or_default();
-		if waiting.is_empty() {
-			self.order.push_back(job.domain.clone());
-		}
-		waiting.push_back(job);
-	}
-
-	/// Queue `job` before the others of its domain, and its domain first.
-	fn push_front(&mut self, job: Job) {
-		let waiting = self.queued.entry(job.domain.clone()).or_default();
-		if waiting.is_empty() {
-			self.order.push_front(job.domain.clone());
-		}
-		waiting.push_front(job);
+/// Whose message an entry is, for the per-sender share of the slots: the
+/// account that submitted it, or else the domain of its reverse path
+/// (`<>` for a bounce).
+fn sender_of(envelope: &crate::storage::Envelope) -> String {
+	match envelope
+		.account
+		.as_deref()
+		.filter(|account| !account.is_empty())
+	{
+		Some(account) => format!("account:{account}"),
+		None => envelope.reverse_path.rsplit_once('@').map_or_else(
+			|| "<>".to_string(),
+			|(_, domain)| domain.to_ascii_lowercase(),
+		),
 	}
 }
 
@@ -188,10 +175,12 @@ impl Worker {
 				continue;
 			}
 			schedule.rounds.insert(id, (by_domain.len(), false));
+			let sender = sender_of(&envelope);
 			for (domain, recipients) in by_domain {
-				schedule.push_back(Job {
+				schedule.waiting.push_back(Job {
 					id,
 					domain,
+					sender: sender.clone(),
 					recipients,
 				});
 			}
@@ -208,59 +197,107 @@ impl Worker {
 		self.record(id, &entry, &conversation, self.now_epoch())
 	}
 
-	/// Start every queued job a slot is free for, domain by domain in the
-	/// order they arrived. A domain at its cap is set aside after one look,
-	/// and filling stops as soon as no slot is free at all.
+	/// Start every waiting job a slot is free for, one per sender in turn
+	/// (see [`Waiting`]). A sender at its share, or whose every domain is
+	/// at its cap, is set aside after one look, and filling stops as soon
+	/// as no slot is free at all.
 	pub(super) fn fill<'a>(&'a self, schedule: &mut Schedule<'a>) {
-		if schedule.order.is_empty() {
+		if schedule.waiting.is_empty() {
 			return;
 		}
 		let now = self.now_epoch();
 		let holds = self.holds();
-		let mut at_cap = Vec::new();
+		let mut aside = Vec::new();
 		while self.claims.has_room(self.limits) {
-			let Some(domain) = schedule.order.pop_front() else {
+			let Some((sender, mut jobs)) = schedule.waiting.next_sender() else {
 				break;
 			};
-			let mut waiting = schedule.queued.remove(&domain).unwrap_or_default();
+			match self.start_next(schedule, &mut jobs, &holds, now) {
+				true => schedule.waiting.put_back(sender, jobs, true),
+				false => aside.push((sender, jobs)),
+			}
+		}
+		for (sender, jobs) in aside.into_iter().rev() {
+			schedule.waiting.put_back(sender, jobs, false);
+		}
+	}
+
+	/// Start the next job of one sender's `jobs`, its domains in turn.
+	/// `false` when none can start now: the sender has its share, no slot
+	/// is free, or each of its domains is at its cap or on hold.
+	fn start_next<'a>(
+		&'a self,
+		schedule: &mut Schedule<'a>,
+		jobs: &mut SenderJobs,
+		holds: &crate::storage::DestinationHolds,
+		now: u64,
+	) -> bool {
+		let mut at_cap = Vec::new();
+		let started = loop {
+			let Some(domain) = jobs.order.pop_front() else {
+				break false;
+			};
+			let mut waiting = jobs.by_domain.remove(&domain).unwrap_or_default();
 			// A conversation of this pass may have put the destination on
 			// hold since its jobs were queued.
-			if backoff::is_held(&holds, &domain, now) {
+			if backoff::is_held(holds, &domain, now) {
 				for job in waiting {
 					schedule.examined += 1;
 					self.job_ended(schedule, job.id, false);
 				}
 				continue;
 			}
+			let mut outcome = None;
 			while let Some(job) = waiting.pop_front() {
 				schedule.examined += 1;
 				match self.start(job) {
-					Started::Waiting(job) => {
+					Started::Running(conversation) => {
+						schedule.running.push(conversation);
+						outcome = Some(true);
+						break;
+					}
+					Started::Dropped(id) => self.job_ended(schedule, id, false),
+					Started::Waiting(job, Full::Domain) => {
 						waiting.push_front(job);
 						break;
 					}
-					Started::Running(conversation) => schedule.running.push(conversation),
-					Started::Dropped(id) => self.job_ended(schedule, id, false),
+					Started::Waiting(job, Full::Sender | Full::Total) => {
+						waiting.push_front(job);
+						outcome = Some(false);
+						break;
+					}
 				}
 			}
 			if !waiting.is_empty() {
-				schedule.queued.insert(domain.clone(), waiting);
-				at_cap.push(domain);
+				jobs.by_domain.insert(domain.clone(), waiting);
+				match outcome {
+					Some(true) => jobs.order.push_back(domain),
+					Some(false) => jobs.order.push_front(domain),
+					None => at_cap.push(domain),
+				}
 			}
-		}
+			if let Some(started) = outcome {
+				break started;
+			}
+		};
 		for domain in at_cap.into_iter().rev() {
-			schedule.order.push_front(domain);
+			jobs.order.push_front(domain);
 		}
+		started
 	}
 
 	/// Claim the recipients of `job` and start its conversation, unless no
 	/// slot is free or nothing is left to send.
 	fn start(&self, job: Job) -> Started<'_> {
-		let Some(claim) = self
-			.claims
-			.take(self.limits, job.id, &job.domain, &job.recipients)
-		else {
-			return Started::Waiting(job);
+		let taken = self.claims.take(
+			self.limits,
+			job.id,
+			(&job.domain, &job.sender),
+			&job.recipients,
+		);
+		let claim = match taken {
+			Ok(claim) => claim,
+			Err(full) => return Started::Waiting(job, full),
 		};
 		// The entry may have been delivered, held or removed since the scan.
 		let entry = match self.spool.load(job.id) {
@@ -311,7 +348,7 @@ impl Worker {
 		} = done;
 		let delivered = conversation.delivered();
 		let now = self.now_epoch();
-		self.pace(&job.domain, &conversation, now);
+		self.pace(&job, &conversation, now);
 		match self.record(job.id, &entry, &conversation, now) {
 			Ok(()) => {}
 			// An operator removed the entry while it was in conversation.
@@ -330,9 +367,10 @@ impl Worker {
 			// another conversation right away.
 			if let Some((left, _)) = schedule.rounds.get_mut(&job.id) {
 				*left += 1;
-				schedule.push_front(Job {
+				schedule.waiting.push_front(Job {
 					id: job.id,
 					domain: job.domain.clone(),
+					sender: job.sender.clone(),
 					recipients: retry_now,
 				});
 			}
@@ -351,7 +389,8 @@ impl Worker {
 	/// Hold off `domain`, and the exchanger that answered, when the
 	/// conversation was asked to slow down; forget their holds once they
 	/// have run out and a conversation delivered.
-	fn pace(&self, domain: &str, conversation: &Conversation, now: u64) {
+	fn pace(&self, job: &Job, conversation: &Conversation, now: u64) {
+		let domain = job.domain.as_str();
 		if conversation.held_until.is_some() {
 			return;
 		}
@@ -377,9 +416,10 @@ impl Worker {
 				.map(backoff::exchanger_key);
 			self.spool.update_holds(|holds| {
 				for key in std::iter::once(domain).chain(exchanger.as_deref()) {
-					match backoff::record_hold(holds, &self.backoff_steps, key, reason, now) {
+					let whose = (key, job.sender.as_str());
+					match backoff::record_hold(holds, &self.backoff_steps, whose, reason, now) {
 						Some(hold) => tracing::warn!(destination = %key, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off"),
-						None => tracing::warn!(destination = %key, %reason, "destination asked to slow down, but every hold slot is in use; not holding it"),
+						None => tracing::warn!(destination = %key, %reason, "destination asked to slow down, but the hold slots are in use; its recipients follow their own retry schedule"),
 					}
 				}
 			})
@@ -433,8 +473,8 @@ impl Worker {
 
 /// What became of a job offered a slot.
 enum Started<'a> {
-	/// No slot is free: try again later.
-	Waiting(Job),
+	/// No slot is free, for the reason given: try again later.
+	Waiting(Job, Full),
 	/// The conversation is under way.
 	Running(Running<'a>),
 	/// Nothing is left to send for this job.

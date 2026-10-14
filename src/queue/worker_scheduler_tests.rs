@@ -26,10 +26,11 @@ fn worker(dir: &std::path::Path) -> Worker {
 	Worker::new(spool, Arc::new(Broken), "mail.sender.example").with_concurrency(8, 1)
 }
 
-fn job(domain: &str) -> Job {
+fn job(domain: &str, sender: &str) -> Job {
 	Job {
 		id: Uuid::now_v7(),
 		domain: domain.to_string(),
+		sender: sender.to_string(),
 		recipients: vec![format!("user@{domain}")],
 	}
 }
@@ -40,11 +41,16 @@ fn a_queue_stuck_behind_a_busy_destination_is_not_walked_on_every_fill() {
 	let worker = worker(dir.path());
 	let busy = worker
 		.claims
-		.take(worker.limits, Uuid::now_v7(), "busy.example", &[])
+		.take(
+			worker.limits,
+			Uuid::now_v7(),
+			("busy.example", "other"),
+			&[],
+		)
 		.expect("a slot for busy.example");
 	let mut schedule = Schedule::default();
 	for _ in 0..JOBS {
-		schedule.push_back(job("busy.example"));
+		schedule.waiting.push_back(job("busy.example", "sender"));
 	}
 
 	// One fill per conversation that ends elsewhere.
@@ -57,11 +63,11 @@ fn a_queue_stuck_behind_a_busy_destination_is_not_walked_on_every_fill() {
 		"{} jobs looked at for {JOBS} fills",
 		schedule.examined
 	);
-	assert_eq!(schedule.queued["busy.example"].len(), JOBS);
+	assert_eq!(schedule.waiting.len(), JOBS);
 	drop(busy);
 	worker.fill(&mut schedule);
 	assert!(
-		schedule.queued.is_empty() && schedule.order.is_empty(),
+		schedule.waiting.is_empty(),
 		"once the slot is free the jobs start"
 	);
 }
@@ -74,13 +80,20 @@ fn many_destinations_waiting_for_a_full_worker_cost_nothing_to_fill() {
 		.map(|n| {
 			worker
 				.claims
-				.take(worker.limits, Uuid::now_v7(), &format!("r{n}.example"), &[])
+				.take(
+					worker.limits,
+					Uuid::now_v7(),
+					(&format!("r{n}.example"), &format!("running{n}")),
+					&[],
+				)
 				.expect("slot")
 		})
 		.collect();
 	let mut schedule = Schedule::default();
 	for n in 0..JOBS {
-		schedule.push_back(job(&format!("d{n}.example")));
+		schedule
+			.waiting
+			.push_back(job(&format!("d{n}.example"), &format!("s{}", n % 50)));
 	}
 
 	for _ in 0..JOBS {
@@ -88,8 +101,64 @@ fn many_destinations_waiting_for_a_full_worker_cost_nothing_to_fill() {
 	}
 
 	assert_eq!(schedule.examined, 0);
-	assert_eq!(schedule.order.len(), JOBS);
+	assert_eq!(schedule.waiting.len(), JOBS);
 	drop(running);
+}
+
+#[test]
+fn a_sender_at_its_share_is_set_aside_after_one_look() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let worker = worker(dir.path());
+	let share = worker.limits.per_sender();
+	assert_eq!(share, 6, "three quarters of eight");
+	let flooding: Vec<_> = (0..share)
+		.map(|n| {
+			worker
+				.claims
+				.take(
+					worker.limits,
+					Uuid::now_v7(),
+					(&format!("hung{n}.example"), "account:flood"),
+					&[],
+				)
+				.expect("slot")
+		})
+		.collect();
+	assert!(
+		worker
+			.claims
+			.take(
+				worker.limits,
+				Uuid::now_v7(),
+				("one-more.example", "account:flood"),
+				&[]
+			)
+			.is_err(),
+		"the share is a cap"
+	);
+	let mut schedule = Schedule::default();
+	for n in 0..JOBS {
+		schedule
+			.waiting
+			.push_back(job(&format!("d{n}.example"), "account:flood"));
+	}
+	schedule
+		.waiting
+		.push_back(job("ok.example", "account:other"));
+
+	for _ in 0..JOBS {
+		worker.fill(&mut schedule);
+	}
+
+	// The other sender's job was taken at the first fill (it is not in the
+	// spool, so it is dropped), and the flood was looked at once per fill.
+	assert_eq!(schedule.waiting.len(), JOBS);
+	assert!(
+		schedule.examined <= JOBS + 1,
+		"{} jobs looked at",
+		schedule.examined
+	);
+	drop(flooding);
 }
 
 #[tokio::test]
@@ -139,12 +208,13 @@ async fn a_conversation_that_panics_gives_back_its_slot_and_recipients() {
 fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let worker = worker(dir.path());
+	let busy = job("busy.example", "account:alice");
 	let throttled = Conversation::all(
 		&["a@busy.example".to_string()],
 		Some("mx.busy.example".into()),
 		DeliveryError::Transient("421 4.7.0 slow down".into()),
 	);
-	worker.pace("busy.example", &throttled, 1000);
+	worker.pace(&busy, &throttled, 1000);
 	let delivered = Conversation {
 		remote: Some("mx.busy.example".into()),
 		results: vec![("b@busy.example".to_string(), Ok(()))],
@@ -152,12 +222,12 @@ fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 		held_until: None,
 	};
 
-	worker.pace("busy.example", &delivered, 1030);
+	worker.pace(&busy, &delivered, 1030);
 
 	let holds = worker.spool.load_holds().expect("holds");
 	assert!(backoff::is_held(&holds, "busy.example", 1030));
 	assert!(backoff::is_held(&holds, "mx:mx.busy.example", 1030));
 
-	worker.pace("busy.example", &delivered, 1060);
+	worker.pace(&busy, &delivered, 1060);
 	assert!(worker.spool.load_holds().expect("holds").is_empty());
 }

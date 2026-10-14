@@ -31,6 +31,7 @@ fn held(dir: &Path) -> FsSpool {
 					level: 1,
 					reason: "421 4.7.0 slow down".into(),
 					since: NOW - 120,
+					sender: None,
 				},
 			);
 			holds.insert(
@@ -40,6 +41,7 @@ fn held(dir: &Path) -> FsSpool {
 					level: 0,
 					reason: "421 busy".into(),
 					since: NOW - 61,
+					sender: None,
 				},
 			);
 		})
@@ -150,6 +152,7 @@ fn the_queue_listing_names_the_destinations_on_hold() {
 					level: 0,
 					reason: "421 4.7.0 slow down".into(),
 					since: now_epoch(),
+					sender: None,
 				},
 			);
 		})
