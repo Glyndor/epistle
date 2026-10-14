@@ -467,3 +467,7 @@ mod tests_next_mx;
 #[cfg(test)]
 #[path = "worker_tests_provider.rs"]
 mod tests_provider;
+
+#[cfg(test)]
+#[path = "worker_tests_recipient_kinds.rs"]
+mod tests_recipient_kinds;
