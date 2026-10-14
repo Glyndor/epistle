@@ -133,6 +133,12 @@ pub struct Trace {
 	/// was sent). A failure before that is about this exchanger, not the
 	/// message, and the next exchanger may do better (RFC 5321 section 5.1).
 	pub transaction: bool,
+	/// Set as soon as the whole message, final dot included, is written:
+	/// from then on the remote may have accepted it, and giving up on its
+	/// reply would send it again on the next attempt (RFC 5321 section
+	/// 4.5.3.2.6). Shared so the caller can see it while the reply is
+	/// awaited.
+	pub sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The remote's answer for one recipient of a conversation.
@@ -263,9 +269,11 @@ where
 		results.push((recipient.clone(), outcome));
 	}
 	if results.iter().any(|(_, outcome)| outcome.is_ok()) {
+		let message_sent = std::sync::Arc::clone(&trace.sent);
 		let sent = async {
 			conn.command("DATA", 354, Phase::DataInit).await?;
 			conn.send_data(data).await?;
+			message_sent.store(true, std::sync::atomic::Ordering::SeqCst);
 			conn.expect(250, Phase::DataEnd).await
 		}
 		.await;

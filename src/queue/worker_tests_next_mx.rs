@@ -293,3 +293,56 @@ async fn the_per_domain_cap_holds_across_every_exchanger_of_the_domain() {
 		.sum();
 	assert_eq!(opened, 4 * 5, "five exchangers for each of four messages");
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_attempt_limit_never_cuts_the_wait_for_the_reply_to_a_sent_message() {
+	// The remote has the whole message when the attempt limit runs out:
+	// giving up then would count it undelivered and send it again.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	remote.script(
+		DOMAIN,
+		Script {
+			delay: Some(std::time::Duration::from_secs(120)),
+			..Script::default()
+		},
+	);
+	let mut worker = worker_for(dir.path(), &remote);
+	worker.set_attempt_limit(std::time::Duration::from_secs(60));
+
+	worker.pass().await.expect("pass");
+	// Whatever the first attempt left pending is due again an hour on.
+	tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+	worker.set_now(worker.now_epoch() + 3600);
+	worker.pass().await.expect("second pass");
+	tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+
+	assert_eq!(remote.copies(RECIPIENT), 1, "one copy, never a second");
+	assert!(
+		worker.spool.list().expect("list").is_empty(),
+		"the entry is settled as delivered"
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_remote_silent_after_the_message_still_frees_the_slot_in_bounded_time() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	remote.script(DOMAIN, Script::hang(Hang::DataEnd));
+	let mut worker = worker_for(dir.path(), &remote);
+	worker.set_attempt_limit(std::time::Duration::from_secs(60));
+	let started = tokio::time::Instant::now();
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(started.elapsed(), crate::queue::timeouts::DATA_END);
+	let state = state(&worker);
+	assert_eq!(
+		(state.status, state.attempts),
+		(RecipientStatus::Pending, 1)
+	);
+	assert_eq!(
+		state.last_error.as_deref(),
+		Some("timed out after 600s waiting for the reply to the message")
+	);
+}

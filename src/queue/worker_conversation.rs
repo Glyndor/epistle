@@ -87,7 +87,10 @@ impl Worker {
 	/// Route and run the conversation for `recipients`, all in `domain`,
 	/// within [`crate::queue::timeouts::ATTEMPT`] for every exchanger and
 	/// every step together. Past it the recipients are deferred like after
-	/// any other timeout, and the slot is free again.
+	/// any other timeout, and the slot is free again, unless the whole
+	/// message is already with the remote: its reply is then awaited for as
+	/// long as the client's own limits on it allow, so a remote that did
+	/// accept it is never sent a second copy.
 	pub(super) async fn converse(
 		&self,
 		entry: &SpoolEntry,
@@ -95,8 +98,12 @@ impl Worker {
 		recipients: &[String],
 	) -> Conversation {
 		let limit = self.attempt_limit;
-		match tokio::time::timeout(limit, self.route(entry, domain, recipients)).await {
+		let sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let talk = self.route(entry, domain, recipients, &sent);
+		tokio::pin!(talk);
+		match tokio::time::timeout(limit, &mut talk).await {
 			Ok(conversation) => conversation,
+			Err(_) if sent.load(std::sync::atomic::Ordering::SeqCst) => talk.await,
 			Err(_) => Conversation::all(
 				recipients,
 				None,
@@ -109,7 +116,13 @@ impl Worker {
 	}
 
 	/// Route and run the conversation for `recipients`, all in `domain`.
-	async fn route(&self, entry: &SpoolEntry, domain: &str, recipients: &[String]) -> Conversation {
+	async fn route(
+		&self,
+		entry: &SpoolEntry,
+		domain: &str,
+		recipients: &[String],
+		sent: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+	) -> Conversation {
 		// MTA-STS: an enforce policy constrains MX choice and mandates TLS.
 		// A testing-mode policy is kept for TLS-RPT, which reports on it.
 		let mut sts_invalid = false;
@@ -179,6 +192,7 @@ impl Worker {
 			// MTA-STS enforce or a sender's REQUIRETLS both mandate
 			// verified TLS.
 			require_tls: policy.is_some() || entry.envelope.require_tls,
+			sent,
 		};
 
 		// Route this delivery: a configured transport (relay/fail) or direct.

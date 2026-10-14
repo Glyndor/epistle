@@ -24,6 +24,9 @@ pub(super) struct Route<'a> {
 	pub(super) tls_optional: bool,
 	/// MTA-STS enforce or REQUIRETLS mandate verified TLS.
 	pub(super) require_tls: bool,
+	/// Set once a session has written the whole message (see
+	/// [`Trace::sent`]).
+	pub(super) sent: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// One open connection and how to speak on it.
@@ -102,7 +105,10 @@ impl Worker {
 			dane,
 			endpoints,
 		} = session;
-		let mut trace = Trace::default();
+		let mut trace = Trace {
+			sent: std::sync::Arc::clone(route.sent),
+			..Trace::default()
+		};
 		let result = client::deliver_each(
 			stream,
 			&server_name,
