@@ -93,6 +93,7 @@ impl ApiState {
 			data,
 			&message_id,
 			&crypto,
+			self.quota_for_account(account),
 		) {
 			Ok(_uid) => {
 				tracing::debug!(
