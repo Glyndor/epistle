@@ -24,13 +24,11 @@ impl AccountStore {
 	/// the same `label`.
 	///
 	/// The in-memory mirror is rebuilt from the post-write disk state
-	/// rather than patched with the new entry alone: another writer
-	/// may have added credentials to the same account while this
-	/// store was open, and `push`ing only the just-written entry would
-	/// silently overwrite that sibling write in the mirror (the file
-	/// is fine — `AppPasswordStore::add` reads fresh under the
-	/// sibling `flock` — but the long-running server's directory
-	/// would still hold the older set).
+	/// rather than patched with the new entry alone. Another process
+	/// may have added credentials while this store was open; the file
+	/// keeps them, because `AppPasswordStore::add` rereads it under the
+	/// `flock`, but a mirror patched with the new entry alone would not
+	/// hold them, and the server would refuse them until a restart.
 	pub fn add_app_password(&self, account: &str, app: AppPassword) -> Result<(), StoreError> {
 		let data_dir = self.path.parent().ok_or_else(|| {
 			StoreError::Invalid("account store path has no parent directory".to_string())
@@ -53,8 +51,8 @@ impl AccountStore {
 	/// mirror, then rebuild the directory so a recreated account cannot
 	/// inherit the previous owner's credentials. The case-insensitive
 	/// matching matches how `AppPasswordStore` keys its map. Returns the
-	/// on-disk count the disk store reported (the in-memory retain drops
-	/// the same set, so they match by construction).
+	/// on-disk count the disk store reported. The mirror is rebuilt from
+	/// the disk state after the removal, as in `add_app_password`.
 	pub fn remove_all_app_passwords(&self, name: &str) -> Result<u32, StoreError> {
 		let data_dir = self.path.parent().ok_or_else(|| {
 			StoreError::Invalid("account store path has no parent directory".to_string())
@@ -70,8 +68,7 @@ impl AccountStore {
 	}
 
 	/// The in-memory mirror's view of one account's app passwords, in
-	/// insertion order. Read-only; used by the tests that pin the
-	/// mirror-rebuild behaviour of `add_app_password` /
+	/// insertion order, for the tests of `add_app_password` and
 	/// `remove_all_app_passwords`.
 	#[cfg(test)]
 	pub(crate) fn for_account(&self, account: &str) -> Vec<AppPassword> {
