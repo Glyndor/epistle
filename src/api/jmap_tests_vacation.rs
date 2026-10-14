@@ -20,12 +20,12 @@ async fn session_advertises_vacation_capability() {
 	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert!(
 		session["capabilities"][CAPABILITY].is_object(),
-		"vacation capability should be advertised: {session}"
+		"vacation capability should be advertised"
 	);
 	let account = &session["accounts"]["alice"];
 	assert!(
 		account["accountCapabilities"][CAPABILITY].is_object(),
-		"every account should advertise the vacation capability: {account}"
+		"every account should advertise the vacation capability"
 	);
 }
 
