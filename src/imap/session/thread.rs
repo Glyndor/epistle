@@ -1,8 +1,19 @@
-//! IMAP THREAD command, ORDEREDSUBJECT algorithm (RFC 5256).
+//! IMAP THREAD command, ORDEREDSUBJECT algorithm (RFC 5256 §3).
 
-use super::helpers::{header_value, load_content, search_matches};
+use super::base_subject::base_subject;
+use super::helpers::{header_value_raw, search_matches};
+use super::sort_keys::sent_seconds;
 use super::state::State;
 use super::{Output, SearchKey, Session};
+use std::collections::HashMap;
+
+/// One matching message: its sent date and sequence number, which order it,
+/// and the number the reply shows (the UID for UID THREAD).
+struct Member {
+	sent: i64,
+	seqno: u32,
+	id: u32,
+}
 
 impl Session {
 	pub(super) fn thread(&mut self, tag: &str, criteria: &[SearchKey], uid: bool) -> Output {
@@ -12,8 +23,7 @@ impl Session {
 
 		let total = snapshot.max_identifier(false);
 		let maxima = (total, snapshot.max_identifier(true));
-		// (base subject, arrival secs, output id) for each matching message.
-		let mut matched: Vec<(String, u64, u32)> = Vec::new();
+		let mut groups: HashMap<String, Vec<Member>> = HashMap::new();
 		for seqno in 1..=total {
 			let Some(message) = snapshot.by_sequence(seqno) else {
 				continue;
@@ -25,65 +35,58 @@ impl Session {
 			if !is_match {
 				continue;
 			}
-			let text = load_content(snapshot, message);
-			let subject = base_subject(&text);
-			let arrival = message
-				.internal_date
-				.duration_since(std::time::UNIX_EPOCH)
-				.map(|d| d.as_secs())
-				.unwrap_or(0);
-			matched.push((subject, arrival, if uid { message.uid } else { seqno }));
+			let raw = snapshot.read(message).unwrap_or_default();
+			let text = String::from_utf8_lossy(&raw);
+			let subject = base_subject(&header_value_raw(&text, "subject").unwrap_or_default());
+			groups.entry(subject).or_default().push(Member {
+				sent: sent_seconds(&text, message),
+				seqno,
+				id: if uid { message.uid } else { seqno },
+			});
 		}
 
-		let threads = group_by_subject(matched);
-
 		let mut response = String::from("* THREAD ");
-		for thread in &threads {
-			response.push('(');
-			let members: Vec<String> = thread.iter().map(|id| id.to_string()).collect();
-			response.push_str(&members.join(" "));
-			response.push(')');
+		for thread in ordered_threads(groups) {
+			response.push_str(&render(&thread));
 		}
 		response.push_str(&format!("\r\n{tag} OK THREAD completed\r\n"));
 		Output::text(response)
 	}
 }
 
-/// The Subject header with a leading `re:`/`fwd:` run removed (the base subject
-/// used to group a thread).
-fn base_subject(text: &str) -> String {
-	let mut subject = header_value(text, "subject").unwrap_or_default();
-	loop {
-		let trimmed = subject.trim_start();
-		let stripped = trimmed
-			.strip_prefix("re:")
-			.or_else(|| trimmed.strip_prefix("fwd:"))
-			.or_else(|| trimmed.strip_prefix("fw:"));
-		match stripped {
-			Some(rest) => subject = rest.to_string(),
-			None => return trimmed.to_string(),
-		}
-	}
-}
-
-/// Group messages sharing a base subject into threads, ordering members and
-/// threads by arrival time (RFC 5256 ORDEREDSUBJECT).
-fn group_by_subject(mut matched: Vec<(String, u64, u32)>) -> Vec<Vec<u32>> {
-	use std::collections::BTreeMap;
-	// subject → members sorted by arrival.
-	let mut groups: BTreeMap<String, Vec<(u64, u32)>> = BTreeMap::new();
-	matched.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
-	for (subject, arrival, id) in matched {
-		groups.entry(subject).or_default().push((arrival, id));
-	}
-	// Order threads by their earliest member's arrival.
-	let mut threads: Vec<(u64, Vec<u32>)> = groups
+/// Sort each base-subject group by sent date, then the groups by the sent
+/// date of their first message. Equal dates fall back to the sequence
+/// number, as everywhere in RFC 5256.
+fn ordered_threads(groups: HashMap<String, Vec<Member>>) -> Vec<Vec<Member>> {
+	let mut threads: Vec<Vec<Member>> = groups
 		.into_values()
-		.map(|members| {
-			let first = members.first().map(|(arrival, _)| *arrival).unwrap_or(0);
-			(first, members.into_iter().map(|(_, id)| id).collect())
+		.map(|mut members| {
+			members.sort_by_key(|member| (member.sent, member.seqno));
+			members
 		})
 		.collect();
-	threads.sort_by_key(|(first, _)| *first);
-	threads.into_iter().map(|(_, members)| members).collect()
+	threads.sort_by_key(|members| {
+		members
+			.first()
+			.map(|first| (first.sent, first.seqno))
+			.unwrap_or_default()
+	});
+	threads
+}
+
+/// One thread in the THREAD reply: the first message is the parent and every
+/// other message is its child. A lone child continues the parent's list,
+/// while several children are each a nested list: `(1)`, `(1 2)`,
+/// `(1 (2)(3))`.
+fn render(members: &[Member]) -> String {
+	let ids: Vec<String> = members.iter().map(|member| member.id.to_string()).collect();
+	match ids.as_slice() {
+		[] => String::new(),
+		[parent] => format!("({parent})"),
+		[parent, child] => format!("({parent} {child})"),
+		[parent, children @ ..] => {
+			let children: String = children.iter().map(|child| format!("({child})")).collect();
+			format!("({parent} {children})")
+		}
+	}
 }

@@ -356,6 +356,34 @@ command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
 
+### IMAP mailbox names and folders
+
+Folders nest. The hierarchy delimiter is `/`, so `Work/Project` is the
+folder `Project` inside `Work`, and `INBOX/Receipts` lives under the inbox.
+Each level is ASCII letters, digits, space, `-`, `_` and `.`, plus any
+non-ASCII character (clients without UTF-8 send it in modified UTF-7, RFC
+3501 §5.1.3). A level cannot be empty, start with `.` or end with a space.
+A name has at most 16 levels and 128 bytes per level, and at most 255 bytes
+on disk.
+
+| Command | Behaviour |
+|---|---|
+| `CREATE a/b/c` | Also creates `a` and `a/b` when they are missing. A trailing `/` is dropped. |
+| `DELETE a` | Refused with `NO [HASCHILDREN]` while `a` has folders under it; delete those first. |
+| `RENAME a x/y` | Moves `a` and every folder under it to `x/y`, creating `x`. A folder cannot move under itself. |
+| `LIST` / `LSUB` | `%` stops at one level. `\HasChildren`/`\HasNoChildren` come from the folders that exist. A missing level with folders under it is returned `\Noselect \HasChildren` where `%` stops at it (`\NonExistent` under LIST-EXTENDED), and LSUB returns an unsubscribed level above a subscribed folder as `\Noselect`. LIST-EXTENDED takes several patterns and `SUBSCRIBED`, `REMOTE` and `RECURSIVEMATCH` (with `CHILDINFO`). |
+
+Every folder is one directory under `<data_dir>/accounts/<name>/folders/`
+whatever its depth: the name with each `/` written as `&AC8-` (the modified
+UTF-7 spelling of `/`), so `Work/Project` is `folders/Work&AC8-Project/`.
+A folder name can never contain `&AC8-` itself, so each directory maps back
+to exactly one name, and folders created before nesting existed need no
+migration. JMAP shows the same tree through `parentId`, as does the `tree`
+of `GET /api/v1/accounts/{name}/mailboxes`; Sieve `fileinto` and routing
+rules accept nested names, and `epistle export --maildir` writes
+`Work/Project` as the Maildir++ folder `.Work.Project` (an import reads a
+`.` in a Maildir++ folder name as a level).
+
 ### IMAP keywords
 
 `SELECT` advertises the system flags (`\Seen`, `\Answered`, `\Flagged`,
@@ -541,6 +569,43 @@ section, an unknown key fails the config load.
 | Key | Meaning |
 |---|---|
 | `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. |
+| `unicode_passwords` | Accept non-ASCII passwords and normalise with NFKC on both set and verify (RFC 8265 OpaqueString profile, in spirit RFC 5802 SASLprep / RFC 7677). Default `false` keeps the historical ASCII-only policy. With the flag on the validator accepts any non-control Unicode scalar, the length is counted in scalars (still 12-64 on the normalised form), and the argon2id hash and the SCRAM verifier are derived from the same canonical form — a password set with one keyboard verifies from another. Scrambling on the client: SCRAM-SHA-256 clients already do SASLprep on the supplied credential, so a SCRAM login from a non-ASCII password works without further config. The flag is opt-in because older IMAP/POP clients mangle non-ASCII in AUTH PLAIN/LOGIN on the wire, and the operator who flips the flag is opting the deployment into the expectation that every client normalises consistently. Absent stays the historical default. |
+
+### `[auth] unicode_passwords` (`[auth] unicode_passwords = true`)
+
+The default policy (`unicode_passwords = false`) requires 12-64 printable-ASCII
+characters and rejects control scalars, mirroring what every SMTP/IMAP
+client can carry across `AUTH PLAIN` and `LOGIN` reliably. The breaches
+list still applies.
+
+With `unicode_passwords = true`, the policy:
+
+- accepts any non-control Unicode scalar (U+0000..=U+001F, U+007F..=U+009F, the
+  bidi / line-separator / paragraph-separator ranges from SASLprep are all
+  out; see RFC 8265 OpaqueString);
+- normalises the candidate with NFKC before hashing, so the canonical form
+  is what lands on disk and what SCRAM's PBKDF2 sees;
+- counts the password length in Unicode scalar values, and applies the
+  12-64 ceiling on the normalised form (a 72-character decomposed form that
+  collapses to 60 scalars is rejected; the 64-character ceiling holds on
+  the post-normalise form).
+
+A `contraseñaSegura` typed in NFC on an iOS keyboard and the same `n`+`˜`
+decomposition typed on an Android keyboard both prepare to the same canonical
+form, so the verifier matches. SCRAM-SHA-256 clients do SASLprep
+automatically (RFC 5802 / RFC 7677); PLAIN/LOGIN clients do not, and the
+caveat is theirs — the operator flips the flag knowing their clients must
+normalise consistently.
+
+```toml
+[auth]
+unicode_passwords = true
+```
+
+The setting is hot-disabled by the absence in an existing `[auth]` block:
+configs that predate the field stay ASCII-only. There is no on-the-wire
+advertisement of which policy the server is running; clients discover
+it by trying a non-ASCII credential.
 
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
@@ -735,6 +800,7 @@ guide's "Data at rest".
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message), failed, suppressed and canceled outcomes, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
 | _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
@@ -1219,6 +1285,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
+| `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 
 ### `[[alias]]`
 A multi-target alias: one address that delivers to several local accounts.

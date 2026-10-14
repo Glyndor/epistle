@@ -10,10 +10,12 @@ pub(crate) mod blob_backend;
 pub mod correspondents;
 mod crypto;
 mod delivery;
+pub mod delivery_log;
 pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
 mod routing_forward;
+pub(crate) mod save_sent;
 mod spool;
 mod spool_recipients;
 
@@ -28,11 +30,16 @@ pub use blob_backend::{
 pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
 pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
 pub use delivery::LocalDelivery;
+pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 #[cfg(test)]
 #[path = "crypto_e2e_tests.rs"]
 mod crypto_e2e_tests;
 pub use routing::SplitDelivery;
+pub use save_sent::{
+	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
+	store_copy as save_sent_copy,
+};
 pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.

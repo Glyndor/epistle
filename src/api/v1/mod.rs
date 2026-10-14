@@ -3,6 +3,7 @@
 mod accounts;
 mod archive;
 mod auth;
+mod deliveries;
 mod display_name;
 mod domains;
 mod mailboxes;
@@ -62,6 +63,7 @@ pub fn router() -> Router<ApiState> {
 			"/suppression/{address}",
 			axum::routing::delete(suppression::remove),
 		)
+		.route("/deliveries", get(deliveries::list))
 		// Explicit body ceiling consistent with the SMTP message-size limit,
 		// rather than relying on the framework default.
 		.route(

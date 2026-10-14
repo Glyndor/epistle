@@ -8,15 +8,17 @@
 use std::io::Write;
 
 use super::term::table::Table;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::storage::{Envelope, FsSpool};
+use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord, Envelope, FsSpool};
 
 /// Operator actions on the outbound queue.
 #[derive(Debug, Subcommand)]
@@ -66,10 +68,17 @@ pub struct Target {
 
 /// Run one queue action against the spool under `data_dir`, writing data to
 /// `out`. `now` is the current epoch second (injectable for tests).
+/// `delivery_log_days` is the operator's configured retention for the
+/// per-recipient delivery log; `0` disables the log and the remove action
+/// then records nothing. `webhook` is the optional advisory webhook the
+/// server is configured with; the `remove` action fires a `Canceled`
+/// event for every pending recipient when it is set.
 pub(super) fn run(
 	data_dir: &Path,
+	delivery_log_days: u64,
 	action: Option<QueueCli>,
 	now: u64,
+	webhook: Option<&Arc<crate::webhook::Webhook>>,
 	out: &mut impl Write,
 ) -> ExitCode {
 	let action = action.unwrap_or(QueueCli::List { json: false });
@@ -77,6 +86,7 @@ pub(super) fn run(
 		Ok(spool) => spool,
 		Err(error) => return fail(format_args!("opening spool: {error}")),
 	};
+	let log = DeliveryLog::open(data_dir, delivery_log_days);
 	match action {
 		QueueCli::List { json: false } => list(data_dir, out),
 		QueueCli::List { json: true } => list_json(&spool, out),
@@ -109,6 +119,43 @@ pub(super) fn run(
 			}
 			match spool.remove(id) {
 				Ok(()) => {
+					// Record the cancel for every recipient that was still
+					// pending. Already-delivered recipients are not touched
+					// (their `delivered` record is the only thing the log
+					// needs to know about); a recipient that was already
+					// failed is past the cancel and the spool removal is a
+					// no-op for them.
+					if log.is_enabled() {
+						for recipient in &envelope.recipients {
+							let state = envelope.recipient_state(recipient);
+							if state.status == crate::storage::RecipientStatus::Pending {
+								let record = DeliveryRecord {
+									time: now,
+									spool_id: id,
+									account: envelope.account.clone(),
+									from: envelope.reverse_path.clone(),
+									recipient: recipient.clone(),
+									outcome: DeliveryOutcome::Canceled,
+									remote: state.remote.clone(),
+									reply: state.last_error.clone(),
+									attempt: state.attempts,
+									extra: BTreeMap::new(),
+								};
+								if let Err(error) = log.append(&record) {
+									tracing::warn!(%id, %error, "delivery log write failed");
+								}
+								if let Some(webhook) = webhook {
+									let webhook = webhook.clone();
+									let event = crate::webhook::WebhookEvent::Canceled {
+										spool_id: id,
+										recipient: recipient.clone(),
+										extra: BTreeMap::new(),
+									};
+									tokio::spawn(async move { webhook.notify(&event).await });
+								}
+							}
+						}
+					}
 					let _ = writeln!(out, "removed {id}");
 					ExitCode::SUCCESS
 				}

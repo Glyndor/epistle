@@ -2,25 +2,31 @@
 
 use std::collections::HashSet;
 
-use super::super::command::{ListAttribute, StatusItem};
+use super::super::command::{ListAttribute, ListCommand, StatusItem};
 use super::{Output, Session, helpers, mailbox};
+use crate::imap::list_pattern;
+use crate::imap::list_tree::{self, Entry, Hidden};
+
+/// The `CHILDINFO` extended data (RFC 5258 §3.5): the selection options a
+/// hidden descendant meets.
+fn child_info(request: &ListCommand) -> String {
+	let mut options = Vec::new();
+	if request.select_subscribed {
+		options.push("\"SUBSCRIBED\"");
+	}
+	if request.select_special_use {
+		options.push("\"SPECIAL-USE\"");
+	}
+	format!(" (\"CHILDINFO\" ({}))", options.join(" "))
+}
 
 impl Session {
-	pub(super) fn list(
-		&mut self,
-		tag: &str,
-		pattern: &str,
-		return_status: &[StatusItem],
-		select_subscribed: bool,
-		select_special_use: bool,
-		return_attributes: &[ListAttribute],
-	) -> Output {
+	pub(super) fn list(&mut self, tag: &str, request: &ListCommand) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
-		let subscribed: HashSet<String> = mailbox::list_subscribed(&self.data_dir, &account)
-			.into_iter()
-			.collect();
+		let subscriptions = mailbox::list_subscribed(&self.data_dir, &account);
+		let subscribed: HashSet<&str> = subscriptions.iter().map(String::as_str).collect();
 		let mut response = String::new();
 		// RFC 3501 §6.3.8: `LIST "" ""` is the canonical hierarchy-
 		// separator discovery call. The reply is a `LIST` line for
@@ -31,51 +37,100 @@ impl Session {
 		// the root never has, so emitting it would be a misleading
 		// match for clients that treat the absence of `\Subscribed`
 		// as "nothing here".
-		if pattern.is_empty() && !select_subscribed && !select_special_use {
+		if request.patterns.iter().all(String::is_empty)
+			&& !request.select_subscribed
+			&& !request.select_special_use
+		{
 			response.push_str("* LIST (\\Noselect) \"/\" \"\"\r\n");
 		}
-		for name in mailbox::list(&self.data_dir, &account) {
-			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
-			let special_use = helpers::special_use_attribute(&name);
-			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
-			if !matches
-				|| (select_subscribed && !subscribed.contains(&name))
-				|| (select_special_use && special_use.is_empty())
-			{
-				continue;
-			}
-			let mut attributes =
-				if self.imap4rev2 || return_attributes.contains(&ListAttribute::SpecialUse) {
-					special_use.to_string()
-				} else {
-					String::new()
-				};
-			if subscribed.contains(&name)
-				&& (self.imap4rev2 || return_attributes.contains(&ListAttribute::Subscribed))
-			{
-				if !attributes.is_empty() {
-					attributes.push(' ');
-				}
-				attributes.push_str("\\Subscribed");
-			}
-			// The store is flat, so an explicitly requested child state is a leaf.
-			if self.imap4rev2 || return_attributes.contains(&ListAttribute::Children) {
-				if !attributes.is_empty() {
-					attributes.push(' ');
-				}
-				attributes.push_str("\\HasNoChildren");
-			}
-			let wire = self.mailbox_astring(&name);
-			response.push_str(&format!("* LIST ({attributes}) \"/\" {wire}\r\n"));
-			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
-			if !return_status.is_empty()
-				&& let Some(parts) = self.status_parts(&account, &name, return_status)
+		let existing = mailbox::list(&self.data_dir, &account);
+		// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists subscribed names,
+		// whether or not the mailbox still exists.
+		let extra: &[String] = if request.select_subscribed {
+			&subscriptions
+		} else {
+			&[]
+		};
+		let qualifies = |name: &str, exists: bool| {
+			(if request.select_subscribed {
+				subscribed.contains(name)
+			} else {
+				exists
+			}) && (!request.select_special_use
+				|| (exists && !helpers::special_use_attribute(name).is_empty()))
+		};
+		let matches = |name: &str| {
+			request
+				.patterns
+				.iter()
+				.any(|pattern| list_pattern::matches(&request.reference, pattern, name))
+		};
+		let hidden = if !request.select_subscribed && !request.select_special_use {
+			Hidden::Placeholder
+		} else if request.recursive_match {
+			Hidden::ChildInfo
+		} else {
+			Hidden::Skip
+		};
+		for entry in list_tree::select(&existing, extra, qualifies, matches, hidden) {
+			let attributes = self.list_attributes(request, &entry, subscribed.contains(entry.name));
+			let wire = self.mailbox_astring(entry.name);
+			let child_info = if entry.child_info {
+				child_info(request)
+			} else {
+				String::new()
+			};
+			response.push_str(&format!(
+				"* LIST ({attributes}) \"/\" {wire}{child_info}\r\n"
+			));
+			// LIST-STATUS (RFC 5819): report the requested STATUS inline, for
+			// a mailbox that exists.
+			if !request.return_status.is_empty()
+				&& entry.exists
+				&& let Some(parts) = self.status_parts(&account, entry.name, &request.return_status)
 			{
 				response.push_str(&format!("* STATUS {wire} ({parts})\r\n"));
 			}
 		}
 		response.push_str(&format!("{tag} OK LIST completed\r\n"));
 		Output::text(response)
+	}
+
+	/// The attributes of one LIST line: special use, subscription, existence
+	/// and children, each when the session or the request asks for it.
+	fn list_attributes(
+		&self,
+		request: &ListCommand,
+		entry: &Entry<'_>,
+		subscribed: bool,
+	) -> String {
+		let wants = |attribute| self.imap4rev2 || request.return_attributes.contains(&attribute);
+		let mut attributes = Vec::new();
+		let special_use = helpers::special_use_attribute(entry.name);
+		if entry.exists && !special_use.is_empty() && wants(ListAttribute::SpecialUse) {
+			attributes.push(special_use);
+		}
+		if subscribed && wants(ListAttribute::Subscribed) {
+			attributes.push("\\Subscribed");
+		}
+		if !entry.exists {
+			// RFC 5258 §3: an extended LIST says `\NonExistent` (which
+			// implies `\Noselect`); a plain one has only `\Noselect`.
+			attributes.push(if request.extended || self.imap4rev2 {
+				"\\NonExistent"
+			} else {
+				"\\Noselect"
+			});
+		}
+		// CHILDREN (RFC 3348): a placeholder always says why it is listed.
+		if entry.placeholder || wants(ListAttribute::Children) {
+			attributes.push(if entry.has_children {
+				"\\HasChildren"
+			} else {
+				"\\HasNoChildren"
+			});
+		}
+		attributes.join(" ")
 	}
 
 	pub(super) fn status(&mut self, tag: &str, mailbox: &str, items: &[StatusItem]) -> Output {
@@ -134,6 +189,9 @@ impl Session {
 				StatusItem::MailboxId => {
 					format!("MAILBOXID (M{})", snapshot.uid_validity())
 				}
+				StatusItem::HighestModseq => {
+					format!("HIGHESTMODSEQ {}", snapshot.highest_modseq())
+				}
 			};
 			parts.push_str(&rendered);
 		}
@@ -148,3 +206,7 @@ mod special_use_selection;
 #[cfg(test)]
 #[path = "list_status_tests_root.rs"]
 mod root_hierarchy;
+
+#[cfg(test)]
+#[path = "list_status_tests_hierarchy.rs"]
+mod hierarchy;

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -40,7 +41,12 @@ fn sink(
 }
 
 fn submit(sink: &Arc<dyn MessageSink>, body: &str) -> Result<(), SinkError> {
-	sink.submit(message(body), uuid::Uuid::now_v7(), "alice")
+	sink.submit(
+		message(body),
+		uuid::Uuid::now_v7(),
+		"alice",
+		&BTreeMap::new(),
+	)
 }
 
 #[tokio::test]
@@ -136,22 +142,11 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
 fn a_detection_logs_the_account_pseudonym_and_the_signature() {
 	let clamd = FakeClamd::start();
 	let (sink, _, _) = sink(true, &clamd.socket, None);
+	crate::cli::tracing_capture::keep_callsites_live();
 	let warnings = Warnings::default();
 	let subscriber = tracing_subscriber::registry().with(warnings.clone());
 	tracing::subscriber::with_default(subscriber, || {
-		// Other tests reach the same warning at the same time on threads
-		// without a subscriber, and a rebuild of the interest cache racing
-		// with theirs can leave this callsite off for one event; measured
-		// once in five runs of the suite. Each attempt rebuilds and submits
-		// again until the warning is seen: a detection that never logs
-		// still fails every attempt.
-		for _ in 0..20 {
-			tracing::callsite::rebuild_interest_cache();
-			let _ = submit(&sink, &eicar());
-			if !warnings.0.lock().expect("warnings").is_empty() {
-				break;
-			}
-		}
+		let _ = submit(&sink, &eicar());
 	});
 	let lines = warnings.0.lock().expect("warnings").join("\n");
 	assert!(
@@ -223,8 +218,13 @@ async fn sequential_scans_share_one_worker() {
 	let clamd = FakeClamd::start();
 	let sink = concrete(&clamd.socket);
 	for _ in 0..50 {
-		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
-			.expect("clean");
+		sink.submit(
+			message("hello"),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&BTreeMap::new(),
+		)
+		.expect("clean");
 	}
 	assert_eq!(clamd.scans(), 50);
 	let workers = sink.workers.lock().expect("workers");
@@ -248,8 +248,13 @@ async fn two_hundred_small_scans_timing() {
 	let sink = concrete(&clamd.socket);
 	let started = std::time::Instant::now();
 	for _ in 0..200 {
-		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
-			.expect("clean");
+		sink.submit(
+			message("hello"),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&BTreeMap::new(),
+		)
+		.expect("clean");
 	}
 	println!("200 small submissions scanned in {:?}", started.elapsed());
 }

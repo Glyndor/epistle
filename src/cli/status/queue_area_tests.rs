@@ -1,6 +1,7 @@
 //! Tests for the queue check with hand-written spool entries whose ids are
 //! UUID v7 values minted at chosen times.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use uuid::{Timestamp, Uuid};
@@ -30,6 +31,8 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		held_secs: 0,
 		last_error: None,
 		recipient_state: Default::default(),
+		account: None,
+		extra: BTreeMap::new(),
 	};
 	std::fs::write(
 		new.join(format!("{id}.json")),

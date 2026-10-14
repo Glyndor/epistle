@@ -16,13 +16,13 @@ impl Session {
 		// protocol tag is the listener kind this session serves (Submission
 		// or Submissions), so a per-account `allowed_protocols` that does
 		// not include it rejects exactly like an unknown login.
-		match self.directory.authenticate_with_ip(
+		match self.directory.authenticate_with_ip_full(
 			&credentials.authcid,
 			&credentials.password,
 			self.peer_ip,
 			self.auth_protocol,
 		) {
-			Some(account) => self.auth_success(account),
+			Some((account, label)) => self.auth_success(account, label),
 			None => self.auth_fail(),
 		}
 	}
@@ -41,13 +41,13 @@ impl Session {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
-		match self.directory.authenticate_with_ip(
+		match self.directory.authenticate_with_ip_full(
 			user,
 			&String::from_utf8_lossy(&bytes),
 			self.peer_ip,
 			self.auth_protocol,
 		) {
-			Some(account) => self.auth_success(account),
+			Some((account, label)) => self.auth_success(account, label),
 			None => self.auth_fail(),
 		}
 	}
@@ -90,11 +90,12 @@ impl Session {
 		{
 			return self.auth_fail();
 		}
-		self.auth_success(account)
+		self.auth_success(account, None)
 	}
 
-	fn auth_success(&mut self, account: String) -> Action {
+	fn auth_success(&mut self, account: String, label: Option<String>) -> Action {
 		self.authenticated = Some(account);
+		self.auth_app_password_label = label;
 		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}
 }

@@ -1,3 +1,44 @@
+epistle (0.12.0) unstable; urgency=medium
+
+  * Migration: `epistle migrate imap` copies a remote account from any IMAP
+    server (resumable, keeps folders, flags and dates), and `epistle migrate
+    mox` / `epistle migrate stalwart` import domains, accounts, aliases and
+    DKIM keys with their selectors, so DNS does not change. See
+    docs/migration.md.
+  * Subfolders: mailbox names may contain `/` (Work/Project) in IMAP, JMAP
+    (parentId), Sieve fileinto and Maildir export/import. CREATE makes the
+    missing parents, RENAME moves children, DELETE of a parent with children
+    answers HASCHILDREN. No data migration.
+  * Sent copies: mail an account sends through SMTP submission, the API or
+    JMAP is saved in its Sent folder by default, without duplicating the copy
+    a client appends itself. `epistle account save-sent`, `app-password
+    create --save-sent` and `"save_sent": false` on the API turn it off.
+  * Delivery log: one metadata-only line per recipient outcome under
+    data_dir/deliverylog, kept 30 days ([storage] delivery_log_days, 0 turns
+    it off), read with `epistle delivery list` or GET /api/v1/deliveries.
+    New webhooks delivered, delayed, suppressed and canceled, and an `extra`
+    correlation map on /api/v1/send.
+  * IMAP, checked with Dovecot's imaptest in CI (69 of 73 scripts pass; the
+    rest test \Recent, which IMAP4rev2 removed): other sessions' expunges
+    and flag changes are announced in order, STORE no longer undoes another
+    session's change, SEARCH supports BODY, SENT*, every HEADER field and
+    parsed addresses, CONDSTORE is remembered, SORT and THREAD follow RFC
+    5256, APPEND keeps its date and zone, ENVELOPE, BINARY and message/rfc822
+    parts are complete, UIDVALIDITY is never reused, NOTIFY SET STATUS
+    works, LIST understands wildcards and the reference, and the tail of a
+    rejected literal is no longer read as a command.
+  * Security: IMAP lines are bounded at 32 KiB with linear scanning, search
+    nesting at 64 levels, the base subject is computed in linear time, and
+    the migration client bounds memory by the bytes it receives.
+  * CLI: run as root, `epistle` hands the files an operator names
+    (password files, a Mox config, an import or export Maildir) to the
+    service account through a private staging copy, and moves outputs
+    back owned by root; `epistle delivery list` is the delivery log
+    reader.
+
+
+ -- Glyndor <packages@glyndor.net>  Wed, 14 Oct 2026 02:14:22 +0000
+
 epistle (0.11.0) unstable; urgency=medium
 
   * Security: API and JMAP push subscriptions belong to their creator; a

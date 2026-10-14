@@ -95,7 +95,8 @@ fn account_root_joins_under_accounts() {
 
 #[test]
 fn mailbox_name_rejects_dangerous_names() {
-	for name in DANGEROUS {
+	// `a/b` is a hierarchical name, valid for a mailbox but not for an account.
+	for name in DANGEROUS.iter().filter(|name| **name != "a/b") {
 		assert_eq!(
 			MailboxName::new(name),
 			Err(InvalidComponent),
@@ -109,7 +110,7 @@ fn mailbox_name_rejects_dangerous_names() {
 		"a:b",
 		"a*b",
 		"caf\u{e9}",
-		"Archive/2024",
+		"Archive/.2024",
 	] {
 		assert_eq!(
 			MailboxName::new(name),
@@ -271,11 +272,13 @@ fn mailbox_dirs_are_refused_when_the_validator_let_a_traversal_through() {
 	let (_guard, data) = data_dir();
 	let account = AccountName::new("alice").expect("account");
 	std::fs::create_dir_all(data.join("accounts/alice/folders")).expect("tree");
-	let escaping = MailboxName::Folder("../../../../outside");
+	// A delimiter becomes `&AC8-` on disk, so only a name that is itself a
+	// traversal component is left for the containment check to refuse.
+	let escaping = MailboxName::Folder("..");
 	assert_outside_root(escaping.messages_dir(&account, &data), "messages_dir");
 	assert_outside_root(escaping.folder_dir(&account, &data), "folder_dir");
-	let sibling = MailboxName::Folder("../../bob");
-	assert_outside_root(sibling.folder_dir(&account, &data), "another account");
+	let separator = MailboxName::Folder("a\\b");
+	assert_outside_root(separator.folder_dir(&account, &data), "a backslash");
 }
 
 #[test]

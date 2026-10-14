@@ -1,7 +1,6 @@
 use super::super::command::SequenceSet;
 use super::mailbox::Snapshot;
-use super::{Command, SearchKey, mailbox};
-use crate::util::encoded_word;
+use super::{Command, SearchKey, mailbox, search_fields, search_header};
 pub(super) use crate::util::header::header_value as header_value_raw;
 
 /// The command verb when it relies on message sequence numbers (and so is
@@ -97,11 +96,14 @@ pub(super) fn search_matches(
 		// UID criteria use the highest UID even in a non-UID search command.
 		SearchKey::Sequence(set) => set.contains(seqno, maxima.0, saved),
 		SearchKey::UidSet(set) => set.contains(message.uid, maxima.1, saved),
-		SearchKey::Header(name, needle) => header_matches(name, needle, snapshot, message, content),
+		SearchKey::Header(name, needle) => {
+			search_header::header_matches(name, needle, snapshot, message)
+		}
 		SearchKey::Text(needle) => {
 			let text = content.get_or_insert_with(|| load_content(snapshot, message));
 			text.contains(needle.as_str())
 		}
+		SearchKey::Body(needle) => search_fields::body_matches(needle, snapshot, message, content),
 		SearchKey::Or(a, b) => {
 			search_matches(a, message, seqno, maxima, snapshot, content, saved)
 				|| search_matches(b, message, seqno, maxima, snapshot, content, saved)
@@ -110,65 +112,21 @@ pub(super) fn search_matches(
 		SearchKey::And(keys) => keys
 			.iter()
 			.all(|k| search_matches(k, message, seqno, maxima, snapshot, content, saved)),
-		SearchKey::Before(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) < date_to_epoch_day(*y, *m, *d)
-		}
-		SearchKey::Since(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) >= date_to_epoch_day(*y, *m, *d)
-		}
-		SearchKey::On(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) == date_to_epoch_day(*y, *m, *d)
-		}
+		SearchKey::Before(y, m, d) => internal_day(message) < date_to_epoch_day(*y, *m, *d),
+		SearchKey::Since(y, m, d) => internal_day(message) >= date_to_epoch_day(*y, *m, *d),
+		SearchKey::On(y, m, d) => internal_day(message) == date_to_epoch_day(*y, *m, *d),
+		SearchKey::SentBefore(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day < date_to_epoch_day(*y, *m, *d)),
+		SearchKey::SentSince(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day >= date_to_epoch_day(*y, *m, *d)),
+		SearchKey::SentOn(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day == date_to_epoch_day(*y, *m, *d)),
 		SearchKey::Larger(n) => message.size > u64::from(*n),
 		SearchKey::Smaller(n) => message.size < u64::from(*n),
 		SearchKey::ModSeq(n) => message.modseq >= *n,
 		SearchKey::Younger(n) => age_seconds(message.internal_date) <= i64::from(*n),
 		SearchKey::Older(n) => age_seconds(message.internal_date) > i64::from(*n),
 	}
-}
-
-/// Header-name based search key. `subject`, `from`, `to`, `cc` and `bcc`
-/// match the DECODED value of the header (RFC 2047 encoded-words are
-/// expanded before comparison) so a search for `Hola` matches a subject
-/// stored as `=?UTF-8?B?wqFIb2xhIQ==?=`. Other header names fall back to
-/// the case-insensitive substring match against the raw text.
-fn header_matches(
-	name: &str,
-	needle: &str,
-	snapshot: &Snapshot,
-	message: &mailbox::MessageRef,
-	content: &mut Option<String>,
-) -> bool {
-	match name {
-		"subject" => decoded_header_matches("subject", needle, snapshot, message),
-		"from" | "to" | "cc" | "bcc" => decoded_header_matches(name, needle, snapshot, message),
-		_ => {
-			let text = content.get_or_insert_with(|| load_content(snapshot, message));
-			header_value(text, name).is_some_and(|v| v.contains(needle))
-		}
-	}
-}
-
-/// Find `header_name` in the message's raw bytes, run every encoded-word
-/// inside through [`encoded_word::decode`], lowercase the result, and
-/// return whether `needle` (already lowercased by the SEARCH parser)
-/// appears as a substring. The header lookup is case-insensitive per
-/// RFC 5322 section 3.6.8 and operates on the raw bytes (no
-/// ASCII-lowercasing first; that would mangle the base64 payload of a
-/// B-encoded-word).
-fn decoded_header_matches(
-	header_name: &str,
-	needle: &str,
-	snapshot: &Snapshot,
-	message: &mailbox::MessageRef,
-) -> bool {
-	let raw = snapshot.read(message).unwrap_or_default();
-	let text = String::from_utf8_lossy(&raw);
-	let Some(value) = header_value_raw(&text, header_name) else {
-		return false;
-	};
-	let decoded = encoded_word::decode(&value);
-	decoded.to_ascii_lowercase().contains(needle)
 }
 
 /// Seconds elapsed from `t` to now. Negative when `t` is in the future.
@@ -198,37 +156,10 @@ pub(super) fn date_to_epoch_day(year: u32, month: u8, day: u8) -> i64 {
 	era * 146097 + doe - 719468
 }
 
-pub(super) fn systemtime_to_epoch_day(t: std::time::SystemTime) -> i64 {
-	match t.duration_since(std::time::SystemTime::UNIX_EPOCH) {
-		Ok(d) => (d.as_secs() / 86400) as i64,
-		Err(e) => -((e.duration().as_secs() / 86400 + 1) as i64),
-	}
-}
-
-pub(super) fn header_value(lower_message: &str, name: &str) -> Option<String> {
-	let header_end = lower_message
-		.find("\r\n\r\n")
-		.unwrap_or(lower_message.len());
-	let headers = &lower_message[..header_end];
-	let mut value: Option<String> = None;
-	for line in headers.split("\r\n") {
-		if line.starts_with(' ') || line.starts_with('\t') {
-			if let Some(value) = &mut value {
-				value.push(' ');
-				value.push_str(line.trim());
-			}
-			continue;
-		}
-		if value.is_some() {
-			break;
-		}
-		if let Some(rest) = line.strip_prefix(name)
-			&& let Some(rest) = rest.strip_prefix(':')
-		{
-			value = Some(rest.trim().to_string());
-		}
-	}
-	value
+/// The day of a message's INTERNALDATE in the zone it was given in, which
+/// BEFORE, ON and SINCE compare (RFC 9051 §6.4.4).
+fn internal_day(message: &mailbox::MessageRef) -> i64 {
+	crate::imap::internal_date::local_day(message.internal_date, message.internal_zone)
 }
 
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an

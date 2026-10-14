@@ -2,8 +2,8 @@
 //!
 //! The `/changes` and `/queryChanges` dispatch helpers live in
 //! [`super::state`]; this file holds the shape-by-shape method handlers
-//! (Mailbox/get/query/set, Email/get/query, Thread/get, EmailSubmission/set,
-//! Identity/get, Quota/get). Submission and identity helpers split out
+//! (Mailbox/get/query, Email/get/query, Thread/get, EmailSubmission/set,
+//! Identity/get, Quota/get). Mailbox/set lives in [`super::mailbox_set`]. Submission and identity helpers split out
 //! into sibling files so this one stays under the per-file line cap.
 
 use serde_json::{Value, json};
@@ -12,6 +12,7 @@ use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
 use super::state;
+use crate::util::mailbox_path;
 
 /// `Quota/get` (RFC 9425): the account's storage quota in octets.
 pub(super) fn quota_get(
@@ -98,74 +99,6 @@ pub(super) fn identity_get(
 	])
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5): create, rename, and delete mailboxes.
-pub(super) fn mailbox_set(
-	state: &ApiState,
-	principal: &Principal,
-	args: &Value,
-	call_id: &str,
-) -> Value {
-	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
-		return json!(["error", { "type": "invalidArguments" }, call_id]);
-	};
-	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	};
-	if !principal.admits_account(&view.name, &view.addresses) {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	}
-	let dir = state.data_dir();
-	let old_state = state::mailbox_get_state(dir, account).unwrap_or_else(|| "0".to_string());
-	let mut created = serde_json::Map::new();
-	let mut not_created = serde_json::Map::new();
-	if let Some(create) = args.get("create").and_then(Value::as_object) {
-		for (cid, spec) in create {
-			match spec.get("name").and_then(Value::as_str) {
-				Some(name) if crate::imap::mailbox::create(dir, account, name).is_ok() => {
-					created.insert(cid.clone(), json!({ "id": name }));
-				}
-				_ => {
-					not_created.insert(cid.clone(), json!({ "type": "invalidProperties" }));
-				}
-			}
-		}
-	}
-	let mut updated = serde_json::Map::new();
-	let mut not_updated = serde_json::Map::new();
-	if let Some(update) = args.get("update").and_then(Value::as_object) {
-		for (id, patch) in update {
-			match patch.get("name").and_then(Value::as_str) {
-				Some(name) if crate::imap::mailbox::rename(dir, account, id, name).is_ok() => {
-					updated.insert(id.clone(), Value::Null);
-				}
-				_ => {
-					not_updated.insert(id.clone(), json!({ "type": "invalidProperties" }));
-				}
-			}
-		}
-	}
-	let mut destroyed = Vec::new();
-	let mut not_destroyed = serde_json::Map::new();
-	if let Some(ids) = args.get("destroy").and_then(Value::as_array) {
-		for id in ids.iter().filter_map(Value::as_str) {
-			if crate::imap::mailbox::delete(dir, account, id).is_ok() {
-				destroyed.push(Value::String(id.to_string()));
-			} else {
-				not_destroyed.insert(id.to_string(), json!({ "type": "notFound" }));
-			}
-		}
-	}
-	let new_state = state::mailbox_get_state(dir, account).unwrap_or_else(|| "0".to_string());
-	json!([
-		"Mailbox/set",
-		{ "accountId": account, "oldState": old_state, "newState": new_state,
-		  "created": created, "notCreated": not_created,
-		  "updated": updated, "notUpdated": not_updated,
-		  "destroyed": destroyed, "notDestroyed": not_destroyed },
-		call_id,
-	])
-}
-
 /// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
 pub(super) fn mailbox_get(
 	state: &ApiState,
@@ -201,10 +134,14 @@ pub(super) fn mailbox_get(
 	if wanted.is_none() && names.len() > super::limits::MAX_OBJECTS_IN_GET {
 		return json!(["error", { "type": "requestTooLarge" }, call_id]);
 	}
+	let existing: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
 	let list: Vec<Value> = names
-		.into_iter()
+		.iter()
 		.filter(|name| wanted.as_ref().is_none_or(|ids| ids.contains(name)))
-		.map(|name| objects::mailbox_object(data_dir, account, &name))
+		.map(|name| {
+			let parent = mailbox_path::nearest_parent(name, |other| existing.contains(other));
+			objects::mailbox_object(data_dir, account, name, parent)
+		})
 		.collect();
 
 	let mailbox_state =

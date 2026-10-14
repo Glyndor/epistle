@@ -126,6 +126,7 @@ fn an_app_password_revoke_picks_the_account_then_its_label() {
 				hash: "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaA".into(),
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add");

@@ -70,8 +70,12 @@ mod auth_bans;
 mod basic;
 #[path = "session_tests_commands.rs"]
 mod commands_tests;
+#[path = "session_tests_condstore_search.rs"]
+mod condstore_search;
 #[path = "session_tests_encoded_search.rs"]
 mod encoded_search;
+#[path = "session_tests_esearch_sets.rs"]
+mod esearch_sets;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
 #[path = "session_tests_metadata.rs"]
@@ -84,6 +88,10 @@ mod paths;
 mod quota_zero;
 #[path = "session_tests_search.rs"]
 mod search;
+#[path = "session_tests_search_headers.rs"]
+mod search_headers;
+#[path = "session_tests_search_keys.rs"]
+mod search_keys;
 
 #[path = "session_tests_rev1.rs"]
 mod rev1;
@@ -146,14 +154,47 @@ mod utf8;
 #[path = "session_tests_quota_names.rs"]
 mod quota_names;
 
+#[path = "session_tests_hierarchy_surfaces.rs"]
+mod hierarchy_surfaces;
+
 #[path = "session_tests_utf8_responses.rs"]
 mod utf8_responses;
 
 #[path = "session_tests_flags_update.rs"]
 mod flags_update;
 
+#[path = "session_tests_save_sent.rs"]
+mod save_sent;
+
 #[path = "session_tests_append_exists.rs"]
 mod append_exists;
 
 #[path = "session_tests_noop_exists.rs"]
 mod noop_exists;
+
+#[path = "session_tests_cross_session.rs"]
+mod cross_session;
+
+#[path = "session_tests_sort_dates.rs"]
+mod sort_dates;
+
+#[path = "session_tests_sort_text.rs"]
+mod sort_text;
+
+#[path = "session_tests_thread_ordered.rs"]
+mod thread_ordered;
+
+#[path = "session_tests_notify_status.rs"]
+mod notify_status;
+
+#[path = "session_tests_uidvalidity.rs"]
+mod uidvalidity;
+
+#[path = "session_tests_fetch_whole.rs"]
+mod fetch_whole;
+
+#[path = "session_tests_append_binary.rs"]
+mod append_binary;
+
+#[path = "session_tests_append_date.rs"]
+mod append_date;

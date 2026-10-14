@@ -1,7 +1,13 @@
 //! Tests for the app-password store and per-credential admission.
 
 use super::*;
+use crate::password::Policy;
 use crate::test_fixtures as fixtures;
+
+/// Every fixture-level call goes through the ASCII-only policy: app
+/// passwords are random base64 secrets, the prepare is a no-op here even
+/// under unicode passwords, and tests stay on the historical path.
+const ASCII: Policy = Policy::ASCII_ONLY;
 
 fn ip(text: &str) -> IpAddr {
 	text.parse().expect("ip")
@@ -13,36 +19,37 @@ fn app_password(label: &str, secret: &str) -> AppPassword {
 		hash: crate::smtp::auth::tests::hash(secret),
 		expires_at: None,
 		ip_cidr: None,
+		save_sent: None,
 	}
 }
 
 #[test]
 fn valid_secret_admitted() {
 	let pw = app_password("phone", fixtures::password());
-	assert!(pw.admits(fixtures::password(), None, 1000));
+	assert!(pw.admits(fixtures::password(), &ASCII, None, 1000));
 }
 
 #[test]
 fn wrong_secret_rejected() {
 	let pw = app_password("phone", fixtures::password());
-	assert!(!pw.admits(fixtures::second_password(), None, 1000));
+	assert!(!pw.admits(fixtures::second_password(), &ASCII, None, 1000));
 }
 
 #[test]
 fn expired_rejected_unexpired_accepted() {
 	let mut pw = app_password("phone", fixtures::password());
 	pw.expires_at = Some(2000);
-	assert!(pw.admits(fixtures::password(), None, 1999));
-	assert!(!pw.admits(fixtures::password(), None, 2000));
-	assert!(!pw.admits(fixtures::password(), None, 2001));
+	assert!(pw.admits(fixtures::password(), &ASCII, None, 1999));
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 2000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 2001));
 }
 
 #[test]
 fn ip_inside_cidr_accepted_outside_rejected() {
 	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("203.0.113.0/24".to_string());
-	assert!(pw.admits(fixtures::password(), Some(ip("203.0.113.5")), 1000));
-	assert!(!pw.admits(fixtures::password(), Some(ip("203.0.114.5")), 1000));
+	assert!(pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.113.5")), 1000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.114.5")), 1000));
 }
 
 #[test]
@@ -50,14 +57,14 @@ fn cidr_with_unknown_ip_rejected() {
 	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("203.0.113.0/24".to_string());
 	// A configured allowlist cannot be satisfied without a client IP.
-	assert!(!pw.admits(fixtures::password(), None, 1000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 1000));
 }
 
 #[test]
 fn malformed_cidr_rejected() {
 	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("not-a-cidr".to_string());
-	assert!(!pw.admits(fixtures::password(), Some(ip("203.0.113.5")), 1000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.113.5")), 1000));
 }
 
 #[test]
@@ -73,7 +80,10 @@ fn store_add_list_remove_roundtrip() {
 
 	let rows = store.list();
 	assert_eq!(rows.len(), 2);
-	assert!(rows.iter().any(|(a, l, _, _)| a == "alice" && l == "phone"));
+	assert!(
+		rows.iter()
+			.any(|(a, l, _, _, _)| a == "alice" && l == "phone")
+	);
 
 	// Reopen to confirm persistence.
 	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");

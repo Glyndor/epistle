@@ -26,8 +26,9 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { config, .. })
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
-		| Command::Ban { config, .. }
-		| Command::Masked { config, .. }
+		| Command::Ban { config, .. } => Some(config),
+		Command::Delivery(args) => Some(&args.config),
+		Command::Masked { config, .. }
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordCreate { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config })
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordRevoke { config, .. })
@@ -37,6 +38,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
 		Command::MoveSubids(args) => Some(&args.config),
+		Command::Migrate(args) => Some(&args.config),
 		Command::Stack { config, .. }
 		| Command::Service { config, .. }
 		| Command::Limits { config, .. }

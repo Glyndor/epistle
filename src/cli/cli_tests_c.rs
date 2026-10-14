@@ -132,15 +132,19 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
 	spool
-		.store(&crate::smtp::session::AcceptedMessage {
-			reverse_path: "alice@example.org".to_string(),
-			recipients: vec!["bob@elsewhere.example".to_string()],
-			data: b"Subject: from-alice\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&crate::smtp::session::AcceptedMessage {
+				reverse_path: "alice@example.org".to_string(),
+				recipients: vec!["bob@elsewhere.example".to_string()],
+				data: b"Subject: from-alice\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
 		.expect("store");
 
 	let cfg_path = cfg.path();

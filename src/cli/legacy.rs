@@ -80,6 +80,12 @@ pub enum Legacy {
 		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
+		/// Optional `save_sent` override for the credential. The
+		/// legacy command exposes the same knob the canonical
+		/// `app-password create --save-sent` does, kept so a
+		/// scripted creation stays on the same line.
+		#[arg(long, value_name = "STATE")]
+		save_sent: Option<String>,
 	},
 	/// (Compatibility) List app passwords: use `app-password list` instead.
 	#[command(hide = true)]
@@ -215,6 +221,7 @@ impl Legacy {
 				label,
 				expires_at,
 				ip_cidr,
+				save_sent,
 			} => (
 				config,
 				Resource::AppPassword(AppPasswordCli::Create {
@@ -222,6 +229,7 @@ impl Legacy {
 					label,
 					expires_at,
 					ip_cidr,
+					save_sent,
 				}),
 			),
 			Legacy::AppPasswords { config } => (

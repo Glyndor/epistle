@@ -153,6 +153,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Messages {
 #[tokio::test]
 async fn setting_a_policy_aside_is_logged() {
 	use tracing_subscriber::layer::SubscriberExt;
+	crate::cli::tracing_capture::keep_callsites_live();
 	let messages = Messages::default();
 	let _guard =
 		tracing::subscriber::set_default(tracing_subscriber::registry().with(messages.clone()));

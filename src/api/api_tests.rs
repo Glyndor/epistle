@@ -2,6 +2,7 @@ use super::*;
 use crate::test_fixtures as fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use std::collections::BTreeMap;
 use tower::ServiceExt;
 
 use crate::smtp::session::AcceptedMessage;
@@ -29,15 +30,19 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 	let spool = FsSpool::open(dir).expect("open spool");
 	for i in 0..queued {
 		spool
-			.store(&AcceptedMessage {
-				reverse_path: format!("a{i}@example.org"),
-				recipients: vec![format!("r{i}@elsewhere.example")],
-				data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
-				require_tls: false,
-				mailbox: None,
-				tlsrpt_verified: false,
-				no_dsn: Vec::new(),
-			})
+			.store(
+				&AcceptedMessage {
+					reverse_path: format!("a{i}@example.org"),
+					recipients: vec![format!("r{i}@elsewhere.example")],
+					data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
+					require_tls: false,
+					mailbox: None,
+					tlsrpt_verified: false,
+					no_dsn: Vec::new(),
+				},
+				None,
+				&BTreeMap::new(),
+			)
 			.expect("store");
 	}
 	let accounts = vec![crate::config::Account {

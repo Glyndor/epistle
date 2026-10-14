@@ -5,6 +5,7 @@
 use super::mailbox::{self, Flag};
 use super::state::State;
 use super::{Output, PendingLiteral, Session};
+use crate::imap::internal_date::InternalDate;
 
 /// Build the rejection `Output` for a literal-bearing command. When the
 /// command used the non-synchronizing `{n+}` form, the client already sent
@@ -17,15 +18,23 @@ fn reject_literal(tag: &str, synchronizing: bool, size: usize, response: &str) -
 	output
 }
 
+/// How the APPEND data was sent: as the RFC 6855 `UTF8 (~{n})` item, or as
+/// an RFC 3516 literal8.
+pub(super) struct AppendForm {
+	pub(super) utf8: bool,
+	pub(super) binary: bool,
+}
+
 impl Session {
+	#[allow(clippy::too_many_arguments)]
 	pub(super) fn append_begin(
 		&mut self,
 		tag: &str,
 		mailbox: &str,
 		flag_tokens: &[String],
-		size: usize,
-		synchronizing: bool,
-		utf8: bool,
+		date: Option<InternalDate>,
+		(size, synchronizing): (usize, bool),
+		AppendForm { utf8, binary }: AppendForm,
 	) -> Output {
 		// A rejected `UTF8 (~{n+})` also drains the `)` after the literal.
 		let wire_size = size + usize::from(utf8);
@@ -92,7 +101,9 @@ impl Session {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
 			flags,
+			date,
 			replace: None,
+			binary,
 		});
 		// RFC 7888 §4: a non-synchronizing literal ({n+}) has no
 		// continuation response. The client already sent the payload
@@ -122,6 +133,7 @@ impl Session {
 		sequence: u32,
 		mailbox: &str,
 		flag_tokens: &[String],
+		date: Option<InternalDate>,
 		size: usize,
 		uid: bool,
 		synchronizing: bool,
@@ -203,12 +215,14 @@ impl Session {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
 			flags,
+			date,
 			// Resolve the sequence to a UID at command start: a
 			// concurrent session that expunges this message (or any
 			// other change to the mailbox) between this point and
 			// the literal read must not move the REPLACE target to
 			// a different message.
 			replace: Some((selected, target_uid)),
+			binary: false,
 		});
 		// See the matching note in `append_begin` above.
 		let mut output = if synchronizing {
@@ -229,8 +243,14 @@ impl Session {
 			tag,
 			mailbox,
 			flags,
+			date,
 			replace,
+			binary,
 		} = pending;
+		let encoded = binary
+			.then(|| crate::imap::binary_append::encode_binary_parts(data))
+			.flatten();
+		let data = encoded.as_deref().unwrap_or(data);
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
@@ -239,11 +259,33 @@ impl Session {
 		} else {
 			"APPEND"
 		};
-		let id = match mailbox::append(
+		// The dedup fast path for client-side APPENDs to the `Sent`
+		// folder: when the literal carries a Message-ID the server
+		// already saved in the last 24 hours, the server returns the
+		// existing UID as if the APPEND had landed, but does not
+		// write a second copy. REPLACE always stores the literal as
+		// the replacement of its target message; the dedup is an
+		// APPEND-only path so the IMAP4rev2 sequence number for the
+		// replacement stays coherent.
+		if replace.is_none()
+			&& mailbox.eq_ignore_ascii_case("Sent")
+			&& let Some(message_id) = crate::storage::first_message_id(data)
+		{
+			let dedup_outcome = self.append_skip_stored_sent(&tag, &account, &mailbox, &message_id);
+			match dedup_outcome {
+				Some(output) => return output,
+				None => {
+					// Guard said "not recent": fall through to the
+					// normal APPEND path.
+				}
+			}
+		}
+		let id = match mailbox::append_dated(
 			&self.data_dir,
 			&account,
 			&mailbox,
 			&flags,
+			date,
 			data,
 			&self.crypto,
 		) {
@@ -263,7 +305,7 @@ impl Session {
 		// surfaces the missing line as `Missing N untagged replies`.
 		// The live snapshot is refreshed here so a STORE or FETCH that
 		// follows the APPEND inside the same command sees the new message.
-		let prelude = self.append_update_selected(&account, &mailbox);
+		let prelude = self.append_update_selected(&mailbox);
 		match replace {
 			None => Output::text(format!("{prelude}{tag} OK {code}APPEND completed\r\n")),
 			Some((selected, seq)) => {
@@ -275,42 +317,52 @@ impl Session {
 		}
 	}
 
-	/// Refresh the live snapshot when the APPEND/REPLACE target is the
-	/// SELECTed mailbox, and emit `* N EXISTS` so the client can keep its
-	/// count in sync. Returns the empty string when no mailbox is selected
-	/// or the target is a different mailbox (the append takes effect on
-	/// disk, but the client will not see a stale count from this session).
-	fn append_update_selected(&mut self, account: &str, mailbox: &str) -> String {
-		// Names are cloned so the mutable borrow of `self.state` ends
-		// before `open_snapshot` takes `&self`.
-		let (selected, count_before) = match &self.state {
+	/// Try the dedup fast path: when the guard says the server already
+	/// stored a copy of `message_id` in the last 24 hours and the
+	/// on-disk scan still finds it in `Sent`, return an `OK
+	/// [APPENDUID ...]` reply that points the client at the existing
+	/// copy. Returns `None` when the guard has no entry or the on-disk
+	/// scan fails (the caller falls through to the normal APPEND
+	/// path).
+	fn append_skip_stored_sent(
+		&mut self,
+		tag: &str,
+		account: &str,
+		mailbox: &str,
+		message_id: &str,
+	) -> Option<Output> {
+		let guard = crate::storage::save_sent::Guard::open(&self.data_dir, account)
+			.map_err(|error| {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					%error,
+					"save_sent: cannot open the dedup guard; falling back to APPEND"
+				);
+				error
+			})
+			.ok()?;
+		guard.is_recent(message_id).ok()?.as_ref()?;
+		let (validity, uid) =
+			mailbox::appenduid_for_message_id(&self.data_dir, account, mailbox, message_id)?;
+		let code = format!("[APPENDUID {validity} {uid}] ");
+		let prelude = self.append_update_selected(mailbox);
+		Some(Output::text(format!(
+			"{prelude}{tag} OK {code}APPEND completed\r\n"
+		)))
+	}
+
+	/// Bring the client up to date when the APPEND/REPLACE target is the
+	/// SELECTed mailbox, so it hears `* N EXISTS` for the new message and
+	/// anything else that changed, and a STORE or FETCH that follows sees
+	/// the new message. Returns the empty string when no mailbox is
+	/// selected or the target is a different one.
+	fn append_update_selected(&mut self, mailbox: &str) -> String {
+		match &self.state {
 			State::Selected {
-				snapshot,
-				mailbox: selected,
-				..
-			} => (selected.clone(), snapshot.len()),
-			_ => return String::new(),
-		};
-		if !selected.eq_ignore_ascii_case(mailbox) {
-			return String::new();
+				mailbox: selected, ..
+			} if selected.eq_ignore_ascii_case(mailbox) => self.sync_selected(true),
+			_ => String::new(),
 		}
-		let fresh = match self.open_snapshot(account, mailbox) {
-			Ok(fresh) => fresh,
-			Err(_) => return String::new(),
-		};
-		let count_after = fresh.len();
-		let State::Selected { snapshot, .. } = &mut self.state else {
-			return String::new();
-		};
-		*snapshot = fresh;
-		// Record that the client has now been told about this count, so
-		// the next NOOP does not re-announce the same value (RFC 9051
-		// §7.1.2: NOOP only re-announces when something has changed).
-		self.announced_exists = Some(u32::try_from(count_after).unwrap_or(u32::MAX));
-		if count_after <= count_before {
-			return String::new();
-		}
-		format!("* {count_after} EXISTS\r\n")
 	}
 
 	/// Finish REPLACE: expunge the source message from the selected mailbox and

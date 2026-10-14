@@ -4,9 +4,11 @@
 //! HMAC-SHA256 signed. Webhooks are advisory and fail open: a delivery error is
 //! logged and never blocks mail processing.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// A delivery event worth notifying about. Serializes to the POST body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +27,9 @@ pub enum WebhookEvent {
 	},
 	/// Outbound delivery to a recipient permanently failed (a bounce was queued).
 	DeliveryFailed {
+		/// Spool id of the message this recipient belongs to.
+		#[serde(default)]
+		spool_id: Option<Uuid>,
 		/// The recipient that could not be reached.
 		recipient: String,
 		/// The failure reason: the remote reply as one line
@@ -37,6 +42,70 @@ pub enum WebhookEvent {
 		/// The server that gave `reason`, when one answered.
 		#[serde(default)]
 		remote: Option<String>,
+		/// Caller-supplied correlation map (the `extra` object of
+		/// `POST /api/v1/send`). `BTreeMap` so the JSON is stable.
+		#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+		extra: BTreeMap<String, String>,
+	},
+	/// Outbound delivery to a recipient succeeded: the remote server
+	/// accepted the message for delivery.
+	Delivered {
+		/// Spool id of the message this recipient belongs to.
+		spool_id: Uuid,
+		/// The recipient that accepted the message.
+		recipient: String,
+		/// The `Message-ID` of the message, when one was assigned before
+		/// the queue picked the message up.
+		#[serde(default)]
+		message_id: Option<String>,
+		/// The remote host that gave the success reply.
+		#[serde(default)]
+		remote: Option<String>,
+		/// Caller-supplied correlation map.
+		#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+		extra: BTreeMap<String, String>,
+	},
+	/// Outbound delivery to a recipient hit a temporary failure that will
+	/// be retried. Sent at most once per recipient per message so retries
+	/// do not spam the endpoint.
+	Delayed {
+		/// Spool id of the message this recipient belongs to.
+		spool_id: Uuid,
+		/// The recipient that was deferred.
+		recipient: String,
+		/// The remote reply that caused the deferral, or the local reason
+		/// when no server answered.
+		reason: String,
+		/// The remote host, when one answered.
+		#[serde(default)]
+		remote: Option<String>,
+		/// The attempt that produced the deferral.
+		attempt: u32,
+		/// Caller-supplied correlation map.
+		#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+		extra: BTreeMap<String, String>,
+	},
+	/// A recipient was on the suppression list, so the queue did not even
+	/// try to deliver to them.
+	Suppressed {
+		/// Spool id of the message this recipient belongs to.
+		spool_id: Uuid,
+		/// The recipient that was suppressed.
+		recipient: String,
+		/// Caller-supplied correlation map.
+		#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+		extra: BTreeMap<String, String>,
+	},
+	/// An operator removed the queue entry before the recipient reached
+	/// any other outcome. Sent once per pending recipient.
+	Canceled {
+		/// Spool id of the message this recipient belongs to.
+		spool_id: Uuid,
+		/// The recipient that was canceled.
+		recipient: String,
+		/// Caller-supplied correlation map.
+		#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+		extra: BTreeMap<String, String>,
 	},
 	/// A `[[alerts]]` rule crossed its threshold over its sample window.
 	MetricAlert {

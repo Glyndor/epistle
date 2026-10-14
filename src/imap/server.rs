@@ -291,10 +291,13 @@ impl Server {
 		stream.write_all(&greeting.bytes).await?;
 		stream.flush().await?;
 
-		let mut decoder = LineDecoder::new();
+		let mut decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 		let mut buffer = [0u8; 4096];
 		// Consecutive BAD responses; too many means an abusive client.
 		let mut error_streak = 0u32;
+		// Set after a rejected literal is drained: the next line is the rest
+		// of that command, not a new one.
+		let mut rejected_tail = false;
 		loop {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
@@ -355,6 +358,19 @@ impl Server {
 				}
 			};
 
+			if rejected_tail {
+				// What follows a drained literal belongs to the rejected
+				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
+				// message), not to a new one.
+				match discard::rejected_tail(&mut *stream, &mut decoder, &line, self.read_timeout)
+					.await?
+				{
+					Some(more) => rejected_tail = more,
+					None => return Ok(()),
+				}
+				continue;
+			}
+
 			let Ok(line) = String::from_utf8(line) else {
 				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
 				stream.flush().await?;
@@ -399,24 +415,21 @@ impl Server {
 				if let Some(size) = output.discard_literal {
 					// RFC 7888 §4: a non-synchronizing literal whose command
 					// was rejected still has its payload on the wire. Drain
-					// exactly `size` bytes (the trailing CRLF, if any, goes
-					// back into the line decoder as an empty line) so the
-					// bytes never arrive as the next command. The
-					// rejection has already been written; nothing more
-					// follows, so return to the command loop instead of
-					// rewriting the same response.
-					match discard::literal(&mut *stream, &mut decoder, size, self.read_timeout)
-						.await
+					// exactly `size` bytes so they never arrive as the next
+					// command, and drop the rest of the command's line
+					// (`rejected_tail`). The rejection has already been
+					// written; return to the command loop.
+					if !discard::literal_or_close(
+						&mut *stream,
+						&mut decoder,
+						size,
+						self.read_timeout,
+					)
+					.await?
 					{
-						Ok(drained) if drained.complete => {}
-						Ok(_) => return Ok(()),
-						Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-							stream.write_all(b"* BYE read timeout\r\n").await?;
-							stream.flush().await?;
-							return Ok(());
-						}
-						Err(error) => return Err(error),
+						return Ok(());
 					}
+					rejected_tail = true;
 					break;
 				}
 				if let Some(size) = output.collect_literal {
@@ -550,7 +563,7 @@ impl Server {
 					session.set_client_identity(identity);
 					stream = Box::new(tls);
 					session.tls_started();
-					decoder = LineDecoder::new();
+					decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 					break;
 				}
 				if output.idle {

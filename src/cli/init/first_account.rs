@@ -195,6 +195,7 @@ pub(super) fn create(
 			name.clone(),
 			vec![address.clone()],
 			password.expose(),
+			&crate::password::Policy::from_config(&config.auth),
 			config.auth.scram,
 		)
 		.map_err(|error| fail(error.to_string()))?;

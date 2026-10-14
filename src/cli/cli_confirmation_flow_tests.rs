@@ -4,6 +4,7 @@
 //! without asking. The handlers run unchanged; only the console under them
 //! is scripted (`prompt::script`).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -153,15 +154,19 @@ fn spooled() -> (tempfile::TempDir, uuid::Uuid) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = FsSpool::open(dir.path())
 		.expect("spool")
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".to_string(),
-			recipients: vec!["bob@remote.example".to_string()],
-			data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".to_string(),
+				recipients: vec!["bob@remote.example".to_string()],
+				data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	(dir, id)
 }
@@ -180,8 +185,10 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 		|(dir, id), yes| {
 			queue::run(
 				dir.path(),
+				0,
 				Some(QueueCli::Remove { id: *id, yes }),
 				queue::now_epoch(),
+				None,
 				&mut Vec::new(),
 			)
 		},
@@ -297,6 +304,7 @@ fn app_password_revoke_asks_naming_label_and_account() {
 				&load(cfg.path()),
 				NAME,
 				"phone",
+				None,
 				None,
 				None,
 				&mut Vec::new(),

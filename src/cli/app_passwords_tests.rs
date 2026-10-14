@@ -34,7 +34,7 @@ fn create_list_revoke_roundtrip() {
 	// Create prints the secret once.
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "alice", "phone", None, None, &mut out),
+		create(&config, "alice", "phone", None, None, None, &mut out),
 		ExitCode::SUCCESS
 	);
 	let created = String::from_utf8(out).expect("utf8");
@@ -85,6 +85,7 @@ fn create_with_expiry_and_cidr_is_stored() {
 			"phone",
 			Some(9999),
 			Some("203.0.113.0/24".to_string()),
+			None,
 			&mut out,
 		),
 		ExitCode::SUCCESS
@@ -108,6 +109,7 @@ fn create_rejects_bad_cidr() {
 			"phone",
 			None,
 			Some("not-a-cidr".to_string()),
+			None,
 			&mut out,
 		),
 		ExitCode::from(2)
@@ -131,7 +133,7 @@ fn create_refuses_unknown_account_and_writes_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	let exit = create(&config, "ghost", "phone", None, None, &mut out);
+	let exit = create(&config, "ghost", "phone", None, None, None, &mut out);
 	assert_eq!(exit, ExitCode::from(2), "unknown account must be refused");
 	// The store has no row, so no orphan credential is left behind:
 	// the check ran before any persistence.
@@ -157,7 +159,7 @@ fn create_refuses_static_account() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
-	let exit = create(&config, "alice", "phone", None, None, &mut out);
+	let exit = create(&config, "alice", "phone", None, None, None, &mut out);
 	assert_eq!(exit, ExitCode::from(2), "static account must be refused");
 	assert!(!dir.path().join("app_passwords.toml").exists());
 }

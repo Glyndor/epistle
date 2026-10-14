@@ -11,7 +11,7 @@ fn default_mailboxes_jmap_objects_expose_matching_roles() {
 		("Archive", "archive"),
 		("INBOX", "inbox"),
 	] {
-		let object = mailbox_object(dir.path(), "alice", name);
+		let object = mailbox_object(dir.path(), "alice", name, None);
 		assert!(
 			object["role"] == role,
 			"JMAP default mailbox {name} must expose role {role}"

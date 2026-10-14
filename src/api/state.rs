@@ -108,6 +108,11 @@ struct Inner {
 	/// The outbound path SMTP submission uses (routing, DKIM, local
 	/// delivery); `None` sends straight to `spool`. See `state_outbound.rs`.
 	outbound: Option<Arc<dyn crate::smtp::sink::MessageSink>>,
+	/// Retention window in days for the per-recipient delivery log
+	/// (`<data_dir>/deliverylog/`). `0` (the default) disables the log;
+	/// the deliveries handler turns that into a `404` so the caller is
+	/// not silently handed an empty page.
+	delivery_log_days: u64,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -244,8 +249,27 @@ impl ApiState {
 				tenant_limits: TenantLimits::default(),
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
+				delivery_log_days: 0,
 			}),
 		}
+	}
+
+	/// The retention window the operator configured for the per-recipient
+	/// delivery log. `None` when the API was built without a config (the
+	/// unit tests that exercise other handlers) and `Some(0)` when the
+	/// operator explicitly disabled the log.
+	pub fn delivery_log_days(&self) -> Option<u64> {
+		Some(self.inner.delivery_log_days)
+	}
+
+	/// Configure the retention window the deliveries handler reads from.
+	/// `0` disables the log (a `404` from the handler); any positive
+	/// value opts in. Must be set before the state is shared.
+	pub fn with_delivery_log_days(mut self, days: u64) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.delivery_log_days = days;
+		}
+		self
 	}
 
 	/// Attach the built-in OAuth authorization server. Must be set before the

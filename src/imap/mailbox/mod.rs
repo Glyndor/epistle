@@ -9,6 +9,7 @@
 
 mod defaults;
 mod flag;
+mod hierarchy;
 pub(crate) mod journal;
 
 pub(crate) use defaults::ensure_defaults;
@@ -22,7 +23,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::imap::changelog::{Change, Op};
+use crate::imap::internal_date::InternalDate;
 use crate::storage::MessageCrypto;
+use crate::util::mailbox_path;
 use crate::util::path_component::{
 	AccountName, AccountRoot, FixedDir, MailboxName, MessageExt, folders_dir, message_file,
 };
@@ -74,6 +77,9 @@ pub struct MessageRef {
 	pub flags: Vec<Flag>,
 	/// File mtime; used for INTERNALDATE.
 	pub internal_date: std::time::SystemTime,
+	/// Minutes east of UTC that INTERNALDATE is shown in: the zone of the
+	/// APPEND date-time, UTC otherwise.
+	pub internal_zone: i16,
 	/// Mod-sequence of the last flag change (CONDSTORE, RFC 7162).
 	pub modseq: u64,
 }
@@ -100,6 +106,7 @@ impl MessageRef {
 			size,
 			flags,
 			internal_date,
+			internal_zone: 0,
 			modseq,
 		}
 	}
@@ -127,29 +134,42 @@ pub fn exists(data_dir: &Path, account: &str, mailbox: &str) -> bool {
 	mailbox_dir(data_dir, account, mailbox).is_some_and(|dir| dir.is_dir())
 }
 
-/// Create a mailbox. Fails if invalid or already existing.
+/// Create a mailbox, and every missing superior of it (RFC 9051 §6.3.4).
+/// A trailing `/` only says the client means to create children under the
+/// name, so it is dropped. Fails if the name is invalid or already exists.
 pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	let account = AccountName::new(account)?;
-	let dir = MailboxName::folder(mailbox)
+	let mailbox = mailbox_path::canonical(mailbox.strip_suffix('/').unwrap_or(mailbox));
+	let dir = MailboxName::folder(&mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
-	std::fs::create_dir_all(&dir)?;
-	journal::note(data_dir, &account, &[Change::mailbox(Op::Created, mailbox)]);
+	let mut changes = hierarchy::create_superiors(data_dir, &account, &mailbox)?;
+	hierarchy::make_mailbox(data_dir, &account, &dir)?;
+	changes.push(Change::mailbox(Op::Created, &mailbox));
+	journal::note(data_dir, &account, &changes);
 	Ok(())
 }
 
-/// Delete a mailbox and its messages. INBOX cannot be deleted.
+/// Delete a mailbox and its messages. INBOX cannot be deleted, and neither
+/// can a mailbox with children: the answer carries `[HASCHILDREN]` (RFC 9051
+/// §6.3.5, §7.1).
 pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
-	let account = AccountName::new(account)?;
-	let dir = MailboxName::folder(mailbox)
+	let mailbox = mailbox_path::canonical(mailbox);
+	let account_name = AccountName::new(account)?;
+	let dir = MailboxName::folder(&mailbox)
 		.ok()
-		.and_then(|folder| folder.folder_dir(&account, data_dir).ok().flatten())
+		.and_then(|folder| folder.folder_dir(&account_name, data_dir).ok().flatten())
 		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
 	if !dir.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
+	}
+	if hierarchy::has_children(data_dir, account, &mailbox) {
+		return Err(std::io::Error::other(
+			"[HASCHILDREN] delete the mailboxes under it first",
+		));
 	}
 	// The messages go with the mailbox: each one is destroyed for JMAP.
 	let ids = journal::message_ids(&contained_child(&dir, "new")?);
@@ -158,51 +178,24 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		.into_iter()
 		.map(|id| Change::email(Op::Destroyed, id))
 		.collect();
-	changes.push(Change::mailbox(Op::Destroyed, mailbox));
-	journal::note(data_dir, &account, &changes);
+	changes.push(Change::mailbox(Op::Destroyed, &mailbox));
+	journal::note(data_dir, &account_name, &changes);
 	Ok(())
 }
 
-/// Rename a mailbox. INBOX cannot be renamed.
+/// Rename a mailbox with every mailbox below it (RFC 9051 §6.3.6). INBOX
+/// cannot be renamed, and a mailbox cannot move into its own subtree.
 pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::Result<()> {
 	let account = AccountName::new(account)?;
-	let (from_name, to_name) = (from, to);
-	let (Ok(from), Ok(to)) = (MailboxName::folder(from), MailboxName::folder(to)) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	let Ok(target) = to.messages_dir(&account, data_dir) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	if target.is_dir() {
-		return Err(std::io::Error::other("cannot rename"));
-	}
-	let (Ok(Some(from)), Ok(Some(to))) = (
-		from.folder_dir(&account, data_dir),
-		to.folder_dir(&account, data_dir),
-	) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	if !from.is_dir() {
-		return Err(std::io::Error::other("no such mailbox"));
-	}
-	std::fs::rename(from, &to)?;
-	// The mailbox id is its name, so the old id is gone and a new one exists;
-	// every message keeps its id but its `mailboxIds` changed.
-	let mut changes = vec![
-		Change::mailbox(Op::Destroyed, from_name),
-		Change::mailbox(Op::Created, to_name),
-	];
-	changes.extend(
-		journal::message_ids(&contained_child(&to, "new")?)
-			.into_iter()
-			.map(|id| Change::email(Op::Updated, id)),
-	);
-	journal::note(data_dir, &account, &changes);
-	Ok(())
+	let from = mailbox_path::canonical(from);
+	let to = mailbox_path::canonical(to);
+	hierarchy::rename_subtree(data_dir, &account, &from, &to)
 }
 
-/// Existing mailbox names: INBOX plus folders, sorted. An account that is not
-/// a plain directory name has only INBOX.
+/// Existing mailbox names: INBOX plus folders, sorted. Folder directories are
+/// read back through [`mailbox_path::stored_name`], so a directory that is
+/// not exactly the on-disk spelling of a valid name is not a mailbox. An
+/// account that is not a plain directory name has only INBOX.
 pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let mut names = vec!["INBOX".to_string()];
 	let Ok(account) = AccountName::new(account) else {
@@ -213,9 +206,9 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
 				&& let Some(name) = entry.file_name().to_str()
-				&& valid_name(name)
+				&& let Some(stored) = mailbox_path::stored_name(name)
 			{
-				names.push(name.to_string());
+				names.push(stored);
 			}
 		}
 	}
@@ -234,23 +227,51 @@ pub fn append(
 	data: &[u8],
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
+	append_dated(data_dir, account, mailbox, flags, None, data, crypto)
+}
+
+/// [`append`] with the INTERNALDATE an IMAP APPEND names or a COPY carries
+/// over. The instant is kept as the message file's modification time, which
+/// is where the scan reads INTERNALDATE from, and a zone other than UTC in a
+/// sidecar written before the message appears; `None` leaves it at the
+/// arrival time.
+pub fn append_dated(
+	data_dir: &Path,
+	account: &str,
+	mailbox: &str,
+	flags: &[Flag],
+	date: Option<InternalDate>,
+	data: &[u8],
+	crypto: &MessageCrypto,
+) -> std::io::Result<Uuid> {
 	let account = AccountName::new(account)?;
+	let mailbox = &*mailbox_path::canonical(mailbox);
 	let account_dir = MailboxName::new(mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	let tmp_dir = account.root(data_dir)?.child(FixedDir::Tmp)?;
 	let new_mailbox = !mailbox.eq_ignore_ascii_case("INBOX") && !account_dir.is_dir();
+	let mut changes = Vec::with_capacity(3);
+	if new_mailbox {
+		changes = hierarchy::create_superiors(data_dir, &account, mailbox)?;
+	}
 	std::fs::create_dir_all(&account_dir)?;
 	std::fs::create_dir_all(&tmp_dir)?;
 
 	let id = Uuid::now_v7();
 	let tmp = message_file(&tmp_dir, id, MessageExt::Eml)?;
 	std::fs::write(&tmp, &crypto.encode(data)?)?;
+	if let Some(date) = date {
+		std::fs::File::options()
+			.write(true)
+			.open(&tmp)?
+			.set_modified(date.time)?;
+		super::internal_date::write_zone(&account_dir, id, date.zone)?;
+	}
 	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
 	}
-	let mut changes = Vec::with_capacity(3);
 	if new_mailbox {
 		changes.push(Change::mailbox(Op::Created, mailbox));
 	}
@@ -267,6 +288,27 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 	// Only UIDs are read here, never a message body, so no key is needed.
 	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
 	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
+	Some((snapshot.uid_validity(), uid))
+}
+
+/// The `(UIDVALIDITY, UID)` for the message in `mailbox` whose
+/// `Message-ID:` matches `message_id`. Used by the save-sent dedup
+/// path so a client APPEND that targets a Message-ID the server
+/// already stored can answer `OK [APPENDUID ...]` without writing a
+/// second copy.
+pub fn appenduid_for_message_id(
+	data_dir: &Path,
+	account: &str,
+	mailbox: &str,
+	message_id: &str,
+) -> Option<(u32, u32)> {
+	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
+	let uid = lookup_message_id_in_mailbox(data_dir, account, mailbox, message_id)
+		.ok()
+		.flatten()?;
+	// The UIDPLUS code requires UIDVALIDITY + UID; we already know
+	// the UID from the lookup, the validity comes from the snapshot.
+	let _ = snapshot.messages().find(|m| m.uid == uid)?;
 	Some((snapshot.uid_validity(), uid))
 }
 
@@ -319,6 +361,118 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 	total
 }
 
+/// Look up the UID of the message in `mailbox` whose `Message-ID:` header
+/// equals `message_id`. Returns `None` when the mailbox does not exist
+/// or no message matches; an empty `message_id` returns `None` without
+/// a scan. The bytes of the header are read lazily and compared byte for
+/// byte, so a CRLF-vs-LF mismatch between the writer and a follower would
+/// be detected and the caller would see `None`; the saver treats the
+/// absent UID as "unknown", which still de-duplicates through the
+/// Message-ID guard.
+pub fn lookup_message_id_in_mailbox(
+	data_dir: &Path,
+	account: &str,
+	mailbox: &str,
+	message_id: &str,
+) -> std::io::Result<Option<u32>> {
+	if message_id.is_empty() {
+		return Ok(None);
+	}
+	let account_name = match AccountName::new(account) {
+		Ok(name) => name,
+		Err(_) => return Ok(None),
+	};
+	let mailbox_name = match MailboxName::new(mailbox) {
+		Ok(name) => name,
+		Err(_) => return Ok(None),
+	};
+	let dir = match mailbox_name.messages_dir(&account_name, data_dir) {
+		Ok(dir) => dir,
+		Err(_) => return Ok(None),
+	};
+	if !dir.is_dir() {
+		return Ok(None);
+	}
+	let snapshot = match Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()) {
+		Ok(snapshot) => snapshot,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(error),
+	};
+	let target = message_id.as_bytes().to_vec();
+	for message in snapshot.messages() {
+		let path = std::path::Path::new(&dir).join(format!("{}.eml", message.id));
+		let bytes = match std::fs::read(&path) {
+			Ok(bytes) => bytes,
+			Err(_) => continue,
+		};
+		if message_id_in(&bytes, &target) {
+			return Ok(Some(message.uid));
+		}
+	}
+	Ok(None)
+}
+
+/// Look up the UID of the message already in `Sent` for `account` with
+/// the given `Message-ID:`. Shortcut for the saver's "is the client
+/// append first?" reverse direction.
+pub fn lookup_message_id_in_sent(
+	data_dir: &Path,
+	account: &str,
+	message_id: &str,
+) -> std::io::Result<Option<u32>> {
+	lookup_message_id_in_mailbox(data_dir, account, "Sent", message_id)
+}
+
+/// Whether `data` carries `Message-ID: <message_id>` in its header
+/// block. The match is on the unfolded header line; folded continuations
+/// do not start a new field. Comparison is case-insensitive on the field
+/// name and exact on the value (the value carries the unique id the
+/// sender picked).
+fn message_id_in(data: &[u8], message_id: &[u8]) -> bool {
+	let header_end = header_block_end(data);
+	let block = &data[..header_end];
+	let needle = b"message-id";
+	for line in block.split(|&b| b == b'\n') {
+		let line = if line.last() == Some(&b'\r') {
+			&line[..line.len() - 1]
+		} else {
+			line
+		};
+		if line.is_empty() {
+			return false;
+		}
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			continue;
+		}
+		let Some(colon) = line.iter().position(|&b| b == b':') else {
+			continue;
+		};
+		if !line[..colon].eq_ignore_ascii_case(needle) {
+			continue;
+		}
+		let value = line[colon + 1..].trim_ascii();
+		return value == message_id;
+	}
+	false
+}
+
+/// Byte index of the blank line that ends the header block. Mirrors
+/// the helper in `crate::smtp::trace`, kept local so the mailbox
+/// module stays self-contained.
+fn header_block_end(data: &[u8]) -> usize {
+	let mut i = 0;
+	while i < data.len() {
+		if data[i] == b'\n' {
+			match data.get(i + 1) {
+				Some(b'\n') | Some(b'\r') => return i + 1,
+				_ => {}
+			}
+		}
+		i += 1;
+	}
+	data.len()
+}
+
 /// Subscribe to a mailbox (the mailbox must already exist).
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	super::subscriptions::subscribe(data_dir, account, mailbox)
@@ -344,3 +498,7 @@ mod tests_path;
 #[cfg(test)]
 #[path = "../mailbox_tests_remove.rs"]
 mod tests_remove;
+
+#[cfg(test)]
+#[path = "../mailbox_tests_hierarchy.rs"]
+mod tests_hierarchy;

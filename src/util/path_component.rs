@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use super::mailbox_path;
 use super::path_containment::{contained, contained_child, contained_subdir};
 
 /// Longest account or mailbox name accepted (bytes). Well under the 255 byte
@@ -170,15 +171,18 @@ impl FixedDir {
 	}
 }
 
-/// A mailbox: `INBOX`, or a folder with a restricted, flat name.
+/// A mailbox: `INBOX`, or a folder with a restricted, possibly hierarchical
+/// name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailboxName<'a> {
 	/// The always-present inbox (matched case-insensitively).
 	Inbox,
-	/// A folder under `folders/`. Names are ASCII letters, digits, space,
-	/// `-`, `_` and `.`, plus non-ASCII characters spelled in modified UTF-7
-	/// (`Entw&APw-rfe` for `Entwürfe`, RFC 3501 §5.1.3); they cannot start
-	/// with a dot or end with a space.
+	/// A folder under `folders/`, by its stored name. Each level between `/`
+	/// delimiters is ASCII letters, digits, space, `-`, `_` and `.`, plus
+	/// non-ASCII characters spelled in modified UTF-7 (`Entw&APw-rfe` for
+	/// `Entwürfe`, RFC 3501 §5.1.3); a level cannot be empty, start with a
+	/// dot or end with a space. See [`super::mailbox_path`] for the limits
+	/// and the on-disk spelling.
 	Folder(&'a str),
 }
 
@@ -195,22 +199,7 @@ impl<'a> MailboxName<'a> {
 	/// Accept only a folder name; `INBOX` is refused. Used for create,
 	/// delete and rename, which must never touch the inbox.
 	pub fn folder(name: &'a str) -> Result<Self, InvalidComponent> {
-		// The on-disk spelling is the canonical modified UTF-7 encoding, so
-		// it stays printable ASCII; the decoded name carries the same ASCII
-		// set as before plus any non-ASCII character that is not a control
-		// or a line/paragraph separator (Net-Unicode, RFC 5198).
-		let decoded = super::mutf7::decode(name);
-		let plain = is_plain_component(name)
-			&& !name.eq_ignore_ascii_case("INBOX")
-			&& decoded.is_some_and(|decoded| {
-				decoded.chars().all(|c| {
-					c.is_ascii_alphanumeric()
-						|| matches!(c, ' ' | '-' | '_' | '.')
-						|| (!c.is_ascii()
-							&& !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
-				}) && !decoded.ends_with(' ')
-			}) && !name.starts_with('.');
-		if plain {
+		if mailbox_path::valid_folder(name) {
 			Ok(Self::Folder(name))
 		} else {
 			Err(InvalidComponent)
@@ -218,7 +207,7 @@ impl<'a> MailboxName<'a> {
 	}
 
 	/// The directory holding the mailbox's messages: `<account_root>/new` for
-	/// the inbox, `<account_root>/folders/<name>/new` for a folder.
+	/// the inbox, `<account_root>/folders/<disk name>/new` for a folder.
 	pub fn messages_dir(
 		&self,
 		account: &AccountName<'_>,
@@ -229,13 +218,15 @@ impl<'a> MailboxName<'a> {
 			Self::Inbox => root.child(FixedDir::New),
 			Self::Folder(name) => {
 				let folders = root.child(FixedDir::Folders)?;
-				contained_child(&contained_subdir(&folders, name)?, "new")
+				let disk = mailbox_path::disk_name(name);
+				contained_child(&contained_subdir(&folders, &disk)?, "new")
 			}
 		}
 	}
 
-	/// The folder's own directory (`<account_root>/folders/<name>`), or
-	/// `None` for the inbox, which has no folder directory.
+	/// The folder's own directory (`<account_root>/folders/<disk name>`), or
+	/// `None` for the inbox, which has no folder directory. The disk name is
+	/// the stored name with `/` written as `&AC8-`, one path component.
 	pub fn folder_dir(
 		&self,
 		account: &AccountName<'_>,
@@ -245,7 +236,7 @@ impl<'a> MailboxName<'a> {
 			Self::Inbox => Ok(None),
 			Self::Folder(name) => {
 				let folders = folders_dir(account, data_dir)?;
-				contained_subdir(&folders, name).map(Some)
+				contained_subdir(&folders, &mailbox_path::disk_name(name)).map(Some)
 			}
 		}
 	}
@@ -310,6 +301,8 @@ pub enum MessageExt {
 	Uid,
 	/// Mod-sequence sidecar.
 	Modseq,
+	/// INTERNALDATE zone sidecar.
+	Zone,
 	/// Archive deletion record.
 	Deleted,
 	/// Spool envelope.
@@ -323,6 +316,7 @@ impl MessageExt {
 			Self::Flags => ".flags",
 			Self::Uid => ".uid",
 			Self::Modseq => ".modseq",
+			Self::Zone => ".zone",
 			Self::Deleted => ".deleted",
 			Self::Json => ".json",
 		}
@@ -347,6 +341,10 @@ pub enum StateFile {
 	UidNext,
 	/// UIDVALIDITY value.
 	UidValidity,
+	/// Per-account last UIDVALIDITY handed out to a new mailbox.
+	UidValidityLast,
+	/// Per-account lock serialising UIDVALIDITY allocation.
+	UidValidityLock,
 	/// Mod-sequence counter.
 	ModseqCounter,
 	/// Expunge log (QRESYNC).
@@ -367,6 +365,8 @@ impl StateFile {
 		match self {
 			Self::UidNext => ".uidnext",
 			Self::UidValidity => ".uidvalidity",
+			Self::UidValidityLast => ".uidvalidity_last",
+			Self::UidValidityLock => ".uidvalidity_lock",
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",
@@ -390,3 +390,7 @@ pub fn state_tmp_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[path = "path_component_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "path_component_tests_hierarchy.rs"]
+mod tests_hierarchy;

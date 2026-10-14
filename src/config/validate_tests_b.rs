@@ -178,6 +178,7 @@ mod plaintext_listener_tls_warning {
 	/// Run `f` with a thread-local subscriber that captures every emitted
 	/// tracing event, then return the captured set.
 	fn run_with_capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
+		crate::cli::tracing_capture::keep_callsites_live();
 		let cap = Capture::default();
 		let events = cap.events.clone();
 		let subscriber = Registry::default().with(cap);

@@ -5,6 +5,7 @@ pub mod address_reason;
 pub mod constant_time;
 pub mod encoded_word;
 pub mod header;
+pub mod mailbox_path;
 pub mod mutf7;
 pub mod path_component;
 pub mod path_containment;

@@ -19,11 +19,11 @@ use crate::config::Account;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::smtp::auth::tests::{fixture_password, hash};
 
-const STATIC_NAME: &str = "alice";
-const DYNAMIC_NAME: &str = "bob";
+pub(super) const STATIC_NAME: &str = "alice";
+pub(super) const DYNAMIC_NAME: &str = "bob";
 const DOMAIN: &str = "example.org";
 
-struct Harness {
+pub(super) struct Harness {
 	#[allow(dead_code)]
 	dir: tempfile::TempDir,
 	config: tempfile::NamedTempFile,
@@ -37,7 +37,7 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 	file
 }
 
-fn build() -> Harness {
+pub(super) fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
 		display_name: None,
@@ -83,7 +83,7 @@ fn build() -> Harness {
 
 /// Open the harness store directly so tests can read it back without
 /// going through the CLI.
-fn reload_store(harness: &Harness) -> AccountStore {
+pub(super) fn reload_store(harness: &Harness) -> AccountStore {
 	let config = crate::config::Config::load(harness.config.path()).expect("load config");
 	AccountStore::open(
 		&config.data_dir,

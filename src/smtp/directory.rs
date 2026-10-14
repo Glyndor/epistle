@@ -1,9 +1,11 @@
 //! Recipient resolution: which account, if any, receives an address.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use super::address::Address;
+use crate::password::Policy;
 use crate::util::address::normalize;
 
 /// Run an async future synchronously from a non-async context. Every
@@ -104,6 +106,13 @@ pub struct Directory {
 	/// is set; otherwise the server-wide default applies (or no limit, if
 	/// neither is configured).
 	domain_submission_limits: HashMap<String, u32>,
+	/// Per-account `save_sent` preference for outbound submission. `None`
+	/// (the account carries no preference) means "on" by default; an
+	/// explicit `Some(false)` disables the save for this account. A
+	/// per-request or per-app-password override wins over the
+	/// account-wide setting; the account-wide setting only applies when
+	/// neither override exists.
+	account_save_sent: HashMap<String, bool>,
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
@@ -143,6 +152,11 @@ pub struct Directory {
 	/// next exchange pays the full cost. `None` in unit tests that do not
 	/// exercise the upgrade path.
 	scram_upgrader: Option<std::sync::Arc<dyn crate::directory_store::ScramUpgrader>>,
+	/// Runtime password policy. Defaults to the ASCII-only policy; the
+	/// `serve` builder wires it from the store's `password_policy` so a
+	/// non-ASCII candidate set under `[auth] unicode_passwords = true`
+	/// verifies consistently with the bytes hashed at set-time.
+	password_policy: Policy,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -181,12 +195,14 @@ impl Directory {
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
+			account_save_sent: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
 			scram_upgrader: None,
+			password_policy: Policy::ASCII_ONLY,
 			#[cfg(test)]
 			scram_lookup_counter: None,
 		}
@@ -210,6 +226,15 @@ impl Directory {
 	/// primary record. Unset in unit tests that do not exercise counters.
 	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
+		self
+	}
+
+	/// Set the runtime password policy. Verification through
+	/// [`Directory::authenticate`] normalises the candidate the same way
+	/// the storage layer did at set-time, so a non-ASCII password typed
+	/// in one decomposition verifies the same as its NFKC canonical form.
+	pub fn with_password_policy(mut self, policy: Policy) -> Self {
+		self.password_policy = policy;
 		self
 	}
 
@@ -333,6 +358,17 @@ impl Directory {
 		self
 	}
 
+	/// Attach per-account `save_sent` preferences (account name →
+	/// enabled). `Some(true)` and `Some(false)` are both stored; an
+	/// account absent from the list keeps the default (`None`).
+	pub fn with_save_sent(mut self, entries: impl IntoIterator<Item = (String, bool)>) -> Self {
+		self.account_save_sent = entries
+			.into_iter()
+			.map(|(name, value)| (name.to_ascii_lowercase(), value))
+			.collect();
+		self
+	}
+
 	/// Attach per-domain default storage quotas (domain → bytes).
 	pub fn with_domain_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
 		self.domain_quotas = quotas
@@ -406,6 +442,37 @@ impl Directory {
 			.filter(|(_, name)| name.eq_ignore_ascii_case(&account))
 			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
 			.find_map(|domain| self.domain_quotas.get(domain).copied())
+	}
+
+	/// The account-wide `save_sent` preference: `Some(true)`/`Some(false)`
+	/// when the account carries an explicit override, `None` when the
+	/// preference is absent (treated as "on" by default). Callers pick the
+	/// default themselves because the per-request and per-app-password
+	/// overrides interact with it; the saver resolves the precedence.
+	pub fn save_sent_for(&self, account: &str) -> Option<bool> {
+		self.account_save_sent
+			.get(&account.to_ascii_lowercase())
+			.copied()
+	}
+
+	/// Whether the SMTP session that authenticated as `account` via
+	/// `app_password` (when the login was a secondary credential rather
+	/// than the primary password) should save a copy of every message
+	/// to Sent. `Some(false)` on the app password disables the save
+	/// unconditionally; `Some(true)` enables it; `None` defers to the
+	/// account-wide preference.
+	pub fn app_password_save_sent(
+		&self,
+		account: &str,
+		app_password: Option<&str>,
+	) -> Option<bool> {
+		let account = account.to_ascii_lowercase();
+		let passwords = self.app_passwords.get(&account)?;
+		let password = app_password?;
+		passwords
+			.iter()
+			.find(|entry| entry.label == password)
+			.and_then(|entry| entry.save_sent)
 	}
 
 	/// The per-domain submission rate limit (messages/minute) for an
@@ -486,13 +553,17 @@ impl Directory {
 	/// The local credential path: primary password (with TOTP when set), then the
 	/// account's app passwords. `None` when the login is unknown locally or no
 	/// local secret matches. Split out so [`Directory::authenticate_with_ip`] can
-	/// fall back to LDAP afterwards.
+	/// fall back to LDAP afterwards. Returns `(account, Option<label>)`:
+	/// `label` is `Some` only when the credential that authenticated is an
+	/// app password; primary-password logins return `None` so callers
+	/// looking up per-credential overrides fall through to the
+	/// account-wide default.
 	fn authenticate_local(
 		&self,
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
-	) -> Option<String> {
+	) -> Option<(String, Option<String>)> {
 		let (account, hash) = self.credentials(login)?;
 		// Disabled check runs after the credential lookup (which lowercases the
 		// bare-login path) but before any hashing — argon2id and SCRAM are both
@@ -506,11 +577,16 @@ impl Directory {
 			Some(secret) => self.totp_strip(password, secret),
 			None => Some(password),
 		};
-		if let Some(primary) = primary
-			&& super::auth::verify_password(hash, primary)
-		{
-			self.maybe_upgrade_scram(&account, primary);
-			return Some(account);
+		// Compare in the form the storage layer hashed: NFKC under the
+		// Unicode policy, as given otherwise. No length or character check
+		// here: a stored hash can predate the current rules.
+		let prepared: Cow<str> = match primary {
+			Some(candidate) => self.password_policy.login_form(candidate),
+			None => Cow::Borrowed(""),
+		};
+		if !prepared.is_empty() && super::auth::verify_password(hash, &prepared) {
+			self.maybe_upgrade_scram(&account, &prepared);
+			return Some((account, None));
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
 		// passwords are not subject to TOTP — they are independent secrets.
@@ -524,8 +600,8 @@ impl Directory {
 			.map(Vec::as_slice)
 			.unwrap_or(&[])
 		{
-			if app.admits(password, ip, now) {
-				return Some(account.clone());
+			if app.admits(password, &self.password_policy, ip, now) {
+				return Some((account.clone(), Some(app.label.clone())));
 			}
 		}
 		None
@@ -692,6 +768,10 @@ mod iteration_tests;
 #[cfg(test)]
 #[path = "directory_totp_tests.rs"]
 mod totp_tests;
+
+#[cfg(test)]
+#[path = "directory_login_form_tests.rs"]
+mod login_form_tests;
 
 #[cfg(test)]
 #[path = "directory_test_support.rs"]

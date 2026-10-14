@@ -41,10 +41,12 @@ pub(super) fn init_tracing(config: &Config) -> Option<opentelemetry_sdk::trace::
 	};
 
 	// Layers attach at `Registry`; the env filter then applies to all of them.
-	tracing_subscriber::registry()
+	// `try_init`: the process runs this once, but the test binary installs a
+	// global subscriber of its own first, and `init` would panic on it.
+	let _ = tracing_subscriber::registry()
 		.with(layers)
 		.with(filter)
-		.init();
+		.try_init();
 	provider
 }
 

@@ -15,7 +15,7 @@ destructive action without `--yes`).
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|
-| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
+| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
 | `account forward` | `list`, `add`, `remove` | |
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
@@ -609,6 +609,25 @@ version, and the local test harness use the invoking user. If its user runtime
 is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
 Use absolute paths for file arguments when invoking administration commands with sudo.
 
+A file or directory you name on such a command does not have to be readable
+by `glyndor-epistle`. Run as root, epistle copies the inputs (`init
+--answers`, `import --maildir`, and `migrate`'s `--password-file`, `--ca-file`
+and `--from`) into a private directory the account owns, and moves the
+outputs (`migrate --passwords-out`, `export --maildir`) to where you asked
+once the command succeeds, owned by root and readable only by it. The copy is
+removed when the command ends. Symbolic links and special files are refused,
+and a copy is bounded: 16 MiB for a file, 64 MiB for a Mox configuration
+directory, and 4 GiB for a Maildir to import, which would otherwise take
+twice its size on the data disk. For a larger Maildir, make it readable by
+`glyndor-epistle` and run the import as that account. Run as root, `export
+--maildir` writes into a missing directory or an empty one owned by root, and
+stops, keeping nothing, if the export would leave its filesystem with less
+than 5% free. An output that is a link, a hard link, or not owned by
+`glyndor-epistle` is refused rather than copied. The paths in
+`dns provider set` and `storage blobs set` are stored in the configuration
+for the server to read, so those files must be readable by the account where
+they are.
+
 Stack requires podup 5.10.13 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
@@ -988,6 +1007,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
+| `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
 | `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
 | `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while `srs_secret` is unset (without SRS the copy fails SPF at the next hop). |
@@ -995,7 +1015,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
 | `epistle app-password list [--account N] [--json]` | App passwords (label, expiry, IP restriction), never the secret. |
-| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an IMAP/SMTP app password; prints it once. Dynamic accounts only. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry, CIDR, scopes, domains, bound account. Never the key. |
 | `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N]` | Create a key; prints it once. Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
@@ -1006,9 +1026,12 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 
 | Command | What it does |
 |---|---|
-| `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
-| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
+| `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
+| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
+| `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
+| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
+| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--outcome O] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, deferred, failed, suppressed or canceled recipient, newest day first, at most `N` records (default 100). `--since` takes an RFC 3339 time or a duration such as `24h` or `7d`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |

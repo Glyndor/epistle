@@ -1,25 +1,6 @@
 use super::*;
 
 #[test]
-fn search_by_modseq() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
-	deliver(dir.path(), b"From: c@d\r\n\r\ntwo\r\n");
-	let mut session = logged_in(dir.path());
-	session.command_line("a2 SELECT INBOX");
-	// Bump message 2's mod-sequence (now 2); message 1 stays at 1.
-	session.command_line("a3 STORE 2 +FLAGS (\\Seen)");
-
-	// MODSEQ 2 matches only the changed message.
-	let response = text(&session.command_line("a4 SEARCH MODSEQ 2"));
-	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
-
-	// MODSEQ 1 matches both.
-	let response = text(&session.command_line("a5 SEARCH MODSEQ 1"));
-	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
-}
-
-#[test]
 fn esearch_return_options() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
@@ -38,7 +19,7 @@ fn esearch_return_options() {
 
 	// ALL returns the matching set; empty RETURN () defaults to ALL.
 	let response = text(&session.command_line("a4 SEARCH RETURN () ALL"));
-	assert!(response.contains("ALL 1,2,3"), "{response}");
+	assert!(response.contains("ALL 1:3"), "{response}");
 
 	// UID SEARCH RETURN carries the UID marker.
 	let response = text(&session.command_line("a5 UID SEARCH RETURN (COUNT) ALL"));
@@ -521,7 +502,7 @@ fn multisearch_defaults_to_selected_mailbox() {
 		response.contains("MAILBOX \"INBOX\" UIDVALIDITY"),
 		"{response}"
 	);
-	assert!(response.contains("UID ALL 1,2"), "{response}");
+	assert!(response.contains("UID ALL 1:2"), "{response}");
 }
 
 #[test]
@@ -536,9 +517,8 @@ fn multisearch_selected_without_selection_is_bad() {
 
 #[test]
 fn multisearch_subtree_matches_root_not_same_prefix_sibling() {
-	// The mailbox store is flat (names cannot contain the hierarchy
-	// separator), so a subtree resolves to its named root. A sibling that
-	// merely shares the name as a prefix ("Workshop") must not be included.
+	// A subtree is its root and the folders under it. A sibling that merely
+	// shares the name as a prefix ("Workshop") must not be included.
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver_to(dir.path(), "Work", b"Subject: a\r\n\r\none\r\n");
 	deliver_to(dir.path(), "Workshop", b"Subject: b\r\n\r\ntwo\r\n");

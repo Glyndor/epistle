@@ -104,6 +104,7 @@ pub(super) fn add_with_display_name(
 		name.to_string(),
 		addresses,
 		&password,
+		&crate::password::Policy::from_config(&config.auth),
 		config.auth.scram,
 	) {
 		Ok(account) => DynamicAccount {
@@ -292,7 +293,7 @@ fn removal_question(
 			passwords
 				.list()
 				.into_iter()
-				.filter(|(account, _, _, _)| account == name)
+				.filter(|(account, _, _, _, _)| account == name)
 				.count()
 		})
 		.unwrap_or(0);

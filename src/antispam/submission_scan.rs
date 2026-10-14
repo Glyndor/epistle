@@ -67,6 +67,7 @@ impl MessageSink for ScanningSink {
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
+		extra: &std::collections::BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
 		// Fail open like the inbound scan: an unreachable clamd is counted
 		// and recorded for `epistle status` inside the hook, and the mail
@@ -84,7 +85,7 @@ impl MessageSink for ScanningSink {
 			self.notify(account, &signature);
 			return Err(SinkError::VirusDetected(signature));
 		}
-		self.inner.submit(message, queue_id, account)
+		self.inner.submit(message, queue_id, account, extra)
 	}
 }
 

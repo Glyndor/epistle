@@ -165,6 +165,24 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 	if crate::api::quota::full_recipient(state, &recipients, stamped.len() as u64).is_some() {
 		return Err("overQuota".into());
 	}
+	// Save a copy of what the account submitted into its `Sent`
+	// folder when the JMAP request does not already place the
+	// Email there. The check inspects `onSuccessUpdateEmail`:
+	// when the client asks the server to move or copy the email
+	// into Sent as part of the submission, the saver must not
+	// produce a second copy. The same `save_sent` per-account and
+	// per-request gates the SMTP and `/api/v1/send` paths.
+	let request_save_sent = submission
+		.get("saveSent")
+		.and_then(Value::as_bool)
+		.or_else(|| submission.get("save_sent").and_then(Value::as_bool));
+	let jmap_email_in_sent = submission
+		.get("onSuccessUpdateEmail")
+		.and_then(Value::as_object)
+		.and_then(|update| update.get("mailboxIds"))
+		.and_then(Value::as_object)
+		.is_some_and(|ids| ids.keys().any(|key| key.eq_ignore_ascii_case("Sent")));
+	let sent_copy = stamped.clone();
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
 		recipients,
@@ -174,9 +192,8 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
-	state
-		.submit(account, message)
-		.map(|id| id.to_string())
+	let id = state
+		.submit(account, message, &std::collections::BTreeMap::new())
 		.map_err(|error| match error {
 			// RFC 8621 section 7.5.2: the server refuses to send this message.
 			crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {
@@ -184,7 +201,14 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 				description: Some(format!("message rejected: virus detected ({signature})")),
 			},
 			crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
-		})
+		})?;
+	// Save the Sent copy unless the JMAP submission already places
+	// the email in Sent, or the caller opted out with `saveSent:
+	// false`, or the account-wide setting is off.
+	if !jmap_email_in_sent {
+		state.save_sent_copy(account, &sent_copy, request_save_sent);
+	}
+	Ok(id.to_string())
 }
 
 /// A `SetError` (RFC 8620 section 5.3): its type, and a description when

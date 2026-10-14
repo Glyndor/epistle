@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Account, Protocol};
 use crate::directory_store::aliases::AliasStore;
+use crate::password::Policy;
 use crate::smtp::directory::Directory;
 use crate::util::address_reason;
 
@@ -20,7 +21,8 @@ pub use app_passwords::{AppPassword, AppPasswordStore};
 pub mod aliases;
 pub mod masked;
 mod names;
-use names::{validate_name, with_safe_names};
+pub(crate) use names::validate_name;
+use names::with_safe_names;
 mod account_views;
 mod app_passwords_api;
 mod masked_api;
@@ -44,6 +46,8 @@ mod forward_catch_all_mutators;
 mod mutators;
 pub mod scram_upgrade;
 
+#[path = "password_policy_settings.rs"]
+mod password_policy_settings;
 #[path = "scram_settings.rs"]
 mod scram_settings;
 #[path = "set_totp.rs"]
@@ -157,6 +161,16 @@ pub struct DynamicAccount {
 	/// [`display_name::validate`].
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub display_name: Option<String>,
+	/// Whether messages the account submits are saved to its `Sent`
+	/// folder. `None` (the default and the value on `accounts.toml`
+	/// files written before the field existed) defaults to "on"; an
+	/// explicit `Some(false)` disables the save for this account
+	/// unless an app password on the credential overrides it.
+	/// Per-request (`/api/v1/send`, JMAP `EmailSubmission`) and
+	/// per-credential (app password) overrides win over the
+	/// account-wide setting.
+	#[serde(default)]
+	pub save_sent: Option<bool>,
 }
 
 impl DynamicAccount {
@@ -166,16 +180,26 @@ impl DynamicAccount {
 	/// `scram_enabled` is `false`, the SCRAM verifier is omitted (`None`);
 	/// a future password change with `scram_enabled` `false` keeps it
 	/// `None`.
+	///
+	/// `policy` decides whether `password` is NFKC-normalised before hashing
+	/// and SCRAM derivation. With `Policy::ASCII_ONLY` (the default) the
+	/// input is hashable as-is; with `Policy::unicode` the prepare step
+	/// canonicalises it (RFC 8265 OpaqueString), so a password set with one
+	/// keyboard verifies from another.
 	pub fn with_password(
 		name: String,
 		addresses: Vec<String>,
 		password: &str,
+		policy: &Policy,
 		scram_enabled: bool,
 	) -> Result<Self, StoreError> {
-		let password_hash = crate::smtp::auth::hash_password(password)
+		let prepared = policy
+			.prepare(password)
+			.map_err(|rejection| StoreError::Invalid(rejection.message().to_string()))?;
+		let password_hash = crate::smtp::auth::hash_password(prepared.as_ref())
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
 		let scram = if scram_enabled {
-			let stored = crate::smtp::scram::ScramStored::with_fresh_salt(password)
+			let stored = crate::smtp::scram::ScramStored::with_fresh_salt(prepared.as_ref())
 				.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
 			Some(stored)
 		} else {
@@ -193,6 +217,7 @@ impl DynamicAccount {
 			forward: Vec::new(),
 			catch_all: Vec::new(),
 			display_name: None,
+			save_sent: None,
 		})
 	}
 }
@@ -305,6 +330,9 @@ pub struct AccountStore {
 	/// derivation entirely; the next password change of an account that
 	/// already has a verifier drops it because the mutator passes `None`.
 	scram_enabled: bool,
+	/// Runtime password policy (default `ASCII_ONLY`; production wiring
+	/// sets it from `[auth] unicode_passwords` via `with_password_policy`).
+	password_policy: Policy,
 	/// At-rest encryption for the TOTP secret (see `set_totp.rs`).
 	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
@@ -352,6 +380,7 @@ impl AccountStore {
 			metrics: None,
 			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
 			scram_enabled: true,
+			password_policy: Policy::ASCII_ONLY,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
@@ -492,85 +521,6 @@ impl AccountStore {
 		Ok(())
 	}
 
-	/// Remove a dynamic account. Static accounts cannot be removed here.
-	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
-		self.mutate_store(|state| {
-			let before = state.accounts.len();
-			state.accounts.retain(|account| account.name != name);
-			if state.accounts.len() == before {
-				return Err(StoreError::NotFound(name.to_string()));
-			}
-			Ok(())
-		})?;
-		Ok(())
-	}
-
-	/// Replace the password hash (and SCRAM credentials) of a dynamic account.
-	pub fn set_password_hash(
-		&self,
-		name: &str,
-		hash: String,
-		scram: Option<crate::smtp::scram::ScramStored>,
-	) -> Result<(), StoreError> {
-		self.mutate_store(|state| {
-			let target = state
-				.accounts
-				.iter_mut()
-				.find(|account| account.name == name)
-				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			target.password_hash = hash;
-			target.scram = scram;
-			Ok(())
-		})?;
-		Ok(())
-	}
-
-	/// Enable or disable a dynamic account (the SCIM `active` flag). The
-	/// account stays on disk and continues to own its mailboxes, but
-	/// authentication rejects it while disabled. Returns the previous state
-	/// so callers can detect a no-op.
-	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
-		let mut previous = None;
-		self.mutate_store(|state| {
-			let target = state
-				.accounts
-				.iter_mut()
-				.find(|account| account.name == name)
-				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			previous = Some(target.disabled);
-			target.disabled = disabled;
-			Ok(())
-		})?;
-		Ok(previous.expect("closure ran"))
-	}
-
-	/// Whether a dynamic account is administratively disabled.
-	pub fn is_disabled(&self, name: &str) -> bool {
-		self.dynamic
-			.read()
-			.expect("store lock")
-			.iter()
-			.find(|account| account.name == name)
-			.is_some_and(|account| account.disabled)
-	}
-
-	/// Look up a dynamic account by name (case-sensitive). `None` for static
-	/// accounts and unknown names.
-	pub fn dynamic(&self, name: &str) -> Option<DynamicAccount> {
-		self.dynamic
-			.read()
-			.expect("store lock")
-			.iter()
-			.find(|account| account.name == name)
-			.cloned()
-	}
-
-	/// Snapshot every dynamic account (cloned). Used by SCIM's `List` and
-	/// other read-only surfaces that need the full set without the lock.
-	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
-		self.dynamic.read().expect("store lock").clone()
-	}
-
 	/// Replace a dynamic account in place, preserving its position in the
 	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
 	/// in SCIM terms) without churning the file. `NotFound` if no
@@ -650,6 +600,12 @@ impl AccountStore {
 					.map(|bytes| (account.name.clone(), bytes))
 			})
 			.chain(build::quota_bytes(&dynamic));
+		// Per-account `save_sent` overrides are dynamic-only (static
+		// accounts do not carry the field today; the operator can edit
+		// `mail.toml` to disable saving if the static-account default is
+		// ever added). The map omits accounts whose setting is `None`,
+		// so the saver falls back to the default ("on").
+		let save_sent = build::save_sent(&dynamic);
 		let forwards = build::forwards(&self.static_accounts, &dynamic);
 		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
@@ -684,6 +640,7 @@ impl AccountStore {
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_domain_submission_limits(self.domain_submission_limits.clone())
 			.with_forwards(forwards)
+			.with_save_sent(save_sent)
 			.with_aliases(aliases)
 			.with_app_passwords(
 				self.app_passwords
@@ -702,6 +659,7 @@ impl AccountStore {
 			dir = dir.with_ban_store(ban_store);
 		}
 		dir = dir.with_scram_upgrader(self.scram_upgrader.clone());
+		dir = dir.with_password_policy(self.password_policy);
 		dir
 	}
 }

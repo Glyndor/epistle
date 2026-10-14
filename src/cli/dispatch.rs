@@ -7,14 +7,15 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, autoconfig,
-	autodiscover, backup, ban, dkim_cli, dns_records, domain, export, import, init, local, masked,
-	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
-	suppression, tls_cli, verify, verify_dns,
+	autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, export, import, init,
+	local, masked, mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status,
+	style, suppression, tls_cli, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -136,6 +137,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Migrate(args) => super::migrate::run(args),
 			Command::Import {
 				config,
 				account,
@@ -238,9 +240,32 @@ impl Cli {
 				}
 			}
 			Command::Queue { config, action } => match Config::load(&config) {
-				Ok(config) => queue::run(
+				Ok(config) => {
+					let webhook = config.webhook.as_ref().map(|wh| {
+						Arc::new(
+							crate::webhook::Webhook::new(&wh.url, wh.secret.clone())
+								.expect("webhook"),
+						)
+					});
+					queue::run(
+						&config.data_dir,
+						config.delivery_log_days(),
+						action,
+						queue::now_epoch(),
+						webhook.as_ref(),
+						&mut std::io::stdout().lock(),
+					)
+				}
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Delivery(args) => match Config::load(&args.config) {
+				Ok(config) => delivery::run(
 					&config.data_dir,
-					action,
+					config.delivery_log_days(),
+					args.action,
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
 				),
@@ -412,3 +437,7 @@ impl Cli {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;

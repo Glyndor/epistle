@@ -100,7 +100,14 @@ async fn api_send_to_a_local_recipient_is_delivered_not_queued() {
 		"local mail is not queued"
 	);
 	let delivered = alice_messages(dir.path());
-	assert_eq!(delivered.len(), 1, "delivered to the local mailbox");
+	// Two copies on disk: the inbox delivery and the Sent folder
+	// the saver keeps by default. The Sent copy is an additional
+	// outcome of the save-sent feature, not a regression.
+	assert_eq!(
+		delivered.len(),
+		2,
+		"delivered to the local mailbox and to Sent"
+	);
 	assert!(
 		delivered[0].windows(16).any(|w| w == b"Subject: Routed\r"),
 		"the delivered copy is the sent message"
@@ -168,7 +175,7 @@ async fn jmap_submission_to_a_local_recipient_is_delivered_not_queued() {
 	);
 	assert_eq!(
 		alice_messages(dir.path()).len(),
-		2,
-		"the draft plus the delivered copy"
+		3,
+		"the draft, the delivered copy, and the Sent copy"
 	);
 }

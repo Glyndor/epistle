@@ -71,6 +71,7 @@ fn ws_state(
 			allowed_protocols: None,
 			forward: Vec::new(),
 			catch_all: Vec::new(),
+			save_sent: None,
 		})
 		.expect("add carol");
 	let state = ApiState::new(

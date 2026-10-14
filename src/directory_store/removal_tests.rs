@@ -41,15 +41,19 @@ fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpool) {
 
 fn enqueue(spool: &FsSpool, reverse_path: &str, body: &str) {
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: reverse_path.to_string(),
-			recipients: vec!["bob@elsewhere.example".to_string()],
-			data: format!("Subject: {body}\r\n\r\n{body}\r\n").into_bytes(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: reverse_path.to_string(),
+				recipients: vec!["bob@elsewhere.example".to_string()],
+				data: format!("Subject: {body}\r\n\r\n{body}\r\n").into_bytes(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
 		.expect("store");
 }
 
@@ -98,6 +102,7 @@ fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSpool, name: &str) {
 				hash: "$argon2id$placeholder".to_string(),
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add app pw");
@@ -383,6 +388,7 @@ async fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 				hash: app_hash,
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add app pw");

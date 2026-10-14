@@ -2,14 +2,18 @@
 
 pub mod acl;
 pub mod archive;
+mod binary_append;
 pub(crate) mod changelog;
 pub mod command;
 mod compress;
 pub(crate) mod fetch;
 mod flags;
 mod index;
+pub mod internal_date;
 pub mod junk_trainer;
 pub mod keyword;
+mod list_pattern;
+mod list_tree;
 pub mod mailbox;
 pub mod metadata;
 mod modseq;

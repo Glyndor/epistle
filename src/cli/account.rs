@@ -36,7 +36,7 @@ pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
 	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
 	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
-	set_name_with_store, show_with_store,
+	save_sent_with_store, set_name_with_store, show_with_store,
 };
 pub use account_args::{
 	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
@@ -158,6 +158,16 @@ pub enum Subcommand {
 		#[arg(value_name = "LIST")]
 		list: String,
 	},
+	/// Set whether the server saves a Sent copy of every send.
+	SaveSent {
+		/// The account login name.
+		#[arg(value_name = "NAME")]
+		name: String,
+		/// `on` or `off`. The default (no account setting) is "on";
+		/// `off` is the opt-out.
+		#[arg(value_name = "STATE")]
+		state: String,
+	},
 	/// Print the public view of an account, never its secrets.
 	///
 	/// Print the public view of an account (addresses, disabled, quota,
@@ -270,47 +280,19 @@ pub(super) fn parse_quota_size(raw: &str) -> Result<Option<u64>, String> {
 /// Parse a protocol-list argument (`imap,smtp`, `all`). Unknown
 /// protocol names are rejected with a list of the accepted ones so a
 /// typo never reaches the store. `all` (case-insensitive) returns
-/// `Ok(None)` to clear the restriction.
+/// `Ok(None)` to clear the restriction. Implementation lives in
+/// `account_actions`; the umbrella keeps only the re-export so
+/// the Subcommand enum stays close to the call site.
 pub(super) fn parse_protocol_list(raw: &str) -> Result<Option<Vec<Protocol>>, String> {
-	let trimmed = raw.trim();
-	if trimmed.is_empty() {
-		return Err("protocol list is empty (expected imap,smtp or 'all')".to_string());
-	}
-	if trimmed.eq_ignore_ascii_case("all") {
-		return Ok(None);
-	}
-	let mut out = Vec::new();
-	for token in trimmed.split(',') {
-		let name = token.trim();
-		if name.is_empty() {
-			return Err("protocol list has an empty entry".to_string());
-		}
-		let protocol = parse_protocol(name)?;
-		if !out.contains(&protocol) {
-			out.push(protocol);
-		}
-	}
-	Ok(Some(out))
+	account_actions::parse_protocol_list_inner(raw)
 }
 
-/// Parse a single protocol name. Duplicates the kebab-case spellings
-/// the TOML `Protocol` deserialiser already understands so the CLI
-/// list and the config file spell them the same way.
-fn parse_protocol(name: &str) -> Result<Protocol, String> {
-	match name.to_ascii_lowercase().as_str() {
-		"smtp" => Ok(Protocol::Smtp),
-		"submission" => Ok(Protocol::Submission),
-		"submissions" => Ok(Protocol::Submissions),
-		"api" => Ok(Protocol::Api),
-		"imap" => Ok(Protocol::Imap),
-		"imaps" => Ok(Protocol::Imaps),
-		"pop3s" => Ok(Protocol::Pop3s),
-		"managesieve" => Ok(Protocol::ManageSieve),
-		"webdav" => Ok(Protocol::WebDav),
-		other => Err(format!(
-			"unknown protocol {other:?} (expected smtp, submission, submissions, api, imap, imaps, pop3s, managesieve, webdav or 'all')"
-		)),
-	}
+/// Parse the `on`/`off` switch the `save_sent` and quota
+/// subcommands accept. The CLI keeps the accepted set narrow so a
+/// typo never lands on disk: `on` and `off` are the only valid
+/// spellings. Implementation lives in `account_actions`.
+pub(super) fn parse_on_off(raw: &str) -> Result<bool, String> {
+	account_actions::parse_on_off(raw)
 }
 
 /// Open the store the action will mutate. Centralising the error
@@ -325,6 +307,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 		config.accounts.clone(),
 	)
 	.map(|store| store.with_scram_enabled(config.auth.scram))
+	.map(|store| store.with_password_policy(crate::password::Policy::from_config(&config.auth)))
 }
 
 /// `handle_error` lives in `account_actions`; the umbrella module only
@@ -509,6 +492,19 @@ pub(super) fn run(
 				Err(code) => return code,
 			};
 			protocols_with_store(&store, &name, parsed)
+		}
+		Subcommand::SaveSent { name, state } => {
+			let value = match parse_on_off(&state) {
+				Ok(value) => value,
+				Err(error) => {
+					return crate::cli::exit::refused(format_args!("account {name}: {error}"));
+				}
+			};
+			let store = match prepare(config_path, &name) {
+				Ok(store) => store,
+				Err(code) => return code,
+			};
+			save_sent_with_store(&store, &name, value)
 		}
 		Subcommand::Show { name, json } => {
 			let store = match prepare_show(config_path, &name) {

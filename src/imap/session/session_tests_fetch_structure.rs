@@ -1,4 +1,4 @@
-use super::fetch_envelope::{PLAIN, SIMPLE, exact, selected};
+use super::fetch_envelope::{CONDSTORE_ON, PLAIN, SIMPLE, exact, selected};
 
 pub(super) const ALTERNATIVE: &[u8] = b"Content-Type: multipart/alternative; boundary=a\r\n\r\n--a\r\nContent-Type: text/plain\r\n\r\nplain\r\n--a\r\nContent-Type: text/html\r\n\r\n<b>x</b>\r\n--a--\r\n";
 pub(super) const MIXED: &[u8] = b"Content-Type: multipart/mixed; boundary=m\r\nContent-Disposition: inline\r\nContent-Language: en, es\r\nContent-Location: /mail\r\n\r\n--m\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ntext\r\n--m\r\nContent-Type: application/octet-stream; name=hello.bin\r\nContent-Disposition: attachment; filename=hello.bin\r\nContent-ID: <file@example.org>\r\nContent-Description: data\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--m--\r\n";
@@ -28,7 +28,7 @@ fn fetch_structure_plain_body_and_uid() {
 		&mut session,
 		"u UID FETCH 1:* (BODYSTRUCTURE) (CHANGEDSINCE 0)",
 		format!(
-			"* 1 FETCH (BODYSTRUCTURE {TEXT_EXT} UID 1 MODSEQ (1))\r\nu OK FETCH completed\r\n"
+			"{CONDSTORE_ON}* 1 FETCH (BODYSTRUCTURE {TEXT_EXT} UID 1 MODSEQ (1))\r\nu OK FETCH completed\r\n"
 		)
 		.as_bytes(),
 		"UID BODYSTRUCTURE must preserve CHANGEDSINCE",

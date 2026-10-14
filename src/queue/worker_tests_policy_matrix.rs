@@ -3,6 +3,7 @@
 //! driven through the worker against a real SMTP server, with the outcome
 //! RFC 8461 and RFC 7672 call for.
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use tokio_rustls::TlsAcceptor;
@@ -298,7 +299,7 @@ async fn attempt_message(
 	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
-	spool.store(message).expect("store");
+	spool.store(message, None, &BTreeMap::new()).expect("store");
 	let sink = Arc::new(MemorySink::new());
 	let store = Arc::new(crate::mtasts::PolicyStore::new(fetcher));
 	let worker = Worker::new(
@@ -343,15 +344,19 @@ pub(super) async fn attempt_with_tlsrpt(
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec!["bob@remote.example".to_string()],
-			data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@sender.example".into(),
+				recipients: vec!["bob@remote.example".to_string()],
+				data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	let sink = Arc::new(MemorySink::new());
 	let store = Arc::new(crate::mtasts::PolicyStore::new(fetcher));

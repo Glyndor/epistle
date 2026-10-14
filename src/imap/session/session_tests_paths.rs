@@ -27,7 +27,7 @@ fn hostile_mailbox_names_are_refused_with_the_exact_response() {
 
 	let cases = [
 		(r#"b1 CREATE "../x""#, "b1 NO invalid mailbox name\r\n"),
-		(r#"b2 CREATE "a/b""#, "b2 NO invalid mailbox name\r\n"),
+		(r#"b2 CREATE "a//b""#, "b2 NO invalid mailbox name\r\n"),
 		(r#"b3 CREATE "..""#, "b3 NO invalid mailbox name\r\n"),
 		(
 			r#"b4 CREATE "Archive\\2024""#,

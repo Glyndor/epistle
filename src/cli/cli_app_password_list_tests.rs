@@ -19,6 +19,7 @@ fn seeded(data_dir: &std::path::Path) -> Config {
 					hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
 					expires_at: None,
 					ip_cidr: None,
+					save_sent: None,
 				},
 			)
 			.expect("add app password");
@@ -46,7 +47,10 @@ fn list_with_account_shows_only_that_account() {
 			json: false,
 		},
 	);
-	assert_eq!(text, "bob\tphone\texpires=never\tip=any\n");
+	assert_eq!(
+		text,
+		"bob\tphone\texpires=never\tip=any\tsave_sent=default\n"
+	);
 }
 
 #[test]
@@ -62,6 +66,6 @@ fn list_without_account_shows_every_account() {
 	);
 	assert_eq!(
 		text,
-		"bob\tphone\texpires=never\tip=any\ncarol\tlaptop\texpires=never\tip=any\n"
+		"bob\tphone\texpires=never\tip=any\tsave_sent=default\ncarol\tlaptop\texpires=never\tip=any\tsave_sent=default\n"
 	);
 }

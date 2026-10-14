@@ -110,17 +110,17 @@ fn rev1_lsub_and_fetch_move_unselect_extensions_remain_available() {
 		session.command_line("s SELECT INBOX");
 		assert!(
 			text(&session.command_line("b FETCH 1 (BINARY[] BINARY.SIZE[])"))
-				== "* 1 FETCH (BINARY[] {3}\r\none BINARY.SIZE[] 3 FLAGS (\\Seen))\r\nb OK FETCH completed\r\n",
+				== "* 1 FETCH (BINARY[] {40}\r\nContent-Transfer-Encoding: base64\r\n\r\none BINARY.SIZE[] 40 FLAGS (\\Seen))\r\nb OK FETCH completed\r\n",
 			"BINARY must preserve decoded bytes and size in both revisions"
 		);
 		let moved = text(&session.command_line("m UID MOVE 1 Sent"));
 		assert!(
-			moved.starts_with("* 1 EXPUNGE\r\nm OK [COPYUID "),
-			"UID MOVE must expunge and report COPYUID"
+			moved.starts_with("* OK [COPYUID ") && moved.contains(" 1 1] moved\r\n"),
+			"UID MOVE must report source and destination UIDs before the expunge"
 		);
 		assert!(
-			moved.ends_with(" 1 1] MOVE completed\r\n"),
-			"UID MOVE must report source and destination UIDs"
+			moved.ends_with("\r\n* 1 EXPUNGE\r\nm OK MOVE completed\r\n"),
+			"UID MOVE must expunge the source"
 		);
 		assert_eq!(
 			text(&session.command_line("q SEARCH RETURN (COUNT) ALL")),

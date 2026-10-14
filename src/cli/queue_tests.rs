@@ -5,6 +5,7 @@ use crate::cli::queue::QueueCli;
 use crate::cli::{Cli, Command};
 use crate::smtp::session::AcceptedMessage;
 use clap::Parser;
+use std::collections::BTreeMap;
 
 const BODY: &str = "Subject: hi\r\n\r\ntop secret body text\r\n";
 
@@ -14,15 +15,19 @@ fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
 	let ids = (0..count)
 		.map(|n| {
 			spool
-				.store(&AcceptedMessage {
-					reverse_path: format!("alice{n}@example.org"),
-					recipients: vec![format!("bob{n}@remote.example")],
-					data: BODY.as_bytes().to_vec(),
-					require_tls: false,
-					mailbox: None,
-					tlsrpt_verified: false,
-					no_dsn: Vec::new(),
-				})
+				.store(
+					&AcceptedMessage {
+						reverse_path: format!("alice{n}@example.org"),
+						recipients: vec![format!("bob{n}@remote.example")],
+						data: BODY.as_bytes().to_vec(),
+						require_tls: false,
+						mailbox: None,
+						tlsrpt_verified: false,
+						no_dsn: Vec::new(),
+					},
+					None,
+					&BTreeMap::new(),
+				)
 				.expect("store")
 		})
 		.collect();
@@ -43,7 +48,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, action, now, &mut out);
+	let code = run(dir, 0, action, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -286,4 +291,118 @@ fn show_json_prints_one_object_for_the_entry() {
 		!text.contains("top secret"),
 		"the body leaked into the JSON"
 	);
+}
+
+#[test]
+fn remove_writes_a_canceled_record_for_each_pending_recipient() {
+	let (dir, _spool, ids) = spool_with(1);
+	let id = ids[0];
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		30,
+		Some(QueueCli::Remove { id, yes: true }),
+		1_700_000_000,
+		None,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		!dir.path()
+			.join("spool/new")
+			.join(format!("{id}.json"))
+			.exists()
+	);
+
+	let log_root = dir.path().join("deliverylog");
+	assert!(log_root.is_dir());
+	let mut paths: Vec<_> = std::fs::read_dir(&log_root)
+		.unwrap()
+		.flatten()
+		.map(|e| e.path())
+		.collect();
+	assert_eq!(paths.len(), 1, "one day file");
+	let path = paths.pop().unwrap();
+	let body = std::fs::read_to_string(&path).unwrap();
+	let lines: Vec<&str> = body.lines().collect();
+	assert_eq!(lines.len(), 1, "one record per pending recipient");
+	let record: crate::storage::DeliveryRecord = serde_json::from_str(lines[0]).expect("record");
+	assert_eq!(record.spool_id, id);
+	assert_eq!(record.recipient, "bob0@remote.example");
+	assert_eq!(record.from, "alice0@example.org");
+	assert_eq!(record.outcome, crate::storage::DeliveryOutcome::Canceled);
+	assert_eq!(record.time, 1_700_000_000);
+	assert_eq!(record.account, None);
+}
+
+#[test]
+fn remove_with_log_disabled_does_not_write_records() {
+	let (dir, _spool, ids) = spool_with(1);
+	let id = ids[0];
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		0,
+		Some(QueueCli::Remove { id, yes: true }),
+		1_700_000_000,
+		None,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(!dir.path().join("deliverylog").exists());
+}
+
+/// Start a webhook receiver; returns its URL and a shared body list.
+async fn webhook_receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+	let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	async fn handler(
+		axum::extract::State(state): axum::extract::State<
+			std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+		>,
+		body: String,
+	) -> &'static str {
+		state.lock().expect("lock").push(body);
+		"ok"
+	}
+	let app = axum::Router::new()
+		.route("/hook", axum::routing::post(handler))
+		.with_state(captured.clone());
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+	(format!("http://{addr}/hook"), captured)
+}
+
+#[tokio::test]
+async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
+	let (url, captured) = webhook_receiver().await;
+	let (dir, _spool, ids) = spool_with(1);
+	let id = ids[0];
+	let webhook = std::sync::Arc::new(crate::webhook::Webhook::new(&url, None).expect("webhook"));
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		30,
+		Some(QueueCli::Remove { id, yes: true }),
+		1_700_000_000,
+		Some(&webhook),
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	for _ in 0..200 {
+		if !captured.lock().expect("lock").is_empty() {
+			break;
+		}
+		tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+	}
+	let bodies = captured.lock().expect("lock").clone();
+	let body = bodies
+		.iter()
+		.find(|body| body.contains("\"event\":\"canceled\""))
+		.expect("a canceled body");
+	let event: serde_json::Value = serde_json::from_str(body).expect("json");
+	assert_eq!(event["spool_id"], id.to_string());
+	assert_eq!(event["recipient"], "bob0@remote.example");
 }

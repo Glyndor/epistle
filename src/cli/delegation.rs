@@ -34,6 +34,7 @@ impl Command {
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
+			| Command::Migrate(_)
 			| Command::Backup { .. }
 			| Command::Restore { .. }
 			| Command::Verify { .. }
@@ -49,6 +50,7 @@ impl Command {
 			// Every flat alias reaches a stateful account-side handler.
 			| Command::Legacy(_)
 			| Command::Queue { .. }
+			| Command::Delivery { .. }
 			| Command::Ban { .. }
 			| Command::Masked { .. }
 			| Command::AppPassword { .. }

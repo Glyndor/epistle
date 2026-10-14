@@ -115,6 +115,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// successful cleartext login rewrites a low-iteration verifier.
 	let account_store = store
 		.with_scram_enabled(config.auth.scram)
+		.with_password_policy(crate::password::Policy::from_config(&config.auth))
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
@@ -311,6 +312,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
+				.with_delivery_log_days(config.delivery_log_days())
 				.with_quota(
 					config
 						.quota_bytes
@@ -481,7 +483,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_max_connections(max_conn)
-					.with_report_dir(config.data_dir.clone());
+					.with_report_dir(config.data_dir.clone())
+					// The Sent copy of a submission is written into the account's
+					// mailboxes, encrypted at rest like any other stored message.
+					.with_data_dir(config.data_dir.clone())
+					.with_crypto(Arc::new(crypto.clone()));
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {

@@ -13,6 +13,14 @@ fn listing(dir: &std::path::Path) -> Vec<String> {
 	names
 }
 
+/// The messages (`.eml` files) in a mailbox's `new/` directory.
+fn messages(dir: &std::path::Path) -> usize {
+	listing(dir)
+		.iter()
+		.filter(|name| name.ends_with(".eml"))
+		.count()
+}
+
 fn sink() -> (tempfile::TempDir, std::path::PathBuf, LocalDelivery) {
 	let outer = tempfile::tempdir().expect("tempdir");
 	let data = outer.path().join("data");
@@ -42,7 +50,7 @@ fn a_traversing_account_name_delivers_nowhere() {
 #[test]
 fn a_traversing_mailbox_name_delivers_nowhere() {
 	let (outer, data, sink) = sink();
-	for mailbox in ["../x", "..", ".", "a/b", "../../evil"] {
+	for mailbox in ["../x", "..", ".", "a//b", "/b", "../../evil"] {
 		let error = sink
 			.deliver_to_account("alice", Some(mailbox), b"x", &[])
 			.expect_err(mailbox);
@@ -70,9 +78,42 @@ fn a_named_mailbox_still_receives_mail() {
 	sink.deliver_to_account("alice", Some("Projects..2024"), b"x", &[])
 		.expect("deliver");
 	assert_eq!(
-		listing(&data.join("accounts/alice/folders/Projects..2024/new")).len(),
+		messages(&data.join("accounts/alice/folders/Projects..2024/new")),
 		1
 	);
+}
+
+#[test]
+fn a_hierarchical_mailbox_receives_mail_with_its_superiors_made() {
+	let (_outer, data, sink) = sink();
+	sink.deliver_to_account("alice", Some("Lists/Rust"), b"x", &[])
+		.expect("deliver");
+	let folders = data.join("accounts/alice/folders");
+	assert_eq!(messages(&folders.join("Lists&AC8-Rust/new")), 1);
+	assert!(folders.join("Lists/new").is_dir(), "the superior exists");
+	assert_eq!(
+		crate::imap::mailbox::list(&data, "alice")
+			.into_iter()
+			.filter(|name| name.starts_with("Lists"))
+			.collect::<Vec<_>>(),
+		["Lists", "Lists/Rust"]
+	);
+}
+
+#[test]
+fn a_routing_rule_may_name_a_hierarchical_mailbox() {
+	let (_outer, data, sink) = sink();
+	sink.deliver_routed(&message(&["alice@example.org"]), Some("Lists/Rust"))
+		.expect("deliver");
+	let folders = data.join("accounts/alice/folders");
+	assert_eq!(messages(&folders.join("Lists&AC8-Rust/new")), 1);
+	for unsafe_name in ["Lists//Rust", "/Rust", "Lists/.x", "../x"] {
+		assert!(
+			sink.deliver_routed(&message(&["alice@example.org"]), Some(unsafe_name))
+				.is_err(),
+			"{unsafe_name:?}"
+		);
+	}
 }
 
 #[test]
@@ -113,4 +154,28 @@ fn directory_style_account_names_get_defaults_and_receive_mail() {
 			["INBOX", "Archive", "Drafts", "Rejects", "Sent", "Trash"]
 		);
 	}
+}
+
+#[test]
+fn a_routing_mailbox_is_levels_of_the_safe_alphabet() {
+	for name in ["Junk", "Lists/Rust", "a b/c-d_e"] {
+		assert!(io::is_safe_mailbox(name), "{name:?}");
+	}
+	for name in [
+		"",
+		"/",
+		"Lists//Rust",
+		"/Rust",
+		"Rust/",
+		"a/.b",
+		"a/b.c",
+		"../x",
+	] {
+		assert!(!io::is_safe_mailbox(name), "{name:?}");
+	}
+	assert!(
+		!io::is_safe_mailbox(&format!("{}a", "a/".repeat(32))),
+		"over 64 bytes"
+	);
+	assert!(io::is_safe_mailbox(&"a".repeat(64)));
 }

@@ -45,6 +45,11 @@ pub struct Session {
 	/// Whether the connection is already inside TLS.
 	tls_active: bool,
 	authenticated: Option<String>,
+	/// The label of the app password that authenticated this session,
+	/// when the credential was a secondary one. `None` for primary
+	/// passwords and EXTERNAL authentication. Stored so the submission
+	/// path can look up the credential's `save_sent` override.
+	auth_app_password_label: Option<String>,
 	/// Failed authentication attempts on this connection.
 	auth_failures: u8,
 	/// Domain the client announced in HELO/EHLO, for trace headers.
@@ -113,6 +118,7 @@ impl Session {
 			tls_available: false,
 			tls_active: false,
 			authenticated: None,
+			auth_app_password_label: None,
 			auth_failures: 0,
 			helo_domain: None,
 			esmtp: false,
@@ -270,12 +276,35 @@ impl Session {
 		self.authenticated.as_deref()
 	}
 
+	/// The label of the app password that authenticated this session,
+	/// or `None` for a primary-password login (or EXTERNAL).
+	pub fn auth_app_password_label(&self) -> Option<&str> {
+		self.auth_app_password_label.as_deref()
+	}
+
+	/// Test-only setter: attach a directory to the session. The
+	/// production code wires the directory through `with_directory`
+	/// at session-construction time.
+	#[cfg(test)]
+	pub fn set_directory_for_test(&mut self, directory: Arc<crate::smtp::directory::Directory>) {
+		self.directory = directory;
+	}
+
 	/// Mark this session as authenticated as `account` without going through
 	/// the SASL flow. Test-only: production code sets the field through the
 	/// AUTH command machinery.
 	#[cfg(test)]
 	pub fn mark_authenticated_for_test(&mut self, account: &str) {
 		self.authenticated = Some(account.to_string());
+		self.auth_app_password_label = None;
+	}
+
+	/// Mark this session as authenticated as `account` via the app
+	/// password labelled `label`. Test-only.
+	#[cfg(test)]
+	pub fn mark_authenticated_with_app_password_for_test(&mut self, account: &str, label: &str) {
+		self.authenticated = Some(account.to_string());
+		self.auth_app_password_label = Some(label.to_string());
 	}
 
 	/// Mark this session as running inside TLS from the start

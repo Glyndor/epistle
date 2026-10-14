@@ -38,9 +38,8 @@ fn list_shows_inbox() {
 	let mut session = logged_in(dir.path());
 	session.command_line("rev ENABLE IMAP4rev2");
 	let output = session.command_line(r#"a2 LIST "" "*""#);
-	// CHILDREN (RFC 3348): every leaf mailbox gets \HasNoChildren. epistle
-	// stores mailboxes flat (no hierarchy separator in names), so the answer
-	// is uniform for every returned mailbox.
+	// CHILDREN (RFC 3348): INBOX has no folder under it here, so it is a
+	// leaf and gets \HasNoChildren.
 	assert!(text(&output).contains("* LIST (\\Subscribed \\HasNoChildren) \"/\" \"INBOX\""));
 	assert!(text(&output).contains("a2 OK"));
 }
@@ -106,15 +105,16 @@ fn fetch_binary_decodes_base64_body() {
 
 	let output = session.command_line("a3 FETCH 1 (BINARY[])");
 	let response = text(&output);
-	// The 5-byte decoded payload, not the encoded text.
-	assert!(response.contains("BINARY[] {5}"), "{response}");
-	assert!(response.contains("\r\nhello"), "{response}");
+	// The whole message (RFC 3516 §4.2): the 37-byte header, then the
+	// 5-byte decoded payload, not the encoded text.
+	assert!(response.contains("BINARY[] {42}"), "{response}");
+	assert!(response.contains("base64\r\n\r\nhello"), "{response}");
 	assert!(response.contains("a3 OK FETCH completed"), "{response}");
 
 	// BINARY.SIZE[] reports the decoded length without the data.
 	let output = session.command_line("a4 FETCH 1 (BINARY.SIZE[])");
 	let response = text(&output);
-	assert!(response.contains("BINARY.SIZE[] 5"), "{response}");
+	assert!(response.contains("BINARY.SIZE[] 42"), "{response}");
 }
 
 #[test]

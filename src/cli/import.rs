@@ -95,7 +95,10 @@ pub(super) fn run_maildir(
 	let entries = match std::fs::read_dir(maildir) {
 		Ok(entries) => entries,
 		Err(error) => {
-			super::style::error(format_args!("reading {}: {error}", maildir.display()));
+			super::style::error(format_args!(
+				"reading {}: {error}",
+				super::staging::shown(&maildir.display().to_string())
+			));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -113,14 +116,24 @@ pub(super) fn run_maildir(
 	folders.sort();
 	for folder in folders {
 		let raw = folder.file_name().and_then(|n| n.to_str()).unwrap_or("");
-		let name = raw.trim_start_matches('.');
-		if !mailbox::valid_name(name) {
+		let Some(name) = maildir_folder_name(raw) else {
 			super::style::warn(format_args!(
 				"skipping folder \"{raw}\" (not a valid mailbox name)"
 			));
 			continue;
+		};
+		targets.push((name, folder));
+	}
+	// Make every mailbox, parents first, before the parallel import, so two
+	// threads never create the same superior.
+	for (name, _) in &targets[1..] {
+		if !mailbox::exists(data_dir, account, name)
+			&& let Err(error) = mailbox::create(data_dir, account, name)
+			&& !mailbox::exists(data_dir, account, name)
+		{
+			super::style::error(format_args!("creating mailbox \"{name}\": {error}"));
+			return ExitCode::FAILURE;
 		}
-		targets.push((name.to_string(), folder));
 	}
 
 	// Import each mailbox in parallel: every target is a distinct mailbox, so
@@ -150,6 +163,20 @@ pub(super) fn run_maildir(
 	progress.tick(imported as usize);
 	progress.finish(&format!("imported {imported} messages into {account}"));
 	ExitCode::SUCCESS
+}
+
+/// The mailbox a Maildir++ folder directory (`.Work.Project`) holds. `.` is
+/// the Maildir++ hierarchy delimiter, so `.Work.Project` is `Work/Project`;
+/// a name that is no valid hierarchy that way (`.Projects..2024`) keeps its
+/// dots as one flat name when that is valid.
+fn maildir_folder_name(raw: &str) -> Option<String> {
+	let flat = raw.strip_prefix('.')?;
+	let nested = flat.replace('.', "/");
+	if mailbox::valid_name(&nested) {
+		Some(nested)
+	} else {
+		mailbox::valid_name(flat).then(|| flat.to_string())
+	}
 }
 
 /// Append every message in a Maildir folder's `cur` and `new` to `mailbox`,

@@ -99,6 +99,7 @@ fn a_valid_code_after_a_multibyte_password_still_authenticates() {
 		[("alice@example.org".to_string(), "alice".to_string())],
 	)
 	.with_password_hashes([("alice".to_string(), hash(&multibyte_base))])
+	.with_password_policy(crate::password::Policy::unicode())
 	.with_totp([("alice".to_string(), crate::totp::encode_base32(&secret))]);
 
 	let now = std::time::SystemTime::now()

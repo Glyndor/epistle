@@ -1,7 +1,13 @@
 //! IMAP command parsing (RFC 9051 section 6), strict subset.
 
-/// Maximum command line length accepted.
-pub const MAX_COMMAND_LINE: usize = 8192;
+/// Maximum command line length accepted, excluding CRLF and literals.
+///
+/// RFC 7162 §4 asks servers to take at least 8000 octets, but an RFC 2971
+/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings)
+/// is 31.8 KB, so 32 KiB is the smallest round bound that holds it. The
+/// line decoder scans each byte once and the recursive parsers cap their
+/// nesting, so the bound limits memory and work per line, not stack depth.
+pub const MAX_COMMAND_LINE: usize = 32 * 1024;
 
 /// A parsed client command with its tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,24 +70,10 @@ pub enum Command {
 		/// The requested algorithm, uppercased. Only `DEFLATE` is implemented.
 		algorithm: String,
 	},
-	/// `LIST <reference> <pattern>`: list mailboxes. `RETURN (STATUS (...))`
-	/// items are returned inline (LIST-STATUS, RFC 5819); `(SUBSCRIBED)`
-	/// narrows the result to subscribed mailboxes (RFC 5258).
-	List {
-		/// Reference name (often `""` or `"INBOX"`); defines the hierarchy
-		/// context for `pattern`.
-		reference: String,
-		/// Pattern with optional wildcards (`%` for one level, `*` for any).
-		pattern: String,
-		/// `RETURN (STATUS (...))` items to report inline (LIST-STATUS, RFC 5819).
-		return_status: Vec<StatusItem>,
-		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
-		select_subscribed: bool,
-		/// `(SPECIAL-USE)` selection: list only mailboxes with a role (RFC 6154).
-		select_special_use: bool,
-		/// Mailbox attributes explicitly requested by selection or RETURN.
-		return_attributes: Vec<ListAttribute>,
-	},
+	/// `LIST [(<selection>)] <reference> <pattern or (patterns)> [RETURN
+	/// (...)]`: list mailboxes (RFC 9051 §6.3.9, LIST-EXTENDED RFC 5258,
+	/// LIST-STATUS RFC 5819).
+	List(ListCommand),
 	/// `SELECT <mailbox>`: open the mailbox read-write. `(QRESYNC (...))`
 	/// resyncs from a previous session (RFC 7162).
 	Select {
@@ -149,6 +141,8 @@ pub enum Command {
 		mailbox: String,
 		/// Initial flags for the appended message (may be empty).
 		flags: Vec<String>,
+		/// The INTERNALDATE the client asked for, if any.
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
@@ -158,6 +152,9 @@ pub enum Command {
 		/// The message came as `UTF8 (~{n})` (RFC 6855 §4): it may carry
 		/// UTF-8 header fields, and a `)` follows the literal.
 		utf8: bool,
+		/// The message came as a literal8 `~{n}` (RFC 3516 §4.4), so its
+		/// binary parts may hold any octet.
+		binary: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
@@ -170,6 +167,8 @@ pub enum Command {
 		mailbox: String,
 		/// Initial flags for the appended message.
 		flags: Vec<String>,
+		/// The INTERNALDATE the client asked for, if any.
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
@@ -342,15 +341,41 @@ pub enum NotifyRequest {
 	None,
 	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
 	/// `STATUS` return modifier. `selected` holds the events requested for the
-	/// `selected` mailbox specifier (the only specifier fully supported); other
-	/// specifiers are accepted and ignored.
+	/// `selected` mailbox specifier, the only one whose events are pushed;
+	/// `others` keeps the remaining groups for the initial STATUS replies.
 	Set {
 		/// Whether the request carried the `STATUS` return modifier: when
-		/// set, status responses for newly selected mailboxes are emitted.
+		/// set, a STATUS reply goes out for every mailbox in `others`.
 		status: bool,
 		/// Events requested for the `selected` mailbox specifier.
 		selected: Vec<NotifyEvent>,
+		/// The event groups naming other mailboxes, in request order.
+		others: Vec<NotifyGroup>,
 	},
+}
+
+/// A NOTIFY event group for mailboxes other than the selected one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyGroup {
+	/// Which mailboxes the group covers.
+	pub mailboxes: NotifyMailboxes,
+	/// The events requested for them (empty for `NONE`).
+	pub events: Vec<NotifyEvent>,
+}
+
+/// A `filter-mailboxes-other` mailbox specifier (RFC 5465 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyMailboxes {
+	/// `inboxes`: the mailboxes that receive mail, here INBOX.
+	Inboxes,
+	/// `personal`: every mailbox of the user.
+	Personal,
+	/// `subscribed`: every subscribed mailbox.
+	Subscribed,
+	/// `subtree <mailboxes>`: the named mailboxes and all their children.
+	Subtree(Vec<String>),
+	/// `mailboxes <mailboxes>`: exactly the named mailboxes.
+	Mailboxes(Vec<String>),
 }
 
 /// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
@@ -386,6 +411,8 @@ pub enum StatusItem {
 	Deleted,
 	/// `MAILBOXID`: the mailbox's stable object id (OBJECTID, RFC 8474).
 	MailboxId,
+	/// `HIGHESTMODSEQ`: the mailbox's highest mod-sequence (RFC 7162 §3.1.6).
+	HighestModseq,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).
@@ -456,6 +483,8 @@ pub enum SearchKey {
 	Header(String, String),
 	/// Substring anywhere in the message (headers + body).
 	Text(String),
+	/// Substring in the body only, after the header block (`BODY`).
+	Body(String),
 	/// Explicit message sequence set.
 	Sequence(SequenceSet),
 	/// Explicit UID set (`UID <set>`).
@@ -472,6 +501,13 @@ pub enum SearchKey {
 	Since(u32, u8, u8),
 	/// INTERNALDATE falls within this date (midnight to midnight UTC).
 	On(u32, u8, u8),
+	/// `SENTBEFORE`: the Date header's own calendar date, time and zone
+	/// disregarded, is earlier than this date.
+	SentBefore(u32, u8, u8),
+	/// `SENTSINCE`: the Date header's calendar date is this date or later.
+	SentSince(u32, u8, u8),
+	/// `SENTON`: the Date header's calendar date is this date.
+	SentOn(u32, u8, u8),
 	/// RFC 2822 size strictly greater than n octets.
 	Larger(u32),
 	/// RFC 2822 size strictly less than n octets.
@@ -628,18 +664,22 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 
 mod acl;
 mod credentials;
+mod date_time;
+pub(crate) use date_time::parse as parse_date_time;
 mod list;
+pub use list::ListCommand;
 pub(super) mod literal;
 mod metadata;
 mod notify;
 mod parse;
 mod search;
+mod search_key;
 mod select_params;
 
-pub(crate) use literal::literal_announcement_in_line;
+pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
-pub(super) use parse::MAX_APPEND_SIZE;
+pub(crate) use parse::MAX_APPEND_SIZE;
 pub use parse::parse;
 
 #[cfg(test)]

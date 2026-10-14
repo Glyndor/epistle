@@ -85,3 +85,53 @@ fn paths_over_100_and_over_255_bytes_round_trip_byte_for_byte() {
 	);
 	assert_eq!(tree(&restored), tree(&data_dir));
 }
+
+#[test]
+fn hierarchical_mailboxes_survive_backup_and_restore() {
+	let source = tempfile::tempdir().unwrap();
+	let data_dir = source.path().join("data");
+	let crypto = crate::storage::MessageCrypto::disabled();
+	crate::imap::mailbox::create(&data_dir, "alice", "Work/Project/2026").unwrap();
+	crate::imap::mailbox::append(
+		&data_dir,
+		"alice",
+		"Work/Project/2026",
+		&[],
+		b"x\r\n",
+		&crypto,
+	)
+	.unwrap();
+	let mut archive = Vec::new();
+	let mut warnings = Vec::new();
+	assert_eq!(
+		run(&config_for(&data_dir), &mut archive, &mut warnings),
+		ExitCode::SUCCESS,
+		"{}",
+		String::from_utf8_lossy(&warnings)
+	);
+	let target = tempfile::tempdir().unwrap();
+	let restored = target.path().join("data");
+	std::fs::create_dir_all(&restored).unwrap();
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	assert_eq!(
+		run_restore(
+			&config_for(&restored),
+			&archive,
+			true,
+			false,
+			&mut out,
+			&mut status
+		),
+		ExitCode::SUCCESS,
+		"{}",
+		String::from_utf8_lossy(&status)
+	);
+	assert_eq!(
+		crate::imap::mailbox::list(&restored, "alice"),
+		["INBOX", "Work", "Work/Project", "Work/Project/2026"]
+	);
+	let snapshot =
+		crate::imap::mailbox::Snapshot::open(&restored, "alice", "Work/Project/2026", &crypto)
+			.unwrap();
+	assert_eq!(snapshot.len(), 1);
+}

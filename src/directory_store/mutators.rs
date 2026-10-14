@@ -75,6 +75,28 @@ impl AccountStore {
 		Ok(previous.expect("closure ran"))
 	}
 
+	/// Set or clear a dynamic account's `save_sent` preference.
+	/// `Some(true)` enables the save (the default for accounts
+	/// written before the field existed), `Some(false)` opts out.
+	/// The mutator keeps the account field a tri-state so a future
+	/// "inherit" value can land without breaking the on-disk
+	/// format; today the helper accepts only the two boolean
+	/// values. `NotFound` for static and unknown accounts.
+	pub fn set_save_sent(&self, name: &str, value: bool) -> Result<Option<bool>, StoreError> {
+		let mut previous: Option<Option<bool>> = None;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			previous = Some(target.save_sent);
+			target.save_sent = Some(value);
+			Ok(())
+		})?;
+		Ok(previous.expect("closure ran"))
+	}
+
 	/// Whether `raw` already routes somewhere: a static account, a dynamic
 	/// account other than `except`, a static `[[alias]]`, or a masked
 	/// address. Callers are inside the locked mutate closure, so the
@@ -182,5 +204,93 @@ impl AccountStore {
 			Ok(())
 		})?;
 		Ok(())
+	}
+
+	// === Account lifecycle =================================================
+	//
+	// The mutators below are simple lookup-and-overwrite calls that the
+	// CLI, the management API, and SCIM drive. They keep their previous
+	// state where it matters (set_disabled, set_quota_bytes,
+	// set_allowed_protocols above all do) so the caller can report the
+	// prior value without re-reading the file.
+
+	/// Remove a dynamic account. Static accounts cannot be removed here.
+	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
+		self.mutate_store(|state| {
+			let before = state.accounts.len();
+			state.accounts.retain(|account| account.name != name);
+			if state.accounts.len() == before {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
+			Ok(())
+		})?;
+		Ok(())
+	}
+
+	/// Replace the password hash (and SCRAM credentials) of a dynamic
+	/// account. `hash` is already argon2id; `scram` is whatever the
+	/// storage layer derived under the password policy at set-time.
+	pub fn set_password_hash(
+		&self,
+		name: &str,
+		hash: String,
+		scram: Option<crate::smtp::scram::ScramStored>,
+	) -> Result<(), StoreError> {
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			target.password_hash = hash;
+			target.scram = scram;
+			Ok(())
+		})?;
+		Ok(())
+	}
+
+	/// Enable or disable a dynamic account (the SCIM `active` flag).
+	/// Returns the previous state so callers can detect a no-op.
+	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
+		let mut previous = None;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			previous = Some(target.disabled);
+			target.disabled = disabled;
+			Ok(())
+		})?;
+		Ok(previous.expect("closure ran"))
+	}
+
+	/// Whether a dynamic account is administratively disabled.
+	pub fn is_disabled(&self, name: &str) -> bool {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.is_some_and(|account| account.disabled)
+	}
+
+	/// Look up a dynamic account by name (case-sensitive). `None` for
+	/// static accounts and unknown names.
+	pub fn dynamic(&self, name: &str) -> Option<DynamicAccount> {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.cloned()
+	}
+
+	/// Snapshot every dynamic account (cloned). Used by SCIM's `List`
+	/// and other read-only surfaces that need the full set without the
+	/// lock.
+	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
+		self.dynamic.read().expect("store lock").clone()
 	}
 }

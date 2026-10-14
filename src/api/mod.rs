@@ -147,6 +147,10 @@ mod jmap_tests_author;
 mod jmap_tests_b;
 
 #[cfg(test)]
+#[path = "jmap_tests_mailbox_tree.rs"]
+mod jmap_tests_mailbox_tree;
+
+#[cfg(test)]
 #[path = "jmap_tests_encoded_words.rs"]
 mod jmap_tests_encoded_words;
 
@@ -205,6 +209,10 @@ mod send_tests_principal;
 #[cfg(test)]
 #[path = "send_tests_outbound.rs"]
 mod send_tests_outbound;
+
+#[cfg(test)]
+#[path = "send_tests_save_sent.rs"]
+mod send_tests_save_sent;
 
 #[cfg(test)]
 #[path = "send_tests_rich.rs"]

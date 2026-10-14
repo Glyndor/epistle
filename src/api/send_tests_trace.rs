@@ -70,7 +70,11 @@ async fn jmap_submission_to_a_local_recipient_stores_the_return_path_first() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let copies = delivered(dir.path());
-	assert_eq!(copies.len(), 2, "the draft and the delivered copy");
+	assert_eq!(
+		copies.len(),
+		3,
+		"the draft, the delivered copy, and the Sent copy"
+	);
 	let stamped: Vec<&String> = copies
 		.iter()
 		.filter(|copy| {

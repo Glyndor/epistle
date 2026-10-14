@@ -338,6 +338,7 @@ fn poll_picks_up_a_write_from_a_separate_store_instance() {
 		"carol".to_string(),
 		vec!["carol@example.org".to_string()],
 		fixture_password(),
+		&crate::password::Policy::ASCII_ONLY,
 		true,
 	)
 	.expect("hashed account");

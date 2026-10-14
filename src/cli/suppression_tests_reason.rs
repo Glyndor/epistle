@@ -3,6 +3,7 @@
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
+use std::collections::BTreeMap;
 
 fn config(data_dir: &std::path::Path) -> Config {
 	let toml = format!(
@@ -17,15 +18,19 @@ fn config(data_dir: &std::path::Path) -> Config {
 async fn refused_with(data_dir: &std::path::Path, reply: &str) {
 	let spool = crate::storage::FsSpool::open(data_dir).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: vec!["carol@remote.example".to_string()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec!["carol@remote.example".to_string()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	let remote = FakeRemote::default();
 	remote.script(

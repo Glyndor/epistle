@@ -28,6 +28,10 @@ pub(in crate::imap) fn render_label(
 		Err(SelectError::TooDeep) => return Ok(empty(section, label)),
 		Err(SelectError::Missing) => return Ok(format!("{label} NIL").into_bytes()),
 	};
+	// Where the body of `part` ends. An encapsulated message's root part
+	// stops at its last boundary, but its TEXT runs to the end of the
+	// message/rfc822 part that holds it, epilogue included.
+	let body_end = part.offset_end;
 	if !section.path.is_empty()
 		&& matches!(
 			section.kind,
@@ -49,7 +53,12 @@ pub(in crate::imap) fn render_label(
 		SectionKind::Entire if section.path.is_empty() && !section.binary => {
 			owner.raw_message().to_vec()
 		}
-		SectionKind::Entire | SectionKind::Text => raw_body(owner, part).to_vec(),
+		SectionKind::Text => owner
+			.raw_message
+			.get(part.offset_body as usize..body_end as usize)
+			.unwrap_or_default()
+			.to_vec(),
+		SectionKind::Entire => raw_body(owner, part).to_vec(),
 		SectionKind::Header | SectionKind::Mime => owner
 			.raw_message
 			.get(part.offset_header as usize..part.offset_body as usize)
@@ -76,6 +85,14 @@ pub(in crate::imap) fn render_label(
 	};
 	if section.binary {
 		data = decoded(owner, part)?;
+		// BINARY[] is the whole message: its header, then the decoded body.
+		if section.path.is_empty() && matches!(section.kind, SectionKind::Entire) {
+			let header = owner
+				.raw_message
+				.get(..part.offset_body as usize)
+				.unwrap_or_default();
+			data.splice(0..0, header.iter().copied());
+		}
 	}
 	if section.size {
 		return Ok(format!("{label} {}", data.len()).into_bytes());

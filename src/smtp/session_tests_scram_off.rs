@@ -150,6 +150,7 @@ fn directory_with_password_omits_scram_when_disabled() {
 		"alice".to_string(),
 		vec!["alice@example.org".to_string()],
 		password,
+		&crate::password::Policy::ASCII_ONLY,
 		false,
 	)
 	.expect("hashed account");
@@ -168,6 +169,7 @@ fn directory_with_password_writes_scram_when_enabled() {
 		"alice".to_string(),
 		vec!["alice@example.org".to_string()],
 		password,
+		&crate::password::Policy::ASCII_ONLY,
 		true,
 	)
 	.expect("hashed account");
@@ -186,6 +188,7 @@ fn password_change_drops_an_existing_verifier_when_scram_disabled() {
 		"alice".to_string(),
 		vec!["alice@example.org".to_string()],
 		password,
+		&crate::password::Policy::ASCII_ONLY,
 		true,
 	)
 	.expect("hashed account");

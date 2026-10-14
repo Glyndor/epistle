@@ -6,6 +6,7 @@ use super::helpers::search_matches;
 use super::mailbox::{self, Snapshot};
 use super::state::State;
 use super::{Output, SearchKey, Session};
+use crate::imap::internal_date::InternalDate;
 
 impl Session {
 	pub(super) fn copy(
@@ -85,7 +86,21 @@ impl Session {
 				Ok(data) => data,
 				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
 			};
-			match mailbox::append(&data_dir, &account, target, &message.flags, &data, &crypto) {
+			// RFC 9051 §6.4.7: the copy keeps the source's INTERNALDATE.
+			let date = InternalDate {
+				time: message.internal_date,
+				zone: message.internal_zone,
+			};
+			let copied = mailbox::append_dated(
+				&data_dir,
+				&account,
+				target,
+				&message.flags,
+				Some(date),
+				&data,
+				&crypto,
+			);
+			match copied {
 				Ok(id) => dest_ids.push(id),
 				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
 			}
@@ -96,6 +111,12 @@ impl Session {
 
 		let mut response = String::new();
 		if remove_source {
+			// RFC 6851 §4.3: MOVE reports COPYUID in an untagged OK before
+			// the expunges, since by the tagged reply the source UIDs are
+			// gone.
+			if !copyuid.is_empty() {
+				response.push_str(&format!("* OK {copyuid}moved\r\n"));
+			}
 			// Remove bottom-up so earlier sequence numbers stay valid, but
 			// emit EXPUNGE top-down with renumber-correct values.
 			for (offset, sequence_number) in matched.iter().enumerate() {
@@ -115,8 +136,15 @@ impl Session {
 				));
 			}
 		}
-		let verb = if remove_source { "MOVE" } else { "COPY" };
-		response.push_str(&format!("{tag} OK {copyuid}{verb} completed\r\n"));
+		// A copy into the selected mailbox, or a change another session
+		// made meanwhile, reaches the client before the tagged reply.
+		response.push_str(&self.sync_selected(true));
+		let (code, verb) = if remove_source {
+			("", "MOVE")
+		} else {
+			(copyuid.as_str(), "COPY")
+		};
+		response.push_str(&format!("{tag} OK {code}{verb} completed\r\n"));
 		Output::text(response)
 	}
 
@@ -143,6 +171,7 @@ impl Session {
 		// alongside the response-shaped `hits` (which is seqnos or UIDs
 		// depending on `uid`) so the protocol reply and the resolver agree.
 		let mut saved_uids = Vec::new();
+		let mut modseqs = Vec::new();
 		for seqno in 1..=total {
 			let Some(message) = snapshot.by_sequence(seqno) else {
 				continue;
@@ -154,16 +183,28 @@ impl Session {
 			if matches {
 				hits.push(if uid { message.uid } else { seqno });
 				saved_uids.push(message.uid);
+				modseqs.push(message.modseq);
 			}
 		}
 
+		// RFC 7162 §3.1.5: a search that tests MODSEQ reports the highest
+		// mod-sequence of the messages it returns.
+		let modseq = if super::condstore::uses_modseq(criteria) {
+			let opts = return_opts.or(self.imap4rev2.then_some(&[ReturnOpt::All][..]));
+			super::condstore::reply_modseq(&modseqs, opts)
+		} else {
+			None
+		};
 		let body = match return_opts {
-			Some(opts) => esearch_line(tag, uid, &hits, opts),
-			None if self.imap4rev2 => esearch_line(tag, uid, &hits, &[ReturnOpt::All]),
+			Some(opts) => esearch_line(tag, uid, &hits, opts, modseq),
+			None if self.imap4rev2 => esearch_line(tag, uid, &hits, &[ReturnOpt::All], modseq),
 			None => {
 				let mut line = String::from("* SEARCH");
 				for hit in &hits {
 					line.push_str(&format!(" {hit}"));
+				}
+				if let Some(modseq) = modseq {
+					line.push_str(&format!(" (MODSEQ {modseq})"));
 				}
 				line.push_str("\r\n");
 				line
