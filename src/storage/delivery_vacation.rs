@@ -8,8 +8,15 @@ use std::fs;
 use crate::smtp::session::AcceptedMessage;
 
 use super::LocalDelivery;
+use crate::storage::vacation_store::{self, VacationSetting};
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::contained_child;
+
+/// RFC 8621 §8.2.1 recommends a 7-day per-recipient dedup window when the
+/// JMAP `VacationResponse` does not specify one. The existing marker file
+/// uses `days` from Sieve `:days`, so the JMAP setting is paired with the
+/// same default and shares the same on-disk state.
+pub(super) const JMAP_VACATION_DAYS: u64 = 7;
 
 impl LocalDelivery {
 	/// Build a vacation autoresponse, applying RFC 5230 suppression (null
@@ -50,6 +57,7 @@ impl LocalDelivery {
 			subject: request.subject.as_deref(),
 			from: request.from.as_deref(),
 			user_address,
+			html_body: None,
 		};
 		Some(crate::sieve::vacation::build_response(
 			&vacation,
@@ -58,6 +66,77 @@ impl LocalDelivery {
 			header("message-id").as_deref(),
 			std::time::SystemTime::now(),
 		))
+	}
+
+	/// Build a JMAP-side autoresponse (RFC 8621 §8). Returns `None` when
+	/// the setting is disabled, when the recipient is the account itself,
+	/// or when the per-sender dedup window already covers the sender. The
+	/// shared suppression rules (null sender, automated or bulk/list mail)
+	/// apply the same way they do for the Sieve vacation.
+	pub(super) fn jmap_vacation_reply(
+		&self,
+		account: &str,
+		message: &AcceptedMessage,
+		setting: &VacationSetting,
+	) -> Option<AcceptedMessage> {
+		if !setting.is_enabled {
+			return None;
+		}
+		if message.reverse_path.is_empty() {
+			return None;
+		}
+		let headers = String::from_utf8_lossy(&message.data);
+		let header = |name: &str| header_field(&headers, name);
+		if header("auto-submitted").is_some_and(|value| !value.eq_ignore_ascii_case("no"))
+			|| header("list-id").is_some()
+			|| header("precedence").is_some_and(|value| {
+				matches!(
+					value.to_ascii_lowercase().as_str(),
+					"bulk" | "list" | "junk"
+				)
+			}) {
+			return None;
+		}
+		// The account's own addresses never receive a reply (a loop would
+		// re-trigger the vacation with the auto-replied message).
+		let sender_lc = message.reverse_path.to_ascii_lowercase();
+		let user_address = message
+			.recipients
+			.first()
+			.map(String::as_str)
+			.unwrap_or(account);
+		if sender_lc.eq_ignore_ascii_case(user_address) || sender_lc.eq_ignore_ascii_case(account) {
+			return None;
+		}
+		if !self.vacation_should_reply(account, &message.reverse_path, JMAP_VACATION_DAYS) {
+			return None;
+		}
+		let text_body = setting.text_body.as_deref().unwrap_or("");
+		let vacation = crate::sieve::vacation::Vacation {
+			reason: text_body,
+			subject: setting.subject.as_deref(),
+			from: None,
+			user_address,
+			html_body: setting.html_body.as_deref(),
+		};
+		Some(crate::sieve::vacation::build_response(
+			&vacation,
+			&message.reverse_path,
+			header("subject").as_deref(),
+			header("message-id").as_deref(),
+			std::time::SystemTime::now(),
+		))
+	}
+
+	/// Read the JMAP vacation setting for `account`. A read or parse error
+	/// is treated as "no vacation", so a corrupted file cannot trigger a
+	/// reply through an untyped path.
+	pub(super) fn jmap_vacation(
+		&self,
+		account: &str,
+	) -> Option<VacationSetting> {
+		let setting = vacation_store::read(&self.data_dir, account).ok()?;
+		if setting.is_enabled { Some(setting) } else { None }
 	}
 
 	/// Whether a vacation reply to `sender` is due (none sent within `days`),
@@ -213,3 +292,7 @@ mod tests {
 		assert!(!data.join("accounts/../evil").exists());
 	}
 }
+
+#[cfg(test)]
+#[path = "delivery_vacation_jmap_tests.rs"]
+mod jmap_tests;

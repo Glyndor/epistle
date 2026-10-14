@@ -18,13 +18,20 @@ pub struct Vacation<'a> {
 	pub from: Option<&'a str>,
 	/// The responding user's own address.
 	pub user_address: &'a str,
+	/// An HTML alternative, sent as `multipart/alternative` together with
+	/// `reason` (the text part) when present. The JMAP `VacationResponse`
+	/// carries both bodies; the Sieve `vacation` extension does not, so this
+	/// is always `None` from a Sieve script.
+	pub html_body: Option<&'a str>,
 }
 
 /// Build the vacation reply to `original_sender`.
 ///
 /// The reply uses the null reverse-path (MAIL FROM `<>`) so an auto-reply can
 /// never trigger another, and carries `Auto-Submitted: auto-replied` plus an
-/// `In-Reply-To` when the original had a Message-ID.
+/// `In-Reply-To` when the original had a Message-ID. When an HTML body is
+/// given, the response is a `multipart/alternative` carrying the text part
+/// first.
 pub fn build_response(
 	vacation: &Vacation,
 	original_sender: &str,
@@ -48,6 +55,7 @@ pub fn build_response(
 To: <{original_sender}>\r\n\
 Subject: {subject}\r\n\
 Date: {date}\r\n\
+MIME-Version: 1.0\r\n\
 Auto-Submitted: auto-replied (vacation)\r\n",
 		date = clock::rfc5322(now),
 	);
@@ -56,7 +64,25 @@ Auto-Submitted: auto-replied (vacation)\r\n",
 		headers.push_str(&format!("In-Reply-To: {message_id}\r\n"));
 	}
 
-	let body = format!("{headers}\r\n{}\r\n", vacation.reason);
+	let body = match vacation.html_body {
+		None => format!("{headers}\r\n{}\r\n", vacation.reason),
+		Some(html) => format!(
+			"{headers}\
+Content-Type: multipart/alternative; boundary=\"vac-boundary\"\r\n\
+\r\n\
+--vac-boundary\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+{reason}\r\n\
+--vac-boundary\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+{html}\r\n\
+--vac-boundary--\r\n",
+			reason = vacation.reason,
+			html = html,
+		),
+	};
 
 	AcceptedMessage {
 		// Null reverse-path: auto-replies must not generate bounces or loops.
@@ -81,6 +107,7 @@ mod tests {
 			subject: None,
 			from: None,
 			user_address: "alice@example.org",
+			html_body: None,
 		}
 	}
 
@@ -114,6 +141,7 @@ mod tests {
 			subject: Some("Out of office"),
 			from: Some("assistant@example.org"),
 			user_address: "alice@example.org",
+			html_body: None,
 		};
 		let reply = build_response(&vacation, "bob@example.net", Some("Hi"), None, UNIX_EPOCH);
 		let body = String::from_utf8(reply.data).expect("ascii");
@@ -128,6 +156,22 @@ mod tests {
 		let reply = build_response(&vacation(), "bob@example.net", None, None, UNIX_EPOCH);
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(body.contains("Subject: Auto: Re: your message"), "{body}");
+	}
+
+	#[test]
+	fn html_body_produces_multipart_alternative() {
+		let vacation = Vacation {
+			reason: "Away.",
+			subject: None,
+			from: None,
+			user_address: "alice@example.org",
+			html_body: Some("<p>Away.</p>"),
+		};
+		let reply = build_response(&vacation, "bob@example.net", None, None, UNIX_EPOCH);
+		let body = String::from_utf8(reply.data).expect("ascii");
+		assert!(body.contains("multipart/alternative"), "{body}");
+		assert!(body.contains("text/plain"), "{body}");
+		assert!(body.contains("<p>Away.</p>"), "{body}");
 	}
 
 	#[test]
@@ -188,6 +232,7 @@ mod tests {
 			subject: Some("Out of office\r\nBcc: attacker@evil.example"),
 			from: None,
 			user_address: "alice@example.org",
+			html_body: None,
 		};
 		let reply = build_response(&vacation, "bob@example.net", None, None, UNIX_EPOCH);
 		let body = String::from_utf8(reply.data).expect("ascii");
