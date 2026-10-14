@@ -7,6 +7,7 @@ use tokio::io::AsyncReadExt;
 use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
+use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, ensure_submission_headers, line_error_reply, received_header,
 	received_hop_count,
@@ -144,6 +145,9 @@ impl Server {
 					// DSNs for recipients this message did not fit for; sent
 					// only if the message itself is delivered.
 					let quota_reports = session.take_quota_reports();
+					// The submission-limit charge, refunded on drop by every
+					// refusal below and kept only once the message is handed on.
+					let mut charge = PendingCharge::new(session.take_submission_charge());
 					// Loop guard: reject mail that has already traversed too many
 					// hops before adding our own Received header (RFC 5321 §6.3).
 					if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
@@ -399,6 +403,7 @@ impl Server {
 					};
 					let reply = match handed {
 						Ok(()) => {
+							charge.accept();
 							self.metrics.accepted();
 							for report in quota_reports {
 								if let Err(error) = self.sink.deliver(report) {

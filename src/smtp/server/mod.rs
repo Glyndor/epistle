@@ -563,6 +563,9 @@ impl Server {
 		if let Some(quota) = &self.quota {
 			session = session.with_quota(Arc::clone(quota));
 		}
+		if let Some(limits) = &self.tenant_limits {
+			session = session.with_tenant_limits(Arc::clone(limits));
+		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;
 		// folding them into a `cap::Cap` keeps the session's field

@@ -288,8 +288,10 @@ before the drain ends.
 
 ```sh
 epistle limits show
+epistle limits show --json
 epistle limits set quota 5G
 epistle limits set submission-rate 120
+epistle limits set submission-rate --tenant acme 200
 epistle limits set queue-give-up 12h
 epistle limits set queue-retry-base 5m
 epistle limits set queue-concurrency 16
@@ -297,7 +299,9 @@ epistle limits set queue-per-domain-concurrency 4
 epistle limits set queue-backoff 1m,5m,15m,1h
 epistle limits set quota --domain example.org 10G
 epistle limits set submission-rate --domain example.org 50
+epistle limits set submission-rate --domain example.org 50 --json
 epistle limits unset quota --domain example.org
+epistle limits unset submission-rate --tenant acme
 epistle limits set quota 10G --dry-run
 epistle limits unset quota
 ```
@@ -305,12 +309,24 @@ epistle limits unset quota
 `show` prints each effective value with `default` or `configured`. Disabled
 rate caps and the protocol-specific connection defaults are shown explicitly.
 Values equal to a built-in default are marked `default`, even when configured.
-`unset` removes the field so its built-in default applies again.
+`unset` removes the field so its built-in default applies again. With
+`--json`, `show` also lists every per-domain override and every named tenant
+in addition to the global dials.
+
+`set` and `unset` accept `--domain <NAME>` (quota or submission-rate) and
+`--tenant <NAME>` (submission-rate only); combining the two is refused.
+`set --json` and `unset --json` write a one-line JSON confirmation on stdout
+instead of the human-readable status line, so a pipeline can audit which
+dial just moved. Either way the command restarts the mail service to apply
+the change, or says the server must be restarted when it runs outside the
+stack.
+`set submission-rate 0` is refused: the server reads zero as no limit, and
+`unset` is how a limit is removed.
 
 | Key | Value |
 |---|---|
 | `quota` | Bytes per account, default 5 GiB; `0` means no limit and shows as `unlimited`. |
-| `submission-rate` | Messages per minute per account, default disabled. |
+| `submission-rate` | Recipients per minute per account, default disabled, across SMTP, `POST /api/v1/send` and JMAP; see `submission_rate_limit_per_min` in the configuration reference for what counts and the replies. |
 | `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
 | `queue-give-up` | Queue age before bouncing, default 5 days. |
 | `queue-retry-base` | Wait after a recipient's first failed attempt, doubling after each failure, default 1 minute, at least 1 minute. |

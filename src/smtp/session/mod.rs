@@ -229,6 +229,7 @@ impl Session {
 	/// before accepting MAIL FROM. `None` (the default) is the identity and
 	/// short-circuits every check.
 	pub fn with_tenant_limits(mut self, limits: std::sync::Arc<crate::api::TenantLimits>) -> Self {
+		self.policy = self.policy.with_tenant_limits(limits.clone());
 		self.tenant_limits = Some(limits);
 		self
 	}
@@ -255,6 +256,13 @@ impl Session {
 	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
 		self.policy = self.policy.with_quota(quota);
 		self
+	}
+
+	/// The submission-limit charge of the message last handed to the
+	/// server (`Action::Deliver`). The server keeps it once the message is
+	/// accepted and refunds it on any later refusal.
+	pub fn take_submission_charge(&mut self) -> Option<crate::smtp::submission_budget::Charge> {
+		self.policy.take_charge()
 	}
 
 	/// The DSNs for recipients the last accepted message did not fit for;
@@ -444,21 +452,20 @@ impl Session {
 					}
 					_ => {}
 				}
-				// Per-account submission rate limit for authenticated senders.
-				// Resolution: per-domain override for the account's own
-				// domain (looked up by walking the account's addresses, the
-				// same way `Directory::quota_for` does), falling back to the
-				// server-wide default, falling back to no limit at all.
-				if let Some(account) = self.authenticated.clone()
-					&& !self.policy.check_authenticated_submission(
-						&account,
-						&self.directory,
-						unix_now(),
-					) {
-					return Action::Continue(Reply::single(
-						450,
-						"4.7.1 sending rate limit exceeded; retry later",
-					));
+				// Submission rate limits for authenticated senders: the
+				// per-account limit (its domain's override, else the
+				// server-wide default) and the tenant aggregate. Nothing is
+				// charged here: a sender with no room left is refused before
+				// it sends the message, and the message is charged one unit
+				// per recipient once it is accepted (`finalise`), so a
+				// transaction that ends in RSET or a refusal costs nothing.
+				if let Some(account) = self.authenticated.as_deref()
+					&& !self
+						.policy
+						.submission_budget(account, &self.directory)
+						.has_room(unix_now())
+				{
+					return Action::Continue(finalise::rate_limited());
 				}
 				// Per-IP and per-sender rate limits for unauthenticated sessions.
 				// Authenticated sessions are charged against the per-account limiter

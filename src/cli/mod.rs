@@ -53,6 +53,7 @@ mod serve_dkim;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;
+mod serve_store;
 mod serve_tasks;
 mod serve_tasks_delivery;
 mod serve_tls;

@@ -54,7 +54,7 @@ impl TenantRuntime {
 		// number travels to `check` instead of into `new`.
 		let send_limiter = config
 			.submission_rate_limit_per_min
-			.map(|_| Arc::new(SendLimiter::new(60)));
+			.map(|_| Arc::new(SendLimiter::for_authenticated_keys(60)));
 		TenantRuntime {
 			config,
 			send_limiter,
@@ -258,36 +258,46 @@ impl TenantLimits {
 			.filter_map(|tenant| tenant.send_limiter.as_ref())
 	}
 
-	/// Whether a submission by an account whose addresses are
-	/// `account_addresses` is over any per-tenant aggregate rate limit.
-	/// The first tenant to reject wins; `Ok(())` when every tenant is under
-	/// its cap or no tenant owns any address.
-	///
-	/// The configured limiter is consulted first so the rejection code path
-	/// is exercised on a denied send; tests use this to drive both branches.
+	/// Whether any tenant configures a submission rate limit.
+	pub fn has_rate_limits(&self) -> bool {
+		self.aggregate_send_limiters().next().is_some()
+	}
+
+	/// `(limiter, key, per-minute cap)` of every tenant that owns one of
+	/// `account_addresses` and configures a submission rate limit. The key
+	/// is the tenant's own label; each tenant has its own limiter, so two
+	/// tenants never share a count. Feeds
+	/// [`Budget`](crate::smtp::submission_budget::Budget), which charges
+	/// them together with the per-account limit.
+	pub fn submission_limiters(
+		&self,
+		account_addresses: &[String],
+	) -> Vec<(Arc<SendLimiter>, String, u32)> {
+		self.tenants_for_addresses(account_addresses.iter().map(String::as_str))
+			.into_iter()
+			.filter_map(|tenant| {
+				let limiter = tenant.send_limiter.as_ref()?;
+				let per_min = tenant.config.submission_rate_limit_per_min?;
+				Some((Arc::clone(limiter), tenant.label(), per_min))
+			})
+			.collect()
+	}
+
+	/// Charge one submission with `recipient_count` recipients against
+	/// every tenant that owns one of `account_addresses`: all of them or
+	/// none. `Ok(())` when every tenant is under its cap or none owns any
+	/// address.
 	pub fn check_aggregate_rate(
 		&self,
 		account_addresses: &[String],
+		recipient_count: u32,
 		now: u64,
-	) -> Result<(), String> {
-		for tenant in self.tenants_for_addresses(account_addresses.iter().map(String::as_str)) {
-			let Some(limiter) = &tenant.send_limiter else {
-				continue;
-			};
-			// A single submission adds one to the count for every tenant
-			// the account belongs to. The key is the tenant's own label so
-			// every tenant tracks its own aggregate independently.
-			let Some(per_min) = tenant.config.submission_rate_limit_per_min else {
-				return Ok(());
-			};
-			if !limiter.check(&tenant.label(), per_min, now) {
-				return Err(format!(
-					"tenant \"{}\" submission rate limit exceeded",
-					tenant.label()
-				));
-			}
-		}
-		Ok(())
+	) -> Result<(), crate::smtp::submission_budget::OverLimit> {
+		let budget =
+			crate::smtp::submission_budget::Budget::for_account("", None, Some(self), || {
+				account_addresses.to_vec()
+			});
+		budget.charge(recipient_count, now).map(drop)
 	}
 }
 

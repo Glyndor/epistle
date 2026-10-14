@@ -485,7 +485,9 @@ impl Directory {
 	/// taking the first configured domain would assign every account to
 	/// whichever domain happened to be configured first, and drop all of
 	/// them the day that domain is removed. The address walk matches the
-	/// approach [`Directory::quota_for`] takes for the same reason.
+	/// approach [`Directory::quota_for`] takes for the same reason. An
+	/// account with addresses in several limited domains gets the strictest
+	/// of their limits, whatever order the addresses are stored in.
 	pub fn submission_limit_for(&self, account: &str) -> Option<u32> {
 		if self.domain_submission_limits.is_empty() {
 			return None;
@@ -494,7 +496,8 @@ impl Directory {
 			.iter()
 			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
 			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
-			.find_map(|domain| self.domain_submission_limits.get(domain).copied())
+			.filter_map(|domain| self.domain_submission_limits.get(domain).copied())
+			.min()
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a

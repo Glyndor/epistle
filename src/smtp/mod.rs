@@ -20,4 +20,5 @@ pub mod scram;
 pub mod server;
 pub mod session;
 pub mod sink;
+pub mod submission_budget;
 pub mod trace;

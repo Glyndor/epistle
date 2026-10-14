@@ -103,6 +103,7 @@ fn limits_changes_without_compose_print_restart_and_skip_no_op() {
 	};
 	assert_eq!(
 		run(Action::Set {
+			tenant: None,
 			key: Key::Quota,
 			value: "7G".into(),
 			domain: None
@@ -120,6 +121,7 @@ fn limits_changes_without_compose_print_restart_and_skip_no_op() {
 	);
 	assert_eq!(
 		run(Action::Unset {
+			tenant: None,
 			key: Key::Quota,
 			domain: None
 		}),
@@ -137,6 +139,7 @@ fn limits_changes_without_compose_print_restart_and_skip_no_op() {
 	let unchanged = std::fs::read(file.path()).unwrap();
 	assert_eq!(
 		run(Action::Unset {
+			tenant: None,
 			key: Key::Quota,
 			domain: None
 		}),
@@ -171,6 +174,7 @@ fn limits_with_compose_restart_only_mail_and_propagate_failure() {
 	let code = run_with_restart(
 		file.path(),
 		Action::Set {
+			tenant: None,
 			key: Key::SubmissionRate,
 			value: "120".into(),
 			domain: None,
@@ -226,6 +230,7 @@ fn limits_invalid_command_value_preserves_bytes_and_reports_exact_error() {
 	let code = run_with_restart(
 		file.path(),
 		Action::Set {
+			tenant: None,
 			key: Key::Quota,
 			value: "bogus".into(),
 			domain: None,
