@@ -237,3 +237,70 @@ async fn a_resolver_that_never_answers_is_cut_off_after_five_seconds() {
 	assert_eq!(began.elapsed(), Duration::from_secs(5));
 	assert_eq!(dns.mx("example.org").await, Err(DnsFailure::Temporary));
 }
+
+/// A Cloudflare `[dns]` section; the provider itself is handed in.
+fn cloudflare_config(dir: &Path) -> Config {
+	ctx(
+		dir,
+		"[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n",
+	)
+	.config
+	.expect("config")
+}
+
+fn zone_with(
+	records: Vec<crate::dns::provider::DnsRecord>,
+) -> std::sync::Arc<dyn crate::dns::provider::DnsProvider> {
+	std::sync::Arc::new(crate::dns::lockdown::tests_support::Zone::with(records))
+}
+
+#[tokio::test]
+async fn a_proxied_mail_name_fails_inside_the_status_runtime() {
+	// The check runs on the runtime `status` already drives; it must not
+	// start one of its own.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = cloudflare_config(dir.path());
+	let proxied = crate::dns::provider::DnsRecord {
+		proxied: Some(true),
+		..crate::dns::provider::DnsRecord::new(
+			"mail.example.org",
+			crate::dns::provider::RecordKind::A,
+			"192.0.2.10",
+			300,
+		)
+	};
+	let items = super::proxied_items(&config, Ok(Some(zone_with(vec![proxied])))).await;
+	assert_eq!(items.len(), 1, "{items:?}");
+	assert_eq!(items[0].name, "Cloudflare proxy mail.example.org");
+	assert_eq!(items[0].status, Level::Fail);
+	assert_eq!(
+		items[0].detail,
+		"mail.example.org is proxied by Cloudflare (orange cloud): mail clients and other servers cannot reach port 25/465/587/993 through the proxy; set it to DNS only"
+	);
+}
+
+#[tokio::test]
+async fn the_proxy_check_is_a_warning_when_it_cannot_read_the_zone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = cloudflare_config(dir.path());
+	let items = super::proxied_items(&config, Err(())).await;
+	assert_eq!(items.len(), 1, "{items:?}");
+	assert_eq!(items[0].status, Level::Warn);
+	assert_eq!(
+		items[0].detail,
+		"the Cloudflare credentials in [dns] could not be read; the proxy state was not checked"
+	);
+}
+
+#[tokio::test]
+async fn other_providers_get_no_proxy_check() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = ctx(
+		dir.path(),
+		"[dns]\nprovider = 'desec'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n",
+	)
+	.config
+	.expect("config");
+	assert!(matches!(super::proxy_provider(&config), Ok(None)));
+	assert!(super::proxied_items(&config, Ok(None)).await.is_empty());
+}

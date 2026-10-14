@@ -7,6 +7,7 @@ pub mod detect;
 pub mod lockdown;
 pub mod provider;
 pub mod providers;
+pub mod proxied_check;
 pub mod records;
 pub mod txt;
 #[cfg(test)]
