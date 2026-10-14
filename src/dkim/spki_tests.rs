@@ -8,6 +8,8 @@
 
 use std::io::Write;
 
+use super::{rsa_public_key_from_spki, rsa_spki_der};
+
 #[test]
 fn rsa_dns_record_value_is_the_spki_openssl_prints() {
 	// Skip (with a printed reason, never silently) when `openssl` is not
@@ -129,4 +131,48 @@ fn strip_pem(pem: &str) -> String {
 		}
 	}
 	body
+}
+
+#[test]
+fn unwrapping_an_rsa_spki_returns_the_key_it_wrapped() {
+	let pkcs1 = [0x30, 0x03, 0x02, 0x01, 0x05];
+	let spki = rsa_spki_der(&pkcs1);
+	assert_eq!(rsa_public_key_from_spki(&spki), Some(&pkcs1[..]));
+}
+
+#[test]
+fn unwrapping_a_long_form_length_spki_returns_the_key() {
+	let pkcs1 = vec![0xAB; 300];
+	let spki = rsa_spki_der(&pkcs1);
+	assert_eq!(rsa_public_key_from_spki(&spki), Some(&pkcs1[..]));
+}
+
+#[test]
+fn unwrapping_refuses_what_is_not_an_rsa_spki() {
+	let pkcs1 = [0x30, 0x03, 0x02, 0x01, 0x05];
+	let spki = rsa_spki_der(&pkcs1);
+	// The bare key, an empty input, a truncated one and trailing bytes.
+	assert_eq!(rsa_public_key_from_spki(&pkcs1), None);
+	assert_eq!(rsa_public_key_from_spki(&[]), None);
+	assert_eq!(rsa_public_key_from_spki(&spki[..spki.len() - 1]), None);
+	let mut trailing = spki.clone();
+	trailing.push(0x00);
+	assert_eq!(rsa_public_key_from_spki(&trailing), None);
+	// Another algorithm (the last OID byte changed) and unused bits set.
+	let mut other_oid = spki.clone();
+	other_oid[14] ^= 0x01;
+	assert_eq!(rsa_public_key_from_spki(&other_oid), None);
+	let mut unused_bits = spki.clone();
+	let bit_string = unused_bits
+		.iter()
+		.position(|&b| b == 0x03)
+		.expect("BIT STRING");
+	unused_bits[bit_string + 2] = 0x01;
+	assert_eq!(rsa_public_key_from_spki(&unused_bits), None);
+	// A length that claims more than is there, and an indefinite length.
+	assert_eq!(
+		rsa_public_key_from_spki(&[0x30, 0x84, 0xFF, 0xFF, 0xFF, 0xFF]),
+		None
+	);
+	assert_eq!(rsa_public_key_from_spki(&[0x30, 0x80, 0x00, 0x00]), None);
 }

@@ -236,6 +236,15 @@ async fn verify_one(
 		Algorithm::RsaSha256 => &RSA_PKCS1_2048_8192_SHA256,
 		Algorithm::Ed25519Sha256 => &ED25519,
 	};
+	// An RSA record carries a SubjectPublicKeyInfo (RFC 6376 §3.6.1), ring
+	// wants the RSAPublicKey inside it; a record with the bare key is used
+	// as it is.
+	let key = match signature.algorithm {
+		Algorithm::RsaSha256 => {
+			super::spki::rsa_public_key_from_spki(&key).map_or(key.clone(), <[u8]>::to_vec)
+		}
+		Algorithm::Ed25519Sha256 => key,
+	};
 	let public_key = UnparsedPublicKey::new(algorithm, key);
 	let outcome = match public_key.verify(hash_input.as_bytes(), &signature.signature) {
 		Ok(()) => DkimOutcome::Pass,
@@ -349,3 +358,7 @@ fn find_body_start(raw: &[u8]) -> (usize, usize) {
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "verify_tests_rsa.rs"]
+mod rsa_tests;

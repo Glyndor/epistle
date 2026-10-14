@@ -50,6 +50,57 @@ pub(crate) fn rsa_spki_der(pkcs1: &[u8]) -> Vec<u8> {
 	subject_public_key_info
 }
 
+/// The PKCS#1 `RSAPublicKey` inside a SubjectPublicKeyInfo for
+/// rsaEncryption, or `None` when `der` is not one. A DKIM `k=rsa` record
+/// carries the SPKI (RFC 6376 §3.6.1), and ring verifies against the bare
+/// `RSAPublicKey`, so the verifier unwraps it first. Only definite-length
+/// DER is read, every length is checked against what is left, and nothing
+/// may follow the structure.
+pub(crate) fn rsa_public_key_from_spki(der: &[u8]) -> Option<&[u8]> {
+	const RSA_ENCRYPTION: &[u8] = &[
+		0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
+	];
+	let (spki, rest) = der_take(der, 0x30)?;
+	if !rest.is_empty() {
+		return None;
+	}
+	let (algorithm, rest) = der_take(spki, 0x30)?;
+	let parameters = algorithm.strip_prefix(RSA_ENCRYPTION)?;
+	if !(parameters.is_empty() || parameters == [0x05, 0x00]) {
+		return None;
+	}
+	let (bits, rest) = der_take(rest, 0x03)?;
+	if !rest.is_empty() {
+		return None;
+	}
+	let (&unused, key) = bits.split_first()?;
+	(unused == 0 && !key.is_empty()).then_some(key)
+}
+
+/// Split one DER element with tag `tag` off the front of `der`, returning
+/// its contents and what follows it.
+fn der_take(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
+	let (&first, rest) = der.split_first()?;
+	if first != tag {
+		return None;
+	}
+	let (&len_byte, rest) = rest.split_first()?;
+	let (len, rest) = if len_byte < 0x80 {
+		(usize::from(len_byte), rest)
+	} else {
+		let count = usize::from(len_byte & 0x7F);
+		if count == 0 || count > 4 || rest.len() < count {
+			return None;
+		}
+		let (bytes, rest) = rest.split_at(count);
+		let len = bytes
+			.iter()
+			.fold(0usize, |acc, &b| (acc << 8) | usize::from(b));
+		(len, rest)
+	};
+	(rest.len() >= len).then(|| rest.split_at(len))
+}
+
 /// Append a DER length to `out`, encoding the value in the short form
 /// (single byte, MSB clear) when it fits in seven bits and the long form
 /// otherwise. RFC 5280 §4.1 defines the encoding.
