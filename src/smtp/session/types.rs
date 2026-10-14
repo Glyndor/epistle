@@ -1,9 +1,10 @@
 //! SMTP session value types: connection state, accepted messages, actions.
 
 use super::Reply;
+use crate::smtp::memory_budget::Reservation;
 
 /// Where the session is in the SMTP dialogue.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum State {
 	/// Connection open, no HELO/EHLO yet.
 	Connected,
@@ -26,12 +27,12 @@ pub(super) enum State {
 		/// Whether a BDAT chunk has begun (RFC 3030): once true, DATA and RCPT
 		/// are no longer valid in this transaction.
 		chunking: bool,
-		/// Bytes currently reserved from the shared memory budget for this
-		/// in-flight body. The reservation is released when the state
-		/// transitions out of `ReceivingData` (success, error, RSET,
-		/// disconnect) so a panic, a transport close or a finalise that
-		/// rejects the message never leaves bytes behind.
-		reserved: u64,
+		/// The octets of this in-flight body held against the shared memory
+		/// budget. Dropping the state drops the reservation, so every way
+		/// out of `ReceivingData` (a reply, `RSET`, `EHLO`, a disconnect, a
+		/// panic) hands them back; an accepted body moves it to the session
+		/// for the length of its delivery.
+		reserved: Reservation,
 		/// Set by `data_line` when a memory-budget reservation fails. The
 		/// body stops growing but the in-flight session still has to read
 		/// to the closing `.`; the final 4xx reply is produced at
@@ -86,6 +87,15 @@ pub enum Action {
 		size: usize,
 		/// Whether this is the final chunk of the message.
 		last: bool,
+	},
+	/// Read exactly `size` raw bytes (a BDAT chunk) and throw them away,
+	/// then send the reply. A refused chunk is still message data and must
+	/// never be parsed as commands (RFC 3030), nor held in memory.
+	DiscardChunk {
+		/// Octet count of the BDAT chunk to read and discard.
+		size: usize,
+		/// The reply sent once the chunk is consumed.
+		reply: Reply,
 	},
 	/// Send the reply, hand the message to delivery, keep reading commands.
 	Deliver(Reply, AcceptedMessage),

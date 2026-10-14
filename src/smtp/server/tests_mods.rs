@@ -60,5 +60,8 @@ mod tests_author;
 mod tests_per_ip;
 
 #[cfg(test)]
+#[path = "server_tests_budget.rs"]
+mod tests_budget;
+#[cfg(test)]
 #[path = "server_tests_sender_verified.rs"]
 mod tests_sender_verified;

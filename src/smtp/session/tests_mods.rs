@@ -27,6 +27,9 @@ mod tests_auth;
 #[path = "../session_tests_author.rs"]
 mod tests_author;
 #[cfg(test)]
+#[path = "../session_tests_budget_leaks.rs"]
+mod tests_budget_leaks;
+#[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
 #[cfg(test)]

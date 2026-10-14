@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub use super::address::Address;
 pub use super::directory::{Directory, Resolution};
 pub use super::diskspace::DiskGuard;
-pub use super::memory_budget::MemoryBudget;
+pub use super::memory_budget::{MemoryBudget, Reservation};
 pub use super::reply::Reply;
 
 mod author;
@@ -123,6 +123,13 @@ pub struct Session {
 	/// every path that drops the body. `None` (the default) leaves the
 	/// historical unbounded behaviour in place.
 	memory_budget: Option<Arc<MemoryBudget>>,
+	/// The claim for a BDAT chunk announced but not read yet. It joins the
+	/// body in `bdat_chunk`, or goes back with the session if the client
+	/// never sends the chunk.
+	chunk_reservation: Reservation,
+	/// The claim for the body last accepted, held while the connection
+	/// loop delivers it: the body is still in memory until then.
+	delivery_reservation: Reservation,
 }
 
 impl Session {
@@ -155,6 +162,8 @@ impl Session {
 			metrics: None,
 			scram_enabled: true,
 			memory_budget: None,
+			chunk_reservation: Reservation::none(),
+			delivery_reservation: Reservation::none(),
 		}
 	}
 
@@ -623,7 +632,7 @@ impl Session {
 					body: Vec::new(),
 					require_tls,
 					chunking: false,
-					reserved: 0,
+					reserved: Reservation::none(),
 					budget_exhausted: false,
 				};
 				Action::Continue(Reply::ok())
@@ -688,48 +697,35 @@ impl Session {
 			return None;
 		}
 		// Memory-budget reservation: claim the line's bytes, or stop
-		// growing the body and flag the message as over-budget. The
-		// budget's release path runs from the finalise (success, error)
-		// and from reset(); the body and the counter stay consistent
-		// because we never extend past a failed reservation.
+		// growing the body and flag the message as over-budget. The claim
+		// lives in the state and goes back when the state is dropped; the
+		// body and the counter stay consistent because we never extend
+		// past a failed reservation.
 		if let Some(budget) = &self.memory_budget
-			&& budget.try_reserve(delta as u64).is_err()
+			&& reserved.try_grow(budget, delta as u64).is_err()
 		{
 			*budget_exhausted = true;
 			return None;
 		}
-		*reserved = reserved.saturating_add(delta as u64);
 		body.extend_from_slice(content);
 		body.extend_from_slice(b"\r\n");
 		None
 	}
 
-	/// Drop any in-progress transaction, keeping the greeting. Releases
-	/// any in-flight memory-budget reservation tied to the dropped body.
+	/// Drop any in-progress transaction, keeping the greeting. The body
+	/// and any announced chunk are dropped with it, and so is their claim
+	/// on the memory budget.
 	fn reset(&mut self) {
-		self.release_in_flight_reservation();
+		self.chunk_reservation = Reservation::none();
 		if self.state != State::Connected {
 			self.state = State::Greeted;
 		}
 	}
 
-	/// Release the bytes the in-flight body holds against the shared
-	/// memory budget, if any. Called from every path that drops a
-	/// `ReceivingData` state (success, error, RSET, disconnect) so a
-	/// panic or a transport close cannot leak reservation bytes; the
-	/// [`MemoryBudget::release`] implementation saturates on over-release,
-	/// so duplicate calls on the success-and-disconnect overlap are
-	/// safe.
-	pub(crate) fn release_in_flight_reservation(&mut self) {
-		let reserved = match &self.state {
-			State::ReceivingData { reserved, .. } => *reserved,
-			_ => 0,
-		};
-		if let Some(budget) = &self.memory_budget
-			&& reserved > 0
-		{
-			budget.release(reserved);
-		}
+	/// The budget claim of the body accepted last, for the connection loop
+	/// to hold until that body's delivery is over.
+	pub fn take_delivery_reservation(&mut self) -> Reservation {
+		std::mem::take(&mut self.delivery_reservation)
 	}
 }
 

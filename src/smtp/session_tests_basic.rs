@@ -25,7 +25,8 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.code(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.code(),
 		Action::Deliver(r, _) => r.code(),
 		// A BDAT chunk read carries no reply.
 		Action::CollectChunk { .. } => 0,
@@ -150,11 +151,13 @@ fn bdat_before_recipients_discards_then_rejects() {
 	session.command_line("MAIL FROM:<alice@example.org>");
 	// No RCPT yet: the chunk octets are still read (so they can't be parsed as
 	// commands — RFC 3030), then the command is rejected with 503.
-	let Action::CollectChunk { size, .. } = session.command_line("BDAT 5 LAST") else {
+	// The chunk is read and thrown away without being kept.
+	let action = session.command_line("BDAT 5 LAST");
+	let Action::DiscardChunk { size, .. } = &action else {
 		panic!("expected the chunk to be consumed before rejection");
 	};
-	assert_eq!(size, 5);
-	assert_eq!(reply_code(&session.bdat_chunk(b"hello", true)), 503);
+	assert_eq!(*size, 5);
+	assert_eq!(reply_code(&action), 503);
 }
 
 #[test]

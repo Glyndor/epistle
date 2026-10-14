@@ -23,7 +23,9 @@ fn line_reply(action: Option<Action>) -> String {
 		return String::new();
 	};
 	match action {
-		Action::Continue(reply) | Action::Deliver(reply, _) => reply.to_string(),
+		Action::Continue(reply)
+		| Action::Deliver(reply, _)
+		| Action::DiscardChunk { reply, .. } => reply.to_string(),
 		_ => String::new(),
 	}
 }
@@ -85,7 +87,9 @@ fn successful_data_delivery_releases_the_reservation() {
 	let Some(Action::Deliver(_, _)) = session.data_line(b".") else {
 		panic!("expected delivery");
 	};
-	assert_eq!(budget.used(), 0, "delivery releases the held reservation");
+	assert_eq!(budget.used(), 7, "the body is held while it is delivered");
+	drop(session.take_delivery_reservation());
+	assert_eq!(budget.used(), 0, "the end of the delivery releases it");
 }
 
 #[test]
@@ -139,6 +143,7 @@ fn bdat_delivery_releases_the_reservation() {
 	};
 	let action = session.bdat_chunk(b"hello world\n", true);
 	assert!(matches!(action, Action::Deliver(..)));
+	drop(session.take_delivery_reservation());
 	assert_eq!(
 		budget.used(),
 		0,
@@ -185,6 +190,7 @@ fn many_concurrent_sessions_share_the_budget() {
 	let Some(Action::Deliver(_, _)) = first.data_line(b".") else {
 		panic!("expected delivery");
 	};
+	drop(first.take_delivery_reservation());
 	assert_eq!(budget.used(), 30);
 	// Reset the others, so the held bytes return to the budget.
 	for session in sessions.iter_mut().skip(1).take(4) {

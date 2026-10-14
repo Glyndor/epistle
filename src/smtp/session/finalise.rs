@@ -12,6 +12,7 @@
 
 use super::types::{AcceptedMessage, State};
 use super::{Action, Reply, Session, cap};
+use crate::smtp::memory_budget::Reservation;
 
 /// Build an `AcceptedMessage` from the in-flight `ReceivingData`
 /// state, run the post-DATA checks, and emit the terminal `Action`.
@@ -24,18 +25,16 @@ use super::{Action, Reply, Session, cap};
 pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: usize) -> Action {
 	// The BDAT LAST path calls us with `session.state` still
 	// `ReceivingData`; the DATA-dot path goes through
-	// `finalise_from_state` which transitions first. Snapshot the
-	// budget fields and the state transition uniformly so the
-	// post-DATA checks see the real values.
-	let (budget_exhausted, reserved) = match &session.state {
+	// `finalise_from_state` which transitions first. Take the budget
+	// fields out before the state goes, so the post-DATA checks see them.
+	let (budget_exhausted, reserved) = match std::mem::replace(&mut session.state, State::Greeted) {
 		State::ReceivingData {
 			budget_exhausted,
 			reserved,
 			..
-		} => (*budget_exhausted, *reserved),
-		_ => (false, 0),
+		} => (budget_exhausted, reserved),
+		_ => (false, Reservation::none()),
 	};
-	session.state = State::Greeted;
 	inner_finalise(session, message, running_size, budget_exhausted, reserved)
 }
 
@@ -92,18 +91,6 @@ fn split_over_quota(
 /// already matched `State::ReceivingData` for the borrow; this
 /// helper moves the fields out by replacing the state with `Greeted`.
 pub fn finalise_from_state(session: &mut Session) -> Action {
-	// The budget-exhausted flag and the reserved count live in the
-	// `ReceivingData` state, which we are about to overwrite with
-	// `Greeted`. Snapshot them first so the post-DATA check can
-	// reject a memory-budget exhaustion and release the held bytes.
-	let (budget_exhausted, reserved) = match &session.state {
-		State::ReceivingData {
-			budget_exhausted,
-			reserved,
-			..
-		} => (*budget_exhausted, *reserved),
-		_ => (false, 0),
-	};
 	let State::ReceivingData {
 		reverse_path,
 		recipients,
@@ -111,6 +98,8 @@ pub fn finalise_from_state(session: &mut Session) -> Action {
 		size,
 		body,
 		require_tls,
+		reserved,
+		budget_exhausted,
 		..
 	} = std::mem::replace(&mut session.state, State::Greeted)
 	else {
@@ -126,44 +115,30 @@ pub fn finalise_from_state(session: &mut Session) -> Action {
 		tlsrpt_verified: false,
 		sender_verified: false,
 	};
-	// Re-apply the snapshot before delegating, so the rejection paths
-	// in `finalise` see the original budget state.
 	inner_finalise(session, message, size, budget_exhausted, reserved)
 }
 
-/// The shared tail of [`finalise`]: the post-DATA checks and the
-/// reservation release. `budget_exhausted` and `reserved` are
-/// snapshots taken before the caller's state transition, because
-/// `finalise` re-checks them on entry but the state is `Greeted` by
-/// then; without this helper the post-DATA budget rejection would
-/// never fire and the held bytes would leak.
+/// The shared tail of [`finalise`]: the post-DATA checks. `reserved` is
+/// the body's claim on the memory budget: a refusal drops it, which hands
+/// the octets back, and an accepted body leaves it with the session so
+/// the connection loop holds it until the delivery is over.
 fn inner_finalise(
 	session: &mut Session,
 	message: AcceptedMessage,
 	running_size: usize,
 	budget_exhausted: bool,
-	reserved: u64,
+	reserved: Reservation,
 ) -> Action {
-	let release_held = |session: &mut Session| {
-		if let Some(budget) = &session.memory_budget
-			&& reserved > 0
-		{
-			budget.release(reserved);
-		}
-	};
 	if budget_exhausted {
-		release_held(session);
 		return Action::Continue(Reply::single(
 			452,
 			"4.3.1 insufficient system resources; try again later",
 		));
 	}
 	if running_size > session.max_message_size() {
-		release_held(session);
 		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
 	}
 	if let Some(reply) = super::author::check(session, &message.data) {
-		release_held(session);
 		return Action::Continue(reply);
 	}
 	if let Some(reply) = cap::check_or_reply(
@@ -172,7 +147,6 @@ fn inner_finalise(
 		&session.cap,
 		session.peer_ip,
 	) {
-		release_held(session);
 		return Action::Continue(reply);
 	}
 	// Submission rate limits, charged once per accepted message at one
@@ -190,22 +164,18 @@ fn inner_finalise(
 				.charge(recipients, super::time::unix_now())
 			{
 				Ok(charge) => Some(charge),
-				Err(_) => {
-					release_held(session);
-					return Action::Continue(rate_limited());
-				}
+				Err(_) => return Action::Continue(rate_limited()),
 			}
 		}
 		None => None,
 	};
 	match split_over_quota(session, message, running_size as u64) {
 		Some(message) => {
-			release_held(session);
 			session.policy.hold_charge(charge);
+			session.delivery_reservation = reserved;
 			Action::Deliver(Reply::ok(), message)
 		}
 		None => {
-			release_held(session);
 			if let Some(charge) = charge {
 				charge.refund();
 			}

@@ -515,6 +515,35 @@ async fn read_chunk(
 	Ok(Some(chunk))
 }
 
+/// Read `size` bytes of a refused BDAT chunk and throw them away, without
+/// holding them: first the bytes already buffered in the decoder, then the
+/// stream through a fixed buffer, feeding any overshoot (the next pipelined
+/// command) back into the decoder. `Ok(false)` if the peer closes or times
+/// out first.
+async fn discard_chunk(
+	stream: &mut Box<dyn Connection>,
+	decoder: &mut crate::smtp::line::LineDecoder,
+	size: usize,
+) -> std::io::Result<bool> {
+	use tokio::io::AsyncReadExt;
+	let mut left = size - decoder.discard_buffered(size);
+	let mut buffer = [0u8; READ_BUFFER];
+	while left > 0 {
+		let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer)).await {
+			Ok(Ok(0)) | Err(_) => return Ok(false),
+			Ok(Ok(n)) => n,
+			Ok(Err(error)) => return Err(error),
+		};
+		if read <= left {
+			left -= read;
+		} else {
+			decoder.feed(&buffer[left..read]);
+			left = 0;
+		}
+	}
+	Ok(true)
+}
+
 #[cfg(test)]
 #[path = "tests_mods.rs"]
 mod tests_mods;

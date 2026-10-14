@@ -8,9 +8,10 @@
 //! `mem_limit`.
 //!
 //! The budget is a single, shared `Arc<MemoryBudget>` every session draws
-//! from. A `try_reserve` call claims `n` bytes for the lifetime of one
-//! in-flight transfer; the matching `release` runs on every path that drops
-//! the reservation (success, error, disconnect, panic). When the budget is
+//! from. A session holds what it claimed in a [`Reservation`], which hands
+//! the octets back when it is dropped, so every path that drops the body
+//! releases them (a reply, `RSET`, `EHLO`, a disconnect, a timeout, a
+//! panic). An accepted body stays reserved until its delivery is over. When the budget is
 //! exhausted a new transaction is told `452 4.3.1 insufficient system
 //! resources; try again later` at DATA, and a BDAT chunk that would push
 //! past the cap is refused the same way.
@@ -22,7 +23,7 @@
 //! default; setting it to `0` disables the budget (every reservation
 //! succeeds, the historical behaviour).
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Default byte budget for the DATA / BDAT path when no
 /// `[server] message_memory_budget` is configured. A quarter of the
@@ -117,6 +118,76 @@ impl MemoryBudget {
 	}
 }
 
+/// Octets held against a [`MemoryBudget`] for one body or one chunk.
+///
+/// The octets go back to the budget when the value is dropped, so every
+/// path that discards the body (a reply, `RSET`, `EHLO`, a disconnect, a
+/// timeout, a panic that unwinds the session task) releases them without
+/// having to remember to.
+#[derive(Default)]
+pub struct Reservation {
+	budget: Option<Arc<MemoryBudget>>,
+	bytes: u64,
+}
+
+impl Reservation {
+	/// A reservation that holds nothing.
+	pub fn none() -> Self {
+		Reservation::default()
+	}
+
+	/// Claim `bytes` more octets from `budget`. On refusal nothing is
+	/// claimed and the octets the reservation already holds stay held.
+	pub fn try_grow(&mut self, budget: &Arc<MemoryBudget>, bytes: u64) -> Result<(), u64> {
+		budget.try_reserve(bytes)?;
+		if self.budget.is_none() {
+			self.budget = Some(Arc::clone(budget));
+		}
+		self.bytes = self.bytes.saturating_add(bytes);
+		Ok(())
+	}
+
+	/// Take over the octets `other` holds; they are released with `self`.
+	pub fn absorb(&mut self, mut other: Reservation) {
+		if self.budget.is_none() {
+			self.budget = other.budget.take();
+		}
+		self.bytes = self.bytes.saturating_add(std::mem::take(&mut other.bytes));
+	}
+
+	/// The octets held.
+	pub fn bytes(&self) -> u64 {
+		self.bytes
+	}
+}
+
+impl Drop for Reservation {
+	fn drop(&mut self) {
+		if let Some(budget) = &self.budget {
+			budget.release(self.bytes);
+		}
+	}
+}
+
+impl std::fmt::Debug for Reservation {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Reservation")
+			.field("bytes", &self.bytes)
+			.finish()
+	}
+}
+
+/// Two reservations are equal when they hold the same number of octets,
+/// which is all a comparison of session states needs.
+impl PartialEq for Reservation {
+	fn eq(&self, other: &Self) -> bool {
+		self.bytes == other.bytes
+	}
+}
+
+impl Eq for Reservation {}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -142,6 +213,25 @@ mod tests {
 		assert!(budget.try_reserve(60).is_ok());
 		budget.release(60);
 		assert!(budget.try_reserve(80).is_ok());
+	}
+
+	#[test]
+	fn a_reservation_hands_its_octets_back_when_dropped() {
+		let budget = Arc::new(MemoryBudget::with_cap(100));
+		let mut held = Reservation::none();
+		assert!(held.try_grow(&budget, 30).is_ok());
+		let mut chunk = Reservation::none();
+		assert!(chunk.try_grow(&budget, 50).is_ok());
+		held.absorb(chunk);
+		assert_eq!((held.bytes(), budget.used()), (80, 80));
+		assert_eq!(held.try_grow(&budget, 30), Err(30));
+		assert_eq!(
+			held.bytes(),
+			80,
+			"a refused claim leaves the held octets alone"
+		);
+		drop(held);
+		assert_eq!(budget.used(), 0);
 	}
 
 	#[test]
