@@ -77,17 +77,13 @@ pub(super) fn add_with_display_name(
 		Some(Ok(stored)) => stored,
 		Some(Err(why)) => return super::exit::refused(format_args!("account {name}: {why}")),
 	};
-	// let-else, not `match`: a match arm that returns is still an arm of the
-	// expression whose value binds to `password`, and the taint analyser follows
-	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
-	// the Err arm as a password reaching the hash. An else block has to diverge,
-	// so no value can travel from it to the binding. `new_password` has already
-	// printed why it refused (no input, mismatch, or the policy rule that failed).
-	let Some(password) =
-		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
-	else {
-		return ExitCode::from(super::exit::REFUSED);
-	};
+	// Open the store up front so the name and address validation
+	// runs before the password prompt; otherwise a typo in either
+	// would force the operator to type the password twice only to
+	// see the validation error. The store is cheap to open and the
+	// `mutate_store` call later holds the same lock, so a parallel
+	// CLI cannot squeeze a write in between the validation and the
+	// add.
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -99,6 +95,30 @@ pub(super) fn add_with_display_name(
 			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
+	};
+	// Validation runs before the password prompt. A refusal here
+	// exits 2 with the same `account NAME: why` message the mutator
+	// would have produced after the password was read and hashed.
+	if let Err(why) = store.validate_for_add(name, &addresses) {
+		// The store wraps the rejection in its own `invalid account:`
+		// phrasing; the CLI surface would rather say what the
+		// operator typed, so unwrap the inner reason.
+		let why = match why {
+			StoreError::Invalid(message) => message,
+			other => return super::exit::refused(format_args!("account {name}: {other}")),
+		};
+		return super::exit::refused(format_args!("account {name}: {why}"));
+	}
+	// let-else, not `match`: a match arm that returns is still an arm of the
+	// expression whose value binds to `password`, and the taint analyser follows
+	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
+	// the Err arm as a password reaching the hash. An else block has to diverge,
+	// so no value can travel from it to the binding. `new_password` has already
+	// printed why it refused (no input, mismatch, or the policy rule that failed).
+	let Some(password) =
+		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
+	else {
+		return ExitCode::from(super::exit::REFUSED);
 	};
 	let account = match DynamicAccount::with_password(
 		name.to_string(),
@@ -376,3 +396,7 @@ pub(super) fn remove_with_bayes(
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "accounts_add_validation_tests.rs"]
+mod accounts_add_validation_tests;

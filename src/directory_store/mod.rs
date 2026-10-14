@@ -479,6 +479,35 @@ impl AccountStore {
 		self.handle.clone()
 	}
 
+	/// The pre-flight checks `add` runs that do not need the on-disk
+	/// state under the lock: a syntactically valid name, at least
+	/// one address, and every address routed by a configured
+	/// domain. The CLI calls this before reading the password so
+	/// the operator is not asked to type one for a name or address
+	/// that cannot be created. The race-sensitive checks
+	/// (`name_taken`, `address_taken`) still run inside [`add`] under
+	/// the lock.
+	pub fn validate_for_add(&self, name: &str, addresses: &[String]) -> Result<(), StoreError> {
+		let normalized = normalize::account_name(name);
+		names::validate_name(&normalized)?;
+		if addresses.is_empty() {
+			return Err(StoreError::Invalid("addresses must not be empty".into()));
+		}
+		for raw in addresses {
+			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
+			if !self
+				.domains
+				.iter()
+				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
+			{
+				return Err(StoreError::Invalid(address_reason::not_handled(
+					address.domain(),
+				)));
+			}
+		}
+		Ok(())
+	}
+
 	/// Add a dynamic account. `password_hash` must already be argon2id.
 	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
 		account.name = normalize::account_name(&account.name);
