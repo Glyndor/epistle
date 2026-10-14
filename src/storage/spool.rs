@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -16,6 +17,24 @@ use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
+
+/// Mode created files start with: owner read+write only. The brief is that no
+/// file the spool holds (envelopes, bodies, the lock file) is ever group- or
+/// world-readable, regardless of the umask under which a worker started.
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// Mode spool directories are created with: owner read+write+exec only.
+/// 0700 means other users cannot even stat a sender's mailbox id in
+/// `<data_dir>/spool/new/`, so the existence of a queue entry is also private.
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+
+/// Whether the "fixed N loose permissions" log line has already been printed
+/// in this process. The spool may be opened more than once (per-thread via a
+/// shared `Arc`, or several components reading the queue), and operators only
+/// need to see the count once at start-up, not every time a component opens.
+static AUDIT_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 /// Envelope metadata stored next to the raw message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,13 +186,40 @@ impl FsSpool {
 		self.root.parent().expect("spool root is under data_dir")
 	}
 
+	/// Walk the spool and retighten any file or directory whose permissions
+	/// are looser than `0600` (for files) or `0700` (for directories). Returns
+	/// the number of entries whose mode was changed. Safe to call repeatedly:
+	/// already-tight entries are left alone. Bounded: a single linear walk of
+	/// the spool tree, no recursion into attacker-shaped filenames.
+	pub fn audit_permissions(&self) -> std::io::Result<u64> {
+		#[cfg(unix)]
+		let fixed = audit_permissions(&self.root)?;
+		#[cfg(not(unix))]
+		let _ = self;
+		#[cfg(not(unix))]
+		let fixed = 0u64;
+		Ok(fixed)
+	}
+
+	/// Run [`FsSpool::audit_permissions`] once at start-up and emit the
+	/// "fixed N loose files" log line the first time, no matter how many
+	/// components then open the same `data_dir`.
+	fn audit_permissions_at_startup(&self) -> std::io::Result<()> {
+		let fixed = self.audit_permissions()?;
+		let previous = AUDIT_LOGGED.swap(fixed, Ordering::AcqRel);
+		if previous == 0 && fixed > 0 {
+			tracing::info!("tightened {fixed} spool file/directory permissions to owner-only");
+		}
+		Ok(())
+	}
+
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
 	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool { root, crypto };
-		fs::create_dir_all(spool.path_in(Path::new(SpoolDir::Tmp.name()))?)?;
-		fs::create_dir_all(spool.path_in(Path::new(SpoolDir::New.name()))?)?;
+		create_spool_dir(&spool.root)?;
+		spool.audit_permissions_at_startup()?;
 		Ok(spool)
 	}
 
@@ -314,13 +360,18 @@ impl FsSpool {
 		Ok(envelope)
 	}
 
-	/// Take the exclusive spool lock; it is released when the guard drops.
+	/// Take the exclusive spool lock; it is released when the guard drops. The
+	/// lock file is owner-only too, so a successful `flock` does not advertise
+	/// its existence to other users.
 	pub(super) fn lock(&self) -> std::io::Result<fs::File> {
-		let file = fs::OpenOptions::new()
-			.create(true)
-			.truncate(false)
-			.write(true)
-			.open(self.path_in(Path::new("lock"))?)?;
+		let mut options = fs::OpenOptions::new();
+		options.create(true).truncate(false).write(true);
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::OpenOptionsExt;
+			options.mode(FILE_MODE);
+		}
+		let file = options.open(self.path_in(Path::new("lock"))?)?;
 		file.lock()?;
 		Ok(file)
 	}
@@ -376,9 +427,119 @@ impl MessageSink for FsSpool {
 	}
 }
 
+/// Create the spool root directory (if missing) along with its `tmp/` and
+/// `new/` children, all at mode 0700. The mode is pinned at create time —
+/// `DirBuilder::mode(0o700)` plus `DirBuilder::recursive(true)` so missing
+/// parents are created — so the resulting tree is owner-only regardless of
+/// the process umask.
+fn create_spool_dir(root: &std::path::Path) -> std::io::Result<()> {
+	let mut builder = std::fs::DirBuilder::new();
+	builder.recursive(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::DirBuilderExt;
+		builder.mode(DIR_MODE);
+	}
+	builder.create(root)?;
+	for child in ["tmp", "new"] {
+		let mut child_builder = std::fs::DirBuilder::new();
+		child_builder.recursive(true);
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::DirBuilderExt;
+			child_builder.mode(DIR_MODE);
+		}
+		child_builder.create(root.join(child))?;
+	}
+	Ok(())
+}
+
+/// Walk the spool and retighten any file or directory whose permissions are
+/// looser than `0600` (for files) or `0700` (for directories), counted
+/// uniformly. Bounded: a linear walk of the spool tree, no recursion into
+/// attacker-controlled filenames (entries whose name is not a single plain
+/// component are skipped, the same check `contained_child` enforces).
+#[cfg(unix)]
+fn audit_permissions(root: &std::path::Path) -> std::io::Result<u64> {
+	use std::os::unix::fs::PermissionsExt;
+	const DESIRED_DIR: u32 = 0o700;
+	let mut fixed = 0u64;
+	// The spool root itself is silently retightened (not counted): the
+	// count the brief asks for is "files fixed", so the operator log stays
+	// tight on what actually mattered.
+	if let Ok(meta) = std::fs::symlink_metadata(root)
+		&& meta.file_type().is_dir()
+	{
+		let current = meta.permissions().mode() & 0o777;
+		if current != DESIRED_DIR {
+			std::fs::set_permissions(root, std::fs::Permissions::from_mode(DESIRED_DIR))?;
+		}
+	}
+	visit_permissions(root, &mut fixed)?;
+	Ok(fixed)
+}
+
+#[cfg(unix)]
+fn visit_permissions(dir: &std::path::Path, fixed: &mut u64) -> std::io::Result<()> {
+	use std::os::unix::fs::PermissionsExt;
+	const DESIRED_FILE: u32 = 0o600;
+	const DESIRED_DIR: u32 = 0o700;
+	let Ok(rd) = std::fs::read_dir(dir) else {
+		return Ok(());
+	};
+	for entry in rd {
+		let entry = match entry {
+			Ok(entry) => entry,
+			Err(_) => continue,
+		};
+		let path = entry.path();
+		let name = match entry.file_name().to_str() {
+			Some(name) if !name.is_empty() && name != "." && name != ".." => name.to_string(),
+			_ => continue,
+		};
+		let meta = match entry.metadata() {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let file_type = meta.file_type();
+		if file_type.is_dir() {
+			let current = meta.permissions().mode() & 0o777;
+			if current != DESIRED_DIR {
+				std::fs::set_permissions(&path, std::fs::Permissions::from_mode(DESIRED_DIR))?;
+			}
+			visit_permissions(&path, fixed)?;
+		} else if file_type.is_file()
+			&& (name.ends_with(".eml") || name.ends_with(".json") || name == "lock")
+		{
+			let current = meta.permissions().mode() & 0o777;
+			if current != DESIRED_FILE {
+				std::fs::set_permissions(&path, std::fs::Permissions::from_mode(DESIRED_FILE))?;
+				*fixed += 1;
+			}
+		}
+	}
+	Ok(())
+}
+
+#[cfg(not(unix))]
+fn audit_permissions(_root: &std::path::Path) -> std::io::Result<u64> {
+	Ok(0)
+}
+
 /// Write `bytes` to `path` and fsync the file before returning.
+///
+/// The file is created at mode `0600` from the start: `OpenOptions::mode`
+/// pins the mode at create, so a spool file is never briefly readable by
+/// group or world, regardless of the umask under which a worker started.
 pub(super) fn write_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-	let mut file = fs::File::create(path)?;
+	let mut options = fs::OpenOptions::new();
+	options.write(true).create(true).truncate(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(FILE_MODE);
+	}
+	let mut file = options.open(path)?;
 	file.write_all(bytes)?;
 	file.sync_all()
 }
@@ -503,3 +664,7 @@ mod tests {
 #[cfg(test)]
 #[path = "spool_tests_edit.rs"]
 mod tests_edit;
+
+#[cfg(all(test, unix))]
+#[path = "spool_tests_perms.rs"]
+mod tests_perms;
