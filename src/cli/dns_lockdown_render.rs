@@ -131,16 +131,32 @@ fn reports_lines(text: &mut String, domain: &str, dmarc: &DmarcPlan) {
 	}
 }
 
-/// The undo report as text. `dry_run` words it as what would happen.
-pub(super) fn undo_text(domain: &str, report: &UndoReport, dry_run: bool) -> String {
+/// Which undo report is printed: the dry run, the preview a real run asks
+/// about, or what a run that stopped partway did.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum UndoView {
+	/// `--undo --dry-run`: nothing is changed.
+	DryRun,
+	/// What a real run is about to do, before it asks.
+	Preview,
+	/// What a run did before it stopped.
+	Done,
+}
+
+/// The undo report as text, worded for `view`.
+pub(super) fn undo_text(domain: &str, report: &UndoReport, view: UndoView) -> String {
 	let mut text = format!(
 		"Undo lockdown for {domain}{}\n",
-		if dry_run { " (dry run)" } else { "" }
+		if view == UndoView::DryRun {
+			" (dry run)"
+		} else {
+			""
+		}
 	);
-	let (deleted, restored) = if dry_run {
-		("would be deleted", "would be restored to")
-	} else {
-		("deleted", "restored to")
+	let (deleted, restored) = match view {
+		UndoView::DryRun => ("would be deleted", "would be restored to"),
+		UndoView::Preview => ("will be deleted", "will be restored to"),
+		UndoView::Done => ("deleted", "restored to"),
 	};
 	for record in &report.deleted {
 		let _ = writeln!(text, "  - {}: {deleted}", record_line(record));

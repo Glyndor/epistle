@@ -225,6 +225,17 @@ fn undo_shows_what_it_will_do_then_puts_the_zone_back() {
 	assert_eq!(*setup.zone.writes.lock().unwrap(), writes);
 	let undo = run(&setup, &["--undo", "--yes"]);
 	assert_eq!(undo.code, ExitCode::SUCCESS, "{}", undo.err);
+	// A real run is not a dry run: the preview it asks about says so.
+	assert_eq!(
+		undo.out,
+		concat!(
+			"Undo lockdown for example.org\n",
+			"  - *.example.org 3600 IN TXT \"v=spf1 -all\": will be deleted\n",
+			"  - www.example.org 3600 IN MX 0 .: will be deleted\n",
+			"  - www.example.org 3600 IN TXT \"v=spf1 -all\": will be deleted\n",
+			"  - TXT _dmarc.example.org: will be restored to \"v=DMARC1; p=none; rua=mailto:d@example.org\"\n",
+		)
+	);
 	assert_eq!(
 		undo.err,
 		"undone: 3 deleted, 1 restored, 0 left as is; journal removed\n"

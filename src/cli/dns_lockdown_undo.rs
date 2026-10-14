@@ -61,7 +61,12 @@ pub(super) fn run(
 			return ExitCode::FAILURE;
 		}
 	};
-	let _ = out.write_all(render::undo_text(target.domain, &preview, true).as_bytes());
+	let view = if dry_run {
+		render::UndoView::DryRun
+	} else {
+		render::UndoView::Preview
+	};
+	let _ = out.write_all(render::undo_text(target.domain, &preview, view).as_bytes());
 	let writes = preview.deleted.len() + preview.restored.len();
 	if dry_run {
 		let _ = writeln!(err, "dry run: nothing was changed");
@@ -109,8 +114,10 @@ pub(super) fn run(
 			ExitCode::SUCCESS
 		}
 		Err(failure) => {
-			let _ =
-				out.write_all(render::undo_text(target.domain, &failure.report, false).as_bytes());
+			let _ = out.write_all(
+				render::undo_text(target.domain, &failure.report, render::UndoView::Done)
+					.as_bytes(),
+			);
 			style::error_to(err, &failure.message);
 			match store_journal(target.journal_path, &failure.remaining) {
 				Ok(()) => {
