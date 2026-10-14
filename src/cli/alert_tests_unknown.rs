@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 
 use crate::cli::exit;
+use crate::cli::resource::ResourceError;
 use crate::cli::resource::test_config;
 
 use super::{AlertCli, run};
@@ -31,20 +32,26 @@ fn remove_unknown_alert_exits_two() {
 }
 
 #[test]
-fn unknown_alert_message_is_preserved() {
-	// The exit code is what scripts branch on, but the message is
-	// what humans read. A refusal must keep the original phrasing so a
-	// log scan for "no alert named" still matches.
+fn unknown_alert_keeps_its_message_and_leaves_the_config_alone() {
+	// Scripts branch on the exit code, people read the message: the
+	// refusal keeps the phrasing a log scan for "no alert named"
+	// matches.
 	let (_dir, file) = test_config("");
 	let before = std::fs::read_to_string(file.path()).expect("read config");
-	let code = run(
+	let result = super::execute_with(
 		file.path(),
 		AlertCli::Remove {
 			name: "nope".to_string(),
 		},
 		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+		|_, _| panic!("a refused removal must not restart anything"),
 	);
-	assert_eq!(code, ExitCode::from(exit::REFUSED));
+	let Err(ResourceError::Refusal(message)) = result else {
+		panic!("an unknown alert must be a refusal");
+	};
+	assert_eq!(message, "no alert named \"nope\"");
 	assert_eq!(
 		std::fs::read_to_string(file.path()).expect("read config"),
 		before,

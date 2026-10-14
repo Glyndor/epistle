@@ -149,7 +149,7 @@ fn execute_with(
 	};
 	let current =
 		Config::load(path).map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
-	let plan = set::plan(&current, &backend).map_err(resource::ResourceError::refused)?;
+	let plan = set::plan(&current, &backend)?;
 	if plan.leaves_blobs_behind {
 		writeln!(
 			status,

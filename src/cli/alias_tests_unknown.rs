@@ -117,20 +117,22 @@ fn disable_unknown_alias_exits_two() {
 }
 
 #[test]
-fn unknown_alias_message_is_preserved() {
-	// The exit code is what the operator scripts branch on, but the
-	// message is what humans read. A refusal must keep the original
-	// phrasing so a log scan for "not found" still matches.
+fn unknown_alias_keeps_its_message_and_leaves_the_config_alone() {
+	// Scripts branch on the exit code, people read the message: the
+	// refusal keeps the phrasing a log scan for "not found" matches.
 	let (_dir, file) = fixture("");
 	let before = std::fs::read_to_string(file.path()).expect("read config");
-	let code = run(
+	let outcome = super::execute(
 		file.path(),
 		AliasCli::Disable {
 			address: "ghost@example.org".to_string(),
 		},
 		false,
 	);
-	assert_eq!(code, ExitCode::from(super::super::exit::REFUSED));
+	let super::Outcome::Refusal(message) = outcome else {
+		panic!("an unknown alias must be a refusal");
+	};
+	assert_eq!(message, "alias ghost@example.org not found");
 	assert_eq!(
 		std::fs::read_to_string(file.path()).expect("read config"),
 		before,

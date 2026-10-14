@@ -70,13 +70,13 @@ fn remove_unknown_domain_alias_exits_two() {
 }
 
 #[test]
-fn unknown_domain_message_is_preserved() {
-	// The exit code is what scripts branch on, but the message is
-	// what humans read. A refusal must keep the original phrasing so a
-	// log scan for "is not configured" still matches.
+fn unknown_domain_keeps_its_message_and_leaves_the_config_alone() {
+	// Scripts branch on the exit code, people read the message: the
+	// refusal keeps the phrasing a log scan for "is not configured"
+	// matches.
 	let (_dir, file) = fixture("");
 	let before = std::fs::read_to_string(file.path()).expect("read config");
-	let code = run(
+	let outcome = super::execute(
 		file.path(),
 		DomainCli::Remove {
 			domain: "ghost.example.org".to_string(),
@@ -84,7 +84,10 @@ fn unknown_domain_message_is_preserved() {
 		},
 		false,
 	);
-	assert_eq!(code, ExitCode::from(super::super::exit::REFUSED));
+	let super::Outcome::Refusal(message) = outcome else {
+		panic!("an unknown domain must be a refusal");
+	};
+	assert_eq!(message, "domain ghost.example.org is not configured");
 	assert_eq!(
 		std::fs::read_to_string(file.path()).expect("read config"),
 		before,

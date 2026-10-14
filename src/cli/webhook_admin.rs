@@ -103,7 +103,7 @@ fn execute_with(
 			return probe::run(&config, out, status);
 		}
 		WebhookCli::Set { url, secret_stdin } => {
-			endpoint::check(&url).map_err(resource::ResourceError::refused)?;
+			endpoint::check(&url)?;
 			let secret = if secret_stdin {
 				Some(resource::read_secret(input, "webhook secret")?)
 			} else {
@@ -121,10 +121,11 @@ fn execute_with(
 		}
 		WebhookCli::Unset => Box::new(|document, config| {
 			if let Some(alert) = config.alerts.iter().find(|alert| alert.webhook) {
-				return Err(resource::ResourceError::refused(format!(
+				return Err(format!(
 					"alert \"{}\" posts to the webhook; remove it or turn its webhook off first",
 					alert.name
-				)));
+				)
+				.into());
 			}
 			document
 				.remove_table(&["webhook"])

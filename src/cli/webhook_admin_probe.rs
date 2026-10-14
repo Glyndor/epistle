@@ -24,7 +24,7 @@ pub(super) fn run_within(
 	status: &mut impl Write,
 ) -> Result<ExitCode, ResourceError> {
 	let settings = config.webhook.as_ref().ok_or_else(|| {
-		ResourceError::refused("no webhook is configured; run `epistle webhook set` first")
+		ResourceError::from("no webhook is configured; run `epistle webhook set` first")
 	})?;
 	let webhook =
 		crate::webhook::Webhook::new(&settings.url, settings.secret.clone()).map_err(|error| {

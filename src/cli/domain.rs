@@ -27,6 +27,8 @@ use super::style;
 #[path = "domain_dispatch.rs"]
 mod dispatch;
 use dispatch::{Outcome, execute};
+
+/// Domain administration actions.
 #[derive(Debug, Subcommand)]
 pub enum DomainCli {
 	/// List every configured domain.

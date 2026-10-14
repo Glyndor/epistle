@@ -6,17 +6,8 @@ use crate::cli::resource::ResourceError;
 use crate::cli::{init, stack};
 use crate::config::Config;
 
-/// Restart the stack mail service after a change, or report a manual restart.
-#[allow(dead_code)]
-pub(crate) fn after_change(
-	config: &Config,
-	outcome: Outcome,
-	needs_restart: bool,
-	status: &mut impl Write,
-) -> Result<ExitCode, ResourceError> {
-	after_change_with(config, outcome, needs_restart, status, stack::run)
-}
-
+/// Restart the stack mail service after a change through `restart`, or
+/// report that a manual restart is needed.
 pub(crate) fn after_change_with(
 	config: &Config,
 	outcome: Outcome,

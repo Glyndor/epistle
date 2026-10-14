@@ -294,24 +294,7 @@ fn execute_with(
 			})
 		}
 		RelayCli::Remove { target } => {
-			// The edit closure takes a `Result<(), String>`, so the
-			// refusal the rest of the umbrella maps to exit 2 has to
-			// flow through a string for now. `resource::apply_edit`
-			// wraps the change's error in `ResourceError::Failure`,
-			// which would put "no relay is configured for X" on exit 1;
-			// we therefore fail fast at the dispatch level, before the
-			// edit opens the configuration, and return Refusal.
-			let config = Config::load(path)
-				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
-			if find(&config, &target).is_err() {
-				return Err(resource::ResourceError::refused(format!(
-					"no relay is configured for {}",
-					target.describe()
-				)));
-			}
-			Box::new(move |document, config| {
-				edit::remove(document, config, &target).map_err(resource::ResourceError::Failure)
-			})
+			Box::new(move |document, config| edit::remove(document, config, &target))
 		}
 	};
 	resource::apply_edit(path, dry_run, "relay", out, status, restart, change)

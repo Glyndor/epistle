@@ -15,14 +15,12 @@ pub(super) fn run(
 	status: &mut impl Write,
 ) -> Result<ExitCode, super::resource::ResourceError> {
 	let dns = config.dns.as_ref().ok_or_else(|| {
-		super::resource::ResourceError::refused(
+		super::resource::ResourceError::from(
 			"no DNS provider is configured; run `epistle dns provider set` first",
 		)
 	})?;
 	if dns.provider.eq_ignore_ascii_case("manual") {
-		return Err(super::resource::ResourceError::refused(
-			"the manual provider has no API to test",
-		));
+		return Err("the manual provider has no API to test".into());
 	}
 	let provider = dns.build_for_host(&config.hostname).ok_or_else(|| {
 		super::resource::ResourceError::Failure(
