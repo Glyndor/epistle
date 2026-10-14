@@ -190,3 +190,74 @@ async fn trusted_cidr_bypasses_the_per_ip_cap() {
 	}
 	assert_eq!(admitted, 3, "a trusted peer is exempt from the per-IP cap");
 }
+
+/// An accept loop fed one stream at a time by the test.
+struct Fed {
+	streams: Mutex<tokio::sync::mpsc::UnboundedReceiver<DuplexStream>>,
+	peer: SocketAddr,
+}
+
+impl Accept for Fed {
+	type Stream = DuplexStream;
+
+	async fn accept(&self) -> std::io::Result<(DuplexStream, SocketAddr)> {
+		match self.streams.lock().await.recv().await {
+			Some(stream) => Ok((stream, self.peer)),
+			None => std::future::pending().await,
+		}
+	}
+}
+
+#[tokio::test]
+async fn a_failed_tls_handshake_gives_the_per_ip_slot_back() {
+	// Cap 1 on an implicit-TLS listener. A client that sends garbage
+	// instead of a ClientHello fails the handshake; the next connection
+	// from the same address must still get in.
+	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
+	let (feed, streams) = tokio::sync::mpsc::unbounded_channel();
+	let accept = Fed {
+		streams: Mutex::new(streams),
+		peer: "203.0.113.9:4000".parse().expect("peer"),
+	};
+	let server = Arc::new(
+		Server::new(
+			"mail.example.org",
+			Arc::new(MemorySink::new()) as Arc<dyn MessageSink>,
+		)
+		.with_tls(
+			crate::tls::ReloadableAcceptor::new(acceptor),
+			TlsMode::Implicit,
+		)
+		.with_max_connections_per_ip(1),
+	);
+	let _serve = tokio::spawn(async move {
+		let _ = server.serve_on(accept).await;
+	});
+	for _ in 0..3 {
+		let (mut client, server_side) = tokio::io::duplex(64 * 1024);
+		feed.send(server_side).expect("feed");
+		tokio::io::AsyncWriteExt::write_all(&mut client, b"EHLO not-a-client-hello\r\n\r\n")
+			.await
+			.expect("garbage");
+		let mut rest = Vec::new();
+		let _ = tokio::time::timeout(
+			std::time::Duration::from_secs(5),
+			client.read_to_end(&mut rest),
+		)
+		.await;
+	}
+	tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+	let (client, server_side) = tokio::io::duplex(64 * 1024);
+	feed.send(server_side).expect("feed");
+	let name =
+		tokio_rustls::rustls::pki_types::ServerName::try_from("mail.example.org").expect("name");
+	let mut tls = super::tests_auth::connector(cert)
+		.connect(name, client)
+		.await
+		.expect("the slot is free again, so the handshake is served");
+	let banner = super::tests_auth::reply(&mut tls).await;
+	assert!(
+		banner.starts_with("220 "),
+		"admitted after failed handshakes"
+	);
+}
