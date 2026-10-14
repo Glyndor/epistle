@@ -211,3 +211,25 @@ fn retighten_never_follows_a_link_swapped_in_after_the_listing() {
 	assert_eq!(mode(&victim), 0o644, "the link target must keep its mode");
 	assert!(!changed, "a link is never counted as loose");
 }
+
+/// The start-up open never carries on with a spool it could not make
+/// owner-only. A loose file the server cannot open (owner write-only, group
+/// and world readable) is either retightened (as root) or the open fails;
+/// it is never left loose behind a successful start.
+#[test]
+fn start_up_refuses_a_spool_it_cannot_tighten() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	FsSpool::open(dir.path()).expect("lay out");
+	let stuck = dir
+		.path()
+		.join("spool/new/01939b5e-7c00-7ccc-aaaa-000000000004.json");
+	std::fs::write(&stuck, b"{}").expect("stuck");
+	chmod(&stuck, 0o244);
+
+	let opened =
+		FsSpool::open_audited(dir.path(), crate::storage::MessageCrypto::disabled()).is_ok();
+	assert!(
+		!opened || mode(&stuck) == 0o600,
+		"a start-up that succeeds must leave no loose spool file"
+	);
+}

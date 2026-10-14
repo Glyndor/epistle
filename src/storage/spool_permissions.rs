@@ -95,8 +95,10 @@ pub(crate) fn audit_permissions(root: &Path) -> std::io::Result<u64> {
 /// nothing is changed unless it is owned by the owner of the spool root.
 #[cfg(unix)]
 fn walk(root: &Path, apply: bool) -> std::io::Result<(u64, u64)> {
-	let Ok(meta) = fs::symlink_metadata(root) else {
-		return Ok((0, 0));
+	let meta = match fs::symlink_metadata(root) {
+		Ok(meta) => meta,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+		Err(error) => return Err(error),
 	};
 	if !meta.is_dir() {
 		return Ok((0, 0));
@@ -108,10 +110,13 @@ fn walk(root: &Path, apply: bool) -> std::io::Result<(u64, u64)> {
 		if retighten(&dir, Kind::Dir, owner, apply)? {
 			dirs += 1;
 		}
-		let Ok(entries) = fs::read_dir(&dir) else {
-			continue;
+		let entries = match fs::read_dir(&dir) {
+			Ok(entries) => entries,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+			Err(error) => return Err(error),
 		};
-		for entry in entries.flatten() {
+		for entry in entries {
+			let entry = entry?;
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
 			}

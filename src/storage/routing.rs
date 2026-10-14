@@ -50,18 +50,7 @@ impl SplitDelivery {
 		directory: DirectoryHandle,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
-		let outbound = FsSpool::open_with_crypto(data_dir, crypto.clone())?;
-		// Retighten any pre-existing spool file or directory that has looser
-		// permissions than the current owner-only bound, and tell the operator
-		// exactly how many were touched. The bound is owned by `FsSpool`; the
-		// routing sink just makes sure the start-up runs the audit.
-		match outbound.audit_permissions() {
-			Ok(0) => {}
-			Ok(fixed) => {
-				tracing::info!("tightened {fixed} spool file/directory permissions to owner-only")
-			}
-			Err(error) => tracing::warn!("spool permission audit failed at start-up: {error}"),
-		}
+		let outbound = FsSpool::open_audited(data_dir, crypto.clone())?;
 		Ok(SplitDelivery {
 			local: LocalDelivery::new_with_crypto(data_dir, directory.clone(), crypto.clone())?,
 			outbound,

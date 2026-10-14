@@ -251,6 +251,27 @@ impl FsSpool {
 		Ok(spool)
 	}
 
+	/// [`FsSpool::open_with_crypto`] for the server start-up: retighten any
+	/// spool path looser than owner-only and log how many files changed. A
+	/// spool whose permissions cannot be checked or fixed is refused, so the
+	/// server never starts on a spool that may be readable by other users.
+	pub fn open_audited(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
+		let spool = Self::open_with_crypto(data_dir, crypto)?;
+		match spool.audit_permissions() {
+			Ok(0) => {}
+			Ok(fixed) => {
+				tracing::info!("tightened {fixed} spool file permissions to owner-only")
+			}
+			Err(error) => {
+				return Err(std::io::Error::new(
+					error.kind(),
+					format!("spool permission audit failed, refusing to start: {error}"),
+				));
+			}
+		}
+		Ok(spool)
+	}
+
 	/// Persist one message crash-safely and return its spool id.
 	///
 	/// Both files are first written and fsynced under `tmp/`, then renamed
