@@ -36,18 +36,11 @@ fn submission_rate_limit_uses_per_domain_override() {
 
 	// Three submissions fit under the per-domain limit of 3.
 	for _ in 0..3 {
-		assert_eq!(
-			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-			250
-		);
-		session.command_line("RSET");
+		assert_eq!(send_one(&mut session, "alice@example.org"), 250);
 	}
 	// The fourth is deferred: the per-domain limit (3) wins over the global
 	// (1), which would have deferred the second send.
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		450
-	);
+	assert_eq!(send_one(&mut session, "alice@example.org"), 450);
 }
 
 #[test]
@@ -66,15 +59,8 @@ fn submission_rate_limit_falls_back_to_global_when_domain_has_no_entry() {
 		plain("alice", fixture_password())
 	));
 
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		450
-	);
+	assert_eq!(send_one(&mut session, "alice@example.org"), 250);
+	assert_eq!(send_one(&mut session, "alice@example.org"), 450);
 }
 
 #[test]
@@ -95,11 +81,7 @@ fn submission_rate_limit_is_off_when_neither_domain_nor_global_is_set() {
 	));
 
 	for _ in 0..5 {
-		assert_eq!(
-			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-			250
-		);
-		session.command_line("RSET");
+		assert_eq!(send_one(&mut session, "alice@example.org"), 250);
 	}
 }
 
@@ -144,15 +126,8 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		"AUTH PLAIN {}",
 		plain("alice", fixture_password())
 	));
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
-		450
-	);
+	assert_eq!(send_one(&mut session, "alice@example.com"), 250);
+	assert_eq!(send_one(&mut session, "alice@example.com"), 450);
 
 	// bob: per-domain 2. The first two sends fit, the third defers. This
 	// would be wrong if bob were charged the example.com limit of 1 (only
@@ -163,20 +138,9 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		.with_send_limiter(Arc::clone(&limiter));
 	session.command_line("EHLO client.example.org");
 	session.command_line(&format!("AUTH PLAIN {}", plain("bob", fixture_password())));
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		450
-	);
+	assert_eq!(send_one(&mut session, "bob@example.org"), 250);
+	assert_eq!(send_one(&mut session, "bob@example.org"), 250);
+	assert_eq!(send_one(&mut session, "bob@example.org"), 450);
 }
 
 #[test]
@@ -335,12 +299,28 @@ fn an_authenticated_session_is_not_subject_to_the_inbound_limits() {
 	// Three authenticated MAIL FROMs in a row: under the per-account cap
 	// (no submission limit configured), the inbound caps do nothing.
 	for _ in 0..3 {
-		assert_eq!(
-			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-			250
-		);
-		session.command_line("RSET");
+		assert_eq!(send_one(&mut session, "alice@example.org"), 250);
 	}
+}
+
+/// One message from `from` to a remote recipient, through to the end of
+/// the data. The `MAIL FROM` reply code; a 250 there must end delivered.
+pub(super) fn send_one(session: &mut Session, from: &str) -> u16 {
+	let mail = reply_code(&session.command_line(&format!("MAIL FROM:<{from}>")));
+	if mail != 250 {
+		return mail;
+	}
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<someone@elsewhere.example>")),
+		250
+	);
+	assert_eq!(reply_code(&session.command_line("DATA")), 354);
+	session.data_line(format!("From: {from}").as_bytes());
+	session.data_line(b"");
+	session.data_line(b"hi");
+	let end = session.data_line(b".").expect("end of data");
+	assert!(matches!(end, Action::Deliver(..)), "message not accepted");
+	mail
 }
 
 fn inbound_test_directory() -> Arc<Directory> {

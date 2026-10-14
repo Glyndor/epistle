@@ -101,6 +101,9 @@ struct Inner {
 	/// Empty when no `[[tenant]]` is configured; the empty state is the
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
+	/// The per-account submission limiter the SMTP listeners share, and
+	/// the server-wide per-account cap; see `state_submission.rs`.
+	submission_limit: Option<(Arc<crate::smtp::ratelimit::SendLimiter>, Option<u32>)>,
 	/// Per-account Bayesian wiring: the training queue and the
 	/// store, both `None` without a database. Builders and accessors
 	/// live in `state_bayes.rs`.
@@ -247,6 +250,7 @@ impl ApiState {
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
+				submission_limit: None,
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
 				delivery_log_days: 0,
@@ -751,6 +755,9 @@ mod bayes;
 
 #[path = "state_outbound.rs"]
 mod outbound;
+
+#[path = "state_submission.rs"]
+mod submission;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

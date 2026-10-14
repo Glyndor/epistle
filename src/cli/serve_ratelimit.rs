@@ -31,7 +31,10 @@ pub(super) struct RateLimiters {
 pub(super) fn build_rate_limiters(config: &Config) -> RateLimiters {
 	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
 		|| !config.domain_submission_limits.is_empty();
-	let send_limiter = has_any_submission_limit.then(|| Arc::new(SendLimiter::new(60)));
+	// Keyed by authenticated account: a full map refuses a new account
+	// rather than reset a running window (see `refusing_new_keys`).
+	let send_limiter =
+		has_any_submission_limit.then(|| Arc::new(SendLimiter::refusing_new_keys(60)));
 	let inbound_ip_limit = config
 		.inbound_rate_limit_per_ip_per_min
 		.map(|per_min| InboundLimit {
@@ -80,4 +83,19 @@ pub(super) fn wire_smtp_submission_limits(
 		server = server.with_tenant_limits(Arc::clone(limits));
 	}
 	server
+}
+
+/// Give the API (`POST /api/v1/send`, JMAP `EmailSubmission/set`) the same
+/// submission limiters as the SMTP listeners: the per-account limiter with
+/// the server-wide cap, and the tenant limits. One budget per account and
+/// per tenant whatever the protocol.
+pub(super) fn wire_api_submission_limits(
+	state: crate::api::ApiState,
+	config: &Config,
+	send_limiter: &Option<Arc<SendLimiter>>,
+	tenant_limits: &Arc<crate::api::TenantLimits>,
+) -> crate::api::ApiState {
+	state
+		.with_tenant_limits(Arc::clone(tenant_limits))
+		.with_submission_limit(send_limiter.clone(), config.submission_rate_limit_per_min)
 }

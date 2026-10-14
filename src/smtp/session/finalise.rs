@@ -37,41 +37,45 @@ pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: u
 	) {
 		return Action::Continue(reply);
 	}
-	// Per-account and per-tenant aggregate rate limits, both
-	// charged per recipient so a 100-recipient message costs 100
-	// units. The MAIL FROM path already charged the first unit
-	// (one transaction started); the remaining `recipients.len() -
-	// 1` are charged here, where the recipient count is known.
-	// With no recipients nothing is charged, which leaves bounces
-	// untouched.
-	if let Some(account) = session.authenticated.as_deref() {
-		let extra = message.recipients.len().saturating_sub(1) as u32;
-		if !session.policy.check_authenticated_submission(
-			account,
-			&session.directory,
-			extra,
-			super::time::unix_now(),
-		) {
-			return Action::Continue(Reply::single(
-				450,
-				"4.7.1 sending rate limit exceeded; retry later",
-			));
+	// Submission rate limits, charged once per accepted message at one
+	// unit per recipient (`RCPT TO` already refused the others), and only
+	// after every check above passed. All limits or none: an over-limit
+	// message costs nothing. A message refused whole for a full mailbox
+	// gets its units back, and the server refunds the held charge when a
+	// later check or the spool refuses the message.
+	let charge = match session.authenticated.as_deref() {
+		Some(account) => {
+			let recipients = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+			match session
+				.policy
+				.submission_budget(account, &session.directory)
+				.charge(recipients, super::time::unix_now())
+			{
+				Ok(charge) => Some(charge),
+				Err(_) => return Action::Continue(rate_limited()),
+			}
 		}
-		let addresses = session.directory.addresses_for(account);
-		if !addresses.is_empty()
-			&& let Err(message) =
-				session
-					.policy
-					.check_tenant_submission(&addresses, extra, super::time::unix_now())
-		{
-			let line = format!("4.7.1 {message}; retry later");
-			return Action::Continue(Reply::single(450, line.as_str()));
-		}
-	}
+		None => None,
+	};
 	match split_over_quota(session, message, running_size as u64) {
-		Some(message) => Action::Deliver(Reply::ok(), message),
-		None => Action::Continue(Reply::single(552, "5.2.2 mailbox full")),
+		Some(message) => {
+			session.policy.hold_charge(charge);
+			Action::Deliver(Reply::ok(), message)
+		}
+		None => {
+			if let Some(charge) = charge {
+				charge.refund();
+			}
+			Action::Continue(Reply::single(552, "5.2.2 mailbox full"))
+		}
 	}
+}
+
+/// The reply to a submission over one of its rate limits, at `MAIL FROM`
+/// or at the end of DATA.
+pub(super) fn rate_limited() -> Reply {
+	let text = format!("4.7.1 {}", crate::smtp::submission_budget::RATE_LIMITED);
+	Reply::single(450, &text)
 }
 
 /// Take out of `message` the local recipients it would put over quota.

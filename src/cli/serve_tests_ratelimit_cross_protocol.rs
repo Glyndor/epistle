@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use super::tests_ratelimit::{
-	authenticated_submit, auth_plain, build_smtp_server, ratelimit_config, spawn_smtp_listener,
-	tls_connector, tls_session,
+	auth_plain, authenticated_submit, build_smtp_server, build_smtp_server_with, ratelimit_config,
+	spawn_smtp_listener, tls_connector, tls_session,
 };
 use crate::api::TenantLimits;
 use crate::tls::test_support::acceptor_and_cert;
@@ -93,6 +93,55 @@ async fn tenant_submission_limit_is_shared_between_smtp_and_jmap() {
 	task.abort();
 }
 
+/// The per-account limit is one budget for the SMTP listener and the API
+/// when both are wired the way `serve` wires them: the API gets the
+/// listener's limiter through `wire_api_submission_limits`.
+#[tokio::test]
+async fn account_submission_limit_is_shared_between_smtp_and_jmap() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = ratelimit_config(dir.path(), 2);
+	let limiters = super::super::serve_ratelimit::build_rate_limiters(&config);
+	let send_limiter = limiters.send_limiter.clone();
+	let (acceptor, cert) = acceptor_and_cert();
+	let server = build_smtp_server_with(
+		&config,
+		crate::tls::ReloadableAcceptor::new(acceptor),
+		None,
+		limiters,
+	);
+	let (addr, task) = spawn_smtp_listener(server).await;
+	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let mut tls = tls_session(addr, tls_connector(cert)).await;
+	let smtp_reply =
+		authenticated_submit(&mut tls, &plain, "alice@example.org", "bob@example.org").await;
+	assert!(smtp_reply.starts_with("250 "), "{smtp_reply:?}");
+	drop(tls);
+
+	let no_tenants = Arc::new(TenantLimits::default());
+	let state = super::super::serve_ratelimit::wire_api_submission_limits(
+		jmap_state_with_tenant_limits(dir.path(), Arc::clone(&no_tenants)),
+		&config,
+		&send_limiter,
+		&no_tenants,
+	);
+	let app = crate::api::router(state);
+	let email_id = seed_jmap_email(dir.path(), "bob@elsewhere.example");
+	let request = jmap_submission_request(&email_id, "bob@elsewhere.example");
+	let (_, body) = jmap_request(&app, &request).await;
+	assert!(
+		body["methodResponses"][0][1]["created"]["s1"].is_object(),
+		"the second unit fits: {body}"
+	);
+	let email_id = seed_jmap_email(dir.path(), "carol@elsewhere.example");
+	let request = jmap_submission_request(&email_id, "carol@elsewhere.example");
+	let (_, body) = jmap_request(&app, &request).await;
+	assert_eq!(
+		body["methodResponses"][0][1]["notCreated"]["s1"]["type"], "rateLimit",
+		"SMTP and JMAP spent the account's two units: {body}"
+	);
+	task.abort();
+}
+
 /// Build a minimal `ApiState` that owns the given `tenant_limits`. Mirrors
 /// what `api::tests::test_state` does but lets the test pin the token and the
 /// tenant_limits instead of inheriting the global fixture token.
@@ -100,14 +149,13 @@ fn jmap_state_with_tenant_limits(
 	dir: &std::path::Path,
 	tenant_limits: Arc<TenantLimits>,
 ) -> crate::api::ApiState {
-	let token = "test-jmap-token";
-	let token_hash = crate::smtp::auth::tests::hash(token);
+	let token_hash = crate::smtp::auth::tests::hash(crate::test_fixtures::api_token());
 	let spool = crate::storage::FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
-		password_hash: Some("$argon2id$secret".to_string()),
+		password_hash: None,
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -141,10 +189,8 @@ fn seed_jmap_email(dir: &std::path::Path, recipient: &str) -> uuid::Uuid {
 	let id = uuid::Uuid::now_v7();
 	std::fs::write(
 		inbox.join(format!("{id}.eml")),
-		format!(
-			"From: alice@example.org\r\nTo: {recipient}\r\nSubject: hello\r\n\r\nbody\r\n"
-		)
-		.as_bytes(),
+		format!("From: alice@example.org\r\nTo: {recipient}\r\nSubject: hello\r\n\r\nbody\r\n")
+			.as_bytes(),
 	)
 	.expect("write");
 	id
@@ -178,7 +224,7 @@ async fn jmap_request(
 		.uri("/jmap/api")
 		.header(
 			axum::http::header::AUTHORIZATION,
-			axum::http::HeaderValue::from_static("Bearer test-jmap-token"),
+			format!("Bearer {}", crate::test_fixtures::api_token()),
 		)
 		.header(axum::http::header::CONTENT_TYPE, "application/json")
 		.body(axum::body::Body::from(body.to_string()))

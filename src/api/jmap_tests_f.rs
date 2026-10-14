@@ -117,14 +117,16 @@ async fn jmap_email_submission_rejects_write_only_key() {
 /// that to assert the cap is shared across protocols.
 fn tenant_state(dir: &std::path::Path, per_min: u32) -> super::ApiState {
 	let mut state = test_state(dir, 0);
-	let limits = Arc::new(crate::api::TenantLimits::from_config(&[crate::config::Tenant {
-		name: Some("acme".to_string()),
-		domains: vec!["example.org".to_string()],
-		quota_bytes: None,
-		max_accounts: None,
-		max_domains: None,
-		submission_rate_limit_per_min: Some(per_min),
-	}]));
+	let limits = Arc::new(crate::api::TenantLimits::from_config(&[
+		crate::config::Tenant {
+			name: Some("acme".to_string()),
+			domains: vec!["example.org".to_string()],
+			quota_bytes: None,
+			max_accounts: None,
+			max_domains: None,
+			submission_rate_limit_per_min: Some(per_min),
+		},
+	]));
 	state = state.with_tenant_limits(Arc::clone(&limits));
 	state
 }
@@ -378,10 +380,7 @@ async fn jmap_email_submission_charges_every_kind_of_recipient() {
 		("Resent-Bcc", "resent-bcc@elsewhere.example"),
 	];
 	let email_id = seed_email_with_all_kinds(dir.path(), &headers);
-	let rcpts: Vec<String> = headers
-		.iter()
-		.map(|(_, email)| email.to_string())
-		.collect();
+	let rcpts: Vec<String> = headers.iter().map(|(_, email)| email.to_string()).collect();
 	let req = submission_request(&email_id, &rcpts);
 	let (status, body) = request_with_body(
 		&app,

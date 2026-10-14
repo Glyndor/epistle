@@ -84,22 +84,18 @@ pub async fn send(
 			.map_err(|_| ApiError::forbidden_from())?;
 	}
 
-	// Per-tenant aggregate submission rate limit. Sits on top of the
-	// existing per-account limiter (which the SMTP session enforces); the
-	// empty `tenant_limits` is the identity and short-circuits. The
-	// charge is one unit per recipient so a 100-recipient message costs
-	// 100 units; the per-account cap above counts the same way.
+	// Submission rate limits: the per-account limit and every tenant of
+	// the account, shared with SMTP and JMAP. Asked here so a sender with
+	// no room left is refused before anything is recorded; charged one
+	// unit per recipient just before the message is handed on, and given
+	// back when it is refused there.
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let recipient_count = recipients.len() as u32;
-	if let Err(message) = state.tenant_limits().check_aggregate_rate_n(
-		std::slice::from_ref(&request.from),
-		recipient_count,
-		now,
-	) {
-		return Err(ApiError::rate_limited_with_message(message));
+	let budget = state.submission_budget(&account, std::slice::from_ref(&request.from));
+	if !budget.has_room(now) {
+		return Err(rate_limited());
 	}
 
 	// Reserve correspondents under the same account lock as SMTP and JMAP.
@@ -180,12 +176,20 @@ pub async fn send(
 		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
-	let id = state
-		.submit(&account, message, &extra)
-		.map_err(|error| match error {
-			SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
-			SinkError::Unavailable(_) => ApiError::internal(),
-		})?;
+	let recipient_count = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+	let charge = budget
+		.charge(recipient_count, now)
+		.map_err(|_| rate_limited())?;
+	let id = match state.submit(&account, message, &extra) {
+		Ok(id) => id,
+		Err(error) => {
+			charge.refund();
+			return Err(match error {
+				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
+				SinkError::Unavailable(_) => ApiError::internal(),
+			});
+		}
+	};
 	// Save a copy of what the account sent into its `Sent` folder
 	// when the per-request and account-wide settings admit it. The
 	// default is "on"; the request may opt out.
@@ -193,6 +197,11 @@ pub async fn send(
 	Ok(Json(Queued {
 		queued: id.to_string(),
 	}))
+}
+
+/// `429 rate_limited` for a send over one of its submission rate limits.
+fn rate_limited() -> ApiError {
+	ApiError::rate_limited_with_message(crate::smtp::submission_budget::RATE_LIMITED)
 }
 
 /// The account a send request acts for. An account-bound credential acts

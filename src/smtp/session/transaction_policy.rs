@@ -21,6 +21,7 @@ use crate::smtp::directory::Directory;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
 use crate::smtp::reply::Reply;
+use crate::smtp::submission_budget::{Budget, Charge};
 
 /// All MAIL-FROM-time policy state held by one session.
 #[derive(Debug, Default)]
@@ -52,6 +53,9 @@ pub(crate) struct TransactionPolicy {
 	/// could not be stored for, waiting for the server to send them once
 	/// the message itself is delivered.
 	quota_reports: Vec<super::types::AcceptedMessage>,
+	/// The submission-limit charge of the last message handed to the
+	/// server, kept only once the server accepts it.
+	pending_charge: Option<Charge>,
 }
 
 impl TransactionPolicy {
@@ -100,10 +104,8 @@ impl TransactionPolicy {
 		self
 	}
 
-	/// Attach the shared per-tenant submission limits. The SMTP path
-	/// checks every owning tenant in turn and rejects with `450 4.7.1
-	/// sending rate limit exceeded; retry later` when any tenant is over
-	/// its `submission_rate_limit_per_min` budget.
+	/// Attach the shared per-tenant submission limits, charged together
+	/// with the per-account limit through [`Self::submission_budget`].
 	pub(crate) fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
 		self
@@ -111,47 +113,32 @@ impl TransactionPolicy {
 
 	// ---------- checks ----------
 
-	/// Whether a submission by the authenticated `account` is over the
-	/// per-account submission limit (per-domain first, then the global
-	/// default). Charges `count` units against the budget; the MAIL
-	/// FROM path charges one unit (one transaction started) and the
-	/// end-of-DATA path charges the remaining `recipients.len() - 1`.
-	/// Returns `true` when the session is allowed to send, or when no
-	/// limit is configured; `false` only when a configured limit is
-	/// exceeded.
-	pub(crate) fn check_authenticated_submission(
-		&self,
-		account: &str,
-		directory: &Directory,
-		count: u32,
-		now: u64,
-	) -> bool {
-		let Some(limiter) = &self.submission_limiter else {
-			return true;
-		};
-		let limit = directory
-			.submission_limit_for(account)
-			.or(self.submission_default);
-		match limit {
-			Some(per_min) => limiter.check_n(account, count, per_min, now),
-			None => true,
-		}
+	/// The submission limits of the authenticated `account`: its domain's
+	/// per-account limit (else the server-wide default) and every tenant
+	/// owning one of its addresses. Empty when none is configured.
+	pub(crate) fn submission_budget(&self, account: &str, directory: &Directory) -> Budget {
+		let account_limit = self.submission_limiter.as_ref().and_then(|limiter| {
+			directory
+				.submission_limit_for(account)
+				.or(self.submission_default)
+				.map(|per_min| (limiter, per_min))
+		});
+		Budget::for_account(
+			account,
+			account_limit,
+			self.tenant_limits.as_deref(),
+			|| directory.addresses_for(account),
+		)
 	}
 
-	/// Whether a submission from an account whose addresses are
-	/// `account_addresses` is over any per-tenant aggregate rate limit.
-	/// Charges one unit per recipient so a 100-recipient message costs
-	/// 100 units. `Ok(())` when no tenant caps are exceeded.
-	pub(crate) fn check_tenant_submission(
-		&self,
-		account_addresses: &[String],
-		recipient_count: u32,
-		now: u64,
-	) -> Result<(), String> {
-		let Some(limits) = &self.tenant_limits else {
-			return Ok(());
-		};
-		limits.check_aggregate_rate_n(account_addresses, recipient_count, now)
+	/// Hold the charge of a message handed to the server for delivery.
+	pub(crate) fn hold_charge(&mut self, charge: Option<Charge>) {
+		self.pending_charge = charge;
+	}
+
+	/// The charge of the message just handed to the server, if any.
+	pub(crate) fn take_charge(&mut self) -> Option<Charge> {
+		self.pending_charge.take()
 	}
 
 	/// Whether an unauthenticated MAIL FROM with `reverse_path` from

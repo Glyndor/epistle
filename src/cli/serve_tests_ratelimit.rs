@@ -9,7 +9,6 @@
 //! second submission comes back with `250`, not the `450` the contract
 //! promises.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,61 +20,44 @@ use tokio::net::TcpListener;
 use super::*;
 use crate::api::TenantLimits;
 use crate::config::Config;
-use crate::directory_store::{AccountStore, DirectoryHandle};
-use crate::smtp::directory::Directory;
 use crate::smtp::server::{Server as SmtpServer, TlsMode};
 use crate::smtp::sink::MemorySink;
 use crate::tls::test_support::acceptor_and_cert;
 
-/// Build a Server with the same wiring pattern `serve::serve` uses for
-/// the SMTP listener. The submission-rate-limit wiring goes through the
-/// shared helper `serve_ratelimit::wire_smtp_submission_limits`, which
-/// is the production single source of truth — a regression test that
-/// forgets to call it cannot pass because `serve::serve`'s listener
-/// loop calls the same helper. The directory is built with both the
-/// password hash (so AUTH succeeds) and the per-domain submission limits
-/// (so the per-domain cap is enforced).
+/// Build a Server the way `serve::serve` builds an SMTP listener: the
+/// account store comes from `serve_store::open_account_store` (which
+/// carries the per-domain submission limits into every directory) and
+/// the limits are attached by `serve_ratelimit::wire_smtp_submission_limits`,
+/// the helper the listener loop calls. Dropping either piece of wiring
+/// from production code turns the over-limit tests below green-to-red:
+/// the second submission comes back `250` instead of `450`.
 pub(super) fn build_smtp_server(
 	config: &Config,
 	acceptor: crate::tls::ReloadableAcceptor,
 	tenant_limits: Option<Arc<TenantLimits>>,
 ) -> SmtpServer {
+	let limiters = super::super::serve_ratelimit::build_rate_limiters(config);
+	build_smtp_server_with(config, acceptor, tenant_limits, limiters)
+}
+
+/// [`build_smtp_server`] with the rate limiters given, so a test can hand
+/// the same per-account limiter to the API as well.
+pub(super) fn build_smtp_server_with(
+	config: &Config,
+	acceptor: crate::tls::ReloadableAcceptor,
+	tenant_limits: Option<Arc<TenantLimits>>,
+	limiters: RateLimiters,
+) -> SmtpServer {
 	let sink: Arc<dyn crate::smtp::sink::MessageSink> = Arc::new(MemorySink::new());
 	let crypto = crate::storage::MessageCrypto::disabled();
-	let store = AccountStore::open(
-		&config.data_dir,
-		config.domains.clone(),
-		config.domain_aliases.clone(),
-		config.accounts.clone(),
-	)
-	.expect("open account store")
-	.with_domain_quotas(config.domain_quotas.clone())
-	.with_domain_submission_limits(config.domain_submission_limits.clone())
-	.with_aliases(config.alias.clone())
-	.with_masked_max(config.masked_addresses_max);
+	let store = super::super::serve_store::open_account_store(config).expect("open account store");
 	let RateLimiters {
 		send_limiter,
 		inbound_ip_limit,
 		inbound_sender_limit,
-	} = super::super::serve_ratelimit::build_rate_limiters(config);
-	let mut directory = Directory::new(
-		config.domains.clone(),
-		[
-			("alice@example.org".to_string(), "alice".to_string()),
-			("bob@example.org".to_string(), "bob".to_string()),
-			("carol@example.org".to_string(), "carol".to_string()),
-		],
-	)
-	.with_password_hashes(HashMap::from([(
-		"alice".to_string(),
-		crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password()),
-	)]));
-	for (domain, per_min) in &config.domain_submission_limits {
-		directory = directory.with_domain_submission_limits([(domain.clone(), *per_min)]);
-	}
-	let directory = DirectoryHandle::new(directory);
+	} = limiters;
 	let mut server = SmtpServer::new(&config.hostname, sink)
-		.with_directory(directory)
+		.with_directory(store.handle())
 		.with_metrics(Arc::new(crate::metrics::Metrics::new()))
 		.with_data_dir(config.data_dir.clone())
 		.with_crypto(Arc::new(crypto))
@@ -92,18 +74,12 @@ pub(super) fn build_smtp_server(
 			per_min: limit.per_min,
 		});
 	}
-	// Use the same helper `serve::serve`'s listener loop uses. Removing
-	// this call from the test breaks the production code too: both
-	// paths go through `wire_smtp_submission_limits`, which attaches
-	// the per-account cap, the server-wide default, and the tenant
-	// aggregate state.
-	server = super::super::serve_ratelimit::wire_smtp_submission_limits(
+	super::super::serve_ratelimit::wire_smtp_submission_limits(
 		server,
 		config,
 		&send_limiter,
 		tenant_limits.as_ref(),
-	);
-	server
+	)
 }
 
 /// Read SMTP reply lines until one starts with `code` followed by a
@@ -297,17 +273,23 @@ pub(super) fn auth_plain(authcid: &str, password: &str) -> String {
 	B64.encode(format!("\0{authcid}\0{password}"))
 }
 
-/// Build a `Config` with `submission_rate_limit_per_min = per_min`.
+/// Build a `Config` with `submission_rate_limit_per_min = per_min` and
+/// three accounts in example.org; alice signs in with the fixture
+/// password.
 pub(super) fn ratelimit_config(data_dir: &std::path::Path, per_min: u32) -> Config {
+	let hash = crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password());
 	let toml_text = format!(
 		"hostname = \"mail.example.org\"\n\
 		 data_dir = \"{}\"\n\
 		 domains = [\"example.org\"]\n\
-		 submission_rate_limit_per_min = {per_min}\n",
+		 submission_rate_limit_per_min = {per_min}\n\
+		 [[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\n\
+		 password_hash = \"{hash}\"\n\
+		 [[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n\
+		 [[accounts]]\nname = \"carol\"\naddresses = [\"carol@example.org\"]\n",
 		data_dir.to_string_lossy()
 	);
-	let config: Config = toml::from_str(&toml_text).expect("config");
-	config
+	toml::from_str(&toml_text).expect("config")
 }
 
 fn ratelimit_config_with_domain(data_dir: &std::path::Path, per_min: u32) -> Config {
@@ -439,7 +421,7 @@ async fn no_limit_means_no_deferral() {
 async fn per_tenant_aggregate_limit_refuses_a_second_submission() {
 	// A `[[tenant]]` with `submission_rate_limit_per_min = 1` that
 	// owns the account's domain must defer the second SMTP submission
-	// with the tenant-flavored 4xx line. The same `SendLimiter` is
+	// with the rate-limit 4xx line. The same `SendLimiter` is
 	// consulted by REST and JMAP, so the SMTP path rejecting on
 	// submission means REST and JMAP cannot dodge the cap by switching
 	// protocols.
@@ -477,9 +459,9 @@ async fn per_tenant_aggregate_limit_refuses_a_second_submission() {
 	let mut tls = tls_session(addr, connector).await;
 	let second =
 		authenticated_submit(&mut tls, &plain, "alice@example.org", "bob@example.org").await;
-	assert!(
-		second.starts_with("450 4.7.1 tenant \"acme\" submission rate limit exceeded; retry later"),
-		"second submission must be deferred with the tenant 4xx line; got: {second:?}"
+	assert_eq!(
+		second, "450 4.7.1 sending rate limit exceeded; retry later",
+		"second submission must be deferred by the tenant cap"
 	);
 	task.abort();
 }

@@ -66,17 +66,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Built before the account store, which seals TOTP secrets with it.
 	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
 		.map_err(std::io::Error::other)?;
-	let mut store = crate::directory_store::AccountStore::open(
-		&config.data_dir,
-		config.domains.clone(),
-		config.domain_aliases.clone(),
-		config.accounts.clone(),
-	)
-	.map_err(|error| std::io::Error::other(error.to_string()))?
-	.with_domain_quotas(config.domain_quotas.clone())
-	.with_domain_submission_limits(config.domain_submission_limits.clone())
-	.with_aliases(config.alias.clone())
-	.with_masked_max(config.masked_addresses_max);
+	let mut store = super::serve_store::open_account_store(&config)?;
 	// Two owners of one address are never merged: the first keeps it and
 	// both are named here (and in `epistle status`) until someone fixes it.
 	for collision in store.address_collisions() {
@@ -324,10 +314,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)
-				.with_tenant_limits(Arc::clone(&tenant_limits))
 				.with_correspondents((*correspondents).clone())
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
+				state = super::serve_ratelimit::wire_api_submission_limits(
+					state,
+					&config,
+					&send_limiter,
+					&tenant_limits,
+				);
 				if let Some((store, queue)) = &bayes {
 					state = state
 						.with_training(queue.clone())
@@ -566,9 +561,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						Some(&tenant_limits)
 					},
 				);
-				if !tenant_limits.is_empty() {
-					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
-				}
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
 				// Same measure and default as IMAP QUOTA.
 				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
@@ -641,3 +633,7 @@ mod tests_ratelimit_per_recipient;
 #[cfg(test)]
 #[path = "serve_tests_ratelimit_cross_protocol.rs"]
 mod tests_ratelimit_cross_protocol;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_charge.rs"]
+mod tests_ratelimit_charge;

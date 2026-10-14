@@ -258,6 +258,13 @@ impl Session {
 		self
 	}
 
+	/// The submission-limit charge of the message last handed to the
+	/// server (`Action::Deliver`). The server keeps it once the message is
+	/// accepted and refunds it on any later refusal.
+	pub fn take_submission_charge(&mut self) -> Option<crate::smtp::submission_budget::Charge> {
+		self.policy.take_charge()
+	}
+
 	/// The DSNs for recipients the last accepted message did not fit for;
 	/// the server sends them once that message is delivered.
 	pub fn take_quota_reports(&mut self) -> Vec<AcceptedMessage> {
@@ -445,45 +452,20 @@ impl Session {
 					}
 					_ => {}
 				}
-				// Per-account submission rate limit for authenticated senders.
-				// Resolution: per-domain override for the account's own
-				// domain (looked up by walking the account's addresses, the
-				// same way `Directory::quota_for` does), falling back to the
-				// server-wide default, falling back to no limit at all.
-				// The check charges one unit per recipient: the MAIL FROM
-				// path charges one unit (one transaction started), the
-				// end-of-DATA path charges the remaining `recipients.len()
-				// - 1`. With one recipient the test below charges 1 unit;
-				// with N it charges N units in total.
-				if let Some(account) = self.authenticated.clone()
-					&& !self.policy.check_authenticated_submission(
-						&account,
-						&self.directory,
-						1,
-						unix_now(),
-					) {
-					return Action::Continue(Reply::single(
-						450,
-						"4.7.1 sending rate limit exceeded; retry later",
-					));
-				}
-				// Per-tenant aggregate rate limit. Each owning tenant is
-				// charged one unit here (one submission started); the rest
-				// of the recipient costs are charged at end-of-DATA, where
-				// the count is known. With no recipient yet at MAIL FROM
-				// the early charge is the transaction start; bounces, the
-				// JMAP path and the REST path call
-				// `check_tenant_submission` directly with the full
-				// recipient count.
-				if let Some(account) = self.authenticated.clone()
-					&& self.directory.addresses_for(&account).is_empty() == false
-					&& let Err(message) = self.policy.check_tenant_submission(
-						&self.directory.addresses_for(&account),
-						1,
-						unix_now(),
-					) {
-					let line = format!("4.7.1 {message}; retry later");
-					return Action::Continue(Reply::single(450, line.as_str()));
+				// Submission rate limits for authenticated senders: the
+				// per-account limit (its domain's override, else the
+				// server-wide default) and the tenant aggregate. Nothing is
+				// charged here: a sender with no room left is refused before
+				// it sends the message, and the message is charged one unit
+				// per recipient once it is accepted (`finalise`), so a
+				// transaction that ends in RSET or a refusal costs nothing.
+				if let Some(account) = self.authenticated.as_deref()
+					&& !self
+						.policy
+						.submission_budget(account, &self.directory)
+						.has_room(unix_now())
+				{
+					return Action::Continue(finalise::rate_limited());
 				}
 				// Per-IP and per-sender rate limits for unauthenticated sessions.
 				// Authenticated sessions are charged against the per-account limiter

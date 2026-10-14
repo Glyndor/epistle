@@ -18,7 +18,7 @@ use crate::api::TenantLimits;
 use crate::tls::test_support::acceptor_and_cert;
 
 use super::tests_ratelimit::{
-	authenticated_submit, auth_plain, build_smtp_server, expect_reply, expect_reply_first_digit,
+	auth_plain, authenticated_submit, build_smtp_server, expect_reply, expect_reply_first_digit,
 	ratelimit_config, spawn_smtp_listener, tls_connector, tls_session,
 };
 
@@ -66,9 +66,9 @@ async fn per_tenant_limit_charges_per_recipient() {
 	let mut tls = tls_session(addr, connector).await;
 	let second =
 		authenticated_submit(&mut tls, &plain, "alice@example.org", "bob@example.org").await;
-	assert!(
-		second.starts_with("450 4.7.1 tenant \"acme\" submission rate limit exceeded; retry later"),
-		"second submission must be deferred when the per-tenant budget is exhausted; got: {second:?}"
+	assert_eq!(
+		second, "450 4.7.1 sending rate limit exceeded; retry later",
+		"second submission must be deferred when the per-tenant budget is exhausted"
 	);
 	task.abort();
 }

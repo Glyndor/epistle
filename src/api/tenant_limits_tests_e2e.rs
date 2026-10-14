@@ -435,14 +435,8 @@ async fn aggregate_rate_charges_per_recipient() {
 		"subject": "x",
 		"text": "hi",
 	});
-	let (first, _) = request_with_body(
-		&app,
-		"POST",
-		"/api/v1/send",
-		Some(KEY),
-		Some(first_body),
-	)
-	.await;
+	let (first, _) =
+		request_with_body(&app, "POST", "/api/v1/send", Some(KEY), Some(first_body)).await;
 	assert_eq!(first, StatusCode::OK);
 	let second_body = serde_json::json!({
 		"from": "ann@a.example",
@@ -450,14 +444,8 @@ async fn aggregate_rate_charges_per_recipient() {
 		"subject": "x",
 		"text": "hi",
 	});
-	let (second, body) = request_with_body(
-		&app,
-		"POST",
-		"/api/v1/send",
-		Some(KEY),
-		Some(second_body),
-	)
-	.await;
+	let (second, body) =
+		request_with_body(&app, "POST", "/api/v1/send", Some(KEY), Some(second_body)).await;
 	assert_eq!(second, StatusCode::TOO_MANY_REQUESTS, "{body}");
 	assert_eq!(
 		body["error"]["code"], "rate_limited",

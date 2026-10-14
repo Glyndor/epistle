@@ -28,7 +28,7 @@ pub(super) fn email_submission_set(
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (creation_id, submission) in create {
-			match submit_email(state, account, submission) {
+			match submit_email(state, account, &view.addresses, submission) {
 				Ok(id) => {
 					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
 				}
@@ -48,7 +48,12 @@ pub(super) fn email_submission_set(
 
 /// Submit one email: read it, build the envelope, route it like SMTP
 /// submission (DKIM for remote mail, local recipients to their mailboxes).
-fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<String, Refusal> {
+fn submit_email(
+	state: &ApiState,
+	account: &str,
+	addresses: &[String],
+	submission: &Value,
+) -> Result<String, Refusal> {
 	let email_id = submission
 		.get("emailId")
 		.and_then(Value::as_str)
@@ -84,20 +89,23 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 			.filter_map(|r| r.get("email").and_then(Value::as_str))
 			.map(str::to_string)
 			.collect(),
-		// RFC 8621 section 7.5: without an envelope, every address in To,
-		// Cc and Bcc. Resent-To, Resent-Cc and Resent-Bcc are also
-		// counted: a forwarded message is delivered to every address it
-		// names, and the cap is meant to bound what one submission can
-		// fan out to. Resent-* headers come last so a primary
-		// recipient that is also a Resent recipient is not double
-		// counted.
-		None => [
-			"to", "cc", "bcc", "resent-to", "resent-cc", "resent-bcc",
-		]
-		.into_iter()
-		.filter_map(|name| objects::header_value(&headers, name))
-		.flat_map(|value| objects::header_emails(&value))
-		.collect(),
+		// RFC 8621 section 7.5: without an envelope, the deduplicated set
+		// of addresses in To, Cc and Bcc. Nothing else: Resent-* fields
+		// left on a stored message name who received an earlier copy,
+		// and sending to them would mail people the author never listed.
+		None => {
+			let mut recipients: Vec<String> = Vec::new();
+			for address in ["to", "cc", "bcc"]
+				.into_iter()
+				.filter_map(|name| objects::header_value(&headers, name))
+				.flat_map(|value| objects::header_emails(&value))
+			{
+				if !recipients.iter().any(|seen| same_address(seen, &address)) {
+					recipients.push(address);
+				}
+			}
+			recipients
+		}
 	};
 	if recipients.is_empty() {
 		return Err("noRecipients".into());
@@ -147,6 +155,20 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 	// RFC 8621 section 7.5: the Bcc header never leaves; those recipients
 	// are on the envelope.
 	let stamped = crate::smtp::trace::strip_bcc(&stamped);
+	// Submission rate limits: the per-account limit and every tenant of
+	// the account, the same limiters SMTP and `POST /api/v1/send` charge.
+	// Asked here so a sender with no room left is refused before anything
+	// is recorded; charged one unit per recipient just before the message
+	// is handed on, and given back when it is refused there. `rateLimit`
+	// is the RFC 8620 section 5.3 error for a rate limit.
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let budget = state.submission_budget(account, addresses);
+	if !budget.has_room(now) {
+		return Err(rate_limited());
+	}
 	// Record recipients even without a cap so replies remain known. The
 	// rolling 24h cap uses the same reservation lock as SMTP and REST. The
 	// account name is the JMAP `accountId` argument: the client is
@@ -182,36 +204,6 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 			}
 		}
 	}
-	// Per-tenant aggregate submission rate limit. The same
-	// `SendLimiter` backs SMTP, REST and JMAP, so a sender cannot
-	// triple the budget by switching protocols. The charge is one
-	// unit per recipient, matching the SMTP and REST paths. With
-	// no tenant limits configured the helper short-circuits and the
-	// submission is accepted. The JMAP error type `rateLimit` is
-	// RFC 8620 §5.3's resource-cap reply, the closest available to
-	// "your tenant is at its per-minute cap".
-	let now = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0);
-	let view = state
-		.accounts()
-		.into_iter()
-		.find(|a| a.name == account)
-		.ok_or_else(|| Refusal {
-			kind: "accountNotFound",
-			description: None,
-		})?;
-	if let Err(message) = state.tenant_limits().check_aggregate_rate_n(
-		&view.addresses,
-		recipients.len() as u32,
-		now,
-	) {
-		return Err(Refusal {
-			kind: "rateLimit",
-			description: Some(message),
-		});
-	}
 	// A full local mailbox is refused now, not bounced days later
 	// (RFC 8620 §5.3 `overQuota`).
 	if crate::api::quota::full_recipient(state, &recipients, stamped.len() as u64).is_some() {
@@ -246,16 +238,24 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
-	let id = state
-		.submit(account, message, &std::collections::BTreeMap::new())
-		.map_err(|error| match error {
-			// RFC 8621 section 7.5.2: the server refuses to send this message.
-			crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {
-				kind: "forbiddenToSend",
-				description: Some(format!("message rejected: virus detected ({signature})")),
-			},
-			crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
-		})?;
+	let recipient_count = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+	let charge = budget
+		.charge(recipient_count, now)
+		.map_err(|_| rate_limited())?;
+	let id = match state.submit(account, message, &std::collections::BTreeMap::new()) {
+		Ok(id) => id,
+		Err(error) => {
+			charge.refund();
+			return Err(match error {
+				// RFC 8621 section 7.5.2: the server refuses to send this message.
+				crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {
+					kind: "forbiddenToSend",
+					description: Some(format!("message rejected: virus detected ({signature})")),
+				},
+				crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
+			});
+		}
+	};
 	// Save the Sent copy unless the JMAP submission already places
 	// the email in Sent, or the caller opted out with `saveSent:
 	// false`, or the account-wide setting is off.
@@ -263,6 +263,26 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		state.save_sent_copy(account, &sent_copy, request_save_sent);
 	}
 	Ok(id.to_string())
+}
+
+/// Whether `a` and `b` name the same mailbox: the domain compared without
+/// case, the local part exactly (RFC 5321 section 2.4 leaves its case to
+/// the receiving host, so folding it could drop a distinct recipient).
+fn same_address(a: &str, b: &str) -> bool {
+	match (a.rsplit_once('@'), b.rsplit_once('@')) {
+		(Some((local_a, domain_a)), Some((local_b, domain_b))) => {
+			local_a == local_b && domain_a.eq_ignore_ascii_case(domain_b)
+		}
+		_ => a == b,
+	}
+}
+
+/// The `rateLimit` SetError for a submission over one of its rate limits.
+fn rate_limited() -> Refusal {
+	Refusal {
+		kind: "rateLimit",
+		description: Some(crate::smtp::submission_budget::RATE_LIMITED.to_string()),
+	}
 }
 
 /// A `SetError` (RFC 8620 section 5.3): its type, and a description when
