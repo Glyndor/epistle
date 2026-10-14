@@ -139,3 +139,52 @@ fn a_set_of_proofs_is_as_strong_as_its_weakest_record() {
 	assert_eq!(summarize([Proof::Bogus, Proof::Secure]), Proof::Bogus);
 	assert_eq!(summarize([]), Proof::Insecure);
 }
+
+/// Open `host`, except that the hosts in `hung` never answer.
+fn opener(
+	hung: &'static [&'static str],
+) -> impl FnMut(&str) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<String>>>> {
+	move |host: &str| {
+		let host = host.to_string();
+		Box::pin(async move {
+			if hung.contains(&host.as_str()) {
+				std::future::pending::<()>().await;
+			}
+			Ok(format!("stream to {host}"))
+		})
+	}
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connect_that_times_out_moves_on_to_the_next_exchanger() {
+	let hosts = vec!["mx1.example.net".to_string(), "mx2.example.net".to_string()];
+	let started = tokio::time::Instant::now();
+	let reached = first_reachable("example.net", &hosts, opener(&["mx1.example.net"])).await;
+	assert_eq!(
+		reached,
+		Ok((
+			"mx2.example.net".to_string(),
+			"stream to mx2.example.net".to_string()
+		))
+	);
+	assert_eq!(started.elapsed(), timeouts::CONNECT);
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_exchanger_timing_out_is_a_transient_failure() {
+	let hosts = vec!["mx1.example.net".to_string(), "mx2.example.net".to_string()];
+	let started = tokio::time::Instant::now();
+	let reached = first_reachable(
+		"example.net",
+		&hosts,
+		opener(&["mx1.example.net", "mx2.example.net"]),
+	)
+	.await;
+	assert_eq!(
+		reached,
+		Err(DeliveryError::Transient(
+			"connect to mx2.example.net:25 timed out after 30s".into()
+		))
+	);
+	assert_eq!(started.elapsed(), timeouts::CONNECT * 2);
+}

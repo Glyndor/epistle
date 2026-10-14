@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::client::danger::{
 	HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
@@ -19,7 +19,16 @@ use crate::dane::policy::DaneOutcome;
 use crate::dane::rrset::TlsaRrset;
 use crate::dane::verify::verify_chain;
 
-use super::tls_outcome::{STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, classify_handshake};
+use super::timeouts::Phase;
+use super::tls_outcome::{
+	STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, VALIDATION_FAILURE, classify_handshake,
+};
+
+#[path = "client_conn.rs"]
+mod conn;
+#[cfg(test)]
+use conn::complete_reply;
+use conn::{Conn, Stream};
 
 /// Whether the attempt may be retried later.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,9 +154,10 @@ where
 	let tls_mandatory = require_tls || *tlsa != TlsaRrset::Absent;
 	let tlsa = tlsa.records();
 	let mut conn = Conn::new(Box::new(stream));
-	conn.expect(220).await?;
+	conn.expect(220, Phase::Greeting).await?;
 
-	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
+	conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
+		.await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
 	if !offers_starttls {
 		*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
@@ -161,7 +171,7 @@ where
 
 	let mut tls_active = false;
 	if offers_starttls {
-		if let Err(error) = conn.command("STARTTLS", 220).await {
+		if let Err(error) = conn.command("STARTTLS", 220, Phase::Command).await {
 			*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
 			return Err(error);
 		}
@@ -189,7 +199,8 @@ where
 		}
 		*tls = Some(TlsOutcome::Success);
 		conn = Conn::new(Box::new(stream));
-		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
+		conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
+			.await?;
 		tls_active = true;
 	}
 
@@ -203,17 +214,19 @@ where
 		use base64::Engine;
 		let token =
 			base64::engine::general_purpose::STANDARD.encode(format!("\0{username}\0{password}"));
-		conn.command(&format!("AUTH PLAIN {token}"), 235).await?;
+		conn.command(&format!("AUTH PLAIN {token}"), 235, Phase::Command)
+			.await?;
 	}
 
-	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250)
+	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250, Phase::Command)
 		.await?;
 	let mut results = Vec::with_capacity(recipients.len());
 	for recipient in recipients {
-		conn.send(&format!("RCPT TO:<{recipient}>")).await?;
+		conn.send(&format!("RCPT TO:<{recipient}>"), Phase::Rcpt)
+			.await?;
 		// A reply refuses this recipient only; a broken connection (no
 		// reply at all) is the `?` and leaves every recipient unanswered.
-		let (code, text) = conn.reply().await?;
+		let (code, text) = conn.reply(Phase::Rcpt).await?;
 		let outcome = match code / 100 {
 			2 => Ok(()),
 			_ => Err(DeliveryError::from_reply(code, &text)),
@@ -222,9 +235,9 @@ where
 	}
 	if results.iter().any(|(_, outcome)| outcome.is_ok()) {
 		let sent = async {
-			conn.command("DATA", 354).await?;
+			conn.command("DATA", 354, Phase::DataInit).await?;
 			conn.send_data(data).await?;
-			conn.expect(250).await
+			conn.expect(250, Phase::DataEnd).await
 		}
 		.await;
 		if let Err(error) = sent {
@@ -233,7 +246,11 @@ where
 			}
 		}
 	}
-	let _ = conn.command("QUIT", 221).await;
+	// After a timeout or a failed read or write, the session is in no state
+	// for QUIT: just close it.
+	if !conn.is_broken() {
+		let _ = conn.command("QUIT", 221, Phase::Quit).await;
+	}
 	Ok(results)
 }
 
@@ -293,15 +310,17 @@ async fn tls_connect(
 			"validation-failure",
 		)
 	})?;
-	let tls = TlsConnector::from(Arc::new(config))
-		.connect(name, stream)
-		.await
-		.map_err(|error| {
-			(
+	let handshake = TlsConnector::from(Arc::new(config)).connect(name, stream);
+	let tls = match tokio::time::timeout(Phase::TlsHandshake.limit(), handshake).await {
+		Ok(Ok(tls)) => tls,
+		Ok(Err(error)) => {
+			return Err((
 				DeliveryError::Transient(format!("TLS handshake failed: {error}")),
 				classify_handshake(&error),
-			)
-		})?;
+			));
+		}
+		Err(_) => return Err((Phase::TlsHandshake.timed_out(), VALIDATION_FAILURE)),
+	};
 	let peer_chain = tls
 		.get_ref()
 		.1
@@ -391,128 +410,6 @@ impl ServerCertVerifier for AcceptAnyServerCert {
 	}
 }
 
-trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
-
-/// Buffered SMTP conversation state.
-struct Conn {
-	stream: Box<dyn Stream>,
-	buffer: Vec<u8>,
-	last_reply: String,
-}
-
-impl Conn {
-	fn new(stream: Box<dyn Stream>) -> Self {
-		Conn {
-			stream,
-			buffer: Vec::new(),
-			last_reply: String::new(),
-		}
-	}
-
-	fn into_inner(self) -> Box<dyn Stream> {
-		self.stream
-	}
-
-	fn last_reply_contains(&self, needle: &str) -> bool {
-		self.last_reply.contains(needle)
-	}
-
-	async fn command(&mut self, line: &str, expected: u16) -> Result<(), DeliveryError> {
-		self.send(line).await?;
-		self.expect(expected).await
-	}
-
-	/// Write one command line.
-	async fn send(&mut self, line: &str) -> Result<(), DeliveryError> {
-		self.stream
-			.write_all(format!("{line}\r\n").as_bytes())
-			.await
-			.map_err(io_transient)?;
-		self.stream.flush().await.map_err(io_transient)
-	}
-
-	/// Send message data with dot-stuffing and the final terminator.
-	async fn send_data(&mut self, data: &[u8]) -> Result<(), DeliveryError> {
-		let mut wire = Vec::with_capacity(data.len() + 16);
-		for line in data.split_inclusive(|&b| b == b'\n') {
-			if line.first() == Some(&b'.') {
-				wire.push(b'.');
-			}
-			wire.extend_from_slice(line);
-		}
-		if !wire.ends_with(b"\r\n") {
-			wire.extend_from_slice(b"\r\n");
-		}
-		wire.extend_from_slice(b".\r\n");
-		self.stream.write_all(&wire).await.map_err(io_transient)?;
-		self.stream.flush().await.map_err(io_transient)
-	}
-
-	/// Read one (possibly multiline) reply and require `expected`.
-	async fn expect(&mut self, expected: u16) -> Result<(), DeliveryError> {
-		let (code, text) = self.reply().await?;
-		if code != expected {
-			return Err(DeliveryError::from_reply(code, &text));
-		}
-		Ok(())
-	}
-
-	/// Read one (possibly multiline) reply: its code and its full text. `Err`
-	/// only when no well-formed reply arrived.
-	async fn reply(&mut self) -> Result<(u16, String), DeliveryError> {
-		let reply = self.read_reply().await?;
-		let code: u16 = reply
-			.get(..3)
-			.and_then(|head| head.parse().ok())
-			.ok_or_else(|| DeliveryError::Transient(format!("malformed reply: {reply}")))?;
-		self.last_reply = reply.clone();
-		Ok((code, reply))
-	}
-
-	async fn read_reply(&mut self) -> Result<String, DeliveryError> {
-		loop {
-			if let Some(reply) = complete_reply(&self.buffer) {
-				let text = String::from_utf8_lossy(&self.buffer[..reply]).to_string();
-				self.buffer.drain(..reply);
-				return Ok(text);
-			}
-			if self.buffer.len() > 64 * 1024 {
-				return Err(DeliveryError::Transient("oversized reply".into()));
-			}
-			let mut chunk = [0u8; 4096];
-			let read = self.stream.read(&mut chunk).await.map_err(io_transient)?;
-			if read == 0 {
-				return Err(DeliveryError::Transient(
-					"connection closed mid-reply".into(),
-				));
-			}
-			self.buffer.extend_from_slice(&chunk[..read]);
-		}
-	}
-}
-
-fn io_transient(error: std::io::Error) -> DeliveryError {
-	DeliveryError::Transient(error.to_string())
-}
-
-/// Length of a complete reply in `buffer` (through the final CRLF of its
-/// last line), or `None` if more bytes are needed.
-fn complete_reply(buffer: &[u8]) -> Option<usize> {
-	let mut offset = 0;
-	loop {
-		let rest = &buffer[offset..];
-		let line_end = rest.windows(2).position(|w| w == b"\r\n")? + 2;
-		let line = &rest[..line_end];
-		// A line like `250-...` continues; `250 ...` (or bare code) ends.
-		let continues = line.len() >= 4 && line[3] == b'-';
-		offset += line_end;
-		if !continues {
-			return Some(offset);
-		}
-	}
-}
-
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
@@ -520,6 +417,10 @@ mod tests;
 #[cfg(test)]
 #[path = "client_tls_tests.rs"]
 mod tls_tests;
+
+#[cfg(test)]
+#[path = "client_timeout_tests.rs"]
+mod timeout_tests;
 
 #[path = "client_probe.rs"]
 mod probe;

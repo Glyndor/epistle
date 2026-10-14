@@ -6,6 +6,7 @@ use tokio::net::TcpStream;
 use crate::mtasts::Policy;
 
 use super::client::DeliveryError;
+use super::timeouts;
 
 /// A bidirectional stream the SMTP client can drive.
 pub type BoxedStream = Box<dyn DynStream>;
@@ -127,6 +128,26 @@ pub trait Connector: Send + Sync {
 	/// Connect to an exchanger for `domain`. With an enforce-mode policy,
 	/// only policy-permitted MX hosts may be contacted.
 	fn connect(&self, domain: &str, policy: Option<&Policy>) -> ConnectFuture<'_>;
+
+	/// Connect to the next exchanger for `domain`, leaving out the hosts in
+	/// `tried`, which already failed this delivery attempt. A connector
+	/// that only knows one way in has nothing after the first.
+	fn connect_skipping(
+		&self,
+		domain: &str,
+		policy: Option<&Policy>,
+		tried: &[String],
+	) -> ConnectFuture<'_> {
+		if tried.is_empty() {
+			return self.connect(domain, policy);
+		}
+		let domain = domain.to_string();
+		Box::pin(async move {
+			Err(DeliveryError::Transient(format!(
+				"no further exchanger for {domain}"
+			)))
+		})
+	}
 }
 
 /// Real connector: system resolver for MX records, TCP to port 25.
@@ -294,30 +315,49 @@ impl Connector for MxConnector {
 					)));
 				}
 			}
-			let mut last_error = DeliveryError::Transient(format!("no exchangers for {domain}"));
-			for host in hosts {
-				match TcpStream::connect((host.as_str(), 25)).await {
-					Ok(stream) => {
-						let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
-						let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
-						return Ok(Connection {
-							stream: Box::new(stream),
-							host,
-							local_ip,
-							peer_ip,
-							mx,
-						});
-					}
-					Err(error) => {
-						last_error = DeliveryError::Transient(format!(
-							"connect to {host}:25 failed: {error}"
-						));
-					}
-				}
-			}
-			Err(last_error)
+			let (host, stream) = first_reachable(&domain, &hosts, |host| {
+				TcpStream::connect((host.to_string(), 25))
+			})
+			.await?;
+			let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
+			let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
+			Ok(Connection {
+				stream: Box::new(stream),
+				host,
+				local_ip,
+				peer_ip,
+				mx,
+			})
 		})
 	}
+}
+
+/// Open a connection to the first of `hosts` that answers, in order, giving
+/// each [`timeouts::CONNECT`] before moving on to the next (RFC 5321
+/// section 5.1). The error is the last host's.
+pub(crate) async fn first_reachable<S, F, Fut>(
+	domain: &str,
+	hosts: &[String],
+	mut open: F,
+) -> Result<(String, S), DeliveryError>
+where
+	F: FnMut(&str) -> Fut,
+	Fut: Future<Output = std::io::Result<S>>,
+{
+	let mut last_error = DeliveryError::Transient(format!("no exchangers for {domain}"));
+	for host in hosts {
+		last_error = match tokio::time::timeout(timeouts::CONNECT, open(host)).await {
+			Ok(Ok(stream)) => return Ok((host.clone(), stream)),
+			Ok(Err(error)) => {
+				DeliveryError::Transient(format!("connect to {host}:25 failed: {error}"))
+			}
+			Err(_) => DeliveryError::Transient(format!(
+				"connect to {host}:25 timed out after {}s",
+				timeouts::CONNECT.as_secs()
+			)),
+		};
+	}
+	Err(last_error)
 }
 
 #[cfg(test)]

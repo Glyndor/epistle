@@ -7,6 +7,7 @@ use tokio::net::TcpStream;
 
 use super::client::DeliveryError;
 use super::resolver::BoxedStream;
+use super::timeouts::{Phase, within};
 
 /// Connect to a smarthost `host:port`, directly or via a SOCKS5 proxy
 /// (`proxy_host:proxy_port`). Connection failures are transient (retry later).
@@ -17,29 +18,70 @@ pub async fn relay_connect(
 ) -> Result<BoxedStream, DeliveryError> {
 	let stream = match socks_proxy {
 		Some(proxy) => socks5_connect(proxy, host, port).await?,
-		None => TcpStream::connect((host, port))
-			.await
-			.map_err(|error| DeliveryError::Transient(format!("relay connect: {error}")))?,
+		None => {
+			within(Phase::Connect, async {
+				TcpStream::connect((host, port))
+					.await
+					.map_err(|error| DeliveryError::Transient(format!("relay connect: {error}")))
+			})
+			.await?
+		}
 	};
 	Ok(Box::new(stream))
 }
 
 /// Open a TCP connection to `target_host:target_port` through a SOCKS5 proxy
 /// (RFC 1928, no-authentication method). The proxy resolves the target name.
+/// Reaching the proxy and the proxy reaching the target each get
+/// [`Phase::Connect`].
 async fn socks5_connect(
 	proxy: &str,
 	target_host: &str,
 	target_port: u16,
 ) -> Result<TcpStream, DeliveryError> {
-	let host = target_host.as_bytes();
-	if host.len() > 255 {
+	if target_host.len() > 255 {
 		return Err(DeliveryError::Permanent(
 			"socks: target host too long".into(),
 		));
 	}
-	let mut stream = TcpStream::connect(proxy)
-		.await
-		.map_err(|error| transient(format!("socks connect: {error}")))?;
+	let mut stream = within(Phase::Connect, async {
+		TcpStream::connect(proxy)
+			.await
+			.map_err(|error| transient(format!("socks connect: {error}")))
+	})
+	.await?;
+	socks5_negotiate(&mut stream, target_host, target_port).await?;
+	Ok(stream)
+}
+
+/// [`socks5_handshake`], bounded by [`Phase::Connect`]: the proxy has that
+/// long to reach the target and say so.
+async fn socks5_negotiate<S>(
+	stream: &mut S,
+	target_host: &str,
+	target_port: u16,
+) -> Result<(), DeliveryError>
+where
+	S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+	within(
+		Phase::Connect,
+		socks5_handshake(stream, target_host, target_port),
+	)
+	.await
+}
+
+/// The SOCKS5 greeting and CONNECT request over an open proxy connection,
+/// leaving `stream` positioned at the tunnelled payload.
+async fn socks5_handshake<S>(
+	stream: &mut S,
+	target_host: &str,
+	target_port: u16,
+) -> Result<(), DeliveryError>
+where
+	S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+	let host = target_host.as_bytes();
 
 	// Greeting: version 5, one method, "no authentication required" (0x00).
 	stream
@@ -104,7 +146,7 @@ async fn socks5_connect(
 		.read_exact(&mut rest)
 		.await
 		.map_err(|error| transient(format!("socks bind addr: {error}")))?;
-	Ok(stream)
+	Ok(())
 }
 
 fn transient(reason: String) -> DeliveryError {

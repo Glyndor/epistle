@@ -9,6 +9,7 @@ pub mod srs;
 pub mod suppression;
 #[cfg(test)]
 pub(crate) mod test_remote;
+pub mod timeouts;
 pub mod tls_outcome;
 pub(crate) mod tls_required;
 mod transport;

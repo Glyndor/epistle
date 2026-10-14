@@ -7,6 +7,7 @@
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{Conn, DeliveryError, tls_connect};
+use crate::queue::timeouts::Phase;
 
 /// Handshake `stream` as a relay client and report each completed step in
 /// `steps`. STARTTLS, when requested, is authenticated against the web PKI the
@@ -47,9 +48,10 @@ where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
 	let mut conn = Conn::new(Box::new(stream));
-	conn.expect(220).await?;
+	conn.expect(220, Phase::Greeting).await?;
 	steps.push("connect");
-	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
+	conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
+		.await?;
 	steps.push("EHLO");
 	if starttls {
 		if !conn.last_reply_contains("STARTTLS") {
@@ -57,12 +59,13 @@ where
 				"smarthost does not offer STARTTLS".into(),
 			));
 		}
-		conn.command("STARTTLS", 220).await?;
+		conn.command("STARTTLS", 220, Phase::Command).await?;
 		let (tls, _chain) = tls_connect(conn.into_inner(), server_name, authenticate_pkix)
 			.await
 			.map_err(|(error, _)| error)?;
 		conn = Conn::new(Box::new(tls));
-		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
+		conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
+			.await?;
 		steps.push("STARTTLS");
 	}
 	if let Some((username, password)) = auth {
@@ -74,12 +77,13 @@ where
 		use base64::Engine;
 		let token =
 			base64::engine::general_purpose::STANDARD.encode(format!("\0{username}\0{password}"));
-		conn.command(&format!("AUTH PLAIN {token}"), 235).await?;
+		conn.command(&format!("AUTH PLAIN {token}"), 235, Phase::Command)
+			.await?;
 		steps.push("AUTH");
 	}
 	// The server may drop the connection right after QUIT; the probe already
 	// has everything it needs.
-	let _ = conn.command("QUIT", 221).await;
+	let _ = conn.command("QUIT", 221, Phase::Quit).await;
 	steps.push("QUIT");
 	Ok(())
 }
