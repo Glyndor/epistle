@@ -85,12 +85,19 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 			.map(str::to_string)
 			.collect(),
 		// RFC 8621 section 7.5: without an envelope, every address in To,
-		// Cc and Bcc.
-		None => ["to", "cc", "bcc"]
-			.into_iter()
-			.filter_map(|name| objects::header_value(&headers, name))
-			.flat_map(|value| objects::header_emails(&value))
-			.collect(),
+		// Cc and Bcc. Resent-To, Resent-Cc and Resent-Bcc are also
+		// counted: a forwarded message is delivered to every address it
+		// names, and the cap is meant to bound what one submission can
+		// fan out to. Resent-* headers come last so a primary
+		// recipient that is also a Resent recipient is not double
+		// counted.
+		None => [
+			"to", "cc", "bcc", "resent-to", "resent-cc", "resent-bcc",
+		]
+		.into_iter()
+		.filter_map(|name| objects::header_value(&headers, name))
+		.flat_map(|value| objects::header_emails(&value))
+		.collect(),
 	};
 	if recipients.is_empty() {
 		return Err("noRecipients".into());

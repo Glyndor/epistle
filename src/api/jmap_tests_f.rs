@@ -143,6 +143,23 @@ fn seed_email(dir: &std::path::Path, recipients: &[String]) -> uuid::Uuid {
 	id
 }
 
+/// Seed a message that exercises every header the rate-limit
+/// counter sums: To, Cc, Bcc, Resent-To, Resent-Cc, Resent-Bcc,
+/// plus an envelope-only recipient that is in no header. The cap is
+/// one unit per recipient.
+fn seed_email_with_all_kinds(dir: &std::path::Path, headers: &[(&str, &str)]) -> uuid::Uuid {
+	let path = dir.join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&path).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	let mut body = String::from("From: alice@example.org\r\n");
+	for (header, value) in headers {
+		body.push_str(&format!("{header}: {value}\r\n"));
+	}
+	body.push_str("Subject: hello\r\n\r\nbody\r\n");
+	std::fs::write(path.join(format!("{id}.eml")), body.as_bytes()).expect("write");
+	id
+}
+
 fn submission_request(email_id: &uuid::Uuid, rcpt_to: &[String]) -> serde_json::Value {
 	let rcpts: Vec<serde_json::Value> = rcpt_to
 		.iter()
@@ -340,5 +357,60 @@ async fn jmap_email_submission_tenant_cap_charges_per_recipient() {
 	assert_eq!(
 		body["methodResponses"][0][1]["notCreated"]["s1"]["type"], "rateLimit",
 		"second submission must be deferred when the per-tenant budget is exhausted by recipient count: {body}"
+	);
+}
+
+/// The recipient count covers every kind of recipient the protocol
+/// can carry: To, Cc, Bcc, Resent-To, Resent-Cc, Resent-Bcc, and an
+/// envelope-only recipient that is in no header. With the tenant cap
+/// at 6, the first message is admitted (6 units = 6 recipients); the
+/// second message is over the cap.
+#[tokio::test]
+async fn jmap_email_submission_charges_every_kind_of_recipient() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(tenant_state(dir.path(), 6));
+	let headers = [
+		("To", "to@elsewhere.example"),
+		("Cc", "cc@elsewhere.example"),
+		("Bcc", "bcc@elsewhere.example"),
+		("Resent-To", "resent-to@elsewhere.example"),
+		("Resent-Cc", "resent-cc@elsewhere.example"),
+		("Resent-Bcc", "resent-bcc@elsewhere.example"),
+	];
+	let email_id = seed_email_with_all_kinds(dir.path(), &headers);
+	let rcpts: Vec<String> = headers
+		.iter()
+		.map(|(_, email)| email.to_string())
+		.collect();
+	let req = submission_request(&email_id, &rcpts);
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(super::tests::TOKEN.as_str()),
+		Some(req),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert!(
+		body["methodResponses"][0]["notCreated"]["s1"].is_null(),
+		"six-recipient message must be accepted at the cap of 6: {body}"
+	);
+	// A second one-recipient message is over the cap.
+	let rcpts_one = vec!["r7@elsewhere.example".to_string()];
+	let email_id = seed_email(dir.path(), &rcpts_one);
+	let req = submission_request(&email_id, &rcpts_one);
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(super::tests::TOKEN.as_str()),
+		Some(req),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		body["methodResponses"][0][1]["notCreated"]["s1"]["type"], "rateLimit",
+		"second message must be over the cap when every recipient kind is counted: {body}"
 	);
 }
