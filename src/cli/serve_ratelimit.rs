@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
+use crate::smtp::server::Server;
 
 /// The three rate limiters `serve` needs to attach to each SMTP listener.
 /// Created whenever the matching `[server] submission_rate_limit_per_min`
@@ -49,4 +50,29 @@ pub(super) fn build_rate_limiters(config: &Config) -> RateLimiters {
 		inbound_ip_limit,
 		inbound_sender_limit,
 	}
+}
+
+/// Apply the per-account and per-domain submission limits to `server`.
+/// This is the production single wiring point: both `serve::serve`'s
+/// listener loop and the regression test in `serve_tests_ratelimit.rs`
+/// go through this helper so the per-account cap and the global default
+/// never drift apart again.
+///
+/// The helper attaches the limiter (built once and shared across the
+/// listeners), the server-wide default, and the directory-level domain
+/// limits. The directory itself is constructed by
+/// `directory_store::AccountStore::open` and rebuilt every time the
+/// static config changes; that helper is what surfaces the per-domain
+/// entries to the `Directory` consulted at MAIL FROM time.
+pub(super) fn wire_smtp_submission_limits(
+	server: Server,
+	config: &Config,
+	send_limiter: &Option<Arc<SendLimiter>>,
+) -> Server {
+	let mut server = server;
+	if let Some(limiter) = send_limiter {
+		server = server.with_send_limiter(Arc::clone(limiter));
+	}
+	server = server.with_global_submission_rate_limit(config.submission_rate_limit_per_min);
+	server
 }

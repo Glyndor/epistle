@@ -74,6 +74,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?
 	.with_domain_quotas(config.domain_quotas.clone())
+	.with_domain_submission_limits(config.domain_submission_limits.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max);
 	// Two owners of one address are never merged: the first keeps it and
@@ -537,9 +538,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					config.antispam.bayes_junk_at,
 					config.antispam.bayes_reject_at,
 				);
-				if let Some(limiter) = &send_limiter {
-					server = server.with_send_limiter(Arc::clone(limiter));
-				}
 				if let Some(limit) = &inbound_ip_limit {
 					server = server.with_inbound_ip_limit(crate::smtp::ratelimit::InboundLimit {
 						limiter: Arc::clone(&limit.limiter),
@@ -553,6 +551,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 							per_min: limit.per_min,
 						});
 				}
+				// The per-account submission limiter and the server-wide
+				// default are wired through `wire_smtp_submission_limits`,
+				// which is the same helper the regression test in
+				// `serve_tests_ratelimit` uses; the production wiring has
+				// exactly one source of truth.
+				server = super::serve_ratelimit::wire_smtp_submission_limits(
+					server,
+					&config,
+					&send_limiter,
+				);
 				if !tenant_limits.is_empty() {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
@@ -616,3 +624,7 @@ mod tests;
 #[cfg(test)]
 #[path = "serve_tests_mta_sts.rs"]
 mod tests_mta_sts;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit.rs"]
+mod tests_ratelimit;
