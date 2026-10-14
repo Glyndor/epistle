@@ -182,6 +182,34 @@ fn release_destination_by_exchanger_frees_every_domain_waiting_for_it() {
 }
 
 #[test]
+fn releasing_an_exchanger_frees_the_mail_of_other_domains_waiting_for_it() {
+	// bob's domain never asked to slow down: his message only waits
+	// because its exchanger is on hold for another domain.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	throttled(
+		&spool,
+		"alice@one.example",
+		(NOW + 300, 1),
+		"421 slow down",
+		"mx.provider.example",
+	);
+	throttled(
+		&spool,
+		"bob@two.example",
+		(NOW + 300, 0),
+		"mx.provider.example is on hold: 421 slow down",
+		"mx.provider.example",
+	);
+
+	let (code, _) = run_args(dir.path(), &["release-destination", "mx.provider.example"]);
+
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert_eq!(state_of(&spool, "alice@one.example").next_attempt, NOW);
+	assert_eq!(state_of(&spool, "bob@two.example").next_attempt, NOW);
+}
+
+#[test]
 fn release_destination_needs_a_domain_or_all() {
 	for args in [
 		vec!["epistle", "queue", "release-destination"],

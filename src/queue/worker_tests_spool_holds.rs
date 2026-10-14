@@ -88,4 +88,9 @@ async fn an_exchanger_on_hold_is_not_even_connected_to_for_another_domain() {
 		(0, now + 60),
 		"bob waits for the hold, no attempt counted"
 	);
+	assert_eq!(
+		bob.remote.as_deref(),
+		Some(PROVIDER),
+		"the exchanger bob waits for, so releasing it frees him"
+	);
 }

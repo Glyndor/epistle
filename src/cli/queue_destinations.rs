@@ -16,7 +16,7 @@ use clap::Args;
 
 use crate::cli::term::sanitize;
 use crate::queue::backoff::{Hold, Holds};
-use crate::queue::destination::Destination;
+use crate::queue::destination::{Destination, Kind};
 use crate::storage::{FsSpool, RecipientStatus};
 
 /// One destination by name, or every held destination with `--all`.
@@ -104,16 +104,33 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 	))
 }
 
+/// The exchangers on hold at `now`, and the time it is.
+type HeldExchangers = (Vec<Destination>, u64);
+
 /// The destination whose hold `recipient` of `envelope` waits for, when it
-/// is `wanted` (or any, without `wanted`).
+/// is `wanted` (or any, without `wanted`): the one that asked it to slow
+/// down, or, for a recipient whose own domain never did, the exchanger on
+/// hold it was passed over at.
 fn released_by(
 	envelope: &crate::storage::Envelope,
 	recipient: &str,
 	wanted: Option<&(Destination, Destination)>,
+	(exchangers, now): &HeldExchangers,
 ) -> Option<Destination> {
 	let state = envelope.recipient_state(recipient);
-	if state.status != RecipientStatus::Pending || state.throttled == 0 {
+	if state.status != RecipientStatus::Pending {
 		return None;
+	}
+	if state.throttled == 0 {
+		let host = state
+			.remote
+			.as_deref()
+			.map(Destination::exchanger)
+			.filter(|host| state.next_attempt > *now && exchangers.contains(host))?;
+		return match wanted {
+			Some((_, wanted)) if *wanted != host => None,
+			_ => Some(host),
+		};
 	}
 	let domain = Destination::of_recipient(recipient);
 	let host = state.remote.as_deref().map(Destination::exchanger);
@@ -144,21 +161,30 @@ pub(super) fn release(
 		Ok(ids) => ids,
 		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
 	};
+	let exchangers = match in_force(spool, now) {
+		Ok(held) => held
+			.into_iter()
+			.map(|(destination, _)| destination)
+			.filter(|destination| destination.kind() == Kind::Exchanger)
+			.collect(),
+		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
+	};
+	let held = (exchangers, now);
 	let mut released: BTreeSet<Destination> = BTreeSet::new();
 	for id in ids {
 		// Only entries with a recipient waiting for the hold are written.
 		let waits = spool.load_envelope(id).is_ok_and(|envelope| {
-			envelope
-				.recipients
-				.iter()
-				.any(|recipient| released_by(&envelope, recipient, wanted.as_ref()).is_some())
+			envelope.recipients.iter().any(|recipient| {
+				released_by(&envelope, recipient, wanted.as_ref(), &held).is_some()
+			})
 		});
 		if !waits {
 			continue;
 		}
 		let edited = spool.update_envelope(id, |envelope| {
 			for recipient in envelope.recipients.clone() {
-				let Some(matched) = released_by(envelope, &recipient, wanted.as_ref()) else {
+				let Some(matched) = released_by(envelope, &recipient, wanted.as_ref(), &held)
+				else {
 					continue;
 				};
 				released.insert(matched);

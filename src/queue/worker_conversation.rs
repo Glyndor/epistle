@@ -305,8 +305,13 @@ impl Worker {
 			});
 			if let Some(hold) = hold {
 				let reason = format!("{} is on hold: {}", connection.host, hold.reason);
-				let mut waiting =
-					Conversation::all(route.recipients, None, DeliveryError::Transient(reason));
+				// The host is kept with the recipients, so that releasing its
+				// hold by command frees them too.
+				let mut waiting = Conversation::all(
+					route.recipients,
+					Some(connection.host.clone()),
+					DeliveryError::Transient(reason),
+				);
 				let until = held
 					.and_then(|earlier| earlier.held_until)
 					.map_or(hold.until, |earlier| earlier.min(hold.until));
