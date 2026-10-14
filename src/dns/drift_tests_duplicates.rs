@@ -231,7 +231,7 @@ async fn two_dkim_selectors_at_different_names_are_ok() {
 	assert_eq!(status(&checks, "DKIM rsa"), Status::Ok);
 }
 
-/// A single SPF record plus one unrelated TXT (no recognised tag , 
+/// A single SPF record plus one unrelated TXT (no recognised tag ,
 /// the ACME DNS-01 challenge, a domain-verification token) at the
 /// apex is fine. The unrelated record does not count toward the SPF
 /// total because `txt_purpose` returns `None` for it.
