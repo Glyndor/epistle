@@ -18,6 +18,7 @@ mod routing_forward;
 pub(crate) mod save_sent;
 mod spool;
 mod spool_recipients;
+pub(crate) mod vacation_markers;
 pub mod vacation_store;
 
 // KEY_LEN, MAGIC and OVERHEAD are re-exported because the public docs of the

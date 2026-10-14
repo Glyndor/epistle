@@ -25,75 +25,108 @@ pub struct Vacation<'a> {
 	pub html_body: Option<&'a str>,
 }
 
-/// Build the vacation reply to `original_sender`.
+/// What the reply threads under: the original message's `Subject`,
+/// `Message-ID` and `References`, all attacker-written.
+#[derive(Default)]
+pub struct Original<'a> {
+	/// The original `Subject`, used for `Auto: <subject>`.
+	pub subject: Option<&'a str>,
+	/// The original `Message-ID`, which becomes `In-Reply-To`.
+	pub message_id: Option<&'a str>,
+	/// The original `References`, extended into the reply's own.
+	pub references: Option<&'a str>,
+}
+
+/// Most message ids carried over from the original `References`.
+const MAX_REFERENCES: usize = 20;
+
+/// Build the vacation reply to `original_sender`, or `None` when an address
+/// cannot be written as a header.
 ///
 /// The reply uses the null reverse-path (MAIL FROM `<>`) so an auto-reply can
-/// never trigger another, and carries `Auto-Submitted: auto-replied` plus an
-/// `In-Reply-To` when the original had a Message-ID. When an HTML body is
-/// given, the response is a `multipart/alternative` carrying the text part
-/// first.
+/// never trigger another, carries `Auto-Submitted: auto-replied` (RFC 3834
+/// section 5) and, when the original had a Message-ID, `In-Reply-To` and
+/// `References`. The bodies go through the MIME writer: line endings become
+/// CRLF, long or non-ASCII lines are quoted-printable, and an HTML body sits
+/// next to the text in a `multipart/alternative` whose boundary its content
+/// cannot close.
 pub fn build_response(
 	vacation: &Vacation,
 	original_sender: &str,
-	original_subject: Option<&str>,
-	original_message_id: Option<&str>,
+	original: &Original,
 	now: std::time::SystemTime,
-) -> AcceptedMessage {
+) -> Option<AcceptedMessage> {
+	use crate::compose::{Bodies, Leaf, address_list, structured, unstructured};
 	let from = vacation.from.unwrap_or(vacation.user_address);
 	// Reflected back from the original message (Subject, Message-ID): a raw
 	// CRLF in any of these values would inject forged headers into the reply.
 	let subject = match vacation.subject {
 		Some(subject) => sanitize_header_value(subject),
-		None => match original_subject {
+		None => match original.subject {
 			Some(original) => format!("Auto: {}", sanitize_header_value(original)),
 			None => "Auto: Re: your message".to_string(),
 		},
 	};
-
-	let mut headers = format!(
-		"From: <{from}>\r\n\
-To: <{original_sender}>\r\n\
-Subject: {subject}\r\n\
-Date: {date}\r\n\
-MIME-Version: 1.0\r\n\
-Auto-Submitted: auto-replied (vacation)\r\n",
-		date = clock::rfc5322(now),
-	);
-	if let Some(message_id) = original_message_id {
-		let message_id = sanitize_header_value(message_id);
-		headers.push_str(&format!("In-Reply-To: {message_id}\r\n"));
+	let mut headers = vec![
+		address_list("From", &[format!("<{}>", sanitize_header_value(from))]).ok()?,
+		address_list(
+			"To",
+			&[format!("<{}>", sanitize_header_value(original_sender))],
+		)
+		.ok()?,
+		unstructured("Subject", &subject).ok()?,
+		structured("Date", &clock::rfc5322(now)).ok()?,
+		structured("Auto-Submitted", "auto-replied (vacation)").ok()?,
+	];
+	if let Some(id) = original
+		.message_id
+		.and_then(|value| message_ids(value).next())
+	{
+		let mut references: Vec<&str> = original
+			.references
+			.map(message_ids)
+			.into_iter()
+			.flatten()
+			.collect();
+		references.drain(..references.len().saturating_sub(MAX_REFERENCES));
+		references.push(id);
+		headers.extend(structured("In-Reply-To", id).ok());
+		headers.extend(structured("References", &references.join(" ")).ok());
 	}
-
-	let body = match vacation.html_body {
-		None => format!("{headers}\r\n{}\r\n", vacation.reason),
-		Some(html) => format!(
-			"{headers}\
-Content-Type: multipart/alternative; boundary=\"vac-boundary\"\r\n\
-\r\n\
---vac-boundary\r\n\
-Content-Type: text/plain; charset=utf-8\r\n\
-\r\n\
-{reason}\r\n\
---vac-boundary\r\n\
-Content-Type: text/html; charset=utf-8\r\n\
-\r\n\
-{html}\r\n\
---vac-boundary--\r\n",
-			reason = vacation.reason,
-			html = html,
-		),
-	};
-
-	AcceptedMessage {
+	let html = vacation.html_body.map(|html| Leaf::text("html", html));
+	let text = (!vacation.reason.is_empty() || html.is_none())
+		.then(|| Leaf::text("plain", vacation.reason));
+	let root = Bodies {
+		text,
+		html,
+		..Bodies::default()
+	}
+	.assemble();
+	let data = crate::compose::write(&headers, &root).ok()?;
+	Some(AcceptedMessage {
 		// Null reverse-path: auto-replies must not generate bounces or loops.
 		reverse_path: String::new(),
 		recipients: vec![original_sender.to_string()],
-		data: body.into_bytes(),
+		data,
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
-	}
+	})
+}
+
+/// The `<id>` tokens of a header value, each without spaces, controls or
+/// nested brackets: whatever else the sender put there is dropped.
+fn message_ids(value: &str) -> impl Iterator<Item = &str> {
+	value.match_indices('<').filter_map(move |(start, _)| {
+		let len = value[start..].find('>')? + 1;
+		let id = &value[start..start + len];
+		let inner = &id[1..len - 1];
+		let clean = !inner.is_empty()
+			&& len <= 250
+			&& inner.bytes().all(|b| b.is_ascii_graphic() && b != b'<');
+		clean.then_some(id)
+	})
 }
 
 #[cfg(test)]
@@ -116,10 +149,14 @@ mod tests {
 		let reply = build_response(
 			&vacation(),
 			"bob@example.net",
-			Some("Lunch?"),
-			Some("<abc@example.net>"),
+			&Original {
+				subject: Some("Lunch?"),
+				message_id: Some("<abc@example.net>"),
+				references: None,
+			},
 			UNIX_EPOCH,
-		);
+		)
+		.expect("reply");
 		assert_eq!(reply.reverse_path, "");
 		assert_eq!(reply.recipients, vec!["bob@example.net".to_string()]);
 		let body = String::from_utf8(reply.data).expect("ascii");
@@ -143,7 +180,17 @@ mod tests {
 			user_address: "alice@example.org",
 			html_body: None,
 		};
-		let reply = build_response(&vacation, "bob@example.net", Some("Hi"), None, UNIX_EPOCH);
+		let reply = build_response(
+			&vacation,
+			"bob@example.net",
+			&Original {
+				subject: Some("Hi"),
+				message_id: None,
+				references: None,
+			},
+			UNIX_EPOCH,
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(body.contains("Subject: Out of office"), "{body}");
 		assert!(body.contains("From: <assistant@example.org>"), "{body}");
@@ -153,7 +200,17 @@ mod tests {
 
 	#[test]
 	fn default_subject_without_original() {
-		let reply = build_response(&vacation(), "bob@example.net", None, None, UNIX_EPOCH);
+		let reply = build_response(
+			&vacation(),
+			"bob@example.net",
+			&Original {
+				subject: None,
+				message_id: None,
+				references: None,
+			},
+			UNIX_EPOCH,
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(body.contains("Subject: Auto: Re: your message"), "{body}");
 	}
@@ -167,7 +224,17 @@ mod tests {
 			user_address: "alice@example.org",
 			html_body: Some("<p>Away.</p>"),
 		};
-		let reply = build_response(&vacation, "bob@example.net", None, None, UNIX_EPOCH);
+		let reply = build_response(
+			&vacation,
+			"bob@example.net",
+			&Original {
+				subject: None,
+				message_id: None,
+				references: None,
+			},
+			UNIX_EPOCH,
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(body.contains("multipart/alternative"), "{body}");
 		assert!(body.contains("text/plain"), "{body}");
@@ -181,10 +248,14 @@ mod tests {
 		let reply = build_response(
 			&vacation(),
 			"bob@example.net",
-			Some("foo\r\nBcc: attacker@evil.example"),
-			Some("<abc@example.net>"),
+			&Original {
+				subject: Some("foo\r\nBcc: attacker@evil.example"),
+				message_id: Some("<abc@example.net>"),
+				references: None,
+			},
 			UNIX_EPOCH,
-		);
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		// No injected header at the start of any line.
 		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
@@ -209,10 +280,14 @@ mod tests {
 		let reply = build_response(
 			&vacation(),
 			"bob@example.net",
-			Some("Lunch?"),
-			Some("<abc@example.net>\r\nBcc: attacker@evil.example"),
+			&Original {
+				subject: Some("Lunch?"),
+				message_id: Some("<abc@example.net>\r\nBcc: attacker@evil.example"),
+				references: None,
+			},
 			UNIX_EPOCH,
-		);
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
 		let in_reply_to_line = body
@@ -234,7 +309,17 @@ mod tests {
 			user_address: "alice@example.org",
 			html_body: None,
 		};
-		let reply = build_response(&vacation, "bob@example.net", None, None, UNIX_EPOCH);
+		let reply = build_response(
+			&vacation,
+			"bob@example.net",
+			&Original {
+				subject: None,
+				message_id: None,
+				references: None,
+			},
+			UNIX_EPOCH,
+		)
+		.expect("reply");
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
 		let subject_line = body

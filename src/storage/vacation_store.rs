@@ -97,20 +97,17 @@ pub fn read(data_dir: &Path, account: &str) -> io::Result<VacationSetting> {
 	}
 }
 
-/// Persist `setting` for `account`. The file is written to a sibling
-/// temporary path and renamed into place, so a crash leaves either the old
-/// file or the new one — never a half-written one a concurrent reader
+/// Persist `setting` for `account`, owner-only, through a uniquely named
+/// sibling temporary file renamed into place, so a crash leaves either the
+/// old file or the new one, never a half-written one a concurrent reader
 /// could parse as JSON and trust.
 pub fn write(data_dir: &Path, account: &str, setting: &VacationSetting) -> io::Result<()> {
 	let path = vacation_file(data_dir, account)?;
 	if let Some(parent) = path.parent() {
 		fs::create_dir_all(parent)?;
 	}
-	let tmp = tempfile_in(parent(path.as_path()))?;
 	let bytes = serde_json::to_vec(setting).map_err(io::Error::other)?;
-	fs::write(&tmp, &bytes)?;
-	fs::rename(&tmp, &path)?;
-	Ok(())
+	super::write_secret(&path, &bytes)
 }
 
 /// Wipe the stored setting (revert to the disabled default).
@@ -120,24 +117,6 @@ pub fn clear(data_dir: &Path, account: &str) -> io::Result<()> {
 		Ok(()) => Ok(()),
 		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
 		Err(error) => Err(error),
-	}
-}
-
-fn parent(path: &Path) -> &Path {
-	path.parent().unwrap_or(Path::new("."))
-}
-
-fn tempfile_in(dir: &Path) -> io::Result<PathBuf> {
-	let nanos = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_nanos())
-		.unwrap_or(0);
-	let name = format!(".vacation.json.{nanos:x}.tmp");
-	let path = dir.join(name);
-	match fs::symlink_metadata(&path) {
-		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path),
-		Err(error) => Err(error),
-		Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, "tempfile")),
 	}
 }
 

@@ -1,197 +1,203 @@
-//! Sieve `vacation` autoresponse generation for local delivery (RFC 5230):
-//! suppression rules and per-sender dedup, kept apart from the core delivery
-//! flow. This is a child module of `delivery`, so it sees `LocalDelivery`'s
-//! private fields.
+//! Vacation autoresponses for local delivery: the Sieve `vacation` action
+//! (RFC 5230) and the JMAP `VacationResponse` (RFC 8621 section 8). Both
+//! go through one set of suppression rules (RFC 3834 section 2, RFC 5230
+//! section 4) and one per-sender tracker, so the two can never answer one
+//! message twice. This is a child module of `delivery`, so it sees
+//! `LocalDelivery`'s private fields.
 
-use std::fs;
-
+use crate::sieve::interp::VacationRequest;
+use crate::sieve::vacation::{Original, Vacation, build_response};
 use crate::smtp::session::AcceptedMessage;
+use crate::storage::vacation_markers;
+use crate::storage::vacation_store::{self, VacationSetting};
 
 use super::LocalDelivery;
-use crate::storage::vacation_store::{self, VacationSetting};
-use crate::util::path_component::AccountName;
-use crate::util::path_containment::contained_child;
 
-/// RFC 8621 §8.2.1 recommends a 7-day per-recipient dedup window when the
-/// JMAP `VacationResponse` does not specify one. The existing marker file
-/// uses `days` from Sieve `:days`, so the JMAP setting is paired with the
-/// same default and shares the same on-disk state.
+/// Period of the JMAP `VacationResponse`, which has no `:days` of its own:
+/// RFC 5230's default, shared with the Sieve markers.
 pub(super) const JMAP_VACATION_DAYS: u64 = 7;
 
+/// Local parts of list robots and bounce senders (RFC 5230 section 4.6).
+const ROBOTS: [&str; 3] = ["mailer-daemon", "listserv", "majordomo"];
+
+/// RFC 2369 list headers: any one of them marks list mail.
+const LIST_HEADERS: [&str; 7] = [
+	"list-id",
+	"list-help",
+	"list-subscribe",
+	"list-unsubscribe",
+	"list-post",
+	"list-owner",
+	"list-archive",
+];
+
 impl LocalDelivery {
-	/// Build a vacation autoresponse, applying RFC 5230 suppression (null
-	/// sender, automated or bulk/list mail) and per-sender-per-days dedup.
-	/// `None` means no reply is sent.
+	/// The account's vacation reply to `message`, delivered as
+	/// `delivered_to`. An enabled JMAP `VacationResponse` is the account's
+	/// vacation: while it is enabled the Sieve `vacation` action is ignored,
+	/// and outside its date window nothing is sent. Otherwise the Sieve
+	/// action, if the script ran one, answers.
+	pub(super) fn vacation_autoreply(
+		&self,
+		account: &str,
+		delivered_to: &str,
+		message: &AcceptedMessage,
+		sieve: Option<&VacationRequest>,
+	) -> Option<AcceptedMessage> {
+		match self.jmap_vacation(account) {
+			Some(setting) if setting.is_within_window(now_unix_secs()) => {
+				self.jmap_vacation_reply(account, delivered_to, message, &setting)
+			}
+			Some(_) => None,
+			None => self.vacation_reply(account, delivered_to, message, sieve?),
+		}
+	}
+
+	/// The Sieve `vacation` reply. A `:from` the account does not own is
+	/// ignored, or a script could send mail as anyone.
 	pub(super) fn vacation_reply(
 		&self,
 		account: &str,
+		delivered_to: &str,
 		message: &AcceptedMessage,
-		request: &crate::sieve::interp::VacationRequest,
+		request: &VacationRequest,
 	) -> Option<AcceptedMessage> {
-		if message.reverse_path.is_empty() {
-			return None;
-		}
-		let headers = String::from_utf8_lossy(&message.data);
-		let header = |name: &str| header_field(&headers, name);
-		// Don't autorespond to automated or bulk/list traffic.
-		if header("auto-submitted").is_some_and(|value| !value.eq_ignore_ascii_case("no"))
-			|| header("list-id").is_some()
-			|| header("precedence").is_some_and(|value| {
-				matches!(
-					value.to_ascii_lowercase().as_str(),
-					"bulk" | "list" | "junk"
-				)
-			}) {
-			return None;
-		}
-		if !self.vacation_should_reply(account, &message.reverse_path, request.days) {
-			return None;
-		}
-		let user_address = message
-			.recipients
-			.first()
-			.map(String::as_str)
-			.unwrap_or(account);
-		let vacation = crate::sieve::vacation::Vacation {
+		let from = request
+			.from
+			.as_deref()
+			.filter(|from| self.owns(account, delivered_to, from));
+		let vacation = Vacation {
 			reason: &request.reason,
 			subject: request.subject.as_deref(),
-			from: request.from.as_deref(),
-			user_address,
+			from,
+			user_address: delivered_to,
 			html_body: None,
 		};
-		Some(crate::sieve::vacation::build_response(
-			&vacation,
-			&message.reverse_path,
-			header("subject").as_deref(),
-			header("message-id").as_deref(),
-			std::time::SystemTime::now(),
-		))
+		self.answer(account, delivered_to, message, &vacation, request.days)
 	}
 
-	/// Build a JMAP-side autoresponse (RFC 8621 §8). Returns `None` when
-	/// the setting is disabled, when the recipient is the account itself,
-	/// or when the per-sender dedup window already covers the sender. The
-	/// shared suppression rules (null sender, automated or bulk/list mail)
-	/// apply the same way they do for the Sieve vacation.
+	/// The JMAP `VacationResponse` reply (RFC 8621 section 8).
 	pub(super) fn jmap_vacation_reply(
 		&self,
 		account: &str,
+		delivered_to: &str,
 		message: &AcceptedMessage,
 		setting: &VacationSetting,
 	) -> Option<AcceptedMessage> {
 		if !setting.is_enabled {
 			return None;
 		}
-		if message.reverse_path.is_empty() {
-			return None;
-		}
-		let headers = String::from_utf8_lossy(&message.data);
-		let header = |name: &str| header_field(&headers, name);
-		if header("auto-submitted").is_some_and(|value| !value.eq_ignore_ascii_case("no"))
-			|| header("list-id").is_some()
-			|| header("precedence").is_some_and(|value| {
-				matches!(
-					value.to_ascii_lowercase().as_str(),
-					"bulk" | "list" | "junk"
-				)
-			}) {
-			return None;
-		}
-		// The account's own addresses never receive a reply (a loop would
-		// re-trigger the vacation with the auto-replied message).
-		let sender_lc = message.reverse_path.to_ascii_lowercase();
-		let user_address = message
-			.recipients
-			.first()
-			.map(String::as_str)
-			.unwrap_or(account);
-		if sender_lc.eq_ignore_ascii_case(user_address) || sender_lc.eq_ignore_ascii_case(account) {
-			return None;
-		}
-		if !self.vacation_should_reply(account, &message.reverse_path, JMAP_VACATION_DAYS) {
-			return None;
-		}
-		let text_body = setting.text_body.as_deref().unwrap_or("");
-		let vacation = crate::sieve::vacation::Vacation {
-			reason: text_body,
+		let vacation = Vacation {
+			reason: setting.text_body.as_deref().unwrap_or(""),
 			subject: setting.subject.as_deref(),
 			from: None,
-			user_address,
+			user_address: delivered_to,
 			html_body: setting.html_body.as_deref(),
 		};
-		Some(crate::sieve::vacation::build_response(
+		self.answer(
+			account,
+			delivered_to,
+			message,
 			&vacation,
-			&message.reverse_path,
-			header("subject").as_deref(),
-			header("message-id").as_deref(),
-			std::time::SystemTime::now(),
-		))
+			JMAP_VACATION_DAYS,
+		)
 	}
 
-	/// Read the JMAP vacation setting for `account`. A read or parse error
-	/// is treated as "no vacation", so a corrupted file cannot trigger a
-	/// reply through an untyped path.
+	/// The enabled JMAP setting for `account`. A read or parse error is "no
+	/// JMAP vacation", so a damaged file cannot make the server answer.
 	pub(super) fn jmap_vacation(&self, account: &str) -> Option<VacationSetting> {
-		let setting = vacation_store::read(&self.data_dir, account).ok()?;
-		if setting.is_enabled {
-			Some(setting)
-		} else {
-			None
-		}
+		vacation_store::read(&self.data_dir, account)
+			.ok()
+			.filter(|setting| setting.is_enabled)
 	}
 
-	/// Whether a vacation reply to `sender` is due (none sent within `days`),
-	/// recording this send. A per-account `.vacation/<hash>` marker file's
-	/// modification time tracks the last reply.
-	fn vacation_should_reply(&self, account: &str, sender: &str, days: u64) -> bool {
-		let digest = ring::digest::digest(
-			&ring::digest::SHA256,
-			sender.to_ascii_lowercase().as_bytes(),
-		);
-		let name: String = digest.as_ref().iter().fold(String::new(), |mut acc, byte| {
-			use std::fmt::Write;
-			let _ = write!(acc, "{byte:02x}");
-			acc
-		});
-		let Ok(account) = AccountName::new(account) else {
-			return false;
-		};
-		let Ok(root) = account.root(&self.data_dir) else {
-			return false;
-		};
-		let Ok(dir) = root.file(".vacation") else {
-			return false;
-		};
-		let Ok(marker) = contained_child(&dir, &name) else {
-			return false;
-		};
-		if let Ok(meta) = fs::metadata(&marker)
-			&& let Ok(modified) = meta.modified()
-			&& modified
-				.elapsed()
-				.map(|age| age.as_secs() < days.saturating_mul(86_400))
-				.unwrap_or(false)
-		{
-			return false;
+	/// The reply, sent to the envelope reverse-path (RFC 3834 section 4)
+	/// and never to a header address, unless a suppression rule applies or
+	/// the sender already had one within `days`.
+	fn answer(
+		&self,
+		account: &str,
+		delivered_to: &str,
+		message: &AcceptedMessage,
+		vacation: &Vacation,
+		days: u64,
+	) -> Option<AcceptedMessage> {
+		let sender = message.reverse_path.as_str();
+		if sender.is_empty() || robot(sender) || self.owns(account, delivered_to, sender) {
+			return None;
 		}
-		let _ = fs::create_dir_all(&dir);
-		let _ = fs::write(&marker, b"");
-		true
+		let headers = String::from_utf8_lossy(header_block(&message.data));
+		let header = |name: &str| crate::util::header::header_value(&headers, name);
+		if automated(&header) {
+			return None;
+		}
+		if !vacation_markers::claim(&self.data_dir, account, sender, days) {
+			return None;
+		}
+		let (subject, message_id, references) = (
+			header("subject"),
+			header("message-id"),
+			header("references"),
+		);
+		let original = Original {
+			subject: subject.as_deref(),
+			message_id: message_id.as_deref(),
+			references: references.as_deref(),
+		};
+		build_response(vacation, sender, &original, std::time::SystemTime::now())
+	}
+
+	/// Whether `address` is one of the account's own: an answer to it would
+	/// be the account writing to itself.
+	fn owns(&self, account: &str, delivered_to: &str, address: &str) -> bool {
+		address.eq_ignore_ascii_case(delivered_to)
+			|| address.eq_ignore_ascii_case(account)
+			|| self
+				.directory
+				.current()
+				.addresses_for(account)
+				.iter()
+				.any(|own| own.eq_ignore_ascii_case(address))
 	}
 }
 
-/// The first value of header `name` from a raw message's header block (the
-/// folded value is returned trimmed; only the header section is scanned).
-fn header_field(message: &str, name: &str) -> Option<String> {
-	let header_block = message.split("\r\n\r\n").next().unwrap_or(message);
-	for line in header_block.split("\r\n") {
-		if let Some((key, value)) = line.split_once(':')
-			&& key.trim().eq_ignore_ascii_case(name)
-		{
-			return Some(value.trim().to_string());
-		}
-	}
-	None
+/// A bounce or list-robot sender.
+fn robot(sender: &str) -> bool {
+	let local = sender.rsplit_once('@').map_or(sender, |(local, _)| local);
+	let local = local.to_ascii_lowercase();
+	ROBOTS.contains(&local.as_str()) || local.starts_with("owner-") || local.ends_with("-request")
+}
+
+/// Automated or list mail (RFC 3834 section 2, RFC 5230 section 4.6):
+/// `Auto-Submitted` other than `no`, an RFC 2369 list header, or
+/// `Precedence: bulk`, `list` or `junk`.
+fn automated(header: &dyn Fn(&str) -> Option<String>) -> bool {
+	let auto_submitted = header("auto-submitted").is_some_and(|value| {
+		let keyword = value.split(';').next().unwrap_or_default().trim();
+		!keyword.eq_ignore_ascii_case("no")
+	});
+	let precedence = header("precedence").is_some_and(|value| {
+		["bulk", "list", "junk"]
+			.iter()
+			.any(|kind| value.trim().eq_ignore_ascii_case(kind))
+	});
+	auto_submitted || precedence || LIST_HEADERS.iter().any(|name| header(name).is_some())
+}
+
+/// The header section of a raw message, up to its blank line.
+fn header_block(data: &[u8]) -> &[u8] {
+	let end = data
+		.windows(4)
+		.position(|window| window == b"\r\n\r\n")
+		.unwrap_or(data.len());
+	&data[..end]
+}
+
+/// The current Unix time in seconds; the clock the date window compares to.
+fn now_unix_secs() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |elapsed| elapsed.as_secs())
 }
 
 #[cfg(test)]
@@ -235,13 +241,19 @@ mod tests {
 		let d = delivery(dir.path());
 		// Null sender: never autorespond.
 		assert!(
-			d.vacation_reply("alice", &message("", "Subject: x"), &request())
-				.is_none()
+			d.vacation_reply(
+				"alice",
+				"alice@example.org",
+				&message("", "Subject: x"),
+				&request()
+			)
+			.is_none()
 		);
 		// Automated mail.
 		assert!(
 			d.vacation_reply(
 				"alice",
+				"alice@example.org",
 				&message("bob@example.net", "Auto-Submitted: auto-generated"),
 				&request()
 			)
@@ -251,6 +263,7 @@ mod tests {
 		assert!(
 			d.vacation_reply(
 				"alice",
+				"alice@example.org",
 				&message("bob@example.net", "List-Id: <list.example.net>"),
 				&request()
 			)
@@ -260,6 +273,7 @@ mod tests {
 		assert!(
 			d.vacation_reply(
 				"alice",
+				"alice@example.org",
 				&message("bob@example.net", "Precedence: bulk"),
 				&request()
 			)
@@ -273,8 +287,14 @@ mod tests {
 		let d = delivery(dir.path());
 		let msg = message("bob@example.net", "Subject: hi");
 		// First reply is sent; an immediate second is suppressed by dedup.
-		assert!(d.vacation_reply("alice", &msg, &request()).is_some());
-		assert!(d.vacation_reply("alice", &msg, &request()).is_none());
+		assert!(
+			d.vacation_reply("alice", "alice@example.org", &msg, &request())
+				.is_some()
+		);
+		assert!(
+			d.vacation_reply("alice", "alice@example.org", &msg, &request())
+				.is_none()
+		);
 	}
 
 	#[test]
@@ -283,9 +303,17 @@ mod tests {
 		let data = outer.path().join("data");
 		std::fs::create_dir_all(&data).expect("data dir");
 		let d = delivery(&data);
-		assert!(!d.vacation_should_reply("../evil", "bob@example.net", 7));
+		assert!(!vacation_markers::claim(
+			&d.data_dir,
+			"../evil",
+			"bob@example.net",
+			7
+		));
 		let msg = message("bob@example.net", "Subject: hi");
-		assert!(d.vacation_reply("../evil", &msg, &request()).is_none());
+		assert!(
+			d.vacation_reply("../evil", "alice@example.org", &msg, &request())
+				.is_none()
+		);
 		assert!(
 			!data.join("evil").exists(),
 			"nothing was written outside accounts/"
@@ -297,3 +325,7 @@ mod tests {
 #[cfg(test)]
 #[path = "delivery_vacation_jmap_tests.rs"]
 mod jmap_tests;
+
+#[cfg(test)]
+#[path = "delivery_vacation_guard_tests.rs"]
+mod guard_tests;

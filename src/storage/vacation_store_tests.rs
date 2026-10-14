@@ -184,7 +184,7 @@ fn window_rejects_outside_bounds() {
 
 #[test]
 fn window_only_uses_unparseable_bound_as_safe() {
-	// A single unparseable bound is treated as "no bound" — never strands
+	// A single unparseable bound is treated as "no bound": it never strands
 	// an account whose date drifted into a format we don't recognise.
 	let setting = VacationSetting {
 		is_enabled: true,

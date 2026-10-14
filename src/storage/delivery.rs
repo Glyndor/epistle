@@ -287,6 +287,10 @@ impl LocalDelivery {
 			}
 			return Ok(Delivered {
 				redirects: trace::redirects(forwards, delivered_to),
+				replies: self
+					.vacation_autoreply(account, delivered_to, message, None)
+					.into_iter()
+					.collect(),
 				..Delivered::default()
 			});
 		};
@@ -334,24 +338,12 @@ impl LocalDelivery {
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
-		// vacation (RFC 5230 / RFC 8621 §8): an autoresponse alongside
-		// normal delivery. The JMAP-side setting is the account's vacation
-		// when it is enabled and within its date window; otherwise the
-		// Sieve `vacation` action (RFC 5230) takes over. The two are not
-		// additive: when the JMAP vacation is enabled, the Sieve one is dormant,
-		// so the same inbound message gets at most one auto-reply.
-		let jmap_setting = self.jmap_vacation(account);
-		let replies: Vec<AcceptedMessage> = match jmap_setting {
-			Some(setting) if setting.is_within_window(now_unix_secs()) => self
-				.jmap_vacation_reply(account, message, &setting)
-				.into_iter()
-				.collect(),
-			_ => outcome
-				.vacation
-				.and_then(|request| self.vacation_reply(account, message, &request))
-				.into_iter()
-				.collect(),
-		};
+		// vacation (RFC 5230, RFC 8621 section 8): an autoresponse alongside
+		// normal delivery, from the JMAP setting or the Sieve action.
+		let replies = self
+			.vacation_autoreply(account, delivered_to, message, outcome.vacation.as_ref())
+			.into_iter()
+			.collect();
 		Ok(Delivered {
 			redirects: trace::redirects(redirects, delivered_to),
 			reject: None,
@@ -359,18 +351,6 @@ impl LocalDelivery {
 			looped: Vec::new(),
 		})
 	}
-}
-
-/// The current Unix seconds; tiny helper to make the wall-clock read at the
-/// vacation decision point explicit. `SystemTime::now()` minus the epoch is
-/// the same clock the marker files' mtime compares against, so the two
-/// share the same time origin.
-fn now_unix_secs() -> u64 {
-	use std::time::{SystemTime, UNIX_EPOCH};
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0)
 }
 
 impl MessageSink for LocalDelivery {
