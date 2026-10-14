@@ -233,6 +233,7 @@ fn retrying_worker(dir: &std::path::Path, remote: &FakeRemote, start: u64) -> Wo
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
+			sender_verified: false,
 		},
 	);
 	let mut worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example")

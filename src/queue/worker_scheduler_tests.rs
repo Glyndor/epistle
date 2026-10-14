@@ -177,6 +177,7 @@ async fn a_conversation_that_panics_gives_back_its_slot_and_recipients() {
 				mailbox: None,
 				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
+				sender_verified: false,
 			},
 			None,
 			&std::collections::BTreeMap::new(),

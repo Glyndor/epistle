@@ -224,6 +224,7 @@ fn queue_show_escapes_the_last_error() {
 				mailbox: None,
 				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
+				sender_verified: false,
 			},
 			None,
 			&std::collections::BTreeMap::new(),

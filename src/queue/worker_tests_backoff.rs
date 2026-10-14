@@ -22,6 +22,7 @@ pub(super) fn store(spool: &FsSpool, recipients: &[&str]) {
 				mailbox: None,
 				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
+				sender_verified: false,
 			},
 			None,
 			&std::collections::BTreeMap::new(),

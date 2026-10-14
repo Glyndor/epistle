@@ -21,6 +21,7 @@ fn store(spool: &FsSpool, sender: &str, recipient: &str, account: Option<&str>) 
 				mailbox: None,
 				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
+				sender_verified: false,
 			},
 			account,
 			&std::collections::BTreeMap::new(),

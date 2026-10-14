@@ -51,6 +51,7 @@ fn message(recipients: Vec<String>, data: Vec<u8>, reverse_path: &str) -> Accept
 		mailbox: None,
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
+		sender_verified: false,
 	}
 }
 
