@@ -257,6 +257,10 @@ mod send_tests_trace;
 mod jmap_tests_attachment_limit;
 
 #[cfg(test)]
+#[path = "jmap_tests_message_size.rs"]
+mod jmap_tests_message_size;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 

@@ -427,6 +427,44 @@ fn declared_oversize_is_rejected_at_mail_time() {
 	);
 }
 
+/// The per-instance message-size cap is what the operator sets in
+/// `[server] max_message_size`; the SMTP `SIZE` extension, MAIL FROM
+/// SIZE parameter, the per-line running check, the end-of-DATA check,
+/// and the BDAT per-chunk cap all share the same value. Lowering the
+/// cap on one session must shrink every check at once: a size the
+/// default would have accepted is now refused with `552 5.3.4`.
+#[test]
+fn configured_max_message_size_applies_to_smtp_size_end_of_data_and_bdat() {
+	let cap = 1024;
+	let mut session =
+		Session::new("mail.example.org").with_directory(test_directory()).with_max_message_size(cap);
+	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
+		panic!("EHLO");
+	};
+	// EHLO advertises the configured cap, not the historical default:
+	// the wire shows the operator's number end to end.
+	assert!(
+		reply.to_string().contains(&format!("SIZE {cap}")),
+		"EHLO SIZE line must carry the configured cap, was: {reply}"
+	);
+	// SIZE parameter above the configured cap is refused at MAIL FROM.
+	let oversize = session.command_line(&format!("MAIL FROM:<a@example.org> SIZE={}", cap + 1));
+	assert_eq!(reply_code(&oversize), 552);
+	// SIZE at the cap itself is admitted.
+	let at_cap = session.command_line(&format!(
+		"MAIL FROM:<a@example.org> SIZE={cap}"
+	));
+	assert_eq!(reply_code(&at_cap), 250);
+	// A fresh session with the same cap refuses a BDAT chunk over it.
+	let mut bdat_session =
+		Session::new("mail.example.org").with_directory(test_directory()).with_max_message_size(cap);
+	bdat_session.command_line("EHLO client.example.org");
+	bdat_session.command_line("MAIL FROM:<a@example.org>");
+	bdat_session.command_line("RCPT TO:<b@example.org>");
+	let action = bdat_session.command_line(&format!("BDAT {} LAST", cap + 1));
+	assert_eq!(reply_code(&action), 552, "BDAT over the configured cap must be refused with 552");
+}
+
 #[test]
 fn unsupported_parameter_gets_555() {
 	let mut session = greeted();
