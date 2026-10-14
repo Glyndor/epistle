@@ -12,11 +12,11 @@
 use serde_json::{Value, json};
 
 use super::Principal;
-use crate::api::api_keys::Scope;
 use crate::api::state::ApiState;
 use crate::storage::vacation_store::{
 	self, MAX_BODY_BYTES, VacationSetting, read as read_setting, write as write_setting,
 };
+use crate::util::header::MAX_HEADER_VALUE_LEN;
 
 /// The only id a `VacationResponse` ever has (RFC 8621 §8).
 pub(crate) const SINGLETON_ID: &str = "singleton";
@@ -35,26 +35,43 @@ const PROPERTIES: [&str; 7] = [
 /// `VacationResponse/get` (RFC 8621 §8.2): read the singleton, returning the
 /// stored fields. `accountId` is required, and a request naming an account
 /// the principal does not have access to is refused with `accountNotFound`,
-/// the same pattern every other per-account JMAP method uses. `state` is
-/// the file's modification time, so a write makes a follow-up `/get`
-/// observe the change.
+/// the same pattern every other per-account JMAP method uses. `ids` (null
+/// for every object) and `properties` behave as for any `/get` (RFC 8620
+/// section 5.1); `id` is always returned.
 pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id: &str) -> Value {
-	let Ok(account) = super::state::admitted_account(state, principal, args, call_id) else {
-		return super::state::admitted_account(state, principal, args, call_id)
-			.err()
-			.unwrap();
+	let account = match super::state::admitted_account(state, principal, args, call_id) {
+		Ok(account) => account,
+		Err(error) => return error,
+	};
+	let Some(properties) = requested_properties(args) else {
+		return method_error("invalidArguments", call_id);
+	};
+	let (wanted, not_found): (Vec<&str>, Vec<&str>) = match args.get("ids") {
+		None | Some(Value::Null) => (vec![SINGLETON_ID], Vec::new()),
+		Some(Value::Array(ids)) => {
+			match ids.iter().map(Value::as_str).collect::<Option<Vec<_>>>() {
+				Some(ids) => ids.into_iter().partition(|id| *id == SINGLETON_ID),
+				None => return method_error("invalidArguments", call_id),
+			}
+		}
+		Some(_) => return method_error("invalidArguments", call_id),
 	};
 	let setting = read_setting(state.data_dir(), &account).unwrap_or_else(|error| {
 		tracing::warn!(error = %error, account = %account, "vacation setting unreadable");
 		VacationSetting::disabled()
 	});
-	let state_token = state_string(state.data_dir(), &account);
+	let list: Vec<Value> = if wanted.is_empty() {
+		Vec::new()
+	} else {
+		vec![project(&setting, &properties)]
+	};
 	json!([
 		"VacationResponse/get",
 		{
 			"accountId": account,
-			"state": state_token,
-			"list": [project(&setting)],
+			"state": state_string(state.data_dir(), &account),
+			"list": list,
+			"notFound": not_found,
 		},
 		call_id,
 	])
@@ -63,25 +80,22 @@ pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id
 /// `VacationResponse/set` (RFC 8621 §8.2): update the singleton. `create`
 /// and `destroy` are refused with `forbidden`; an update of `singleton` is
 /// validated and persisted. Validation: dates are UTCDate, `fromDate` is
-/// not after `toDate`, both bodies stay under [`MAX_BODY_BYTES`]. The
+/// not after `toDate`, both bodies stay under [`MAX_BODY_BYTES`], and the
+/// subject fits one header line with no control characters. The
 /// reverse-path the server emits, and its `Auto-Submitted: auto-replied`
-/// marker, are server concerns, not user input.
+/// marker, are server concerns, not user input. The `Write` scope is
+/// checked by the dispatcher before this runs.
 pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id: &str) -> Value {
-	// The setting lives behind `Write`, the same scope every other `/set`
-	// method asks for. `get` is `Read`. The scope check fires here, before
-	// any account lookup, so a tokenless request learns nothing about which
-	// accounts exist.
-	if state
-		.require_scope_for_principal(principal, Scope::Write)
-		.is_err()
-	{
-		return forbidden(call_id);
-	}
-	let Ok(account) = super::state::admitted_account(state, principal, args, call_id) else {
-		return super::state::admitted_account(state, principal, args, call_id)
-			.err()
-			.unwrap();
+	let account = match super::state::admitted_account(state, principal, args, call_id) {
+		Ok(account) => account,
+		Err(error) => return error,
 	};
+	let old_state = state_string(state.data_dir(), &account);
+	if let Some(expected) = args.get("ifInState").filter(|value| !value.is_null())
+		&& expected.as_str() != Some(old_state.as_str())
+	{
+		return method_error("stateMismatch", call_id);
+	}
 	let mut not_created = serde_json::Map::new();
 	let mut not_updated = serde_json::Map::new();
 	let mut not_destroyed = serde_json::Map::new();
@@ -125,7 +139,8 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 	json!([
 		"VacationResponse/set",
 		{
-			"oldState": new_state.clone(),
+			"accountId": account,
+			"oldState": old_state,
 			"newState": new_state,
 			"created": serde_json::Map::<String, Value>::new(),
 			"notCreated": not_created,
@@ -138,11 +153,27 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 	])
 }
 
-/// Map a stored [`VacationSetting`] to its JMAP object form. `id` is
-/// server-defined; absent properties (e.g. `textBody` left unset) become
-/// `null`, the same as the RFC's example shape.
-fn project(setting: &VacationSetting) -> Value {
-	json!({
+/// The `properties` argument: every property when absent or null, `None`
+/// when it is not a list of known names.
+fn requested_properties(args: &Value) -> Option<Vec<&'static str>> {
+	match args.get("properties") {
+		None | Some(Value::Null) => Some(PROPERTIES.to_vec()),
+		Some(Value::Array(names)) => names
+			.iter()
+			.map(|name| {
+				let name = name.as_str()?;
+				PROPERTIES.iter().copied().find(|known| *known == name)
+			})
+			.collect(),
+		Some(_) => None,
+	}
+}
+
+/// Map a stored [`VacationSetting`] to its JMAP object form, keeping `id`
+/// and the requested `properties`. Absent properties (e.g. `textBody` left
+/// unset) become `null`, the same as the RFC's example shape.
+fn project(setting: &VacationSetting, properties: &[&str]) -> Value {
+	let mut object = json!({
 		"id": SINGLETON_ID,
 		"isEnabled": setting.is_enabled,
 		"fromDate": setting.from_date,
@@ -150,12 +181,17 @@ fn project(setting: &VacationSetting) -> Value {
 		"subject": setting.subject,
 		"textBody": setting.text_body,
 		"htmlBody": setting.html_body,
-	})
+	});
+	if let Some(fields) = object.as_object_mut() {
+		fields.retain(|name, _| name == "id" || properties.contains(&name.as_str()));
+	}
+	object
 }
 
-/// `state` for an account's singleton: the file's modification time as
-/// epoch seconds, falling back to `"0"` when the file does not exist. A
-/// write produces a fresh mtime, so the next `/get` observes the change.
+/// `state` for an account's singleton: the file's modification time in
+/// nanoseconds since the epoch, `"0"` when the file does not exist. Every
+/// write renames a new file into place, so even two writes in one second
+/// give two states.
 fn state_string(data_dir: &std::path::Path, account: &str) -> String {
 	let Ok(path) = vacation_store::vacation_file(data_dir, account) else {
 		return "0".to_string();
@@ -168,12 +204,12 @@ fn state_string(data_dir: &std::path::Path, account: &str) -> String {
 	};
 	modified
 		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs().to_string())
+		.map(|d| d.as_nanos().to_string())
 		.unwrap_or_else(|_| "0".to_string())
 }
 
-fn forbidden(call_id: &str) -> Value {
-	json!(["error", { "type": "forbidden" }, call_id])
+fn method_error(kind: &str, call_id: &str) -> Value {
+	json!(["error", { "type": kind }, call_id])
 }
 
 fn forbidden_value() -> Value {
@@ -232,8 +268,8 @@ fn apply_patch(current: &VacationSetting, patch: &Value) -> Result<VacationSetti
 	}
 	if let Some(value) = patch.get("subject") {
 		next.subject = match parse_optional_string(value) {
-			Ok(parsed) => parsed,
-			Err(()) => {
+			Ok(parsed) if parsed.as_deref().is_none_or(header_safe) => parsed,
+			_ => {
 				bad.push("subject");
 				None
 			}
@@ -299,6 +335,13 @@ fn parse_optional_date(value: &Value) -> Result<Option<String>, ()> {
 	} else {
 		Err(())
 	}
+}
+
+/// A subject becomes the reply's `Subject:` header: a line break would end
+/// it and start a header of the client's choosing, so any control
+/// character is refused, as is a value longer than one header line.
+fn header_safe(subject: &str) -> bool {
+	subject.len() <= MAX_HEADER_VALUE_LEN && !subject.chars().any(char::is_control)
 }
 
 fn parse_optional_string(value: &Value) -> Result<Option<String>, ()> {

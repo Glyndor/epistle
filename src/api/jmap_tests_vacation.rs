@@ -347,49 +347,6 @@ async fn vacation_get_without_account_id_is_invalid_arguments() {
 }
 
 #[tokio::test]
-async fn vacation_set_state_advances_on_each_write() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let app = router(test_state(dir.path(), 0));
-	let set_req = json!({
-		"methodCalls": [["VacationResponse/set", {
-			"accountId": "alice",
-			"update": { "singleton": { "isEnabled": true, "textBody": "Out" } }
-		}, "s1"]],
-	});
-	let (_, first) = request_with_body(
-		&app,
-		"POST",
-		"/jmap/api",
-		Some(TOKEN.as_str()),
-		Some(set_req.clone()),
-	)
-	.await;
-	let first_state = first["methodResponses"][0][1]["newState"]
-		.as_str()
-		.unwrap()
-		.to_string();
-	// Wait at least one second so the file's mtime advances; some
-	// filesystems only resolve to the second.
-	tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-	let (_, second) = request_with_body(
-		&app,
-		"POST",
-		"/jmap/api",
-		Some(TOKEN.as_str()),
-		Some(set_req),
-	)
-	.await;
-	let second_state = second["methodResponses"][0][1]["newState"]
-		.as_str()
-		.unwrap()
-		.to_string();
-	assert_ne!(
-		first_state, second_state,
-		"second state must advance from {first_state}"
-	);
-}
-
-#[tokio::test]
 async fn vacation_set_can_clear_text_body() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));

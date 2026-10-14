@@ -1375,29 +1375,46 @@ mail from other servers is not modified.
 ## JMAP VacationResponse
 
 The JMAP session advertises `urn:ietf:params:jmap:vacationresponse` (RFC
-8621 §8.3) for every account. `VacationResponse/get` returns the
-singleton, `VacationResponse/set` updates it; `create` and `destroy` are
-refused with `forbidden`, the only valid id is `singleton`, and the
-properties are `isEnabled`, `fromDate`, `toDate`, `subject`, `textBody`,
-`htmlBody`.
+8621 section 8) for every account. `VacationResponse/get` returns the
+singleton (`ids` and `properties` work as for any `/get`) and
+`VacationResponse/set` updates it; `create` and `destroy` are refused with
+`forbidden`, the only id is `singleton`, and the properties are
+`isEnabled`, `fromDate`, `toDate`, `subject`, `textBody` and `htmlBody`.
+The account check is the one every JMAP method uses: an `accountId` the
+credential cannot reach is `accountNotFound`.
 
-The setting lives at `<data_dir>/accounts/<account>/.vacation.json`.
-When `isEnabled = true` and the current time is inside `fromDate ..
-toDate` (either bound optional), an incoming message from a new sender
-gets one auto-reply, subject to the suppression rules in RFC 8621 §8.2.1:
-no reply to `Auto-Submitted: <not "no">`, no reply to `List-Id`, no
-reply to `Precedence: bulk|list|junk`, no reply to a null sender, no
-reply when the recipient is the account itself. Per-sender dedup uses the
-same `<account>/.vacation/<sha256>` marker file the Sieve `vacation`
-extension writes, so the two share state and a given sender gets at most
-one auto-reply per 7 days regardless of which path produced it.
+`/set` refuses with `invalidProperties` a date that is not a UTCDate, a
+`fromDate` after `toDate`, a `textBody` or `htmlBody` over 64 KiB, and a
+`subject` with a line break or other control character or longer than 998
+octets. The setting lives in the account's own directory, at
+`<data_dir>/accounts/<account>/.vacation.json`. `htmlBody` is stored as
+given and only ever sent as a `text/html` part, never rendered.
 
-When the JMAP vacation is set, the Sieve `vacation` action is dormant:
-both paths lead to the same dedup, so a single inbound message gets at
-most one auto-reply. `htmlBody` is sent as `multipart/alternative` next
-to `textBody`; `htmlBody` is stored as given and never rendered server
-side. Body fields over the per-server 64 KiB cap are rejected with
-`invalidProperties`. `fromDate > toDate` is the same error.
+When `isEnabled` is true and the current time is inside `fromDate ..
+toDate` (either bound optional), mail delivered to the account gets an
+auto-reply following RFC 3834 and RFC 5230:
+
+- It goes to the envelope sender (`MAIL FROM`), never to a header
+  address, with a null reverse-path, `Auto-Submitted: auto-replied`,
+  `In-Reply-To` and `References`. It is queued and DKIM-signed like any
+  other outbound message.
+- No reply to a null sender, to the account's own addresses, to
+  `MAILER-DAEMON`, `LISTSERV`, `majordomo`, `owner-*` or `*-request`, to
+  mail with `Auto-Submitted` other than `no`, to mail with any RFC 2369
+  `List-*` header, or to `Precedence: bulk`, `list` or `junk`.
+- One reply per sender per 7 days. Each reply leaves a marker under
+  `<account>/.vacation/`, which survives restarts. The account keeps at
+  most 4096 markers: when the store is full, markers older than the
+  period are removed, and if none is, the new sender gets no reply. A
+  marker that cannot be written means no reply.
+
+The Sieve `vacation` action uses the same rules and markers (its `:days`
+is held between 1 and 365, and a `:from` the account does not own is
+ignored). Only one of the two answers a message: while the JMAP
+VacationResponse is enabled it is the account's vacation, and the Sieve
+action is ignored, including outside the JMAP date window, when no reply
+is sent at all. With the JMAP setting disabled, the Sieve action answers
+as before.
 
 ## Example
 
