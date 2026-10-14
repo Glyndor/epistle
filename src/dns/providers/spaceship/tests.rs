@@ -445,3 +445,14 @@ async fn srv_upsert_splits_into_priority_weight_port_target() {
 	assert!(body.contains("\"port\":465"), "{body}");
 	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
 }
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"exchange\":\".\""), "{body}");
+}

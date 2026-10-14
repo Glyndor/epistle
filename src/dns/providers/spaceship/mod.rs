@@ -184,9 +184,8 @@ impl SpaceshipProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			let map = item.as_object_mut().expect("object");
 			map.insert("priority".to_string(), priority.into());
 			map.insert("exchange".to_string(), target.into());

@@ -416,3 +416,14 @@ async fn list_follows_pagination_next_link() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new(), false).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"data\":\".\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+}

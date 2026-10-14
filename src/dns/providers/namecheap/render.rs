@@ -68,7 +68,7 @@ pub(crate) fn host_from_record(record: &DnsRecord, zone: &str) -> Result<Host, P
 			.split_once(char::is_whitespace)
 			.ok_or(ProviderError::Unsupported)?;
 		host.mx_pref = Some(pref.parse().map_err(|_| ProviderError::Unsupported)?);
-		host.address = target.trim().trim_end_matches('.').to_string();
+		host.address = crate::dns::provider::mx_target_for_api(target.trim()).to_string();
 	}
 	Ok(host)
 }

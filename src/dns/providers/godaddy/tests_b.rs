@@ -503,3 +503,16 @@ async fn delete_txt_with_empty_value_is_a_wholesale_delete() {
 		"/domains/example.org/records/TXT/ed._domainkey"
 	);
 }
+
+/// The null MX (RFC 7505) keeps its root target: cutting the trailing dot
+/// off `.` leaves an empty host, which is not a null MX.
+#[tokio::test]
+async fn upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock().await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("mx upsert");
+	let body: serde_json::Value =
+		serde_json::from_str(&state.lock().unwrap().calls[1].body).expect("parse");
+	assert_eq!(body[0]["data"], ".");
+	assert_eq!(body[0]["priority"], 0);
+}

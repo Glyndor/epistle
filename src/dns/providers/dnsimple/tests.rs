@@ -439,3 +439,14 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"content\":\".\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+}
