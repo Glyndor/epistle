@@ -158,8 +158,8 @@ pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> 
 /// `Message-ID` and `Date` headers the receiver contract expects when
 /// the client omitted them. When both are already present, the
 /// buffer is left untouched. The header lines are prepended in
-/// `Message-ID`, `Date` order; the body is moved up to follow the
-/// new header block without being copied.
+/// `Message-ID`, `Date` order; the message is shifted up inside the
+/// same buffer instead of being copied into a new one.
 pub fn ensure_submission_headers_in_place(data: &mut Vec<u8>, domain: &str, now: SystemTime) {
 	let header_end = header_block_end(data);
 	let (has_message_id, has_date) = scan_submission_headers(&data[..header_end]);
@@ -167,25 +167,14 @@ pub fn ensure_submission_headers_in_place(data: &mut Vec<u8>, domain: &str, now:
 		return;
 	}
 	let prepended = build_prepended_headers(domain, now, has_message_id, has_date);
-	// Grow the buffer by the prepended size; everything from the
-	// header block onwards shifts up by that many bytes. Then
-	// write the prepended bytes into the new prefix.
-	let extra = prepended.len();
-	data.splice(0..0, std::iter::empty::<u8>());
-	data.reserve(extra);
-	// Move the body (and the existing header block) up by `extra`
-	// bytes. We do this by extending the buffer with the existing
-	// bytes shifted up.
+	// Grow by exactly the prepended size (no doubling of a 25 MiB
+	// buffer), shift the message up with one memmove, then write the
+	// new headers in front.
 	let original_len = data.len();
-	let new_len = original_len + extra;
-	// Ensure the buffer is large enough.
-	data.resize(new_len, 0);
-	// Shift bytes [0..original_len] to [extra..new_len].
-	for i in (0..original_len).rev() {
-		data[extra + i] = data[i];
-	}
-	// Write the prepended bytes at [0..extra].
-	data[..extra].copy_from_slice(&prepended);
+	data.reserve_exact(prepended.len());
+	data.resize(original_len + prepended.len(), 0);
+	data.copy_within(..original_len, prepended.len());
+	data[..prepended.len()].copy_from_slice(&prepended);
 }
 
 /// Build the prepended submission-header bytes for the in-place

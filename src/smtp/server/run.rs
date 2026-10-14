@@ -272,8 +272,8 @@ impl Server {
 					// domain), with the server hostname as a last resort.
 					// Done before the Received block so the trace header
 					// stays the outermost line. The stamp and the Bcc
-					// strip happen in place so a 25 MiB body is moved once,
-					// not copied three times.
+					// strip work inside the body's own buffer, so the only
+					// new body-sized allocation is the stamped one below.
 					if session.authenticated().is_some() {
 						let stamp_domain = message
 							.reverse_path
@@ -288,9 +288,9 @@ impl Server {
 						// The MSA drops Bcc: those recipients are on the envelope.
 						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
 					}
-					// Build the final stamped buffer in one allocation
-					// sized to the trace + auth + body lengths, so the
-					// body is moved (not copied) into place.
+					// Build the final stamped buffer in one allocation of
+					// the exact trace + auth + body length: the body is
+					// copied once and its old buffer freed.
 					let mut stamped =
 						Vec::with_capacity(header.len() + auth_headers.len() + message.data.len());
 					stamped.extend_from_slice(header.as_bytes());

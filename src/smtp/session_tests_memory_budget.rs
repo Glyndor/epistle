@@ -232,3 +232,27 @@ fn one_client_cannot_hold_more_than_its_share_of_the_budget() {
 	drop(first);
 	assert_eq!(budget.used(), 400, "the other client's body is still held");
 }
+
+#[test]
+fn bdat_last_hands_over_the_body_without_copying_it() {
+	// The body is moved into the accepted message: a copy would hold the
+	// message twice at the end of the transfer.
+	let (mut session, _budget) = session_with_budget(1 << 20);
+	session.command_line("MAIL FROM:<a@example.org>");
+	session.command_line("RCPT TO:<b@example.org>");
+	session.command_line("BDAT 4096");
+	assert_eq!(reply_code(&session.bdat_chunk(&[b'x'; 4096], false)), 250);
+	let State::ReceivingData { body, .. } = &session.state else {
+		panic!("expected an open transaction");
+	};
+	let held = body.as_ptr();
+	session.command_line("BDAT 0 LAST");
+	let Action::Deliver(_, message) = session.bdat_chunk(&[], true) else {
+		panic!("expected delivery");
+	};
+	assert_eq!(message.data.len(), 4096);
+	assert!(
+		std::ptr::eq(message.data.as_ptr(), held),
+		"the delivered body is the buffer the session held"
+	);
+}

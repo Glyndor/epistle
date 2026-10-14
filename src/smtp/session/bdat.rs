@@ -94,20 +94,22 @@ impl Session {
 			body,
 			require_tls,
 			..
-		} = &self.state
+		} = &mut self.state
 		else {
 			unreachable!("state checked above");
 		};
+		let running_size = *size;
+		// The body moves into the message; `finalise` drops the state.
 		let message = AcceptedMessage {
 			reverse_path: reverse_path.clone(),
 			recipients: recipients.clone(),
 			no_dsn: no_dsn.clone(),
-			data: body.clone(),
+			data: std::mem::take(body),
 			require_tls: *require_tls,
 			mailbox: None,
 			tlsrpt_verified: false,
 			sender_verified: false,
 		};
-		super::finalise::finalise(self, message, *size)
+		super::finalise::finalise(self, message, running_size)
 	}
 }

@@ -281,6 +281,60 @@ fn strip_bcc_drops_every_bcc_field_and_keeps_the_rest() {
 }
 
 #[test]
+fn ensure_submission_headers_in_place_matches_the_allocating_variant() {
+	// The minted Message-ID is random, so the first line is compared by
+	// shape and the rest byte for byte. Each buffer has no spare capacity,
+	// so the in-place stamp has to grow it.
+	let cases: &[&[u8]] = &[
+		b"Message-ID: <a@x>\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\n\r\nbody",
+		b"Message-ID: <a@x>\r\nSubject: s\r\n\r\nbody\r\n",
+		b"Date: Mon, 1 Jan 2024 00:00:00 +0000\r\nSubject: s\r\n\r\nbody",
+		b"Subject: s\nTo: b@x\n\nbody\n",
+		b"Subject: no blank line",
+		b"",
+	];
+	for original in cases {
+		let expected = super::ensure_submission_headers(original, "example.org", at(1_700_000_000));
+		let mut buffer = Vec::with_capacity(original.len());
+		buffer.extend_from_slice(original);
+		super::ensure_submission_headers_in_place(&mut buffer, "example.org", at(1_700_000_000));
+		assert_eq!(buffer.len(), expected.len());
+		let minted = expected.starts_with(b"Message-ID: <") && !original.starts_with(b"Message-ID");
+		let skip = if minted {
+			let end = expected.iter().position(|&b| b == b'\n').expect("line") + 1;
+			assert!(buffer[..end].ends_with(b"@example.org>\r\n"));
+			end
+		} else {
+			0
+		};
+		assert_eq!(
+			buffer[skip..],
+			expected[skip..],
+			"case {:?}",
+			String::from_utf8_lossy(original)
+		);
+	}
+}
+
+#[test]
+fn ensure_submission_headers_in_place_grows_by_the_headers_only() {
+	// A full buffer must not double: for a 25 MiB body that is 25 MiB of
+	// spare capacity held for the rest of the delivery.
+	const SIZE: usize = 1 << 20;
+	let mut buffer = Vec::with_capacity(SIZE);
+	buffer.extend_from_slice(b"Subject: s\r\n\r\n");
+	buffer.resize(SIZE, b'x');
+	assert_eq!(buffer.capacity(), SIZE);
+	super::ensure_submission_headers_in_place(&mut buffer, "example.org", at(1_700_000_000));
+	assert!(
+		buffer.capacity() < SIZE + 4096,
+		"capacity {} for a {} octet message",
+		buffer.capacity(),
+		buffer.len()
+	);
+}
+
+#[test]
 fn strip_bcc_in_place_matches_the_allocating_variant() {
 	let cases: &[&[u8]] = &[
 		b"Subject: s\r\n\r\nx",
@@ -311,9 +365,9 @@ fn strip_bcc_in_place_matches_the_allocating_variant() {
 /// fresh `Vec<u8>` and `extend_from_slice` the entire body,
 /// so the old path makes two full body copies. The in-place
 /// `ensure_submission_headers_in_place` and `strip_bcc_in_place`
-/// mutate the buffer in place: the body is moved (not copied)
-/// through every step, and the final `Vec::with_capacity`
-/// receives the body via `Vec::append` (also a move).
+/// shift the bytes inside the same buffer, and the final
+/// `Vec::with_capacity` receives the body via `Vec::append`, the
+/// one copy left.
 ///
 /// The test counts the distinct intermediate `Vec<u8>`
 /// allocations whose capacity reaches the body size. The old
