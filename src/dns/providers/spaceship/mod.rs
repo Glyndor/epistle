@@ -424,6 +424,7 @@ impl SpaceshipProvider {
 					kind: Self::parse_kind(kind),
 					value,
 					ttl,
+					proxied: None,
 				})
 			})
 			.collect())

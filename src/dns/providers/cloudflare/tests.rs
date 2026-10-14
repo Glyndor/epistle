@@ -113,12 +113,7 @@ async fn mock(records: Vec<serde_json::Value>) -> (CloudflareProvider, Shared) {
 }
 
 fn txt(name: &str, value: &str) -> DnsRecord {
-	DnsRecord {
-		name: name.to_string(),
-		kind: RecordKind::Txt,
-		value: value.to_string(),
-		ttl: 3600,
-	}
+	DnsRecord::new(name.to_string(), RecordKind::Txt, value.to_string(), 3600)
 }
 
 #[tokio::test]
@@ -252,12 +247,7 @@ async fn record_outside_zone_is_rejected_without_network() {
 #[tokio::test]
 async fn mx_upsert_posts_data_object_with_priority_and_host() {
 	let (provider, state) = mock(Vec::new()).await;
-	let mx = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Mx,
-		value: "10 mail.example.org".into(),
-		ttl: 3600,
-	};
+	let mx = DnsRecord::new("example.org", RecordKind::Mx, "10 mail.example.org", 3600);
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state
 		.lock()
@@ -273,23 +263,18 @@ async fn mx_upsert_posts_data_object_with_priority_and_host() {
 
 #[test]
 fn record_body_uses_data_for_tlsa_and_content_otherwise() {
-	let tlsa = DnsRecord {
-		name: "_25._tcp.mail.example.org".into(),
-		kind: RecordKind::Tlsa,
-		value: "3 0 1 abcd".into(),
-		ttl: 3600,
-	};
+	let tlsa = DnsRecord::new(
+		"_25._tcp.mail.example.org",
+		RecordKind::Tlsa,
+		"3 0 1 abcd",
+		3600,
+	);
 	let body = CloudflareProvider::record_body("TLSA", &tlsa).expect("tlsa body");
 	assert!(body.contains("\"data\""), "{body}");
 	assert!(body.contains("\"usage\":3"), "{body}");
 	assert!(body.contains("\"certificate\":\"abcd\""), "{body}");
 
-	let txt = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Txt,
-		value: "v=spf1 -all".into(),
-		ttl: 3600,
-	};
+	let txt = DnsRecord::new("example.org", RecordKind::Txt, "v=spf1 -all", 3600);
 	let body = CloudflareProvider::record_body("TXT", &txt).expect("txt body");
 	// TXT content goes quoted, the form Cloudflare's API documents.
 	assert!(body.contains(r#""content":"\"v=spf1 -all\"""#), "{body}");
@@ -297,12 +282,12 @@ fn record_body_uses_data_for_tlsa_and_content_otherwise() {
 
 #[test]
 fn record_body_splits_srv_into_priority_weight_port_target() {
-	let srv = DnsRecord {
-		name: "_submissions._tcp.example.org".into(),
-		kind: RecordKind::Srv,
-		value: "0 1 465 mail.example.org".into(),
-		ttl: 3600,
-	};
+	let srv = DnsRecord::new(
+		"_submissions._tcp.example.org",
+		RecordKind::Srv,
+		"0 1 465 mail.example.org",
+		3600,
+	);
 	let body = CloudflareProvider::record_body("SRV", &srv).expect("srv body");
 	assert!(body.contains("\"data\""), "{body}");
 	assert!(body.contains("\"priority\":0"), "{body}");
@@ -315,12 +300,12 @@ fn record_body_splits_srv_into_priority_weight_port_target() {
 #[tokio::test]
 async fn srv_upsert_posts_with_data_fields() {
 	let (provider, state) = mock(Vec::new()).await;
-	let srv = DnsRecord {
-		name: "_submissions._tcp.example.org".into(),
-		kind: RecordKind::Srv,
-		value: "0 1 465 mail.example.org".into(),
-		ttl: 3600,
-	};
+	let srv = DnsRecord::new(
+		"_submissions._tcp.example.org",
+		RecordKind::Srv,
+		"0 1 465 mail.example.org",
+		3600,
+	);
 	provider
 		.upsert("example.org", srv)
 		.await
@@ -343,12 +328,12 @@ async fn srv_upsert_posts_with_data_fields() {
 #[tokio::test]
 async fn caa_upsert_posts_with_flags_tag_value_data() {
 	let (provider, state) = mock(Vec::new()).await;
-	let caa = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Caa,
-		value: "0 issue \"letsencrypt.org\"".into(),
-		ttl: 3600,
-	};
+	let caa = DnsRecord::new(
+		"example.org",
+		RecordKind::Caa,
+		"0 issue \"letsencrypt.org\"",
+		3600,
+	);
 	provider
 		.upsert("example.org", caa)
 		.await
@@ -404,12 +389,7 @@ async fn update_body_sets_the_comment_field_too() {
 
 #[test]
 fn every_record_kind_body_carries_the_comment() {
-	let rec = |kind, value: &str| DnsRecord {
-		name: "x.example.org".into(),
-		kind,
-		value: value.into(),
-		ttl: 300,
-	};
+	let rec = |kind, value: &str| DnsRecord::new("x.example.org", kind, value, 300);
 	let cases = [
 		(RecordKind::A, "192.0.2.1"),
 		(RecordKind::Mx, "10 mail.example.org."),

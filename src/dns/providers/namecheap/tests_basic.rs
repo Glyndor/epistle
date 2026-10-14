@@ -105,6 +105,7 @@ async fn tlsa_returns_unsupported_without_network() {
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	let result = provider.upsert("example.org", tlsa).await;
 	assert_eq!(result, Err(ProviderError::Unsupported));
@@ -121,6 +122,7 @@ async fn mx_is_supported_and_srv_refused() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("mx upsert");
 	let srv = crate::dns::provider::DnsRecord {
@@ -128,6 +130,7 @@ async fn mx_is_supported_and_srv_refused() {
 		kind: RecordKind::Srv,
 		value: "10 5 5060 sip.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", srv).await,

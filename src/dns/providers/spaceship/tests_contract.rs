@@ -13,6 +13,7 @@ fn txt(value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.into(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 

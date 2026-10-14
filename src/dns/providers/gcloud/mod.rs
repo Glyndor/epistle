@@ -483,6 +483,7 @@ impl GcloudProvider {
 						value
 					},
 					ttl: r.ttl,
+					proxied: None,
 				})
 			})
 			.collect())

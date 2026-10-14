@@ -360,9 +360,8 @@ impl DnsimpleProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			serde_json::json!({
 				"name": relative,
 				"type": kind,
@@ -483,6 +482,7 @@ impl DnsimpleProvider {
 					kind,
 					value,
 					ttl: r.ttl,
+					proxied: None,
 				})
 			})
 			.collect())

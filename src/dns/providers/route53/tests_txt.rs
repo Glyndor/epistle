@@ -24,6 +24,7 @@ async fn txt_upsert_emits_long_value_as_one_record_with_joined_pieces() {
 		kind: RecordKind::Txt,
 		value: long_value.clone(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", record)
@@ -79,6 +80,7 @@ async fn txt_upsert_keeps_short_value_in_one_chunk() {
 		kind: RecordKind::Txt,
 		value: "v=DMARC1; p=none".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", record)
@@ -125,6 +127,7 @@ async fn txt_upsert_long_value_escapes_per_piece() {
 		kind: RecordKind::Txt,
 		value: value.clone(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", record)
@@ -186,6 +189,7 @@ async fn txt_upsert_replaces_existing_long_record_without_duplicating() {
 		kind: RecordKind::Txt,
 		value: new_value,
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", record)
@@ -244,6 +248,7 @@ async fn txt_delete_with_long_value_removes_that_one_record() {
 		kind: RecordKind::Txt,
 		value: long_value.clone(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.delete("example.org", record)

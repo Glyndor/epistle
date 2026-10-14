@@ -138,6 +138,7 @@ impl Dns01 {
 			kind: RecordKind::Txt,
 			value: key.dns01_value(token),
 			ttl: DNS01_TTL,
+			proxied: None,
 		}
 	}
 

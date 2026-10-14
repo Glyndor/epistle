@@ -26,6 +26,7 @@ async fn upsert_keeps_unrelated_apex_txt_when_set_already_has_one() {
 				kind: RecordKind::Txt,
 				value: "v=spf1 mx -all".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -76,6 +77,7 @@ async fn upsert_replaces_matching_value_and_keeps_others() {
 				kind: RecordKind::Txt,
 				value: "v=spf1 mx -all".into(),
 				ttl: 1800,
+				proxied: None,
 			},
 		)
 		.await
@@ -119,6 +121,7 @@ async fn fqdn_to_relative_accepts_a_trailing_dot_on_the_apex() {
 				kind: RecordKind::A,
 				value: "203.0.113.10".into(),
 				ttl: 600,
+				proxied: None,
 			},
 		)
 		.await
@@ -224,6 +227,7 @@ async fn upsert_spf_at_apex_with_ownership_txt_replaces_only_the_spf() {
 				kind: RecordKind::Txt,
 				value: "v=spf1 mx -all".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -272,6 +276,7 @@ async fn upsert_mx_with_a_different_case_target_replaces_rather_than_duplicates(
 				kind: RecordKind::Mx,
 				value: "10 mail.example.org".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -367,6 +372,7 @@ async fn fetch_set_does_not_embed_response_body_in_the_error() {
 				kind: RecordKind::Txt,
 				value: "v=spf1 -all".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -408,6 +414,7 @@ async fn upsert_tlsa_is_unsupported_and_does_not_reach_the_wire() {
 				kind: RecordKind::Tlsa,
 				value: "3 1 1 ABCDEF".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await;
@@ -476,6 +483,7 @@ async fn delete_txt_with_empty_value_is_a_wholesale_delete() {
 				kind: RecordKind::Txt,
 				value: String::new(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await

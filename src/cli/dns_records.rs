@@ -155,6 +155,7 @@ mod tests {
 				kind: RecordKind::Txt,
 				value: "v=DMARC1; p=none".to_string(),
 				ttl: 3600,
+				proxied: None,
 			},
 		}];
 		let mut out = Vec::new();
@@ -175,6 +176,7 @@ mod tests {
 				kind: RecordKind::Txt,
 				value: "v=DKIM1; k=rsa; p=".to_string() + &"A".repeat(600),
 				ttl: 3600,
+				proxied: None,
 			},
 		}];
 		let mut out = Vec::new();

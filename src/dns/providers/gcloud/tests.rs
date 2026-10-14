@@ -251,6 +251,7 @@ async fn mx_upsert_passes_value_through_in_rrdatas() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().changes.last().cloned().unwrap();
@@ -273,6 +274,7 @@ async fn srv_upsert_passes_value_through_in_rrdatas() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().changes.last().cloned().unwrap();

@@ -11,12 +11,13 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
+mod list;
 mod tags;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
-use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+use crate::dns::txt::{TxtForm, txt_encode};
 use tags as cloudflare_tags;
 
 /// How Cloudflare wants a TXT `content` written and lists it back; see
@@ -54,6 +55,15 @@ struct ZoneRef {
 #[derive(Deserialize)]
 struct ListRecords {
 	result: Vec<RecordRef>,
+	/// Paging: `total_pages` says how many pages the list has.
+	#[serde(default)]
+	result_info: Option<ResultInfo>,
+}
+
+#[derive(Deserialize)]
+struct ResultInfo {
+	#[serde(default)]
+	total_pages: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -68,6 +78,14 @@ struct RecordRef {
 	/// Tags already on the record, kept (but for epistle's own) on update.
 	#[serde(default)]
 	tags: Vec<String>,
+	/// Whether the record is proxied through Cloudflare's orange cloud. Only
+	/// present for the record kinds Cloudflare can proxy (A, AAAA, CNAME); other
+	/// kinds do not return the field and `None` means "not applicable".
+	#[serde(default)]
+	proxied: Option<bool>,
+	/// The MX preference; Cloudflare lists it apart from the target.
+	#[serde(default)]
+	priority: Option<u16>,
 }
 
 impl CloudflareProvider {
@@ -193,9 +211,8 @@ impl CloudflareProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			serde_json::json!({
 				"type": kind,
 				"name": record.name,
@@ -220,12 +237,25 @@ impl CloudflareProvider {
 			} else {
 				record.value.clone()
 			};
-			serde_json::json!({
+			let mut body = serde_json::json!({
 				"type": kind,
 				"name": record.name,
 				"content": content,
 				"ttl": record.ttl,
-			})
+			});
+			// Cloudflare only accepts `proxied` on the kinds it can
+			// actually proxy (A, AAAA, CNAME). Pin those to DNS-only:
+			// the proxy only speaks HTTP(S), so a mail hostname, an
+			// `autoconfig`, an `autodiscover`, or an `mta-sts` A/AAAA/CNAME
+			// the proxy took over would never deliver mail. Other kinds
+			// do not take the field.
+			if matches!(
+				record.kind,
+				RecordKind::A | RecordKind::Aaaa | RecordKind::Cname
+			) {
+				body["proxied"] = serde_json::Value::from(false);
+			}
+			body
 		};
 		value["comment"] = serde_json::Value::from(record_description());
 		Ok(value)
@@ -484,34 +514,6 @@ impl CloudflareProvider {
 		};
 		self.delete_id(&zone_id, &found.id).await
 	}
-
-	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
-		let zone_id = self.zone_id(zone).await?;
-		let url = self.records_url(&zone_id, None)?;
-		let records: ListRecords = self.get_json(url).await?;
-		Ok(records
-			.result
-			.into_iter()
-			.map(|r| {
-				let kind = parse_kind(&r.kind);
-				// The read form is not documented. A record written by
-				// the API comes back quoted (possibly re-split), one an
-				// older release wrote unquoted comes back as it was;
-				// `txt_decode` reads both as the logical value.
-				let value = if kind == RecordKind::Txt {
-					txt_decode(&r.content, TXT_FORM)
-				} else {
-					r.content
-				};
-				DnsRecord {
-					name: r.name,
-					kind,
-					value,
-					ttl: r.ttl,
-				}
-			})
-			.collect())
-	}
 }
 
 impl DnsProvider for CloudflareProvider {
@@ -585,3 +587,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_path.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "tests_proxied.rs"]
+mod proxied_tests;

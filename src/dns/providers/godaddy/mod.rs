@@ -508,6 +508,7 @@ impl GodaddyProvider {
 					kind,
 					value,
 					ttl: r.ttl,
+					proxied: None,
 				})
 			})
 			.collect())

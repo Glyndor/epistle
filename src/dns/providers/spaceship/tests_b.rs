@@ -16,6 +16,7 @@ fn record(name: &str, kind: RecordKind, value: &str) -> DnsRecord {
 		kind,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 

@@ -467,6 +467,7 @@ fn txt_record(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 300,
+		proxied: None,
 	}
 }
 

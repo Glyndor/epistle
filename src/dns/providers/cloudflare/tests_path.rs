@@ -14,7 +14,7 @@ async fn zone_name_and_zone_id_are_escaped_in_the_request_target() {
 		*seen.lock().unwrap(),
 		[
 			"GET /zones?name=a%26b%3Dc.org",
-			"GET /zones/z%2F1%3Fx=2/dns_records"
+			"GET /zones/z%2F1%3Fx=2/dns_records?per_page=100&page=1"
 		]
 	);
 }
@@ -36,6 +36,7 @@ async fn record_id_and_lookup_values_are_escaped_on_delete() {
 				kind: RecordKind::A,
 				value: String::new(),
 				ttl: 300,
+				proxied: None,
 			},
 		)
 		.await

@@ -12,6 +12,7 @@ fn txt(name: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: "v=DKIM1; k=ed25519; p=AAAA".into(),
 		ttl: 300,
+		proxied: None,
 	}
 }
 
@@ -71,6 +72,7 @@ fn only_unnamed_rotated_records_of_signing_domains_are_orphans() {
 		txt("ed77._domainkey.example.org"),
 		DnsRecord {
 			kind: RecordKind::Cname,
+			proxied: None,
 			..txt("ed8._domainkey.example.org")
 		},
 	];

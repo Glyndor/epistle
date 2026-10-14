@@ -499,6 +499,7 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 			rec.target.trim_matches('"').to_string()
 		},
 		ttl: rec.ttl,
+		proxied: None,
 	}
 }
 

@@ -387,6 +387,7 @@ impl PorkbunProvider {
 					kind,
 					value,
 					ttl: r.ttl.parse().unwrap_or(MIN_TTL),
+					proxied: None,
 				})
 			})
 			.collect())

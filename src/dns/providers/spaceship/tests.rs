@@ -184,6 +184,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -415,6 +416,7 @@ async fn mx_upsert_splits_priority_and_exchange() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	// Spaceship upserts as `remove then add`; the PUT body is the last one.
@@ -432,6 +434,7 @@ async fn srv_upsert_splits_into_priority_weight_port_target() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	// Spaceship upserts as `remove then add`; the PUT body is the last one.

@@ -161,6 +161,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -368,6 +369,7 @@ async fn mx_upsert_splits_priority_and_target() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
@@ -384,6 +386,7 @@ async fn srv_upsert_splits_into_priority_weight_port_data() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
