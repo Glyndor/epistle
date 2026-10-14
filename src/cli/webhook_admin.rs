@@ -67,7 +67,7 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 }
 
 pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
@@ -86,18 +86,24 @@ fn execute_with(
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let change: resource::Change = match action {
 		WebhookCli::Show { json } => {
-			show(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+			show(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		WebhookCli::Test => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 			return probe::run(&config, out, status);
 		}
 		WebhookCli::Set { url, secret_stdin } => {
-			endpoint::check(&url)?;
+			endpoint::check(&url).map_err(resource::ResourceError::refused)?;
 			let secret = if secret_stdin {
 				Some(resource::read_secret(input, "webhook secret")?)
 			} else {
@@ -108,17 +114,22 @@ fn execute_with(
 				if let Some(secret) = secret {
 					fields.push(("secret", Some(TomlValue::from(secret))));
 				}
-				document.set_table_fields(&["webhook"], &fields)
+				document
+					.set_table_fields(&["webhook"], &fields)
+					.map_err(resource::ResourceError::Failure)
 			})
 		}
 		WebhookCli::Unset => Box::new(|document, config| {
 			if let Some(alert) = config.alerts.iter().find(|alert| alert.webhook) {
-				return Err(format!(
+				return Err(resource::ResourceError::refused(format!(
 					"alert \"{}\" posts to the webhook; remove it or turn its webhook off first",
 					alert.name
-				));
+				)));
 			}
-			document.remove_table(&["webhook"]).map(|_| ())
+			document
+				.remove_table(&["webhook"])
+				.map(|_| ())
+				.map_err(resource::ResourceError::Failure)
 		}),
 	};
 	resource::apply_edit(path, dry_run, "webhook", out, status, restart, change)

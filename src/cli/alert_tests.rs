@@ -137,7 +137,7 @@ fn remove_deletes_the_rule_and_keeps_its_comments() {
 #[test]
 fn remove_reports_an_unknown_rule_and_dry_run_writes_nothing() {
 	let run = run(ALERTS, &["remove", "nope"]);
-	assert_eq!(run.result.unwrap_err(), "no alert named \"nope\"");
+	assert_eq!(run.result.unwrap_err().as_ref(), "no alert named \"nope\"");
 	assert!(run.after == run.before);
 	let dry = run_with(ALERTS, &["remove", "bounce-storm"], true);
 	assert!(dry.out.contains("-name = 'bounce-storm'"), "{}", dry.out);

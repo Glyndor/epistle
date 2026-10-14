@@ -89,7 +89,7 @@ fn test_fails_with_the_refused_connection() {
 	)
 	.unwrap_err();
 	assert!(
-		error.starts_with(&format!(
+		error.as_ref().starts_with(&format!(
 			"relay test failed for 127.0.0.1:{port}: relay connect:"
 		)),
 		"{error}"
@@ -115,7 +115,7 @@ fn test_gives_up_when_the_smarthost_never_greets() {
 	)
 	.unwrap_err();
 	assert_eq!(
-		error,
+		error.as_ref(),
 		format!("relay test failed for 127.0.0.1:{port}: no answer within 0.3 s")
 	);
 	assert!(started.elapsed() < Duration::from_secs(5));
@@ -137,5 +137,5 @@ fn test_names_the_missing_rule() {
 		&mut Vec::new(),
 	)
 	.unwrap_err();
-	assert_eq!(error, "no relay is configured for account alice");
+	assert_eq!(error.as_ref(), "no relay is configured for account alice");
 }

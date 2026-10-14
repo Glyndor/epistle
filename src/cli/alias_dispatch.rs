@@ -97,7 +97,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 				&mut err,
 			) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 		AliasCli::Remove { address, yes } => {
@@ -128,7 +135,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 				&mut err,
 			) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 		AliasCli::Member(args) => {
@@ -152,7 +166,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			}
 			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 		AliasCli::Sender(args) => {
@@ -176,7 +197,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			}
 			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 		AliasCli::Enable { address } => {
@@ -185,7 +213,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			}
 			match set_enabled(&config, &address, true, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 		AliasCli::Disable { address } => {
@@ -194,7 +229,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			}
 			match set_enabled(&config, &address, false, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					crate::cli::resource::ResourceError::Refusal(message) => {
+						Outcome::Refusal(message)
+					}
+					crate::cli::resource::ResourceError::Failure(message) => {
+						Outcome::Error(message)
+					}
+				},
 			}
 		}
 	}

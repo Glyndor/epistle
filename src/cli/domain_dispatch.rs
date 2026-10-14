@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::cli::prompt;
+use crate::cli::resource::ResourceError;
 use crate::config::Config;
 
 use super::domain_writers::{commit_add, commit_alias, commit_remove};
@@ -106,7 +107,10 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 			}
 			match commit_add(&config, document, &domain, dry_run, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					ResourceError::Refusal(message) => Outcome::Refusal(message),
+					ResourceError::Failure(message) => Outcome::Error(message),
+				},
 			}
 		}
 		DomainCli::Remove { domain, yes } => {
@@ -130,7 +134,10 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 			}
 			match commit_remove(document, &domain, dry_run, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
+				Err(error) => match error {
+					ResourceError::Refusal(message) => Outcome::Refusal(message),
+					ResourceError::Failure(message) => Outcome::Error(message),
+				},
 			}
 		}
 		DomainCli::Alias(args) => match args.action {
@@ -145,7 +152,10 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 				}
 				match commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err) {
 					Ok(code) => Outcome::Code(code),
-					Err(error) => Outcome::Error(error),
+					Err(error) => match error {
+						ResourceError::Refusal(message) => Outcome::Refusal(message),
+						ResourceError::Failure(message) => Outcome::Error(message),
+					},
 				}
 			}
 			DomainAliasSubcommand::Remove { alias, yes } => {
@@ -176,7 +186,10 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 					&mut err,
 				) {
 					Ok(code) => Outcome::Code(code),
-					Err(error) => Outcome::Error(error),
+					Err(error) => match error {
+						ResourceError::Refusal(message) => Outcome::Refusal(message),
+						ResourceError::Failure(message) => Outcome::Error(message),
+					},
 				}
 			}
 		},

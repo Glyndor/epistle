@@ -69,9 +69,10 @@ pub fn commit_add(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let new_config = document.config()?;
@@ -81,11 +82,13 @@ pub fn commit_add(
 			status,
 			"domain {domain} already configured; nothing changed."
 		)
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(status, "domain {domain} added.").map_err(|e| e.to_string())?;
-	print_domain_records(&new_config, domain, out).map_err(|e| e.to_string())?;
+	writeln!(status, "domain {domain} added.")
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
+	print_domain_records(&new_config, domain, out)
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 	crate::cli::config_edit::after_change_with(
 		&new_config,
 		outcome,
@@ -101,19 +104,21 @@ pub fn commit_remove(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
 	let outcome = document.commit()?;
 	if outcome == crate::cli::config_edit::Outcome::Unchanged {
 		writeln!(status, "domain {domain} already removed; nothing changed.")
-			.map_err(|e| e.to_string())?;
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(status, "domain {domain} removed.").map_err(|e| e.to_string())?;
+	writeln!(status, "domain {domain} removed.")
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 	let _ = config;
 	crate::cli::config_edit::after_change_with(
 		&config,
@@ -131,9 +136,10 @@ pub fn commit_alias(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
@@ -143,10 +149,11 @@ pub fn commit_alias(
 			status,
 			"domain alias {alias} already {verb}; nothing changed."
 		)
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(status, "domain alias {alias} {verb}.").map_err(|e| e.to_string())?;
+	writeln!(status, "domain alias {alias} {verb}.")
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 	crate::cli::config_edit::after_change_with(
 		&config,
 		outcome,

@@ -49,8 +49,8 @@ fn set_s3_refuses_when_local_blobs_exist_unless_forced() {
 	let refused = run_with("", &s3_args(&[]), false, create);
 	let message = refused.result.unwrap_err();
 	assert!(
-		message.starts_with("blobs already exist under ")
-			&& message.ends_with(
+		message.as_ref().starts_with("blobs already exist under ")
+			&& message.as_ref().ends_with(
 				"blobs; they are not migrated and would stop being served. Pass --force to switch anyway"
 			),
 		"{message}"
@@ -78,7 +78,10 @@ fn an_uninspectable_blob_directory_refuses_the_switch() {
 		std::fs::write(dir.join("blobs"), b"not a directory").unwrap();
 	});
 	assert!(
-		run.result.unwrap_err().starts_with("cannot inspect "),
+		run.result
+			.unwrap_err()
+			.as_ref()
+			.starts_with("cannot inspect "),
 		"an unreadable store must fail closed"
 	);
 	assert!(run.after == run.before);

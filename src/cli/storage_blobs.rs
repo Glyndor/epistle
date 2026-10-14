@@ -116,7 +116,7 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 }
 
 pub(super) fn run(path: &Path, action: StorageCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
@@ -133,26 +133,35 @@ fn execute_with(
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let StorageCli::Blobs { action } = action;
 	let backend = match action {
 		BlobsCli::Show { json } => {
-			show(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+			show(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		BlobsCli::Set { backend } => backend,
 	};
-	let current = Config::load(path).map_err(|e| e.to_string())?;
-	let plan = set::plan(&current, &backend)?;
+	let current =
+		Config::load(path).map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+	let plan = set::plan(&current, &backend).map_err(resource::ResourceError::refused)?;
 	if plan.leaves_blobs_behind {
 		writeln!(
 			status,
 			"Existing blobs are not migrated: those stored in the previous backend stay there and stop being served."
 		)
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 	}
 	let fields = plan.fields;
-	let change: resource::Change =
-		Box::new(move |document, _| document.set_table_fields(&["storage", "blobs"], &fields));
+	let change: resource::Change = Box::new(move |document, _| {
+		document
+			.set_table_fields(&["storage", "blobs"], &fields)
+			.map_err(resource::ResourceError::Failure)
+	});
 	resource::apply_edit(path, dry_run, "blob storage", out, status, restart, change)
 }

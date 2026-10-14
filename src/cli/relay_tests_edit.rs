@@ -3,7 +3,7 @@ use super::*;
 use crate::cli::resource::test_config;
 
 struct Run {
-	result: Result<ExitCode, String>,
+	result: Result<ExitCode, super::super::resource::ResourceError>,
 	out: String,
 	status: String,
 	after: String,

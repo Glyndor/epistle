@@ -56,19 +56,21 @@ pub(crate) fn commit_and_restart(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
 	let outcome = document.commit()?;
 	if outcome == Outcome::Unchanged {
 		writeln!(status, "alias {address} already {verb}; nothing changed.")
-			.map_err(|e| e.to_string())?;
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(status, "alias {address} {verb}.").map_err(|e| e.to_string())?;
+	writeln!(status, "alias {address} {verb}.")
+		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 	crate::cli::config_edit::after_change_with(
 		&config,
 		outcome,
@@ -88,7 +90,7 @@ pub(super) fn set_enabled(
 	enabled: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -97,10 +99,14 @@ pub(super) fn set_enabled(
 	) {
 		Ok(store) => store,
 		Err(error) => {
-			return Err(format!("cannot open directory store: {error}"));
+			return Err(crate::cli::resource::ResourceError::Failure(format!(
+				"cannot open directory store: {error}"
+			)));
 		}
 	};
-	let alias = find_alias(config, address).ok_or_else(|| format!("alias {address} not found"))?;
+	let alias = find_alias(config, address).ok_or_else(|| {
+		crate::cli::resource::ResourceError::refused(format!("alias {address} not found"))
+	})?;
 	match store.set_alias_enabled(&alias.address, enabled) {
 		Ok(previous) => {
 			let verb = if enabled { "enabled" } else { "disabled" };
@@ -112,16 +118,19 @@ pub(super) fn set_enabled(
 			} else {
 				verb.to_string()
 			};
-			writeln!(status, "alias {address} {transition}.").map_err(|e| e.to_string())?;
+			writeln!(status, "alias {address} {transition}.")
+				.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 			writeln!(
 				out,
 				"{}\t{}",
 				alias.address,
 				if enabled { "enabled" } else { "disabled" }
 			)
-			.map_err(|e| e.to_string())?;
+			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
 			Ok(ExitCode::SUCCESS)
 		}
-		Err(error) => Err(format!("cannot update alias {address}: {error}")),
+		Err(error) => Err(crate::cli::resource::ResourceError::Failure(format!(
+			"cannot update alias {address}: {error}"
+		))),
 	}
 }

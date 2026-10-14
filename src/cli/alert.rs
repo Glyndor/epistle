@@ -19,6 +19,9 @@ mod tests;
 #[cfg(test)]
 #[path = "alert_tests_add.rs"]
 mod tests_add;
+#[cfg(test)]
+#[path = "alert_tests_unknown.rs"]
+mod tests_unknown;
 
 /// Longest window or cooldown accepted: one year.
 const MAX_SECONDS: u64 = 365 * 86_400;
@@ -229,7 +232,7 @@ fn add(
 }
 
 pub(super) fn run(path: &Path, action: AlertCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
@@ -246,10 +249,15 @@ fn execute_with(
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let change: resource::Change = match action {
 		AlertCli::List { json } => {
-			list(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+			list(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		AlertCli::Add {
@@ -265,13 +273,19 @@ fn execute_with(
 			let new = validate(
 				name, metric, op, threshold, &window, &cooldown, webhook, email,
 			)?;
-			Box::new(move |document, config| add(document, config, new))
+			Box::new(move |document, config| {
+				add(document, config, new).map_err(resource::ResourceError::Failure)
+			})
 		}
 		AlertCli::Remove { name } => Box::new(move |document, config| {
 			if !config.alerts.iter().any(|alert| alert.name == name) {
-				return Err(format!("no alert named \"{name}\""));
+				return Err(resource::ResourceError::refused(format!(
+					"no alert named \"{name}\""
+				)));
 			}
-			document.remove_elements("alerts", "name", &name)
+			document
+				.remove_elements("alerts", "name", &name)
+				.map_err(resource::ResourceError::Failure)
 		}),
 	};
 	resource::apply_edit(path, dry_run, "alert", out, status, restart, change)
