@@ -84,13 +84,9 @@ fn enabled_setting_sends_a_reply() {
 fn enabled_setting_includes_three_levels_in_window() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let d = delivery(dir.path());
-	let from = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2000-01-01T00:00:00Z"))
-		.unwrap();
-	let to = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2099-12-31T23:59:59Z"))
-		.unwrap();
 	let setting = VacationSetting {
-		from_date: Some(from.to_string()),
-		to_date: Some(to.to_string()),
+		from_date: Some("2000-01-01T00:00:00Z".to_string()),
+		to_date: Some("2099-12-31T23:59:59Z".to_string()),
 		..enabled_setting()
 	};
 	write_setting(dir.path(), "alice", &setting).expect("write");
@@ -99,6 +95,37 @@ fn enabled_setting_includes_three_levels_in_window() {
 	let mid = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2024-06-01T12:00:00Z"))
 		.unwrap();
 	assert!(setting.is_within_window(mid));
+	// "before" — outside the lower bound.
+	let before =
+		crate::storage::vacation_store::utc_date_to_unix_secs(Some("1999-12-31T23:59:59Z"))
+			.unwrap();
+	assert!(!setting.is_within_window(before));
+	// "after" — past the upper bound.
+	let after = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2100-01-01T00:00:00Z"))
+		.unwrap();
+	assert!(!setting.is_within_window(after));
+}
+
+#[test]
+fn deliver_routed_skips_reply_outside_window() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let d = delivery(dir.path());
+	let setting = VacationSetting {
+		from_date: Some("2099-01-01T00:00:00Z".to_string()),
+		to_date: Some("2099-12-31T23:59:59Z".to_string()),
+		..enabled_setting()
+	};
+	write_setting(dir.path(), "alice", &setting).expect("write");
+	assert!(
+		d.jmap_vacation("alice").is_some(),
+		"setting must be enabled and stored"
+	);
+	let msg = message("bob@example.net", "Subject: hi");
+	let delivered = d.deliver_routed(&msg, None).expect("delivery");
+	assert!(
+		delivered.replies.is_empty(),
+		"outside-window setting sends no reply"
+	);
 }
 
 #[test]
