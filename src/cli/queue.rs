@@ -20,6 +20,9 @@ use uuid::Uuid;
 
 use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord, Envelope, FsSpool};
 
+#[path = "queue_destinations.rs"]
+mod destinations;
+
 /// Operator actions on the outbound queue.
 #[derive(Debug, Subcommand)]
 pub enum QueueCli {
@@ -43,6 +46,14 @@ pub enum QueueCli {
 	Hold(Target),
 	/// Release a held entry so it is attempted again.
 	Release(Target),
+	/// Show the destinations on hold, until when, and why.
+	Destinations {
+		/// Print one JSON array instead of text lines.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Lift the hold on a destination so the queue contacts it again now.
+	ReleaseDestination(destinations::DestinationTarget),
 	/// Delete one entry from the queue without delivering or bouncing it.
 	Remove {
 		/// Spool id of the entry.
@@ -99,6 +110,8 @@ pub(super) fn run(
 		QueueCli::Release(target) => edit_many(&spool, &target, "released", out, |e| {
 			e.release(now);
 		}),
+		QueueCli::Destinations { json } => destinations::list(&spool, now, json, out),
+		QueueCli::ReleaseDestination(target) => destinations::release(&spool, &target, out),
 		QueueCli::Remove { id, yes } => {
 			let envelope = match spool.load_envelope(id) {
 				Ok(envelope) => envelope,
@@ -218,6 +231,7 @@ pub(super) fn list(data_dir: &Path, out: &mut impl Write) -> ExitCode {
 		}
 		let _ = table.write(decor, out);
 		let _ = writeln!(out, "{} queued", ids.len());
+		held_destinations(&spool, out);
 		return ExitCode::SUCCESS;
 	}
 	for id in &ids {
@@ -238,7 +252,16 @@ pub(super) fn list(data_dir: &Path, out: &mut impl Write) -> ExitCode {
 		);
 	}
 	let _ = writeln!(out, "{} queued", ids.len());
+	held_destinations(&spool, out);
 	ExitCode::SUCCESS
+}
+
+/// Say which destinations are on hold, when any is: their messages wait
+/// for the hold to end, not for their own retry.
+fn held_destinations(spool: &FsSpool, out: &mut impl Write) {
+	if let Some(line) = destinations::summary(spool, now_epoch()) {
+		let _ = writeln!(out, "{line}");
+	}
 }
 
 fn sender(envelope: &Envelope) -> &str {
@@ -393,3 +416,7 @@ fn note_if_held(verb: &str, envelope: &Envelope, out: &mut impl Write) {
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "queue_tests_destinations.rs"]
+mod tests_destinations;

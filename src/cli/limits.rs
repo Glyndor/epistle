@@ -22,6 +22,12 @@ fn edit_document(
 	domain: Option<&str>,
 	value: Option<&str>,
 ) -> Result<super::config_edit::ConfigDocument, String> {
+	if let Some(table) = key.table() {
+		if domain.is_some() {
+			return Err("--domain is supported only for quota and submission-rate".into());
+		}
+		return edit_table_key(path, key, table, value);
+	}
 	let value = value
 		.map(|input| values::parse_value(input, key.unit(), key.max()))
 		.transpose()
@@ -46,6 +52,33 @@ fn edit_document(
 	Ok(document)
 }
 
+/// Set or remove a key of a table (`[queue]`); a list key takes its values
+/// comma-separated, each checked like a single value.
+fn edit_table_key(
+	path: &Path,
+	key: Key,
+	table: &str,
+	value: Option<&str>,
+) -> Result<super::config_edit::ConfigDocument, String> {
+	let parse = |input: &str| {
+		values::parse_value(input.trim(), key.unit(), key.max())
+			.map_err(|error| format!("{}: {error}", key.name()))
+	};
+	let mut document = super::config_edit::ConfigDocument::open(path)?;
+	match value {
+		None => document.remove_table_key(&[table], key.field())?,
+		Some(input) if key.is_list() => {
+			let mut array = toml_edit::Array::new();
+			for part in input.split(',') {
+				array.push(parse(part)? as i64);
+			}
+			document.set_table_key(&[table], key.field(), array)?;
+		}
+		Some(input) => document.set_table_key(&[table], key.field(), parse(input)? as i64)?,
+	}
+	Ok(document)
+}
+
 #[cfg(test)]
 fn change_config(path: &Path, key: Key, value: Option<&str>) -> Result<Option<Config>, String> {
 	let document = edit_document(path, key, None, value)?;
@@ -55,6 +88,17 @@ fn change_config(path: &Path, key: Key, value: Option<&str>) -> Result<Option<Co
 
 fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 	for key in Key::ALL {
+		if let Some((values, default)) = key.list(config) {
+			let joined: Vec<String> = values.iter().map(u64::to_string).collect();
+			let source = if default { "default" } else { "configured" };
+			writeln!(
+				out,
+				"{}\t{} seconds\t{source}",
+				key.name(),
+				joined.join(",")
+			)?;
+			continue;
+		}
 		let configured = key.value(config);
 		let default = configured.is_none() || configured == key.default_value();
 		let value = match configured.or(key.default_value()) {
@@ -75,10 +119,22 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 
 /// `limits show --json`: `{"<limit>": {"value", "unit", "source"}}`, where
 /// `value` is the effective number (`null` when the limit is off or left to
-/// the protocol) and `unit` is `bytes`, `seconds` or `count`.
+/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`,
+/// `seconds` or `count`.
 pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	let mut limits = serde_json::Map::new();
 	for key in Key::ALL {
+		if let Some((values, default)) = key.list(config) {
+			limits.insert(
+				key.name().to_string(),
+				serde_json::json!({
+					"value": values,
+					"unit": "seconds",
+					"source": if default { "default" } else { "configured" },
+				}),
+			);
+			continue;
+		}
 		let configured = key.value(config);
 		let default = configured.is_none() || configured == key.default_value();
 		let unit = match key.unit() {
@@ -121,7 +177,8 @@ pub enum Action {
 		/// Override one domain (quota or submission-rate only).
 		#[arg(long)]
 		domain: Option<String>,
-		/// Non-negative integer, size (K/M/G/T), or duration (s/m/h/d/w).
+		/// Non-negative integer, size (K/M/G/T), or duration (s/m/h/d/w);
+		/// comma-separated durations for queue-backoff.
 		#[arg(allow_hyphen_values = true)]
 		value: String,
 	},
@@ -217,3 +274,7 @@ mod tests_domains;
 #[cfg(test)]
 #[path = "limits_tests_schedule.rs"]
 mod tests_schedule;
+
+#[cfg(test)]
+#[path = "limits_tests_queue.rs"]
+mod tests_queue;
