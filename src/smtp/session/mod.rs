@@ -229,6 +229,7 @@ impl Session {
 	/// before accepting MAIL FROM. `None` (the default) is the identity and
 	/// short-circuits every check.
 	pub fn with_tenant_limits(mut self, limits: std::sync::Arc<crate::api::TenantLimits>) -> Self {
+		self.policy = self.policy.with_tenant_limits(limits.clone());
 		self.tenant_limits = Some(limits);
 		self
 	}
@@ -449,6 +450,11 @@ impl Session {
 				// domain (looked up by walking the account's addresses, the
 				// same way `Directory::quota_for` does), falling back to the
 				// server-wide default, falling back to no limit at all.
+				// The check charges one unit per transaction started so
+				// the per-account budget cannot be silently exhausted by
+				// starting a transaction and abandoning it; the rest of
+				// the recipient costs are charged at end-of-DATA, where
+				// the count is known.
 				if let Some(account) = self.authenticated.clone()
 					&& !self.policy.check_authenticated_submission(
 						&account,
@@ -459,6 +465,24 @@ impl Session {
 						450,
 						"4.7.1 sending rate limit exceeded; retry later",
 					));
+				}
+				// Per-tenant aggregate rate limit. Each owning tenant is
+				// charged one unit here (one submission started); the rest
+				// of the recipient costs are charged at end-of-DATA, where
+				// the count is known. With no recipient yet at MAIL FROM
+				// the early charge is the transaction start; bounces, the
+				// JMAP path and the REST path call
+				// `check_tenant_submission` directly with the full
+				// recipient count.
+				if let Some(account) = self.authenticated.clone()
+					&& self.directory.addresses_for(&account).is_empty() == false
+					&& let Err(message) = self.policy.check_tenant_submission(
+						&self.directory.addresses_for(&account),
+						1,
+						unix_now(),
+					) {
+					let line = format!("4.7.1 {message}; retry later");
+					return Action::Continue(Reply::single(450, line.as_str()));
 				}
 				// Per-IP and per-sender rate limits for unauthenticated sessions.
 				// Authenticated sessions are charged against the per-account limiter

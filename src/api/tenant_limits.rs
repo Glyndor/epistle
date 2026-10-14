@@ -263,6 +263,10 @@ impl TenantLimits {
 	/// The first tenant to reject wins; `Ok(())` when every tenant is under
 	/// its cap or no tenant owns any address.
 	///
+	/// Charges one unit per submission. Callers that already know the
+	/// recipient count should use [`check_aggregate_rate_n`](Self::check_aggregate_rate_n)
+	/// instead so a 100-recipient message costs 100 units and not one.
+	///
 	/// The configured limiter is consulted first so the rejection code path
 	/// is exercised on a denied send; tests use this to drive both branches.
 	pub fn check_aggregate_rate(
@@ -270,17 +274,33 @@ impl TenantLimits {
 		account_addresses: &[String],
 		now: u64,
 	) -> Result<(), String> {
+		self.check_aggregate_rate_n(account_addresses, 1, now)
+	}
+
+	/// Like [`check_aggregate_rate`](Self::check_aggregate_rate) but
+	/// charges `recipient_count` units against each owning tenant's
+	/// per-minute budget in one call. A 100-recipient message costs 100
+	/// units; a bounce with no recipients costs nothing. The whole call
+	/// refuses when any tenant would be pushed over its cap.
+	pub fn check_aggregate_rate_n(
+		&self,
+		account_addresses: &[String],
+		recipient_count: u32,
+		now: u64,
+	) -> Result<(), String> {
+		if recipient_count == 0 {
+			return Ok(());
+		}
 		for tenant in self.tenants_for_addresses(account_addresses.iter().map(String::as_str)) {
 			let Some(limiter) = &tenant.send_limiter else {
 				continue;
 			};
-			// A single submission adds one to the count for every tenant
-			// the account belongs to. The key is the tenant's own label so
-			// every tenant tracks its own aggregate independently.
+			// The key is the tenant's own label so every tenant tracks
+			// its own aggregate independently.
 			let Some(per_min) = tenant.config.submission_rate_limit_per_min else {
 				return Ok(());
 			};
-			if !limiter.check(&tenant.label(), per_min, now) {
+			if !limiter.check_n(&tenant.label(), recipient_count, per_min, now) {
 				return Err(format!(
 					"tenant \"{}\" submission rate limit exceeded",
 					tenant.label()

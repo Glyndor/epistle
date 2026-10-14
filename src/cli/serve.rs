@@ -551,15 +551,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 							per_min: limit.per_min,
 						});
 				}
-				// The per-account submission limiter and the server-wide
-				// default are wired through `wire_smtp_submission_limits`,
+				// The per-account, per-domain and per-tenant submission
+				// limits are wired through `wire_smtp_submission_limits`,
 				// which is the same helper the regression test in
-				// `serve_tests_ratelimit` uses; the production wiring has
-				// exactly one source of truth.
+				// `serve_tests_ratelimit` uses; the production wiring
+				// has exactly one source of truth.
 				server = super::serve_ratelimit::wire_smtp_submission_limits(
 					server,
 					&config,
 					&send_limiter,
+					if tenant_limits.is_empty() {
+						None
+					} else {
+						Some(&tenant_limits)
+					},
 				);
 				if !tenant_limits.is_empty() {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));

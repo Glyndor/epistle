@@ -39,6 +39,9 @@ pub(crate) struct TransactionPolicy {
 	/// unauthenticated sessions. Keyed by the lowercased reverse path;
 	/// the null sender (`<>`) used by bounces is always skipped.
 	inbound_sender: Option<InboundLimit>,
+	/// Per-tenant aggregate submission limits. `None` (the default)
+	/// short-circuits every tenant check to the pre-tenancy identity.
+	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
 	/// Shared disk-space guard for `data_dir`. When set, MAIL FROM is
 	/// rejected with `452` if the filesystem cannot hold another message.
 	disk_guard: Option<Arc<DiskGuard>>,
@@ -97,6 +100,18 @@ impl TransactionPolicy {
 		self
 	}
 
+	/// Attach the shared per-tenant submission limits. The SMTP path
+	/// checks every owning tenant in turn and rejects with `450 4.7.1
+	/// sending rate limit exceeded; retry later` when any tenant is over
+	/// its `submission_rate_limit_per_min` budget.
+	pub(crate) fn with_tenant_limits(
+		mut self,
+		limits: Arc<crate::api::TenantLimits>,
+	) -> Self {
+		self.tenant_limits = Some(limits);
+		self
+	}
+
 	// ---------- checks ----------
 
 	/// Whether a submission by the authenticated `account` is over the
@@ -120,6 +135,22 @@ impl TransactionPolicy {
 			Some(per_min) => limiter.check(account, per_min, now),
 			None => true,
 		}
+	}
+
+	/// Whether a submission from an account whose addresses are
+	/// `account_addresses` is over any per-tenant aggregate rate limit.
+	/// Charges one unit per recipient so a 100-recipient message costs
+	/// 100 units. `Ok(())` when no tenant caps are exceeded.
+	pub(crate) fn check_tenant_submission(
+		&self,
+		account_addresses: &[String],
+		recipient_count: u32,
+		now: u64,
+	) -> Result<(), String> {
+		let Some(limits) = &self.tenant_limits else {
+			return Ok(());
+		};
+		limits.check_aggregate_rate_n(account_addresses, recipient_count, now)
 	}
 
 	/// Whether an unauthenticated MAIL FROM with `reverse_path` from

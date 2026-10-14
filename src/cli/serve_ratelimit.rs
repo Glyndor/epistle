@@ -52,15 +52,16 @@ pub(super) fn build_rate_limiters(config: &Config) -> RateLimiters {
 	}
 }
 
-/// Apply the per-account and per-domain submission limits to `server`.
-/// This is the production single wiring point: both `serve::serve`'s
-/// listener loop and the regression test in `serve_tests_ratelimit.rs`
-/// go through this helper so the per-account cap and the global default
+/// Apply the per-account, per-domain and per-tenant submission limits
+/// to `server`. This is the production single wiring point: both
+/// `serve::serve`'s listener loop and the regression test in
+/// `serve_tests_ratelimit.rs` go through this helper so the
+/// per-account cap, the per-domain cap and the tenant aggregate cap
 /// never drift apart again.
 ///
 /// The helper attaches the limiter (built once and shared across the
-/// listeners), the server-wide default, and the directory-level domain
-/// limits. The directory itself is constructed by
+/// listeners), the server-wide default, and the tenant aggregate
+/// state. The directory itself is constructed by
 /// `directory_store::AccountStore::open` and rebuilt every time the
 /// static config changes; that helper is what surfaces the per-domain
 /// entries to the `Directory` consulted at MAIL FROM time.
@@ -68,11 +69,15 @@ pub(super) fn wire_smtp_submission_limits(
 	server: Server,
 	config: &Config,
 	send_limiter: &Option<Arc<SendLimiter>>,
+	tenant_limits: Option<&Arc<crate::api::TenantLimits>>,
 ) -> Server {
 	let mut server = server;
 	if let Some(limiter) = send_limiter {
 		server = server.with_send_limiter(Arc::clone(limiter));
 	}
 	server = server.with_global_submission_rate_limit(config.submission_rate_limit_per_min);
+	if let Some(limits) = tenant_limits {
+		server = server.with_tenant_limits(Arc::clone(limits));
+	}
 	server
 }

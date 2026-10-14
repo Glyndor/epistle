@@ -86,15 +86,19 @@ pub async fn send(
 
 	// Per-tenant aggregate submission rate limit. Sits on top of the
 	// existing per-account limiter (which the SMTP session enforces); the
-	// empty `tenant_limits` is the identity and short-circuits.
+	// empty `tenant_limits` is the identity and short-circuits. The
+	// charge is one unit per recipient so a 100-recipient message costs
+	// 100 units; the per-account cap above counts the same way.
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	if let Err(message) = state
-		.tenant_limits()
-		.check_aggregate_rate(std::slice::from_ref(&request.from), now)
-	{
+	let recipient_count = recipients.len() as u32;
+	if let Err(message) = state.tenant_limits().check_aggregate_rate_n(
+		std::slice::from_ref(&request.from),
+		recipient_count,
+		now,
+	) {
 		return Err(ApiError::rate_limited_with_message(message));
 	}
 

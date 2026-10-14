@@ -95,6 +95,21 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 	if recipients.is_empty() {
 		return Err("noRecipients".into());
 	}
+	// Bound the recipient list to the same ceiling the SMTP and REST
+	// paths enforce. RFC 9422 (the SPEC the EHLO LIMITS RCPTMAX line
+	// points at) gives the per-message recipient count; JMAP callers
+	// must hit the same wall so no protocol can carry a 101-recipient
+	// message while the others refuse the 101st.
+	if recipients.len() > crate::smtp::session::MAX_RECIPIENTS {
+		return Err(Refusal {
+			kind: "tooManyRecipients",
+			description: Some(format!(
+				"too many recipients ({} > {})",
+				recipients.len(),
+				crate::smtp::session::MAX_RECIPIENTS,
+			)),
+		});
+	}
 	// Send-as guard: the envelope mailFrom must belong to the account on whose
 	// behalf the bearer authenticated, matching what SMTP enforces at
 	// `src/smtp/session/mod.rs:380`. Empty mailFrom is the null reverse path
@@ -159,6 +174,36 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 				);
 			}
 		}
+	}
+	// Per-tenant aggregate submission rate limit. The same
+	// `SendLimiter` backs SMTP, REST and JMAP, so a sender cannot
+	// triple the budget by switching protocols. The charge is one
+	// unit per recipient, matching the SMTP and REST paths. With
+	// no tenant limits configured the helper short-circuits and the
+	// submission is accepted. The JMAP error type `rateLimit` is
+	// RFC 8620 §5.3's resource-cap reply, the closest available to
+	// "your tenant is at its per-minute cap".
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let view = state
+		.accounts()
+		.into_iter()
+		.find(|a| a.name == account)
+		.ok_or_else(|| Refusal {
+			kind: "accountNotFound",
+			description: None,
+		})?;
+	if let Err(message) = state.tenant_limits().check_aggregate_rate_n(
+		&view.addresses,
+		recipients.len() as u32,
+		now,
+	) {
+		return Err(Refusal {
+			kind: "rateLimit",
+			description: Some(message),
+		});
 	}
 	// A full local mailbox is refused now, not bounced days later
 	// (RFC 8620 §5.3 `overQuota`).
