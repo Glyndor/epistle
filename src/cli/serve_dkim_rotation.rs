@@ -191,9 +191,11 @@ pub fn spawn_dkim_rotation(
 			if let Some(webhook) = webhook {
 				rotator = rotator.with_webhook(webhook);
 			}
-			if let Some(dkim) = &config.dkim {
+			if let Some(dkim) = &config.dkim
+				&& let Some(selector) = dkim.selector.as_ref()
+			{
 				rotator = rotator.keeping(
-					std::iter::once(dkim.selector.clone())
+					std::iter::once(selector.clone())
 						.chain(dkim.rsa_selector.clone())
 						.collect(),
 				);

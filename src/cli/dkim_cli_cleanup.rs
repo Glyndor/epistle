@@ -53,9 +53,13 @@ pub(super) fn cleanup_with(
 		DkimRotationPlan::Off => (Vec::new(), false),
 	};
 	let zone = config.dns.as_ref().map_or("", |dns| dns.zone.as_str());
-	let keep: Vec<String> = std::iter::once(dkim.selector.clone())
-		.chain(dkim.rsa_selector.clone())
-		.collect();
+	let mut keep: Vec<String> = Vec::new();
+	if let Some(selector) = dkim.selector.as_ref() {
+		keep.push(selector.clone());
+	}
+	if let Some(rsa) = dkim.rsa_selector.as_ref() {
+		keep.push(rsa.clone());
+	}
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {

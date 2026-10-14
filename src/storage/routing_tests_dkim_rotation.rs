@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use crate::dkim::rotate::Decision;
 use crate::dkim::test_support::{KeyDns, signature_fields};
-use crate::dkim::{ReloadableSigner, Rotator, Signer};
+use crate::dkim::{PerDomainSigner, ReloadableSigner, Rotator, Signer};
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError};
 
 struct NoNetworkDns;
@@ -32,8 +32,9 @@ async fn check_delivery(rotate: bool) {
 	let (pem, _) = crate::dkim::generate_key().expect("key");
 	let key_file = root.join("original.key");
 	std::fs::write(&key_file, pem).expect("write key");
-	let signer =
+	let default_signer =
 		ReloadableSigner::new(Arc::new(Signer::load("original", &key_file).expect("load")));
+	let signer = PerDomainSigner::new(default_signer.clone(), Vec::new());
 	let domains = ["example.org", "other.example.net"];
 	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		domains.map(str::to_string),
@@ -41,11 +42,11 @@ async fn check_delivery(rotate: bool) {
 	));
 	let split = SplitDelivery::new(&root, directory)
 		.expect("sink")
-		.with_signer(signer.clone());
+		.with_signer(signer);
 	let expected_selector = if rotate {
 		let rotator = Rotator::new(
 			root.clone(),
-			signer.clone(),
+			default_signer.clone(),
 			Arc::new(NoNetworkDns),
 			"example.org".into(),
 			vec!["example.org".into()],
@@ -92,7 +93,7 @@ async fn check_delivery(rotate: bool) {
 		// from the rotator's separate DNS publication policy.
 		let dns = KeyDns(std::collections::HashMap::from([(
 			format!("{expected_selector}._domainkey.{domain}"),
-			vec![signer.current().dns_record_value()],
+			vec![default_signer.current().dns_record_value()],
 		)]));
 		let results = crate::dkim::verify_message(&dns, &entry.data).await;
 		assert_eq!(results.len(), 1, "queued mail carries one signature");

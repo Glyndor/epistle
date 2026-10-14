@@ -20,7 +20,10 @@ pub(super) fn routed_state(dir: &std::path::Path) -> ApiState {
 	let (pem, _) = crate::dkim::generate_key().expect("key");
 	let key_file = dir.join("dkim.key");
 	std::fs::write(&key_file, pem).expect("write key");
-	let signer = ReloadableSigner::new(Arc::new(Signer::load("sel", &key_file).expect("load")));
+	let signer = crate::dkim::PerDomainSigner::new(
+		ReloadableSigner::new(Arc::new(Signer::load("sel", &key_file).expect("load"))),
+		Vec::new(),
+	);
 	let directory =
 		crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::new(
 			["example.org".to_string()],
