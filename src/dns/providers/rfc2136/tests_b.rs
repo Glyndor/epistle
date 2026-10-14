@@ -286,6 +286,7 @@ async fn dkim_retire_with_empty_value_uses_class_any() {
 				kind: RecordKind::Txt,
 				value: String::new(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -321,6 +322,7 @@ async fn srv_upsert_encodes_priority_weight_port_target_in_wire_message() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org.".to_string(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, srv).await.expect("srv upsert");
 	let caps = captured.lock().unwrap();

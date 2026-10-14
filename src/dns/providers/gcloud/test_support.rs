@@ -79,6 +79,9 @@ pub(super) struct MockState {
 	pub(super) bearers: Vec<String>,
 	/// Rrsets now considered live (used to compute whether a change is valid).
 	pub(super) live_rrsets: Vec<Rrset>,
+	/// When set, the rrsets listing answers this many rrsets per page and
+	/// hands out a `nextPageToken` for the rest, as the API may.
+	pub(super) page_size: Option<usize>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -226,6 +229,7 @@ pub(super) async fn list_zones(
 /// GET /dns/v1/projects/{p}/managedZones/{z}/rrsets — return the current set.
 pub(super) async fn list_rrsets(
 	State(state): State<Shared>,
+	axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 	headers: axum::http::HeaderMap,
 ) -> Result<axum::Json<Value>, axum::http::StatusCode> {
 	let auth = headers
@@ -237,7 +241,18 @@ pub(super) async fn list_rrsets(
 	}
 	let mut s = state.lock().unwrap();
 	s.bearers.push(auth.to_string());
-	let value = serde_json::json!({ "rrsets": s.live_rrsets });
+	let Some(size) = s.page_size else {
+		return Ok(axum::Json(serde_json::json!({ "rrsets": s.live_rrsets })));
+	};
+	let start: usize = query
+		.get("pageToken")
+		.map_or(Ok(0), |token| token.parse())
+		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	let end = (start + size).min(s.live_rrsets.len());
+	let mut value = serde_json::json!({ "rrsets": s.live_rrsets[start.min(end)..end] });
+	if end < s.live_rrsets.len() {
+		value["nextPageToken"] = Value::from(end.to_string());
+	}
 	Ok(axum::Json(value))
 }
 
@@ -345,5 +360,6 @@ pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }

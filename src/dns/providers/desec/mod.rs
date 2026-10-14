@@ -301,6 +301,7 @@ impl DnsProvider for DesecProvider {
 							value
 						},
 						ttl: r.ttl,
+						proxied: None,
 					})
 				})
 				.collect())

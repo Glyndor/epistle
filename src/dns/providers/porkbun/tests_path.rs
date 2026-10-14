@@ -21,6 +21,7 @@ async fn zone_and_record_id_are_escaped_path_segments() {
 				kind: RecordKind::A,
 				value: String::new(),
 				ttl: 300,
+				proxied: None,
 			},
 		)
 		.await

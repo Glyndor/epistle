@@ -24,12 +24,7 @@ pub(super) const KEY_NAME: &str = "epistle-key.";
 pub(super) const KEY_BASE64: &str = "c3VwZXJzZWNyZXQta2V5LW1hdGVyaWFsLWZvci10ZXN0cw==";
 
 pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
-	DnsRecord {
-		name: name.to_string(),
-		kind: RecordKind::Txt,
-		value: value.to_string(),
-		ttl: 3600,
-	}
+	DnsRecord::new(name, RecordKind::Txt, value, 3600)
 }
 
 pub(super) fn make_signing_pair() -> TSigner {
@@ -513,12 +508,12 @@ async fn txt_upsert_uses_class_none_and_empty_value_delete_uses_class_any() {
 	provider
 		.delete(
 			ZONE,
-			DnsRecord {
-				name: "_dkim._domainkey.example.org".into(),
-				kind: RecordKind::Txt,
-				value: String::new(),
-				ttl: 3600,
-			},
+			DnsRecord::new(
+				"_dkim._domainkey.example.org",
+				RecordKind::Txt,
+				String::new(),
+				3600,
+			),
 		)
 		.await
 		.expect("delete");
@@ -573,12 +568,7 @@ async fn mx_upsert_with_a_different_case_target_uses_class_any_delete() {
 	provider
 		.upsert(
 			ZONE,
-			DnsRecord {
-				name: ZONE.into(),
-				kind: RecordKind::Mx,
-				value: "10 mail.example.org".into(),
-				ttl: 3600,
-			},
+			DnsRecord::new(ZONE, RecordKind::Mx, "10 mail.example.org", 3600),
 		)
 		.await
 		.expect("MX upsert");
@@ -629,12 +619,7 @@ async fn mx_upsert_encodes_preference_and_exchange_in_wire_message() {
 	})
 	.await;
 	let provider = provider_with_endpoint(endpoint);
-	let mx = DnsRecord {
-		name: ZONE.to_string(),
-		kind: RecordKind::Mx,
-		value: "10 mail.example.org.".to_string(),
-		ttl: 3600,
-	};
+	let mx = DnsRecord::new(ZONE, RecordKind::Mx, "10 mail.example.org.", 3600);
 	provider.upsert(ZONE, mx).await.expect("mx upsert");
 	let caps = captured.lock().unwrap();
 	let wire = caps.first().expect("captured a request").wire.clone();

@@ -201,6 +201,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -373,6 +374,7 @@ async fn unsupported_kind_is_rejected() {
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert(ZONE, tlsa).await,
@@ -389,6 +391,7 @@ async fn mx_upsert_splits_priority_target_into_fields() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, mx).await.expect("mx upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -405,6 +408,7 @@ async fn srv_upsert_splits_priority_weight_port_target_into_fields() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, srv).await.expect("srv upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -423,6 +427,7 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 		kind: RecordKind::Caa,
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, caa).await.expect("caa upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -434,3 +439,14 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"content\":\".\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+}

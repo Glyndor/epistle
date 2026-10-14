@@ -60,6 +60,7 @@ impl DnsProvider for Zone {
 					kind: crate::dns::provider::RecordKind::Txt,
 					value: value.clone(),
 					ttl: 300,
+					proxied: None,
 				})
 			})
 			.collect();

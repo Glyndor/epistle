@@ -398,6 +398,19 @@ the value. `test` lists the zone's records through the provider (a read only cal
 10 second limit) and reports the count. Every mutation accepts `--dry-run` and
 `--config FILE`.
 
+## DNS lockdown (`epistle dns lockdown`)
+
+```sh
+epistle dns lockdown [<domain>] [--dry-run] [--yes] [--json] [--dmarc reject]
+epistle dns lockdown [<domain>] --undo [--dry-run] [--yes]
+```
+
+Publishes the anti-spoofing records for the domain (the `[dns]` zone by
+default): DMARC one step stricter per run, a null SPF and null MX on
+names that send no mail, and a wildcard null SPF. It asks first; `--yes`
+skips the question. `--undo` removes what earlier runs published. See
+[`docs/dns.md`](dns.md#locking-the-zone-against-spoofing).
+
 ## Blob storage (`epistle storage blobs`)
 
 ```sh

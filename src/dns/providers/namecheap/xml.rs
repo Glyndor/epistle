@@ -184,5 +184,6 @@ pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
 		kind,
 		value,
 		ttl: host.ttl,
+		proxied: None,
 	})
 }

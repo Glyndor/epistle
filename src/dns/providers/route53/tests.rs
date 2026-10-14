@@ -127,6 +127,7 @@ async fn upsert_sends_signed_change_request() {
 		kind: RecordKind::Txt,
 		value: "v=DMARC1; p=none".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", record)
@@ -175,6 +176,7 @@ async fn delete_uses_delete_action() {
 		kind: RecordKind::Txt,
 		value: "v=DMARC1; p=none".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.delete("example.org", record)
@@ -224,6 +226,7 @@ async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
 				kind: RecordKind::Txt,
 				value: "token-aaaa".into(),
 				ttl: 60,
+				proxied: None,
 			},
 		)
 		.await
@@ -248,6 +251,7 @@ async fn mx_upsert_uses_verbatim_value_in_value_element() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -275,6 +279,7 @@ async fn srv_upsert_uses_verbatim_value_in_value_element() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", srv)
@@ -296,6 +301,7 @@ async fn caa_upsert_uses_verbatim_value_in_value_element() {
 		kind: RecordKind::Caa,
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider
 		.upsert("example.org", caa)

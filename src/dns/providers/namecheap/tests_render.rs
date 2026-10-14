@@ -50,3 +50,17 @@ fn sandbox_url_constant_is_sandbox_subdomain() {
 		Some("api.sandbox.namecheap.com")
 	);
 }
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[test]
+fn the_null_mx_keeps_its_root_target() {
+	let mx = crate::dns::provider::DnsRecord::new(
+		"www.example.org",
+		crate::dns::provider::RecordKind::Mx,
+		"0 .",
+		3600,
+	);
+	let host = render::host_from_record(&mx, "example.org").expect("host");
+	assert_eq!(host.address, ".");
+	assert_eq!(host.mx_pref, Some(0));
+}

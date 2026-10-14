@@ -56,24 +56,32 @@ pub fn record_description() -> String {
 }
 
 /// A DNS record kind epistle publishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecordKind {
 	/// IPv4 address record.
+	#[serde(rename = "A")]
 	A,
 	/// IPv6 address record.
+	#[serde(rename = "AAAA")]
 	Aaaa,
 	/// Text record. Used for SPF, DMARC, DKIM keys, MTA-STS, TLSRPT, and
 	/// ACME DNS-01 challenges.
+	#[serde(rename = "TXT")]
 	Txt,
 	/// Mail exchange record.
+	#[serde(rename = "MX")]
 	Mx,
 	/// Canonical name (alias) record.
+	#[serde(rename = "CNAME")]
 	Cname,
 	/// TLSA association record (RFC 6698) for DANE.
+	#[serde(rename = "TLSA")]
 	Tlsa,
 	/// Service locator record (RFC 2782).
+	#[serde(rename = "SRV")]
 	Srv,
 	/// Certification Authority Authorization (RFC 8659).
+	#[serde(rename = "CAA")]
 	Caa,
 }
 
@@ -111,7 +119,7 @@ pub fn parse_srv(value: &str) -> Option<(u16, u16, u16, String)> {
 }
 
 /// A DNS record to publish or remove.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DnsRecord {
 	/// Fully-qualified record name (e.g. `_dmarc.example.org`).
 	pub name: String,
@@ -126,6 +134,15 @@ pub struct DnsRecord {
 	pub value: String,
 	/// Time-to-live in seconds. Providers translate to their own semantics.
 	pub ttl: u32,
+	/// Whether the record is proxied through the provider's edge (Cloudflare's
+	/// "orange cloud"). Providers that do not proxy (every other one
+	/// epistle publishes through) ignore it on write and leave it `None`
+	/// on read. Cloudflare populates it from the API's `proxied` field on
+	/// `list` and always writes `proxied: false` for mail-related names,
+	/// because traffic for SMTP / IMAP / POP3 / submission cannot reach
+	/// epistle through the proxy.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub proxied: Option<bool>,
 }
 
 /// A provider operation failure. Its message never contains the secret token.
@@ -248,6 +265,38 @@ impl DnsProvider for ManualProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+/// An MX target as a provider API takes it: without the trailing root dot,
+/// except the null MX target (RFC 7505), which is the root `.` itself and
+/// would otherwise become an empty host.
+pub fn mx_target_for_api(target: &str) -> &str {
+	if target == "." {
+		target
+	} else {
+		target.trim_end_matches('.')
+	}
+}
+
+impl DnsRecord {
+	/// A record with `proxied: None` (the default for every non-Cloudflare
+	/// provider). The convenience constructor exists so call sites that
+	/// build a record by hand do not have to spell the field out; tests
+	/// already build `DnsRecord` literally.
+	pub fn new(
+		name: impl Into<String>,
+		kind: RecordKind,
+		value: impl Into<String>,
+		ttl: u32,
+	) -> Self {
+		Self {
+			name: name.into(),
+			kind,
+			value: value.into(),
+			ttl,
+			proxied: None,
+		}
 	}
 }
 

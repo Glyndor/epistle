@@ -376,6 +376,7 @@ impl BunnyProvider {
 					kind,
 					value,
 					ttl: r.ttl.max(0) as u32,
+					proxied: None,
 				})
 			})
 			.collect())

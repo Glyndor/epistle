@@ -114,6 +114,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -366,6 +367,7 @@ async fn mx_upsert_splits_priority_and_target() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().body("/dns/create/example.org");
@@ -382,6 +384,7 @@ async fn srv_upsert_passes_value_through_and_sets_prio_to_priority() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().body("/dns/create/example.org");
@@ -478,3 +481,14 @@ mod txt_forms;
 
 #[path = "tests_contract.rs"]
 mod contract;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["content"], ".");
+	assert_eq!(body["prio"], serde_json::json!(0));
+}

@@ -38,6 +38,7 @@ fn record() -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: "v=DMARC1; p=reject".to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -292,4 +293,11 @@ fn same_txt_purpose_with_an_empty_value() {
 	assert!(!same_txt_purpose("", "token-aaaa"));
 	assert!(!same_txt_purpose("v=spf1 -all", ""));
 	assert!(!same_txt_purpose("token-aaaa", ""));
+}
+
+#[test]
+fn an_mx_target_loses_its_root_dot_except_the_null_mx() {
+	assert_eq!(mx_target_for_api("mail.example.org."), "mail.example.org");
+	assert_eq!(mx_target_for_api("mail.example.org"), "mail.example.org");
+	assert_eq!(mx_target_for_api("."), ".");
 }

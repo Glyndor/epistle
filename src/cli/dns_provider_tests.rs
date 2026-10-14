@@ -194,6 +194,7 @@ fn test_reports_the_record_count_and_writes_nothing() {
 		kind: RecordKind::A,
 		value: "192.0.2.1".into(),
 		ttl: 300,
+		proxied: None,
 	};
 	let (result, out, status) = probe(&Fake(Ok(vec![record]), false), Duration::from_secs(1));
 	assert_eq!(result.unwrap(), ExitCode::SUCCESS);

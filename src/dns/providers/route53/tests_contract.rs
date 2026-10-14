@@ -36,6 +36,7 @@ async fn upsert_over(existing: &[&str]) -> Vec<String> {
 				kind: RecordKind::Txt,
 				value: NEW_DKIM.into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await
@@ -95,6 +96,7 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 				kind: RecordKind::Txt,
 				value: NEW_SPF.into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await

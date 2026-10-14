@@ -10,6 +10,8 @@ use super::resource;
 use super::stack::StackAction;
 use crate::config::Config;
 
+#[path = "dns_lockdown.rs"]
+mod lockdown_handler;
 #[path = "dns_provider_probe.rs"]
 mod probe;
 #[path = "dns_provider_set.rs"]
@@ -17,6 +19,9 @@ mod set;
 #[path = "dns_provider_show.rs"]
 mod show;
 
+#[cfg(test)]
+#[path = "dns_lockdown_tests.rs"]
+mod lockdown_tests;
 #[cfg(test)]
 #[path = "dns_provider_tests.rs"]
 mod tests;
@@ -35,6 +40,8 @@ pub enum DnsCli {
 		#[command(subcommand)]
 		action: ProviderCli,
 	},
+	/// Lock the zone against mail spoofing.
+	Lockdown(lockdown_handler::LockdownArgs),
 }
 
 /// Provider actions.
@@ -61,14 +68,17 @@ pub enum ProviderCli {
 }
 
 pub(super) fn run(path: &Path, action: DnsCli, dry_run: bool) -> ExitCode {
-	resource::exit_resource(execute_with(
-		path,
-		action,
-		dry_run,
-		&mut std::io::stdout().lock(),
-		&mut super::style::stderr(),
-		super::stack::run,
-	))
+	match action {
+		DnsCli::Lockdown(args) => lockdown_handler::run(path, args, dry_run),
+		action => resource::exit_resource(execute_with(
+			path,
+			action,
+			dry_run,
+			&mut std::io::stdout().lock(),
+			&mut super::style::stderr(),
+			super::stack::run,
+		)),
+	}
 }
 
 fn execute_with(
@@ -79,7 +89,9 @@ fn execute_with(
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
-	let DnsCli::Provider { action } = action;
+	let DnsCli::Provider { action } = action else {
+		return Err("dns lockdown runs through its own path; this should not be reached".into());
+	};
 	let change: resource::Change = match action {
 		ProviderCli::Show { json } => {
 			show::run(

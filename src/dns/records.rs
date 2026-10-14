@@ -215,6 +215,7 @@ pub fn build_records(
 				kind: RecordKind::A,
 				value: ip.to_string(),
 				ttl: TTL,
+				proxied: None,
 			},
 		});
 	}
@@ -226,6 +227,7 @@ pub fn build_records(
 				kind: RecordKind::Aaaa,
 				value: ip.to_string(),
 				ttl: TTL,
+				proxied: None,
 			},
 		});
 	}
@@ -237,6 +239,7 @@ pub fn build_records(
 				kind: RecordKind::Txt,
 				value,
 				ttl: TTL,
+				proxied: None,
 			},
 		};
 		let srv = |name: String, port: u16| PublishRecord {
@@ -246,6 +249,7 @@ pub fn build_records(
 				kind: RecordKind::Srv,
 				value: format!("0 1 {port} {hostname}."),
 				ttl: TTL,
+				proxied: None,
 			},
 		};
 		let cname = |name: String| PublishRecord {
@@ -255,6 +259,7 @@ pub fn build_records(
 				kind: RecordKind::Cname,
 				value: hostname.to_string(),
 				ttl: TTL,
+				proxied: None,
 			},
 		};
 
@@ -290,6 +295,7 @@ pub fn build_records(
 				kind: RecordKind::Mx,
 				value: format!("10 {hostname}"),
 				ttl: TTL,
+				proxied: None,
 			},
 		});
 		// DKIM public keys, one per configured selector. Two are typical
@@ -329,6 +335,7 @@ pub fn build_records(
 					kind: RecordKind::Caa,
 					value: format!("0 issue \"{ca}\""),
 					ttl: TTL,
+					proxied: None,
 				},
 			});
 		}
@@ -355,6 +362,7 @@ pub fn build_records(
 				kind: RecordKind::Tlsa,
 				value: association.to_string(),
 				ttl: TTL,
+				proxied: None,
 			},
 		});
 	}
@@ -393,6 +401,7 @@ pub async fn publish_tlsa(
 		kind: RecordKind::Tlsa,
 		value,
 		ttl: TTL,
+		proxied: None,
 	};
 	provider.upsert(hostname, record).await
 }

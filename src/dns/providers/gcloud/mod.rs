@@ -41,6 +41,8 @@ use crate::dns::provider::{
 };
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
+mod list;
+
 /// How Cloud DNS wants a TXT value written and lists it back; see
 /// `GcloudProvider::rrdatas`.
 const TXT_FORM: TxtForm = TxtForm::Presentation;
@@ -106,6 +108,9 @@ pub(crate) struct Rrset {
 struct ListRrsetsResp {
 	#[serde(default)]
 	rrsets: Vec<Rrset>,
+	/// Set when more rrsets follow on another page.
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
 }
 
 /// A Google Cloud DNS-backed DNS provider for one managed zone.
@@ -258,23 +263,6 @@ impl GcloudProvider {
 			.find(|z| z.dnsName.trim_end_matches('.') == zone.trim_end_matches('.'))
 			.map(|z| z.name)
 			.ok_or_else(|| ProviderError::Remote(format!("zone not found: {zone}")))
-	}
-
-	async fn list_rrsets(&self, managed_zone: &str) -> Result<Vec<Rrset>, ProviderError> {
-		let token = self.ensure_token().await?;
-		let url = self.managed_zones_url(&[managed_zone, "rrsets"])?;
-		let response = self
-			.client
-			.get(url.into_url())
-			.bearer_auth(&token)
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		Self::classify(&response, false)?;
-		let text = self.read_body(response).await?;
-		let parsed: ListRrsetsResp =
-			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
-		Ok(parsed.rrsets)
 	}
 
 	async fn post_change(
@@ -483,6 +471,7 @@ impl GcloudProvider {
 						value
 					},
 					ttl: r.ttl,
+					proxied: None,
 				})
 			})
 			.collect())

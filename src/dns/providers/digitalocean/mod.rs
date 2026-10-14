@@ -317,9 +317,8 @@ impl DigitaloceanProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			return Ok(serde_json::json!({
 				"type": kind,
 				"name": rel,
@@ -456,6 +455,7 @@ impl DigitaloceanProvider {
 					kind,
 					value,
 					ttl: r.ttl,
+					proxied: None,
 				})
 			})
 			.collect())
