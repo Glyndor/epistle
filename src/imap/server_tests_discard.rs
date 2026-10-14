@@ -63,6 +63,48 @@ async fn above_cap_literal_closes_without_reading_payload() {
 	task.await.expect("server task").expect("server result");
 }
 
+#[tokio::test(start_paused = true)]
+async fn above_cap_synchronizing_literal_is_refused_with_toobig() {
+	let (mut client, task, _dir) = start_server(Duration::from_secs(1800));
+	greeting(&mut client).await;
+	// RFC 7889 §3: the client waits for a continuation that never comes,
+	// so the server answers TOOBIG and the connection carries on.
+	let over = crate::imap::command::MAX_APPEND_SIZE + 1;
+	client
+		.write_all(format!("a2 APPEND INBOX {{{over}}}\r\na3 NOOP\r\na4 LOGOUT\r\n").as_bytes())
+		.await
+		.expect("commands");
+	let (closed, reply) = read_closed(&mut client).await;
+	assert!(closed, "LOGOUT must end the session");
+	assert!(
+		reply.starts_with("a2 NO [TOOBIG] message exceeds APPENDLIMIT\r\n"),
+		"oversized synchronizing APPEND must get a tagged TOOBIG: {reply}"
+	);
+	assert!(reply.contains("a3 OK"), "the session must go on: {reply}");
+	task.await.expect("server task").expect("server result");
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_append_payload_is_not_read_as_commands() {
+	let (mut client, task, _dir) = start_server(Duration::from_secs(1800));
+	greeting(&mut client).await;
+	// An unclosed flag list with a non-synchronizing literal: the payload
+	// follows at once and must be drained, not answered as a command.
+	client
+		.write_all(b"a2 APPEND INBOX (\\Seen {7+}\r\nx1 NOOP\r\na3 LOGOUT\r\n")
+		.await
+		.expect("commands");
+	let (closed, reply) = read_closed(&mut client).await;
+	assert!(closed, "LOGOUT must end the session");
+	assert!(reply.starts_with("a2 BAD"), "{reply}");
+	assert!(
+		!reply.contains("x1 "),
+		"the payload ran as a command: {reply}"
+	);
+	assert!(reply.contains("a3 OK"), "{reply}");
+	task.await.expect("server task").expect("server result");
+}
+
 #[tokio::test]
 async fn discarded_literal_storage_stays_below_one_mib() {
 	let size = 8 * 1024 * 1024;

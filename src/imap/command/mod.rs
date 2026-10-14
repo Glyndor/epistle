@@ -418,6 +418,9 @@ pub enum StatusItem {
 	MailboxId,
 	/// `HIGHESTMODSEQ`: the mailbox's highest mod-sequence (RFC 7162 §3.1.6).
 	HighestModseq,
+	/// `APPENDLIMIT` (RFC 7889 §4): the largest message, in octets, an
+	/// APPEND to the mailbox may carry.
+	AppendLimit,
 }
 
 /// The threading algorithm a `THREAD` command asked for. The parser
@@ -612,6 +615,9 @@ pub enum ParseError {
 	Unknown(String),
 	/// Valid tag, known command, bad arguments: tagged `BAD`.
 	BadArguments(String),
+	/// Valid tag, APPEND or REPLACE whose literal exceeds the advertised
+	/// APPENDLIMIT: tagged `NO [TOOBIG]` (RFC 7889 §3).
+	TooBig(String),
 }
 
 /// Parse `1`, `1:5`, `1:*`, `*`, comma-separated, or the SEARCHRES `$`

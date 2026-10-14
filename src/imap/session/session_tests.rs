@@ -187,6 +187,9 @@ mod thread_ordered;
 #[path = "session_tests_thread_references.rs"]
 mod thread_references;
 
+#[path = "session_tests_appendlimit.rs"]
+mod appendlimit;
+
 #[path = "session_tests_notify_status.rs"]
 mod notify_status;
 

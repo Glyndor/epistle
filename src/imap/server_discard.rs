@@ -68,6 +68,17 @@ pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>
 	}
 }
 
+/// Whether a command line announces a non-synchronizing literal above the
+/// APPEND limit, which ends the connection. Its payload is already on the
+/// wire and draining an arbitrary announced size is not worth it. A
+/// synchronizing one goes on to the session, which answers NO [TOOBIG]
+/// (RFC 7889 §3) before the client sends any of it.
+pub(super) fn oversized_sent_literal(line: &str) -> bool {
+	crate::imap::command::literal_announcement_in_line(line).is_some_and(|literal| {
+		literal.size > crate::imap::command::MAX_APPEND_SIZE && !literal.synchronizing
+	})
+}
+
 /// Drop a line that follows a drained literal of a rejected command: its
 /// CRLF, the `)` closing a UTF8 APPEND item, or the next message of a
 /// MULTIAPPEND. Answering it as a new command would send `* BAD` for an

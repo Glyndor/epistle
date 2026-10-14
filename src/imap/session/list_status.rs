@@ -192,6 +192,11 @@ impl Session {
 				StatusItem::HighestModseq => {
 					format!("HIGHESTMODSEQ {}", snapshot.highest_modseq())
 				}
+				StatusItem::AppendLimit => {
+					// RFC 7889 §4: the same octet limit CAPABILITY
+					// advertises, since it holds for every mailbox.
+					format!("APPENDLIMIT {}", crate::imap::command::MAX_APPEND_SIZE)
+				}
 			};
 			parts.push_str(&rendered);
 		}

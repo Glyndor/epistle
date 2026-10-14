@@ -36,6 +36,15 @@ mod utf8;
 
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
+/// The size of the non-synchronizing literal a tagged APPEND or REPLACE
+/// line announces (RFC 7888 §4): bytes the client has already sent, which
+/// a rejection must discard.
+fn sent_literal(line: &str) -> Option<usize> {
+	super::command::literal_announcement_in_line(line)
+		.filter(|literal| !literal.synchronizing)
+		.map(|literal| literal.size)
+}
+
 impl Session {
 	#[cfg(test)]
 	fn rev2_enabled(&self) -> bool {
@@ -73,11 +82,16 @@ impl Session {
 				// payload is already on the wire and must be discarded so it
 				// does not arrive as the next command.
 				let mut output = Output::text(format!("{tag} BAD invalid arguments\r\n"));
-				if let Some(announcement) = super::command::literal_announcement_in_line(line)
-					&& !announcement.synchronizing
-				{
-					output.discard_literal = Some(announcement.size);
-				}
+				output.discard_literal = sent_literal(line);
+				return output;
+			}
+			Err(ParseError::TooBig(tag)) => {
+				// A non-synchronizing literal above the limit never gets
+				// here from the network layer, which closes the connection
+				// instead of reading it; the drain covers direct callers.
+				let mut output =
+					Output::text(format!("{tag} NO [TOOBIG] message exceeds APPENDLIMIT\r\n"));
+				output.discard_literal = sent_literal(line);
 				return output;
 			}
 		};
