@@ -5,7 +5,7 @@ use crate::migrate::mox;
 
 /// An epistle configuration with no domains yet, as `init` leaves one
 /// before the first domain is added, plus its data directory.
-fn epistle(dir: &Path, extra: &str) -> PathBuf {
+pub(super) fn epistle(dir: &Path, extra: &str) -> PathBuf {
 	let data = dir.join("data");
 	std::fs::create_dir_all(&data).expect("data dir");
 	let file = dir.join("mail.toml");
@@ -25,7 +25,7 @@ fn epistle(dir: &Path, extra: &str) -> PathBuf {
 	file
 }
 
-fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
+pub(super) fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
 	let source = dir.join("mox");
 	std::fs::create_dir_all(&source).expect("mox dir");
 	let written = mox::fixture::write(&source);
@@ -33,7 +33,7 @@ fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
 }
 
 /// Every file under `dir`, with its bytes, to prove a run wrote nothing.
-fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+pub(super) fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 	let mut out = Vec::new();
 	let mut pending = vec![dir.to_path_buf()];
 	while let Some(next) = pending.pop() {
@@ -52,7 +52,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 
 /// A plan for one domain whose keys can sign it, without the account epistle
 /// cannot name.
-fn single_domain(plan: &mut Plan) {
+pub(super) fn single_domain(plan: &mut Plan) {
 	plan.domains.retain(|d| d == "example.com");
 	plan.keys.retain(|k| k.domain == "example.com");
 	for account in &mut plan.accounts {
@@ -86,12 +86,21 @@ fn apply_creates_domains_aliases_keys_and_disabled_accounts() {
 	assert_eq!(config.domains, ["example.com"]);
 	assert_eq!(config.alias[0].address, "team@example.com");
 	assert!(!config.alias[0].hidden);
-	let dkim = config.dkim.clone().expect("[dkim]");
-	assert_eq!(dkim.selector, "2024a", "the selector Mox published stays");
-	assert_eq!(dkim.rsa_selector.as_deref(), Some("2024b"));
-	let rsa_file = dkim.rsa_key_file.expect("rsa key file");
+	let dkim = config.dkim.clone().expect("[dkim] is configured");
+	// The single domain's keys live in a per-domain override.
+	let override_ = dkim
+		.domain
+		.iter()
+		.find(|d| d.name == "example.com")
+		.expect("example.com has a per-domain override");
+	assert_eq!(
+		override_.selector, "2024a",
+		"the selector Mox published stays"
+	);
+	assert_eq!(override_.rsa_selector.as_deref(), Some("2024b"));
+	let rsa_file = override_.rsa_key_file.clone().expect("rsa key file");
 	// The server's own signer loads both keys and signs with them.
-	let signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
+	let signer = crate::dkim::Signer::load(&override_.selector, &override_.key_file)
 		.and_then(|signer| signer.with_rsa("2024b", &rsa_file))
 		.expect("epistle loads the imported keys");
 	let signature = signer
@@ -109,7 +118,7 @@ fn apply_creates_domains_aliases_keys_and_disabled_accounts() {
 		written.rsa
 	);
 	#[cfg(unix)]
-	for file in [&dkim.key_file, &rsa_file, &passwords] {
+	for file in [&override_.key_file, &rsa_file, &passwords] {
 		use std::os::unix::fs::PermissionsExt;
 		let mode = std::fs::metadata(file).expect("meta").permissions().mode();
 		assert_eq!(mode & 0o777, 0o600, "{}", file.display());
@@ -201,19 +210,28 @@ fn existing_accounts_and_domains_are_refused_unless_merged() {
 }
 
 #[test]
-fn per_domain_keys_leave_dkim_alone_and_say_why() {
+fn per_domain_keys_become_per_domain_overrides() {
+	// The Mox fixture has two domains with one ed25519 key each, and
+	// example.com has an RSA pair too. The import now creates a
+	// `[[dkim.domain]]` entry per domain instead of the legacy "one
+	// key pair" note.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config_file = epistle(dir.path(), "");
 	let (plan, _) = mox_plan(dir.path());
 	let prepared = prepare(&plan, &config_file, false).expect("prepare");
 	let outcome = apply(&plan, prepared, &Passwords::Reset).expect("apply");
-	assert!(outcome.dkim.is_none());
+	// No more "one key pair" note: each domain signs with its own key.
 	assert!(
-		outcome.notes.iter().any(|n| n.contains("one key pair")),
-		"a note explains that only one key pair signs"
+		!outcome.notes.iter().any(|n| n.contains("one key pair")),
+		"the legacy note must be gone, got: {:?}",
+		outcome.notes
 	);
-	assert_eq!(outcome.key_files.len(), 3, "every key is still saved");
-	assert!(Config::load(&config_file).expect("load").dkim.is_none());
+	assert!(outcome.dkim.is_some(), "an outcome summary is reported");
+	let config = Config::load(&config_file).expect("load");
+	let dkim = config
+		.dkim
+		.expect("[dkim] is configured with per-domain overrides");
+	assert_eq!(dkim.domain.len(), 2, "two per-domain overrides land");
 }
 
 #[test]
