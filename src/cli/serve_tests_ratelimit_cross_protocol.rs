@@ -14,8 +14,6 @@
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 use super::tests_ratelimit::{
 	authenticated_submit, auth_plain, build_smtp_server, ratelimit_config, spawn_smtp_listener,
 	tls_connector, tls_session,
