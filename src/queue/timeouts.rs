@@ -27,6 +27,12 @@ pub const DATA_INIT: Duration = Duration::from_secs(2 * 60);
 pub const DATA_BLOCK: Duration = Duration::from_secs(3 * 60);
 /// The reply to the final dot (section 4.5.3.2.6).
 pub const DATA_END: Duration = Duration::from_secs(10 * 60);
+/// One whole delivery attempt for the recipients of one domain, every
+/// exchanger and every step together. Each step has its own limit, but a
+/// remote that answers each one just in time (or a domain whose every
+/// exchanger stalls until its limit) could otherwise hold a conversation
+/// slot for hours.
+pub const ATTEMPT: Duration = Duration::from_secs(60 * 60);
 /// The STARTTLS handshake.
 pub const TLS_HANDSHAKE: Duration = Duration::from_secs(60);
 /// The reply to QUIT. The outcome of every recipient is known by then, so

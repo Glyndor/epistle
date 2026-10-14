@@ -268,3 +268,40 @@ fn a_domain_with_many_exchangers_is_tried_on_a_few() {
 		))
 	);
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_exchanger_with_many_addresses_is_tried_on_two_within_the_connect_limit() {
+	let addresses: Vec<std::net::SocketAddr> = (1..=50)
+		.map(|n| std::net::SocketAddr::from(([192, 0, 2, n], 25)))
+		.collect();
+	let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	let seen = opened.clone();
+	let started = tokio::time::Instant::now();
+	let result: std::io::Result<()> = connect_any(&addresses, move |address| {
+		seen.lock().expect("opened").push(address);
+		std::future::pending()
+	})
+	.await;
+	let error = result.expect_err("every address hangs");
+	assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+	assert_eq!(*opened.lock().expect("opened"), addresses[..2].to_vec());
+	assert_eq!(started.elapsed(), timeouts::CONNECT);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_second_address_answers_when_the_first_hangs() {
+	let addresses = [
+		std::net::SocketAddr::from(([192, 0, 2, 1], 25)),
+		std::net::SocketAddr::from(([192, 0, 2, 2], 25)),
+	];
+	let started = tokio::time::Instant::now();
+	let reached = connect_any(&addresses, |address| async move {
+		if address == addresses[0] {
+			std::future::pending::<()>().await;
+		}
+		Ok(address)
+	})
+	.await;
+	assert_eq!(reached.expect("second address"), addresses[1]);
+	assert_eq!(started.elapsed(), timeouts::CONNECT / 2);
+}

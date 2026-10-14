@@ -191,3 +191,97 @@ async fn a_deferred_mail_command_does_not_try_another_exchanger() {
 		Some("451 4.3.0 try again later")
 	);
 }
+
+/// A domain publishing 50 exchangers, every one of which accepts the
+/// connection and never greets.
+fn fifty_silent_exchangers(remote: &FakeRemote) {
+	remote.exchangers(DOMAIN, vec![Script::hang(Hang::Greeting); 50]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_domain_with_fifty_silent_exchangers_is_tried_on_five() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	fifty_silent_exchangers(&remote);
+	let worker = worker_for(dir.path(), &remote);
+	let started = tokio::time::Instant::now();
+
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+
+	let opened: Vec<usize> = (1..=50)
+		.map(|n| remote.connections(&format!("mx{n}.{DOMAIN}")))
+		.collect();
+	assert_eq!(opened[..5], [1; 5]);
+	assert!(opened[5..].iter().all(|count| *count == 0), "{opened:?}");
+	assert_eq!(
+		started.elapsed(),
+		crate::queue::timeouts::GREETING * 5,
+		"five greetings waited for, one after the other"
+	);
+	let state = state(&worker);
+	assert_eq!(
+		(state.status, state.attempts),
+		(RecipientStatus::Pending, 1)
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_delivery_attempt_ends_at_its_overall_limit() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	fifty_silent_exchangers(&remote);
+	let mut worker = worker_for(dir.path(), &remote);
+	let limit = crate::queue::timeouts::GREETING * 2 + std::time::Duration::from_secs(60);
+	worker.set_attempt_limit(limit);
+	let started = tokio::time::Instant::now();
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(started.elapsed(), limit);
+	assert_eq!(remote.connections("mx3.multi.example"), 1);
+	assert_eq!(remote.connections("mx4.multi.example"), 0);
+	let state = state(&worker);
+	assert_eq!(
+		(state.status, state.attempts),
+		(RecipientStatus::Pending, 1)
+	);
+	assert_eq!(
+		state.last_error.as_deref(),
+		Some("delivery attempt timed out after 660s")
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_per_domain_cap_holds_across_every_exchanger_of_the_domain() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	fifty_silent_exchangers(&remote);
+	let spool = FsSpool::open(dir.path()).expect("open spool");
+	for n in 0..4 {
+		spool
+			.store(
+				&AcceptedMessage {
+					reverse_path: "alice@sender.example".into(),
+					recipients: vec![format!("user{n}@{DOMAIN}")],
+					data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+					require_tls: false,
+					mailbox: None,
+					tlsrpt_verified: false,
+					no_dsn: Vec::new(),
+				},
+				None,
+				&std::collections::BTreeMap::new(),
+			)
+			.expect("store");
+	}
+	let worker =
+		Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example").with_concurrency(8, 1);
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(remote.most_at_once(DOMAIN), 1);
+	let opened: usize = (1..=50)
+		.map(|n| remote.connections(&format!("mx{n}.{DOMAIN}")))
+		.sum();
+	assert_eq!(opened, 4 * 5, "five exchangers for each of four messages");
+}

@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 use crate::mtasts::Policy;
 
 use super::client::DeliveryError;
-use super::limits::MAX_EXCHANGERS;
+use super::limits::{MAX_ADDRESSES, MAX_EXCHANGERS};
 use super::timeouts;
 
 /// A bidirectional stream the SMTP client can drive.
@@ -319,7 +319,14 @@ impl Connector for MxConnector {
 			let (hosts, mx) = self.exchangers(&domain).await?;
 			let hosts = candidates(&domain, hosts, policy.as_ref(), &tried)?;
 			let (host, stream) = first_reachable(&domain, &hosts, |host| {
-				TcpStream::connect((host.to_string(), 25))
+				let host = host.to_string();
+				async move {
+					let addresses: Vec<std::net::SocketAddr> =
+						tokio::net::lookup_host((host.as_str(), 25))
+							.await?
+							.collect();
+					connect_any(&addresses, TcpStream::connect).await
+				}
 			})
 			.await?;
 			let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
@@ -366,6 +373,35 @@ pub(crate) fn candidates(
 		)));
 	}
 	Ok(rest)
+}
+
+/// Open a connection to the first of `addresses` (one exchanger's) that
+/// answers, trying at most [`MAX_ADDRESSES`] of them, each for an equal
+/// share of [`timeouts::CONNECT`]: the exchanger's whole connect stays
+/// within that limit however many addresses it publishes, and one address
+/// that never answers does not use up the time of the next.
+pub(crate) async fn connect_any<S, F, Fut>(
+	addresses: &[std::net::SocketAddr],
+	mut open: F,
+) -> std::io::Result<S>
+where
+	F: FnMut(std::net::SocketAddr) -> Fut,
+	Fut: Future<Output = std::io::Result<S>>,
+{
+	let tried = addresses.len().clamp(1, MAX_ADDRESSES);
+	let share = timeouts::CONNECT / u32::try_from(tried).unwrap_or(1);
+	let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "no address to connect to");
+	for address in addresses.iter().take(MAX_ADDRESSES) {
+		last = match tokio::time::timeout(share, open(*address)).await {
+			Ok(Ok(stream)) => return Ok(stream),
+			Ok(Err(error)) => error,
+			Err(_) => std::io::Error::new(
+				std::io::ErrorKind::TimedOut,
+				format!("{address} did not answer within {}s", share.as_secs()),
+			),
+		};
+	}
+	Err(last)
 }
 
 /// Open a connection to the first of `hosts` that answers, in order, giving

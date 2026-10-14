@@ -255,9 +255,54 @@ impl Connector for FakeRemote {
 			};
 			let (client, server) = tokio::io::duplex(64 * 1024);
 			let open = Open::new(remote.load.clone(), &domain, &host);
-			tokio::spawn(serve(server, host.clone(), script, remote, open));
+			tokio::spawn(serve(server, host.clone(), script, remote));
+			let client = Counted {
+				stream: client,
+				_open: open,
+			};
 			Ok(Connection::new(Box::new(client) as BoxedStream, host))
 		})
+	}
+}
+
+/// The client's end of a connection, counted as open until the client
+/// drops it.
+struct Counted {
+	stream: DuplexStream,
+	_open: Open,
+}
+
+impl tokio::io::AsyncRead for Counted {
+	fn poll_read(
+		mut self: std::pin::Pin<&mut Self>,
+		context: &mut std::task::Context<'_>,
+		buf: &mut tokio::io::ReadBuf<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_read(context, buf)
+	}
+}
+
+impl tokio::io::AsyncWrite for Counted {
+	fn poll_write(
+		mut self: std::pin::Pin<&mut Self>,
+		context: &mut std::task::Context<'_>,
+		buf: &[u8],
+	) -> std::task::Poll<std::io::Result<usize>> {
+		std::pin::Pin::new(&mut self.stream).poll_write(context, buf)
+	}
+
+	fn poll_flush(
+		mut self: std::pin::Pin<&mut Self>,
+		context: &mut std::task::Context<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_flush(context)
+	}
+
+	fn poll_shutdown(
+		mut self: std::pin::Pin<&mut Self>,
+		context: &mut std::task::Context<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_shutdown(context)
 	}
 }
 
@@ -266,20 +311,25 @@ async fn stall() {
 	std::future::pending::<()>().await;
 }
 
+/// Answer nothing more, and end once the client has closed the connection,
+/// so a connection counts as open exactly as long as the client keeps it.
+async fn until_closed<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) {
+	let mut sink = [0u8; 1024];
+	while tokio::io::AsyncReadExt::read(reader, &mut sink)
+		.await
+		.unwrap_or(0)
+		> 0
+	{}
+}
+
 /// Speak the server side of one SMTP conversation.
-async fn serve(
-	stream: DuplexStream,
-	host: String,
-	script: Script,
-	remote: FakeRemote,
-	_open: Open,
-) {
+async fn serve(stream: DuplexStream, host: String, script: Script, remote: FakeRemote) {
 	let (read, mut write) = tokio::io::split(stream);
 	let mut reader = BufReader::new(read);
 	let mut accepted: Vec<String> = Vec::new();
 	let mut line = String::new();
 	if script.hang == Some(Hang::Greeting) {
-		return stall().await;
+		return until_closed(&mut reader).await;
 	}
 	let greeting = script
 		.greeting
@@ -303,7 +353,7 @@ async fn serve(
 		let hang_on = |step: Hang| script.hang == Some(step);
 		let reply = if upper.starts_with("EHLO") {
 			if hang_on(Hang::Ehlo) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			match script.starttls {
 				true => format!("250-{host}\r\n250-STARTTLS\r\n250 8BITMIME"),
@@ -312,13 +362,13 @@ async fn serve(
 		} else if upper == "STARTTLS" && script.starttls {
 			let _ = write.write_all(b"220 2.0.0 go ahead\r\n").await;
 			if hang_on(Hang::TlsHandshake) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			let _ = write.write_all(b"this is not a TLS record\r\n").await;
 			return;
 		} else if upper.starts_with("MAIL FROM:") {
 			if hang_on(Hang::Mail) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			accepted.clear();
 			script
@@ -327,7 +377,7 @@ async fn serve(
 				.unwrap_or_else(|| "250 2.1.0 ok".to_string())
 		} else if let Some(rest) = upper.strip_prefix("RCPT TO:<") {
 			if hang_on(Hang::Rcpt) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			let recipient = command[command.len() - rest.len()..]
 				.trim_end_matches('>')
@@ -349,7 +399,7 @@ async fn serve(
 			reply
 		} else if upper == "DATA" {
 			if hang_on(Hang::DataInit) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			if accepted.is_empty() {
 				"554 5.5.1 no valid recipients".to_string()
@@ -358,6 +408,7 @@ async fn serve(
 					return;
 				}
 				if hang_on(Hang::DataBody) {
+					// Stop reading, so the client's writes block.
 					return stall().await;
 				}
 				let mut message = String::new();
@@ -372,7 +423,7 @@ async fn serve(
 					message.push_str(&line);
 				}
 				if hang_on(Hang::DataEnd) {
-					return stall().await;
+					return until_closed(&mut reader).await;
 				}
 				if let Some(delay) = script.delay {
 					tokio::time::sleep(delay).await;
@@ -388,7 +439,7 @@ async fn serve(
 			}
 		} else if upper == "QUIT" {
 			if hang_on(Hang::Quit) {
-				return stall().await;
+				return until_closed(&mut reader).await;
 			}
 			let _ = write.write_all(b"221 2.0.0 bye\r\n").await;
 			return;

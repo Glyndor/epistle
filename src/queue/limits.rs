@@ -18,6 +18,10 @@ pub const MAX_CONCURRENCY: usize = 1024;
 /// publishes hundreds of MX records cannot keep a conversation slot busy
 /// trying each of them.
 pub const MAX_EXCHANGERS: usize = 5;
+/// The most addresses of one exchanger tried in one delivery attempt
+/// (Postfix tries two by default): a host with dozens of A and AAAA records
+/// cannot multiply the time a slot spends connecting.
+pub const MAX_ADDRESSES: usize = 2;
 
 /// The caps the scheduler works within.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

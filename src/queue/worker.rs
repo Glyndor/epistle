@@ -76,6 +76,8 @@ pub struct Worker {
 	/// How long a destination that asks to slow down is held off, by the
 	/// number of times in a row it did (seconds).
 	backoff_steps: Vec<u64>,
+	/// The longest one delivery attempt to one domain may take.
+	attempt_limit: Duration,
 }
 
 impl Worker {
@@ -103,6 +105,7 @@ impl Worker {
 			claims: scheduler::Claims::default(),
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
+			attempt_limit: super::timeouts::ATTEMPT,
 		}
 	}
 
@@ -231,6 +234,11 @@ impl Worker {
 	#[cfg(test)]
 	fn set_jitter(&mut self, jitter: fn() -> f64) {
 		self.jitter = jitter;
+	}
+
+	#[cfg(test)]
+	fn set_attempt_limit(&mut self, limit: Duration) {
+		self.attempt_limit = limit;
 	}
 
 	#[cfg(test)]

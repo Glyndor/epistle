@@ -4,6 +4,7 @@
 use super::Worker;
 use super::attempt::{Route, Session};
 use crate::queue::client::{DeliveryError, RecipientResult};
+use crate::queue::limits::MAX_EXCHANGERS;
 use crate::queue::tls_outcome::{STS_POLICY_FETCH_ERROR, TlsOutcome};
 use crate::storage::SpoolEntry;
 use crate::tlsrpt::sessions::Attempt;
@@ -74,13 +75,32 @@ impl Conversation {
 }
 
 impl Worker {
-	/// Route and run the conversation for `recipients`, all in `domain`.
+	/// Route and run the conversation for `recipients`, all in `domain`,
+	/// within [`crate::queue::timeouts::ATTEMPT`] for every exchanger and
+	/// every step together. Past it the recipients are deferred like after
+	/// any other timeout, and the slot is free again.
 	pub(super) async fn converse(
 		&self,
 		entry: &SpoolEntry,
 		domain: &str,
 		recipients: &[String],
 	) -> Conversation {
+		let limit = self.attempt_limit;
+		match tokio::time::timeout(limit, self.route(entry, domain, recipients)).await {
+			Ok(conversation) => conversation,
+			Err(_) => Conversation::all(
+				recipients,
+				None,
+				DeliveryError::Transient(format!(
+					"delivery attempt timed out after {}s",
+					limit.as_secs()
+				)),
+			),
+		}
+	}
+
+	/// Route and run the conversation for `recipients`, all in `domain`.
+	async fn route(&self, entry: &SpoolEntry, domain: &str, recipients: &[String]) -> Conversation {
 		// MTA-STS: an enforce policy constrains MX choice and mandates TLS.
 		// A testing-mode policy is kept for TLS-RPT, which reports on it.
 		let mut sts_invalid = false;
@@ -203,7 +223,8 @@ impl Worker {
 
 	/// Deliver through the exchangers of the domain, in preference order:
 	/// one that turns the session away before the mail transaction begins
-	/// is passed over for the next (RFC 5321 section 5.1). The policy
+	/// is passed over for the next (RFC 5321 section 5.1), up to
+	/// [`MAX_EXCHANGERS`] of them whatever the connector offers. The policy
 	/// limits which exchangers may be contacted, and DANE applies to each
 	/// host on its own.
 	async fn exchange(
@@ -215,6 +236,14 @@ impl Worker {
 		let mut last: Option<Conversation> = None;
 		let mut slowed: Option<String> = None;
 		loop {
+			if tried.len() >= MAX_EXCHANGERS {
+				let mut conversation = last.unwrap_or_else(|| {
+					let reason = format!("no further exchanger for {}", route.domain);
+					Conversation::all(route.recipients, None, DeliveryError::Transient(reason))
+				});
+				conversation.slowed = conversation.slowed.take().or(slowed);
+				return conversation;
+			}
 			let connection = match self
 				.connector
 				.connect_skipping(route.domain, policy, &tried)
