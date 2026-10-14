@@ -35,6 +35,12 @@ pub enum DkimCli {
 		/// Check the preconditions and print what would happen; change nothing.
 		#[arg(long)]
 		dry_run: bool,
+		/// Rotate the per-domain override for this domain. Refused in
+		/// this release: per-domain DKIM keys do not rotate
+		/// automatically yet. Edit `[dkim.domain]` and restart to
+		/// replace a per-domain key.
+		#[arg(long)]
+		domain: Option<String>,
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
@@ -63,7 +69,9 @@ pub(super) fn now_epoch() -> u64 {
 pub(super) fn run(config: &Config, action: DkimCli, out: &mut impl std::io::Write) -> ExitCode {
 	match action {
 		DkimCli::Show { json } => show(config, json, out),
-		DkimCli::Rotate { dry_run } => rotate_now(config, dry_run, now_epoch(), out),
+		DkimCli::Rotate { dry_run, domain } => {
+			rotate_now(config, dry_run, now_epoch(), domain, out)
+		}
 		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, out),
 	}
 }
@@ -181,12 +189,49 @@ pub(super) fn rotate_now(
 	config: &Config,
 	dry_run: bool,
 	now: u64,
+	domain: Option<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	rotate_now_with(
+		config,
+		dry_run,
+		now,
+		domain,
+		&mut super::style::stderr(),
+		out,
+	)
+}
+
+/// The real `rotate_now`, with a caller-supplied error writer. Lives
+/// separately so a test can assert on the exact refusal text without
+/// going through the process boundary.
+pub(super) fn rotate_now_with(
+	config: &Config,
+	dry_run: bool,
+	now: u64,
+	domain: Option<String>,
+	err: &mut impl std::io::Write,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	if let Some(name) = domain.as_deref() {
+		// Per-domain overrides are not yet on the rotation schedule.
+		// The operator replaces them by editing `[dkim.domain]` and
+		// restarting; we refuse early with a clear message so the
+		// command cannot silently rotate the default key when the
+		// operator thought they were rotating a per-domain one.
+		super::style::error_to(
+			err,
+			format_args!(
+				"dkim rotate --domain {name}: per-domain keys do not rotate automatically; \
+				 edit [[dkim.domain]] for {name} in mail.toml and restart the server to replace the key"
+			),
+		);
+		return ExitCode::FAILURE;
+	}
 	let plan = match preflight(config, now) {
 		Ok(plan) => plan,
 		Err(reason) => {
-			super::style::error(format_args!("dkim rotate refused: {reason}"));
+			super::style::error_to(err, format_args!("dkim rotate refused: {reason}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -208,7 +253,10 @@ pub(super) fn rotate_now(
 		return ExitCode::SUCCESS;
 	}
 	if let Err(error) = rotate::request_rotation(&config.data_dir, now) {
-		super::style::error(format_args!("cannot write the rotation request: {error}"));
+		super::style::error_to(
+			err,
+			format_args!("cannot write the rotation request: {error}"),
+		);
 		return ExitCode::FAILURE;
 	}
 	let _ = writeln!(

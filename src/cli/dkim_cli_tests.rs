@@ -36,7 +36,7 @@ fn refuses_without_dns_exactly_as_the_server_stays_off() {
 	assert!(refusal(&config, 5 * DAY).contains("[dns] is not configured"));
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, &mut out),
 		ExitCode::FAILURE
 	);
 	assert!(
@@ -60,7 +60,7 @@ fn refuses_an_out_of_zone_signing_domain_like_the_server() {
 	);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, &mut out),
 		ExitCode::FAILURE
 	);
 	assert!(!dir.path().join(REQUEST_FILE).exists());
@@ -102,7 +102,7 @@ fn dry_run_describes_the_rotation_and_writes_nothing() {
 	let config = config_with(dir.path(), "['example.org']", DNS);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, true, 5 * DAY, &mut out),
+		rotate_now(&config, true, 5 * DAY, None, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -121,7 +121,7 @@ fn rotate_queues_one_request_for_the_server() {
 	let config = config_with(dir.path(), "['example.org']", DNS);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert!(String::from_utf8(out).expect("utf8").contains("queued"));
@@ -153,7 +153,7 @@ fn dry_run_with_dual_signing_names_both_keys() {
 	std::fs::write(dir.path().join(STATE_FILE), state).expect("state");
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, true, 5 * DAY, &mut out),
+		rotate_now(&config, true, 5 * DAY, None, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -167,4 +167,62 @@ fn dry_run_with_dual_signing_names_both_keys() {
 	] {
 		assert!(text.contains(line), "the dry run prints {line:?}");
 	}
+}
+
+#[test]
+fn rotate_with_a_per_domain_target_refuses_with_a_clear_message() {
+	// A per-domain override does not get an automatic rotation; the
+	// operator must edit the configuration. The CLI returns a refusal
+	// and prints the reason, never queuing a request for the server.
+	let dir = tempfile::tempdir().expect("dir");
+	let (default_pem, _) = crate::dkim::generate_key().expect("key");
+	let (override_pem, _) = crate::dkim::generate_key().expect("key");
+	let default_key = dir.path().join("default.key");
+	let override_key = dir.path().join("override.key");
+	std::fs::write(&default_key, default_pem).expect("default");
+	std::fs::write(&override_key, override_pem).expect("override");
+	let toml = format!(
+		r#"
+hostname = "mail.example.org"
+data_dir = {:?}
+domains = ["example.org"]
+
+[dkim]
+selector = "default-sel"
+key_file = {:?}
+
+[[dkim.domain]]
+name = "example.org"
+selector = "per-sel"
+key_file = {:?}
+"#,
+		dir.path(),
+		default_key,
+		override_key,
+	);
+	let config: Config = toml::from_str(&toml).expect("config");
+	let mut out = Vec::new();
+	let mut err = Vec::new();
+	let code = rotate_now_with(
+		&config,
+		false,
+		5 * DAY,
+		Some("example.org".into()),
+		&mut err,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::FAILURE, "the per-domain rotation must fail");
+	let text = String::from_utf8_lossy(&err);
+	assert!(
+		text.contains("per-domain keys do not rotate automatically"),
+		"the refusal must name the per-domain limitation, got {text}"
+	);
+	assert!(
+		text.contains("example.org"),
+		"the refusal must name the domain the operator asked to rotate, got {text}"
+	);
+	assert!(
+		!dir.path().join(REQUEST_FILE).exists(),
+		"no rotation request must be queued for the per-domain case"
+	);
 }
