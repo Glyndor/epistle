@@ -19,7 +19,7 @@
 //! An entry is settled ([`Worker::finish`]) once every job it had in the
 //! scan has ended: expiry, failure reports, the delay warning, removal.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
@@ -117,21 +117,32 @@ impl Worker {
 		let Some(holds) = self.holds() else {
 			return Ok(());
 		};
+		// The domains some mail still waits for: a hold that ran out on any
+		// other has nothing left to slow down.
+		let mut queued: HashSet<String> = HashSet::new();
 		for id in self.spool.list()? {
-			if schedule.rounds.contains_key(&id) {
-				continue;
-			}
 			// The CLI edits entries on disk while this runs, so `held` and
 			// `next_attempt` are read from the file on every scan, never kept
-			// in memory. Skip held entries and entries still backing off.
+			// in memory.
 			let envelope = match self.spool.load_envelope(id) {
-				Ok(envelope) if envelope.held.is_some() || envelope.next_attempt > now => continue,
 				Ok(envelope) => envelope,
 				Err(error) => {
 					tracing::warn!(%id, %error, "cannot read spool entry");
 					continue;
 				}
 			};
+			for recipient in envelope.pending() {
+				if let Some((_, domain)) = recipient.rsplit_once('@') {
+					queued.insert(domain.to_ascii_lowercase());
+				}
+			}
+			// Skip entries already in hand, held, or still backing off.
+			if schedule.rounds.contains_key(&id)
+				|| envelope.held.is_some()
+				|| envelope.next_attempt > now
+			{
+				continue;
+			}
 			// A sender on hold (its mail filled the room for holds) waits.
 			let sender = sender_of(&envelope);
 			if backoff::is_held(&holds, &backoff::sender_key(&sender), now) {
@@ -193,6 +204,7 @@ impl Worker {
 				});
 			}
 		}
+		self.prune_holds(&holds, &queued, now);
 		Ok(())
 	}
 

@@ -82,12 +82,34 @@ fn a_flood_of_destinations_never_frees_or_resets_a_hold() {
 	assert_eq!(destinations(&holds), MAX_HOLDS);
 	assert!(holds.contains_key("throttled.example"), "never evicted");
 
-	// A new destination finds no room: it is not left free, its sender is
-	// held instead.
+	// A quiet sender's new destination is still held: one of the flooding
+	// senders gives up one of its own holds for it.
+	let flooders_before = holds
+		.values()
+		.filter(|hold| hold.sender.as_deref() != Some("account:victim"))
+		.count();
 	let (key, _) = hold(&mut holds, &steps, "new.example", "account:s9", 3000);
-	assert_eq!(key, "sender:account:s9");
-	assert!(!holds.contains_key("new.example"));
-	assert!(is_held(&holds, "sender:account:s9", 3000));
+	assert_eq!(key, "new.example");
+	assert!(is_held(&holds, "new.example", 3000));
+	assert!(
+		!holds.contains_key("sender:account:s9"),
+		"the quiet sender is not held"
+	);
+	assert_eq!(destinations(&holds), MAX_HOLDS);
+	let flooders_after = holds
+		.values()
+		.filter(|hold| {
+			!matches!(
+				hold.sender.as_deref(),
+				Some("account:victim" | "account:s9")
+			)
+		})
+		.count();
+	assert_eq!(flooders_after, flooders_before - 1);
+	assert!(
+		holds.contains_key("throttled.example"),
+		"the victim keeps its hold"
+	);
 	// The victim's next deferral continues its run of steps.
 	let (_, next) = hold(
 		&mut holds,
@@ -136,4 +158,26 @@ fn an_oversized_key_holds_its_sender() {
 	let (key, _) = hold(&mut holds, &[60], &long, SENDER, 1000);
 	assert_eq!(key, sender_key(SENDER));
 	assert_eq!(holds.keys().collect::<Vec<_>>(), [&sender_key(SENDER)]);
+}
+
+#[test]
+fn a_hold_that_ran_out_goes_once_no_mail_waits_for_it() {
+	let mut holds = DestinationHolds::new();
+	for key in [
+		"idle.example",
+		"waiting.example",
+		"mx:mx.idle.example",
+		"sender:system",
+	] {
+		hold(&mut holds, &[60], key, SENDER, 1000);
+	}
+	hold(&mut holds, &[86_400], "busy.example", SENDER, 1000);
+
+	prune_idle(&mut holds, |key| key == "waiting.example", 1100);
+
+	assert_eq!(
+		holds.keys().collect::<Vec<_>>(),
+		["busy.example", "mx:mx.idle.example", "waiting.example"],
+		"in force, an exchanger, or mail waits"
+	);
 }

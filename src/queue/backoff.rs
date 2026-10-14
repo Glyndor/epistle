@@ -144,17 +144,20 @@ pub fn sender_key(sender: &str) -> String {
 /// `now`, and return the key it is held under and its hold.
 ///
 /// A hold is forgotten when its destination delivers again after it ran
-/// out, when the operator releases it, or [`HOLD_MEMORY_SECS`] after it ran
-/// out, so the backoff keeps growing through deferrals that come after a
-/// hold ran out. No hold ever gives way to make room, so flooding the queue
-/// with distinct deferring destinations cannot free or reset the hold of
-/// another. Past [`MAX_HOLDS`] destination holds, or past
+/// out, when the operator releases it, [`HOLD_MEMORY_SECS`] after it ran
+/// out, or once it ran out and no mail waits for its destination
+/// ([`prune_idle`]), so the backoff keeps growing through deferrals that
+/// come after a hold ran out while mail still waits.
+///
+/// Room is shared out by sender, never taken from a quiet sender. Past
 /// [`MAX_HOLDS_PER_SENDER`] set by `sender`'s mail, or for a key longer
-/// than [`MAX_KEY_BYTES`], the sender itself is held instead
+/// than [`MAX_KEY_BYTES`], `sender` itself is held instead
 /// ([`sender_key`]): the destination is never left free to send to, and
-/// the one whose mail filled the room waits, not the others. Sender holds
-/// are one per sender, and senders are the server's own accounts and one
-/// system bucket.
+/// the sender that filled its share is the one that waits. Past
+/// [`MAX_HOLDS`] in all, the sender with the most holds gives one of its
+/// own up (one that has run out if it has any), so senders flooding the
+/// map with junk destinations lose their own holds, never another
+/// sender's, and never block another sender's new destination.
 pub fn record_hold(
 	holds: &mut DestinationHolds,
 	steps: &[u64],
@@ -165,25 +168,54 @@ pub fn record_hold(
 	holds.retain(|_, hold| hold.active(now) || hold.until.saturating_add(HOLD_MEMORY_SECS) > now);
 	let mut key = key.to_string();
 	if !holds.contains_key(&key) {
-		let destinations = || {
-			holds
-				.iter()
-				.filter(|(held, _)| !held.starts_with("sender:"))
-		};
-		let by_sender = destinations()
+		let by_sender = destination_holds(holds)
 			.filter(|(_, hold)| hold.sender.as_deref() == Some(sender))
 			.count();
-		if key.len() > MAX_KEY_BYTES
-			|| destinations().count() >= MAX_HOLDS
-			|| by_sender >= MAX_HOLDS_PER_SENDER
-		{
+		if key.len() > MAX_KEY_BYTES || by_sender >= MAX_HOLDS_PER_SENDER {
 			key = sender_key(sender);
+		} else if destination_holds(holds).count() >= MAX_HOLDS {
+			give_up_one(holds, now);
 		}
 	}
 	let mut hold = next_hold(steps, holds.get(&key), reason, now);
 	hold.sender.get_or_insert_with(|| sender.to_string());
 	holds.insert(key.clone(), hold.clone());
 	(key, hold)
+}
+
+/// The holds of destinations (domains and exchangers), not of senders.
+fn destination_holds(
+	holds: &DestinationHolds,
+) -> impl Iterator<Item = (&String, &DestinationHold)> {
+	holds.iter().filter(|(key, _)| !key.starts_with("sender:"))
+}
+
+/// Remove one destination hold of the sender with the most of them: one
+/// that has run out if it has any, else the one ending soonest.
+fn give_up_one(holds: &mut DestinationHolds, now: u64) {
+	let mut counts: std::collections::HashMap<Option<&str>, usize> = Default::default();
+	for (_, hold) in destination_holds(holds) {
+		*counts.entry(hold.sender.as_deref()).or_default() += 1;
+	}
+	let Some((heaviest, _)) = counts.into_iter().max_by_key(|(_, count)| *count) else {
+		return;
+	};
+	let heaviest = heaviest.map(str::to_string);
+	let victim = destination_holds(holds)
+		.filter(|(_, hold)| hold.sender == heaviest)
+		.min_by_key(|(_, hold)| (hold.active(now), hold.until))
+		.map(|(key, _)| key.clone());
+	if let Some(victim) = victim {
+		holds.remove(&victim);
+	}
+}
+
+/// Forget every hold that has run out and has nothing left to slow down:
+/// a domain with no mail waiting for it (`queued` says which have some),
+/// or a held sender. Exchanger holds stay for [`HOLD_MEMORY_SECS`], since
+/// which domains they serve is not known here. Holds in force always stay.
+pub fn prune_idle(holds: &mut DestinationHolds, queued: impl Fn(&str) -> bool, now: u64) {
+	holds.retain(|key, hold| hold.active(now) || key.starts_with("mx:") || queued(key));
 }
 
 /// Forget the hold of `key` after a delivery, unless it is still in

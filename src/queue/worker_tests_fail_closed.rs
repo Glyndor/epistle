@@ -118,3 +118,63 @@ async fn a_held_sender_waits_and_the_others_do_not() {
 	assert_eq!(remote.copies("x@a.example"), 0, "the held sender waits");
 	assert_eq!(remote.copies("y@b.example"), 1);
 }
+
+#[tokio::test]
+async fn one_account_flooding_the_holds_does_not_stop_another_accounts_mail() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("open spool");
+	spool
+		.store(
+			&crate::smtp::session::AcceptedMessage {
+				reverse_path: "bob@sender.example".into(),
+				recipients: vec!["carol@fresh.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			Some("bob"),
+			&std::collections::BTreeMap::new(),
+		)
+		.expect("store");
+	let now = spool.list().expect("list")[0]
+		.get_timestamp()
+		.expect("v7")
+		.to_unix()
+		.0;
+	// The flood: far more deferring destinations than any share, all of
+	// them in force for a day.
+	spool
+		.update_holds(|holds| {
+			for n in 0..(backoff::MAX_HOLDS * 2) {
+				let key = format!("junk{n}.example");
+				backoff::record_hold(holds, &[86_400], (&key, "account:flood"), "421", now);
+			}
+		})
+		.expect("holds");
+	let holds = spool.load_holds().expect("holds");
+	assert!(
+		holds.len() <= backoff::MAX_HOLDS_PER_SENDER + 1,
+		"{}",
+		holds.len()
+	);
+	assert!(backoff::is_held(&holds, "sender:account:flood", now));
+	let worker = super::Worker::new(
+		spool,
+		std::sync::Arc::new(remote.clone()),
+		"mail.sender.example",
+	);
+	worker.set_now(now + 1);
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(remote.copies("carol@fresh.example"), 1);
+	// No mail waits for the junk any more once its holds run out: they go.
+	worker.set_now(now + 86_401);
+	worker.pass().await.expect("pass");
+	let holds = worker.spool.load_holds().expect("holds");
+	assert!(holds.is_empty(), "{} holds left", holds.len());
+}

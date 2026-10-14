@@ -8,6 +8,7 @@ use super::conversation::Conversation;
 use super::waiting::Job;
 use crate::queue::backoff;
 use crate::storage::DestinationHolds;
+use std::collections::HashSet;
 
 /// Add to `into` every hold of `from` that holds longer than the one
 /// `into` has under the same key.
@@ -48,6 +49,25 @@ impl Worker {
 		self.unwritten_holds
 			.lock()
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	/// Forget the holds that ran out and have nothing left to slow down
+	/// ([`backoff::prune_idle`]); `queued` names the domains mail waits
+	/// for. Writes only when one goes.
+	pub(super) fn prune_holds(&self, holds: &DestinationHolds, queued: &HashSet<String>, now: u64) {
+		let idle = |key: &str| !key.starts_with("mx:") && !queued.contains(key);
+		if !holds
+			.iter()
+			.any(|(key, hold)| !hold.active(now) && idle(key))
+		{
+			return;
+		}
+		let pruned = self.spool.update_holds(|holds| {
+			backoff::prune_idle(holds, |key| queued.contains(key), now);
+		});
+		if let Err(error) = pruned {
+			tracing::warn!(%error, "cannot forget idle destination holds");
+		}
 	}
 
 	/// Hold off the job's domain, and the exchanger that answered, when the
