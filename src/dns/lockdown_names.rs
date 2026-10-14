@@ -87,12 +87,31 @@ impl ServedNames {
 	}
 }
 
+/// An MX value split into its preference and its target. Providers list an
+/// MX as `priority target`, as the bare target, or (the ones that cut the
+/// trailing dot off the target) as a bare `priority` when the target is the
+/// root, which is how a null MX `0 .` comes back from them. The root
+/// target is the empty string.
+fn mx_parts(value: &str) -> Option<(Option<u16>, &str)> {
+	let mut parts = value.split_whitespace();
+	let (first, second) = (parts.next()?, parts.next());
+	if parts.next().is_some() {
+		return None;
+	}
+	Some(match second {
+		Some(target) => (Some(first.parse().ok()?), target),
+		None => match first.parse::<u16>() {
+			Ok(preference) => (Some(preference), ""),
+			Err(_) => (None, first),
+		},
+	})
+}
+
 /// The target of an MX value, canonical, with the null MX target `.` as
-/// the empty string. Providers list an MX as `priority target` or as the
-/// bare target; both are read.
+/// the empty string.
 pub(crate) fn mx_target(value: &str) -> Option<String> {
-	let target = value.split_whitespace().last()?;
-	Some(if target == "." {
+	let (_, target) = mx_parts(value)?;
+	Some(if matches!(target, "." | "") {
 		String::new()
 	} else {
 		canonical_name(target)
@@ -100,19 +119,9 @@ pub(crate) fn mx_target(value: &str) -> Option<String> {
 }
 
 /// Whether an MX value is the null MX (RFC 7505: preference 0, target `.`).
+/// A bare `.` (a listing without the preference) counts too.
 pub fn is_null_mx(value: &str) -> bool {
-	let mut parts = value.split_whitespace();
-	let (first, second) = (parts.next(), parts.next());
-	if parts.next().is_some() {
-		return false;
-	}
-	match (first, second) {
-		(Some(preference), Some(target)) => {
-			preference.parse::<u16>() == Ok(0) && matches!(target, "." | "")
-		}
-		(Some(target), None) => target == ".",
-		_ => false,
-	}
+	matches!(mx_parts(value), Some((None | Some(0), "." | "")))
 }
 
 /// Whether two records are the same record: same name, same kind and the
@@ -135,8 +144,5 @@ pub fn same_record(a: &DnsRecord, b: &DnsRecord) -> bool {
 }
 
 fn mx_preference(value: &str) -> Option<u16> {
-	let mut parts = value.split_whitespace();
-	let first = parts.next()?;
-	parts.next()?;
-	first.parse().ok()
+	mx_parts(value)?.0
 }

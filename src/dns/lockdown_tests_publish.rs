@@ -298,3 +298,42 @@ fn a_null_mx_listed_without_its_preference_is_still_ours() {
 		&txt("x.example.org", "\"v=spf1 -all\"")
 	));
 }
+
+#[tokio::test]
+async fn a_null_mx_listed_as_a_bare_preference_is_still_ours() {
+	// The DigitalOcean, GoDaddy, Namecheap, Porkbun and Spaceship readers
+	// cut the trailing dot off an MX target, so the null MX they list comes
+	// back as `0 ` or `0`.
+	for listed_as in ["0 ", "0"] {
+		let zone = Zone::with(operator_zone());
+		let journal = publish(&zone, &plan(&zone.snapshot()), None)
+			.await
+			.expect("publish");
+		let listed: Vec<DnsRecord> = zone
+			.snapshot()
+			.into_iter()
+			.map(|mut r| {
+				if r.kind == RecordKind::Mx && r.value == NULL_MX {
+					r.value = listed_as.to_string();
+				}
+				r
+			})
+			.collect();
+		let second = plan_with(&listed, Some(&journal), &DmarcInputs::default());
+		assert_eq!(
+			skip_reason(&second, "www.example.org").as_deref(),
+			Some("www.example.org already has the null SPF and null MX this command published"),
+			"{listed_as:?}"
+		);
+		let zone = Zone::with(listed);
+		let report = undo_journal(&zone, "example.org", &journal, false)
+			.await
+			.expect("undo");
+		assert!(report.changed.is_empty(), "{listed_as:?}: {report:?}");
+		assert_eq!(
+			sorted(zone.snapshot()),
+			sorted(operator_zone()),
+			"{listed_as:?}"
+		);
+	}
+}
