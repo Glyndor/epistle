@@ -6,10 +6,9 @@
 //!
 //! Read returns the persisted singleton or the disabled default when the
 //! file does not exist; write serialises the chosen setting through a
-//! crash-safe write-temporary-then-rename dance. The reply sender
-//! ([`super::delivery`]) reads it for every inbound message, so reads are
-//! frequent and writes rare: keeping the schema compact and parse-friendly
-//! is what costs.
+//! crash-safe write-temporary-then-rename dance. The reply sender reads
+//! it for every inbound message, so reads are frequent and writes rare:
+//! keeping the schema compact and parse-friendly is what costs.
 
 use std::fs;
 use std::io;
@@ -172,7 +171,7 @@ pub(crate) fn utc_date_to_unix_secs(value: Option<&str>) -> Option<u64> {
 	) else {
 		return None;
 	};
-	if !(1..=12).contains(&m) || d < 1 || d > 31 || h > 23 || min > 59 || s > 59 {
+	if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || s > 59 {
 		return None;
 	}
 	// A day past the end of the month (`2030-02-30`) rolls into the next

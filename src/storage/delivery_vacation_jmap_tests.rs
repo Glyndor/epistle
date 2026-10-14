@@ -43,7 +43,11 @@ fn disabled_setting_sends_no_reply() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let d = delivery(dir.path());
 	write_setting(dir.path(), "alice", &VacationSetting::disabled()).expect("write disabled");
-	let reply = d.jmap_vacation_reply("alice", &message("bob@example.net", "Subject: hi"), &VacationSetting::disabled());
+	let reply = d.jmap_vacation_reply(
+		"alice",
+		&message("bob@example.net", "Subject: hi"),
+		&VacationSetting::disabled(),
+	);
 	assert!(reply.is_none(), "disabled setting must not produce a reply");
 }
 
@@ -53,16 +57,25 @@ fn enabled_setting_sends_a_reply() {
 	let d = delivery(dir.path());
 	let reply = d.jmap_vacation_reply(
 		"alice",
-		&message("bob@example.net", "Subject: hi\r\nMessage-ID: <orig@example.net>"),
+		&message(
+			"bob@example.net",
+			"Subject: hi\r\nMessage-ID: <orig@example.net>",
+		),
 		&enabled_setting(),
 	);
 	let reply = reply.expect("reply");
-	assert_eq!(reply.reverse_path, "", "vacation replies use a null reverse-path");
+	assert_eq!(
+		reply.reverse_path, "",
+		"vacation replies use a null reverse-path"
+	);
 	assert_eq!(reply.recipients, vec!["bob@example.net".to_string()]);
 	let body = String::from_utf8(reply.data).expect("ascii");
 	assert!(body.contains("From: <alice@example.org>"), "{body}");
 	assert!(body.contains("Subject: OOO"), "{body}");
-	assert!(body.contains("Auto-Submitted: auto-replied (vacation)"), "{body}");
+	assert!(
+		body.contains("Auto-Submitted: auto-replied (vacation)"),
+		"{body}"
+	);
 	assert!(body.contains("In-Reply-To: <orig@example.net>"), "{body}");
 	assert!(body.contains("Away until Monday."), "{body}");
 }
@@ -71,8 +84,10 @@ fn enabled_setting_sends_a_reply() {
 fn enabled_setting_includes_three_levels_in_window() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let d = delivery(dir.path());
-	let from = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2000-01-01T00:00:00Z")).unwrap();
-	let to = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2099-12-31T23:59:59Z")).unwrap();
+	let from = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2000-01-01T00:00:00Z"))
+		.unwrap();
+	let to = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2099-12-31T23:59:59Z"))
+		.unwrap();
 	let setting = VacationSetting {
 		from_date: Some(from.to_string()),
 		to_date: Some(to.to_string()),
@@ -81,7 +96,8 @@ fn enabled_setting_includes_three_levels_in_window() {
 	write_setting(dir.path(), "alice", &setting).expect("write");
 	let read = d.jmap_vacation("alice");
 	assert_eq!(read, Some(setting.clone()));
-	let mid = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2024-06-01T12:00:00Z")).unwrap();
+	let mid = crate::storage::vacation_store::utc_date_to_unix_secs(Some("2024-06-01T12:00:00Z"))
+		.unwrap();
 	assert!(setting.is_within_window(mid));
 }
 
@@ -96,7 +112,11 @@ fn reply_skips_automated_or_list_mail() {
 		"Precedence: list",
 		"Precedence: junk",
 	] {
-		let reply = d.jmap_vacation_reply("alice", &message("bob@example.net", headers), &enabled_setting());
+		let reply = d.jmap_vacation_reply(
+			"alice",
+			&message("bob@example.net", headers),
+			&enabled_setting(),
+		);
 		assert!(reply.is_none(), "should skip {headers}");
 	}
 }
@@ -118,7 +138,10 @@ fn reply_skips_own_address() {
 		&message("alice@example.org", "Subject: x"),
 		&enabled_setting(),
 	);
-	assert!(reply.is_none(), "a sender equal to the recipient must not loop");
+	assert!(
+		reply.is_none(),
+		"a sender equal to the recipient must not loop"
+	);
 }
 
 #[test]
@@ -131,7 +154,11 @@ fn reply_dedups_per_sender() {
 	let second = d.jmap_vacation_reply("alice", &msg, &enabled_setting());
 	assert!(second.is_none(), "an immediate second reply is suppressed");
 	// A different sender is a fresh slate.
-	let other = d.jmap_vacation_reply("alice", &message("carol@example.net", "Subject: hi"), &enabled_setting());
+	let other = d.jmap_vacation_reply(
+		"alice",
+		&message("carol@example.net", "Subject: hi"),
+		&enabled_setting(),
+	);
 	assert!(other.is_some(), "another sender gets a reply");
 }
 
@@ -143,14 +170,20 @@ fn reply_dedup_survives_restart() {
 	{
 		let d = delivery(&data);
 		let msg = message("bob@example.net", "Subject: hi");
-		assert!(d.jmap_vacation_reply("alice", &msg, &enabled_setting()).is_some());
+		assert!(
+			d.jmap_vacation_reply("alice", &msg, &enabled_setting())
+				.is_some()
+		);
 	}
 	// Restart: a brand-new instance over the same directory sees the marker
 	// file that the first run wrote and suppresses a follow-up reply.
 	let d = delivery(&data);
 	let msg = message("bob@example.net", "Subject: hi");
 	let reply = d.jmap_vacation_reply("alice", &msg, &enabled_setting());
-	assert!(reply.is_none(), "marker file from the previous run suppresses the next reply");
+	assert!(
+		reply.is_none(),
+		"marker file from the previous run suppresses the next reply"
+	);
 }
 
 #[test]
@@ -179,7 +212,10 @@ fn own_address_does_not_match_a_different_account() {
 		&message("not-alice@example.org", "Subject: x"),
 		&enabled_setting(),
 	);
-	assert!(reply.is_some(), "a sender that only shares the domain still receives a reply");
+	assert!(
+		reply.is_some(),
+		"a sender that only shares the domain still receives a reply"
+	);
 }
 
 #[test]

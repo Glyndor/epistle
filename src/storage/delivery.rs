@@ -334,7 +334,7 @@ impl LocalDelivery {
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
-// vacation (RFC 5230 / RFC 8621 §8): an autoresponse alongside
+		// vacation (RFC 5230 / RFC 8621 §8): an autoresponse alongside
 		// normal delivery. The JMAP-side setting is the account's vacation
 		// when it is enabled and within its date window; otherwise the
 		// Sieve `vacation` action (RFC 5230) takes over. The two are not
@@ -342,12 +342,10 @@ impl LocalDelivery {
 		// so the same inbound message gets at most one auto-reply.
 		let jmap_setting = self.jmap_vacation(account);
 		let replies: Vec<AcceptedMessage> = match jmap_setting {
-			Some(setting)
-				if setting
-					.is_within_window(now_unix_secs()) =>
-			{
-				self.jmap_vacation_reply(account, message, &setting).into_iter().collect()
-			}
+			Some(setting) if setting.is_within_window(now_unix_secs()) => self
+				.jmap_vacation_reply(account, message, &setting)
+				.into_iter()
+				.collect(),
 			_ => outcome
 				.vacation
 				.and_then(|request| self.vacation_reply(account, message, &request))

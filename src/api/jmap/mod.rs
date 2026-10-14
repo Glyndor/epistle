@@ -92,7 +92,7 @@ pub async fn session(
 					"name": account.name,
 					"isPersonal": true,
 					"isReadOnly": false,
-"accountCapabilities": {
+				"accountCapabilities": {
 					CORE_CAPABILITY: {}, MAIL_CAPABILITY: {},
 					SUBMISSION_CAPABILITY: {}, QUOTA_CAPABILITY: {},
 					VACATION_CAPABILITY: {},

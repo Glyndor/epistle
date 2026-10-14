@@ -12,8 +12,8 @@
 use serde_json::{Value, json};
 
 use super::Principal;
-use crate::api::state::ApiState;
 use crate::api::api_keys::Scope;
+use crate::api::state::ApiState;
 use crate::storage::vacation_store::{
 	self, MAX_BODY_BYTES, VacationSetting, read as read_setting, write as write_setting,
 };
@@ -40,7 +40,9 @@ const PROPERTIES: [&str; 7] = [
 /// observe the change.
 pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id: &str) -> Value {
 	let Ok(account) = super::state::admitted_account(state, principal, args, call_id) else {
-		return super::state::admitted_account(state, principal, args, call_id).err().unwrap();
+		return super::state::admitted_account(state, principal, args, call_id)
+			.err()
+			.unwrap();
 	};
 	let setting = read_setting(state.data_dir(), &account).unwrap_or_else(|error| {
 		tracing::warn!(error = %error, account = %account, "vacation setting unreadable");
@@ -69,11 +71,16 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 	// method asks for. `get` is `Read`. The scope check fires here, before
 	// any account lookup, so a tokenless request learns nothing about which
 	// accounts exist.
-	if state.require_scope_for_principal(principal, Scope::Write).is_err() {
+	if state
+		.require_scope_for_principal(principal, Scope::Write)
+		.is_err()
+	{
 		return forbidden(call_id);
 	}
 	let Ok(account) = super::state::admitted_account(state, principal, args, call_id) else {
-		return super::state::admitted_account(state, principal, args, call_id).err().unwrap();
+		return super::state::admitted_account(state, principal, args, call_id)
+			.err()
+			.unwrap();
 	};
 	let mut not_created = serde_json::Map::new();
 	let mut not_updated = serde_json::Map::new();
@@ -100,7 +107,10 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 			match apply_patch(&current, patch) {
 				Ok(next) => {
 					if let Err(error) = write_setting(state.data_dir(), &account, &next) {
-						not_updated.insert(id.clone(), json!({ "type": "serverFail", "description": error.to_string() }));
+						not_updated.insert(
+							id.clone(),
+							json!({ "type": "serverFail", "description": error.to_string() }),
+						);
 						continue;
 					}
 					updated.insert(id.clone(), Value::Null);
@@ -191,10 +201,10 @@ fn apply_patch(current: &VacationSetting, patch: &Value) -> Result<VacationSetti
 	}
 	let mut bad: Vec<&str> = Vec::new();
 	let mut next = current.clone();
-	if let Some(value) = patch.get("id") {
-		if value.as_str() != Some(SINGLETON_ID) {
-			bad.push("id");
-		}
+	if let Some(value) = patch.get("id")
+		&& value.as_str() != Some(SINGLETON_ID)
+	{
+		bad.push("id");
 	}
 	if let Some(value) = patch.get("isEnabled") {
 		match value.as_bool() {
@@ -301,13 +311,4 @@ fn parse_optional_string(value: &Value) -> Result<Option<String>, ()> {
 	Ok(Some(text.to_string()))
 }
 
-// `clear_setting` is exported because tests below exercise the wipe path.
-// The production dispatch never calls it; the JMAP surface only has an
-// `isEnabled = false` escape.
-#[cfg(test)]
-pub(crate) use crate::storage::vacation_store::clear as clear_for_test;
 
-/// The known-properties list, exposed for tests that need to assert no
-/// property was silently dropped.
-#[cfg(test)]
-pub(crate) const PROPERTIES_FOR_TEST: &[&str] = &PROPERTIES;

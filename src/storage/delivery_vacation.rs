@@ -131,12 +131,13 @@ impl LocalDelivery {
 	/// Read the JMAP vacation setting for `account`. A read or parse error
 	/// is treated as "no vacation", so a corrupted file cannot trigger a
 	/// reply through an untyped path.
-	pub(super) fn jmap_vacation(
-		&self,
-		account: &str,
-	) -> Option<VacationSetting> {
+	pub(super) fn jmap_vacation(&self, account: &str) -> Option<VacationSetting> {
 		let setting = vacation_store::read(&self.data_dir, account).ok()?;
-		if setting.is_enabled { Some(setting) } else { None }
+		if setting.is_enabled {
+			Some(setting)
+		} else {
+			None
+		}
 	}
 
 	/// Whether a vacation reply to `sender` is due (none sent within `days`),

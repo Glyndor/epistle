@@ -70,20 +70,37 @@ async fn vacation_set_round_trips_through_get() {
 			}}
 		}, "s1"]],
 	});
-	let (status, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 	let response = &body["methodResponses"][0];
 	assert_eq!(response[0], "VacationResponse/set");
-	assert!(response[1]["notUpdated"].as_object().map(|m| m.is_empty()).unwrap_or(true));
+	assert!(
+		response[1]["notUpdated"]
+			.as_object()
+			.map(|m| m.is_empty())
+			.unwrap_or(true)
+	);
 	let updated = &response[1]["updated"];
 	assert_eq!(updated["singleton"], serde_json::Value::Null);
 
 	let get_req = json!({
 		"methodCalls": [["VacationResponse/get", {"accountId": "alice"}, "g1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(get_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(get_req),
+	)
+	.await;
 	let object = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(object["id"], "singleton");
 	assert_eq!(object["isEnabled"], true);
@@ -109,8 +126,14 @@ async fn vacation_set_after_rejects_invalid_dates() {
 			}}
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let not_updated = &body["methodResponses"][0][1]["notUpdated"];
 	let error = &not_updated["singleton"];
 	assert_eq!(error["type"], "invalidProperties");
@@ -127,8 +150,14 @@ async fn vacation_set_after_rejects_invalid_dates() {
 	let get_req = json!({
 		"methodCalls": [["VacationResponse/get", {"accountId": "alice"}, "g1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(get_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(get_req),
+	)
+	.await;
 	let object = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(object["isEnabled"], false);
 	assert!(object["textBody"].is_null());
@@ -148,8 +177,14 @@ async fn vacation_set_rejects_unparseable_date_value() {
 			}}
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let error = &body["methodResponses"][0][1]["notUpdated"]["singleton"];
 	assert_eq!(error["type"], "invalidProperties");
 	let properties = error["properties"].as_array().expect("properties array");
@@ -171,8 +206,14 @@ async fn vacation_set_rejects_oversized_body() {
 			}}
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let error = &body["methodResponses"][0][1]["notUpdated"]["singleton"];
 	assert_eq!(error["type"], "invalidProperties");
 	let properties = error["properties"].as_array().expect("properties array");
@@ -193,8 +234,14 @@ async fn vacation_set_rejects_unknown_property() {
 			}}
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let error = &body["methodResponses"][0][1]["notUpdated"]["singleton"];
 	assert_eq!(error["type"], "invalidProperties");
 	let properties = error["properties"].as_array().expect("properties array");
@@ -212,8 +259,14 @@ async fn vacation_set_rejects_wrong_singleton_id() {
 			"update": { "wrong": { "isEnabled": true, "textBody": "Out" } }
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let not_updated = &body["methodResponses"][0][1]["notUpdated"];
 	let error = &not_updated["wrong"];
 	assert_eq!(error["type"], "notFound");
@@ -230,11 +283,21 @@ async fn vacation_set_refuses_create_and_destroy() {
 			"destroy": ["singleton"],
 		}, "s1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
 	let response = &body["methodResponses"][0][1];
-	let not_created = response["notCreated"].as_object().expect("notCreated object");
-	let not_destroyed = response["notDestroyed"].as_object().expect("notDestroyed object");
+	let not_created = response["notCreated"]
+		.as_object()
+		.expect("notCreated object");
+	let not_destroyed = response["notDestroyed"]
+		.as_object()
+		.expect("notDestroyed object");
 	assert_eq!(not_created["c"]["type"], "forbidden");
 	assert_eq!(not_destroyed["singleton"]["type"], "forbidden");
 	// Nothing was persisted: a follow-up /get still reports the disabled
@@ -242,8 +305,14 @@ async fn vacation_set_refuses_create_and_destroy() {
 	let get_req = json!({
 		"methodCalls": [["VacationResponse/get", {"accountId": "alice"}, "g1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(get_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(get_req),
+	)
+	.await;
 	let object = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(object["isEnabled"], false);
 	assert!(object["textBody"].is_null());
@@ -287,16 +356,37 @@ async fn vacation_set_state_advances_on_each_write() {
 			"update": { "singleton": { "isEnabled": true, "textBody": "Out" } }
 		}, "s1"]],
 	});
-	let (_, first) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req.clone())).await;
-	let first_state = first["methodResponses"][0][1]["newState"].as_str().unwrap().to_string();
+	let (_, first) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req.clone()),
+	)
+	.await;
+	let first_state = first["methodResponses"][0][1]["newState"]
+		.as_str()
+		.unwrap()
+		.to_string();
 	// Wait at least one second so the file's mtime advances; some
 	// filesystems only resolve to the second.
 	tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-	let (_, second) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(set_req)).await;
-	let second_state = second["methodResponses"][0][1]["newState"].as_str().unwrap().to_string();
-	assert_ne!(first_state, second_state, "second state must advance from {first_state}");
+	let (_, second) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(set_req),
+	)
+	.await;
+	let second_state = second["methodResponses"][0][1]["newState"]
+		.as_str()
+		.unwrap()
+		.to_string();
+	assert_ne!(
+		first_state, second_state,
+		"second state must advance from {first_state}"
+	);
 }
 
 #[tokio::test]
@@ -309,19 +399,39 @@ async fn vacation_set_can_clear_text_body() {
 			"update": { "singleton": { "isEnabled": true, "textBody": "Out" } }
 		}, "s1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(enable)).await;
+	request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(enable),
+	)
+	.await;
 	let disable = json!({
 		"methodCalls": [["VacationResponse/set", {
 			"accountId": "alice",
 			"update": { "singleton": { "isEnabled": false, "textBody": null } }
 		}, "s2"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(disable)).await;
+	request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(disable),
+	)
+	.await;
 	let get_req = json!({
 		"methodCalls": [["VacationResponse/get", {"accountId": "alice"}, "g1"]],
 	});
-	let (_, body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(get_req)).await;
+	let (_, body) = request_with_body(
+		&app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(get_req),
+	)
+	.await;
 	let object = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(object["isEnabled"], false);
 	assert!(object["textBody"].is_null());

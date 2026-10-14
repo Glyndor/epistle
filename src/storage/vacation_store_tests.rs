@@ -1,7 +1,6 @@
 //! Tests for the per-account vacation setting store.
 
 use super::*;
-use crate::util::path_component::AccountName;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn data_dir() -> tempfile::TempDir {
@@ -103,7 +102,10 @@ fn invalid_json_is_a_propagated_error() {
 	}
 	std::fs::write(&path, b"not-json").expect("write");
 	let error = read(dir.path(), "alice").expect_err("read");
-	assert!(matches!(error.kind(), io::ErrorKind::Other | io::ErrorKind::InvalidData));
+	assert!(matches!(
+		error.kind(),
+		io::ErrorKind::Other | io::ErrorKind::InvalidData
+	));
 }
 
 #[test]
@@ -119,19 +121,23 @@ fn utc_date_parses_iso_z() {
 fn utc_date_rejects_bad_shapes() {
 	for bad in [
 		"",
-		"1970-01-01T00:00:00", // missing Z
-		"1970-01-01 00:00:00Z", // space
-		"1970-1-1T00:00:00Z", // single-digit
+		"1970-01-01T00:00:00",   // missing Z
+		"1970-01-01 00:00:00Z",  // space
+		"1970-1-1T00:00:00Z",    // single-digit
 		"1970-01-01T00:00:00.0", // missing Z
-		"1970-13-01T00:00:00Z", // month out of range
-		"1970-00-01T00:00:00Z", // zero month
-		"1970-01-32T00:00:00Z", // day out of range
+		"1970-13-01T00:00:00Z",  // month out of range
+		"1970-00-01T00:00:00Z",  // zero month
+		"1970-01-32T00:00:00Z",  // day out of range
 		"1970-01-01T24:00:00Z",
 		"1970-01-01T00:60:00Z",
 		"1970-01-01T00:00:60Z",
 		"2030-02-30T00:00:00Z", // Feb 30 rolls into March
 	] {
-		assert_eq!(utc_date_to_unix_secs(Some(bad)), None, "value {bad} should reject");
+		assert_eq!(
+			utc_date_to_unix_secs(Some(bad)),
+			None,
+			"value {bad} should reject"
+		);
 	}
 	assert_eq!(utc_date_to_unix_secs(None), None);
 }
@@ -149,7 +155,14 @@ fn window_open_when_no_bounds_set() {
 		html_body: None,
 	};
 	assert!(setting.is_within_window(0));
-	assert!(setting.is_within_window(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()));
+	assert!(
+		setting.is_within_window(
+			SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.unwrap()
+				.as_secs()
+		)
+	);
 }
 
 #[test]
@@ -164,7 +177,9 @@ fn window_rejects_outside_bounds() {
 	};
 	assert!(!setting.is_within_window(0));
 	assert!(setting.is_within_window(utc_date_to_unix_secs(Some("2000-06-01T00:00:00Z")).unwrap()));
-	assert!(!setting.is_within_window(utc_date_to_unix_secs(Some("2001-01-01T00:00:00Z")).unwrap()));
+	assert!(
+		!setting.is_within_window(utc_date_to_unix_secs(Some("2001-01-01T00:00:00Z")).unwrap())
+	);
 }
 
 #[test]
