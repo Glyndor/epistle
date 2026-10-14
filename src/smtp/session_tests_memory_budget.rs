@@ -39,7 +39,7 @@ fn ehlo_advertises_size_with_no_budget_change() {
 	let rendered = reply.to_string();
 	assert!(
 		rendered.contains(&format!("SIZE {MAX_MESSAGE_SIZE}")),
-		"EHLO must advertise the configured size cap: {rendered}"
+		"EHLO must advertise the configured size cap"
 	);
 }
 

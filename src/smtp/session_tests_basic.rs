@@ -449,7 +449,7 @@ fn configured_max_message_size_applies_to_smtp_size_end_of_data_and_bdat() {
 	// the wire shows the operator's number end to end.
 	assert!(
 		reply.to_string().contains(&format!("SIZE {cap}")),
-		"EHLO SIZE line must carry the configured cap, was: {reply}"
+		"EHLO SIZE line must carry the configured cap"
 	);
 	// SIZE parameter above the configured cap is refused at MAIL FROM.
 	let oversize = session.command_line(&format!("MAIL FROM:<a@example.org> SIZE={}", cap + 1));
