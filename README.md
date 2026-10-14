@@ -66,6 +66,7 @@ network at all and are reached only through Unix sockets.
 |---|---|
 | [CLI reference](docs/cli.md) | Every command, starting with common tasks |
 | [Configuration](docs/configuration.md) | The `mail.toml` file, every section and key, secrets |
+| [Storage](docs/storage.md) | On-disk layout, at-rest encryption, the spool hardening |
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
 | [Migration](docs/migration.md) | Moving from Mox, Stalwart or any IMAP server |
 | [Container stack](docs/container.md) | What `epistle stack` runs and how it is built |
