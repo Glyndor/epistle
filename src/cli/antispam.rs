@@ -152,19 +152,25 @@ pub(super) fn run(path: &Path, action: AntispamCli, dry_run: bool) -> ExitCode {
 	}
 }
 
-fn execute(path: &Path, action: AntispamCli, dry_run: bool) -> Result<ExitCode, String> {
+fn execute(
+	path: &Path,
+	action: AntispamCli,
+	dry_run: bool,
+) -> Result<ExitCode, super::resource::ResourceError> {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
 	match action {
 		AntispamCli::Show { json } => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 			if json {
 				return Ok(super::json_out::print(
 					&mut out,
 					&antispam_show::show_json(&config),
 				));
 			}
-			show_keys(&config, &mut out).map_err(|e| e.to_string())?;
+			show_keys(&config, &mut out)
+				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 			Ok(ExitCode::SUCCESS)
 		}
 		AntispamCli::Set { key, value } => {
@@ -419,9 +425,10 @@ pub(super) fn commit_and_restart(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::resource::ResourceError> {
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
@@ -432,10 +439,11 @@ pub(super) fn commit_and_restart(
 			"antispam {} already set; nothing changed.",
 			key.name()
 		)
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(status, "antispam {} {verb}.", key.name()).map_err(|e| e.to_string())?;
+	writeln!(status, "antispam {} {verb}.", key.name())
+		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
 }
 

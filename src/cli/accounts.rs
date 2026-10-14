@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use super::term::table::Table;
+use crate::cli::account_reload;
 use crate::config::Config;
 use crate::directory_store::removal::{QueuePolicy, remove_account};
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
@@ -77,17 +78,10 @@ pub(super) fn add_with_display_name(
 		Some(Ok(stored)) => stored,
 		Some(Err(why)) => return super::exit::refused(format_args!("account {name}: {why}")),
 	};
-	// let-else, not `match`: a match arm that returns is still an arm of the
-	// expression whose value binds to `password`, and the taint analyser follows
-	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
-	// the Err arm as a password reaching the hash. An else block has to diverge,
-	// so no value can travel from it to the binding. `new_password` has already
-	// printed why it refused (no input, mismatch, or the policy rule that failed).
-	let Some(password) =
-		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
-	else {
-		return ExitCode::from(super::exit::REFUSED);
-	};
+	// Open the store and check the name and addresses before the
+	// password prompt, so a typo in either does not cost the operator
+	// typing the password twice first. The refusal is the one `add`
+	// would print after the prompt: same message, same exit code.
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -99,6 +93,22 @@ pub(super) fn add_with_display_name(
 			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
+	};
+	if let Err(error) = store.validate_for_add(name, &addresses) {
+		let code = super::exit::for_store_error(&error);
+		super::style::error(error);
+		return code;
+	}
+	// let-else, not `match`: a match arm that returns is still an arm of the
+	// expression whose value binds to `password`, and the taint analyser follows
+	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
+	// the Err arm as a password reaching the hash. An else block has to diverge,
+	// so no value can travel from it to the binding. `new_password` has already
+	// printed why it refused (no input, mismatch, or the policy rule that failed).
+	let Some(password) =
+		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
+	else {
+		return ExitCode::from(super::exit::REFUSED);
 	};
 	let account = match DynamicAccount::with_password(
 		name.to_string(),
@@ -120,7 +130,10 @@ pub(super) fn add_with_display_name(
 	match store.add(account) {
 		Ok(()) => {
 			println!("account created");
-			ExitCode::SUCCESS
+			// The store released its lock on `accounts.toml` when `add`
+			// returned, so the server's reload is free to run while
+			// this waits for it.
+			account_reload::wait_after_write(store.store_path(), &mut super::style::stderr())
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);
@@ -350,7 +363,9 @@ pub(super) fn remove_with_bayes(
 			);
 			let _ = writeln!(out, "queued_messages_left: {}", counts.queued_messages_left);
 			let _ = writeln!(out, "bayes_tokens_removed: {}", counts.bayes_tokens_removed);
-			ExitCode::SUCCESS
+			// `err` is stderr outside the tests, the same stream the
+			// other account commands print the note on.
+			account_reload::wait_after_write(store.store_path(), err)
 		}
 		Err(StoreError::NotFound(what)) => {
 			super::style::error_to(err, format_args!("no such dynamic account: {what}"));
@@ -376,3 +391,7 @@ pub(super) fn remove_with_bayes(
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "accounts_add_validation_tests.rs"]
+mod accounts_add_validation_tests;

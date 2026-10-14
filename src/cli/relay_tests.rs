@@ -25,7 +25,7 @@ pub(super) fn no_restart(_: &Config, _: StackAction) -> ExitCode {
 	panic!("a test host has no compose file, so nothing may be restarted")
 }
 
-fn capture(args: Vec<&str>) -> (Result<ExitCode, String>, String) {
+fn capture(args: Vec<&str>) -> (Result<ExitCode, super::resource::ResourceError>, String) {
 	let (_dir, file) = test_config(RULES);
 	let action = parse(&args);
 	let mut out = Vec::new();
@@ -135,7 +135,7 @@ fn show_reports_a_missing_rule_and_a_non_relay_rule() {
 	] {
 		let (result, out) = capture(args);
 		assert_eq!(
-			result.unwrap_err(),
+			result.unwrap_err().as_ref(),
 			format!("no relay is configured for {label}")
 		);
 		assert!(out.is_empty());

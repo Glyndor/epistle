@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use super::alias_writers::commit_and_restart;
 use super::*;
 use crate::config::Config;
 

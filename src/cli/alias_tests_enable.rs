@@ -4,6 +4,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use super::alias_writers::set_enabled;
 use super::*;
 use crate::config::Config;
 
@@ -125,7 +126,10 @@ fn enable_refuses_an_alias_not_in_the_config() {
 		&mut Vec::new(),
 	)
 	.unwrap_err();
-	assert!(err.contains("not found"), "unexpected message: {err}");
+	assert!(
+		err.as_ref().contains("not found"),
+		"unexpected message: {err}"
+	);
 }
 
 /// What the running server sees: a store opened on the same data dir, as the

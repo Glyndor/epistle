@@ -32,6 +32,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::directory_store::AccountStore;
 use crate::directory_store::StoreError;
+use crate::directory_store::reload_status::{self, ReloadStatus};
 
 /// The cheap file identity used to short-circuit no-change polls and
 /// to dedupe the "still bad" warning. None of the three fields alone is
@@ -39,23 +40,23 @@ use crate::directory_store::StoreError;
 /// rename replaces the inode without moving mtime forward by the wall
 /// clock the polling task can see, and a `chmod`/`chown` touches
 /// `ctime` (not captured) while leaving every captured field alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Fingerprint {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Fingerprint {
 	/// Modification time as reported by the filesystem, truncated to whole
 	/// seconds: the poll loop can outrun nanosecond resolution on some
 	/// filesystems, and the triple still changes whenever the file
 	/// content does.
-	mtime_secs: u64,
+	pub mtime_secs: u64,
 	/// Byte length, distinguishes a write that left the size alone (so
 	/// the file is logically unchanged for our purposes) from one that
 	/// did not.
-	len: u64,
+	pub len: u64,
 	/// The inode number. An atomic `rename(2)` over the watched path
 	/// replaces the inode even when mtime and length would compare
 	/// equal, so this is the field that catches a CLI edit in the same
 	/// polling interval the writer committed it.
 	#[cfg(unix)]
-	ino: u64,
+	pub ino: u64,
 }
 
 /// Hot-reload target for `api_keys.toml`. The file watcher holds one
@@ -175,6 +176,9 @@ pub struct FileWatcher {
 	/// invoked. The watcher always polls the file either way, so a
 	/// later `with_api_keys` upgrade keeps the same fingerprint cache.
 	api_keys: Option<Arc<dyn ApiKeyReloader>>,
+	/// The data dir the watcher polls under; cached so the reload
+	/// status file is written back to the same root.
+	data_dir: PathBuf,
 }
 
 /// What one `poll` did, for the integration tests' assertions. The
@@ -278,6 +282,7 @@ impl FileWatcher {
 			last_warned,
 			store,
 			api_keys: None,
+			data_dir,
 		}
 	}
 
@@ -301,6 +306,18 @@ impl FileWatcher {
 		for watch in &watches {
 			let event = self.poll_one(watch);
 			report.events.push(event);
+		}
+		// One status write per poll that loaded something, and a bare
+		// mtime update on every other poll, so the CLI sees both what
+		// is loaded and that the server is still polling.
+		if report
+			.events
+			.iter()
+			.any(|event| matches!(event, PollEvent::Loaded(_)))
+		{
+			self.write_status();
+		} else {
+			self.refresh_status();
 		}
 		report
 	}
@@ -413,6 +430,10 @@ impl FileWatcher {
 	/// `JoinHandle` for callers that want to await the loop on
 	/// graceful shutdown.
 	pub fn spawn(mut self, interval: Duration) -> tokio::task::JoinHandle<()> {
+		// Publish what the server loaded at startup before the first
+		// poll, so a CLI write in the first interval has a status to
+		// wait on instead of reading the server as absent.
+		self.write_status();
 		tokio::spawn(async move {
 			let mut ticker = tokio::time::interval(interval);
 			ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -455,6 +476,52 @@ fn fingerprint(path: &Path) -> Option<Fingerprint> {
 	})
 }
 
+/// The fingerprint of `path` as the file watcher computes it, for the
+/// CLI to compare against the server's reload status.
+pub fn reload_fingerprint(path: &Path) -> Option<Fingerprint> {
+	fingerprint(path)
+}
+
+impl FileWatcher {
+	/// Where the reload status is written, under the data dir the
+	/// watcher was built with.
+	pub fn status_path(&self) -> PathBuf {
+		reload_status::status_path(&self.data_dir)
+	}
+
+	/// Publish the fingerprints the server has loaded, so a CLI that
+	/// just wrote one of the files can tell when the change is live.
+	fn write_status(&self) {
+		let mut status = ReloadStatus::default();
+		for watch in &self.watches {
+			let loaded = self.last.get(&watch.path).copied().flatten();
+			status.files.insert(watch.kind.label().to_string(), loaded);
+		}
+		let path = self.status_path();
+		if let Err(error) = reload_status::write(&path, &status) {
+			tracing::warn!(
+				target: "epistle::directory_store::file_watcher",
+				%error,
+				"cannot write the reload status; the CLI will not wait for this server's reloads",
+			);
+		}
+	}
+
+	/// Move the status file's mtime forward so the CLI can tell this
+	/// server is still polling. Falls back to a full write when the
+	/// cheap update fails: the file was removed, or it belongs to
+	/// another user because it was written before a privilege drop.
+	fn refresh_status(&self) {
+		if reload_status::touch(&self.status_path()).is_err() {
+			self.write_status();
+		}
+	}
+}
+
 #[cfg(test)]
 #[path = "file_watcher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_watcher_status_tests.rs"]
+mod status_tests;

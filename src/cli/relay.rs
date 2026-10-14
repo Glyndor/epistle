@@ -25,6 +25,9 @@ mod tests_edit;
 #[cfg(test)]
 #[path = "relay_tests_probe.rs"]
 mod tests_probe;
+#[cfg(test)]
+#[path = "relay_tests_unknown.rs"]
+mod tests_unknown;
 
 /// Which relay rule a command addresses. With neither flag it is the default
 /// route, the rule that carries mail no account or domain rule claims.
@@ -187,10 +190,15 @@ pub(super) fn find<'a>(config: &'a Config, target: &Target) -> Result<&'a Transp
 		.ok_or_else(|| format!("no relay is configured for {}", target.describe()))
 }
 
-fn show(config: &Config, target: &Target, json: bool, out: &mut impl Write) -> Result<(), String> {
-	let row = row(find(config, target)?);
+fn show(
+	config: &Config,
+	target: &Target,
+	json: bool,
+	out: &mut impl Write,
+) -> Result<(), resource::ResourceError> {
+	let row = row(find(config, target).map_err(resource::ResourceError::refused)?);
 	if json {
-		return resource::json(out, &row);
+		return resource::json(out, &row).map_err(Into::into);
 	}
 	let none = "-".to_string();
 	for (key, value) in [
@@ -205,13 +213,14 @@ fn show(config: &Config, target: &Target, json: bool, out: &mut impl Write) -> R
 		("password", row.password.to_string()),
 		("socks_proxy", row.socks_proxy.clone().unwrap_or(none)),
 	] {
-		writeln!(out, "{key}\t{value}").map_err(|error| error.to_string())?;
+		writeln!(out, "{key}\t{value}")
+			.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 	}
 	Ok(())
 }
 
 pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
@@ -230,15 +239,21 @@ fn execute_with(
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let change: resource::Change = match action {
 		RelayCli::List { json } => {
-			list(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+			list(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		RelayCli::Show { json, target } => {
 			show(
-				&Config::load(path).map_err(|e| e.to_string())?,
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
 				&target,
 				json,
 				out,
@@ -246,7 +261,8 @@ fn execute_with(
 			return Ok(ExitCode::SUCCESS);
 		}
 		RelayCli::Test { target } => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 			return probe::run(&config, &target, out, status);
 		}
 		RelayCli::Add {
@@ -273,7 +289,9 @@ fn execute_with(
 				socks_proxy,
 				password_stdin,
 			};
-			Box::new(move |document, config| edit::add(document, config, request))
+			Box::new(move |document, config| {
+				edit::add(document, config, request).map_err(resource::ResourceError::Failure)
+			})
 		}
 		RelayCli::Remove { target } => {
 			Box::new(move |document, config| edit::remove(document, config, &target))

@@ -128,7 +128,7 @@ impl From<StackCli> for StackAction {
 /// straight `podup` wrapper, so each variant holds the trailing
 /// arguments verbatim.
 #[derive(Debug)]
-pub(super) enum StackAction {
+pub(crate) enum StackAction {
 	/// Render the compose file again, then recreate changed services and restart mail.
 	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.

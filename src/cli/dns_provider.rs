@@ -61,7 +61,7 @@ pub enum ProviderCli {
 }
 
 pub(super) fn run(path: &Path, action: DnsCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
@@ -78,22 +78,37 @@ fn execute_with(
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let DnsCli::Provider { action } = action;
 	let change: resource::Change = match action {
 		ProviderCli::Show { json } => {
-			show::run(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+			show::run(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		ProviderCli::Test => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 			return probe::run(&config, out, status);
 		}
 		ProviderCli::Set { provider, args } => {
 			let fields = set::fields(&provider, &args)?;
-			Box::new(move |document, _| document.set_table_fields(&["dns"], &fields))
+			Box::new(move |document, _| {
+				document
+					.set_table_fields(&["dns"], &fields)
+					.map_err(resource::ResourceError::Failure)
+			})
 		}
-		ProviderCli::Unset => Box::new(|document, _| document.remove_table(&["dns"]).map(|_| ())),
+		ProviderCli::Unset => Box::new(|document, _| {
+			document
+				.remove_table(&["dns"])
+				.map(|_| ())
+				.map_err(resource::ResourceError::Failure)
+		}),
 	};
 	resource::apply_edit(path, dry_run, "dns provider", out, status, restart, change)
 }

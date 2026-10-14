@@ -43,6 +43,29 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
+	let _ = writeln!(out, "forwards: {}", render_targets(&account.forward));
+	let _ = writeln!(out, "catch_all: {}", render_targets(&account.catch_all));
+	let _ = writeln!(
+		out,
+		"two_factor: {}",
+		if account.totp_secret.is_some() {
+			"yes"
+		} else {
+			"no"
+		}
+	);
+}
+
+/// Render a one-per-line list with `(none)` for the empty case. The
+/// form mirrors the rest of `account show` so a script that greps for
+/// `forwards: outside@example.com` keeps matching regardless of
+/// whether the account is static or dynamic.
+fn render_targets(targets: &[String]) -> String {
+	if targets.is_empty() {
+		"(none)".to_string()
+	} else {
+		targets.join(",")
+	}
 }
 
 /// A display name for `account show`, or `unset`.
@@ -63,6 +86,13 @@ pub(crate) fn set_name_with_store(store: &AccountStore, name: &str, raw: &str) -
 		}
 		Err(error) => handle_error(name, error),
 	}
+}
+
+/// Wait for the running server to load the accounts file the store
+/// just wrote; see [`crate::cli::account_reload::wait_after_write`].
+/// The store holds no lock once its mutator has returned.
+fn wait_after_write(store: &AccountStore) -> ExitCode {
+	crate::cli::account_reload::wait_after_write(store.store_path(), &mut style::stderr())
 }
 
 /// Render the protocol allowlist. `None` is the pre-restriction
@@ -140,7 +170,7 @@ pub(crate) fn password_with_store(
 	match store.set_password_hash(name, hash, scram) {
 		Ok(()) => {
 			println!("password updated");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -155,7 +185,7 @@ pub(crate) fn disable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 				"account disabled"
 			};
 			println!("{state}");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -170,7 +200,7 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 				"account already enabled"
 			};
 			println!("{state}");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -300,9 +330,11 @@ pub(crate) fn show_with_store(
 	crate::cli::exit::refused(format_args!("no such account: {name}"))
 }
 
-/// Public view of a static `[accounts]` row. Static accounts do not
-/// carry a `disabled` flag or SCRAM/TOTP material, so the renderer
-/// reports the loader-controlled fields only. The password hash is
+/// Public view of a static `[accounts]` row. The shape mirrors the
+/// dynamic view so an operator can grep a single set of fields
+/// regardless of where the account lives; a static account is
+/// `disabled: no` by definition (the loader never sets it) and
+/// `two_factor: no` (TOTP is dynamic-only). The password hash is
 /// never printed (matches the dynamic viewer's contract).
 fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write) {
 	let _ = writeln!(out, "name: {}", account.name);
@@ -314,6 +346,7 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 		shown(account.display_name.as_deref())
 	);
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
+	let _ = writeln!(out, "disabled: no");
 	let quota = match account.quota_bytes {
 		Some(bytes) => bytes.to_string(),
 		None => "server default".to_string(),
@@ -324,6 +357,9 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
+	let _ = writeln!(out, "forwards: {}", render_targets(&account.forward));
+	let _ = writeln!(out, "catch_all: {}", render_targets(&account.catch_all));
+	let _ = writeln!(out, "two_factor: no");
 }
 
 /// Convert a store error into the exit code plus the message the
@@ -407,3 +443,6 @@ pub(crate) fn parse_protocol_list_inner(raw: &str) -> Result<Option<Vec<Protocol
 #[cfg(test)]
 #[path = "cli_account_save_sent_tests.rs"]
 mod save_sent_tests;
+#[cfg(test)]
+#[path = "account_actions_show_fields_tests.rs"]
+mod show_fields_tests;

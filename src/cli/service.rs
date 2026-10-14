@@ -178,13 +178,17 @@ pub(super) fn run(path: &Path, action: ServiceCli, dry_run: bool) -> ExitCode {
 	match execute(path, action, dry_run) {
 		Ok(code) => code,
 		Err(error) => {
-			super::style::error(error);
+			super::style::error(error.to_string());
 			ExitCode::FAILURE
 		}
 	}
 }
 
-fn execute(path: &Path, action: ServiceCli, dry_run: bool) -> Result<ExitCode, String> {
+fn execute(
+	path: &Path,
+	action: ServiceCli,
+	dry_run: bool,
+) -> Result<ExitCode, super::resource::ResourceError> {
 	execute_with(
 		path,
 		action,
@@ -202,10 +206,11 @@ fn execute_with(
 	out: &mut impl Write,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::resource::ResourceError> {
 	let (name, enabled) = match action {
 		ServiceCli::List { json } => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 			list(&config, json, out)?;
 			return Ok(ExitCode::SUCCESS);
 		}
@@ -214,7 +219,8 @@ fn execute_with(
 	};
 	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|error| error.to_string())?;
+		write!(out, "{}", document.dry_run()?)
+			.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
@@ -226,12 +232,13 @@ fn execute_with(
 			"{} is already {state}; nothing changed.",
 			name.as_str()
 		)
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	writeln!(err, "{} {state}.", name.as_str()).map_err(|e| e.to_string())?;
+	writeln!(err, "{} {state}.", name.as_str())
+		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 	super::init::update_listener_ports(&config.data_dir, &config.listeners)
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
 	super::config_edit::after_ports_change_with(&config, outcome, err, restart)
 }
 

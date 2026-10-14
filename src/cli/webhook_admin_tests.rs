@@ -185,7 +185,10 @@ fn test_fails_on_an_error_status_an_unreachable_endpoint_and_silence() {
 		&mut Vec::new(),
 	)
 	.unwrap_err();
-	assert!(error.starts_with("webhook test failed: "), "{error}");
+	assert!(
+		error.as_ref().starts_with("webhook test failed: "),
+		"{error}"
+	);
 	let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
 	let (_dir, _file, config) =
 		config_for(&format!("http://{}/hook", listener.local_addr().unwrap()));

@@ -56,7 +56,13 @@ mod set_totp;
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
-pub use file_watcher::{ApiKeyReloader, FileWatcher};
+pub use file_watcher::{ApiKeyReloader, FileWatcher, reload_fingerprint};
+/// What the file watcher publishes for the CLI to wait on. See
+/// [`reload_status`].
+pub mod reload_status;
+pub use reload_status::{
+	ReloadStatus, ReloadWait, WaitError, read_reload_status, remove_reload_status, wait_for_reload,
+};
 
 mod collisions;
 pub mod display_name;
@@ -479,28 +485,60 @@ impl AccountStore {
 		self.handle.clone()
 	}
 
+	/// The absolute path of the on-disk accounts file the store
+	/// mutates. The CLI uses it to know which file to wait on after
+	/// a mutator returns.
+	pub fn store_path(&self) -> &Path {
+		&self.path
+	}
+
+	/// The checks `add` runs that do not depend on the accounts already
+	/// on disk: a valid name, at least one address, and every address
+	/// in a configured domain. The CLI calls this before it reads the
+	/// password, so nobody types one for a name or address that cannot
+	/// be created. The input is normalized the way `add` normalizes it,
+	/// so both refuse the same input with the same error; the checks
+	/// against existing accounts still run inside [`AccountStore::add`]
+	/// under the lock.
+	pub fn validate_for_add(&self, name: &str, addresses: &[String]) -> Result<(), StoreError> {
+		let mut account = DynamicAccount {
+			name: normalize::account_name(name),
+			addresses: addresses.to_vec(),
+			..DynamicAccount::default()
+		};
+		normalize::account(&mut account);
+		self.check_name_and_addresses(&account)
+	}
+
+	/// The part of [`AccountStore::validate_for_add`] that `add` repeats
+	/// under the lock.
+	fn check_name_and_addresses(&self, account: &DynamicAccount) -> Result<(), StoreError> {
+		validate_name(&account.name)?;
+		if account.addresses.is_empty() {
+			return Err(StoreError::Invalid("addresses must not be empty".into()));
+		}
+		for raw in &account.addresses {
+			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
+			if !self
+				.domains
+				.iter()
+				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
+			{
+				return Err(StoreError::Invalid(address_reason::not_handled(
+					address.domain(),
+				)));
+			}
+		}
+		Ok(())
+	}
+
 	/// Add a dynamic account. `password_hash` must already be argon2id.
 	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store(|state| {
-			validate_name(&account.name)?;
-			if account.addresses.is_empty() {
-				return Err(StoreError::Invalid("addresses must not be empty".into()));
-			}
-			for raw in &account.addresses {
-				let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-				if !self
-					.domains
-					.iter()
-					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-				{
-					return Err(StoreError::Invalid(address_reason::not_handled(
-						address.domain(),
-					)));
-				}
-			}
+			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
 				.iter()
