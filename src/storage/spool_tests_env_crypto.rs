@@ -252,3 +252,40 @@ fn load_envelope_is_also_aad_bound() {
 	let err = spool.load_envelope(id).expect_err("tamper fails");
 	assert!(err.to_string().contains("authentication failed"));
 }
+
+/// An edit (a delivery attempt being recorded, an operator hold) on an
+/// envelope still in the legacy plaintext form must finish: the edit holds
+/// the spool lock, so it must not wait on that same lock to migrate the
+/// envelope it is about to rewrite sealed anyway.
+#[test]
+fn editing_a_legacy_plaintext_envelope_under_encryption_completes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = FsSpool::open(dir.path())
+		.expect("open pre")
+		.store(&sample(), None, &BTreeMap::new())
+		.expect("store pre");
+	let crypto = MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open crypto");
+
+	let (done, finished) = std::sync::mpsc::channel();
+	std::thread::spawn(move || {
+		let attempts = spool
+			.update_envelope(id, |envelope| envelope.attempts += 1)
+			.map(|envelope| envelope.attempts)
+			.map_err(|error| error.kind());
+		let _ = done.send(attempts);
+	});
+	let outcome = finished.recv_timeout(std::time::Duration::from_secs(10));
+	assert_eq!(
+		outcome,
+		Ok(Ok(1)),
+		"the edit must finish instead of waiting on its own lock"
+	);
+	let envelope_path = dir.path().join("spool/new").join(format!("{id}.json"));
+	assert!(
+		std::fs::read(&envelope_path)
+			.expect("read post")
+			.starts_with(crate::storage::MAGIC),
+		"the edited envelope must be written sealed"
+	);
+}

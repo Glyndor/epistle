@@ -14,10 +14,10 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
-use super::spool_permissions::{
-	audit_permissions, count_loose_permissions, create_spool_dir, FILE_MODE,
-};
 pub(super) use super::spool_permissions::write_sync;
+use super::spool_permissions::{
+	FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir,
+};
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
 
 /// Envelope metadata stored next to the raw message.
@@ -398,16 +398,14 @@ impl FsSpool {
 		}
 	}
 
-	/// Read an envelope without holding the lock. Used by `update_envelope`,
-	/// which holds the lock itself, and by `read_envelope_unlocked` which is
-	/// the only path used outside `update_envelope`.
+	/// Read and decode an envelope without taking the lock and without
+	/// migrating it. Only `update_envelope` calls this: it already holds the
+	/// lock and rewrites the envelope sealed itself, so a migration here would
+	/// wait on that same lock forever.
 	fn read_envelope_unlocked(&self, id: Uuid) -> std::io::Result<Envelope> {
 		let bytes =
 			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		let (envelope, decrypted) = self.decode_envelope_bytes(id, &bytes)?;
-		if decrypted == DecodedEnvelope::Plaintext {
-			self.maybe_migrate_envelope(id, &bytes)?;
-		}
+		let (envelope, _) = self.decode_envelope_bytes(id, &bytes)?;
 		Ok(envelope)
 	}
 
