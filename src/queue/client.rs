@@ -100,6 +100,7 @@ pub async fn deliver<S>(
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+	let mut trace = Trace::default();
 	let results = deliver_each(
 		stream,
 		server_name,
@@ -111,13 +112,27 @@ where
 		auth,
 		tlsa,
 		mode,
-		tls,
+		&mut trace,
 	)
-	.await?;
+	.await;
+	*tls = trace.tls;
+	let results = results?;
 	match results.into_iter().find_map(|(_, result)| result.err()) {
 		Some(error) => Err(error),
 		None => Ok(()),
 	}
+}
+
+/// What a conversation showed besides the answer for each recipient.
+#[derive(Debug, Default)]
+pub struct Trace {
+	/// How the TLS part ended (for TLS-RPT), once the conversation got as
+	/// far as the STARTTLS decision.
+	pub tls: Option<TlsOutcome>,
+	/// Whether the session was set up and the mail transaction begun (MAIL
+	/// was sent). A failure before that is about this exchanger, not the
+	/// message, and the next exchanger may do better (RFC 5321 section 5.1).
+	pub transaction: bool,
 }
 
 /// The remote's answer for one recipient of a conversation.
@@ -130,7 +145,8 @@ pub type RecipientResult = (String, Result<(), DeliveryError>);
 /// and its outcome applies to the accepted ones. `Err` means the
 /// conversation broke before any recipient had an answer of its own (the
 /// connection, the greeting, EHLO, STARTTLS, AUTH, `MAIL FROM`, or the
-/// connection dropping mid-`RCPT`); it applies to every recipient. The other
+/// connection dropping mid-`RCPT`); it applies to every recipient. `trace`
+/// receives the TLS outcome and how far the session got; the other
 /// arguments are those of [`deliver`].
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver_each<S>(
@@ -144,7 +160,7 @@ pub async fn deliver_each<S>(
 	auth: Option<(&str, &str)>,
 	tlsa: &TlsaRrset,
 	mode: OutboundTls,
-	tls: &mut Option<TlsOutcome>,
+	trace: &mut Trace,
 ) -> Result<Vec<RecipientResult>, DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -160,7 +176,7 @@ where
 		.await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
 	if !offers_starttls {
-		*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+		trace.tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
 	}
 	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
 	if tls_mandatory && !offers_starttls {
@@ -172,7 +188,7 @@ where
 	let mut tls_active = false;
 	if offers_starttls {
 		if let Err(error) = conn.command("STARTTLS", 220, Phase::Command).await {
-			*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+			trace.tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
 			return Err(error);
 		}
 		let inner = conn.into_inner();
@@ -183,7 +199,7 @@ where
 		let (stream, peer_chain) = tls_connect(inner, server_name, authenticate_pkix)
 			.await
 			.map_err(|(error, result_type)| {
-				*tls = Some(TlsOutcome::Failure(result_type));
+				trace.tls = Some(TlsOutcome::Failure(result_type));
 				error
 			})?;
 		// DANE: authenticate the presented chain against validated TLSA records.
@@ -191,13 +207,13 @@ where
 		match verify_chain(tlsa, &peer_chain) {
 			DaneOutcome::Authenticated | DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {
-				*tls = Some(TlsOutcome::Failure(TLSA_INVALID));
+				trace.tls = Some(TlsOutcome::Failure(TLSA_INVALID));
 				return Err(DeliveryError::Transient(format!(
 					"DANE: no TLSA record matches the certificate of {server_name}"
 				)));
 			}
 		}
-		*tls = Some(TlsOutcome::Success);
+		trace.tls = Some(TlsOutcome::Success);
 		conn = Conn::new(Box::new(stream));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
 			.await?;
@@ -218,6 +234,7 @@ where
 			.await?;
 	}
 
+	trace.transaction = true;
 	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250, Phase::Command)
 		.await?;
 	let mut results = Vec::with_capacity(recipients.len());

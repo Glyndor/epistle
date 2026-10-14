@@ -10,6 +10,8 @@ use super::client::DeliveryError;
 use super::resolver::Connector;
 use conversation::Conversation;
 
+#[path = "worker_attempt.rs"]
+mod attempt;
 #[path = "worker_conversation.rs"]
 mod conversation;
 #[path = "worker_reports.rs"]
@@ -441,3 +443,7 @@ mod tests_parallel;
 #[cfg(test)]
 #[path = "worker_tests_backoff.rs"]
 mod tests_backoff;
+
+#[cfg(test)]
+#[path = "worker_tests_next_mx.rs"]
+mod tests_next_mx;

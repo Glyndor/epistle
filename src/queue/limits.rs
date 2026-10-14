@@ -13,6 +13,11 @@ pub const DEFAULT_CONCURRENCY: usize = 8;
 pub const DEFAULT_PER_DOMAIN_CONCURRENCY: usize = 2;
 /// The highest `concurrency` the configuration accepts.
 pub const MAX_CONCURRENCY: usize = 1024;
+/// The most exchangers of one domain tried in one delivery attempt, the
+/// way Postfix's `smtp_mx_address_limit` bounds it: a domain that
+/// publishes hundreds of MX records cannot keep a conversation slot busy
+/// trying each of them.
+pub const MAX_EXCHANGERS: usize = 5;
 
 /// The caps the scheduler works within.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

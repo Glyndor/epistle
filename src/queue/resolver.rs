@@ -6,6 +6,7 @@ use tokio::net::TcpStream;
 use crate::mtasts::Policy;
 
 use super::client::DeliveryError;
+use super::limits::MAX_EXCHANGERS;
 use super::timeouts;
 
 /// A bidirectional stream the SMTP client can drive.
@@ -302,19 +303,21 @@ impl MxConnector {
 
 impl Connector for MxConnector {
 	fn connect(&self, domain: &str, policy: Option<&Policy>) -> ConnectFuture<'_> {
+		self.connect_skipping(domain, policy, &[])
+	}
+
+	fn connect_skipping(
+		&self,
+		domain: &str,
+		policy: Option<&Policy>,
+		tried: &[String],
+	) -> ConnectFuture<'_> {
 		let domain = domain.to_string();
 		let policy = policy.cloned();
+		let tried = tried.to_vec();
 		Box::pin(async move {
-			let (mut hosts, mx) = self.exchangers(&domain).await?;
-			if let Some(policy) = &policy {
-				hosts.retain(|host| policy.permits_mx(host));
-				if hosts.is_empty() {
-					// Never contact unlisted hosts under enforce: retry later.
-					return Err(DeliveryError::Transient(format!(
-						"no MTA-STS-permitted MX for {domain}"
-					)));
-				}
-			}
+			let (hosts, mx) = self.exchangers(&domain).await?;
+			let hosts = candidates(&domain, hosts, policy.as_ref(), &tried)?;
 			let (host, stream) = first_reachable(&domain, &hosts, |host| {
 				TcpStream::connect((host.to_string(), 25))
 			})
@@ -330,6 +333,39 @@ impl Connector for MxConnector {
 			})
 		})
 	}
+}
+
+/// The exchangers to try, in preference order: those `policy` permits
+/// (never an unlisted host under MTA-STS enforce), at most
+/// [`MAX_EXCHANGERS`] of them, and only those after the last one in `tried`,
+/// which already turned this attempt away.
+pub(crate) fn candidates(
+	domain: &str,
+	mut hosts: Vec<String>,
+	policy: Option<&Policy>,
+	tried: &[String],
+) -> Result<Vec<String>, DeliveryError> {
+	if let Some(policy) = policy {
+		hosts.retain(|host| policy.permits_mx(host));
+		if hosts.is_empty() {
+			// Never contact unlisted hosts under enforce: retry later.
+			return Err(DeliveryError::Transient(format!(
+				"no MTA-STS-permitted MX for {domain}"
+			)));
+		}
+	}
+	hosts.truncate(MAX_EXCHANGERS);
+	let after = hosts
+		.iter()
+		.rposition(|host| tried.contains(host))
+		.map_or(0, |index| index + 1);
+	let rest = hosts.split_off(after);
+	if rest.is_empty() {
+		return Err(DeliveryError::Transient(format!(
+			"no further exchanger for {domain}"
+		)));
+	}
+	Ok(rest)
 }
 
 /// Open a connection to the first of `hosts` that answers, in order, giving

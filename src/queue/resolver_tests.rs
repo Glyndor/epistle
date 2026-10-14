@@ -188,3 +188,83 @@ async fn every_exchanger_timing_out_is_a_transient_failure() {
 	);
 	assert_eq!(started.elapsed(), timeouts::CONNECT * 2);
 }
+
+fn hosts(names: &[&str]) -> Vec<String> {
+	names.iter().map(|name| name.to_string()).collect()
+}
+
+#[test]
+fn the_next_exchanger_comes_after_the_last_one_tried() {
+	let all = hosts(&["mx1.example.net", "mx2.example.net", "mx3.example.net"]);
+	assert_eq!(
+		candidates("example.net", all.clone(), None, &[]),
+		Ok(all.clone())
+	);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			None,
+			&hosts(&["mx2.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"])),
+		"mx1 failed to connect before mx2 answered, so it is not tried again"
+	);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			None,
+			&hosts(&["mx1.example.net", "mx2.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"]))
+	);
+	assert_eq!(
+		candidates("example.net", all, None, &hosts(&["mx3.example.net"])),
+		Err(DeliveryError::Transient(
+			"no further exchanger for example.net".into()
+		))
+	);
+}
+
+#[test]
+fn the_next_exchanger_is_still_one_the_policy_permits() {
+	let policy = Policy {
+		mode: crate::mtasts::Mode::Enforce,
+		mx: vec!["mx1.example.net".into(), "mx3.example.net".into()],
+		max_age: 86_400,
+	};
+	let all = hosts(&["mx1.example.net", "mx2.example.net", "mx3.example.net"]);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			Some(&policy),
+			&hosts(&["mx1.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"]))
+	);
+	let unlisted = Policy {
+		mx: vec!["other.example.org".into()],
+		..policy
+	};
+	assert_eq!(
+		candidates("example.net", all, Some(&unlisted), &[]),
+		Err(DeliveryError::Transient(
+			"no MTA-STS-permitted MX for example.net".into()
+		))
+	);
+}
+
+#[test]
+fn a_domain_with_many_exchangers_is_tried_on_a_few() {
+	let many: Vec<String> = (0..200).map(|n| format!("mx{n}.example.net")).collect();
+	let first = candidates("example.net", many.clone(), None, &[]).expect("candidates");
+	assert_eq!(first.len(), crate::queue::limits::MAX_EXCHANGERS);
+	assert_eq!(
+		candidates("example.net", many, None, &first[first.len() - 1..]),
+		Err(DeliveryError::Transient(
+			"no further exchanger for example.net".into()
+		))
+	);
+}

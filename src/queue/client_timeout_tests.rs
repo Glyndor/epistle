@@ -35,7 +35,7 @@ async fn converse_with(
 		None,
 		&TlsaRrset::Absent,
 		OutboundTls::Opportunistic,
-		&mut None,
+		&mut Trace::default(),
 	)
 	.await;
 	(result, started.elapsed())
