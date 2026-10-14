@@ -174,9 +174,8 @@ pub struct Server {
 	/// peer over the cap is answered `421 4.7.0` and closed. The cap
 	/// is per-listener: two SMTP listeners each have their own count
 	/// for the same IP, so a peer can saturate one listener and still
-	/// reach the other. Authenticated submission from a trusted
-	/// network is exempt when `[server] trusted_networks` lists the
-	/// peer's CIDR.
+	/// reach the other. A peer on a [`Server::with_trusted_networks`]
+	/// CIDR is exempt; `serve` lists none, so in production no peer is.
 	max_connections_per_ip: usize,
 	/// CIDR blocks exempt from the per-IP connection cap. The set is
 	/// per-listener (a `smtp` listener can admit the office while a

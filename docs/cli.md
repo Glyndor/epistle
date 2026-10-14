@@ -335,9 +335,9 @@ stack.
 | `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
 | `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
 | `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
-| `max-message-size` | Per-instance cap, default 25 MiB. Applied to SMTP, JMAP `Email/set` create, JMAP upload body limit, REST `POST /api/v1/send`. |
-| `max-connections-per-ip` | Concurrent connections per client IP on each SMTP listener, default 20. Extra connections get `421 4.7.0` and are closed. |
-| `message-memory-budget` | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from, default 256 MiB. `0` disables the cap. |
+| `max-message-size` | Per-instance cap, default 25 MiB. Applied to SMTP, JMAP `Email/set` create, JMAP upload body limit, REST `POST /api/v1/send`. Refused above `message-memory-budget`. |
+| `max-connections-per-ip` | Concurrent connections per client IP (IPv6: per /64) on each SMTP listener, default 20. Extra connections get `421 4.7.0` and are closed. |
+| `message-memory-budget` | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from, default 256 MiB; one client may hold a quarter of it. Refused below `max-message-size`. `0` disables the cap. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |

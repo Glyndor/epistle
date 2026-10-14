@@ -309,8 +309,8 @@ pub struct Config {
 	pub max_connections_per_listener: Option<usize>,
 	/// Max concurrent connections per client IP per SMTP listener. A peer
 	/// over the cap is answered `421 4.7.0 too many connections from your
-	/// address` and closed. Absent uses the built-in default of 20; a
-	/// peer on a `[server] trusted_networks` CIDR is exempt.
+	/// address` and closed. Absent (or `0`) uses the built-in default of
+	/// 20. An IPv6 client is counted by its /64; no peer is exempt.
 	#[serde(default)]
 	pub max_connections_per_ip: Option<usize>,
 	/// Shared byte budget every SMTP `DATA` / `BDAT` reservation draws
