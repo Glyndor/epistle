@@ -428,3 +428,22 @@ fn the_plan_shows_a_stricter_subdomain_policy_kept() {
 		run.out
 	);
 }
+
+#[test]
+fn a_unicode_domain_and_zone_names_are_compared_as_a_labels() {
+	let setup = setup(CLOUDFLARE, Zone::with(vec![a("WWW.Bücher.example.org.")]));
+	let run = run(&setup, &["Bücher.Example.org", "--dry-run"]);
+	assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
+	assert!(
+		run.out
+			.starts_with("Lockdown plan for xn--bcher-kva.example.org\n"),
+		"{}",
+		run.out
+	);
+	assert!(
+		run.out
+			.contains("  + www.xn--bcher-kva.example.org 3600 IN TXT \"v=spf1 -all\"\n  "),
+		"{}",
+		run.out
+	);
+}

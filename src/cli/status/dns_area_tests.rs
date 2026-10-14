@@ -304,3 +304,60 @@ async fn other_providers_get_no_proxy_check() {
 	assert!(matches!(super::proxy_provider(&config), Ok(None)));
 	assert!(super::proxied_items(&config, Ok(None)).await.is_empty());
 }
+
+/// A provider whose zone listing fails.
+struct UnlistableZone;
+
+impl crate::dns::provider::DnsProvider for UnlistableZone {
+	fn upsert(
+		&self,
+		_zone: &str,
+		_record: crate::dns::provider::DnsRecord,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<(), crate::dns::provider::ProviderError>> + Send + '_>,
+	> {
+		Box::pin(async { Err(crate::dns::provider::ProviderError::Unsupported) })
+	}
+	fn delete(
+		&self,
+		_zone: &str,
+		_record: crate::dns::provider::DnsRecord,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<(), crate::dns::provider::ProviderError>> + Send + '_>,
+	> {
+		Box::pin(async { Err(crate::dns::provider::ProviderError::Unsupported) })
+	}
+	fn list(
+		&self,
+		_zone: &str,
+	) -> std::pin::Pin<
+		Box<
+			dyn Future<
+					Output = Result<
+						Vec<crate::dns::provider::DnsRecord>,
+						crate::dns::provider::ProviderError,
+					>,
+				> + Send
+				+ '_,
+		>,
+	> {
+		Box::pin(async {
+			Err(crate::dns::provider::ProviderError::Remote(
+				"HTTP 502".into(),
+			))
+		})
+	}
+}
+
+#[tokio::test]
+async fn a_zone_listing_that_fails_leaves_the_proxy_state_unknown() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = cloudflare_config(dir.path());
+	let items = super::proxied_items(&config, Ok(Some(std::sync::Arc::new(UnlistableZone)))).await;
+	assert_eq!(items.len(), 1, "{items:?}");
+	assert_eq!(items[0].status, Level::Warn);
+	assert_eq!(
+		items[0].detail,
+		"listing the example.org zone failed, so the proxy state was not checked: provider error: HTTP 502"
+	);
+}
