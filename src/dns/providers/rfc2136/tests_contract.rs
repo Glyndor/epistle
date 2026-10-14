@@ -14,8 +14,8 @@ use hickory_resolver::proto::op::Message;
 use hickory_resolver::proto::rr::DNSClass;
 
 use super::tests::{
-	ZONE, make_signing_pair, provider_with_endpoint_and_cache, spawn_server, txt, wait_for_wire,
-	ServerReply,
+	ServerReply, ZONE, make_signing_pair, provider_with_endpoint_and_cache, spawn_server, txt,
+	wait_for_wire,
 };
 use crate::dns::provider::DnsProvider;
 

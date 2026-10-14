@@ -111,10 +111,7 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		rec1_touched,
 		"old SPF1 was not edited or deleted: {writes:?}"
 	);
-	assert!(
-		rec2_touched,
-		"old SPF2 was left in place: {writes:?}"
-	);
+	assert!(rec2_touched, "old SPF2 was left in place: {writes:?}");
 	// No body carries an old SPF value.
 	for body in &state.lock().unwrap().bodies {
 		assert!(
@@ -135,7 +132,8 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		.filter(|b| b.contains(NEW_SPF))
 		.count();
 	assert_eq!(
-		fresh, 1,
+		fresh,
+		1,
 		"exactly one SPF write carries the new value, bodies: {:?}",
 		state.lock().unwrap().bodies
 	);

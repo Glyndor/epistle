@@ -376,8 +376,7 @@ impl OvhProvider {
 					let url = self.zone_url(zone, &["record", &primary.to_string()])?;
 					self.send_unit(reqwest::Method::PUT, &url, &body).await?;
 					for dup in ids {
-						let dup_url =
-							self.zone_url(zone, &["record", &dup.to_string()])?;
+						let dup_url = self.zone_url(zone, &["record", &dup.to_string()])?;
 						self.send_unit(reqwest::Method::DELETE, &dup_url, "")
 							.await?;
 					}
@@ -387,10 +386,7 @@ impl OvhProvider {
 					self.send_unit(reqwest::Method::POST, &url, &body).await?;
 				}
 			}
-		} else if let Some(id) = self
-			.find_record_id(zone, &sub, kind, None)
-			.await?
-		{
+		} else if let Some(id) = self.find_record_id(zone, &sub, kind, None).await? {
 			let url = self.zone_url(zone, &["record", &id.to_string()])?;
 			self.send_unit(reqwest::Method::PUT, &url, &body).await?;
 		} else {

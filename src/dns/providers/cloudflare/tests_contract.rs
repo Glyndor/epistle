@@ -121,21 +121,16 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 	// the bug the contract closes: a second SPF at the same name makes
 	// every receiver return SPF permerror.
 	let rec1_touched = writes.iter().any(|w| {
-		w == "PUT /zones/zone123/dns_records/rec1"
-			|| w == "DELETE /zones/zone123/dns_records/rec1"
+		w == "PUT /zones/zone123/dns_records/rec1" || w == "DELETE /zones/zone123/dns_records/rec1"
 	});
 	let rec2_touched = writes.iter().any(|w| {
-		w == "PUT /zones/zone123/dns_records/rec2"
-			|| w == "DELETE /zones/zone123/dns_records/rec2"
+		w == "PUT /zones/zone123/dns_records/rec2" || w == "DELETE /zones/zone123/dns_records/rec2"
 	});
 	assert!(
 		rec1_touched,
 		"old SPF1 was not edited or deleted: {writes:?}"
 	);
-	assert!(
-		rec2_touched,
-		"old SPF2 was left in place: {writes:?}"
-	);
+	assert!(rec2_touched, "old SPF2 was left in place: {writes:?}");
 	// No write carries an old SPF value. The Cloudflare wire payload
 	// is JSON with the TXT in presentation form, so the on-wire
 	// substring for "v=spf1 mx -all" is the bare logical value
@@ -160,7 +155,8 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		.filter(|b| b.contains("v=spf1 -all"))
 		.count();
 	assert_eq!(
-		fresh, 1,
+		fresh,
+		1,
 		"exactly one SPF write carries the new value, bodies: {:?}",
 		state.lock().unwrap().bodies
 	);

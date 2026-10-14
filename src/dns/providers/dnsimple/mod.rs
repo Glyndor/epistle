@@ -245,9 +245,7 @@ impl DnsimpleProvider {
 		// match is fine.
 		if record.kind == RecordKind::Txt {
 			let lookup = record.value.clone();
-			let mut ids = self
-				.find_ids(zone, &relative, kind, Some(&lookup))
-				.await?;
+			let mut ids = self.find_ids(zone, &relative, kind, Some(&lookup)).await?;
 			match ids.next() {
 				Some(primary) => {
 					self.write_record(zone, primary, record).await?;
@@ -267,11 +265,7 @@ impl DnsimpleProvider {
 		}
 	}
 
-	async fn create_record(
-		&self,
-		zone: &str,
-		record: DnsRecord,
-	) -> Result<(), ProviderError> {
+	async fn create_record(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		let kind = Self::api_kind(record.kind)?;
 		let relative = self.relative_name(&record.name);
 		let body = self.record_body(kind, &relative, &record)?;

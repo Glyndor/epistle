@@ -7,9 +7,8 @@
 //! `v=spf1` TXT plus one unrelated TXT ends with exactly one SPF TXT
 //! (epistle's value) and the unrelated TXT untouched.
 
-use super::tests::{mock_with, txt, StoredRecord};
+use super::tests::{StoredRecord, mock_with, txt};
 use super::*;
-use crate::dns::providers::ovh::tests::Shared;
 
 fn apex_spf(id: u64, target: &str) -> StoredRecord {
 	StoredRecord {

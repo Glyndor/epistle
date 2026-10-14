@@ -138,9 +138,7 @@ pub fn all_ok(checks: &[Check]) -> bool {
 async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) -> Check {
 	match dns.txt(name).await {
 		Ok(records) => {
-			let mut matches = records
-				.iter()
-				.filter(|r| txt_purpose(r) == Some(prefix));
+			let mut matches = records.iter().filter(|r| txt_purpose(r) == Some(prefix));
 			let first = matches.next();
 			match (first, matches.next()) {
 				(Some(record), None) => Check::ok(kind, name, record.clone()),

@@ -124,8 +124,7 @@ async fn two_spf_records_at_the_apex_are_reported() {
 			"v=spf1 include:_spf.google.com -all".into(),
 		],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 	let d = detail(&checks, "SPF");
 	assert!(d.contains("2 SPF records"), "detail missing count: {d:?}");
@@ -146,8 +145,7 @@ async fn two_dmarc_records_are_reported() {
 		"_dmarc.example.org".into(),
 		vec!["v=DMARC1; p=none".into(), "v=DMARC1; p=reject".into()],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "DMARC"), Status::Missing);
 	let d = detail(&checks, "DMARC");
 	assert!(d.contains("2 DMARC records"), "detail: {d:?}");
@@ -167,8 +165,7 @@ async fn two_mta_sts_records_are_reported() {
 		"_mta-sts.example.org".into(),
 		vec!["v=STSv1; id=1".into(), "v=STSv1; id=2".into()],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "MTA-STS"), Status::Missing);
 	let d = detail(&checks, "MTA-STS");
 	assert!(d.contains("2 MTA-STS records"), "detail: {d:?}");
@@ -202,10 +199,7 @@ async fn two_dkim_records_at_the_same_selector_are_reported() {
 	assert_eq!(status(&checks, "DKIM mail"), Status::Missing);
 	let d = detail(&checks, "DKIM mail");
 	assert!(d.contains("2 DKIM"), "detail: {d:?}");
-	assert!(
-		d.contains("mail._domainkey.example.org"),
-		"detail: {d:?}"
-	);
+	assert!(d.contains("mail._domainkey.example.org"), "detail: {d:?}");
 	assert!(d.contains("keep one"), "detail: {d:?}");
 }
 
@@ -253,8 +247,7 @@ async fn one_spf_and_one_unrelated_txt_does_not_flag_a_match() {
 			"google-site-verification=abc123".into(),
 		],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Ok);
 }
 
@@ -273,8 +266,7 @@ async fn duplicate_spf_with_mixed_case_and_quoted_form_is_reported() {
 			"\"v=spf1 include:_spf.google.com -all\"".into(),
 		],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 	let d = detail(&checks, "SPF");
 	assert!(d.contains("2 SPF records"), "detail: {d:?}");
@@ -289,12 +281,9 @@ async fn one_quoted_spf_does_not_double_count() {
 	let mut dns = FakeDns::default();
 	dns.mx
 		.insert("example.org".into(), vec!["mail.example.org".into()]);
-	dns.txt.insert(
-		"example.org".into(),
-		vec!["\"v=spf1 mx -all\"".into()],
-	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	dns.txt
+		.insert("example.org".into(), vec!["\"v=spf1 mx -all\"".into()]);
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Ok);
 }
 
@@ -314,8 +303,7 @@ async fn two_spf_with_one_unrelated_txt_still_reports_the_spf_duplicate() {
 			"google-site-verification=abc123".into(),
 		],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 }
 
@@ -330,8 +318,7 @@ async fn duplicate_spf_with_leading_whitespace_is_reported() {
 		"example.org".into(),
 		vec!["  v=spf1 mx -all".into(), "\tv=spf1 -all".into()],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 }
 
@@ -350,8 +337,7 @@ async fn three_spf_records_reports_the_exact_count() {
 			"v=spf1 -all".into(),
 		],
 	);
-	let checks =
-		check_domain("example.org", "mail.example.org", &[], &dns).await;
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 	let d = detail(&checks, "SPF");
 	assert!(d.contains("3 SPF records"), "detail: {d:?}");

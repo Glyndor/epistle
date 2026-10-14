@@ -74,8 +74,7 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 	const OLD_SPF_2: &str = "v=spf1 include:_spf.google.com -all";
 	const NEW_SPF: &str = "v=spf1 -all";
 	const UNRELATED: &str = "google-site-verification=abc123";
-	let (deleted, saved) =
-		upsert_over(&[OLD_SPF_1, OLD_SPF_2, UNRELATED], NEW_SPF).await;
+	let (deleted, saved) = upsert_over(&[OLD_SPF_1, OLD_SPF_2, UNRELATED], NEW_SPF).await;
 	// Both old SPF records were DELETEd; the new SPF was added.
 	let mut deleted_sorted = deleted.clone();
 	deleted_sorted.sort();

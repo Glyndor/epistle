@@ -88,20 +88,17 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 	// Each old SPF record was either edited (POST with the new
 	// value) or deleted (DELETE). Leaving either at the spot is
 	// the bug the contract closes.
-	let rec1_touched = writes.iter().any(|w| {
-		w == "POST /dnszone/42/records/1" || w == "DELETE /dnszone/42/records/1"
-	});
-	let rec2_touched = writes.iter().any(|w| {
-		w == "POST /dnszone/42/records/2" || w == "DELETE /dnszone/42/records/2"
-	});
+	let rec1_touched = writes
+		.iter()
+		.any(|w| w == "POST /dnszone/42/records/1" || w == "DELETE /dnszone/42/records/1");
+	let rec2_touched = writes
+		.iter()
+		.any(|w| w == "POST /dnszone/42/records/2" || w == "DELETE /dnszone/42/records/2");
 	assert!(
 		rec1_touched,
 		"old SPF1 was not edited or deleted: {writes:?}"
 	);
-	assert!(
-		rec2_touched,
-		"old SPF2 was left in place: {writes:?}"
-	);
+	assert!(rec2_touched, "old SPF2 was left in place: {writes:?}");
 	// No write carries an old SPF value.
 	for body in &state.lock().unwrap().bodies {
 		assert!(

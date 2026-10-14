@@ -79,9 +79,6 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 	// No old SPF value reaches the wire.
 	for v in [OLD_SPF_1, OLD_SPF_2] {
 		let old = txt_presentation(v);
-		assert!(
-			!put.contains(&old),
-			"old SPF value {v:?} re-published"
-		);
+		assert!(!put.contains(&old), "old SPF value {v:?} re-published");
 	}
 }
