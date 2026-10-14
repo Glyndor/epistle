@@ -323,3 +323,55 @@ fn a_live_sender_own_limit_is_not_reset_by_its_own_renewals() {
 	// Eleventh event in the same window is the last the budget allows.
 	assert!(!limiter.check("alice", 10, 1_000));
 }
+
+#[test]
+fn check_n_charges_one_unit_per_recipient() {
+	// One submission to 100 recipients costs 100 units against the
+	// budget; the call returns `true` only when every unit fits. With a
+	// per-minute cap of 50 a 100-recipient message overshoots the cap
+	// from a cold budget.
+	let limiter = WindowLimiter::new(60);
+	assert!(
+		limiter.check_n("alice", 100, 50, 1_000),
+		"100 units must fit when the cap is 100, not 50"
+	);
+	assert!(
+		!limiter.check_n("alice", 100, 50, 1_001),
+		"100 units over a cap of 50 must be refused"
+	);
+}
+
+#[test]
+fn check_n_returns_true_for_zero_count() {
+	// Bounces and null-recipient paths must not be charged: a call with
+	// `count == 0` is a no-op that cannot push the budget past the cap.
+	let limiter = WindowLimiter::new(60);
+	// Saturate the budget.
+	limiter.check("alice", 2, 1_000);
+	limiter.check("alice", 2, 1_000);
+	assert!(!limiter.check("alice", 2, 1_000));
+	// A zero-count call is allowed even though the budget is full: nothing
+	// is charged.
+	assert!(
+		limiter.check_n("alice", 0, 2, 1_000),
+		"zero-count calls must be a no-op and never refuse"
+	);
+}
+
+#[test]
+fn check_n_partial_overflow_refuses_when_sum_would_exceed_the_cap() {
+	// The cap is 10. Three recipients bring the count from 8 to 11,
+	// which exceeds the cap; the whole `check_n` call refuses rather
+	// than partial-charging, so the sender is never billed for units
+	// the server did not accept.
+	let limiter = WindowLimiter::new(60);
+	limiter.check_n("alice", 8, 10, 1_000);
+	assert!(
+		!limiter.check_n("alice", 3, 10, 1_000),
+		"a call that would push the count above the cap must refuse"
+	);
+	assert!(
+		limiter.check("alice", 10, 1_000),
+		"the refused call must not have charged any units"
+	);
+}

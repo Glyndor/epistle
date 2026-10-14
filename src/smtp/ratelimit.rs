@@ -98,6 +98,12 @@ impl WindowLimiter {
 	/// per-key `limit` (events per window) and report whether it is within
 	/// the limit.
 	///
+	/// One event is the right unit for things that fire once per call
+	/// (a `MAIL FROM` transaction, a `POST /api/v1/send` request). When
+	/// the charge should scale with a per-call quantity (the recipient
+	/// count of a submission), use [`check_n`](Self::check_n) so a
+	/// 100-recipient message costs 100 units.
+	///
 	/// On every call the limiter drops the looked-up entry's count when
 	/// its window is stale (`now - window_start >= window_secs`) before
 	/// counting this event, so a key that has been idle longer than the
@@ -112,7 +118,21 @@ impl WindowLimiter {
 	/// path never evicts; an existing sender keeps its budget through
 	/// every call that hits a full map.
 	pub fn check(&self, key: &str, limit: u32, now: u64) -> bool {
-		if limit == 0 {
+		self.check_n(key, 1, limit, now)
+	}
+
+	/// Record `count` events for `key` at `now` (epoch seconds) against
+	/// the per-key `limit` and report whether every event fits. Used by
+	/// the per-recipient submission limits where one submission charges
+	/// one unit per recipient, so a 100-recipient message costs 100
+	/// units; a bounce with no recipients costs 0.
+	///
+	/// `count == 0` is a no-op that returns `true`: the cap is unchanged
+	/// and the call cannot push a key over the limit on its own. The
+	/// underlying window logic is identical to [`check`](Self::check); the
+	/// only difference is the per-call increment.
+	pub fn check_n(&self, key: &str, count: u32, limit: u32, now: u64) -> bool {
+		if limit == 0 || count == 0 {
 			return true;
 		}
 		let key_lc = key.to_ascii_lowercase();
@@ -124,10 +144,10 @@ impl WindowLimiter {
 			if now.saturating_sub(entry.0) >= self.window_secs {
 				*entry = (now, 0);
 			}
-			if entry.1 >= limit {
+			if entry.1.saturating_add(count) > limit {
 				return false;
 			}
-			entry.1 += 1;
+			entry.1 = entry.1.saturating_add(count);
 			return true;
 		}
 		// Unseen key. If the cap is full, evict the oldest entry to make
@@ -157,7 +177,7 @@ impl WindowLimiter {
 				state.insertion.pop_front();
 			}
 		}
-		state.entries.insert(key_lc.clone(), (now, 1));
+		state.entries.insert(key_lc.clone(), (now, count));
 		state.insertion.push_back(key_lc);
 		true
 	}
