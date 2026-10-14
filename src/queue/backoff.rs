@@ -101,6 +101,41 @@ pub fn next_hold(
 	}
 }
 
+/// The most destinations kept on hold at once. Anyone who can make the
+/// server send to many domains that all defer could otherwise grow the
+/// holds file, read on every scheduling decision, without bound.
+pub const MAX_HOLDS: usize = 1024;
+
+/// Record in `holds` that `domain` deferred for `reason` at `now`, and
+/// return its hold. Holds that ended longer ago than the longest step are
+/// forgotten first (a deferral that long after starts a new run of them),
+/// and past [`MAX_HOLDS`] the ones ending soonest give way, so the set
+/// stays bounded however many destinations defer.
+pub fn record_hold(
+	holds: &mut DestinationHolds,
+	steps: &[u64],
+	domain: &str,
+	reason: &str,
+	now: u64,
+) -> DestinationHold {
+	let longest = steps.iter().copied().max().unwrap_or(DEFAULT_STEPS[3]);
+	holds.retain(|_, hold| hold.until.saturating_add(longest) > now);
+	let hold = next_hold(steps, holds.get(domain), reason, now);
+	holds.insert(domain.to_string(), hold.clone());
+	while holds.len() > MAX_HOLDS {
+		let soonest = holds
+			.iter()
+			.filter(|(held, _)| held.as_str() != domain)
+			.min_by_key(|(_, hold)| hold.until)
+			.map(|(held, _)| held.clone());
+		match soonest {
+			Some(held) => holds.remove(&held),
+			None => break,
+		};
+	}
+	hold
+}
+
 /// Whether `domain` is on hold at `now`.
 pub fn is_held(holds: &DestinationHolds, domain: &str, now: u64) -> bool {
 	holds.get(domain).is_some_and(|hold| hold.active(now))
@@ -145,6 +180,38 @@ mod tests {
 		assert!(too_many_recipients("452 Too many recipients"));
 		assert!(!too_many_recipients("452 4.2.2 mailbox full"));
 		assert!(!too_many_recipients("451 4.5.3 too many recipients"));
+	}
+
+	#[test]
+	fn the_holds_stay_bounded_however_many_destinations_defer() {
+		// Day-long holds: none ends while the destinations pile up.
+		let steps = [86_400];
+		let mut holds = DestinationHolds::new();
+		for n in 0..(MAX_HOLDS as u64 * 3) {
+			record_hold(
+				&mut holds,
+				&steps,
+				&format!("d{n}.example"),
+				"421 busy",
+				1000 + n,
+			);
+			assert!(holds.len() <= MAX_HOLDS, "{} holds", holds.len());
+		}
+		let newest = format!("d{}.example", MAX_HOLDS as u64 * 3 - 1);
+		assert!(holds.contains_key(&newest), "the latest deferral is kept");
+		// Long after every hold ended, a new deferral finds them gone.
+		record_hold(&mut holds, &steps, "late.example", "421 busy", 1_000_000);
+		assert_eq!(holds.keys().collect::<Vec<_>>(), ["late.example"]);
+		assert_eq!(holds["late.example"].level, 0);
+	}
+
+	#[test]
+	fn a_deferral_soon_after_a_hold_ended_still_escalates() {
+		let steps = [60, 300];
+		let mut holds = DestinationHolds::new();
+		record_hold(&mut holds, &steps, "a.example", "421 busy", 1000);
+		let second = record_hold(&mut holds, &steps, "a.example", "421 busy", 1100);
+		assert_eq!((second.level, second.until), (1, 1400));
 	}
 
 	#[test]

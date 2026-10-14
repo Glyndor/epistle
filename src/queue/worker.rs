@@ -12,6 +12,8 @@ use conversation::Conversation;
 
 #[path = "worker_attempt.rs"]
 mod attempt;
+#[path = "worker_claims.rs"]
+mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
 #[path = "worker_reports.rs"]
@@ -69,7 +71,7 @@ pub struct Worker {
 	/// How many conversations run at once, overall and per domain.
 	limits: super::limits::Limits,
 	/// Recipients in conversation, and the slots in use.
-	claims: scheduler::Claims,
+	claims: claims::Claims,
 	/// Held while an entry is settled, so two passes never send the same
 	/// failure report twice.
 	settling: std::sync::Mutex<()>,
@@ -102,7 +104,7 @@ impl Worker {
 			jitter: super::schedule::random_factor,
 			delivery_log: None,
 			limits: super::limits::Limits::default(),
-			claims: scheduler::Claims::default(),
+			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
 			attempt_limit: super::timeouts::ATTEMPT,

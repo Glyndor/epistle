@@ -5,7 +5,8 @@
 //! hold ends. Holds are written to `<data_dir>/spool/destinations.json`, so
 //! they survive a restart: a server restarted in the middle of a backoff
 //! does not go straight back to the destination that asked it to wait. The
-//! file is small (one record per held domain), rewritten whole under the
+//! file is small (one record per held domain, at most
+//! [`crate::queue::backoff::MAX_HOLDS`] of them), rewritten whole under the
 //! spool lock and renamed into place, so the operator CLI (`epistle queue
 //! destinations`, `epistle queue release-destination`) and the worker never
 //! lose each other's edits. The worker reads it from disk each time it

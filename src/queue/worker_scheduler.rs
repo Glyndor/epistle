@@ -19,19 +19,18 @@
 //! An entry is settled ([`Worker::finish`]) once every job it had in the
 //! scan has ended: expiry, failure reports, the delay warning, removal.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
 use std::task::Poll;
 
 use uuid::Uuid;
 
 use super::Worker;
+use super::claims::{Claim, Guarded};
 use super::conversation::Conversation;
 use crate::queue::backoff;
 use crate::queue::client::DeliveryError;
-use crate::queue::limits::Limits;
 use crate::smtp::address::Address;
 use crate::storage::{RecipientStatus, SpoolEntry};
 
@@ -53,9 +52,17 @@ pub(super) struct Done<'a> {
 type Running<'a> = Pin<Box<dyn Future<Output = Done<'a>> + Send + 'a>>;
 
 /// Jobs still to start, and the conversations running, of one scheduler.
+///
+/// Waiting jobs are kept by domain, and the domains with any in the order
+/// their first job arrived, so starting what fits looks at the jobs it
+/// starts and at the few domains already at their cap, never at the whole
+/// queue: a spool of thousands of messages to one slow destination costs
+/// each completion a constant amount of work, not a walk of the spool.
 #[derive(Default)]
 pub(super) struct Schedule<'a> {
-	queued: VecDeque<Job>,
+	queued: HashMap<String, VecDeque<Job>>,
+	/// Domains with waiting jobs, each once.
+	order: VecDeque<String>,
 	/// Jobs not yet ended per entry, and whether any delivered.
 	rounds: HashMap<Uuid, (usize, bool)>,
 	running: Vec<Running<'a>>,
@@ -63,6 +70,8 @@ pub(super) struct Schedule<'a> {
 	pub(super) delivered: usize,
 	/// The first spool error, reported once the pass is over.
 	pub(super) error: Option<std::io::Error>,
+	/// Waiting jobs looked at when filling slots, over the schedule's life.
+	pub(super) examined: usize,
 }
 
 impl<'a> Schedule<'a> {
@@ -73,95 +82,23 @@ impl<'a> Schedule<'a> {
 	pub(super) fn running_mut(&mut self) -> &mut Vec<Running<'a>> {
 		&mut self.running
 	}
-}
 
-/// The recipients in conversation and the slots in use, in this worker.
-#[derive(Default)]
-pub(super) struct Claims {
-	state: Mutex<ClaimState>,
-}
-
-#[derive(Default)]
-struct ClaimState {
-	recipients: HashSet<(Uuid, String)>,
-	domains: HashMap<String, usize>,
-	running: usize,
-}
-
-/// Recipients of one entry claimed for one conversation, and its slot.
-/// Dropping it releases both.
-pub(super) struct Claim<'a> {
-	claims: &'a Claims,
-	id: Uuid,
-	domain: String,
-	recipients: Vec<String>,
-}
-
-impl Claims {
-	fn state(&self) -> std::sync::MutexGuard<'_, ClaimState> {
-		self.state
-			.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	/// Queue `job` after the others of its domain.
+	fn push_back(&mut self, job: Job) {
+		let waiting = self.queued.entry(job.domain.clone()).or_default();
+		if waiting.is_empty() {
+			self.order.push_back(job.domain.clone());
+		}
+		waiting.push_back(job);
 	}
 
-	/// Whether `recipient` of entry `id` is in a conversation.
-	pub(super) fn holds(&self, id: Uuid, recipient: &str) -> bool {
-		self.state()
-			.recipients
-			.contains(&(id, recipient.to_string()))
-	}
-
-	/// Whether any recipient of entry `id` is in a conversation.
-	fn holds_any(&self, id: Uuid) -> bool {
-		self.state().recipients.iter().any(|(held, _)| *held == id)
-	}
-
-	/// Take a slot for `domain` and claim those of `recipients` nobody holds.
-	/// `None` when no slot is free; the claim may hold no recipient.
-	fn take(
-		&self,
-		limits: Limits,
-		id: Uuid,
-		domain: &str,
-		recipients: &[String],
-	) -> Option<Claim<'_>> {
-		let mut state = self.state();
-		let in_domain = state.domains.get(domain).copied().unwrap_or(0);
-		if state.running >= limits.total || in_domain >= limits.per_domain {
-			return None;
+	/// Queue `job` before the others of its domain, and its domain first.
+	fn push_front(&mut self, job: Job) {
+		let waiting = self.queued.entry(job.domain.clone()).or_default();
+		if waiting.is_empty() {
+			self.order.push_front(job.domain.clone());
 		}
-		let free: Vec<String> = recipients
-			.iter()
-			.filter(|recipient| !state.recipients.contains(&(id, (*recipient).clone())))
-			.cloned()
-			.collect();
-		for recipient in &free {
-			state.recipients.insert((id, recipient.clone()));
-		}
-		state.running += 1;
-		*state.domains.entry(domain.to_string()).or_default() += 1;
-		Some(Claim {
-			claims: self,
-			id,
-			domain: domain.to_string(),
-			recipients: free,
-		})
-	}
-}
-
-impl Drop for Claim<'_> {
-	fn drop(&mut self) {
-		let mut state = self.claims.state();
-		for recipient in self.recipients.drain(..) {
-			state.recipients.remove(&(self.id, recipient));
-		}
-		state.running = state.running.saturating_sub(1);
-		if let Some(count) = state.domains.get_mut(&self.domain) {
-			*count = count.saturating_sub(1);
-			if *count == 0 {
-				state.domains.remove(&self.domain);
-			}
-		}
+		waiting.push_front(job);
 	}
 }
 
@@ -217,6 +154,7 @@ impl Worker {
 			let due = self.skip_suppressed(id, &envelope, due)?;
 			let mut changed = due.len() != count;
 			let mut by_domain: Vec<(String, Vec<String>)> = Vec::new();
+			let mut index: HashMap<String, usize> = HashMap::new();
 			let mut unparseable = Vec::new();
 			for recipient in due {
 				let Ok(address) = Address::parse(&recipient) else {
@@ -229,9 +167,12 @@ impl Worker {
 				if backoff::is_held(&holds, &domain, now) {
 					continue;
 				}
-				match by_domain.iter_mut().find(|(known, _)| *known == domain) {
-					Some((_, recipients)) => recipients.push(recipient),
-					None => by_domain.push((domain, vec![recipient])),
+				match index.get(&domain) {
+					Some(&at) => by_domain[at].1.push(recipient),
+					None => {
+						index.insert(domain.clone(), by_domain.len());
+						by_domain.push((domain, vec![recipient]));
+					}
 				}
 			}
 			if !unparseable.is_empty() {
@@ -248,7 +189,7 @@ impl Worker {
 			}
 			schedule.rounds.insert(id, (by_domain.len(), false));
 			for (domain, recipients) in by_domain {
-				schedule.queued.push_back(Job {
+				schedule.push_back(Job {
 					id,
 					domain,
 					recipients,
@@ -267,28 +208,49 @@ impl Worker {
 		self.record(id, &entry, &conversation, self.now_epoch())
 	}
 
-	/// Start every queued job a slot is free for, oldest entry first.
+	/// Start every queued job a slot is free for, domain by domain in the
+	/// order they arrived. A domain at its cap is set aside after one look,
+	/// and filling stops as soon as no slot is free at all.
 	pub(super) fn fill<'a>(&'a self, schedule: &mut Schedule<'a>) {
-		if schedule.queued.is_empty() {
+		if schedule.order.is_empty() {
 			return;
 		}
 		let now = self.now_epoch();
 		let holds = self.holds();
-		let mut waiting = VecDeque::new();
-		while let Some(job) = schedule.queued.pop_front() {
+		let mut at_cap = Vec::new();
+		while self.claims.has_room(self.limits) {
+			let Some(domain) = schedule.order.pop_front() else {
+				break;
+			};
+			let mut waiting = schedule.queued.remove(&domain).unwrap_or_default();
 			// A conversation of this pass may have put the destination on
-			// hold since the job was queued.
-			if backoff::is_held(&holds, &job.domain, now) {
-				self.job_ended(schedule, job.id, false);
+			// hold since its jobs were queued.
+			if backoff::is_held(&holds, &domain, now) {
+				for job in waiting {
+					schedule.examined += 1;
+					self.job_ended(schedule, job.id, false);
+				}
 				continue;
 			}
-			match self.start(job) {
-				Started::Waiting(job) => waiting.push_back(job),
-				Started::Running(conversation) => schedule.running.push(conversation),
-				Started::Dropped(id) => self.job_ended(schedule, id, false),
+			while let Some(job) = waiting.pop_front() {
+				schedule.examined += 1;
+				match self.start(job) {
+					Started::Waiting(job) => {
+						waiting.push_front(job);
+						break;
+					}
+					Started::Running(conversation) => schedule.running.push(conversation),
+					Started::Dropped(id) => self.job_ended(schedule, id, false),
+				}
+			}
+			if !waiting.is_empty() {
+				schedule.queued.insert(domain.clone(), waiting);
+				at_cap.push(domain);
 			}
 		}
-		schedule.queued = waiting;
+		for domain in at_cap.into_iter().rev() {
+			schedule.order.push_front(domain);
+		}
 	}
 
 	/// Claim the recipients of `job` and start its conversation, unless no
@@ -323,7 +285,12 @@ impl Worker {
 			return Started::Dropped(job.id);
 		}
 		Started::Running(Box::pin(async move {
-			let conversation = self.converse(&entry, &job.domain, &recipients).await;
+			let talk = Guarded(Box::pin(self.converse(&entry, &job.domain, &recipients)));
+			let conversation = talk.await.unwrap_or_else(|()| {
+				tracing::error!(id = %job.id, domain = %job.domain, "outbound conversation panicked; its recipients wait for the next attempt");
+				let reason = DeliveryError::Transient("internal error during delivery".into());
+				Conversation::all(&recipients, None, reason)
+			});
 			Done {
 				job,
 				entry,
@@ -363,7 +330,7 @@ impl Worker {
 			// another conversation right away.
 			if let Some((left, _)) = schedule.rounds.get_mut(&job.id) {
 				*left += 1;
-				schedule.queued.push_front(Job {
+				schedule.push_front(Job {
 					id: job.id,
 					domain: job.domain.clone(),
 					recipients: retry_now,
@@ -394,9 +361,8 @@ impl Worker {
 			})
 		} else if let Some(reason) = conversation.throttle() {
 			self.spool.update_holds(|holds| {
-				let hold = backoff::next_hold(&self.backoff_steps, holds.get(domain), reason, now);
+				let hold = backoff::record_hold(holds, &self.backoff_steps, domain, reason, now);
 				tracing::warn!(%domain, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off");
-				holds.insert(domain.to_string(), hold);
 			})
 		} else {
 			return;
@@ -455,3 +421,7 @@ enum Started<'a> {
 	/// Nothing is left to send for this job.
 	Dropped(Uuid),
 }
+
+#[cfg(test)]
+#[path = "worker_scheduler_tests.rs"]
+mod tests;
