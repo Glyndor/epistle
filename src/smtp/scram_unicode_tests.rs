@@ -15,22 +15,28 @@
 //! - `ScramStored::with_fresh_salt(password)` similarly receives the
 //!   prepared form, so the produced `StoredKey` matches what an
 //!   SCRAM-SHA-256 client computes from the same Unicode password.
-//! - The brief's example, `contraseñaSegura` set in NFC and verified in
+//! - A password with `ñ`, set in NFC and verified in
 //!   NFD, both prepare to the same bytes and therefore derive the same
 //!   credentials.
 
-use crate::password::Policy;
+use crate::password::{MIN_LENGTH, Policy};
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials};
 use crate::test_fixtures as fixtures;
 
-/// The brief's example password in NFC form (`ñ` precomposed U+00F1).
-const NFC_PASSWORD: &str = "contrase\u{00F1}aSegura12";
-/// The same password in NFD form (`n` U+006E followed by combining tilde
-/// U+0303). Two byte sequences, one canonical UTF-8 user-perceived string.
-const NFD_PASSWORD: &str = "contrase\u{006E}\u{0303}aSegura12";
+/// The same password in NFC form (`ñ` precomposed, U+00F1) and in NFD form
+/// (`n` followed by the combining tilde U+0303), with one random ASCII tail,
+/// so no password is written into the test.
+fn passwords() -> (String, String) {
+	let tail = crate::test_fixtures::printable_ascii(MIN_LENGTH);
+	(
+		format!("contrase\u{00F1}a{tail}"),
+		format!("contrase\u{006E}\u{0303}a{tail}"),
+	)
+}
 
 #[test]
 fn scram_with_fresh_salt_holds_across_nfc_and_nfd_under_unicode_policy() {
+	let (nfc, nfd) = passwords();
 	// Set-time must derive the verifier from the NFKC form so a
 	// SASLprep-aware client (which itself normalises with NFKC) ends up
 	// with the same SaltedPassword. The test asserts the storage-layer
@@ -39,15 +45,15 @@ fn scram_with_fresh_salt_holds_across_nfc_and_nfd_under_unicode_policy() {
 	// produce identical verifier material; without that preparation
 	// they diverge (the second test in this file pins that).
 	let policy = Policy::unicode();
-	let prepared_nfc = policy.prepare(NFC_PASSWORD).expect("nfc is valid");
-	let prepared_nfd = policy.prepare(NFD_PASSWORD).expect("nfd is valid");
+	let prepared_nfc = policy.prepare(nfc.as_str()).expect("nfc is valid");
+	let prepared_nfd = policy.prepare(nfd.as_str()).expect("nfd is valid");
 	assert_eq!(
 		prepared_nfc.as_ref(),
 		prepared_nfd.as_ref(),
 		"shape precondition: NFKC collapses NFD to NFC",
 	);
 
-	let salt = [0x42u8; 16];
+	let salt = crate::test_fixtures::bytes::<16>();
 	let from_nfc = ScramCredentials::derive(prepared_nfc.as_ref(), &salt, SCRAM_ITERATIONS);
 	let from_nfd = ScramCredentials::derive(prepared_nfd.as_ref(), &salt, SCRAM_ITERATIONS);
 	assert_eq!(
@@ -62,7 +68,8 @@ fn scram_with_fresh_salt_holds_across_nfc_and_nfd_under_unicode_policy() {
 
 #[test]
 fn scram_derive_sees_through_preparation_to_canonical_bytes() {
-	// The brief requirement is "verification must normalise the same way,
+	let (nfc, nfd) = passwords();
+	// The requirement is "verification must normalise the same way,
 	// including SCRAM (RFC 5802 SASLprep / RFC 7677)". The contract here
 	// is that the derive function takes already-prepared bytes; the
 	// caller (the directory layer) is what runs NFKC. Pin that the two
@@ -70,8 +77,8 @@ fn scram_derive_sees_through_preparation_to_canonical_bytes() {
 	// raw NFC input cannot accidentally match a verifier built from the
 	// raw NFD input, but after `Policy::unicode().prepare` both produce
 	// the same key material.
-	let prepared_nfc = Policy::unicode().prepare(NFC_PASSWORD).expect("valid");
-	let prepared_nfd = Policy::unicode().prepare(NFD_PASSWORD).expect("valid");
+	let prepared_nfc = Policy::unicode().prepare(nfc.as_str()).expect("valid");
+	let prepared_nfd = Policy::unicode().prepare(nfd.as_str()).expect("valid");
 	let via_nfc =
 		ScramCredentials::derive(prepared_nfc.as_ref(), fixtures::salt(), SCRAM_ITERATIONS);
 	let via_nfd =
@@ -84,8 +91,8 @@ fn scram_derive_sees_through_preparation_to_canonical_bytes() {
 	// Sanity: the same two inputs *without* the policy prepare actually
 	// diverge — this is what would happen if the storage layer forgot to
 	// run `prepare` before `ScramStored::with_fresh_salt`.
-	let raw_nfc = ScramCredentials::derive(NFC_PASSWORD, fixtures::salt(), SCRAM_ITERATIONS);
-	let raw_nfd = ScramCredentials::derive(NFD_PASSWORD, fixtures::salt(), SCRAM_ITERATIONS);
+	let raw_nfc = ScramCredentials::derive(nfc.as_str(), fixtures::salt(), SCRAM_ITERATIONS);
+	let raw_nfd = ScramCredentials::derive(nfd.as_str(), fixtures::salt(), SCRAM_ITERATIONS);
 	assert_ne!(
 		raw_nfc.stored_key, raw_nfd.stored_key,
 		"without preparation the two encodings differ in PBKDF2 input bytes",

@@ -203,14 +203,15 @@ pub(crate) mod tests {
 		// another, and the contract here is that the same `Cow<str>` flowed
 		// in on both paths.
 		let policy = Policy::unicode();
-		let nfc = "contrase\u{00F1}aSegura12";
-		let nfd = "contrase\u{006E}\u{0303}aSegura12";
+		let tail = crate::test_fixtures::printable_ascii(crate::password::MIN_LENGTH);
+		let nfc = format!("contrase\u{00F1}a{tail}");
+		let nfd = format!("contrase\u{006E}\u{0303}a{tail}");
 		assert_ne!(
 			nfc, nfd,
 			"shape precondition: the two forms differ in bytes"
 		);
-		let prepared_nfc = policy.prepare(nfc).expect("nfc is valid");
-		let prepared_nfd = policy.prepare(nfd).expect("nfd is valid");
+		let prepared_nfc = policy.prepare(&nfc).expect("nfc is valid");
+		let prepared_nfd = policy.prepare(&nfd).expect("nfd is valid");
 		assert_eq!(
 			prepared_nfc.as_ref(),
 			prepared_nfd.as_ref(),
@@ -230,7 +231,8 @@ pub(crate) mod tests {
 		assert!(verify_password(&phc_from_nfd, prepared_nfc.as_ref()));
 		assert!(verify_password(&phc_from_nfd, prepared_nfd.as_ref()));
 		// A wrong password still fails, even after the policy prepare.
-		assert!(!verify_password(&phc, "wrongPassword12"));
+		let wrong = crate::test_fixtures::printable_ascii(crate::password::MIN_LENGTH + 2);
+		assert!(!verify_password(&phc, &wrong));
 	}
 }
 

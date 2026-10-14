@@ -102,7 +102,7 @@ fn apply_creates_domains_aliases_keys_and_disabled_accounts() {
 		.expect("sign");
 	assert!(
 		signature.contains("s=2024a") && signature.contains("s=2024b"),
-		"{signature}"
+		"the message is signed with both selectors"
 	);
 	assert_eq!(
 		std::fs::read_to_string(&rsa_file).expect("rsa"),
@@ -210,8 +210,7 @@ fn per_domain_keys_leave_dkim_alone_and_say_why() {
 	assert!(outcome.dkim.is_none());
 	assert!(
 		outcome.notes.iter().any(|n| n.contains("one key pair")),
-		"{:?}",
-		outcome.notes
+		"a note explains that only one key pair signs"
 	);
 	assert_eq!(outcome.key_files.len(), 3, "every key is still saved");
 	assert!(Config::load(&config_file).expect("load").dkim.is_none());
@@ -235,8 +234,7 @@ fn an_account_the_store_refuses_becomes_a_note() {
 			.notes
 			.iter()
 			.any(|n| n.starts_with("account alice was not created")),
-		"{:?}",
-		outcome.notes
+		"a note names the account the store refused"
 	);
 }
 

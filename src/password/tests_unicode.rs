@@ -12,25 +12,29 @@
 // under the line cap.
 use crate::password::{MAX_LENGTH, MIN_LENGTH, Policy, Rejection};
 
-/// NFC form of the brief's example password.
-const NFC_PASSWORD: &str = "contrase\u{00F1}aSegura12";
-/// NFD form of the same password (`ñ` decomposed into `n` + combining
-/// tilde). The byte sequences differ; after NFKC normalisation they are
-/// identical, and a verifier derived from one must match a proof built
-/// from the other.
-const NFD_PASSWORD: &str = "contrase\u{006E}\u{0303}aSegura12";
+/// The same password in NFC form (`ñ` precomposed, U+00F1) and in NFD form
+/// (`n` followed by the combining tilde U+0303), with one random ASCII tail,
+/// so no password is written into the test.
+fn passwords() -> (String, String) {
+	let tail = crate::test_fixtures::printable_ascii(MIN_LENGTH);
+	(
+		format!("contrase\u{00F1}a{tail}"),
+		format!("contrase\u{006E}\u{0303}a{tail}"),
+	)
+}
 
 #[test]
 fn unicode_policy_prepare_returns_nfkc_normalised_owned() {
+	let (nfc, nfd) = passwords();
 	let policy = Policy::unicode();
-	let prepared = policy.prepare(NFD_PASSWORD).expect("valid");
+	let prepared = policy.prepare(nfd.as_str()).expect("valid");
 	assert!(
-		!std::ptr::eq(prepared.as_ptr(), NFD_PASSWORD.as_ptr()) || prepared == NFD_PASSWORD,
+		!std::ptr::eq(prepared.as_ptr(), nfd.as_ptr()) || prepared == nfd.as_str(),
 		"shape precondition: the NFD form must allocate or already be NFC",
 	);
 	assert_eq!(
 		prepared.as_ref(),
-		NFC_PASSWORD,
+		nfc.as_str(),
 		"NFKC must collapse NFD back into NFC byte-for-byte",
 	);
 }
@@ -61,7 +65,7 @@ fn unicode_policy_normalises_length_to_normalised_form() {
 	let policy = Policy::unicode();
 	// 1 combining-mark + 11 ASCII letters: 12 scalars in NFC, 13 scalars
 	// after NFC (combining mark counts as one scalar), still inside.
-	let ascii_11 = "abcdefghijk";
+	let ascii_11 = crate::test_fixtures::printable_ascii(11);
 	let nfc_form: String = format!("\u{0303}{ascii_11}"); // 12 scalars
 	assert_eq!(nfc_form.chars().count(), 12);
 	assert_eq!(policy.prepare(&nfc_form).unwrap().chars().count(), 12);
@@ -76,12 +80,13 @@ fn unicode_policy_normalises_length_to_normalised_form() {
 
 #[test]
 fn unicode_policy_validates_nfc_and_verifies_nfd_via_the_prepared_form() {
+	let (nfc, nfd) = passwords();
 	let policy = Policy::unicode();
 	// Validation gate accepts both byte sequences; the password is set
 	// under one form and verified under the other without any bcrypt/
 	// SCRAM layer in between, by routing both through `prepare`.
-	let prepared_nfc = policy.prepare(NFC_PASSWORD).expect("NFC is valid");
-	let prepared_nfd = policy.prepare(NFD_PASSWORD).expect("NFD is valid");
+	let prepared_nfc = policy.prepare(nfc.as_str()).expect("NFC is valid");
+	let prepared_nfd = policy.prepare(nfd.as_str()).expect("NFD is valid");
 	assert_eq!(
 		prepared_nfc.as_ref(),
 		prepared_nfd.as_ref(),
@@ -89,16 +94,17 @@ fn unicode_policy_validates_nfc_and_verifies_nfd_via_the_prepared_form() {
 	);
 	// Going through `validate` must also accept both: validation is on
 	// the prepared form, and both forms prepare to the same string.
-	assert_eq!(policy.validate(NFC_PASSWORD), Ok(()));
-	assert_eq!(policy.validate(NFD_PASSWORD), Ok(()));
+	assert_eq!(policy.validate(nfc.as_str()), Ok(()));
+	assert_eq!(policy.validate(nfd.as_str()), Ok(()));
 }
 
 #[test]
 fn ascii_only_policy_still_refuses_non_ascii() {
+	let (nfc, _) = passwords();
 	// With the flag off, today's behaviour must hold: a candidate with
 	// non-ASCII scalars is rejected as IllegalCharacter, regardless of
 	// length.
-	let password = NFC_PASSWORD;
+	let password = nfc.as_str();
 	assert!(
 		!password.is_ascii(),
 		"shape precondition: the fixture is non-ASCII",

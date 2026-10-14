@@ -52,7 +52,7 @@ fn an_append_of_a_message_id_the_server_just_saved_returns_the_existing_uid() {
 	);
 	assert!(
 		response.contains(&format!(" {}]", expected_uid)),
-		"APPENDUID carries the existing UID {expected_uid}: {response}"
+		"APPENDUID carries the UID of the copy already in Sent"
 	);
 	let snapshot = crate::imap::mailbox::Snapshot::open(
 		dir.path(),

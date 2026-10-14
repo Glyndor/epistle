@@ -35,7 +35,7 @@ fn store_copy_records_message_id_and_returns_uid() {
 		None,
 	)
 	.expect("store");
-	assert!(uid >= 1, "uid should be at least 1, got {uid}");
+	assert!(uid >= 1, "the stored copy gets a UID of at least 1");
 	let guard = Guard::open(dir.path(), "alice").expect("guard");
 	assert!(
 		guard.is_recent("<a@x>").expect("recent").is_some(),
@@ -153,7 +153,10 @@ fn a_copy_that_would_exceed_the_quota_is_not_stored() {
 		&crypto,
 		Some(data.len() as u64 - 1),
 	);
-	assert!(matches!(result, Err(SaveError::OverQuota)), "{result:?}");
+	assert!(
+		matches!(result, Err(SaveError::OverQuota)),
+		"a copy over the quota is refused as OverQuota"
+	);
 	assert!(
 		lookup_sent_uid(dir.path(), "alice", "<q@example.org>")
 			.unwrap_or(None)
