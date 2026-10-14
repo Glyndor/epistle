@@ -33,8 +33,9 @@ const MAX_CONNECTIONS: usize = 1000;
 /// Maximum concurrent connections per client IP per listener. Excess
 /// connections are answered `421 4.7.0 too many connections from your
 /// address` and closed (RFC 5321 §4.5.3.2). The cap keeps a single
-/// client from monopolising one listener; the global
-/// [`MAX_CONNECTIONS`] still bounds the total.
+/// client from monopolising one listener; the per-listener connection
+/// cap (1000 unless `max_connections_per_listener` says otherwise) still
+/// bounds the total.
 pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 20;
 const MAX_CONNECTIONS_PER_IP: usize = DEFAULT_MAX_CONNECTIONS_PER_IP;
 
