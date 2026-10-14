@@ -100,6 +100,7 @@ impl Worker {
 		// that are not due included, before any is scheduled.
 		let mut holds = Holds::default();
 		let mut due_entries = Vec::new();
+		let mut overdue = Vec::new();
 		for id in self.spool.list()? {
 			// The CLI edits entries on disk while this runs, so `held` and
 			// `next_attempt` are read from the file on every scan, never kept
@@ -112,6 +113,9 @@ impl Worker {
 				}
 			};
 			holds.add_envelope(&envelope);
+			if schedule.rounds.contains_key(&id) && self.overdue(id, &envelope, now) {
+				overdue.push(id);
+			}
 			// Skip entries already in hand, held, or still backing off.
 			if !schedule.rounds.contains_key(&id)
 				&& envelope.held.is_none()
@@ -121,6 +125,16 @@ impl Worker {
 			}
 		}
 		*self.holds() = holds.clone();
+		for id in overdue {
+			// Its jobs still wait for a slot: they find nothing left to send
+			// once their turn comes.
+			if let Err(error) = self.finish(id, now, false)
+				&& error.kind() != std::io::ErrorKind::NotFound
+			{
+				tracing::warn!(%id, %error, "cannot expire spool entry");
+				schedule.error.get_or_insert(error);
+			}
+		}
 		for (id, envelope) in due_entries {
 			// One entry that cannot be handled is reported once the pass is
 			// over; it must not keep every entry after it from going out.
@@ -130,6 +144,19 @@ impl Worker {
 			}
 		}
 		Ok(())
+	}
+
+	/// Whether an entry this scheduler already has in hand is past the
+	/// give-up window with a recipient no conversation holds: one waiting
+	/// for a slot behind a slow destination must not outlive the window
+	/// until its turn comes.
+	fn overdue(&self, id: Uuid, envelope: &crate::storage::Envelope, now: u64) -> bool {
+		envelope.held.is_none()
+			&& self.message_age(id, now).saturating_sub(envelope.held_secs) >= self.max_age_secs
+			&& envelope
+				.pending()
+				.iter()
+				.any(|recipient| !self.claims.holds(id, recipient))
 	}
 
 	/// Queue the due recipients of one entry, one job per destination,

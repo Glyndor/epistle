@@ -1,9 +1,14 @@
 //! A scan of the spool goes on past an entry it cannot handle: one broken
-//! entry must never keep every entry after it from being delivered.
+//! entry must never keep every entry after it from being delivered. And
+//! the give-up window holds for mail that waits for a slot: a message is
+//! bounced when it is too old, not when its turn finally comes.
+
+use std::time::Duration;
 
 use super::*;
-use crate::queue::test_remote::FakeRemote;
+use crate::queue::test_remote::{FakeRemote, Hang, Script};
 use crate::smtp::session::AcceptedMessage;
+use crate::smtp::sink::MemorySink;
 
 fn store(spool: &FsSpool, recipient: &str) -> uuid::Uuid {
 	spool
@@ -61,4 +66,42 @@ async fn an_entry_that_cannot_be_settled_does_not_stop_the_entries_after_it() {
 
 	assert_eq!(remote.copies("bob@healthy.example"), 1);
 	assert!(outcome.is_err(), "the broken entry is still reported");
+}
+
+#[tokio::test(start_paused = true)]
+async fn mail_waiting_for_a_slow_destination_still_expires_on_time() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("open spool");
+	for user in ["a", "b", "c"] {
+		store(&spool, &format!("{user}@slow.example"));
+	}
+	let created = spool.list().expect("list")[2]
+		.get_timestamp()
+		.expect("v7")
+		.to_unix()
+		.0;
+	let remote = FakeRemote::default();
+	remote.script("slow.example", Script::hang(Hang::Greeting));
+	let bounces = Arc::new(MemorySink::new());
+	let worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example")
+		.with_concurrency(1, 1)
+		.with_max_age(3600)
+		.with_bounce_sink(bounces.clone() as Arc<dyn MessageSink>);
+	worker.set_now(created + 1);
+	let worker = Arc::new(worker);
+	let running = tokio::spawn(Arc::clone(&worker).run(Duration::from_secs(30)));
+	tokio::time::sleep(Duration::from_secs(1)).await;
+	assert_eq!(remote.connections("mx.slow.example"), 1);
+
+	// The give-up window closes while the first conversation still waits
+	// for its greeting and the two other messages wait for the slot.
+	worker.set_now(created + 3600);
+	tokio::time::sleep(Duration::from_secs(31)).await;
+
+	let left = worker.spool.list().expect("list");
+	let bounced = bounces.messages().len();
+	running.abort();
+	assert_eq!(bounced, 2, "the two waiting messages are bounced at once");
+	assert_eq!(left.len(), 1, "only the one in conversation is left");
+	assert_eq!(remote.connections("mx.slow.example"), 1);
 }
