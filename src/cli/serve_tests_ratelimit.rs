@@ -535,6 +535,47 @@ async fn per_tenant_limit_charges_per_recipient() {
 	task.abort();
 }
 
+#[tokio::test]
+async fn per_account_limit_charges_per_recipient() {
+	// A two-recipient submission must cost two units against the
+	// per-account submission budget, the same as the tenant aggregate
+	// budget charges per recipient. With `submission_rate_limit_per_min
+	// = 2` the first two-recipient submission fits and the second
+	// single-recipient submission is deferred. Before per-recipient
+	// counting reached the per-account path the second submission came
+	// back with `250` because both messages cost only one unit each.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = ratelimit_config(dir.path(), 2);
+	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let (acceptor, cert) = acceptor_and_cert();
+	let server = build_smtp_server(&config, crate::tls::ReloadableAcceptor::new(acceptor), None);
+	let (addr, task) = spawn_smtp_listener(server).await;
+	let connector = tls_connector(cert);
+
+	let mut tls = tls_session(addr, connector.clone()).await;
+	let first = authenticated_submit_two_recipients(
+		&mut tls,
+		&plain,
+		"alice@example.org",
+		&["bob@example.org", "carol@example.org"],
+	)
+	.await;
+	assert!(
+		first.starts_with("250 "),
+		"first two-recipient submission must be accepted: {first:?}"
+	);
+	drop(tls);
+
+	let mut tls = tls_session(addr, connector).await;
+	let second =
+		authenticated_submit(&mut tls, &plain, "alice@example.org", "bob@example.org").await;
+	assert!(
+		second.starts_with("450 4.7.1 sending rate limit exceeded; retry later"),
+		"second submission must be deferred when the per-account budget is exhausted; got: {second:?}"
+	);
+	task.abort();
+}
+
 /// Drive a two-recipient submission and return the MAIL FROM reply.
 /// Mirrors `authenticated_submit` but with two RCPT TO commands so the
 /// tenant aggregate budget charges two units.
@@ -544,7 +585,9 @@ async fn authenticated_submit_two_recipients(
 	from: &str,
 	to: &[&str],
 ) -> String {
-	tls.write_all(b"EHLO c.example.org\r\n").await.expect("ehlo");
+	tls.write_all(b"EHLO c.example.org\r\n")
+		.await
+		.expect("ehlo");
 	let _ = expect_reply(tls, "250").await;
 	tls.write_all(format!("AUTH PLAIN {plain}\r\n").as_bytes())
 		.await

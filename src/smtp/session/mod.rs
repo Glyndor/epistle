@@ -450,15 +450,16 @@ impl Session {
 				// domain (looked up by walking the account's addresses, the
 				// same way `Directory::quota_for` does), falling back to the
 				// server-wide default, falling back to no limit at all.
-				// The check charges one unit per transaction started so
-				// the per-account budget cannot be silently exhausted by
-				// starting a transaction and abandoning it; the rest of
-				// the recipient costs are charged at end-of-DATA, where
-				// the count is known.
+				// The check charges one unit per recipient: the MAIL FROM
+				// path charges one unit (one transaction started), the
+				// end-of-DATA path charges the remaining `recipients.len()
+				// - 1`. With one recipient the test below charges 1 unit;
+				// with N it charges N units in total.
 				if let Some(account) = self.authenticated.clone()
 					&& !self.policy.check_authenticated_submission(
 						&account,
 						&self.directory,
+						1,
 						unix_now(),
 					) {
 					return Action::Continue(Reply::single(

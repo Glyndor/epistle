@@ -104,10 +104,7 @@ impl TransactionPolicy {
 	/// checks every owning tenant in turn and rejects with `450 4.7.1
 	/// sending rate limit exceeded; retry later` when any tenant is over
 	/// its `submission_rate_limit_per_min` budget.
-	pub(crate) fn with_tenant_limits(
-		mut self,
-		limits: Arc<crate::api::TenantLimits>,
-	) -> Self {
+	pub(crate) fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
 		self
 	}
@@ -116,13 +113,17 @@ impl TransactionPolicy {
 
 	/// Whether a submission by the authenticated `account` is over the
 	/// per-account submission limit (per-domain first, then the global
-	/// default). Returns `true` when the session is allowed to send, or
-	/// when no limit is configured; `false` only when a configured limit
-	/// is exceeded.
+	/// default). Charges `count` units against the budget; the MAIL
+	/// FROM path charges one unit (one transaction started) and the
+	/// end-of-DATA path charges the remaining `recipients.len() - 1`.
+	/// Returns `true` when the session is allowed to send, or when no
+	/// limit is configured; `false` only when a configured limit is
+	/// exceeded.
 	pub(crate) fn check_authenticated_submission(
 		&self,
 		account: &str,
 		directory: &Directory,
+		count: u32,
 		now: u64,
 	) -> bool {
 		let Some(limiter) = &self.submission_limiter else {
@@ -132,7 +133,7 @@ impl TransactionPolicy {
 			.submission_limit_for(account)
 			.or(self.submission_default);
 		match limit {
-			Some(per_min) => limiter.check(account, per_min, now),
+			Some(per_min) => limiter.check_n(account, count, per_min, now),
 			None => true,
 		}
 	}

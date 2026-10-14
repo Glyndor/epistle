@@ -37,24 +37,35 @@ pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: u
 	) {
 		return Action::Continue(reply);
 	}
-	// Per-tenant aggregate rate limit, charged per recipient so a
-	// 100-recipient message costs 100 units. The MAIL FROM path
-	// already charged the first unit (one transaction started); the
-	// remaining `recipients.len() - 1` are charged here, where the
-	// recipient count is known. With no recipients nothing is
-	// charged, which leaves bounces untouched.
+	// Per-account and per-tenant aggregate rate limits, both
+	// charged per recipient so a 100-recipient message costs 100
+	// units. The MAIL FROM path already charged the first unit
+	// (one transaction started); the remaining `recipients.len() -
+	// 1` are charged here, where the recipient count is known.
+	// With no recipients nothing is charged, which leaves bounces
+	// untouched.
 	if let Some(account) = session.authenticated.as_deref() {
+		let extra = message.recipients.len().saturating_sub(1) as u32;
+		if !session.policy.check_authenticated_submission(
+			account,
+			&session.directory,
+			extra,
+			super::time::unix_now(),
+		) {
+			return Action::Continue(Reply::single(
+				450,
+				"4.7.1 sending rate limit exceeded; retry later",
+			));
+		}
 		let addresses = session.directory.addresses_for(account);
-		if !addresses.is_empty() {
-			let extra = message.recipients.len().saturating_sub(1) as u32;
-			if let Err(message) =
+		if !addresses.is_empty()
+			&& let Err(message) =
 				session
 					.policy
 					.check_tenant_submission(&addresses, extra, super::time::unix_now())
-			{
-				let line = format!("4.7.1 {message}; retry later");
-				return Action::Continue(Reply::single(450, line.as_str()));
-			}
+		{
+			let line = format!("4.7.1 {message}; retry later");
+			return Action::Continue(Reply::single(450, line.as_str()));
 		}
 	}
 	match split_over_quota(session, message, running_size as u64) {
