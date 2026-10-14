@@ -1,6 +1,7 @@
 //! DKIM signing and verification (RFC 6376).
 
 pub(crate) mod canon;
+mod per_domain;
 pub mod rotate;
 mod rsa_keygen;
 mod sign;
@@ -11,6 +12,7 @@ mod verify;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use per_domain::{DomainSigner, PerDomainSigner};
 pub use rotate::{
 	ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator, publication_waits,
 };

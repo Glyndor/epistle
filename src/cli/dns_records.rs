@@ -13,46 +13,28 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	// DKIM records from the configured signer: the ed25519 selector always
 	// (the one the rotator currently has in service, or the configured one
 	// before the first tick), plus the optional RSA dual-signing selector
-	// when both fields are set.
+	// when both fields are set. A per-domain override replaces the default
+	// for the domain it names; every other domain keeps the default.
 	let mut failed = false;
-	let dkim_owned: Vec<(String, String)> = config
-		.dkim
-		.as_ref()
-		.map(|dkim| {
-			let mut pairs = Vec::new();
-			let active = match crate::dkim::rotate::active_ed25519(dkim, &config.data_dir) {
-				Ok(active) => active,
-				Err(error) => {
-					failed = true;
-					super::style::error(format_args!("{error}"));
-					return pairs;
-				}
-			};
-			let ed_selector = active.selector;
-			match crate::dkim::Signer::load(&ed_selector, &active.key_file) {
-				Ok(signer) => {
-					pairs.push((ed_selector, signer.dns_record_value()));
-					let rsa = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)
-						.ok()
-						.flatten();
-					if let Some(rsa) = rsa {
-						match crate::dkim::rsa_record_value(&rsa.key_file) {
-							Ok(value) => pairs.push((rsa.selector, value)),
-							Err(error) => {
-								super::style::warn(format_args!(
-									"cannot load RSA DKIM key: {error}"
-								));
-							}
-						}
-					}
-				}
-				Err(error) => {
-					super::style::warn(format_args!("cannot load DKIM key: {error}"));
-				}
+	let mut dkim_default: Vec<(String, String)> = Vec::new();
+	let mut dkim_per_domain: records::DomainDkim = records::DomainDkim::new();
+	if let Some(dkim) = &config.dkim {
+		match build_default_dkim_pairs(dkim, &config.data_dir) {
+			Ok(pairs) => dkim_default = pairs,
+			Err(error) => {
+				failed = true;
+				super::style::error(format_args!("{error}"));
 			}
-			pairs
-		})
-		.unwrap_or_default();
+		}
+		dkim_per_domain = match build_per_domain_dkim_pairs(dkim) {
+			Ok(map) => map,
+			Err(error) => {
+				failed = true;
+				super::style::error(format_args!("{error}"));
+				records::DomainDkim::new()
+			}
+		};
+	}
 
 	if failed {
 		return ExitCode::FAILURE;
@@ -73,7 +55,8 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	let recs = records::build_records(
 		&config.domains,
 		&config.hostname,
-		&dkim_owned,
+		&dkim_default,
+		&dkim_per_domain,
 		tlsa.as_deref(),
 		&records::mta_sts_id(config),
 		// The `webdav` listener always exposes CalDAV/CardDAV when present;
@@ -85,6 +68,60 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		config.public_ipv6,
 	);
 	report(&recs, out)
+}
+
+/// The default `[dkim]` selector (and its optional RSA partner) as
+/// `(selector, value)` pairs. The rotation state takes precedence over
+/// the configured value when the state is readable.
+fn build_default_dkim_pairs(
+	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
+) -> Result<Vec<(String, String)>, String> {
+	let mut pairs = Vec::new();
+	let active =
+		crate::dkim::rotate::active_ed25519(dkim, data_dir).map_err(|error| error.to_string())?;
+	let ed_selector = active.selector;
+	match crate::dkim::Signer::load(&ed_selector, &active.key_file) {
+		Ok(signer) => {
+			pairs.push((ed_selector, signer.dns_record_value()));
+			let rsa = crate::dkim::rotate::active_rsa(dkim, data_dir)
+				.ok()
+				.flatten();
+			if let Some(rsa) = rsa {
+				match crate::dkim::rsa_record_value(&rsa.key_file) {
+					Ok(value) => pairs.push((rsa.selector, value)),
+					Err(error) => {
+						super::style::warn(format_args!("cannot load RSA DKIM key: {error}"));
+					}
+				}
+			}
+		}
+		Err(error) => {
+			super::style::warn(format_args!("cannot load DKIM key: {error}"));
+		}
+	}
+	Ok(pairs)
+}
+
+/// The per-domain DKIM overrides as a domain -> list of (selector, value)
+/// map. Each override is loaded from the file the configuration names;
+/// the optional RSA selector adds a second `(selector, value)` pair.
+fn build_per_domain_dkim_pairs(dkim: &crate::config::Dkim) -> Result<records::DomainDkim, String> {
+	let mut map = records::DomainDkim::new();
+	for entry in &dkim.domain {
+		let mut pairs = Vec::new();
+		let signer = crate::dkim::Signer::load(&entry.selector, &entry.key_file)
+			.map_err(|error| error.to_string())?;
+		pairs.push((entry.selector.clone(), signer.dns_record_value()));
+		if let (Some(rsa_selector), Some(rsa_key_file)) = (&entry.rsa_selector, &entry.rsa_key_file)
+		{
+			let value =
+				crate::dkim::rsa_record_value(rsa_key_file).map_err(|error| error.to_string())?;
+			pairs.push((rsa_selector.clone(), value));
+		}
+		map.insert(entry.name.to_ascii_lowercase(), pairs);
+	}
+	Ok(map)
 }
 
 /// Print one line per record: `name TTL IN KIND value`. TXT values are
@@ -210,3 +247,7 @@ mod tests_state;
 #[cfg(test)]
 #[path = "dns_records_tests_rsa.rs"]
 mod tests_rsa;
+
+#[cfg(test)]
+#[path = "dns_records_tests_per_domain.rs"]
+mod tests_per_domain;

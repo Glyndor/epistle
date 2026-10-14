@@ -162,11 +162,19 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 	}
 }
 
+/// Per-domain DKIM selectors and their record values. A domain absent
+/// from the map keeps the configured default; the map's keys are
+/// lowercased to match the way the validator and the routing layer
+/// compare domains. Used by [`build_records`] to publish only the
+/// selectors that actually sign each domain.
+pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
+
 /// The records to publish for the given domains and mail hostname.
 ///
-/// `dkim` lists every `<selector>._domainkey` value to emit (one per
+/// `dkim_default` lists every `<selector>._domainkey` value to emit (one per
 /// configured signing key, in selector order, the ed25519 selector first,
-/// then the optional RSA selector); `tlsa` is the `3 0 1` association for
+/// then the optional RSA selector), replaced for a domain in
+/// `dkim_per_domain` by that domain's own list; `tlsa` is the `3 0 1` association for
 /// the mail host's certificate when one is available; `mta_sts_id`
 /// versions the MTA-STS record; `services` toggles the optional SRV records
 /// (CalDAV/CardDAV are tied to the `webdav` listener); `caa_directory` is
@@ -184,7 +192,8 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 pub fn build_records(
 	domains: &[String],
 	hostname: &str,
-	dkim: &[(String, String)],
+	dkim_default: &[(String, String)],
+	dkim_per_domain: &DomainDkim,
 	tlsa: Option<&str>,
 	mta_sts_id: &str,
 	services: Services,
@@ -285,8 +294,16 @@ pub fn build_records(
 		});
 		// DKIM public keys, one per configured selector. Two are typical
 		// (the ed25519 key plus the optional RSA dual-signing selector);
-		// nothing about the format limits that to two.
-		for (selector, value) in dkim {
+		// nothing about the format limits that to two. Per-domain
+		// overrides take precedence over the default: a domain listed
+		// in `dkim_per_domain` publishes only its own selectors, every
+		// other domain publishes the default list.
+		let dkim_for_domain: &[(String, String)] =
+			match dkim_per_domain.get(&domain.to_ascii_lowercase()) {
+				Some(pairs) => pairs.as_slice(),
+				None => dkim_default,
+			};
+		for (selector, value) in dkim_for_domain {
 			records.push(txt(
 				format!("{selector}._domainkey.{domain}"),
 				value.clone(),

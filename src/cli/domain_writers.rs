@@ -19,17 +19,27 @@ pub fn print_domain_records(
 	domain: &str,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	let dkim_owned: Vec<(String, String)> = config
-		.dkim
-		.as_ref()
-		.map(|dkim| {
-			let mut pairs = Vec::new();
-			if let Ok(signer) = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file) {
-				pairs.push((dkim.selector.clone(), signer.dns_record_value()));
-			}
-			pairs
-		})
-		.unwrap_or_default();
+	// One domain is printed, so its own key (a `[[dkim.domain]]` override
+	// when it has one, the `[dkim]` default otherwise) is the only one.
+	let mut dkim_owned: Vec<(String, String)> = Vec::new();
+	if let Some(dkim) = &config.dkim {
+		let (selector, key_file, rsa) = match dkim.override_for(domain) {
+			Some(entry) => (
+				&entry.selector,
+				&entry.key_file,
+				entry.rsa_selector.as_ref().zip(entry.rsa_key_file.as_ref()),
+			),
+			None => (&dkim.selector, &dkim.key_file, None),
+		};
+		if let Ok(signer) = crate::dkim::Signer::load(selector, key_file) {
+			dkim_owned.push((selector.clone(), signer.dns_record_value()));
+		}
+		if let Some((rsa_selector, rsa_key_file)) = rsa
+			&& let Ok(value) = crate::dkim::rsa_record_value(rsa_key_file)
+		{
+			dkim_owned.push((rsa_selector.clone(), value));
+		}
+	}
 	let tlsa = config
 		.tls
 		.as_ref()
@@ -39,6 +49,7 @@ pub fn print_domain_records(
 		&[domain.to_string()],
 		&config.hostname,
 		&dkim_owned,
+		&dns_records::DomainDkim::new(),
 		tlsa.as_deref(),
 		&dns_records::mta_sts_id(config),
 		dns_records::Services::all(),

@@ -12,18 +12,45 @@ use crate::metrics::Metrics;
 use crate::storage::{MessageCrypto, SplitDelivery};
 
 /// Everything `serve` needs after wiring the split delivery sink: the sink
-/// itself, the optional DKIM signer (consumed by the rotation task), the
+/// itself, the default DKIM signer (consumed by the rotation task), the
 /// optional webhook (consumed by the queue worker and the alert engine),
 /// and the optional ARC sealer (consumed by each SMTP listener).
 pub(super) struct SplitCompanions {
 	/// The split delivery sink, wrapped in an `Arc` by the caller.
 	pub split: SplitDelivery,
-	/// The hot-swappable DKIM signer, present when `[dkim]` is configured.
+	/// The default DKIM signer, present when `[dkim]` is configured.
+	/// The rotation task replaces it; per-domain overrides, when any
+	/// are configured, are loaded into the sink but not rotated.
 	pub dkim_signer: Option<crate::dkim::ReloadableSigner>,
 	/// The webhook dispatcher, present when `[webhook]` is configured.
 	pub webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// The ARC sealer, present when `[arc]` is configured.
 	pub arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
+}
+
+/// Load every per-domain DKIM override from the configuration: each
+/// ed25519 key, plus the optional RSA pair. A bad path or unreadable
+/// key stops the start, the same way a bad configured `[dkim]` key
+/// does, so the misconfiguration cannot ship.
+fn load_per_domain_signers(
+	dkim: &crate::config::Dkim,
+) -> std::io::Result<Vec<crate::dkim::DomainSigner>> {
+	let mut loaded = Vec::with_capacity(dkim.domain.len());
+	for entry in &dkim.domain {
+		let mut signer = crate::dkim::Signer::load(&entry.selector, &entry.key_file)
+			.map_err(std::io::Error::other)?;
+		if let (Some(rsa_selector), Some(rsa_key_file)) = (&entry.rsa_selector, &entry.rsa_key_file)
+		{
+			signer = signer
+				.with_rsa(rsa_selector, rsa_key_file)
+				.map_err(std::io::Error::other)?;
+		}
+		loaded.push(crate::dkim::DomainSigner {
+			domain: entry.name.to_ascii_lowercase(),
+			signer: Arc::new(signer),
+		});
+	}
+	Ok(loaded)
 }
 
 /// Build [`SplitDelivery`] and attach the DKIM signer, SRS, webhook, and
@@ -54,7 +81,9 @@ pub(super) fn build_split_with_companions(
 				.map_err(std::io::Error::other)?;
 		}
 		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));
-		split = split.with_signer(reloadable.clone());
+		let overrides = load_per_domain_signers(dkim)?;
+		let per_domain = crate::dkim::PerDomainSigner::new(reloadable.clone(), overrides);
+		split = split.with_signer(per_domain);
 		dkim_signer = Some(reloadable);
 	}
 	if let Some(secret) = &config.srs_secret {
@@ -87,3 +116,7 @@ pub(super) fn build_split_with_companions(
 #[cfg(test)]
 #[path = "serve_dkim_tests_restart.rs"]
 mod tests_restart;
+
+#[cfg(test)]
+#[path = "serve_dkim_tests_per_domain.rs"]
+mod tests_per_domain;

@@ -44,20 +44,9 @@ impl Config {
 	}
 
 	fn validate_dkim(&self) -> Result<(), ConfigError> {
-		let Some(dkim) = &self.dkim else {
-			return Ok(());
-		};
-		// The RSA selector and key file are a pair: the configured selector
-		// points at a `_domainkey` TXT published for the key, so leaving one
-		// side unset means the published record is unreachable (or, if the
-		// key file is set without the selector, the key has no TXT at all).
-		// Treat the half-configured state as a load-time error so it cannot
-		// ship.
-		match (&dkim.rsa_selector, &dkim.rsa_key_file) {
-			(Some(_), Some(_)) | (None, None) => Ok(()),
-			_ => Err(ConfigError::Invalid(
-				"rsa_selector and rsa_key_file must be set together".into(),
-			)),
+		match &self.dkim {
+			Some(dkim) => dkim.validate(&self.domains, &self.domain_aliases),
+			None => Ok(()),
 		}
 	}
 

@@ -40,10 +40,13 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// When the signing key cannot be resolved the failure is already
 	// reported; the DNS records are still checked with whatever selectors
 	// can be named, and with none if the rotation state itself is broken.
-	let selectors: Vec<String> = if signing_key_failed {
-		crate::cli::verify_dns::dkim_selectors(config).unwrap_or_default()
+	let default_selectors: Vec<String> = if signing_key_failed {
+		crate::cli::verify_dns::dkim_default_selectors(config).unwrap_or_default()
 	} else {
-		keys.iter().map(|key| key.selector.clone()).collect()
+		keys.iter()
+			.filter(|k| k.domain.is_none())
+			.map(|k| k.key.selector.clone())
+			.collect()
 	};
 
 	let mut records = dns::check_host(
@@ -54,6 +57,10 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	)
 	.await;
 	for domain in &config.domains {
+		// Each domain is checked against its own selectors: a per-domain
+		// override replaces the default, otherwise the default applies.
+		let selectors = crate::cli::verify_dns::dkim_selectors_for(config, domain)
+			.unwrap_or_else(|_| default_selectors.clone());
 		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
 	}
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
@@ -63,8 +70,15 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 
 	let mut mismatches = 0;
 	for domain in &config.domains {
-		for key in &keys {
-			if let Some(item) = key_item(key, domain, dns).await {
+		// A domain with a `[[dkim.domain]]` override is checked against the
+		// override's keys only, the default's against every other domain.
+		let own = config
+			.dkim
+			.as_ref()
+			.and_then(|dkim| dkim.override_for(domain))
+			.map(|entry| entry.name.to_ascii_lowercase());
+		for key in keys.iter().filter(|key| key.domain == own) {
+			if let Some(item) = key_item(&key.key, domain, dns).await {
 				mismatches += usize::from(item.status == Level::Fail);
 				findings.push(item);
 			}
@@ -153,3 +167,7 @@ async fn bounded<T>(query: Lookup<'_, T>) -> Result<T, DnsFailure> {
 #[cfg(test)]
 #[path = "dns_area_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dns_area_tests_per_domain.rs"]
+mod tests_per_domain;

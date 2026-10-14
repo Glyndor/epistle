@@ -88,6 +88,74 @@ impl ConfigDocument {
 		Ok(())
 	}
 
+	/// Insert or update one element of a nested `[[parent.array]]`, like
+	/// `[[dkim.domain]]`. `parent_path` is the dotted path to the
+	/// parent table (e.g. `&["dkim"]`), `array` is the table-array
+	/// name, and the first character of `match_key` must not be
+	/// changed by `fields` (the same rule as the top-level
+	/// `upsert_element`).
+	pub fn upsert_nested_element(
+		&mut self,
+		parent_path: &[&str],
+		array: &str,
+		match_key: &str,
+		match_value: &str,
+		fields: &[(&str, Value)],
+	) -> Result<(), String> {
+		if fields
+			.iter()
+			.any(|(key, value)| *key == match_key && value.as_str() != Some(match_value))
+		{
+			return Err("updated fields cannot change the matching key".into());
+		}
+		// Walk the parent path and create the parent table on the way
+		// in if it does not exist.
+		let mut table = self.document.as_table_mut();
+		for segment in parent_path {
+			if !table.contains_key(segment) {
+				table.insert(segment, toml_edit::Item::Table(toml_edit::Table::new()));
+			}
+			table = table
+				.get_mut(segment)
+				.and_then(toml_edit::Item::as_table_mut)
+				.ok_or_else(|| format!("expected a table at [{}]", parent_path.join(".")))?;
+		}
+		let entry = table.entry(array).or_insert(toml_edit::Item::ArrayOfTables(
+			toml_edit::ArrayOfTables::new(),
+		));
+		let tables = entry
+			.as_array_of_tables_mut()
+			.ok_or_else(|| format!("expected [{}] to be an array of tables", array))?;
+		let matches: Vec<usize> = tables
+			.iter()
+			.enumerate()
+			.filter(|(_, t)| {
+				t.get(match_key).and_then(toml_edit::Item::as_str) == Some(match_value)
+			})
+			.map(|(i, _)| i)
+			.collect();
+		let index = match matches.as_slice() {
+			[index] => *index,
+			[] => {
+				let mut new_table = toml_edit::Table::new();
+				new_table.insert(match_key, toml_edit::value(match_value));
+				tables.push(new_table);
+				tables.len() - 1
+			}
+			_ => {
+				return Err(format!(
+					"multiple array elements match {} = {}",
+					array, match_value
+				));
+			}
+		};
+		let target = tables.get_mut(index).ok_or("missing array element")?;
+		for (key, value) in fields {
+			target.insert(key, toml_edit::Item::Value(value.clone()));
+		}
+		Ok(())
+	}
+
 	/// Remove every array-of-tables element with the matching key value.
 	pub fn remove_elements(
 		&mut self,

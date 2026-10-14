@@ -41,7 +41,7 @@ pub use api::Api;
 pub use arc::Arc;
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
-pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
+pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
 pub use dns::Dns;
 pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
 pub use ldap::Ldap;
