@@ -152,7 +152,8 @@ the `[dns]` provider, prints the plan (`--json` prints the same plan as
 JSON), asks, and publishes:
 
 - DMARC at `_dmarc.<domain>`, one step stricter per run: `none`, then
-  `quarantine`, then `reject`. `sp=` follows `p=`, `np=reject`
+  `quarantine`, then `reject`. `sp=` follows `p=` (a stricter `sp=`
+  already there stays), `np=reject`
   (DMARCbis, names that do not exist) is set at once, `pct` is dropped,
   and every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`) stays as
   written. `--dmarc reject` goes straight to `reject`. A DMARC record

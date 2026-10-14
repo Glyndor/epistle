@@ -207,3 +207,32 @@ fn failing_senders_are_carried_into_the_plan() {
 	assert_eq!(plan.dmarc.failing_sources, inputs.failing_sources);
 	assert!(plan.dmarc.steps_up());
 }
+
+#[test]
+fn a_stricter_subdomain_policy_is_never_loosened() {
+	let plan = plan(&[dmarc("v=DMARC1; p=none; sp=reject")]);
+	assert_eq!(
+		dmarc_write(&plan).expect("rewrite").record.value,
+		"v=DMARC1; p=quarantine; sp=reject; np=reject"
+	);
+	assert_eq!(plan.dmarc.next, DmarcStep::Quarantine);
+	assert_eq!(plan.dmarc.sp, DmarcStep::Reject);
+	assert_eq!(
+		dmarc_write(&plan).expect("rewrite").reason,
+		"move _dmarc.example.org from p=none to p=quarantine; sp=reject is stricter and stays; np=reject; the other tags stay as written; pct is dropped (DMARCbis)"
+	);
+}
+
+#[test]
+fn a_reject_policy_missing_a_tag_is_completed_in_place() {
+	let plan = plan(&[dmarc("v=DMARC1; p=reject; rua=mailto:d@example.org")]);
+	let entry = dmarc_write(&plan).expect("rewrite");
+	assert_eq!(
+		entry.record.value,
+		"v=DMARC1; p=reject; sp=reject; np=reject; rua=mailto:d@example.org"
+	);
+	assert_eq!(
+		entry.reason,
+		"keep _dmarc.example.org at p=reject; set sp=reject and np=reject; the other tags stay as written; pct is dropped (DMARCbis)"
+	);
+}

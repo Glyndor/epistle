@@ -1,5 +1,6 @@
 //! The DMARC part of the lockdown: the policy moves one step per run
-//! (`none`, then `quarantine`, then `reject`), `sp=` follows `p=`, and
+//! (`none`, then `quarantine`, then `reject`), `sp=` follows `p=` (a
+//! stricter `sp=` the operator wrote is kept, never loosened), and
 //! `np=reject` (DMARCbis, draft-ietf-dmarc-dmarcbis) is set at once
 //! because it only covers names that do not exist. Every other tag the
 //! operator wrote (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`, anything
@@ -95,6 +96,9 @@ pub struct DmarcPlan {
 	pub current: Option<DmarcStep>,
 	/// The policy after this run.
 	pub next: DmarcStep,
+	/// The subdomain policy (`sp=`) after this run: it follows `p=`, but a
+	/// stricter `sp=` the operator already wrote is kept.
+	pub sp: DmarcStep,
 	/// Whether `--dmarc reject` asked for the jump.
 	pub jumped: bool,
 	/// What this run does.
@@ -178,13 +182,17 @@ pub fn parse_dmarc(value: &str) -> Result<DmarcTags, String> {
 	Ok(tags)
 }
 
-/// The DMARC value for `step`: `v=DMARC1; p=<step>; sp=<step>;
-/// np=reject`, then every other tag of `existing` as written, without
-/// `pct`.
-pub fn rewrite_dmarc(existing: Option<&DmarcTags>, step: DmarcStep) -> String {
+/// The DMARC value `v=DMARC1; p=<policy>; sp=<subdomains>; np=reject`,
+/// then every other tag of `existing` as written, without `pct`.
+pub fn rewrite_dmarc(
+	existing: Option<&DmarcTags>,
+	policy: DmarcStep,
+	subdomains: DmarcStep,
+) -> String {
 	let mut value = format!(
-		"v=DMARC1; p={step}; sp={step}; np=reject",
-		step = step.as_str()
+		"v=DMARC1; p={}; sp={}; np=reject",
+		policy.as_str(),
+		subdomains.as_str()
 	);
 	for (name, tag_value) in existing.map(|t| t.tags.as_slice()).unwrap_or_default() {
 		if ["v", "p", "sp", "np", "pct"]
@@ -219,6 +227,7 @@ pub fn plan_dmarc(
 		name: name.clone(),
 		current: None,
 		next: inputs.jump_to.unwrap_or(DmarcStep::Quarantine),
+		sp: inputs.jump_to.unwrap_or(DmarcStep::Quarantine),
 		jumped: inputs.jump_to.is_some(),
 		action: DmarcAction::Publish,
 		has_reports: inputs.has_reports,
@@ -263,8 +272,10 @@ pub fn plan_dmarc(
 		plan.current = Some(current);
 		plan.next = inputs.jump_to.unwrap_or(current.next()).max(current);
 		let target = |tag: &str| tags.get(tag).and_then(DmarcStep::parse);
+		// sp follows p, but never loosens a stricter sp the operator set.
+		plan.sp = target("sp").map_or(plan.next, |sp| sp.max(plan.next));
 		if current == plan.next
-			&& target("sp") == Some(plan.next)
+			&& target("sp") == Some(plan.sp)
 			&& target("np") == Some(DmarcStep::Reject)
 			&& tags.get("pct").is_none()
 		{
@@ -272,11 +283,22 @@ pub fn plan_dmarc(
 			return (plan, None);
 		}
 	}
-	let value = rewrite_dmarc(tags.as_ref(), plan.next);
+	let value = rewrite_dmarc(tags.as_ref(), plan.next, plan.sp);
 	let reason = match plan.current {
 		None => format!(
 			"{name} has no DMARC record; publish p={next} with sp={next} and np=reject",
 			next = plan.next.as_str()
+		),
+		Some(current) if current == plan.next => format!(
+			"keep {name} at p={next}; set sp={sp} and np=reject; the other tags stay as written; pct is dropped (DMARCbis)",
+			next = plan.next.as_str(),
+			sp = plan.sp.as_str()
+		),
+		Some(current) if plan.sp > plan.next => format!(
+			"move {name} from p={current} to p={next}; sp={sp} is stricter and stays; np=reject; the other tags stay as written; pct is dropped (DMARCbis)",
+			current = current.as_str(),
+			next = plan.next.as_str(),
+			sp = plan.sp.as_str()
 		),
 		Some(current) => format!(
 			"move {name} from p={current} to p={next}; sp follows p; np=reject; the other tags stay as written; pct is dropped (DMARCbis)",

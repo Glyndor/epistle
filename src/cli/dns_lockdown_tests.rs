@@ -401,3 +401,19 @@ fn the_flags_refuse_what_they_cannot_do() {
 		);
 	}
 }
+
+#[test]
+fn the_plan_shows_a_stricter_subdomain_policy_kept() {
+	let mut records = zone_records();
+	records.retain(|r| r.name != "_dmarc.example.org");
+	records.push(txt("_dmarc.example.org", "v=DMARC1; p=none; sp=reject"));
+	let setup = setup(CLOUDFLARE, Zone::with(records));
+	let run = run(&setup, &["--dry-run"]);
+	assert!(
+		run.out.contains(
+			"DMARC at _dmarc.example.org: p=none now; this run sets p=quarantine (sp=reject, np=reject); the next run moves it one more step, to p=reject\n"
+		),
+		"{}",
+		run.out
+	);
+}

@@ -73,10 +73,11 @@ pub(crate) fn plan_text(plan: &Plan) -> String {
 
 fn dmarc_line(dmarc: &DmarcPlan) -> String {
 	let next = dmarc.next.as_str();
+	let sp = dmarc.sp.as_str();
 	match &dmarc.action {
 		DmarcAction::LeftAlone { reason } => format!("left as is: {reason}"),
 		DmarcAction::Unchanged => {
-			format!("already at p={next} with sp={next} and np=reject; nothing to change")
+			format!("already at p={next} with sp={sp} and np=reject; nothing to change")
 		}
 		DmarcAction::Publish => {
 			let start = match dmarc.current {
@@ -89,7 +90,7 @@ fn dmarc_line(dmarc: &DmarcPlan) -> String {
 			} else {
 				"the next run moves it one more step, to p=reject"
 			};
-			format!("{start}{why} (sp={next}, np=reject); {then}")
+			format!("{start}{why} (sp={sp}, np=reject); {then}")
 		}
 	}
 }
