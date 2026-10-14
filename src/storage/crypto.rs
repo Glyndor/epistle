@@ -93,6 +93,9 @@ pub enum CryptoAuthError {
 	/// The envelope is truncated: not even the magic and nonce fit.
 	#[error("encrypted envelope is truncated")]
 	Truncated,
+	/// The envelope is encrypted but no key is loaded, so it cannot be read.
+	#[error("encrypted envelope but no key is loaded")]
+	NoKey,
 }
 
 /// Transparent at-rest encryption of stored message files. Cheap to clone (an
@@ -277,17 +280,14 @@ impl MessageCrypto {
 	///
 	/// # Errors
 	/// Fails closed when the envelope is truncated, when authentication fails
-	/// (tamper, wrong key, or `aad` mismatch), or when no key is loaded but the
-	/// buffer does start with [`MAGIC`].
+	/// (tamper, wrong key, or `aad` mismatch), or with
+	/// [`CryptoAuthError::NoKey`] when no key is loaded but the buffer does
+	/// start with [`MAGIC`].
 	pub fn decode_with_aad(&self, stored: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoAuthError> {
 		if !stored.starts_with(MAGIC) {
 			return Err(CryptoAuthError::NotEncrypted);
 		}
-		let key = self
-			.inner
-			.key
-			.as_ref()
-			.ok_or(CryptoAuthError::AuthenticationFailed)?;
+		let key = self.inner.key.as_ref().ok_or(CryptoAuthError::NoKey)?;
 		let rest = &stored[MAGIC.len()..];
 		if rest.len() < NONCE_LEN {
 			return Err(CryptoAuthError::Truncated);

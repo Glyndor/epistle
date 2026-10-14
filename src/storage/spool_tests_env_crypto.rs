@@ -289,3 +289,32 @@ fn editing_a_legacy_plaintext_envelope_under_encryption_completes() {
 		"the edited envelope must be written sealed"
 	);
 }
+
+/// A sealed envelope read with no key loaded (encryption turned off and the
+/// key removed) says so, instead of reporting tampering the operator would
+/// then go looking for.
+#[test]
+fn a_sealed_envelope_without_a_key_reports_the_missing_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let id = FsSpool::open_with_crypto(dir.path(), crypto)
+		.expect("open sealed")
+		.store(&sample(), None, &BTreeMap::new())
+		.expect("store");
+
+	let keyless = FsSpool::open(dir.path()).expect("open keyless");
+	let error = keyless.load_envelope(id).expect_err("no key, no envelope");
+	assert!(
+		error.to_string().contains("no key"),
+		"the error must name the missing key: {error}"
+	);
+	let sealed = std::fs::read(dir.path().join("spool/new").join(format!("{id}.json")))
+		.expect("read sealed");
+	assert!(
+		matches!(
+			MessageCrypto::disabled().decode_with_aad(&sealed, id.as_bytes()),
+			Err(crate::storage::CryptoAuthError::NoKey)
+		),
+		"a keyless decode must fail as NoKey"
+	);
+}

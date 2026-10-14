@@ -410,9 +410,7 @@ impl FsSpool {
 			let plaintext = self
 				.crypto
 				.decode_with_aad(bytes, id.as_bytes())
-				.map_err(|error| {
-					std::io::Error::other(format!("envelope authentication failed: {error}"))
-				})?;
+				.map_err(|error| std::io::Error::other(format!("spool envelope: {error}")))?;
 			let envelope: Envelope =
 				serde_json::from_slice(&plaintext).map_err(std::io::Error::other)?;
 			Ok((envelope, DecodedEnvelope::Sealed))
