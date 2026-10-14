@@ -11,6 +11,10 @@ mod tests_values;
 mod keys;
 pub use keys::Key;
 
+#[path = "limits_tenant_keys.rs"]
+mod tenant_keys;
+pub(super) use tenant_keys::TenantKey;
+
 use crate::config::Config;
 use std::io::Write;
 use std::path::Path;
@@ -20,11 +24,15 @@ fn edit_document(
 	path: &Path,
 	key: Key,
 	domain: Option<&str>,
+	tenant: Option<&str>,
 	value: Option<&str>,
 ) -> Result<super::config_edit::ConfigDocument, String> {
 	if let Some(table) = key.table() {
 		if domain.is_some() {
 			return Err("--domain is supported only for quota and submission-rate".into());
+		}
+		if tenant.is_some() {
+			return Err("per-tenant limits support submission-rate only".into());
 		}
 		return edit_table_key(path, key, table, value);
 	}
@@ -32,21 +40,34 @@ fn edit_document(
 		.map(|input| values::parse_value(input, key.unit(), key.max()))
 		.transpose()
 		.map_err(|error| format!("{}: {error}", key.name()))?;
-	let map = match (domain, key) {
-		(None, _) => None,
-		(Some(_), Key::Quota) => Some("domain_quotas"),
-		(Some(_), Key::SubmissionRate) => Some("domain_submission_limits"),
-		(Some(_), _) => {
+	let value_i64 = match value {
+		Some(value) => Some(value as i64),
+		None => None,
+	};
+	let map = match (domain, tenant, key) {
+		(Some(_), Some(_), _) => {
+			return Err("--domain and --tenant cannot be combined".into());
+		}
+		(_, Some(_), _) | (None, None, Key::Quota | Key::SubmissionRate) if tenant.is_some() => {
+			return edit_tenant_document(path, key, tenant, value_i64);
+		}
+		(_, Some(_), _) => {
+			return Err("--tenant requires submission-rate".into());
+		}
+		(Some(_), None, Key::Quota) => Some("domain_quotas"),
+		(Some(_), None, Key::SubmissionRate) => Some("domain_submission_limits"),
+		(Some(_), None, _) => {
 			return Err("--domain is supported only for quota and submission-rate".into());
 		}
+		(None, None, _) => None,
 	};
 	let mut document = super::config_edit::ConfigDocument::open(path)?;
-	match (map, domain, value) {
+	match (map, domain, value_i64) {
 		(Some(map), Some(domain), Some(value)) => {
-			document.set_map_entry(map, domain, value as i64)?
+			document.set_map_entry(map, domain, value)?
 		}
 		(Some(map), Some(domain), None) => document.remove_map_entry(map, domain)?,
-		(_, _, Some(value)) => document.set_scalar(key.field(), value as i64)?,
+		(_, _, Some(value)) => document.set_scalar(key.field(), value)?,
 		(_, _, None) => document.remove_scalar(key.field()),
 	}
 	Ok(document)
@@ -79,9 +100,57 @@ fn edit_table_key(
 	Ok(document)
 }
 
+/// Dispatch on `--tenant` and forward to [`edit_tenant`]. Kept in a
+/// helper so the per-tenant editing is in one place and the public
+/// signature of `edit_document` stays linear.
+fn edit_tenant_document(
+	path: &Path,
+	key: Key,
+	tenant: Option<&str>,
+	value: Option<i64>,
+) -> Result<super::config_edit::ConfigDocument, String> {
+	let tenant = match tenant {
+		Some(name) => name,
+		None => {
+			return Err(
+			 "--tenant is required to edit a per-tenant limit".to_string(),
+			);
+		}
+	};
+	edit_tenant(path, tenant, key, value)
+}
+
+/// Tenant-bounded edit: write `key.field() = value` on the tenant
+/// whose `name = tenant`. The tenant must already exist in the
+/// config; the operator creates the tenant through `epistle tenant`
+/// (or by editing the file) before turning the dial.
+fn edit_tenant(
+	path: &Path,
+	tenant: &str,
+	key: Key,
+	value: Option<i64>,
+) -> Result<super::config_edit::ConfigDocument, String> {
+	if !matches!(key, Key::SubmissionRate) {
+		return Err("per-tenant limits support submission-rate only".into());
+	}
+	let mut document = super::config_edit::ConfigDocument::open(path)?;
+	let toml_value = value.map(toml_edit::Value::from);
+	let edited = document.edit_array_entry_field(
+		&["tenant"],
+		tenant,
+		"name",
+		key.field(),
+		toml_value,
+	)?;
+	if !edited {
+		return Err(format!("tenant \"{tenant}\" not found in config"));
+	}
+	Ok(document)
+}
+
 #[cfg(test)]
 fn change_config(path: &Path, key: Key, value: Option<&str>) -> Result<Option<Config>, String> {
-	let document = edit_document(path, key, None, value)?;
+	let document = edit_document(path, key, None, None, value)?;
 	let config = document.config()?;
 	Ok((document.commit()? == super::config_edit::Outcome::Changed).then_some(config))
 }
@@ -156,10 +225,6 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	serde_json::Value::Object(limits)
 }
 
-#[cfg(test)]
-#[path = "limits_tests_config.rs"]
-mod tests_config;
-
 /// Operations on the server-wide limits.
 #[derive(Debug, clap::Subcommand)]
 pub enum Action {
@@ -177,6 +242,9 @@ pub enum Action {
 		/// Override one domain (quota or submission-rate only).
 		#[arg(long)]
 		domain: Option<String>,
+		/// Override one tenant (submission-rate only).
+		#[arg(long, value_name = "TENANT")]
+		tenant: Option<String>,
 		/// Non-negative integer, size (K/M/G/T), or duration (s/m/h/d/w);
 		/// comma-separated durations for queue-backoff.
 		#[arg(allow_hyphen_values = true)]
@@ -190,6 +258,9 @@ pub enum Action {
 		/// Remove one domain override (quota or submission-rate only).
 		#[arg(long)]
 		domain: Option<String>,
+		/// Remove one tenant override (submission-rate only).
+		#[arg(long, value_name = "TENANT")]
+		tenant: Option<String>,
 	},
 }
 
@@ -212,7 +283,7 @@ fn run_with_restart(
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
-	let (key, domain, value) = match action {
+	let (key, domain, tenant, value) = match action {
 		Action::Show { json } => {
 			let result = Config::load(path)
 				.map_err(|error| error.to_string())
@@ -231,11 +302,26 @@ fn run_with_restart(
 				}
 			};
 		}
-		Action::Set { key, domain, value } => (key, domain, Some(value)),
-		Action::Unset { key, domain } => (key, domain, None),
+		Action::Set {
+			key,
+			domain,
+			tenant,
+			value,
+		} => (key, domain, tenant, Some(value)),
+		Action::Unset {
+			key,
+			domain,
+			tenant,
+		} => (key, domain, tenant, None),
 	};
 	let result = (|| {
-		let document = edit_document(path, key, domain.as_deref(), value.as_deref())?;
+		let document = edit_document(
+			path,
+			key,
+			domain.as_deref(),
+			tenant.as_deref(),
+			value.as_deref(),
+		)?;
 		if dry_run {
 			write!(out, "{}", document.dry_run()?).map_err(|error| error.to_string())?;
 			return Ok(ExitCode::SUCCESS);
@@ -264,8 +350,8 @@ fn run_with_restart(
 }
 
 #[cfg(test)]
-#[path = "limits_tests_cli.rs"]
-mod tests_cli;
+#[path = "limits_tests_config.rs"]
+mod tests_config;
 
 #[cfg(test)]
 #[path = "limits_tests_domains.rs"]
@@ -278,3 +364,7 @@ mod tests_schedule;
 #[cfg(test)]
 #[path = "limits_tests_queue.rs"]
 mod tests_queue;
+
+#[cfg(test)]
+#[path = "limits_tests_tenants.rs"]
+mod tests_tenants;
