@@ -200,3 +200,17 @@ fn a_sealed_envelope_after_migration_is_still_sealed_yes() {
 		.expect("encryption item");
 	assert!(item.detail.contains("sealed: yes"), "detail: {report:?}");
 }
+
+/// The check only observes: run against a data directory with no spool yet
+/// (or by an operator as root), it must not create one.
+#[test]
+fn the_check_never_creates_the_spool() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = data_dir_config(dir.path());
+	let report = evaluate(&config);
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+	assert!(
+		!dir.path().join("spool").exists(),
+		"the status check must not create the spool"
+	);
+}

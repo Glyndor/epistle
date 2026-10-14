@@ -225,6 +225,18 @@ impl FsSpool {
 		Ok(0)
 	}
 
+	/// [`FsSpool::count_loose_permissions`] for the spool under `data_dir`,
+	/// without opening it: an observer such as `epistle status`, possibly run
+	/// as root, must never create a spool directory. `0` when there is no
+	/// spool yet.
+	pub fn count_loose_permissions_in(data_dir: &Path) -> std::io::Result<u64> {
+		let root = data_dir.join("spool");
+		if !fs::symlink_metadata(&root).is_ok_and(|meta| meta.is_dir()) {
+			return Ok(0);
+		}
+		count_loose_permissions(&contained(data_dir, &root)?)
+	}
+
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
 	/// (`.eml`) files and the envelope (`.json`) sidecar through `crypto`. The
 	/// envelope is sealed with ChaCha20-Poly1305 and bound to the message id as

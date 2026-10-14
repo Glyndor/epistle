@@ -44,11 +44,7 @@ fn evaluate_inner(data_dir: &Path, storage: Option<&crate::config::Storage>) -> 
 		},
 		None => MessageCrypto::disabled(),
 	};
-	let spool = match FsSpool::open_with_crypto(data_dir, crypto.clone()) {
-		Ok(spool) => spool,
-		Err(error) => return AreaReport::fail(format!("cannot open the spool: {error}")),
-	};
-	let loose = match spool.count_loose_permissions() {
+	let loose = match FsSpool::count_loose_permissions_in(data_dir) {
 		Ok(n) => n,
 		Err(error) => return AreaReport::fail(format!("spool permission scan failed: {error}")),
 	};
