@@ -33,6 +33,17 @@ fn signed(domain: &str, message: &str) -> (String, (String, String)) {
 /// Deliver `data` from `eve@sender.example` at 192.0.2.7, with `spf` as
 /// the domain's SPF record and `keys` as further TXT records.
 async fn deliver(spf: &str, keys: &[(String, String)], data: &str) -> AcceptedMessage {
+	let script = format!(
+		"EHLO client.example.org\r\nMAIL FROM:<eve@sender.example>\r\n\
+		 RCPT TO:<bob@example.org>\r\nDATA\r\n{data}.\r\nQUIT\r\n"
+	);
+	let mut messages = converse(spf, keys, &script).await;
+	assert_eq!(messages.len(), 1);
+	messages.remove(0)
+}
+
+/// Run `script` from 192.0.2.7 and return what was delivered.
+async fn converse(spf: &str, keys: &[(String, String)], script: &str) -> Vec<AcceptedMessage> {
 	let mut records = HashMap::from([("sender.example".to_string(), vec![spf.to_string()])]);
 	for (name, record) in keys {
 		records.insert(name.clone(), vec![record.clone()]);
@@ -48,19 +59,14 @@ async fn deliver(spf: &str, keys: &[(String, String)], data: &str) -> AcceptedMe
 	let (client, server_stream) = tokio::io::duplex(256 * 1024);
 	let peer = Some("192.0.2.7".parse().expect("ip"));
 	let task = tokio::spawn(async move { server.handle(server_stream, peer).await });
-	let script = format!(
-		"EHLO client.example.org\r\nMAIL FROM:<eve@sender.example>\r\n\
-		 RCPT TO:<bob@example.org>\r\nDATA\r\n{data}.\r\nQUIT\r\n"
-	);
 	let (mut read, mut write) = tokio::io::split(client);
 	write.write_all(script.as_bytes()).await.expect("write");
 	write.shutdown().await.expect("shutdown");
 	let mut output = Vec::new();
 	read.read_to_end(&mut output).await.expect("read");
 	task.await.expect("task").expect("server result");
-	let mut messages = sink.messages();
-	assert_eq!(messages.len(), 1, "{}", String::from_utf8_lossy(&output));
-	messages.remove(0)
+	assert!(!output.is_empty());
+	sink.messages()
 }
 
 const PLAIN: &str =
@@ -97,11 +103,51 @@ async fn a_dkim_pass_for_a_subdomain_of_the_sender_verifies_it() {
 	assert!(deliver(SOFTFAIL, &[key], &data).await.sender_verified);
 }
 
+/// The reply goes to the envelope sender, so a signature by the From
+/// domain proves nothing about it: anyone can sign mail From their own
+/// domain and put a victim in MAIL FROM.
 #[tokio::test]
-async fn a_dkim_pass_for_the_from_domain_verifies_it() {
+async fn a_dkim_pass_for_a_from_domain_unrelated_to_the_envelope_does_not() {
 	let message = PLAIN.replace("From: eve@sender.example", "From: eve@author.example");
 	let (data, key) = signed("author.example", &message);
+	assert!(!deliver(SOFTFAIL, &[key], &data).await.sender_verified);
+}
+
+#[tokio::test]
+async fn a_dkim_pass_for_a_from_domain_aligned_with_the_envelope_verifies_it() {
+	let message = PLAIN.replace("From: eve@sender.example", "From: eve@news.sender.example");
+	let (data, key) = signed("news.sender.example", &message);
 	assert!(deliver(SOFTFAIL, &[key], &data).await.sender_verified);
+}
+
+/// Two transactions on one connection: a pass for the first sender does
+/// not carry over to the second, whose domain has no SPF record.
+#[tokio::test]
+async fn a_pass_does_not_carry_over_to_the_next_transaction() {
+	let script = format!(
+		"EHLO client.example.org\r\n\
+		 MAIL FROM:<eve@sender.example>\r\nRCPT TO:<bob@example.org>\r\nDATA\r\n{PLAIN}.\r\n\
+		 MAIL FROM:<mallory@other.example>\r\nRCPT TO:<bob@example.org>\r\nDATA\r\n{PLAIN}.\r\n\
+		 QUIT\r\n"
+	);
+	let messages = converse(PASS, &[], &script).await;
+	assert_eq!(messages.len(), 2);
+	assert!(messages[0].sender_verified, "eve passed SPF");
+	assert!(!messages[1].sender_verified, "mallory did not");
+}
+
+#[tokio::test]
+async fn a_pass_does_not_survive_rset() {
+	let script = format!(
+		"EHLO client.example.org\r\n\
+		 MAIL FROM:<eve@sender.example>\r\nRSET\r\n\
+		 MAIL FROM:<mallory@other.example>\r\nRCPT TO:<bob@example.org>\r\nDATA\r\n{PLAIN}.\r\n\
+		 QUIT\r\n"
+	);
+	let messages = converse(PASS, &[], &script).await;
+	assert_eq!(messages.len(), 1);
+	assert_eq!(messages[0].reverse_path, "mallory@other.example");
+	assert!(!messages[0].sender_verified);
 }
 
 #[tokio::test]

@@ -49,11 +49,12 @@ pub struct AcceptedMessage {
 	/// Trusted SMTP verification: a reporting-domain DKIM signature without
 	/// `l=` covers the complete TLS-RPT body. Never derived from mail headers.
 	pub tlsrpt_verified: bool,
-	/// Trusted SMTP verification: the session logged in, or the envelope
-	/// sender's domain passed SPF, or a DKIM signature passed for the
-	/// envelope sender's domain or the From domain. Set by the server from
-	/// its own checks, never derived from mail headers, which the sender
-	/// writes. Auto-replies are sent only when it is true.
+	/// Trusted SMTP verification of this message's envelope sender: the
+	/// session logged in (and so owns it), or on this hop SPF passed for its
+	/// domain or a DKIM signature passed for a domain aligned with it. Set
+	/// by the server from its own checks of this message, never derived
+	/// from mail headers, which the sender writes. Auto-replies are sent
+	/// only when it is true.
 	pub sender_verified: bool,
 	/// Recipients that asked to suppress failure DSNs (`NOTIFY=NEVER`, or a
 	/// `NOTIFY` without `FAILURE`, RFC 3461): no bounce is generated for them.

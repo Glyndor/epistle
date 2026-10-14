@@ -64,8 +64,7 @@ impl Server {
 						.reverse_path
 						.rsplit_once('@')
 						.map(|(_, domain)| domain.to_ascii_lowercase());
-					passed =
-						sender_passed(outcome, envelope.as_deref(), from.as_deref(), &dkim_results);
+					passed = sender_passed(outcome, envelope.as_deref(), &dkim_results);
 					let dmarc = match &author {
 						crate::dmarc::author::AuthorDomain::One(from) => {
 							crate::dmarc::evaluate(
@@ -184,28 +183,32 @@ impl Server {
 	}
 }
 
-/// Whether this hop authenticated the sender: SPF passed for the envelope
-/// sender's domain, or a DKIM signature passed for a domain that shares its
-/// organizational domain with the envelope sender's or the From domain
-/// (relaxed alignment, RFC 7489 section 3.1). DMARC alignment between the
-/// two is not required: the question is only whether the sender is who the
-/// envelope or the From says, before the server writes back to it.
+/// Whether this hop authenticated the envelope sender, the address an
+/// auto-reply goes to: SPF passed for its domain, or a DKIM signature
+/// passed for a domain that shares its organizational domain (relaxed
+/// alignment, RFC 7489 section 3.1). A signature by the From domain counts
+/// only through that alignment: anyone can sign mail From a domain of
+/// their own while putting someone else's address in MAIL FROM, and a
+/// pass for the From would then aim the reply at that someone. Everything
+/// here comes from this message's own checks, never from its headers.
 pub(super) fn sender_passed(
 	spf: crate::spf::SpfOutcome,
 	envelope: Option<&str>,
-	from: Option<&str>,
 	dkim: &[crate::dkim::DkimResult],
 ) -> bool {
 	use crate::dmarc::organizational_domain as org;
-	if envelope.is_some() && spf == crate::spf::SpfOutcome::Pass {
+	let Some(envelope) = envelope else {
+		return false;
+	};
+	if spf == crate::spf::SpfOutcome::Pass {
 		return true;
 	}
-	let owners: Vec<String> = [envelope, from].into_iter().flatten().map(org).collect();
+	let owner = org(envelope);
 	dkim.iter().any(|result| {
 		result.outcome == crate::dkim::DkimOutcome::Pass
 			&& result
 				.domain
 				.as_deref()
-				.is_some_and(|domain| owners.contains(&org(&domain.to_ascii_lowercase())))
+				.is_some_and(|domain| org(&domain.to_ascii_lowercase()) == owner)
 	})
 }

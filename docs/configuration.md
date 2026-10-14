@@ -1410,10 +1410,13 @@ auto-reply following RFC 3834 and RFC 5230:
   logged in (local submission, `POST /api/v1/send`, JMAP
   `EmailSubmission/set`), or on the inbound hop SPF passed for the
   envelope sender's domain, or a DKIM signature passed for a domain with
-  the same organizational domain as the envelope sender's or the From
-  domain, aligned or not. The server takes these from its own checks when
-  it accepts the message and never from `Authentication-Results` or
-  `Received-SPF` headers in the message.
+  the same organizational domain as the envelope sender's. A signature by
+  the From domain counts only when the From domain shares that
+  organizational domain: the reply goes to the envelope sender, and a
+  sender can sign mail From a domain of its own while naming someone else
+  in `MAIL FROM`. The server takes these from its own checks of each
+  message when it accepts it and never from `Authentication-Results`,
+  `Received-SPF` or ARC headers in the message.
 - One reply per sender per 7 days. Each reply leaves a marker under
   `<account>/.vacation/`, which survives restarts. The account keeps at
   most 4096 markers: when the store is full, markers older than the
