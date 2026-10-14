@@ -533,7 +533,18 @@ impl Server {
 			.as_deref()
 			.cloned()
 			.unwrap_or_else(crate::storage::MessageCrypto::disabled);
-		match crate::storage::save_sent::store_copy(data_dir, account, data, &message_id, &crypto) {
+		let quota = self
+			.quota
+			.as_ref()
+			.and_then(|quota| quota.limit(&self.directory.current(), account));
+		match crate::storage::save_sent::store_copy(
+			data_dir,
+			account,
+			data,
+			&message_id,
+			&crypto,
+			quota,
+		) {
 			Ok(_uid) => {
 				tracing::debug!(
 					account = %crate::log_id::account(account),

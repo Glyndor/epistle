@@ -93,6 +93,9 @@ pub enum SaveError {
 	/// The account name was malformed or the account directory is missing.
 	#[error("account: {0}")]
 	Account(String),
+	/// The copy would put the account over its storage quota.
+	#[error("the copy would put the account over its quota")]
+	OverQuota,
 }
 
 /// Where the decision to skip the save came from, for tests and for
@@ -384,7 +387,16 @@ pub fn store_copy(
 	data: &[u8],
 	message_id: &str,
 	crypto: &MessageCrypto,
+	quota: Option<u64>,
 ) -> Result<u32, SaveError> {
+	// The copy is stored mail like any other: it counts against the
+	// account's quota, and one that would not fit is not stored.
+	if let Some(limit) = quota
+		&& mailbox::account_usage(data_dir, account, crypto).saturating_add(data.len() as u64)
+			> limit
+	{
+		return Err(SaveError::OverQuota);
+	}
 	let flag = Flag::Seen;
 	// Ensure the Sent mailbox exists. The IMAP side expects one;
 	// `ensure_defaults` creates the standard five (Sent, Drafts, ...)
