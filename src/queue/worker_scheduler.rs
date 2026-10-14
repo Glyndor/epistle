@@ -122,7 +122,12 @@ impl Worker {
 		}
 		*self.holds() = holds.clone();
 		for (id, envelope) in due_entries {
-			self.queue_entry(schedule, &holds, id, &envelope, now)?;
+			// One entry that cannot be handled is reported once the pass is
+			// over; it must not keep every entry after it from going out.
+			if let Err(error) = self.queue_entry(schedule, &holds, id, &envelope, now) {
+				tracing::warn!(%id, %error, "cannot queue spool entry");
+				schedule.error.get_or_insert(error);
+			}
 		}
 		Ok(())
 	}

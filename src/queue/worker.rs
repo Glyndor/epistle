@@ -522,3 +522,7 @@ mod tests_fairness;
 #[cfg(test)]
 #[path = "worker_tests_spool_holds.rs"]
 mod tests_spool_holds;
+
+#[cfg(test)]
+#[path = "worker_tests_scan.rs"]
+mod tests_scan;
