@@ -388,7 +388,7 @@ impl SplitDelivery {
 	fn sign_reply(&self, reply: &mut AcceptedMessage) {
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(reply)
-			&& let Some(header) = signer.current().sign(&domain, &reply.data)
+			&& let Some(header) = signer.sign(&domain, &reply.data)
 		{
 			let mut signed = header.into_bytes();
 			signed.extend_from_slice(&reply.data);

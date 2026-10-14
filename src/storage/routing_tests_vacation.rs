@@ -31,7 +31,7 @@ async fn a_jmap_vacation_reply_is_queued_and_dkim_signed() {
 	write_setting(dir.path(), "alice", &setting).expect("write setting");
 	let split = SplitDelivery::new(dir.path(), directory)
 		.expect("sink")
-		.with_signer(signer);
+		.with_signer(crate::dkim::PerDomainSigner::new(signer, Vec::new()));
 	split
 		.deliver(AcceptedMessage {
 			reverse_path: "carol@example.net".into(),
