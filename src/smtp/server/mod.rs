@@ -35,7 +35,8 @@ const MAX_CONNECTIONS: usize = 1000;
 /// address` and closed (RFC 5321 §4.5.3.2). The cap keeps a single
 /// client from monopolising one listener; the global
 /// [`MAX_CONNECTIONS`] still bounds the total.
-const MAX_CONNECTIONS_PER_IP: usize = 20;
+pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 20;
+const MAX_CONNECTIONS_PER_IP: usize = DEFAULT_MAX_CONNECTIONS_PER_IP;
 
 /// Per-read idle timeout. RFC 5321 §4.5.3.2 mandates at least 5 minutes between
 /// command-phase reads; we match that minimum to kill Slowloris connections.

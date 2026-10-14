@@ -306,6 +306,22 @@ pub struct Config {
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
 	pub max_connections_per_listener: Option<usize>,
+	/// Max concurrent connections per client IP per SMTP listener. A peer
+	/// over the cap is answered `421 4.7.0 too many connections from your
+	/// address` and closed. Absent uses the built-in default of 20; a
+	/// peer on a `[server] trusted_networks` CIDR is exempt.
+	#[serde(default)]
+	pub max_connections_per_ip: Option<usize>,
+	/// Shared byte budget every SMTP `DATA` / `BDAT` reservation draws
+	/// from. When a reservation would push the in-flight total past the
+	/// cap the message is refused with `452 4.3.1 insufficient system
+	/// resources; try again later`, so a busy server cannot grow without
+	/// bound. `0` disables the cap (every reservation succeeds, the
+	/// historical behaviour). Absent uses the built-in default of 256
+	/// MiB (a quarter of the `mail` container's 1 GiB `mem_limit`,
+	/// rounded down to the nearest MiB).
+	#[serde(default)]
+	pub message_memory_budget: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -333,6 +349,17 @@ pub struct Config {
 	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
+	/// Per-instance message-size cap in bytes. `None` keeps the
+	/// historical default of 25 MiB (the same value the SMTP
+	/// `SIZE` extension, the JMAP `maxSizeRequest` / upload cap and
+	/// the REST `POST /api/v1/send` builder enforce). Applied
+	/// consistently: the SMTP `MAIL FROM` SIZE check, the per-line
+	/// running size, the end-of-DATA check, the per-chunk BDAT cap,
+	/// the JMAP `Email/set` / `EmailSubmission/set` builder, the JMAP
+	/// `upload` body limit, and the REST `send` body limit all use
+	/// the same value.
+	#[serde(default)]
+	pub max_message_size: Option<u64>,
 	/// Tenant definitions: named groups of domains with optional aggregate
 	/// caps on accounts, domains, storage and submission rate. Absent or
 	/// empty means no tenancy is in effect and the server behaves exactly as
@@ -434,6 +461,14 @@ impl std::fmt::Debug for Config {
 			.field(
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,
+			)
+			.field(
+				"max_connections_per_ip",
+				&self.max_connections_per_ip,
+			)
+			.field(
+				"message_memory_budget",
+				&self.message_memory_budget,
 			)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
@@ -735,6 +770,34 @@ max_connections_per_listener = 2048
 				.max_connections_per_listener,
 			Some(2048)
 		);
+	}
+
+	#[test]
+	fn message_size_and_memory_budget_cap_parse_and_default_none() {
+		let default = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		let default = Config::load(default.path()).expect("default loads");
+		assert_eq!(default.max_message_size, None);
+		assert_eq!(default.message_memory_budget, None);
+		assert_eq!(default.max_connections_per_ip, None);
+
+		let set = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+max_message_size = 10485760
+message_memory_budget = 134217728
+max_connections_per_ip = 5
+"#,
+		);
+		let set = Config::load(set.path()).expect("loaded with caps");
+		assert_eq!(set.max_message_size, Some(10485760));
+		assert_eq!(set.message_memory_budget, Some(134217728));
+		assert_eq!(set.max_connections_per_ip, Some(5));
 	}
 }
 
