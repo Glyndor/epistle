@@ -179,8 +179,9 @@ Every record published goes into `<data_dir>/dns-lockdown/<domain>.json`
 as soon as the provider accepts it, so a failure halfway leaves the
 journal with exactly what went out. A second run with nothing to do
 prints `nothing to change`. `--undo` removes only journal records that
-are still in the zone as published, puts back the DMARC record the first
-run replaced, and reports anything changed since; nothing outside the
+are still in the zone as published, puts back the DMARC record the
+lockdown replaced (your last version of it, if you edited it between
+runs), and reports anything changed since; nothing outside the
 journal is touched. Without a provider, the command prints the DMARC
 and wildcard records to add by hand.
 

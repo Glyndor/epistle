@@ -59,9 +59,13 @@ pub async fn publish_plan(
 }
 
 /// Add a published entry to the journal. A record that replaces one the
-/// journal already holds (the next DMARC step) takes its place and keeps
-/// the operator's original, so `--undo` restores what was there before
-/// the first run.
+/// journal already holds (the next DMARC step) takes its place. What
+/// `--undo` puts back is the operator's last record there: the one this
+/// write replaced when the operator edited the slot since an earlier run
+/// (the plan only names a replaced record that is not the journal's own),
+/// otherwise the one the earlier run replaced. Without that, a DMARC record
+/// the first run created and the operator then edited would be deleted by
+/// `--undo` together with the operator's edits.
 fn remember(journal: &mut Journal, entry: &PlanEntry) {
 	let record = &entry.record;
 	let slot = journal
@@ -69,7 +73,12 @@ fn remember(journal: &mut Journal, entry: &PlanEntry) {
 		.iter_mut()
 		.find(|held| same_slot(&held.record, record));
 	match slot {
-		Some(held) => held.record = record.clone(),
+		Some(held) => {
+			held.record = record.clone();
+			if entry.replaces.is_some() {
+				held.replaced = entry.replaces.clone();
+			}
+		}
 		None => journal.entries.push(JournalEntry {
 			record: record.clone(),
 			replaced: entry.replaces.clone(),

@@ -337,3 +337,35 @@ async fn a_null_mx_listed_as_a_bare_preference_is_still_ours() {
 		);
 	}
 }
+
+#[tokio::test]
+async fn undo_puts_back_the_dmarc_record_the_operator_edited_between_runs() {
+	use crate::dns::provider::DnsProvider;
+	let zone = Zone::with(vec![a("www.example.org")]);
+	let first = publish(&zone, &plan(&zone.snapshot()), None)
+		.await
+		.expect("first run");
+	// The first run created the DMARC record; the operator then adds a
+	// report address to it, and the second run moves it to reject.
+	let edited = txt(
+		"_dmarc.example.org",
+		"v=DMARC1; p=quarantine; sp=quarantine; np=reject; rua=mailto:d@example.org",
+	);
+	zone.upsert("example.org", edited.clone())
+		.await
+		.expect("operator edit");
+	let second = plan_with(&zone.snapshot(), Some(&first), &DmarcInputs::default());
+	let journal = publish(&zone, &second, Some(&first))
+		.await
+		.expect("second run");
+	let report = undo_journal(&zone, "example.org", &journal, false)
+		.await
+		.expect("undo");
+	assert_eq!(report.restored, vec![edited.clone()]);
+	let dmarc: Vec<DnsRecord> = zone
+		.snapshot()
+		.into_iter()
+		.filter(|r| r.name == "_dmarc.example.org")
+		.collect();
+	assert_eq!(dmarc, vec![edited]);
+}
