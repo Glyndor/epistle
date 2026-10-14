@@ -43,8 +43,8 @@ fn a_throttled_recipient_holds_its_domain_and_its_exchanger() {
 		("c@calm.example", RecipientState::default()),
 	]));
 
-	let busy = Destination::new("busy.example");
-	let provider = Destination::new("mx.provider.example");
+	let busy = Destination::domain("busy.example");
+	let provider = Destination::exchanger("mx.provider.example");
 	assert_eq!(
 		holds.held(&busy, 1100),
 		Some(&Hold {
@@ -57,7 +57,7 @@ fn a_throttled_recipient_holds_its_domain_and_its_exchanger() {
 		holds.held(&provider, 1100).map(|hold| hold.until),
 		Some(1300)
 	);
-	assert_eq!(holds.held(&Destination::new("calm.example"), 1100), None);
+	assert_eq!(holds.held(&Destination::domain("calm.example"), 1100), None);
 	assert_eq!(holds.held(&busy, 1300), None, "it ends at its next attempt");
 	assert_eq!(
 		holds.deferrals(&busy),
@@ -80,6 +80,44 @@ fn a_recipient_no_longer_pending_holds_nothing() {
 	let mut delivered = throttled(1300, 3, "mx.busy.example");
 	delivered.status = RecipientStatus::Delivered;
 	holds.add_envelope(&envelope(&[("a@busy.example", delivered)]));
-	assert_eq!(holds.held(&Destination::new("busy.example"), 1000), None);
-	assert_eq!(holds.deferrals(&Destination::new("busy.example")), 0);
+	assert_eq!(holds.held(&Destination::domain("busy.example"), 1000), None);
+	assert_eq!(holds.deferrals(&Destination::domain("busy.example")), 0);
+}
+
+#[test]
+fn a_domain_named_like_another_domains_exchanger_keeps_its_own_hold() {
+	let mut holds = Holds::default();
+	// a.example waits on its exchanger mx.shared.example; nobody waits on
+	// the domain mx.shared.example, whose name is the same.
+	holds.add_envelope(&envelope(&[(
+		"a@a.example",
+		throttled(1300, 1, "mx.shared.example"),
+	)]));
+	assert!(
+		holds
+			.held(&Destination::exchanger("mx.shared.example"), 1000)
+			.is_some()
+	);
+	assert!(
+		holds
+			.held(&Destination::domain("mx.shared.example"), 1000)
+			.is_none()
+	);
+
+	// And the other way round.
+	let mut holds = Holds::default();
+	holds.add_envelope(&envelope(&[(
+		"b@mx.shared.example",
+		throttled(1300, 1, "mx.elsewhere.example"),
+	)]));
+	assert!(
+		holds
+			.held(&Destination::domain("mx.shared.example"), 1000)
+			.is_some()
+	);
+	assert!(
+		holds
+			.held(&Destination::exchanger("mx.shared.example"), 1000)
+			.is_none()
+	);
 }

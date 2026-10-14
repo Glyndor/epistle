@@ -54,10 +54,10 @@ pub(super) fn worker_for(
 }
 
 /// The hold of `key` at `now`, as the spool shows it.
-pub(super) fn hold(worker: &Worker, key: &str, now: u64) -> Option<Hold> {
+pub(super) fn hold(worker: &Worker, key: &Destination, now: u64) -> Option<Hold> {
 	Holds::read(&worker.spool)
 		.expect("holds")
-		.held(&Destination::new(key), now)
+		.held(key, now)
 		.cloned()
 }
 
@@ -78,7 +78,7 @@ async fn a_421_greeting_holds_the_destination_and_its_other_mail_waits() {
 	worker.pass().await.expect("pass");
 
 	assert_eq!(
-		hold(&worker, DOMAIN, now),
+		hold(&worker, &Destination::domain(DOMAIN), now),
 		Some(Hold {
 			until: now + 60,
 			deferrals: 1,
@@ -87,7 +87,7 @@ async fn a_421_greeting_holds_the_destination_and_its_other_mail_waits() {
 		"the destination is on hold"
 	);
 	assert_eq!(
-		hold(&worker, HOST, now).map(|hold| hold.until),
+		hold(&worker, &Destination::exchanger(HOST), now).map(|hold| hold.until),
 		Some(now + 60)
 	);
 
@@ -121,19 +121,23 @@ async fn deferring_again_after_the_hold_moves_to_the_next_step_and_success_reset
 
 	worker.set_now(now + 60);
 	worker.pass().await.expect("pass");
-	let held = hold(&worker, DOMAIN, now + 60).expect("held");
+	let held = hold(&worker, &Destination::domain(DOMAIN), now + 60).expect("held");
 	assert_eq!((held.until, held.deferrals), (now + 360, 2));
 
 	worker.set_now(now + 360);
 	worker.pass().await.expect("pass");
-	let held = hold(&worker, DOMAIN, now + 360).expect("held");
+	let held = hold(&worker, &Destination::domain(DOMAIN), now + 360).expect("held");
 	assert_eq!((held.until, held.deferrals), (now + 1260, 3));
 
 	remote.script(DOMAIN, Script::default());
 	worker.set_now(now + 1260);
 	worker.pass().await.expect("pass");
 	assert_eq!(remote.copies("bob@busy.example"), 1);
-	assert_eq!(hold(&worker, DOMAIN, now), None, "a delivery ends the hold");
+	assert_eq!(
+		hold(&worker, &Destination::domain(DOMAIN), now),
+		None,
+		"a delivery ends the hold"
+	);
 	assert_eq!(remote.connections(HOST), 4);
 }
 
@@ -148,7 +152,7 @@ async fn a_rate_limit_reply_to_rcpt_holds_the_destination() {
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
 	assert_eq!(
-		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		hold(&worker, &Destination::domain(DOMAIN), now).map(|hold| hold.until),
 		Some(now + 60)
 	);
 }
@@ -167,7 +171,7 @@ async fn a_rate_limit_reply_to_the_message_holds_the_destination() {
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
 	assert_eq!(
-		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		hold(&worker, &Destination::domain(DOMAIN), now).map(|hold| hold.until),
 		Some(now + 60)
 	);
 }
@@ -182,7 +186,7 @@ async fn an_ordinary_deferral_does_not_hold_the_destination() {
 	);
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
-	assert_eq!(hold(&worker, DOMAIN, now), None);
+	assert_eq!(hold(&worker, &Destination::domain(DOMAIN), now), None);
 }
 
 #[tokio::test]
@@ -194,7 +198,7 @@ async fn the_steps_are_configurable() {
 	let worker = worker.with_backoff(vec![120, 600]);
 	worker.pass().await.expect("pass");
 	assert_eq!(
-		hold(&worker, DOMAIN, now).map(|hold| hold.until),
+		hold(&worker, &Destination::domain(DOMAIN), now).map(|hold| hold.until),
 		Some(now + 120)
 	);
 }

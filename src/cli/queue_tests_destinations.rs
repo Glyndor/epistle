@@ -100,8 +100,8 @@ fn destinations_lists_the_holds_in_force_and_why() {
 	assert_eq!(
 		out,
 		format!(
-			"busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
-			 mx.busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
+			"domain busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
+			 exchanger mx.busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
 			 2 destinations on hold\n",
 			until = NOW + 300
 		)
@@ -120,7 +120,8 @@ fn destinations_json_is_one_array() {
 	assert_eq!(
 		value[0],
 		serde_json::json!({
-			"domain": "busy.example",
+			"kind": "domain",
+			"name": "busy.example",
 			"until": NOW + 300,
 			"deferrals": 2,
 			"reason": "421 4.7.0 slow down",
@@ -214,7 +215,7 @@ fn the_queue_listing_names_the_destinations_on_hold() {
 	let out = String::from_utf8(out).expect("utf8");
 	assert!(
 		out.ends_with(
-			"2 destinations on hold: busy.example, mx.busy.example \
+			"2 destinations on hold: domain busy.example, exchanger mx.busy.example \
 			 (see `epistle queue destinations`)\n"
 		),
 		"{out}"

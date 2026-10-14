@@ -6,6 +6,7 @@
 
 use super::tests_backoff::{greeting, hold, store, worker_for};
 use super::*;
+use crate::queue::destination::Destination;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::storage::RecipientStatus;
 
@@ -40,11 +41,11 @@ async fn another_domain_on_a_held_exchanger_waits_for_the_hold() {
 
 	worker.pass().await.expect("pass");
 
-	let until = hold(&worker, PROVIDER, now)
+	let until = hold(&worker, &Destination::exchanger(PROVIDER), now)
 		.expect("the exchanger is held")
 		.until;
 	assert_eq!(until, now + 60);
-	assert!(hold(&worker, "a.example", now).is_some());
+	assert!(hold(&worker, &Destination::domain("a.example"), now).is_some());
 
 	// The provider would take mail for b.example, but it asked to slow down.
 	remote.hosted("b.example", PROVIDER, Script::default());
@@ -72,5 +73,5 @@ async fn another_domain_on_a_held_exchanger_waits_for_the_hold() {
 	assert_eq!(remote.copies("bob@b.example"), 1);
 	assert_eq!(remote.copies("alice@a.example"), 1);
 	assert!(worker.spool.list().expect("list").is_empty());
-	assert_eq!(hold(&worker, PROVIDER, now), None);
+	assert_eq!(hold(&worker, &Destination::exchanger(PROVIDER), now), None);
 }

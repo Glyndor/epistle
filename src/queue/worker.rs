@@ -394,7 +394,7 @@ impl Worker {
 			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
 			if let Some(host) = &slow.host {
 				holds.note(
-					super::destination::Destination::new(host),
+					super::destination::Destination::exchanger(host),
 					slow.until,
 					slow.deferrals,
 					&slow.reason,

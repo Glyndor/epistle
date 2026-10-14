@@ -4,6 +4,7 @@
 
 use super::tests_backoff::{greeting, hold, store, worker_for};
 use super::*;
+use crate::queue::destination::Destination;
 use crate::queue::test_remote::{FakeRemote, Script};
 
 const PROVIDER: &str = "mx.provider.example";
@@ -15,7 +16,7 @@ async fn a_dropped_copy_of_the_holds_is_read_back_from_the_spool() {
 	remote.script("busy.example", greeting("421 4.7.0 slow down"));
 	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
 	worker.pass().await.expect("pass");
-	assert!(hold(&worker, "busy.example", now).is_some());
+	assert!(hold(&worker, &Destination::domain("busy.example"), now).is_some());
 
 	*worker.holds() = crate::queue::backoff::Holds::default();
 	remote.script("busy.example", Script::default());

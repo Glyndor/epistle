@@ -44,7 +44,7 @@ fn sender(account: &str) -> Sender {
 fn job(domain: &str, account: &str) -> Job {
 	Job {
 		id: Uuid::now_v7(),
-		domain: Destination::new(domain),
+		domain: Destination::domain(domain),
 		sender: sender(account),
 		recipients: vec![format!("user@{domain}")],
 	}
@@ -265,13 +265,16 @@ fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 		.expect("record");
 
 	let holds = crate::queue::backoff::Holds::read(&worker.spool).expect("holds");
-	for key in ["busy.example", "mx.busy.example"] {
-		let held = holds.held(&Destination::new(key), 1030);
-		assert_eq!(held.map(|hold| hold.until), Some(1060), "{key}");
+	for key in [
+		Destination::domain("busy.example"),
+		Destination::exchanger("mx.busy.example"),
+	] {
+		let held = holds.held(&key, 1030);
+		assert_eq!(held.map(|hold| hold.until), Some(1060), "{key:?}");
 	}
 	assert!(
 		holds
-			.held(&Destination::new("busy.example"), 1060)
+			.held(&Destination::domain("busy.example"), 1060)
 			.is_none()
 	);
 }

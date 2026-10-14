@@ -52,7 +52,8 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 			.iter()
 			.map(|(destination, hold)| {
 				serde_json::json!({
-					"domain": destination.as_str(),
+					"kind": destination.kind().label(),
+					"name": destination.as_str(),
 					"until": hold.until,
 					"deferrals": hold.deferrals,
 					"reason": hold.reason,
@@ -66,7 +67,8 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 	for (destination, hold) in &held {
 		let _ = writeln!(
 			out,
-			"{}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
+			"{} {}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
+			destination.kind().label(),
 			sanitize(destination.as_str()),
 			hold.until,
 			hold.until.saturating_sub(now),
@@ -87,7 +89,13 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 	}
 	let names: Vec<String> = held
 		.iter()
-		.map(|(destination, _)| sanitize(destination.as_str()))
+		.map(|(destination, _)| {
+			format!(
+				"{} {}",
+				destination.kind().label(),
+				sanitize(destination.as_str())
+			)
+		})
 		.collect();
 	Some(format!(
 		"{} destinations on hold: {} (see `epistle queue destinations`)",
@@ -101,18 +109,18 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 fn released_by(
 	envelope: &crate::storage::Envelope,
 	recipient: &str,
-	wanted: Option<&Destination>,
+	wanted: Option<&(Destination, Destination)>,
 ) -> Option<Destination> {
 	let state = envelope.recipient_state(recipient);
 	if state.status != RecipientStatus::Pending || state.throttled == 0 {
 		return None;
 	}
 	let domain = Destination::of_recipient(recipient);
-	let host = state.remote.as_deref().map(Destination::new);
+	let host = state.remote.as_deref().map(Destination::exchanger);
 	match wanted {
 		None => Some(domain),
-		Some(wanted) if *wanted == domain => Some(domain),
-		Some(wanted) if host.as_ref() == Some(wanted) => host,
+		Some((wanted, _)) if *wanted == domain => Some(domain),
+		Some((_, wanted)) if host.as_ref() == Some(wanted) => host,
 		Some(_) => None,
 	}
 }
@@ -126,7 +134,12 @@ pub(super) fn release(
 	now: u64,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let wanted = target.domain.as_deref().map(Destination::new);
+	// A name given on the command line may be a domain or an exchanger:
+	// the holds of both kinds under that name are released.
+	let wanted = target
+		.domain
+		.as_deref()
+		.map(|name| (Destination::domain(name), Destination::exchanger(name)));
 	let ids = match spool.list() {
 		Ok(ids) => ids,
 		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
@@ -164,11 +177,11 @@ pub(super) fn release(
 		}
 	}
 	match wanted {
-		Some(wanted) if released.is_empty() => crate::cli::exit::refused(format_args!(
+		Some((wanted, _)) if released.is_empty() => crate::cli::exit::refused(format_args!(
 			"no destination on hold: {}",
 			sanitize(wanted.as_str())
 		)),
-		Some(wanted) => {
+		Some((wanted, _)) => {
 			let _ = writeln!(out, "released {}", sanitize(wanted.as_str()));
 			ExitCode::SUCCESS
 		}

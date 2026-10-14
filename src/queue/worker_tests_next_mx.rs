@@ -4,6 +4,7 @@
 //! begun, its answers are about the message, and they stand.
 
 use super::*;
+use crate::queue::destination::Destination;
 use crate::queue::test_remote::{FakeRemote, Hang, Received, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::RecipientStatus;
@@ -40,13 +41,10 @@ fn greeting(reply: &str) -> Script {
 }
 
 /// The hold of `key` now, as the spool shows it.
-fn hold(worker: &Worker, key: &str) -> Option<crate::queue::backoff::Hold> {
+fn hold(worker: &Worker, key: &Destination) -> Option<crate::queue::backoff::Hold> {
 	crate::queue::backoff::Holds::read(&worker.spool)
 		.expect("holds")
-		.held(
-			&crate::queue::destination::Destination::new(key),
-			worker.now_epoch(),
-		)
+		.held(key, worker.now_epoch())
 		.cloned()
 }
 
@@ -81,7 +79,7 @@ async fn a_4xx_greeting_moves_on_to_the_next_exchanger() {
 	assert_eq!(remote.connections("mx1.multi.example"), 1);
 	assert!(worker.spool.list().expect("list").is_empty());
 	assert_eq!(
-		hold(&worker, DOMAIN),
+		hold(&worker, &Destination::domain(DOMAIN)),
 		None,
 		"the domain delivered, so it is not held off"
 	);
@@ -128,8 +126,8 @@ async fn when_every_exchanger_turns_the_session_away_the_recipient_waits() {
 	);
 	assert_eq!(state.last_error.as_deref(), Some("421 4.7.0 slow down"));
 	assert_eq!(state.remote.as_deref(), Some("mx2.multi.example"));
-	assert!(hold(&worker, DOMAIN).is_some());
-	assert!(hold(&worker, "mx2.multi.example").is_some());
+	assert!(hold(&worker, &Destination::domain(DOMAIN)).is_some());
+	assert!(hold(&worker, &Destination::exchanger("mx2.multi.example")).is_some());
 }
 
 #[tokio::test(start_paused = true)]
@@ -153,10 +151,10 @@ async fn a_slow_down_from_an_earlier_exchanger_still_holds_the_domain() {
 	assert_eq!(state.last_error.as_deref(), Some("421 4.7.0 slow down"));
 	assert_eq!(state.remote.as_deref(), Some("mx1.multi.example"));
 	assert_eq!(
-		hold(&worker, DOMAIN).map(|hold| hold.reason),
+		hold(&worker, &Destination::domain(DOMAIN)).map(|hold| hold.reason),
 		Some("421 4.7.0 slow down".to_string())
 	);
-	assert!(hold(&worker, "mx1.multi.example").is_some());
+	assert!(hold(&worker, &Destination::exchanger("mx1.multi.example")).is_some());
 }
 
 #[tokio::test]

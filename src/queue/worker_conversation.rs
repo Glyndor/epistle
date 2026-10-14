@@ -273,7 +273,7 @@ impl Worker {
 			tried.push(connection.host.clone());
 			// An exchanger on hold (its provider asked to slow down for
 			// another of its domains) is left before a word is said.
-			let exchanger = Destination::new(&connection.host);
+			let exchanger = Destination::exchanger(&connection.host);
 			let hold = self.holds().held(&exchanger, now).cloned();
 			if let Some(hold) = hold {
 				let reason = format!("{} is on hold: {}", connection.host, hold.reason);
@@ -335,7 +335,7 @@ impl Worker {
 		let (first, _) = conversation.results.first()?;
 		let domain = Destination::of_recipient(first);
 		let host = host.filter(|host| !host.is_empty()).map(str::to_string);
-		let exchanger = host.as_deref().map(Destination::new);
+		let exchanger = host.as_deref().map(Destination::exchanger);
 		let holds = self.holds();
 		let own = conversation
 			.results

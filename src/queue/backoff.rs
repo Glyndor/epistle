@@ -132,7 +132,7 @@ impl Holds {
 			);
 			if let Some(host) = &state.remote {
 				self.note(
-					Destination::new(host),
+					Destination::exchanger(host),
 					state.next_attempt,
 					state.throttled,
 					&reason,
