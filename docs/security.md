@@ -302,7 +302,7 @@ error string) is sealed with the same key and bound to the message id as
 associated data, so a stolen spool file on its own discloses nothing more
 than the spool id and a Poly1305 tag. Spool files and directories are
 pinned to `0600`/`0700`, regardless of the umask under which the server
-started. A legacy plaintext spool migrates on first read. See
+started. A legacy plaintext envelope is sealed on its next read. See
 [`storage.md`](storage.md) for the on-disk layout, the AEAD envelope, the
 magic-tag migration path and the `epistle status` `spool` area that
 observes the current state.

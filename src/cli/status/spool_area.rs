@@ -1,11 +1,9 @@
 //! The `spool` check: whether `encrypt_at_rest` is on for the spool and
 //! whether every file under `<data_dir>/spool/` is currently owner-only.
 //!
-//! Reading the spool here can read message bodies through the AEAD (so the
-//! check works whether or not envelopes are still plaintext being migrated);
-//! it never prints one byte of mail content. The check is bounded by the
-//! spool size: a linear walk of the spool tree, no recursion into
-//! attacker-shaped filenames.
+//! The check reads only file modes, never an envelope or a body, and never
+//! creates or changes anything. It walks the spool root, `tmp/` and `new/`
+//! once, without following links.
 
 use std::path::Path;
 

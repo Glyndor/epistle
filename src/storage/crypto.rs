@@ -5,7 +5,7 @@
 //! or backup never exposes mail content. This protects against **offline**
 //! disk/backup theft only: the server holds the key in memory and decrypts
 //! transparently, so it still serves IMAP/POP3/JMAP and runs delivery-time
-//! processing (Sieve, antispam). It complements, never replaces, full-disk
+//! processing (Sieve, antispam). It complements — never replaces — full-disk
 //! encryption (LUKS); the two defend different threats.
 //!
 //! For the key to be worth anything against disk theft it must live **off the
@@ -19,13 +19,13 @@
 //!
 //! An encrypted file is `MAGIC ‖ nonce ‖ ciphertext+tag`:
 //!
-//! - `MAGIC`, [`MAGIC`] (`b"EPENC1\0"`, 7 bytes), a version-tagged marker that
+//! - `MAGIC` — [`MAGIC`] (`b"EPENC1\0"`, 7 bytes), a version-tagged marker that
 //!   lets encrypted and legacy plaintext files coexist in the same store. A file
 //!   that does not start with `MAGIC` is treated as plaintext and returned
 //!   verbatim by [`MessageCrypto::decode`], so a store can be migrated in place
 //!   with no flag-day.
-//! - `nonce`, 12 random bytes from the system CSPRNG, fresh per write.
-//! - `ciphertext+tag`, ChaCha20-Poly1305 over the plaintext, with the 16-byte
+//! - `nonce` — 12 random bytes from the system CSPRNG, fresh per write.
+//! - `ciphertext+tag` — ChaCha20-Poly1305 over the plaintext, with the 16-byte
 //!   Poly1305 tag appended (`ring::aead`). The envelope adds a fixed
 //!   [`OVERHEAD`] bytes over the plaintext.
 
@@ -192,7 +192,7 @@ impl MessageCrypto {
 	/// did.
 	///
 	/// # Errors
-	/// Only when the system CSPRNG cannot produce a nonce or the AEAD fails, both
+	/// Only when the system CSPRNG cannot produce a nonce or the AEAD fails — both
 	/// fatal for that write, never a silent fallback to plaintext.
 	pub fn encode(&self, plaintext: &[u8]) -> std::io::Result<Vec<u8>> {
 		let Some(key) = self.inner.key.as_ref().filter(|_| self.inner.enabled) else {
@@ -221,7 +221,7 @@ impl MessageCrypto {
 	/// # Errors
 	/// Fails closed when an encrypted file is encountered with no key loaded, when
 	/// the envelope is truncated, or when authentication fails (tamper or wrong
-	/// key), it never returns undecrypted ciphertext as if it were plaintext.
+	/// key) — it never returns undecrypted ciphertext as if it were plaintext.
 	pub fn decode(&self, stored: &[u8]) -> std::io::Result<Vec<u8>> {
 		if !stored.starts_with(MAGIC) {
 			return Ok(stored.to_vec());

@@ -192,17 +192,10 @@ impl FsSpool {
 		self.root.parent().expect("spool root is under data_dir")
 	}
 
-	/// Walk the spool and retighten any file or directory whose permissions
-	/// are looser than `0600` (for files) or `0700` (for directories). Returns
-	/// the number of entries whose mode was changed. Safe to call repeatedly:
-	/// already-tight entries are left alone. Bounded: a single linear walk of
-	/// the spool tree, no recursion into attacker-shaped filenames.
-	///
-	/// The intended call site is the server start-up, once per process, with
-	/// the count logged for operators. Subsequent opens of the same spool do
-	/// not call this; the spool's own file modes cover new writes, and a
-	/// later call from `epistle status`'s spool check observes the current
-	/// state without modifying it.
+	/// Retighten the spool root, `tmp/`, `new/` and the files directly in them
+	/// to `0700`/`0600`, and return how many files changed. Safe to call
+	/// repeatedly. Links are never followed. The server calls it once at
+	/// start-up through [`FsSpool::open_audited`]; `epistle status` only counts.
 	pub fn audit_permissions(&self) -> std::io::Result<u64> {
 		#[cfg(unix)]
 		return audit_permissions(&self.root);
@@ -240,10 +233,10 @@ impl FsSpool {
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
 	/// (`.eml`) files and the envelope (`.json`) sidecar through `crypto`. The
 	/// envelope is sealed with ChaCha20-Poly1305 and bound to the message id as
-	/// associated data, so it cannot be silently swapped onto another message's
-	/// body. The caller is responsible for running [`FsSpool::audit_permissions`]
-	/// at start-up (and acting on its return value) if the spool may have been
-	/// written before this code path pinned the mode to `0600`/`0700`.
+	/// associated data, so one message's envelope is never read as another's.
+	/// The body is not bound to its id. The server starts through
+	/// [`FsSpool::open_audited`], which also retightens a spool written before
+	/// the mode was pinned to `0600`/`0700`.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool { root, crypto };
