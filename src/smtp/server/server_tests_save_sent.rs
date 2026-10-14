@@ -73,8 +73,7 @@ fn an_authenticated_smtp_submission_saves_one_copy_in_sent_with_seen() {
 			.flags
 			.iter()
 			.any(|flag| matches!(flag, mailbox::Flag::Seen)),
-		"\\Seen flag set: {:?}",
-		messages[0].flags
+		"the copy carries the \\Seen flag"
 	);
 }
 
