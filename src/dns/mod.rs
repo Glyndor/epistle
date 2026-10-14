@@ -4,6 +4,7 @@
 
 pub mod check_host;
 pub mod detect;
+pub mod lockdown;
 pub mod provider;
 pub mod providers;
 pub mod records;

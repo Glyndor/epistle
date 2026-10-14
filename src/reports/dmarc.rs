@@ -112,7 +112,7 @@ impl DmarcReport {
 
 /// True when the row would have triggered DMARC enforcement (the receiver
 /// did quarantine/reject, or both SPF and DKIM failed).
-fn is_failing(row: &Row) -> bool {
+pub(crate) fn is_failing(row: &Row) -> bool {
 	let disposition_failing = matches!(row.disposition.as_str(), "quarantine" | "reject");
 	let auth_failing = row.dkim == "fail" && row.spf == "fail";
 	disposition_failing || auth_failing
