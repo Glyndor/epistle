@@ -62,11 +62,9 @@ fn account_add_names_the_rule_an_address_breaks() {
 		PASSWORD,
 	);
 	assert!(!refused.status.success());
-	// The CLI validates the address before reading the password,
-	// so the error names the account and the rule that broke.
 	assert_eq!(
 		stderr(&refused),
-		"error: account bob: local part is 65 characters; the maximum is 64 (RFC 5321)\n"
+		"error: invalid account: local part is 65 characters; the maximum is 64 (RFC 5321)\n"
 	);
 	let refused = epistle(
 		&[
@@ -82,7 +80,7 @@ fn account_add_names_the_rule_an_address_breaks() {
 	);
 	assert_eq!(
 		stderr(&refused),
-		"error: account bob: example.com is not a domain this server handles\n"
+		"error: invalid account: example.com is not a domain this server handles\n"
 	);
 }
 

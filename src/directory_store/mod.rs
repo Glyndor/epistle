@@ -492,21 +492,32 @@ impl AccountStore {
 		&self.path
 	}
 
-	/// The pre-flight checks `add` runs that do not need the on-disk
-	/// state under the lock: a syntactically valid name, at least
-	/// one address, and every address routed by a configured
-	/// domain. The CLI calls this before reading the password so
-	/// the operator is not asked to type one for a name or address
-	/// that cannot be created. The race-sensitive checks
-	/// (`name_taken`, `address_taken`) still run inside
-	/// [`AccountStore::add`] under the lock.
+	/// The checks `add` runs that do not depend on the accounts already
+	/// on disk: a valid name, at least one address, and every address
+	/// in a configured domain. The CLI calls this before it reads the
+	/// password, so nobody types one for a name or address that cannot
+	/// be created. The input is normalized the way `add` normalizes it,
+	/// so both refuse the same input with the same error; the checks
+	/// against existing accounts still run inside [`AccountStore::add`]
+	/// under the lock.
 	pub fn validate_for_add(&self, name: &str, addresses: &[String]) -> Result<(), StoreError> {
-		let normalized = normalize::account_name(name);
-		names::validate_name(&normalized)?;
-		if addresses.is_empty() {
+		let mut account = DynamicAccount {
+			name: normalize::account_name(name),
+			addresses: addresses.to_vec(),
+			..DynamicAccount::default()
+		};
+		normalize::account(&mut account);
+		self.check_name_and_addresses(&account)
+	}
+
+	/// The part of [`AccountStore::validate_for_add`] that `add` repeats
+	/// under the lock.
+	fn check_name_and_addresses(&self, account: &DynamicAccount) -> Result<(), StoreError> {
+		validate_name(&account.name)?;
+		if account.addresses.is_empty() {
 			return Err(StoreError::Invalid("addresses must not be empty".into()));
 		}
-		for raw in addresses {
+		for raw in &account.addresses {
 			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
 			if !self
 				.domains
@@ -527,22 +538,7 @@ impl AccountStore {
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store(|state| {
-			validate_name(&account.name)?;
-			if account.addresses.is_empty() {
-				return Err(StoreError::Invalid("addresses must not be empty".into()));
-			}
-			for raw in &account.addresses {
-				let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-				if !self
-					.domains
-					.iter()
-					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-				{
-					return Err(StoreError::Invalid(address_reason::not_handled(
-						address.domain(),
-					)));
-				}
-			}
+			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
 				.iter()

@@ -78,13 +78,10 @@ pub(super) fn add_with_display_name(
 		Some(Ok(stored)) => stored,
 		Some(Err(why)) => return super::exit::refused(format_args!("account {name}: {why}")),
 	};
-	// Open the store up front so the name and address validation
-	// runs before the password prompt; otherwise a typo in either
-	// would force the operator to type the password twice only to
-	// see the validation error. The store is cheap to open and the
-	// `mutate_store` call later holds the same lock, so a parallel
-	// CLI cannot squeeze a write in between the validation and the
-	// add.
+	// Open the store and check the name and addresses before the
+	// password prompt, so a typo in either does not cost the operator
+	// typing the password twice first. The refusal is the one `add`
+	// would print after the prompt: same message, same exit code.
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -97,18 +94,10 @@ pub(super) fn add_with_display_name(
 			return ExitCode::FAILURE;
 		}
 	};
-	// Validation runs before the password prompt. A refusal here
-	// exits 2 with the same `account NAME: why` message the mutator
-	// would have produced after the password was read and hashed.
-	if let Err(why) = store.validate_for_add(name, &addresses) {
-		// The store wraps the rejection in its own `invalid account:`
-		// phrasing; the CLI surface would rather say what the
-		// operator typed, so unwrap the inner reason.
-		let why = match why {
-			StoreError::Invalid(message) => message,
-			other => return super::exit::refused(format_args!("account {name}: {other}")),
-		};
-		return super::exit::refused(format_args!("account {name}: {why}"));
+	if let Err(error) = store.validate_for_add(name, &addresses) {
+		let code = super::exit::for_store_error(&error);
+		super::style::error(error);
+		return code;
 	}
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows

@@ -1,9 +1,8 @@
-//! `epistle account add` validates the name and addresses before it
-//! asks for a password, so a typo in either fails at once instead of
-//! after the operator has typed the password twice. The test holds
-//! stdin closed (an EOF, like Ctrl+D on an empty terminal) and
-//! asserts the error message is the validation error, not a
-//! no-input-on-stdin error.
+//! `epistle account add` checks the name and addresses before it asks
+//! for a password, so a typo in either fails at once instead of after
+//! the operator has typed the password twice. Each test offers a
+//! password line on the input and asserts whether the command read it:
+//! a refused name or address must leave it unread.
 //!
 //! Lives in a sibling so `accounts.rs` stays under the per-file
 //! code-line budget.
@@ -33,82 +32,73 @@ fn load(path: &std::path::Path) -> Config {
 	Config::load(path).expect("config must load")
 }
 
+/// Run `account add` with a password line on the input. Returns the
+/// exit code and whether the command read the line.
+fn add_offering_a_password(
+	config: &Config,
+	name: &str,
+	addresses: Vec<String>,
+) -> (ExitCode, bool) {
+	let line = format!("{}\n", fixture_password());
+	let mut input = line.as_bytes();
+	let code = add_with_display_name(config, name, addresses, None, &mut input);
+	(code, input.len() < line.len())
+}
+
 #[test]
-fn invalid_name_fails_before_password_is_read() {
-	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	// An empty stdin must surface the validation refusal, not a
-	// "no password on stdin" message: the validation runs first, so
-	// the password prompt is never reached. The test holds stdin
-	// closed and asserts the printed error names the bad name, not
-	// the missing password.
-	let mut empty: &[u8] = &[];
-	let code = add_with_display_name(
-		&config,
+fn invalid_name_is_refused_before_the_password_is_read() {
+	let (dir, file) = fixture("");
+	let (code, read) = add_offering_a_password(
+		&load(file.path()),
 		"BAD NAME!",
 		vec!["alice@example.org".to_string()],
-		None,
-		&mut empty,
 	);
 	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
-	// No store was opened (validation refused before the disk was
-	// touched), so the directory is empty.
+	assert!(!read, "a refused name must not ask for the password");
 	assert!(
-		!_dir.path().join("accounts.toml").exists(),
+		!dir.path().join("accounts.toml").exists(),
 		"a refused name must not write accounts.toml"
 	);
 }
 
 #[test]
-fn out_of_domain_address_fails_before_password_is_read() {
-	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut empty: &[u8] = &[];
-	let code = add_with_display_name(
-		&config,
+fn out_of_domain_address_is_refused_before_the_password_is_read() {
+	let (dir, file) = fixture("");
+	let (code, read) = add_offering_a_password(
+		&load(file.path()),
 		"alice",
 		vec!["alice@somewhere-else.example".to_string()],
-		None,
-		&mut empty,
 	);
 	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
+	assert!(!read, "a refused address must not ask for the password");
 	assert!(
-		!_dir.path().join("accounts.toml").exists(),
+		!dir.path().join("accounts.toml").exists(),
 		"a refused address must not write accounts.toml"
 	);
 }
 
 #[test]
-fn empty_addresses_fails_before_password_is_read() {
+fn no_address_is_refused_before_the_password_is_read() {
 	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut empty: &[u8] = &[];
-	let code = add_with_display_name(&config, "alice", Vec::new(), None, &mut empty);
+	let (code, read) = add_offering_a_password(&load(file.path()), "alice", Vec::new());
 	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
+	assert!(!read, "an empty address list must not ask for the password");
 }
 
 #[test]
-fn closed_stdin_triggers_password_error_not_validation_error() {
-	// When the validation accepts the name and addresses, the
-	// password prompt is the next step. A closed stdin then yields
-	// the "no input" refusal, not the validation refusal. The
-	// accounts.toml file is also not written, because the validation
-	// passed but the prompt failed before the hash was even
-	// computed.
-	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut empty: &[u8] = &[];
-	let code = add_with_display_name(
-		&config,
+fn an_address_add_accepts_once_normalized_reaches_the_prompt() {
+	// `add` trims and lowercases an address before it checks it, so the
+	// early check must do the same or it refuses what `add` accepts.
+	let (dir, file) = fixture("");
+	let (code, read) = add_offering_a_password(
+		&load(file.path()),
 		"alice",
-		vec!["alice@example.org".to_string()],
-		None,
-		&mut empty,
+		vec![" Alice@EXAMPLE.ORG ".to_string()],
 	);
-	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(read, "an acceptable address must reach the password prompt");
 	assert!(
-		!_dir.path().join("accounts.toml").exists(),
-		"a closed stdin must not write accounts.toml"
+		dir.path().join("accounts.toml").exists(),
+		"the account must be written"
 	);
-	let _ = fixture_password;
 }
