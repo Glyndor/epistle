@@ -143,6 +143,46 @@ store under `data_dir/reports/dmarc/YYYYMMDD/` keeps one parsed report per
 line, the alert engine can watch `dmarc_report_rows_failing`, and
 `epistle reports --config F [--days N]` summarises what receivers saw.
 
+### Locking the zone against spoofing
+
+`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject]`
+(and the `dns` flag `--dry-run`) makes sure nobody can send mail as the
+domain or a name under it from somewhere else. It reads the zone through
+the `[dns]` provider, prints the plan (`--json` prints the same plan as
+JSON), asks, and publishes:
+
+- DMARC at `_dmarc.<domain>`, one step stricter per run: `none`, then
+  `quarantine`, then `reject`. `sp=` follows `p=`, `np=reject`
+  (DMARCbis, names that do not exist) is set at once, `pct` is dropped,
+  and every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`) stays as
+  written. `--dmarc reject` goes straight to `reject`. A DMARC record
+  that cannot be read, a second one, or a CNAME at `_dmarc` is left alone
+  and reported.
+- `v=spf1 -all` (sends no mail) and `MX 0 .` (RFC 7505, accepts no mail)
+  at every name with an A, AAAA or CNAME, except: names epistle serves
+  (each hosted domain, the mail hostname, `autoconfig`, `autodiscover`,
+  `mta-sts`), service names (`_dmarc`, `_domainkey` and DKIM selectors,
+  `_mta-sts`, `_smtp._tls`), MX targets, CNAMEs (no record may sit next
+  to a CNAME, RFC 1034 section 3.6.2), and names with an SPF or MX of
+  their own. Each is listed as left as is, with the reason.
+- `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
+  covers names that do not exist; a wildcard never applies to a name
+  with records of its own.
+
+Before a step up, the plan lists the senders that failed DMARC in the
+aggregate reports epistle received for the domain in the last 30 days
+(`data_dir/reports/dmarc/`), or says there are none. Authorise the ones
+that are yours first.
+
+Every record published goes into `<data_dir>/dns-lockdown/<domain>.json`
+as soon as the provider accepts it, so a failure halfway leaves the
+journal with exactly what went out. A second run with nothing to do
+prints `nothing to change`. `--undo` removes only journal records that
+are still in the zone as published, puts back the DMARC record the first
+run replaced, and reports anything changed since; nothing outside the
+journal is touched. Without a provider, the command prints the DMARC
+and wildcard records to add by hand.
+
 ### MTA-STS
 Requires inbound senders to use verified TLS. Two parts:
 
@@ -227,6 +267,19 @@ record. Tags need a paid Cloudflare plan: if a write is refused on a Free zone,
 epistle retries it once without tags, stops sending them until the next
 restart, and logs a single warning. The record `id` is assigned by Cloudflare
 and cannot be set.
+
+Cloudflare's proxy (the orange cloud) forwards only HTTP(S), so a mail
+name behind it is unreachable on ports 25, 465, 587 and 993. With the
+Cloudflare provider, `epistle status` fails for each proxied A, AAAA or
+CNAME at the mail hostname, an MX target of a hosted domain, or a
+domain's `autoconfig`, `autodiscover` and `mta-sts` host:
+
+```
+mail.example.org is proxied by Cloudflare (orange cloud): mail clients and other servers cannot reach port 25/465/587/993 through the proxy; set it to DNS only
+```
+
+Every A, AAAA and CNAME epistle publishes through Cloudflare is sent
+with `proxied: false`. Other providers have no proxy and no such check.
 
 ### TXT values
 
