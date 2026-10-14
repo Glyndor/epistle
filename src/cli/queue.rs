@@ -18,6 +18,7 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::config::Storage;
 use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord, Envelope, FsSpool};
 
 #[path = "queue_destinations.rs"]
@@ -86,6 +87,7 @@ pub struct Target {
 /// event for every pending recipient when it is set.
 pub(super) fn run(
 	data_dir: &Path,
+	storage: Option<&Storage>,
 	delivery_log_days: u64,
 	action: Option<QueueCli>,
 	now: u64,
@@ -93,13 +95,13 @@ pub(super) fn run(
 	out: &mut impl Write,
 ) -> ExitCode {
 	let action = action.unwrap_or(QueueCli::List { json: false });
-	let spool = match FsSpool::open(data_dir) {
+	let spool = match FsSpool::open_configured(data_dir, storage) {
 		Ok(spool) => spool,
 		Err(error) => return fail(format_args!("opening spool: {error}")),
 	};
 	let log = DeliveryLog::open(data_dir, delivery_log_days);
 	match action {
-		QueueCli::List { json: false } => list(data_dir, out),
+		QueueCli::List { json: false } => list(data_dir, storage, out),
 		QueueCli::List { json: true } => list_json(&spool, out),
 		QueueCli::Show { id, json: false } => show(&spool, id, now, out),
 		QueueCli::Show { id, json: true } => show_json(&spool, id, out),
@@ -201,8 +203,8 @@ fn entry_error(id: Uuid, error: &std::io::Error) -> ExitCode {
 
 /// List the outbound spool: one line per message with its envelope and retry
 /// state. Writes to `out` so the formatting is unit-testable.
-pub(super) fn list(data_dir: &Path, out: &mut impl Write) -> ExitCode {
-	let spool = match FsSpool::open(data_dir) {
+pub(super) fn list(data_dir: &Path, storage: Option<&Storage>, out: &mut impl Write) -> ExitCode {
+	let spool = match FsSpool::open_configured(data_dir, storage) {
 		Ok(spool) => spool,
 		Err(error) => return fail(format_args!("opening spool: {error}")),
 	};

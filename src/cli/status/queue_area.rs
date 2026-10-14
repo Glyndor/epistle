@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::Ctx;
 use super::clock::epoch;
 use super::report::{AreaReport, Item, Level};
+use crate::config::Storage;
 use crate::storage::FsSpool;
 
 /// The oldest message older than this: warn.
@@ -23,19 +24,22 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Err(report) => return report,
 	};
 	let data_dir = config.data_dir.clone();
+	let storage = config.storage.clone();
 	let now = epoch(ctx.now);
-	tokio::task::spawn_blocking(move || evaluate(&data_dir, now))
+	tokio::task::spawn_blocking(move || evaluate(&data_dir, storage.as_ref(), now))
 		.await
 		.unwrap_or_else(|error| AreaReport::fail(format!("spool scan failed: {error}")))
 }
 
-/// Read the spool under `data_dir` as of `now` (epoch seconds). Reading never
-/// creates the spool directories and never touches message bodies.
-fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
+/// Read the spool under `data_dir` as of `now` (epoch seconds), with the key
+/// `storage` configures so sealed envelopes are read rather than counted as
+/// unreadable. Reading never creates the spool directories and never touches
+/// message bodies.
+fn evaluate(data_dir: &Path, storage: Option<&Storage>, now: i64) -> AreaReport {
 	if !data_dir.join("spool").join("new").is_dir() {
 		return AreaReport::ok("0 messages queued (no spool yet)");
 	}
-	let spool = match FsSpool::open(data_dir) {
+	let spool = match FsSpool::open_configured(data_dir, storage) {
 		Ok(spool) => spool,
 		Err(error) => return AreaReport::fail(format!("cannot open the spool: {error}")),
 	};

@@ -339,7 +339,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// Empty spool: only the total line.
 	let mut out = Vec::new();
-	assert_eq!(queue::list(dir.path(), &mut out), ExitCode::SUCCESS);
+	assert_eq!(queue::list(dir.path(), None, &mut out), ExitCode::SUCCESS);
 	assert!(String::from_utf8_lossy(&out).contains("0 queued"));
 
 	let spool = FsSpool::open(dir.path()).expect("spool");
@@ -386,7 +386,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 	)
 	.expect("write");
 	let mut out = Vec::new();
-	assert_eq!(queue::list(dir.path(), &mut out), ExitCode::SUCCESS);
+	assert_eq!(queue::list(dir.path(), None, &mut out), ExitCode::SUCCESS);
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(text.contains("from=bob@example.org"), "{text}");
 	assert!(text.contains("from=<>"), "{text}");
@@ -395,7 +395,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 	// An unavailable spool (data_dir is a file) reports failure.
 	let file = tempfile::NamedTempFile::new().expect("file");
 	let mut out = Vec::new();
-	assert_eq!(queue::list(file.path(), &mut out), ExitCode::FAILURE);
+	assert_eq!(queue::list(file.path(), None, &mut out), ExitCode::FAILURE);
 
 	// An unreadable spool directory makes the listing itself fail.
 	#[cfg(unix)]
@@ -413,7 +413,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 		// is what decides, and a non-root process can hold it too.
 		let denied = std::fs::read_dir(&new).is_err();
 		let mut out = Vec::new();
-		let result = queue::list(dir.path(), &mut out);
+		let result = queue::list(dir.path(), None, &mut out);
 		// Restore permissions so the tempdir can be cleaned up.
 		let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755));
 		if denied {

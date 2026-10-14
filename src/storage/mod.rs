@@ -17,6 +17,7 @@ mod routing;
 mod routing_forward;
 pub(crate) mod save_sent;
 mod spool;
+mod spool_permissions;
 mod spool_recipients;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;
@@ -30,7 +31,9 @@ pub use blob_backend::{
 	BlobAccount, BlobBackend, BlobError, FsBackend, S3Backend, build as build_blob_backend,
 };
 pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
-pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
+pub use crypto::{
+	CryptoAuthError, CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64,
+};
 pub use delivery::LocalDelivery;
 pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 

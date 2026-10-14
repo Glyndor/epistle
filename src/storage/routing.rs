@@ -50,9 +50,10 @@ impl SplitDelivery {
 		directory: DirectoryHandle,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
+		let outbound = FsSpool::open_audited(data_dir, crypto.clone())?;
 		Ok(SplitDelivery {
 			local: LocalDelivery::new_with_crypto(data_dir, directory.clone(), crypto.clone())?,
-			outbound: FsSpool::open_with_crypto(data_dir, crypto)?,
+			outbound,
 			directory,
 			signer: None,
 			rules: Vec::new(),

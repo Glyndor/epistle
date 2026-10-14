@@ -49,7 +49,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, 0, action, now, None, &mut out);
+	let code = run(dir, None, 0, action, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -301,6 +301,7 @@ fn remove_writes_a_canceled_record_for_each_pending_recipient() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
 		1_700_000_000,
@@ -343,6 +344,7 @@ fn remove_with_log_disabled_does_not_write_records() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		0,
 		Some(QueueCli::Remove { id, yes: true }),
 		1_700_000_000,
@@ -385,6 +387,7 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
 		1_700_000_000,
@@ -406,4 +409,71 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 	let event: serde_json::Value = serde_json::from_str(body).expect("json");
 	assert_eq!(event["spool_id"], id.to_string());
 	assert_eq!(event["recipient"], "bob0@remote.example");
+}
+
+/// With `encrypt_at_rest` on every envelope is sealed, so the operator
+/// commands must open the spool with the configured key. A listing that
+/// cannot read an envelope prints no row for it, and `show` fails outright.
+#[test]
+fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key_file = dir.path().join("mail.key");
+	std::fs::write(
+		&key_file,
+		crate::storage::generate_key_base64().expect("keygen"),
+	)
+	.expect("key file");
+	let storage = crate::config::Storage {
+		encrypt_at_rest: true,
+		encryption_key_env: None,
+		encryption_key_file: Some(key_file),
+		deleted_retention_days: 0,
+		delivery_log_days: 0,
+		blobs: None,
+	};
+	let crypto = crate::storage::MessageCrypto::from_config(Some(&storage)).expect("crypto");
+	let id = FsSpool::open_with_crypto(dir.path(), crypto)
+		.expect("spool")
+		.store(
+			&AcceptedMessage {
+				reverse_path: "sealed@example.org".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: BODY.as_bytes().to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
+		.expect("store");
+
+	let mut out = Vec::new();
+	assert_eq!(
+		list(dir.path(), Some(&storage), &mut out),
+		ExitCode::SUCCESS
+	);
+	let listed = String::from_utf8(out).expect("utf8");
+	assert!(
+		listed.contains(&id.to_string()) && listed.contains("sealed@example.org"),
+		"the sealed entry must be listed: {listed}"
+	);
+
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		Some(&storage),
+		0,
+		Some(QueueCli::Show { id, json: false }),
+		1_700_000_000,
+		None,
+		&mut out,
+	);
+	assert_eq!(
+		code,
+		ExitCode::SUCCESS,
+		"show must read the sealed envelope"
+	);
 }

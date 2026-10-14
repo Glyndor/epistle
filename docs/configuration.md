@@ -836,6 +836,12 @@ guide's "Data at rest".
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
 
+The outbound spool's envelope (sender, recipients, per-recipient state) is
+sealed with the same key under the message id as associated data, so an
+envelope cannot be swapped onto another message. Spool files and directories
+are pinned to `0600`/`0700`. See [`storage.md`](storage.md) for the on-disk
+format and the migration path.
+
 ### `[storage.blobs]`
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
 `backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,

@@ -20,6 +20,7 @@ mod in_stack;
 mod ports;
 mod queue_area;
 mod report;
+mod spool_area;
 mod subid_area;
 #[cfg(test)]
 mod test_support;
@@ -67,6 +68,8 @@ pub enum CheckArea {
 	Queue,
 	/// The data filesystem has room.
 	Disk,
+	/// The spool filesystem: at-rest encryption is on, every file is owner-only.
+	Spool,
 	/// The service account's subordinate id ranges overlap no other account's.
 	Subid,
 }
@@ -83,6 +86,7 @@ impl CheckArea {
 		CheckArea::Antispam,
 		CheckArea::Queue,
 		CheckArea::Disk,
+		CheckArea::Spool,
 		CheckArea::Subid,
 	];
 
@@ -98,6 +102,7 @@ impl CheckArea {
 			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
+			CheckArea::Spool => "spool",
 			CheckArea::Subid => "subid",
 		}
 	}
@@ -237,6 +242,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
+		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
 	}
 }

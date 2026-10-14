@@ -156,7 +156,7 @@ fn queue_list_marks_a_held_message() {
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))
 		.expect("hold");
 	let lines = on_terminal(120, |out| {
-		assert_eq!(super::queue::list(dir.path(), out), ExitCode::SUCCESS);
+		assert_eq!(super::queue::list(dir.path(), None, out), ExitCode::SUCCESS);
 	});
 	assert!(lines[0].starts_with("\x1b[1mID"), "{lines:#?}");
 	assert!(lines[1].contains("\x1b[33m⚠ held"), "{lines:#?}");

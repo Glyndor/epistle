@@ -1,7 +1,6 @@
 //! Crash-safe filesystem spool for accepted messages.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
@@ -15,6 +14,10 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
+pub(super) use super::spool_permissions::write_sync;
+use super::spool_permissions::{
+	FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir,
+};
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
 
 /// Envelope metadata stored next to the raw message.
@@ -135,6 +138,15 @@ impl SpoolDir {
 	}
 }
 
+/// How an envelope file was stored on disk: sealed under the AEAD with the
+/// message id as AAD, or the legacy plaintext written before at-rest
+/// encryption covered envelopes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodedEnvelope {
+	Sealed,
+	Plaintext,
+}
+
 impl FsSpool {
 	/// The path of one spooled file. The id is a [`Uuid`] and the extension a
 	/// closed set, so nothing but a plain file name is ever joined onto the root.
@@ -153,6 +165,19 @@ impl FsSpool {
 		Self::open_with_crypto(data_dir, MessageCrypto::disabled())
 	}
 
+	/// Open the spool under `data_dir` with the at-rest crypto that `storage`
+	/// configures, exactly as the server does. Every operator command that
+	/// reads envelopes opens the spool this way: with `encrypt_at_rest` on, a
+	/// spool opened without the key cannot read a single envelope.
+	pub fn open_configured(
+		data_dir: &Path,
+		storage: Option<&crate::config::Storage>,
+	) -> std::io::Result<Self> {
+		let crypto = MessageCrypto::from_config(storage)
+			.map_err(|error| std::io::Error::other(format!("spool key: {error}")))?;
+		Self::open_with_crypto(data_dir, crypto)
+	}
+
 	/// The at-rest crypto this spool uses for stored message bodies.
 	/// The save-sent helper borrows this so the Sent copy is encoded
 	/// the same way the rest of the account's mail is.
@@ -167,20 +192,83 @@ impl FsSpool {
 		self.root.parent().expect("spool root is under data_dir")
 	}
 
+	/// Retighten the spool root, `tmp/`, `new/` and the files directly in them
+	/// to `0700`/`0600`, and return how many files changed. Safe to call
+	/// repeatedly. Links are never followed. The server calls it once at
+	/// start-up through [`FsSpool::open_audited`]; `epistle status` only counts.
+	pub fn audit_permissions(&self) -> std::io::Result<u64> {
+		#[cfg(unix)]
+		return audit_permissions(&self.root);
+		#[cfg(not(unix))]
+		let _ = self;
+		#[cfg(not(unix))]
+		Ok(0)
+	}
+
+	/// Walk the spool without modifying it and return the number of files
+	/// and directories whose permissions are looser than `0600` (files) or
+	/// `0700` (directories). Used by the `spool` status check, which must
+	/// observe the on-disk state without fixing it.
+	pub fn count_loose_permissions(&self) -> std::io::Result<u64> {
+		#[cfg(unix)]
+		return count_loose_permissions(&self.root);
+		#[cfg(not(unix))]
+		let _ = self;
+		#[cfg(not(unix))]
+		Ok(0)
+	}
+
+	/// [`FsSpool::count_loose_permissions`] for the spool under `data_dir`,
+	/// without opening it: an observer such as `epistle status`, possibly run
+	/// as root, must never create a spool directory. `0` when there is no
+	/// spool yet.
+	pub fn count_loose_permissions_in(data_dir: &Path) -> std::io::Result<u64> {
+		let root = data_dir.join("spool");
+		if !fs::symlink_metadata(&root).is_ok_and(|meta| meta.is_dir()) {
+			return Ok(0);
+		}
+		count_loose_permissions(&contained(data_dir, &root)?)
+	}
+
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
-	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
+	/// (`.eml`) files and the envelope (`.json`) sidecar through `crypto`. The
+	/// envelope is sealed with ChaCha20-Poly1305 and bound to the message id as
+	/// associated data, so one message's envelope is never read as another's.
+	/// The body is not bound to its id. The server starts through
+	/// [`FsSpool::open_audited`], which also retightens a spool written before
+	/// the mode was pinned to `0600`/`0700`.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool { root, crypto };
-		fs::create_dir_all(spool.path_in(Path::new(SpoolDir::Tmp.name()))?)?;
-		fs::create_dir_all(spool.path_in(Path::new(SpoolDir::New.name()))?)?;
+		create_spool_dir(&spool.root)?;
+		Ok(spool)
+	}
+
+	/// [`FsSpool::open_with_crypto`] for the server start-up: retighten any
+	/// spool path looser than owner-only and log how many files changed. A
+	/// spool whose permissions cannot be checked or fixed is refused, so the
+	/// server never starts on a spool that may be readable by other users.
+	pub fn open_audited(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
+		let spool = Self::open_with_crypto(data_dir, crypto)?;
+		match spool.audit_permissions() {
+			Ok(0) => {}
+			Ok(fixed) => {
+				tracing::info!("tightened {fixed} spool file permissions to owner-only")
+			}
+			Err(error) => {
+				return Err(std::io::Error::new(
+					error.kind(),
+					format!("spool permission audit failed, refusing to start: {error}"),
+				));
+			}
+		}
 		Ok(spool)
 	}
 
 	/// Persist one message crash-safely and return its spool id.
 	///
 	/// Both files are first written and fsynced under `tmp/`, then renamed
-	/// into `new/` — envelope last, so a visible envelope guarantees a
+	/// into `new/` , envelope last, so a visible envelope guarantees a
 	/// complete message file next to it. `account` is the local account that
 	/// submitted the message (used by the delivery log); pass `None` for the
 	/// SMTP relay hop that has none. The caller-supplied `extra` correlation
@@ -233,7 +321,10 @@ impl FsSpool {
 
 		write_sync(&tmp_message, &self.crypto.encode(&message.data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
-		write_sync(&tmp_envelope, &envelope_bytes)?;
+		let envelope_sealed = self
+			.crypto
+			.encode_with_aad(&envelope_bytes, id.as_bytes())?;
+		write_sync(&tmp_envelope, &envelope_sealed)?;
 
 		fs::rename(&tmp_message, &final_message)?;
 		fs::rename(&tmp_envelope, &final_envelope)?;
@@ -242,10 +333,7 @@ impl FsSpool {
 
 	/// Load one spooled entry by id.
 	pub fn load(&self, id: Uuid) -> std::io::Result<SpoolEntry> {
-		let envelope_bytes =
-			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		let envelope: Envelope =
-			serde_json::from_slice(&envelope_bytes).map_err(std::io::Error::other)?;
+		let envelope = self.load_envelope(id)?;
 		let body = self.entry_file(SpoolDir::New, id, MessageExt::Eml)?;
 		let data = self.crypto.decode(&crate::util::fs_walk::read(body)?)?;
 		Ok(SpoolEntry { envelope, data })
@@ -277,10 +365,19 @@ impl FsSpool {
 
 	/// Load only the envelope of an entry, never the message body. This is
 	/// what `queue show` uses, so an operator command cannot print mail.
+	///
+	/// Accepts envelopes sealed with the AEAD as well as the legacy plaintext
+	/// form written before `encrypt_at_rest` was turned on. When a plaintext
+	/// envelope is read under encryption-enabled, it is rewritten encrypted in
+	/// place atomically, so subsequent loads go through the AEAD path.
 	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
 		let bytes =
 			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+		let (envelope, decrypted) = self.decode_envelope_bytes(id, &bytes)?;
+		if decrypted == DecodedEnvelope::Plaintext {
+			self.maybe_migrate_envelope(id, &bytes)?;
+		}
+		Ok(envelope)
 	}
 
 	/// Read-modify-write one envelope under the spool lock and return the
@@ -299,13 +396,14 @@ impl FsSpool {
 		edit: impl FnOnce(&mut Envelope),
 	) -> std::io::Result<Envelope> {
 		let _guard = self.lock()?;
-		let mut envelope = self.load_envelope(id)?;
+		let mut envelope = self.read_envelope_unlocked(id)?;
 		edit(&mut envelope);
 		let tmp = self.path_in(
 			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
 		)?;
 		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
-		let written = write_sync(&tmp, &bytes)
+		let sealed = self.crypto.encode_with_aad(&bytes, id.as_bytes())?;
+		let written = write_sync(&tmp, &sealed)
 			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
 		if let Err(error) = written {
 			let _ = fs::remove_file(&tmp);
@@ -314,13 +412,87 @@ impl FsSpool {
 		Ok(envelope)
 	}
 
-	/// Take the exclusive spool lock; it is released when the guard drops.
+	/// Read an envelope file's bytes and decode it. The returned flag tells
+	/// the caller whether the bytes were plaintext (caller should migrate)
+	/// or already sealed (nothing to do).
+	fn decode_envelope_bytes(
+		&self,
+		id: Uuid,
+		bytes: &[u8],
+	) -> std::io::Result<(Envelope, DecodedEnvelope)> {
+		if bytes.starts_with(crate::storage::MAGIC) {
+			let plaintext = self
+				.crypto
+				.decode_with_aad(bytes, id.as_bytes())
+				.map_err(|error| std::io::Error::other(format!("spool envelope: {error}")))?;
+			let envelope: Envelope =
+				serde_json::from_slice(&plaintext).map_err(std::io::Error::other)?;
+			Ok((envelope, DecodedEnvelope::Sealed))
+		} else {
+			let envelope: Envelope =
+				serde_json::from_slice(bytes).map_err(std::io::Error::other)?;
+			Ok((envelope, DecodedEnvelope::Plaintext))
+		}
+	}
+
+	/// Read and decode an envelope without taking the lock and without
+	/// migrating it. Only `update_envelope` calls this: it already holds the
+	/// lock and rewrites the envelope sealed itself, so a migration here would
+	/// wait on that same lock forever.
+	fn read_envelope_unlocked(&self, id: Uuid) -> std::io::Result<Envelope> {
+		let bytes =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
+		let (envelope, _) = self.decode_envelope_bytes(id, &bytes)?;
+		Ok(envelope)
+	}
+
+	/// If encryption is on and the on-disk envelope is plaintext, rewrite it
+	/// encrypted in place. The rewrite goes through `tmp/<uuid>.<uuid>.json`
+	/// and is renamed over the old one, so a reader that happens to look at
+	/// the file mid-rewrite sees either the old plaintext or the new sealed
+	/// envelope, never a half-written file.
+	fn maybe_migrate_envelope(&self, id: Uuid, plain: &[u8]) -> std::io::Result<()> {
+		if !self.crypto.enabled() {
+			return Ok(());
+		}
+		let _guard = self.lock()?;
+		let on_disk =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
+		if on_disk.starts_with(crate::storage::MAGIC) {
+			// Another writer migrated it between our decode and our write.
+			return Ok(());
+		}
+		if on_disk != plain {
+			// The envelope on disk no longer matches what we just decoded
+			// (someone wrote a newer one). Skip: rewriting over a newer
+			// envelope would be a lost update.
+			return Ok(());
+		}
+		let tmp = self.path_in(
+			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
+		)?;
+		let sealed = self.crypto.encode_with_aad(plain, id.as_bytes())?;
+		let written = write_sync(&tmp, &sealed)
+			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
+		if let Err(error) = written {
+			let _ = fs::remove_file(&tmp);
+			return Err(error);
+		}
+		Ok(())
+	}
+
+	/// Take the exclusive spool lock; it is released when the guard drops. The
+	/// lock file is owner-only too, so a successful `flock` does not advertise
+	/// its existence to other users.
 	pub(super) fn lock(&self) -> std::io::Result<fs::File> {
-		let file = fs::OpenOptions::new()
-			.create(true)
-			.truncate(false)
-			.write(true)
-			.open(self.path_in(Path::new("lock"))?)?;
+		let mut options = fs::OpenOptions::new();
+		options.create(true).truncate(false).write(true);
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::OpenOptionsExt;
+			options.mode(FILE_MODE);
+		}
+		let file = options.open(self.path_in(Path::new("lock"))?)?;
 		file.lock()?;
 		Ok(file)
 	}
@@ -374,13 +546,6 @@ impl MessageSink for FsSpool {
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
-}
-
-/// Write `bytes` to `path` and fsync the file before returning.
-pub(super) fn write_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-	let mut file = fs::File::create(path)?;
-	file.write_all(bytes)?;
-	file.sync_all()
 }
 
 #[cfg(test)]
@@ -503,3 +668,11 @@ mod tests {
 #[cfg(test)]
 #[path = "spool_tests_edit.rs"]
 mod tests_edit;
+
+#[cfg(all(test, unix))]
+#[path = "spool_tests_perms.rs"]
+mod tests_perms;
+
+#[cfg(test)]
+#[path = "spool_tests_env_crypto.rs"]
+mod tests_env_crypto;

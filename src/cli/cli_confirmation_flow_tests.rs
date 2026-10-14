@@ -136,6 +136,62 @@ fn account_remove_asks_with_what_it_destroys() {
 	);
 }
 
+/// With `encrypt_at_rest` on, `account remove --queue discard` reads the
+/// sealed spool with the configured key and discards the account's queued
+/// mail. A spool opened without the key could read no entry and kept it all.
+#[test]
+fn account_remove_discards_sealed_queued_mail() {
+	let keys = tempfile::tempdir().expect("key dir");
+	let key_file = keys.path().join("mail.key");
+	std::fs::write(
+		&key_file,
+		crate::storage::generate_key_base64().expect("keygen"),
+	)
+	.expect("key file");
+	let (dir, cfg) = fixture(&format!(
+		"[storage]\nencrypt_at_rest = true\nencryption_key_file = {:?}\n",
+		key_file.display().to_string()
+	));
+	let config = load(cfg.path());
+	store(&config)
+		.add(DynamicAccount {
+			name: NAME.to_string(),
+			addresses: vec![format!("{NAME}@example.org")],
+			password_hash: hash(fixture_password()),
+			..DynamicAccount::default()
+		})
+		.expect("add alice");
+	let crypto =
+		crate::storage::MessageCrypto::from_config(config.storage.as_ref()).expect("crypto");
+	let id = FsSpool::open_with_crypto(dir.path(), crypto)
+		.expect("spool")
+		.store(
+			&AcceptedMessage {
+				reverse_path: format!("{NAME}@example.org"),
+				recipients: vec!["bob@remote.example".to_string()],
+				data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
+		.expect("store");
+
+	let code = accounts::remove(&config, NAME, QueuePolicy::Discard, true, &mut Vec::new());
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		!dir.path()
+			.join("spool/new")
+			.join(format!("{id}.json"))
+			.exists(),
+		"the sealed queued message must be discarded"
+	);
+}
+
 #[test]
 fn account_remove_refuses_an_unknown_or_static_name_without_asking() {
 	let (_dir, cfg) = fixture("[[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n");
@@ -186,6 +242,7 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 		|(dir, id), yes| {
 			queue::run(
 				dir.path(),
+				None,
 				0,
 				Some(QueueCli::Remove { id: *id, yes }),
 				queue::now_epoch(),

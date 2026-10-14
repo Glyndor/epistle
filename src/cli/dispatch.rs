@@ -249,6 +249,7 @@ impl Cli {
 					});
 					queue::run(
 						&config.data_dir,
+						config.storage.as_ref(),
 						config.delivery_log_days(),
 						action,
 						queue::now_epoch(),

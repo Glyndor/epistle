@@ -15,7 +15,7 @@ fn run_args(dir: &Path, args: &[&str]) -> (ExitCode, String) {
 		panic!("not a queue command");
 	};
 	let mut out = Vec::new();
-	let code = run(dir, 0, action, NOW, None, &mut out);
+	let code = run(dir, None, 0, action, NOW, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -224,7 +224,7 @@ fn the_queue_listing_names_a_few_holds_however_many_there_are() {
 	}
 	let mut out = Vec::new();
 
-	assert_eq!(list(dir.path(), &mut out), ExitCode::SUCCESS);
+	assert_eq!(list(dir.path(), None, &mut out), ExitCode::SUCCESS);
 
 	let out = String::from_utf8(out).expect("utf8");
 	let line = out.lines().last().expect("summary");
@@ -267,7 +267,7 @@ fn the_queue_listing_names_the_destinations_on_hold() {
 	);
 	let mut out = Vec::new();
 
-	assert_eq!(list(dir.path(), &mut out), ExitCode::SUCCESS);
+	assert_eq!(list(dir.path(), None, &mut out), ExitCode::SUCCESS);
 
 	let out = String::from_utf8(out).expect("utf8");
 	assert!(

@@ -73,6 +73,31 @@ pub enum CryptoError {
 	KeyMalformed,
 }
 
+/// Errors raised by the AEAD envelope that aren't I/O. Folding them into
+/// `std::io::Result` would lose the distinction between "tamper detected"
+/// and a real file problem, so the helpers that distinguish survive on their
+/// own; the high-level `encode` / `decode` keep returning `io::Result` so the
+/// rest of the codebase is unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum CryptoAuthError {
+	/// The on-disk bytes do not start with [`MAGIC`] and the operation
+	/// required an encrypted envelope (e.g., spool migration rewriting a
+	/// plaintext envelope and finding magic present already).
+	#[error("expected an encrypted envelope but the data does not start with the envelope magic")]
+	NotEncrypted,
+	/// An encrypted envelope was given but the AEAD authentication failed:
+	/// either the bytes were tampered with, the wrong key was loaded, or
+	/// the associated data does not match what the file was sealed under.
+	#[error("envelope authentication failed: wrong key, tamper, or wrong associated data")]
+	AuthenticationFailed,
+	/// The envelope is truncated: not even the magic and nonce fit.
+	#[error("encrypted envelope is truncated")]
+	Truncated,
+	/// The envelope is encrypted but no key is loaded, so it cannot be read.
+	#[error("encrypted envelope but no key is loaded")]
+	NoKey,
+}
+
 /// Transparent at-rest encryption of stored message files. Cheap to clone (an
 /// `Arc` internally), so it can be threaded into every component that reads or
 /// writes message bytes (delivery, spool, IMAP/POP3 mailboxes, the JMAP state
@@ -215,6 +240,65 @@ impl MessageCrypto {
 		let plaintext = key
 			.open_in_place(nonce, Aad::empty(), &mut buffer)
 			.map_err(|_| std::io::Error::other("encrypted message: authentication failed"))?;
+		Ok(plaintext.to_vec())
+	}
+
+	/// Encode `plaintext` for storage, binding it to `aad` so a sealed envelope
+	/// cannot be silently rebound to a different context. With encryption enabled
+	/// and a key, returns `MAGIC ‖ nonce ‖ ciphertext+tag`; otherwise returns the
+	/// plaintext unchanged so an unencrypted deployment writes exactly the bytes
+	/// it always did. The AEAD is fed `aad`; when binding to a per-message id,
+	/// pass `id.as_bytes()`.
+	///
+	/// # Errors
+	/// Only when the system CSPRNG cannot produce a nonce or the AEAD fails,
+	/// both fatal for that write, never a silent fallback to plaintext.
+	pub fn encode_with_aad(&self, plaintext: &[u8], aad: &[u8]) -> std::io::Result<Vec<u8>> {
+		let Some(key) = self.inner.key.as_ref().filter(|_| self.inner.enabled) else {
+			return Ok(plaintext.to_vec());
+		};
+		let mut nonce_bytes = [0u8; NONCE_LEN];
+		self.inner
+			.rng
+			.fill(&mut nonce_bytes)
+			.map_err(|_| std::io::Error::other("CSPRNG failure generating nonce"))?;
+		let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+		let mut buffer = plaintext.to_vec();
+		key.seal_in_place_append_tag(nonce, Aad::from(aad), &mut buffer)
+			.map_err(|_| std::io::Error::other("AEAD sealing failed"))?;
+		let mut out = Vec::with_capacity(OVERHEAD + plaintext.len());
+		out.extend_from_slice(MAGIC);
+		out.extend_from_slice(&nonce_bytes);
+		out.extend_from_slice(&buffer);
+		Ok(out)
+	}
+
+	/// Decode `stored` bytes read from disk, requiring `aad` to match what the
+	/// envelope was sealed under. A buffer not starting with [`MAGIC`] returns
+	/// [`CryptoAuthError::NotEncrypted`] (fails closed) so callers can distinguish
+	/// "legacy plaintext" from a tampered or wrong-key case instead of guessing.
+	///
+	/// # Errors
+	/// Fails closed when the envelope is truncated, when authentication fails
+	/// (tamper, wrong key, or `aad` mismatch), or with
+	/// [`CryptoAuthError::NoKey`] when no key is loaded but the buffer does
+	/// start with [`MAGIC`].
+	pub fn decode_with_aad(&self, stored: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoAuthError> {
+		if !stored.starts_with(MAGIC) {
+			return Err(CryptoAuthError::NotEncrypted);
+		}
+		let key = self.inner.key.as_ref().ok_or(CryptoAuthError::NoKey)?;
+		let rest = &stored[MAGIC.len()..];
+		if rest.len() < NONCE_LEN {
+			return Err(CryptoAuthError::Truncated);
+		}
+		let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
+		let nonce = Nonce::try_assume_unique_for_key(nonce_bytes)
+			.map_err(|_| CryptoAuthError::AuthenticationFailed)?;
+		let mut buffer = ciphertext.to_vec();
+		let plaintext = key
+			.open_in_place(nonce, Aad::from(aad), &mut buffer)
+			.map_err(|_| CryptoAuthError::AuthenticationFailed)?;
 		Ok(plaintext.to_vec())
 	}
 
