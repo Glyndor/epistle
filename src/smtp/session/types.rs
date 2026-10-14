@@ -26,6 +26,17 @@ pub(super) enum State {
 		/// Whether a BDAT chunk has begun (RFC 3030): once true, DATA and RCPT
 		/// are no longer valid in this transaction.
 		chunking: bool,
+		/// Bytes currently reserved from the shared memory budget for this
+		/// in-flight body. The reservation is released when the state
+		/// transitions out of `ReceivingData` (success, error, RSET,
+		/// disconnect) so a panic, a transport close or a finalise that
+		/// rejects the message never leaves bytes behind.
+		reserved: u64,
+		/// Set by `data_line` when a memory-budget reservation fails. The
+		/// body stops growing but the in-flight session still has to read
+		/// to the closing `.`; the final 4xx reply is produced at
+		/// finalise so the reply is on the wire once per message.
+		budget_exhausted: bool,
 	},
 }
 

@@ -10,6 +10,7 @@ use tokio::sync::Semaphore;
 
 use super::directory::Directory;
 use super::diskspace::DiskGuard;
+use super::memory_budget::MemoryBudget;
 use super::reply::Reply;
 use super::session::Session;
 use super::sink::MessageSink;
@@ -26,6 +27,13 @@ const READ_BUFFER: usize = 4096;
 /// Maximum concurrent connections per listener. Excess connections are dropped
 /// immediately (TCP RST) to prevent file-descriptor exhaustion.
 const MAX_CONNECTIONS: usize = 1000;
+
+/// Maximum concurrent connections per client IP per listener. Excess
+/// connections are answered `421 4.7.0 too many connections from your
+/// address` and closed (RFC 5321 §4.5.3.2). The cap keeps a single
+/// client from monopolising one listener; the global
+/// [`MAX_CONNECTIONS`] still bounds the total.
+const MAX_CONNECTIONS_PER_IP: usize = 20;
 
 /// Per-read idle timeout. RFC 5321 §4.5.3.2 mandates at least 5 minutes between
 /// command-phase reads; we match that minimum to kill Slowloris connections.
@@ -154,6 +162,29 @@ pub struct Server {
 	daily_new_recipients: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// Shared byte budget every DATA / BDAT reservation draws from.
+	/// `None` (the default) leaves the historical unbounded behaviour
+	/// in place; the listener is constructed with `Some` when the
+	/// operator configured `[server] message_memory_budget`.
+	memory_budget: Option<std::sync::Arc<MemoryBudget>>,
+	/// Per-client-IP concurrent connection cap for this listener. A
+	/// peer over the cap is answered `421 4.7.0` and closed. The cap
+	/// is per-listener: two SMTP listeners each have their own count
+	/// for the same IP, so a peer can saturate one listener and still
+	/// reach the other. Authenticated submission from a trusted
+	/// network is exempt when `[server] trusted_networks` lists the
+	/// peer's CIDR.
+	max_connections_per_ip: usize,
+	/// CIDR blocks exempt from the per-IP connection cap. The set is
+	/// per-listener (a `smtp` listener can admit the office while a
+	/// `submissions` listener still caps the open internet). Matched
+	/// against the client peer; an empty set is the identity.
+	trusted_networks: Vec<crate::cidr::Cidr>,
+	/// Per-instance message-size cap applied to every session opened
+	/// on this listener. The default is
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; raise or lower
+	/// with [`Server::with_max_message_size`].
+	max_message_size: usize,
 	/// The authentication protocol this listener serves. Sessions tag every
 	/// password attempt through this server with it, so a per-account
 	/// `allowed_protocols` set that does not include the listener's kind
@@ -202,6 +233,10 @@ impl Server {
 			correspondents: None,
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
+			memory_budget: None,
+			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
+			trusted_networks: Vec::new(),
+			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
 		}
@@ -308,6 +343,48 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Cap concurrent connections per client IP for this listener (0
+	/// keeps the built-in default). A peer over the cap is answered
+	/// `421 4.7.0 too many connections from your address` and closed;
+	/// a peer on a [`Self::with_trusted_networks`] CIDR is exempt.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections_per_ip = max;
+		}
+		self
+	}
+
+	/// CIDR blocks exempt from the per-IP connection cap. A peer whose
+	/// address matches any CIDR bypasses the per-IP check; the global
+	/// per-listener cap still applies. An empty list (the default)
+	/// makes every peer subject to the per-IP cap.
+	pub fn with_trusted_networks(mut self, cidrs: Vec<crate::cidr::Cidr>) -> Self {
+		self.trusted_networks = cidrs;
+		self
+	}
+
+	/// Share the per-listener byte budget with every session. The
+	/// budget draws from itself on every DATA line and every BDAT
+	/// chunk; the reservation is released on every path that drops
+	/// the in-flight body. `None` (the default) leaves the historical
+	/// unbounded behaviour in place.
+	pub fn with_memory_budget(mut self, budget: std::sync::Arc<MemoryBudget>) -> Self {
+		self.memory_budget = Some(budget);
+		self
+	}
+
+	/// Set the per-instance message-size cap for every session opened
+	/// on this listener. The cap is advertised in EHLO, enforced at
+	/// `MAIL FROM` (SIZE parameter), at end-of-DATA, and per BDAT chunk.
+	/// `0` keeps the built-in default
+	/// ([`crate::smtp::session::MAX_MESSAGE_SIZE`]).
+	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
+		if bytes > 0 {
+			self.max_message_size = bytes;
 		}
 		self
 	}
@@ -537,7 +614,11 @@ impl Server {
 			.with_directory(self.directory.current())
 			.with_auth_protocol(self.auth_protocol)
 			.with_metrics(Arc::clone(&self.metrics))
-			.with_scram_enabled(self.scram_enabled);
+			.with_scram_enabled(self.scram_enabled)
+			.with_max_message_size(self.max_message_size);
+		if let Some(budget) = &self.memory_budget {
+			session = session.with_memory_budget(Arc::clone(budget));
+		}
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
@@ -593,6 +674,9 @@ impl Server {
 		listener: A,
 	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let per_ip = Arc::new(crate::smtp::per_ip::PerIpCounter::new(
+			self.max_connections_per_ip,
+		));
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = match &self.drain {
@@ -612,15 +696,50 @@ impl Server {
 				tracing::warn!(%peer, "SMTP connection limit reached, dropping");
 				continue;
 			};
+			// Per-IP cap. A peer in a trusted CIDR bypasses the cap;
+			// the global per-listener semaphore still bounds the
+			// total. The accepted branch hands ownership of the
+			// counter slot to the connection task: when the task
+			// ends, the guard drops, the count decrements, and the
+			// next connection from the same IP is admitted.
+			let Some(per_ip_slot) = per_ip.try_acquire(peer.ip(), &self.trusted_networks) else {
+				tracing::warn!(%peer, "SMTP per-IP connection limit reached, refusing");
+				// Best-effort: write the 421 to the wire, then close.
+				// The semaphore permit is dropped immediately because
+				// the refused connection never reached a task.
+				drop(permit);
+				let refusal = crate::smtp::reply::Reply::single(
+					421,
+					"4.7.0 too many connections from your address",
+				);
+				let (mut read_half, mut write_half) = tokio::io::split(stream);
+				// Drain the read side so the peer's bytes do not stall
+				// the kernel buffer; the write side gets the refusal.
+				tokio::spawn(async move {
+					use tokio::io::{AsyncReadExt, AsyncWriteExt};
+					let mut sink = [0u8; 1024];
+					let _ = read_half.read(&mut sink).await;
+					let _ = write_half.write_all(refusal.to_string().as_bytes()).await;
+					let _ = write_half.shutdown().await;
+				});
+				continue;
+			};
 			let server = Arc::clone(&self);
 			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
+			let slot_for_task = Arc::clone(&per_ip);
 			tokio::spawn(async move {
 				let _permit = permit;
 				let _tracked = tracked;
+				let _slot = per_ip_slot;
 				tracing::debug!(%peer, "connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "connection ended with error");
 				}
+				// Releasing the slot explicitly is redundant (the
+				// guard drops at scope end) but documents the contract
+				// for future readers.
+				drop(_slot);
+				drop(slot_for_task);
 			});
 		}
 	}
