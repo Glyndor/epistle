@@ -30,10 +30,11 @@ fn message(reverse_path: &str, headers: &str) -> AcceptedMessage {
 	AcceptedMessage {
 		reverse_path: reverse_path.to_string(),
 		recipients: vec!["alice@example.org".to_string()],
-		data: format!("{headers}\r\n\r\nbody\r\n").into_bytes(),
+		data: format!("To: alice@example.org\r\n{headers}\r\n\r\nbody\r\n").into_bytes(),
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: true,
 		no_dsn: Vec::new(),
 	}
 }

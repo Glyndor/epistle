@@ -1402,6 +1402,18 @@ auto-reply following RFC 3834 and RFC 5230:
   `MAILER-DAEMON`, `LISTSERV`, `majordomo`, `owner-*` or `*-request`, to
   mail with `Auto-Submitted` other than `no`, to mail with any RFC 2369
   `List-*` header, or to `Precedence: bulk`, `list` or `junk`.
+- Only when one of the account's addresses, or the address the copy was
+  delivered to, is in the message's `To` or `Cc` (RFC 5230 section 4.5).
+  Mail that reached the account through `Bcc`, a mailing list or an alias
+  gets no reply.
+- Only when the server itself verified the sender: the SMTP session
+  logged in (local submission, `POST /api/v1/send`, JMAP
+  `EmailSubmission/set`), or on the inbound hop SPF passed for the
+  envelope sender's domain, or a DKIM signature passed for a domain with
+  the same organizational domain as the envelope sender's or the From
+  domain, aligned or not. The server takes these from its own checks when
+  it accepts the message and never from `Authentication-Results` or
+  `Received-SPF` headers in the message.
 - One reply per sender per 7 days. Each reply leaves a marker under
   `<account>/.vacation/`, which survives restarts. The account keeps at
   most 4096 markers: when the store is full, markers older than the

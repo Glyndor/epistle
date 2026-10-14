@@ -203,6 +203,7 @@ async fn deliver_once(data_dir: &std::path::Path) -> (usize, usize) {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,

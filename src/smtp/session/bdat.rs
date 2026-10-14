@@ -75,6 +75,7 @@ impl Session {
 			require_tls: *require_tls,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 		};
 		super::finalise::finalise(self, message, *size)
 	}

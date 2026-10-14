@@ -145,6 +145,7 @@ fn queue_list_marks_a_held_message() {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,

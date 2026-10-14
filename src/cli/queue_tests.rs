@@ -23,6 +23,7 @@ fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
 						require_tls: false,
 						mailbox: None,
 						tlsrpt_verified: false,
+						sender_verified: false,
 						no_dsn: Vec::new(),
 					},
 					None,

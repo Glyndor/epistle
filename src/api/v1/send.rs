@@ -172,6 +172,8 @@ pub async fn send(
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		// The account logged in and owns the sender address.
+		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
 	let id = state

@@ -36,10 +36,13 @@ async fn a_jmap_vacation_reply_is_queued_and_dkim_signed() {
 		.deliver(AcceptedMessage {
 			reverse_path: "carol@example.net".into(),
 			recipients: vec!["alice@example.org".into()],
-			data: b"From: carol@example.net\r\nSubject: hi\r\n\r\nHello\r\n".to_vec(),
+			data:
+				b"From: carol@example.net\r\nTo: alice@example.org\r\nSubject: hi\r\n\r\nHello\r\n"
+					.to_vec(),
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: true,
 			no_dsn: Vec::new(),
 		})
 		.expect("deliver");

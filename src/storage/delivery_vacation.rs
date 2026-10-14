@@ -113,7 +113,11 @@ impl LocalDelivery {
 
 	/// The reply, sent to the envelope reverse-path (RFC 3834 section 4)
 	/// and never to a header address, unless a suppression rule applies or
-	/// the sender already had one within `days`.
+	/// the sender already had one within `days`. The server must have
+	/// verified the sender itself (`sender_verified`: SPF or DKIM on the
+	/// inbound hop, or a login), and one of the account's addresses must
+	/// be in To or Cc (RFC 5230 section 4.5): mail that reached the account
+	/// through Bcc, a list or an alias is not answered.
 	fn answer(
 		&self,
 		account: &str,
@@ -123,12 +127,16 @@ impl LocalDelivery {
 		days: u64,
 	) -> Option<AcceptedMessage> {
 		let sender = message.reverse_path.as_str();
-		if sender.is_empty() || robot(sender) || self.owns(account, delivered_to, sender) {
+		if !message.sender_verified
+			|| sender.is_empty()
+			|| robot(sender)
+			|| self.owns(account, delivered_to, sender)
+		{
 			return None;
 		}
 		let headers = String::from_utf8_lossy(header_block(&message.data));
 		let header = |name: &str| crate::util::header::header_value(&headers, name);
-		if automated(&header) {
+		if automated(&header) || !self.addressed(account, delivered_to, &headers) {
 			return None;
 		}
 		if !vacation_markers::claim(&self.data_dir, account, sender, days) {
@@ -145,6 +153,16 @@ impl LocalDelivery {
 			references: references.as_deref(),
 		};
 		build_response(vacation, sender, &original, std::time::SystemTime::now())
+	}
+
+	/// Whether one of the account's addresses, `delivered_to` included, is
+	/// in the To or Cc of `headers`.
+	fn addressed(&self, account: &str, delivered_to: &str, headers: &str) -> bool {
+		let fields = to_and_cc(headers);
+		let mut own = self.directory.current().addresses_for(account);
+		own.push(delivered_to.to_string());
+		own.iter()
+			.any(|address| names(&fields, &address.to_ascii_lowercase()))
 	}
 
 	/// Whether `address` is one of the account's own: an answer to it would
@@ -182,6 +200,52 @@ fn automated(header: &dyn Fn(&str) -> Option<String>) -> bool {
 			.any(|kind| value.trim().eq_ignore_ascii_case(kind))
 	});
 	auto_submitted || precedence || LIST_HEADERS.iter().any(|name| header(name).is_some())
+}
+
+/// Every To and Cc value in `headers`, unfolded and lowercased, joined by
+/// commas.
+fn to_and_cc(headers: &str) -> String {
+	let mut fields = String::new();
+	let mut wanted = false;
+	for line in headers.lines() {
+		if line.starts_with([' ', '\t']) {
+			if wanted {
+				fields.push_str(line);
+			}
+			continue;
+		}
+		let (name, value) = line.split_once(':').unwrap_or((line, ""));
+		wanted = ["to", "cc"]
+			.iter()
+			.any(|field| name.trim().eq_ignore_ascii_case(field));
+		if wanted {
+			fields.push(',');
+			fields.push_str(value);
+		}
+	}
+	fields.to_ascii_lowercase()
+}
+
+/// Whether `fields` holds `address` as a whole address: not as the tail of
+/// a longer local part or the head of a longer domain.
+fn names(fields: &str, address: &str) -> bool {
+	let bytes = fields.as_bytes();
+	fields.match_indices(address).any(|(at, _)| {
+		let end = at + address.len();
+		let before = at.checked_sub(1).map(|index| bytes[index]);
+		let after = bytes.get(end).copied();
+		!before.is_some_and(is_local_part_byte) && !after.is_some_and(is_domain_byte)
+	})
+}
+
+/// A byte that can sit in an unquoted local part (RFC 5322 `atext`, dot).
+fn is_local_part_byte(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric() || b"!#$%&'*+-/=?^_`{|}~.".contains(&byte)
+}
+
+/// A byte that can sit in a domain name.
+fn is_domain_byte(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.'
 }
 
 /// The header section of a raw message, up to its blank line.
@@ -227,10 +291,11 @@ mod tests {
 		AcceptedMessage {
 			reverse_path: reverse_path.to_string(),
 			recipients: vec!["alice@example.org".to_string()],
-			data: format!("{headers}\r\n\r\nbody\r\n").into_bytes(),
+			data: format!("To: alice@example.org\r\n{headers}\r\n\r\nbody\r\n").into_bytes(),
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: true,
 			no_dsn: Vec::new(),
 		}
 	}

@@ -111,6 +111,7 @@ pub fn build_response(
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	})
 }

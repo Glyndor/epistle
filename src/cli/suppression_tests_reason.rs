@@ -26,6 +26,7 @@ async fn refused_with(data_dir: &std::path::Path, reply: &str) {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
