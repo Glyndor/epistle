@@ -2,13 +2,13 @@
 //! non-destructive observer that backs the `spool` status check).
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 use std::fs;
 use std::path::Path;
 
-/// Mode created files start with: owner read+write only. The brief is that no
-/// file the spool holds (envelopes, bodies, the lock file) is ever group- or
+/// Mode created files start with: owner read+write only. No file the spool
+/// holds (envelopes, bodies, the lock file) is ever group- or
 /// world-readable, regardless of the umask under which a worker started.
 #[cfg(unix)]
 pub(crate) const FILE_MODE: u32 = 0o600;
@@ -18,6 +18,11 @@ pub(crate) const FILE_MODE: u32 = 0o600;
 /// `<data_dir>/spool/new/`, so the existence of a queue entry is also private.
 #[cfg(unix)]
 pub(crate) const DIR_MODE: u32 = 0o700;
+
+/// The spool's fixed subdirectories. The audit and the status count look at
+/// the root, these two and the files directly inside the three, nothing else.
+#[cfg(unix)]
+const SUBDIRS: [&str; 2] = ["tmp", "new"];
 
 /// Create the spool root directory (if missing) along with its `tmp/` and
 /// `new/` children, all at mode 0700. The mode is pinned at create time:
@@ -43,8 +48,8 @@ pub(crate) fn create_spool_dir(root: &Path) -> std::io::Result<()> {
 /// Write `bytes` to `path` and fsync the file before returning.
 ///
 /// The file is created at mode `0600` from the start: `OpenOptions::mode`
-/// pins the mode at create, so a spool file is never briefly readable by
-/// group or world, regardless of the umask under which a worker started.
+/// pins the mode at create, so a spool file is never readable by group or
+/// world at any point, regardless of the umask under which a worker started.
 pub(crate) fn write_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 	let mut options = fs::OpenOptions::new();
 	options.write(true).create(true).truncate(true);
@@ -56,125 +61,114 @@ pub(crate) fn write_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 	file.sync_all()
 }
 
-/// Walk the spool without modifying it and report the number of files and
-/// directories that are looser than the owner-only bound. Used by the
-/// `spool` status check, which must not silently retighten (the brief says
-/// "report whether any file has loose permissions", not "fix and report").
-/// Bounded: linear walk, no recursion.
+/// What a spool path is expected to be.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+	File,
+	Dir,
+}
+
+/// Count the spool paths whose mode is not owner-only, without changing
+/// anything. Used by the `spool` status check, which observes the on-disk
+/// state rather than fixing it.
 #[cfg(unix)]
 pub(crate) fn count_loose_permissions(root: &Path) -> std::io::Result<u64> {
-	let mut loose = 0u64;
-	count_loose_visit(root, &mut loose)?;
-	Ok(loose)
+	let (dirs, files) = walk(root, false)?;
+	Ok(dirs + files)
 }
 
-#[cfg(unix)]
-fn count_loose_visit(dir: &Path, loose: &mut u64) -> std::io::Result<()> {
-	const DESIRED_FILE: u32 = 0o600;
-	const DESIRED_DIR: u32 = 0o700;
-	if let Ok(meta) = fs::symlink_metadata(dir)
-		&& meta.file_type().is_dir()
-	{
-		let current = meta.permissions().mode() & 0o777;
-		if current != DESIRED_DIR {
-			*loose += 1;
-		}
-	}
-	let Ok(rd) = fs::read_dir(dir) else {
-		return Ok(());
-	};
-	for entry in rd {
-		let entry = match entry {
-			Ok(entry) => entry,
-			Err(_) => continue,
-		};
-		let path = entry.path();
-		let name = match entry.file_name().to_str() {
-			Some(name) if !name.is_empty() && name != "." && name != ".." => name.to_string(),
-			_ => continue,
-		};
-		let meta = match entry.metadata() {
-			Ok(meta) => meta,
-			Err(_) => continue,
-		};
-		let file_type = meta.file_type();
-		if file_type.is_dir() {
-			count_loose_visit(&path, loose)?;
-		} else if file_type.is_file()
-			&& (name.ends_with(".eml") || name.ends_with(".json") || name == "lock")
-		{
-			let current = meta.permissions().mode() & 0o777;
-			if current != DESIRED_FILE {
-				*loose += 1;
-			}
-		}
-	}
-	Ok(())
-}
-
-/// Walk the spool and retighten any file or directory whose permissions are
-/// looser than `0600` (for files) or `0700` (for directories), counted
-/// uniformly. Bounded: a linear walk of the spool tree, no recursion into
-/// attacker-controlled filenames (entries whose name is not a single plain
-/// component are skipped).
+/// Retighten every spool directory looser than `0700` and every spool file
+/// looser than `0600`, and return how many files were changed. Directories
+/// are retightened too but not counted, so the start-up log reports the
+/// files that held mail data.
 #[cfg(unix)]
 pub(crate) fn audit_permissions(root: &Path) -> std::io::Result<u64> {
-	const DESIRED_DIR: u32 = 0o700;
-	let mut fixed = 0u64;
-	// The spool root itself is silently retightened (not counted): the
-	// count the brief asks for is "files fixed", so the operator log
-	// stays tight on what actually mattered.
-	if let Ok(meta) = fs::symlink_metadata(root)
-		&& meta.file_type().is_dir()
-	{
-		let current = meta.permissions().mode() & 0o777;
-		if current != DESIRED_DIR {
-			fs::set_permissions(root, fs::Permissions::from_mode(DESIRED_DIR))?;
-		}
-	}
-	visit_permissions(root, &mut fixed)?;
-	Ok(fixed)
+	let (_, files) = walk(root, true)?;
+	Ok(files)
 }
 
+/// Visit the root, its fixed subdirectories and the `.eml`, `.json` and
+/// `lock` files directly inside them, and return how many directories and
+/// files were loose (and retightened when `apply`). Bounded by the number of
+/// entries in three directories; links and special files are skipped, and
+/// nothing is changed unless it is owned by the owner of the spool root.
 #[cfg(unix)]
-fn visit_permissions(dir: &Path, fixed: &mut u64) -> std::io::Result<()> {
-	const DESIRED_FILE: u32 = 0o600;
-	const DESIRED_DIR: u32 = 0o700;
-	let Ok(rd) = fs::read_dir(dir) else {
-		return Ok(());
+fn walk(root: &Path, apply: bool) -> std::io::Result<(u64, u64)> {
+	let Ok(meta) = fs::symlink_metadata(root) else {
+		return Ok((0, 0));
 	};
-	for entry in rd {
-		let entry = match entry {
-			Ok(entry) => entry,
-			Err(_) => continue,
+	if !meta.is_dir() {
+		return Ok((0, 0));
+	}
+	let owner = meta.uid();
+	let (mut dirs, mut files) = (0u64, 0u64);
+	let tree = std::iter::once(root.to_path_buf()).chain(SUBDIRS.iter().map(|name| root.join(name)));
+	for dir in tree {
+		if retighten(&dir, Kind::Dir, owner, apply)? {
+			dirs += 1;
+		}
+		let Ok(entries) = fs::read_dir(&dir) else {
+			continue;
 		};
-		let path = entry.path();
-		let name = match entry.file_name().to_str() {
-			Some(name) if !name.is_empty() && name != "." && name != ".." => name.to_string(),
-			_ => continue,
-		};
-		let meta = match entry.metadata() {
-			Ok(meta) => meta,
-			Err(_) => continue,
-		};
-		let file_type = meta.file_type();
-		if file_type.is_dir() {
-			let current = meta.permissions().mode() & 0o777;
-			if current != DESIRED_DIR {
-				fs::set_permissions(&path, fs::Permissions::from_mode(DESIRED_DIR))?;
+		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
 			}
-			visit_permissions(&path, fixed)?;
-		} else if file_type.is_file()
-			&& (name.ends_with(".eml") || name.ends_with(".json") || name == "lock")
-		{
-			let current = meta.permissions().mode() & 0o777;
-			if current != DESIRED_FILE {
-				fs::set_permissions(&path, fs::Permissions::from_mode(DESIRED_FILE))?;
-				*fixed += 1;
+			let name = entry.file_name();
+			let Some(name) = name.to_str() else {
+				continue;
+			};
+			if !(name.ends_with(".eml") || name.ends_with(".json") || name == "lock") {
+				continue;
+			}
+			if retighten(&entry.path(), Kind::File, owner, apply)? {
+				files += 1;
 			}
 		}
 	}
-	Ok(())
+	Ok((dirs, files))
+}
+
+/// Whether `path` is a `kind` owned by `owner` with a mode other than the
+/// owner-only one, setting that mode when `apply`. The path is opened with
+/// `O_NOFOLLOW` and checked and changed through the open descriptor, so an
+/// entry replaced by a link after the listing cannot redirect the change.
+#[cfg(unix)]
+pub(super) fn retighten(path: &Path, kind: Kind, owner: u32, apply: bool) -> std::io::Result<bool> {
+	let mut options = fs::OpenOptions::new();
+	options.read(true);
+	let mut flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+	if kind == Kind::Dir {
+		flags |= libc::O_DIRECTORY;
+	}
+	options.custom_flags(flags);
+	let file = match options.open(path) {
+		Ok(file) => file,
+		// A link, a vanished entry, or something that is not a directory
+		// where one was listed: not a spool path to change.
+		Err(error)
+			if matches!(
+				error.raw_os_error(),
+				Some(libc::ELOOP | libc::ENOENT | libc::ENOTDIR)
+			) =>
+		{
+			return Ok(false);
+		}
+		Err(error) => return Err(error),
+	};
+	let meta = file.metadata()?;
+	let (matches, desired) = match kind {
+		Kind::File => (meta.is_file(), FILE_MODE),
+		Kind::Dir => (meta.is_dir(), DIR_MODE),
+	};
+	if !matches || meta.uid() != owner || meta.mode() & 0o777 == desired {
+		return Ok(false);
+	}
+	if apply {
+		file.set_permissions(fs::Permissions::from_mode(desired))?;
+	}
+	Ok(true)
 }
 
 #[cfg(not(unix))]

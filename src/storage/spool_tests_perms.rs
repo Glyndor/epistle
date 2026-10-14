@@ -155,3 +155,59 @@ fn sample_message_owned() -> crate::smtp::session::AcceptedMessage {
 		no_dsn: Vec::new(),
 	}
 }
+
+/// A link planted in the spool never steers the start-up audit, which can
+/// run as root before privileges drop, or the status count onto a file or a
+/// directory outside the spool.
+#[test]
+fn audit_and_count_never_follow_a_link_out_of_the_spool() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let outside = tempfile::tempdir().expect("outside");
+	let victim_dir = outside.path().join("etc");
+	std::fs::create_dir(&victim_dir).expect("victim dir");
+	let victim_inner = victim_dir.join("inner.eml");
+	std::fs::write(&victim_inner, b"x").expect("victim inner");
+	let victim_file = outside.path().join("victim.json");
+	std::fs::write(&victim_file, b"{}").expect("victim file");
+	chmod(&victim_dir, 0o755);
+	chmod(&victim_inner, 0o644);
+	chmod(&victim_file, 0o644);
+
+	let spool = FsSpool::open(dir.path()).expect("open");
+	let new_dir = dir.path().join("spool/new");
+	std::os::unix::fs::symlink(&victim_dir, new_dir.join("linked")).expect("dir link");
+	std::os::unix::fs::symlink(
+		&victim_file,
+		new_dir.join("01939b5e-7c00-7ccc-aaaa-000000000002.json"),
+	)
+	.expect("file link");
+
+	let loose = spool.count_loose_permissions().expect("count");
+	let fixed = spool.audit_permissions().expect("audit");
+	assert_eq!(mode(&victim_file), 0o644, "a linked file outside keeps its mode");
+	assert_eq!(mode(&victim_inner), 0o644, "a file under a linked dir keeps its mode");
+	assert_eq!(mode(&victim_dir), 0o755, "a linked directory keeps its mode");
+	assert_eq!((loose, fixed), (0, 0), "nothing outside the spool is counted");
+}
+
+/// The retighten step never follows a link: an entry swapped for a link
+/// between the listing and the change cannot redirect the change onto the
+/// link's target.
+#[test]
+fn retighten_never_follows_a_link_swapped_in_after_the_listing() {
+	use std::os::unix::fs::MetadataExt;
+
+	use crate::storage::spool_permissions::{Kind, retighten};
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let victim = dir.path().join("victim.json");
+	std::fs::write(&victim, b"{}").expect("victim");
+	chmod(&victim, 0o644);
+	let swapped = dir.path().join("01939b5e-7c00-7ccc-aaaa-000000000003.json");
+	std::os::unix::fs::symlink(&victim, &swapped).expect("link");
+	let owner = std::fs::metadata(dir.path()).expect("owner").uid();
+
+	let changed = retighten(&swapped, Kind::File, owner, true).expect("retighten");
+	assert_eq!(mode(&victim), 0o644, "the link target must keep its mode");
+	assert!(!changed, "a link is never counted as loose");
+}
