@@ -633,3 +633,11 @@ mod tests_mta_sts;
 #[cfg(test)]
 #[path = "serve_tests_ratelimit.rs"]
 mod tests_ratelimit;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_per_recipient.rs"]
+mod tests_ratelimit_per_recipient;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_cross_protocol.rs"]
+mod tests_ratelimit_cross_protocol;
