@@ -244,15 +244,16 @@ impl Drop for Open {
 
 impl Connector for FakeRemote {
 	fn connect(&self, domain: &str, policy: Option<&crate::mtasts::Policy>) -> ConnectFuture<'_> {
-		self.connect_skipping(domain, policy, &[])
+		self.connect_skipping(domain, policy, &[], super::resolver::NONE_HELD)
 	}
 
-	fn connect_skipping(
-		&self,
+	fn connect_skipping<'a>(
+		&'a self,
 		domain: &str,
 		_policy: Option<&crate::mtasts::Policy>,
 		tried: &[String],
-	) -> ConnectFuture<'_> {
+		held: &'a super::resolver::Held<'a>,
+	) -> ConnectFuture<'a> {
 		let next = self.next_exchanger(domain, tried);
 		let domain = domain.to_string();
 		let remote = self.clone();
@@ -262,6 +263,9 @@ impl Connector for FakeRemote {
 					"no further exchanger for {domain}"
 				)));
 			};
+			if held(&host) {
+				return Ok(Connection::unopened(host));
+			}
 			let (client, server) = tokio::io::duplex(64 * 1024);
 			let open = Open::new(remote.load.clone(), &domain, &host);
 			tokio::spawn(serve(server, host.clone(), script, remote));

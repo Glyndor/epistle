@@ -269,9 +269,14 @@ impl Worker {
 				conversation.slowed = conversation.slowed.take().or(slowed);
 				return conversation;
 			}
+			let on_hold = move |host: &str| {
+				self.holds()
+					.held(&Destination::exchanger(host), now)
+					.is_some()
+			};
 			let connection = match self
 				.connector
-				.connect_skipping(route.domain, policy, &tried)
+				.connect_skipping(route.domain, policy, &tried, &on_hold)
 				.await
 			{
 				Ok(connection) => connection,
@@ -289,6 +294,15 @@ impl Worker {
 			// another of its domains) is left before a word is said.
 			let exchanger = Destination::exchanger(&connection.host);
 			let hold = self.holds().held(&exchanger, now).cloned();
+			// A host named without a connection was on hold when asked for,
+			// and stays passed over even should its hold just have ended.
+			let hold = hold.or_else(|| {
+				(!connection.opened).then(|| crate::queue::backoff::Hold {
+					until: now,
+					deferrals: 0,
+					reason: "slowing down".to_string(),
+				})
+			});
 			if let Some(hold) = hold {
 				let reason = format!("{} is on hold: {}", connection.host, hold.reason);
 				let mut waiting =

@@ -50,3 +50,42 @@ async fn a_restarted_worker_keeps_an_exchanger_on_hold_for_other_domains() {
 
 	assert!(remote.received().is_empty(), "{:?}", remote.received());
 }
+
+#[tokio::test]
+async fn an_exchanger_on_hold_is_not_even_connected_to_for_another_domain() {
+	// The provider asked to slow down: a message to another of its domains
+	// must not open a connection to it only to drop it unspoken, which is
+	// the very load it asked to shed.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	remote.hosted("a.example", PROVIDER, greeting("421 4.7.0 slow down"));
+	remote.hosted("b.example", PROVIDER, Script::default());
+	let (worker, now) = worker_for(dir.path(), &["alice@a.example"], &remote);
+	worker.pass().await.expect("pass");
+	assert_eq!(remote.connections(PROVIDER), 1);
+
+	store(&worker.spool, &["bob@b.example"]);
+	worker.set_now(now + 30);
+	worker.pass().await.expect("pass");
+
+	assert_eq!(
+		remote.connections(PROVIDER),
+		1,
+		"no connection while on hold"
+	);
+	assert_eq!(remote.copies("bob@b.example"), 0);
+	let bob = worker
+		.spool
+		.list()
+		.expect("list")
+		.into_iter()
+		.map(|id| worker.spool.load_envelope(id).expect("envelope"))
+		.find(|envelope| envelope.recipients == ["bob@b.example"])
+		.expect("bob's message")
+		.recipient_state("bob@b.example");
+	assert_eq!(
+		(bob.attempts, bob.next_attempt),
+		(0, now + 60),
+		"bob waits for the hold, no attempt counted"
+	);
+}

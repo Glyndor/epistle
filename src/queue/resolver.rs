@@ -9,6 +9,17 @@ use super::client::DeliveryError;
 use super::limits::{MAX_ADDRESSES, MAX_EXCHANGERS};
 use super::timeouts;
 
+/// Whether an exchanger, by host name, is on hold.
+pub type Held<'a> = dyn Fn(&str) -> bool + Sync + 'a;
+
+/// No exchanger is on hold.
+fn none_held(_host: &str) -> bool {
+	false
+}
+
+/// A [`Held`] for which no exchanger is on hold.
+pub const NONE_HELD: &Held<'static> = &none_held;
+
 /// A bidirectional stream the SMTP client can drive.
 pub type BoxedStream = Box<dyn DynStream>;
 
@@ -29,6 +40,10 @@ pub struct Connection {
 	pub peer_ip: Option<std::net::IpAddr>,
 	/// Whether the MX answer that named this host was DNSSEC-secure.
 	pub mx: MxSecurity,
+	/// `false` when the host is on hold and was named without being
+	/// connected to (see [`Connector::connect_skipping`]): nothing may be
+	/// said on `stream`.
+	pub opened: bool,
 }
 
 /// The DNSSEC state of the MX lookup that named an exchanger.
@@ -109,6 +124,17 @@ impl Connection {
 			local_ip: None,
 			peer_ip: None,
 			mx: MxSecurity::Insecure,
+			opened: true,
+		}
+	}
+
+	/// The exchanger `host`, named but not connected to because it is on
+	/// hold. Its stream carries nothing.
+	pub fn unopened(host: String) -> Self {
+		let (stream, _) = tokio::io::duplex(1);
+		Connection {
+			opened: false,
+			..Connection::new(Box::new(stream), host)
 		}
 	}
 
@@ -133,12 +159,19 @@ pub trait Connector: Send + Sync {
 	/// Connect to the next exchanger for `domain`, leaving out the hosts in
 	/// `tried`, which already failed this delivery attempt. A connector
 	/// that only knows one way in has nothing after the first.
-	fn connect_skipping(
-		&self,
+	///
+	/// `held` says whether an exchanger is on hold: when the next one is,
+	/// it is returned [`Connection::unopened`], so a provider that asked to
+	/// slow down does not see a connection opened and dropped for each of
+	/// its other domains. A connector that cannot tell the host before
+	/// connecting ignores it; the worker still says nothing to a held host.
+	fn connect_skipping<'a>(
+		&'a self,
 		domain: &str,
 		policy: Option<&Policy>,
 		tried: &[String],
-	) -> ConnectFuture<'_> {
+		_held: &'a Held<'a>,
+	) -> ConnectFuture<'a> {
 		if tried.is_empty() {
 			return self.connect(domain, policy);
 		}
@@ -303,15 +336,16 @@ impl MxConnector {
 
 impl Connector for MxConnector {
 	fn connect(&self, domain: &str, policy: Option<&Policy>) -> ConnectFuture<'_> {
-		self.connect_skipping(domain, policy, &[])
+		self.connect_skipping(domain, policy, &[], NONE_HELD)
 	}
 
-	fn connect_skipping(
-		&self,
+	fn connect_skipping<'a>(
+		&'a self,
 		domain: &str,
 		policy: Option<&Policy>,
 		tried: &[String],
-	) -> ConnectFuture<'_> {
+		held: &'a Held<'a>,
+	) -> ConnectFuture<'a> {
 		let domain = domain.to_string();
 		let policy = policy.cloned();
 		let tried = tried.to_vec();
@@ -320,15 +354,22 @@ impl Connector for MxConnector {
 			let hosts = candidates(&domain, hosts, policy.as_ref(), &tried)?;
 			let (host, stream) = first_reachable(&domain, &hosts, |host| {
 				let host = host.to_string();
+				let on_hold = held(&host);
 				async move {
+					if on_hold {
+						return Ok(None);
+					}
 					let addresses: Vec<std::net::SocketAddr> =
 						tokio::net::lookup_host((host.as_str(), 25))
 							.await?
 							.collect();
-					connect_any(&addresses, TcpStream::connect).await
+					connect_any(&addresses, TcpStream::connect).await.map(Some)
 				}
 			})
 			.await?;
+			let Some(stream) = stream else {
+				return Ok(Connection::unopened(host).with_mx(mx));
+			};
 			let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
 			let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
 			Ok(Connection {
@@ -337,6 +378,7 @@ impl Connector for MxConnector {
 				local_ip,
 				peer_ip,
 				mx,
+				opened: true,
 			})
 		})
 	}
