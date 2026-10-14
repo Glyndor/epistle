@@ -166,6 +166,95 @@ fn a_mail_server_of_another_name_keeps_its_own_spf_freedom() {
 	);
 }
 
+/// A subdomain delegated to other nameservers (NS records at the
+/// name) is invisible to the lockdown: any A/AAAA/MX epistle would
+/// publish under it lives on someone else's zone, so the plan leaves
+/// the name and every name under it alone. Before this fix the
+/// delegation was reported as TXT (parse_kind fell through), so the
+/// plan went on to plan a `null SPF` and a `null MX` at `sub.example.org`
+/// the nameserver would have rejected. The skip reason names the
+/// delegation explicitly so the operator can see why the name was
+/// left alone.
+#[test]
+fn a_delegated_subdomain_with_glue_is_left_alone() {
+	let plan = plan(&[
+		rec("sub.example.org", RecordKind::Ns, "ns1.delegated.example."),
+		rec("sub.example.org", RecordKind::Ns, "ns2.delegated.example."),
+		rec("sub.example.org", RecordKind::A, "192.0.2.1"),
+		// A record under the delegation: must also be left alone.
+		rec("host.sub.example.org", RecordKind::A, "192.0.2.10"),
+	]);
+	assert!(
+		writes_at(&plan, "sub.example.org").is_empty(),
+		"delegation got records: {plan:?}"
+	);
+	assert!(
+		writes_at(&plan, "host.sub.example.org").is_empty(),
+		"a name under a delegation got records: {plan:?}"
+	);
+	assert_eq!(
+		skip_reason(&plan, "sub.example.org").as_deref(),
+		Some(
+			"sub.example.org is delegated to other nameservers; left as is"
+		)
+	);
+	assert!(
+		skip_reason(&plan, "host.sub.example.org").is_some(),
+		"a name under a delegation must be reported as left alone: {plan:?}"
+	);
+}
+
+/// The apex NS records the registrar publishes are the delegation
+/// pointing at *us* — they do not mark the zone as delegated to
+/// someone else. The apex is served by epistle (it is the mail
+/// domain), so the lockdown must not classify it as a delegation.
+/// Before this fix the registrar's NS rrset would not have been
+/// reported as anything special (parse_kind fell through to TXT),
+/// but the test guards the new contract: an apex with NS records
+/// is still the served mail domain, not a delegation.
+#[test]
+fn apex_ns_records_do_not_skip_the_apex() {
+	let plan = plan(&[
+		rec("example.org", RecordKind::A, "192.0.2.1"),
+		rec("example.org", RecordKind::Ns, "ns1.example.org."),
+		rec("example.org", RecordKind::Ns, "ns2.example.org."),
+	]);
+	// The apex is epistle's mail domain: it is skipped because it is
+	// served, and the skip reason is the served one (not a
+	// delegation).
+	assert_eq!(
+		skip_reason(&plan, "example.org").as_deref(),
+		Some("epistle serves example.org (a mail domain epistle hosts); left as is"),
+		"apex must be reported as served, not as a delegation"
+	);
+}
+
+/// A delegated name that has its own A record (glue) but no SPF or MX
+/// does not get the null records planned on top of the glue. The
+/// null records would be occluded by the delegation and would be
+/// rejected by some providers' APIs.
+#[test]
+fn delegated_name_with_only_glue_does_not_get_null_spf_or_mx() {
+	let plan = plan(&[
+		rec("sub.example.org", RecordKind::Ns, "ns1.delegated.example."),
+		rec("sub.example.org", RecordKind::A, "192.0.2.1"),
+	]);
+	let mut null_writes: Vec<String> = plan
+		.entries
+		.iter()
+		.filter(|e| {
+			e.record.name == "sub.example.org"
+				&& (e.record.value == NULL_SPF || e.record.value == NULL_MX)
+		})
+		.map(|e| e.record.value.clone())
+		.collect();
+	null_writes.sort();
+	assert!(
+		null_writes.is_empty(),
+		"the delegation must absorb the null-SPF/null-MX plans: {plan:?}"
+	);
+}
+
 #[test]
 fn a_hosted_subdomain_is_served_like_the_apex() {
 	let existing = vec![a("lists.example.org"), a("autoconfig.lists.example.org")];

@@ -180,13 +180,14 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	let mut entries: Vec<PlanEntry> = dmarc_entry.into_iter().collect();
 	let mut skipped = Vec::new();
 	let exchanges = mx_owners(input.existing);
+	let delegated = delegated_names(input.domain, input.existing);
 	for name in address_names(input.domain, input.existing) {
 		let records: Vec<&DnsRecord> = input
 			.existing
 			.iter()
 			.filter(|r| canonical_name(&r.name) == name)
 			.collect();
-		match classify(&name, &records, input.served, &exchanges, journal) {
+		match classify(&name, &records, input.served, &exchanges, journal, &delegated) {
 			Verdict::Skip(reason) => skipped.push(SkipEntry { name, reason }),
 			Verdict::Add { spf, mx } => {
 				if spf {
@@ -246,6 +247,37 @@ fn address_names(domain: &str, existing: &[DnsRecord]) -> Vec<String> {
 	names
 }
 
+/// The names that carry NS records and are not the zone apex: those
+/// are delegations to other nameservers. Any name under a delegation
+/// lives on someone else's zone, so the lockdown must not try to
+/// publish records there. Apex NS records are not a delegation: the
+/// registrar publishes them and the operator's zone owns them.
+fn delegated_names(domain: &str, existing: &[DnsRecord]) -> Vec<String> {
+	let mut names: Vec<String> = existing
+		.iter()
+		.filter(|r| r.kind == RecordKind::Ns)
+		.map(|r| canonical_name(&r.name))
+		.filter(|name| in_domain(name, domain) && name != domain)
+		.collect();
+	names.sort();
+	names.dedup();
+	names
+}
+
+/// Every name under any of `delegated`: a name at `foo.delegated.example.org`
+/// is just as much out of reach as `delegated.example.org` itself, because
+/// the nameserver the NS rrset points at owns the whole subtree. The
+/// `delegated` list is the flat set of names; the comparison is the same
+/// `in_domain` form the rest of the lockdown uses.
+fn under_delegation(name: &str, delegated: &[String]) -> bool {
+	for d in delegated {
+		if name == d || in_domain(name, d) {
+			return true;
+		}
+	}
+	false
+}
+
 /// Every MX target in the zone, with the first name that points at it.
 fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
 	let mut owners = BTreeMap::new();
@@ -272,7 +304,23 @@ fn classify(
 	served: &ServedNames,
 	exchanges: &BTreeMap<String, String>,
 	journal: &Journal,
+	delegated: &[String],
 ) -> Verdict {
+	// The name sits under a delegation: the NS rrset on the parent
+	// name points at another nameserver, which owns every record
+	// under it. Publishing here would either be occluded or rejected.
+	if under_delegation(name, delegated) {
+		// The delegation reason names the parent so the operator
+		// can see which NS rrset is in charge.
+		let parent = delegated
+			.iter()
+			.find(|d| name == d.as_str() || in_domain(name, d))
+			.cloned()
+			.unwrap_or_else(|| name.to_string());
+		return Verdict::Skip(format!(
+			"{parent} is delegated to other nameservers; left as is"
+		));
+	}
 	if let Some(role) = served.role(name) {
 		return Verdict::Skip(format!("epistle serves {name} ({role}); left as is"));
 	}
