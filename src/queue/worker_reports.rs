@@ -21,6 +21,16 @@ fn message_id_of(entry: &SpoolEntry) -> Option<String> {
 	value.into_iter().next()
 }
 
+/// The number of the attempt a conversation just made for `recipient`,
+/// counting from one: those recorded before it, plus this one.
+fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
+	entry
+		.envelope
+		.recipient_state(recipient)
+		.attempts
+		.saturating_add(1)
+}
+
 impl Worker {
 	/// Write one per-recipient outcome to the delivery log, when the log
 	/// is enabled. A best-effort writer: a failed `append` is logged and
@@ -142,7 +152,7 @@ impl Worker {
 						DeliveryOutcome::Delivered,
 						Some(remote),
 						Some("250 OK"),
-						0,
+						attempt_of(entry, recipient),
 					);
 					self.notify_delivered(
 						id,
@@ -154,16 +164,22 @@ impl Worker {
 				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
-					let attempts = entry.envelope.recipient_state(recipient).attempts;
+					let before = entry.envelope.recipient_state(recipient);
+					let attempts = before.attempts;
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
-					self.log_outcome(
-						&entry.envelope,
-						recipient,
-						DeliveryOutcome::Deferred,
-						Some(remote),
-						Some(&Self::bounded_reply(reason)),
-						attempts,
-					);
+					// One record per recipient for each distinct reason: a
+					// destination down for days repeating the same reply
+					// on every retry adds nothing after the first.
+					if before.last_error.as_deref() != Some(reason.as_str()) {
+						self.log_outcome(
+							&entry.envelope,
+							recipient,
+							DeliveryOutcome::Deferred,
+							Some(remote),
+							Some(&Self::bounded_reply(reason)),
+							attempts.saturating_add(1),
+						);
+					}
 					self.notify_delayed(
 						id,
 						recipient,
@@ -183,7 +199,7 @@ impl Worker {
 						DeliveryOutcome::Failed,
 						Some(remote),
 						Some(&Self::bounded_reply(reason)),
-						entry.envelope.recipient_state(recipient).attempts,
+						attempt_of(entry, recipient),
 					);
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from

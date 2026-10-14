@@ -252,7 +252,7 @@ async fn the_extra_recipients_of_a_452_go_out_at_once_and_are_not_failures() {
 	assert_eq!(log.len(), 5);
 	assert!(
 		log.iter()
-			.all(|record| record.outcome == DeliveryOutcome::Delivered && record.attempt == 0),
+			.all(|record| record.outcome == DeliveryOutcome::Delivered && record.attempt == 1),
 		"{log:?}"
 	);
 }

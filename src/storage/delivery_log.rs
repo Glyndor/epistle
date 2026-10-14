@@ -43,8 +43,10 @@ pub const DEFAULT_DELIVERY_LOG_DAYS: u64 = 30;
 pub enum DeliveryOutcome {
 	/// The remote server accepted the message for this recipient.
 	Delivered,
-	/// A transient failure that will be retried. Emitted at most once per
-	/// recipient per message; subsequent deferrals do not write a record.
+	/// A transient failure that will be retried. Emitted once per
+	/// recipient per message for each distinct reply: a retry deferred for
+	/// the same reason as the one before writes no record, one deferred for
+	/// a new reason does.
 	Deferred,
 	/// Delivery failed permanently (the message expired or the remote
 	/// refused it).
@@ -113,8 +115,8 @@ pub struct DeliveryRecord {
 	/// the spool open.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reply: Option<String>,
-	/// Which attempt this record corresponds to. `0` for a record that
-	/// has no attempt (suppression, cancel).
+	/// Which attempt this record corresponds to, counting from one. `0`
+	/// for a record that has no attempt (suppression, cancel).
 	pub attempt: u32,
 	/// The caller-supplied correlation map, when the API attached one to
 	/// the submission. Empty in every record of a message the API did not
