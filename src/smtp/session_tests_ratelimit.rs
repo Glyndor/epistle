@@ -303,6 +303,26 @@ fn an_authenticated_session_is_not_subject_to_the_inbound_limits() {
 	}
 }
 
+/// An account with addresses in two limited domains gets the strictest
+/// limit every time, not whichever domain the address map yields first.
+#[test]
+fn an_account_in_two_limited_domains_gets_the_strictest_limit() {
+	for _ in 0..32 {
+		let directory = Directory::new(
+			["example.com".to_string(), "example.org".to_string()],
+			[
+				("carol@example.com".to_string(), "carol".to_string()),
+				("carol@example.org".to_string(), "carol".to_string()),
+			],
+		)
+		.with_domain_submission_limits([
+			("example.com".to_string(), 1),
+			("example.org".to_string(), 50),
+		]);
+		assert_eq!(directory.submission_limit_for("carol"), Some(1));
+	}
+}
+
 /// One message from `from` to a remote recipient, through to the end of
 /// the data. The `MAIL FROM` reply code; a 250 there must end delivered.
 pub(super) fn send_one(session: &mut Session, from: &str) -> u16 {
