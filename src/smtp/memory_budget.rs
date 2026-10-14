@@ -23,6 +23,8 @@
 //! default; setting it to `0` disables the budget (every reservation
 //! succeeds, the historical behaviour).
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 /// Default byte budget for the DATA / BDAT path when no
@@ -32,22 +34,39 @@ use std::sync::{Arc, Mutex};
 /// full message buffered.
 pub const DEFAULT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The share of the budget one client may hold by default: a quarter, so a
+/// single source cannot hold more than that while others wait.
+pub const CLIENT_SHARE_DIVISOR: u64 = 4;
+
 /// A shared byte budget for in-flight SMTP message transfers. Every
 /// session holds an `Arc<MemoryBudget>` and reserves from it on DATA and
 /// every BDAT chunk. Reservations are released on every path that drops
 /// the in-flight body.
+///
+/// One client may hold at most `client_share` of it, so a single source
+/// trickling large bodies slowly cannot hold the whole budget and refuse
+/// everybody else. Clients are keyed like the per-IP connection cap: the
+/// IPv4 address, or the /64 of an IPv6 one.
 pub struct MemoryBudget {
 	cap: u64,
-	used: Mutex<u64>,
+	client_share: u64,
+	usage: Mutex<Usage>,
+}
+
+/// What is held, in total and per client.
+#[derive(Default)]
+struct Usage {
+	used: u64,
+	per_client: HashMap<IpAddr, u64>,
 }
 
 impl std::fmt::Debug for MemoryBudget {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let used = *self.used.lock().expect("memory budget");
 		formatter
 			.debug_struct("MemoryBudget")
 			.field("cap", &self.cap)
-			.field("used", &used)
+			.field("client_share", &self.client_share)
+			.field("used", &self.used())
 			.finish()
 	}
 }
@@ -57,20 +76,26 @@ impl MemoryBudget {
 	/// for `[server] message_memory_budget = 0` and the default for
 	/// tests that do not wire the budget in.
 	pub fn unlimited() -> Self {
-		MemoryBudget {
-			cap: 0,
-			used: Mutex::new(0),
-		}
+		Self::with_cap(0)
 	}
 
 	/// A budget with the given cap in bytes. `0` is the unlimited
 	/// variant; any positive value is the upper bound on the sum of
-	/// in-flight reservations.
+	/// in-flight reservations. One client may take all of it until
+	/// [`Self::with_client_share`] says otherwise.
 	pub fn with_cap(cap: u64) -> Self {
 		MemoryBudget {
 			cap,
-			used: Mutex::new(0),
+			client_share: cap,
+			usage: Mutex::new(Usage::default()),
 		}
+	}
+
+	/// Limit what one client may hold at once to `share` bytes (at most
+	/// the cap).
+	pub fn with_client_share(mut self, share: u64) -> Self {
+		self.client_share = share.min(self.cap);
+		self
 	}
 
 	/// The configured cap, in bytes. `0` means unlimited.
@@ -78,43 +103,68 @@ impl MemoryBudget {
 		self.cap
 	}
 
-	/// The bytes currently reserved. Includes DATA, BDAT chunks that have
-	/// been admitted but not yet finalized, and reservations that have not
-	/// been released yet on a slow path.
-	pub fn used(&self) -> u64 {
-		*self.used.lock().expect("memory budget")
+	/// The most one client may hold at once, in bytes.
+	pub fn client_share(&self) -> u64 {
+		self.client_share
 	}
 
-	/// Try to claim `bytes` octets from the budget. `Ok(())` when the
-	/// reservation fits (or the budget is unlimited), `Err(required)` with
-	/// the number of bytes the caller asked for when the reservation
-	/// would exceed the cap. The caller is expected to call [`Self::release`]
-	/// with the same `bytes` on every path that drops the reservation.
+	/// The bytes currently reserved. Includes DATA, BDAT chunks that have
+	/// been admitted but not yet finalized, and bodies being delivered.
+	pub fn used(&self) -> u64 {
+		self.usage.lock().expect("memory budget").used
+	}
+
+	/// Try to claim `bytes` octets with no client attached (a session that
+	/// does not know its peer). See [`Self::try_reserve_for`].
 	pub fn try_reserve(&self, bytes: u64) -> Result<(), u64> {
+		self.try_reserve_for(None, bytes)
+	}
+
+	/// Try to claim `bytes` octets for `client`. `Ok(())` when the claim
+	/// fits the cap and the client's share (or the budget is unlimited),
+	/// `Err(bytes)` otherwise, with nothing claimed. Every claim must be
+	/// handed back with [`Self::release_for`] and the same client;
+	/// [`Reservation`] does that when dropped.
+	pub fn try_reserve_for(&self, client: Option<IpAddr>, bytes: u64) -> Result<(), u64> {
 		if self.cap == 0 {
 			return Ok(());
 		}
-		if bytes > self.cap {
+		let mut usage = self.usage.lock().expect("memory budget");
+		if usage.used.saturating_add(bytes) > self.cap {
 			return Err(bytes);
 		}
-		let mut used = self.used.lock().expect("memory budget");
-		if used.saturating_add(bytes) > self.cap {
-			return Err(bytes);
+		if let Some(client) = client {
+			let held = usage.per_client.get(&client).copied().unwrap_or(0);
+			if held.saturating_add(bytes) > self.client_share {
+				return Err(bytes);
+			}
+			usage.per_client.insert(client, held + bytes);
 		}
-		*used = used.saturating_add(bytes);
+		usage.used += bytes;
 		Ok(())
 	}
 
-	/// Release a reservation previously made with [`Self::try_reserve`].
-	/// Saturating: a `release` larger than what was reserved is a no-op
-	/// (the extra is clamped to zero), so a path that double-releases on
-	/// success and on disconnect does not underflow the counter.
+	/// Release a claim made with [`Self::try_reserve`].
 	pub fn release(&self, bytes: u64) {
+		self.release_for(None, bytes);
+	}
+
+	/// Release a claim made with [`Self::try_reserve_for`]. Saturating: a
+	/// release larger than what is held clamps to zero rather than wrap.
+	pub fn release_for(&self, client: Option<IpAddr>, bytes: u64) {
 		if self.cap == 0 || bytes == 0 {
 			return;
 		}
-		let mut used = self.used.lock().expect("memory budget");
-		*used = used.saturating_sub(bytes);
+		let mut usage = self.usage.lock().expect("memory budget");
+		usage.used = usage.used.saturating_sub(bytes);
+		if let Some(client) = client
+			&& let Some(held) = usage.per_client.get_mut(&client)
+		{
+			*held = held.saturating_sub(bytes);
+			if *held == 0 {
+				usage.per_client.remove(&client);
+			}
+		}
 	}
 }
 
@@ -127,6 +177,7 @@ impl MemoryBudget {
 #[derive(Default)]
 pub struct Reservation {
 	budget: Option<Arc<MemoryBudget>>,
+	client: Option<IpAddr>,
 	bytes: u64,
 }
 
@@ -136,12 +187,20 @@ impl Reservation {
 		Reservation::default()
 	}
 
-	/// Claim `bytes` more octets from `budget`. On refusal nothing is
-	/// claimed and the octets the reservation already holds stay held.
-	pub fn try_grow(&mut self, budget: &Arc<MemoryBudget>, bytes: u64) -> Result<(), u64> {
-		budget.try_reserve(bytes)?;
+	/// Claim `bytes` more octets from `budget` for the client `peer`
+	/// belongs to. On refusal nothing is claimed and the octets the
+	/// reservation already holds stay held.
+	pub fn try_grow(
+		&mut self,
+		budget: &Arc<MemoryBudget>,
+		peer: Option<IpAddr>,
+		bytes: u64,
+	) -> Result<(), u64> {
+		let client = peer.map(crate::smtp::per_ip::client_key);
+		budget.try_reserve_for(client, bytes)?;
 		if self.budget.is_none() {
 			self.budget = Some(Arc::clone(budget));
+			self.client = client;
 		}
 		self.bytes = self.bytes.saturating_add(bytes);
 		Ok(())
@@ -151,6 +210,7 @@ impl Reservation {
 	pub fn absorb(&mut self, mut other: Reservation) {
 		if self.budget.is_none() {
 			self.budget = other.budget.take();
+			self.client = other.client;
 		}
 		self.bytes = self.bytes.saturating_add(std::mem::take(&mut other.bytes));
 	}
@@ -164,7 +224,7 @@ impl Reservation {
 impl Drop for Reservation {
 	fn drop(&mut self) {
 		if let Some(budget) = &self.budget {
-			budget.release(self.bytes);
+			budget.release_for(self.client, self.bytes);
 		}
 	}
 }
@@ -219,12 +279,12 @@ mod tests {
 	fn a_reservation_hands_its_octets_back_when_dropped() {
 		let budget = Arc::new(MemoryBudget::with_cap(100));
 		let mut held = Reservation::none();
-		assert!(held.try_grow(&budget, 30).is_ok());
+		assert!(held.try_grow(&budget, None, 30).is_ok());
 		let mut chunk = Reservation::none();
-		assert!(chunk.try_grow(&budget, 50).is_ok());
+		assert!(chunk.try_grow(&budget, None, 50).is_ok());
 		held.absorb(chunk);
 		assert_eq!((held.bytes(), budget.used()), (80, 80));
-		assert_eq!(held.try_grow(&budget, 30), Err(30));
+		assert_eq!(held.try_grow(&budget, None, 30), Err(30));
 		assert_eq!(
 			held.bytes(),
 			80,

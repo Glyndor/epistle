@@ -198,3 +198,37 @@ fn many_concurrent_sessions_share_the_budget() {
 	}
 	assert_eq!(budget.used(), 0);
 }
+
+#[test]
+fn one_client_cannot_hold_more_than_its_share_of_the_budget() {
+	// A client trickling bodies slowly over many connections would hold
+	// the whole budget and every other sender would get 452. Its share
+	// is counted per IPv4 address or IPv6 /64.
+	let budget = Arc::new(MemoryBudget::with_cap(1000).with_client_share(400));
+	let open = |peer: &str| {
+		let mut session = greeted().with_memory_budget(Arc::clone(&budget));
+		session.set_peer_ip(Some(peer.parse().expect("peer")));
+		session.command_line("MAIL FROM:<a@example.org>");
+		session.command_line("RCPT TO:<b@example.org>");
+		session.command_line("DATA");
+		session
+	};
+	let mut first = open("2001:db8::1");
+	let mut second = open("2001:db8::2");
+	assert_eq!(first.data_line(&[b'x'; 198]), None);
+	assert_eq!(second.data_line(&[b'x'; 198]), None);
+	assert_eq!(budget.used(), 400, "the client's share is full");
+	let mut third = open("2001:db8::3");
+	assert_eq!(third.data_line(&[b'x'; 198]), None);
+	assert_eq!(
+		budget.used(),
+		400,
+		"a third body from the same /64 claims nothing"
+	);
+	assert_eq!(reply_code(&third.data_line(b".").expect("end")), 452);
+	let mut other = open("198.51.100.7");
+	assert_eq!(other.data_line(&[b'x'; 198]), None);
+	assert_eq!(reply_code(&other.data_line(b".").expect("end")), 250);
+	drop(first);
+	assert_eq!(budget.used(), 400, "the other client's body is still held");
+}

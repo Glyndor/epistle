@@ -36,7 +36,7 @@ impl Session {
 		// kept, so its octets are never parsed as commands.
 		let mut chunk = Reservation::none();
 		if let Some(budget) = &self.memory_budget
-			&& chunk.try_grow(budget, size as u64).is_err()
+			&& chunk.try_grow(budget, self.peer_ip, size as u64).is_err()
 		{
 			self.reset();
 			return Action::DiscardChunk {

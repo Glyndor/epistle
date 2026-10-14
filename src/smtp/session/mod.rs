@@ -702,7 +702,9 @@ impl Session {
 		// body and the counter stay consistent because we never extend
 		// past a failed reservation.
 		if let Some(budget) = &self.memory_budget
-			&& reserved.try_grow(budget, delta as u64).is_err()
+			&& reserved
+				.try_grow(budget, self.peer_ip, delta as u64)
+				.is_err()
 		{
 			*budget_exhausted = true;
 			return None;

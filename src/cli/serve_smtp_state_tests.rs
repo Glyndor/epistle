@@ -84,6 +84,31 @@ fn message_memory_budget_config_threads_through_smtp_shared_state() {
 	assert_eq!(budget.cap(), 128 * 1024 * 1024);
 }
 
+#[test]
+fn one_client_gets_a_quarter_of_the_budget_and_never_less_than_one_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let share = |settings: &str| {
+		let state =
+			build_smtp_shared_state(&build_config(dir.path(), settings), &metrics).expect("state");
+		state.memory_budget.expect("budget present").client_share()
+	};
+	assert_eq!(
+		share(""),
+		64 * 1024 * 1024,
+		"a quarter of the 256 MiB default"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432"),
+		crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+		"a quarter of 32 MiB is below one 25 MiB message, so one message it is"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432\nmax_message_size = 1048576"),
+		8 * 1024 * 1024
+	);
+}
+
 fn config(dir: &std::path::Path, settings: &str) -> Config {
 	toml::from_str(&format!(
 		"hostname = 'mail.example.org'\ndata_dir = '{}'\n{settings}",

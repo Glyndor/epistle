@@ -84,12 +84,23 @@ pub(super) fn build_smtp_shared_state(
 	// `0` disables the budget (the historical unbounded behaviour) so a
 	// configured 0 leaves the slot empty. Any other value becomes a shared
 	// budget for every SMTP listener.
-	let memory_budget = match config.message_memory_budget {
-		Some(0) => None,
-		Some(cap) => Some(Arc::new(memory_budget::MemoryBudget::with_cap(cap))),
-		None => Some(Arc::new(memory_budget::MemoryBudget::with_cap(
-			memory_budget::DEFAULT_BUDGET_BYTES,
-		))),
+	let memory_budget = match config
+		.message_memory_budget
+		.unwrap_or(memory_budget::DEFAULT_BUDGET_BYTES)
+	{
+		0 => None,
+		cap => {
+			// One client gets a quarter of the budget, but always room for
+			// one message of the largest size.
+			let largest = match max_message_size {
+				0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+				size => size as u64,
+			};
+			let share = (cap / memory_budget::CLIENT_SHARE_DIVISOR).max(largest);
+			Some(Arc::new(
+				memory_budget::MemoryBudget::with_cap(cap).with_client_share(share),
+			))
+		}
 	};
 	let clamd = config.antispam.clamd_socket.as_ref().map(|socket| {
 		Arc::new(
