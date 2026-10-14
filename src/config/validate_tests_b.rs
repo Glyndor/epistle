@@ -183,9 +183,7 @@ mod plaintext_listener_tls_warning {
 		let events = cap.events.clone();
 		let subscriber = Registry::default().with(cap);
 		tracing::subscriber::with_default(subscriber, f);
-		Arc::try_unwrap(events)
-			.map(|m| m.into_inner().unwrap())
-			.unwrap_or_default()
+		std::mem::take(&mut *events.lock().unwrap())
 	}
 
 	fn parse(toml: &str) -> Result<Config, ConfigError> {

@@ -116,7 +116,31 @@ pub(crate) fn run_with_capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
 	let events = cap.events.clone();
 	let subscriber = Registry::default().with(cap);
 	tracing::subscriber::with_default(subscriber, f);
-	Arc::try_unwrap(events)
-		.map(|m| m.into_inner().unwrap())
-		.unwrap_or_default()
+	std::mem::take(&mut *events.lock().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Mutex;
+
+	/// `tracing` rebuilds every callsite's interest by upgrading each live
+	/// dispatcher, from whichever thread registers a new callsite. A rebuild
+	/// that overlaps the end of a capture still holds the capture's
+	/// subscriber, so the recorded events must not depend on being the
+	/// last owner of it. Holding a clone of the dispatcher stands in for
+	/// that rebuild.
+	#[test]
+	fn events_survive_a_dispatcher_held_past_the_capture() {
+		let held = Mutex::new(None);
+		let events = super::run_with_capture(|| {
+			tracing::warn!(probe = "kept", "probe");
+			*held.lock().unwrap() = Some(tracing::dispatcher::get_default(Clone::clone));
+		});
+		assert_eq!(
+			events.len(),
+			1,
+			"the event recorded while another holder kept the subscriber alive was lost"
+		);
+		drop(held);
+	}
 }
