@@ -497,6 +497,10 @@ impl Server {
 		data: &[u8],
 	) {
 		let Some(data_dir) = self.data_dir.as_ref() else {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"save_sent: no data directory on this listener; skipping copy"
+			);
 			return;
 		};
 		let message_id = match crate::storage::save_sent::first_message_id(data) {

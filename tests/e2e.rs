@@ -213,10 +213,10 @@ async fn submit(env: &Env, marker: &str) {
 	expect_code(&mut tls, 221).await;
 }
 
-/// Open the `imaps` port over TLS, log in, SELECT INBOX and FETCH every message,
+/// Open the `imaps` port over TLS, log in, SELECT `mailbox` and FETCH every message,
 /// returning the concatenated FETCH text. A fresh connection per poll keeps the
 /// IMAP state simple.
-async fn fetch_all(env: &Env) -> String {
+async fn fetch_all(env: &Env, mailbox: &str) -> String {
 	let addr = format!("{}:{}", env.host, env.imaps_port);
 	let tcp = TcpStream::connect(&addr).await.expect("connect imaps");
 	let mut tls = tls_client_connect(tcp, env.server_name.clone(), &env.ca_pem).await;
@@ -228,7 +228,7 @@ async fn fetch_all(env: &Env) -> String {
 	)
 	.await;
 	read_until(&mut tls, "a1 OK").await;
-	send_line(&mut tls, "a2 SELECT INBOX").await;
+	send_line(&mut tls, &format!("a2 SELECT {mailbox}")).await;
 	let select = read_until(&mut tls, "a2 OK").await;
 	// No message yet: report an empty mailbox so the caller keeps polling.
 	if select.contains("* 0 EXISTS") {
@@ -245,15 +245,15 @@ async fn fetch_all(env: &Env) -> String {
 
 /// Poll the IMAP store until the `marker` arrives (delivery is near-instant
 /// locally, but allow a short backoff), or fail after the deadline.
-async fn poll_for_marker(env: &Env, marker: &str) -> String {
+async fn poll_for_marker(env: &Env, marker: &str, mailbox: &str) -> String {
 	for _ in 0..50 {
-		let fetched = fetch_all(env).await;
+		let fetched = fetch_all(env, mailbox).await;
 		if fetched.contains(marker) {
 			return fetched;
 		}
 		tokio::time::sleep(Duration::from_millis(200)).await;
 	}
-	panic!("message with marker {marker:?} did not arrive over IMAP within the deadline");
+	panic!("message with marker {marker:?} did not reach {mailbox} within the deadline");
 }
 
 #[tokio::test]
@@ -267,7 +267,7 @@ async fn submission_to_imap_round_trip() {
 	let marker = format!("e2e-{}", uuid::Uuid::now_v7());
 	submit(&env, &marker).await;
 
-	let fetched = poll_for_marker(&env, &marker).await;
+	let fetched = poll_for_marker(&env, &marker, "INBOX").await;
 	assert!(
 		fetched.contains(&format!("Subject: {marker}")),
 		"FETCH missing subject marker: {fetched}"
@@ -275,5 +275,23 @@ async fn submission_to_imap_round_trip() {
 	assert!(
 		fetched.contains(&format!("body {marker}")),
 		"FETCH missing body marker: {fetched}"
+	);
+}
+
+/// A message the account submits is saved in its Sent folder by the server
+/// (save_sent is on by default). The copy is written by the running server,
+/// so this fails when the submission listener is not wired to the store.
+#[tokio::test]
+async fn a_submission_is_saved_in_sent() {
+	let Some(env) = Env::load() else {
+		eprintln!("skipping: E2E_* environment not set");
+		return;
+	};
+	let marker = format!("e2e-sent-{}", uuid::Uuid::now_v7());
+	submit(&env, &marker).await;
+	let fetched = poll_for_marker(&env, &marker, "Sent").await;
+	assert!(
+		fetched.contains(&format!("Subject: {marker}")),
+		"Sent copy missing subject marker: {fetched}"
 	);
 }

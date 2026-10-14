@@ -483,7 +483,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_max_connections(max_conn)
-					.with_report_dir(config.data_dir.clone());
+					.with_report_dir(config.data_dir.clone())
+					// The Sent copy of a submission is written into the account's
+					// mailboxes, encrypted at rest like any other stored message.
+					.with_data_dir(config.data_dir.clone())
+					.with_crypto(Arc::new(crypto.clone()));
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {
