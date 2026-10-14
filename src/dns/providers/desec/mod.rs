@@ -70,18 +70,22 @@ impl DesecProvider {
 	/// The record type token for a kind we can publish (deSEC handles each as
 	/// an rrset; MX needs the priority split out into a separate field which
 	/// epistle does not build yet).
-	fn rrset_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn rrset_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// The subname (label relative to the zone): the name with the trailing
 	/// `.zone` removed; the apex is the empty string.
@@ -106,8 +110,8 @@ impl DesecProvider {
 	/// no DKIM verifier stitches back together. deSEC lists the canonical
 	/// form, the same quoted strings, and reads `\DDD` as decimal (RFC 1035
 	/// §5.1), which is [`TXT_FORM`]. Other kinds go verbatim.
-	fn record_content(kind: RecordKind, value: &str) -> Vec<String> {
-		if kind == RecordKind::Txt {
+	fn record_content(kind: &RecordKind, value: &str) -> Vec<String> {
+		if kind == &RecordKind::Txt {
 			vec![txt_encode(value, TXT_FORM)]
 		} else {
 			vec![value.to_string()]
@@ -130,7 +134,7 @@ impl DesecProvider {
 		records: Vec<String>,
 	) -> Result<(), ProviderError> {
 		self.authorize(record)?;
-		let kind = Self::rrset_kind(record.kind)?;
+		let kind = Self::rrset_kind(&record.kind)?;
 		let body = serde_json::json!([{
 			"subname": self.subname(&record.name),
 			"type": kind,
@@ -202,13 +206,13 @@ impl DesecProvider {
 impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(async move {
-			let mut content = Self::record_content(record.kind, &record.value);
+			let mut content = Self::record_content(&record.kind, &record.value);
 			// The bulk PUT replaces the whole rrset. The upsert contract
 			// in `src/dns/provider.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
 			if record.kind == RecordKind::Txt {
 				self.authorize(&record)?;
-				let kind = Self::rrset_kind(record.kind)?;
+				let kind = Self::rrset_kind(&record.kind)?;
 				if let Some(rrset) = self.fetch_rrset(&record.name, kind).await? {
 					let siblings = rrset
 						.records
@@ -224,7 +228,7 @@ impl DnsProvider for DesecProvider {
 		let record_value = record.value.clone();
 		Box::pin(async move {
 			self.authorize(&record)?;
-			let kind = Self::rrset_kind(record.kind)?;
+			let kind = Self::rrset_kind(&record.kind)?;
 			// The TXT matching rule from `src/dns/provider.rs` is
 			// the contract: a value-bearing delete drops only the
 			// record whose content matches the value (a sibling ACME
@@ -287,16 +291,19 @@ impl DnsProvider for DesecProvider {
 						format!("{}.{}", r.subname, zone)
 					};
 					let kind = parse_kind(&r.kind);
-					r.records.into_iter().map(move |value| DnsRecord {
-						name: name.clone(),
-						kind,
-						value: if kind == RecordKind::Txt {
-							txt_decode(&value, TXT_FORM)
-						} else {
-							value
-						},
-						ttl: r.ttl,
-						proxied: None,
+					r.records.into_iter().map(move |value| {
+						let kind_for_value = &kind;
+						DnsRecord {
+							name: name.clone(),
+							kind: kind.clone(),
+							value: if kind_for_value == &RecordKind::Txt {
+								txt_decode(&value, TXT_FORM)
+							} else {
+								value
+							},
+							ttl: r.ttl,
+							proxied: None,
+						}
 					})
 				})
 				.collect())
@@ -311,12 +318,17 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"AAAA" => RecordKind::Aaaa,
 		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
 		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(kind.to_string()),
 	}
 }
+
 
 /// Map a write response to success or a typed error.
 fn check(response: reqwest::Response) -> Result<(), ProviderError> {

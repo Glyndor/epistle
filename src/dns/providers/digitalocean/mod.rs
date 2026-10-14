@@ -93,18 +93,22 @@ impl DigitaloceanProvider {
 	/// The DigitalOcean type token for a kind we can publish; SRV uses
 	/// dedicated `priority`/`weight`/`port`/`data` fields, MX needs the
 	/// priority split out (epistle still packs it into the value).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// The relative name DigitalOcean's API wants: `name` minus the zone suffix,
 	/// or `"@"` for the apex. DigitalOcean stores TXT and most record types with
@@ -345,7 +349,7 @@ impl DigitaloceanProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		let body = Self::record_body(kind, &rel, &record)?;
@@ -396,7 +400,7 @@ impl DigitaloceanProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
@@ -485,10 +489,14 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"AAAA" => RecordKind::Aaaa,
 		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
 		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

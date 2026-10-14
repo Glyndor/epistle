@@ -171,18 +171,22 @@ impl Rfc2136Provider {
 	/// The record kinds this provider can publish. SRV maps directly from the
 	/// presentation form to the wire format; MX needs the priority split out
 	/// (epistle still packs it into the value).
-	fn supported_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn supported_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// Build the update section for a TXT upsert. The section
 	/// contains a `class NONE` delete for every cached value with the
@@ -204,12 +208,12 @@ impl Rfc2136Provider {
 		zone_query.set_query_class(DNSClass::IN);
 		message.add_zone(zone_query);
 		for stale in cached.iter().filter(|c| same_txt_purpose(c, value)) {
-			let rdata = record_rdata(RecordKind::Txt, stale)?;
+			let rdata = record_rdata(&RecordKind::Txt, stale)?;
 			let mut delete = Record::from_rdata(name.clone(), 0, rdata);
 			delete.dns_class = DNSClass::NONE;
 			message.add_update(delete);
 		}
-		let rdata = record_rdata(RecordKind::Txt, value)?;
+		let rdata = record_rdata(&RecordKind::Txt, value)?;
 		let add = Record::from_rdata(name.clone(), ttl, rdata);
 		message.add_update(add);
 		Ok(message)
@@ -225,7 +229,7 @@ impl Rfc2136Provider {
 	fn build_update_message(
 		zone: &Name,
 		name: &Name,
-		kind: RecordKind,
+		kind: &RecordKind,
 		value: &str,
 		ttl: u32,
 	) -> Result<Message, ProviderError> {
@@ -257,7 +261,7 @@ impl Rfc2136Provider {
 	fn build_delete_message(
 		zone: &Name,
 		name: &Name,
-		kind: RecordKind,
+		kind: &RecordKind,
 	) -> Result<Message, ProviderError> {
 		let rr_type = RecordType::from_str(Self::supported_kind(kind)?)
 			.map_err(|e| ProviderError::Remote(format!("unknown record type: {e}")))?;
@@ -295,7 +299,7 @@ impl Rfc2136Provider {
 			delete.dns_class = DNSClass::ANY;
 			message.add_update(delete);
 		} else {
-			let rdata = record_rdata(RecordKind::Txt, value)?;
+			let rdata = record_rdata(&RecordKind::Txt, value)?;
 			let mut delete = Record::from_rdata(name.clone(), 0, rdata);
 			delete.dns_class = DNSClass::NONE;
 			message.add_update(delete);
@@ -385,7 +389,7 @@ impl DnsProvider for Rfc2136Provider {
 				};
 				Self::build_txt_update_message(&zone, &name, record.ttl, &record.value, &cached)?
 			} else {
-				Self::build_update_message(&zone, &name, record.kind, &record.value, record.ttl)?
+				Self::build_update_message(&zone, &name, &record.kind, &record.value, record.ttl)?
 			};
 			self.send_update(message).await?;
 			if record.kind == RecordKind::Txt {
@@ -408,7 +412,7 @@ impl DnsProvider for Rfc2136Provider {
 			let message = if record.kind == RecordKind::Txt {
 				Self::build_txt_delete_message(&zone, &name, &record.value)?
 			} else {
-				Self::build_delete_message(&zone, &name, record.kind)?
+				Self::build_delete_message(&zone, &name, &record.kind)?
 			};
 			self.send_update(message).await?;
 			if record.kind == RecordKind::Txt {
@@ -444,7 +448,7 @@ fn decode_key(encoded: &str) -> Result<Vec<u8>, ProviderError> {
 }
 
 /// Build an [`RData`] for one of the supported kinds.
-fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
+fn record_rdata(kind: &RecordKind, value: &str) -> Result<RData, ProviderError> {
 	match kind {
 		RecordKind::A => {
 			let addr: std::net::Ipv4Addr = value
@@ -574,6 +578,10 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 			.map_err(|e| ProviderError::Remote(format!("bad MX exchange: {e}")))?;
 			Ok(RData::MX(MX::new(preference, exchange)))
 		}
+		RecordKind::Ns
+		| RecordKind::Https
+		| RecordKind::Svcb
+		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 	}
 }
 

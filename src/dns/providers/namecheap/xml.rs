@@ -142,10 +142,15 @@ pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
 	let kind = match host.kind.as_str() {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
-		"TXT" => RecordKind::Txt,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
+		"TLSA" => RecordKind::Tlsa,
+		"TXT" => RecordKind::Txt,
 		_ => return None,
 	};
 	let value = match kind {

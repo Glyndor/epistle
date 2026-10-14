@@ -398,7 +398,7 @@ fn every_record_kind_body_carries_the_comment() {
 		(RecordKind::Caa, "0 issue \"letsencrypt.org\""),
 	];
 	for (kind, value) in cases {
-		let r = rec(kind, value);
+		let r = rec(kind.clone(), value);
 		let body = CloudflareProvider::record_body(kind.as_str(), &r).unwrap();
 		let v: serde_json::Value = serde_json::from_str(&body).unwrap();
 		assert_eq!(v["comment"], expected_description(), "{}", kind.as_str());

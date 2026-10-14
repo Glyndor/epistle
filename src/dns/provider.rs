@@ -55,8 +55,13 @@ pub fn record_description() -> String {
 	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// A DNS record kind epistle publishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// A DNS record kind epistle publishes, or any other type the provider
+/// happens to know about. NS, HTTPS and SVCB are split out because they
+/// have specific meaning (`NS` marks a delegation, `HTTPS`/`SVCB` are
+/// alias forms the operator may add at the apex), and everything else
+/// keeps the type token the provider returned so a round-trip through
+/// `upsert`/`delete` cannot quietly swap it for a TXT.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecordKind {
 	/// IPv4 address record.
 	#[serde(rename = "A")]
@@ -83,11 +88,30 @@ pub enum RecordKind {
 	/// Certification Authority Authorization (RFC 8659).
 	#[serde(rename = "CAA")]
 	Caa,
+	/// Name server record. Marks a delegation: any name (other than the
+	/// zone apex) that carries NS records is delegated to other
+	/// nameservers, and `epistle dns lockdown` must not try to publish
+	/// anything under it.
+	#[serde(rename = "NS")]
+	Ns,
+	/// HTTPS RR (RFC 9460): alias for `SVCB` plus a `svcparams` hint,
+	/// used at the apex or a service name.
+	#[serde(rename = "HTTPS")]
+	Https,
+	/// Service binding record (RFC 9460).
+	#[serde(rename = "SVCB")]
+	Svcb,
+	/// Any other record type the provider returned, preserved with the
+	/// original type token so nothing is collapsed into TXT. The string
+	/// is the wire-format type name in upper case (`NAPTR`, `SSHFP`,
+	/// `LOC`, ...); the caller never sees it as a TXT record.
+	#[serde(rename = "OTHER")]
+	Other(String),
 }
 
 impl RecordKind {
 	/// The record type token used in zone files and provider APIs.
-	pub fn as_str(self) -> &'static str {
+	pub fn as_str(&self) -> &str {
 		match self {
 			RecordKind::A => "A",
 			RecordKind::Aaaa => "AAAA",
@@ -97,7 +121,21 @@ impl RecordKind {
 			RecordKind::Tlsa => "TLSA",
 			RecordKind::Srv => "SRV",
 			RecordKind::Caa => "CAA",
+			RecordKind::Ns => "NS",
+			RecordKind::Https => "HTTPS",
+			RecordKind::Svcb => "SVCB",
+			RecordKind::Other(name) => name.as_str(),
 		}
+	}
+
+	/// Whether this is a kind TXT-only logic should ignore: NS (a
+	/// delegation, not a TXT value), HTTPS/SVCB (alias forms with
+	/// specific semantics), or `Other` (the provider's own native type,
+	/// never collapsed into TXT). `same_txt_purpose`, the
+	/// duplicate-detection loops, and the drift checks use this so a
+	/// delegation's NS rrset is never treated as a TXT.
+	pub fn is_txt_kind(&self) -> bool {
+		matches!(self, RecordKind::Txt)
 	}
 }
 

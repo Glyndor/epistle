@@ -40,7 +40,7 @@ pub(crate) fn host_label(record_name: &str, zone: &str) -> String {
 /// Build a [`Host`] from a [`DnsRecord`], validating the value format for
 /// kinds that carry structured data (the MX preference).
 pub(crate) fn host_from_record(record: &DnsRecord, zone: &str) -> Result<Host, ProviderError> {
-	let kind_str = api_kind(record.kind)?;
+	let kind_str = api_kind(&record.kind)?;
 	let mut host = Host {
 		name: host_label(&record.name, zone),
 		kind: kind_str.to_string(),
@@ -75,15 +75,19 @@ pub(crate) fn host_from_record(record: &DnsRecord, zone: &str) -> Result<Host, P
 
 /// Whether `kind` can be published through Namecheap; see
 /// `NamecheapProvider::api_kind`.
-fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 	match kind {
-		RecordKind::A
-		| RecordKind::Aaaa
-		| RecordKind::Txt
-		| RecordKind::Cname
-		| RecordKind::Mx
-		| RecordKind::Caa => Ok(kind.as_str()),
-		// setHosts documents no SRV and no TLSA record type.
-		RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+		RecordKind::A => Ok("A"),
+		RecordKind::Aaaa => Ok("AAAA"),
+		RecordKind::Txt => Ok("TXT"),
+		RecordKind::Cname => Ok("CNAME"),
+		RecordKind::Mx => Ok("MX"),
+		RecordKind::Srv => Ok("SRV"),
+		RecordKind::Tlsa => Ok("TLSA"),
+		RecordKind::Caa => Ok("CAA"),
+		RecordKind::Ns
+		| RecordKind::Https
+		| RecordKind::Svcb
+		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 	}
 }

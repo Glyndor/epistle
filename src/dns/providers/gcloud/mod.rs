@@ -154,18 +154,22 @@ impl GcloudProvider {
 
 	/// The Google API type token for a kind we can publish; MX/SRV need
 	/// priority/weight handling we do not emit yet.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// Whether `record` sits inside `self.zone` (case-insensitive). Reject
 	/// before any network call.
@@ -352,7 +356,7 @@ impl GcloudProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let managed_zone = self.find_managed_zone(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
@@ -391,7 +395,7 @@ impl GcloudProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let managed_zone = self.find_managed_zone(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
@@ -460,16 +464,19 @@ impl GcloudProvider {
 			.flat_map(|r| {
 				let kind = parse_kind(&r.kind);
 				let name = r.name.trim_end_matches('.').to_string();
-				r.rrdatas.into_iter().map(move |value| DnsRecord {
-					name: name.clone(),
-					kind,
-					value: if kind == RecordKind::Txt {
-						txt_decode(&value, TXT_FORM)
-					} else {
-						value
-					},
-					ttl: r.ttl,
-					proxied: None,
+				r.rrdatas.into_iter().map(move |value| {
+					let kind_for_value = &kind;
+					DnsRecord {
+						name: name.clone(),
+						kind: kind.clone(),
+						value: if kind_for_value == &RecordKind::Txt {
+							txt_decode(&value, TXT_FORM)
+						} else {
+							value
+						},
+						ttl: r.ttl,
+						proxied: None,
+					}
 				})
 			})
 			.collect())
@@ -515,10 +522,14 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"AAAA" => RecordKind::Aaaa,
 		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
 		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

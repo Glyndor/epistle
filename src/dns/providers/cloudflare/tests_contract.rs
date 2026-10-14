@@ -170,3 +170,77 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		"the unrelated TXT was deleted: {writes:?}"
 	);
 }
+
+/// A listing against a zone that carries NS, CAA, HTTPS and an unknown
+/// record type (`NAPTR`) must surface every kind on its own line. Before
+/// this contract landed, NS / HTTPS / CAA came back as TXT, which made
+/// them invisible to `epistle dns lockdown` (delegated subdomains fell
+/// through to `null SPF` / `null MX` writes the nameserver would have
+/// rejected) and to a `list`-then-`upsert` round-trip (the upsert would
+/// have replaced the wrong record set).
+#[tokio::test]
+async fn list_preserves_ns_caa_https_and_unknown_kinds() {
+	let existing = vec![
+		serde_json::json!({
+			"id": "ns1", "type": "NS", "name": "sub.example.org",
+			"content": "ns1.delegated.example.", "ttl": 3600
+		}),
+		serde_json::json!({
+			"id": "caa1", "type": "CAA", "name": "example.org",
+			"content": "0 issue \"letsencrypt.org\"", "ttl": 3600
+		}),
+		serde_json::json!({
+			"id": "https1", "type": "HTTPS", "name": "example.org",
+			"content": "1 . alpn=\"h2\"", "ttl": 3600
+		}),
+		serde_json::json!({
+			"id": "naptr1", "type": "NAPTR", "name": "example.org",
+			"content": "100 10 \"S\" \"SIP+D2U\" \"\" _sip._udp.example.org.",
+			"ttl": 3600
+		}),
+	];
+	let (provider, _state) = mock(existing).await;
+	let records = provider.list("example.org").await.expect("list");
+	assert_eq!(
+		records.len(),
+		4,
+		"every record must come back, none collapsed: {records:?}"
+	);
+	let ns = records
+		.iter()
+		.find(|r| r.name == "sub.example.org")
+		.expect("NS record must come back");
+	assert!(
+		matches!(ns.kind, RecordKind::Ns),
+		"NS record must keep its kind, got {:?}",
+		ns.kind
+	);
+	assert_eq!(ns.value, "ns1.delegated.example.");
+	let caa = records
+		.iter()
+		.find(|r| r.name == "example.org" && matches!(r.kind, RecordKind::Caa))
+		.expect("CAA record must be its own kind");
+	assert_eq!(caa.value, "0 issue \"letsencrypt.org\"");
+	let https = records
+		.iter()
+		.find(|r| r.name == "example.org" && matches!(r.kind, RecordKind::Https))
+		.expect("HTTPS record must be its own kind");
+	assert_eq!(https.value, "1 . alpn=\"h2\"");
+	let naptr = records
+		.iter()
+		.find(|r| r.name == "example.org" && matches!(r.kind, RecordKind::Other(_)))
+		.expect("NAPTR record must come back");
+	match &naptr.kind {
+		RecordKind::Other(name) => assert_eq!(name, "NAPTR", "NAPTR must be Other(\"NAPTR\")"),
+		other => panic!("NAPTR must round-trip as Other, got {other:?}"),
+	}
+	assert_eq!(
+		naptr.value,
+		"100 10 \"S\" \"SIP+D2U\" \"\" _sip._udp.example.org."
+	);
+	// Crucially: nothing leaked into TXT.
+	assert!(
+		!records.iter().any(|r| r.kind == RecordKind::Txt),
+		"unknown kinds must not be silently reported as TXT: {records:?}"
+	);
+}

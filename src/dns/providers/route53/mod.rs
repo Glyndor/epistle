@@ -65,7 +65,7 @@ impl Route53Provider {
 
 	/// Submit a ChangeResourceRecordSets request with the given action.
 	async fn change(&self, action: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let kind = record_type(record.kind)?;
+		let kind = record_type(&record.kind)?;
 		// Route 53 wants a TXT value quoted and split by the caller: "break
 		// the value into strings of 255 characters or fewer, and enclose
 		// each string in double quotation marks" and "For the API, include
@@ -472,17 +472,21 @@ impl DnsProvider for Route53Provider {
 /// The Route 53 record type for a kind we can publish. SRV, MX, and CAA
 /// all use the same presentation form we emit (the value goes verbatim
 /// into `<Value>`), which Route 53 accepts.
-fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
-	match kind {
-		RecordKind::A
-		| RecordKind::Aaaa
-		| RecordKind::Txt
-		| RecordKind::Cname
-		| RecordKind::Tlsa
-		| RecordKind::Srv
-		| RecordKind::Mx
-		| RecordKind::Caa => Ok(kind.as_str()),
-	}
+fn record_type(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
 }
 
 /// The logical value of one rdata as `parse_txt_rrset` returns it: Route

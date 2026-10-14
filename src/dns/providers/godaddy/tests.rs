@@ -454,8 +454,12 @@ async fn list_never_guesses_whether_a_returned_name_is_absolute() {
 /// TXT set, not on the original record type.
 #[tokio::test]
 async fn list_skips_records_of_unsupported_kinds() {
+	// SOA is the only kind we know GoDaddy exposes but we cannot
+	// publish: apex NS and HTTPS are real record kinds epistle
+	// reads and preserves. The list skips SOA so a caller that
+	// round-trips it through `upsert`/`delete` does not operate on
+	// the wrong record type.
 	let zone_records = serde_json::json!([
-		serde_json::json!({"type": "NS", "name": "@", "data": "ns1.example.org.", "ttl": 600}),
 		serde_json::json!({"type": "SOA", "name": "@", "data": "ns1.example.org. admin.example.org. 1 7200 3600 1209600 3600", "ttl": 600}),
 		serde_json::json!({"type": "TXT", "name": "_dmarc", "data": "v=DMARC1", "ttl": 600}),
 	]);

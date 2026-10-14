@@ -118,18 +118,22 @@ impl OvhProvider {
 	}
 
 	/// The OVH fieldType token for a kind we publish.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Mx
-			| RecordKind::Srv
-			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+	match kind {
+		RecordKind::A => Ok("A"),
+		RecordKind::Aaaa => Ok("AAAA"),
+		RecordKind::Txt => Ok("TXT"),
+		RecordKind::Cname => Ok("CNAME"),
+		RecordKind::Mx => Ok("MX"),
+		RecordKind::Srv => Ok("SRV"),
+		RecordKind::Caa => Ok("CAA"),
+		RecordKind::Tlsa => Err(ProviderError::Unsupported),
+		RecordKind::Ns
+		| RecordKind::Https
+		| RecordKind::Svcb
+		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 	}
+}
 
 	/// The relative subDomain OVH expects: apex → `""`, otherwise the name
 	/// with `.zone` stripped.
@@ -327,7 +331,7 @@ impl OvhProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
 		// The API schema gives `target` only as "Target of the record"
 		// (<https://eu.api.ovh.com/v1/domain.json>, read 2026-10-12), and
@@ -395,7 +399,7 @@ impl OvhProvider {
 	/// (no zone mutation happened).
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -467,11 +471,15 @@ fn parse_kind(field_type: &str) -> RecordKind {
 	match field_type {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
 		"CAA" => RecordKind::Caa,
-		_ => RecordKind::Txt,
+		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
+		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
+		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(field_type.to_string()),
 	}
 }
 
@@ -485,10 +493,11 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 		format!("{}.{}", rec.sub_domain, zone)
 	};
 	let kind = parse_kind(&rec.field_type);
+	let is_txt = kind == RecordKind::Txt;
 	DnsRecord {
 		name,
 		kind,
-		value: if kind == RecordKind::Txt {
+		value: if is_txt {
 			txt_decode(&rec.target, TXT_FORM)
 		} else {
 			rec.target.trim_matches('"').to_string()

@@ -120,18 +120,22 @@ impl PorkbunProvider {
 	/// `prio` field as a plain preference and is not yet supported because
 	/// the rest of epistle still builds MX with the priority embedded in the
 	/// value string.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// Validate that `record.value` is a well-formed SRV. Returns the priority
 	/// so the upsert path can populate the `prio` field (Porkbun treats it
@@ -234,7 +238,7 @@ impl PorkbunProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		// The API documents `content` only as "The record value", with
 		// no word on quoting, length or escaping for TXT
 		// (<https://porkbun.com/api/json/v3/spec>, read 2026-10-12). The
@@ -330,7 +334,7 @@ impl PorkbunProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		// Porkbun addresses every record by numeric id, so a delete is
 		// a read-then-delete loop. The TXT matching rule from
 		// `src/dns/provider.rs` is the contract: a value-bearing delete
@@ -413,10 +417,14 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"AAAA" => RecordKind::Aaaa,
 		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
 		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

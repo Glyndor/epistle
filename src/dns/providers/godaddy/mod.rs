@@ -162,18 +162,23 @@ impl GodaddyProvider {
 	/// (https://developer.godaddy.com/en/docs/references/rest/domains/v1/record-replace-type-name),
 	/// so a TLSA publish would round-trip a 4xx instead of a clean
 	/// "this provider does not support TLSA" verdict.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+	match kind {
+		RecordKind::A => Ok("A"),
+		RecordKind::Aaaa => Ok("AAAA"),
+		RecordKind::Txt => Ok("TXT"),
+		RecordKind::Cname => Ok("CNAME"),
+		RecordKind::Mx => Ok("MX"),
+		RecordKind::Srv => Ok("SRV"),
+		RecordKind::Caa => Ok("CAA"),
+		// TLSA has no structured field on GoDaddy.
+		RecordKind::Tlsa => Err(ProviderError::Unsupported),
+		RecordKind::Ns
+		| RecordKind::Https
+		| RecordKind::Svcb
+		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 	}
+}
 
 	/// Reject a record outside the configured zone before any network call.
 	fn authorize(&self, record: &DnsRecord) -> Result<(), ProviderError> {
@@ -358,7 +363,7 @@ impl GodaddyProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = fqdn_to_relative(&record.name, &self.zone);
 		let new_element = self.record_element(&record)?;
 		// GoDaddy's PUT replaces the whole record set at (type, name).
@@ -391,7 +396,7 @@ impl GodaddyProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = fqdn_to_relative(&record.name, &self.zone);
 		// A TXT delete with an empty value retires the whole TXT set
 		// at the owner (the DKIM rotator retires a selector this way).
@@ -533,8 +538,11 @@ fn parse_kind(kind: &str) -> Option<RecordKind> {
 		"AAAA" => Some(RecordKind::Aaaa),
 		"CAA" => Some(RecordKind::Caa),
 		"CNAME" => Some(RecordKind::Cname),
+		"HTTPS" => Some(RecordKind::Https),
 		"MX" => Some(RecordKind::Mx),
+		"NS" => Some(RecordKind::Ns),
 		"SRV" => Some(RecordKind::Srv),
+		"SVCB" => Some(RecordKind::Svcb),
 		"TLSA" => Some(RecordKind::Tlsa),
 		"TXT" => Some(RecordKind::Txt),
 		_ => None,

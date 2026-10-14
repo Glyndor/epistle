@@ -67,18 +67,22 @@ impl SpaceshipProvider {
 	/// The Spaceship type token for a kind we can publish; SRV splits the
 	/// presentation form into `priority`/`weight`/`port`/`target` fields, MX
 	/// needs the priority split out (epistle still packs it into the value).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
-		}
-	}
+fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+match kind {
+RecordKind::A => Ok("A"),
+RecordKind::Aaaa => Ok("AAAA"),
+RecordKind::Txt => Ok("TXT"),
+RecordKind::Cname => Ok("CNAME"),
+RecordKind::Mx => Ok("MX"),
+RecordKind::Srv => Ok("SRV"),
+RecordKind::Tlsa => Ok("TLSA"),
+RecordKind::Caa => Ok("CAA"),
+RecordKind::Ns
+| RecordKind::Https
+| RecordKind::Svcb
+| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+}
+}
 
 	/// The Spaceship-relative name: `name` minus the zone suffix, or `@` for
 	/// the apex (the literal Spaceship uses for the zone itself).
@@ -109,7 +113,7 @@ impl SpaceshipProvider {
 	/// `value` for TXT, `address` for A/AAAA, `cname` for CNAME,
 	/// `associationData` for TLSA, `target` for SRV (priority/weight/port
 	/// travel in their own dedicated fields).
-	fn value_field(kind: RecordKind) -> &'static str {
+	fn value_field(kind: &RecordKind) -> &'static str {
 		match kind {
 			RecordKind::Txt => "value",
 			RecordKind::A | RecordKind::Aaaa => "address",
@@ -118,6 +122,14 @@ impl SpaceshipProvider {
 			RecordKind::Srv => "target",
 			RecordKind::Caa => "value",
 			RecordKind::Mx => "exchange",
+			// Spaceship's API does not model NS / HTTPS / SVCB; an
+			// `Other` type is something we cannot translate to one
+			// of Spaceship's value fields. The caller must never
+			// reach this point: `api_kind` rejects the kinds.
+			RecordKind::Ns
+			| RecordKind::Https
+			| RecordKind::Svcb
+			| RecordKind::Other(_) => "",
 		}
 	}
 
@@ -193,7 +205,7 @@ impl SpaceshipProvider {
 		} else {
 			let map = item.as_object_mut().expect("object");
 			map.insert(
-				Self::value_field(record.kind).to_string(),
+				Self::value_field(&record.kind).to_string(),
 				Self::wire_value(record).into(),
 			);
 		}
@@ -320,17 +332,22 @@ impl SpaceshipProvider {
 		match kind {
 			"A" => RecordKind::A,
 			"AAAA" => RecordKind::Aaaa,
+			"CAA" => RecordKind::Caa,
 			"CNAME" => RecordKind::Cname,
+			"HTTPS" => RecordKind::Https,
 			"MX" => RecordKind::Mx,
+			"NS" => RecordKind::Ns,
 			"SRV" => RecordKind::Srv,
+			"SVCB" => RecordKind::Svcb,
 			"TLSA" => RecordKind::Tlsa,
-			_ => RecordKind::Txt,
+			"TXT" => RecordKind::Txt,
+			_ => RecordKind::Other(kind.to_string()),
 		}
 	}
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		// Spaceship has no in-place update: remove the existing matching
 		// record first, then add the new one. remove() is a 204 either way,
@@ -373,7 +390,7 @@ impl SpaceshipProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		self.remove(kind, &rel, &record).await
 	}

@@ -120,16 +120,23 @@ impl CloudflareProvider {
 	/// structured `data` object — each carries its kind-specific shape
 	/// (`usage selector matching cert` / `priority weight port target` /
 	/// `priority host` / `flags tag value`).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
+			// Cloudflare accepts HTTPS and SVCB; publishing NS, HTTPS
+			// or SVCB is the operator's call, not epistle's. Any
+			// other (custom) type is also out of scope.
+			RecordKind::Ns
+			| RecordKind::Https
+			| RecordKind::Svcb
+			| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -375,7 +382,7 @@ impl CloudflareProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
 		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
@@ -488,7 +495,7 @@ impl CloudflareProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -539,10 +546,14 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"AAAA" => RecordKind::Aaaa,
 		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
+		"HTTPS" => RecordKind::Https,
 		"MX" => RecordKind::Mx,
+		"NS" => RecordKind::Ns,
 		"SRV" => RecordKind::Srv,
+		"SVCB" => RecordKind::Svcb,
 		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		"TXT" => RecordKind::Txt,
+		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

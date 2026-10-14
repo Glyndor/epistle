@@ -112,7 +112,7 @@ impl BunnyProvider {
 	/// returns [`ProviderError::Unsupported`]. SRV (type 8) carries the
 	/// four-tuple in the `Value` field as `weight port target` (priority is
 	/// not editable through Bunny's API for SRV — it is always 0).
-	fn api_type(kind: RecordKind) -> Result<i64, ProviderError> {
+	fn api_type(kind: &RecordKind) -> Result<i64, ProviderError> {
 		match kind {
 			RecordKind::A => Ok(0),
 			RecordKind::Aaaa => Ok(1),
@@ -120,7 +120,12 @@ impl BunnyProvider {
 			RecordKind::Txt => Ok(3),
 			RecordKind::Mx => Ok(4),
 			RecordKind::Srv => Ok(8),
-			RecordKind::Tlsa | RecordKind::Caa => Err(ProviderError::Unsupported),
+			RecordKind::Tlsa
+			| RecordKind::Caa
+			| RecordKind::Ns
+			| RecordKind::Https
+			| RecordKind::Svcb
+			| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -242,7 +247,7 @@ impl BunnyProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record.name)?;
-		let rtype = Self::api_type(record.kind)?;
+		let rtype = Self::api_type(&record.kind)?;
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
@@ -255,10 +260,11 @@ impl BunnyProvider {
 		// ignored): the upsert collapses them by editing the first
 		// match and deleting every other. Other kinds take the first
 		// record at (type, name), so duplicates do not arise.
-		let mut matching = detail.records.into_iter().filter(|r| {
+		let kind_for_match = record.kind.clone();
+		let mut matching = detail.records.into_iter().filter(move |r| {
 			r.rtype == rtype
 				&& r.name.as_deref() == Some(name.as_str())
-				&& (record.kind != RecordKind::Txt
+				&& (kind_for_match != RecordKind::Txt
 					|| same_txt_purpose(r.value.as_deref().unwrap_or(""), &record.value))
 		});
 		if let Some(primary) = matching.next() {
@@ -277,7 +283,7 @@ impl BunnyProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record.name)?;
-		let rtype = Self::api_type(record.kind)?;
+		let rtype = Self::api_type(&record.kind)?;
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
@@ -402,10 +408,15 @@ fn parse_kind(rtype: i64) -> RecordKind {
 		0 => RecordKind::A,
 		1 => RecordKind::Aaaa,
 		2 => RecordKind::Cname,
+		3 => RecordKind::Txt,
 		4 => RecordKind::Mx,
 		8 => RecordKind::Srv,
 		15 => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		// Bunny's API only ever returns a known numeric code, but the
+		// contract that follows everywhere else is preserved: an
+		// unknown kind is preserved with the type token the provider
+		// gave us, never silently collapsed into TXT.
+		_ => RecordKind::Other(format!("TYPE{rtype}")),
 	}
 }
 

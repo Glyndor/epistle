@@ -50,7 +50,7 @@ impl CloudflareProvider {
 				// the API comes back quoted (possibly re-split), one an
 				// older release wrote unquoted comes back as it was;
 				// `txt_decode` reads both as the logical value.
-				let value = match (kind, r.priority) {
+				let value = match (&kind, r.priority) {
 					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
 					// `priority target`, the shape every MX value has.
 					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
@@ -59,7 +59,7 @@ impl CloudflareProvider {
 				// Cloudflare only returns `proxied` for the kinds it can
 				// proxy (A, AAAA, CNAME). Other kinds leave it `None`,
 				// which the rest of epistle treats as "not applicable".
-				let proxied = match kind {
+				let proxied = match &kind {
 					RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
 					_ => None,
 				};
