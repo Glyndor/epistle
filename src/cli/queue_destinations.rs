@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 
+use crate::cli::term::sanitize;
 use crate::storage::{DestinationHold, FsSpool};
 
 /// One destination by domain, or every held destination with `--all`.
@@ -55,14 +56,18 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 			.collect();
 		return crate::cli::json_out::print(out, &serde_json::Value::Array(rows));
 	}
+	// The domain, an exchanger's name and the reply all come from remote
+	// servers: their control characters are shown escaped, never sent to
+	// the terminal.
 	for (domain, hold) in &held {
 		let _ = writeln!(
 			out,
-			"{domain}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
+			"{}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
+			sanitize(domain),
 			hold.until,
 			hold.until.saturating_sub(now),
 			hold.level.saturating_add(1),
-			hold.reason
+			sanitize(&hold.reason)
 		);
 	}
 	let _ = writeln!(out, "{} destinations on hold", held.len());
@@ -76,7 +81,7 @@ pub(super) fn summary(spool: &FsSpool, now: u64) -> Option<String> {
 	if held.is_empty() {
 		return None;
 	}
-	let names: Vec<&str> = held.iter().map(|(domain, _)| domain.as_str()).collect();
+	let names: Vec<String> = held.iter().map(|(domain, _)| sanitize(domain)).collect();
 	Some(format!(
 		"{} destinations on hold: {} (see `epistle queue destinations`)",
 		held.len(),
@@ -109,11 +114,12 @@ pub(super) fn release(
 		return super::fail(format_args!("writing destination holds: {error}"));
 	}
 	match domain {
-		Some(domain) if released == 0 => {
-			crate::cli::exit::refused(format_args!("no destination on hold: {domain}"))
-		}
+		Some(domain) if released == 0 => crate::cli::exit::refused(format_args!(
+			"no destination on hold: {}",
+			sanitize(&domain)
+		)),
 		Some(domain) => {
-			let _ = writeln!(out, "released {domain}");
+			let _ = writeln!(out, "released {}", sanitize(&domain));
 			ExitCode::SUCCESS
 		}
 		None => {

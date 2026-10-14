@@ -342,10 +342,12 @@ fn show(spool: &FsSpool, id: Uuid, now: u64, out: &mut impl Write) -> ExitCode {
 		}
 	}
 	let _ = writeln!(out, "require tls: {}", envelope.require_tls);
+	// The last error is a remote server's reply: shown with its control
+	// characters escaped.
 	let _ = writeln!(
 		out,
 		"last error: {}",
-		envelope.last_error.as_deref().unwrap_or("none")
+		super::term::sanitize(envelope.last_error.as_deref().unwrap_or("none"))
 	);
 	ExitCode::SUCCESS
 }

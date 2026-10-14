@@ -167,3 +167,79 @@ fn the_queue_listing_names_the_destinations_on_hold() {
 		"{out}"
 	);
 }
+
+#[test]
+fn a_remote_reply_cannot_drive_the_terminal() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let reply = "421 \u{1b}[2J\u{1b}[31mslow\r\nfake line\tand \u{9b}31m";
+	spool
+		.update_holds(|holds| {
+			holds.insert(
+				"mx:evil\u{1b}]0;title\u{7}.example".into(),
+				DestinationHold {
+					until: NOW + 60,
+					level: 0,
+					reason: reply.into(),
+					since: NOW,
+					sender: None,
+				},
+			);
+		})
+		.expect("holds");
+
+	let (_, text) = run_args(dir.path(), &["destinations"]);
+	assert!(
+		!text
+			.chars()
+			.any(|c| c.is_control() && c != '\t' && c != '\n'),
+		"{text:?}"
+	);
+	assert_eq!(text.lines().count(), 2, "{text:?}");
+	assert!(
+		text.contains("421 \\u{1b}[2J\\u{1b}[31mslow\\r\\nfake line\\tand \\u{9b}31m"),
+		"{text:?}"
+	);
+	assert!(
+		text.contains("mx:evil\\u{1b}]0;title\\u{7}.example"),
+		"{text:?}"
+	);
+
+	let (_, json) = run_args(dir.path(), &["destinations", "--json"]);
+	let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+	assert_eq!(value[0]["reason"], reply, "JSON keeps the reply exact");
+}
+
+#[test]
+fn queue_show_escapes_the_last_error() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let id = spool
+		.store(
+			&crate::smtp::session::AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
+		.expect("store");
+	spool
+		.update_envelope(id, |envelope| {
+			envelope.last_error = Some("450 \u{1b}[2Jgone\r\nfake: line".into());
+		})
+		.expect("update");
+
+	let (_, text) = run_args(dir.path(), &["show", &id.to_string()]);
+
+	assert!(
+		text.contains("last error: 450 \\u{1b}[2Jgone\\r\\nfake: line\n"),
+		"{text:?}"
+	);
+	assert!(!text.contains('\u{1b}'), "{text:?}");
+}
