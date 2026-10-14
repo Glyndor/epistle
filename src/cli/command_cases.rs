@@ -98,6 +98,12 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		&["queue", "remove", "00000000-0000-0000-0000-000000000000"],
 		true,
 	),
+	(&["delivery"], true),
+	(&["delivery", "list", "--json"], true),
+	(
+		&["delivery", "list", "--outcome", "failed", "--since", "1d"],
+		true,
+	),
 	(&["ban", "list", "--json"], true),
 	(&["ban", "add", "203.0.113.0/24", "--for", "24h"], true),
 	(&["ban", "remove", "203.0.113.9"], true),
@@ -130,6 +136,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		true,
 	),
 	(&["app-passwords"], true),
+	(&["app-password", "list", "--json"], true),
 	(
 		&[
 			"app-password-revoke",

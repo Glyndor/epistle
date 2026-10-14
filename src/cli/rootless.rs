@@ -5,17 +5,24 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 
+use super::staging::Stage;
+
 pub(super) struct ServiceUser {
 	pub(super) uid: u32,
+	pub(super) gid: u32,
 	pub(super) home: PathBuf,
 }
 
+/// Run as root, re-execute as the service account with the paths the
+/// operator named staged for it (`stage`, see `super::staging`); `None`
+/// when this process is not root or the account does not exist.
 fn delegate(
 	euid: u32,
 	lookup: impl FnOnce() -> io::Result<Option<ServiceUser>>,
 	runtime_exists: impl FnOnce(&Path) -> bool,
 	exe: &Path,
 	args: &[OsString],
+	stage: impl FnOnce(&[OsString], &ServiceUser) -> io::Result<Stage>,
 	spawn: impl FnOnce(&mut Command) -> io::Result<ExitStatus>,
 ) -> io::Result<Option<ExitCode>> {
 	if euid != 0 {
@@ -31,11 +38,15 @@ fn delegate(
 			runtime.display()
 		)));
 	}
+	let stage = stage(args, &user)?;
 	let mut command = Command::new("runuser");
 	command
 		.args(["-u", "glyndor-epistle", "--"])
 		.arg(exe)
-		.args(args);
+		.args(stage.args());
+	if let Some(shown) = stage.shown_env() {
+		command.env(super::staging::SHOWN_ENV, shown);
+	}
 	command.env("XDG_RUNTIME_DIR", &runtime);
 	command.env(
 		"DBUS_SESSION_BUS_ADDRESS",
@@ -43,6 +54,7 @@ fn delegate(
 	);
 	command.env("HOME", &user.home).current_dir(&user.home);
 	let status = spawn(&mut command)?;
+	stage.finish(status.success())?;
 	Ok(Some(ExitCode::from(status.code().unwrap_or(1) as u8)))
 }
 
@@ -76,6 +88,11 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 			Path::is_dir,
 			&std::env::current_exe()?,
 			&super::pick::effective_args(),
+			|args, user| {
+				Stage::prepare(args, &user.home, user.uid, &|file, _| {
+					std::os::unix::fs::fchown(file, Some(user.uid), Some(user.gid))
+				})
+			},
 			|command| command.status(),
 		)
 	}
@@ -119,6 +136,7 @@ pub(super) fn lookup_user() -> io::Result<Option<ServiceUser>> {
 		let home = unsafe { CStr::from_ptr(passwd.pw_dir) };
 		return Ok(Some(ServiceUser {
 			uid: passwd.pw_uid,
+			gid: passwd.pw_gid,
 			home: PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())),
 		}));
 	}

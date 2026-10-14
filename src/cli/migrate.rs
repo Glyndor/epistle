@@ -123,11 +123,29 @@ pub(super) fn run(args: MigrateArgs) -> ExitCode {
 		MigrateCli::Imap(imap_args) => imap::run(&args.config, imap_args),
 		MigrateCli::Mox { from, import } => {
 			let plan = crate::migrate::mox::read(&from).map_err(|error| error.to_string());
-			config::run(&args.config, plan, &import)
+			config::run(&args.config, shown(plan), &import)
 		}
 		MigrateCli::Stalwart { from, import } => {
 			let plan = crate::migrate::stalwart::read(&from).map_err(|error| error.to_string());
-			config::run(&args.config, plan, &import)
+			config::run(&args.config, shown(plan), &import)
 		}
+	}
+}
+
+/// The plan as the operator reads it: a root run reads a staged copy of
+/// the source, and the messages name the path the operator gave.
+fn shown(
+	plan: Result<crate::migrate::import::Plan, String>,
+) -> Result<crate::migrate::import::Plan, String> {
+	use super::staging::shown;
+	match plan {
+		Ok(mut plan) => {
+			plan.source = shown(&plan.source);
+			for note in &mut plan.skipped {
+				note.reason = shown(&note.reason);
+			}
+			Ok(plan)
+		}
+		Err(error) => Err(shown(&error)),
 	}
 }

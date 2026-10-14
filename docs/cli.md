@@ -609,6 +609,25 @@ version, and the local test harness use the invoking user. If its user runtime
 is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
 Use absolute paths for file arguments when invoking administration commands with sudo.
 
+A file or directory you name on such a command does not have to be readable
+by `glyndor-epistle`. Run as root, epistle copies the inputs (`init
+--answers`, `import --maildir`, and `migrate`'s `--password-file`, `--ca-file`
+and `--from`) into a private directory the account owns, and moves the
+outputs (`migrate --passwords-out`, `export --maildir`) to where you asked
+once the command succeeds, owned by root and readable only by it. The copy is
+removed when the command ends. Symbolic links and special files are refused,
+and a copy is bounded: 16 MiB for a file, 64 MiB for a Mox configuration
+directory, and 4 GiB for a Maildir to import, which would otherwise take
+twice its size on the data disk. For a larger Maildir, make it readable by
+`glyndor-epistle` and run the import as that account. Run as root, `export
+--maildir` writes into a missing directory or an empty one owned by root, and
+stops, keeping nothing, if the export would leave its filesystem with less
+than 5% free. An output that is a link, a hard link, or not owned by
+`glyndor-epistle` is refused rather than copied. The paths in
+`dns provider set` and `storage blobs set` are stored in the configuration
+for the server to read, so those files must be readable by the account where
+they are.
+
 Stack requires podup 5.10.13 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
@@ -1012,6 +1031,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
+| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--outcome O] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, deferred, failed, suppressed or canceled recipient, newest day first, at most `N` records (default 100). `--since` takes an RFC 3339 time or a duration such as `24h` or `7d`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |

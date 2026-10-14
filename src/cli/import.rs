@@ -95,7 +95,10 @@ pub(super) fn run_maildir(
 	let entries = match std::fs::read_dir(maildir) {
 		Ok(entries) => entries,
 		Err(error) => {
-			super::style::error(format_args!("reading {}: {error}", maildir.display()));
+			super::style::error(format_args!(
+				"reading {}: {error}",
+				super::staging::shown(&maildir.display().to_string())
+			));
 			return ExitCode::FAILURE;
 		}
 	};

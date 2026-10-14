@@ -94,7 +94,7 @@ fn endpoint(args: &ImapArgs) -> Result<Endpoint, ExitCode> {
 				Err(error) => {
 					return Err(crate::cli::exit::refused(format_args!(
 						"reading {}: {error}",
-						path.display()
+						shown(path)
 					)));
 				}
 			}
@@ -195,11 +195,11 @@ pub(super) fn password(file: Option<&Path>) -> Result<Zeroizing<String>, ExitCod
 		Ok(password) if !password.is_empty() => Ok(password),
 		Ok(_) => Err(crate::cli::exit::refused(format_args!(
 			"{} holds no password",
-			path.display()
+			shown(path)
 		))),
 		Err(error) => Err(crate::cli::exit::refused(format_args!(
 			"reading {}: {error}",
-			path.display()
+			shown(path)
 		))),
 	}
 }
@@ -226,6 +226,11 @@ fn report(summary: &Summary, error: Option<&MigrateError>, json: bool) -> ExitCo
 		}
 		None => ExitCode::SUCCESS,
 	}
+}
+
+/// `path` as the operator named it, when a root run staged a copy.
+fn shown(path: &Path) -> String {
+	crate::cli::staging::shown(&path.display().to_string())
 }
 
 #[cfg(test)]

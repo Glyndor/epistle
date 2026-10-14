@@ -265,7 +265,7 @@ impl Cli {
 				Ok(config) => delivery::run(
 					&config.data_dir,
 					config.delivery_log_days(),
-					&args,
+					args.action,
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
 				),
@@ -437,3 +437,7 @@ impl Cli {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;

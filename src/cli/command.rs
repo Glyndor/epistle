@@ -271,6 +271,8 @@ pub enum Command {
 		action: Option<queue::QueueCli>,
 	},
 	/// Read the per-recipient delivery log (metadata only).
+	///
+	/// Without an action it lists the log, like `delivery list`.
 	Delivery(delivery::DeliveryConfig),
 	/// Manage authentication bans and the allow list.
 	///

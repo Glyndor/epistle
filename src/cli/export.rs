@@ -70,7 +70,10 @@ pub(super) fn run_maildir(
 		};
 		let cur = folder.join("cur");
 		if std::fs::create_dir_all(&cur).is_err() {
-			super::style::error(format_args!("creating {}", cur.display()));
+			super::style::error(format_args!(
+				"creating {}",
+				super::staging::shown(&cur.display().to_string())
+			));
 			return ExitCode::FAILURE;
 		}
 		let Ok(snapshot) = Snapshot::open(data_dir, account, &name, crypto) else {
@@ -82,7 +85,10 @@ pub(super) fn run_maildir(
 			};
 			let filename = format!("{}:2,{}", message.id(), maildir_flags(&message.flags));
 			if std::fs::write(cur.join(filename), &data).is_err() {
-				super::style::error(format_args!("writing message to {}", cur.display()));
+				super::style::error(format_args!(
+					"writing message to {}",
+					super::staging::shown(&cur.display().to_string())
+				));
 				return ExitCode::FAILURE;
 			}
 			count += 1;
