@@ -65,7 +65,7 @@ impl Server {
 	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
 	/// listener kind (`Protocol::Submissions` for the implicit-TLS port,
 	/// `Protocol::Submission` for STARTTLS submission, `Protocol::Smtp`
-	/// for the receiving port — though the latter does not advertise AUTH
+	/// for the receiving port, though the latter does not advertise AUTH
 	/// so the choice has no practical effect).
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
