@@ -316,13 +316,17 @@ in addition to the global dials.
 `set` and `unset` accept `--domain <NAME>` (quota or submission-rate) and
 `--tenant <NAME>` (submission-rate only); combining the two is refused.
 `set --json` and `unset --json` write a one-line JSON confirmation on stdout
-and skip the human-readable status line on stderr, so a pipeline can audit
-which dial just moved.
+instead of the human-readable status line, so a pipeline can audit which
+dial just moved. Either way the command restarts the mail service to apply
+the change, or says the server must be restarted when it runs outside the
+stack.
+`set submission-rate 0` is refused: the server reads zero as no limit, and
+`unset` is how a limit is removed.
 
 | Key | Value |
 |---|---|
 | `quota` | Bytes per account, default 5 GiB; `0` means no limit and shows as `unlimited`. |
-| `submission-rate` | Recipients per minute per account, default disabled. The SMTP path charges one unit per recipient (a 100-recipient message costs 100 units): SMTP `450 4.7.1 sending rate limit exceeded; retry later`, `POST /api/v1/send` `429 rate_limited`, JMAP `EmailSubmission/set` `SetError type: rateLimit`. |
+| `submission-rate` | Recipients per minute per account, default disabled, across SMTP, `POST /api/v1/send` and JMAP; see `submission_rate_limit_per_min` in the configuration reference for what counts and the replies. |
 | `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
 | `queue-give-up` | Queue age before bouncing, default 5 days. |
 | `queue-retry-base` | Wait after a recipient's first failed attempt, doubling after each failure, default 1 minute, at least 1 minute. |
