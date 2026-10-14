@@ -18,7 +18,11 @@ fn root_delegation_builds_exact_command_and_rootless_environment() {
 		|path| path == Path::new("/run/user/987"),
 		Path::new("/usr/bin/epistle"),
 		&args,
-		|args, user| Stage::prepare(args, &user.home, &|_, _| panic!("nothing to stage")),
+		|args, user| {
+			Stage::prepare(args, &user.home, user.uid, &|_, _| {
+				panic!("nothing to stage")
+			})
+		},
 		|command| {
 			spawned = true;
 			assert_eq!(command.get_program(), "runuser");
@@ -129,7 +133,11 @@ fn root_run(
 		Path::new("/usr/bin/epistle"),
 		args,
 		|args, user| {
-			Stage::prepare(args, &user.home, &|_, rel| {
+			// The account is played by this process, which writes the outputs.
+			// SAFETY: geteuid takes no arguments and cannot fail.
+			let account = unsafe { libc::geteuid() };
+			let _ = user;
+			Stage::prepare(args, home, account, &|_, rel| {
 				handed.borrow_mut().push(rel.to_path_buf());
 				Ok(())
 			})

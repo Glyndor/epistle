@@ -11,13 +11,14 @@
 //! logged; messages name paths only.
 
 mod copy;
+mod output;
 mod shown;
 pub(crate) mod table;
 
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 pub(crate) use copy::Chown;
@@ -32,10 +33,18 @@ pub(crate) struct Stage {
 	dir: Option<StageDir>,
 	outputs: Vec<Output>,
 	shown: Vec<(PathBuf, PathBuf)>,
+	/// The account's uid: everything moved back must be its own.
+	account: u32,
+	/// This process's uid (root): an export goes only into a directory it owns.
+	root: u32,
 }
 
 struct StageDir {
+	/// Where the delegated run finds it.
 	path: PathBuf,
+	/// The account's home, and the directory's name in it, for the removal.
+	home: File,
+	name: PathBuf,
 	handle: File,
 }
 
@@ -46,17 +55,18 @@ struct Output {
 	kind: Kind,
 }
 
-/// The largest output file moved back: the import's password list, one
-/// short line per new account.
-const OUTPUT_FILE_LIMIT: u64 = table::FILE_LIMIT;
-
 impl Stage {
 	/// Stage every operator-named path of `args` (the command line without
 	/// the program name) under `home`, handing each copy to the account with
-	/// `chown`. A command line that names no path is returned unchanged and
-	/// creates nothing.
-	pub(crate) fn prepare(args: &[OsString], home: &Path, chown: Chown) -> io::Result<Self> {
-		Self::prepare_with(args, home, chown, table::STAGED)
+	/// `chown`; `account` is its uid. A command line that names no path is
+	/// returned unchanged and creates nothing.
+	pub(crate) fn prepare(
+		args: &[OsString],
+		home: &Path,
+		account: u32,
+		chown: Chown,
+	) -> io::Result<Self> {
+		Self::prepare_with(args, home, account, chown, table::STAGED)
 	}
 
 	/// [`Stage::prepare`] against `table` instead of [`table::STAGED`]; tests
@@ -64,6 +74,7 @@ impl Stage {
 	pub(crate) fn prepare_with(
 		args: &[OsString],
 		home: &Path,
+		account: u32,
 		chown: Chown,
 		table: &[Staged],
 	) -> io::Result<Self> {
@@ -72,6 +83,9 @@ impl Stage {
 			dir: None,
 			outputs: Vec::new(),
 			shown: Vec::new(),
+			account,
+			// SAFETY: geteuid takes no arguments and cannot fail.
+			root: unsafe { libc::geteuid() },
 		};
 		let found = table::find(args, table);
 		if found.is_empty() {
@@ -129,8 +143,14 @@ impl Stage {
 		};
 		for output in &self.outputs {
 			match output.kind {
-				Kind::WriteFile => move_file(&dir.handle, output)?,
-				Kind::WriteDir => move_dir(&dir.handle, output)?,
+				Kind::WriteFile => output::move_file(&dir.handle, output, self.account)?,
+				Kind::WriteDir => output::move_dir(
+					&dir.handle,
+					output,
+					self.account,
+					self.root,
+					output::free_room,
+				)?,
 				_ => {}
 			}
 		}
@@ -143,7 +163,9 @@ impl Drop for Stage {
 		let Some(dir) = self.dir.take() else {
 			return;
 		};
-		if let Err(error) = copy::clear(&dir.handle).and_then(|()| fs::remove_dir(&dir.path)) {
+		let removed = copy::clear(&dir.handle)
+			.and_then(|()| fs::remove_dir(copy::under(&dir.home, &dir.name)));
+		if let Err(error) = removed {
 			crate::cli::style::warn(format_args!(
 				"could not remove the staging directory {}: {error}",
 				dir.path.display()
@@ -196,33 +218,32 @@ fn shown_parent(path: &Path) -> PathBuf {
 }
 
 /// A new private directory in `home`, made and owned by this process and
-/// opened before anything goes in.
+/// opened before anything goes in. The account owns `home` and could swap
+/// the new name for a directory of its own: [`copy::make_dir`] accepts only
+/// a directory this process owns.
 fn create(home: &Path) -> io::Result<StageDir> {
 	let token = crate::cli::util::generate_secret()
 		.ok_or_else(|| io::Error::other("no randomness for the staging directory name"))?;
-	let path = home.join(format!(".epistle-staging-{}", &token[..16]));
-	fs::DirBuilder::new()
-		.mode(0o700)
-		.create(&path)
-		.map_err(|error| {
-			io::Error::new(
-				error.kind(),
-				format!("creating {}: {error}", path.display()),
-			)
-		})?;
-	let handle = copy::open_dir(&path)?;
-	// The account owns `home` and could swap the new name for a directory
-	// of its own; one owned by this process is the one just made.
-	let meta = handle.metadata()?;
-	// SAFETY: geteuid takes no arguments and cannot fail.
-	if meta.uid() != unsafe { libc::geteuid() } {
-		return Err(io::Error::other(format!(
-			"{} changed while it was being created",
-			path.display()
-		)));
-	}
-	handle.set_permissions(Permissions::from_mode(0o700))?;
-	Ok(StageDir { path, handle })
+	let name = PathBuf::from(format!(".epistle-staging-{}", &token[..16]));
+	let path = home.join(&name);
+	let creating = |error: io::Error| {
+		io::Error::new(
+			error.kind(),
+			format!("creating {}: {error}", path.display()),
+		)
+	};
+	let home = OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_DIRECTORY)
+		.open(home)
+		.map_err(creating)?;
+	let handle = copy::make_dir(&home, &name).map_err(creating)?;
+	Ok(StageDir {
+		path,
+		home,
+		name,
+		handle,
+	})
 }
 
 /// Copy one input into `slot`, or reserve the name an output is written
@@ -244,14 +265,14 @@ fn stage_one(
 	};
 	match kind {
 		Kind::ReadFile { limit, secret } => {
-			let (node, meta) = copy::classify(value, value)?;
-			if node != copy::Node::File {
+			let node = operator_node(value)?;
+			if !node.meta.is_file() {
 				return Err(io::Error::other(format!(
 					"{} is not a file",
 					value.display()
 				)));
 			}
-			if secret && meta.mode() & 0o077 != 0 {
+			if secret && node.meta.mode() & 0o077 != 0 {
 				crate::cli::style::warn(format_args!(
 					"{} is readable by other users; keep password files mode 0600",
 					value.display()
@@ -260,7 +281,7 @@ fn stage_one(
 			let file = name(value, "input");
 			let mut budget = copy::Budget::new(limit, value);
 			copy::copy_file(
-				value,
+				node,
 				value,
 				slot,
 				&file,
@@ -270,123 +291,55 @@ fn stage_one(
 			)?;
 			Ok(same(rel.join(file)))
 		}
-		Kind::ReadDir { limit } => stage_dir(value, slot, rel, limit, chown).map(same),
-		Kind::ReadDirOfFile { limit } => match copy::classify(value, value)?.0 {
-			copy::Node::Dir => stage_dir(value, slot, rel, limit, chown).map(same),
-			copy::Node::File => {
-				let parent = shown_parent(value);
-				let dir = stage_dir(&parent, slot, rel, limit, chown)?;
-				Ok((dir.join(name(value, "input")), dir, parent))
+		Kind::ReadDir { limit } => {
+			stage_dir(operator_node(value)?, value, slot, rel, limit, chown).map(same)
+		}
+		Kind::ReadDirOfFile { limit } => {
+			let node = operator_node(value)?;
+			if node.meta.is_dir() {
+				return stage_dir(node, value, slot, rel, limit, chown).map(same);
 			}
-		},
+			let parent = shown_parent(value);
+			let dir = stage_dir(operator_node(&parent)?, &parent, slot, rel, limit, chown)?;
+			Ok((dir.join(name(value, "input")), dir, parent))
+		}
 		Kind::WriteFile | Kind::WriteDir => Ok(same(rel.join(name(value, "output")))),
 	}
 }
 
+/// The path the operator named, opened without following it and checked.
+fn operator_node(value: &Path) -> io::Result<copy::Node> {
+	let node = copy::open_node(value, value)?;
+	node.check(value, copy::Source::Operator)?;
+	Ok(node)
+}
+
+/// Copy the directory open as `node` (the operator's `value`) into `slot`.
 fn stage_dir(
+	node: copy::Node,
 	value: &Path,
 	slot: &File,
 	rel: &Path,
 	limit: u64,
 	chown: Chown,
 ) -> io::Result<PathBuf> {
-	let shown = value;
-	if copy::classify(value, shown)?.0 != copy::Node::Dir {
+	if !node.meta.is_dir() {
 		return Err(io::Error::other(format!(
 			"{} is not a directory",
-			shown.display()
+			value.display()
 		)));
 	}
-	let source = copy::open_dir(value)?;
+	let source = node.dir()?;
 	let name = value
-		.canonicalize()
-		.ok()
-		.and_then(|path| path.file_name().map(PathBuf::from))
+		.file_name()
+		.map(PathBuf::from)
 		.unwrap_or_else(|| PathBuf::from("input"));
 	let target = copy::make_dir(slot, &name)?;
 	let rel = rel.join(&name);
 	chown(&target, &rel)?;
-	let mut budget = copy::Budget::new(limit, shown);
-	copy::copy_tree(&source, &target, shown, &rel, &mut budget, chown)?;
+	let mut budget = copy::Budget::new(limit, value);
+	copy::copy_tree(&source, &target, value, &rel, &mut budget, chown)?;
 	Ok(rel)
-}
-
-/// Move the password list to the requested path: a new file, mode 0600,
-/// owned by this process (root). On any error nothing is left there.
-fn move_file(stage: &File, output: &Output) -> io::Result<()> {
-	let source = match copy::open_beneath(stage, &output.rel, false) {
-		Ok(file) => file,
-		// A dry run writes nothing, and nothing is moved.
-		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-		Err(error) => return Err(error),
-	};
-	let shown = output.requested.display();
-	if source.metadata()?.len() > OUTPUT_FILE_LIMIT {
-		return Err(io::Error::other(format!(
-			"the output for {shown} is too large"
-		)));
-	}
-	let target = OpenOptions::new()
-		.write(true)
-		.create_new(true)
-		.mode(0o600)
-		.custom_flags(libc::O_NOFOLLOW)
-		.open(&output.requested)
-		.map_err(|error| io::Error::new(error.kind(), format!("writing {shown}: {error}")))?;
-	let written = target
-		.set_permissions(Permissions::from_mode(0o600))
-		.and_then(|()| {
-			io::copy(
-				&mut io::Read::take(&source, OUTPUT_FILE_LIMIT),
-				&mut &target,
-			)
-		})
-		.and_then(|_| target.sync_all());
-	if let Err(error) = written {
-		let _ = fs::remove_file(&output.requested);
-		return Err(io::Error::new(
-			error.kind(),
-			format!("writing {shown}: {error}"),
-		));
-	}
-	Ok(())
-}
-
-/// Move an exported tree to the requested directory, creating it when
-/// missing. On any error what was written there is removed again.
-fn move_dir(stage: &File, output: &Output) -> io::Result<()> {
-	let source = match copy::open_beneath(stage, &output.rel, true) {
-		Ok(dir) => dir,
-		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-		Err(error) => return Err(error),
-	};
-	let requested = &output.requested;
-	let created = !requested.exists();
-	if created {
-		fs::create_dir_all(shown_parent(requested))?;
-		fs::DirBuilder::new().mode(0o700).create(requested)?;
-	}
-	let target = copy::open_dir(requested)?;
-	let mut budget = copy::Budget::new(u64::MAX, requested);
-	let copied = copy::copy_tree(
-		&source,
-		&target,
-		requested,
-		Path::new(""),
-		&mut budget,
-		&|_, _| Ok(()),
-	);
-	if let Err(error) = copied {
-		let _ = copy::clear(&target);
-		if created {
-			let _ = fs::remove_dir(requested);
-		}
-		return Err(io::Error::new(
-			error.kind(),
-			format!("writing {}: {error}", requested.display()),
-		));
-	}
-	Ok(())
 }
 
 #[cfg(test)]

@@ -89,7 +89,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 			&std::env::current_exe()?,
 			&super::pick::effective_args(),
 			|args, user| {
-				Stage::prepare(args, &user.home, &|file, _| {
+				Stage::prepare(args, &user.home, user.uid, &|file, _| {
 					std::os::unix::fs::fchown(file, Some(user.uid), Some(user.gid))
 				})
 			},

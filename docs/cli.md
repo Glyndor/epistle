@@ -620,7 +620,10 @@ and a copy is bounded: 16 MiB for a file, 64 MiB for a Mox configuration
 directory, and 4 GiB for a Maildir to import, which would otherwise take
 twice its size on the data disk. For a larger Maildir, make it readable by
 `glyndor-epistle` and run the import as that account. Run as root, `export
---maildir` writes into a missing or empty directory. The paths in
+--maildir` writes into a missing directory or an empty one owned by root, and
+stops, keeping nothing, if the export would leave its filesystem with less
+than 5% free. An output that is a link, a hard link, or not owned by
+`glyndor-epistle` is refused rather than copied. The paths in
 `dns provider set` and `storage blobs set` are stored in the configuration
 for the server to read, so those files must be readable by the account where
 they are.

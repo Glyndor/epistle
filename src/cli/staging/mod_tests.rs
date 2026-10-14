@@ -1,5 +1,6 @@
 use super::*;
 use std::cell::RefCell;
+use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
 /// Records every hand-over to the account instead of changing owners, so
@@ -19,6 +20,13 @@ impl Owner {
 	fn handed(&self) -> Vec<(PathBuf, u32)> {
 		self.0.borrow().clone()
 	}
+}
+
+/// The account's uid in these tests: this process plays the account and
+/// writes the outputs.
+fn me() -> u32 {
+	// SAFETY: geteuid takes no arguments and cannot fail.
+	unsafe { libc::geteuid() }
 }
 
 fn os(list: &[&str]) -> Vec<OsString> {
@@ -64,7 +72,7 @@ fn a_password_file_is_copied_private_and_the_argument_points_at_the_copy() {
 	write(&secret, "s3cret\n", 0o600);
 	let owner = Owner::default();
 	let line = imap(&["--password-file", secret.to_str().unwrap()]);
-	let stage = Stage::prepare(&line, home.path(), &owner.chown()).unwrap();
+	let stage = Stage::prepare(&line, home.path(), me(), &owner.chown()).unwrap();
 
 	let dir = &stage.dir.as_ref().expect("a staging directory").path;
 	assert_eq!(
@@ -115,7 +123,7 @@ fn the_joined_spelling_is_rewritten_in_place() {
 	let ca = source.path().join("ca.pem");
 	write(&ca, "-----BEGIN CERTIFICATE-----\n", 0o644);
 	let line = imap(&[&format!("--ca-file={}", ca.display())]);
-	let stage = Stage::prepare(&line, home.path(), &Owner::default().chown()).unwrap();
+	let stage = Stage::prepare(&line, home.path(), me(), &Owner::default().chown()).unwrap();
 	let dir = &stage.dir.as_ref().unwrap().path;
 	let expected = format!("--ca-file={}", dir.join("0/ca.pem").display());
 	assert_eq!(stage.args()[8], OsString::from(expected));
@@ -125,7 +133,10 @@ fn the_joined_spelling_is_rewritten_in_place() {
 fn a_command_line_without_paths_stages_nothing() {
 	let home = tempfile::tempdir().unwrap();
 	let line = os(&["queue", "list", "--config", "/etc/epistle/mail.toml"]);
-	let stage = Stage::prepare(&line, home.path(), &|_, _| panic!("nothing to hand over")).unwrap();
+	let stage = Stage::prepare(&line, home.path(), me(), &|_, _| {
+		panic!("nothing to hand over")
+	})
+	.unwrap();
 	assert_eq!(stage.args(), line.as_slice());
 	assert!(stage.shown_env().is_none());
 	assert!(entries(home.path()).is_empty(), "no directory is made");
@@ -147,7 +158,7 @@ fn a_maildir_tree_is_copied_with_private_modes() {
 		"--maildir",
 		maildir.to_str().unwrap(),
 	]);
-	let stage = Stage::prepare(&line, home.path(), &owner.chown()).unwrap();
+	let stage = Stage::prepare(&line, home.path(), me(), &owner.chown()).unwrap();
 	let staged = stage.dir.as_ref().unwrap().path.join("0/Maildir");
 	assert_eq!(stage.args()[4], staged.as_os_str());
 	assert_eq!(fs::read_to_string(staged.join("cur/1:2,S")).unwrap(), "one");
@@ -193,7 +204,7 @@ fn a_mox_file_brings_its_directory() {
 		conf.to_str().unwrap(),
 		"--password-reset",
 	]);
-	let stage = Stage::prepare(&line, home.path(), &Owner::default().chown()).unwrap();
+	let stage = Stage::prepare(&line, home.path(), me(), &Owner::default().chown()).unwrap();
 	let staged = stage.dir.as_ref().unwrap().path.join("0/config");
 	assert_eq!(stage.args()[3], staged.join("mox.conf").as_os_str());
 	assert_eq!(
@@ -210,7 +221,7 @@ fn a_mox_file_brings_its_directory() {
 
 /// Every refusal leaves no staging directory behind.
 fn refused(line: &[OsString], home: &Path, table: &[Staged]) -> String {
-	let error = Stage::prepare_with(line, home, &Owner::default().chown(), table)
+	let error = Stage::prepare_with(line, home, me(), &Owner::default().chown(), table)
 		.err()
 		.expect("refused");
 	assert!(entries(home).is_empty(), "a refused stage leaves nothing");
@@ -230,7 +241,7 @@ fn symbolic_links_are_never_followed() {
 		table::STAGED,
 	);
 	assert!(
-		message.contains("is a symbolic link; it is not followed"),
+		message.contains("is a symbolic link; links are not followed"),
 		"{message}"
 	);
 
@@ -246,8 +257,7 @@ fn symbolic_links_are_never_followed() {
 	]);
 	let message = refused(&line, home.path(), table::STAGED);
 	assert!(
-		message.contains("2:2,")
-			&& message.contains("links inside a copied directory are not followed"),
+		message.contains("2:2,") && message.contains("is a symbolic link; links are not followed"),
 		"{message}"
 	);
 }
@@ -302,7 +312,7 @@ fn the_size_bound_stops_a_copy() {
 	let file = source.path().join("pw");
 	write(&file, "12345678", 0o600);
 	let line = imap(&["--password-file", file.to_str().unwrap()]);
-	Stage::prepare_with(&line, home.path(), &Owner::default().chown(), &small)
+	Stage::prepare_with(&line, home.path(), me(), &Owner::default().chown(), &small)
 		.expect("a file at the bound is copied");
 	write(&file, "123456789", 0o600);
 	let message = refused(&line, home.path(), &small);
@@ -347,7 +357,7 @@ fn the_password_list_moves_to_the_requested_path_only_on_success() {
 		);
 		let requested = out.path().join("passwords.txt");
 		let line = mox_out(source.path(), &requested);
-		let stage = Stage::prepare(&line, home.path(), &Owner::default().chown()).unwrap();
+		let stage = Stage::prepare(&line, home.path(), me(), &Owner::default().chown()).unwrap();
 		let staged = PathBuf::from(&stage.args()[5]);
 		assert!(
 			staged.starts_with(home.path()),
@@ -430,6 +440,7 @@ fn a_link_left_by_the_account_is_not_moved() {
 	let stage = Stage::prepare(
 		&mox_out(&source.path().join("mox"), &requested),
 		home.path(),
+		me(),
 		&Owner::default().chown(),
 	)
 	.unwrap();
@@ -455,7 +466,7 @@ fn an_export_moves_its_tree_on_success_only() {
 			"--maildir",
 			requested.to_str().unwrap(),
 		]);
-		let stage = Stage::prepare(&line, home.path(), &Owner::default().chown()).unwrap();
+		let stage = Stage::prepare(&line, home.path(), me(), &Owner::default().chown()).unwrap();
 		let staged = PathBuf::from(&stage.args()[4]);
 		write(&staged.join("cur/1:2,S"), "mail", 0o644);
 		write(&staged.join(".Work/cur/2:2,"), "work", 0o644);
