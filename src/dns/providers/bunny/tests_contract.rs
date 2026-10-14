@@ -111,7 +111,7 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		);
 	}
 	// Exactly one write carries the new SPF value (the chosen
-	// implementation — edit-in-place or PUT-then-delete — picks
+	// implementation, edit-in-place or PUT-then-delete, picks
 	// exactly one path per duplicate).
 	let fresh = state
 		.lock()

@@ -110,7 +110,7 @@ fn txt_purpose_matches_every_casing_and_presentation_form() {
 /// Two SPF records at the apex is a `permerror` per RFC 7208 §4.5. The
 /// check must flag the duplicate with a message that names the count,
 /// the record kind, the name where the duplicate lives, and tells the
-/// operator to keep one — so they know which record to delete without
+/// operator to keep one, so they know which record to delete without
 /// reading the DNS spec.
 #[tokio::test]
 async fn two_spf_records_at_the_apex_are_reported() {
@@ -154,7 +154,7 @@ async fn two_dmarc_records_are_reported() {
 }
 
 /// Two MTA-STS records at `_mta-sts.<domain>` break the lookup
-/// (RFC 8461 §3.1 — SVRls observes both nameservers and treats the
+/// (RFC 8461 §3.1, SVRls observes both nameservers and treats the
 /// lookup as inconclusive). The check flags it with the same shape.
 #[tokio::test]
 async fn two_mta_sts_records_are_reported() {
@@ -173,8 +173,8 @@ async fn two_mta_sts_records_are_reported() {
 	assert!(d.contains("keep one"), "detail: {d:?}");
 }
 
-/// DKIM at one selector — two records with the same `v=DKIM1` tag at
-/// the same `<selector>._domainkey` name — is a duplicate. Multiple
+/// DKIM at one selector, two records with the same `v=DKIM1` tag at
+/// the same `<selector>._domainkey` name, is a duplicate. Multiple
 /// selectors at the same domain are normal (Ed25519 + RSA dual
 /// signing), but two at the same selector name is the same bug.
 #[tokio::test]
@@ -231,7 +231,7 @@ async fn two_dkim_selectors_at_different_names_are_ok() {
 	assert_eq!(status(&checks, "DKIM rsa"), Status::Ok);
 }
 
-/// A single SPF record plus one unrelated TXT (no recognised tag —
+/// A single SPF record plus one unrelated TXT (no recognised tag , 
 /// the ACME DNS-01 challenge, a domain-verification token) at the
 /// apex is fine. The unrelated record does not count toward the SPF
 /// total because `txt_purpose` returns `None` for it.
@@ -322,7 +322,7 @@ async fn duplicate_spf_with_leading_whitespace_is_reported() {
 	assert_eq!(status(&checks, "SPF"), Status::Missing);
 }
 
-/// Three SPF records is still a duplicate — the message names the
+/// Three SPF records is still a duplicate, the message names the
 /// exact count, not just "more than one", so they can grep for it.
 #[tokio::test]
 async fn three_spf_records_reports_the_exact_count() {
