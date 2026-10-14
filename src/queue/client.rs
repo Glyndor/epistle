@@ -221,7 +221,14 @@ where
 	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250, Phase::Command)
 		.await?;
 	let mut results = Vec::with_capacity(recipients.len());
+	// Once the remote says the transaction has too many recipients, the
+	// rest are not offered: they wait for a transaction of their own.
+	let mut full: Option<DeliveryError> = None;
 	for recipient in recipients {
+		if let Some(error) = &full {
+			results.push((recipient.clone(), Err(error.clone())));
+			continue;
+		}
 		conn.send(&format!("RCPT TO:<{recipient}>"), Phase::Rcpt)
 			.await?;
 		// A reply refuses this recipient only; a broken connection (no
@@ -231,6 +238,11 @@ where
 			2 => Ok(()),
 			_ => Err(DeliveryError::from_reply(code, &text)),
 		};
+		if let Err(DeliveryError::Transient(reason)) = &outcome
+			&& super::backoff::too_many_recipients(reason)
+		{
+			full = outcome.clone().err();
+		}
 		results.push((recipient.clone(), outcome));
 	}
 	if results.iter().any(|(_, outcome)| outcome.is_ok()) {

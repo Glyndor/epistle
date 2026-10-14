@@ -29,7 +29,7 @@ impl Config {
 		self.validate_acme()?;
 		self.validate_webhook()?;
 		self.validate_retry_schedule()?;
-		self.validate_queue_concurrency()?;
+		self.validate_queue_limits()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;

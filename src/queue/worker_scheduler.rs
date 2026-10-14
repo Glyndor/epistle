@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use super::Worker;
 use super::conversation::Conversation;
+use crate::queue::backoff;
 use crate::queue::client::DeliveryError;
 use crate::queue::limits::Limits;
 use crate::smtp::address::Address;
@@ -187,6 +188,7 @@ impl Worker {
 	/// in `schedule` yet, grouped by domain.
 	pub(super) fn scan<'a>(&'a self, schedule: &mut Schedule<'a>) -> std::io::Result<()> {
 		let now = self.now_epoch();
+		let holds = self.holds();
 		for id in self.spool.list()? {
 			if schedule.rounds.contains_key(&id) {
 				continue;
@@ -211,7 +213,9 @@ impl Worker {
 				// Another pass has this entry in hand and will settle it.
 				continue;
 			}
+			let count = due.len();
 			let due = self.skip_suppressed(id, &envelope, due)?;
+			let mut changed = due.len() != count;
 			let mut by_domain: Vec<(String, Vec<String>)> = Vec::new();
 			let mut unparseable = Vec::new();
 			for recipient in due {
@@ -220,6 +224,11 @@ impl Worker {
 					continue;
 				};
 				let domain = address.domain().to_ascii_lowercase();
+				// A destination on hold is not contacted, and its recipients
+				// wait without an attempt counted.
+				if backoff::is_held(&holds, &domain, now) {
+					continue;
+				}
 				match by_domain.iter_mut().find(|(known, _)| *known == domain) {
 					Some((_, recipients)) => recipients.push(recipient),
 					None => by_domain.push((domain, vec![recipient])),
@@ -227,6 +236,11 @@ impl Worker {
 			}
 			if !unparseable.is_empty() {
 				self.refuse_unparseable(id, &unparseable)?;
+				changed = true;
+			}
+			if by_domain.is_empty() && !changed && count > 0 {
+				// Everything due waits for a destination on hold.
+				continue;
 			}
 			if by_domain.is_empty() {
 				self.settle(schedule, id, false);
@@ -255,8 +269,19 @@ impl Worker {
 
 	/// Start every queued job a slot is free for, oldest entry first.
 	pub(super) fn fill<'a>(&'a self, schedule: &mut Schedule<'a>) {
+		if schedule.queued.is_empty() {
+			return;
+		}
+		let now = self.now_epoch();
+		let holds = self.holds();
 		let mut waiting = VecDeque::new();
 		while let Some(job) = schedule.queued.pop_front() {
+			// A conversation of this pass may have put the destination on
+			// hold since the job was queued.
+			if backoff::is_held(&holds, &job.domain, now) {
+				self.job_ended(schedule, job.id, false);
+				continue;
+			}
 			match self.start(job) {
 				Started::Waiting(job) => waiting.push_back(job),
 				Started::Running(conversation) => schedule.running.push(conversation),
@@ -317,11 +342,10 @@ impl Worker {
 			conversation,
 			_claim,
 		} = done;
-		let delivered = conversation
-			.results
-			.iter()
-			.any(|(_, result)| result.is_ok());
-		match self.record(job.id, &entry, &conversation, self.now_epoch()) {
+		let delivered = conversation.delivered();
+		let now = self.now_epoch();
+		self.pace(&job.domain, &conversation, now);
+		match self.record(job.id, &entry, &conversation, now) {
 			Ok(()) => {}
 			// An operator removed the entry while it was in conversation.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -333,7 +357,53 @@ impl Worker {
 			}
 		}
 		drop(_claim);
+		let retry_now = conversation.retry_now();
+		if !retry_now.is_empty() {
+			// The remote took part of the recipients: the rest go out in
+			// another conversation right away.
+			if let Some((left, _)) = schedule.rounds.get_mut(&job.id) {
+				*left += 1;
+				schedule.queued.push_front(Job {
+					id: job.id,
+					domain: job.domain.clone(),
+					recipients: retry_now,
+				});
+			}
+		}
 		self.job_ended(schedule, job.id, delivered);
+	}
+
+	/// The destination holds as stored; none when they cannot be read.
+	fn holds(&self) -> crate::storage::DestinationHolds {
+		self.spool.load_holds().unwrap_or_else(|error| {
+			tracing::warn!(%error, "cannot read destination holds");
+			Default::default()
+		})
+	}
+
+	/// Hold off `domain` when the conversation was asked to slow down, and
+	/// end its hold when the conversation delivered.
+	fn pace(&self, domain: &str, conversation: &Conversation, now: u64) {
+		let written = if conversation.delivered() {
+			if !self.holds().contains_key(domain) {
+				return;
+			}
+			tracing::info!(%domain, "destination delivered again; hold ended");
+			self.spool.update_holds(|holds| {
+				holds.remove(domain);
+			})
+		} else if let Some(reason) = conversation.throttle() {
+			self.spool.update_holds(|holds| {
+				let hold = backoff::next_hold(&self.backoff_steps, holds.get(domain), reason, now);
+				tracing::warn!(%domain, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off");
+				holds.insert(domain.to_string(), hold);
+			})
+		} else {
+			return;
+		};
+		if let Err(error) = written {
+			tracing::warn!(%domain, %error, "cannot record destination hold");
+		}
 	}
 
 	/// One job of entry `id` has ended; settle the entry after its last.

@@ -71,6 +71,9 @@ pub struct Worker {
 	/// Held while an entry is settled, so two passes never send the same
 	/// failure report twice.
 	settling: std::sync::Mutex<()>,
+	/// How long a destination that asks to slow down is held off, by the
+	/// number of times in a row it did (seconds).
+	backoff_steps: Vec<u64>,
 }
 
 impl Worker {
@@ -97,7 +100,18 @@ impl Worker {
 			limits: super::limits::Limits::default(),
 			claims: scheduler::Claims::default(),
 			settling: std::sync::Mutex::new(()),
+			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
 		}
+	}
+
+	/// Hold off a destination that asks to slow down for these waits
+	/// (seconds), one per deferral in a row, the last repeating. Empty keeps
+	/// the default.
+	pub fn with_backoff(mut self, steps: Vec<u64>) -> Self {
+		if !steps.is_empty() {
+			self.backoff_steps = steps;
+		}
+		self
 	}
 
 	/// Run up to `total` conversations at once, and up to `per_domain` of
@@ -305,11 +319,15 @@ impl Worker {
 		conversation: &Conversation,
 		now: u64,
 	) -> std::io::Result<()> {
+		let retry_now = conversation.retry_now();
 		self.spool.update_envelope(id, |envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
 				state.remote = conversation.remote.clone();
 				match result {
+					// Left for another transaction: due again now, and not
+					// an attempt that failed.
+					Err(_) if retry_now.contains(recipient) => state.next_attempt = now,
 					Ok(()) => state.status = RecipientStatus::Delivered,
 					Err(DeliveryError::Transient(reason)) => {
 						state.attempts += 1;
@@ -419,3 +437,7 @@ mod tests_delivery_log;
 #[cfg(test)]
 #[path = "worker_tests_parallel.rs"]
 mod tests_parallel;
+
+#[cfg(test)]
+#[path = "worker_tests_backoff.rs"]
+mod tests_backoff;

@@ -47,6 +47,15 @@ pub struct Queue {
 	/// Defaults to [`crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY`].
 	#[serde(default = "default_per_domain_concurrency")]
 	pub per_domain_concurrency: usize,
+	/// How long a destination that asks to slow down is held off, in
+	/// seconds, one step per deferral in a row, the last repeating.
+	/// Defaults to [`crate::queue::backoff::DEFAULT_STEPS`].
+	#[serde(default = "default_backoff_steps")]
+	pub backoff_steps: Vec<u64>,
+}
+
+fn default_backoff_steps() -> Vec<u64> {
+	crate::queue::backoff::DEFAULT_STEPS.to_vec()
 }
 
 const fn default_concurrency() -> usize {
@@ -68,6 +77,7 @@ impl Default for Queue {
 			tlsrpt_reports: default_tlsrpt_reports(),
 			concurrency: default_concurrency(),
 			per_domain_concurrency: default_per_domain_concurrency(),
+			backoff_steps: default_backoff_steps(),
 		}
 	}
 }
@@ -76,7 +86,7 @@ impl super::Config {
 	/// The conversation caps must allow at least one conversation, stay
 	/// within what one process should open, and not give one domain more
 	/// than the total.
-	pub(super) fn validate_queue_concurrency(&self) -> Result<(), super::ConfigError> {
+	pub(super) fn validate_queue_limits(&self) -> Result<(), super::ConfigError> {
 		use crate::queue::limits::MAX_CONCURRENCY;
 		let queue = &self.queue;
 		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
@@ -91,6 +101,28 @@ impl super::Config {
 				"[queue] per_domain_concurrency must be between 1 and concurrency ({}) (got {})",
 				queue.concurrency, queue.per_domain_concurrency
 			));
+		}
+		self.validate_backoff_steps()
+	}
+
+	/// The backoff needs at least one step and at most
+	/// [`crate::queue::backoff::MAX_STEPS`], each between a second and a day.
+	fn validate_backoff_steps(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::backoff::{MAX_STEP_SECS, MAX_STEPS};
+		let steps = &self.queue.backoff_steps;
+		if steps.is_empty() || steps.len() > MAX_STEPS {
+			return Err(super::ConfigError::Invalid(format!(
+				"[queue] backoff_steps must have between 1 and {MAX_STEPS} steps (got {})",
+				steps.len()
+			)));
+		}
+		if let Some(step) = steps
+			.iter()
+			.find(|step| !(1..=MAX_STEP_SECS).contains(*step))
+		{
+			return Err(super::ConfigError::Invalid(format!(
+				"[queue] backoff_steps must be between 1 and {MAX_STEP_SECS} seconds each (got {step})"
+			)));
 		}
 		Ok(())
 	}
@@ -174,7 +206,7 @@ mod tests {
 			),
 		] {
 			let error = with_queue(section)
-				.validate_queue_concurrency()
+				.validate_queue_limits()
 				.expect_err(section);
 			assert_eq!(
 				error.to_string(),
@@ -183,9 +215,39 @@ mod tests {
 		}
 		assert!(
 			with_queue("concurrency = 16\nper_domain_concurrency = 16")
-				.validate_queue_concurrency()
+				.validate_queue_limits()
 				.is_ok()
 		);
+	}
+
+	#[test]
+	fn backoff_steps_default_parse_and_are_bounded() {
+		assert_eq!(Queue::default().backoff_steps, [60, 300, 900, 3600]);
+		let parsed = with_queue("backoff_steps = [30, 120]");
+		assert_eq!(parsed.queue.backoff_steps, [30, 120]);
+		assert!(parsed.validate_queue_limits().is_ok());
+		for (section, message) in [
+			(
+				"backoff_steps = []",
+				"[queue] backoff_steps must have between 1 and 16 steps (got 0)",
+			),
+			(
+				"backoff_steps = [60, 0]",
+				"[queue] backoff_steps must be between 1 and 86400 seconds each (got 0)",
+			),
+			(
+				"backoff_steps = [86401]",
+				"[queue] backoff_steps must be between 1 and 86400 seconds each (got 86401)",
+			),
+		] {
+			let error = with_queue(section)
+				.validate_queue_limits()
+				.expect_err(section);
+			assert_eq!(
+				error.to_string(),
+				format!("invalid configuration: {message}")
+			);
+		}
 	}
 
 	#[test]

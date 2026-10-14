@@ -143,7 +143,7 @@ impl FsSpool {
 	}
 
 	/// `relative` under the spool root, resolved and checked to stay inside it.
-	fn path_in(&self, relative: &Path) -> std::io::Result<PathBuf> {
+	pub(super) fn path_in(&self, relative: &Path) -> std::io::Result<PathBuf> {
 		contained(&self.root, &self.root.join(relative))
 	}
 
@@ -315,7 +315,7 @@ impl FsSpool {
 	}
 
 	/// Take the exclusive spool lock; it is released when the guard drops.
-	fn lock(&self) -> std::io::Result<fs::File> {
+	pub(super) fn lock(&self) -> std::io::Result<fs::File> {
 		let file = fs::OpenOptions::new()
 			.create(true)
 			.truncate(false)

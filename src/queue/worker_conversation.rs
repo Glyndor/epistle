@@ -17,6 +17,39 @@ pub(super) struct Conversation {
 }
 
 impl Conversation {
+	/// Whether the remote accepted the message for any recipient.
+	pub(super) fn delivered(&self) -> bool {
+		self.results.iter().any(|(_, result)| result.is_ok())
+	}
+
+	/// The recipients a `452 4.5.3` left for another transaction, when the
+	/// remote took others in this one: they go out again at once and are
+	/// not failures. Without any recipient taken, a 452 is an ordinary
+	/// deferral, so a remote that takes none cannot loop the queue.
+	pub(super) fn retry_now(&self) -> Vec<String> {
+		if !self.delivered() {
+			return Vec::new();
+		}
+		self.results
+			.iter()
+			.filter(|(_, result)| {
+				matches!(result, Err(DeliveryError::Transient(reason))
+					if crate::queue::backoff::too_many_recipients(reason))
+			})
+			.map(|(recipient, _)| recipient.clone())
+			.collect()
+	}
+
+	/// The reply that asked the queue to slow down, when one did.
+	pub(super) fn throttle(&self) -> Option<&str> {
+		self.results.iter().find_map(|(_, result)| match result {
+			Err(DeliveryError::Transient(reason)) if crate::queue::backoff::throttled(reason) => {
+				Some(reason.as_str())
+			}
+			_ => None,
+		})
+	}
+
 	/// The same answer for every recipient: the conversation never reached
 	/// the point where recipients are answered one by one.
 	pub(super) fn all(recipients: &[String], remote: Option<String>, error: DeliveryError) -> Self {

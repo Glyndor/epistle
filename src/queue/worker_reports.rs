@@ -127,7 +127,12 @@ impl Worker {
 	) {
 		let remote = conversation.remote.as_deref().unwrap_or("-");
 		let message_id = message_id_of(entry);
+		let retry_now = conversation.retry_now();
 		for (recipient, result) in &conversation.results {
+			if retry_now.contains(recipient) {
+				tracing::debug!(%id, %recipient, remote, "left for another transaction");
+				continue;
+			}
 			match result {
 				Ok(()) => {
 					tracing::debug!(%id, %recipient, remote, "delivered");

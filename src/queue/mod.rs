@@ -1,5 +1,6 @@
 //! Outbound delivery queue: takes spooled relay mail to remote servers.
 
+pub mod backoff;
 pub mod bounce;
 pub mod client;
 pub mod limits;
