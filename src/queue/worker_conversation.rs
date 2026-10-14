@@ -16,8 +16,11 @@ pub(super) struct Conversation {
 	/// One answer per recipient.
 	pub(super) results: Vec<RecipientResult>,
 	/// A slow-down reply from an exchanger tried before the one that gave
-	/// these results.
-	pub(super) slowed: Option<String>,
+	/// these results: that exchanger, and its reply.
+	pub(super) slowed: Option<(String, String)>,
+	/// Set when no exchanger was spoken to because each one reached was on
+	/// hold: the recipients wait until then, with no attempt counted.
+	pub(super) held_until: Option<u64>,
 }
 
 impl Conversation {
@@ -44,20 +47,24 @@ impl Conversation {
 			.collect()
 	}
 
-	/// The reply that asked the queue to slow down, when one did, from this
-	/// exchanger or an earlier one.
-	pub(super) fn throttle(&self) -> Option<&str> {
+	/// The exchanger that asked the queue to slow down (when the
+	/// conversation got as far as one), from this exchanger or an earlier
+	/// one, and its reply.
+	pub(super) fn throttled_by(&self) -> Option<(Option<&str>, &str)> {
 		self.results
 			.iter()
 			.find_map(|(_, result)| match result {
 				Err(DeliveryError::Transient(reason))
 					if crate::queue::backoff::throttled(reason) =>
 				{
-					Some(reason.as_str())
+					Some((self.remote.as_deref(), reason.as_str()))
 				}
 				_ => None,
 			})
-			.or(self.slowed.as_deref())
+			.or(self
+				.slowed
+				.as_ref()
+				.map(|(host, reason)| (Some(host.as_str()), reason.as_str())))
 	}
 
 	/// The same answer for every recipient: the conversation never reached
@@ -70,6 +77,7 @@ impl Conversation {
 				.map(|recipient| (recipient.clone(), Err(error.clone())))
 				.collect(),
 			slowed: None,
+			held_until: None,
 		}
 	}
 }
@@ -234,10 +242,13 @@ impl Worker {
 	) -> Conversation {
 		let mut tried: Vec<String> = Vec::new();
 		let mut last: Option<Conversation> = None;
-		let mut slowed: Option<String> = None;
+		let mut slowed: Option<(String, String)> = None;
+		let holds = self.holds();
+		let now = self.now_epoch();
+		let mut held: Option<Conversation> = None;
 		loop {
 			if tried.len() >= MAX_EXCHANGERS {
-				let mut conversation = last.unwrap_or_else(|| {
+				let mut conversation = last.or(held).unwrap_or_else(|| {
 					let reason = format!("no further exchanger for {}", route.domain);
 					Conversation::all(route.recipients, None, DeliveryError::Transient(reason))
 				});
@@ -252,20 +263,39 @@ impl Worker {
 				Ok(connection) => connection,
 				// No exchanger left: the last answer stands.
 				Err(error) => {
-					let mut conversation =
-						last.unwrap_or_else(|| Conversation::all(route.recipients, None, error));
+					let mut conversation = last
+						.or(held)
+						.unwrap_or_else(|| Conversation::all(route.recipients, None, error));
 					conversation.slowed = conversation.slowed.take().or(slowed);
 					return conversation;
 				}
 			};
 			tried.push(connection.host.clone());
+			// An exchanger on hold (its provider asked to slow down for
+			// another of its domains) is left before a word is said.
+			let key = crate::queue::backoff::exchanger_key(&connection.host);
+			if let Some(hold) = holds.get(&key).filter(|hold| hold.active(now)) {
+				let reason = format!("{} is on hold: {}", connection.host, hold.reason);
+				let mut waiting =
+					Conversation::all(route.recipients, None, DeliveryError::Transient(reason));
+				let until = held
+					.and_then(|earlier| earlier.held_until)
+					.map_or(hold.until, |earlier| earlier.min(hold.until));
+				waiting.held_until = Some(until);
+				held = Some(waiting);
+				continue;
+			}
 			let (conversation, next) = self.attempt_direct(route, connection).await;
 			if !next {
 				let mut conversation = conversation;
 				conversation.slowed = slowed;
 				return conversation;
 			}
-			slowed = slowed.or_else(|| conversation.throttle().map(str::to_string));
+			slowed = slowed.or_else(|| {
+				conversation.throttled_by().map(|(host, reason)| {
+					(host.unwrap_or_default().to_string(), reason.to_string())
+				})
+			});
 			last = Some(conversation);
 		}
 	}

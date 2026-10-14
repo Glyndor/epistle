@@ -134,3 +134,30 @@ async fn a_conversation_that_panics_gives_back_its_slot_and_recipients() {
 		Some("internal error during delivery")
 	);
 }
+
+#[test]
+fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let worker = worker(dir.path());
+	let throttled = Conversation::all(
+		&["a@busy.example".to_string()],
+		Some("mx.busy.example".into()),
+		DeliveryError::Transient("421 4.7.0 slow down".into()),
+	);
+	worker.pace("busy.example", &throttled, 1000);
+	let delivered = Conversation {
+		remote: Some("mx.busy.example".into()),
+		results: vec![("b@busy.example".to_string(), Ok(()))],
+		slowed: None,
+		held_until: None,
+	};
+
+	worker.pace("busy.example", &delivered, 1030);
+
+	let holds = worker.spool.load_holds().expect("holds");
+	assert!(backoff::is_held(&holds, "busy.example", 1030));
+	assert!(backoff::is_held(&holds, "mx:mx.busy.example", 1030));
+
+	worker.pace("busy.example", &delivered, 1060);
+	assert!(worker.spool.load_holds().expect("holds").is_empty());
+}

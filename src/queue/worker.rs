@@ -340,6 +340,12 @@ impl Worker {
 					// Left for another transaction: due again now, and not
 					// an attempt that failed.
 					Err(_) if retry_now.contains(recipient) => state.next_attempt = now,
+					// Every exchanger reached was on hold: nothing was
+					// attempted, and the recipient waits for the hold.
+					Err(DeliveryError::Transient(reason)) if conversation.held_until.is_some() => {
+						state.next_attempt = conversation.held_until.unwrap_or(now);
+						state.last_error = Some(reason.clone());
+					}
 					Ok(()) => state.status = RecipientStatus::Delivered,
 					Err(DeliveryError::Transient(reason)) => {
 						state.attempts += 1;
@@ -457,3 +463,7 @@ mod tests_backoff;
 #[cfg(test)]
 #[path = "worker_tests_next_mx.rs"]
 mod tests_next_mx;
+
+#[cfg(test)]
+#[path = "worker_tests_provider.rs"]
+mod tests_provider;

@@ -1,6 +1,6 @@
 //! A destination that asks the queue to slow down is held off as a whole,
 //! for longer each time it does so in a row, and released by the first
-//! conversation that delivers. A `452 4.5.3` only sends the extra
+//! conversation that delivers once the hold has run out. A `452 4.5.3` only sends the extra
 //! recipients to another transaction at once.
 
 use super::*;
@@ -11,7 +11,7 @@ use crate::storage::{DeliveryLog, DeliveryOutcome, RecipientStatus};
 const DOMAIN: &str = "busy.example";
 const HOST: &str = "mx.busy.example";
 
-fn store(spool: &FsSpool, recipients: &[&str]) {
+pub(super) fn store(spool: &FsSpool, recipients: &[&str]) {
 	spool
 		.store(
 			&AcceptedMessage {
@@ -32,7 +32,11 @@ fn store(spool: &FsSpool, recipients: &[&str]) {
 /// A worker over a spool with one message to `recipients`, delivering
 /// through `remote`, its clock at the message's creation plus a second,
 /// and with no spread on retry waits.
-fn worker_for(dir: &std::path::Path, recipients: &[&str], remote: &FakeRemote) -> (Worker, u64) {
+pub(super) fn worker_for(
+	dir: &std::path::Path,
+	recipients: &[&str],
+	remote: &FakeRemote,
+) -> (Worker, u64) {
 	let spool = FsSpool::open(dir).expect("open spool");
 	store(&spool, recipients);
 	let created = spool.list().expect("list")[0]
@@ -46,7 +50,7 @@ fn worker_for(dir: &std::path::Path, recipients: &[&str], remote: &FakeRemote) -
 	(worker, created + 1)
 }
 
-fn greeting(reply: &str) -> Script {
+pub(super) fn greeting(reply: &str) -> Script {
 	Script {
 		greeting: Some(reply.to_string()),
 		..Script::default()
@@ -201,11 +205,13 @@ async fn a_hold_survives_a_restart_and_a_release_lifts_it() {
 		"still on hold after the restart"
 	);
 
-	// The operator releases it: the next pass goes ahead.
+	// The operator releases the domain and its exchanger: the next pass
+	// goes ahead.
 	restarted
 		.spool
 		.update_holds(|holds| {
 			holds.remove(DOMAIN);
+			holds.remove(&crate::queue::backoff::exchanger_key(HOST));
 		})
 		.expect("release");
 	restarted.pass().await.expect("pass");

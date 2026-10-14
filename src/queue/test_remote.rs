@@ -137,6 +137,15 @@ impl FakeRemote {
 			.insert(domain.to_string(), hosts);
 	}
 
+	/// Serve `domain` with one exchanger named `host`, which several
+	/// domains may share, the way a mail provider hosts its customers.
+	pub fn hosted(&self, domain: &str, host: &str, script: Script) {
+		self.scripts
+			.lock()
+			.expect("scripts")
+			.insert(domain.to_string(), vec![(host.to_string(), script)]);
+	}
+
 	/// Every message accepted so far, in order.
 	pub fn received(&self) -> Vec<Received> {
 		self.received.lock().expect("received").clone()

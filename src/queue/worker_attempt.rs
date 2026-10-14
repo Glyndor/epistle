@@ -149,6 +149,7 @@ impl Worker {
 					remote: Some(server_name),
 					results,
 					slowed: None,
+					held_until: None,
 				},
 				false,
 			),

@@ -135,6 +135,10 @@ impl Worker {
 		entry: &SpoolEntry,
 		conversation: &Conversation,
 	) {
+		if conversation.held_until.is_some() {
+			// Nothing was attempted: the recipients only wait for a hold.
+			return;
+		}
 		let remote = conversation.remote.as_deref().unwrap_or("-");
 		let message_id = message_id_of(entry);
 		let retry_now = conversation.retry_now();

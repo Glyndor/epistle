@@ -3,10 +3,14 @@
 //! Large receivers answer a sender that goes too fast with a 421 (often at
 //! the greeting), a 4.7.x status, or a 451 or 452 that says the sender hit a
 //! rate limit. Retrying each message on its own schedule would keep hitting
-//! them; instead the whole recipient domain is put on hold, and every
-//! message to it waits. The hold grows with each deferral in a row, through
-//! the configured steps (1, 5, 15 and 60 minutes by default), and a
-//! conversation that delivers ends it.
+//! them; instead the whole recipient domain is put on hold, and so is the
+//! exchanger host that answered ([`exchanger_key`]): a provider that hosts
+//! many domains limits the sender on its own hosts, so no other domain it
+//! serves gets a fresh conversation with that host either. Every message to
+//! a held destination waits. The hold grows with each deferral in a row,
+//! through the configured steps (1, 5, 15 and 60 minutes by default), also
+//! when a hold ran out without a delivery in between, and only a
+//! conversation that delivers after the hold has run out ends it.
 //!
 //! A `452 4.5.3` (too many recipients) is different: the remote took some
 //! recipients and asks for the rest in another transaction. Those are not
@@ -106,34 +110,51 @@ pub fn next_hold(
 /// holds file, read on every scheduling decision, without bound.
 pub const MAX_HOLDS: usize = 1024;
 
-/// Record in `holds` that `domain` deferred for `reason` at `now`, and
-/// return its hold. Holds that ended longer ago than the longest step are
-/// forgotten first (a deferral that long after starts a new run of them),
-/// and past [`MAX_HOLDS`] the ones ending soonest give way, so the set
-/// stays bounded however many destinations defer.
+/// The key under which an exchanger host is held, next to the recipient
+/// domains: many domains hosted by one provider share its exchangers, and
+/// the provider's rate limit is on its own hosts, not on each domain.
+pub fn exchanger_key(host: &str) -> String {
+	format!("mx:{}", host.trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// Record in `holds` that `key` (a recipient domain or an
+/// [`exchanger_key`]) deferred for `reason` at `now`, and return its hold.
+///
+/// A hold is only ever forgotten when its destination delivers again or the
+/// operator releases it, so the backoff keeps growing through deferrals
+/// that come after a hold ran out. Past [`MAX_HOLDS`], the hold that ended
+/// longest ago gives way; a hold still in force never does, and when every
+/// one is in force the new one is not recorded (`None`): its recipients
+/// still wait on their own retry schedule.
 pub fn record_hold(
 	holds: &mut DestinationHolds,
 	steps: &[u64],
-	domain: &str,
+	key: &str,
 	reason: &str,
 	now: u64,
-) -> DestinationHold {
-	let longest = steps.iter().copied().max().unwrap_or(DEFAULT_STEPS[3]);
-	holds.retain(|_, hold| hold.until.saturating_add(longest) > now);
-	let hold = next_hold(steps, holds.get(domain), reason, now);
-	holds.insert(domain.to_string(), hold.clone());
-	while holds.len() > MAX_HOLDS {
-		let soonest = holds
+) -> Option<DestinationHold> {
+	let hold = next_hold(steps, holds.get(key), reason, now);
+	if !holds.contains_key(key) && holds.len() >= MAX_HOLDS {
+		let ended = holds
 			.iter()
-			.filter(|(held, _)| held.as_str() != domain)
+			.filter(|(_, hold)| !hold.active(now))
 			.min_by_key(|(_, hold)| hold.until)
-			.map(|(held, _)| held.clone());
-		match soonest {
-			Some(held) => holds.remove(&held),
-			None => break,
-		};
+			.map(|(held, _)| held.clone())?;
+		holds.remove(&ended);
 	}
-	hold
+	holds.insert(key.to_string(), hold.clone());
+	Some(hold)
+}
+
+/// Forget the hold of `key` after a delivery, unless it is still in
+/// force: a destination that set a hold for all senders' conversations
+/// keeps it until it ends, even when one that was already under way got
+/// through. Returns whether a hold was removed.
+pub fn clear_after_success(holds: &mut DestinationHolds, key: &str, now: u64) -> bool {
+	match holds.get(key) {
+		Some(hold) if !hold.active(now) => holds.remove(key).is_some(),
+		_ => false,
+	}
 }
 
 /// Whether `domain` is on hold at `now`.
@@ -184,34 +205,78 @@ mod tests {
 
 	#[test]
 	fn the_holds_stay_bounded_however_many_destinations_defer() {
-		// Day-long holds: none ends while the destinations pile up.
-		let steps = [86_400];
+		let steps = [60];
 		let mut holds = DestinationHolds::new();
 		for n in 0..(MAX_HOLDS as u64 * 3) {
+			// Each hold has ended by the time the next destination defers.
+			let now = 1000 + n * 100;
+			let hold = record_hold(
+				&mut holds,
+				&steps,
+				&format!("d{n}.example"),
+				"421 busy",
+				now,
+			);
+			assert!(hold.is_some());
+			assert!(holds.len() <= MAX_HOLDS, "{} holds", holds.len());
+		}
+		let newest = format!("d{}.example", MAX_HOLDS as u64 * 3 - 1);
+		assert!(holds.contains_key(&newest), "the latest deferral is kept");
+	}
+
+	#[test]
+	fn a_flood_of_destinations_never_frees_one_still_on_hold() {
+		// Day-long holds: every one is in force while the flood goes on.
+		let steps = [86_400];
+		let mut holds = DestinationHolds::new();
+		record_hold(
+			&mut holds,
+			&steps,
+			"throttled.example",
+			"421 slow down",
+			1000,
+		);
+		for n in 0..(MAX_HOLDS as u64 * 2) {
 			record_hold(
 				&mut holds,
 				&steps,
 				&format!("d{n}.example"),
 				"421 busy",
-				1000 + n,
+				1001 + n,
 			);
-			assert!(holds.len() <= MAX_HOLDS, "{} holds", holds.len());
 		}
-		let newest = format!("d{}.example", MAX_HOLDS as u64 * 3 - 1);
-		assert!(holds.contains_key(&newest), "the latest deferral is kept");
-		// Long after every hold ended, a new deferral finds them gone.
-		record_hold(&mut holds, &steps, "late.example", "421 busy", 1_000_000);
-		assert_eq!(holds.keys().collect::<Vec<_>>(), ["late.example"]);
-		assert_eq!(holds["late.example"].level, 0);
+		assert_eq!(holds.len(), MAX_HOLDS);
+		assert!(holds.contains_key("throttled.example"));
+		assert!(is_held(&holds, "throttled.example", 5000));
 	}
 
 	#[test]
-	fn a_deferral_soon_after_a_hold_ended_still_escalates() {
-		let steps = [60, 300];
+	fn the_backoff_keeps_growing_when_a_hold_runs_out_without_a_delivery() {
+		let steps = [60, 300, 900];
 		let mut holds = DestinationHolds::new();
 		record_hold(&mut holds, &steps, "a.example", "421 busy", 1000);
-		let second = record_hold(&mut holds, &steps, "a.example", "421 busy", 1100);
-		assert_eq!((second.level, second.until), (1, 1400));
+		// A deferral long after the hold ended is still the next in a row.
+		let second =
+			record_hold(&mut holds, &steps, "a.example", "421 busy", 1_000_000).expect("hold");
+		assert_eq!((second.level, second.until), (1, 1_000_300));
+	}
+
+	#[test]
+	fn a_delivery_ends_a_hold_only_once_it_has_run_out() {
+		let mut holds = DestinationHolds::new();
+		record_hold(&mut holds, &[60], "a.example", "421 busy", 1000);
+		assert!(!clear_after_success(&mut holds, "a.example", 1030));
+		assert!(is_held(&holds, "a.example", 1030));
+		assert!(clear_after_success(&mut holds, "a.example", 1060));
+		assert!(holds.is_empty());
+	}
+
+	#[test]
+	fn an_exchanger_is_held_under_its_own_key() {
+		assert_eq!(
+			exchanger_key("MX1.Provider.Example."),
+			"mx:mx1.provider.example"
+		);
 	}
 
 	#[test]

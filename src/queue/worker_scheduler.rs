@@ -341,28 +341,47 @@ impl Worker {
 	}
 
 	/// The destination holds as stored; none when they cannot be read.
-	fn holds(&self) -> crate::storage::DestinationHolds {
+	pub(super) fn holds(&self) -> crate::storage::DestinationHolds {
 		self.spool.load_holds().unwrap_or_else(|error| {
 			tracing::warn!(%error, "cannot read destination holds");
 			Default::default()
 		})
 	}
 
-	/// Hold off `domain` when the conversation was asked to slow down, and
-	/// end its hold when the conversation delivered.
+	/// Hold off `domain`, and the exchanger that answered, when the
+	/// conversation was asked to slow down; forget their holds once they
+	/// have run out and a conversation delivered.
 	fn pace(&self, domain: &str, conversation: &Conversation, now: u64) {
+		if conversation.held_until.is_some() {
+			return;
+		}
+		let exchanger = conversation.remote.as_deref().map(backoff::exchanger_key);
 		let written = if conversation.delivered() {
-			if !self.holds().contains_key(domain) {
+			let keys: Vec<&str> = std::iter::once(domain)
+				.chain(exchanger.as_deref())
+				.collect();
+			let holds = self.holds();
+			if !keys.iter().any(|key| holds.contains_key(*key)) {
 				return;
 			}
-			tracing::info!(%domain, "destination delivered again; hold ended");
 			self.spool.update_holds(|holds| {
-				holds.remove(domain);
+				for key in &keys {
+					if backoff::clear_after_success(holds, key, now) {
+						tracing::info!(destination = %key, "destination delivered again; hold ended");
+					}
+				}
 			})
-		} else if let Some(reason) = conversation.throttle() {
+		} else if let Some((host, reason)) = conversation.throttled_by() {
+			let exchanger = host
+				.filter(|host| !host.is_empty())
+				.map(backoff::exchanger_key);
 			self.spool.update_holds(|holds| {
-				let hold = backoff::record_hold(holds, &self.backoff_steps, domain, reason, now);
-				tracing::warn!(%domain, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off");
+				for key in std::iter::once(domain).chain(exchanger.as_deref()) {
+					match backoff::record_hold(holds, &self.backoff_steps, key, reason, now) {
+						Some(hold) => tracing::warn!(destination = %key, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off"),
+						None => tracing::warn!(destination = %key, %reason, "destination asked to slow down, but every hold slot is in use; not holding it"),
+					}
+				}
 			})
 		} else {
 			return;
