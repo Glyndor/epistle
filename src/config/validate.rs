@@ -58,7 +58,8 @@ impl Config {
 			_ => Err(ConfigError::Invalid(
 				"rsa_selector and rsa_key_file must be set together".into(),
 			)),
-		}
+		}?;
+		super::validate_dkim_overrides(dkim, &self.domains, &self.domain_aliases)
 	}
 
 	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
@@ -587,6 +588,9 @@ pub(crate) fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigErr
 	}
 }
 
+/// The per-domain DKIM rules live in `super::validate_dkim_domain` to
+/// keep this file under the 500-code-line budget; the validator above
+/// calls it after the configured `[dkim]` block's own checks.
 #[cfg(test)]
 #[path = "validate_tests.rs"]
 mod tests;

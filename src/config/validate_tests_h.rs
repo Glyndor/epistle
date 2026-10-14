@@ -227,3 +227,156 @@ key_file = "/etc/mail/dkim.pem"
 	.expect("missing RSA must be accepted (warning, not refusal)");
 	assert!(config.dkim.is_some());
 }
+
+#[test]
+fn accepts_a_per_domain_dkim_override_for_a_hosted_domain() {
+	// A per-domain override for a domain in [domains] must pass. The
+	// per-domain block is the same shape as [dkim], so the validator
+	// must accept it just like the main block.
+	let config = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org", "example.net"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[dkim.domain]]
+name = "example.org"
+selector = "ed-2024a"
+key_file = "/etc/mail/example-ed25519.pem"
+rsa_selector = "rsa-2024a"
+rsa_key_file = "/etc/mail/example-rsa.pem"
+"#,
+	)
+	.expect("per-domain override for a hosted domain is accepted");
+	let dkim = config.dkim.expect("[dkim] is set");
+	assert_eq!(dkim.domain.len(), 1);
+	assert_eq!(dkim.domain[0].name, "example.org");
+}
+
+#[test]
+fn accepts_a_per_domain_dkim_override_for_an_alias_domain() {
+	// A per-domain override for an alias domain is also accepted: the
+	// server still signs mail whose `d=` is the alias, so the key must
+	// be just as publishable as one tied to an apex domain.
+	let config = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[domain_aliases]
+"example.net" = "example.org"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[dkim.domain]]
+name = "example.net"
+selector = "ed-2024a"
+key_file = "/etc/mail/example-ed25519.pem"
+"#,
+	)
+	.expect("per-domain override for an alias domain is accepted");
+	assert_eq!(config.dkim.expect("dkim").domain.len(), 1);
+}
+
+#[test]
+fn rejects_a_per_domain_dkim_override_for_a_non_hosted_domain() {
+	// The override names a domain the server does not host: the
+	// published TXT would never match a domain any message can sign
+	// with, so the config must be rejected at load.
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[dkim.domain]]
+name = "other.example"
+selector = "ed-2024a"
+key_file = "/etc/mail/other-ed25519.pem"
+"#,
+	);
+	let err = result.expect_err("non-hosted domain must be rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("[dkim.domain]") && message.contains("other.example"),
+		"the rejection must name the override and the offending domain, got {message:?}"
+	);
+	assert!(
+		message.contains("[domains]") || message.contains("[domain_aliases]"),
+		"the rejection must point the operator at the two lists the override has to match, got {message:?}"
+	);
+}
+
+#[test]
+fn rejects_a_duplicate_per_domain_dkim_override() {
+	// The same name twice in [[dkim.domain]] is an error: only one
+	// selector can win, and a silent one-wins is exactly the kind of
+	// misconfiguration that the validator should not let ship.
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[dkim.domain]]
+name = "example.org"
+selector = "ed-a"
+key_file = "/etc/mail/a.pem"
+
+[[dkim.domain]]
+name = "example.org"
+selector = "ed-b"
+key_file = "/etc/mail/b.pem"
+"#,
+	);
+	let err = result.expect_err("duplicate override must be rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("example.org") && message.contains("more than once"),
+		"the rejection must name the duplicate and call it out, got {message:?}"
+	);
+}
+
+#[test]
+fn rejects_a_per_domain_override_with_only_rsa_selector() {
+	// Same rule as the configured block: a selector without a key file
+	// points a published TXT at a key we never load.
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[dkim.domain]]
+name = "example.org"
+selector = "ed-a"
+key_file = "/etc/mail/a.pem"
+rsa_selector = "rsa-a"
+"#,
+	);
+	let err = result.expect_err("half-configured RSA on an override must be rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("rsa_selector and rsa_key_file must be set together"),
+		"the rejection must match the configured-block wording, got {message:?}"
+	);
+}

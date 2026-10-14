@@ -28,8 +28,10 @@ mod tenant;
 mod tls;
 mod transport;
 mod validate;
+mod validate_dkim_domain;
 pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
 pub(crate) use validate::validate_dns_name;
+pub(crate) use validate_dkim_domain::validate_dkim_overrides;
 mod webhook;
 
 pub use account::Account;

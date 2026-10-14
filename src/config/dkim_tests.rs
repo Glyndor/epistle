@@ -1,5 +1,7 @@
 //! Tests for `Dkim` configuration parsing and `single_signature_warning`.
 
+use std::path::PathBuf;
+
 use super::{DKIM_RSA_REQUIRED_FROM, Dkim};
 
 #[test]
@@ -11,7 +13,7 @@ key_file = "/etc/mail/dkim.pem"
 "#,
 	)
 	.expect("parse dkim");
-	assert_eq!(dkim.selector, "mail");
+	assert_eq!(dkim.selector.as_deref(), Some("mail"));
 	// Deprecated fields default to None when absent.
 	assert!(dkim.rotate_days.is_none());
 	assert!(dkim.rotate_overlap_days.is_none());
@@ -19,7 +21,9 @@ key_file = "/etc/mail/dkim.pem"
 
 #[test]
 fn rejects_missing_fields_and_unknown_keys() {
-	assert!(toml::from_str::<Dkim>(r#"selector = "mail""#).is_err());
+	// A half-configured RSA pair is still rejected (the validator
+	// runs the cross-field check, not serde); unknown keys remain a
+	// load-time error from `deny_unknown_fields`.
 	assert!(
 		toml::from_str::<Dkim>(
 			r#"
@@ -78,23 +82,25 @@ rotate_overlap_days = 21
 
 fn dkim_with_rsa() -> Dkim {
 	Dkim {
-		selector: "mail".into(),
-		key_file: "/etc/mail/dkim.pem".into(),
+		selector: Some("mail".into()),
+		key_file: Some("/etc/mail/dkim.pem".into()),
 		rsa_selector: Some("rsa1".into()),
 		rsa_key_file: Some("/etc/mail/rsa.pem".into()),
 		rotate_days: None,
 		rotate_overlap_days: None,
+		domain: Vec::new(),
 	}
 }
 
 fn dkim_without_rsa() -> Dkim {
 	Dkim {
-		selector: "mail".into(),
-		key_file: "/etc/mail/dkim.pem".into(),
+		selector: Some("mail".into()),
+		key_file: Some("/etc/mail/dkim.pem".into()),
 		rsa_selector: None,
 		rsa_key_file: None,
 		rotate_days: None,
 		rotate_overlap_days: None,
+		domain: Vec::new(),
 	}
 }
 
@@ -140,5 +146,120 @@ fn single_signature_warning_is_some_when_only_rsa_key_file_is_set() {
 	assert!(
 		dkim.single_signature_warning().is_some(),
 		"missing selector must warn (the pair has to be complete)"
+	);
+}
+
+#[test]
+fn parses_a_per_domain_override() {
+	let dkim: Dkim = toml::from_str(
+		r#"
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[domain]]
+name = "example.org"
+selector = "ed-2024a"
+key_file = "/etc/mail/example-ed25519.pem"
+rsa_selector = "rsa-2024a"
+rsa_key_file = "/etc/mail/example-rsa.pem"
+"#,
+	)
+	.expect("parse dkim with per-domain override");
+	assert_eq!(dkim.domain.len(), 1, "one per-domain override parsed");
+	assert_eq!(dkim.domain[0].name, "example.org");
+	assert_eq!(dkim.domain[0].selector, "ed-2024a");
+	assert_eq!(
+		dkim.domain[0].key_file,
+		PathBuf::from("/etc/mail/example-ed25519.pem")
+	);
+	assert_eq!(dkim.domain[0].rsa_selector.as_deref(), Some("rsa-2024a"));
+	assert_eq!(
+		dkim.domain[0].rsa_key_file.as_deref(),
+		Some(std::path::Path::new("/etc/mail/example-rsa.pem"))
+	);
+}
+
+#[test]
+fn override_for_returns_the_match_by_name() {
+	let dkim: Dkim = toml::from_str(
+		r#"
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+
+[[domain]]
+name = "example.org"
+selector = "ed-a"
+key_file = "/k-a.pem"
+
+[[domain]]
+name = "example.net"
+selector = "ed-b"
+key_file = "/k-b.pem"
+"#,
+	)
+	.expect("parse");
+	let one = dkim
+		.override_for("example.org")
+		.expect("example.org has an override");
+	assert_eq!(one.selector, "ed-a");
+	assert_eq!(
+		dkim.override_for("example.net").expect("net").selector,
+		"ed-b"
+	);
+	assert!(
+		dkim.override_for("other.example").is_none(),
+		"a domain with no override returns None"
+	);
+}
+
+#[test]
+fn override_rejects_an_unknown_key() {
+	let result = toml::from_str::<Dkim>(
+		r#"
+selector = "mail"
+key_file = "/k.pem"
+
+[[domain]]
+name = "example.org"
+selector = "ed-a"
+key_file = "/k-a.pem"
+algorithm = "ed25519"
+"#,
+	);
+	let err = result.expect_err("unknown field on a per-domain override is rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("algorithm"),
+		"the rejection must name the unknown field, got {message:?}"
+	);
+}
+
+#[test]
+fn override_rsa_pair_check_matches_the_default_block() {
+	let mut dkim: Dkim = toml::from_str(
+		r#"
+selector = "mail"
+key_file = "/k.pem"
+
+[[domain]]
+name = "example.org"
+selector = "ed-a"
+key_file = "/k-a.pem"
+rsa_selector = "rsa-a"
+rsa_key_file = "/k-a-rsa.pem"
+"#,
+	)
+	.expect("parse");
+	assert!(dkim.domain[0].rsa_pair_is_complete());
+	dkim.domain[0].rsa_key_file = None;
+	assert!(
+		!dkim.domain[0].rsa_pair_is_complete(),
+		"a selector without a key file is half-configured"
+	);
+	dkim.domain[0].rsa_key_file = Some("/k-a-rsa.pem".into());
+	dkim.domain[0].rsa_selector = None;
+	assert!(
+		!dkim.domain[0].rsa_pair_is_complete(),
+		"a key file without a selector is half-configured"
 	);
 }

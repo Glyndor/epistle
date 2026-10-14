@@ -1,0 +1,65 @@
+//! Per-domain DKIM validation: every `[[dkim.domain]]` entry must
+//! name a hosted domain, list the RSA pair as a complete pair, and
+//! be unique. Pulled out of `validate.rs` so the main validator
+//! stays under the 500-code-line budget.
+
+use std::collections::HashSet;
+
+use super::ConfigError;
+
+/// The set the server signs for, projected from the configured domains
+/// and aliases. Case-insensitive so `Example.org` and `example.org`
+/// resolve to the same key, the same way the routing layer compares
+/// them at delivery time.
+fn hosted_set(
+	domains: &[String],
+	domain_aliases: &std::collections::HashMap<String, String>,
+) -> HashSet<String> {
+	let mut all = HashSet::new();
+	for domain in domains {
+		all.insert(domain.to_ascii_lowercase());
+	}
+	for alias in domain_aliases.keys() {
+		all.insert(alias.to_ascii_lowercase());
+	}
+	all
+}
+
+/// Apply the per-domain DKIM rules: every override must name a hosted
+/// domain, its RSA fields must be a complete pair, and the same domain
+/// must not be listed twice. The half-configured RSA pair matches the
+/// rule the configured `[dkim]` block applies, so the operator reads
+/// the same shape of error from both.
+pub(crate) fn validate_dkim_overrides(
+	dkim: &super::Dkim,
+	domains: &[String],
+	domain_aliases: &std::collections::HashMap<String, String>,
+) -> Result<(), ConfigError> {
+	if dkim.domain.is_empty() {
+		return Ok(());
+	}
+	let hosted = hosted_set(domains, domain_aliases);
+	let mut seen = HashSet::new();
+	for entry in &dkim.domain {
+		if !entry.rsa_pair_is_complete() {
+			return Err(ConfigError::Invalid(format!(
+				"[dkim.domain] name = \"{}\": rsa_selector and rsa_key_file must be set together",
+				entry.name
+			)));
+		}
+		let name = entry.name.to_ascii_lowercase();
+		if !hosted.contains(&name) {
+			return Err(ConfigError::Invalid(format!(
+				"[dkim.domain] name = \"{}\" is not in [domains] or [domain_aliases]; \
+				 per-domain keys can only sign domains the server hosts",
+				entry.name
+			)));
+		}
+		if !seen.insert(name.clone()) {
+			return Err(ConfigError::Invalid(format!(
+				"[dkim.domain] name = \"{name}\" is listed more than once"
+			)));
+		}
+	}
+	Ok(())
+}
