@@ -149,7 +149,9 @@ fn an_export_larger_than_the_free_room_is_refused_and_removed() {
 	let error = move_dir(handle, &stage.outputs[0], me(), me(), |_| Ok(3)).unwrap_err();
 	assert!(error.to_string().contains("less than 5% free"), "{error}");
 	assert!(!requested.exists());
-	move_dir(handle, &stage.outputs[0], me(), me(), |_| Ok(8)).expect("fits exactly");
+	// `cur` and the file cost a block each, plus the file's eight bytes.
+	let exact = 2 * super::super::copy::ENTRY_COST + 8;
+	move_dir(handle, &stage.outputs[0], me(), me(), |_| Ok(exact)).expect("fits exactly");
 	assert_eq!(
 		fs::read_to_string(requested.join("cur/1:2,S")).unwrap(),
 		"12345678"

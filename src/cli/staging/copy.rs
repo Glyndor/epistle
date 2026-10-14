@@ -39,7 +39,17 @@ pub(crate) struct Budget {
 	shown: PathBuf,
 	free_space: bool,
 	pub(crate) source: Source,
+	/// Directories entered below the root of the copy.
+	depth: usize,
 }
+
+/// What every file or directory costs at least: a block and an inode, so a
+/// tree of empty entries cannot get past a bound counted in bytes.
+pub(crate) const ENTRY_COST: u64 = 4096;
+
+/// Deepest directory a copy enters. A Maildir is three levels deep; the
+/// bound keeps the recursion's stack small whatever the tree holds.
+pub(crate) const MAX_DEPTH: usize = 64;
 
 impl Budget {
 	/// A copy into the staging directory, bounded at `limit` bytes.
@@ -50,7 +60,17 @@ impl Budget {
 			shown: shown.to_path_buf(),
 			free_space: false,
 			source: Source::Operator,
+			depth: 0,
 		}
+	}
+
+	/// Charge one entry before it is made.
+	fn charge_entry(&mut self) -> io::Result<()> {
+		if ENTRY_COST > self.left {
+			return Err(self.exceeded());
+		}
+		self.left -= ENTRY_COST;
+		Ok(())
 	}
 
 	/// A copy bounded by the `room` its target filesystem has to spare.
@@ -269,11 +289,21 @@ pub(crate) fn copy_tree(
 		let (shown, rel) = (shown.join(&name), rel.join(&name));
 		let node = open_node(&under(source, &name), &shown)?;
 		node.check(&shown, budget.source)?;
+		budget.charge_entry()?;
 		if node.meta.is_dir() {
+			if budget.depth >= MAX_DEPTH {
+				return Err(io::Error::other(format!(
+					"{} is more than {MAX_DEPTH} directories deep",
+					shown.display()
+				)));
+			}
 			let from = node.dir()?;
 			let to = make_dir(target, &name)?;
 			chown(&to, &rel)?;
-			copy_tree(&from, &to, &shown, &rel, budget, chown)?;
+			budget.depth += 1;
+			let copied = copy_tree(&from, &to, &shown, &rel, budget, chown);
+			budget.depth -= 1;
+			copied?;
 		} else {
 			copy_file(node, &shown, target, &name, &rel, budget, chown)?;
 		}

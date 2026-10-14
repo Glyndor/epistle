@@ -73,7 +73,7 @@ fn an_entry_swapped_for_a_link_after_it_is_opened_is_not_read_through() {
 			std::os::unix::fs::symlink(&secret, &swap).unwrap();
 		}
 	})));
-	let mut budget = Budget::new(1024, source.path());
+	let mut budget = Budget::new(1024 + 4 * ENTRY_COST, source.path());
 	let copied = copy_tree(
 		&dir(source.path()),
 		&dir(target.path()),
@@ -99,4 +99,48 @@ fn sizes_read_in_the_largest_whole_unit() {
 	assert_eq!(size(4 * 1024 * 1024 * 1024), "4 GiB");
 	assert_eq!(size(64 * 1024 * 1024), "64 MiB");
 	assert_eq!(size(10), "10 bytes");
+}
+
+/// Copy `source` into a fresh directory with a byte budget of `limit`.
+fn copy_with_limit(source: &Path, limit: u64) -> io::Result<()> {
+	let target = tempfile::tempdir().unwrap();
+	let mut budget = Budget::new(limit, source);
+	copy_tree(
+		&dir(source),
+		&dir(target.path()),
+		source,
+		Path::new(""),
+		&mut budget,
+		&|_, _| Ok(()),
+	)
+}
+
+#[test]
+fn empty_entries_cost_a_block_each() {
+	let source = tempfile::tempdir().unwrap();
+	for index in 0..10 {
+		fs::write(source.path().join(format!("empty{index}")), "").unwrap();
+	}
+	// Ten empty files hold no bytes, but each costs a block and an inode.
+	assert!(copy_with_limit(source.path(), 10 * ENTRY_COST).is_ok());
+	assert!(copy_with_limit(source.path(), 10 * ENTRY_COST - 1).is_err());
+}
+
+#[test]
+fn a_tree_deeper_than_the_bound_is_refused() {
+	let source = tempfile::tempdir().unwrap();
+	let mut path = source.path().to_path_buf();
+	for _ in 0..=MAX_DEPTH {
+		path.push("d");
+	}
+	fs::create_dir_all(&path).unwrap();
+	let error = copy_with_limit(source.path(), u64::MAX).unwrap_err();
+	assert!(error.to_string().contains("directories deep"), "{error}");
+	let mut shallow = source.path().join("ok");
+	for _ in 0..MAX_DEPTH - 1 {
+		shallow.push("d");
+	}
+	let ok = tempfile::tempdir().unwrap();
+	fs::create_dir_all(ok.path().join(shallow.strip_prefix(source.path()).unwrap())).unwrap();
+	assert!(copy_with_limit(ok.path(), u64::MAX).is_ok());
 }
