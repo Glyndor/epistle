@@ -31,6 +31,7 @@ impl DnsProvider for Listed {
 				kind: RecordKind::Txt,
 				value: "v=DKIM1; k=ed25519; p=AAAA".into(),
 				ttl: 300,
+				proxied: None,
 			})
 			.collect();
 		Box::pin(async move { Ok(records) })
