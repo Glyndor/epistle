@@ -169,27 +169,29 @@ fn an_enormous_references_list_keeps_the_parent_and_a_bounded_tail() {
 /// A mailbox of about `n` messages.
 type Shape = fn(usize) -> Vec<String>;
 
-/// The fastest of three runs, so a busy machine adds as little noise as it
-/// can to a timing comparison.
-fn fastest(texts: &[String]) -> Duration {
-	(0..3)
-		.map(|_| {
-			let started = Instant::now();
-			thread_texts(texts);
-			started.elapsed()
-		})
-		.min()
-		.unwrap_or_default()
+/// The fastest of five runs of each input, the two inputs interleaved, so
+/// a busy machine slows both sides of a comparison alike instead of only
+/// the one that happened to run during a burst.
+fn fastest_pair(short: &[String], long: &[String]) -> (Duration, Duration) {
+	let time = |texts: &[String]| {
+		let started = Instant::now();
+		thread_texts(texts);
+		started.elapsed()
+	};
+	(0..5).fold(
+		(Duration::MAX, Duration::MAX),
+		|(short_best, long_best), _| (short_best.min(time(short)), long_best.min(time(long))),
+	)
 }
 
-/// Growth, not wall clock: four times the input must cost about four times
-/// the work (a little more for the sorts and the amortized splay steps).
-/// A quadratic path costs about sixteen times. The short run is floored at
-/// 5 ms so scheduler noise on a busy machine cannot make the ratio look
-/// quadratic.
+/// Growth, not wall clock: eight times the input must cost about eight
+/// times the work (a little more for the sorts and the amortized splay
+/// steps), and a quadratic path costs about sixty-four times. The bound of
+/// 24 leaves a wide margin on both sides, and the short run is floored at
+/// 5 ms so scheduler noise cannot make the ratio look quadratic.
 #[test]
 fn hostile_mailboxes_take_near_linear_time() {
-	let small = 12_500;
+	let small = 6_250;
 	let shapes: [(&str, Shape); 6] = [
 		("chain", chain),
 		("comb", comb),
@@ -199,12 +201,12 @@ fn hostile_mailboxes_take_near_linear_time() {
 		("star", star),
 	];
 	for (name, shape) in shapes {
-		let (short, long) = (shape(small), shape(small * 4));
-		let base = fastest(&short).max(Duration::from_millis(5));
-		let grown = fastest(&long);
+		let (short, long) = (shape(small), shape(small * 8));
+		let (base, grown) = fastest_pair(&short, &long);
+		let base = base.max(Duration::from_millis(5));
 		assert!(
-			grown < base * 10,
-			"{name} went from {base:?} to {grown:?} for four times the input"
+			grown < base * 24,
+			"{name} went from {base:?} to {grown:?} for eight times the input"
 		);
 	}
 }
