@@ -32,15 +32,12 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			match crate::dkim::Signer::load(&ed_selector, &active.key_file) {
 				Ok(signer) => {
 					pairs.push((ed_selector, signer.dns_record_value()));
-					if let (Some(rsa_selector), Some(rsa_key_file)) =
-						(dkim.rsa_selector.as_ref(), dkim.rsa_key_file.as_ref())
-					{
-						match signer.with_rsa(rsa_selector, rsa_key_file) {
-							Ok(with_rsa) => {
-								if let Some(value) = with_rsa.rsa_dns_record_value() {
-									pairs.push((rsa_selector.clone(), value));
-								}
-							}
+					let rsa = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)
+						.ok()
+						.flatten();
+					if let Some(rsa) = rsa {
+						match crate::dkim::rsa_record_value(&rsa.key_file) {
+							Ok(value) => pairs.push((rsa.selector, value)),
 							Err(error) => {
 								super::style::warn(format_args!(
 									"cannot load RSA DKIM key: {error}"
@@ -168,6 +165,7 @@ mod tests {
 			rotated_at: 31 * 86_400,
 			previous: None,
 			pending: None,
+			rsa: None,
 		};
 		std::fs::write(
 			dir.path().join("dkim-rotation.json"),
@@ -208,3 +206,7 @@ key_file = "{}"
 #[cfg(test)]
 #[path = "dns_records_tests_state.rs"]
 mod tests_state;
+
+#[cfg(test)]
+#[path = "dns_records_tests_rsa.rs"]
+mod tests_rsa;

@@ -48,6 +48,7 @@ fn config(dir: &std::path::Path, dns: bool) -> Config {
 		rotated_at: 1,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		dir.join(STATE_FILE),

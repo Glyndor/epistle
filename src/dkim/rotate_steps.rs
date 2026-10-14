@@ -9,13 +9,19 @@
 //! live signer switches only after it. A rotation that cannot be confirmed
 //! is marked as withdrawing before anything is removed, so a crash during
 //! the rollback finishes the rollback instead of publishing again.
+//!
+//! A rotation that covers the RSA dual-signing key carries it in the same
+//! journal entry: its key and records are written, confirmed, committed,
+//! withdrawn and retired alongside the ed25519 ones, so no crash can leave
+//! one key switched and the other not.
 
 use std::path::Path;
 use std::sync::Arc;
 
+use super::rsa::pending_selectors;
 use super::{
-	ERROR_FILE, Pending, Previous, RotateError, RotationState, Rotator, Signer, selector_for,
-	txt_record,
+	ERROR_FILE, Pending, Previous, RotateError, RotationState, Rotator, RsaKey, Signer,
+	rsa_selector_for, selector_for, txt_record,
 };
 
 /// A point in a rotation or a retirement. Production code passes each one
@@ -26,8 +32,12 @@ pub(crate) enum Step {
 	Journaled,
 	/// The new key file is on disk.
 	KeyWritten,
+	/// The new RSA key file is on disk.
+	RsaKeyWritten,
 	/// The new TXT for the n-th signing domain was published.
 	Published(usize),
+	/// The new RSA TXT for the n-th signing domain was published.
+	RsaPublished(usize),
 	/// The new selector was not visible yet and the rotator is waiting.
 	Waiting,
 	/// Every signing domain shows the new key.
@@ -38,13 +48,15 @@ pub(crate) enum Step {
 	Swapped,
 	/// A rotation that could not be confirmed is marked as withdrawing.
 	Withdrawing,
-	/// The n-th TXT of a withdrawn rotation was deleted.
+	/// The TXT records of a withdrawn rotation at the n-th domain were
+	/// deleted.
 	WithdrawnRecord(usize),
-	/// The key file of a withdrawn rotation was removed.
+	/// The key files of a withdrawn rotation were removed.
 	WithdrawnKey,
-	/// The n-th TXT of the retired selector was deleted.
+	/// The TXT records of the retired selectors at the n-th domain were
+	/// deleted.
 	RetiredRecord(usize),
-	/// The retired selector's key file was removed.
+	/// The retired selectors' key files were removed.
 	RetiredKey,
 	/// The state without the retired selector is saved.
 	RetiredState,
@@ -79,12 +91,21 @@ impl Rotator {
 	) -> Result<(), RotateError> {
 		let selector = selector_for(now);
 		let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
+		// The RSA key rotates whenever the server dual-signs.
+		let rsa = self.signer.current().rsa_selector().is_some().then(|| {
+			let selector = rsa_selector_for(now);
+			RsaKey {
+				key_file: self.data_dir.join(format!("dkim-{selector}.key")),
+				selector,
+			}
+		});
 		state.pending = Some(Pending {
 			selector,
 			key_file,
 			domains: self.signing_domains.clone(),
 			started_at: now,
 			withdrawing: None,
+			rsa,
 		});
 		self.save_state(state)?;
 		self.checkpoint(Step::Journaled)?;
@@ -108,6 +129,13 @@ impl Rotator {
 		}
 		let txt = pending_key(&pending)?;
 		self.checkpoint(Step::KeyWritten)?;
+		let rsa_txt = match self.pending_rsa_key(&pending) {
+			Ok(rsa_txt) => rsa_txt,
+			Err(reason) => return self.withdraw(state, &pending, &reason, now).await,
+		};
+		if rsa_txt.is_some() {
+			self.checkpoint(Step::RsaKeyWritten)?;
+		}
 		// A domain dropped from the configuration since the rotation began
 		// gets no new record; one published there before the restart goes.
 		for domain in pending
@@ -115,46 +143,65 @@ impl Rotator {
 			.iter()
 			.filter(|d| !self.signing_domains.contains(d))
 		{
-			self.provider
-				.delete(
-					&self.zone,
-					txt_record(&Self::record_name(&pending.selector, domain), ""),
-				)
-				.await
-				.map_err(|error| RotateError(format!("withdraw from {domain}: {error}")))?;
+			for selector in pending_selectors(&pending) {
+				self.provider
+					.delete(
+						&self.zone,
+						txt_record(&Self::record_name(selector, domain), ""),
+					)
+					.await
+					.map_err(|error| RotateError(format!("withdraw from {domain}: {error}")))?;
+			}
 		}
 		for (index, domain) in self.signing_domains.iter().enumerate() {
-			let name = Self::record_name(&pending.selector, domain);
-			if let Err(error) = self
-				.provider
-				.upsert(&self.zone, txt_record(&name, &txt))
-				.await
-			{
-				let reason = format!("publish {name}: {error}");
-				return self.withdraw(state, &pending, &reason, now).await;
+			let mut records = vec![(&pending.selector, &txt, Step::Published(index))];
+			if let (Some(rsa), Some(rsa_txt)) = (&pending.rsa, &rsa_txt) {
+				records.push((&rsa.selector, rsa_txt, Step::RsaPublished(index)));
 			}
-			self.checkpoint(Step::Published(index))?;
+			for (selector, value, step) in records {
+				let name = Self::record_name(selector, domain);
+				if let Err(error) = self
+					.provider
+					.upsert(&self.zone, txt_record(&name, value))
+					.await
+				{
+					let reason = format!("publish {name}: {error}");
+					return self.withdraw(state, &pending, &reason, now).await;
+				}
+				self.checkpoint(step)?;
+			}
 		}
 		if let Err(reason) = self.confirm_published(&pending.selector, &txt).await? {
 			return self.withdraw(state, &pending, &reason, now).await;
 		}
-		self.checkpoint(Step::Confirmed)?;
-		let signer = match self
-			.signer
-			.current()
-			.with_rotated_key(&pending.selector, &pending.key_file)
+		if let (Some(rsa), Some(rsa_txt)) = (&pending.rsa, &rsa_txt)
+			&& let Err(reason) = self.confirm_published(&rsa.selector, rsa_txt).await?
 		{
+			return self.withdraw(state, &pending, &reason, now).await;
+		}
+		self.checkpoint(Step::Confirmed)?;
+		let rsa_paths = pending
+			.rsa
+			.as_ref()
+			.map(|rsa| (rsa.selector.as_str(), rsa.key_file.as_path()));
+		let signer = match self.signer.current().with_rotated_keys(
+			&pending.selector,
+			&pending.key_file,
+			rsa_paths,
+		) {
 			Ok(signer) => signer,
 			Err(error) => {
-				let reason = format!("load {}: {error}", pending.key_file.display());
+				let reason = format!("load the rotated keys: {error}");
 				return self.withdraw(state, &pending, &reason, now).await;
 			}
 		};
-		// Retire the just-replaced selector after the overlap window.
+		let (rsa, retired_rsa) = self.rsa_after_commit(state, &pending);
+		// Retire the just-replaced selectors after the overlap window.
 		let previous = (!state.selector.is_empty()).then(|| Previous {
 			selector: state.selector.clone(),
 			key_file: self.data_dir.join(&state.key_file),
 			retire_at: now.saturating_add(self.overlap),
+			rsa: retired_rsa,
 		});
 		*state = RotationState {
 			selector: pending.selector,
@@ -162,6 +209,7 @@ impl Rotator {
 			rotated_at: now,
 			previous,
 			pending: None,
+			rsa,
 		};
 		self.save_state(state)?;
 		self.checkpoint(Step::Committed)?;
@@ -198,13 +246,15 @@ impl Rotator {
 		);
 		let mut failed = None;
 		for (index, domain) in domains.iter().enumerate() {
-			let name = Self::record_name(&pending.selector, domain);
-			if let Err(error) = self
-				.provider
-				.delete(&self.zone, txt_record(&name, ""))
-				.await
-			{
-				failed = Some(format!("delete {name}: {error}"));
+			for selector in pending_selectors(pending) {
+				let name = Self::record_name(selector, domain);
+				if let Err(error) = self
+					.provider
+					.delete(&self.zone, txt_record(&name, ""))
+					.await
+				{
+					failed = Some(format!("delete {name}: {error}"));
+				}
 			}
 			self.checkpoint(Step::WithdrawnRecord(index))?;
 		}
@@ -215,6 +265,9 @@ impl Rotator {
 			)));
 		}
 		remove_key_file(&pending.key_file, "withdrawn");
+		if let Some(rsa) = &pending.rsa {
+			remove_key_file(&rsa.key_file, "withdrawn");
+		}
 		self.checkpoint(Step::WithdrawnKey)?;
 		state.pending = None;
 		self.save_state(state)?;
@@ -235,19 +288,24 @@ impl Rotator {
 		state: &mut RotationState,
 		selector: &str,
 	) -> Result<(), RotateError> {
-		let retired_key_file = state.previous.as_ref().and_then(|p| {
-			(p.selector == selector && !p.key_file.as_os_str().is_empty())
-				.then(|| p.key_file.clone())
-		});
+		let retired = state.previous.as_ref().filter(|p| p.selector == selector);
+		let retired_key_file = retired
+			.filter(|p| !p.key_file.as_os_str().is_empty())
+			.map(|p| p.key_file.clone());
+		let retired_rsa = retired.and_then(|p| p.rsa.clone());
+		let mut selectors = vec![selector];
+		selectors.extend(retired_rsa.as_ref().map(|rsa| rsa.selector.as_str()));
 		let mut last_error: Option<String> = None;
 		for (index, domain) in self.signing_domains.iter().enumerate() {
-			let name = Self::record_name(selector, domain);
-			if let Err(error) = self
-				.provider
-				.delete(&self.zone, txt_record(&name, ""))
-				.await
-			{
-				last_error = Some(format!("delete {name}: {error}"));
+			for selector in &selectors {
+				let name = Self::record_name(selector, domain);
+				if let Err(error) = self
+					.provider
+					.delete(&self.zone, txt_record(&name, ""))
+					.await
+				{
+					last_error = Some(format!("delete {name}: {error}"));
+				}
 			}
 			self.checkpoint(Step::RetiredRecord(index))?;
 		}
@@ -256,6 +314,9 @@ impl Rotator {
 		}
 		if let Some(path) = retired_key_file {
 			remove_key_file(&self.data_dir.join(path), "retired");
+		}
+		if let Some(rsa) = retired_rsa.filter(|rsa| !rsa.key_file.as_os_str().is_empty()) {
+			remove_key_file(&self.data_dir.join(rsa.key_file), "retired");
 		}
 		self.checkpoint(Step::RetiredKey)?;
 		state.previous = None;
@@ -273,7 +334,9 @@ impl Rotator {
 		for entry in entries.flatten() {
 			let name = entry.file_name();
 			let name = name.to_string_lossy();
-			let ours = name.starts_with(".dkim-rotation.json.") || name.starts_with(".dkim-ed");
+			let ours = name.starts_with(".dkim-rotation.json.")
+				|| name.starts_with(".dkim-ed")
+				|| name.starts_with(".dkim-rsa");
 			let stale = (ours && name.ends_with(".tmp")) || name == "dkim-rotation.json.tmp";
 			if stale && let Err(error) = std::fs::remove_file(entry.path()) {
 				tracing::warn!(%error, file = %name, "cannot remove a stale DKIM temporary file");

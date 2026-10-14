@@ -12,7 +12,7 @@ use clap::Subcommand;
 
 use super::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
-use crate::dkim::rotate::{self, selector_for};
+use crate::dkim::rotate::{self, rsa_selector_for, selector_for};
 
 /// Actions of `epistle dkim`.
 #[derive(Debug, Subcommand)]
@@ -29,7 +29,8 @@ pub enum DkimCli {
 	/// Rotate the signing key now.
 	///
 	/// Rotate the signing key now, publishing the new TXT record for every
-	/// signing domain before the server switches to it.
+	/// signing domain before the server switches to it. With RSA dual
+	/// signing the RSA key rotates in the same step, under `rsa<day>`.
 	Rotate {
 		/// Check the preconditions and print what would happen; change nothing.
 		#[arg(long)]
@@ -37,9 +38,10 @@ pub enum DkimCli {
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
-	/// List the `dkim-ed<day>.key` files and `ed<day>._domainkey` TXT
-	/// records that neither the active, the previous nor a pending rotation
-	/// names, then ask the running server to remove them.
+	/// List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and the
+	/// `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records that
+	/// neither the active, the previous nor a pending rotation names, then
+	/// ask the running server to remove them.
 	Cleanup {
 		/// List what would be removed; change nothing.
 		#[arg(long)]
@@ -104,6 +106,8 @@ pub(super) fn show_with(
 pub(super) struct Plan {
 	active: String,
 	next: String,
+	/// The RSA selector in service and the one it rotates to.
+	rsa: Option<(String, String)>,
 	names: Vec<String>,
 	retires: Option<String>,
 }
@@ -146,17 +150,29 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 			"selector {next} is already active; a second rotation on the same UTC day would reuse its name"
 		));
 	}
+	let rsa = rotate::active_rsa(dkim, &config.data_dir)
+		.map_err(|e| e.to_string())?
+		.map(|rsa| (rsa.selector, rsa_selector_for(now)));
 	let retires = rotate::read_state(&config.data_dir)
 		.map_err(|e| e.to_string())?
 		.and_then(|state| state.previous)
-		.map(|previous| previous.selector);
+		.map(|previous| match previous.rsa {
+			Some(rsa) => format!("{} and {}", previous.selector, rsa.selector),
+			None => previous.selector,
+		});
+	let selectors = std::iter::once(next.as_str()).chain(rsa.as_ref().map(|(_, n)| n.as_str()));
+	let names = selectors
+		.flat_map(|selector| {
+			signing_domains
+				.iter()
+				.map(move |domain| format!("{selector}._domainkey.{domain}"))
+		})
+		.collect();
 	Ok(Plan {
-		names: signing_domains
-			.iter()
-			.map(|domain| format!("{next}._domainkey.{domain}"))
-			.collect(),
+		names,
 		active: active.selector,
 		next,
+		rsa,
 		retires,
 	})
 }
@@ -175,6 +191,9 @@ pub(super) fn rotate_now(
 		}
 	};
 	let _ = writeln!(out, "rotate {} -> {}", plan.active, plan.next);
+	if let Some((active, next)) = &plan.rsa {
+		let _ = writeln!(out, "rotate {active} -> {next}");
+	}
 	for name in &plan.names {
 		let _ = writeln!(out, "publish TXT {name}");
 	}

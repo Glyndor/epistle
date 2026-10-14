@@ -46,9 +46,11 @@ pub(super) fn build_split_with_companions(
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 		let mut signer = crate::dkim::Signer::load(&active.selector, &active.key_file)
 			.map_err(std::io::Error::other)?;
-		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
+		let rsa = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)
+			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+		if let Some(rsa) = rsa {
 			signer = signer
-				.with_rsa(selector, key_file)
+				.with_rsa(&rsa.selector, &rsa.key_file)
 				.map_err(std::io::Error::other)?;
 		}
 		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));

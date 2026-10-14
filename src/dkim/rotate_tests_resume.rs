@@ -112,6 +112,7 @@ async fn temporary_files_of_killed_writes_are_swept() {
 	let stale = [
 		".dkim-rotation.json.0190f3a1.tmp",
 		".dkim-ed100.key.0190f3a1.tmp",
+		".dkim-rsa100.key.0190f3a1.tmp",
 		"dkim-rotation.json.tmp",
 	];
 	let kept = [

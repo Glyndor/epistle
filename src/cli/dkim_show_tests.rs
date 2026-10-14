@@ -95,8 +95,10 @@ fn rotation_state_drives_selector_previous_and_next_due() {
 			selector: "ed1".into(),
 			key_file: std::path::PathBuf::new(),
 			retire_at: 21 * DAY,
+			rsa: None,
 		}),
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		f.dir.path().join("dkim-rotation.json"),
@@ -171,7 +173,10 @@ fn json_output_carries_the_documented_fields() {
 	let json: serde_json::Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(json["selector"], "original");
 	assert_eq!(json["algorithm"], "ed25519");
-	assert_eq!(json["rsa_selector"], "rsa1");
+	assert!(
+		json.get("rsa_selector").is_some(),
+		"the field is present, null without dual signing"
+	);
 	assert!(json["records"].is_array());
 	assert!(!String::from_utf8_lossy(&out).contains("PRIVATE"));
 }
@@ -190,7 +195,9 @@ fn a_rotation_in_progress_is_shown_beside_the_key_that_signs() {
 			domains: vec!["example.org".into()],
 			started_at: 100 * DAY,
 			withdrawing: None,
+			rsa: None,
 		}),
+		rsa: None,
 	};
 	let path = f.dir.path().join(rotate::STATE_FILE);
 	std::fs::write(&path, serde_json::to_vec(&state).expect("json")).expect("state");

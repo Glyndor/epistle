@@ -20,7 +20,8 @@ pub(super) struct SigningKey {
 /// The keys in use: the active Ed25519 key as the server resolves it
 /// ([`crate::dkim::rotate::active_ed25519`]: an unreadable rotation state
 /// is an error unless its last good copy stands in, see [`state_item`]),
-/// plus the RSA key when configured. Empty without a `[dkim]` section.
+/// plus the RSA key in service ([`crate::dkim::rotate::active_rsa`]) when
+/// the server dual-signs. Empty without a `[dkim]` section.
 pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
@@ -28,21 +29,21 @@ pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
 	let active = crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
 		.map_err(|error| error.to_string())?;
 	let (selector, file) = (active.selector, active.key_file);
-	let mut signer = Signer::load(&selector, &file).map_err(|error| error.to_string())?;
+	let signer = Signer::load(&selector, &file).map_err(|error| error.to_string())?;
 	let mut keys = vec![SigningKey {
 		selector,
 		public: public_value(&signer.dns_record_value()),
 		file,
 	}];
-	if let (Some(selector), Some(file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
-		signer = signer
-			.with_rsa(selector, file)
-			.map_err(|error| error.to_string())?;
-		let record = signer.rsa_dns_record_value().unwrap_or_default();
+	let rsa = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)
+		.map_err(|error| error.to_string())?;
+	if let Some(rsa) = rsa {
+		let record =
+			crate::dkim::rsa_record_value(&rsa.key_file).map_err(|error| error.to_string())?;
 		keys.push(SigningKey {
-			selector: selector.clone(),
+			selector: rsa.selector,
 			public: public_value(&record),
-			file: file.clone(),
+			file: rsa.key_file,
 		});
 	}
 	Ok(keys)
@@ -101,3 +102,7 @@ pub(super) fn state_item(config: &Config) -> Option<Item> {
 		),
 	))
 }
+
+#[cfg(test)]
+#[path = "dns_dkim_tests.rs"]
+mod tests;

@@ -75,9 +75,8 @@ pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std:
 /// RSA selector), used to locate the `_domainkey` records. The Ed25519
 /// selector is the one the rotator currently has in service when the
 /// rotation state file exists, falling back to the configured selector at
-/// startup before the first tick has run. The RSA selector is always the
-/// one in the config (RSA key material is rotated manually with
-/// `epistle dkim-keygen --rsa`).
+/// startup before the first tick has run. The RSA selector follows the same
+/// rule through [`crate::dkim::rotate::active_rsa`].
 pub(super) fn dkim_selectors(
 	config: &Config,
 ) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
@@ -85,8 +84,8 @@ pub(super) fn dkim_selectors(
 		return Ok(Vec::new());
 	};
 	let mut selectors = vec![crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)?.selector];
-	if let Some(rsa) = &dkim.rsa_selector {
-		selectors.push(rsa.clone());
+	if let Some(rsa) = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)? {
+		selectors.push(rsa.selector);
 	}
 	Ok(selectors)
 }

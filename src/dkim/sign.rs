@@ -70,15 +70,29 @@ impl Signer {
 		Ok(self)
 	}
 
-	/// Replace only the ed25519 signing material, retaining the loaded RSA key.
-	pub(crate) fn with_rotated_key(
+	/// Replace the ed25519 signing material and, when `rsa` names a
+	/// selector and key file, the RSA key too. Without `rsa` the loaded RSA
+	/// key (if any) is retained. Nothing is replaced unless every new key
+	/// loads.
+	pub(crate) fn with_rotated_keys(
 		&self,
 		selector: &str,
 		key_file: &std::path::Path,
+		rsa: Option<(&str, &std::path::Path)>,
 	) -> Result<Self, SignerError> {
-		let mut signer = Self::load(selector, key_file)?;
-		signer.rsa = self.rsa.clone();
-		Ok(signer)
+		let signer = Self::load(selector, key_file)?;
+		match rsa {
+			Some((rsa_selector, rsa_key_file)) => signer.with_rsa(rsa_selector, rsa_key_file),
+			None => Ok(Signer {
+				rsa: self.rsa.clone(),
+				..signer
+			}),
+		}
+	}
+
+	/// The selector of the RSA key this signer also signs with, if any.
+	pub fn rsa_selector(&self) -> Option<&str> {
+		self.rsa.as_ref().map(|rsa| rsa.selector.as_str())
 	}
 
 	/// The selector of the ed25519 key this signer signs with.
@@ -100,9 +114,7 @@ impl Signer {
 	/// not the PKCS#1 `RSAPublicKey` ring produces: `openssl rsa -pubout`
 	/// prints the same envelope, which is what receivers verify against.
 	pub fn rsa_dns_record_value(&self) -> Option<String> {
-		let rsa = self.rsa.as_ref()?;
-		let spki = super::spki::spki_for_rsa(rsa.key.public_key().as_ref());
-		Some(format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki)))
+		Some(rsa_record(&self.rsa.as_ref()?.key))
 	}
 
 	/// Sign a raw message for `domain`, returning the full DKIM-Signature
@@ -242,6 +254,17 @@ pub(crate) fn load_rsa_key(key_file: &std::path::Path) -> Result<RsaKeyPair, Sig
 		.map_err(|_| SignerError::InvalidKey(key_file.display().to_string()))
 }
 
+/// The DNS TXT record value publishing the RSA key in `key_file`, in the
+/// form [`Signer::rsa_dns_record_value`] prints.
+pub(crate) fn rsa_record_value(key_file: &std::path::Path) -> Result<String, SignerError> {
+	Ok(rsa_record(&load_rsa_key(key_file)?))
+}
+
+fn rsa_record(key: &RsaKeyPair) -> String {
+	let spki = super::spki::spki_for_rsa(key.public_key().as_ref());
+	format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))
+}
+
 /// RSASSA-PKCS1-v1_5 over SHA-256, the RSA variant DKIM uses.
 fn rsa_sign(key: &RsaKeyPair, input: &[u8]) -> Option<Vec<u8>> {
 	let mut signature = vec![0u8; key.public().modulus_len()];
@@ -256,7 +279,7 @@ fn rsa_sign(key: &RsaKeyPair, input: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Extract the DER body of a single-block PEM file.
-fn pem_body(pem: &str) -> Option<Vec<u8>> {
+pub(super) fn pem_body(pem: &str) -> Option<Vec<u8>> {
 	let mut body = String::new();
 	let mut inside = false;
 	for line in pem.lines() {
