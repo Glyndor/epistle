@@ -241,6 +241,30 @@ With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also re
 | `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
+#### `[[dkim.domain]]`
+Optional per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
+
+```toml
+[dkim]
+selector = "mail"
+key_file = "/etc/glyndor/epistle/dkim/mail.pem"
+
+[[dkim.domain]]
+name = "example.net"
+selector = "net2024"
+key_file = "/etc/glyndor/epistle/dkim/example.net.pem"
+rsa_selector = "net2024r"
+rsa_key_file = "/etc/glyndor/epistle/dkim/example.net.rsa.pem"
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | A domain in `domains` or `domain_aliases`, compared without regard to case. Listing a domain the server does not host, or the same domain twice, is a configuration error. |
+| `selector`, `key_file` | Ed25519 selector and key, as in `[dkim]`. |
+| `rsa_selector`, `rsa_key_file` | Optional RSA pair, set together, as in `[dkim]`. |
+
+The keys are read when the server starts, like the default key: an unreadable or invalid file stops the start, and a changed key or a new entry takes effect after a restart. Per-domain keys are **not rotated**. Automatic rotation covers the `[dkim]` default only, and it neither publishes nor retires records of a domain listed here, so a listed domain outside the `[dns]` zone does not stop it. To replace a per-domain key, generate one (`epistle dkim-keygen`), publish its record under a new selector, point the entry at it and restart; `epistle dkim rotate --domain <name>` refuses and says the same. `epistle dkim cleanup` never offers a listed key or its record for removal.
+
 ### `[api]`
 Management API (consumed by `epistle-panel`). Closed by default.
 
