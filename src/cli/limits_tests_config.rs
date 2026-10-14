@@ -1,4 +1,5 @@
 use std::io::{Seek, Write};
+use std::process::ExitCode;
 
 use super::*;
 
@@ -150,4 +151,106 @@ fn a_zero_quota_shows_as_unlimited() {
 		String::from_utf8(out).unwrap().lines().next(),
 		Some("quota\tunlimited\tconfigured")
 	);
+}
+
+/// `epistle limits show --json` must list every per-domain override
+/// (quota and submission-rate) and every per-tenant submission-rate
+/// alongside the global values, so an operator's one call answers the
+/// "what is in force for every sender" question.
+#[test]
+fn limits_show_json_lists_every_domain_override_and_every_tenant_entry() {
+	let (_dir, file) = config_file();
+	let text = std::fs::read_to_string(file.path()).unwrap()
+		+ "\n[domain_quotas]\n'example.org' = 10737418240 # cap\n"
+		+ "[domain_submission_limits]\n'example.org' = 50 # rate\n"
+		+ "\n[[tenant]]\nname = \"acme\"\ndomains = [\"example.org\"]\nsubmission_rate_limit_per_min = 200\n";
+	std::fs::write(file.path(), text).unwrap();
+	let config = Config::load(file.path()).unwrap();
+	let json = super::show_json(&config);
+	// Domain overrides: each domain name maps to its quota and
+	// submission-rate entries (null when not set).
+	let domain_overrides = &json["domain-overrides"];
+	assert_eq!(
+		domain_overrides["example.org"],
+		serde_json::json!({"quota": 10_737_418_240_u64, "submission-rate": 50_u32})
+	);
+	// Tenant overrides: each named tenant maps to its aggregate dial.
+	let tenants = &json["tenants"];
+	assert_eq!(
+		tenants["acme"],
+		serde_json::json!({"submission-rate": 200_u32})
+	);
+	// The global submission-rate entry stays alongside the others
+	// and reports the configured (default) value.
+	let submission = &json["submission-rate"];
+	assert_eq!(submission["unit"], "count");
+	assert_eq!(submission["source"], "default");
+}
+
+/// `epistle limits set --json` must emit a single JSON object on
+/// stdout and skip the human-readable status line on stderr, so an
+/// operator's pipeline can parse the result without touching a TTY.
+#[test]
+fn limits_set_with_json_emits_only_the_confirmation_object() {
+	let (_dir, file) = config_file();
+	let mut out = Vec::new();
+	let mut status = Vec::new();
+	let code = super::run_with_restart(
+		file.path(),
+		super::Action::Set {
+			key: Key::SubmissionRate,
+			domain: None,
+			tenant: None,
+			value: "120".into(),
+			json: true,
+		},
+		false,
+		&mut out,
+		&mut status,
+		|_, _| panic!("json path must not restart"),
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		status.is_empty(),
+		"json path must not write the human-readable status line"
+	);
+	let payload: serde_json::Value =
+		serde_json::from_slice(out.as_slice()).expect("json payload");
+	assert_eq!(payload["result"], "saved");
+	assert_eq!(payload["key"], "submission-rate");
+	assert_eq!(payload["action"], "set");
+	assert_eq!(payload["scope"]["type"], "global");
+	assert_eq!(payload["value"], 120_u64);
+}
+
+/// `epistle limits set --json` carries the domain and tenant scope
+/// through to the confirmation object, so an operator's pipeline
+/// can audit which dial just moved.
+#[test]
+fn limits_set_with_json_records_domain_and_tenant_scope() {
+	let (_dir, file) = config_file();
+	let mut out = Vec::new();
+	let mut status = Vec::new();
+	let mut original = std::fs::read_to_string(file.path()).unwrap();
+	original.push_str("\n[domain_submission_limits]\n'example.org' = 5 # rate\n");
+	std::fs::write(file.path(), &original).unwrap();
+	super::run_with_restart(
+		file.path(),
+		super::Action::Set {
+			key: Key::SubmissionRate,
+			domain: Some("example.org".into()),
+			tenant: None,
+			value: "20".into(),
+			json: true,
+		},
+		false,
+		&mut out,
+		&mut status,
+		|_, _| panic!("must not restart"),
+	);
+	let payload: serde_json::Value =
+		serde_json::from_slice(out.as_slice()).expect("json payload");
+	assert_eq!(payload["scope"]["type"], "domain");
+	assert_eq!(payload["scope"]["name"], "example.org");
+	assert_eq!(payload["value"], 20_u64);
 }

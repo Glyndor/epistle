@@ -76,6 +76,7 @@ fn limits_dry_run_returns_diff_without_writing_or_restarting() {
 			domain: None,
 			tenant: None,
 			value: "10G".into(),
+			json: false,
 		},
 		true,
 		&mut out,

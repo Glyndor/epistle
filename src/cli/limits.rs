@@ -186,10 +186,10 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 	Ok(())
 }
 
-/// `limits show --json`: `{"<limit>": {"value", "unit", "source"}}`, where
-/// `value` is the effective number (`null` when the limit is off or left to
-/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`,
-/// `seconds` or `count`.
+/// `limits show --json`: `{"<limit>": {"value", "unit", "source"}, "domain-overrides":
+/// {"<domain>": {"submission-rate": N, "quota": N}}, "tenants": {"<name>": {"submission-rate": N}}}`,
+/// where `value` is the effective number (`null` when the limit is off or left to
+/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`, `seconds` or `count`.
 pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	let mut limits = serde_json::Map::new();
 	for key in Key::ALL {
@@ -222,6 +222,33 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 			}),
 		);
 	}
+	// Per-domain overrides for quota and submission-rate.
+	let mut domain_overrides = serde_json::Map::new();
+	for domain in config.domains.iter().chain(config.domain_quotas.keys())
+		.chain(config.domain_submission_limits.keys())
+	{
+		let entry = serde_json::json!({
+			"quota": config.domain_quotas.get(domain).copied(),
+			"submission-rate": config.domain_submission_limits.get(domain).copied(),
+		});
+		domain_overrides.insert(domain.clone(), entry);
+	}
+	limits.insert("domain-overrides".to_string(), serde_json::Value::Object(domain_overrides));
+	// Per-tenant aggregate submission-rate. Other per-tenant limits (quota,
+	// max_accounts, max_domains) are accounted for under `[[tenant]]` in the
+	// config itself; the CLI surfaces only the operator-editable dial here.
+	let mut tenants = serde_json::Map::new();
+	for tenant in &config.tenants {
+		if let Some(name) = &tenant.name {
+			tenants.insert(
+				name.clone(),
+				serde_json::json!({
+					"submission-rate": tenant.submission_rate_limit_per_min,
+				}),
+			);
+		}
+	}
+	limits.insert("tenants".to_string(), serde_json::Value::Object(tenants));
 	serde_json::Value::Object(limits)
 }
 
@@ -249,6 +276,9 @@ pub enum Action {
 		/// comma-separated durations for queue-backoff.
 		#[arg(allow_hyphen_values = true)]
 		value: String,
+		/// Emit a one-line JSON confirmation on success.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Remove an override and use the built-in default.
 	Unset {
@@ -261,6 +291,9 @@ pub enum Action {
 		/// Remove one tenant override (submission-rate only).
 		#[arg(long, value_name = "TENANT")]
 		tenant: Option<String>,
+		/// Emit a one-line JSON confirmation on success.
+		#[arg(long)]
+		json: bool,
 	},
 }
 
@@ -283,7 +316,7 @@ fn run_with_restart(
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
-	let (key, domain, tenant, value) = match action {
+	let (key, domain, tenant, value, json) = match action {
 		Action::Show { json } => {
 			let result = Config::load(path)
 				.map_err(|error| error.to_string())
@@ -307,12 +340,14 @@ fn run_with_restart(
 			domain,
 			tenant,
 			value,
-		} => (key, domain, tenant, Some(value)),
+			json,
+		} => (key, domain, tenant, Some(value), json),
 		Action::Unset {
 			key,
 			domain,
 			tenant,
-		} => (key, domain, tenant, None),
+			json,
+		} => (key, domain, tenant, None, json),
 	};
 	let result = (|| {
 		let document = edit_document(
@@ -328,6 +363,28 @@ fn run_with_restart(
 		}
 		let config = document.config()?;
 		let outcome = document.commit()?;
+		let kind = match &value {
+			Some(_) => "set",
+			None => "unset",
+		};
+		let scope = if let Some(domain) = &domain {
+			serde_json::json!({"type": "domain", "name": domain})
+		} else if let Some(tenant) = &tenant {
+			serde_json::json!({"type": "tenant", "name": tenant})
+		} else {
+			serde_json::json!({"type": "global"})
+		};
+		if json {
+			let payload = serde_json::json!({
+				"result": if outcome == super::config_edit::Outcome::Changed { "saved" } else { "unchanged" },
+				"key": key.name(),
+				"action": kind,
+				"scope": scope,
+				"value": value.clone().and_then(|raw| values::parse_value(&raw, key.unit(), key.max()).ok()),
+			});
+			writeln!(out, "{payload}").map_err(|error| error.to_string())?;
+			return Ok(ExitCode::SUCCESS);
+		}
 		writeln!(
 			status,
 			"limits {}",
