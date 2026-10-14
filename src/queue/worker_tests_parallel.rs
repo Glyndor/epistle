@@ -105,8 +105,8 @@ async fn one_destination_gets_two_conversations_at_a_time_by_default() {
 
 #[tokio::test(start_paused = true)]
 async fn the_per_destination_and_total_caps_are_configurable() {
-	// Every message is from a sender of its own, so the per-sender share
-	// (three of the four slots) does not come into it.
+	// Every message is from an account of its own, so the per-sender
+	// share (three of the four slots) does not come into it.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let recipients = [
 		"a@one.example",
@@ -132,7 +132,7 @@ async fn the_per_destination_and_total_caps_are_configurable() {
 					no_dsn: Vec::new(),
 					sender_verified: false,
 				},
-				None,
+				Some(&format!("account{n}")),
 				&std::collections::BTreeMap::new(),
 			)
 			.expect("store");

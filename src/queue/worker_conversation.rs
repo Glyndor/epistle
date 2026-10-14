@@ -243,8 +243,14 @@ impl Worker {
 		let mut tried: Vec<String> = Vec::new();
 		let mut last: Option<Conversation> = None;
 		let mut slowed: Option<(String, String)> = None;
-		let holds = self.holds();
 		let now = self.now_epoch();
+		let Some(holds) = self.holds() else {
+			// Holds that cannot be read hold every exchanger.
+			let reason = DeliveryError::Transient("destination holds cannot be read".into());
+			let mut waiting = Conversation::all(route.recipients, None, reason);
+			waiting.held_until = Some(now.saturating_add(60));
+			return waiting;
+		};
 		let mut held: Option<Conversation> = None;
 		loop {
 			if tried.len() >= MAX_EXCHANGERS {

@@ -98,10 +98,11 @@ pub(super) fn release(
 	target: &DestinationTarget,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let domain = target
-		.domain
-		.as_deref()
-		.map(|domain| domain.trim().trim_end_matches('.').to_ascii_lowercase());
+	let domain = target.domain.as_deref().map(|domain| match domain.trim() {
+		// A held sender is named by its account, kept as written.
+		sender if sender.starts_with("sender:") => sender.to_string(),
+		domain => domain.trim_end_matches('.').to_ascii_lowercase(),
+	});
 	let mut released = 0usize;
 	let written = spool.update_holds(|holds| match &domain {
 		Some(domain) => released = usize::from(holds.remove(domain).is_some()),

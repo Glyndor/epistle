@@ -16,6 +16,8 @@ mod attempt;
 mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
+#[path = "worker_pace.rs"]
+mod pace;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -82,6 +84,9 @@ pub struct Worker {
 	backoff_steps: Vec<u64>,
 	/// The longest one delivery attempt to one domain may take.
 	attempt_limit: Duration,
+	/// Holds that could not be written to the spool yet, applied from
+	/// memory until they are.
+	unwritten_holds: std::sync::Mutex<crate::storage::DestinationHolds>,
 }
 
 impl Worker {
@@ -110,6 +115,7 @@ impl Worker {
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
 			attempt_limit: super::timeouts::ATTEMPT,
+			unwritten_holds: Default::default(),
 		}
 	}
 
@@ -477,3 +483,7 @@ mod tests_recipient_kinds;
 #[cfg(test)]
 #[path = "worker_tests_fairness.rs"]
 mod tests_fairness;
+
+#[cfg(test)]
+#[path = "worker_tests_fail_closed.rs"]
+mod tests_fail_closed;

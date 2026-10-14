@@ -1071,8 +1071,8 @@ decides whether to attempt it.
 | `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
 | `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
-| `epistle queue destinations [--json]` | The recipient domains and exchanger hosts (`mx:<host>`) on hold because they asked to slow down: until when, after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
-| `epistle queue release-destination <domain>\|mx:<host>\|--all` | Lift a hold at once; the queue contacts the destination at its next decision. The run of deferrals is forgotten too. |
+| `epistle queue destinations [--json]` | The recipient domains and exchanger hosts (`mx:<host>`) on hold because they asked to slow down, and any sender held because its mail filled its share of the holds (`sender:account:<name>`, `sender:system`): until when, after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
+| `epistle queue release-destination <domain>\|mx:<host>\|sender:<...>\|--all` | Lift a hold at once; the queue contacts the destination at its next decision. The run of deferrals is forgotten too. |
 | `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
 A held entry is not attempted and its time on hold does not count toward the

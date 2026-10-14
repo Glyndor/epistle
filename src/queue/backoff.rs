@@ -128,39 +128,62 @@ pub const MAX_HOLDS_PER_SENDER: usize = MAX_HOLDS / 4;
 /// week without a single deferral there is nothing left to slow down.
 pub const HOLD_MEMORY_SECS: u64 = 7 * 86_400;
 
+/// The longest destination key a hold is recorded under. Recipient
+/// domains and host names are at most 255 bytes; anything longer is not a
+/// destination, and is held through its sender instead.
+pub const MAX_KEY_BYTES: usize = 300;
+
+/// The key under which a sender (an account, or the system bucket) is
+/// held when a destination its mail deferred at could not be held itself.
+pub fn sender_key(sender: &str) -> String {
+	format!("sender:{sender}")
+}
+
 /// Record in `holds` that `key` (a recipient domain or an
 /// [`exchanger_key`]) deferred a conversation of `sender` for `reason` at
-/// `now`, and return its hold.
+/// `now`, and return the key it is held under and its hold.
 ///
 /// A hold is forgotten when its destination delivers again after it ran
 /// out, when the operator releases it, or [`HOLD_MEMORY_SECS`] after it ran
 /// out, so the backoff keeps growing through deferrals that come after a
-/// hold ran out. No hold ever gives way to make room: past [`MAX_HOLDS`],
-/// or past [`MAX_HOLDS_PER_SENDER`] created by `sender`, a destination not
-/// yet held is not recorded (`None`) and its recipients follow their own
-/// retry schedule, so flooding the queue with distinct deferring
-/// destinations cannot free, or reset, the hold of another.
+/// hold ran out. No hold ever gives way to make room, so flooding the queue
+/// with distinct deferring destinations cannot free or reset the hold of
+/// another. Past [`MAX_HOLDS`] destination holds, or past
+/// [`MAX_HOLDS_PER_SENDER`] set by `sender`'s mail, or for a key longer
+/// than [`MAX_KEY_BYTES`], the sender itself is held instead
+/// ([`sender_key`]): the destination is never left free to send to, and
+/// the one whose mail filled the room waits, not the others. Sender holds
+/// are one per sender, and senders are the server's own accounts and one
+/// system bucket.
 pub fn record_hold(
 	holds: &mut DestinationHolds,
 	steps: &[u64],
 	(key, sender): (&str, &str),
 	reason: &str,
 	now: u64,
-) -> Option<DestinationHold> {
+) -> (String, DestinationHold) {
 	holds.retain(|_, hold| hold.active(now) || hold.until.saturating_add(HOLD_MEMORY_SECS) > now);
-	if !holds.contains_key(key) {
-		let by_sender = holds
-			.values()
-			.filter(|hold| hold.sender.as_deref() == Some(sender))
+	let mut key = key.to_string();
+	if !holds.contains_key(&key) {
+		let destinations = || {
+			holds
+				.iter()
+				.filter(|(held, _)| !held.starts_with("sender:"))
+		};
+		let by_sender = destinations()
+			.filter(|(_, hold)| hold.sender.as_deref() == Some(sender))
 			.count();
-		if holds.len() >= MAX_HOLDS || by_sender >= MAX_HOLDS_PER_SENDER {
-			return None;
+		if key.len() > MAX_KEY_BYTES
+			|| destinations().count() >= MAX_HOLDS
+			|| by_sender >= MAX_HOLDS_PER_SENDER
+		{
+			key = sender_key(sender);
 		}
 	}
-	let mut hold = next_hold(steps, holds.get(key), reason, now);
+	let mut hold = next_hold(steps, holds.get(&key), reason, now);
 	hold.sender.get_or_insert_with(|| sender.to_string());
-	holds.insert(key.to_string(), hold.clone());
-	Some(hold)
+	holds.insert(key.clone(), hold.clone());
+	(key, hold)
 }
 
 /// Forget the hold of `key` after a delivery, unless it is still in

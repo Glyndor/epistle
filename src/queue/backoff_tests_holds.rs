@@ -1,7 +1,9 @@
 //! The hold map stays bounded without ever letting a hold slip: no hold in
 //! force or remembered gives way to a flood of new destinations, one
-//! sender cannot take the room every other sender's holds need, and the
-//! backoff keeps growing until a delivery or a week of quiet.
+//! sender cannot take the room every other sender's holds need, a
+//! destination that finds no room is held through its sender instead of
+//! being left free, and the backoff keeps growing until a delivery or a
+//! week of quiet.
 
 use super::*;
 
@@ -13,8 +15,16 @@ fn hold(
 	key: &str,
 	sender: &str,
 	now: u64,
-) -> Option<DestinationHold> {
+) -> (String, DestinationHold) {
 	record_hold(holds, steps, (key, sender), "421 busy", now)
+}
+
+/// The holds of destinations, leaving out those of senders.
+fn destinations(holds: &DestinationHolds) -> usize {
+	holds
+		.keys()
+		.filter(|key| !key.starts_with("sender:"))
+		.count()
 }
 
 #[test]
@@ -24,20 +34,26 @@ fn one_sender_fills_its_own_share_of_the_holds_and_no_more() {
 	for n in 0..(MAX_HOLDS * 3) {
 		hold(&mut holds, &steps, &format!("d{n}.example"), SENDER, 1000);
 	}
-	assert_eq!(holds.len(), MAX_HOLDS_PER_SENDER);
+	assert_eq!(destinations(&holds), MAX_HOLDS_PER_SENDER);
+	assert!(
+		is_held(&holds, &sender_key(SENDER), 2000),
+		"the sender that filled its share waits itself"
+	);
+	assert_eq!(holds.len(), MAX_HOLDS_PER_SENDER + 1);
 
-	let other = hold(
+	let (key, _) = hold(
 		&mut holds,
 		&steps,
 		"throttled.example",
 		"account:other",
 		1000,
 	);
-	assert!(
-		other.is_some(),
-		"another sender's destination is still held"
+	assert_eq!(
+		key, "throttled.example",
+		"another sender's destination is held"
 	);
 	assert!(is_held(&holds, "throttled.example", 2000));
+	assert!(!is_held(&holds, &sender_key("account:other"), 2000));
 }
 
 #[test]
@@ -63,23 +79,23 @@ fn a_flood_of_destinations_never_frees_or_resets_a_hold() {
 			2000,
 		);
 	}
-	assert_eq!(holds.len(), MAX_HOLDS);
+	assert_eq!(destinations(&holds), MAX_HOLDS);
 	assert!(holds.contains_key("throttled.example"), "never evicted");
 
-	// A new destination finds no room and is not held at all.
-	assert_eq!(
-		hold(&mut holds, &steps, "new.example", "account:s9", 3000),
-		None
-	);
+	// A new destination finds no room: it is not left free, its sender is
+	// held instead.
+	let (key, _) = hold(&mut holds, &steps, "new.example", "account:s9", 3000);
+	assert_eq!(key, "sender:account:s9");
+	assert!(!holds.contains_key("new.example"));
+	assert!(is_held(&holds, "sender:account:s9", 3000));
 	// The victim's next deferral continues its run of steps.
-	let next = hold(
+	let (_, next) = hold(
 		&mut holds,
 		&steps,
 		"throttled.example",
 		"account:victim",
 		3000,
-	)
-	.expect("hold");
+	);
 	assert_eq!((next.level, next.until), (1, 3300));
 }
 
@@ -89,7 +105,7 @@ fn the_backoff_keeps_growing_when_a_hold_runs_out_without_a_delivery() {
 	let mut holds = DestinationHolds::new();
 	hold(&mut holds, &steps, "a.example", SENDER, 1000);
 	// A deferral a day after the hold ended is still the next in a row.
-	let second = hold(&mut holds, &steps, "a.example", SENDER, 87_400).expect("hold");
+	let (_, second) = hold(&mut holds, &steps, "a.example", SENDER, 87_400);
 	assert_eq!((second.level, second.until), (1, 87_700));
 }
 
@@ -98,7 +114,7 @@ fn a_hold_is_forgotten_a_week_after_it_ran_out() {
 	let mut holds = DestinationHolds::new();
 	hold(&mut holds, &[60, 300], "a.example", SENDER, 1000);
 	let later = 1060 + HOLD_MEMORY_SECS;
-	let fresh = hold(&mut holds, &[60, 300], "a.example", SENDER, later).expect("hold");
+	let (_, fresh) = hold(&mut holds, &[60, 300], "a.example", SENDER, later);
 	assert_eq!(fresh.level, 0);
 	assert_eq!(fresh.since, later);
 }
@@ -111,4 +127,13 @@ fn a_delivery_ends_a_hold_only_once_it_has_run_out() {
 	assert!(is_held(&holds, "a.example", 1030));
 	assert!(clear_after_success(&mut holds, "a.example", 1060));
 	assert!(holds.is_empty());
+}
+
+#[test]
+fn an_oversized_key_holds_its_sender() {
+	let mut holds = DestinationHolds::new();
+	let long = format!("{}.example", "a".repeat(MAX_KEY_BYTES));
+	let (key, _) = hold(&mut holds, &[60], &long, SENDER, 1000);
+	assert_eq!(key, sender_key(SENDER));
+	assert_eq!(holds.keys().collect::<Vec<_>>(), [&sender_key(SENDER)]);
 }

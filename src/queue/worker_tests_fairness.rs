@@ -101,3 +101,49 @@ async fn senders_take_turns_for_the_slots() {
 		"second in turn, not after the five messages queued before it"
 	);
 }
+
+/// Fill the slots from `account` with 100 messages to silent
+/// destinations, each from a MAIL FROM domain of its own, and queue one
+/// message of another account behind them; returns how many conversations
+/// the flood had open, and whether the other message went out at once.
+async fn flood_with_many_reverse_paths(account: Option<&str>) -> (usize, bool) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("open spool");
+	let remote = FakeRemote::default();
+	for n in 0..100 {
+		let domain = format!("silent{n}.example");
+		remote.script(&domain, Script::hang(Hang::Greeting));
+		store(
+			&spool,
+			&format!("flood@sender{n}.example"),
+			&format!("x@{domain}"),
+			account,
+		);
+	}
+	store(&spool, "bob@two.example", "carol@ok.example", Some("bob"));
+	let worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example");
+	let started = tokio::time::Instant::now();
+
+	let _ = tokio::time::timeout(Duration::from_secs(1), worker.pass()).await;
+
+	let flooding = (0..100)
+		.map(|n| remote.connections(&format!("mx.silent{n}.example")))
+		.sum();
+	(
+		flooding,
+		remote.delivered_at("carol@ok.example") == Some(started),
+	)
+}
+
+#[tokio::test(start_paused = true)]
+async fn many_reverse_paths_from_one_account_are_still_one_share() {
+	assert_eq!(
+		flood_with_many_reverse_paths(Some("flood")).await,
+		(6, true)
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mail_without_an_account_shares_one_bucket_whatever_its_reverse_path() {
+	assert_eq!(flood_with_many_reverse_paths(None).await, (6, true));
+}

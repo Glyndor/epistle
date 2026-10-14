@@ -72,20 +72,21 @@ impl<'a> Schedule<'a> {
 	}
 }
 
-/// Whose message an entry is, for the per-sender share of the slots: the
-/// account that submitted it, or else the domain of its reverse path
-/// (`<>` for a bounce).
-fn sender_of(envelope: &crate::storage::Envelope) -> String {
+/// Whose message an entry is, for the per-sender share of the slots and
+/// of the holds: the account the server recorded as submitting it when it
+/// accepted the message (from the authenticated session or API key, never
+/// from anything the client wrote). Mail the server sends on its own
+/// (bounces, delay warnings, auto-replies, forwards, alerts) has no account
+/// and shares one system bucket, with one share like any account: nothing
+/// a remote sender writes, such as the reverse path, picks the bucket.
+pub(super) fn sender_of(envelope: &crate::storage::Envelope) -> String {
 	match envelope
 		.account
 		.as_deref()
 		.filter(|account| !account.is_empty())
 	{
 		Some(account) => format!("account:{account}"),
-		None => envelope.reverse_path.rsplit_once('@').map_or_else(
-			|| "<>".to_string(),
-			|(_, domain)| domain.to_ascii_lowercase(),
-		),
+		None => "system".to_string(),
 	}
 }
 
@@ -112,7 +113,10 @@ impl Worker {
 	/// in `schedule` yet, grouped by domain.
 	pub(super) fn scan<'a>(&'a self, schedule: &mut Schedule<'a>) -> std::io::Result<()> {
 		let now = self.now_epoch();
-		let holds = self.holds();
+		// Holds that cannot be read hold everything.
+		let Some(holds) = self.holds() else {
+			return Ok(());
+		};
 		for id in self.spool.list()? {
 			if schedule.rounds.contains_key(&id) {
 				continue;
@@ -128,6 +132,11 @@ impl Worker {
 					continue;
 				}
 			};
+			// A sender on hold (its mail filled the room for holds) waits.
+			let sender = sender_of(&envelope);
+			if backoff::is_held(&holds, &backoff::sender_key(&sender), now) {
+				continue;
+			}
 			let due: Vec<String> = envelope
 				.due(now)
 				.into_iter()
@@ -175,7 +184,6 @@ impl Worker {
 				continue;
 			}
 			schedule.rounds.insert(id, (by_domain.len(), false));
-			let sender = sender_of(&envelope);
 			for (domain, recipients) in by_domain {
 				schedule.waiting.push_back(Job {
 					id,
@@ -206,12 +214,21 @@ impl Worker {
 			return;
 		}
 		let now = self.now_epoch();
-		let holds = self.holds();
+		let Some(holds) = self.holds() else {
+			return;
+		};
 		let mut aside = Vec::new();
 		while self.claims.has_room(self.limits) {
 			let Some((sender, mut jobs)) = schedule.waiting.next_sender() else {
 				break;
 			};
+			if backoff::is_held(&holds, &backoff::sender_key(&sender), now) {
+				for job in jobs.by_domain.into_values().flatten() {
+					schedule.examined += 1;
+					self.job_ended(schedule, job.id, false);
+				}
+				continue;
+			}
 			match self.start_next(schedule, &mut jobs, &holds, now) {
 				true => schedule.waiting.put_back(sender, jobs, true),
 				false => aside.push((sender, jobs)),
@@ -376,59 +393,6 @@ impl Worker {
 			}
 		}
 		self.job_ended(schedule, job.id, delivered);
-	}
-
-	/// The destination holds as stored; none when they cannot be read.
-	pub(super) fn holds(&self) -> crate::storage::DestinationHolds {
-		self.spool.load_holds().unwrap_or_else(|error| {
-			tracing::warn!(%error, "cannot read destination holds");
-			Default::default()
-		})
-	}
-
-	/// Hold off `domain`, and the exchanger that answered, when the
-	/// conversation was asked to slow down; forget their holds once they
-	/// have run out and a conversation delivered.
-	fn pace(&self, job: &Job, conversation: &Conversation, now: u64) {
-		let domain = job.domain.as_str();
-		if conversation.held_until.is_some() {
-			return;
-		}
-		let exchanger = conversation.remote.as_deref().map(backoff::exchanger_key);
-		let written = if conversation.delivered() {
-			let keys: Vec<&str> = std::iter::once(domain)
-				.chain(exchanger.as_deref())
-				.collect();
-			let holds = self.holds();
-			if !keys.iter().any(|key| holds.contains_key(*key)) {
-				return;
-			}
-			self.spool.update_holds(|holds| {
-				for key in &keys {
-					if backoff::clear_after_success(holds, key, now) {
-						tracing::info!(destination = %key, "destination delivered again; hold ended");
-					}
-				}
-			})
-		} else if let Some((host, reason)) = conversation.throttled_by() {
-			let exchanger = host
-				.filter(|host| !host.is_empty())
-				.map(backoff::exchanger_key);
-			self.spool.update_holds(|holds| {
-				for key in std::iter::once(domain).chain(exchanger.as_deref()) {
-					let whose = (key, job.sender.as_str());
-					match backoff::record_hold(holds, &self.backoff_steps, whose, reason, now) {
-						Some(hold) => tracing::warn!(destination = %key, until = hold.until, level = hold.level, %reason, "destination asked to slow down; holding it off"),
-						None => tracing::warn!(destination = %key, %reason, "destination asked to slow down, but the hold slots are in use; its recipients follow their own retry schedule"),
-					}
-				}
-			})
-		} else {
-			return;
-		};
-		if let Err(error) = written {
-			tracing::warn!(%domain, %error, "cannot record destination hold");
-		}
 	}
 
 	/// One job of entry `id` has ended; settle the entry after its last.

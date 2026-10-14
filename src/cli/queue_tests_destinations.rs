@@ -244,3 +244,31 @@ fn queue_show_escapes_the_last_error() {
 	);
 	assert!(!text.contains('\u{1b}'), "{text:?}");
 }
+
+#[test]
+fn a_held_sender_is_released_by_its_key_as_written() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	spool
+		.update_holds(|holds| {
+			holds.insert(
+				"sender:account:Bob".into(),
+				DestinationHold {
+					until: NOW + 60,
+					level: 0,
+					reason: "421 busy".into(),
+					since: NOW,
+					sender: Some("account:Bob".into()),
+				},
+			);
+		})
+		.expect("holds");
+
+	let (code, out) = run_args(dir.path(), &["release-destination", "sender:account:Bob"]);
+
+	assert_eq!(
+		(code, out.as_str()),
+		(ExitCode::SUCCESS, "released sender:account:Bob\n")
+	);
+	assert!(spool.load_holds().expect("holds").is_empty());
+}
