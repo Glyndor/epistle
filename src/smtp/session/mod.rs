@@ -6,11 +6,11 @@
 
 use std::sync::Arc;
 
-use super::address::Address;
-use super::directory::{Directory, Resolution};
-use super::diskspace::DiskGuard;
-use super::memory_budget::MemoryBudget;
-use super::reply::Reply;
+pub use super::address::Address;
+pub use super::directory::{Directory, Resolution};
+pub use super::diskspace::DiskGuard;
+pub use super::memory_budget::MemoryBudget;
+pub use super::reply::Reply;
 
 mod author;
 mod bdat;
@@ -734,48 +734,5 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "../session_tests_basic.rs"]
-mod tests_basic;
-
-#[cfg(test)]
-#[path = "../session_tests_enhanced.rs"]
-mod tests_enhanced;
-
-#[cfg(test)]
-#[path = "../session_tests_quota.rs"]
-mod tests_quota;
-
-#[cfg(test)]
-#[path = "../session_tests_auth.rs"]
-mod tests_auth;
-
-#[cfg(test)]
-#[path = "../session_tests_author.rs"]
-mod tests_author;
-#[cfg(test)]
-#[path = "../session_tests_diskspace.rs"]
-mod tests_diskspace;
-#[cfg(test)]
-#[path = "../session_tests_memory_budget.rs"]
-mod tests_memory_budget;
-#[cfg(test)]
-#[path = "../session_tests_newrecipients.rs"]
-mod tests_newrecipients;
-#[cfg(test)]
-#[path = "../session_tests_oauth.rs"]
-mod tests_oauth;
-#[cfg(test)]
-#[path = "../session_tests_ratelimit.rs"]
-mod tests_ratelimit;
-#[cfg(test)]
-#[path = "../session_tests_scram.rs"]
-mod tests_scram;
-#[cfg(test)]
-#[path = "../session_tests_scram_ban_lifecycle.rs"]
-mod tests_scram_ban_lifecycle;
-#[cfg(test)]
-#[path = "../session_tests_scram_bans.rs"]
-mod tests_scram_bans;
-#[cfg(test)]
-#[path = "../session_tests_scram_off.rs"]
-mod tests_scram_off;
+#[path = "tests_mods.rs"]
+mod tests_mods;

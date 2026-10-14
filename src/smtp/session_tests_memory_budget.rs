@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use super::super::memory_budget::MemoryBudget;
 use super::tests_basic::{greeted, reply_code};
 use super::*;
+use crate::smtp::memory_budget::MemoryBudget;
 
 /// Build a greeted session wired to a fresh `MemoryBudget` of `cap` bytes.
 fn session_with_budget(cap: u64) -> (Session, Arc<MemoryBudget>) {
