@@ -63,3 +63,10 @@ impl Limits {
 		}
 	}
 }
+
+/// The most `deferred` records the delivery log keeps for one recipient
+/// of one message. A deferral is recorded when its reply differs from the
+/// one before, and a remote controls the wording of its replies: without
+/// a bound, one that varies each reply would add a record on every retry
+/// for the days the message stays queued.
+pub const MAX_DEFERRALS_LOGGED: u32 = 8;

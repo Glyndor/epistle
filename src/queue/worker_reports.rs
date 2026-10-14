@@ -31,6 +31,16 @@ fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
 		.saturating_add(1)
 }
 
+/// Whether a deferral for `reason` of a recipient now in `state` writes a
+/// `deferred` record: when the reply differs from the one before, and the
+/// recipient has fewer than [`crate::queue::limits::MAX_DEFERRALS_LOGGED`] already.
+/// A destination down for days repeating one reply adds nothing after the
+/// first, and one that words every reply differently adds a bounded few.
+pub(super) fn logs_deferral(state: &crate::storage::RecipientState, reason: &str) -> bool {
+	state.last_error.as_deref() != Some(reason)
+		&& state.deferrals_logged < crate::queue::limits::MAX_DEFERRALS_LOGGED
+}
+
 impl Worker {
 	/// Write one per-recipient outcome to the delivery log, when the log
 	/// is enabled. A best-effort writer: a failed `append` is logged and
@@ -171,10 +181,7 @@ impl Worker {
 					let before = entry.envelope.recipient_state(recipient);
 					let attempts = before.attempts;
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
-					// One record per recipient for each distinct reason: a
-					// destination down for days repeating the same reply
-					// on every retry adds nothing after the first.
-					if before.last_error.as_deref() != Some(reason.as_str()) {
+					if logs_deferral(&before, reason) {
 						self.log_outcome(
 							&entry.envelope,
 							recipient,

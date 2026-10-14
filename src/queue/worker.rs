@@ -363,6 +363,11 @@ impl Worker {
 					}
 					Ok(()) => state.status = RecipientStatus::Delivered,
 					Err(DeliveryError::Transient(reason)) => {
+						if reports::logs_deferral(&state, reason) {
+							// Counted here, where the state is written; the
+							// record itself is written once the outcome is.
+							state.deferrals_logged += 1;
+						}
 						state.attempts += 1;
 						state.next_attempt = self.retry_at(now, state.attempts);
 						state.last_error = Some(reason.clone());

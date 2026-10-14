@@ -46,7 +46,8 @@ pub enum DeliveryOutcome {
 	/// A transient failure that will be retried. Emitted once per
 	/// recipient per message for each distinct reply: a retry deferred for
 	/// the same reason as the one before writes no record, one deferred for
-	/// a new reason does.
+	/// a new reason does, up to
+	/// [`crate::queue::limits::MAX_DEFERRALS_LOGGED`] per recipient.
 	Deferred,
 	/// Delivery failed permanently (the message expired or the remote
 	/// refused it).

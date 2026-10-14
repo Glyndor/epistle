@@ -301,3 +301,32 @@ async fn a_recipient_deferred_again_for_the_same_reason_is_logged_once() {
 		]
 	);
 }
+
+#[tokio::test]
+async fn a_remote_that_words_every_deferral_differently_cannot_flood_the_log() {
+	use crate::storage::DeliveryOutcome::Deferred;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	let start = 1_700_000_000;
+	let worker = retrying_worker(dir.path(), &remote, start);
+
+	for day in 0..30 {
+		let reply = format!("450 4.2.1 busy, session {day}");
+		remote.script("remote.example", Script::rcpt("bob@remote.example", &reply));
+		pass_on_day(&worker, start, day).await;
+	}
+
+	let deferred: Vec<u32> = outcomes(dir.path())
+		.into_iter()
+		.filter(|(outcome, _, _)| *outcome == Deferred)
+		.map(|(_, _, attempt)| attempt)
+		.collect();
+	assert_eq!(deferred, (1..=8).collect::<Vec<u32>>());
+	let id = worker.spool.list().expect("list")[0];
+	let state = worker
+		.spool
+		.load_envelope(id)
+		.expect("envelope")
+		.recipient_state("bob@remote.example");
+	assert_eq!(state.attempts, 30, "every attempt still counts");
+}

@@ -60,6 +60,11 @@ pub struct RecipientState {
 	/// answer sets it back to zero.
 	#[serde(default, skip_serializing_if = "is_zero")]
 	pub throttled: u32,
+	/// `deferred` records the delivery log holds for this recipient, so a
+	/// remote that words each deferral differently cannot add one record
+	/// per retry (see [`crate::queue::limits::MAX_DEFERRALS_LOGGED`]).
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub deferrals_logged: u32,
 }
 
 fn is_zero(value: &u32) -> bool {
