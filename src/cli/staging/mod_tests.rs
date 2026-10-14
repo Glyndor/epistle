@@ -1,7 +1,7 @@
 use super::*;
 use std::cell::RefCell;
 use std::fs::Permissions;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 /// Records every hand-over to the account instead of changing owners, so
 /// the staging runs without root.

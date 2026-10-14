@@ -10,11 +10,13 @@
 //! `fstat` on that descriptor, and the data is read through the same inode,
 //! reopened by its descriptor rather than by its name.
 
-use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions};
+use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Read};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
+
+use super::stat::{self, Stat};
 
 /// Hands a staged file or directory to the service account. The path is
 /// the entry's place inside the staging directory, for tests to assert on.
@@ -138,20 +140,16 @@ fn context(shown: &Path) -> impl Fn(io::Error) -> io::Error + '_ {
 /// `fstat` on that descriptor says it is.
 pub(crate) struct Node {
 	handle: File,
-	pub(crate) meta: Metadata,
+	pub(crate) meta: Stat,
 }
 
 /// Open `at` as a [`Node`]: `O_PATH | O_NOFOLLOW`, so a link is the link
 /// and a device is never opened for reading.
 pub(crate) fn open_node(at: &Path, shown: &Path) -> io::Result<Node> {
-	let handle = OpenOptions::new()
-		.read(true)
-		.custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
-		.open(at)
-		.map_err(context(shown))?;
+	let handle = stat::open_path(at).map_err(context(shown))?;
 	#[cfg(test)]
 	hook::opened(shown);
-	let meta = handle.metadata()?;
+	let meta = stat::of(&handle)?;
 	Ok(Node { handle, meta })
 }
 
@@ -159,7 +157,7 @@ impl Node {
 	/// Refuse a link, a special file, and, from the account, an entry it
 	/// does not own or a file with another link.
 	pub(crate) fn check(&self, shown: &Path, source: Source) -> io::Result<()> {
-		let kind = self.meta.file_type();
+		let kind = self.meta;
 		if kind.is_symlink() {
 			return Err(io::Error::other(format!(
 				"{} is a symbolic link; links are not followed",
@@ -206,8 +204,7 @@ impl Node {
 			.read(true)
 			.custom_flags(flags)
 			.open(fd_path(&self.handle))?;
-		let meta = opened.metadata()?;
-		if (meta.dev(), meta.ino()) != (self.meta.dev(), self.meta.ino()) {
+		if !stat::of(&opened)?.same_inode(&self.meta) {
 			return Err(io::Error::other(
 				"an entry changed while it was being opened",
 			));

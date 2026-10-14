@@ -13,7 +13,7 @@
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use super::copy::{self, Budget, Source};
@@ -131,7 +131,7 @@ pub(super) fn move_dir(
 		}
 	};
 	let target = copy::open_node(&copy::under(&parent, &name), requested)?;
-	if target.meta.file_type().is_symlink() {
+	if target.meta.is_symlink() {
 		return Err(io::Error::other(format!(
 			"{shown} is a symbolic link; the export is not written through it"
 		)));

@@ -13,12 +13,13 @@
 mod copy;
 mod output;
 mod shown;
+mod stat;
 pub(crate) mod table;
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub(crate) use copy::Chown;
