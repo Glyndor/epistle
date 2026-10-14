@@ -310,5 +310,3 @@ fn parse_optional_string(value: &Value) -> Result<Option<String>, ()> {
 	};
 	Ok(Some(text.to_string()))
 }
-
-
