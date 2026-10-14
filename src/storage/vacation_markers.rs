@@ -30,9 +30,24 @@ const MIN_DAYS: u64 = 1;
 /// Longest period honoured, so a marker never outlives a year.
 const MAX_DAYS: u64 = 365;
 
+/// Number of claim locks. A full store costs a directory scan per new
+/// sender, so one lock for the whole server would let a flood aimed at one
+/// account hold up every other account's deliveries.
+const STRIPES: usize = 64;
+
 /// Deliveries run on several threads; the check and the record must be one
-/// step or two concurrent messages from one sender both get a reply.
-static CLAIM: Mutex<()> = Mutex::new(());
+/// step or two concurrent messages from one sender both get a reply. The
+/// lock is per account (striped by name), so accounts do not wait on each
+/// other.
+static CLAIM: [Mutex<()>; STRIPES] = [const { Mutex::new(()) }; STRIPES];
+
+/// The claim lock for `account`.
+pub(crate) fn stripe(account: &str) -> &'static Mutex<()> {
+	use std::hash::{Hash, Hasher};
+	let mut hasher = std::collections::hash_map::DefaultHasher::new();
+	account.hash(&mut hasher);
+	&CLAIM[(hasher.finish() % STRIPES as u64) as usize]
+}
 
 /// Whether a reply to `sender` is due (none within `days`), recording it
 /// when it is. `false` on any error.
@@ -50,7 +65,9 @@ pub(crate) fn claim(data_dir: &Path, account: &str, sender: &str, days: u64) -> 
 	let Ok(marker) = contained_child(&dir, &marker_name(sender)) else {
 		return false;
 	};
-	let _guard = CLAIM.lock().unwrap_or_else(PoisonError::into_inner);
+	let _guard = stripe(account.as_str())
+		.lock()
+		.unwrap_or_else(PoisonError::into_inner);
 	let known = match fs::symlink_metadata(&marker) {
 		Ok(meta) if !meta.is_file() => return false,
 		Ok(meta) => {
@@ -113,4 +130,35 @@ fn make_room(dir: &Path, period: Duration) -> bool {
 		}
 	}
 	remaining < MAX_MARKERS
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// A claim takes its own account's lock and no other: with every other
+	/// lock held, it still goes through.
+	#[test]
+	fn a_claim_waits_only_on_its_own_account() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let account = (0..1000)
+			.map(|n| format!("user{n}"))
+			.find(|name| !std::ptr::eq(stripe(name), &CLAIM[0]))
+			.expect("a name off the first stripe");
+		let own = stripe(&account);
+		let _others: Vec<_> = CLAIM
+			.iter()
+			.filter(|lock| !std::ptr::eq(*lock, own))
+			.map(|lock| lock.lock().unwrap_or_else(PoisonError::into_inner))
+			.collect();
+		let (done, finished) = std::sync::mpsc::channel();
+		let data = dir.path().to_path_buf();
+		std::thread::spawn(move || {
+			let _ = done.send(claim(&data, &account, "carol@example.net", 7));
+		});
+		let claimed = finished
+			.recv_timeout(Duration::from_secs(10))
+			.expect("other accounts' locks do not hold this claim up");
+		assert!(claimed, "first reply to carol is due");
+	}
 }

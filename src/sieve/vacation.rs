@@ -116,17 +116,27 @@ pub fn build_response(
 }
 
 /// The `<id>` tokens of a header value, each without spaces, controls or
-/// nested brackets: whatever else the sender put there is dropped.
+/// nested brackets: whatever else the sender put there is dropped. One
+/// pass over the value: each `<` starts a segment that ends at the next
+/// `<`, so no byte is looked at twice however the brackets are arranged.
 fn message_ids(value: &str) -> impl Iterator<Item = &str> {
-	value.match_indices('<').filter_map(move |(start, _)| {
-		let len = value[start..].find('>')? + 1;
-		let id = &value[start..start + len];
-		let inner = &id[1..len - 1];
-		let clean = !inner.is_empty()
-			&& len <= 250
-			&& inner.bytes().all(|b| b.is_ascii_graphic() && b != b'<');
-		clean.then_some(id)
-	})
+	let mut offset = 0;
+	value
+		.split('<')
+		.enumerate()
+		.filter_map(move |(index, segment)| {
+			let start = offset;
+			offset += segment.len() + 1;
+			if index == 0 {
+				return None;
+			}
+			let (inner, _) = segment.split_once('>')?;
+			let clean = !inner.is_empty()
+				&& inner.len() <= 248
+				&& inner.bytes().all(|b| b.is_ascii_graphic());
+			// `start - 1` is the `<` this segment followed.
+			clean.then(|| &value[start - 1..start + inner.len() + 1])
+		})
 }
 
 #[cfg(test)]
@@ -328,5 +338,52 @@ mod tests {
 			.expect("Subject line present");
 		assert!(!subject_line.contains('\r'), "{subject_line}");
 		assert!(!subject_line.contains('\n'), "{subject_line}");
+	}
+
+	/// A `References` or `Message-ID` of a megabyte of `<` with no `>`: each
+	/// opening bracket must not rescan the rest of the header, or one
+	/// inbound message costs about 5 * 10^11 byte comparisons.
+	#[test]
+	fn a_header_full_of_open_brackets_costs_linear_time() {
+		let hostile = "<".repeat(1 << 20);
+		let (done, finished) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			let original = Original {
+				subject: None,
+				message_id: Some(&hostile),
+				references: Some(&hostile),
+			};
+			let reply = build_response(&vacation(), "bob@example.net", &original, UNIX_EPOCH);
+			let _ = done.send(reply.is_some());
+		});
+		let built = finished
+			.recv_timeout(std::time::Duration::from_secs(10))
+			.expect("the reply is built in linear time");
+		assert!(built, "the reply is still sent, without In-Reply-To");
+	}
+
+	#[test]
+	fn references_keep_the_last_ids_and_drop_junk() {
+		let many: String = (0..40)
+			.map(|n| format!("<{n}@x> junk < bad id> "))
+			.collect();
+		let original = Original {
+			subject: None,
+			message_id: Some("noise <last@x> more"),
+			references: Some(&many),
+		};
+		let reply =
+			build_response(&vacation(), "bob@example.net", &original, UNIX_EPOCH).expect("reply");
+		let text = String::from_utf8(reply.data).expect("utf-8");
+		let unfolded = text.replace("\r\n ", " ");
+		let line = unfolded
+			.lines()
+			.find(|line| line.starts_with("References:"))
+			.expect("References line");
+		let ids: Vec<&str> = line["References:".len()..].split_whitespace().collect();
+		assert_eq!(ids.len(), MAX_REFERENCES + 1, "{line}");
+		assert_eq!(ids[0], "<20@x>");
+		assert_eq!(ids[MAX_REFERENCES], "<last@x>");
+		assert!(text.contains("In-Reply-To: <last@x>\r\n"), "{text}");
 	}
 }
