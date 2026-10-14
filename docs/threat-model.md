@@ -104,7 +104,7 @@ PEM in `[tls]`).
 
 | Threat | Control | Evidence |
 |---|---|---|
-| DKIM key theft | keys are read from operator-owned paths (`src/config/dkim.rs:13-20`); rotated keys are written `0600` (`src/dkim/rotate.rs:275`); rotation every 90 days with a 14-day overlap (`:82`, `:91`) | test: `src/dkim/rotate_tests.rs` |
+| DKIM key theft | keys are read from operator-owned paths (`src/config/dkim.rs:13-20`); rotated keys, ed25519 and the RSA dual-signing key alike, are written `0600` (`write_key` in `src/dkim/rotate_steps.rs`); rotation every 90 days with a 14-day overlap (`ROTATE_INTERVAL_DAYS`, `ROTATE_OVERLAP_DAYS` in `src/dkim/rotate.rs`) | test: `src/dkim/rotate_tests.rs` |
 | ACME account key exposure | written `0600` into a fresh temp file, fsynced and renamed into place (`src/acme/renew.rs:58-72`) | none named for the mode |
 | The at-rest key left in memory or in a log | the key bytes are read into `Zeroizing` buffers and wiped once the AEAD key is built (`src/storage/crypto.rs:263-295`); `Debug` never prints key material (`:94-101`); `zeroize` is pinned exactly (`Cargo.toml:55`); a message that fails to decrypt is an error, never served as ciphertext (`:192-216`); enabling encryption without a key refuses to start (`:126-133`) | test: `decode_fails_closed_when_tampered`, `decode_fails_closed_when_encrypted_but_no_key`, `from_config_enabled_without_key_fails_closed` (`src/storage/crypto_tests.rs:54`, `:64`, `:89`) |
 | A restored backup exposing mail | `epistle backup` archives the on-disk bytes, so an encrypted store stays ciphertext without the key (`src/cli/backup.rs:1-5`); the key is expected off the data disk (`security.md`) | test: `src/cli/backup_tests.rs` |
