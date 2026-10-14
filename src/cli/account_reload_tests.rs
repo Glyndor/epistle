@@ -53,13 +53,18 @@ fn elsewhere() -> Option<Fingerprint> {
 fn write_status(data_dir: &Path, accounts: Option<Fingerprint>, age: Duration) {
 	let mut status = ReloadStatus::default();
 	status.files.insert("accounts.toml".to_string(), accounts);
+	// Written aside and renamed into place, as the server writes it: a
+	// plain write truncates first, and a wait polling at that moment reads
+	// an empty status and returns as if no server were running.
 	let path = data_dir.join(ReloadStatus::FILENAME);
-	std::fs::write(&path, serde_json::to_string(&status).expect("serialise")).expect("write");
+	let staged = data_dir.join(format!("{}.staged", ReloadStatus::FILENAME));
+	std::fs::write(&staged, serde_json::to_string(&status).expect("serialise")).expect("write");
 	std::fs::File::options()
 		.write(true)
-		.open(&path)
+		.open(&staged)
 		.and_then(|file| file.set_modified(SystemTime::now() - age))
 		.expect("set the status mtime");
+	std::fs::rename(&staged, &path).expect("rename into place");
 }
 
 #[test]
