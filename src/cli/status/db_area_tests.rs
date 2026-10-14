@@ -26,10 +26,15 @@ async fn without_a_database_section_there_is_nothing_to_check() {
 
 #[tokio::test]
 async fn a_refused_connection_fails_within_the_limit_not_after_the_pool_deadline() {
-	let port = {
-		let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-		listener.local_addr().expect("addr").port()
-	};
+	// A socket bound but never listening refuses every connection and keeps
+	// the port, so a test running in parallel cannot take it over (a
+	// dropped listener frees the port and another test's listener may then
+	// answer and reset the connection instead).
+	let reserved = tokio::net::TcpSocket::new_v4().expect("socket");
+	reserved
+		.bind("127.0.0.1:0".parse().expect("address"))
+		.expect("bind");
+	let port = reserved.local_addr().expect("addr").port();
 	let url = format!("postgres://epistle@127.0.0.1:{port}/epistle?sslmode=disable");
 	let began = Instant::now();
 	let report = evaluate(&database(&url), Duration::from_millis(400)).await;
@@ -39,6 +44,7 @@ async fn a_refused_connection_fails_within_the_limit_not_after_the_pool_deadline
 		"cannot reach PostgreSQL within 400ms (refused, or no answer)"
 	);
 	assert!(began.elapsed() < Duration::from_secs(3), "waited too long");
+	drop(reserved);
 }
 
 #[tokio::test]
