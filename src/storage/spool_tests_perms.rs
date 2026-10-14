@@ -60,8 +60,8 @@ fn spool_files_are_owner_only_on_a_permissive_process() {
 	assert_eq!(mode(&body), 0o600, "body must be 0600");
 }
 
-/// Legacy files left on disk with looser permissions are retightened when
-/// the spool is opened.
+/// Legacy files left on disk with looser permissions are retightened by
+/// the audit the server runs at start-up, and the audit is idempotent.
 #[test]
 fn open_retightens_loose_files_and_logs_once() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -81,11 +81,13 @@ fn open_retightens_loose_files_and_logs_once() {
 	chmod(&envelope, 0o644);
 	chmod(&body, 0o644);
 
-	// Opening the spool retightens every loose file. The exact count is
-	// logged once; here we assert the observable: every previously-loose
-	// entry ends up owner-only, and re-running the audit is a no-op.
+	// The audit is what retightens; opening the spool alone is now
+	// side-effect-free on permissions, so the operator command that just
+	// observes (the `spool` status check) sees the current state instead
+	// of silently fixing it.
 	let spool = FsSpool::open(dir.path()).expect("open");
-
+	let fixed = spool.audit_permissions().expect("audit");
+	assert_eq!(fixed, 2, "two loose files must be retightened");
 	assert_eq!(mode(&spool_root), 0o700, "spool root retightened");
 	assert_eq!(mode(&new_dir), 0o700, "new/ retightened");
 	assert_eq!(mode(&tmp_dir), 0o700, "tmp/ retightened");

@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,12 +28,6 @@ const FILE_MODE: u32 = 0o600;
 /// `<data_dir>/spool/new/`, so the existence of a queue entry is also private.
 #[cfg(unix)]
 const DIR_MODE: u32 = 0o700;
-
-/// Whether the "fixed N loose permissions" log line has already been printed
-/// in this process. The spool may be opened more than once (per-thread via a
-/// shared `Arc`, or several components reading the queue), and operators only
-/// need to see the count once at start-up, not every time a component opens.
-static AUDIT_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 /// Envelope metadata stored next to the raw message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,38 +193,45 @@ impl FsSpool {
 	/// the number of entries whose mode was changed. Safe to call repeatedly:
 	/// already-tight entries are left alone. Bounded: a single linear walk of
 	/// the spool tree, no recursion into attacker-shaped filenames.
+	///
+	/// The intended call site is the server start-up, once per process, with
+	/// the count logged for operators. Subsequent opens of the same spool do
+	/// not call this; the spool's own file modes cover new writes, and a
+	/// later call from `epistle status`'s spool check observes the current
+	/// state without modifying it.
 	pub fn audit_permissions(&self) -> std::io::Result<u64> {
 		#[cfg(unix)]
-		let fixed = audit_permissions(&self.root)?;
+		return audit_permissions(&self.root);
 		#[cfg(not(unix))]
 		let _ = self;
 		#[cfg(not(unix))]
-		let fixed = 0u64;
-		Ok(fixed)
+		Ok(0)
 	}
 
-	/// Run [`FsSpool::audit_permissions`] once at start-up and emit the
-	/// "fixed N loose files" log line the first time, no matter how many
-	/// components then open the same `data_dir`.
-	fn audit_permissions_at_startup(&self) -> std::io::Result<()> {
-		let fixed = self.audit_permissions()?;
-		let previous = AUDIT_LOGGED.swap(fixed, Ordering::AcqRel);
-		if previous == 0 && fixed > 0 {
-			tracing::info!("tightened {fixed} spool file/directory permissions to owner-only");
-		}
-		Ok(())
+	/// Walk the spool without modifying it and return the number of files
+	/// and directories whose permissions are looser than `0600` (files) or
+	/// `0700` (directories). Used by the `spool` status check, which must
+	/// observe the on-disk state without fixing it.
+	pub fn count_loose_permissions(&self) -> std::io::Result<u64> {
+		#[cfg(unix)]
+		return count_loose_permissions(&self.root);
+		#[cfg(not(unix))]
+		let _ = self;
+		#[cfg(not(unix))]
+		Ok(0)
 	}
 
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
 	/// (`.eml`) files and the envelope (`.json`) sidecar through `crypto`. The
 	/// envelope is sealed with ChaCha20-Poly1305 and bound to the message id as
 	/// associated data, so it cannot be silently swapped onto another message's
-	/// body.
+	/// body. The caller is responsible for running [`FsSpool::audit_permissions`]
+	/// at start-up (and acting on its return value) if the spool may have been
+	/// written before this code path pinned the mode to `0600`/`0700`.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool { root, crypto };
 		create_spool_dir(&spool.root)?;
-		spool.audit_permissions_at_startup()?;
 		Ok(spool)
 	}
 
@@ -549,6 +549,63 @@ fn create_spool_dir(root: &std::path::Path) -> std::io::Result<()> {
 	Ok(())
 }
 
+/// Walk the spool without modifying it and report the number of files and
+/// directories that are looser than the owner-only bound. Used by the
+/// `spool` status check, which must not silently retighten (the brief
+/// says "report whether any file has loose permissions", not "fix and
+/// report"). Bounded: linear walk, no recursion.
+#[cfg(unix)]
+pub(crate) fn count_loose_permissions(root: &std::path::Path) -> std::io::Result<u64> {
+	let mut loose = 0u64;
+	count_loose_visit(root, &mut loose)?;
+	Ok(loose)
+}
+
+#[cfg(unix)]
+fn count_loose_visit(dir: &std::path::Path, loose: &mut u64) -> std::io::Result<()> {
+	use std::os::unix::fs::PermissionsExt;
+	const DESIRED_FILE: u32 = 0o600;
+	const DESIRED_DIR: u32 = 0o700;
+	if let Ok(meta) = std::fs::symlink_metadata(dir)
+		&& meta.file_type().is_dir()
+	{
+		let current = meta.permissions().mode() & 0o777;
+		if current != DESIRED_DIR {
+			*loose += 1;
+		}
+	}
+	let Ok(rd) = std::fs::read_dir(dir) else {
+		return Ok(());
+	};
+	for entry in rd {
+		let entry = match entry {
+			Ok(entry) => entry,
+			Err(_) => continue,
+		};
+		let path = entry.path();
+		let name = match entry.file_name().to_str() {
+			Some(name) if !name.is_empty() && name != "." && name != ".." => name.to_string(),
+			_ => continue,
+		};
+		let meta = match entry.metadata() {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let file_type = meta.file_type();
+		if file_type.is_dir() {
+			count_loose_visit(&path, loose)?;
+		} else if file_type.is_file()
+			&& (name.ends_with(".eml") || name.ends_with(".json") || name == "lock")
+		{
+			let current = meta.permissions().mode() & 0o777;
+			if current != DESIRED_FILE {
+				*loose += 1;
+			}
+		}
+	}
+	Ok(())
+}
+
 /// Walk the spool and retighten any file or directory whose permissions are
 /// looser than `0600` (for files) or `0700` (for directories), counted
 /// uniformly. Bounded: a linear walk of the spool tree, no recursion into
@@ -618,6 +675,11 @@ fn visit_permissions(dir: &std::path::Path, fixed: &mut u64) -> std::io::Result<
 
 #[cfg(not(unix))]
 fn audit_permissions(_root: &std::path::Path) -> std::io::Result<u64> {
+	Ok(0)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn count_loose_permissions(_root: &std::path::Path) -> std::io::Result<u64> {
 	Ok(0)
 }
 
