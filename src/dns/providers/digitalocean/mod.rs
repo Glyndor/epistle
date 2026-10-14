@@ -352,19 +352,44 @@ impl DigitaloceanProvider {
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
-		// other TXT at the name alone. `same_txt_purpose` carries
-		// the contract; for non-TXT kinds the matching is just
-		// (type, name) and the first match is fine.
-		let match_by_value = |r: &DomainRecord| -> bool {
-			r.kind == kind
-				&& r.name == rel
-				&& (record.kind != RecordKind::Txt || same_txt_purpose(&r.data, &record.value))
-		};
-		match existing.into_iter().find(&match_by_value) {
-			Some(prev) => self.update(zone, prev.id, body).await,
-			None => {
-				self.create(zone, body).await?;
-				Ok(())
+		// other TXT at the name alone. Two records of the same
+		// purpose are a configuration mistake (SPF returns
+		// permerror, DMARC is ignored): the upsert collapses them
+		// by updating the first match and deleting every other.
+		// Non-TXT kinds take the whole (type, name) set, so
+		// duplicates do not arise.
+		if record.kind == RecordKind::Txt {
+			let mut matching = existing
+				.into_iter()
+				.filter(|r| same_txt_purpose(&r.data, &record.value));
+			match matching.next() {
+				Some(primary) => {
+					let primary_id = primary.id;
+					self.update(zone, primary_id, body).await?;
+					for dup in matching {
+						self.delete_record(zone, dup.id).await?;
+					}
+					Ok(())
+				}
+				None => {
+					self.create(zone, body).await?;
+					Ok(())
+				}
+			}
+		} else {
+			let mut found = existing.into_iter();
+			match found.next() {
+				Some(prev) => {
+					self.update(zone, prev.id, body).await?;
+					for stale in found {
+						self.delete_record(zone, stale.id).await?;
+					}
+					Ok(())
+				}
+				None => {
+					self.create(zone, body).await?;
+					Ok(())
+				}
 			}
 		}
 	}
@@ -488,6 +513,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]

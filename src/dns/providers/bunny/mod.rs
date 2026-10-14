@@ -247,22 +247,30 @@ impl BunnyProvider {
 		let name = self.subname(&record.name);
 		let body = self.record_body(&record, rtype)?;
 		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
-		// only the record of the same purpose, so a sibling at the name
-		// (an ACME challenge, a verification token) is never written
-		// over. Other kinds take the first record at (type, name).
-		let existing = detail.records.into_iter().find(|r| {
+		// the record of the same purpose and leaves every other TXT
+		// at the name alone (an ACME challenge, a verification token).
+		// Two records of the same purpose at the same name are a
+		// configuration mistake (SPF returns permerror, DMARC is
+		// ignored): the upsert collapses them by editing the first
+		// match and deleting every other. Other kinds take the first
+		// record at (type, name), so duplicates do not arise.
+		let mut matching = detail.records.into_iter().filter(|r| {
 			r.rtype == rtype
 				&& r.name.as_deref() == Some(name.as_str())
 				&& (record.kind != RecordKind::Txt
 					|| same_txt_purpose(r.value.as_deref().unwrap_or(""), &record.value))
 		});
-		let response = if let Some(rec) = existing {
-			let url = self.record_url(zone_id, Some(rec.id))?;
-			self.send_write(reqwest::Method::POST, url, body).await?
-		} else {
-			let url = self.record_url(zone_id, None)?;
-			self.send_write(reqwest::Method::PUT, url, body).await?
-		};
+		if let Some(primary) = matching.next() {
+			let url = self.record_url(zone_id, Some(primary.id))?;
+			let response = self.send_write(reqwest::Method::POST, url, body).await?;
+			check(response)?;
+			for duplicate in matching {
+				self.delete_by_id(zone_id, duplicate.id).await?;
+			}
+			return Ok(());
+		}
+		let url = self.record_url(zone_id, None)?;
+		let response = self.send_write(reqwest::Method::PUT, url, body).await?;
 		check(response)
 	}
 

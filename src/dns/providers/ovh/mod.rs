@@ -257,6 +257,34 @@ impl OvhProvider {
 		Ok(None)
 	}
 
+	/// Every record id that would match a single-record lookup
+	/// (`find_record_id`); used by the TXT upsert path to collapse
+	/// duplicates of the same purpose.
+	async fn find_record_ids(
+		&self,
+		zone: &str,
+		sub_domain: &str,
+		kind: &str,
+		value: Option<&str>,
+	) -> Result<impl Iterator<Item = u64>, ProviderError> {
+		let url = self.find_url(zone, kind, sub_domain)?;
+		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
+		let mut out: Vec<u64> = Vec::new();
+		for id in ids {
+			let Some(rec) = self.get_record(zone, id).await? else {
+				continue;
+			};
+			let matches = match value {
+				Some(v) => same_txt_purpose(&rec.target, v),
+				None => true,
+			};
+			if matches {
+				out.push(id);
+			}
+		}
+		Ok(out.into_iter())
+	}
+
 	/// Fetch one record by id; returns `None` if OVH says 404 (the record
 	/// was removed out from under us between the list and the fetch).
 	async fn get_record(&self, zone: &str, id: u64) -> Result<Option<OvhRecord>, ProviderError> {
@@ -332,14 +360,37 @@ impl OvhProvider {
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
-		// other TXT at the name alone. `same_txt_purpose` carries
-		// the contract; for non-TXT kinds the matching is just
+		// other TXT at the name alone. Two records of the same
+		// purpose are a configuration mistake (SPF returns
+		// permerror, DMARC is ignored): the upsert collapses them
+		// by PUTing the first match with the new value and
+		// DELETEing every other. `same_txt_purpose` carries the
+		// contract; for non-TXT kinds the matching is just
 		// (kind, sub) and the first match is fine.
-		let lookup_value = match record.kind {
-			RecordKind::Txt => Some(record.value.as_str()),
-			_ => None,
-		};
-		if let Some(id) = self.find_record_id(zone, &sub, kind, lookup_value).await? {
+		if record.kind == RecordKind::Txt {
+			let mut ids = self
+				.find_record_ids(zone, &sub, kind, Some(&record.value))
+				.await?;
+			match ids.next() {
+				Some(primary) => {
+					let url = self.zone_url(zone, &["record", &primary.to_string()])?;
+					self.send_unit(reqwest::Method::PUT, &url, &body).await?;
+					for dup in ids {
+						let dup_url =
+							self.zone_url(zone, &["record", &dup.to_string()])?;
+						self.send_unit(reqwest::Method::DELETE, &dup_url, "")
+							.await?;
+					}
+				}
+				None => {
+					let url = self.zone_url(zone, &["record"])?;
+					self.send_unit(reqwest::Method::POST, &url, &body).await?;
+				}
+			}
+		} else if let Some(id) = self
+			.find_record_id(zone, &sub, kind, None)
+			.await?
+		{
 			let url = self.zone_url(zone, &["record", &id.to_string()])?;
 			self.send_unit(reqwest::Method::PUT, &url, &body).await?;
 		} else {
@@ -505,6 +556,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]

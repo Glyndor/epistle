@@ -70,3 +70,48 @@ async fn txt_rotation_leaves_one_record_of_that_purpose() {
 	expected.sort();
 	assert_eq!(values, expected);
 }
+
+/// Two SPF records at the same name plus one unrelated TXT (a site
+/// verification token) is a configuration mistake every receiver turns
+/// into a permanent error: SPF returns `permerror` (RFC 7208 §4.5).
+/// The upsert must collapse the two SPF entries into one carrying the
+/// new value, leave the unrelated TXT alone, and never create a
+/// third record. Route 53 UPSERTs the whole rrset, so the test
+/// checks the values of the rrset the final UPSERT wrote.
+#[tokio::test]
+async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
+	const OLD_SPF_1: &str = "v=spf1 mx -all";
+	const OLD_SPF_2: &str = "v=spf1 include:_spf.google.com -all";
+	const NEW_SPF: &str = "v=spf1 -all";
+	const UNRELATED: &str = "google-site-verification=abc123";
+	let initial = [OLD_SPF_1, OLD_SPF_2, UNRELATED];
+	let (provider, state) = mock().await;
+	state.lock().unwrap().list_response = Some(rrset_xml(&initial));
+	provider
+		.upsert(
+			"example.org",
+			DnsRecord {
+				name: NAME.into(),
+				kind: RecordKind::Txt,
+				value: NEW_SPF.into(),
+				ttl: 3600,
+			},
+		)
+		.await
+		.expect("apex SPF upsert with duplicates");
+	let s = state.lock().unwrap();
+	let body = s.bodies.last().expect("a change").clone();
+	assert!(body.contains("<Action>UPSERT</Action>"), "{body}");
+	let mut values: Vec<String> = body
+		.split("<Value>")
+		.skip(1)
+		.map(|rest| rest[..rest.find("</Value>").unwrap()].to_string())
+		.collect();
+	values.sort();
+	let mut want = vec![quoted(NEW_SPF), quoted(UNRELATED)];
+	want.sort();
+	assert_eq!(
+		values, want,
+		"the UPSERT body must carry exactly one SPF (new) and the unrelated TXT"
+	);
+}

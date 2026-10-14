@@ -57,3 +57,79 @@ async fn txt_rotation_leaves_one_record_of_that_purpose() {
 		serde_json::from_str(&state.lock().unwrap().bodies[0]).expect("JSON");
 	assert_eq!(body["Value"], NEW_DKIM);
 }
+
+/// Two SPF records at the apex plus one unrelated TXT (a site
+/// verification token) is a configuration mistake every receiver turns
+/// into a permanent error: SPF returns `permerror` (RFC 7208 §4.5).
+/// The upsert must collapse the two SPF entries into one carrying the
+/// new value, leave the unrelated TXT alone, and never create a
+/// third record. A naive find-first-match implementation would update
+/// record 1 and leave record 2, the bug the contract is closing.
+#[tokio::test]
+async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
+	const OLD_SPF_1: &str = "v=spf1 mx -all";
+	const OLD_SPF_2: &str = "v=spf1 include:_spf.google.com -all";
+	const NEW_SPF: &str = "v=spf1 -all";
+	const UNRELATED: &str = "google-site-verification=abc123";
+	let (provider, state) = mock().await;
+	state.lock().unwrap().zone_detail = serde_json::json!({
+		"Id": 42,
+		"Records": [
+			{ "Id": 1, "Type": 3, "Name": "", "Value": OLD_SPF_1, "Ttl": 3600 },
+			{ "Id": 2, "Type": 3, "Name": "", "Value": OLD_SPF_2, "Ttl": 3600 },
+			{ "Id": 3, "Type": 3, "Name": "", "Value": UNRELATED, "Ttl": 3600 }
+		]
+	});
+	provider
+		.upsert("example.org", txt("example.org", NEW_SPF))
+		.await
+		.expect("apex SPF upsert with duplicates");
+	let writes = writes(&state);
+	// Each old SPF record was either edited (POST with the new
+	// value) or deleted (DELETE). Leaving either at the spot is
+	// the bug the contract closes.
+	let rec1_touched = writes.iter().any(|w| {
+		w == "POST /dnszone/42/records/1" || w == "DELETE /dnszone/42/records/1"
+	});
+	let rec2_touched = writes.iter().any(|w| {
+		w == "POST /dnszone/42/records/2" || w == "DELETE /dnszone/42/records/2"
+	});
+	assert!(
+		rec1_touched,
+		"old SPF1 was not edited or deleted: {writes:?}"
+	);
+	assert!(
+		rec2_touched,
+		"old SPF2 was left in place: {writes:?}"
+	);
+	// No write carries an old SPF value.
+	for body in &state.lock().unwrap().bodies {
+		assert!(
+			!body.contains(OLD_SPF_1),
+			"old SPF1 was re-published: {body}"
+		);
+		assert!(
+			!body.contains(OLD_SPF_2),
+			"old SPF2 was re-published: {body}"
+		);
+	}
+	// Exactly one write carries the new SPF value (the chosen
+	// implementation — edit-in-place or PUT-then-delete — picks
+	// exactly one path per duplicate).
+	let fresh = state
+		.lock()
+		.unwrap()
+		.bodies
+		.iter()
+		.filter(|b| b.contains(&format!("\"Value\":\"{NEW_SPF}\"")))
+		.count();
+	assert_eq!(
+		fresh, 1,
+		"exactly one SPF write carries the new value, got {fresh}"
+	);
+	// The unrelated TXT must not be touched.
+	assert!(
+		!writes.iter().any(|w| w == "DELETE /dnszone/42/records/3"),
+		"the unrelated TXT was deleted: {writes:?}"
+	);
+}

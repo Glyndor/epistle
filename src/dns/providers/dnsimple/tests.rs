@@ -12,21 +12,21 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 
 #[derive(Default)]
-struct MockState {
+pub(super) struct MockState {
 	/// Records the `GET` endpoint returns. Mutated by `POST`/`PATCH`/`DELETE`
 	/// so subsequent `GET`s reflect changes.
-	records: Vec<serde_json::Value>,
+	pub(super) records: Vec<serde_json::Value>,
 	/// Next id the mock assigns to a created record.
 	next_id: u64,
 	/// Captured "METHOD /path" of every request, in order.
-	calls: Vec<String>,
+	pub(super) calls: Vec<String>,
 	/// Captured `POST`/`PATCH` bodies, in order.
-	bodies: Vec<String>,
+	pub(super) bodies: Vec<String>,
 	/// Last `Authorization` header seen (set on every request).
 	auth: Option<String>,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 const ACCOUNT: &str = "1";
 const ZONE: &str = "example.org";
@@ -169,7 +169,7 @@ async fn delete_record(
 		.expect("build response")
 }
 
-async fn mock(initial: Vec<serde_json::Value>) -> (DnsimpleProvider, Shared) {
+pub(super) async fn mock(initial: Vec<serde_json::Value>) -> (DnsimpleProvider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState {
 		records: initial,
 		next_id: 0,

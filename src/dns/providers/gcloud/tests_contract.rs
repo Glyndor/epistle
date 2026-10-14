@@ -41,3 +41,42 @@ async fn txt_rotation_leaves_one_record_of_that_purpose() {
 	expected.sort();
 	assert_eq!(live, expected);
 }
+
+/// Two SPF records at the apex plus one unrelated TXT (a site
+/// verification token) is a configuration mistake every receiver turns
+/// into a permanent error: SPF returns `permerror` (RFC 7208 §4.5).
+/// The upsert must collapse the two SPF entries into one carrying the
+/// new value, leave the unrelated TXT alone, and never create a
+/// third record.
+#[tokio::test]
+async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
+	const OLD_SPF_1: &str = "v=spf1 mx -all";
+	const OLD_SPF_2: &str = "v=spf1 include:_spf.google.com -all";
+	const NEW_SPF: &str = "v=spf1 -all";
+	const UNRELATED: &str = "google-site-verification=abc123";
+	let (base, state) = start_mock(vec![Rrset {
+		name: "example.org.".into(),
+		kind: "TXT".into(),
+		ttl: 3600,
+		rrdatas: [OLD_SPF_1, OLD_SPF_2, UNRELATED]
+			.iter()
+			.map(|v| txt_presentation(v))
+			.collect(),
+	}])
+	.await;
+	provider_for(&base)
+		.upsert("example.org", txt("example.org", NEW_SPF))
+		.await
+		.expect("apex SPF upsert with duplicates");
+	let s = state.lock().unwrap();
+	let mut live: Vec<String> = s.live_rrsets[0].rrdatas.clone();
+	live.sort();
+	let new = txt_presentation(NEW_SPF);
+	let unrelated = txt_presentation(UNRELATED);
+	let mut expected = vec![unrelated, new];
+	expected.sort();
+	assert_eq!(
+		live, expected,
+		"the rrset must carry exactly one SPF (new) and the unrelated TXT"
+	);
+}

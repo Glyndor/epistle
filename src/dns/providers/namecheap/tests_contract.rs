@@ -54,3 +54,47 @@ async fn txt_rotation_leaves_one_record_of_that_purpose() {
 	let txt = upsert_over(&[SIBLING, OLD_DKIM]).await;
 	assert_eq!(txt, vec![SIBLING.to_string(), NEW_DKIM.to_string()]);
 }
+
+/// Two SPF records at the apex plus one unrelated TXT is a
+/// configuration mistake every receiver turns into a permanent
+/// error: SPF returns `permerror` (RFC 7208 §4.5). The upsert
+/// must collapse the two SPF entries into one carrying the new
+/// value, leave the unrelated TXT alone, and never create a
+/// third record.
+#[tokio::test]
+async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
+	const OLD_SPF_1: &str = "v=spf1 mx -all";
+	const OLD_SPF_2: &str = "v=spf1 include:_spf.google.com -all";
+	const NEW_SPF: &str = "v=spf1 -all";
+	const UNRELATED: &str = "google-site-verification=abc123";
+	let initial = format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="1" Name="@" Type="TXT" Address="{OLD_SPF_1}" TTL="3600"/><host HostId="2" Name="@" Type="TXT" Address="{OLD_SPF_2}" TTL="3600"/><host HostId="3" Name="@" Type="TXT" Address="{UNRELATED}" TTL="3600"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#
+	);
+	let (provider, state) = mock(&initial, None).await;
+	provider
+		.upsert("example.org", txt("example.org", NEW_SPF))
+		.await
+		.expect("apex SPF upsert with duplicates");
+	let s = state.lock().unwrap();
+	assert_eq!(s.set_hosts_calls.len(), 1);
+	let mut txt: Vec<String> = s.set_hosts_calls[0]
+		.hosts()
+		.into_iter()
+		.filter(|h| h.kind == "TXT" && h.name == "@")
+		.map(|h| h.address)
+		.collect();
+	txt.sort();
+	let mut expected = vec![NEW_SPF.to_string(), UNRELATED.to_string()];
+	expected.sort();
+	assert_eq!(
+		txt, expected,
+		"the new setHosts body must carry exactly one SPF (new) and the unrelated TXT"
+	);
+	// No old SPF value reaches the wire.
+	for old in [OLD_SPF_1, OLD_SPF_2] {
+		assert!(
+			!txt.contains(&old.to_string()),
+			"old SPF value {old:?} re-published"
+		);
+	}
+}
