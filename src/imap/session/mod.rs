@@ -1,6 +1,8 @@
 //! IMAP session state machine (sans-IO).
 
-use super::command::{Command, FetchItem, Line, ParseError, SearchKey, StoreMode, Tagged};
+use super::command::{
+	Command, FetchItem, Line, ParseError, SearchKey, StoreMode, Tagged, ThreadAlgorithm,
+};
 use super::mailbox;
 
 mod acl;
@@ -29,6 +31,7 @@ mod sort_keys;
 mod state;
 mod sync;
 mod thread;
+mod thread_references;
 mod utf8;
 
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
@@ -179,7 +182,14 @@ impl Session {
 				criteria,
 				uid,
 			} => self.sort(&tag, &keys, &criteria, uid),
-			Command::Thread { criteria, uid } => self.thread(&tag, &criteria, uid),
+			Command::Thread {
+				algorithm,
+				criteria,
+				uid,
+			} => match algorithm {
+				ThreadAlgorithm::OrderedSubject => self.thread(&tag, &criteria, uid),
+				ThreadAlgorithm::References => self.thread_references(&tag, &criteria, uid),
+			},
 			Command::Idle => {
 				if self.account().is_none() {
 					return Output::text(format!("{tag} NO not authenticated\r\n"));
