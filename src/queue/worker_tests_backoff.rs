@@ -334,3 +334,38 @@ async fn a_hold_lasts_the_backoff_step_whatever_the_retry_schedule_of_its_recipi
 		Some(now + 60)
 	);
 }
+
+#[tokio::test]
+async fn a_released_destination_that_asks_again_is_held_again() {
+	// An operator's release lifts one hold; it cannot make the queue
+	// ignore the remote: the next slow-down reply holds it once more.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	remote.script(DOMAIN, greeting("421 4.7.0 slow down"));
+	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
+	worker.pass().await.expect("pass");
+	// What `epistle queue release-destination` writes.
+	let id = worker.spool.list().expect("list")[0];
+	worker
+		.spool
+		.update_envelope(id, |envelope| {
+			let mut state = envelope.recipient_state("bob@busy.example");
+			state.throttled = 0;
+			state.next_attempt = now;
+			envelope.set_recipient_state("bob@busy.example", state);
+			envelope.settle();
+		})
+		.expect("release");
+	assert_eq!(hold(&worker, &Destination::domain(DOMAIN), now), None);
+
+	worker.pass().await.expect("pass");
+	worker.pass().await.expect("pass");
+
+	assert_eq!(
+		remote.connections(HOST),
+		2,
+		"contacted once after the release"
+	);
+	let held = hold(&worker, &Destination::domain(DOMAIN), now).expect("held again");
+	assert_eq!((held.until, held.deferrals), (now + 60, 1));
+}
