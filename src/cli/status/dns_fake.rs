@@ -18,6 +18,8 @@ pub(crate) struct FakeDns {
 	pub(crate) txt_errors: Vec<String>,
 	/// Addresses whose PTR lookup fails temporarily.
 	pub(crate) ptr_errors: Vec<IpAddr>,
+	/// TLSA RRsets by owner name; absent names have none.
+	pub(crate) tlsa: HashMap<String, crate::dane::rrset::TlsaRrset>,
 }
 
 impl FakeDns {
@@ -70,5 +72,9 @@ impl DnsLookup for FakeDns {
 				Ok(found)
 			}
 		})
+	}
+	fn tlsa(&self, name: &str) -> Lookup<'_, crate::dane::rrset::TlsaRrset> {
+		let found = self.tlsa.get(name).cloned().unwrap_or_default();
+		Box::pin(async move { Ok(found) })
 	}
 }
