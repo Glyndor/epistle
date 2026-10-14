@@ -35,10 +35,9 @@ pub enum DkimCli {
 		/// Check the preconditions and print what would happen; change nothing.
 		#[arg(long)]
 		dry_run: bool,
-		/// Rotate the per-domain override for this domain. Refused in
-		/// this release: per-domain DKIM keys do not rotate
-		/// automatically yet. Edit `[dkim.domain]` and restart to
-		/// replace a per-domain key.
+		/// Always refused: a `[[dkim.domain]]` key does not rotate. The
+		/// refusal says how to replace it, or that the domain signs with
+		/// the default key, which `dkim rotate` without `--domain` rotates.
 		#[arg(long)]
 		domain: Option<String>,
 	},
@@ -214,18 +213,25 @@ pub(super) fn rotate_now_with(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Some(name) = domain.as_deref() {
-		// Per-domain overrides are not yet on the rotation schedule.
-		// The operator replaces them by editing `[dkim.domain]` and
-		// restarting; we refuse early with a clear message so the
-		// command cannot silently rotate the default key when the
-		// operator thought they were rotating a per-domain one.
-		super::style::error_to(
-			err,
-			format_args!(
-				"dkim rotate --domain {name}: per-domain keys do not rotate automatically; \
-				 edit [[dkim.domain]] for {name} in mail.toml and restart the server to replace the key"
-			),
-		);
+		// A `[[dkim.domain]]` key is not rotated (the rotation journal
+		// covers the default key only), so refuse instead of rotating the
+		// default under a name the operator did not mean.
+		let has_override = config
+			.dkim
+			.as_ref()
+			.is_some_and(|dkim| dkim.override_for(name).is_some());
+		let reason = if has_override {
+			format!(
+				"per-domain keys do not rotate; replace the key of [[dkim.domain]] {name} in the \
+				 configuration file, publish its record (epistle dns-records) and restart the server"
+			)
+		} else {
+			format!(
+				"{name} has no [[dkim.domain]] key and signs with the [dkim] default; \
+				 rotate that with `epistle dkim rotate`"
+			)
+		};
+		super::style::error_to(err, format_args!("dkim rotate --domain {name}: {reason}"));
 		return ExitCode::FAILURE;
 	}
 	let plan = match preflight(config, now) {

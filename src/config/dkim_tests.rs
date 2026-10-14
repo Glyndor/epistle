@@ -13,7 +13,7 @@ key_file = "/etc/mail/dkim.pem"
 "#,
 	)
 	.expect("parse dkim");
-	assert_eq!(dkim.selector.as_deref(), Some("mail"));
+	assert_eq!(dkim.selector, "mail");
 	// Deprecated fields default to None when absent.
 	assert!(dkim.rotate_days.is_none());
 	assert!(dkim.rotate_overlap_days.is_none());
@@ -21,9 +21,7 @@ key_file = "/etc/mail/dkim.pem"
 
 #[test]
 fn rejects_missing_fields_and_unknown_keys() {
-	// A half-configured RSA pair is still rejected (the validator
-	// runs the cross-field check, not serde); unknown keys remain a
-	// load-time error from `deny_unknown_fields`.
+	assert!(toml::from_str::<Dkim>(r#"selector = "mail""#).is_err());
 	assert!(
 		toml::from_str::<Dkim>(
 			r#"
@@ -82,8 +80,8 @@ rotate_overlap_days = 21
 
 fn dkim_with_rsa() -> Dkim {
 	Dkim {
-		selector: Some("mail".into()),
-		key_file: Some("/etc/mail/dkim.pem".into()),
+		selector: "mail".into(),
+		key_file: "/etc/mail/dkim.pem".into(),
 		rsa_selector: Some("rsa1".into()),
 		rsa_key_file: Some("/etc/mail/rsa.pem".into()),
 		rotate_days: None,
@@ -94,8 +92,8 @@ fn dkim_with_rsa() -> Dkim {
 
 fn dkim_without_rsa() -> Dkim {
 	Dkim {
-		selector: Some("mail".into()),
-		key_file: Some("/etc/mail/dkim.pem".into()),
+		selector: "mail".into(),
+		key_file: "/etc/mail/dkim.pem".into(),
 		rsa_selector: None,
 		rsa_key_file: None,
 		rotate_days: None,

@@ -154,15 +154,10 @@ pub(super) async fn build(
 	let mut records = Vec::new();
 	if let Some(dns) = dns {
 		for domain in signing_domains(config) {
-			let key = domain.to_ascii_lowercase();
 			// A per-domain override replaces the default for the domain
 			// it names. The configured selectors are only checked for
 			// domains without an override.
-			if let Some(override_) = dkim
-				.domain
-				.iter()
-				.find(|d| d.name.eq_ignore_ascii_case(&key))
-			{
+			if let Some(override_) = dkim.override_for(&domain) {
 				let mut override_expected: Vec<(String, Option<String>)> = Vec::new();
 				match Signer::load(&override_.selector, &override_.key_file) {
 					Ok(signer) => {

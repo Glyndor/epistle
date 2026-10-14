@@ -17,22 +17,20 @@ pub(super) struct SigningKey {
 	pub(super) file: PathBuf,
 }
 
+/// A signing key with the domain it signs for: `None` for the `[dkim]`
+/// default, which signs every domain without a `[[dkim.domain]]` override,
+/// and the lowercase domain for an override, which signs only that domain.
+pub(super) struct PerDomainSigningKey {
+	pub(super) key: SigningKey,
+	pub(super) domain: Option<String>,
+}
+
 /// The keys in use: the active Ed25519 key as the server resolves it
 /// ([`crate::dkim::rotate::active_ed25519`]: an unreadable rotation state
 /// is an error unless its last good copy stands in, see [`state_item`]),
 /// plus the RSA key in service ([`crate::dkim::rotate::active_rsa`]) when
-/// the server dual-signs. Empty without a `[dkim]` section.
-/// A per-domain signing key the operator configures, with the
-/// domain it signs for. The default key has `domain == None` and
-/// applies to every hosted domain without a `[dkim.domain]`
-/// override; the per-domain entries only apply to their own
-/// domain.
-pub(super) struct PerDomainSigningKey {
-	pub(super) key: SigningKey,
-	/// `None` for the default; `Some(domain)` for an override.
-	pub(super) domain: Option<String>,
-}
-
+/// the server dual-signs, then each override's keys. Empty without a
+/// `[dkim]` section.
 pub(super) fn signing_keys(config: &Config) -> Result<Vec<PerDomainSigningKey>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());

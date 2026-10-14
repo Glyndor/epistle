@@ -160,7 +160,15 @@ pub(crate) fn prepare(
 		outcome.key_files.push(path.display().to_string());
 		key_paths.push((path, index));
 	}
-	choose_dkim(plan, &domains, &key_paths, &mut document, &mut outcome)?;
+	let added = outcome.domains_added.clone();
+	choose_dkim(
+		plan,
+		&config,
+		&added,
+		&key_paths,
+		&mut document,
+		&mut outcome,
+	)?;
 	document.config().map_err(ApplyError::Failed)?;
 	Ok(Prepared {
 		outcome,
@@ -308,102 +316,137 @@ fn temporary_password() -> Result<Zeroizing<String>, ApplyError> {
 	))
 }
 
-/// Point every imported domain at its own DKIM key. Each domain's
-/// ed25519 key becomes a `[[dkim.domain]]` entry, with the optional
-/// RSA pair attached when Mox published one. The configured `[dkim]`
-/// block stays as the fallback for any hosted domain Mox did not
-/// sign for, so adding a new hosted domain after the import does not
-/// leave it unsigned.
+/// One imported domain's keys: the first ed25519 key Mox signs it with, and
+/// the first RSA key when there is one. Indexes into `plan.keys`.
+#[derive(Clone, Copy)]
+struct DomainKeys {
+	ed: usize,
+	rsa: Option<usize>,
+}
+
+/// Keep every imported domain signing with the key Mox published for it.
 ///
-/// A domain that only has an RSA key (no ed25519) cannot be carried
-/// by an override yet: the validator requires both fields or none,
-/// and an ed25519-less override is a downgrade compared to RSA. The
-/// import reports the gap as a note so the operator can decide.
+/// Without a `[dkim]` block the first imported domain's pair becomes the
+/// default (the server needs one, and it also signs any domain added
+/// later); with one, the operator's default is left as it is. Every other
+/// imported domain whose keys differ from the default gets a
+/// `[[dkim.domain]]` override, so one domain or several sharing one pair
+/// end up exactly as before per-domain keys existed. A domain Mox signs
+/// without an ed25519 key cannot have an override and signs with the
+/// default, which a note says. Domains kept by `--merge` keep their
+/// settings.
 fn choose_dkim(
 	plan: &Plan,
-	domains: &[String],
+	config: &Config,
+	added: &[String],
 	key_paths: &[(PathBuf, usize)],
 	document: &mut ConfigDocument,
 	outcome: &mut Outcome,
 ) -> Result<(), ApplyError> {
-	// Build the `domain -> { ed, rsa }` map. The key index points back
-	// into `plan.keys` so the selector and algorithm are authoritative.
-	let mut per_domain: std::collections::BTreeMap<String, (Option<usize>, Option<usize>)> =
-		std::collections::BTreeMap::new();
-	for (index, key) in plan.keys.iter().enumerate() {
-		let entry = per_domain.entry(key.domain.clone()).or_insert((None, None));
-		match key.algorithm {
-			Algorithm::Ed25519 => entry.0 = Some(index),
-			Algorithm::Rsa => entry.1 = Some(index),
-		}
-	}
-	let path_for = |index: usize| -> &PathBuf {
-		&key_paths
+	let path = |index: usize| -> Result<String, ApplyError> {
+		key_paths
 			.iter()
 			.find(|(_, i)| *i == index)
-			.expect("every imported key has a path")
-			.0
+			.map(|(path, _)| path.display().to_string())
+			.ok_or_else(|| ApplyError::Failed("an imported DKIM key has no file".into()))
 	};
-	let mut per_domain_count = 0;
-	let mut rsa_only: Vec<String> = Vec::new();
-	for (domain, (ed, rsa)) in &per_domain {
-		if domain.is_empty() || !domains.iter().any(|d| d.eq_ignore_ascii_case(domain)) {
-			// The Mox fixture occasionally records a key under a
-			// domain the import did not add (a third domain that
-			// was kept out by the operator); skip it.
+	let mut without_ed25519 = Vec::new();
+	let mut imported: Vec<(&String, DomainKeys)> = Vec::new();
+	for domain in added {
+		let of = |algorithm: Algorithm| {
+			plan.keys.iter().position(|key| {
+				key.algorithm == algorithm && key.domain.eq_ignore_ascii_case(domain)
+			})
+		};
+		match of(Algorithm::Ed25519) {
+			Some(ed) => imported.push((
+				domain,
+				DomainKeys {
+					ed,
+					rsa: of(Algorithm::Rsa),
+				},
+			)),
+			None if plan
+				.keys
+				.iter()
+				.any(|key| key.domain.eq_ignore_ascii_case(domain)) =>
+			{
+				without_ed25519.push(domain.clone());
+			}
+			None => {}
+		}
+	}
+	let same_key = |a: usize, b: usize| {
+		plan.keys[a].selector == plan.keys[b].selector && *plan.keys[a].pkcs8 == *plan.keys[b].pkcs8
+	};
+	let same = |a: DomainKeys, b: DomainKeys| {
+		same_key(a.ed, b.ed)
+			&& match (a.rsa, b.rsa) {
+				(Some(a), Some(b)) => same_key(a, b),
+				(None, None) => true,
+				_ => false,
+			}
+	};
+	let mut summary = Vec::new();
+	let default = match (&config.dkim, imported.first()) {
+		(None, Some((_, keys))) => {
+			let ed_selector = plan.keys[keys.ed].selector.clone();
+			let mut text = format!("signing with the imported ed25519 selector {ed_selector}");
+			let mut fields: Vec<crate::cli::config_edit::FieldChange> = vec![
+				("selector", Some(ed_selector.into())),
+				("key_file", Some(path(keys.ed)?.into())),
+			];
+			match keys.rsa {
+				Some(rsa) => {
+					let selector = plan.keys[rsa].selector.clone();
+					text.push_str(&format!(" and rsa selector {selector}"));
+					fields.push(("rsa_selector", Some(selector.into())));
+					fields.push(("rsa_key_file", Some(path(rsa)?.into())));
+				}
+				None => {
+					fields.push(("rsa_selector", None));
+					fields.push(("rsa_key_file", None));
+				}
+			}
+			document
+				.set_table_fields(&["dkim"], &fields)
+				.map_err(ApplyError::Failed)?;
+			summary.push(text);
+			Some(*keys)
+		}
+		_ => None,
+	};
+	let mut overridden = Vec::new();
+	for (domain, keys) in &imported {
+		if default.is_some_and(|default| same(default, *keys)) {
 			continue;
 		}
-		let (Some(ed), rsa) = (ed, rsa) else {
-			rsa_only.push(domain.clone());
-			continue;
-		};
-		let ed_path = path_for(*ed);
 		let mut fields: Vec<(&str, toml_edit::Value)> = vec![
-			(
-				"selector",
-				toml_edit::Value::from(plan.keys[*ed].selector.clone()),
-			),
-			(
-				"key_file",
-				toml_edit::Value::from(ed_path.display().to_string()),
-			),
+			("selector", plan.keys[keys.ed].selector.clone().into()),
+			("key_file", path(keys.ed)?.into()),
 		];
-		if let Some(rsa_index) = rsa {
-			fields.push((
-				"rsa_selector",
-				toml_edit::Value::from(plan.keys[*rsa_index].selector.clone()),
-			));
-			fields.push((
-				"rsa_key_file",
-				toml_edit::Value::from(path_for(*rsa_index).display().to_string()),
-			));
+		if let Some(rsa) = keys.rsa {
+			fields.push(("rsa_selector", plan.keys[rsa].selector.clone().into()));
+			fields.push(("rsa_key_file", path(rsa)?.into()));
 		}
 		document
 			.upsert_nested_element(&["dkim"], "domain", "name", domain, &fields)
 			.map_err(ApplyError::Failed)?;
-		per_domain_count += 1;
+		overridden.push(domain.as_str());
 	}
-	if !rsa_only.is_empty() {
+	if !overridden.is_empty() {
+		summary.push(format!("per-domain keys for {}", overridden.join(", ")));
+	}
+	if !without_ed25519.is_empty() {
 		outcome.notes.push(format!(
-			"domain(s) {} had an RSA key only; epistle does not sign with an ed25519-less override, so set a [dkim] default and re-publish those selectors (epistle dns-records)",
-			rsa_only.join(", ")
+			"{} had no ed25519 DKIM key, so the [dkim] default signs it; publish that \
+			 selector (epistle dns-records) before moving its mail",
+			without_ed25519.join(", ")
 		));
 	}
-	let summary = if per_domain_count == 0 {
-		if !plan.keys.is_empty() {
-			outcome.notes.push(
-				"the imported DKIM keys are written to files but no per-domain override covers \
-				 every configured domain; epistle's default [dkim] (or absence thereof) signs \
-				 them. publish epistle's selector (epistle dns-records) for any domain you \
-				 added before moving its mail"
-					.into(),
-			);
-		}
-		"no per-domain override landed".to_string()
-	} else {
-		format!("{per_domain_count} per-domain override(s) configured")
-	};
-	outcome.dkim = Some(summary);
+	if !summary.is_empty() {
+		outcome.dkim = Some(summary.join("; "));
+	}
 	Ok(())
 }
 

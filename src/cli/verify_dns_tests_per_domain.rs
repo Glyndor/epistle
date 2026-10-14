@@ -129,21 +129,21 @@ async fn per_domain_override_uses_its_own_selector() {
 	// The per-domain override at example.org means the report
 	// must NOT mention the default selector for that domain.
 	assert!(
-		!text.contains("DKIM default-sel — v=DKIM1; k=ed25519; p=AAAA"),
+		!text.contains("DKIM default-sel \u{2014} v=DKIM1; k=ed25519; p=AAAA"),
 		"example.org must not be checked against the default selector, got: {text}"
 	);
 	// And it must mention the override selector for that domain.
 	assert!(
-		text.contains("DKIM per-sel — v=DKIM1; k=ed25519; p=AAAA"),
+		text.contains("DKIM per-sel \u{2014} v=DKIM1; k=ed25519; p=AAAA"),
 		"example.org must be checked against the override selector, got: {text}"
 	);
 	// The other domain keeps the default.
 	assert!(
-		text.contains("DKIM default-sel — v=DKIM1; k=ed25519; p=BBBB"),
+		text.contains("DKIM default-sel \u{2014} v=DKIM1; k=ed25519; p=BBBB"),
 		"example.net keeps the default selector, got: {text}"
 	);
 	assert!(
-		!text.contains("DKIM per-sel — v=DKIM1; k=ed25519; p=BBBB"),
+		!text.contains("DKIM per-sel \u{2014} v=DKIM1; k=ed25519; p=BBBB"),
 		"example.net must not see the override selector, got: {text}"
 	);
 	assert_eq!(

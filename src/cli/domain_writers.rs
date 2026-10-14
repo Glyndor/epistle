@@ -19,35 +19,25 @@ pub fn print_domain_records(
 	domain: &str,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	let mut dkim_default: Vec<(String, String)> = Vec::new();
-	let mut dkim_per_domain: dns_records::DomainDkim = dns_records::DomainDkim::new();
+	// One domain is printed, so its own key (a `[[dkim.domain]]` override
+	// when it has one, the `[dkim]` default otherwise) is the only one.
+	let mut dkim_owned: Vec<(String, String)> = Vec::new();
 	if let Some(dkim) = &config.dkim {
-		// A per-domain override for this exact domain replaces the
-		// default; the default itself stays for any other domain the
-		// caller might query later in the same run.
-		let key = domain.to_ascii_lowercase();
-		if let Some(override_) = dkim
-			.domain
-			.iter()
-			.find(|d| d.name.eq_ignore_ascii_case(&key))
+		let (selector, key_file, rsa) = match dkim.override_for(domain) {
+			Some(entry) => (
+				&entry.selector,
+				&entry.key_file,
+				entry.rsa_selector.as_ref().zip(entry.rsa_key_file.as_ref()),
+			),
+			None => (&dkim.selector, &dkim.key_file, None),
+		};
+		if let Ok(signer) = crate::dkim::Signer::load(selector, key_file) {
+			dkim_owned.push((selector.clone(), signer.dns_record_value()));
+		}
+		if let Some((rsa_selector, rsa_key_file)) = rsa
+			&& let Ok(value) = crate::dkim::rsa_record_value(rsa_key_file)
 		{
-			let mut pairs = Vec::new();
-			if let Ok(signer) = crate::dkim::Signer::load(&override_.selector, &override_.key_file)
-			{
-				pairs.push((override_.selector.clone(), signer.dns_record_value()));
-			}
-			if let (Some(rsa_selector), Some(rsa_key_file)) =
-				(&override_.rsa_selector, &override_.rsa_key_file)
-				&& let Ok(value) = crate::dkim::rsa_record_value(rsa_key_file)
-			{
-				pairs.push((rsa_selector.clone(), value));
-			}
-			dkim_per_domain.insert(key, pairs);
-		} else if let (Some(selector), Some(key_file)) =
-			(dkim.selector.as_ref(), dkim.key_file.as_ref())
-			&& let Ok(signer) = crate::dkim::Signer::load(selector, key_file)
-		{
-			dkim_default.push((selector.clone(), signer.dns_record_value()));
+			dkim_owned.push((rsa_selector.clone(), value));
 		}
 	}
 	let tlsa = config
@@ -58,8 +48,8 @@ pub fn print_domain_records(
 	let recs = dns_records::build_records(
 		&[domain.to_string()],
 		&config.hostname,
-		&dkim_default,
-		&dkim_per_domain,
+		&dkim_owned,
+		&dns_records::DomainDkim::new(),
 		tlsa.as_deref(),
 		&dns_records::mta_sts_id(config),
 		dns_records::Services::all(),

@@ -154,7 +154,8 @@ pub fn request_cleanup(data_dir: &Path) -> std::io::Result<()> {
 
 impl Rotator {
 	/// Selectors outside the state that must never count as orphans: the
-	/// configured ed25519 and RSA selectors.
+	/// configured ed25519 and RSA selectors and every `[[dkim.domain]]` one
+	/// ([`crate::config::Dkim::kept_selectors`]).
 	pub fn keeping(mut self, selectors: Vec<String>) -> Self {
 		self.keep = selectors;
 		self

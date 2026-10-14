@@ -54,8 +54,7 @@ async fn per_domain_override_is_listed_in_the_view() {
 	assert_eq!(entry.selector, "per-sel");
 	assert!(
 		entry.key_file.ends_with("override.key"),
-		"the override entry points at the operator-configured file, got {}",
-		entry.key_file.display()
+		"the override entry points at the operator-configured file"
 	);
 }
 

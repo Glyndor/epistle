@@ -60,7 +60,13 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 	}
 	let mut signing_domains = Vec::new();
 	let mut out_of_zone = Vec::new();
-	for domain in all {
+	// A domain with a `[[dkim.domain]]` override never signs with the
+	// default key, so the default's rotation neither publishes nor retires
+	// records there, and that domain's zone cannot hold the rotation back.
+	for domain in all
+		.into_iter()
+		.filter(|domain| dkim.override_for(domain).is_none())
+	{
 		if crate::dkim::Rotator::is_in_zone(&domain, &dns.zone) {
 			signing_domains.push(domain);
 		} else {
@@ -191,14 +197,8 @@ pub fn spawn_dkim_rotation(
 			if let Some(webhook) = webhook {
 				rotator = rotator.with_webhook(webhook);
 			}
-			if let Some(dkim) = &config.dkim
-				&& let Some(selector) = dkim.selector.as_ref()
-			{
-				rotator = rotator.keeping(
-					std::iter::once(selector.clone())
-						.chain(dkim.rsa_selector.clone())
-						.collect(),
-				);
+			if let Some(dkim) = &config.dkim {
+				rotator = rotator.keeping(dkim.kept_selectors());
 			}
 			// Wake every minute so an operator's `dkim rotate` request is
 			// served promptly; the scheduled tick still runs hourly.

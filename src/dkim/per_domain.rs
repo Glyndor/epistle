@@ -1,19 +1,12 @@
-//! A signer that picks the right key for the message's `d=` domain, so
-//! the relay can host many domains with independent keys without
-//! rotating every domain together.
+//! A signer that picks the key of the message's `d=` domain: the domain's
+//! `[[dkim.domain]]` override when it has one, the `[dkim]` default
+//! otherwise.
 //!
-//! The default signer (one key, optional RSA dual) is hot-swappable: the
-//! background rotation task replaces it. Per-domain overrides are loaded
-//! once at startup: in this release they are not rotated, so a per-domain
-//! key lives until the operator replaces it by editing `[dkim.domain]`
-//! and restarting.
-//!
-//! The lookup is `O(n)` over a `Vec` because the number of overrides is
-//! small (a single deployment rarely has more than a handful) and the
-//! comparison is one lowercase string. A `HashMap` would force a
-//! per-call allocation and lock contention on a hot path.
+//! The default is hot-swappable, because the rotation task replaces it.
+//! Overrides are loaded once at startup and never rotated: an override's
+//! key lives until the operator replaces it in the configuration and
+//! restarts the server.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::rotate::ReloadableSigner;
@@ -35,14 +28,13 @@ pub struct DomainSigner {
 #[derive(Clone)]
 pub struct PerDomainSigner {
 	default_signer: ReloadableSigner,
-	/// Lowercase domain name, in the order the operator listed them.
+	/// One entry per `[[dkim.domain]]`, few enough for a linear search.
 	overrides: Vec<DomainSigner>,
 }
 
 impl PerDomainSigner {
-	/// Build a `PerDomainSigner` from a default signer and per-domain
-	/// overrides. The overrides are stored in `domain` order; the
-	/// default is what the existing rotation task replaces.
+	/// Build a `PerDomainSigner` from the default signer, which the rotation
+	/// task replaces, and the overrides, whose `domain` is lowercase.
 	pub fn new(default_signer: ReloadableSigner, overrides: Vec<DomainSigner>) -> Self {
 		PerDomainSigner {
 			default_signer,
@@ -50,55 +42,20 @@ impl PerDomainSigner {
 		}
 	}
 
-	/// The default signer, for callers that drive rotation (the
-	/// rotation task replaces this one, not the overrides).
-	pub fn default_signer(&self) -> &ReloadableSigner {
-		&self.default_signer
-	}
-
-	/// The per-domain overrides, in the order the operator listed them.
-	/// Used by `dns-records`, `verify-dns` and `dkim show` to publish a
-	/// per-domain TXT record.
-	pub fn overrides(&self) -> &[DomainSigner] {
-		&self.overrides
-	}
-
 	/// Sign `raw` for `domain`, picking the override when the operator
 	/// configured one and falling back to the default signer otherwise.
 	/// `domain` is matched case-insensitively, the same way the
 	/// validator and the routing layer compare it.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
-		let want = domain.to_ascii_lowercase();
-		if let Some(override_signer) = self.overrides.iter().find(|d| d.domain == want) {
+		if let Some(override_signer) = self
+			.overrides
+			.iter()
+			.find(|d| d.domain.eq_ignore_ascii_case(domain))
+		{
 			return override_signer.signer.sign(domain, raw);
 		}
 		self.default_signer.current().sign(domain, raw)
 	}
-}
-
-/// Lowercase the override domains once and group them, so the signer
-/// can resolve a `d=` to its override in one pass. The rotation task
-/// loads the default and the overrides separately; this helper just
-/// normalises the override names so a typo in the operator's input
-/// cannot make signing silently fall back to the default.
-pub fn lowercase_overrides(raw: &HashMap<String, Arc<Signer>>) -> Vec<DomainSigner> {
-	let mut entries: Vec<DomainSigner> = raw
-		.iter()
-		.map(|(name, signer)| DomainSigner {
-			domain: name.to_ascii_lowercase(),
-			signer: Arc::clone(signer),
-		})
-		.collect();
-	entries.sort_by(|a, b| a.domain.cmp(&b.domain));
-	entries
-}
-
-/// Sort and validate a pre-built list of overrides. Used by the
-/// startup path: each entry's key is already loaded, only the lookup
-/// order has to be fixed.
-pub fn sort_overrides(mut entries: Vec<DomainSigner>) -> Vec<DomainSigner> {
-	entries.sort_by(|a, b| a.domain.cmp(&b.domain));
-	entries
 }
 
 #[cfg(test)]
@@ -183,47 +140,5 @@ mod tests {
 			other.contains("s=default-2;"),
 			"default reload must propagate to the default signer, got {other}"
 		);
-	}
-
-	#[test]
-	fn lowercase_overrides_keeps_the_loaded_signers() {
-		let s1 = fresh_signer("a");
-		let s2 = fresh_signer("b");
-		let mut raw = HashMap::new();
-		raw.insert("Example.Org".to_string(), Arc::clone(&s1));
-		raw.insert("elsewhere.example".to_string(), Arc::clone(&s2));
-		let lower = lowercase_overrides(&raw);
-		assert_eq!(lower.len(), 2);
-		for entry in &lower {
-			let raw_key = match entry.domain.as_str() {
-				"example.org" => &s1,
-				"elsewhere.example" => &s2,
-				other => panic!("unexpected domain {other}"),
-			};
-			assert!(
-				Arc::ptr_eq(&entry.signer, raw_key),
-				"the override must keep the loaded signer for {}",
-				entry.domain
-			);
-		}
-	}
-
-	#[test]
-	fn sort_overrides_returns_alphabetical_order() {
-		let s1 = fresh_signer("a");
-		let s2 = fresh_signer("b");
-		let unsorted = vec![
-			DomainSigner {
-				domain: "zeta.example".to_string(),
-				signer: Arc::clone(&s1),
-			},
-			DomainSigner {
-				domain: "alpha.example".to_string(),
-				signer: Arc::clone(&s2),
-			},
-		];
-		let sorted = sort_overrides(unsorted);
-		assert_eq!(sorted[0].domain, "alpha.example");
-		assert_eq!(sorted[1].domain, "zeta.example");
 	}
 }

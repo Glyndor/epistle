@@ -1,74 +1,150 @@
-//! Per-domain DKIM in Mox import: each domain's ed25519 key becomes a
-//! per-domain `[dkim.domain]` override, not a single default key.
+//! Per-domain DKIM in a Mox import: every imported domain keeps signing
+//! with the key Mox published for it, and the configuration it leaves
+//! loads and starts like any other.
+
+use std::sync::Arc;
 
 use super::*;
+use crate::dkim::{DomainSigner, PerDomainSigner, ReloadableSigner, Signer};
 use crate::migrate::import::apply::tests::{epistle, mox_plan};
 
+const BUCHER: &str = "xn--bcher-kva.example";
+
+/// The public record of the key in Mox's PEM `source`, which is the record
+/// Mox had published for that selector.
+fn mox_record(source: &str) -> String {
+	let normalized = crate::migrate::import::keys::normalize(source, None)
+		.unwrap_or_else(|_| panic!("the Mox key decodes"));
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("mox.pem");
+	std::fs::write(
+		&path,
+		crate::migrate::import::keys::to_pem(&normalized.pkcs8).as_bytes(),
+	)
+	.expect("write");
+	Signer::load("mox", &path)
+		.unwrap_or_else(|_| panic!("the Mox key loads"))
+		.dns_record_value()
+}
+
+/// The signer `serve` builds from `dkim`, without the rotation state.
+fn server_signer(dkim: &crate::config::Dkim) -> PerDomainSigner {
+	let default = Signer::load(&dkim.selector, &dkim.key_file)
+		.unwrap_or_else(|_| panic!("the default key loads"));
+	let overrides = dkim
+		.domain
+		.iter()
+		.map(|entry| DomainSigner {
+			domain: entry.name.to_ascii_lowercase(),
+			signer: Arc::new(
+				Signer::load(&entry.selector, &entry.key_file)
+					.unwrap_or_else(|_| panic!("the override key loads")),
+			),
+		})
+		.collect();
+	PerDomainSigner::new(ReloadableSigner::new(Arc::new(default)), overrides)
+}
+
+/// Sign a message for `domain` and verify it against `record` published
+/// under the selector the signature names.
+fn verifies_with(signer: &PerDomainSigner, domain: &str, record: &str) -> bool {
+	let raw = format!("From: a@{domain}\r\nSubject: x\r\n\r\nbody\r\n");
+	let header = signer.sign(domain, raw.as_bytes()).expect("signs");
+	let signed = format!("{header}{raw}");
+	let fields = crate::dkim::test_support::signature_fields(signed.as_bytes());
+	let ed = fields
+		.iter()
+		.find(|(_, _, a)| a == "ed25519-sha256")
+		.expect("an ed25519 signature");
+	assert_eq!(ed.1, domain, "d= is the domain signed for");
+	let dns = crate::dkim::test_support::KeyDns(
+		[(
+			format!("{}._domainkey.{domain}", ed.0),
+			vec![record.to_string()],
+		)]
+		.into(),
+	);
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	runtime
+		.block_on(crate::dkim::verify_message(&dns, signed.as_bytes()))
+		.iter()
+		.any(|result| result.outcome == crate::dkim::DkimOutcome::Pass)
+}
+
 #[test]
-fn two_domains_with_different_keys_become_per_domain_overrides() {
+fn a_fresh_import_signs_every_domain_with_the_key_mox_published_for_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config_file = epistle(dir.path(), "");
 	let (plan, written) = mox_plan(dir.path());
 	let prepared = prepare(&plan, &config_file, false).expect("prepare");
 	let outcome = apply(&plan, prepared, &Passwords::Reset).expect("apply");
-	// Two domains in the Mox fixture, each with its own ed25519 key;
-	// example.com also has an RSA key. The import records a file per
-	// published key: 2 ed25519 + 1 RSA.
-	assert_eq!(
-		outcome.key_files.len(),
-		3,
-		"every imported key is still saved"
-	);
-	// No "one key pair" note: the per-domain path no longer needs it.
+	assert_eq!(outcome.key_files.len(), 3, "every key is saved");
+	let dkim = Config::load(&config_file)
+		.expect("the imported configuration loads")
+		.dkim
+		.expect("[dkim] is set");
+	// The first domain's pair is the default, so a domain added later
+	// signs too; the other domain gets its own key as an override.
+	assert_eq!(dkim.selector, "2024a");
+	assert_eq!(dkim.rsa_selector.as_deref(), Some("2024b"));
+	let names: Vec<&str> = dkim.domain.iter().map(|d| d.name.as_str()).collect();
+	assert_eq!(names, [BUCHER]);
+	let signer = server_signer(&dkim);
+	assert!(verifies_with(
+		&signer,
+		"example.com",
+		&mox_record(&written.ed25519)
+	));
+	assert!(verifies_with(&signer, BUCHER, &mox_record(&written.other)));
 	assert!(
-		!outcome.notes.iter().any(|n| n.contains("one key pair")),
-		"per-domain import must not leave the legacy note, got: {:?}",
-		outcome.notes
+		!verifies_with(&signer, BUCHER, &mox_record(&written.ed25519)),
+		"bücher.example must not sign with example.com's key"
 	);
-	// The two domains end up as [[dkim.domain]] entries: the config
-	// loads back with the override for each.
-	let config = Config::load(&config_file).expect("load");
-	let dkim = config.dkim.expect("[dkim] is set");
-	assert_eq!(dkim.domain.len(), 2, "two per-domain overrides");
-	let domains: std::collections::HashSet<String> =
-		dkim.domain.iter().map(|d| d.name.clone()).collect();
-	assert!(domains.contains("example.com"));
-	assert!(domains.contains("xn--bcher-kva.example"));
-	// The default [dkim] block is no longer set: per-domain overrides
-	// are the signing key for every imported domain.
-	// (A single domain's keys were left as a default before this
-	//  feature; now both domains go through [dkim.domain].)
-	let _ = written; // keep the fixture's expected rsa key referenced
+	assert!(
+		!outcome
+			.notes
+			.iter()
+			.any(|n| n.contains("no ed25519 DKIM key")),
+		"no imported domain is left signing with another domain's key"
+	);
 }
 
 #[test]
-fn per_domain_keys_sign_with_their_own_selector() {
+fn an_existing_default_stays_and_each_imported_domain_gets_its_own_key() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let config_file = epistle(dir.path(), "");
+	let config_file = epistle(
+		dir.path(),
+		"[dkim]\nselector = \"local\"\nkey_file = \"/etc/epistle/local.pem\"\n",
+	);
 	let (plan, _) = mox_plan(dir.path());
 	let prepared = prepare(&plan, &config_file, false).expect("prepare");
-	let outcome = apply(&plan, prepared, &Passwords::Reset).expect("apply");
-	// Load the config back: each domain's signing key is the one
-	// Mox published for it.
-	let config = Config::load(&config_file).expect("load");
-	let dkim = config.dkim.expect("[dkim] is set");
-	let example = dkim
+	apply(&plan, prepared, &Passwords::Reset).expect("apply");
+	let dkim = Config::load(&config_file)
+		.expect("the imported configuration loads")
+		.dkim
+		.expect("[dkim] is set");
+	assert_eq!(dkim.selector, "local", "the operator's default is kept");
+	assert_eq!(
+		dkim.key_file,
+		std::path::PathBuf::from("/etc/epistle/local.pem")
+	);
+	let mut overrides: Vec<(&str, &str, Option<&str>)> = dkim
 		.domain
 		.iter()
-		.find(|d| d.name == "example.com")
-		.expect("example.com override");
-	let bucher = dkim
-		.domain
-		.iter()
-		.find(|d| d.name == "xn--bcher-kva.example")
-		.expect("bücher.example override");
-	// Each override's key file is readable; epistle signs with the
-	// right selector for the right domain.
-	let signer_example = crate::dkim::Signer::load(&example.selector, &example.key_file)
-		.expect("example.com key loads");
-	let signer_bucher = crate::dkim::Signer::load(&bucher.selector, &bucher.key_file)
-		.expect("bücher.example key loads");
-	let _ = (signer_example, signer_bucher);
-	// The outcome reports the per-domain import succeeded.
-	assert!(outcome.notes.is_empty() || !outcome.notes.iter().any(|n| n.contains("one key pair")));
+		.map(|d| {
+			(
+				d.name.as_str(),
+				d.selector.as_str(),
+				d.rsa_selector.as_deref(),
+			)
+		})
+		.collect();
+	overrides.sort();
+	assert_eq!(
+		overrides,
+		[
+			("example.com", "2024a", Some("2024b")),
+			(BUCHER, "2024a", None),
+		]
+	);
 }

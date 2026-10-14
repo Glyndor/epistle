@@ -546,6 +546,10 @@ mod tests;
 #[path = "serve_tasks_tests_no_database.rs"]
 mod tests_no_database;
 
+#[cfg(test)]
+#[path = "serve_tasks_tests_per_domain.rs"]
+mod tests_per_domain;
+
 /// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
 /// under the server hostname. Absent config yields `None`; a key that does
 /// not load is fatal (fail closed), so a misconfigured sealer never lets

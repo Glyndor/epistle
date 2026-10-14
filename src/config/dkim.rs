@@ -13,15 +13,11 @@ pub const DKIM_RSA_REQUIRED_FROM: &str = "0.10";
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dkim {
-	/// Selector published at `<selector>._domainkey.<domain>` for any
-	/// signing domain that has no per-domain override. Optional when
-	/// every hosted domain has a per-domain override, the way Mox
-	/// imports land.
-	pub selector: Option<String>,
-	/// ed25519 private key, PKCS#8 PEM, used for every signing domain
-	/// that has no per-domain override. Paired with [`Self::selector`]:
-	/// either both are set or neither is.
-	pub key_file: Option<PathBuf>,
+	/// Selector published at `<selector>._domainkey.<domain>`. It signs
+	/// every domain that has no `[[dkim.domain]]` override.
+	pub selector: String,
+	/// ed25519 private key, PKCS#8 PEM, paired with [`Self::selector`].
+	pub key_file: PathBuf,
 	/// Optional RSA selector for an additional rsa-sha256 signature (RFC 8463).
 	#[serde(default)]
 	pub rsa_selector: Option<String>,
@@ -56,9 +52,8 @@ pub struct Dkim {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DkimDomain {
-	/// The hosted domain the override signs for. Lowercased during
-	/// config normalisation and matched case-insensitively against the
-	/// message's `d=`.
+	/// The hosted domain the override signs for, matched against the
+	/// message's `d=` without regard to case.
 	pub name: String,
 	/// Selector published at `<selector>._domainkey.<name>`.
 	pub selector: String,
@@ -98,10 +93,36 @@ impl Dkim {
 		))
 	}
 
-	/// The per-domain override for `name` when one is configured, so the
-	/// signer and the rotation logic use the same lookup.
+	/// The `[[dkim.domain]]` override for `name`, compared without regard
+	/// to case the way the signer and the validator compare domains.
 	pub fn override_for(&self, name: &str) -> Option<&DkimDomain> {
-		self.domain.iter().find(|d| d.name == name)
+		self.domain
+			.iter()
+			.find(|d| d.name.eq_ignore_ascii_case(name))
+	}
+
+	/// Selectors that leftover detection (`epistle dkim cleanup` and the
+	/// rotation task's report) must never count as unused: the configured
+	/// pair, every override's pair, and the selector an override's key file
+	/// name carries when it has the `dkim-<selector>.key` shape rotated keys
+	/// use. An override is not rotated, so nothing in the rotation state
+	/// names it, and its record and key file would otherwise look orphaned.
+	pub fn kept_selectors(&self) -> Vec<String> {
+		let mut kept = vec![self.selector.clone()];
+		kept.extend(self.rsa_selector.clone());
+		for entry in &self.domain {
+			kept.push(entry.selector.clone());
+			kept.extend(entry.rsa_selector.clone());
+			for file in std::iter::once(&entry.key_file).chain(entry.rsa_key_file.as_ref()) {
+				let selector = file
+					.file_name()
+					.and_then(|name| name.to_str())
+					.and_then(|name| name.strip_prefix("dkim-"))
+					.and_then(|name| name.strip_suffix(".key"));
+				kept.extend(selector.map(str::to_string));
+			}
+		}
+		kept
 	}
 }
 
@@ -115,6 +136,13 @@ impl DkimDomain {
 	}
 }
 
+#[path = "validate_dkim_domain.rs"]
+mod validate;
+
 #[cfg(test)]
 #[path = "dkim_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dkim_tests_per_domain.rs"]
+mod tests_per_domain;

@@ -12,7 +12,7 @@ mod verify;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use per_domain::{DomainSigner, PerDomainSigner, lowercase_overrides, sort_overrides};
+pub use per_domain::{DomainSigner, PerDomainSigner};
 pub use rotate::{
 	ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator, publication_waits,
 };

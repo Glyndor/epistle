@@ -39,8 +39,7 @@ key_file = {:?}
 fn signing_keys_lists_default_and_per_domain_entries() {
 	let (_dir, config) = per_domain_fixture();
 	let keys = signing_keys(&config).expect("keys");
-	// Two default keys (ed25519, RSA not configured) plus one per-domain
-	// override (ed25519, no RSA).
+	// The default's ed25519 key and the override's, neither with RSA.
 	assert_eq!(keys.len(), 2);
 	let default = keys
 		.iter()
@@ -52,18 +51,4 @@ fn signing_keys_lists_default_and_per_domain_entries() {
 		.find(|k| k.domain.as_deref() == Some("example.org"))
 		.expect("the per-domain key");
 	assert_eq!(per.key.selector, "per-sel");
-}
-
-#[test]
-fn a_per_domain_override_lists_its_own_domain_only() {
-	let (_dir, config) = per_domain_fixture();
-	let keys = signing_keys(&config).expect("keys");
-	let per = keys
-		.iter()
-		.find(|k| k.domain.is_some())
-		.expect("per-domain key");
-	// The override is bound to example.org and is not the default;
-	// the loop in dns_area uses `key.domain` to decide which domain
-	// the key applies to.
-	assert_eq!(per.domain.as_deref(), Some("example.org"));
 }

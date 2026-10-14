@@ -107,17 +107,10 @@ pub(super) fn dkim_selectors_for(
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
 	};
-	let key = domain.to_ascii_lowercase();
-	if let Some(override_) = dkim
-		.domain
-		.iter()
-		.find(|d| d.name.eq_ignore_ascii_case(&key))
-	{
-		let mut selectors = vec![override_.selector.clone()];
-		if override_.rsa_selector.is_some() {
-			selectors.push(override_.rsa_selector.clone().expect("rsa_selector set"));
-		}
-		return Ok(selectors);
+	if let Some(entry) = dkim.override_for(domain) {
+		return Ok(std::iter::once(entry.selector.clone())
+			.chain(entry.rsa_selector.clone())
+			.collect());
 	}
 	dkim_default_selectors(config)
 }

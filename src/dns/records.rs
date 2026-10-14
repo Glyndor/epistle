@@ -162,11 +162,19 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 	}
 }
 
+/// Per-domain DKIM selectors and their record values. A domain absent
+/// from the map keeps the configured default; the map's keys are
+/// lowercased to match the way the validator and the routing layer
+/// compare domains. Used by [`build_records`] to publish only the
+/// selectors that actually sign each domain.
+pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
+
 /// The records to publish for the given domains and mail hostname.
 ///
-/// `dkim` lists every `<selector>._domainkey` value to emit (one per
+/// `dkim_default` lists every `<selector>._domainkey` value to emit (one per
 /// configured signing key, in selector order, the ed25519 selector first,
-/// then the optional RSA selector); `tlsa` is the `3 0 1` association for
+/// then the optional RSA selector), replaced for a domain in
+/// `dkim_per_domain` by that domain's own list; `tlsa` is the `3 0 1` association for
 /// the mail host's certificate when one is available; `mta_sts_id`
 /// versions the MTA-STS record; `services` toggles the optional SRV records
 /// (CalDAV/CardDAV are tied to the `webdav` listener); `caa_directory` is
@@ -177,13 +185,6 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 /// `public_ipv4` / `public_ipv6` are the hostname's A and AAAA addresses when
 /// the operator has set them in the config; when present, both are emitted in
 /// the zone of the hostname's domain, once (not per served domain), before
-/// Per-domain DKIM selectors and their record values. A domain absent
-/// from the map keeps the configured default; the map's keys are
-/// lowercased to match the way the validator and the routing layer
-/// compare domains. Used by [`build_records`] to publish only the
-/// selectors that actually sign each domain.
-pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
-
 /// the MX: an MX pointing at a name that does not resolve yet tries the
 /// resolver, fails, and yields a hard bounce instead of falling back to the
 /// next MX. Parameter order matches the read-the-config order.

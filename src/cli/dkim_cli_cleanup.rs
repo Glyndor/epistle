@@ -53,13 +53,7 @@ pub(super) fn cleanup_with(
 		DkimRotationPlan::Off => (Vec::new(), false),
 	};
 	let zone = config.dns.as_ref().map_or("", |dns| dns.zone.as_str());
-	let mut keep: Vec<String> = Vec::new();
-	if let Some(selector) = dkim.selector.as_ref() {
-		keep.push(selector.clone());
-	}
-	if let Some(rsa) = dkim.rsa_selector.as_ref() {
-		keep.push(rsa.clone());
-	}
+	let keep = dkim.kept_selectors();
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
@@ -125,3 +119,7 @@ pub(super) fn cleanup_with(
 #[cfg(test)]
 #[path = "dkim_cli_cleanup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dkim_cli_cleanup_tests_per_domain.rs"]
+mod tests_per_domain;

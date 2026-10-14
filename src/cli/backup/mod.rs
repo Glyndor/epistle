@@ -338,9 +338,7 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 		}
 	}
 	if let Some(dkim) = &config.dkim {
-		if let Some(key_file) = &dkim.key_file {
-			entries.push(format!("[dkim] key_file = {}", key_file.display()));
-		}
+		entries.push(format!("[dkim] key_file = {}", dkim.key_file.display()));
 		if let Some(rsa) = &dkim.rsa_key_file {
 			entries.push(format!("[dkim] rsa_key_file = {}", rsa.display()));
 		}

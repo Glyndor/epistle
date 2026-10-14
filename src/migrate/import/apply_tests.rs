@@ -86,21 +86,12 @@ fn apply_creates_domains_aliases_keys_and_disabled_accounts() {
 	assert_eq!(config.domains, ["example.com"]);
 	assert_eq!(config.alias[0].address, "team@example.com");
 	assert!(!config.alias[0].hidden);
-	let dkim = config.dkim.clone().expect("[dkim] is configured");
-	// The single domain's keys live in a per-domain override.
-	let override_ = dkim
-		.domain
-		.iter()
-		.find(|d| d.name == "example.com")
-		.expect("example.com has a per-domain override");
-	assert_eq!(
-		override_.selector, "2024a",
-		"the selector Mox published stays"
-	);
-	assert_eq!(override_.rsa_selector.as_deref(), Some("2024b"));
-	let rsa_file = override_.rsa_key_file.clone().expect("rsa key file");
+	let dkim = config.dkim.clone().expect("[dkim]");
+	assert_eq!(dkim.selector, "2024a", "the selector Mox published stays");
+	assert_eq!(dkim.rsa_selector.as_deref(), Some("2024b"));
+	let rsa_file = dkim.rsa_key_file.expect("rsa key file");
 	// The server's own signer loads both keys and signs with them.
-	let signer = crate::dkim::Signer::load(&override_.selector, &override_.key_file)
+	let signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
 		.and_then(|signer| signer.with_rsa("2024b", &rsa_file))
 		.expect("epistle loads the imported keys");
 	let signature = signer
@@ -118,7 +109,7 @@ fn apply_creates_domains_aliases_keys_and_disabled_accounts() {
 		written.rsa
 	);
 	#[cfg(unix)]
-	for file in [&override_.key_file, &rsa_file, &passwords] {
+	for file in [&dkim.key_file, &rsa_file, &passwords] {
 		use std::os::unix::fs::PermissionsExt;
 		let mode = std::fs::metadata(file).expect("meta").permissions().mode();
 		assert_eq!(mode & 0o777, 0o600, "{}", file.display());
@@ -207,31 +198,6 @@ fn existing_accounts_and_domains_are_refused_unless_merged() {
 		"the existing account is untouched"
 	);
 	assert!(!alice.disabled);
-}
-
-#[test]
-fn per_domain_keys_become_per_domain_overrides() {
-	// The Mox fixture has two domains with one ed25519 key each, and
-	// example.com has an RSA pair too. The import now creates a
-	// `[[dkim.domain]]` entry per domain instead of the legacy "one
-	// key pair" note.
-	let dir = tempfile::tempdir().expect("tempdir");
-	let config_file = epistle(dir.path(), "");
-	let (plan, _) = mox_plan(dir.path());
-	let prepared = prepare(&plan, &config_file, false).expect("prepare");
-	let outcome = apply(&plan, prepared, &Passwords::Reset).expect("apply");
-	// No more "one key pair" note: each domain signs with its own key.
-	assert!(
-		!outcome.notes.iter().any(|n| n.contains("one key pair")),
-		"the legacy note must be gone, got: {:?}",
-		outcome.notes
-	);
-	assert!(outcome.dkim.is_some(), "an outcome summary is reported");
-	let config = Config::load(&config_file).expect("load");
-	let dkim = config
-		.dkim
-		.expect("[dkim] is configured with per-domain overrides");
-	assert_eq!(dkim.domain.len(), 2, "two per-domain overrides land");
 }
 
 #[test]

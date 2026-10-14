@@ -50,7 +50,7 @@ fn load_per_domain_signers(
 			signer: Arc::new(signer),
 		});
 	}
-	Ok(crate::dkim::sort_overrides(loaded))
+	Ok(loaded)
 }
 
 /// Build [`SplitDelivery`] and attach the DKIM signer, SRS, webhook, and
@@ -116,3 +116,7 @@ pub(super) fn build_split_with_companions(
 #[cfg(test)]
 #[path = "serve_dkim_tests_restart.rs"]
 mod tests_restart;
+
+#[cfg(test)]
+#[path = "serve_dkim_tests_per_domain.rs"]
+mod tests_per_domain;

@@ -203,21 +203,10 @@ pub fn active_ed25519(
 			selector: state.selector,
 			key_file: data_dir.join(state.key_file),
 		},
-		None => {
-			let selector = dkim.selector.clone().ok_or_else(|| {
-				RotateError(
-					"no [dkim] default selector; per-domain keys do not rotate automatically"
-						.into(),
-				)
-			})?;
-			let key_file = dkim.key_file.clone().ok_or_else(|| {
-				RotateError(
-					"no [dkim] default key_file; per-domain keys do not rotate automatically"
-						.into(),
-				)
-			})?;
-			ActiveKey { selector, key_file }
-		}
+		None => ActiveKey {
+			selector: dkim.selector.clone(),
+			key_file: dkim.key_file.clone(),
+		},
 	})
 }
 
