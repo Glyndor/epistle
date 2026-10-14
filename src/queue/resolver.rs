@@ -161,10 +161,11 @@ pub trait Connector: Send + Sync {
 	/// that only knows one way in has nothing after the first.
 	///
 	/// `held` says whether an exchanger is on hold: when the next one is,
-	/// it is returned [`Connection::unopened`], so a provider that asked to
-	/// slow down does not see a connection opened and dropped for each of
-	/// its other domains. A connector that cannot tell the host before
-	/// connecting ignores it; the worker still says nothing to a held host.
+	/// it is returned unopened, never connected to, so a provider that
+	/// asked to slow down does not see a connection opened and dropped for
+	/// each of its other domains. A connector that cannot tell the host
+	/// before connecting ignores it; the worker still says nothing to a
+	/// held host.
 	fn connect_skipping<'a>(
 		&'a self,
 		domain: &str,
