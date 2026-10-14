@@ -3,6 +3,7 @@
 mod account;
 mod account_json;
 mod account_name;
+mod account_reload;
 mod accounts;
 mod alert;
 mod alias;

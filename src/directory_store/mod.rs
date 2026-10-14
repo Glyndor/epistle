@@ -56,7 +56,10 @@ mod set_totp;
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
-pub use file_watcher::{ApiKeyReloader, FileWatcher};
+pub use file_watcher::{
+	ApiKeyReloader, FileWatcher, ReloadStatus, WaitError, read_reload_status, reload_fingerprint,
+	wait_for_reload,
+};
 
 mod collisions;
 pub mod display_name;
@@ -479,14 +482,21 @@ impl AccountStore {
 		self.handle.clone()
 	}
 
+	/// The absolute path of the on-disk accounts file the store
+	/// mutates. The CLI uses it to know which file to wait on after
+	/// a mutator returns.
+	pub fn store_path(&self) -> &Path {
+		&self.path
+	}
+
 	/// The pre-flight checks `add` runs that do not need the on-disk
 	/// state under the lock: a syntactically valid name, at least
 	/// one address, and every address routed by a configured
 	/// domain. The CLI calls this before reading the password so
 	/// the operator is not asked to type one for a name or address
 	/// that cannot be created. The race-sensitive checks
-	/// (`name_taken`, `address_taken`) still run inside [`add`] under
-	/// the lock.
+	/// (`name_taken`, `address_taken`) still run inside
+	/// [`AccountStore::add`] under the lock.
 	pub fn validate_for_add(&self, name: &str, addresses: &[String]) -> Result<(), StoreError> {
 		let normalized = normalize::account_name(name);
 		names::validate_name(&normalized)?;

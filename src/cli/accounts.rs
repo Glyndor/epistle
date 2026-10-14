@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use super::term::table::Table;
+use crate::cli::account_reload;
 use crate::config::Config;
 use crate::directory_store::removal::{QueuePolicy, remove_account};
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
@@ -140,7 +141,19 @@ pub(super) fn add_with_display_name(
 	match store.add(account) {
 		Ok(()) => {
 			println!("account created");
-			ExitCode::SUCCESS
+			// Block until the running server has reloaded the just-written
+			// `accounts.toml`. The wait is silent on success; on
+			// timeout it prints a one-line note and the caller's
+			// exit code is set to 1 so a script that chains a login
+			// after the add sees the warning. The store_path is
+			// `accounts.toml`; a no-server test host returns at
+			// once.
+			let store_path = store.store_path().to_path_buf();
+			drop(store);
+			match account_reload::wait_for_reload_or_warn(&store_path, &mut super::style::stderr())
+			{
+				Ok(code) | Err(code) => code,
+			}
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);
@@ -370,7 +383,15 @@ pub(super) fn remove_with_bayes(
 			);
 			let _ = writeln!(out, "queued_messages_left: {}", counts.queued_messages_left);
 			let _ = writeln!(out, "bayes_tokens_removed: {}", counts.bayes_tokens_removed);
-			ExitCode::SUCCESS
+			// Block until the running server has reloaded the just-written
+			// `accounts.toml` so a follow-up login attempt sees the
+			// account gone. The wait is silent on success and on
+			// the "no server" path; on timeout it prints a one-line
+			// note and the caller's exit code is 1.
+			let store_path = store.store_path().to_path_buf();
+			match account_reload::wait_for_reload_or_warn(&store_path, err) {
+				Ok(code) | Err(code) => code,
+			}
 		}
 		Err(StoreError::NotFound(what)) => {
 			super::style::error_to(err, format_args!("no such dynamic account: {what}"));

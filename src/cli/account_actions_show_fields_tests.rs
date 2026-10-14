@@ -11,8 +11,8 @@
 
 use std::process::ExitCode;
 
-use crate::cli::account_json;
 use super::*;
+use crate::cli::account_json;
 use crate::config::Config;
 use crate::directory_store::AccountStore;
 use crate::smtp::auth::tests::{fixture_password, hash};

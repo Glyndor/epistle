@@ -43,20 +43,16 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
-	let _ = writeln!(
-		out,
-		"forwards: {}",
-		render_targets(&account.forward)
-	);
-	let _ = writeln!(
-		out,
-		"catch_all: {}",
-		render_targets(&account.catch_all)
-	);
+	let _ = writeln!(out, "forwards: {}", render_targets(&account.forward));
+	let _ = writeln!(out, "catch_all: {}", render_targets(&account.catch_all));
 	let _ = writeln!(
 		out,
 		"two_factor: {}",
-		if account.totp_secret.is_some() { "yes" } else { "no" }
+		if account.totp_secret.is_some() {
+			"yes"
+		} else {
+			"no"
+		}
 	);
 }
 
@@ -89,6 +85,21 @@ pub(crate) fn set_name_with_store(store: &AccountStore, name: &str, raw: &str) -
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
+	}
+}
+
+/// Wait for the server to have reloaded the just-written accounts file,
+/// using the in-memory path the store keeps. Returns the wait's exit
+/// code; the caller forwards it. A success or "no server" path
+/// returns `ExitCode::SUCCESS` (i.e. the wait was a no-op) and the
+/// caller reports success; a timeout returns `ExitCode::FAILURE`
+/// and the caller surfaces the warning the wait function printed.
+fn wait_after_write(store: &AccountStore) -> ExitCode {
+	match crate::cli::account_reload::wait_for_reload_or_warn(
+		store.store_path(),
+		&mut super::style::stderr(),
+	) {
+		Ok(code) | Err(code) => code,
 	}
 }
 
@@ -167,7 +178,7 @@ pub(crate) fn password_with_store(
 	match store.set_password_hash(name, hash, scram) {
 		Ok(()) => {
 			println!("password updated");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -182,7 +193,7 @@ pub(crate) fn disable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 				"account disabled"
 			};
 			println!("{state}");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -197,7 +208,7 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 				"account already enabled"
 			};
 			println!("{state}");
-			ExitCode::SUCCESS
+			wait_after_write(store)
 		}
 		Err(error) => handle_error(name, error),
 	}

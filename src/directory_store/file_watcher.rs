@@ -39,23 +39,23 @@ use crate::directory_store::StoreError;
 /// rename replaces the inode without moving mtime forward by the wall
 /// clock the polling task can see, and a `chmod`/`chown` touches
 /// `ctime` (not captured) while leaving every captured field alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Fingerprint {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Fingerprint {
 	/// Modification time as reported by the filesystem, truncated to whole
 	/// seconds: the poll loop can outrun nanosecond resolution on some
 	/// filesystems, and the triple still changes whenever the file
 	/// content does.
-	mtime_secs: u64,
+	pub mtime_secs: u64,
 	/// Byte length, distinguishes a write that left the size alone (so
 	/// the file is logically unchanged for our purposes) from one that
 	/// did not.
-	len: u64,
+	pub len: u64,
 	/// The inode number. An atomic `rename(2)` over the watched path
 	/// replaces the inode even when mtime and length would compare
 	/// equal, so this is the field that catches a CLI edit in the same
 	/// polling interval the writer committed it.
 	#[cfg(unix)]
-	ino: u64,
+	pub ino: u64,
 }
 
 /// Hot-reload target for `api_keys.toml`. The file watcher holds one
@@ -175,6 +175,9 @@ pub struct FileWatcher {
 	/// invoked. The watcher always polls the file either way, so a
 	/// later `with_api_keys` upgrade keeps the same fingerprint cache.
 	api_keys: Option<Arc<dyn ApiKeyReloader>>,
+	/// The data dir the watcher polls under; cached so the reload
+	/// status file is written back to the same root.
+	data_dir: PathBuf,
 }
 
 /// What one `poll` did, for the integration tests' assertions. The
@@ -278,6 +281,7 @@ impl FileWatcher {
 			last_warned,
 			store,
 			api_keys: None,
+			data_dir,
 		}
 	}
 
@@ -348,6 +352,7 @@ impl FileWatcher {
 							file = watch.kind.label(),
 							"reloaded dynamic-store file",
 						);
+						self.write_status();
 						PollEvent::Loaded(target)
 					}
 					Err(error) => {
@@ -392,6 +397,7 @@ impl FileWatcher {
 							file = watch.kind.label(),
 							"reloaded dynamic-store file (now absent)",
 						);
+						self.write_status();
 						PollEvent::Loaded(target)
 					}
 					Err(error) => {
@@ -454,6 +460,162 @@ fn fingerprint(path: &Path) -> Option<Fingerprint> {
 		ino,
 	})
 }
+
+/// The on-disk record of the last fingerprint the server successfully
+/// applied per watched file. The CLI reads this to know whether the
+/// running server has reloaded a write it just made, instead of
+/// betting the server picks it up on its next two-second poll.
+///
+/// The file is `<data_dir>/reload.status` and contains a single JSON
+/// object whose keys are the watched basenames and values are
+/// fingerprints. A missing or empty file means the server has not
+/// reloaded anything yet; the CLI treats that as "no server" and
+/// returns at once.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReloadStatus {
+	/// The fingerprints keyed by the file's basename (e.g.
+	/// `accounts.toml`). An entry is `None` when the file was absent
+	/// at the last poll.
+	#[serde(flatten)]
+	pub files: std::collections::BTreeMap<String, Option<Fingerprint>>,
+}
+
+impl ReloadStatus {
+	/// Where the server publishes this status. Stable across releases
+	/// so the CLI can be paired with a slightly older or newer server.
+	pub const FILENAME: &'static str = "reload.status";
+
+	/// True when `self` carries the same fingerprint for `name` as
+	/// `target` (or both are absent). A reload that has not yet
+	/// observed the just-written file returns false here.
+	pub fn matches(&self, name: &str, target: Option<Fingerprint>) -> bool {
+		self.files.get(name).copied().unwrap_or(None) == target
+	}
+}
+
+/// The fingerprint of `path` as the file watcher would compute it
+/// for the reload status: a stable three-field identity suitable for
+/// the CLI to compare against the server's last applied version.
+pub fn reload_fingerprint(path: &Path) -> Option<Fingerprint> {
+	fingerprint(path)
+}
+
+impl FileWatcher {
+	/// Where the reload status is written, relative to the data dir
+	/// the watcher was built with.
+	pub fn status_path(&self) -> PathBuf {
+		self.data_dir.join(ReloadStatus::FILENAME)
+	}
+
+	/// Persist the current `last` map so a CLI can read it after a
+	/// write. Atomic over the existing file: the watcher uses the
+	/// same `write_secret` helper the dynamic stores use to avoid a
+	/// half-written status file.
+	fn write_status(&self) {
+		let mut status = ReloadStatus::default();
+		for watch in &self.watches {
+			let fp = self.last.get(&watch.path).copied().flatten();
+			status.files.insert(watch.kind.label().to_string(), fp);
+		}
+		let text = match serde_json::to_string_pretty(&status) {
+			Ok(text) => text,
+			Err(error) => {
+				tracing::warn!(
+					target: "epistle::directory_store::file_watcher",
+					%error,
+					"cannot serialise reload status; CLI will not see the latest fingerprint"
+				);
+				return;
+			}
+		};
+		let path = self.status_path();
+		if let Err(error) = crate::storage::write_secret(&path, text.as_bytes()) {
+			tracing::warn!(
+				target: "epistle::directory_store::file_watcher",
+				path = %path.display(),
+				%error,
+				"cannot write reload status; CLI will not see the latest fingerprint"
+			);
+		}
+	}
+}
+
+/// Read the reload status the server published under
+/// `<data_dir>/reload.status`. Returns `None` when the file is
+/// missing or unparseable: the CLI treats both as "no server has
+/// reloaded anything yet" and returns at once.
+pub fn read_reload_status(data_dir: &Path) -> Option<ReloadStatus> {
+	let path = data_dir.join(ReloadStatus::FILENAME);
+	let text = std::fs::read_to_string(&path).ok()?;
+	serde_json::from_str(&text).ok()
+}
+
+/// Block (up to `timeout`) until the server's reload status carries
+/// `target` for the file at `watched_path`, polled every
+/// `interval`. Returns:
+///
+/// * `Ok(())` on a match (including the case where no server is
+///   running and the status file is absent or empty).
+/// * `Err(WaitError::Timeout)` when the timeout expires without a
+///   match.
+///
+/// The function is intentionally blocking and `std::thread::sleep`-based
+/// because the CLI is a short-lived process: an async runtime would
+/// be more machinery than the work it does here. The
+/// `interval` of 100 ms is short enough that the CLI does not extend
+/// the worst-case end-to-end latency beyond a few hundred milliseconds
+/// of the server's two-second poll, and long enough that the loop
+/// does not pin a CPU core.
+pub fn wait_for_reload(
+	data_dir: &Path,
+	watched_path: &Path,
+	target: Option<Fingerprint>,
+	timeout: std::time::Duration,
+) -> Result<(), WaitError> {
+	let Some(name) = watched_path.file_name().and_then(|n| n.to_str()) else {
+		// A path with no filename component is the caller's bug;
+		// the CLI never builds one. Treat as a no-match so the
+		// caller times out cleanly.
+		return Err(WaitError::NoFilename);
+	};
+	let start = std::time::Instant::now();
+	let interval = std::time::Duration::from_millis(100);
+	loop {
+		match read_reload_status(data_dir) {
+			None => return Ok(()),
+			Some(status) => {
+				if status.matches(name, target) {
+					return Ok(());
+				}
+			}
+		}
+		if start.elapsed() >= timeout {
+			return Err(WaitError::Timeout);
+		}
+		std::thread::sleep(interval);
+	}
+}
+
+/// What `wait_for_reload` cannot do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitError {
+	/// The watched path has no filename component.
+	NoFilename,
+	/// The server's status did not catch up to the just-written
+	/// fingerprint within the timeout.
+	Timeout,
+}
+
+impl std::fmt::Display for WaitError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			WaitError::NoFilename => formatter.write_str("watched path has no filename"),
+			WaitError::Timeout => formatter.write_str("timeout waiting for reload"),
+		}
+	}
+}
+
+impl std::error::Error for WaitError {}
 
 #[cfg(test)]
 #[path = "file_watcher_tests.rs"]
