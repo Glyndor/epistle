@@ -91,6 +91,25 @@ fn limits_invalid_values_leave_config_bytes_untouched() {
 }
 
 #[test]
+fn limits_refuse_a_message_size_the_memory_budget_cannot_hold() {
+	let (_dir, file) = config_file();
+	let original = std::fs::read(file.path()).unwrap();
+	let result = change_config(file.path(), Key::MaxMessageSize, Some("300M"));
+	assert!(
+		result
+			.err()
+			.is_some_and(|message| message.contains("message_memory_budget")),
+		"a size over the 256 MiB default budget is refused"
+	);
+	assert!(
+		std::fs::read(file.path()).unwrap() == original,
+		"the refused size leaves the file byte-for-byte untouched"
+	);
+	assert!(change_config(file.path(), Key::MessageMemoryBudget, Some("8M")).is_err());
+	assert!(change_config(file.path(), Key::MaxMessageSize, Some("8M")).is_ok());
+}
+
+#[test]
 fn limits_candidate_validation_preserves_invalid_config() {
 	let (_dir, mut file) = config_file();
 	let text = std::fs::read_to_string(file.path())

@@ -40,7 +40,7 @@ impl Config {
 		self.validate_database()?;
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
-		Ok(())
+		self.validate_message_limits()
 	}
 
 	fn validate_dkim(&self) -> Result<(), ConfigError> {
