@@ -11,6 +11,7 @@ pub mod txt;
 #[cfg(test)]
 mod uri_probe;
 
+use crate::dns::provider::txt_purpose;
 use crate::spf::DnsLookup;
 
 /// The outcome of checking one expected record.
@@ -114,7 +115,13 @@ pub fn all_ok(checks: &[Check]) -> bool {
 	checks.iter().all(|c| c.status != Status::Missing)
 }
 
-/// Look up TXT records at `name` and report whether one begins with `prefix`.
+/// Look up TXT records at `name` and report whether one carries the tag
+/// `prefix` (e.g. `v=spf1`). Two records with the same tag at the same
+/// name are a configuration mistake every receiver turns into a permanent
+/// error: SPF returns `permerror` (RFC 7208 §4.5), DMARC is ignored (RFC
+/// 7489 §6.6.3), MTA-STS / TLS-RPT clients treat the name as
+/// unconfigured. The check flags the duplicate rather than silently
+/// accepting the first match.
 ///
 /// A single logical TXT record may arrive as several character-strings
 /// (RFC 1035 §3.3.14, RFC 7489 §6.1: SPF, for instance, is one logical
@@ -124,17 +131,39 @@ pub fn all_ok(checks: &[Check]) -> bool {
 /// zone; the resolver currently concatenates them, so this is a guard
 /// rather than the active path: if a future implementation returns the
 /// strings separately, the check still produces the right answer.
+///
+/// Matching uses [`crate::dns::provider::txt_purpose`], so the tag is
+/// recognised case-insensitively and tolerates the leading-whitespace
+/// and quoted presentation forms a provider may hand back.
 async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) -> Check {
-	let prefix_upper = prefix.to_ascii_uppercase();
 	match dns.txt(name).await {
-		Ok(records) => match records.iter().map(|r| r.as_str()).find(|s| {
-			s.trim_start()
-				.to_ascii_uppercase()
-				.starts_with(&prefix_upper)
-		}) {
-			Some(record) => Check::ok(kind, name, record.to_string()),
-			None => Check::missing(kind, name, format!("no {prefix} record")),
-		},
+		Ok(records) => {
+			let mut matches = records
+				.iter()
+				.filter(|r| txt_purpose(r) == Some(prefix));
+			let first = matches.next();
+			match (first, matches.next()) {
+				(Some(record), None) => Check::ok(kind, name, record.clone()),
+				(Some(_), Some(_)) => {
+					// Count again from the front so the message names
+					// the actual number, not "more than one". The
+					// first iterator includes nulls.
+					let count = records
+						.iter()
+						.filter(|r| txt_purpose(r) == Some(prefix))
+						.count();
+					Check::missing(
+						kind,
+						name,
+						format!(
+							"{count} {kind} records at {name}: receivers treat that as an \
+							 error and every message fails; keep one"
+						),
+					)
+				}
+				(None, _) => Check::missing(kind, name, format!("no {prefix} record")),
+			}
+		}
 		Err(_) => Check::error(kind, name),
 	}
 }
@@ -142,6 +171,9 @@ async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) ->
 #[cfg(test)]
 #[path = "drift_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "drift_tests_duplicates.rs"]
+mod tests_duplicates;
 
 pub use check_host::check_host;
 pub use detect::{LocalGlobals, PtrReport, detect, local_global_addresses, ptr_report};
