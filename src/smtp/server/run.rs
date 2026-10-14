@@ -9,8 +9,7 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, ensure_submission_headers, line_error_reply, received_header,
-	received_hop_count,
+	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
 };
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
@@ -252,22 +251,29 @@ impl Server {
 					// reverse-path's domain (the authenticated account's own
 					// domain), with the server hostname as a last resort.
 					// Done before the Received block so the trace header
-					// stays the outermost line.
+					// stays the outermost line. The stamp and the Bcc
+					// strip happen in place so a 25 MiB body is moved once,
+					// not copied three times.
 					if session.authenticated().is_some() {
 						let stamp_domain = message
 							.reverse_path
 							.rsplit_once('@')
 							.map(|(_, d)| d.to_ascii_lowercase())
 							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
-						message.data = ensure_submission_headers(
-							&message.data,
+						crate::smtp::trace::ensure_submission_headers_in_place(
+							&mut message.data,
 							&stamp_domain,
 							std::time::SystemTime::now(),
 						);
 						// The MSA drops Bcc: those recipients are on the envelope.
-						message.data = crate::smtp::trace::strip_bcc(&message.data);
+						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
 					}
-					let mut stamped = header.into_bytes();
+					// Build the final stamped buffer in one allocation
+					// sized to the trace + auth + body lengths, so the
+					// body is moved (not copied) into place.
+					let mut stamped =
+						Vec::with_capacity(header.len() + auth_headers.len() + message.data.len());
+					stamped.extend_from_slice(header.as_bytes());
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);
 					message.data = stamped;

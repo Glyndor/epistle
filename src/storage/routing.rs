@@ -361,12 +361,18 @@ impl SplitDelivery {
 				..message
 			};
 			// Sign relayed mail so receivers can verify our domain.
+			// The signer returns the DKIM-Signature header line; we
+			// prepend it to the body in a single allocation sized to
+			// the combined length so the body is moved, not copied.
 			if let Some(signer) = &self.signer
 				&& let Some(domain) = self.signing_domain(&outbound_message)
 				&& let Some(header) = signer.sign(&domain, &outbound_message.data)
 			{
-				let mut signed = header.into_bytes();
-				signed.extend_from_slice(&outbound_message.data);
+				let header_bytes = header.as_bytes();
+				let mut signed =
+					Vec::with_capacity(header_bytes.len() + outbound_message.data.len());
+				signed.extend_from_slice(header_bytes);
+				signed.append(&mut outbound_message.data);
 				outbound_message.data = signed;
 			}
 			self.outbound
@@ -386,13 +392,18 @@ impl SplitDelivery {
 
 	/// DKIM-sign an auto-reply the server writes itself: it has a null
 	/// reverse-path, so `d=` is the domain of its From, the account's own.
+	/// The signer returns only the DKIM-Signature header line; we prepend
+	/// it to the body in a single allocation sized to the combined length
+	/// so the body is moved, not copied.
 	fn sign_reply(&self, reply: &mut AcceptedMessage) {
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(reply)
 			&& let Some(header) = signer.sign(&domain, &reply.data)
 		{
-			let mut signed = header.into_bytes();
-			signed.extend_from_slice(&reply.data);
+			let header_bytes = header.as_bytes();
+			let mut signed = Vec::with_capacity(header_bytes.len() + reply.data.len());
+			signed.extend_from_slice(header_bytes);
+			signed.append(&mut reply.data);
 			reply.data = signed;
 		}
 	}
