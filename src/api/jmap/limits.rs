@@ -2,23 +2,18 @@
 //! checks that enforce them (§3.6.1). One constant per limit, read both by
 //! the Session resource and by the code that applies it, so what a client is
 //! told and what the server does cannot drift apart.
+//!
+//! The operator-configured `[server] max_message_size` drives two of the
+//! advertised limits (`maxSizeUpload` and `maxSizeAttachmentsPerEmail`)
+//! at runtime, so they live as functions of `ApiState` rather than
+//! constants; see [`crate::api::jmap::session_resource::max_size_*`].
 
 use axum::http::StatusCode;
 
-/// `maxSizeUpload`: the most octets accepted in one `POST /jmap/upload`
-/// body (RFC 8620 §6.1). Anything larger is refused with the `limit`
-/// problem, however much larger it is.
-pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
-
-/// `maxSizeAttachmentsPerEmail` (RFC 8621 section 1.3.1): attachment octets
-/// that still fit the message size limit once written. Base64 takes four
-/// characters for three octets and a CRLF after every 76 characters; the
-/// rest of [`ATTACHMENT_HEADROOM`] is left for the headers, the body and
-/// each part's own headers.
-pub const MAX_SIZE_ATTACHMENTS_PER_EMAIL: usize =
-	(crate::smtp::session::MAX_MESSAGE_SIZE - ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
-
-/// Room kept outside the attachments in [`MAX_SIZE_ATTACHMENTS_PER_EMAIL`].
+/// `maxSizeAttachmentsPerEmail` room for headers, body, and per-part
+/// headers (RFC 8621 §1.3.1). The actual advertised value is
+/// `(max_size_upload - ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3` where
+/// `max_size_upload` is the configured `[server] max_message_size`.
 pub const ATTACHMENT_HEADROOM: usize = 256 * 1024;
 
 /// `maxSizeRequest`: the most octets accepted in one `POST /jmap/api` body.
@@ -101,7 +96,7 @@ pub(super) fn too_many_concurrent(limit: &str, max: usize) -> serde_json::Value 
 	)
 }
 
-/// The error for an upload body over [`MAX_UPLOAD_SIZE`].
+/// The error for an upload body over the configured `maxSizeUpload`.
 pub(super) fn upload_too_large() -> serde_json::Value {
 	problem(
 		"maxSizeUpload",

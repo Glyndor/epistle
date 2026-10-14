@@ -35,9 +35,13 @@ use tower_http::cors::CorsLayer;
 
 /// Build the API router with authentication applied to every route.
 pub fn router(state: ApiState) -> Router {
+	// The configured per-instance message-size cap, applied consistently
+	// to SMTP, the JMAP upload body limit, the JMAP `Email/set` build,
+	// and the REST `POST /api/v1/send` builder.
+	let max_message_size = state.max_message_size();
 	// Authenticated surface: every route requires the bearer token.
 	let authenticated = Router::new()
-		.nest("/api/v1", v1::router())
+		.nest("/api/v1", v1::router(max_message_size))
 		// SCIM 2.0 provisioning (RFC 7644). The dedicated `Scope::Scim`
 		// gates every route, set in `acceptable_scopes_for` for any path
 		// starting with `/scim/v2`. A `read`/`write`-only key cannot
@@ -62,12 +66,14 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
-		// The upload route's body limit is maxSizeUpload; the handler answers
-		// a larger body with the spec's limit error. Other routes keep the
+		// The upload route's body limit is `maxSizeUpload`: the
+		// operator-configured `[server] max_message_size`, the same value
+		// the SMTP path applies at end-of-DATA. The handler answers a
+		// larger body with the spec's limit error. Other routes keep the
 		// default cap.
 		.route(
 			"/jmap/upload/{account_id}",
-			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE)),
+			post(jmap::upload).layer(DefaultBodyLimit::max(max_message_size)),
 		)
 		// Runs after the bearer check below (layers wrap outward), so the
 		// matched credentials are already in the request.

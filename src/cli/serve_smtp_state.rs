@@ -15,6 +15,9 @@ use crate::api::TenantLimits;
 use crate::config::Config;
 use crate::metrics::Metrics;
 use crate::smtp::diskspace::DiskGuard;
+use crate::smtp::memory_budget;
+use crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP;
+use crate::smtp::server::MemoryBudget;
 use crate::storage::CorrespondentStore;
 
 /// Everything `serve` attaches to every SMTP listener that comes from
@@ -37,6 +40,17 @@ pub(super) struct SmtpSharedState {
 	/// Per-listener concurrency cap; `0` keeps each protocol's built-in
 	/// default.
 	pub max_conn: usize,
+	/// Per-IP concurrency cap (default [`DEFAULT_MAX_CONNECTIONS_PER_IP`]).
+	/// `0` keeps the built-in default.
+	pub max_connections_per_ip: usize,
+	/// Per-instance message-size cap in bytes. `0` keeps the SMTP
+	/// session's built-in default ([`crate::smtp::session::MAX_MESSAGE_SIZE`]).
+	pub max_message_size: usize,
+	/// Optional shared byte budget every `DATA` / `BDAT` reservation
+	/// draws from. `None` keeps the historical unbounded behaviour; an
+	/// operator-set `[server] message_memory_budget` produces a budget
+	/// shared by every SMTP listener.
+	pub memory_budget: Option<Arc<MemoryBudget>>,
 	/// Optional external content scanner hook.
 	pub scanner_hook: Option<Arc<dyn MailHook>>,
 	/// The clamd client behind `scanner_hook` when clamd is the scanner,
@@ -62,6 +76,21 @@ pub(super) fn build_smtp_shared_state(
 	let daily_new_recipients = config.new_recipients_per_day;
 	let disk_guard = Arc::new(DiskGuard::new(config.data_dir.clone()));
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
+	let max_connections_per_ip = config.max_connections_per_ip.unwrap_or(0);
+	let max_message_size = config
+		.max_message_size
+		.map(|value| value as usize)
+		.unwrap_or(0);
+	// `0` disables the budget (the historical unbounded behaviour) so a
+	// configured 0 leaves the slot empty. Any other value becomes a shared
+	// budget for every SMTP listener.
+	let memory_budget = match config.message_memory_budget {
+		Some(0) => None,
+		Some(cap) => Some(Arc::new(memory_budget::MemoryBudget::with_cap(cap))),
+		None => Some(Arc::new(memory_budget::MemoryBudget::with_cap(
+			memory_budget::DEFAULT_BUDGET_BYTES,
+		))),
+	};
 	let clamd = config.antispam.clamd_socket.as_ref().map(|socket| {
 		Arc::new(
 			ClamdHook::new(socket.clone())
@@ -79,12 +108,24 @@ pub(super) fn build_smtp_shared_state(
 		None => clamd.clone().map(|clamd| clamd as Arc<dyn MailHook>),
 	};
 	let llm_hook = LlmHook::from_config(config.antispam_llm.as_ref())?;
+	// A configured 0 on the per-IP cap means "use the protocol default",
+	// not "0 concurrent connections per peer". When the operator omits the
+	// key the listener keeps its built-in default; an explicit 0 falls back
+	// the same way.
+	let max_connections_per_ip = if max_connections_per_ip == 0 {
+		DEFAULT_MAX_CONNECTIONS_PER_IP
+	} else {
+		max_connections_per_ip
+	};
 	Ok(SmtpSharedState {
 		tenant_limits,
 		correspondents,
 		daily_new_recipients,
 		disk_guard,
 		max_conn,
+		max_connections_per_ip,
+		max_message_size,
+		memory_budget,
 		scanner_hook,
 		clamd,
 		llm_hook,

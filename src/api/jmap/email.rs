@@ -123,7 +123,7 @@ pub(super) fn email_set(
 				crypto: state.crypto(),
 				uploads,
 			};
-			match create_email(spec, &sources) {
+			match create_email(spec, &sources, state.max_message_size()) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -174,7 +174,11 @@ pub(super) fn email_set(
 /// Create a message from a JMAP Email object (Email/set create): build the
 /// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
 /// mailbox. The error is the SetError to answer with.
-fn create_email(spec: &Value, sources: &super::email_build::Sources<'_>) -> Result<Value, Value> {
+fn create_email(
+	spec: &Value,
+	sources: &super::email_build::Sources<'_>,
+	max_message_size: usize,
+) -> Result<Value, Value> {
 	let (data_dir, account, crypto) = (sources.data_dir, sources.account, sources.crypto);
 	let mailbox = spec
 		.get("mailboxIds")
@@ -194,7 +198,7 @@ fn create_email(spec: &Value, sources: &super::email_build::Sources<'_>) -> Resu
 		}
 		out
 	};
-	let raw = super::email_build::build(spec, sources)?;
+	let raw = super::email_build::build(spec, sources, max_message_size)?;
 	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
 		.map_err(|_| json!({ "type": "serverFail" }))?;
 	Ok(json!({

@@ -148,6 +148,7 @@ pub async fn send(
 			date: &date,
 			message_id: &message_id,
 		},
+		state.max_message_size(),
 	)?;
 
 	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {

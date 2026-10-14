@@ -116,6 +116,14 @@ struct Inner {
 	/// the deliveries handler turns that into a `404` so the caller is
 	/// not silently handed an empty page.
 	delivery_log_days: u64,
+	/// Per-instance message-size cap, applied consistently to SMTP
+	/// (`SIZE` extension, per-line running check, end-of-DATA check,
+	/// per-chunk BDAT cap), the JMAP `Email/set` build, the JMAP
+	/// `EmailSubmission/set` builder, the JMAP `upload` body limit,
+	/// and the REST `POST /api/v1/send` body limit. The default is
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
+	/// lower it with the `[server] max_message_size` config key.
+	max_message_size: usize,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -254,6 +262,7 @@ impl ApiState {
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
 				delivery_log_days: 0,
+				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			}),
 		}
 	}
@@ -272,6 +281,25 @@ impl ApiState {
 	pub fn with_delivery_log_days(mut self, days: u64) -> Self {
 		if let Some(inner) = Arc::get_mut(&mut self.inner) {
 			inner.delivery_log_days = days;
+		}
+		self
+	}
+
+	/// The per-instance message-size cap. Defaults to
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
+	/// lower it with the `[server] max_message_size` config key.
+	pub fn max_message_size(&self) -> usize {
+		self.inner.max_message_size
+	}
+
+	/// Override the per-instance message-size cap. Used by `serve` to
+	/// apply the operator's `[server] max_message_size`. Must be set
+	/// before the state is shared. `0` keeps the default.
+	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			if bytes > 0 {
+				inner.max_message_size = bytes;
+			}
 		}
 		self
 	}

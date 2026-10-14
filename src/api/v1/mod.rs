@@ -23,7 +23,7 @@ use axum::routing::{get, post};
 use super::state::ApiState;
 
 /// The v1 route tree.
-pub fn router() -> Router<ApiState> {
+pub fn router(max_message_size: usize) -> Router<ApiState> {
 	Router::new()
 		.route("/status", get(status::get))
 		.route("/auth/verify", post(auth::verify))
@@ -65,11 +65,12 @@ pub fn router() -> Router<ApiState> {
 		)
 		.route("/deliveries", get(deliveries::list))
 		// Explicit body ceiling consistent with the SMTP message-size limit,
-		// rather than relying on the framework default.
+		// rather than relying on the framework default. The cap is the
+		// operator-configured `[server] max_message_size`, so the REST
+		// `POST /api/v1/send` builder never goes above what the SMTP
+		// `SIZE` and end-of-DATA checks accept.
 		.route(
 			"/send",
-			post(send::send).layer(DefaultBodyLimit::max(
-				crate::smtp::session::MAX_MESSAGE_SIZE,
-			)),
+			post(send::send).layer(DefaultBodyLimit::max(max_message_size)),
 		)
 }

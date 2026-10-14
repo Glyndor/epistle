@@ -164,6 +164,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		daily_new_recipients,
 		disk_guard,
 		max_conn,
+		max_connections_per_ip,
+		max_message_size,
+		memory_budget,
 		scanner_hook,
 		clamd,
 		llm_hook,
@@ -479,6 +482,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_max_connections(max_conn)
+					.with_max_connections_per_ip(max_connections_per_ip)
+					.with_max_message_size(max_message_size)
 					.with_report_dir(config.data_dir.clone())
 					// The Sent copy of a submission is written into the account's
 					// mailboxes, encrypted at rest like any other stored message.
@@ -589,6 +594,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				server = server.with_scram_enabled(config.auth.scram);
 				server = server.with_drain(Arc::clone(&drain));
+				if let Some(budget) = memory_budget.as_ref() {
+					server = server.with_memory_budget(Arc::clone(budget));
+				}
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}
