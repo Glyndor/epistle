@@ -174,10 +174,26 @@ fn audit_and_count_never_follow_a_link_out_of_the_spool() {
 
 	let loose = spool.count_loose_permissions().expect("count");
 	let fixed = spool.audit_permissions().expect("audit");
-	assert_eq!(mode(&victim_file), 0o644, "a linked file outside keeps its mode");
-	assert_eq!(mode(&victim_inner), 0o644, "a file under a linked dir keeps its mode");
-	assert_eq!(mode(&victim_dir), 0o755, "a linked directory keeps its mode");
-	assert_eq!((loose, fixed), (0, 0), "nothing outside the spool is counted");
+	assert_eq!(
+		mode(&victim_file),
+		0o644,
+		"a linked file outside keeps its mode"
+	);
+	assert_eq!(
+		mode(&victim_inner),
+		0o644,
+		"a file under a linked dir keeps its mode"
+	);
+	assert_eq!(
+		mode(&victim_dir),
+		0o755,
+		"a linked directory keeps its mode"
+	);
+	assert_eq!(
+		(loose, fixed),
+		(0, 0),
+		"nothing outside the spool is counted"
+	);
 }
 
 /// The retighten step never follows a link: an entry swapped for a link

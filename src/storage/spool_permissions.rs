@@ -105,7 +105,8 @@ fn walk(root: &Path, apply: bool) -> std::io::Result<(u64, u64)> {
 	}
 	let owner = meta.uid();
 	let (mut dirs, mut files) = (0u64, 0u64);
-	let tree = std::iter::once(root.to_path_buf()).chain(SUBDIRS.iter().map(|name| root.join(name)));
+	let tree =
+		std::iter::once(root.to_path_buf()).chain(SUBDIRS.iter().map(|name| root.join(name)));
 	for dir in tree {
 		if retighten(&dir, Kind::Dir, owner, apply)? {
 			dirs += 1;

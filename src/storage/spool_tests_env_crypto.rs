@@ -232,7 +232,9 @@ fn load_envelope_is_also_aad_bound() {
 		new_dir.join(format!("{id_b}.json")),
 	)
 	.expect("swap a over b");
-	let swapped = spool.load_envelope(id_b).expect_err("a swapped envelope must fail");
+	let swapped = spool
+		.load_envelope(id_b)
+		.expect_err("a swapped envelope must fail");
 	assert!(swapped.to_string().contains("authentication failed"));
 
 	let path_a = new_dir.join(format!("{id_a}.json"));

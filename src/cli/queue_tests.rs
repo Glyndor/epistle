@@ -451,7 +451,10 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 		.expect("store");
 
 	let mut out = Vec::new();
-	assert_eq!(list(dir.path(), Some(&storage), &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		list(dir.path(), Some(&storage), &mut out),
+		ExitCode::SUCCESS
+	);
 	let listed = String::from_utf8(out).expect("utf8");
 	assert!(
 		listed.contains(&id.to_string()) && listed.contains("sealed@example.org"),
@@ -468,5 +471,9 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 		None,
 		&mut out,
 	);
-	assert_eq!(code, ExitCode::SUCCESS, "show must read the sealed envelope");
+	assert_eq!(
+		code,
+		ExitCode::SUCCESS,
+		"show must read the sealed envelope"
+	);
 }
