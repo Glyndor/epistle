@@ -53,6 +53,7 @@ async fn a_delivered_recipient_writes_a_record_with_the_remote_host() {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		},
 	);
@@ -90,6 +91,7 @@ async fn a_transient_failure_writes_a_deferred_record_with_the_reply() {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		},
 	);
@@ -128,6 +130,7 @@ async fn a_permanent_failure_writes_a_failed_record() {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		},
 	);
@@ -160,6 +163,7 @@ async fn a_suppressed_recipient_writes_a_record_with_no_remote() {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -199,6 +203,7 @@ async fn a_disabled_log_writes_no_records() {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		},
 	);

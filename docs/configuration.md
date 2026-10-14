@@ -1372,6 +1372,65 @@ form of the server's current UTC time. Client-supplied `Message-ID` and
 one. The stamp only fires on authenticated submission; inbound relay
 mail from other servers is not modified.
 
+## JMAP VacationResponse
+
+The JMAP session advertises `urn:ietf:params:jmap:vacationresponse` (RFC
+8621 section 8) for every account. `VacationResponse/get` returns the
+singleton (`ids` and `properties` work as for any `/get`) and
+`VacationResponse/set` updates it; `create` and `destroy` are refused with
+`forbidden`, the only id is `singleton`, and the properties are
+`isEnabled`, `fromDate`, `toDate`, `subject`, `textBody` and `htmlBody`.
+The account check is the one every JMAP method uses: an `accountId` the
+credential cannot reach is `accountNotFound`.
+
+`/set` refuses with `invalidProperties` a date that is not a UTCDate, a
+`fromDate` after `toDate`, a `textBody` or `htmlBody` over 64 KiB, and a
+`subject` with a line break or other control character or longer than 998
+octets. The setting lives in the account's own directory, at
+`<data_dir>/accounts/<account>/.vacation.json`. `htmlBody` is stored as
+given and only ever sent as a `text/html` part, never rendered.
+
+When `isEnabled` is true and the current time is inside `fromDate ..
+toDate` (either bound optional), mail delivered to the account gets an
+auto-reply following RFC 3834 and RFC 5230:
+
+- It goes to the envelope sender (`MAIL FROM`), never to a header
+  address, with a null reverse-path, `Auto-Submitted: auto-replied`,
+  `In-Reply-To` and `References`. It is queued and DKIM-signed like any
+  other outbound message.
+- No reply to a null sender, to the account's own addresses, to
+  `MAILER-DAEMON`, `LISTSERV`, `majordomo`, `owner-*` or `*-request`, to
+  mail with `Auto-Submitted` other than `no`, to mail with any RFC 2369
+  `List-*` header, or to `Precedence: bulk`, `list` or `junk`.
+- Only when one of the account's addresses, or the address the copy was
+  delivered to, is in the message's `To` or `Cc` (RFC 5230 section 4.5).
+  Mail that reached the account through `Bcc`, a mailing list or an alias
+  gets no reply.
+- Only when the server itself verified the sender: the SMTP session
+  logged in (local submission, `POST /api/v1/send`, JMAP
+  `EmailSubmission/set`), or on the inbound hop SPF passed for the
+  envelope sender's domain, or a DKIM signature passed for a domain with
+  the same organizational domain as the envelope sender's. A signature by
+  the From domain counts only when the From domain shares that
+  organizational domain: the reply goes to the envelope sender, and a
+  sender can sign mail From a domain of its own while naming someone else
+  in `MAIL FROM`. The server takes these from its own checks of each
+  message when it accepts it and never from `Authentication-Results`,
+  `Received-SPF` or ARC headers in the message.
+- One reply per sender per 7 days. Each reply leaves a marker under
+  `<account>/.vacation/`, which survives restarts. The account keeps at
+  most 4096 markers: when the store is full, markers older than the
+  period are removed, and if none is, the new sender gets no reply. A
+  marker that cannot be written means no reply.
+
+The Sieve `vacation` action uses the same rules and markers (its `:days`
+is held between 1 and 365, and a `:from` the account does not own is
+ignored). Only one of the two answers a message: while the JMAP
+VacationResponse is enabled it is the account's vacation, and the Sieve
+action is ignored, including outside the JMAP date window, when no reply
+is sent at all. With the JMAP setting disabled, the Sieve action answers
+as before.
+
 ## Example
 
 ```toml

@@ -18,6 +18,8 @@ mod routing_forward;
 pub(crate) mod save_sent;
 mod spool;
 mod spool_recipients;
+pub(crate) mod vacation_markers;
+pub mod vacation_store;
 
 // KEY_LEN, MAGIC and OVERHEAD are re-exported because the public docs of the
 // items above already describe the contract in terms of them: a key is
@@ -41,6 +43,10 @@ pub use save_sent::{
 	store_copy as save_sent_copy,
 };
 pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
+pub use vacation_store::{
+	MAX_BODY_BYTES, VacationSetting, clear as clear_vacation, read as read_vacation,
+	write as write_vacation,
+};
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.
 ///

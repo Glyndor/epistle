@@ -287,6 +287,10 @@ impl LocalDelivery {
 			}
 			return Ok(Delivered {
 				redirects: trace::redirects(forwards, delivered_to),
+				replies: self
+					.vacation_autoreply(account, delivered_to, message, None)
+					.into_iter()
+					.collect(),
 				..Delivered::default()
 			});
 		};
@@ -334,10 +338,10 @@ impl LocalDelivery {
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
-		// vacation (RFC 5230): an autoresponse alongside normal delivery.
-		let replies = outcome
-			.vacation
-			.and_then(|request| self.vacation_reply(account, message, &request))
+		// vacation (RFC 5230, RFC 8621 section 8): an autoresponse alongside
+		// normal delivery, from the JMAP setting or the Sieve action.
+		let replies = self
+			.vacation_autoreply(account, delivered_to, message, outcome.vacation.as_ref())
 			.into_iter()
 			.collect();
 		Ok(Delivered {
@@ -383,6 +387,7 @@ mod tests {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		}
 	}

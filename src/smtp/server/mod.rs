@@ -748,3 +748,7 @@ mod tests_starttls;
 #[cfg(test)]
 #[path = "server_tests_author.rs"]
 mod tests_author;
+
+#[cfg(test)]
+#[path = "server_tests_sender_verified.rs"]
+mod tests_sender_verified;

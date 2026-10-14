@@ -327,6 +327,14 @@ mod jmap_tests_push_get;
 mod jmap_tests_eventsource;
 
 #[cfg(test)]
+#[path = "jmap_tests_vacation.rs"]
+mod jmap_tests_vacation;
+
+#[cfg(test)]
+#[path = "jmap_tests_vacation_b.rs"]
+mod jmap_tests_vacation_b;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 

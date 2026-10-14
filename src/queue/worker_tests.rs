@@ -155,6 +155,7 @@ fn spool_with_message(dir: &std::path::Path, recipient: &str) -> FsSpool {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -373,6 +374,7 @@ async fn permanent_failure_suppresses_then_drops_silently() {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -467,6 +469,7 @@ async fn notify_never_suppresses_the_bounce() {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				// The sender asked for no failure DSN.
 				no_dsn: vec!["carol@remote.example".into()],
 			},

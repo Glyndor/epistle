@@ -214,14 +214,17 @@ impl Server {
 					}
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
-					let auth_headers =
+					let (auth_headers, sender_passed) =
 						match self.authenticate_inbound(&message, &session, peer).await {
-							Ok(headers) => headers,
+							Ok(outcome) => outcome,
 							Err(reply) => {
 								send(&mut stream, &reply).await?;
 								continue;
 							}
 						};
+					// Who the server itself verified: a logged-in session, or
+					// this hop's SPF or DKIM pass. Never read from the headers.
+					message.sender_verified = session.authenticated().is_some() || sender_passed;
 					if let Some(dns) = &self.spf
 						&& message.recipients.iter().any(|recipient| {
 							recipient

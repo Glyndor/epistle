@@ -327,7 +327,8 @@ impl SplitDelivery {
 			}
 			self.queue_redirects(&message, delivered.redirects)?;
 			self.bounce_loops(&message, &delivered.looped)?;
-			for reply in delivered.replies {
+			for mut reply in delivered.replies {
+				self.sign_reply(&mut reply);
 				self.outbound
 					.store(&reply, account, extra)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -345,6 +346,7 @@ impl SplitDelivery {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			};
 			self.outbound
@@ -378,6 +380,19 @@ impl SplitDelivery {
 			.store(message, None, &BTreeMap::new())
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
+	}
+
+	/// DKIM-sign an auto-reply the server writes itself: it has a null
+	/// reverse-path, so `d=` is the domain of its From, the account's own.
+	fn sign_reply(&self, reply: &mut AcceptedMessage) {
+		if let Some(signer) = &self.signer
+			&& let Some(domain) = self.signing_domain(reply)
+			&& let Some(header) = signer.current().sign(&domain, &reply.data)
+		{
+			let mut signed = header.into_bytes();
+			signed.extend_from_slice(&reply.data);
+			reply.data = signed;
+		}
 	}
 
 	/// The `d=` for an outbound message: the domain of its single From
@@ -438,3 +453,7 @@ mod tests_dkim_domain;
 #[cfg(test)]
 #[path = "routing_tests_forward.rs"]
 mod tests_forward;
+
+#[cfg(test)]
+#[path = "routing_tests_vacation.rs"]
+mod tests_vacation;

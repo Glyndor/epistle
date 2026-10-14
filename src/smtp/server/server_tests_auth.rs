@@ -185,6 +185,10 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 
 	let messages = sink.messages();
 	assert_eq!(messages.len(), 1, "exactly one delivered message");
+	assert!(
+		messages[0].sender_verified,
+		"a logged-in sender is a verified sender"
+	);
 	let data = String::from_utf8(messages[0].data.clone()).expect("ascii");
 	// The Received trace header sits outermost; the stamper's lines come
 	// right after it (before the client's own headers).
