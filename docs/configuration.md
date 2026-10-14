@@ -1372,6 +1372,33 @@ form of the server's current UTC time. Client-supplied `Message-ID` and
 one. The stamp only fires on authenticated submission; inbound relay
 mail from other servers is not modified.
 
+## JMAP VacationResponse
+
+The JMAP session advertises `urn:ietf:params:jmap:vacationresponse` (RFC
+8621 §8.3) for every account. `VacationResponse/get` returns the
+singleton, `VacationResponse/set` updates it; `create` and `destroy` are
+refused with `forbidden`, the only valid id is `singleton`, and the
+properties are `isEnabled`, `fromDate`, `toDate`, `subject`, `textBody`,
+`htmlBody`.
+
+The setting lives at `<data_dir>/accounts/<account>/.vacation.json`.
+When `isEnabled = true` and the current time is inside `fromDate ..
+toDate` (either bound optional), an incoming message from a new sender
+gets one auto-reply, subject to the suppression rules in RFC 8621 §8.2.1:
+no reply to `Auto-Submitted: <not "no">`, no reply to `List-Id`, no
+reply to `Precedence: bulk|list|junk`, no reply to a null sender, no
+reply when the recipient is the account itself. Per-sender dedup uses the
+same `<account>/.vacation/<sha256>` marker file the Sieve `vacation`
+extension writes, so the two share state and a given sender gets at most
+one auto-reply per 7 days regardless of which path produced it.
+
+When the JMAP vacation is set, the Sieve `vacation` action is dormant:
+both paths lead to the same dedup, so a single inbound message gets at
+most one auto-reply. `htmlBody` is sent as `multipart/alternative` next
+to `textBody`; `htmlBody` is stored as given and never rendered server
+side. Body fields over the per-server 64 KiB cap are rejected with
+`invalidProperties`. `fromDate > toDate` is the same error.
+
 ## Example
 
 ```toml
