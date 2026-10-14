@@ -25,15 +25,17 @@ fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 	Ok(TlsAcceptor::from(Arc::new(server)))
 }
 
-#[derive(PartialEq, Eq)]
-struct Stamp {
+/// What identifies one version of a file: its modification time, length
+/// and (on Unix) inode, so a rename over it counts as a change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Stamp {
 	modified: SystemTime,
 	length: u64,
 	#[cfg(unix)]
 	inode: u64,
 }
 
-fn stamp(path: &std::path::Path) -> std::io::Result<Stamp> {
+pub(super) fn stamp(path: &std::path::Path) -> std::io::Result<Stamp> {
 	let metadata = fs::metadata(path)?;
 	Ok(Stamp {
 		modified: metadata.modified()?,
