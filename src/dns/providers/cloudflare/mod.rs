@@ -348,16 +348,27 @@ impl CloudflareProvider {
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
 		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
-		// only the record of the same purpose; every other kind owns its
-		// name, so the write replaces the whole set. The first record is
-		// updated in place (an A with a new address is the same record,
-		// not a second one) and any others at the name are removed.
+		// the record of the same purpose and leaves every other TXT
+		// at the name alone (an ACME challenge, a verification
+		// token). Two records of the same purpose at the same name
+		// are a configuration mistake (SPF returns permerror, DMARC
+		// is ignored): the upsert collapses them by editing the
+		// first match and deleting every other. Every other kind
+		// owns its name, so the write replaces the whole set: the
+		// first record is updated in place and any others at the
+		// name are removed.
 		let found = self.find_records(&zone_id, &record.name, kind).await?;
 		let (existing, extra) = if record.kind == RecordKind::Txt {
-			let existing = found
+			// Filter to records of the same purpose only: an
+			// untagged TXT at the same owner (an ACME challenge,
+			// a site-verification token) is not a duplicate of
+			// epistle's record and the upsert must leave it alone.
+			let mut found = found
 				.into_iter()
-				.find(|r| same_txt_purpose(&r.content, &record.value));
-			(existing, Vec::new())
+				.filter(|r| same_txt_purpose(&r.content, &record.value));
+			let primary = found.next();
+			let rest: Vec<RecordRef> = found.collect();
+			(primary, rest)
 		} else {
 			let mut found = found.into_iter();
 			(found.next(), found.collect::<Vec<_>>())

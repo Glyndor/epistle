@@ -205,10 +205,116 @@ impl DnsimpleProvider {
 			.map(|r| r.id))
 	}
 
+	/// Every record id that would match a single-record lookup
+	/// (`find_id`); used by the TXT upsert path to collapse
+	/// duplicates of the same purpose.
+	async fn find_ids(
+		&self,
+		zone: &str,
+		relative_name: &str,
+		kind: &str,
+		value: Option<&str>,
+	) -> Result<impl Iterator<Item = u64>, ProviderError> {
+		let records = self.list_page(zone).await?;
+		Ok(records
+			.into_iter()
+			.filter(move |r| {
+				r.name == relative_name
+					&& r.kind.eq_ignore_ascii_case(kind)
+					&& match value {
+						Some(v) => same_txt_purpose(&r.content, v),
+						None => true,
+					}
+			})
+			.map(|r| r.id))
+	}
+
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let relative = self.relative_name(&record.name);
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: an upsert replaces the TXT with the same
+		// purpose (version tag) at that name and leaves every
+		// other TXT at the name alone. Two records of the same
+		// purpose are a configuration mistake (SPF returns
+		// permerror, DMARC is ignored): the upsert collapses them
+		// by PATCHing the first match and DELETEing every other.
+		// `same_txt_purpose` carries the contract; for non-TXT
+		// kinds the matching is just (name, kind) and the first
+		// match is fine.
+		if record.kind == RecordKind::Txt {
+			let lookup = record.value.clone();
+			let mut ids = self.find_ids(zone, &relative, kind, Some(&lookup)).await?;
+			match ids.next() {
+				Some(primary) => {
+					self.write_record(zone, primary, record).await?;
+					for dup in ids {
+						self.delete_by_id(self.records_url(zone, Some(dup))?)
+							.await?;
+					}
+					Ok(())
+				}
+				None => self.create_record(zone, record).await,
+			}
+		} else {
+			match self.find_id(zone, &relative, kind, None).await? {
+				Some(id) => self.write_record(zone, id, record).await,
+				None => self.create_record(zone, record).await,
+			}
+		}
+	}
+
+	async fn create_record(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
+		let kind = Self::api_kind(record.kind)?;
+		let relative = self.relative_name(&record.name);
+		let body = self.record_body(kind, &relative, &record)?;
+		self.write_body(zone, None, body).await
+	}
+
+	async fn write_record(
+		&self,
+		zone: &str,
+		id: u64,
+		record: DnsRecord,
+	) -> Result<(), ProviderError> {
+		let kind = Self::api_kind(record.kind)?;
+		let relative = self.relative_name(&record.name);
+		let body = self.record_body(kind, &relative, &record)?;
+		self.write_body(zone, Some(id), body).await
+	}
+
+	async fn write_body(
+		&self,
+		zone: &str,
+		id: Option<u64>,
+		body: String,
+	) -> Result<(), ProviderError> {
+		let url = match id {
+			Some(id) => self.records_url(zone, Some(id))?,
+			None => self.records_url(zone, None)?,
+		};
+		let request = if id.is_some() {
+			self.client.patch(url.into_url())
+		} else {
+			self.client.post(url.into_url())
+		};
+		let response = request
+			.bearer_auth(self.secret.token())
+			.header(reqwest::header::CONTENT_TYPE, "application/json")
+			.body(body)
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		check(response)
+	}
+
+	fn record_body(
+		&self,
+		kind: &str,
+		relative: &str,
+		record: &DnsRecord,
+	) -> Result<String, ProviderError> {
 		let body = if record.kind == RecordKind::Srv {
 			let (priority, weight, port, target) = parse_srv(&record.value)
 				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
@@ -287,32 +393,7 @@ impl DnsimpleProvider {
 			})
 			.to_string()
 		};
-		let url = self.records_url(zone, None)?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
-		// contract: an upsert replaces the TXT with the same
-		// purpose (version tag) at that name and leaves every
-		// other TXT at the name alone. `same_txt_purpose` carries
-		// the contract; for non-TXT kinds the matching is just
-		// (name, kind) and the first match is fine.
-		let lookup_value = match record.kind {
-			RecordKind::Txt => Some(record.value.as_str()),
-			_ => None,
-		};
-		let existing = self.find_id(zone, &relative, kind, lookup_value).await?;
-		let request = if let Some(id) = existing {
-			self.client
-				.patch(self.records_url(zone, Some(id))?.into_url())
-		} else {
-			self.client.post(url.into_url())
-		};
-		let response = request
-			.bearer_auth(self.secret.token())
-			.header(reqwest::header::CONTENT_TYPE, "application/json")
-			.body(body)
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		check(response)
+		Ok(body)
 	}
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -468,6 +549,10 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]

@@ -62,6 +62,15 @@ different things and point at three different fixes:
 Authorizes your IP to send for the domain. `v=spf1 mx -all` authorizes whatever
 the MX points at; or pin the IP: `v=spf1 ip4:203.0.113.10 -all`. `-all` (hard
 fail) is recommended once you are sure every sender is listed.
+
+Exactly one SPF record at the apex. Two `v=spf1` TXT records at the same
+name are a `permerror` for every receiver (RFC 7208 §4.5), so a
+migrated domain whose old provider left a record behind stops
+delivering until the duplicate is removed. `epistle status` and
+`epistle verify-dns` flag duplicates by name, count, and the
+`keep one` instruction; the upsert through a configured provider
+collapses them.
+
 ### DKIM
 
 Sign outbound mail. Generate the key and record:
@@ -87,6 +96,12 @@ configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
 a startup warning is logged before that whenever the pair is missing).
 A single message is then signed with both keys (RFC 8463); receivers
 that understand Ed25519 use that signature, the rest fall back to RSA.
+
+Multiple selectors at different names are normal (the Ed25519 + RSA
+pair), but two at the same selector name is the same configuration
+mistake the SPF, DMARC, and MTA-STS lanes flag and collapse; a
+DKIM rotator's old and new keys sit at different selector names,
+never at the same one.
 
 #### Long TXT values split at 255 octets
 
@@ -117,6 +132,10 @@ Ties SPF and DKIM together and tells receivers what to do on failure. Start at
 v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s
 ```
 
+Exactly one DMARC record at `_dmarc.<domain>`. Two of them make
+receivers ignore the policy (RFC 7489 §6.6.3); the same duplicate
+detection and collapse the SPF lane gets.
+
 The server produces aggregate (RUA) reports for domains you host. Inbound
 DMARC aggregate reports from receivers are ingested automatically: the
 deliverer recognises `postmaster@<domain>` as a report target, the JSONL
@@ -139,9 +158,15 @@ Requires inbound senders to use verified TLS. Two parts:
    max_age: 604800
    ```
 
+One MTA-STS discovery TXT at `_mta-sts.<domain>`; the policy file
+itself lives over HTTPS, but two discovery records break the lookup
+(RFC 8461 §3.1).
+
 ### TLS-RPT
 Receives reports about TLS delivery problems: TXT at `_smtp._tls.example.org`
-with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. The server ingests inbound
+with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. One TLS-RPT TXT per
+domain; a duplicate is the same configuration mistake the SPF and
+DMARC lanes flag and collapse. The server ingests inbound
 TLS-RPT reports the same way it ingests DMARC: `tlsrpt@<domain>` is the
 envelope target, the JSONL store lives at
 `data_dir/reports/tlsrpt/YYYYMMDD/`, the alert engine can watch
