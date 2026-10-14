@@ -329,15 +329,19 @@ fn check_n_charges_one_unit_per_recipient() {
 	// One submission to 100 recipients costs 100 units against the
 	// budget; the call returns `true` only when every unit fits. With a
 	// per-minute cap of 50 a 100-recipient message overshoots the cap
-	// from a cold budget.
+	// even from a cold budget, the first call of a window included.
 	let limiter = WindowLimiter::new(60);
 	assert!(
-		limiter.check_n("alice", 100, 50, 1_000),
-		"100 units must fit when the cap is 100, not 50"
+		!limiter.check_n("alice", 100, 50, 1_000),
+		"100 units over a cap of 50 must be refused on a fresh key"
 	);
 	assert!(
-		!limiter.check_n("alice", 100, 50, 1_001),
-		"100 units over a cap of 50 must be refused"
+		limiter.check_n("alice", 50, 50, 1_001),
+		"the refused call charged nothing, so 50 units still fit"
+	);
+	assert!(
+		!limiter.check_n("alice", 1, 50, 1_002),
+		"the window is now full"
 	);
 }
 

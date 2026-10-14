@@ -1,23 +1,29 @@
 //! Fixed-window, string-keyed rate limiter shared across server-side call sites.
 //!
 //! The limiter is a single mutable map of `key -> (window_start_epoch, count)`
-//! guarded by one mutex. Each [`check`](WindowLimiter::check) call looks up
-//! the key, advances the window once `window_secs` have elapsed, and either
-//! increments the count or returns `false` to signal "over the limit". The
-//! caller supplies the cap (`limit`) per call so one limiter can back several
-//! policies (per-account, per-IP, per-sender, per-tenant).
+//! guarded by one mutex. Each [`check_n`](WindowLimiter::check_n) call looks
+//! up the key, starts a new window once `window_secs` have elapsed, and either
+//! adds the charge or returns `false` to signal "over the limit". A refused
+//! call charges nothing. The caller supplies the cap (`limit`) per call so
+//! one limiter can back several policies (per-account, per-IP, per-sender,
+//! per-tenant).
 //!
 //! ## Bounded memory and constant per-call work
 //!
-//! The `state` map is capped at [`MAX_ENTRIES`] entries. A key already in
-//! the map is handled in place (its window is reset if stale and its count
-//! is incremented) so an active sender keeps its budget while the map sits
-//! at the cap. A key that is not in the map is admitted by evicting the
-//! oldest entry when the cap is full: an `insertion`-ordered [`VecDeque`]
-//! tracks the order in which keys first appeared in the map, and the
-//! head is lazily popped (skipping keys that have already been removed or
-//! never existed) to evict the entry whose window started earliest.
-//! O(1) amortized.
+//! The `entries` map is capped at [`MAX_ENTRIES`] keys. A key already in the
+//! map is handled in place, so an active sender keeps its budget while the
+//! map sits at the cap. A key that is not in the map needs a free slot: the
+//! `windows` queue records `(key, window_start)` in the order windows began,
+//! so its first live record is the entry whose window is the oldest. That
+//! entry is dropped when its window is over. When it is still running the
+//! limiter either refuses the new key ([`WindowLimiter::refusing_new_keys`],
+//! used for the submission limits, whose keys are server-authenticated
+//! accounts and tenants: an active window is never reset by somebody else's
+//! traffic) or evicts it ([`WindowLimiter::new`], used for the inbound limits,
+//! whose keys come from the network: refusing there would let a flood of
+//! fresh keys defer every new sender). Records whose window has since been
+//! replaced are skipped and the queue is compacted once it holds twice the
+//! cap, so each call does O(1) amortized work and memory stays bounded.
 //!
 //! `limit == 0` is treated as "no limit" (always allowed): the policy layer
 //! is expected to skip the call when the resolved limit is `None`, so a
@@ -26,10 +32,11 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
-/// Hard cap on the `state` map. Once [`MAX_ENTRIES`] distinct keys are
-/// tracked, an unseen key evicts the oldest entry (insertion order) and
-/// is admitted; a live sender keeps its budget through every call that
-/// hits a full map.
+/// Hard cap on the `entries` map. Once [`MAX_ENTRIES`] distinct keys are
+/// tracked, an unseen key takes the slot of the entry whose window is the
+/// oldest, provided that window is over (or the limiter evicts active
+/// entries); a live sender keeps its budget through every call that hits
+/// a full map.
 pub const MAX_ENTRIES: usize = 10_000;
 
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
@@ -41,7 +48,10 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub struct WindowLimiter {
 	/// Window length in seconds.
 	window_secs: u64,
-	/// The shared mutable map plus the insertion-order queue. Both are
+	/// What an unseen key does when the map is full and the oldest window
+	/// is still running: `true` refuses the key, `false` evicts that entry.
+	refuse_when_full: bool,
+	/// The shared mutable map plus the window-order queue. Both are
 	/// guarded by a single mutex so `check` cannot deadlock with itself
 	/// across the two structures.
 	state: Mutex<StateInner>,
@@ -54,16 +64,57 @@ struct StateInner {
 	/// used so the in-place active-key path and the membership test
 	/// during eviction are O(log n).
 	entries: BTreeMap<String, (u64, u32)>,
-	/// Insertion order of the keys currently in `entries` (plus any
-	/// stale entries that have already been removed from `entries`,
-	/// which the eviction walk skips). The head holds the entry whose
-	/// window started earliest; popping the head is the eviction.
-	insertion: VecDeque<String>,
-	/// Test-only counter of how many entries the eviction walk visited
+	/// `(key, window_start)` for every window started, oldest first. A
+	/// record is live while `entries[key]` still has that window start;
+	/// the others are skipped (and dropped) when they reach the head.
+	windows: VecDeque<(String, u64)>,
+	/// Test-only counter of how many records the eviction walk visited
 	/// across every `check` call so a regression test can assert the
 	/// per-call work stays bounded when the map sits at the cap.
 	#[cfg(test)]
 	scan_count: u64,
+}
+
+impl StateInner {
+	/// Record that `key` started a window at `start`, compacting the queue
+	/// when dead records make it twice the size of the cap. A compaction
+	/// is O(cap) and follows at least `cap` pushes, so O(1) amortized.
+	fn record_window(&mut self, key: String, start: u64) {
+		self.windows.push_back((key, start));
+		if self.windows.len() > 2 * MAX_ENTRIES {
+			let entries = &self.entries;
+			self.windows
+				.retain(|(key, start)| entries.get(key).is_some_and(|entry| entry.0 == *start));
+		}
+	}
+
+	/// Free one slot for an unseen key. Drops the entry whose window is
+	/// the oldest when that window is over, or when `evict_active` allows
+	/// dropping a running one; `false` when no slot can be freed.
+	fn free_slot(&mut self, now: u64, window_secs: u64, evict_active: bool) -> bool {
+		loop {
+			let Some((key, start)) = self.windows.front() else {
+				// The queue is empty but the map is full: an entry
+				// escaped its record. Refuse rather than panic.
+				return false;
+			};
+			#[cfg(test)]
+			{
+				self.scan_count += 1;
+			}
+			let live = self.entries.get(key).is_some_and(|entry| entry.0 == *start);
+			if !live {
+				self.windows.pop_front();
+				continue;
+			}
+			if now.saturating_sub(*start) < window_secs && !evict_active {
+				return false;
+			}
+			let (key, _) = self.windows.pop_front().expect("front checked above");
+			self.entries.remove(&key);
+			return true;
+		}
+	}
 }
 
 /// Backwards-compatible alias. Kept so existing call sites (per-account
@@ -86,37 +137,34 @@ pub struct InboundLimit {
 impl WindowLimiter {
 	/// A limiter that evaluates a per-call `limit` against a shared fixed
 	/// window of `window_secs` seconds. `window_secs` is clamped to one so
-	/// the window still advances on every check.
+	/// the window still advances on every check. With the map full of
+	/// running windows an unseen key evicts the oldest one: the right
+	/// choice when keys come from the network (client IPs, envelope
+	/// senders), where refusing would let a flood defer every new sender.
 	pub fn new(window_secs: u64) -> Self {
 		WindowLimiter {
 			window_secs: window_secs.max(1),
+			refuse_when_full: false,
 			state: Mutex::new(StateInner::default()),
+		}
+	}
+
+	/// Like [`new`](Self::new), but with the map full of running windows
+	/// an unseen key is refused instead of evicting one. Used for the
+	/// submission limits: their keys are accounts and tenants the server
+	/// authenticated, so no amount of traffic from one sender can reset
+	/// another sender's running window, and a sender cannot reset its
+	/// own by pushing others out.
+	pub fn refusing_new_keys(window_secs: u64) -> Self {
+		WindowLimiter {
+			refuse_when_full: true,
+			..Self::new(window_secs)
 		}
 	}
 
 	/// Record one event for `key` at `now` (epoch seconds) against the
 	/// per-key `limit` (events per window) and report whether it is within
-	/// the limit.
-	///
-	/// One event is the right unit for things that fire once per call
-	/// (a `MAIL FROM` transaction, a `POST /api/v1/send` request). When
-	/// the charge should scale with a per-call quantity (the recipient
-	/// count of a submission), use [`check_n`](Self::check_n) so a
-	/// 100-recipient message costs 100 units.
-	///
-	/// On every call the limiter drops the looked-up entry's count when
-	/// its window is stale (`now - window_start >= window_secs`) before
-	/// counting this event, so a key that has been idle longer than the
-	/// window gets a fresh budget. The window is the fixed-window kind: a
-	/// continuous burst for `window_secs` then a hard reset.
-	///
-	/// The map size is capped at [`MAX_ENTRIES`]. A new key always fits,
-	/// because an unseen key at the cap evicts the oldest entry in
-	/// insertion order to make room: the head of `insertion` is popped
-	/// (skipping keys that no longer live in `entries`) and the matching
-	/// entry is removed, then the new key is inserted. The active-key
-	/// path never evicts; an existing sender keeps its budget through
-	/// every call that hits a full map.
+	/// the limit. Same as [`check_n`](Self::check_n) with a count of one.
 	pub fn check(&self, key: &str, limit: u32, now: u64) -> bool {
 		self.check_n(key, 1, limit, now)
 	}
@@ -127,59 +175,72 @@ impl WindowLimiter {
 	/// one unit per recipient, so a 100-recipient message costs 100
 	/// units; a bounce with no recipients costs 0.
 	///
-	/// `count == 0` is a no-op that returns `true`: the cap is unchanged
-	/// and the call cannot push a key over the limit on its own. The
-	/// underlying window logic is identical to [`check`](Self::check); the
-	/// only difference is the per-call increment.
+	/// All or nothing: a call that would take the window past `limit`
+	/// charges nothing and returns `false`, including the first call of a
+	/// window. `count == 0` is a no-op that returns `true`. A window older
+	/// than `window_secs` starts over at `now` before the charge.
 	pub fn check_n(&self, key: &str, count: u32, limit: u32, now: u64) -> bool {
 		if limit == 0 || count == 0 {
 			return true;
 		}
 		let key_lc = key.to_ascii_lowercase();
 		let mut state = self.state.lock().expect("send limiter");
-		// Active-key path: the entry is already present. Its window may
-		// have elapsed, in which case the count resets to 0; we never
-		// evict here, so a live budget survives a saturated map.
 		if let Some(entry) = state.entries.get_mut(&key_lc) {
-			if now.saturating_sub(entry.0) >= self.window_secs {
-				*entry = (now, 0);
-			}
-			if entry.1.saturating_add(count) > limit {
+			let restart = now.saturating_sub(entry.0) >= self.window_secs;
+			let used = if restart { 0 } else { entry.1 };
+			if used.saturating_add(count) > limit {
 				return false;
 			}
-			entry.1 = entry.1.saturating_add(count);
+			if restart {
+				*entry = (now, count);
+				state.record_window(key_lc, now);
+			} else {
+				entry.1 = used + count;
+			}
 			return true;
 		}
-		// Unseen key. If the cap is full, evict the oldest entry to make
-		// room. The head of `insertion` is the oldest live entry; stale
-		// entries (whose key was already removed) are skipped lazily.
-		// Every visit, including skips of stale entries and the chosen
-		// eviction, increments the test-only scan counter so the bound
-		// regression can observe the per-call work.
-		if state.entries.len() >= MAX_ENTRIES {
-			loop {
-				let Some(front) = state.insertion.front().cloned() else {
-					// The queue is empty but the map is full: an entry
-					// escaped removal. Treat the inconsistency as a
-					// refusal rather than panicking; the next call that
-					// touches the same key recovers.
-					return false;
-				};
-				#[cfg(test)]
-				{
-					state.scan_count += 1;
-				}
-				if state.entries.contains_key(&front) {
-					state.entries.remove(&front);
-					state.insertion.pop_front();
-					break;
-				}
-				state.insertion.pop_front();
-			}
+		if count > limit {
+			return false;
+		}
+		if state.entries.len() >= MAX_ENTRIES
+			&& !state.free_slot(now, self.window_secs, !self.refuse_when_full)
+		{
+			return false;
 		}
 		state.entries.insert(key_lc.clone(), (now, count));
-		state.insertion.push_back(key_lc);
+		state.record_window(key_lc, now);
 		true
+	}
+
+	/// Whether `count` more events for `key` would fit at `now`, without
+	/// charging them. The SMTP path asks this at `MAIL FROM` so a sender
+	/// already at its cap is refused before it sends the message; the
+	/// charge itself happens once the message is accepted.
+	pub fn has_room(&self, key: &str, count: u32, limit: u32, now: u64) -> bool {
+		if limit == 0 || count == 0 {
+			return true;
+		}
+		let state = self.state.lock().expect("send limiter");
+		let used = match state.entries.get(&key.to_ascii_lowercase()) {
+			Some(&(start, used)) if now.saturating_sub(start) < self.window_secs => used,
+			_ => 0,
+		};
+		used.saturating_add(count) <= limit
+	}
+
+	/// Give back `count` events charged for `key` at `now` by a
+	/// [`check_n`](Self::check_n) whose message was then not accepted.
+	/// Only the window that took the charge is credited: once a newer
+	/// window has started for the key, the refund is dropped, so it can
+	/// never raise a later window's budget.
+	pub fn refund(&self, key: &str, count: u32, now: u64) {
+		let mut state = self.state.lock().expect("send limiter");
+		if let Some(entry) = state.entries.get_mut(&key.to_ascii_lowercase())
+			&& entry.0 <= now
+			&& now.saturating_sub(entry.0) < self.window_secs
+		{
+			entry.1 = entry.1.saturating_sub(count);
+		}
 	}
 
 	/// Number of entries currently held in the state map. Test-only helper,
@@ -190,17 +251,27 @@ impl WindowLimiter {
 		self.state.lock().expect("send limiter").entries.len()
 	}
 
-	/// Total number of entries the eviction walk has visited across every
+	/// Total number of records the eviction walk has visited across every
 	/// `check` call. Test-only counter used to assert the per-call work
-	/// stays bounded. With the insertion-ordered eviction, each call does
-	/// O(1) amortized work (a single pop_front, or a few when stale entries
-	/// have accumulated) so the bound holds trivially.
+	/// stays bounded: each record is visited once before it is dropped, so
+	/// the work is O(1) amortized.
 	#[cfg(test)]
 	fn scan_count(&self) -> u64 {
 		self.state.lock().expect("send limiter").scan_count
+	}
+
+	/// Number of window records queued. Test-only, to assert the queue
+	/// stays bounded however often keys start new windows.
+	#[cfg(test)]
+	fn window_records(&self) -> usize {
+		self.state.lock().expect("send limiter").windows.len()
 	}
 }
 
 #[cfg(test)]
 #[path = "ratelimit_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ratelimit_tests_window.rs"]
+mod tests_window;
