@@ -54,6 +54,9 @@ fn every_kind_of_command_without_progress_counts() {
 		"ETRN example.org",
 		"FROB",
 		"NOOP",
+		"EHLO client.example.org",
+		"HELO client.example.org",
+		"BDAT 0",
 	];
 	for sent in 0..100 {
 		let command = junk[sent % junk.len()];

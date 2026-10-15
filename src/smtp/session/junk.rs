@@ -6,7 +6,9 @@
 //!
 //! Two counts share the limit, as Postfix keeps its junk count apart from
 //! its error count. Commands that never move a message (NOOP, RSET, VRFY,
-//! unknown verbs such as EXPN, HELP or ETRN, an AUTH response line) count for the whole session: a delivered
+//! unknown verbs such as EXPN, HELP or ETRN, a greeting after the one each
+//! connection and each TLS start need, an empty BDAT chunk that is not the
+//! last, an AUTH response line) count for the whole session: a delivered
 //! message or a login does not reset them, and a logged-in client has the
 //! same limit. Refused commands (syntax errors, refused MAIL and RCPT,
 //! commands out of sequence) count only since the last message the session
@@ -14,6 +16,7 @@
 //! exist keeps its connection as long as its messages go through, while a
 //! client that only collects refusals is a scanner and is cut.
 
+use super::types::State;
 use super::{Action, Reply, Session};
 use crate::smtp::command::{Command, ParseError};
 
@@ -78,9 +81,15 @@ impl Session {
 	/// whatever its reply.
 	pub(super) fn is_junk(&self, parsed: &Result<Command, ParseError>) -> bool {
 		match parsed {
-			Ok(Command::Noop | Command::Rset | Command::Vrfy) | Err(ParseError::UnknownCommand) => {
-				true
-			}
+			Ok(Command::Noop | Command::Rset | Command::Vrfy) => true,
+			// One greeting is needed after the banner and one after STARTTLS
+			// (which puts the session back to `Connected`); any other is junk.
+			Ok(Command::Helo { .. } | Command::Ehlo { .. }) => self.state != State::Connected,
+			Ok(Command::Bdat {
+				size: 0,
+				last: false,
+			})
+			| Err(ParseError::UnknownCommand) => true,
 			_ => false,
 		}
 	}
