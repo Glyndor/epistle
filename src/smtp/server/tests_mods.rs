@@ -85,3 +85,7 @@ mod tests_data_rate_writes;
 #[cfg(test)]
 #[path = "server_tests_data_rate_legit.rs"]
 mod tests_data_rate_legit;
+
+#[cfg(test)]
+#[path = "server_tests_tls_drip.rs"]
+mod tests_tls_drip;
