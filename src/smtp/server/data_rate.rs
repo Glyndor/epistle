@@ -132,6 +132,30 @@ impl super::Server {
 	}
 }
 
+/// Write `reply` while the transaction `window` belongs to is open: the
+/// write is held to the window as a read is, so a client that leaves its
+/// replies unread cannot stretch the transaction one blocked write at a
+/// time. `Ok(false)` when the window ran out first; the connection is then
+/// closed without a 421 that client would not read either.
+pub(super) async fn send_within(
+	stream: &mut Box<dyn super::Connection>,
+	reply: &Reply,
+	window: Option<&RateWindow>,
+) -> std::io::Result<bool> {
+	let Some(window) = window else {
+		return super::send(stream, reply).await.map(|()| true);
+	};
+	match window.guard(super::send(stream, reply)).await {
+		Some(sent) => sent.map(|()| true),
+		None => {
+			tracing::info!(
+				"closing a client below the DATA/BDAT rate floor that leaves its replies unread"
+			);
+			Ok(false)
+		}
+	}
+}
+
 /// What the client gets before a connection below the floor is closed.
 pub(super) fn too_slow() -> Reply {
 	Reply::single(421, "4.4.2 transfer too slow, closing connection")

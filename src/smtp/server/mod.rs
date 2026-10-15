@@ -483,12 +483,26 @@ impl Server {
 	}
 }
 
+/// Write one reply. A client that stops reading must not keep the
+/// connection, nor whatever its session holds on the memory budget, in a
+/// write that never ends: the write gives up after the same idle timeout
+/// as a read.
 async fn send<W>(writer: &mut W, reply: &Reply) -> std::io::Result<()>
 where
 	W: AsyncWrite + Unpin + ?Sized,
 {
-	writer.write_all(reply.to_string().as_bytes()).await?;
-	writer.flush().await
+	let writing = async {
+		writer.write_all(reply.to_string().as_bytes()).await?;
+		writer.flush().await
+	};
+	tokio::time::timeout(COMMAND_TIMEOUT, writing)
+		.await
+		.unwrap_or_else(|_| {
+			Err(std::io::Error::new(
+				std::io::ErrorKind::TimedOut,
+				"SMTP reply write timed out",
+			))
+		})
 }
 
 /// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
@@ -562,9 +576,16 @@ async fn discard_chunk(
 	Ok(Ok(()))
 }
 
-/// End a connection whose chunk read was cut: a client below the rate
-/// floor is told why first.
-async fn end_cut(stream: &mut Box<dyn Connection>, cut: data_rate::Cut) -> std::io::Result<()> {
+/// End a connection whose read was cut: a client below the rate floor is
+/// told why first. The session goes before the 421 is written, so a client
+/// that does not read it gives its reservation back at the cut, not when
+/// the write gives up.
+async fn end_cut(
+	stream: &mut Box<dyn Connection>,
+	cut: data_rate::Cut,
+	session: Session,
+) -> std::io::Result<()> {
+	drop(session);
 	if cut == data_rate::Cut::TooSlow {
 		tracing::info!("closing a client below the DATA/BDAT rate floor");
 		send(stream, &data_rate::too_slow()).await?;

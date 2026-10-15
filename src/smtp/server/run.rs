@@ -12,7 +12,7 @@ use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
 };
 
-use super::data_rate::{Cut, RateWindow};
+use super::data_rate::{Cut, RateWindow, send_within};
 use super::{
 	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, end_cut, read_chunk,
 	send,
@@ -66,7 +66,7 @@ impl Server {
 						}
 						Some(Ok(Some(Ok(n)))) => n,
 						Some(Ok(Some(Err(e)))) => return Err(e),
-						Some(Ok(None)) => return end_cut(&mut stream, Cut::TooSlow).await,
+						Some(Ok(None)) => return end_cut(&mut stream, Cut::TooSlow, session).await,
 						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
@@ -95,8 +95,11 @@ impl Server {
 			} else {
 				let Ok(line_str) = String::from_utf8(line) else {
 					if mode == Mode::Commands {
-						send(&mut stream, &Reply::syntax_error()).await?;
-						continue;
+						let reply = Reply::syntax_error();
+						if send_within(&mut stream, &reply, body_window.as_ref()).await? {
+							continue;
+						}
+						return Ok(());
 					}
 					// Auth responses must be ASCII; abort.
 					send(
@@ -129,7 +132,7 @@ impl Server {
 						let chunk =
 							match read_chunk(&mut stream, &mut decoder, size, window).await? {
 								Ok(chunk) => chunk,
-								Err(cut) => return end_cut(&mut stream, cut).await,
+								Err(cut) => return end_cut(&mut stream, cut, session).await,
 							};
 						session.bdat_chunk(&chunk, last)
 					}
@@ -139,7 +142,7 @@ impl Server {
 						if let Err(cut) =
 							discard_chunk(&mut stream, &mut decoder, size, window).await?
 						{
-							return end_cut(&mut stream, cut).await;
+							return end_cut(&mut stream, cut, session).await;
 						}
 						Action::Continue(reply)
 					}
@@ -168,7 +171,10 @@ impl Server {
 					} else {
 						error_streak = 0;
 					}
-					send(&mut stream, &reply).await?;
+					// Inside a transaction an unread reply counts as idle time.
+					if !send_within(&mut stream, &reply, body_window.as_ref()).await? {
+						return Ok(());
+					}
 				}
 				Action::CollectData(reply) => {
 					mode = Mode::Data;

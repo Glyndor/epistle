@@ -77,3 +77,7 @@ mod tests_data_rate_bdat;
 #[cfg(test)]
 #[path = "server_tests_data_rate_config.rs"]
 mod tests_data_rate_config;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_writes.rs"]
+mod tests_data_rate_writes;
