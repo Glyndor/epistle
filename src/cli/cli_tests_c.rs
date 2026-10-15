@@ -263,6 +263,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 		Some(&bayes),
 		&mut out,
 		&mut err_stream,
+		false,
 	);
 	assert_eq!(
 		exit,
@@ -334,6 +335,7 @@ fn cli_remove_completes_without_a_bayes_store() {
 		None,
 		&mut out,
 		&mut err_stream,
+		false,
 	);
 	assert_eq!(exit, ExitCode::SUCCESS, "no-bayes path must succeed");
 	let text = String::from_utf8(out).expect("utf8");
@@ -387,6 +389,7 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 		Some(&bayes),
 		&mut out,
 		&mut err_stream,
+		false,
 	);
 	assert_eq!(exit, ExitCode::from(2), "unknown account must fail");
 	let err_text = String::from_utf8(err_buf).expect("utf8");

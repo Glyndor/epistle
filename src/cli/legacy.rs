@@ -287,7 +287,7 @@ pub(super) fn run(command: Legacy) -> ExitCode {
 	let mut out = std::io::stdout().lock();
 	match resource {
 		Resource::Account(action) => {
-			with_config(&config, |_| account::run(&config, action, &mut out))
+			with_config(&config, |_| account::run(&config, action, false, &mut out))
 		}
 		Resource::AppPassword(action) => with_config(&config, |config| {
 			app_passwords::run(config, action, &mut out)

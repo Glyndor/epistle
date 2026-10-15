@@ -255,6 +255,9 @@ pub enum Command {
 			default_value = DEFAULT_CONFIG
 		)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The action to run on the account.
 		#[command(subcommand)]
 		action: account::Subcommand,

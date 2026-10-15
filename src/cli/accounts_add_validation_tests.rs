@@ -41,7 +41,15 @@ fn add_offering_a_password(
 ) -> (ExitCode, bool) {
 	let line = format!("{}\n", fixture_password());
 	let mut input = line.as_bytes();
-	let code = add_with_display_name(config, name, addresses, None, &mut input);
+	let code = add_with_display_name(
+		config,
+		name,
+		addresses,
+		None,
+		&mut input,
+		&mut std::io::sink(),
+		false,
+	);
 	(code, input.len() < line.len())
 }
 

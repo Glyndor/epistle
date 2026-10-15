@@ -229,10 +229,14 @@ impl Cli {
 				)
 			}),
 			Command::Legacy(command) => super::legacy::run(command),
-			Command::Account { config, action } => {
+			Command::Account {
+				config,
+				json,
+				action,
+			} => {
 				let mut out = std::io::stdout().lock();
 				match Config::load(&config) {
-					Ok(_) => account::run(&config, action, &mut out),
+					Ok(_) => account::run(&config, action, json, &mut out),
 					Err(error) => {
 						style::error(error);
 						ExitCode::FAILURE

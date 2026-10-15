@@ -108,7 +108,7 @@ fn parse(args: &[&str]) -> Command {
 /// The resource action a parsed resource command line carries.
 fn resource_of(command: Command) -> (std::path::PathBuf, Resource) {
 	match command {
-		Command::Account { config, action } => (config, Resource::Account(action)),
+		Command::Account { config, action, .. } => (config, Resource::Account(action)),
 		Command::AppPassword { config, action } => (config, Resource::AppPassword(action)),
 		Command::ApiKey { config, action } => (config, Resource::ApiKey(action)),
 		other => panic!("not a resource command: {other:?}"),

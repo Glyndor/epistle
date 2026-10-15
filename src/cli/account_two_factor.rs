@@ -41,6 +41,8 @@ pub(crate) fn two_factor_disable(
 	store: &crate::directory_store::AccountStore,
 	name: &str,
 	yes: bool,
+	out: &mut dyn std::io::Write,
+	json: bool,
 ) -> ExitCode {
 	let question = format!(
 		"Remove TOTP secret for {name}? After this, the password is the only factor. [y/N]"
@@ -50,8 +52,10 @@ pub(crate) fn two_factor_disable(
 	}
 	match store.set_totp(name, None) {
 		Ok(()) => {
-			println!("2fa disabled");
-			ExitCode::SUCCESS
+			let mut report = crate::cli::json_out::Report::new(out, json);
+			report.line("2fa disabled");
+			let fields = serde_json::json!({ "account": name, "enrolled": false });
+			report.change("2fa disable", true, fields, None)
 		}
 		Err(error) => {
 			let code = crate::cli::exit::for_store_error(&error);

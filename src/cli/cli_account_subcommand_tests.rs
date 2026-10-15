@@ -106,6 +106,8 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 			&store,
 			DYNAMIC_NAME,
 			Cursor::new(format!("{new_password}\n")),
+			&mut std::io::sink(),
+			false,
 		),
 		ExitCode::SUCCESS,
 		"password change should succeed"
@@ -150,6 +152,8 @@ fn password_change_also_updates_scram_credentials() {
 			&store,
 			DYNAMIC_NAME,
 			Cursor::new(format!("{new_password}\n")),
+			&mut std::io::sink(),
+			false,
 		),
 		ExitCode::SUCCESS
 	);
@@ -173,7 +177,7 @@ fn disable_makes_authentication_fail() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::disable_with_store(&store, DYNAMIC_NAME),
+		account::disable_with_store(&store, DYNAMIC_NAME, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -195,12 +199,12 @@ fn enable_lifts_the_disabled_flag() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::disable_with_store(&store, DYNAMIC_NAME),
+		account::disable_with_store(&store, DYNAMIC_NAME, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::enable_with_store(&store, DYNAMIC_NAME),
+		account::enable_with_store(&store, DYNAMIC_NAME, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -257,7 +261,13 @@ fn quota_setter_rebuilds_the_directory() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::quota_with_store(&store, DYNAMIC_NAME, Some(500 * 1024 * 1024)),
+		account::quota_with_store(
+			&store,
+			DYNAMIC_NAME,
+			Some(500 * 1024 * 1024),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -270,12 +280,18 @@ fn quota_setter_none_clears_the_quota() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::quota_with_store(&store, DYNAMIC_NAME, Some(1024)),
+		account::quota_with_store(
+			&store,
+			DYNAMIC_NAME,
+			Some(1024),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::quota_with_store(&store, DYNAMIC_NAME, None),
+		account::quota_with_store(&store, DYNAMIC_NAME, None, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -311,7 +327,9 @@ fn protocols_setter_restricts_authentication() {
 		account::protocols_with_store(
 			&store,
 			DYNAMIC_NAME,
-			Some(vec![crate::config::Protocol::Api])
+			Some(vec![crate::config::Protocol::Api]),
+			&mut std::io::sink(),
+			false
 		),
 		ExitCode::SUCCESS
 	);
@@ -345,7 +363,13 @@ fn address_add_resolves_after_reload() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::address_add_with_store(&store, DYNAMIC_NAME, &format!("{DYNAMIC_NAME}2@{DOMAIN}")),
+		account::address_add_with_store(
+			&store,
+			DYNAMIC_NAME,
+			&format!("{DYNAMIC_NAME}2@{DOMAIN}"),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -363,7 +387,13 @@ fn address_add_rejects_static_address() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::address_add_with_store(&store, DYNAMIC_NAME, &format!("{STATIC_NAME}@{DOMAIN}")),
+		account::address_add_with_store(
+			&store,
+			DYNAMIC_NAME,
+			&format!("{STATIC_NAME}@{DOMAIN}"),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::from(2),
 		"address owned by a static account must be refused"
 	);
@@ -377,7 +407,9 @@ fn address_add_rejects_foreign_domain() {
 		account::address_add_with_store(
 			&store,
 			DYNAMIC_NAME,
-			&format!("{DYNAMIC_NAME}@elsewhere.example")
+			&format!("{DYNAMIC_NAME}@elsewhere.example"),
+			&mut std::io::sink(),
+			false
 		),
 		ExitCode::from(2)
 	);
@@ -388,7 +420,13 @@ fn address_remove_unresolves_after_reload() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::address_add_with_store(&store, DYNAMIC_NAME, &format!("{DYNAMIC_NAME}2@{DOMAIN}")),
+		account::address_add_with_store(
+			&store,
+			DYNAMIC_NAME,
+			&format!("{DYNAMIC_NAME}2@{DOMAIN}"),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -396,7 +434,9 @@ fn address_remove_unresolves_after_reload() {
 		account::address_remove_with_store(
 			&store,
 			DYNAMIC_NAME,
-			&format!("{DYNAMIC_NAME}2@{DOMAIN}")
+			&format!("{DYNAMIC_NAME}2@{DOMAIN}"),
+			&mut std::io::sink(),
+			false
 		),
 		ExitCode::SUCCESS
 	);
@@ -416,13 +456,31 @@ fn static_account_refused_with_edit_config_hint() {
 	let store = reload_store(&harness);
 	// Every mutator refuses a static account with the same hint.
 	for code in [
-		account::password_with_store(&store, STATIC_NAME, Cursor::new("a-long-password\n")),
-		account::disable_with_store(&store, STATIC_NAME),
-		account::enable_with_store(&store, STATIC_NAME),
-		account::address_add_with_store(&store, STATIC_NAME, &format!("new@{DOMAIN}")),
-		account::address_remove_with_store(&store, STATIC_NAME, &format!("{STATIC_NAME}@{DOMAIN}")),
-		account::quota_with_store(&store, STATIC_NAME, Some(1024)),
-		account::protocols_with_store(&store, STATIC_NAME, None),
+		account::password_with_store(
+			&store,
+			STATIC_NAME,
+			Cursor::new("a-long-password\n"),
+			&mut std::io::sink(),
+			false,
+		),
+		account::disable_with_store(&store, STATIC_NAME, &mut std::io::sink(), false),
+		account::enable_with_store(&store, STATIC_NAME, &mut std::io::sink(), false),
+		account::address_add_with_store(
+			&store,
+			STATIC_NAME,
+			&format!("new@{DOMAIN}"),
+			&mut std::io::sink(),
+			false,
+		),
+		account::address_remove_with_store(
+			&store,
+			STATIC_NAME,
+			&format!("{STATIC_NAME}@{DOMAIN}"),
+			&mut std::io::sink(),
+			false,
+		),
+		account::quota_with_store(&store, STATIC_NAME, Some(1024), &mut std::io::sink(), false),
+		account::protocols_with_store(&store, STATIC_NAME, None, &mut std::io::sink(), false),
 	] {
 		assert_eq!(code, ExitCode::from(2), "static account must be refused");
 	}
@@ -489,11 +547,19 @@ fn show_refuses_unknown_account() {
 fn show_handles_set_quota_and_protocols() {
 	let harness = build();
 	let store = reload_store(&harness);
-	account::quota_with_store(&store, DYNAMIC_NAME, Some(500 * 1024 * 1024));
+	account::quota_with_store(
+		&store,
+		DYNAMIC_NAME,
+		Some(500 * 1024 * 1024),
+		&mut std::io::sink(),
+		false,
+	);
 	account::protocols_with_store(
 		&store,
 		DYNAMIC_NAME,
 		Some(vec![crate::config::Protocol::Api]),
+		&mut std::io::sink(),
+		false,
 	);
 	let store = reload_store(&harness);
 	let mut out = Vec::new();

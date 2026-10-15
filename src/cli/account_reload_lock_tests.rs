@@ -147,6 +147,8 @@ fn add_does_not_hold_the_lock_while_it_waits() {
 			vec!["carol@example.org".to_string()],
 			None,
 			password,
+			&mut std::io::sink(),
+			false,
 		)
 	});
 	assert_not_blocked("account add", result);
@@ -171,6 +173,7 @@ fn remove_does_not_hold_the_lock_while_it_waits() {
 			None,
 			&mut out,
 			&mut err,
+			false,
 		)
 	});
 	assert_not_blocked("account remove", result);
@@ -182,7 +185,9 @@ fn password_does_not_hold_the_lock_while_it_waits() {
 	let dir = with_bob();
 	let store = open_store(dir.path());
 	let password = Cursor::new(format!("{}\n", second_password()));
-	let result = against_a_server(dir.path(), || password_with_store(&store, "bob", password));
+	let result = against_a_server(dir.path(), || {
+		password_with_store(&store, "bob", password, &mut std::io::sink(), false)
+	});
 	assert_not_blocked("account password", result);
 }
 
@@ -190,7 +195,9 @@ fn password_does_not_hold_the_lock_while_it_waits() {
 fn disable_does_not_hold_the_lock_while_it_waits() {
 	let dir = with_bob();
 	let store = open_store(dir.path());
-	let result = against_a_server(dir.path(), || disable_with_store(&store, "bob"));
+	let result = against_a_server(dir.path(), || {
+		disable_with_store(&store, "bob", &mut std::io::sink(), false)
+	});
 	assert_not_blocked("account disable", result);
 }
 
@@ -199,6 +206,8 @@ fn enable_does_not_hold_the_lock_while_it_waits() {
 	let dir = with_bob();
 	let store = open_store(dir.path());
 	store.set_disabled("bob", true).expect("disable bob first");
-	let result = against_a_server(dir.path(), || enable_with_store(&store, "bob"));
+	let result = against_a_server(dir.path(), || {
+		enable_with_store(&store, "bob", &mut std::io::sink(), false)
+	});
 	assert_not_blocked("account enable", result);
 }

@@ -60,7 +60,13 @@ fn change_password(dir: &std::path::Path, config: &std::path::Path) -> Option<Sc
 	let store = account::prepare(config, NAME).expect("prepare");
 	let new_password = crate::test_fixtures::second_password();
 	assert_eq!(
-		account::password_with_store(&store, NAME, Cursor::new(format!("{new_password}\n"))),
+		account::password_with_store(
+			&store,
+			NAME,
+			Cursor::new(format!("{new_password}\n")),
+			&mut std::io::sink(),
+			false
+		),
 		ExitCode::SUCCESS
 	);
 	AccountStore::open(

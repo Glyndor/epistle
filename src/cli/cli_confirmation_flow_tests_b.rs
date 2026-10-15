@@ -182,6 +182,7 @@ fn account_password_refuses_an_unknown_name_before_reading_anything() {
 			account::Subcommand::Password {
 				name: "ghost".to_string(),
 			},
+			false,
 			&mut Vec::new(),
 		)
 	});
@@ -205,6 +206,7 @@ fn account_password_asks_twice_for_a_known_name() {
 				account::Subcommand::Password {
 					name: NAME.to_string(),
 				},
+				false,
 				&mut Vec::new(),
 			)
 		},
@@ -224,6 +226,7 @@ fn account_show_reads_a_static_account() {
 			name: "bob".to_string(),
 			json: false,
 		},
+		false,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
