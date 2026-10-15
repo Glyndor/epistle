@@ -54,7 +54,9 @@ impl ScanningSink {
 
 	/// [`ScanningSink::wrap`], with the attachment policy applied to
 	/// submissions too. A submission the policy would quarantine or reject
-	/// is refused: there is no quarantine for outbound mail.
+	/// is refused: there is no quarantine for outbound mail. A policy that
+	/// cannot refuse anything (`mode = "flag"`) is not applied: nothing is
+	/// stamped on outgoing mail, so the inspection would only cost time.
 	pub fn wrap_with_attachments(
 		scan_authenticated: bool,
 		inner: Arc<dyn MessageSink>,
@@ -63,6 +65,7 @@ impl ScanningSink {
 		metrics: Option<Arc<Metrics>>,
 		webhook: Option<Arc<Webhook>>,
 	) -> std::io::Result<Arc<dyn MessageSink>> {
+		let attachments = attachments.filter(|policy| policy.can_refuse());
 		if !scan_authenticated || (clamd.is_none() && attachments.is_none()) {
 			return Ok(inner);
 		}

@@ -124,6 +124,12 @@ impl Policy {
 		self.timeout
 	}
 
+	/// Whether any finding can quarantine or refuse a message. Under
+	/// `mode = "flag"` none can: every finding is a header at most.
+	pub fn can_refuse(&self) -> bool {
+		mode_action(self.mode) >= Action::Quarantine
+	}
+
 	/// Admit one inbound inspection for the client at `peer`, or `None`
 	/// when the server or that client is at its cap. A client is its IPv4
 	/// address or the /64 of its IPv6 one; mail with no known peer shares

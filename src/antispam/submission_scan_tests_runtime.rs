@@ -4,10 +4,18 @@
 //! plain thread. None of them may crash on the inspection, and a panic in
 //! it is a temporary failure, never a dead session.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::*;
 use crate::antispam::attachments::corpus;
 use crate::config::{AttachmentMode, Attachments};
 use crate::smtp::sink::MemorySink;
+
+static INSPECTED: AtomicUsize = AtomicUsize::new(0);
+
+fn count() {
+	INSPECTED.fetch_add(1, Ordering::SeqCst);
+}
 
 fn explode() {
 	panic!("inspection failed on purpose");
@@ -119,4 +127,19 @@ fn every_caller_the_sink_can_have_gets_the_verdict() {
 		refused(multi.block_on(async { submit(&sink) })),
 		"the runtime's own block_on"
 	);
+}
+
+#[test]
+fn flag_mode_never_inspects_a_submission() {
+	// Under `flag` no finding can stop a submission, and nothing is
+	// stamped on outgoing mail: an inspection would only cost time and,
+	// at the gate's cap, a 451 an upgrade never asked for.
+	let before = INSPECTED.load(Ordering::SeqCst);
+	let (sink, inner) = make(policy(AttachmentMode::Flag).with_check_hook(count));
+	submit(&sink).expect("sent");
+	assert_eq!(inner.messages().len(), 1);
+	assert_eq!(INSPECTED.load(Ordering::SeqCst), before, "not inspected");
+	let (sink, _) = make(policy(AttachmentMode::Quarantine).with_check_hook(count));
+	assert!(refused(submit(&sink)));
+	assert_eq!(INSPECTED.load(Ordering::SeqCst), before + 1);
 }
