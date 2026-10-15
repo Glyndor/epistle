@@ -35,7 +35,7 @@ pub const MAX_ANCHORS: usize = 8;
 const FILE: &str = "timestamp.json";
 
 /// One authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Authority {
 	/// Where RFC 3161 requests are POSTed.
 	pub url: String,
@@ -49,6 +49,24 @@ pub struct Authority {
 	/// outside the test build.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub local_test: bool,
+	/// A file (`0600`, owned by the server user) holding a bearer token for
+	/// an authority that requires one. Only the path is kept here; the
+	/// token is read when a request is made and never stored or recorded.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub token_file: Option<std::path::PathBuf>,
+}
+
+impl std::fmt::Debug for Authority {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Authority")
+			.field("host", &self.display())
+			.field("anchors", &self.anchors)
+			.field("policy", &self.policy)
+			.field("local_test", &self.local_test)
+			.field("token_file", &self.token_file.as_ref().map(|_| "<set>"))
+			.finish()
+	}
 }
 
 /// The timestamp settings.
@@ -69,12 +87,22 @@ impl Default for Settings {
 				anchors: vec![DEFAULT_TSA_ANCHOR.to_string()],
 				policy: None,
 				local_test: false,
+				token_file: None,
 			}],
 		}
 	}
 }
 
 impl Authority {
+	/// How the authority is named in output and errors: its host only, so
+	/// nothing a URL could carry (credentials, a query) is ever printed.
+	pub fn display(&self) -> String {
+		url::Url::parse(&self.url)
+			.ok()
+			.and_then(|url| url.host_str().map(str::to_string))
+			.unwrap_or_else(|| "<invalid URL>".to_string())
+	}
+
 	/// The required policy as DER OID content octets, when one is set and
 	/// well formed.
 	pub fn policy_oid(&self) -> Option<Vec<u8>> {
@@ -118,6 +146,13 @@ impl Settings {
 			));
 		}
 		for authority in &self.authorities {
+			if url::Url::parse(&authority.url)
+				.is_ok_and(|url| !url.username().is_empty() || url.password().is_some())
+			{
+				return Err(SettingsError(
+					"a timestamp authority URL must not carry credentials (use token_file)".into(),
+				));
+			}
 			// Plain HTTP exists for the loopback authority the tests run;
 			// a release build never accepts it.
 			check_url(&authority.url, authority.local_test && cfg!(test))?;
@@ -243,6 +278,36 @@ pub fn save(evidence_root: &Path, settings: &Settings) -> std::io::Result<()> {
 	crate::storage::write_secret(&evidence_root.join(FILE), &bytes)
 }
 
+/// Read the bearer token in `path`: a regular file (not a link), owned by
+/// the server user, readable by nobody else, at most 4 KiB.
+pub fn read_token(path: &Path) -> std::io::Result<String> {
+	use std::os::unix::fs::MetadataExt;
+	let refused = || {
+		std::io::Error::new(
+			std::io::ErrorKind::PermissionDenied,
+			"a TSA token file must be 0600 and owned by the server user",
+		)
+	};
+	let meta = std::fs::symlink_metadata(path)?;
+	// SAFETY: geteuid has no preconditions and cannot fail.
+	let me = unsafe { libc::geteuid() };
+	if !meta.file_type().is_file() || meta.uid() != me || meta.mode() & 0o077 != 0 {
+		return Err(refused());
+	}
+	let bytes = crate::evidence::checkpoint::read_bounded(path, 4096)?.ok_or_else(refused)?;
+	let token = String::from_utf8(bytes).map_err(|_| {
+		std::io::Error::new(std::io::ErrorKind::InvalidData, "a TSA token is not text")
+	})?;
+	let token = token.trim().to_string();
+	if token.is_empty() || token.chars().any(|c| c.is_control()) {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			"a TSA token is empty or has control characters",
+		));
+	}
+	Ok(token)
+}
+
 /// Save `settings` and record the change in the evidence chain, naming
 /// the `operator` who made it.
 pub fn record_change(
@@ -252,10 +317,10 @@ pub fn record_change(
 ) -> std::io::Result<()> {
 	save(evidence_root, settings)?;
 	let value = if settings.enabled {
-		let urls: Vec<&str> = settings
+		let urls: Vec<String> = settings
 			.authorities
 			.iter()
-			.map(|a| a.url.as_str())
+			.map(Authority::display)
 			.collect();
 		format!("enabled ({}) by {operator}", urls.join(", "))
 	} else {
@@ -277,3 +342,7 @@ mod tests;
 #[cfg(test)]
 #[path = "settings_tests_fail_closed.rs"]
 mod tests_fail_closed;
+
+#[cfg(test)]
+#[path = "settings_tests_secrets.rs"]
+mod tests_secrets;

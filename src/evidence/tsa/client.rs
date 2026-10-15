@@ -41,7 +41,17 @@ pub async fn obtain(authorities: &[Authority], digest: &[u8; 32]) -> Result<Obta
 	let mut errors = Vec::new();
 	for authority in authorities {
 		let request = build(digest, random_nonce());
-		match exchange(&client, &authority.url, &request).await {
+		let token = match &authority.token_file {
+			Some(path) => match super::settings::read_token(path) {
+				Ok(token) => Some(token),
+				Err(error) => {
+					errors.push(format!("{}: token file: {error}", authority.display()));
+					continue;
+				}
+			},
+			None => None,
+		};
+		match exchange(&client, &authority.url, &request, token.as_deref()).await {
 			Ok(response) => {
 				let anchors = authority.anchor_hashes();
 				let policy = authority.policy_oid();
@@ -59,10 +69,10 @@ pub async fn obtain(authorities: &[Authority], digest: &[u8; 32]) -> Result<Obta
 							url: authority.url.clone(),
 						});
 					}
-					Err(error) => errors.push(format!("{}: {error}", authority.url)),
+					Err(error) => errors.push(format!("{}: {error}", authority.display())),
 				}
 			}
-			Err(error) => errors.push(format!("{}: {error}", authority.url)),
+			Err(error) => errors.push(format!("{}: {error}", authority.display())),
 		}
 	}
 	Err(if errors.is_empty() {
@@ -76,11 +86,16 @@ async fn exchange(
 	client: &reqwest::Client,
 	url: &str,
 	request: &Request,
+	token: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-	let mut response = client
+	let mut builder = client
 		.post(url)
 		.header(reqwest::header::CONTENT_TYPE, "application/timestamp-query")
-		.body(request.der.clone())
+		.body(request.der.clone());
+	if let Some(token) = token {
+		builder = builder.bearer_auth(token);
+	}
+	let mut response = builder
 		.send()
 		.await
 		.map_err(|error| format!("request failed: {}", without_url(&error)))?;

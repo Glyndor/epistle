@@ -28,6 +28,7 @@ fn settings(url: String, tsa: &FakeTsa) -> Settings {
 			anchors: vec![to_hex(&tsa.anchor)],
 			policy: None,
 			local_test: true,
+			token_file: None,
 		}],
 	}
 }

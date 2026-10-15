@@ -14,6 +14,7 @@ fn authority(url: String, tsa: &FakeTsa) -> Authority {
 		anchors: vec![crate::evidence::record::to_hex(&tsa.anchor)],
 		policy: None,
 		local_test: true,
+		token_file: None,
 	}
 }
 
@@ -95,8 +96,6 @@ async fn every_failure_is_reported_without_remote_text() {
 	.expect_err("no token");
 	assert_eq!(
 		error,
-		format!(
-			"{url}: the TSA refused the request (status 2); {unreachable}: request failed: could not connect"
-		)
+		"127.0.0.1: the TSA refused the request (status 2); 127.0.0.1: request failed: could not connect"
 	);
 }

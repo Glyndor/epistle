@@ -59,6 +59,8 @@ pub(crate) struct FakeTsa {
 	pub(crate) faults: Faults,
 	/// Every request body received over HTTP.
 	pub(crate) received: Mutex<Vec<Vec<u8>>>,
+	/// The Authorization header of every request that carried one.
+	pub(crate) authorization: Mutex<Vec<String>>,
 }
 
 /// The policy OID the fake issues under: 1.2.3.4.
@@ -152,6 +154,7 @@ impl FakeTsa {
 			gen_time,
 			faults: Faults::default(),
 			received: Mutex::new(Vec::new()),
+			authorization: Mutex::new(Vec::new()),
 		}
 	}
 
@@ -339,19 +342,30 @@ impl FakeTsa {
 		let tsa = Arc::clone(&self);
 		let app = axum::Router::new().route(
 			"/tsr",
-			post(move |body: axum::body::Bytes| {
-				let tsa = Arc::clone(&tsa);
-				async move {
-					tsa.received.lock().expect("lock").push(body.to_vec());
-					(
-						[(
-							axum::http::header::CONTENT_TYPE,
-							"application/timestamp-reply",
-						)],
-						tsa.respond(&body),
-					)
-				}
-			}),
+			post(
+				move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+					let tsa = Arc::clone(&tsa);
+					async move {
+						tsa.received.lock().expect("lock").push(body.to_vec());
+						if let Some(value) = headers
+							.get(axum::http::header::AUTHORIZATION)
+							.and_then(|value| value.to_str().ok())
+						{
+							tsa.authorization
+								.lock()
+								.expect("lock")
+								.push(value.to_string());
+						}
+						(
+							[(
+								axum::http::header::CONTENT_TYPE,
+								"application/timestamp-reply",
+							)],
+							tsa.respond(&body),
+						)
+					}
+				},
+			),
 		);
 		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 			.await

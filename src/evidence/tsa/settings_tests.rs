@@ -8,6 +8,7 @@ fn with(url: &str, anchors: Vec<String>) -> Settings {
 			anchors,
 			policy: None,
 			local_test: true,
+			token_file: None,
 		}],
 	}
 }
