@@ -30,7 +30,7 @@ fn message(data: Vec<u8>) -> AcceptedMessage {
 	}
 }
 
-fn sink_with_gate(gate: gate::Gate, mode: AttachmentMode) -> (ScanningSink, Arc<MemorySink>) {
+fn sink_with_gate(gate: Arc<gate::Gate>, mode: AttachmentMode) -> (ScanningSink, Arc<MemorySink>) {
 	let inner = Arc::new(MemorySink::new());
 	let sink = ScanningSink {
 		inner: inner.clone(),
@@ -67,7 +67,7 @@ fn the_gate_caps_each_account_and_the_whole_server() {
 		"a freed slot is reusable"
 	);
 	drop((second, bob));
-	assert_eq!(gate.accounts(), 0, "no entry outlives its permits");
+	assert_eq!(gate.senders(), 0, "no entry outlives its permits");
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn a_message_that_always_hits_a_cap_is_refused_permanently() {
 		"permanent, so nothing retries it"
 	);
 	assert!(inner.messages().is_empty());
-	assert_eq!(sink.gate.accounts(), 0, "the slot was released");
+	assert_eq!(sink.gate.senders(), 0, "the slot was released");
 	let _ = corpus::pe();
 }
 

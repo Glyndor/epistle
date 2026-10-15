@@ -11,6 +11,7 @@
 
 pub mod archive;
 pub mod decode;
+pub(crate) mod gate;
 pub mod header;
 pub mod image;
 pub mod policy;

@@ -10,8 +10,11 @@
 //! flagged and quarantined when `mode` quarantines, but never rejected on
 //! its own: a large or odd message is not proof of a disguise.
 
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::gate::{Gate, Permit};
 use super::rules::{Extensions, Reason};
 use super::{Budget, Report, inspect};
 use crate::config::{AttachmentMode, Attachments, ContentAction};
@@ -79,6 +82,13 @@ pub struct Policy {
 	extensions: Extensions,
 	max_decoded: usize,
 	timeout: Duration,
+	/// Caps on concurrent inbound inspections, total and per client.
+	/// Shared by every listener that holds this policy.
+	inbound: Arc<Gate>,
+	/// Called at the start of every inspection, so a test can make one
+	/// panic or block.
+	#[cfg(test)]
+	check_hook: Option<fn()>,
 }
 
 impl Policy {
@@ -103,7 +113,40 @@ impl Policy {
 			),
 			max_decoded,
 			timeout: DEFAULT_TIMEOUT,
+			inbound: Gate::with_defaults(),
+			#[cfg(test)]
+			check_hook: None,
 		})
+	}
+
+	/// How long one inspection may run.
+	pub fn timeout(&self) -> Duration {
+		self.timeout
+	}
+
+	/// Admit one inbound inspection for the client at `peer`, or `None`
+	/// when the server or that client is at its cap. A client is its IPv4
+	/// address or the /64 of its IPv6 one; mail with no known peer shares
+	/// one slot count.
+	pub(crate) fn admit_inbound(&self, peer: Option<IpAddr>) -> Option<Permit> {
+		let client = peer
+			.map(|ip| crate::smtp::per_ip::client_key(ip).to_string())
+			.unwrap_or_default();
+		self.inbound.try_enter(&client)
+	}
+
+	/// Replace the inbound caps.
+	#[cfg(test)]
+	pub(crate) fn with_inbound_caps(mut self, global: usize, per_client: usize) -> Self {
+		self.inbound = Gate::new(global, per_client);
+		self
+	}
+
+	/// Run `hook` at the start of every inspection.
+	#[cfg(test)]
+	pub(crate) fn with_check_hook(mut self, hook: fn()) -> Self {
+		self.check_hook = Some(hook);
+		self
 	}
 
 	/// Replace the inspection deadline.
@@ -114,6 +157,10 @@ impl Policy {
 
 	/// Inspect `raw` and decide.
 	pub fn check(&self, raw: &[u8]) -> (Report, Decision) {
+		#[cfg(test)]
+		if let Some(hook) = self.check_hook {
+			hook();
+		}
 		let report = inspect(
 			raw,
 			&self.extensions,

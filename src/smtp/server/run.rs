@@ -407,9 +407,9 @@ impl Server {
 						}
 					}
 					// The attachment policy decides where the scanner does.
-					if let (Some(policy), None) = (&self.attachments, session.authenticated())
+					if session.authenticated().is_none()
 						&& self
-							.screen_attachments(policy, &mut message, &mut stream)
+							.screen_attachments(&mut message, &mut stream, peer)
 							.await?
 					{
 						continue;

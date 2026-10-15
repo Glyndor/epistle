@@ -113,3 +113,7 @@ mod tests_session_time_abuse;
 #[cfg(test)]
 #[path = "server_tests_bdat_share.rs"]
 mod tests_bdat_share;
+
+#[cfg(test)]
+#[path = "server_tests_attachments_flood.rs"]
+mod tests_attachments_flood;

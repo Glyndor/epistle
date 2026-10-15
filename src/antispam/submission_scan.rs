@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use super::attachments::gate;
 use super::attachments::policy::{Action, Policy};
 use super::clamd::{ClamdHook, Inspection};
 use crate::metrics::Metrics;
@@ -28,7 +29,7 @@ pub struct ScanningSink {
 	scanner: Option<worker::Scanner>,
 	attachments: Option<Arc<Policy>>,
 	/// Caps on concurrent attachment inspections, total and per account.
-	gate: gate::Gate,
+	gate: Arc<gate::Gate>,
 	metrics: Option<Arc<Metrics>>,
 	webhook: Option<Arc<Webhook>>,
 	/// The threads scans ran on, so a test can tell how many there were.
@@ -69,10 +70,7 @@ impl ScanningSink {
 			inner,
 			scanner: clamd.map(worker::Scanner::start).transpose()?,
 			attachments,
-			gate: gate::Gate::new(
-				gate::default_global_cap(),
-				gate::default_account_cap(gate::default_global_cap()),
-			),
+			gate: gate::Gate::with_defaults(),
 			metrics,
 			webhook,
 			#[cfg(test)]
@@ -207,9 +205,6 @@ fn bounded(signature: &str) -> String {
 
 #[path = "submission_scan_worker.rs"]
 mod worker;
-
-#[path = "submission_scan_gate.rs"]
-mod gate;
 
 #[cfg(test)]
 #[path = "submission_scan_tests.rs"]

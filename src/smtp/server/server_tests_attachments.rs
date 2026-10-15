@@ -143,3 +143,32 @@ async fn an_authenticated_submission_the_policy_stops_is_refused() {
 	assert_eq!(answer, "550 5.7.1 attachment type not accepted\r\n");
 	assert!(inner.messages().is_empty(), "nothing was routed");
 }
+
+#[tokio::test]
+async fn a_forged_warning_header_is_removed_also_when_the_policy_is_off() {
+	// Only the server speaks in this header. With the inspection off, a
+	// sender's copy would read as the server's verdict.
+	let forged = FORGED.replace("none", "executable-content");
+	let (answer, delivered) = deliver(None, &forged).await;
+	assert!(answer.starts_with("250 "), "{answer}");
+	assert_eq!(delivered.len(), 1);
+	assert_eq!(warning(&delivered[0]), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn flag_mode_adds_one_header_and_leaves_every_other_byte_alone() {
+	let (_, delivered) = deliver(Some(policy(AttachmentMode::Flag)), EXE_AS_JPG).await;
+	let data = &delivered[0].data;
+	let header = b"X-Epistle-Attachment-Warning: executable-content, type-mismatch\r\n";
+	assert!(data.starts_with(header), "the header is on top");
+	let (_, plain) = deliver(None, EXE_AS_JPG).await;
+	let rest = &data[header.len()..];
+	// The trace headers carry a timestamp, so compare from the original
+	// message on: it is byte for byte what the client sent.
+	let original = EXE_AS_JPG.as_bytes();
+	assert!(
+		rest.ends_with(original),
+		"the message after it is unchanged"
+	);
+	assert!(plain[0].data.ends_with(original));
+}
