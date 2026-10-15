@@ -19,6 +19,7 @@ pub mod key;
 pub mod lines;
 pub mod marketing;
 pub mod merkle;
+pub mod policy;
 pub mod record;
 #[cfg(test)]
 pub(crate) mod test_support;
