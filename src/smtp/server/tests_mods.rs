@@ -93,3 +93,7 @@ mod tests_tls_drip;
 #[cfg(test)]
 #[path = "server_tests_bdat_growth.rs"]
 mod tests_bdat_growth;
+
+#[cfg(test)]
+#[path = "server_tests_session_limits.rs"]
+mod tests_session_limits;

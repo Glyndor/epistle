@@ -14,7 +14,14 @@ use crate::smtp::session::{Action, Reply, Session, scram};
 impl Session {
 	/// Feed one command line (CRLF already stripped and enforced upstream).
 	pub fn command_line(&mut self, line: &str) -> Action {
-		match crate::smtp::command::parse(line) {
+		let parsed = crate::smtp::command::parse(line);
+		let junk = matches!(parsed, Ok(Command::Noop | Command::Rset | Command::Vrfy));
+		let action = self.dispatch(parsed);
+		self.count_junk(junk, action)
+	}
+
+	fn dispatch(&mut self, parsed: Result<Command, ParseError>) -> Action {
+		match parsed {
 			Ok(command) => self.apply(command),
 			Err(ParseError::UnknownCommand) => Action::Continue(Reply::syntax_error()),
 			Err(ParseError::LineTooLong) => {
@@ -121,8 +128,14 @@ impl Session {
 		}
 	}
 
-	/// Feed the response line of a challenged AUTH (server sent 334).
+	/// Feed the response line of a challenged AUTH (server sent 334). A
+	/// cancelled or failed exchange counts as a command without progress.
 	pub fn auth_line(&mut self, line: &str) -> Action {
+		let action = self.auth_response(line);
+		self.count_junk(false, action)
+	}
+
+	fn auth_response(&mut self, line: &str) -> Action {
 		if line == "*" {
 			self.pending_scram = None;
 			self.pending_login = None;

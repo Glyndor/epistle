@@ -56,6 +56,7 @@ impl Server {
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			data_rate: super::DataRate::default(),
+			junk_command_limit: crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT,
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
 		}
@@ -210,6 +211,13 @@ impl Server {
 	/// floor of `0` turns the check off.
 	pub fn with_data_rate(mut self, rate: super::DataRate) -> Self {
 		self.data_rate = rate;
+		self
+	}
+
+	/// Close a session on this listener after `limit` commands that bring
+	/// it no closer to a delivered message (`0` turns the limit off).
+	pub fn with_junk_command_limit(mut self, limit: u32) -> Self {
+		self.junk_command_limit = limit;
 		self
 	}
 

@@ -194,6 +194,9 @@ pub struct Server {
 	/// The minimum average rate of one DATA body or one BDAT chunk once
 	/// its grace period is over (see [`DataRate`]).
 	data_rate: DataRate,
+	/// Commands without progress a session may send before it is closed;
+	/// `0` turns the limit off.
+	junk_command_limit: u32,
 	/// The authentication protocol this listener serves. Sessions tag every
 	/// password attempt through this server with it, so a per-account
 	/// `allowed_protocols` set that does not include the listener's kind
@@ -321,7 +324,8 @@ impl Server {
 			.with_auth_protocol(self.auth_protocol)
 			.with_metrics(Arc::clone(&self.metrics))
 			.with_scram_enabled(self.scram_enabled)
-			.with_max_message_size(self.max_message_size);
+			.with_max_message_size(self.max_message_size)
+			.with_junk_command_limit(self.junk_command_limit);
 		if let Some(budget) = &self.memory_budget {
 			session = session.with_memory_budget(Arc::clone(budget));
 		}

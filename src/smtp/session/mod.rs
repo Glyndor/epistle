@@ -16,6 +16,7 @@ mod author;
 mod bdat;
 pub mod cap;
 mod finalise;
+mod junk;
 mod login;
 mod oauth;
 mod scram;
@@ -35,6 +36,7 @@ mod auth_dispatch;
 mod transaction_policy;
 #[path = "types.rs"]
 mod types;
+pub use junk::DEFAULT_JUNK_COMMAND_LIMIT;
 use transaction_policy::TransactionPolicy;
 use types::State;
 pub use types::{AcceptedMessage, Action};
@@ -130,6 +132,10 @@ pub struct Session {
 	/// The claim for the body last accepted, held while the connection
 	/// loop delivers it: the body is still in memory until then.
 	delivery_reservation: Reservation,
+	/// Commands without progress sent so far, and how many are allowed
+	/// (`0`: no limit); see the `junk` module.
+	junk_commands: u32,
+	junk_command_limit: u32,
 }
 
 impl Session {
@@ -164,6 +170,8 @@ impl Session {
 			memory_budget: None,
 			chunk_reservation: Reservation::none(),
 			delivery_reservation: Reservation::none(),
+			junk_commands: 0,
+			junk_command_limit: DEFAULT_JUNK_COMMAND_LIMIT,
 		}
 	}
 
