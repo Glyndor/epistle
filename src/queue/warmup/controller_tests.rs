@@ -313,3 +313,18 @@ fn turning_it_off_lifts_every_cap_at_once() {
 		Grant::Unlimited
 	);
 }
+
+#[test]
+fn a_cap_of_zero_written_by_hand_does_not_hold_mail_for_ever() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut shut = State::new(20_375);
+	shut.group_mut(Group::Gmail).cap = Some(0);
+	state::save(dir.path(), &shut).expect("save");
+	let warmup = on(dir.path(), MIDNIGHT);
+	let tomorrow = MIDNIGHT + 86_400;
+	warmup.tick(tomorrow);
+	assert_eq!(
+		granted(warmup.grant(Group::Gmail, "system", 1, tomorrow)),
+		(1, tomorrow)
+	);
+}

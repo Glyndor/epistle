@@ -114,3 +114,27 @@ fn history_and_senders_are_bounded() {
 	assert_eq!(schedule.sender_key("account:late"), OVERFLOW_SENDER);
 	assert_eq!(schedule.sender_key("account:7"), "account:7");
 }
+
+#[test]
+fn a_cap_this_server_never_writes_is_not_trusted() {
+	use super::super::policy::MAX_CAP;
+	for (cap, from) in [
+		(Some(0), None),
+		(Some(MAX_CAP + 1), None),
+		(Some(100), Some(0)),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut state = State::new(20_375);
+		let gmail = state.group_mut(Group::Gmail);
+		gmail.cap = cap;
+		gmail.raise = from.map(|from| Raise {
+			from,
+			trial_day: 20_376,
+		});
+		save(dir.path(), &state).expect("save");
+		assert!(
+			matches!(load(dir.path()), Err(ReadError::Corrupt(..))),
+			"cap {cap:?}, raise from {from:?}"
+		);
+	}
+}

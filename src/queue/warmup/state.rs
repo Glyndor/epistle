@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::Group;
-use super::policy::{START_CAP, Verdict};
+use super::policy::{MAX_CAP, START_CAP, Verdict};
 
 /// The state file under the data directory.
 pub const STATE_FILE: &str = "warmup-state.json";
@@ -312,6 +312,19 @@ pub fn load(data_dir: &Path) -> Result<Option<State>, ReadError> {
 			return Err(ReadError::Corrupt(
 				file.display().to_string(),
 				"too many senders".into(),
+			));
+		}
+		// A cap of 0 would hold the group's mail for ever: no day would
+		// send anything, so none would be judged and grow it.
+		let caps = [group.cap, group.raise.map(|raise| raise.from)];
+		if caps
+			.into_iter()
+			.flatten()
+			.any(|cap| !(1..=MAX_CAP).contains(&cap))
+		{
+			return Err(ReadError::Corrupt(
+				file.display().to_string(),
+				format!("a cap is not between 1 and {MAX_CAP}"),
 			));
 		}
 	}
