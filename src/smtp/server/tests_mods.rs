@@ -105,3 +105,7 @@ mod tests_session_time;
 #[cfg(test)]
 #[path = "server_tests_session_time_abuse.rs"]
 mod tests_session_time_abuse;
+
+#[cfg(test)]
+#[path = "server_tests_bdat_share.rs"]
+mod tests_bdat_share;
