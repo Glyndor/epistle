@@ -5,13 +5,14 @@
 //! 24 MiB BDAT transfer peaked at 55.7 MiB, the same body over DATA and TLS
 //! at 70 MiB), while the budget counts body bytes only. A full budget can
 //! therefore cost about [`PEAK_FACTOR`] times its size. When
-//! `[server] message_memory_budget` is not set, the budget is a quarter of
-//! the container's memory limit ([`LIMIT_DIVISOR`]): about three quarters of
-//! the limit at the peak, the rest left to IMAP and JMAP sessions, the
-//! queue and the allocator. It never drops below one message of the largest
-//! size (a smaller budget would answer that message with 452 forever) and
-//! never grows past [`MAX_DERIVED_BUDGET`], which already admits forty
-//! 25 MiB messages at once.
+//! `[server] message_memory_budget` is not set, the budget is a fifth of
+//! the container's memory limit ([`LIMIT_DIVISOR`]), rounded down to whole
+//! MiB: about 60% of the limit at the peak, under the [`WARN_PERCENT`] line
+//! a configured budget is held to, the rest left to IMAP and JMAP sessions,
+//! the queue and the allocator. It never drops below one message of the
+//! largest size (a smaller budget would answer that message with 452
+//! forever) and never grows past [`MAX_DERIVED_BUDGET`], which already
+//! admits forty 25 MiB messages at once.
 //!
 //! The limit is the cgroup v2 `memory.max` of the running process, the
 //! lowest one on the way up to the cgroup root. Outside a limited cgroup it
@@ -21,8 +22,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// The share of the container limit the derived budget takes: a quarter.
-pub const LIMIT_DIVISOR: u64 = 4;
+/// The share of the container limit the derived budget takes: a fifth, so
+/// a full budget at the peak ([`PEAK_FACTOR`] times it) stays at 60% of the
+/// limit, under [`WARN_PERCENT`].
+pub const LIMIT_DIVISOR: u64 = 5;
 
 /// The largest derived budget: 1 GiB.
 pub const MAX_DERIVED_BUDGET: u64 = 1024 * 1024 * 1024;
@@ -197,9 +200,11 @@ pub fn container_limit(paths: &LimitPaths) -> ContainerLimit {
 /// The budget derived from a container limit of `limit` bytes for a server
 /// whose largest message is `max_message_size` bytes.
 pub fn derive(limit: u64, max_message_size: u64) -> u64 {
+	const MIB: u64 = 1024 * 1024;
 	// The config refuses a max_message_size above the ceiling when the
 	// budget is derived, so the floor never passes the ceiling.
-	(limit / LIMIT_DIVISOR).clamp(max_message_size.min(MAX_DERIVED_BUDGET), MAX_DERIVED_BUDGET)
+	(limit / LIMIT_DIVISOR / MIB * MIB)
+		.clamp(max_message_size.min(MAX_DERIVED_BUDGET), MAX_DERIVED_BUDGET)
 }
 
 /// The budget in effect: the configured one when set, else the one derived
@@ -217,11 +222,9 @@ pub fn effective(configured: Option<u64>, max_message_size: u64, limit: Containe
 pub fn warning(budget: &Budget) -> Option<String> {
 	let peak = u128::from(budget.bytes) * u128::from(PEAK_FACTOR);
 	let over = peak * 100 > u128::from(budget.limit.bytes) * u128::from(WARN_PERCENT);
-	// A derived budget is a quarter of the limit, which is over the line by
-	// design (3 x 25% = 75%); it only warns when the largest message pushed
-	// it past that quarter.
-	let raised = budget.derived && budget.bytes > budget.limit.bytes / LIMIT_DIVISOR;
-	if budget.bytes == 0 || !over || (budget.derived && !raised) {
+	// A derived budget only passes the line when the largest message raised
+	// it above a fifth of the limit (3 x 20% = 60%).
+	if budget.bytes == 0 || !over {
 		return None;
 	}
 	let (subject, remedy) = if budget.derived {

@@ -145,9 +145,10 @@ fn the_cgroup_wins_then_the_compose_file_then_the_fallback() {
 }
 
 #[test]
-fn the_derived_budget_is_a_quarter_of_the_limit_within_its_clamps() {
-	assert_eq!(derive(GIB, LARGEST), 256 * MIB);
-	assert_eq!(derive(2 * GIB, LARGEST), 512 * MIB);
+fn the_derived_budget_is_a_fifth_of_the_limit_within_its_clamps() {
+	assert_eq!(derive(GIB, LARGEST), 204 * MIB, "rounded down to whole MiB");
+	assert_eq!(derive(2 * GIB, LARGEST), 409 * MIB);
+	assert_eq!(derive(5 * GIB, LARGEST), GIB);
 	assert_eq!(derive(8 * GIB, LARGEST), GIB, "at most 1 GiB");
 	assert_eq!(derive(64 * MIB, LARGEST), LARGEST, "at least one message");
 	assert_eq!(derive(0, LARGEST), LARGEST);
@@ -167,7 +168,7 @@ fn a_configured_budget_is_kept_and_an_unset_one_is_derived() {
 	assert_eq!(
 		effective(None, LARGEST, two),
 		Budget {
-			bytes: 512 * MIB,
+			bytes: 409 * MIB,
 			derived: true,
 			limit: two
 		}

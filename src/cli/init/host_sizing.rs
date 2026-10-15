@@ -5,7 +5,7 @@
 //! host has to hold when every service peaks at once. On 8 GiB they add up
 //! to 6 GiB, 75%, under the 85% `epistle status` warns at; between 4 and
 //! about 7 GiB the same set passes that line, and `status` says so. `mail`
-//! gets 2g from the start: a full message memory budget (a quarter of the
+//! gets 2g from the start: a full message memory budget (a fifth of the
 //! limit) costs about three times its size while a burst of large messages
 //! arrives. clamav needs about 1 GiB resident and 2 GiB while it reloads its
 //! signatures, so below 4 GiB it is left out.

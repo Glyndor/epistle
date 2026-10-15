@@ -41,8 +41,8 @@ fn an_unset_budget_follows_the_container_limit_and_a_set_one_does_not() {
 	};
 	assert_eq!(
 		budget(""),
-		(512 * 1024 * 1024, 128 * 1024 * 1024),
-		"a quarter of 2 GiB, and a quarter of that for one client"
+		(409 * 1024 * 1024, 409 * 1024 * 1024 / 4),
+		"a fifth of 2 GiB in whole MiB, and a quarter of that for one client"
 	);
 	assert_eq!(
 		budget("message_memory_budget = 134217728"),
@@ -131,8 +131,8 @@ fn one_client_gets_a_quarter_of_the_budget_and_never_less_than_one_message() {
 	};
 	assert_eq!(
 		share(""),
-		64 * 1024 * 1024,
-		"a quarter of the 256 MiB default"
+		51 * 1024 * 1024,
+		"a quarter of the 204 MiB derived from the 1 GiB assumed without a limit"
 	);
 	assert_eq!(
 		share("message_memory_budget = 33554432"),

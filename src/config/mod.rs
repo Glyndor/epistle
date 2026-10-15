@@ -319,7 +319,7 @@ pub struct Config {
 	/// resources; try again later`, so a busy server cannot grow without
 	/// bound. `0` disables the cap (every reservation succeeds, the
 	/// historical behaviour). Absent derives it from the memory the `mail`
-	/// container may use (see [`crate::smtp::memory_fit`]): a quarter of
+	/// container may use (see [`crate::smtp::memory_fit`]): a fifth of
 	/// the limit, at least `max_message_size`, at most 1 GiB.
 	#[serde(default)]
 	pub message_memory_budget: Option<u64>,

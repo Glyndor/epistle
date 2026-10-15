@@ -17,7 +17,7 @@
 //! past the cap is refused the same way.
 //!
 //! The default cap is derived from the memory the `mail` container may use
-//! (see [`crate::smtp::memory_fit`]), a quarter of it, so a busy server
+//! (see [`crate::smtp::memory_fit`]), a fifth of it, so a busy server
 //! stays clear of the OOM. A `[server] message_memory_budget` overrides the
 //! derived default; setting it to `0` disables the budget (every
 //! reservation succeeds, the historical behaviour).

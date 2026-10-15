@@ -154,7 +154,7 @@ fn status_json_carries_both_findings() {
 					{
 						"name": "message budget",
 						"status": "ok",
-						"detail": "256 MiB, derived from the 1024 MiB the mail container may use \
+						"detail": "204 MiB, derived from the 1024 MiB the mail container may use \
 								   (mem_limit in compose.yaml)"
 					},
 				],

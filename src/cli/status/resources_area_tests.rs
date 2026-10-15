@@ -36,7 +36,7 @@ fn an_unset_budget_is_derived_from_the_mail_limit() {
 		budget_line("", Some("2g")),
 		(
 			Level::Ok,
-			"512 MiB, derived from the 2048 MiB the mail container may use (mem_limit in \
+			"409 MiB, derived from the 2048 MiB the mail container may use (mem_limit in \
 			 compose.yaml)"
 				.to_string()
 		)
@@ -45,7 +45,7 @@ fn an_unset_budget_is_derived_from_the_mail_limit() {
 		budget_line("", None),
 		(
 			Level::Ok,
-			"256 MiB, derived from the 1024 MiB the mail container may use (no limit found, \
+			"204 MiB, derived from the 1024 MiB the mail container may use (no limit found, \
 			 the former 1g default)"
 				.to_string()
 		)
