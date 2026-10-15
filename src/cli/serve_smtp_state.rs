@@ -8,6 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::antispam::attachments::policy::Policy;
 use crate::antispam::clamd::ClamdHook;
 use crate::antispam::hook::MailHook;
 use crate::antispam::llm::LlmHook;
@@ -67,6 +68,9 @@ pub(super) struct SmtpSharedState {
 	pub clamd: Option<Arc<ClamdHook>>,
 	/// Optional LLM-assisted antispam hook for the uncertain band.
 	pub llm_hook: Option<LlmHook>,
+	/// The `[attachments]` policy, shared by every SMTP listener and the
+	/// submission sink; `None` when `mode = "off"`.
+	pub attachment_policy: Option<Arc<Policy>>,
 }
 
 /// Build the per-listener shared state. A missing or unreachable data
@@ -139,6 +143,13 @@ pub(super) fn build_smtp_shared_state(
 				.unwrap_or(crate::smtp::server::DEFAULT_DATA_RATE_GRACE_SECS),
 		),
 	);
+	// No message is larger than the size limit, so no inspection decodes
+	// more than that.
+	let decode_limit = match max_message_size {
+		0 => crate::smtp::session::MAX_MESSAGE_SIZE,
+		size => size,
+	};
+	let attachment_policy = Policy::from_config(&config.attachments, decode_limit).map(Arc::new);
 	// A configured 0 on the per-IP cap means "use the protocol default",
 	// not "0 concurrent connections per peer". When the operator omits the
 	// key the listener keeps its built-in default; an explicit 0 falls back
@@ -162,6 +173,7 @@ pub(super) fn build_smtp_shared_state(
 		scanner_hook,
 		clamd,
 		llm_hook,
+		attachment_policy,
 	})
 }
 

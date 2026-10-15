@@ -187,6 +187,7 @@ pub async fn send(
 			charge.refund();
 			return Err(match error {
 				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
+				SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
 				SinkError::Unavailable(_) => ApiError::internal(),
 			});
 		}

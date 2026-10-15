@@ -406,6 +406,14 @@ impl Server {
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
+					// The attachment policy decides where the scanner does.
+					if let (Some(policy), None) = (&self.attachments, session.authenticated())
+						&& self
+							.screen_attachments(policy, &mut message, &mut stream)
+							.await?
+					{
+						continue;
+					}
 					// Bayesian thresholds that decide on their own: a score at or above
 					// `bayes_junk_at` routes to Junk with the spam-marking
 					// headers stamped on it; a score at or above

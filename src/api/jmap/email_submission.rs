@@ -252,6 +252,10 @@ fn submit_email(
 					kind: "forbiddenToSend",
 					description: Some(format!("message rejected: virus detected ({signature})")),
 				},
+				crate::smtp::sink::SinkError::AttachmentRefused(reasons) => Refusal {
+					kind: "forbiddenToSend",
+					description: Some(format!("attachment type not accepted ({reasons})")),
+				},
 				crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
 			});
 		}

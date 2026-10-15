@@ -1,0 +1,174 @@
+//! What the server does with an inspection: the `[attachments]` policy
+//! turned into one action per message.
+//!
+//! Every reason maps to an action. Dangerous content follows `mode`;
+//! macros and encrypted archives follow their own setting, never above
+//! `mode`. What could not be inspected or reads two ways (`scan-limit`,
+//! `ambiguous-mime`, `unreadable-archive`, `nested-archive`) is at least
+//! flagged and quarantined when `mode` quarantines, but never rejected on
+//! its own: a large or odd message is not proof of a disguise.
+
+use std::time::{Duration, Instant};
+
+use super::rules::{Extensions, Reason};
+use super::{Budget, Report, inspect};
+use crate::config::{AttachmentMode, Attachments, ContentAction};
+
+/// The header that carries the reason codes.
+pub const WARNING_HEADER: &str = "X-Epistle-Attachment-Warning";
+
+/// How long one inspection may run before what is left is a scan-limit.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What happens to the message, weakest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Action {
+	/// Deliver as is.
+	Deliver,
+	/// Deliver with the warning header.
+	Flag,
+	/// Deliver to Rejects with the warning header.
+	Quarantine,
+	/// Refuse during SMTP.
+	Reject,
+}
+
+/// The outcome for one message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decision {
+	/// The strongest action any reason asked for.
+	pub action: Action,
+	/// The reasons that asked for an action, sorted.
+	pub reasons: Vec<Reason>,
+}
+
+impl Decision {
+	/// The warning header line, CRLF-terminated, or `None` when there is
+	/// nothing to say. Only reason codes go in: no file name or other text
+	/// from the message.
+	pub fn header(&self) -> Option<String> {
+		if self.reasons.is_empty() {
+			return None;
+		}
+		let codes: Vec<&str> = self.reasons.iter().map(|reason| reason.code()).collect();
+		Some(format!("{WARNING_HEADER}: {}\r\n", codes.join(", ")))
+	}
+
+	/// Remove any warning header the sender wrote, then add ours. Whatever
+	/// arrives in the message is the sender's claim; only the server's own
+	/// inspection may speak in this header.
+	pub fn stamp(&self, data: &mut Vec<u8>) {
+		crate::smtp::trace::strip_headers_in_place(data, &[WARNING_HEADER]);
+		if let Some(header) = self.header() {
+			let mut stamped = Vec::with_capacity(header.len() + data.len());
+			stamped.extend_from_slice(header.as_bytes());
+			stamped.append(data);
+			*data = stamped;
+		}
+	}
+}
+
+/// The configured policy.
+#[derive(Clone, Debug)]
+pub struct Policy {
+	mode: AttachmentMode,
+	macros: ContentAction,
+	encrypted_archives: ContentAction,
+	extensions: Extensions,
+	max_decoded: usize,
+	timeout: Duration,
+}
+
+impl Policy {
+	/// The policy for `section`, or `None` when `mode = "off"`. `max_decoded`
+	/// is the message size limit: no message can decode to more.
+	pub fn from_config(section: &Attachments, max_decoded: usize) -> Option<Self> {
+		if section.mode == AttachmentMode::Off {
+			return None;
+		}
+		let normalise = |list: &[String]| -> Vec<String> {
+			list.iter()
+				.map(|value| crate::config::normalise_extension(value))
+				.collect()
+		};
+		Some(Self {
+			mode: section.mode,
+			macros: section.macros,
+			encrypted_archives: section.encrypted_archives,
+			extensions: Extensions::new(
+				&normalise(&section.block_extensions),
+				&normalise(&section.allow_extensions),
+			),
+			max_decoded,
+			timeout: DEFAULT_TIMEOUT,
+		})
+	}
+
+	/// Replace the inspection deadline.
+	pub fn with_timeout(mut self, timeout: Duration) -> Self {
+		self.timeout = timeout;
+		self
+	}
+
+	/// Inspect `raw` and decide.
+	pub fn check(&self, raw: &[u8]) -> (Report, Decision) {
+		let report = inspect(
+			raw,
+			&self.extensions,
+			Budget {
+				max_decoded: self.max_decoded,
+				deadline: Some(Instant::now() + self.timeout),
+			},
+		);
+		let decision = self.decide(&report);
+		(report, decision)
+	}
+
+	/// The action for every reason in `report`, and the strongest of them.
+	pub fn decide(&self, report: &Report) -> Decision {
+		let mut action = Action::Deliver;
+		let mut reasons = Vec::new();
+		for reason in report.reasons() {
+			let wanted = self.action_for(reason);
+			if wanted > Action::Deliver {
+				reasons.push(reason);
+				action = action.max(wanted);
+			}
+		}
+		Decision { action, reasons }
+	}
+
+	fn action_for(&self, reason: Reason) -> Action {
+		let ceiling = mode_action(self.mode);
+		match reason {
+			Reason::Macro => content_action(self.macros).min(ceiling),
+			Reason::EncryptedArchive => content_action(self.encrypted_archives).min(ceiling),
+			Reason::ScanLimit
+			| Reason::AmbiguousMime
+			| Reason::UnreadableArchive
+			| Reason::NestedArchive => ceiling.min(Action::Quarantine).max(Action::Flag),
+			_ => ceiling,
+		}
+	}
+}
+
+fn mode_action(mode: AttachmentMode) -> Action {
+	match mode {
+		AttachmentMode::Off => Action::Deliver,
+		AttachmentMode::Flag => Action::Flag,
+		AttachmentMode::Quarantine => Action::Quarantine,
+		AttachmentMode::Reject => Action::Reject,
+	}
+}
+
+fn content_action(action: ContentAction) -> Action {
+	match action {
+		ContentAction::Allow => Action::Deliver,
+		ContentAction::Flag => Action::Flag,
+		ContentAction::Quarantine => Action::Quarantine,
+	}
+}
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;

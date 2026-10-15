@@ -245,6 +245,10 @@ mod send_tests_bcc;
 mod send_tests_virus;
 
 #[cfg(test)]
+#[path = "send_tests_attachments.rs"]
+mod send_tests_attachments;
+
+#[cfg(test)]
 #[path = "send_tests_ratelimit.rs"]
 mod send_tests_ratelimit;
 

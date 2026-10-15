@@ -5,12 +5,14 @@
 //! client. The inspection reads the MIME structure ([`walk`]), identifies
 //! every attachment from its magic bytes ([`sniff`]), lists zip entries and
 //! Office macro storage without extracting anything ([`archive`]), and
-//! applies the [`rules`]. ClamAV still finds known malware; this finds the
-//! files that say one thing and carry another.
+//! applies the [`rules`]. What the server then does is the [`policy`]'s
+//! decision. ClamAV still finds known malware; this finds the files that
+//! say one thing and carry another.
 
 pub mod archive;
 pub mod decode;
 pub mod header;
+pub mod policy;
 pub mod rules;
 pub mod sniff;
 pub mod walk;

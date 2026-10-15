@@ -5,11 +5,13 @@
 //! alike. Mail from elsewhere passes through untouched: it has its own
 //! screening in the SMTP connection loop.
 //!
-//! Only the antivirus runs here: an account's own mail is not subjected to
-//! the Bayesian filter, reputation, DNSBL or greylisting.
+//! Only the antivirus and the attachment policy run here: an account's own
+//! mail is not subjected to the Bayesian filter, reputation, DNSBL or
+//! greylisting.
 
 use std::sync::Arc;
 
+use super::attachments::policy::{Action, Policy};
 use super::clamd::{ClamdHook, Inspection};
 use crate::metrics::Metrics;
 use crate::smtp::session::AcceptedMessage;
@@ -23,7 +25,8 @@ const MAX_SIGNATURE_CHARS: usize = 120;
 /// A sink that scans submissions before handing them on.
 pub struct ScanningSink {
 	inner: Arc<dyn MessageSink>,
-	scanner: worker::Scanner,
+	scanner: Option<worker::Scanner>,
+	attachments: Option<Arc<Policy>>,
 	metrics: Option<Arc<Metrics>>,
 	webhook: Option<Arc<Webhook>>,
 	/// The threads scans ran on, so a test can tell how many there were.
@@ -43,17 +46,32 @@ impl ScanningSink {
 		metrics: Option<Arc<Metrics>>,
 		webhook: Option<Arc<Webhook>>,
 	) -> std::io::Result<Arc<dyn MessageSink>> {
-		Ok(match clamd {
-			Some(clamd) if scan_authenticated => Arc::new(ScanningSink {
-				inner,
-				scanner: worker::Scanner::start(clamd)?,
-				metrics,
-				webhook,
-				#[cfg(test)]
-				workers: Default::default(),
-			}),
-			_ => inner,
-		})
+		Self::wrap_with_attachments(scan_authenticated, inner, clamd, None, metrics, webhook)
+	}
+
+	/// [`ScanningSink::wrap`], with the attachment policy applied to
+	/// submissions too. A submission the policy would quarantine or reject
+	/// is refused: there is no quarantine for outbound mail.
+	pub fn wrap_with_attachments(
+		scan_authenticated: bool,
+		inner: Arc<dyn MessageSink>,
+		clamd: Option<Arc<ClamdHook>>,
+		attachments: Option<Arc<Policy>>,
+		metrics: Option<Arc<Metrics>>,
+		webhook: Option<Arc<Webhook>>,
+	) -> std::io::Result<Arc<dyn MessageSink>> {
+		if !scan_authenticated || (clamd.is_none() && attachments.is_none()) {
+			return Ok(inner);
+		}
+		Ok(Arc::new(ScanningSink {
+			inner,
+			scanner: clamd.map(worker::Scanner::start).transpose()?,
+			attachments,
+			metrics,
+			webhook,
+			#[cfg(test)]
+			workers: Default::default(),
+		}))
 	}
 }
 
@@ -69,6 +87,30 @@ impl MessageSink for ScanningSink {
 		account: &str,
 		extra: &std::collections::BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
+		if let Some(policy) = &self.attachments {
+			let (_, decision) = policy.check(&message.data);
+			let codes: Vec<&str> = decision
+				.reasons
+				.iter()
+				.map(|reason| reason.code())
+				.collect();
+			match decision.action {
+				Action::Reject | Action::Quarantine => {
+					tracing::warn!(
+						account = %crate::log_id::account(account),
+						reasons = %codes.join(","),
+						"attachment policy refused a submission"
+					);
+					return Err(SinkError::AttachmentRefused(codes.join(",")));
+				}
+				Action::Flag => tracing::info!(
+					account = %crate::log_id::account(account),
+					reasons = %codes.join(","),
+					"attachment policy flagged a submission"
+				),
+				Action::Deliver => {}
+			}
+		}
 		// Fail open like the inbound scan: an unreachable clamd is counted
 		// and recorded for `epistle status` inside the hook, and the mail
 		// goes on unscanned.
@@ -92,7 +134,10 @@ impl MessageSink for ScanningSink {
 impl ScanningSink {
 	/// Scan `raw` and say what clamd found.
 	fn scan(&self, raw: &[u8]) -> Inspection {
-		let (inspection, _worker) = self.scanner.scan(raw);
+		let Some(scanner) = &self.scanner else {
+			return Inspection::Clean;
+		};
+		let (inspection, _worker) = scanner.scan(raw);
 		#[cfg(test)]
 		if let (Some(worker), Ok(mut workers)) = (_worker, self.workers.lock()) {
 			workers.insert(worker);
@@ -127,3 +172,7 @@ mod worker;
 #[cfg(test)]
 #[path = "submission_scan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_attachments.rs"]
+mod tests_attachments;

@@ -24,6 +24,10 @@ mod tests_bcc;
 mod tests_virus;
 
 #[cfg(test)]
+#[path = "server_tests_attachments.rs"]
+mod tests_attachments;
+
+#[cfg(test)]
 #[path = "server_tests_trace.rs"]
 mod tests_trace;
 

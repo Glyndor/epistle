@@ -47,6 +47,10 @@ pub enum SinkError {
 	/// the same message is refused again however often it is retried.
 	#[error("virus detected ({0})")]
 	VirusDetected(String),
+	/// The attachment policy refused a submitted message; the reason codes,
+	/// comma separated. Permanent like a virus.
+	#[error("attachment type not accepted ({0})")]
+	AttachmentRefused(String),
 }
 
 impl SinkError {
@@ -61,6 +65,9 @@ impl SinkError {
 				554,
 				&format!("5.7.1 message rejected: virus detected ({signature})"),
 			),
+			SinkError::AttachmentRefused(_) => {
+				Reply::single(550, "5.7.1 attachment type not accepted")
+			}
 		}
 	}
 }

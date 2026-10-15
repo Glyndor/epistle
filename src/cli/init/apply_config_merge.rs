@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::init::apply::ApplyError;
 use crate::config::Config;
 
-use super::apply_config::{ExistingConfig, INIT_MANAGED_KEYS, read_config};
+use super::apply_config::{ExistingConfig, INIT_MANAGED_KEYS, NEW_INSTALL_ONLY, read_config};
 
 /// Merge the desired TOML with whatever is already on disk at
 /// `path`. Three outcomes: no file on disk (write the desired one);
@@ -38,10 +38,11 @@ pub(crate) fn merge_with_read_config(
 	keep_existing_listeners: bool,
 	existing: Option<&ExistingConfig>,
 ) -> Result<super::apply_config::ConfigWrite, ApplyError> {
-	let desired_value: toml::Value =
+	let mut desired_value: toml::Value =
 		toml::from_str(desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	match existing {
 		Some(opened) => {
+			without_new_install_defaults(&mut desired_value);
 			let existing = &opened.text;
 			let existing_value: toml::Value = parsed(existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
@@ -64,6 +65,26 @@ pub(crate) fn merge_with_read_config(
 		None => {
 			write_validated_config(path, desired)?;
 			Ok(super::apply_config::ConfigWrite::Wrote)
+		}
+	}
+}
+
+/// Drop what `init` writes only into a new configuration, so merging into
+/// an existing one leaves those settings as the operator has them.
+fn without_new_install_defaults(desired: &mut toml::Value) {
+	let Some(root) = desired.as_table_mut() else {
+		return;
+	};
+	for (table, key) in NEW_INSTALL_ONLY {
+		match key {
+			None => {
+				root.remove(*table);
+			}
+			Some(key) => {
+				if let Some(section) = root.get_mut(*table).and_then(toml::Value::as_table_mut) {
+					section.remove(*key);
+				}
+			}
 		}
 	}
 }

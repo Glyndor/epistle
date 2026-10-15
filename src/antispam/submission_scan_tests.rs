@@ -59,6 +59,9 @@ async fn a_submission_carrying_a_virus_is_refused_with_its_signature() {
 		Err(SinkError::Unavailable(_)) => {
 			panic!("expected a virus refusal, got a storage-unavailable refusal")
 		}
+		Err(SinkError::AttachmentRefused(_)) => {
+			panic!("expected a virus refusal, got an attachment refusal")
+		}
 		Ok(()) => panic!("expected a virus refusal, the submission was accepted"),
 	}
 	assert!(
@@ -206,8 +209,11 @@ fn a_long_signature_is_cut_for_the_reply() {
 fn concrete(socket: &std::path::Path) -> ScanningSink {
 	ScanningSink {
 		inner: Arc::new(MemorySink::new()),
-		scanner: worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
-			.expect("scanner"),
+		scanner: Some(
+			worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
+				.expect("scanner"),
+		),
+		attachments: None,
 		metrics: None,
 		webhook: None,
 		workers: Default::default(),
