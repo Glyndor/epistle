@@ -70,8 +70,9 @@ impl Chain {
 		self.append_with(crate::storage::delivery_log::now_epoch, entry)
 	}
 
-	/// [`Chain::append`] at a fixed `time`, for tests.
-	#[cfg(test)]
+	/// [`Chain::append`] at a fixed `time` (never earlier than the last
+	/// record): for the sweeper, which runs in the same task as the sealing,
+	/// and for tests.
 	pub(crate) fn append_at(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
 		self.append_with(|| time, entry)
 	}

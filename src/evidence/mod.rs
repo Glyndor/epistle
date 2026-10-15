@@ -22,8 +22,10 @@ pub mod marketing;
 pub mod merkle;
 pub mod policy;
 pub mod record;
+pub mod retention;
 pub mod service;
 pub mod submission;
+pub mod tasks;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tsa;

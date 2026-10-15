@@ -119,7 +119,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		dkim_signer,
 		webhook,
 		arc_sealer,
-		evidence,
+		mut evidence,
 	} = super::serve_dkim::build_split_with_companions(
 		&config,
 		&metrics,
@@ -229,6 +229,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 
+	super::serve_evidence::spawn(evidence.tasks.take());
 	// The queue worker drains the outbound spool in the background.
 	super::serve_queue::spawn_queue_worker(
 		&config,

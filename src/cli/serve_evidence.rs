@@ -13,10 +13,13 @@ pub(super) struct Evidence {
 	pub service: Arc<EvidenceService>,
 	/// The default classes of accounts and credentials.
 	pub bindings: Arc<BindingSet>,
+	/// The evidence tasks, until [`spawn`] takes them.
+	pub tasks: Option<crate::evidence::tasks::Tasks>,
 }
 
-/// Open the evidence service and the class bindings, and reconcile what a
-/// crash left staged in the spool. Fails closed: bindings or a policy that
+/// Open the evidence service and the class bindings, reconcile what a
+/// crash left staged in the spool, and prepare the evidence tasks (seal,
+/// timestamp, sweep, verify) for [`spawn`]. Fails closed: bindings or a policy that
 /// cannot be trusted stop the start, since no last good copy exists yet.
 pub(super) fn open(config: &Config, crypto: &MessageCrypto) -> std::io::Result<Evidence> {
 	let tenants = config
@@ -35,5 +38,35 @@ pub(super) fn open(config: &Config, crypto: &MessageCrypto) -> std::io::Result<E
 	if reconciled > 0 {
 		tracing::warn!(reconciled, "discarded submissions a stop left half-queued");
 	}
-	Ok(Evidence { service, bindings })
+	// Transactional mail waits for the first verification.
+	service.set_gate(Some(
+		"the evidence has not been verified since the start".into(),
+	));
+	let tasks = Some(crate::evidence::tasks::Tasks::new(Arc::clone(&service))?);
+	Ok(Evidence {
+		service,
+		bindings,
+		tasks,
+	})
+}
+
+/// Run the evidence tasks every [`crate::evidence::tasks::TICK`], the first
+/// one at once.
+pub(super) fn spawn(tasks: Option<crate::evidence::tasks::Tasks>) {
+	let Some(tasks) = tasks else {
+		return;
+	};
+	tokio::spawn(async move {
+		let mut interval = tokio::time::interval(crate::evidence::tasks::TICK);
+		loop {
+			interval.tick().await;
+			let status = tasks.tick(crate::storage::delivery_log::now_epoch()).await;
+			if let Some(reason) = &status.held {
+				tracing::error!(%reason, "transactional mail is held: the evidence does not verify");
+			}
+			for error in &status.errors {
+				tracing::warn!(%error, "evidence task");
+			}
+		}
+	});
 }

@@ -219,7 +219,13 @@ pub fn compute(
 		last_hash: to_hex(&walk.last.hash),
 		last_seq: walk.last.seq,
 		last_time: walk.last.time,
-		prev_checkpoint: before.map(|(_, bytes)| to_hex(&sha256(&bytes))),
+		// After a purge the previous checkpoint is gone; the anchor keeps its
+		// hash.
+		prev_checkpoint: match before {
+			Some((_, bytes)) => Some(to_hex(&sha256(&bytes))),
+			None => super::anchor::load(&evidence_root.join(super::chain::CHAIN_DIR))?
+				.map(|anchor| anchor.checkpoint),
+		},
 		retain_until: retain_until.name(),
 		timestamp: if timestamp { "enabled" } else { "disabled" }.to_string(),
 		key: key_id.to_string(),
