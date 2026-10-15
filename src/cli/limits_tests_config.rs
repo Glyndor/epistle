@@ -31,6 +31,9 @@ fn limits_set_unset_round_trip_preserves_every_other_key() {
 		(Key::MaskedAddressesMax, "30", 30),
 		(Key::FirstTimeSenderDelay, "10s", 10),
 		(Key::GreylistDelay, "3m", 180),
+		(Key::MaxMessageSize, "10M", 10 * 1024 * 1024),
+		(Key::MessageMemoryBudget, "128M", 128 * 1024 * 1024),
+		(Key::MaxConnectionsPerIp, "5", 5),
 	] {
 		let result = change_config(file.path(), key, Some(input));
 		assert!(
@@ -88,6 +91,25 @@ fn limits_invalid_values_leave_config_bytes_untouched() {
 }
 
 #[test]
+fn limits_refuse_a_message_size_the_memory_budget_cannot_hold() {
+	let (_dir, file) = config_file();
+	let original = std::fs::read(file.path()).unwrap();
+	let result = change_config(file.path(), Key::MaxMessageSize, Some("300M"));
+	assert!(
+		result
+			.err()
+			.is_some_and(|message| message.contains("message_memory_budget")),
+		"a size over the 256 MiB default budget is refused"
+	);
+	assert!(
+		std::fs::read(file.path()).unwrap() == original,
+		"the refused size leaves the file byte-for-byte untouched"
+	);
+	assert!(change_config(file.path(), Key::MessageMemoryBudget, Some("8M")).is_err());
+	assert!(change_config(file.path(), Key::MaxMessageSize, Some("8M")).is_ok());
+}
+
+#[test]
 fn limits_candidate_validation_preserves_invalid_config() {
 	let (_dir, mut file) = config_file();
 	let text = std::fs::read_to_string(file.path())
@@ -124,7 +146,7 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 	show(&config, &mut out).unwrap();
 	assert_eq!(
 		String::from_utf8(out).unwrap(),
-		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\nqueue-concurrency\t8\tdefault\nqueue-per-domain-concurrency\t2\tdefault\nqueue-backoff\t60,300,900,3600 seconds\tdefault\n",
+		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\nqueue-concurrency\t8\tdefault\nqueue-per-domain-concurrency\t2\tdefault\nqueue-backoff\t60,300,900,3600 seconds\tdefault\nmax-message-size\t26214400 bytes\tdefault\nmessage-memory-budget\t268435456 bytes\tdefault\nmax-connections-per-ip\t20\tdefault\n",
 		"limits show must print each effective value and mark built-in defaults"
 	);
 	change_config(file.path(), Key::SubmissionRate, Some("120")).unwrap();

@@ -40,10 +40,21 @@ pub enum Key {
 	/// How long a destination that asks to slow down is held off, one
 	/// wait per deferral in a row (a comma-separated list).
 	QueueBackoff,
+	/// Per-instance message-size cap in bytes. Applies to SMTP DATA / BDAT
+	/// and to the JMAP / REST submission paths. Default is 25 MiB.
+	MaxMessageSize,
+	/// Shared byte budget every DATA / BDAT reservation draws from. The
+	/// reservation is released on every path that drops the in-flight
+	/// body (success, error, RSET, disconnect). `0` disables the
+	/// budget (every reservation succeeds). The default is 256 MiB.
+	MessageMemoryBudget,
+	/// Per-client-IP concurrent connection cap. A peer over the cap
+	/// is answered `421 4.7.0` and closed. Default is 20.
+	MaxConnectionsPerIp,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 16] = [
+	pub(super) const ALL: [Self; 19] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -60,6 +71,9 @@ impl Key {
 		Self::QueueConcurrency,
 		Self::QueuePerDomainConcurrency,
 		Self::QueueBackoff,
+		Self::MaxMessageSize,
+		Self::MessageMemoryBudget,
+		Self::MaxConnectionsPerIp,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -80,6 +94,9 @@ impl Key {
 			Self::QueueConcurrency => "queue-concurrency",
 			Self::QueuePerDomainConcurrency => "queue-per-domain-concurrency",
 			Self::QueueBackoff => "queue-backoff",
+			Self::MaxMessageSize => "max-message-size",
+			Self::MessageMemoryBudget => "message-memory-budget",
+			Self::MaxConnectionsPerIp => "max-connections-per-ip",
 		}
 	}
 
@@ -101,6 +118,9 @@ impl Key {
 			Self::QueueConcurrency => "concurrency",
 			Self::QueuePerDomainConcurrency => "per_domain_concurrency",
 			Self::QueueBackoff => "backoff_steps",
+			Self::MaxMessageSize => "max_message_size",
+			Self::MessageMemoryBudget => "message_memory_budget",
+			Self::MaxConnectionsPerIp => "max_connections_per_ip",
 		}
 	}
 
@@ -134,7 +154,7 @@ impl Key {
 
 	pub(super) fn unit(self) -> Unit {
 		match self {
-			Self::Quota => Unit::Size,
+			Self::Quota | Self::MaxMessageSize | Self::MessageMemoryBudget => Unit::Size,
 			Self::QueueGiveUp
 			| Self::QueueRetryBase
 			| Self::QueueRetryCap
@@ -152,13 +172,14 @@ impl Key {
 			| Self::NewRecipientsPerDay
 			| Self::InboundRatePerIp
 			| Self::InboundRatePerSender => u32::MAX as u64,
-			Self::MaxConnectionsPerListener | Self::MaskedAddressesMax => {
-				(usize::MAX as u64).min(i64::MAX as u64)
-			}
+			Self::MaxConnectionsPerListener
+			| Self::MaskedAddressesMax
+			| Self::MaxConnectionsPerIp => (usize::MAX as u64).min(i64::MAX as u64),
 			Self::QueueConcurrency | Self::QueuePerDomainConcurrency => {
 				crate::queue::limits::MAX_CONCURRENCY as u64
 			}
 			Self::QueueBackoff => crate::queue::backoff::MAX_STEP_SECS,
+			Self::MaxMessageSize | Self::MessageMemoryBudget => i64::MAX as u64,
 			_ => i64::MAX as u64,
 		}
 	}
@@ -186,6 +207,9 @@ impl Key {
 			Self::QueueConcurrency => Some(config.queue.concurrency as u64),
 			Self::QueuePerDomainConcurrency => Some(config.queue.per_domain_concurrency as u64),
 			Self::QueueBackoff => None,
+			Self::MaxMessageSize => config.max_message_size.filter(|value| *value != 0),
+			Self::MessageMemoryBudget => config.message_memory_budget,
+			Self::MaxConnectionsPerIp => config.max_connections_per_ip.map(|value| value as u64),
 		}
 	}
 
@@ -201,6 +225,11 @@ impl Key {
 			Self::QueueConcurrency => Some(crate::queue::limits::DEFAULT_CONCURRENCY as u64),
 			Self::QueuePerDomainConcurrency => {
 				Some(crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY as u64)
+			}
+			Self::MaxMessageSize => Some(crate::smtp::session::MAX_MESSAGE_SIZE as u64),
+			Self::MessageMemoryBudget => Some(crate::smtp::memory_budget::DEFAULT_BUDGET_BYTES),
+			Self::MaxConnectionsPerIp => {
+				Some(crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP as u64)
 			}
 			_ => None,
 		}

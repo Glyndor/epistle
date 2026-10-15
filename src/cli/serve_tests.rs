@@ -170,3 +170,63 @@ rsa_key_file = \"/etc/mail/rsa.pem\"
 		"both RSA fields set: serve must not log the single-signature warning, got {events:?}"
 	);
 }
+
+/// POST `body` to `path` on the API at `port` with the fixture token and
+/// return the HTTP status code. Retries the connect while `serve` binds.
+async fn api_post_status(port: u16, path: &str, body: &[u8]) -> u16 {
+	let mut stream = None;
+	for _ in 0..100 {
+		match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+			Ok(connected) => {
+				stream = Some(connected);
+				break;
+			}
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+		}
+	}
+	let mut stream = stream.expect("the API listener comes up");
+	let head = format!(
+		"POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n\
+Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+		crate::test_fixtures::api_token(),
+		body.len()
+	);
+	stream.write_all(head.as_bytes()).await.expect("head");
+	let _ = stream.write_all(body).await;
+	let mut response = Vec::new();
+	let _ = stream.read_to_end(&mut response).await;
+	let status = String::from_utf8_lossy(&response[..response.len().min(12)]).into_owned();
+	status
+		.strip_prefix("HTTP/1.1 ")
+		.and_then(|code| code.parse().ok())
+		.expect("an HTTP status line")
+}
+
+#[tokio::test]
+async fn serve_applies_max_message_size_to_the_api() {
+	// The configured cap must reach the REST send body limit, not only the
+	// SMTP listeners: an 8 KiB body under a 4 KiB cap is refused with 413
+	// before it is parsed.
+	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+		.await
+		.expect("probe bind");
+	let port = probe.local_addr().expect("addr").port();
+	drop(probe);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let listener: Listener =
+		toml::from_str(&format!("kind = \"api\"\nport = {port}")).expect("listener config");
+	let mut config = test_config(dir.path(), vec![listener]);
+	config.max_message_size = Some(4096);
+	config.api = Some(
+		toml::from_str(&format!(
+			"token_hash = \"{}\"",
+			crate::smtp::auth::tests::hash(crate::test_fixtures::api_token())
+		))
+		.expect("api config"),
+	);
+	let server = tokio::spawn(serve(config));
+	let body = format!("{{\"pad\":\"{}\"}}", "x".repeat(8 * 1024));
+	let status = api_post_status(port, "/api/v1/send", body.as_bytes()).await;
+	server.abort();
+	assert_eq!(status, 413, "the API body limit follows max_message_size");
+}

@@ -42,9 +42,9 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 
 /// Maximum size of a single `PUT` body. No project-level upload cap was
 /// already wired into the WebDAV path, so this constant is the per-file
-/// limit. The value mirrors JMAP's advertised `maxSizeUpload` (see
-/// [`crate::api::jmap::MAX_UPLOAD_SIZE`]) so the two protocols agree on
-/// the per-resource size an authenticated client can write. A per-account
+/// limit. It was chosen to match the old fixed JMAP upload limit; JMAP now
+/// follows `[server] max_message_size` (25 MiB by default), so a DAV
+/// resource may be larger than a message. A per-account
 /// storage quota (the `quota_bytes` field in the account config) still
 /// applies on top of this for cumulative usage; this is the per-file cap.
 const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;

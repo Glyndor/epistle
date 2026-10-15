@@ -9,11 +9,12 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, ensure_submission_headers, line_error_reply, received_header,
-	received_hop_count,
+	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
 };
 
-use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
+use super::{
+	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, read_chunk, send,
+};
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
 /// akin to Postfix's `smtpd_hard_error_limit`).
@@ -104,14 +105,26 @@ impl Server {
 			// Resolve BDAT chunk reads (RFC 3030) into a terminal action that the
 			// dispatch below already handles (Continue for a non-final chunk,
 			// Deliver for the LAST chunk — so the full delivery path still runs).
-			while let Action::CollectChunk { size, last } = action {
-				let chunk = match read_chunk(&mut stream, &mut decoder, size).await {
-					Ok(Some(chunk)) => chunk,
-					Ok(None) => return Ok(()), // client closed mid-chunk
-					Err(error) => return Err(error),
+			let action = loop {
+				action = match action {
+					Action::CollectChunk { size, last } => {
+						let chunk = match read_chunk(&mut stream, &mut decoder, size).await {
+							Ok(Some(chunk)) => chunk,
+							Ok(None) => return Ok(()), // client closed mid-chunk
+							Err(error) => return Err(error),
+						};
+						session.bdat_chunk(&chunk, last)
+					}
+					// A refused chunk is consumed without being kept.
+					Action::DiscardChunk { size, reply } => {
+						if !discard_chunk(&mut stream, &mut decoder, size).await? {
+							return Ok(()); // client closed mid-chunk
+						}
+						Action::Continue(reply)
+					}
+					resolved => break resolved,
 				};
-				action = session.bdat_chunk(&chunk, last);
-			}
+			};
 			match action {
 				Action::Continue(reply) => {
 					// Abuse guard: disconnect a client that only produces errors.
@@ -136,12 +149,18 @@ impl Server {
 					send(&mut stream, &reply).await?;
 				}
 				// BDAT chunk reads are resolved into a terminal action above.
-				Action::CollectChunk { .. } => unreachable!("BDAT chunk resolved before dispatch"),
+				Action::CollectChunk { .. } | Action::DiscardChunk { .. } => {
+					unreachable!("BDAT chunk resolved before dispatch")
+				}
 				Action::CollectAuthResponse(reply) => {
 					mode = Mode::Auth;
 					send(&mut stream, &reply).await?;
 				}
 				Action::Deliver(reply, mut message) => {
+					// The body stays on the memory budget until this arm is
+					// over: it is still in memory while it is checked,
+					// stamped and handed to the sink.
+					let _held_body = session.take_delivery_reservation();
 					// DSNs for recipients this message did not fit for; sent
 					// only if the message itself is delivered.
 					let quota_reports = session.take_quota_reports();
@@ -252,22 +271,29 @@ impl Server {
 					// reverse-path's domain (the authenticated account's own
 					// domain), with the server hostname as a last resort.
 					// Done before the Received block so the trace header
-					// stays the outermost line.
+					// stays the outermost line. The stamp and the Bcc
+					// strip work inside the body's own buffer, so the only
+					// new body-sized allocation is the stamped one below.
 					if session.authenticated().is_some() {
 						let stamp_domain = message
 							.reverse_path
 							.rsplit_once('@')
 							.map(|(_, d)| d.to_ascii_lowercase())
 							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
-						message.data = ensure_submission_headers(
-							&message.data,
+						crate::smtp::trace::ensure_submission_headers_in_place(
+							&mut message.data,
 							&stamp_domain,
 							std::time::SystemTime::now(),
 						);
 						// The MSA drops Bcc: those recipients are on the envelope.
-						message.data = crate::smtp::trace::strip_bcc(&message.data);
+						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
 					}
-					let mut stamped = header.into_bytes();
+					// Build the final stamped buffer in one allocation of
+					// the exact trace + auth + body length: the body is
+					// copied once and its old buffer freed.
+					let mut stamped =
+						Vec::with_capacity(header.len() + auth_headers.len() + message.data.len());
+					stamped.extend_from_slice(header.as_bytes());
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);
 					message.data = stamped;

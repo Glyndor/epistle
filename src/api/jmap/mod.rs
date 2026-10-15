@@ -39,7 +39,7 @@ pub use uploads::Uploads;
 pub(crate) mod limits;
 pub use limits::{
 	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
-	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST,
 };
 mod mailbox_set;
 mod methods;
@@ -108,10 +108,19 @@ pub async fn session(
 		.into_iter()
 		.collect();
 
+	// The Session resource advertises the configured cap, not a hard-coded
+	// constant, so what the client is told and what the handlers enforce
+	// cannot drift. `maxSizeUpload` is the same number the upload route's
+	// body limit applies (configured `[server] max_message_size`), and the
+	// per-attachment bound is the same base minus the headroom that the
+	// rest of the message needs for headers and the body itself.
+	let max_message_size = state.max_message_size();
+	let max_size_attachments_per_email =
+		max_message_size.saturating_sub(limits::ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {
-				"maxSizeUpload": MAX_UPLOAD_SIZE as u64,
+				"maxSizeUpload": max_message_size as u64,
 				"maxConcurrentUpload": MAX_CONCURRENT_UPLOAD as u32,
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
 				"maxConcurrentRequests": MAX_CONCURRENT_REQUESTS as u32,
@@ -124,7 +133,7 @@ pub async fn session(
 				"maxMailboxesPerEmail": null,
 				"maxMailboxDepth": null,
 				"maxSizeMailboxName": 128u32,
-				"maxSizeAttachmentsPerEmail": limits::MAX_SIZE_ATTACHMENTS_PER_EMAIL as u64,
+				"maxSizeAttachmentsPerEmail": max_size_attachments_per_email as u64,
 				"emailQuerySortOptions": [],
 				"mayCreateTopLevelMailbox": true,
 			},

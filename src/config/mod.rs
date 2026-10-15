@@ -28,6 +28,7 @@ mod tenant;
 mod tls;
 mod transport;
 mod validate;
+mod validate_limits;
 pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
@@ -306,6 +307,22 @@ pub struct Config {
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
 	pub max_connections_per_listener: Option<usize>,
+	/// Max concurrent connections per client IP per SMTP listener. A peer
+	/// over the cap is answered `421 4.7.0 too many connections from your
+	/// address` and closed. Absent (or `0`) uses the built-in default of
+	/// 20. An IPv6 client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_connections_per_ip: Option<usize>,
+	/// Shared byte budget every SMTP `DATA` / `BDAT` reservation draws
+	/// from. When a reservation would push the in-flight total past the
+	/// cap the message is refused with `452 4.3.1 insufficient system
+	/// resources; try again later`, so a busy server cannot grow without
+	/// bound. `0` disables the cap (every reservation succeeds, the
+	/// historical behaviour). Absent uses the built-in default of 256
+	/// MiB (a quarter of the `mail` container's 1 GiB `mem_limit`,
+	/// rounded down to the nearest MiB).
+	#[serde(default)]
+	pub message_memory_budget: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -333,6 +350,17 @@ pub struct Config {
 	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
+	/// Per-instance message-size cap in bytes. `None` keeps the
+	/// historical default of 25 MiB (the same value the SMTP
+	/// `SIZE` extension, the JMAP `maxSizeRequest` / upload cap and
+	/// the REST `POST /api/v1/send` builder enforce). Applied
+	/// consistently: the SMTP `MAIL FROM` SIZE check, the per-line
+	/// running size, the end-of-DATA check, the per-chunk BDAT cap,
+	/// the JMAP `Email/set` / `EmailSubmission/set` builder, the JMAP
+	/// `upload` body limit, and the REST `send` body limit all use
+	/// the same value.
+	#[serde(default)]
+	pub max_message_size: Option<u64>,
 	/// Tenant definitions: named groups of domains with optional aggregate
 	/// caps on accounts, domains, storage and submission rate. Absent or
 	/// empty means no tenancy is in effect and the server behaves exactly as
@@ -435,6 +463,8 @@ impl std::fmt::Debug for Config {
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,
 			)
+			.field("max_connections_per_ip", &self.max_connections_per_ip)
+			.field("message_memory_budget", &self.message_memory_budget)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)
@@ -548,195 +578,8 @@ mod redaction_tests;
 mod hold_outbound_tests;
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn write_temp(content: &str) -> tempfile::NamedTempFile {
-		use std::io::Write;
-		let mut file = tempfile::NamedTempFile::new().expect("create temp file");
-		file.write_all(content.as_bytes()).expect("write temp file");
-		file
-	}
-
-	#[test]
-	fn loads_minimal_valid_config() {
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		let config = Config::load(file.path()).expect("valid config loads");
-		assert_eq!(config.hostname, "mail.example.org");
-		assert!(config.listeners.is_empty());
-	}
-
-	#[test]
-	fn expands_environment_variables() {
-		// SAFETY: the variable name is unique to this test, so no other test
-		// reads or writes it concurrently.
-		unsafe { std::env::set_var("EPISTLE_TEST_HOSTNAME", "mail.expanded.example") };
-		let file = write_temp(
-			r#"
-hostname = "${EPISTLE_TEST_HOSTNAME}"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		let config = Config::load(file.path()).expect("config loads");
-		assert_eq!(config.hostname, "mail.expanded.example");
-		// SAFETY: same uniquely-named variable as set above.
-		unsafe { std::env::remove_var("EPISTLE_TEST_HOSTNAME") };
-	}
-
-	#[test]
-	fn rejects_undefined_environment_variable() {
-		let file = write_temp(
-			r#"
-hostname = "${EPISTLE_DEFINITELY_UNSET_VAR_XYZ}"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::MissingEnv(_))
-		));
-	}
-
-	#[cfg(unix)]
-	#[test]
-	fn rejects_group_or_world_accessible_config() {
-		use std::os::unix::fs::PermissionsExt;
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
-			.expect("chmod");
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::InsecurePermissions { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_unknown_keys() {
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-surprise = true
-"#,
-		);
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_missing_file() {
-		let missing = Path::new("/nonexistent/mail.toml");
-		assert!(matches!(
-			Config::load(missing),
-			Err(ConfigError::Read { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_invalid_toml() {
-		let file = write_temp("hostname = ");
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn outbound_tls_defaults_strict_and_parses() {
-		// Absent [queue] section: strict (fail closed, back-compatible).
-		let default = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert_eq!(
-			Config::load(default.path())
-				.expect("loads")
-				.queue
-				.outbound_tls,
-			OutboundTls::Strict
-		);
-
-		// Explicit opportunistic parses.
-		let opportunistic = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-[queue]
-outbound_tls = "opportunistic"
-"#,
-		);
-		assert_eq!(
-			Config::load(opportunistic.path())
-				.expect("loads")
-				.queue
-				.outbound_tls,
-			OutboundTls::Opportunistic
-		);
-
-		// An unknown key inside [queue] is rejected (deny_unknown_fields).
-		let bad = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-[queue]
-surprise = true
-"#,
-		);
-		assert!(matches!(
-			Config::load(bad.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn default_bind_is_loopback() {
-		assert!(Config::default_bind_addr().is_loopback());
-	}
-
-	#[test]
-	fn max_connections_per_listener_parses_and_defaults_none() {
-		let default = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert_eq!(
-			Config::load(default.path())
-				.expect("loads")
-				.max_connections_per_listener,
-			None
-		);
-
-		let set = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-max_connections_per_listener = 2048
-"#,
-		);
-		assert_eq!(
-			Config::load(set.path())
-				.expect("loads")
-				.max_connections_per_listener,
-			Some(2048)
-		);
-	}
-}
+#[path = "config_tests.rs"]
+mod tests;
 
 mod parse;
 

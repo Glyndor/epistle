@@ -13,7 +13,7 @@ use super::*;
 fn counting_guard(bytes: u64) -> (Arc<DiskGuard>, Arc<AtomicUsize>) {
 	let calls = Arc::new(AtomicUsize::new(0));
 	let count = Arc::clone(&calls);
-	let probe: super::super::diskspace::ProbeFn = Arc::new(move || {
+	let probe: crate::smtp::diskspace::ProbeFn = Arc::new(move || {
 		count.fetch_add(1, Ordering::Relaxed);
 		Some(bytes)
 	});
@@ -69,7 +69,7 @@ fn mail_from_probe_failure_accepts() {
 	// A probe that errors out fails open: the alternative is a hard reject
 	// loop that masks the real problem. The downstream spool write will
 	// surface `ENOSPC` if the low space is genuine.
-	let probe: super::super::diskspace::ProbeFn = Arc::new(|| None);
+	let probe: crate::smtp::diskspace::ProbeFn = Arc::new(|| None);
 	let guard = Arc::new(DiskGuard::with_probe(
 		std::path::PathBuf::from("/tmp"),
 		probe,

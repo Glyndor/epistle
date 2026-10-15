@@ -4,6 +4,111 @@ use crate::antispam::hook::HookVerdict;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
+/// Build an [`ApiState`]-free [`Config`] without going through the
+/// `mail.toml` validator: the tests in this file only touch the new
+/// `[server] max_message_size`, `max_connections_per_ip`, and
+/// `message_memory_budget` keys, which `Config::load` itself parses
+/// through `#[serde(default)]`. The validator still wants the same
+/// fields as the rest of the config (hostname, data_dir), so the
+/// helper above is not enough on its own for everything below.
+fn build_config(dir: &std::path::Path, settings: &str) -> Config {
+	config(dir, settings)
+}
+
+#[test]
+fn max_message_size_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// Absent on the config: SmtpSharedState keeps the SMTP session's
+	// `0` sentinel, which the server builder turns into
+	// `MAX_MESSAGE_SIZE`.
+	let default = build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
+	assert_eq!(default.max_message_size, 0);
+	// A positive operator value is forwarded byte-for-byte to the
+	// listener's `with_max_message_size` setter.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "max_message_size = 5242880"),
+		&metrics,
+	)
+	.expect("state");
+	assert_eq!(set.max_message_size, 5 * 1024 * 1024);
+}
+
+#[test]
+fn max_connections_per_ip_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// Absent on the config: the helper promotes the operator's `0` to
+	// the SMTP listener's built-in default so a configured zero (or no
+	// entry at all) means "use the protocol default", never "0
+	// concurrent connections per peer".
+	let default = build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
+	assert_eq!(
+		default.max_connections_per_ip,
+		crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP,
+		"absent falls back to the listener's built-in default"
+	);
+	// A positive operator value is forwarded byte-for-byte.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "max_connections_per_ip = 7"),
+		&metrics,
+	)
+	.expect("state");
+	assert_eq!(set.max_connections_per_ip, 7);
+}
+
+#[test]
+fn message_memory_budget_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// `Some(0)` keeps the historical unbounded behaviour: the budget
+	// slot stays `None`, no reservation can ever fail.
+	let zero = build_smtp_shared_state(
+		&build_config(dir.path(), "message_memory_budget = 0"),
+		&metrics,
+	)
+	.expect("state");
+	assert!(
+		zero.memory_budget.is_none(),
+		"message_memory_budget = 0 must disable the budget"
+	);
+	// Any other value produces a budget with the matching cap. The
+	// shared `Arc<MemoryBudget>` is the same handle every SMTP listener
+	// will receive.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "message_memory_budget = 134217728"),
+		&metrics,
+	)
+	.expect("state");
+	let budget = set.memory_budget.as_ref().expect("budget present");
+	assert_eq!(budget.cap(), 128 * 1024 * 1024);
+}
+
+#[test]
+fn one_client_gets_a_quarter_of_the_budget_and_never_less_than_one_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let share = |settings: &str| {
+		let state =
+			build_smtp_shared_state(&build_config(dir.path(), settings), &metrics).expect("state");
+		state.memory_budget.expect("budget present").client_share()
+	};
+	assert_eq!(
+		share(""),
+		64 * 1024 * 1024,
+		"a quarter of the 256 MiB default"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432"),
+		crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+		"a quarter of 32 MiB is below one 25 MiB message, so one message it is"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432\nmax_message_size = 1048576"),
+		8 * 1024 * 1024
+	);
+}
+
 fn config(dir: &std::path::Path, settings: &str) -> Config {
 	toml::from_str(&format!(
 		"hostname = 'mail.example.org'\ndata_dir = '{}'\n{settings}",

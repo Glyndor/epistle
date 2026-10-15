@@ -12,6 +12,7 @@ fn reply_text(action: &Action) -> String {
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
 		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. }
 		| Action::Deliver(r, _) => r.to_string(),
 		Action::CollectChunk { .. } => String::new(),
 	}

@@ -8,7 +8,8 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.code(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.code(),
 		Action::Deliver(r, _) => r.code(),
 		Action::CollectChunk { .. } => 0,
 	}
@@ -20,7 +21,8 @@ pub(super) fn reply_text(action: &Action) -> String {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.to_string(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.to_string(),
 		Action::Deliver(r, _) => r.to_string(),
 		Action::CollectChunk { .. } => String::new(),
 	}
