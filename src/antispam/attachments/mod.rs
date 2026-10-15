@@ -12,6 +12,7 @@
 pub mod archive;
 pub mod decode;
 pub mod header;
+pub mod image;
 pub mod policy;
 pub mod rules;
 pub mod sniff;
@@ -151,6 +152,12 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		},
 		extensions,
 	);
+	if real_type == RealType::Svg && image::svg_is_active(&leaf.content) {
+		reasons.push(Reason::ActiveImage);
+	}
+	if image::has_appended_payload(real_type, &leaf.content) {
+		reasons.push(Reason::AppendedPayload);
+	}
 	reasons.extend(limits_only(leaf));
 	if disguised {
 		reasons.push(Reason::TypeMismatch);

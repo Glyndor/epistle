@@ -60,6 +60,9 @@ fn dangerous_content_follows_the_mode() {
 			expected,
 			"{mode:?}"
 		);
+		for reason in [Reason::ActiveImage, Reason::AppendedPayload] {
+			assert_eq!(action(&policy, &[reason]), expected, "{mode:?} {reason:?}");
+		}
 	}
 }
 

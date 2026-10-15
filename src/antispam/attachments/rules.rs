@@ -145,6 +145,11 @@ pub enum Reason {
 	TypeMismatch,
 	/// An HTML page sent as an attachment, the usual fake login form.
 	HtmlAttachment,
+	/// An SVG image with script, event handlers, script URLs or embedded
+	/// documents.
+	ActiveImage,
+	/// A raster image with a program, a script or a zip after its end.
+	AppendedPayload,
 	/// An archive holds an entry with a dangerous extension.
 	DangerousArchiveEntry,
 	/// An archive holds another archive, whose content is not listed.
@@ -181,6 +186,8 @@ impl Reason {
 			Self::DiskImage => "disk-image",
 			Self::TypeMismatch => "type-mismatch",
 			Self::HtmlAttachment => "html-attachment",
+			Self::ActiveImage => "active-image",
+			Self::AppendedPayload => "appended-payload",
 			Self::DangerousArchiveEntry => "dangerous-archive-entry",
 			Self::NestedArchive => "nested-archive",
 			Self::EncryptedArchive => "encrypted-archive",

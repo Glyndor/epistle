@@ -451,6 +451,54 @@ fn every_known_evasion_keeps_its_verdict() {
 			}])),
 			DangerousArchiveEntry,
 		),
+		(
+			"svg with an event handler named as a png",
+			one(
+				"Content-Type: image/png; name=logo.png",
+				b"<svg xmlns='http://www.w3.org/2000/svg' onload='go()'/>",
+			),
+			ActiveImage,
+		),
+		(
+			"svg with an encoded script url",
+			one(
+				"Content-Type: image/svg+xml; name=a.svg",
+				b"<svg><a href='&#x6a;ava&#9;script:go()'>x</a></svg>",
+			),
+			ActiveImage,
+		),
+		(
+			"png with a program after IEND",
+			one(
+				"Content-Type: image/png; name=a.png",
+				&image::tests::png_then(&image::tests::pe_header()),
+			),
+			AppendedPayload,
+		),
+		(
+			"jpeg with a zip after its end",
+			one(
+				"Content-Type: image/jpeg; name=a.jpg",
+				&image::tests::jpeg_then(&corpus::zip_of(&["x.js"])),
+			),
+			AppendedPayload,
+		),
+		(
+			"gif with an elf after its trailer",
+			one(
+				"Content-Type: image/gif; name=a.gif",
+				&image::tests::gif_then(b"\x7fELF\x02"),
+			),
+			AppendedPayload,
+		),
+		(
+			"webp with a script past its size",
+			one(
+				"Content-Type: image/webp; name=a.webp",
+				&image::tests::webp_then(b"#!/bin/sh\n"),
+			),
+			AppendedPayload,
+		),
 	];
 	let mut failures = Vec::new();
 	for (name, message, expected) in &cases {

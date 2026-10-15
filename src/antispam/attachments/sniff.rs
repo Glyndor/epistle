@@ -51,6 +51,8 @@ pub enum RealType {
 	Ico,
 	/// A HEIF image (HEIC, AVIF).
 	Heif,
+	/// An SVG image, which is XML and may carry script.
+	Svg,
 	/// A RAR archive.
 	Rar,
 	/// A 7z archive.
@@ -84,6 +86,7 @@ impl RealType {
 			Self::Tiff => "tiff",
 			Self::Ico => "ico",
 			Self::Heif => "heif",
+			Self::Svg => "svg",
 			Self::Rar => "rar",
 			Self::SevenZip => "7z",
 			Self::Iso => "iso9660",
@@ -108,14 +111,14 @@ impl RealType {
 				| Self::Jpeg | Self::Gif
 				| Self::Webp | Self::Bmp
 				| Self::Tiff | Self::Ico
-				| Self::Heif
+				| Self::Heif | Self::Svg
 		)
 	}
 
 	/// A binary format no text body starts with: everything in the table
-	/// except HTML and scripts, which are text themselves.
+	/// except HTML, SVG and scripts, which are text themselves.
 	pub fn is_binary(self) -> bool {
-		!matches!(self, Self::Unknown | Self::Html | Self::Script)
+		!matches!(self, Self::Unknown | Self::Html | Self::Script | Self::Svg)
 	}
 }
 
@@ -189,6 +192,9 @@ pub fn sniff(content: &[u8]) -> RealType {
 		.any(|&offset| content.get(offset..offset + 5) == Some(b"CD001"))
 	{
 		return RealType::Iso;
+	}
+	if super::image::is_svg(content) {
+		return RealType::Svg;
 	}
 	if looks_like_html(content) {
 		return RealType::Html;
