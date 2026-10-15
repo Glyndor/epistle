@@ -26,9 +26,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
-/// The byte budget derived for a `mail` container whose limit cannot be
-/// read: a quarter of the former 1 GiB default. `epistle limits` shows it
-/// as the default of `message-memory-budget`.
+/// A quarter of 1 GiB, the fixed budget releases before the derived one
+/// used. The server no longer falls back to it; tests use it as the budget
+/// of a small install.
 pub const DEFAULT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The share of the budget one client may hold by default: a quarter, so a

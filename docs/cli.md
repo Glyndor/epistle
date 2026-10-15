@@ -312,6 +312,12 @@ epistle limits unset quota
 `show` prints each effective value with `default` or `configured`. Disabled
 rate caps and the protocol-specific connection defaults are shown explicitly.
 Values equal to a built-in default are marked `default`, even when configured.
+An unset `message-memory-budget` has no fixed default: `show` prints
+`auto (409 MiB from the mail container limit)`, the budget the server derives
+from the `mem_limit` of `mail` in `compose.yaml` (or `auto (204 MiB, no mail
+container limit found, 1g assumed)`), marked `derived`, and `--json` gives its
+bytes with `"source": "derived"`. The running server reads its cgroup instead,
+which `podup` sets from that same `mem_limit`.
 `unset` removes the field so its built-in default applies again. With
 `--json`, `show` also lists every per-domain override and every named tenant
 in addition to the global dials.

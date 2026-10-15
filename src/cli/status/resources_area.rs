@@ -204,17 +204,8 @@ fn read_bounded(path: &Path) -> Option<String> {
 /// limit, with the start-up warning when a full budget would not fit.
 fn budget_item(config: &Config, compose: &Path) -> Item {
 	const NAME: &str = "message budget";
-	let limit = match memory_fit::read_compose_limit(compose) {
-		Some(bytes) => memory_fit::ContainerLimit {
-			bytes,
-			source: memory_fit::LimitSource::Compose,
-		},
-		None => memory_fit::ContainerLimit::fallback(),
-	};
-	let largest = config
-		.max_message_size
-		.filter(|size| *size > 0)
-		.unwrap_or(crate::smtp::session::MAX_MESSAGE_SIZE as u64);
+	let limit = memory_fit::compose_or_fallback(compose);
+	let largest = memory_fit::largest_message(config.max_message_size);
 	let budget = memory_fit::effective(config.message_memory_budget, largest, limit);
 	if budget.bytes == 0 {
 		return Item::new(NAME, Level::Ok, "off (message_memory_budget = 0)");

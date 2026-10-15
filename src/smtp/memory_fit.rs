@@ -179,6 +179,27 @@ pub fn read_compose_limit(compose: &Path) -> Option<u64> {
 	parse_memory(document["services"]["mail"]["mem_limit"].as_str()?)
 }
 
+/// The mail container's limit as the host sees it, from outside the
+/// container's cgroup: the compose file's, else [`FALLBACK_LIMIT`]. What
+/// `epistle status` and `epistle limits show` judge the budget against.
+pub fn compose_or_fallback(compose: &Path) -> ContainerLimit {
+	match read_compose_limit(compose) {
+		Some(bytes) => ContainerLimit {
+			bytes,
+			source: LimitSource::Compose,
+		},
+		None => ContainerLimit::fallback(),
+	}
+}
+
+/// The largest message a server accepts: `max_message_size`, or the
+/// built-in default when it is unset or `0`.
+pub fn largest_message(max_message_size: Option<u64>) -> u64 {
+	max_message_size
+		.filter(|size| *size > 0)
+		.unwrap_or(crate::smtp::session::MAX_MESSAGE_SIZE as u64)
+}
+
 /// The mail container's limit: the cgroup's, else the compose file's, else
 /// [`FALLBACK_LIMIT`].
 pub fn container_limit(paths: &LimitPaths) -> ContainerLimit {
@@ -188,13 +209,7 @@ pub fn container_limit(paths: &LimitPaths) -> ContainerLimit {
 			source: LimitSource::Cgroup,
 		};
 	}
-	match read_compose_limit(&paths.compose) {
-		Some(bytes) => ContainerLimit {
-			bytes,
-			source: LimitSource::Compose,
-		},
-		None => ContainerLimit::fallback(),
-	}
+	compose_or_fallback(&paths.compose)
 }
 
 /// The budget derived from a container limit of `limit` bytes for a server
