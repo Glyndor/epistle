@@ -28,10 +28,11 @@
 //! accounts with the most ([`DayTally::causes`]) so the operator can slow
 //! or stop that account.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use super::Group;
+use crate::queue::destination::Destination;
 use crate::queue::reply::parse_enhanced;
 use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
@@ -131,15 +132,40 @@ pub struct DayTally {
 	seen: HashMap<u64, Seen>,
 	/// Bad replies per account, by group.
 	causes: BTreeMap<Group, HashMap<String, u32>>,
+	/// The smarthosts whose records are left out, as exchanger names.
+	relays: HashSet<String>,
 }
 
 impl DayTally {
+	/// A tally that leaves out the records the smarthosts `relays`
+	/// answered. Mail a `[[transport]]` relays goes out from the
+	/// smarthost's address, not ours: its replies say nothing of how the
+	/// receivers take our address, and a smarthost throttling us must not
+	/// hold back a group, nor its volume water down a group's shares.
+	pub fn without(relays: &[String]) -> Self {
+		DayTally {
+			relays: relays
+				.iter()
+				.map(|host| Destination::exchanger(host).as_str().to_string())
+				.collect(),
+			..DayTally::default()
+		}
+	}
+
 	/// Count `record`.
 	pub fn add(&mut self, record: &DeliveryRecord) {
 		let Some(signal) = signal(record) else {
 			return;
 		};
-		let group = Group::of_exchanger(record.remote.as_deref().unwrap_or_default());
+		let remote = record.remote.as_deref().unwrap_or_default();
+		if !self.relays.is_empty()
+			&& self
+				.relays
+				.contains(Destination::exchanger(remote).as_str())
+		{
+			return;
+		}
+		let group = Group::of_exchanger(remote);
 		let key = recipient_key(record);
 		let full = self.seen.len() >= MAX_RECIPIENTS;
 		let (first, before) = match self.seen.get(&key) {
@@ -233,7 +259,17 @@ fn recipient_key(record: &DeliveryRecord) -> u64 {
 
 /// Tally the UTC day `unix_day` of `log`.
 pub fn tally_day(log: &DeliveryLog, unix_day: i64) -> std::io::Result<DayTally> {
-	let mut tally = DayTally::default();
+	tally_day_without(log, unix_day, &[])
+}
+
+/// Tally the UTC day `unix_day` of `log`, leaving out what `relays`
+/// answered (see [`DayTally::without`]).
+pub fn tally_day_without(
+	log: &DeliveryLog,
+	unix_day: i64,
+	relays: &[String],
+) -> std::io::Result<DayTally> {
+	let mut tally = DayTally::without(relays);
 	log.for_each_on_day(unix_day, |record| tally.add(record))?;
 	Ok(tally)
 }

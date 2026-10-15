@@ -26,15 +26,24 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	let data_dir = config.data_dir.clone();
 	let storage = config.storage.clone();
 	let log_days = config.delivery_log_days();
+	let relays = crate::queue::warmup::relay_hosts(&config.transport);
 	let now = u64::try_from(epoch(ctx.now)).unwrap_or(0);
-	tokio::task::spawn_blocking(move || evaluate(&data_dir, storage.as_ref(), log_days, now))
-		.await
-		.unwrap_or_else(|error| AreaReport::fail(format!("warm-up check failed: {error}")))
+	tokio::task::spawn_blocking(move || {
+		evaluate(&data_dir, storage.as_ref(), log_days, &relays, now)
+	})
+	.await
+	.unwrap_or_else(|error| AreaReport::fail(format!("warm-up check failed: {error}")))
 }
 
 /// The report for the files under `data_dir` as of `now`.
-fn evaluate(data_dir: &Path, storage: Option<&Storage>, log_days: u64, now: u64) -> AreaReport {
-	let report = match view::build(data_dir, storage, log_days, now) {
+fn evaluate(
+	data_dir: &Path,
+	storage: Option<&Storage>,
+	log_days: u64,
+	relays: &[String],
+	now: u64,
+) -> AreaReport {
+	let report = match view::build(data_dir, storage, log_days, relays, now) {
 		Ok(report) => report,
 		Err(error) => {
 			return AreaReport::single(

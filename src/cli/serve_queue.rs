@@ -22,6 +22,7 @@ pub(super) fn open_warmup(
 	let log = crate::storage::DeliveryLog::open(&config.data_dir, config.delivery_log_days());
 	let now = crate::storage::delivery_log::now_epoch();
 	let mut warmup = crate::queue::warmup::Warmup::open(&config.data_dir, Some(log), now)
+		.with_relays(crate::queue::warmup::relay_hosts(&config.transport))
 		.with_metrics(Arc::clone(metrics));
 	if let Some(webhook) = webhook {
 		warmup = warmup.with_webhook(Arc::clone(webhook));

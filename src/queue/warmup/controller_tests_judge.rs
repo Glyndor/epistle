@@ -119,3 +119,51 @@ fn a_day_still_to_judge_survives_a_restart() {
 		Some((day_of(MIDNIGHT), 3))
 	);
 }
+
+#[test]
+fn a_smarthost_throttling_relayed_mail_does_not_back_a_group_off() {
+	use crate::storage::{DeliveryOutcome, DeliveryRecord};
+	let dir = tempfile::tempdir().expect("tempdir");
+	enable(dir.path(), |_| {});
+	let log = DeliveryLog::open(dir.path(), 30);
+	let warmup = Warmup::open(dir.path(), Some(log.clone()), MIDNIGHT)
+		.with_relays(vec!["smtp-relay.google.com".to_string()]);
+	assert_eq!(
+		granted(warmup.grant(Group::Gmail, "system", 3, MIDNIGHT)).0,
+		3
+	);
+	for n in 0..13 {
+		let (outcome, remote, reply) = match n < 3 {
+			true => (
+				DeliveryOutcome::Delivered,
+				"gmail-smtp-in.l.google.com",
+				"250 OK",
+			),
+			false => (
+				DeliveryOutcome::Deferred,
+				"smtp-relay.google.com",
+				"421 4.7.0 slow down",
+			),
+		};
+		log.append(&DeliveryRecord {
+			time: MIDNIGHT + 60,
+			spool_id: uuid::Uuid::nil(),
+			account: None,
+			from: "alice@sender.example".into(),
+			recipient: format!("user{n}@gmail.com"),
+			outcome,
+			remote: Some(remote.into()),
+			reply: Some(reply.into()),
+			attempt: 1,
+			extra: Default::default(),
+		})
+		.expect("append");
+	}
+	warmup.tick(TOMORROW + 5);
+	let (_, state) = warmup.snapshot();
+	let judged = state.group(Group::Gmail).history.back().cloned();
+	assert_eq!(
+		judged.map(|record| (record.attempted, record.deferred, record.verdict)),
+		Some((3, 0, crate::queue::warmup::policy::Verdict::Good))
+	);
+}

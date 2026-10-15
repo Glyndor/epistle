@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::Group;
-use super::health::{DayTally, tally_day};
+use super::health::{DayTally, tally_day_without};
 use super::pacing;
 use super::schedule;
 use super::settings::{self, Settings};
@@ -111,6 +111,9 @@ impl Inner {
 pub struct Warmup {
 	data_dir: PathBuf,
 	log: Option<DeliveryLog>,
+	/// The smarthosts of `[[transport]]` relay rules, whose records are
+	/// left out of each day's judgement.
+	relays: Vec<String>,
 	inner: Mutex<Inner>,
 	notify: super::events::Notify,
 }
@@ -138,6 +141,7 @@ impl Warmup {
 		let warmup = Warmup {
 			data_dir: data_dir.to_path_buf(),
 			log,
+			relays: Vec::new(),
 			inner: Mutex::new(Inner {
 				settings,
 				state,
@@ -152,6 +156,13 @@ impl Warmup {
 			}
 		}
 		warmup
+	}
+
+	/// Leave the records these smarthosts answered out of each day's
+	/// judgement (see [`super::health::DayTally::without`]).
+	pub fn with_relays(mut self, relays: Vec<String>) -> Self {
+		self.relays = relays;
+		self
 	}
 
 	/// Report judged days to this webhook.
@@ -232,7 +243,7 @@ impl Warmup {
 		let Some(log) = &self.log else {
 			return DayTally::default();
 		};
-		tally_day(log, day).unwrap_or_else(|error| {
+		tally_day_without(log, day, &self.relays).unwrap_or_else(|error| {
 			tracing::warn!(%error, "cannot read the delivery log to judge the warm-up day");
 			DayTally::default()
 		})

@@ -129,13 +129,14 @@ pub(super) fn run(
 	data_dir: &Path,
 	storage: Option<&Storage>,
 	delivery_log_days: u64,
+	relays: &[String],
 	action: WarmupCli,
 	now: u64,
 	out: &mut impl Write,
 ) -> ExitCode {
 	let (change, yes, json) = match action {
 		WarmupCli::Status { json } => {
-			return status(data_dir, storage, delivery_log_days, now, json, out);
+			return status(data_dir, storage, delivery_log_days, relays, now, json, out);
 		}
 		WarmupCli::Plan(args) => return start::run_plan(data_dir, &args, now, out),
 		WarmupCli::Start(args) => {
@@ -172,11 +173,12 @@ fn status(
 	data_dir: &Path,
 	storage: Option<&Storage>,
 	delivery_log_days: u64,
+	relays: &[String],
 	now: u64,
 	json: bool,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let report = match view::build(data_dir, storage, delivery_log_days, now) {
+	let report = match view::build(data_dir, storage, delivery_log_days, relays, now) {
 		Ok(report) => report,
 		Err(error) => {
 			super::style::error(format_args!(

@@ -30,5 +30,16 @@ pub mod stages;
 pub mod state;
 
 pub use controller::{Grant, Warmup, day_of, sender_share};
+
+/// The smarthosts of the `[[transport]]` relay rules: mail through them
+/// leaves from their address, so their answers are not part of the
+/// warm-up's judgement.
+pub fn relay_hosts(transports: &[crate::config::Transport]) -> Vec<String> {
+	transports
+		.iter()
+		.filter(|rule| rule.kind == crate::config::TransportKind::Relay)
+		.filter_map(|rule| rule.host.clone())
+		.collect()
+}
 pub use events::WarmupReport;
 pub use group::Group;

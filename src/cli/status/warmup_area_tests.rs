@@ -35,7 +35,7 @@ fn line(report: &AreaReport) -> (Level, &str) {
 fn off_and_quiet_is_just_off() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	assert_eq!(
-		line(&evaluate(dir.path(), None, 30, NOW)),
+		line(&evaluate(dir.path(), None, 30, &[], NOW)),
 		(Level::Ok, "off")
 	);
 }
@@ -45,7 +45,7 @@ fn a_new_address_sending_a_lot_is_told_about_the_warm_up() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	log_gmail(dir.path(), NOW - 60, 200);
 	assert_eq!(
-		line(&evaluate(dir.path(), None, 30, NOW)),
+		line(&evaluate(dir.path(), None, 30, &[], NOW)),
 		(
 			Level::Warn,
 			"off; this address looks new (200 recipients today, 0 messages queued): \
@@ -55,7 +55,7 @@ fn a_new_address_sending_a_lot_is_told_about_the_warm_up() {
 	// A month of delivery log says it is not new.
 	log_gmail(dir.path(), NOW - 30 * 86_400, 1);
 	assert_eq!(
-		line(&evaluate(dir.path(), None, 30, NOW)),
+		line(&evaluate(dir.path(), None, 30, &[], NOW)),
 		(Level::Ok, "off")
 	);
 }
@@ -75,7 +75,7 @@ fn on_it_reports_each_group() {
 	kept.group_mut(crate::queue::warmup::Group::Gmail).sent = 30;
 	state::save(dir.path(), &kept).expect("state");
 	log_gmail(dir.path(), NOW - 60, 30);
-	let report = evaluate(dir.path(), None, 30, NOW);
+	let report = evaluate(dir.path(), None, 30, &[], NOW);
 	assert_eq!(line(&report), (Level::Ok, "on: gmail 30/50 good"));
 	assert_eq!(
 		report.items[0],

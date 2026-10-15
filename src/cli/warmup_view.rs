@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::config::Storage;
 use crate::queue::warmup::events::percent;
-use crate::queue::warmup::health::tally_day;
+use crate::queue::warmup::health::tally_day_without;
 use crate::queue::warmup::schedule::close_day;
 use crate::queue::warmup::settings::{self, Action, Order};
 use crate::queue::warmup::state::{self, DayRecord, State};
@@ -82,6 +82,7 @@ pub(in crate::cli) fn build(
 	data_dir: &Path,
 	storage: Option<&Storage>,
 	delivery_log_days: u64,
+	relays: &[String],
 	now: u64,
 ) -> Result<View, String> {
 	let settings = settings::load(data_dir)
@@ -97,8 +98,8 @@ pub(in crate::cli) fn build(
 		crate::queue::warmup::schedule::open_day(&mut state, today);
 	}
 	let log = DeliveryLog::open(data_dir, delivery_log_days);
-	let tally =
-		tally_day(&log, today).map_err(|error| format!("reading the delivery log: {error}"))?;
+	let tally = tally_day_without(&log, today, relays)
+		.map_err(|error| format!("reading the delivery log: {error}"))?;
 	let mut projected = state.clone();
 	let projection = close_day(&mut projected, today, &tally, settings.paused);
 	let waiting = waiting(data_dir, storage);

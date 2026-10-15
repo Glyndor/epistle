@@ -26,7 +26,15 @@ fn parse(args: &[&str]) -> Result<WarmupCli, String> {
 
 fn run_args(dir: &Path, args: &[&str]) -> (ExitCode, String) {
 	let mut out = Vec::new();
-	let code = crate::cli::warmup::run(dir, None, 30, parse(args).expect("parse"), NOW, &mut out);
+	let code = crate::cli::warmup::run(
+		dir,
+		None,
+		30,
+		&[],
+		parse(args).expect("parse"),
+		NOW,
+		&mut out,
+	);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 

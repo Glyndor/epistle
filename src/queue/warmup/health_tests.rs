@@ -310,3 +310,33 @@ fn accounts_past_the_bound_are_counted_together() {
 	assert_eq!(day.accounts(Group::Gmail), MAX_ACCOUNTS + 1);
 	assert_eq!(named(&day.causes(Group::Gmail))[0], ("overflow", 76));
 }
+
+#[test]
+fn a_smarthost_answer_says_nothing_about_the_receivers() {
+	// Mail a `[[transport]]` relays goes out from the smarthost's own
+	// address: its replies, its throttling included, are not ours.
+	let relays = [
+		"Smtp.Relay.Example.".to_string(),
+		"smtp-relay.google.com".to_string(),
+	];
+	let mut day = DayTally::without(&relays);
+	day.add(&record(
+		DeliveryOutcome::Deferred,
+		Some("smtp.relay.example"),
+		"451 4.7.1 rate limited",
+	));
+	day.add(&record(
+		DeliveryOutcome::Delivered,
+		Some("smtp-relay.google.com"),
+		"250 OK",
+	));
+	assert_eq!(day.of(Group::Other), Tally::default());
+	assert_eq!(day.of(Group::Gmail), Tally::default());
+	// The same replies from an exchanger count.
+	day.add(&record(
+		DeliveryOutcome::Delivered,
+		Some(GMAIL_MX),
+		"250 OK",
+	));
+	assert_eq!(day.of(Group::Gmail).attempted, 1);
+}

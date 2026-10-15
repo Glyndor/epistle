@@ -71,7 +71,9 @@ From the delivery log, by reply code, never by reply text:
 | spam block | `5.7.x` |
 
 Unknown users count because receivers count them against the sender: a
-list with many dead addresses must not grow.
+list with many dead addresses must not grow. Mail a `[[transport]]`
+relay rule hands to a smarthost leaves from the smarthost's address, so
+the smarthost's replies are left out.
 
 | Day | When | Effect on the cap |
 |---|---|---|

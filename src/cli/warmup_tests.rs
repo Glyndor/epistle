@@ -25,7 +25,7 @@ fn parse(args: &[&str]) -> Result<WarmupCli, String> {
 fn run_args(dir: &Path, log_days: u64, args: &[&str]) -> (u8, String) {
 	let action = parse(args).expect("parse");
 	let mut out = Vec::new();
-	let code = run(dir, None, log_days, action, MIDNIGHT + 3600, &mut out);
+	let code = run(dir, None, log_days, &[], action, MIDNIGHT + 3600, &mut out);
 	let code = [0u8, 1, 2]
 		.into_iter()
 		.find(|known| code == ExitCode::from(*known))

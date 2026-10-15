@@ -267,6 +267,7 @@ impl Cli {
 					&config.data_dir,
 					config.storage.as_ref(),
 					config.delivery_log_days(),
+					&crate::queue::warmup::relay_hosts(&config.transport),
 					action,
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
