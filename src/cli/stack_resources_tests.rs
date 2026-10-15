@@ -4,9 +4,12 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use super::{ResourcesCli, run, set_limits};
+use super::{ResourcesCli, mail_floor_problem, run, set_limits};
 
 const GIB: u64 = 1024 * 1024 * 1024;
+
+/// The default `max_message_size`, 25 MiB.
+const LARGEST: u64 = 25 * 1024 * 1024;
 
 /// A data dir with the compose file `init` writes for a stack with a
 /// database, and the path of that file.
@@ -37,7 +40,10 @@ fn document(path: &std::path::Path) -> Value {
 fn resources_lists_each_service_limit_as_json() {
 	let (_dir, compose) = stack();
 	let mut out = Vec::new();
-	assert_eq!(run(&compose, None, true, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		run(&compose, LARGEST, None, true, &mut out),
+		ExitCode::SUCCESS
+	);
 	let printed: Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(
 		printed,
@@ -57,7 +63,10 @@ fn resources_lists_each_service_limit_as_json() {
 fn resources_prints_a_table_with_the_total() {
 	let (_dir, compose) = stack();
 	let mut out = Vec::new();
-	assert_eq!(run(&compose, None, false, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		run(&compose, LARGEST, None, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	assert_eq!(
 		String::from_utf8(out).expect("utf8"),
 		"SERVICE    MEMORY  PIDS\n\
@@ -73,7 +82,13 @@ fn resources_prints_a_table_with_the_total() {
 fn set_records_the_limit_where_stack_update_reads_it_back() {
 	let (dir, compose) = stack();
 	let mut out = Vec::new();
-	let code = run(&compose, set("clamav", Some("2g"), None), true, &mut out);
+	let code = run(
+		&compose,
+		LARGEST,
+		set("clamav", Some("2g"), None),
+		true,
+		&mut out,
+	);
 	assert_eq!(code, ExitCode::SUCCESS);
 	let printed: Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(
@@ -107,6 +122,7 @@ fn set_prints_what_changed_and_how_to_apply_it() {
 	let mut out = Vec::new();
 	let code = run(
 		&compose,
+		LARGEST,
 		set("mail", Some("2g"), Some(2048)),
 		false,
 		&mut out,
@@ -153,7 +169,13 @@ fn set_refuses_what_init_refuses_and_writes_nothing() {
 			"{service} {memory:?} {pids:?}"
 		);
 		let mut out = Vec::new();
-		let code = run(&compose, set(service, memory, pids), false, &mut out);
+		let code = run(
+			&compose,
+			LARGEST,
+			set(service, memory, pids),
+			false,
+			&mut out,
+		);
 		assert_eq!(code, ExitCode::FAILURE);
 		assert_eq!(std::fs::read_to_string(&compose).expect("read"), text);
 	}
@@ -209,9 +231,18 @@ fn a_compose_file_over_one_mib_is_refused_unread() {
 	text.push_str(&" ".repeat(2 * 1024 * 1024));
 	std::fs::write(&compose, &text).expect("pad");
 	let mut out = Vec::new();
-	assert_eq!(run(&compose, None, true, &mut out), ExitCode::FAILURE);
+	assert_eq!(
+		run(&compose, LARGEST, None, true, &mut out),
+		ExitCode::FAILURE
+	);
 	assert!(out.is_empty(), "nothing listed");
-	let code = run(&compose, set("clamav", Some("2g"), None), true, &mut out);
+	let code = run(
+		&compose,
+		LARGEST,
+		set("clamav", Some("2g"), None),
+		true,
+		&mut out,
+	);
 	assert_eq!(code, ExitCode::FAILURE);
 	assert_eq!(
 		std::fs::read_to_string(&compose).expect("read").len(),
@@ -230,11 +261,82 @@ fn control_characters_in_the_compose_file_do_not_reach_the_terminal() {
 	)
 	.expect("compose");
 	let mut out = Vec::new();
-	assert_eq!(run(&compose, None, false, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		run(&compose, LARGEST, None, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	let printed = String::from_utf8(out).expect("utf8");
 	assert!(
 		!printed.chars().any(|c| c == '\u{1b}' || c == '\u{7}'),
 		"escape bytes were printed: {:?}",
 		printed.escape_debug().to_string()
+	);
+}
+
+#[test]
+fn set_refuses_a_mail_limit_under_what_the_largest_message_needs() {
+	let (_dir, compose) = stack();
+	let before = std::fs::read(&compose).expect("read");
+	let mut out = Vec::new();
+	let code = run(
+		&compose,
+		LARGEST,
+		set("mail", Some("256m"), None),
+		false,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(
+		std::fs::read(&compose).expect("read"),
+		before,
+		"nothing written"
+	);
+	// 300 MiB messages need five of them and 256 MiB: 1756 MiB.
+	let code = run(
+		&compose,
+		300 << 20,
+		set("mail", Some("1755m"), None),
+		false,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::FAILURE);
+	let code = run(
+		&compose,
+		300 << 20,
+		set("mail", Some("1756m"), None),
+		false,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert_eq!(document(&compose)["services"]["mail"]["mem_limit"], "1756m");
+}
+
+#[test]
+fn the_mail_floor_names_the_least_it_takes() {
+	assert_eq!(
+		mail_floor_problem("mail", Some("256m"), LARGEST),
+		Some(
+			"mail needs at least 381m for messages of up to 25 MiB: 5 of them and 256 MiB \
+			 for the server itself; give it more, or lower max_message_size first"
+				.to_string()
+		)
+	);
+	assert_eq!(mail_floor_problem("mail", Some("381m"), LARGEST), None);
+	assert_eq!(mail_floor_problem("mail", None, LARGEST), None, "pids only");
+	assert_eq!(
+		mail_floor_problem("clamav", Some("256m"), LARGEST),
+		None,
+		"only mail holds messages"
+	);
+	assert_eq!(
+		mail_floor_problem("mail", Some("1g"), 1_000_000),
+		None,
+		"a size in bytes, not whole MiB"
+	);
+	assert_eq!(
+		mail_floor_problem("mail", Some("260m"), 1_000_000)
+			.map(|problem| problem.starts_with("mail needs at least 261m ")),
+		Some(true),
+		"rounded up to the next MiB"
 	);
 }

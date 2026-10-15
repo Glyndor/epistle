@@ -161,10 +161,35 @@ pub(crate) fn set_limits(
 	Ok((text, Change { before, after }))
 }
 
-/// Run `stack resources [set ...]` against the compose file at `compose`,
-/// printing to `out`.
+/// Why `memory` is too little for `service`: only `mail` holds messages,
+/// and it needs [`crate::smtp::memory_fit::mail_floor`] for messages of up
+/// to `largest` bytes. `None` when it is enough.
+pub(crate) fn mail_floor_problem(
+	service: &str,
+	memory: Option<&str>,
+	largest: u64,
+) -> Option<String> {
+	const MIB: u64 = 1024 * 1024;
+	let floor = crate::smtp::memory_fit::mail_floor(largest);
+	let asked = parse_memory(memory?)?;
+	if service != "mail" || asked >= floor {
+		return None;
+	}
+	Some(format!(
+		"mail needs at least {} for messages of up to {} MiB: {} of them and {} MiB for the \
+		 server itself; give it more, or lower max_message_size first",
+		compose_size(floor.div_ceil(MIB) * MIB),
+		largest.div_ceil(MIB),
+		crate::smtp::memory_fit::LIMIT_DIVISOR,
+		crate::smtp::memory_fit::MAIL_BASE / MIB,
+	))
+}
+
+/// Run `stack resources [set ...]` against the compose file at `compose`
+/// of a server whose largest message is `largest` bytes, printing to `out`.
 pub(super) fn run(
 	compose: &Path,
+	largest: u64,
 	action: Option<ResourcesCli>,
 	json: bool,
 	out: &mut impl Write,
@@ -176,6 +201,9 @@ pub(super) fn run(
 			memory,
 			pids,
 		}) => {
+			if let Some(problem) = mail_floor_problem(&service, memory.as_deref(), largest) {
+				return Err(problem);
+			}
 			let (written, change) = set_limits(&text, &service, memory.as_deref(), pids)?;
 			crate::storage::write_secret(compose, written.as_bytes())
 				.map_err(|error| format!("cannot write {}: {error}", compose.display()))?;

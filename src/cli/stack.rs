@@ -220,7 +220,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 	// The limits live in the compose file alone: no podup, no socket.
 	let action = match action {
 		StackAction::Resources { action, json } => {
-			return super::stack_resources::run(&compose, action, json, &mut std::io::stdout());
+			return super::stack_resources::run(
+				&compose,
+				crate::smtp::memory_fit::largest_message(config.max_message_size),
+				action,
+				json,
+				&mut std::io::stdout(),
+			);
 		}
 		action => action,
 	};
@@ -316,9 +322,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
 		}
-		StackAction::Resources { action, json } => {
-			super::stack_resources::run(&compose, action, json, &mut std::io::stdout())
-		}
+		StackAction::Resources { action, json } => super::stack_resources::run(
+			&compose,
+			crate::smtp::memory_fit::largest_message(config.max_message_size),
+			action,
+			json,
+			&mut std::io::stdout(),
+		),
 	}
 }
 

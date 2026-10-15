@@ -31,11 +31,12 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 /// Judge `config` against the compose file at `compose` and the host's
 /// memory in `meminfo`.
 fn evaluate(config: &Config, compose: &Path, meminfo: &Path) -> AreaReport {
-	let containers = containers_item(compose, meminfo);
+	let largest = memory_fit::largest_message(config.max_message_size);
+	let containers = containers_item(compose, meminfo, largest);
 	let budget = budget_item(config, compose);
 	let summary = format!("{}; message budget {}", containers.detail, budget.detail);
 	let mut items = vec![containers];
-	items.extend(suggested_item(compose, meminfo));
+	items.extend(suggested_item(compose, meminfo, largest));
 	items.push(budget);
 	let warnings: Vec<&str> = items
 		.iter()
@@ -56,8 +57,9 @@ fn evaluate(config: &Config, compose: &Path, meminfo: &Path) -> AreaReport {
 /// limits, so this is where the operator hears of them. A warning when the
 /// `mail` limit is below the suggestion, since that is the container a
 /// burst of large messages fills; `None` when the compose file or
-/// `MemTotal` cannot be read (the containers finding says which).
-fn suggested_item(compose: &Path, meminfo: &Path) -> Option<Item> {
+/// `MemTotal` cannot be read (the containers finding says which). `mail` is
+/// never suggested less than messages of up to `largest` bytes need.
+fn suggested_item(compose: &Path, meminfo: &Path, largest: u64) -> Option<Item> {
 	let document: serde_json::Value = serde_json::from_str(&read_bounded(compose)?).ok()?;
 	let total = host_sizing::mem_total(meminfo)?;
 	let sizing = host_sizing::for_host(total);
@@ -73,7 +75,11 @@ fn suggested_item(compose: &Path, meminfo: &Path) -> Option<Item> {
 		if matches!(service, "clamav" | "freshclam") && !sizing.antivirus {
 			continue;
 		}
-		let wanted_bytes = memory_fit::parse_memory(wanted);
+		let wanted_bytes = match memory_fit::parse_memory(wanted) {
+			Some(bytes) if service == "mail" => Some(bytes.max(needs(service, largest))),
+			bytes => bytes,
+		};
+		let wanted = wanted_bytes.map_or_else(|| wanted.to_string(), compose_size);
 		if limit.memory_bytes == wanted_bytes {
 			continue;
 		}
@@ -119,10 +125,27 @@ const HOST_SHARE_PERCENT: u64 = 85;
 /// The step a suggested lower limit is rounded down to: 256 MiB.
 const SUGGESTION_STEP: u64 = 256 * 1024 * 1024;
 
+/// The least memory `status` suggests for `service`: for `mail`, room for
+/// messages of up to `largest` bytes ([`memory_fit::mail_floor`]) rounded
+/// up to [`SUGGESTION_STEP`]; for the others, the least any tier gives it.
+fn needs(service: &str, largest: u64) -> u64 {
+	if service == "mail" {
+		return memory_fit::mail_floor(largest).div_ceil(SUGGESTION_STEP) * SUGGESTION_STEP;
+	}
+	host_sizing::least(service).unwrap_or(SUGGESTION_STEP)
+}
+
+/// A byte count as compose writes it.
+fn compose_size(bytes: u64) -> String {
+	crate::cli::stack_resources::compose_size(bytes)
+}
+
 /// The containers finding: the sum of the compose memory limits against the
 /// host's `MemTotal`, naming the largest and the command to lower one when
-/// they add up to more than [`HOST_SHARE_PERCENT`].
-fn containers_item(compose: &Path, meminfo: &Path) -> Item {
+/// they add up to more than [`HOST_SHARE_PERCENT`]. A service is never
+/// suggested less than it [`needs`]; when the largest cannot go lower, the
+/// next one is named.
+fn containers_item(compose: &Path, meminfo: &Path, largest: u64) -> Item {
 	const NAME: &str = "containers";
 	let Some(document) = read_bounded(compose).and_then(|text| serde_json::from_str(&text).ok())
 	else {
@@ -159,25 +182,35 @@ fn containers_item(compose: &Path, meminfo: &Path) -> Item {
 		return Item::new(NAME, Level::Ok, detail);
 	}
 	limits.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-	let largest: Vec<String> = limits
+	let largest_two: Vec<String> = limits
 		.iter()
 		.take(2)
 		.map(|(service, _, memory)| format!("{} ({})", sanitize(service), sanitize(memory)))
 		.collect();
-	let (service, bytes, _) = &limits[0];
-	// Lower the largest by the excess, rounded down to the step.
+	// Lower the largest that can go lower by the excess, rounded down to
+	// the step, but not under what it needs.
 	let excess = (u128::from(sum) * 100 - allowed).div_ceil(100);
-	let target = u128::from(*bytes).saturating_sub(excess) as u64;
-	let suggested = (target / SUGGESTION_STEP).max(1) * SUGGESTION_STEP;
+	let lowered = limits.iter().find_map(|(service, bytes, _)| {
+		let target = u128::from(*bytes).saturating_sub(excess) as u64;
+		let suggested = (target / SUGGESTION_STEP * SUGGESTION_STEP).max(needs(service, largest));
+		(suggested < *bytes).then_some((service, suggested))
+	});
+	let remedy = match lowered {
+		Some((service, suggested)) => format!(
+			"lower one with `epistle stack resources set {} --memory {}`",
+			sanitize(service),
+			compose_size(suggested)
+		),
+		None => {
+			"none can be lowered under what it needs, so the host needs more memory".to_string()
+		}
+	};
 	Item::new(
 		NAME,
 		Level::Warn,
 		format!(
-			"{detail}, more than {HOST_SHARE_PERCENT}%; the largest are {}; lower one with \
-			 `epistle stack resources set {} --memory {}`",
-			largest.join(" and "),
-			sanitize(service),
-			crate::cli::stack_resources::compose_size(suggested)
+			"{detail}, more than {HOST_SHARE_PERCENT}%; the largest are {}; {remedy}",
+			largest_two.join(" and "),
 		),
 	)
 }
@@ -234,3 +267,7 @@ mod tests_containers;
 #[cfg(test)]
 #[path = "resources_area_tests_suggest.rs"]
 mod tests_suggest;
+
+#[cfg(test)]
+#[path = "resources_area_tests_floor.rs"]
+mod tests_floor;

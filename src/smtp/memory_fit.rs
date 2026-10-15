@@ -37,6 +37,20 @@ pub const PEAK_FACTOR: u64 = 3;
 /// the peak before start-up and `epistle status` warn.
 pub const WARN_PERCENT: u64 = 70;
 
+/// What the mail process needs besides message data: 47 MB were measured
+/// under 64 SMTP and 32 IMAP sessions, and the rest is room for the
+/// allocator, TLS and the queue.
+pub const MAIL_BASE: u64 = 256 * 1024 * 1024;
+
+/// The least memory the `mail` container needs when the largest message is
+/// `largest` bytes: [`LIMIT_DIVISOR`] of them, so the budget derived from
+/// the limit holds one, and [`MAIL_BASE`].
+pub fn mail_floor(largest: u64) -> u64 {
+	largest
+		.saturating_mul(LIMIT_DIVISOR)
+		.saturating_add(MAIL_BASE)
+}
+
 /// The limit assumed when none can be read: the `mail` default of the
 /// compose files written before the default followed the host's memory.
 pub const FALLBACK_LIMIT: u64 = 1024 * 1024 * 1024;

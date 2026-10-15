@@ -97,6 +97,18 @@ pub(crate) const TIERS: [Tier; 4] = [
 	},
 ];
 
+/// The least memory any tier gives `service` where it runs: what it was
+/// measured to need. `None` for a service no tier sizes.
+pub(crate) fn least(service: &str) -> Option<u64> {
+	TIERS
+		.iter()
+		.filter(|tier| tier.antivirus || !matches!(service, "clamav" | "freshclam"))
+		.flat_map(|tier| tier.memory)
+		.filter(|(name, _)| *name == service)
+		.filter_map(|(_, memory)| crate::smtp::memory_fit::parse_memory(memory))
+		.min()
+}
+
 /// The limits for a host whose `MemTotal` is `mem_total` bytes: the last
 /// tier it reaches.
 pub(crate) fn for_host(mem_total: u64) -> Sizing {
