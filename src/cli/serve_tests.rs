@@ -231,11 +231,15 @@ async fn serve_applies_max_message_size_to_the_api() {
 	assert_eq!(status, 413, "the API body limit follows max_message_size");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn serve_applies_the_rate_floor_to_smtp() {
 	// A floor no client can meet after a one-second grace: the listener
 	// `serve` builds cuts a dripped BDAT chunk then, not after the
-	// built-in 120 s.
+	// built-in 120 s. The clock is the real one: with real sockets a
+	// paused clock jumps to the next timer whenever the runtime waits on
+	// the kernel, so a reply still in flight could find the server timed
+	// out. One second of real time, and a minute of margin before the
+	// built-in grace would be the one that cut.
 	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
 		.await
 		.expect("probe bind");
@@ -265,18 +269,20 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 		.write_all(b"EHLO client.example.org\r\nBDAT 4096\r\n")
 		.await
 		.expect("write");
-	let started = tokio::time::Instant::now();
 	let mut output = Vec::new();
-	let _ = stream.read_to_end(&mut output).await;
-	let elapsed = started.elapsed();
+	let read = tokio::time::timeout(
+		std::time::Duration::from_secs(60),
+		stream.read_to_end(&mut output),
+	)
+	.await;
 	server.abort();
 	let output = String::from_utf8_lossy(&output);
 	assert!(
-		output.ends_with("421 4.4.2 transfer too slow, closing connection\r\n"),
-		"the configured floor cuts the chunk: {output}"
+		read.is_ok(),
+		"the configured grace cuts within a minute, not the built-in 120 s: {output}"
 	);
 	assert!(
-		elapsed < std::time::Duration::from_secs(5),
-		"after the configured grace, not at {elapsed:?}"
+		output.ends_with("421 4.4.2 transfer too slow, closing connection\r\n"),
+		"the configured floor cuts the chunk: {output}"
 	);
 }
