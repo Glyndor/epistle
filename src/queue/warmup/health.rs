@@ -18,6 +18,15 @@
 //!
 //! Records with no remote answer (a local error, a suppression, a cancel,
 //! an expiry with no reply) say nothing about the receiver and are left out.
+//!
+//! Reputation belongs to the sending address, so every account's mail is
+//! judged together: one account mailing dead addresses or spam traps can
+//! hold or step back a group's cap for everyone. That cannot be prevented
+//! without letting the bad mail itself go on, so it is made visible: each
+//! bad reply is put to the account that submitted the message (`system`
+//! for mail the server sends on its own), and a judged day names the
+//! accounts with the most ([`DayTally::causes`]) so the operator can slow
+//! or stop that account.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -30,6 +39,12 @@ use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord};
 /// seen again is counted again rather than remembered, so a day of any
 /// size is read in bounded memory.
 pub const MAX_RECIPIENTS: usize = 200_000;
+
+/// The most accounts one group's day tells apart; past it the rest are
+/// counted together under [`super::state::OVERFLOW_SENDER`].
+pub const MAX_ACCOUNTS: usize = 1024;
+/// How many accounts a judged day names.
+pub const NAMED_CAUSES: usize = 3;
 
 /// What one group's records of one day add up to.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -114,6 +129,8 @@ struct Seen {
 pub struct DayTally {
 	groups: BTreeMap<Group, Tally>,
 	seen: HashMap<u64, Seen>,
+	/// Bad replies per account, by group.
+	causes: BTreeMap<Group, HashMap<String, u32>>,
 }
 
 impl DayTally {
@@ -134,14 +151,24 @@ impl DayTally {
 			tally.attempted = tally.attempted.saturating_add(1);
 		}
 		let mut after = before;
-		match signal {
+		let bad = match signal {
 			Signal::Throttled if !before.deferred => {
 				tally.deferred = tally.deferred.saturating_add(1);
 				after.deferred = true;
+				true
 			}
-			Signal::Bounced => tally.bounced = tally.bounced.saturating_add(1),
-			Signal::SpamBlock => tally.spam_blocks = tally.spam_blocks.saturating_add(1),
-			_ => {}
+			Signal::Bounced => {
+				tally.bounced = tally.bounced.saturating_add(1);
+				true
+			}
+			Signal::SpamBlock => {
+				tally.spam_blocks = tally.spam_blocks.saturating_add(1);
+				true
+			}
+			_ => false,
+		};
+		if bad {
+			self.blame(group, record.account.as_deref());
 		}
 		if !full || !first {
 			self.seen.insert(key, after);
@@ -151,6 +178,43 @@ impl DayTally {
 	/// The tally of `group`, zero when it had no records.
 	pub fn of(&self, group: Group) -> Tally {
 		self.groups.get(&group).copied().unwrap_or_default()
+	}
+
+	/// The accounts with the most bad replies in `group`, most first, at
+	/// most [`NAMED_CAUSES`] of them.
+	pub fn causes(&self, group: Group) -> Vec<super::state::Cause> {
+		let Some(accounts) = self.causes.get(&group) else {
+			return Vec::new();
+		};
+		let mut causes: Vec<(&String, &u32)> = accounts.iter().collect();
+		causes.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+		causes
+			.into_iter()
+			.take(NAMED_CAUSES)
+			.map(|(account, bad)| super::state::Cause {
+				account: account.clone(),
+				bad: *bad,
+			})
+			.collect()
+	}
+
+	/// Count one bad reply against the account that submitted the message,
+	/// or `system` for mail with none.
+	fn blame(&mut self, group: Group, account: Option<&str>) {
+		let accounts = self.causes.entry(group).or_default();
+		let account = account
+			.filter(|account| !account.is_empty())
+			.unwrap_or("system");
+		let key = match accounts.contains_key(account) || accounts.len() < MAX_ACCOUNTS {
+			true => account,
+			false => super::state::OVERFLOW_SENDER,
+		};
+		*accounts.entry(key.to_string()).or_default() += 1;
+	}
+
+	/// How many accounts `group`'s day tells apart.
+	pub fn accounts(&self, group: Group) -> usize {
+		self.causes.get(&group).map_or(0, HashMap::len)
 	}
 
 	/// How many recipients are told apart.

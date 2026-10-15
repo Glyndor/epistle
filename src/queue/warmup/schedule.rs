@@ -72,6 +72,7 @@ pub fn close_day(state: &mut State, day: i64, tally: &DayTally, paused: bool) ->
 			next_cap: schedule.cap,
 			raise,
 			paused,
+			causes: tally.causes(group),
 		};
 		schedule.remember(record.clone());
 		let kind = match (verdict, raise) {

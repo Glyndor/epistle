@@ -102,6 +102,7 @@ fn history_and_senders_are_bounded() {
 			next_cap: Some(50),
 			raise: None,
 			paused: false,
+			causes: Vec::new(),
 		});
 	}
 	assert_eq!(schedule.history.len(), MAX_HISTORY);

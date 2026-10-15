@@ -38,6 +38,11 @@ pub struct WarmupReport {
 	/// The schedule was paused, so the cap did not move.
 	#[serde(default)]
 	pub paused: bool,
+	/// The accounts with the most bad replies that day, most first, so the
+	/// operator can act on them (`epistle limits set submission-rate
+	/// --tenant`, or the account itself).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub causes: Vec<super::state::Cause>,
 }
 
 /// `part` as a percentage of `whole`, to one decimal.
@@ -66,6 +71,7 @@ impl WarmupReport {
 			next_cap: record.next_cap,
 			raise: record.raise.map(|raise| raise.label().to_string()),
 			paused: record.paused,
+			causes: record.causes.clone(),
 		}
 	}
 
@@ -78,6 +84,15 @@ impl WarmupReport {
 			EventKind::Backoff => WebhookEvent::WarmupBackoff(self),
 		}
 	}
+}
+
+/// `account=bad, ...` for a log line.
+fn causes(causes: &[super::state::Cause]) -> String {
+	let named: Vec<String> = causes
+		.iter()
+		.map(|cause| format!("{}={}", cause.account, cause.bad))
+		.collect();
+	named.join(", ")
 }
 
 /// Where judged days are reported, besides the log.
@@ -103,7 +118,8 @@ impl Notify {
 					group = %report.group, day = %report.day, verdict = %report.verdict,
 					cap = %cap(report.cap), next_cap = %cap(report.next_cap),
 					deferred_percent = report.deferred_percent, bounced_percent = report.bounced_percent,
-					spam_blocks = report.spam_blocks, "warm-up day went badly"
+					spam_blocks = report.spam_blocks, causes = %causes(&report.causes),
+					"warm-up day went badly"
 				),
 			}
 			if let Some(metrics) = &self.metrics {

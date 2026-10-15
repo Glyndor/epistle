@@ -65,6 +65,18 @@ pub struct Raise {
 	pub trial_day: i64,
 }
 
+/// An account named for the bad replies of a day: who to look at first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cause {
+	/// The submitting account, or `system` for mail the server sent on
+	/// its own or relayed.
+	pub account: String,
+	/// Its recipients deferred for rate or reputation, bounced, or
+	/// refused as spam that day.
+	pub bad: u32,
+}
+
 /// One judged day of one group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -93,6 +105,9 @@ pub struct DayRecord {
 	/// The schedule was paused: the cap did not move.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub paused: bool,
+	/// The accounts with the most bad replies that day, most first.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub causes: Vec<Cause>,
 }
 
 /// One group's schedule and its use today.

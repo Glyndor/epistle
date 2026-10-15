@@ -228,3 +228,35 @@ fn a_new_day_starts_every_count_at_zero() {
 		(DAY + 1, 0, 0)
 	);
 }
+
+#[test]
+fn a_bad_day_names_the_accounts_behind_it() {
+	let mut tally = day_of(100, 0, 0);
+	for n in 0..4 {
+		tally.add(&DeliveryRecord {
+			time: 0,
+			spool_id: uuid::Uuid::nil(),
+			account: Some("bulk@school.example".into()),
+			from: "bulk@school.example".into(),
+			recipient: format!("dead{n}@gmail.com"),
+			outcome: DeliveryOutcome::Failed,
+			remote: Some(GMAIL_MX.into()),
+			reply: Some("550 5.1.1 unknown".into()),
+			attempt: 1,
+			extra: Default::default(),
+		});
+	}
+	let mut state = state(Some(50), 50);
+	let events = close_day(&mut state, DAY, &tally, false);
+	assert_eq!(
+		gmail(&events),
+		(EventKind::Held, Some(50), Some(50), Verdict::Bad)
+	);
+	assert_eq!(
+		events[0].record.causes,
+		[crate::queue::warmup::state::Cause {
+			account: "bulk@school.example".into(),
+			bad: 4
+		}]
+	);
+}

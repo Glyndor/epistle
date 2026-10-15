@@ -1,7 +1,7 @@
 use super::*;
 use crate::queue::warmup::Group;
 use crate::queue::warmup::policy::Verdict;
-use crate::queue::warmup::state::{DayRecord, RaiseOutcome};
+use crate::queue::warmup::state::{Cause, DayRecord, RaiseOutcome};
 
 fn event(kind: EventKind, verdict: Verdict, raise: Option<RaiseOutcome>) -> Event {
 	Event {
@@ -19,6 +19,16 @@ fn event(kind: EventKind, verdict: Verdict, raise: Option<RaiseOutcome>) -> Even
 			next_cap: Some(50),
 			raise,
 			paused: false,
+			causes: vec![
+				Cause {
+					account: "bulk@school.example".into(),
+					bad: 8,
+				},
+				Cause {
+					account: "system".into(),
+					bad: 1,
+				},
+			],
 		},
 	}
 }
@@ -37,7 +47,8 @@ fn each_kind_is_its_own_webhook_event() {
 		concat!(
 			r#"{"event":"warmup.backoff","group":"gmail","day":"2025-10-14","cap":200,"sent":200,"#,
 			r#""attempted":180,"deferred_percent":5.0,"bounced_percent":0.5,"spam_blocks":0,"#,
-			r#""verdict":"bad","next_cap":50,"raise":"reverted","paused":false}"#
+			r#""verdict":"bad","next_cap":50,"raise":"reverted","paused":false,"#,
+			r#""causes":[{"account":"bulk@school.example","bad":8},{"account":"system","bad":1}]}"#
 		)
 	);
 	let ok = body(&event(EventKind::Ok, Verdict::Good, None));

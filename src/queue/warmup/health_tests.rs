@@ -217,3 +217,96 @@ fn a_day_is_tallied_from_the_log_file() {
 		}
 	);
 }
+
+fn from(
+	account: Option<&str>,
+	recipient: &str,
+	outcome: DeliveryOutcome,
+	reply: &str,
+) -> DeliveryRecord {
+	let mut record = record(outcome, Some(GMAIL_MX), reply);
+	record.account = account.map(str::to_string);
+	record.recipient = recipient.into();
+	record
+}
+
+fn named(causes: &[crate::queue::warmup::state::Cause]) -> Vec<(&str, u32)> {
+	causes
+		.iter()
+		.map(|cause| (cause.account.as_str(), cause.bad))
+		.collect()
+}
+
+#[test]
+fn bad_replies_are_attributed_to_the_accounts_that_caused_them() {
+	use DeliveryOutcome::*;
+	let mut day = DayTally::default();
+	for n in 0..5 {
+		day.add(&from(
+			Some("bulk@school.example"),
+			&format!("dead{n}@gmail.com"),
+			Failed,
+			"550 5.1.1 no such user",
+		));
+	}
+	for n in 0..2 {
+		// Mail the server sends on its own has no account.
+		day.add(&from(
+			None,
+			&format!("trap{n}@gmail.com"),
+			Failed,
+			"550 5.7.1 spam",
+		));
+	}
+	// One recipient deferred three times is one bad recipient.
+	for _ in 0..3 {
+		day.add(&from(
+			Some("alice@sender.example"),
+			"slow@gmail.com",
+			Deferred,
+			"421 4.7.0 slow",
+		));
+	}
+	day.add(&from(
+		Some("carol@sender.example"),
+		"ok@gmail.com",
+		Delivered,
+		"250 OK",
+	));
+	day.add(&from(
+		Some("carol@sender.example"),
+		"grey@gmail.com",
+		Deferred,
+		"450 4.2.0 greylisted",
+	));
+	day.add(&from(
+		Some("dave@sender.example"),
+		"x@gmail.com",
+		Failed,
+		"550 5.1.1 unknown",
+	));
+	assert_eq!(
+		named(&day.causes(Group::Gmail)),
+		[
+			("bulk@school.example", 5),
+			("system", 2),
+			("alice@sender.example", 1)
+		]
+	);
+	assert!(day.causes(Group::Yahoo).is_empty());
+}
+
+#[test]
+fn accounts_past_the_bound_are_counted_together() {
+	let mut day = DayTally::default();
+	for n in 0..(MAX_ACCOUNTS + 76) {
+		day.add(&from(
+			Some(&format!("a{n:04}@sender.example")),
+			&format!("dead{n}@gmail.com"),
+			DeliveryOutcome::Failed,
+			"550 5.1.1 unknown",
+		));
+	}
+	assert_eq!(day.accounts(Group::Gmail), MAX_ACCOUNTS + 1);
+	assert_eq!(named(&day.causes(Group::Gmail))[0], ("overflow", 76));
+}
