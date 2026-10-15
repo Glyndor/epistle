@@ -225,8 +225,10 @@ pids = 256
 ```
 
 `init` records the answered values in `compose.yaml` under
-`x-epistle-resources`, and `stack update` keeps them. A value in
-`compose.override.yaml` works too and wins over both.
+`x-epistle-resources`, and `stack update` keeps them. On a running install,
+`sudo epistle stack resources set clamav --memory 2g` records a value the
+same way, and `sudo epistle stack update` recreates the service with it. A
+value in `compose.override.yaml` works too and wins over both.
 
 ### Keys outside data_dir
 

@@ -27,6 +27,7 @@ fn ctx_for(path: &std::path::Path) -> Ctx {
 		config: Ok(config),
 		now,
 		podup: "podup".to_string(),
+		meminfo: std::path::PathBuf::from("meminfo-absent"),
 	}
 }
 

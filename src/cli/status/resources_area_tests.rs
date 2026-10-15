@@ -21,7 +21,7 @@ fn budget_line(extra: &str, memory: Option<&str>) -> (Level, String) {
 		Some(memory) => compose(dir.path(), memory),
 		None => dir.path().join("absent.yaml"),
 	};
-	let report = evaluate(ctx.config.as_ref().expect("config"), &path);
+	let report = evaluate(ctx.config.as_ref().expect("config"), &path, &ctx.meminfo);
 	let item = report
 		.items
 		.iter()
@@ -85,6 +85,7 @@ fn the_warning_rolls_up_to_the_area() {
 	let report = evaluate(
 		ctx.config.as_ref().expect("config"),
 		&compose(dir.path(), "2g"),
+		&ctx.meminfo,
 	);
 	assert_eq!(report.status, Level::Warn, "{report:?}");
 }

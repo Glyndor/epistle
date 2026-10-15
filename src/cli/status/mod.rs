@@ -76,7 +76,8 @@ pub enum CheckArea {
 	Subid,
 	/// The IP warm-up: each receiver group's cap, use, health and verdict.
 	Warmup,
-	/// The message memory budget fits the memory the mail container may use.
+	/// The containers' memory limits fit the host, and the message memory
+	/// budget fits the mail container's.
 	Resources,
 }
 
@@ -126,6 +127,8 @@ pub(super) struct Ctx {
 	pub(super) now: SystemTime,
 	/// The `podup` program that reports the stack's container state.
 	pub(super) podup: String,
+	/// The host's `/proc/meminfo`, which `resources` reads `MemTotal` from.
+	pub(super) meminfo: PathBuf,
 }
 
 impl Ctx {
@@ -143,6 +146,7 @@ impl Ctx {
 			config: Config::load(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
+			meminfo: PathBuf::from("/proc/meminfo"),
 		}
 	}
 }
