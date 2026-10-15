@@ -283,6 +283,12 @@ impl Warmup {
 	}
 }
 
+impl crate::directory_store::file_watcher::WarmupReloader for Warmup {
+	fn reload_warmup(&self) -> std::io::Result<()> {
+		self.reload(crate::storage::delivery_log::now_epoch())
+	}
+}
+
 /// When `sender` may next send to a group in `schedule`, or `None` when a
 /// recipient may go now or the group has no cap.
 fn wait(schedule: &state::GroupState, sender: &str, now: u64) -> Option<u64> {

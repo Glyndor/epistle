@@ -216,9 +216,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the polling interval sits well inside the 5 s deadline the
 	// operators see on the CLI. The same loop watches `api_keys.toml`
 	// and feeds the API-key reloader below.
+	let warmup = super::serve_queue::open_warmup(&config, &metrics, webhook.as_ref());
 	let watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
 		.with_api_keys(Arc::clone(&api_keys_set)
 			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
+		.with_warmup(
+			Arc::clone(&warmup) as Arc<dyn crate::directory_store::file_watcher::WarmupReloader>
+		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 
 	// The queue worker drains the outbound spool in the background.
@@ -229,6 +233,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		Arc::clone(&spf_dns),
 		&metrics,
 		webhook.as_ref(),
+		warmup,
 	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.
