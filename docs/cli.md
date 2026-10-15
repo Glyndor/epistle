@@ -10,8 +10,10 @@ Run `epistle <command> --help` for the exact flags.
 Commands take the shape `epistle <resource> <action>`. Every `list` and `show`
 accepts `--json`: a list prints one JSON array, a show one object, on stdout.
 Exit codes: `0` done, `1` the operation failed (I/O, database), `2` usage
-error or refused (unknown name, rejected input, a static account, a
-destructive action without `--yes`).
+error or not found (unknown name, rejected input, a destructive action
+without `--yes`), `3` refused by policy (a static account, a reached limit,
+a setting the change needs that is missing, such as `srs_secret` for a
+forward). Policy refusals exited `2` before they had their own code.
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|

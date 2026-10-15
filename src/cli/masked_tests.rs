@@ -129,7 +129,7 @@ fn per_account_cap_applies() {
 	let config = config(dir.path(), "masked_addresses_max = 1");
 	assert_eq!(add(&config, "alice", "one", None).0, ExitCode::SUCCESS);
 	let (code, out) = add(&config, "alice", "two", None);
-	assert_eq!(code, ExitCode::from(2));
+	assert_eq!(code, ExitCode::from(3));
 	assert!(out.is_empty(), "{out}");
 	let listed = exec(
 		&config,

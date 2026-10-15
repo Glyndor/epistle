@@ -22,3 +22,6 @@ mod stack;
 
 #[path = "cli_json/top_level.rs"]
 mod top_level;
+
+#[path = "cli_json/exit_codes.rs"]
+mod exit_codes;

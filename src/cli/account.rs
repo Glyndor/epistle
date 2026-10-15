@@ -321,7 +321,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	let store = prepare_show(config_path, name)?;
 	if store.is_static(name) {
-		return Err(crate::cli::exit::refused(format_args!(
+		return Err(crate::cli::exit::policy(format_args!(
 			"account {name}: edit the config file to change a static account"
 		)));
 	}
@@ -578,7 +578,7 @@ fn dispatch_forward(
 			// rejects the copy. The config loader refuses a static forward
 			// for the same reason.
 			if Config::load(config_path).is_ok_and(|config| config.srs_secret.is_none()) {
-				return crate::cli::exit::refused(format_args!(
+				return crate::cli::exit::policy(format_args!(
 					"account {name} forward: set `srs_secret` in the config first; \
 					 without SRS a forwarded copy fails SPF at the next hop"
 				));

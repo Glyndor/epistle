@@ -162,6 +162,10 @@ fn create_refuses_static_account() {
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
 	let exit = create(&config, "alice", "phone", None, None, None, false, &mut out);
-	assert_eq!(exit, ExitCode::from(2), "static account must be refused");
+	assert_eq!(
+		exit,
+		ExitCode::from(3),
+		"static account must be refused by policy"
+	);
 	assert!(!dir.path().join("app_passwords.toml").exists());
 }

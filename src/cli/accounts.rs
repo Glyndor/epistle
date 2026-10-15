@@ -266,7 +266,7 @@ pub(super) fn remove_reporting(
 		}
 	};
 	if store.is_static(name) {
-		return super::exit::refused(format_args!(
+		return super::exit::policy(format_args!(
 			"account {name}: edit the config file to change a static account"
 		));
 	}

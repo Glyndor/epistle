@@ -144,7 +144,7 @@ fn api_key_account_bound_rejects_scim_scope() {
 		"bob",
 	])
 	.expect("parses");
-	assert_eq!(cli.run(), ExitCode::from(2));
+	assert_eq!(cli.run(), ExitCode::from(3));
 	// And the file was not written.
 	let path = dir.path().join("api_keys.toml");
 	let exists = path.exists();

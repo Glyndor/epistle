@@ -60,7 +60,7 @@ pub(super) fn create(
 			Err(code) => return code,
 		}
 		if scopes.iter().any(|scope| scope == "scim") {
-			return super::exit::refused(
+			return super::exit::policy(
 				"account-bound API keys cannot hold the scim scope (scim is administrative)",
 			);
 		}

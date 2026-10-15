@@ -168,7 +168,7 @@ fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), Ex
 		ExitCode::FAILURE
 	})?;
 	if store.is_static(account) {
-		return Err(super::exit::refused(format_args!(
+		return Err(super::exit::policy(format_args!(
 			"account {account} is a static account; edit mail.toml to manage its credentials"
 		)));
 	}

@@ -1,5 +1,6 @@
-//! The 0/1/2 split: a refusal (fix the command) against an operation
-//! failure (retry later), for the store errors and through `Cli::run`.
+//! The 0/1/2/3 split: a refusal (fix the command) and a refusal by policy
+//! against an operation failure (retry later), for the store errors and
+//! through `Cli::run`.
 
 use std::process::ExitCode;
 
@@ -13,10 +14,11 @@ fn store_refusals_are_two_and_io_failures_are_one() {
 		StoreError::NotFound("bob".into()),
 		StoreError::Duplicate("bob".into()),
 		StoreError::Invalid("bad".into()),
-		StoreError::LimitReached { max: 1 },
 	] {
 		assert_eq!(for_store_error(&refusal), ExitCode::from(2), "{refusal:?}");
 	}
+	let limit = StoreError::LimitReached { max: 1 };
+	assert_eq!(for_store_error(&limit), ExitCode::from(3));
 	let io = StoreError::Io(std::io::Error::other("disk on fire"));
 	assert_eq!(for_store_error(&io), ExitCode::FAILURE);
 	let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "no such key");

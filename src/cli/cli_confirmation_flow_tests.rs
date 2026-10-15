@@ -196,11 +196,12 @@ fn account_remove_discards_sealed_queued_mail() {
 fn account_remove_refuses_an_unknown_or_static_name_without_asking() {
 	let (_dir, cfg) = fixture("[[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n");
 	let config = load(cfg.path());
-	for name in ["ghost", "bob"] {
+	// Unknown is a usage error (2), static a refusal by policy (3).
+	for (name, code) in [("ghost", 2), ("bob", 3)] {
 		let run = scripted(true, None, "y\n", || {
 			accounts::remove(&config, name, QueuePolicy::Drain, false, &mut Vec::new())
 		});
-		assert_eq!(run.value, ExitCode::from(2), "{name}");
+		assert_eq!(run.value, ExitCode::from(code), "{name}");
 		assert_eq!(run.stderr, "", "{name}: nothing is asked");
 		assert_eq!(run.unread, 2, "{name}: no answer is read");
 	}
