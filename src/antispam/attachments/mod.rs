@@ -52,7 +52,7 @@ pub struct Report {
 
 impl Report {
 	/// Every reason in the report, sorted and without duplicates. A walk
-	/// that stopped early adds [`Reason::MimeTooComplex`].
+	/// that stopped early adds [`Reason::ScanLimit`].
 	pub fn reasons(&self) -> Vec<Reason> {
 		let mut all: Vec<Reason> = self
 			.parts
