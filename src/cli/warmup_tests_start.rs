@@ -197,3 +197,23 @@ fn a_higher_or_lifted_cap_is_kept_unless_forced() {
 	server.reload(NOW + 1).expect("reload");
 	assert_eq!(server.snapshot().1.group(Group::Gmail).cap, Some(50));
 }
+
+#[test]
+fn a_three_week_address_starts_at_a_quarter_of_its_volume() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (code, out) = run_args(
+		dir.path(),
+		&["plan", "--ip-age", "3w", "--daily-volume", "1000"],
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	// 250, 375, 563, 845, 1268: four good days to a thousand.
+	assert_eq!(
+		out,
+		format!(
+			"plan: IP 21 days old, 1000 recipients a day (UTC day 2025-10-14)\n{}",
+			rows(|group| format!(
+				"{group}\tstage=weeks\tcap=250\tnow=50\tdays=4\treach=2025-10-18\n"
+			))
+		)
+	);
+}
