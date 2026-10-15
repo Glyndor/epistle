@@ -26,6 +26,7 @@ pub mod pacing;
 pub mod policy;
 pub mod schedule;
 pub mod settings;
+pub mod stages;
 pub mod state;
 
 pub use controller::{Grant, Warmup, day_of, sender_share};

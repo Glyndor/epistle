@@ -18,6 +18,8 @@ use crate::queue::warmup::Group;
 use crate::queue::warmup::policy::{MAX_CAP, START_CAP};
 use crate::queue::warmup::settings::{self, Action, Settings};
 
+#[path = "warmup_start.rs"]
+mod start;
 #[path = "warmup_view.rs"]
 mod view;
 
@@ -48,6 +50,15 @@ pub enum WarmupCli {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Print the caps `start` would set; change nothing.
+	///
+	/// The caps come from the address's age and daily volume, with the
+	/// days each group needs to reach that volume.
+	Plan(start::StartArgs),
+	/// Turn the warm-up on with caps from the address's age and volume.
+	///
+	/// A higher cap is kept unless `--force`.
+	Start(start::StartArgs),
 	/// Turn the warm-up on: mail over a group's daily cap waits in the queue.
 	Enable {
 		/// Skip the confirmation.
@@ -126,6 +137,10 @@ pub(super) fn run(
 		WarmupCli::Status { json } => {
 			return status(data_dir, storage, delivery_log_days, now, json, out);
 		}
+		WarmupCli::Plan(args) => return start::run_plan(data_dir, &args, now, out),
+		WarmupCli::Start(args) => {
+			return start::run_start(data_dir, delivery_log_days, &args, now, out);
+		}
 		WarmupCli::Enable { yes, json } => {
 			if delivery_log_days == 0 {
 				return super::exit::refused(
@@ -203,6 +218,7 @@ impl Change {
 			Change::Order(_, Action::Set { .. }) => "set",
 			Change::Order(_, Action::Next) => "next",
 			Change::Order(_, Action::Reset) => "reset",
+			Change::Order(_, Action::Start { .. }) => "start",
 		}
 	}
 
@@ -227,7 +243,9 @@ impl Change {
 			Change::Order(group, Action::Reset) => {
 				format!("Start the {group} cap over at {START_CAP} recipients a day? [y/N]")
 			}
-			Change::Pause | Change::Resume => String::new(),
+			Change::Pause | Change::Resume | Change::Order(_, Action::Start { .. }) => {
+				String::new()
+			}
 		}
 	}
 

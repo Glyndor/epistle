@@ -38,6 +38,13 @@ pub enum Action {
 	Next,
 	/// Start the group over at its starting cap.
 	Reset,
+	/// Start the group at a stage derived from the address's age and
+	/// volume (see [`super::stages`]): the cap is set as is, not on trial.
+	/// `None` is no cap.
+	Start {
+		/// Recipients a day, or none.
+		cap: Option<u32>,
+	},
 }
 
 /// An order with its place in the sequence.
@@ -84,7 +91,11 @@ impl Settings {
 			if !groups.insert(order.group) {
 				return Err(format!("more than one order for {}", order.group));
 			}
-			if let Action::Set { cap } = order.action
+			let cap = match order.action {
+				Action::Set { cap } | Action::Start { cap: Some(cap) } => Some(cap),
+				_ => None,
+			};
+			if let Some(cap) = cap
 				&& !(1..=MAX_CAP).contains(&cap)
 			{
 				return Err(format!("cap {cap} is not between 1 and {MAX_CAP}"));

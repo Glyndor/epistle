@@ -150,6 +150,10 @@ pub fn apply(schedule: &mut GroupState, action: Action, today: i64) {
 			schedule.cap = grown(current);
 		}
 		(Action::Next, None) => {}
+		(Action::Start { cap }, _) => {
+			schedule.raise = None;
+			schedule.cap = cap;
+		}
 		(Action::Reset, _) => {
 			schedule.raise = None;
 			schedule.cap = Some(START_CAP);
