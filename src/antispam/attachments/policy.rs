@@ -230,3 +230,7 @@ fn content_action(action: ContentAction) -> Action {
 #[cfg(test)]
 #[path = "policy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "policy_tests_dkim.rs"]
+mod tests_dkim;
