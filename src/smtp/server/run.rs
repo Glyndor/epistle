@@ -40,8 +40,11 @@ impl Server {
 		let mut buffer = [0u8; READ_BUFFER];
 		// Consecutive error replies; too many means an abusive client.
 		let mut error_streak = 0u32;
-		// The rate window of the DATA body being read, started at its 354.
-		let mut body_window = RateWindow::off();
+		// The rate window of the message being received: started at the
+		// 354 or at the first BDAT chunk, and kept until the transaction
+		// ends, so the time between chunks and the commands sent in it
+		// count against the same clock.
+		let mut body_window: Option<RateWindow> = None;
 
 		loop {
 			let line = match decoder.next_line() {
@@ -50,13 +53,9 @@ impl Server {
 					// A drain waits for an open transaction, DATA or AUTH to end.
 					let idle = mode == Mode::Commands && !session.in_transaction();
 					let drain = self.drain.as_deref().filter(|_| idle);
-					// Only a DATA body is held to the rate floor.
+					// A message being received is held to the rate floor.
 					let off = RateWindow::off();
-					let window = if mode == Mode::Data {
-						&body_window
-					} else {
-						&off
-					};
+					let window = body_window.as_ref().unwrap_or(&off);
 					let reading = window.guard(stream.read(&mut buffer));
 					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
@@ -76,8 +75,10 @@ impl Server {
 					if read == 0 {
 						return Ok(());
 					}
-					if mode == Mode::Data {
-						body_window.record(read);
+					if mode == Mode::Data
+						&& let Some(window) = body_window.as_mut()
+					{
+						window.record(read);
 					}
 					decoder.feed(&buffer[..read]);
 					continue;
@@ -122,10 +123,9 @@ impl Server {
 			// Deliver for the LAST chunk — so the full delivery path still runs).
 			let action = loop {
 				action = match action {
-					// Every chunk gets its own rate window, so the time spent
-					// between chunks in the command phase never counts.
+					// The first chunk starts the window of the transaction.
 					Action::CollectChunk { size, last } => {
-						let window = self.data_rate.start();
+						let window = body_window.get_or_insert_with(|| self.message_window());
 						let chunk =
 							match read_chunk(&mut stream, &mut decoder, size, window).await? {
 								Ok(chunk) => chunk,
@@ -135,7 +135,7 @@ impl Server {
 					}
 					// A refused chunk is consumed without being kept.
 					Action::DiscardChunk { size, reply } => {
-						let window = self.data_rate.start();
+						let window = body_window.get_or_insert_with(|| self.message_window());
 						if let Err(cut) =
 							discard_chunk(&mut stream, &mut decoder, size, window).await?
 						{
@@ -146,6 +146,11 @@ impl Server {
 					resolved => break resolved,
 				};
 			};
+			// The window ends with the transaction: the dot, the LAST
+			// chunk, RSET, or any refusal that resets it.
+			if !session.in_transaction() {
+				body_window = None;
+			}
 			match action {
 				Action::Continue(reply) => {
 					// Abuse guard: disconnect a client that only produces errors.
@@ -168,7 +173,7 @@ impl Server {
 				Action::CollectData(reply) => {
 					mode = Mode::Data;
 					send(&mut stream, &reply).await?;
-					body_window = self.data_rate.start();
+					body_window = Some(self.message_window());
 				}
 				// BDAT chunk reads are resolved into a terminal action above.
 				Action::CollectChunk { .. } | Action::DiscardChunk { .. } => {

@@ -1,12 +1,24 @@
-//! A minimum average transfer rate for one DATA body or one BDAT chunk.
+//! A minimum average transfer rate for one message transaction.
 //!
 //! The per-read idle timeout alone lets a client that sends one byte every
 //! few minutes keep its connection, its per-IP slot and its share of the
-//! message memory budget forever. Once the grace period from the start of
-//! the body (or chunk) is over, the average rate since that start must stay
-//! at or above the floor; below it the client is answered `421 4.4.2` and
-//! the connection is closed, which drops the session and with it every
-//! reservation it held.
+//! message memory budget forever. The window opens at the 354 of DATA or
+//! at the first BDAT chunk and lasts until the final dot or the LAST chunk
+//! (or until anything else ends the transaction). The grace is given once
+//! per transaction, and the time between BDAT chunks counts, commands
+//! included, though they bring no octets: otherwise tiny chunks, each
+//! inside its own grace, would hold a reservation for ever. Once the grace
+//! is over the average rate since the start must stay at or above the
+//! floor; below it the client is answered `421 4.4.2` and the connection
+//! is closed, which drops the session and with it every reservation it
+//! held.
+//!
+//! A fast burst followed by a drip is bounded too: the octets received
+//! buy exactly the time they cover at the floor, and only octets up to
+//! `max_message_size` count (an oversized DATA is still read to the dot,
+//! but buys nothing), so one transaction lasts at most the grace or
+//! `max_message_size / floor`, whichever is longer: about 43 minutes for
+//! 25 MiB at 10 KiB/s.
 
 use std::future::Future;
 use std::time::Duration;
@@ -47,33 +59,38 @@ impl DataRate {
 		}
 	}
 
-	/// Start the window of one body or one chunk now.
+	/// Start the window of one transaction now.
 	pub(super) fn start(self) -> RateWindow {
 		RateWindow {
 			rate: self,
 			start: Instant::now(),
 			bytes: 0,
+			counted: u64::MAX,
 		}
 	}
 }
 
-/// The bytes read since one body or chunk started.
+/// The message octets read since one transaction started.
 #[derive(Debug)]
 pub(super) struct RateWindow {
 	rate: DataRate,
 	start: Instant,
 	bytes: u64,
+	/// The most octets that buy time: past the size cap DATA is still read
+	/// to the dot, but those octets are thrown away.
+	counted: u64,
 }
 
 impl RateWindow {
-	/// A window that never cuts: what everything but a body is read with.
+	/// A window that never cuts: what a connection with no message in
+	/// progress is read with.
 	pub(super) fn off() -> Self {
 		DataRate::new(0, Duration::ZERO).start()
 	}
 
 	/// Count `bytes` more read off the wire.
 	pub(super) fn record(&mut self, bytes: usize) {
-		self.bytes = self.bytes.saturating_add(bytes as u64);
+		self.bytes = self.bytes.saturating_add(bytes as u64).min(self.counted);
 	}
 
 	/// The first instant at which, with no further byte, the client is
@@ -100,6 +117,17 @@ impl RateWindow {
 			biased;
 			output = read => Some(output),
 			() = tokio::time::sleep_until(deadline) => None,
+		}
+	}
+}
+
+impl super::Server {
+	/// Open the window of a message on this listener: only octets up to
+	/// its size cap count.
+	pub(super) fn message_window(&self) -> RateWindow {
+		RateWindow {
+			counted: self.max_message_size as u64,
+			..self.data_rate.start()
 		}
 	}
 }

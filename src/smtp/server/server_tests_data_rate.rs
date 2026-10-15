@@ -290,3 +290,49 @@ async fn the_budget_and_the_per_ip_slot_come_back_after_the_cut() {
 	assert_eq!(sink.messages().len(), 1);
 	serving.abort();
 }
+
+#[tokio::test(start_paused = true)]
+async fn octets_past_the_size_cap_buy_no_time() {
+	// Past `max_message_size` the body stops growing but DATA is still read
+	// to the dot while the reservation is held. 3 MiB would cover 307 s at
+	// the floor; only the first 4 KiB count, so the grace decides.
+	let sink = Arc::new(MemorySink::new());
+	let server = Arc::new(
+		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
+			.with_directory(test_directory())
+			.with_max_message_size(4096),
+	);
+	let mut client = Client::connect(&server);
+	let started = enter_data(&mut client).await;
+	client.send(&body(3 * 1024 * 1024)).await;
+	let output = client.finish().await;
+	assert_cut_at_grace(started);
+	assert!(output.ends_with(TOO_SLOW), "the exact 421 line");
+	assert!(sink.messages().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_window_ends_with_the_transaction() {
+	// A delivered message closes its window: 250 s idle between two
+	// messages is the command phase, judged only by the idle timeout.
+	let (server, sink) = default_server();
+	let mut client = Client::connect(&server);
+	enter_data(&mut client).await;
+	client.send(b"Subject: one\r\n\r\nbody\r\n.\r\n").await;
+	pass(Duration::from_secs(250)).await;
+	client
+		.send(&OPEN[b"EHLO client.example.org\r\n".len()..])
+		.await;
+	client
+		.send(b"DATA\r\nSubject: two\r\n\r\nbody\r\n.\r\nQUIT\r\n")
+		.await;
+	let output = client.finish().await;
+	assert_eq!(
+		reply_codes(&output),
+		[
+			"220", "250", "250", "250", "354", "250", "250", "250", "354", "250", "221"
+		],
+		"both messages are delivered"
+	);
+	assert_eq!(sink.messages().len(), 2);
+}

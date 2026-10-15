@@ -494,14 +494,14 @@ where
 /// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
 /// already buffered in the decoder, then read from the stream, feeding any
 /// overshoot (the next pipelined command) back into the decoder. `window`
-/// is this chunk's own rate window, started when its octets start to be
-/// read. Ends with a [`data_rate::Cut`] if the peer closes or times out, or
+/// is the rate window of the whole transaction, so the chunk adds its
+/// octets to it. Ends with a [`data_rate::Cut`] if the peer closes or times out, or
 /// falls below the rate floor, before `size` bytes arrive.
 async fn read_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
 	size: usize,
-	mut window: data_rate::RateWindow,
+	window: &mut data_rate::RateWindow,
 ) -> std::io::Result<Result<Vec<u8>, data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
 	let mut chunk = decoder.take_buffered(size);
@@ -536,7 +536,7 @@ async fn discard_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
 	size: usize,
-	mut window: data_rate::RateWindow,
+	window: &mut data_rate::RateWindow,
 ) -> std::io::Result<Result<(), data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
 	let buffered = decoder.discard_buffered(size);
