@@ -348,7 +348,13 @@ impl Worker {
 			};
 			let (mut conversation, next) = self.attempt_direct(&going, connection).await;
 			if let Some((group, _, until)) = admitted {
-				self.give_back_unoffered(&route.entry.envelope, group, &conversation, now);
+				// Only a session that ended before the mail transaction
+				// began offered nothing: once MAIL is sent, recipients are
+				// offered and the message may be written out, whatever
+				// the remote then answers or fails to.
+				if next {
+					self.give_back_unoffered(&route.entry.envelope, group, &conversation, now);
+				}
 				conversation.add_capped(&route.recipients[granted..], group, until);
 			}
 			if !next {

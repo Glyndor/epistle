@@ -5,9 +5,13 @@
 //! group. The ones granted go; the rest wait for the cap of their group
 //! until the warm-up says it opens. Waiting is not an attempt, not a
 //! failure and not a deferral: nothing is counted or logged for it, and the
-//! wait does not use up the give-up window. Recipients granted and never
-//! offered to the remote (a connection that failed before any reply) are
-//! given back, so a destination that does not answer cannot use up the cap.
+//! wait does not use up the give-up window. Recipients granted to a
+//! session that ended before the mail transaction began (no connection, a
+//! silent or refusing greeting, a failed TLS handshake) are given back, so
+//! a destination that does not answer cannot use up the cap. Once MAIL is
+//! sent they are offered and stay counted, whatever the remote does next:
+//! a remote that takes the message and drops the connection before its
+//! reply must not get its share back to be sent the message again.
 //!
 //! Between conversations, a recipient waiting for the cap is left out of
 //! the scan while its group is still closed to its sender, and woken early
@@ -121,8 +125,9 @@ impl Worker {
 		}
 	}
 
-	/// Give back the granted recipients `conversation` never offered to the
-	/// remote: those answered with a local error rather than a reply.
+	/// Give back the granted recipients of a `conversation` that ended
+	/// before its mail transaction began: those answered with a local error
+	/// rather than a reply.
 	pub(super) fn give_back_unoffered(
 		&self,
 		envelope: &Envelope,

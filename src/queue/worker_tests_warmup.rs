@@ -3,7 +3,7 @@
 //! toward the give-up window, then go out as the cap allows.
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::test_remote::{FakeRemote, Hang, Script};
 use crate::queue::warmup::settings::{self, Settings};
 use crate::queue::warmup::{Group, Warmup};
 use crate::queue::worker::tests_backoff::store;
@@ -280,5 +280,51 @@ fn time_waiting_for_the_cap_is_kept_across_waits() {
 	assert_eq!(
 		(state.warmup.as_deref(), state.waited, state.capped_at),
 		(None, 500, 0)
+	);
+}
+
+/// Three Gmail recipients whose exchanger stops answering at `hang`, until
+/// the client's limit on that step ends the conversation.
+fn hanging(dir: &std::path::Path, remote: &FakeRemote, hang: Hang) -> (Worker, Arc<Warmup>) {
+	let (worker, _, warmup) = capped_worker(dir, &FIVE[..3], remote);
+	remote.hosted("gmail.com", GMAIL_MX, Script::hang(hang));
+	(worker, warmup)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_message_written_out_and_never_answered_keeps_its_share_used() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	let (worker, warmup) = hanging(dir.path(), &remote, Hang::DataEnd);
+	worker.pass().await.expect("pass");
+	let (_, state) = warmup.snapshot();
+	assert_eq!(
+		state.group(Group::Gmail).sent,
+		3,
+		"the whole message went out: the remote may have taken it"
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn recipients_offered_and_never_answered_keep_their_share_used() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	let (worker, warmup) = hanging(dir.path(), &remote, Hang::Rcpt);
+	worker.pass().await.expect("pass");
+	let (_, state) = warmup.snapshot();
+	assert_eq!(state.group(Group::Gmail).sent, 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn recipients_never_offered_are_given_back_to_the_cap() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	let (worker, warmup) = hanging(dir.path(), &remote, Hang::Ehlo);
+	worker.pass().await.expect("pass");
+	let (_, state) = warmup.snapshot();
+	assert_eq!(
+		state.group(Group::Gmail).sent,
+		0,
+		"no mail transaction began"
 	);
 }
