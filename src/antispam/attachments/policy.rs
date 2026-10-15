@@ -147,7 +147,7 @@ impl Policy {
 			Reason::EncryptedArchive => content_action(self.encrypted_archives).min(ceiling),
 			// Only a simple, consistent zip is judged by its names; one that
 			// reads two ways is treated as dangerous.
-			Reason::AmbiguousArchive => ceiling,
+			Reason::AmbiguousArchive | Reason::AmbiguousImage => ceiling,
 			Reason::ScanLimit
 			| Reason::AmbiguousMime
 			| Reason::UnreadableArchive

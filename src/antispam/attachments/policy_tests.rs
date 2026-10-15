@@ -60,7 +60,11 @@ fn dangerous_content_follows_the_mode() {
 			expected,
 			"{mode:?}"
 		);
-		for reason in [Reason::ActiveImage, Reason::AppendedPayload] {
+		for reason in [
+			Reason::ActiveImage,
+			Reason::AppendedPayload,
+			Reason::AmbiguousImage,
+		] {
 			assert_eq!(action(&policy, &[reason]), expected, "{mode:?} {reason:?}");
 		}
 	}

@@ -8,10 +8,6 @@ fn one(headers: &str, content: &[u8]) -> Vec<u8> {
 	corpus::message(&[attachment(headers, content)])
 }
 
-fn zip_part(zip: Vec<u8>) -> Vec<u8> {
-	one("Content-Type: application/zip; name=a.zip", &zip)
-}
-
 fn raw(text: &str) -> Vec<u8> {
 	text.as_bytes().to_vec()
 }
@@ -402,102 +398,6 @@ fn every_known_evasion_keeps_its_verdict() {
 				&one("Content-Type: application/octet-stream; name=x.exe", b"x"),
 			),
 			DangerousExtension,
-		),
-		(
-			"fake end record in the zip comment",
-			zip_part(archive::tests_sources::fake_end_record_in_comment()),
-			DangerousArchiveEntry,
-		),
-		(
-			"fake end record is ambiguous",
-			zip_part(archive::tests_sources::fake_end_record_in_comment()),
-			AmbiguousArchive,
-		),
-		(
-			"fake end record before the real directory",
-			zip_part(archive::tests_sources::earlier_fake_end_record()),
-			DangerousArchiveEntry,
-		),
-		(
-			"directory offset into prefixed data",
-			zip_part(archive::tests_sources::offset_into_prefixed_data()),
-			AmbiguousArchive,
-		),
-		(
-			"unicode path field",
-			zip_part(archive::tests_sources::unicode_path_differs()),
-			DangerousArchiveEntry,
-		),
-		(
-			"self-extracting stub in front",
-			zip_part(prefixed(&corpus::pe(), corpus::zip_of(&["x.vbs"]))),
-			DangerousArchiveEntry,
-		),
-		(
-			"invalid utf-8 that claims utf-8",
-			zip_part(corpus::zip_raw(&[corpus::RawEntry {
-				name: b"a\xff.exe",
-				flags: 0x0800,
-				central_extra: Vec::new(),
-			}])),
-			AmbiguousArchive,
-		),
-		(
-			"entry name longer than the cap",
-			zip_part(corpus::zip_raw(&[corpus::RawEntry {
-				name: &[b"a".repeat(1100), b".exe".to_vec()].concat(),
-				flags: 0,
-				central_extra: Vec::new(),
-			}])),
-			DangerousArchiveEntry,
-		),
-		(
-			"svg with an event handler named as a png",
-			one(
-				"Content-Type: image/png; name=logo.png",
-				b"<svg xmlns='http://www.w3.org/2000/svg' onload='go()'/>",
-			),
-			ActiveImage,
-		),
-		(
-			"svg with an encoded script url",
-			one(
-				"Content-Type: image/svg+xml; name=a.svg",
-				b"<svg><a href='&#x6a;ava&#9;script:go()'>x</a></svg>",
-			),
-			ActiveImage,
-		),
-		(
-			"png with a program after IEND",
-			one(
-				"Content-Type: image/png; name=a.png",
-				&image::tests::png_then(&image::tests::pe_header()),
-			),
-			AppendedPayload,
-		),
-		(
-			"jpeg with a zip after its end",
-			one(
-				"Content-Type: image/jpeg; name=a.jpg",
-				&image::tests::jpeg_then(&corpus::zip_of(&["x.js"])),
-			),
-			AppendedPayload,
-		),
-		(
-			"gif with an elf after its trailer",
-			one(
-				"Content-Type: image/gif; name=a.gif",
-				&image::tests::gif_then(b"\x7fELF\x02"),
-			),
-			AppendedPayload,
-		),
-		(
-			"webp with a script past its size",
-			one(
-				"Content-Type: image/webp; name=a.webp",
-				&image::tests::webp_then(b"#!/bin/sh\n"),
-			),
-			AppendedPayload,
 		),
 	];
 	let mut failures = Vec::new();

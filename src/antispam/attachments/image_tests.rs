@@ -1,48 +1,8 @@
 use super::*;
 use crate::antispam::attachments::corpus;
 
-#[test]
-fn an_svg_is_recognised_whatever_it_is_called() {
-	assert!(is_svg(b"\xef\xbb\xbf  <?xml version=\"1.0\"?><svg/>"));
-	assert!(is_svg(
-		b"<!-- logo -->\n<SVG xmlns=\"http://www.w3.org/2000/svg\"/>"
-	));
-	assert!(!is_svg(b"just text"));
-	assert!(!is_svg(&corpus::png()));
-}
-
-#[test]
-fn active_svg_content_is_found_in_any_spelling() {
-	for svg in [
-		&b"<svg><script>alert(1)</script></svg>"[..],
-		b"<svg><SCRIPT href=x.js/></svg>",
-		b"<svg onload=\"go()\"/>",
-		b"<svg><rect ONCLICK = 'go()'/></svg>",
-		b"<svg><rect o&#110;mouseover=\"go()\"/></svg>",
-		b"<svg><a href=\"java\tscript:go()\">x</a></svg>",
-		b"<svg><a href=\"&#x6a;avascript:go()\">x</a></svg>",
-		b"<svg><image href=\"data:text/html;base64,PHNjcmlwdD4=\"/></svg>",
-		b"<svg><foreignObject><body/></foreignObject></svg>",
-		b"<svg><iframe src=x/></svg>",
-		b"<svg><embed src=x/></svg>",
-		b"<svg><object data=x/></svg>",
-	] {
-		assert!(svg_is_active(svg), "{}", String::from_utf8_lossy(svg));
-	}
-}
-
-#[test]
-fn a_plain_svg_is_not_active() {
-	let svg = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\" \
-		width=\"10\" height=\"10\"><rect fill=\"#000\" data-on=\"x\"/></svg>";
-	assert!(!svg_is_active(svg));
-}
-
-#[test]
-fn an_svg_too_long_to_read_counts_as_active() {
-	let mut svg = b"<svg>".to_vec();
-	svg.resize(SVG_SCAN_BYTES + 1, b' ');
-	assert!(svg_is_active(&svg));
+fn facts(real: RealType, bytes: &[u8]) -> ImageFacts {
+	inspect_raster(real, bytes)
 }
 
 pub(crate) fn pe_header() -> Vec<u8> {
@@ -102,7 +62,14 @@ fn a_payload_after_the_logical_end_of_an_image_is_found() {
 		(RealType::Webp, webp_then(b"#!/bin/sh\nrm -rf ~\n")),
 	];
 	for (real, bytes) in cases {
-		assert!(has_appended_payload(real, &bytes), "{real:?}");
+		assert_eq!(
+			facts(real, &bytes),
+			ImageFacts {
+				payload: true,
+				ambiguous: false
+			},
+			"{real:?}"
+		);
 	}
 }
 
@@ -116,7 +83,7 @@ fn a_clean_image_or_harmless_trailing_bytes_are_not_a_payload() {
 		(RealType::Webp, webp_then(b"")),
 	];
 	for (real, bytes) in cases {
-		assert!(!has_appended_payload(real, &bytes), "{real:?}");
+		assert_eq!(facts(real, &bytes), ImageFacts::default(), "{real:?}");
 	}
 }
 
@@ -124,6 +91,76 @@ fn a_clean_image_or_harmless_trailing_bytes_are_not_a_payload() {
 fn the_tail_scan_stays_linear() {
 	let tail = b"MZ".repeat(4 << 20);
 	let started = std::time::Instant::now();
-	assert!(!has_appended_payload(RealType::Png, &png_then(&tail)));
+	assert!(!facts(RealType::Png, &png_then(&tail)).payload);
 	assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn a_payload_inside_metadata_is_found() {
+	let mut text_chunk = (pe_header().len() as u32).to_be_bytes().to_vec();
+	text_chunk.extend_from_slice(b"tEXt");
+	text_chunk.extend_from_slice(&pe_header());
+	text_chunk.extend_from_slice(&[0; 4]);
+	let png = png_then(b"");
+	let iend = png.len() - 12;
+	let mut with_text = png[..iend].to_vec();
+	with_text.extend_from_slice(&text_chunk);
+	with_text.extend_from_slice(&png[iend..]);
+	assert!(facts(RealType::Png, &with_text).payload, "PNG tEXt");
+
+	let mut jpeg = vec![0xff, 0xd8, 0xff, 0xfe, 0x00, 0x08];
+	jpeg.extend_from_slice(b"PK\x03\x04xx");
+	jpeg.extend_from_slice(&jpeg_then(b"")[2..]);
+	assert!(facts(RealType::Jpeg, &jpeg).payload, "JPEG comment");
+
+	let mut gif = gif_then(b"");
+	let trailer = gif.len() - 1;
+	let comment = [0x21, 0xfe, 0x05, 0x7f, b'E', b'L', b'F', 0x02, 0x00];
+	gif.splice(trailer..trailer, comment);
+	assert!(facts(RealType::Gif, &gif).payload, "GIF comment");
+
+	let mut webp = b"RIFF".to_vec();
+	webp.extend_from_slice(&(4u32 + 8 + 4).to_le_bytes());
+	webp.extend_from_slice(b"WEBPEXIF");
+	webp.extend_from_slice(&4u32.to_le_bytes());
+	webp.extend_from_slice(b"#!/x");
+	assert!(facts(RealType::Webp, &webp).payload, "WebP EXIF");
+}
+
+#[test]
+fn an_end_of_image_inside_an_app_segment_is_not_the_end() {
+	let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x06, 0xff, 0xd9, 0x00, 0x00];
+	jpeg.extend_from_slice(&jpeg_then(&pe_header())[2..]);
+	assert!(facts(RealType::Jpeg, &jpeg).payload);
+}
+
+#[test]
+fn an_image_that_cannot_be_walked_is_ambiguous() {
+	let mut bad_png = png_then(b"");
+	bad_png[8..12].copy_from_slice(&0x7fff_ffffu32.to_be_bytes());
+	let mut no_end_jpeg = jpeg_then(b"");
+	no_end_jpeg.truncate(no_end_jpeg.len() - 2);
+	let mut long_webp = webp_then(b"");
+	long_webp[4..8].copy_from_slice(&4096u32.to_le_bytes());
+	let mut short_webp = webp_then(b"");
+	short_webp[4..8].copy_from_slice(&2u32.to_le_bytes());
+	let mut no_trailer_gif = gif_then(b"");
+	no_trailer_gif.pop();
+	for (real, bytes) in [
+		(RealType::Png, bad_png),
+		(RealType::Jpeg, no_end_jpeg),
+		(RealType::Webp, long_webp),
+		(RealType::Webp, short_webp),
+		(RealType::Gif, no_trailer_gif),
+	] {
+		assert!(facts(real, &bytes).ambiguous, "{real:?}");
+	}
+}
+
+#[test]
+fn a_payload_inside_an_exif_segment_is_found() {
+	let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x0e];
+	jpeg.extend_from_slice(b"Exif\0\0\x7fELF\x02\x01");
+	jpeg.extend_from_slice(&jpeg_then(b"")[2..]);
+	assert!(facts(RealType::Jpeg, &jpeg).payload);
 }

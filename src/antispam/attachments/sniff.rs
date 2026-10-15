@@ -10,6 +10,9 @@
 /// Bytes [`sniff`] reads at most. ISO 9660 keeps its signature at 32769.
 pub const SNIFF_WINDOW: usize = 0x8001 + 5;
 
+/// How much of a file is read to tell HTML and SVG apart.
+const MARKUP_HEAD: usize = 128 * 1024;
+
 /// How far into a file the `%PDF-` marker may sit; readers accept leading
 /// junk, so a PDF that starts with a few bytes of padding is still a PDF.
 const PDF_SEARCH: usize = 1024;
@@ -193,11 +196,15 @@ pub fn sniff(content: &[u8]) -> RealType {
 	{
 		return RealType::Iso;
 	}
-	if super::image::is_svg(content) {
-		return RealType::Svg;
-	}
-	if looks_like_html(content) {
+	// Markup is read through UTF-16 and past prologs, doctypes and
+	// comments, and HTML is decided first: a page with an inline SVG is
+	// still a page.
+	let head = super::svg::text_view(&content[..content.len().min(MARKUP_HEAD)]);
+	if looks_like_html(&head) {
 		return RealType::Html;
+	}
+	if super::svg::is_svg(&head) {
+		return RealType::Svg;
 	}
 	RealType::Unknown
 }
@@ -222,9 +229,10 @@ fn looks_like_html(content: &[u8]) -> bool {
 		.position(|byte| !byte.is_ascii_whitespace())
 		.unwrap_or(content.len());
 	let rest = &content[start..];
+	const ROOTS: &[&str] = &["html", "head", "body", "script", "iframe", "form", "meta"];
 	OPENERS.iter().any(|opener| {
 		rest.len() >= opener.len() && rest[..opener.len()].eq_ignore_ascii_case(opener)
-	})
+	}) || super::svg::root_element(content).is_some_and(|root| ROOTS.contains(&root.as_str()))
 }
 
 #[cfg(test)]

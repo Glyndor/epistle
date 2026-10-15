@@ -148,8 +148,12 @@ pub enum Reason {
 	/// An SVG image with script, event handlers, script URLs or embedded
 	/// documents.
 	ActiveImage,
-	/// A raster image with a program, a script or a zip after its end.
+	/// A raster image with a program, a script or a zip after its end or
+	/// inside its metadata.
 	AppendedPayload,
+	/// An image whose structure cannot be followed to its end, or an SVG
+	/// that cannot be read cleanly (entity declarations, broken gzip).
+	AmbiguousImage,
 	/// An archive holds an entry with a dangerous extension.
 	DangerousArchiveEntry,
 	/// An archive holds another archive, whose content is not listed.
@@ -188,6 +192,7 @@ impl Reason {
 			Self::HtmlAttachment => "html-attachment",
 			Self::ActiveImage => "active-image",
 			Self::AppendedPayload => "appended-payload",
+			Self::AmbiguousImage => "ambiguous-image",
 			Self::DangerousArchiveEntry => "dangerous-archive-entry",
 			Self::NestedArchive => "nested-archive",
 			Self::EncryptedArchive => "encrypted-archive",

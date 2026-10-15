@@ -16,6 +16,7 @@ pub mod image;
 pub mod policy;
 pub mod rules;
 pub mod sniff;
+pub mod svg;
 pub mod walk;
 
 use rules::{Extensions, Facts, Reason};
@@ -152,12 +153,7 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		},
 		extensions,
 	);
-	if real_type == RealType::Svg && image::svg_is_active(&leaf.content) {
-		reasons.push(Reason::ActiveImage);
-	}
-	if image::has_appended_payload(real_type, &leaf.content) {
-		reasons.push(Reason::AppendedPayload);
-	}
+	reasons.extend(image_reasons(leaf, real_type));
 	reasons.extend(limits_only(leaf));
 	if disguised {
 		reasons.push(Reason::TypeMismatch);
@@ -170,6 +166,45 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		real_type,
 		reasons,
 	}
+}
+
+/// What an image part hides. An SVG is judged when its bytes are SVG, or
+/// when any name or declared type says SVG (gzip-compressed or not, which
+/// is how `.svgz` travels); raster images are walked to their end.
+fn image_reasons(leaf: &Leaf, real_type: RealType) -> Vec<Reason> {
+	let claims_svg = leaf
+		.declared_types
+		.iter()
+		.any(|kind| kind == "image/svg+xml")
+		|| leaf.names.iter().any(|name| {
+			let name = name.to_ascii_lowercase();
+			name.ends_with(".svg") || name.ends_with(".svgz")
+		});
+	let svg = if leaf.content.starts_with(b"\x1f\x8b") && claims_svg {
+		svg::gunzip(&leaf.content).map(|plain| svg::inspect_svg(&plain))
+	} else if real_type == RealType::Svg || claims_svg {
+		Some(svg::inspect_svg(&leaf.content))
+	} else {
+		None
+	};
+	let mut reasons = Vec::new();
+	match svg {
+		Some(svg::SvgVerdict::Active) => reasons.push(Reason::ActiveImage),
+		Some(svg::SvgVerdict::Clean) => {}
+		Some(svg::SvgVerdict::Ambiguous) => reasons.push(Reason::AmbiguousImage),
+		None if leaf.content.starts_with(b"\x1f\x8b") && claims_svg => {
+			reasons.push(Reason::AmbiguousImage);
+		}
+		None => {}
+	}
+	let raster = image::inspect_raster(real_type, &leaf.content);
+	if raster.payload {
+		reasons.push(Reason::AppendedPayload);
+	}
+	if raster.ambiguous {
+		reasons.push(Reason::AmbiguousImage);
+	}
+	reasons
 }
 
 /// The reasons a part earns for how it was read, whatever it contains.
@@ -203,3 +238,7 @@ mod tests_failclosed;
 #[cfg(test)]
 #[path = "inspect_tests_regressions.rs"]
 mod tests_regressions;
+
+#[cfg(test)]
+#[path = "inspect_tests_regressions_b.rs"]
+mod tests_regressions_b;

@@ -15,7 +15,8 @@ pub fn pe() -> Vec<u8> {
 /// A PNG signature and an empty header chunk.
 pub fn png() -> Vec<u8> {
 	let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
-	bytes.resize(64, 0);
+	bytes.extend_from_slice(&[0; 13 + 4]);
+	bytes.extend_from_slice(b"\x00\x00\x00\x00IEND\x00\x00\x00\x00");
 	bytes
 }
 

@@ -1,171 +1,86 @@
-//! Images that carry more than a picture: an SVG with active content, and
-//! a raster image with a program or an archive appended after its last
-//! byte. Every check is one bounded pass over the decoded content.
+//! Raster images that carry more than a picture: a program, a script or a
+//! zip after the image's logical end, or inside its metadata. Each format
+//! is walked by its own structure to that end; an image that cannot be
+//! walked cleanly is ambiguous, never clean. One bounded pass each.
 
 use super::sniff::RealType;
 
-/// How much of an SVG is read for active content.
-pub const SVG_SCAN_BYTES: usize = 4 << 20;
-
-/// Whether `content` is an SVG document: after a byte-order mark and
-/// whitespace it starts with an XML prolog, or `<svg` appears in its first
-/// KiB. Name and declared type play no part.
-pub fn is_svg(content: &[u8]) -> bool {
-	let content = content.strip_prefix(b"\xef\xbb\xbf").unwrap_or(content);
-	let start = content
-		.iter()
-		.take(1024)
-		.position(|byte| !byte.is_ascii_whitespace())
-		.unwrap_or(content.len());
-	let head = &content[start..content.len().min(start + 1024)];
-	starts_with_ignore_case(head, b"<?xml") || find_ignore_case(head, b"<svg").is_some()
+/// What a raster image hides.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageFacts {
+	/// A payload after the logical end or inside a metadata block.
+	pub payload: bool,
+	/// The structure could not be followed to its logical end.
+	pub ambiguous: bool,
 }
 
-/// Whether an SVG carries anything a viewer may run: a script element,
-/// an `on...=` event attribute, a `javascript:` or `data:text/html` URL,
-/// a `foreignObject`, or an embedded frame or object. Numeric character
-/// references are decoded first and URL schemes are matched with
-/// whitespace removed, as browsers read them. At most [`SVG_SCAN_BYTES`]
-/// are read; a longer SVG counts as active, since its tail was not seen.
-pub fn svg_is_active(content: &[u8]) -> bool {
-	if content.len() > SVG_SCAN_BYTES {
-		return true;
-	}
-	let text = decode_references(content);
-	const ELEMENTS: &[&[u8]] = &[
-		b"<script",
-		b"<foreignobject",
-		b"<iframe",
-		b"<embed",
-		b"<object",
-	];
-	if ELEMENTS
-		.iter()
-		.any(|element| find_ignore_case(&text, element).is_some())
-	{
-		return true;
-	}
-	if has_event_attribute(&text) {
-		return true;
-	}
-	let compact: Vec<u8> = text
-		.iter()
-		.copied()
-		.filter(|byte| !byte.is_ascii_whitespace())
-		.collect();
-	find_ignore_case(&compact, b"javascript:").is_some()
-		|| find_ignore_case(&compact, b"data:text/html").is_some()
+/// Where an image ends, and the byte ranges of its metadata blocks
+/// (comments, text chunks, EXIF, XMP, application extensions).
+struct Layout {
+	end: usize,
+	metadata: Vec<(usize, usize)>,
 }
 
-/// `&#NN;` and `&#xHH;` replaced by the byte they name when it is ASCII;
-/// anything else is kept as written. One pass.
-fn decode_references(content: &[u8]) -> Vec<u8> {
-	let mut out = Vec::with_capacity(content.len());
-	let mut at = 0;
-	while at < content.len() {
-		if content[at] == b'&' && content.get(at + 1) == Some(&b'#') {
-			let (hex, digits_at) = match content.get(at + 2) {
-				Some(b'x' | b'X') => (true, at + 3),
-				_ => (false, at + 2),
-			};
-			let digits = content[digits_at..]
-				.iter()
-				.take(8)
-				.take_while(|byte| {
-					if hex {
-						byte.is_ascii_hexdigit()
-					} else {
-						byte.is_ascii_digit()
-					}
-				})
-				.count();
-			let value = std::str::from_utf8(&content[digits_at..digits_at + digits])
-				.ok()
-				.and_then(|text| u32::from_str_radix(text, if hex { 16 } else { 10 }).ok());
-			if let Some(byte) = value
-				.and_then(|value| u8::try_from(value).ok())
-				.filter(u8::is_ascii)
-				&& digits > 0
-			{
-				out.push(byte);
-				at = digits_at + digits;
-				if content.get(at) == Some(&b';') {
-					at += 1;
-				}
-				continue;
-			}
-		}
-		out.push(content[at]);
-		at += 1;
-	}
-	out
-}
-
-/// An attribute named `on` plus letters, followed by `=`, after
-/// whitespace, a slash or a quote: `onload=`, `ONCLICK =`.
-fn has_event_attribute(text: &[u8]) -> bool {
-	let mut at = 1;
-	while at + 2 < text.len() {
-		let before = text[at - 1];
-		if (before.is_ascii_whitespace() || before == b'/' || before == b'"' || before == b'\'')
-			&& text[at].eq_ignore_ascii_case(&b'o')
-			&& text[at + 1].eq_ignore_ascii_case(&b'n')
-		{
-			let name_end = at
-				+ 2 + text[at + 2..]
-				.iter()
-				.take_while(|byte| byte.is_ascii_alphabetic())
-				.count();
-			let after = text[name_end..]
-				.iter()
-				.find(|byte| !byte.is_ascii_whitespace());
-			if name_end > at + 2 && after == Some(&b'=') {
-				return true;
-			}
-			at = name_end.max(at + 1);
-			continue;
-		}
-		at += 1;
-	}
-	false
-}
-
-/// Whether a raster image has a program, a script or a zip after its
-/// logical end (PNG IEND, JPEG end of image, GIF trailer, WebP RIFF size).
-/// An image whose end cannot be found is not judged here: the bytes are
-/// then not the format the table says, and other rules apply.
-pub fn has_appended_payload(real: RealType, content: &[u8]) -> bool {
-	let end = match real {
-		RealType::Png => png_end(content),
-		RealType::Jpeg => jpeg_end(content),
-		RealType::Gif => gif_end(content),
-		RealType::Webp => webp_end(content),
-		_ => None,
+/// Inspect a PNG, JPEG, GIF or WebP. Other types give the default.
+pub fn inspect_raster(real: RealType, content: &[u8]) -> ImageFacts {
+	let layout = match real {
+		RealType::Png => png(content),
+		RealType::Jpeg => jpeg(content),
+		RealType::Gif => gif(content),
+		RealType::Webp => webp(content),
+		_ => return ImageFacts::default(),
 	};
-	end.and_then(|end| content.get(end..))
-		.is_some_and(contains_payload)
+	let Some(layout) = layout else {
+		return ImageFacts {
+			payload: false,
+			ambiguous: true,
+		};
+	};
+	let tail = content.get(layout.end..).unwrap_or_default();
+	let payload = contains_payload(tail)
+		|| layout
+			.metadata
+			.iter()
+			.any(|&(start, end)| content.get(start..end).is_some_and(contains_payload));
+	ImageFacts {
+		payload,
+		ambiguous: false,
+	}
 }
 
-/// After the IEND chunk, walking the chunks by their lengths.
-fn png_end(png: &[u8]) -> Option<usize> {
+/// PNG chunks, by their lengths, to the end of IEND. A length that runs
+/// past the file is a structure that cannot be followed.
+fn png(png: &[u8]) -> Option<Layout> {
+	const METADATA: &[&[u8]] = &[b"tEXt", b"zTXt", b"iTXt", b"eXIf"];
+	let mut metadata = Vec::new();
 	let mut at = 8;
 	loop {
 		let len = u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?) as usize;
 		let kind = png.get(at + 4..at + 8)?;
-		let next = at.checked_add(12)?.checked_add(len)?;
-		if kind == b"IEND" {
-			return Some(next.min(png.len()));
-		}
+		let data = at + 8;
+		let next = data.checked_add(len)?.checked_add(4)?;
 		if next > png.len() {
 			return None;
+		}
+		if METADATA.contains(&kind) {
+			metadata.push((data, data + len));
+		}
+		if kind == b"IEND" {
+			return Some(Layout {
+				end: next,
+				metadata,
+			});
 		}
 		at = next;
 	}
 }
 
-/// After the end-of-image marker that closes the first frame: segments are
-/// walked by their lengths, entropy-coded data is scanned for markers.
-fn jpeg_end(jpeg: &[u8]) -> Option<usize> {
+/// JPEG segments, by their lengths, up to each start of scan; inside a
+/// scan the next marker is a 0xFF not followed by 0x00 or a restart
+/// marker. The image ends at the first end-of-image found this way, so an
+/// end-of-image inside an APP segment does not count.
+fn jpeg(jpeg: &[u8]) -> Option<Layout> {
+	let mut metadata = Vec::new();
 	let mut at = 2;
 	while at + 1 < jpeg.len() {
 		if jpeg[at] != 0xff {
@@ -173,17 +88,27 @@ fn jpeg_end(jpeg: &[u8]) -> Option<usize> {
 		}
 		let marker = jpeg[at + 1];
 		match marker {
-			0xd9 => return Some(at + 2),
+			0xd9 => {
+				return Some(Layout {
+					end: at + 2,
+					metadata,
+				});
+			}
 			0xff => at += 1,
 			0x01 | 0xd0..=0xd7 => at += 2,
 			_ => {
 				let len = usize::from(u16::from_be_bytes(
 					jpeg.get(at + 2..at + 4)?.try_into().ok()?,
 				));
-				at = at.checked_add(2 + len)?;
+				let next = at.checked_add(2 + len)?;
+				if len < 2 || next > jpeg.len() {
+					return None;
+				}
+				if (0xe0..=0xef).contains(&marker) || marker == 0xfe {
+					metadata.push((at + 4, next));
+				}
+				at = next;
 				if marker == 0xda {
-					// Entropy-coded data: the next marker is a 0xFF not
-					// followed by 0x00 or a restart marker.
 					while at + 1 < jpeg.len()
 						&& !(jpeg[at] == 0xff
 							&& jpeg[at + 1] != 0x00
@@ -198,8 +123,10 @@ fn jpeg_end(jpeg: &[u8]) -> Option<usize> {
 	None
 }
 
-/// After the trailer, walking image descriptors and extension sub-blocks.
-fn gif_end(gif: &[u8]) -> Option<usize> {
+/// GIF blocks to the trailer; comment, application and plain-text
+/// extensions are metadata.
+fn gif(gif: &[u8]) -> Option<Layout> {
+	let mut metadata = Vec::new();
 	let flags = *gif.get(10)?;
 	let mut at = 13;
 	if flags & 0x80 != 0 {
@@ -207,8 +134,20 @@ fn gif_end(gif: &[u8]) -> Option<usize> {
 	}
 	loop {
 		match *gif.get(at)? {
-			0x3b => return Some(at + 1),
-			0x21 => at = skip_sub_blocks(gif, at + 2)?,
+			0x3b => {
+				return Some(Layout {
+					end: at + 1,
+					metadata,
+				});
+			}
+			0x21 => {
+				let label = *gif.get(at + 1)?;
+				let start = at + 2;
+				at = skip_sub_blocks(gif, start)?;
+				if matches!(label, 0xfe | 0xff | 0x01) {
+					metadata.push((start, at));
+				}
+			}
 			0x2c => {
 				let local = *gif.get(at + 9)?;
 				at += 10;
@@ -230,21 +169,43 @@ fn skip_sub_blocks(gif: &[u8], mut at: usize) -> Option<usize> {
 			return Some(at);
 		}
 		at = at.checked_add(size)?;
+		if at > gif.len() {
+			return None;
+		}
 	}
 }
 
-/// Past the RIFF size, padded to an even length.
-fn webp_end(webp: &[u8]) -> Option<usize> {
+/// WebP: the RIFF size must fit the file, and the chunks inside it must
+/// add up to it. EXIF and XMP chunks are metadata.
+fn webp(webp: &[u8]) -> Option<Layout> {
 	let size = u32::from_le_bytes(webp.get(4..8)?.try_into().ok()?) as usize;
-	let end = 8usize.checked_add(size)?.checked_add(size & 1)?;
-	Some(end.min(webp.len()))
+	let end = 8usize.checked_add(size)?;
+	if size < 4 || end > webp.len() {
+		return None;
+	}
+	let mut metadata = Vec::new();
+	let mut at = 12;
+	while at < end {
+		let kind = webp.get(at..at + 4)?;
+		let len = u32::from_le_bytes(webp.get(at + 4..at + 8)?.try_into().ok()?) as usize;
+		let data = at + 8;
+		let next = data.checked_add(len)?.checked_add(len & 1)?;
+		if next > end {
+			return None;
+		}
+		if kind == b"EXIF" || kind == b"XMP " {
+			metadata.push((data, data + len));
+		}
+		at = next;
+	}
+	Some(Layout { end, metadata })
 }
 
 /// A PE (`MZ` whose header offset points at `PE\0\0`), ELF, a zip local
-/// header or a `#!/` script anywhere in `tail`. One pass.
-fn contains_payload(tail: &[u8]) -> bool {
-	(0..tail.len()).any(|at| {
-		let rest = &tail[at..];
+/// header or a `#!/` script anywhere in `region`. One pass.
+fn contains_payload(region: &[u8]) -> bool {
+	(0..region.len()).any(|at| {
+		let rest = &region[at..];
 		rest.starts_with(b"\x7fELF")
 			|| rest.starts_with(b"PK\x03\x04")
 			|| rest.starts_with(b"#!/")
@@ -258,17 +219,6 @@ fn is_pe(mz: &[u8]) -> bool {
 	};
 	let offset = u32::from_le_bytes([offset[0], offset[1], offset[2], offset[3]]) as usize;
 	mz.get(offset..offset.saturating_add(4)) == Some(b"PE\0\0")
-}
-
-fn starts_with_ignore_case(text: &[u8], prefix: &[u8]) -> bool {
-	text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix)
-}
-
-/// Case-insensitive search for an ASCII `needle`; linear for the short
-/// fixed needles used here.
-fn find_ignore_case(text: &[u8], needle: &[u8]) -> Option<usize> {
-	text.windows(needle.len())
-		.position(|window| window.eq_ignore_ascii_case(needle))
 }
 
 #[cfg(test)]
