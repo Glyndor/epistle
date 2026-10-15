@@ -16,9 +16,6 @@ use crate::smtp::session::AcceptedMessage;
 /// room for a blocking pool that is slow to start the task.
 const SLACK: Duration = Duration::from_secs(5);
 
-/// The reply when the inspection cannot run or finish now.
-const UNAVAILABLE: &str = "4.7.1 content scan unavailable, try again later";
-
 impl Server {
 	/// Remove any attachment warning the sender wrote from unauthenticated
 	/// inbound `message`, then inspect its attachments and apply the
@@ -47,7 +44,11 @@ impl Server {
 		};
 		let Some(permit) = policy.admit_inbound(peer) else {
 			tracing::warn!("attachment inspection busy; deferring the message");
-			send(stream, &Reply::single(451, UNAVAILABLE)).await?;
+			send(
+				stream,
+				&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
+			)
+			.await?;
 			return Ok(true);
 		};
 		let data = std::mem::take(&mut message.data);
@@ -62,7 +63,11 @@ impl Server {
 		});
 		let Ok(Ok((data, decision))) = tokio::time::timeout(deadline, task).await else {
 			tracing::error!("attachment inspection failed or timed out; deferring the message");
-			send(stream, &Reply::single(451, UNAVAILABLE)).await?;
+			send(
+				stream,
+				&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
+			)
+			.await?;
 			return Ok(true);
 		};
 		message.data = data;
