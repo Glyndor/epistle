@@ -8,6 +8,7 @@
 //! the operator included, rewrote the record afterwards.
 
 pub mod anchor;
+pub mod audit;
 pub mod chain;
 pub mod checkpoint;
 pub mod class;
