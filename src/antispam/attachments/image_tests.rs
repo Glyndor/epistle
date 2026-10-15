@@ -164,3 +164,27 @@ fn a_payload_inside_an_exif_segment_is_found() {
 	jpeg.extend_from_slice(&jpeg_then(b"")[2..]);
 	assert!(facts(RealType::Jpeg, &jpeg).payload);
 }
+
+#[test]
+fn a_shebang_inside_appended_media_is_not_a_payload() {
+	// Motion photos carry an MP4 after the JPEG and Ultra HDR photos a
+	// second JPEG: compressed bytes that contain "#!/" about once every
+	// 16 MiB. A script only means something where it starts.
+	let mut video = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom".to_vec();
+	video.extend_from_slice(&[0x5a; 4096]);
+	video.extend_from_slice(b"#!/");
+	video.extend_from_slice(&[0xa5; 4096]);
+	assert_eq!(
+		facts(RealType::Jpeg, &jpeg_then(&video)),
+		ImageFacts::default(),
+		"a motion photo"
+	);
+	let mut comment = vec![0xff, 0xd8, 0xff, 0xfe, 0x00, 0x0c];
+	comment.extend_from_slice(b"see #!/usr");
+	comment.extend_from_slice(&jpeg_then(b"")[2..]);
+	assert_eq!(facts(RealType::Jpeg, &comment), ImageFacts::default());
+	assert!(
+		facts(RealType::Jpeg, &jpeg_then(b"\n#!/bin/sh\nid\n")).payload,
+		"a script appended right after the image still is"
+	);
+}

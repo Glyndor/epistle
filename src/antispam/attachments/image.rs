@@ -201,16 +201,23 @@ fn webp(webp: &[u8]) -> Option<Layout> {
 	Some(Layout { end, metadata })
 }
 
-/// A PE (`MZ` whose header offset points at `PE\0\0`), ELF, a zip local
-/// header or a `#!/` script anywhere in `region`. One pass.
+/// A PE (`MZ` whose header offset points at `PE\0\0`), ELF or a zip
+/// local header anywhere in `region`, or a `#!/` script at its start
+/// (after white space). One pass. A shebang only means something where a
+/// file starts, and three bytes turn up by chance in compressed data: a
+/// motion photo's video would match about once every 16 MiB.
 fn contains_payload(region: &[u8]) -> bool {
-	(0..region.len()).any(|at| {
-		let rest = &region[at..];
-		rest.starts_with(b"\x7fELF")
-			|| rest.starts_with(b"PK\x03\x04")
-			|| rest.starts_with(b"#!/")
-			|| (rest.starts_with(b"MZ") && is_pe(rest))
-	})
+	let text = region
+		.iter()
+		.position(|byte| !byte.is_ascii_whitespace())
+		.map_or(&region[region.len()..], |start| &region[start..]);
+	text.starts_with(b"#!/")
+		|| (0..region.len()).any(|at| {
+			let rest = &region[at..];
+			rest.starts_with(b"\x7fELF")
+				|| rest.starts_with(b"PK\x03\x04")
+				|| (rest.starts_with(b"MZ") && is_pe(rest))
+		})
 }
 
 fn is_pe(mz: &[u8]) -> bool {
