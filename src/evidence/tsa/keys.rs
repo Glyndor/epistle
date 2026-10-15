@@ -22,8 +22,12 @@ pub(super) fn signed_by(certificate: &X509Certificate<'_>, issuer: &X509Certific
 	)
 }
 
+/// The algorithm OID, the curve OID (for EC keys) and the key bits of an
+/// SPKI.
+type SpkiParts<'a> = (&'a [u8], Option<&'a [u8]>, &'a [u8]);
+
 /// The key inside an SPKI and its algorithm (and curve).
-fn spki_parts(spki: &[u8]) -> Option<(&[u8], Option<&[u8]>, &[u8])> {
+fn spki_parts(spki: &[u8]) -> Option<SpkiParts<'_>> {
 	let outer = parse_one(spki, tag::SEQUENCE).ok()?;
 	let mut fields = outer.reader();
 	let algorithm = fields.expect(tag::SEQUENCE).ok()?;

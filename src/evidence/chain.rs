@@ -70,7 +70,8 @@ impl Chain {
 		self.append_with(crate::storage::delivery_log::now_epoch, entry)
 	}
 
-	/// [`Chain::append`] at a fixed `time`, for tests and replays.
+	/// [`Chain::append`] at a fixed `time`, for tests.
+	#[cfg(test)]
 	pub(crate) fn append_at(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
 		self.append_with(|| time, entry)
 	}
@@ -233,7 +234,8 @@ pub fn last_position(path: &Path, repair: bool) -> std::io::Result<Option<Positi
 	Ok(Some(record.position(&line)))
 }
 
-/// The hash of the last complete line of `path` (see [`last_line`]).
+/// The hash of the last complete line of `path`, `None` for a missing or
+/// empty file; with `repair`, an interrupted last line is cut off first.
 pub fn last_line_hash(path: &Path, repair: bool) -> std::io::Result<Option<[u8; 32]>> {
 	Ok(last_line(path, repair)?.map(|line| sha256(&line)))
 }

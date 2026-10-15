@@ -285,8 +285,8 @@ pub fn hash_from_hex(value: &str) -> Option<[u8; 32]> {
 		_ => None,
 	};
 	let mut out = [0u8; 32];
-	for (index, pair) in bytes.chunks_exact(2).enumerate() {
-		out[index] = nibble(pair[0])? << 4 | nibble(pair[1])?;
+	for (index, slot) in out.iter_mut().enumerate() {
+		*slot = nibble(bytes[2 * index])? << 4 | nibble(bytes[2 * index + 1])?;
 	}
 	Some(out)
 }

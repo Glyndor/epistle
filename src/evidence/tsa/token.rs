@@ -2,7 +2,7 @@
 //!
 //! The parser takes the structure apart and checks its shape; whether the
 //! parts are true (the signature, the certificate chain, the digest) is
-//! [`super::verify`]'s job. Every list is capped, so a response cannot make
+//! [`super::verify()`]'s job. Every list is capped, so a response cannot make
 //! the parser do more than a fixed amount of work per byte.
 
 use super::der::{DerError, Tlv, generalized_time, parse_one, small_unsigned, tag};
