@@ -15,6 +15,42 @@ fn build_config(dir: &std::path::Path, settings: &str) -> Config {
 	config(dir, settings)
 }
 
+/// The shared state for a mail container held to the former 1 GiB default,
+/// so no test reads the host's cgroup.
+fn build_smtp_shared_state(
+	config: &Config,
+	metrics: &Arc<Metrics>,
+) -> std::io::Result<SmtpSharedState> {
+	build_smtp_shared_state_with(config, metrics, memory_fit::ContainerLimit::fallback())
+}
+
+#[test]
+fn an_unset_budget_follows_the_container_limit_and_a_set_one_does_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let two_gib = memory_fit::ContainerLimit {
+		bytes: 2 * 1024 * 1024 * 1024,
+		source: memory_fit::LimitSource::Cgroup,
+	};
+	let budget = |settings: &str| {
+		let state =
+			build_smtp_shared_state_with(&build_config(dir.path(), settings), &metrics, two_gib)
+				.expect("state");
+		let budget = state.memory_budget.expect("budget present");
+		(budget.cap(), budget.client_share())
+	};
+	assert_eq!(
+		budget(""),
+		(512 * 1024 * 1024, 128 * 1024 * 1024),
+		"a quarter of 2 GiB, and a quarter of that for one client"
+	);
+	assert_eq!(
+		budget("message_memory_budget = 134217728"),
+		(128 * 1024 * 1024, 32 * 1024 * 1024),
+		"a configured budget is kept"
+	);
+}
+
 #[test]
 fn max_message_size_config_threads_through_smtp_shared_state() {
 	let dir = tempfile::tempdir().expect("tempdir");

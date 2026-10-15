@@ -12,7 +12,8 @@ use super::{Config, ConfigError};
 impl Config {
 	/// Refuse a `max_message_size` that does not fit this platform's
 	/// addresses, or that the effective `message_memory_budget` (unless it
-	/// is turned off with `0`) could never hold.
+	/// is turned off with `0`) could never hold: the configured one, or the
+	/// ceiling of the derived one.
 	pub(super) fn validate_message_limits(&self) -> Result<(), ConfigError> {
 		let size = match self.max_message_size {
 			None | Some(0) => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
@@ -23,9 +24,19 @@ impl Config {
 				"max_message_size ({size} bytes) is larger than this platform can address"
 			)));
 		}
-		let budget = self
-			.message_memory_budget
-			.unwrap_or(crate::smtp::memory_budget::DEFAULT_BUDGET_BYTES);
+		let Some(budget) = self.message_memory_budget else {
+			// An unset budget is derived from the container's memory and
+			// rises to one message of the largest size, up to its ceiling.
+			let ceiling = crate::smtp::memory_fit::MAX_DERIVED_BUDGET;
+			if size > ceiling {
+				return Err(ConfigError::Invalid(format!(
+					"max_message_size ({size} bytes) is larger than the {ceiling} bytes a \
+					 derived message_memory_budget can reach; set message_memory_budget to at \
+					 least max_message_size, or to 0 to turn the budget off"
+				)));
+			}
+			return self.validate_data_rate();
+		};
 		if budget != 0 && budget < size {
 			return Err(ConfigError::Invalid(format!(
 				"message_memory_budget ({budget} bytes) is smaller than max_message_size \
@@ -121,9 +132,23 @@ mod tests {
 	}
 
 	#[test]
-	fn a_message_size_over_the_default_budget_is_refused() {
-		let error = validate("max_message_size = 314572800").expect_err("refused");
-		assert!(error.contains("message_memory_budget"), "{error}");
+	fn a_derived_budget_holds_any_message_up_to_its_ceiling() {
+		assert_eq!(
+			validate("max_message_size = 314572800"),
+			Ok(()),
+			"the derived budget rises to one 300 MiB message"
+		);
+		assert_eq!(validate("max_message_size = 1073741824"), Ok(()));
+		assert_eq!(
+			validate("max_message_size = 1073741825"),
+			Err(
+				"invalid configuration: max_message_size (1073741825 bytes) is larger than \
+				 the 1073741824 bytes a derived message_memory_budget can reach; set \
+				 message_memory_budget to at least max_message_size, or to 0 to turn the \
+				 budget off"
+					.to_string()
+			)
+		);
 	}
 
 	#[test]

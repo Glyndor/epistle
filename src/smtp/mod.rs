@@ -14,6 +14,7 @@ pub mod directory_scram_test_counter;
 pub mod diskspace;
 pub mod line;
 pub mod memory_budget;
+pub mod memory_fit;
 pub mod per_ip;
 pub mod quota;
 pub mod ratelimit;

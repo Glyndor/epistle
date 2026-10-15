@@ -94,12 +94,12 @@ fn limits_invalid_values_leave_config_bytes_untouched() {
 fn limits_refuse_a_message_size_the_memory_budget_cannot_hold() {
 	let (_dir, file) = config_file();
 	let original = std::fs::read(file.path()).unwrap();
-	let result = change_config(file.path(), Key::MaxMessageSize, Some("300M"));
+	let result = change_config(file.path(), Key::MaxMessageSize, Some("1025M"));
 	assert!(
 		result
 			.err()
 			.is_some_and(|message| message.contains("message_memory_budget")),
-		"a size over the 256 MiB default budget is refused"
+		"a size over the 1 GiB a derived budget can reach is refused"
 	);
 	assert!(
 		std::fs::read(file.path()).unwrap() == original,

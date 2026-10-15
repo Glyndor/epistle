@@ -20,6 +20,7 @@ mod in_stack;
 mod ports;
 mod queue_area;
 mod report;
+mod resources_area;
 mod spool_area;
 mod subid_area;
 #[cfg(test)]
@@ -75,6 +76,8 @@ pub enum CheckArea {
 	Subid,
 	/// The IP warm-up: each receiver group's cap, use, health and verdict.
 	Warmup,
+	/// The message memory budget fits the memory the mail container may use.
+	Resources,
 }
 
 impl CheckArea {
@@ -92,6 +95,7 @@ impl CheckArea {
 		CheckArea::Spool,
 		CheckArea::Subid,
 		CheckArea::Warmup,
+		CheckArea::Resources,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -109,6 +113,7 @@ impl CheckArea {
 			CheckArea::Spool => "spool",
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
+			CheckArea::Resources => "resources",
 		}
 	}
 }
@@ -250,6 +255,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
+		CheckArea::Resources => resources_area::check(ctx).await,
 	}
 }
 
