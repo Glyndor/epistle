@@ -122,8 +122,17 @@ fn bdat_chunk_over_the_budget_is_refused_with_452() {
 	assert_eq!(size, 8);
 	assert_eq!(reply_code(&session.bdat_chunk(b"12345678", false)), 250);
 	assert_eq!(budget.used(), 8);
-	// The next chunk would push the running total past the cap.
-	let action = session.command_line("BDAT 1 LAST");
+	// Announcing the next chunk claims nothing; its octets would push
+	// the running total past the cap once they arrive.
+	assert!(matches!(
+		session.command_line("BDAT 1 LAST"),
+		Action::CollectChunk {
+			size: 1,
+			last: true
+		}
+	));
+	assert_eq!(budget.used(), 8, "an announcement is not charged");
+	let action = session.bdat_chunk(b"9", true);
 	assert_eq!(reply_code(&action), 452);
 	assert_eq!(
 		line_reply(Some(action)),

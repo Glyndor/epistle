@@ -123,9 +123,9 @@ pub struct Session {
 	/// every path that drops the body. `None` (the default) leaves the
 	/// historical unbounded behaviour in place.
 	memory_budget: Option<Arc<MemoryBudget>>,
-	/// The claim for a BDAT chunk announced but not read yet. It joins the
-	/// body in `bdat_chunk`, or goes back with the session if the client
-	/// never sends the chunk.
+	/// The octets of the BDAT chunk being read, charged as they arrive. They
+	/// join the body in `bdat_chunk`, or go back with the session if the
+	/// client never sends the rest of the chunk.
 	chunk_reservation: Reservation,
 	/// The claim for the body last accepted, held while the connection
 	/// loop delivers it: the body is still in memory until then.

@@ -129,12 +129,13 @@ impl Server {
 					// The first chunk starts the window of the transaction.
 					Action::CollectChunk { size, last } => {
 						let window = body_window.get_or_insert_with(|| self.message_window());
-						let chunk =
-							match read_chunk(&mut stream, &mut decoder, size, window).await? {
-								Ok(chunk) => chunk,
-								Err(cut) => return end_cut(&mut stream, cut, session).await,
-							};
-						session.bdat_chunk(&chunk, last)
+						let read = (size, last);
+						match read_chunk(&mut stream, &mut decoder, read, window, &mut session)
+							.await?
+						{
+							Ok(action) => action,
+							Err(cut) => return end_cut(&mut stream, cut, session).await,
+						}
 					}
 					// A refused chunk is consumed without being kept.
 					Action::DiscardChunk { size, reply } => {

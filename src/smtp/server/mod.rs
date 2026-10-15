@@ -13,6 +13,7 @@ pub use super::diskspace::DiskGuard;
 pub use super::memory_budget::MemoryBudget;
 pub use super::ratelimit::SendLimiter;
 pub use super::reply::Reply;
+use super::session::Action;
 pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
@@ -505,21 +506,32 @@ where
 		})
 }
 
-/// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
-/// already buffered in the decoder, then read from the stream, feeding any
-/// overshoot (the next pipelined command) back into the decoder. `window`
-/// is the rate window of the whole transaction, so the chunk adds its
-/// octets to it. Ends with a [`data_rate::Cut`] if the peer closes or times out, or
-/// falls below the rate floor, before `size` bytes arrive.
+/// Read exactly `size` bytes for a BDAT chunk (RFC 3030) and hand them to
+/// the session: first the bytes already buffered in the decoder, then the
+/// stream, feeding any overshoot (the next pipelined command) back into the
+/// decoder. Every read is charged to the memory budget before it is kept,
+/// so the chunk holds only what has arrived; when the budget has no room
+/// the transaction is refused, the rest of the chunk is read away through
+/// [`discard_chunk`] and the client gets the 452. `window` is the rate
+/// window of the whole transaction. Ends with a [`data_rate::Cut`] if the
+/// peer closes or times out, or falls below the rate floor, before `size`
+/// bytes arrive.
 async fn read_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
-	size: usize,
+	chunk_of: (usize, bool),
 	window: &mut data_rate::RateWindow,
-) -> std::io::Result<Result<Vec<u8>, data_rate::Cut>> {
+	session: &mut Session,
+) -> std::io::Result<Result<Action, data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
+	let (size, last) = chunk_of;
 	let mut chunk = decoder.take_buffered(size);
 	window.record(chunk.len());
+	if !session.reserve_chunk(chunk.len()) {
+		let left = size - chunk.len();
+		drop(chunk);
+		return refuse_chunk(stream, decoder, left, window, session).await;
+	}
 	let mut buffer = [0u8; READ_BUFFER];
 	while chunk.len() < size {
 		let reading = tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer));
@@ -530,15 +542,36 @@ async fn read_chunk(
 			Some(Ok(Err(error))) => return Err(error),
 		};
 		let need = size - chunk.len();
-		window.record(read.min(need));
-		if read <= need {
-			chunk.extend_from_slice(&buffer[..read]);
-		} else {
-			chunk.extend_from_slice(&buffer[..need]);
+		let kept = read.min(need);
+		window.record(kept);
+		if read > need {
 			decoder.feed(&buffer[need..read]);
 		}
+		if !session.reserve_chunk(kept) {
+			// The octets just read are part of the chunk too.
+			let left = size - chunk.len() - kept;
+			drop(chunk);
+			return refuse_chunk(stream, decoder, left, window, session).await;
+		}
+		chunk.extend_from_slice(&buffer[..kept]);
 	}
-	Ok(Ok(chunk))
+	Ok(Ok(session.bdat_chunk(&chunk, last)))
+}
+
+/// A chunk the memory budget has no room for: the session drops the
+/// transaction (and what it held) first, then the `left` octets still on
+/// the wire are read away, so they are never parsed as commands.
+async fn refuse_chunk(
+	stream: &mut Box<dyn Connection>,
+	decoder: &mut crate::smtp::line::LineDecoder,
+	left: usize,
+	window: &mut data_rate::RateWindow,
+	session: &mut Session,
+) -> std::io::Result<Result<Action, data_rate::Cut>> {
+	let refusal = session.refuse_chunk();
+	Ok(discard_chunk(stream, decoder, left, window)
+		.await?
+		.map(|()| refusal))
 }
 
 /// Read `size` bytes of a refused BDAT chunk and throw them away, without

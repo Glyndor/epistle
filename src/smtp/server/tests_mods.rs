@@ -89,3 +89,7 @@ mod tests_data_rate_legit;
 #[cfg(test)]
 #[path = "server_tests_tls_drip.rs"]
 mod tests_tls_drip;
+
+#[cfg(test)]
+#[path = "server_tests_bdat_growth.rs"]
+mod tests_bdat_growth;
