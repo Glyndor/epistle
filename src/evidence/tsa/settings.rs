@@ -41,6 +41,10 @@ pub struct Authority {
 	pub url: String,
 	/// Hex SHA-256 of the SubjectPublicKeyInfo of each trusted key.
 	pub anchors: Vec<String>,
+	/// The policy OID (dotted, `1.2.3.4`) its tokens must carry, when the
+	/// operator requires one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub policy: Option<String>,
 }
 
 /// The timestamp settings.
@@ -59,12 +63,19 @@ impl Default for Settings {
 			authorities: vec![Authority {
 				url: DEFAULT_TSA_URL.to_string(),
 				anchors: vec![DEFAULT_TSA_ANCHOR.to_string()],
+				policy: None,
 			}],
 		}
 	}
 }
 
 impl Authority {
+	/// The required policy as DER OID content octets, when one is set and
+	/// well formed.
+	pub fn policy_oid(&self) -> Option<Vec<u8>> {
+		self.policy.as_deref().and_then(oid_from_dotted)
+	}
+
 	/// The anchors as hashes; a malformed one is skipped (and refused when
 	/// the settings are saved).
 	pub fn anchor_hashes(&self) -> Vec<[u8; 32]> {
@@ -120,6 +131,33 @@ impl Settings {
 		}
 		Ok(())
 	}
+}
+
+/// The DER content octets of a dotted OID (`1.2.840.113549`), or `None`.
+pub fn oid_from_dotted(dotted: &str) -> Option<Vec<u8>> {
+	let arcs: Vec<u64> = dotted
+		.split('.')
+		.map(|arc| {
+			arc.parse()
+				.ok()
+				.filter(|_| !arc.is_empty() && arc.len() <= 19)
+		})
+		.collect::<Option<_>>()?;
+	if arcs.len() < 2 || arcs.len() > 32 || arcs[0] > 2 || (arcs[0] < 2 && arcs[1] > 39) {
+		return None;
+	}
+	let mut out = Vec::new();
+	let first = arcs[0].checked_mul(40)?.checked_add(arcs[1])?;
+	for arc in std::iter::once(first).chain(arcs[2..].iter().copied()) {
+		let mut groups = vec![(arc & 0x7f) as u8];
+		let mut rest = arc >> 7;
+		while rest > 0 {
+			groups.push((rest & 0x7f) as u8 | 0x80);
+			rest >>= 7;
+		}
+		out.extend(groups.iter().rev());
+	}
+	Some(out)
 }
 
 /// Refuse a URL that is not `https`, or `http` to loopback.

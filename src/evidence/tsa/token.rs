@@ -53,9 +53,12 @@ pub struct Signer<'a> {
 	pub signed_attributes: &'a [u8],
 	/// The `messageDigest` attribute value.
 	pub message_digest: &'a [u8],
-	/// The `signingCertificate` (`false`, SHA-1) or `signingCertificateV2`
-	/// (`true`, algorithm given) certificate hash and its algorithm OID.
-	pub certificate_hash: (&'a [u8], &'a [u8]),
+	/// The `contentType` attribute value (an OID), when present.
+	pub content_type: Option<&'a [u8]>,
+	/// The hash algorithm OID and certificate hash of the first ESSCertID
+	/// of `signingCertificate` (SHA-1) or `signingCertificateV2`, when
+	/// present. Its absence is a verification failure, reported as such.
+	pub certificate_hash: Option<(&'a [u8], &'a [u8])>,
 	/// The signature algorithm OID.
 	pub signature_algorithm: &'a [u8],
 	/// The signature.
@@ -255,16 +258,13 @@ fn parse_signer(info: Tlv<'_>) -> Result<Signer<'_>, TokenError> {
 			_ => {}
 		}
 	}
-	if content_type != Some(oid::TST_INFO) {
-		return Err(TokenError::Shape("signed content type is not TSTInfo"));
-	}
 	Ok(Signer {
 		id,
 		digest_algorithm,
 		signed_attributes: attributes.raw,
 		message_digest: message_digest.ok_or(TokenError::Shape("no messageDigest attribute"))?,
-		certificate_hash: certificate_hash
-			.ok_or(TokenError::Shape("no signingCertificate attribute"))?,
+		content_type,
+		certificate_hash,
 		signature_algorithm,
 		signature,
 	})

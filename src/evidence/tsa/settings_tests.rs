@@ -6,6 +6,7 @@ fn with(url: &str, anchors: Vec<String>) -> Settings {
 		authorities: vec![Authority {
 			url: url.to_string(),
 			anchors,
+			policy: None,
 		}],
 	}
 }
@@ -76,4 +77,26 @@ fn saved_settings_load_back_and_bad_ones_are_not_written() {
 	);
 	assert!(save(dir.path(), &bad).is_err());
 	assert_eq!(load(dir.path()).expect("load"), settings);
+}
+
+#[test]
+fn a_dotted_policy_encodes_as_der() {
+	assert_eq!(oid_from_dotted("1.2.3.4"), Some(vec![0x2a, 0x03, 0x04]));
+	assert_eq!(
+		oid_from_dotted("1.3.6.1.4.1.6449.2.1.1"),
+		Some(vec![
+			0x2b, 0x06, 0x01, 0x04, 0x01, 0xb2, 0x31, 0x02, 0x01, 0x01
+		])
+	);
+	for bad in [
+		"",
+		"1",
+		"3.1",
+		"1.40",
+		"1..2",
+		"1.2.x",
+		"1.2.99999999999999999999",
+	] {
+		assert_eq!(oid_from_dotted(bad), None, "{bad}");
+	}
 }

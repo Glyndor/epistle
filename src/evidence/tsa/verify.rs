@@ -1,30 +1,139 @@
-//! Verifying a timestamp token against a digest and pinned trust anchors.
+//! Verifying a timestamp token, check by check.
 //!
-//! A token is accepted only when every one of these holds:
+//! A token proves a time only when all of these hold, and [`check`] reports
+//! each one on its own:
 //!
-//! 1. it stamps exactly our SHA-256 digest (and our nonce, when we sent one);
-//! 2. the signed `messageDigest` is the digest of the TSTInfo as carried;
-//! 3. the signer's certificate is in the token, is the one the signed
-//!    `signingCertificate` attribute names, carries the critical
-//!    `timeStamping` extended key usage, and was valid at the stamped time;
-//! 4. the signature over the signed attributes verifies with that key;
-//! 5. a chain of certificates from the token, each signed by the next and
-//!    valid at the stamped time, reaches a key whose SubjectPublicKeyInfo
-//!    hashes to a pinned anchor.
+//! - (a) the signer certificate chains, certificate by certificate, to a
+//!   key the operator pinned. Certificates the response carries are only
+//!   intermediates: the chain must end at a key whose SubjectPublicKeyInfo
+//!   hashes to a pinned anchor, so a response cannot vouch for itself;
+//! - (b) the signer has the extended key usage `timeStamping`, critical, and
+//!   no other (RFC 3161 section 2.3);
+//! - (c) the time stamped lies within the validity of the signer and of
+//!   every certificate of the chain;
+//! - (d) an ESSCertID or ESSCertIDv2 in the signed attributes names the
+//!   signer certificate (RFC 2634, RFC 5035, RFC 5816);
+//! - (e) the imprint is SHA-256 of our digest;
+//! - (f) the nonce is the one we sent (checked when the token is received;
+//!   a stored token is verified without it);
+//! - (g) the signed content type is TSTInfo, the signed `messageDigest` is
+//!   the digest of the TSTInfo, and the signature over the DER of the
+//!   signed attributes verifies with the signer's key;
+//! - (h) the policy is the configured one, when one is configured.
 //!
-//! Anchors are pinned by key, not by certificate, so a root that is both
-//! self-signed and cross-signed (as Sectigo's is) matches either way.
+//! Revocation (CRL, OCSP) is not checked: a token is judged by what the
+//! certificates said at the stamped time.
 
-use ring::signature::{self, UnparsedPublicKey, VerificationAlgorithm};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-use super::der::{Reader, parse_one, tag};
+use super::der::{tag, unsigned_content};
+use super::keys::{cms_algorithm, signed_by, verify_with};
 use super::oid;
 use super::token::{SignerId, Token, TokenError, parse_response};
 use crate::evidence::record::{sha256, to_hex};
 
 /// The longest chain walked from the signer to an anchor.
 const MAX_CHAIN: usize = 6;
+
+/// One of the conditions a token must meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+	/// (a) chain to a pinned anchor.
+	Anchor,
+	/// (b) critical timeStamping usage, and no other.
+	KeyUsage,
+	/// (c) every certificate valid at the stamped time.
+	Validity,
+	/// (d) ESSCertID(v2) names the signer.
+	SigningCertificate,
+	/// (e) the imprint is our SHA-256 digest.
+	Imprint,
+	/// (f) the nonce is ours.
+	Nonce,
+	/// (g) content type, messageDigest and signature.
+	Signature,
+	/// (h) the configured policy.
+	Policy,
+}
+
+impl Check {
+	/// Every check, in the order they are reported.
+	pub const ALL: [Check; 8] = [
+		Check::Anchor,
+		Check::KeyUsage,
+		Check::Validity,
+		Check::SigningCertificate,
+		Check::Imprint,
+		Check::Nonce,
+		Check::Signature,
+		Check::Policy,
+	];
+
+	/// What the check establishes, for a report.
+	pub fn label(self) -> &'static str {
+		match self {
+			Check::Anchor => "(a) the signer chains to a pinned anchor",
+			Check::KeyUsage => "(b) the signer is a critical timeStamping-only key",
+			Check::Validity => "(c) every certificate was valid at the stamped time",
+			Check::SigningCertificate => "(d) ESSCertID names the signer certificate",
+			Check::Imprint => "(e) the imprint is the SHA-256 being verified",
+			Check::Nonce => "(f) the nonce is the one requested",
+			Check::Signature => "(g) content type, messageDigest and signature verify",
+			Check::Policy => "(h) the policy is the configured one",
+		}
+	}
+}
+
+/// How one check came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+	/// It holds.
+	Passed,
+	/// It does not, and why.
+	Failed(&'static str),
+	/// It was not asked for (no nonce or policy to compare with).
+	NotApplicable,
+}
+
+/// What a verification expects.
+#[derive(Debug, Clone, Copy)]
+pub struct Expected<'a> {
+	/// The SHA-256 the token must stamp.
+	pub digest: &'a [u8; 32],
+	/// The nonce sent, when it is known.
+	pub nonce: Option<u64>,
+	/// Pinned anchors: SHA-256 of trusted SubjectPublicKeyInfos.
+	pub anchors: &'a [[u8; 32]],
+	/// The policy OID (content octets) required, when one is configured.
+	pub policy: Option<&'a [u8]>,
+}
+
+/// The outcome of every check, and what the token says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+	/// One outcome per [`Check::ALL`] entry, in that order.
+	pub checks: Vec<(Check, Outcome)>,
+	/// When the TSA stamped, epoch seconds.
+	pub gen_time: u64,
+	/// The serial number, hex.
+	pub serial: String,
+	/// The anchor reached, hex, when the chain reached one.
+	pub anchor: Option<String>,
+	/// The certificates the token carried, DER, signer first when found.
+	pub certificates: Vec<Vec<u8>>,
+}
+
+impl Report {
+	/// The first failed check, in [`Check::ALL`] order.
+	pub fn first_failure(&self) -> Option<(Check, &'static str)> {
+		self.checks
+			.iter()
+			.find_map(|(check, outcome)| match outcome {
+				Outcome::Failed(why) => Some((*check, *why)),
+				_ => None,
+			})
+	}
+}
 
 /// What a verified token says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +155,7 @@ pub enum VerifyError {
 	Imprint,
 	/// The token carries another nonce.
 	Nonce,
-	/// A check of the token's signature or certificates failed.
+	/// Another check failed.
 	Untrusted(&'static str),
 }
 
@@ -67,90 +176,172 @@ impl std::fmt::Display for VerifyError {
 	}
 }
 
-/// Verify the TimeStampResp `response` for `digest`, trusting the keys
-/// whose SPKI SHA-256 is in `anchors`. `nonce` is checked when given.
+/// Verify `response` and return the stamp, or the first failed check.
+pub fn verify_expected(response: &[u8], expected: &Expected<'_>) -> Result<Stamp, VerifyError> {
+	let report = check(response, expected)?;
+	match report.first_failure() {
+		Some((Check::Imprint, _)) => Err(VerifyError::Imprint),
+		Some((Check::Nonce, _)) => Err(VerifyError::Nonce),
+		Some((_, why)) => Err(VerifyError::Untrusted(why)),
+		None => Ok(Stamp {
+			gen_time: report.gen_time,
+			serial: report.serial,
+			anchor: report.anchor.unwrap_or_default(),
+		}),
+	}
+}
+
+/// [`verify_expected`] without a policy requirement.
 pub fn verify(
 	response: &[u8],
 	digest: &[u8; 32],
 	nonce: Option<u64>,
 	anchors: &[[u8; 32]],
 ) -> Result<Stamp, VerifyError> {
+	verify_expected(
+		response,
+		&Expected {
+			digest,
+			nonce,
+			anchors,
+			policy: None,
+		},
+	)
+}
+
+/// Run every check on `response`. Only a response that is not a token at
+/// all is an error; every other problem is a failed check in the report.
+pub fn check(response: &[u8], expected: &Expected<'_>) -> Result<Report, TokenError> {
 	let token = parse_response(response)?;
-	if token.tst.hash_algorithm != oid::SHA256 || token.tst.hashed_message != digest {
-		return Err(VerifyError::Imprint);
+	let when = i64::try_from(token.tst.gen_time).unwrap_or(i64::MAX);
+	let certificates: Vec<X509Certificate<'_>> = token
+		.certificates
+		.iter()
+		.filter_map(|der| X509Certificate::from_der(der).ok().map(|(_, cert)| cert))
+		.collect();
+	let signer = find_signer(&token, &certificates);
+	let chain = signer.map(|signer| chain_to_anchor(signer, &certificates, expected.anchors));
+	let missing = Outcome::Failed("the signer's certificate is not in the token");
+	let mut checks = Vec::with_capacity(Check::ALL.len());
+	for kind in Check::ALL {
+		let outcome = match (kind, signer, &chain) {
+			(Check::Imprint, ..) => imprint(&token, expected.digest),
+			(Check::Nonce, ..) => nonce(&token, expected.nonce),
+			(Check::Policy, ..) => policy(&token, expected.policy),
+			(_, None, _) => missing,
+			(Check::Anchor, _, Some(Ok(_))) => Outcome::Passed,
+			(Check::Anchor, _, Some(Err(why))) => Outcome::Failed(why),
+			(Check::Anchor, ..) => missing,
+			(Check::KeyUsage, Some(signer), _) => key_usage(signer),
+			(Check::Validity, Some(signer), chain) => validity(signer, chain, when),
+			(Check::SigningCertificate, Some(signer), _) => signing_certificate(&token, signer),
+			(Check::Signature, Some(signer), _) => signature(&token, signer),
+		};
+		checks.push((kind, outcome));
 	}
-	if let Some(nonce) = nonce {
-		let expected = super::der::unsigned_content(nonce);
-		if token.tst.nonce != Some(expected.as_slice()) {
-			return Err(VerifyError::Nonce);
+	let mut ders: Vec<Vec<u8>> = Vec::new();
+	if let Some(signer) = signer {
+		ders.push(signer.as_raw().to_vec());
+	}
+	for der in &token.certificates {
+		if !ders.iter().any(|kept| kept == der) {
+			ders.push(der.to_vec());
 		}
 	}
-	let when = i64::try_from(token.tst.gen_time).unwrap_or(i64::MAX);
-	let digest_of = |algorithm: &[u8], bytes: &[u8]| -> Option<Vec<u8>> {
-		let algorithm = match algorithm {
-			a if a == oid::SHA256 => &ring::digest::SHA256,
-			a if a == oid::SHA384 => &ring::digest::SHA384,
-			a if a == oid::SHA512 => &ring::digest::SHA512,
-			a if a == oid::SHA1 => &ring::digest::SHA1_FOR_LEGACY_USE_ONLY,
-			_ => return None,
-		};
-		Some(ring::digest::digest(algorithm, bytes).as_ref().to_vec())
-	};
-	let content_digest = digest_of(token.signer.digest_algorithm, token.tst_der)
-		.ok_or(VerifyError::Untrusted("unsupported digest algorithm"))?;
-	if content_digest != token.signer.message_digest {
-		return Err(VerifyError::Untrusted(
-			"messageDigest does not match the TSTInfo",
-		));
-	}
-	let certificates = parse_certificates(&token)?;
-	let signer = find_signer(&token, &certificates)?;
-	let (hash_algorithm, hash) = token.signer.certificate_hash;
-	if digest_of(hash_algorithm, signer.as_raw()).as_deref() != Some(hash) {
-		return Err(VerifyError::Untrusted(
-			"signingCertificate does not name the signer",
-		));
-	}
-	check_timestamping(signer, when)?;
-	let mut signed = token.signer.signed_attributes.to_vec();
-	signed[0] = tag::SET;
-	let algorithm = cms_algorithm(
-		token.signer.signature_algorithm,
-		token.signer.digest_algorithm,
-		signer.public_key().raw,
-	)?;
-	if !verify_with(
-		algorithm,
-		signer.public_key().raw,
-		&signed,
-		token.signer.signature,
-	) {
-		return Err(VerifyError::Untrusted("bad signature"));
-	}
-	let anchor = chain_to_anchor(signer, &certificates, anchors, when)?;
-	Ok(Stamp {
+	Ok(Report {
+		checks,
 		gen_time: token.tst.gen_time,
 		serial: to_hex(token.tst.serial),
-		anchor: to_hex(&anchor),
+		anchor: match &chain {
+			Some(Ok((anchor, _))) => Some(to_hex(anchor)),
+			_ => None,
+		},
+		certificates: ders,
 	})
 }
 
-fn parse_certificates<'a>(token: &Token<'a>) -> Result<Vec<X509Certificate<'a>>, VerifyError> {
-	token
-		.certificates
-		.iter()
-		.map(|der| {
-			X509Certificate::from_der(der)
-				.map(|(_, certificate)| certificate)
-				.map_err(|_| VerifyError::Untrusted("a certificate does not parse"))
-		})
-		.collect()
+fn imprint(token: &Token<'_>, digest: &[u8; 32]) -> Outcome {
+	if token.tst.hash_algorithm != oid::SHA256 {
+		Outcome::Failed("the imprint is not SHA-256")
+	} else if token.tst.hashed_message != digest {
+		Outcome::Failed("the token stamps a different digest")
+	} else {
+		Outcome::Passed
+	}
+}
+
+fn nonce(token: &Token<'_>, nonce: Option<u64>) -> Outcome {
+	match nonce {
+		None => Outcome::NotApplicable,
+		Some(nonce) if token.tst.nonce == Some(unsigned_content(nonce).as_slice()) => {
+			Outcome::Passed
+		}
+		Some(_) => Outcome::Failed("the token carries a different nonce"),
+	}
+}
+
+fn policy(token: &Token<'_>, policy: Option<&[u8]>) -> Outcome {
+	match policy {
+		None => Outcome::NotApplicable,
+		Some(policy) if token.tst.policy == policy => Outcome::Passed,
+		Some(_) => Outcome::Failed("the token was issued under another policy"),
+	}
+}
+
+fn digest_of(algorithm: &[u8], bytes: &[u8]) -> Option<Vec<u8>> {
+	let algorithm = match algorithm {
+		a if a == oid::SHA256 => &ring::digest::SHA256,
+		a if a == oid::SHA384 => &ring::digest::SHA384,
+		a if a == oid::SHA512 => &ring::digest::SHA512,
+		a if a == oid::SHA1 => &ring::digest::SHA1_FOR_LEGACY_USE_ONLY,
+		_ => return None,
+	};
+	Some(ring::digest::digest(algorithm, bytes).as_ref().to_vec())
+}
+
+fn signing_certificate(token: &Token<'_>, signer: &X509Certificate<'_>) -> Outcome {
+	match token.signer.certificate_hash {
+		None => Outcome::Failed("no ESSCertID or ESSCertIDv2 in the signed attributes"),
+		Some((algorithm, hash))
+			if digest_of(algorithm, signer.as_raw()).as_deref() == Some(hash) =>
+		{
+			Outcome::Passed
+		}
+		Some(_) => Outcome::Failed("signingCertificate does not name the signer"),
+	}
+}
+
+fn signature(token: &Token<'_>, signer: &X509Certificate<'_>) -> Outcome {
+	if token.signer.content_type != Some(oid::TST_INFO) {
+		return Outcome::Failed("the signed content type is not TSTInfo");
+	}
+	match digest_of(token.signer.digest_algorithm, token.tst_der) {
+		None => return Outcome::Failed("unsupported digest algorithm"),
+		Some(digest) if digest != token.signer.message_digest => {
+			return Outcome::Failed("messageDigest does not match the TSTInfo");
+		}
+		Some(_) => {}
+	}
+	let mut signed = token.signer.signed_attributes.to_vec();
+	signed[0] = tag::SET;
+	let key = signer.public_key().raw;
+	match cms_algorithm(
+		token.signer.signature_algorithm,
+		token.signer.digest_algorithm,
+		key,
+	) {
+		Err(why) => Outcome::Failed(why),
+		Ok(algorithm) if verify_with(algorithm, key, &signed, token.signer.signature) => {
+			Outcome::Passed
+		}
+		Ok(_) => Outcome::Failed("bad signature"),
+	}
 }
 
 fn find_signer<'b, 'a>(
 	token: &Token<'a>,
 	certificates: &'b [X509Certificate<'a>],
-) -> Result<&'b X509Certificate<'a>, VerifyError> {
+) -> Option<&'b X509Certificate<'a>> {
 	certificates
 		.iter()
 		.find(|certificate| match token.signer.id {
@@ -159,9 +350,6 @@ fn find_signer<'b, 'a>(
 			}
 			SignerId::KeyId(id) => key_identifier(certificate) == Some(id),
 		})
-		.ok_or(VerifyError::Untrusted(
-			"the signer's certificate is not in the token",
-		))
 }
 
 fn key_identifier<'a>(certificate: &X509Certificate<'a>) -> Option<&'a [u8]> {
@@ -175,163 +363,81 @@ fn key_identifier<'a>(certificate: &X509Certificate<'a>) -> Option<&'a [u8]> {
 		})
 }
 
-/// The signer must be a time-stamping key (RFC 3161 section 2.3) valid at
-/// the stamped time.
-fn check_timestamping(signer: &X509Certificate<'_>, when: i64) -> Result<(), VerifyError> {
-	let usage = signer
-		.extended_key_usage()
-		.map_err(|_| VerifyError::Untrusted("unreadable extended key usage"))?
-		.ok_or(VerifyError::Untrusted(
-			"the signer has no extended key usage",
-		))?;
-	if !usage.critical || !usage.value.time_stamping {
-		return Err(VerifyError::Untrusted(
-			"the signer is not a critical timeStamping key",
-		));
+/// (b): the only usage is timeStamping, and the extension is critical.
+fn key_usage(signer: &X509Certificate<'_>) -> Outcome {
+	let usage = match signer.extended_key_usage() {
+		Err(_) => return Outcome::Failed("unreadable extended key usage"),
+		Ok(None) => return Outcome::Failed("the signer has no extended key usage"),
+		Ok(Some(usage)) => usage,
+	};
+	let value = usage.value;
+	if !usage.critical || !value.time_stamping {
+		return Outcome::Failed("the signer is not a critical timeStamping key");
 	}
-	valid_at(signer, when)
+	let others = value.any
+		|| value.server_auth
+		|| value.client_auth
+		|| value.code_signing
+		|| value.email_protection
+		|| value.ocsp_signing
+		|| !value.other.is_empty();
+	if others {
+		return Outcome::Failed("the signer has usages besides timeStamping");
+	}
+	Outcome::Passed
 }
 
-fn valid_at(certificate: &X509Certificate<'_>, when: i64) -> Result<(), VerifyError> {
-	let validity = certificate.validity();
-	if when < validity.not_before.timestamp() || when > validity.not_after.timestamp() {
-		return Err(VerifyError::Untrusted(
-			"a certificate was not valid at the stamped time",
-		));
-	}
-	Ok(())
-}
-
-/// Walk issuers from `signer` until a pinned key; return that key's hash.
-fn chain_to_anchor(
+/// (c): the signer and every certificate up to the anchor.
+fn validity(
 	signer: &X509Certificate<'_>,
-	certificates: &[X509Certificate<'_>],
-	anchors: &[[u8; 32]],
+	chain: &Option<ChainResult<'_, '_>>,
 	when: i64,
-) -> Result<[u8; 32], VerifyError> {
+) -> Outcome {
+	let valid = |certificate: &X509Certificate<'_>| {
+		let validity = certificate.validity();
+		when >= validity.not_before.timestamp() && when <= validity.not_after.timestamp()
+	};
+	if !valid(signer) {
+		return Outcome::Failed("the signer certificate was not valid at the stamped time");
+	}
+	match chain {
+		Some(Ok((_, path))) if path.iter().all(|certificate| valid(certificate)) => Outcome::Passed,
+		Some(Ok(_)) => Outcome::Failed("a chain certificate was not valid at the stamped time"),
+		_ => Outcome::Failed("no chain to check"),
+	}
+}
+
+type ChainResult<'b, 'a> = Result<([u8; 32], Vec<&'b X509Certificate<'a>>), &'static str>;
+
+/// (a): walk issuers from `signer`, each verified as having signed the one
+/// below, until a pinned key. Returns the anchor and the issuers walked.
+fn chain_to_anchor<'b, 'a>(
+	signer: &'b X509Certificate<'a>,
+	certificates: &'b [X509Certificate<'a>],
+	anchors: &[[u8; 32]],
+) -> ChainResult<'b, 'a> {
 	let mut current = signer;
+	let mut path = Vec::new();
 	for _ in 0..MAX_CHAIN {
 		let key = sha256(current.public_key().raw);
 		if anchors.contains(&key) {
-			return Ok(key);
+			return Ok((key, path));
 		}
-		let issuer = certificates
+		let Some(issuer) = certificates
 			.iter()
 			.filter(|candidate| candidate.subject().as_raw() == current.issuer().as_raw())
 			.find(|candidate| signed_by(current, candidate))
-			.ok_or(VerifyError::Untrusted(
-				"the chain does not reach a pinned anchor",
-			))?;
-		valid_at(issuer, when)?;
+		else {
+			break;
+		};
 		if issuer.as_raw() == current.as_raw() {
 			// Self-signed and not pinned: nothing further up.
 			break;
 		}
+		path.push(issuer);
 		current = issuer;
 	}
-	Err(VerifyError::Untrusted(
-		"the chain does not reach a pinned anchor",
-	))
-}
-
-fn signed_by(certificate: &X509Certificate<'_>, issuer: &X509Certificate<'_>) -> bool {
-	let algorithm = certificate.signature_algorithm.algorithm.as_bytes();
-	let Ok(verification) = certificate_algorithm(algorithm, issuer.public_key().raw) else {
-		return false;
-	};
-	verify_with(
-		verification,
-		issuer.public_key().raw,
-		certificate.tbs_certificate.as_ref(),
-		&certificate.signature_value.data,
-	)
-}
-
-/// The key inside an SPKI and its algorithm (and curve).
-fn spki_parts(spki: &[u8]) -> Option<(&[u8], Option<&[u8]>, &[u8])> {
-	let outer = parse_one(spki, tag::SEQUENCE).ok()?;
-	let mut fields = outer.reader();
-	let algorithm = fields.expect(tag::SEQUENCE).ok()?;
-	let key = fields.expect(tag::BIT_STRING).ok()?;
-	let mut parts = Reader::new(algorithm.value);
-	let kind = parts.expect(tag::OID).ok()?.value;
-	let curve = parts.optional(tag::OID).ok()?.map(|curve| curve.value);
-	// The BIT STRING's first octet counts unused bits: zero for a key.
-	let (unused, key) = key.value.split_first()?;
-	(*unused == 0).then_some((kind, curve, key))
-}
-
-fn ecdsa_for(curve: Option<&[u8]>, hash: &[u8]) -> Option<&'static dyn VerificationAlgorithm> {
-	Some(match (curve?, hash) {
-		(c, h) if c == oid::P256 && h == oid::SHA256 => &signature::ECDSA_P256_SHA256_ASN1,
-		(c, h) if c == oid::P256 && h == oid::SHA384 => &signature::ECDSA_P256_SHA384_ASN1,
-		(c, h) if c == oid::P384 && h == oid::SHA256 => &signature::ECDSA_P384_SHA256_ASN1,
-		(c, h) if c == oid::P384 && h == oid::SHA384 => &signature::ECDSA_P384_SHA384_ASN1,
-		_ => return None,
-	})
-}
-
-fn rsa_for(hash: &[u8]) -> Option<&'static dyn VerificationAlgorithm> {
-	Some(match hash {
-		h if h == oid::SHA256 => &signature::RSA_PKCS1_2048_8192_SHA256,
-		h if h == oid::SHA384 => &signature::RSA_PKCS1_2048_8192_SHA384,
-		h if h == oid::SHA512 => &signature::RSA_PKCS1_2048_8192_SHA512,
-		_ => return None,
-	})
-}
-
-/// The verification algorithm for a CMS signer: the signature algorithm
-/// may name the key type only (`rsaEncryption`), with the hash in the
-/// digest algorithm.
-fn cms_algorithm(
-	signature_algorithm: &[u8],
-	digest_algorithm: &[u8],
-	spki: &[u8],
-) -> Result<&'static dyn VerificationAlgorithm, VerifyError> {
-	let hash = match signature_algorithm {
-		a if a == oid::RSA || a == oid::EC_PUBLIC_KEY => digest_algorithm,
-		other => return certificate_algorithm(other, spki),
-	};
-	let (kind, curve, _) = spki_parts(spki).ok_or(VerifyError::Untrusted("unreadable key"))?;
-	match kind {
-		k if k == oid::RSA => rsa_for(hash),
-		k if k == oid::EC_PUBLIC_KEY => ecdsa_for(curve, hash),
-		_ => None,
-	}
-	.ok_or(VerifyError::Untrusted("unsupported signature algorithm"))
-}
-
-/// The verification algorithm for a signature algorithm OID that names
-/// its hash (`sha256WithRSAEncryption`, `ecdsa-with-SHA384`, Ed25519).
-fn certificate_algorithm(
-	algorithm: &[u8],
-	spki: &[u8],
-) -> Result<&'static dyn VerificationAlgorithm, VerifyError> {
-	let (_, curve, _) = spki_parts(spki).ok_or(VerifyError::Untrusted("unreadable key"))?;
-	match algorithm {
-		a if a == oid::RSA_SHA256 => rsa_for(oid::SHA256),
-		a if a == oid::RSA_SHA384 => rsa_for(oid::SHA384),
-		a if a == oid::RSA_SHA512 => rsa_for(oid::SHA512),
-		a if a == oid::ECDSA_SHA256 => ecdsa_for(curve, oid::SHA256),
-		a if a == oid::ECDSA_SHA384 => ecdsa_for(curve, oid::SHA384),
-		a if a == oid::ED25519 => Some(&signature::ED25519 as &dyn VerificationAlgorithm),
-		_ => None,
-	}
-	.ok_or(VerifyError::Untrusted("unsupported signature algorithm"))
-}
-
-fn verify_with(
-	algorithm: &'static dyn VerificationAlgorithm,
-	spki: &[u8],
-	message: &[u8],
-	signature: &[u8],
-) -> bool {
-	let Some((_, _, key)) = spki_parts(spki) else {
-		return false;
-	};
-	UnparsedPublicKey::new(algorithm, key)
-		.verify(message, signature)
-		.is_ok()
+	Err("the chain does not reach a pinned anchor")
 }
 
 #[cfg(test)]

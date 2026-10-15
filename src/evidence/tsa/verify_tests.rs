@@ -100,6 +100,132 @@ fn a_noncritical_timestamping_usage_is_refused() {
 }
 
 #[test]
+fn a_signer_with_usages_besides_timestamping_is_refused() {
+	let (_, result) = stamped(Faults {
+		extra_usage: true,
+		..Faults::default()
+	});
+	assert_eq!(
+		result,
+		Err(VerifyError::Untrusted(
+			"the signer has usages besides timeStamping"
+		))
+	);
+}
+
+#[test]
+fn an_expired_signer_is_refused() {
+	let (_, result) = stamped(Faults {
+		expired_signer: true,
+		..Faults::default()
+	});
+	assert_eq!(
+		result,
+		Err(VerifyError::Untrusted(
+			"the signer certificate was not valid at the stamped time"
+		))
+	);
+}
+
+#[test]
+fn a_token_without_an_ess_cert_id_is_refused() {
+	let (_, result) = stamped(Faults {
+		no_signing_certificate: true,
+		..Faults::default()
+	});
+	assert_eq!(
+		result,
+		Err(VerifyError::Untrusted(
+			"no ESSCertID or ESSCertIDv2 in the signed attributes"
+		))
+	);
+}
+
+#[test]
+fn a_signed_content_type_other_than_tstinfo_is_refused() {
+	let (_, result) = stamped(Faults {
+		wrong_content_type: true,
+		..Faults::default()
+	});
+	assert_eq!(
+		result,
+		Err(VerifyError::Untrusted(
+			"the signed content type is not TSTInfo"
+		))
+	);
+}
+
+#[test]
+fn a_configured_policy_must_match() {
+	let tsa = FakeTsa::new(NOW);
+	let response = tsa.respond(&build(&digest(), 3).der);
+	let stamped_digest = digest();
+	let expected = |policy: &'static [u8]| Expected {
+		digest: &stamped_digest,
+		nonce: Some(3),
+		anchors: std::slice::from_ref(&tsa.anchor),
+		policy: Some(policy),
+	};
+	assert!(verify_expected(&response, &expected(crate::evidence::tsa::fake::POLICY)).is_ok());
+	assert_eq!(
+		verify_expected(&response, &expected(&[0x2a, 0x03, 0x05])),
+		Err(VerifyError::Untrusted(
+			"the token was issued under another policy"
+		))
+	);
+}
+
+#[test]
+fn the_report_names_every_check_and_its_outcome() {
+	let mut tsa = FakeTsa::new(NOW);
+	tsa.faults.extra_usage = true;
+	let response = tsa.respond(&build(&digest(), 4).der);
+	let other = FakeTsa::new(NOW);
+	let report = check(
+		&response,
+		&Expected {
+			digest: &digest(),
+			nonce: None,
+			anchors: &[other.anchor],
+			policy: None,
+		},
+	)
+	.expect("a token");
+	let outcomes: Vec<(&str, Outcome)> = report
+		.checks
+		.iter()
+		.map(|(check, outcome)| (check.label(), *outcome))
+		.collect();
+	assert_eq!(
+		outcomes,
+		vec![
+			(
+				Check::Anchor.label(),
+				Outcome::Failed("the chain does not reach a pinned anchor")
+			),
+			(
+				Check::KeyUsage.label(),
+				Outcome::Failed("the signer has usages besides timeStamping")
+			),
+			(
+				Check::Validity.label(),
+				Outcome::Failed("no chain to check")
+			),
+			(Check::SigningCertificate.label(), Outcome::Passed),
+			(Check::Imprint.label(), Outcome::Passed),
+			(Check::Nonce.label(), Outcome::NotApplicable),
+			(Check::Signature.label(), Outcome::Passed),
+			(Check::Policy.label(), Outcome::NotApplicable),
+		]
+	);
+	assert_eq!(
+		report.certificates.len(),
+		2,
+		"the signer and the root are carried"
+	);
+}
+
+#[test]
 fn a_chain_to_an_unpinned_root_is_refused() {
 	let tsa = FakeTsa::new(NOW);
 	let other = FakeTsa::new(NOW);
@@ -132,7 +258,7 @@ fn a_signer_outside_its_validity_at_the_stamped_time_is_refused() {
 	assert_eq!(
 		verify(&response, &digest(), Some(5), &[tsa.anchor]),
 		Err(VerifyError::Untrusted(
-			"a certificate was not valid at the stamped time"
+			"the signer certificate was not valid at the stamped time"
 		))
 	);
 }
@@ -164,9 +290,24 @@ fn a_real_sectigo_token_verifies_against_the_pinned_root_key() {
 fn freetsa_tokens_use_a_signature_this_verifier_does_not_support() {
 	let response = include_bytes!("testdata/freetsa.tsr");
 	let digest = crate::evidence::record::hash_from_hex(FIXTURE_DIGEST).expect("digest");
+	let report = check(
+		response,
+		&Expected {
+			digest: &digest,
+			nonce: None,
+			anchors: &[[0; 32]],
+			policy: None,
+		},
+	)
+	.expect("a token");
+	let signature = report
+		.checks
+		.iter()
+		.find(|(check, _)| *check == Check::Signature)
+		.map(|(_, outcome)| *outcome);
 	assert_eq!(
-		verify(response, &digest, None, &[[0; 32]]),
-		Err(VerifyError::Untrusted("unsupported signature algorithm"))
+		signature,
+		Some(Outcome::Failed("unsupported signature algorithm"))
 	);
 }
 

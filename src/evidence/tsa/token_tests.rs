@@ -14,7 +14,14 @@ fn a_response_is_taken_apart() {
 	assert_eq!(token.tst.gen_time, 1_792_038_711);
 	assert_eq!(token.tst.nonce, Some(&[42u8][..]));
 	assert_eq!(token.certificates.len(), 2);
-	assert_eq!(token.signer.certificate_hash.0, oid::SHA256);
+	assert_eq!(
+		token
+			.signer
+			.certificate_hash
+			.map(|(algorithm, _)| algorithm),
+		Some(oid::SHA256)
+	);
+	assert_eq!(token.signer.content_type, Some(oid::TST_INFO));
 }
 
 #[test]

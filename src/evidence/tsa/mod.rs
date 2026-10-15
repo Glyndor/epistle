@@ -15,6 +15,7 @@ pub mod client;
 pub mod der;
 #[cfg(test)]
 pub(crate) mod fake;
+pub mod keys;
 pub mod oid;
 pub mod request;
 pub mod settings;
@@ -22,4 +23,6 @@ pub mod stamp;
 pub mod token;
 pub mod verify;
 
-pub use verify::{Stamp, VerifyError, verify};
+pub use verify::{
+	Check, Expected, Outcome, Report, Stamp, VerifyError, check, verify, verify_expected,
+};

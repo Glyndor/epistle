@@ -24,6 +24,16 @@ pub(crate) struct Faults {
 	pub(crate) no_timestamping: bool,
 	/// Give the signer the timeStamping usage, not marked critical.
 	pub(crate) noncritical_timestamping: bool,
+	/// Give the signer serverAuth as well as timeStamping.
+	pub(crate) extra_usage: bool,
+	/// Sign with a certificate that expired before the stamped time.
+	pub(crate) expired_signer: bool,
+	/// Leave the ESSCertIDv2 out of the signed attributes.
+	pub(crate) no_signing_certificate: bool,
+	/// Sign a content type other than TSTInfo.
+	pub(crate) wrong_content_type: bool,
+	/// Issue under this policy OID instead of 1.2.3.4.
+	pub(crate) policy: Option<Vec<u8>>,
 	/// Flip a bit of the signature.
 	pub(crate) bad_signature: bool,
 	/// Sign a messageDigest that is not that of the TSTInfo.
@@ -38,6 +48,8 @@ pub(crate) struct FakeTsa {
 	signer_der: Vec<u8>,
 	plain_signer_der: Vec<u8>,
 	noncritical_signer_der: Vec<u8>,
+	extra_usage_signer_der: Vec<u8>,
+	expired_signer_der: Vec<u8>,
 	root_der: Vec<u8>,
 	/// Hex-free SHA-256 of the root's SubjectPublicKeyInfo: the pin.
 	pub(crate) anchor: [u8; 32],
@@ -49,15 +61,24 @@ pub(crate) struct FakeTsa {
 	pub(crate) received: Mutex<Vec<Vec<u8>>>,
 }
 
+/// The policy OID the fake issues under: 1.2.3.4.
+pub(crate) const POLICY: &[u8] = &[0x2a, 0x03, 0x04];
+
 fn timestamping_usage(critical: bool) -> CustomExtension {
-	// ExtKeyUsageSyntax ::= SEQUENCE OF KeyPurposeId; id-kp-timeStamping.
-	let content = encode_all(
-		tag::SEQUENCE,
-		&[&encode(
-			tag::OID,
-			&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08],
-		)],
-	);
+	usages(
+		critical,
+		&[&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08]],
+	)
+}
+
+fn usages(critical: bool, purposes: &[&[u8]]) -> CustomExtension {
+	// ExtKeyUsageSyntax ::= SEQUENCE OF KeyPurposeId.
+	let oids: Vec<Vec<u8>> = purposes
+		.iter()
+		.map(|purpose| encode(tag::OID, purpose))
+		.collect();
+	let refs: Vec<&[u8]> = oids.iter().map(Vec::as_slice).collect();
+	let content = encode_all(tag::SEQUENCE, &refs);
 	let mut extension = CustomExtension::from_oid_content(&[2, 5, 29, 37], content);
 	extension.set_criticality(critical);
 	extension
@@ -89,7 +110,27 @@ impl FakeTsa {
 			.expect("noncritical signer")
 			.der()
 			.to_vec();
+		// id-kp-timeStamping and id-kp-serverAuth.
+		signer.custom_extensions = vec![usages(
+			true,
+			&[
+				&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08],
+				&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01],
+			],
+		)];
+		let extra_usage_signer_der = signer
+			.signed_by(&signer_key, &issuer)
+			.expect("extra usage signer")
+			.der()
+			.to_vec();
 		signer.custom_extensions = vec![timestamping_usage(true)];
+		let mut expired = signer.clone();
+		expired.not_after = rcgen::date_time_ymd(1980, 1, 1);
+		let expired_signer_der = expired
+			.signed_by(&signer_key, &issuer)
+			.expect("expired signer")
+			.der()
+			.to_vec();
 		let signer_der = signer
 			.signed_by(&signer_key, &issuer)
 			.expect("signer")
@@ -104,6 +145,8 @@ impl FakeTsa {
 			signer_der,
 			plain_signer_der,
 			noncritical_signer_der,
+			extra_usage_signer_der,
+			expired_signer_der,
 			root_der,
 			anchor,
 			gen_time,
@@ -163,7 +206,7 @@ impl FakeTsa {
 		let time = generalized(self.gen_time);
 		let mut parts = vec![
 			encode(tag::INTEGER, &[1]),
-			encode(tag::OID, &[0x2a, 0x03, 0x04]),
+			encode(tag::OID, self.faults.policy.as_deref().unwrap_or(POLICY)),
 			imprint.to_vec(),
 			encode(tag::INTEGER, &unsigned_content(self.gen_time)),
 			encode(tag::GENERALIZED_TIME, time.as_bytes()),
@@ -180,6 +223,10 @@ impl FakeTsa {
 			&self.plain_signer_der
 		} else if self.faults.noncritical_timestamping {
 			&self.noncritical_signer_der
+		} else if self.faults.extra_usage {
+			&self.extra_usage_signer_der
+		} else if self.faults.expired_signer {
+			&self.expired_signer_der
 		} else {
 			&self.signer_der
 		};
@@ -204,11 +251,18 @@ impl FakeTsa {
 				)],
 			)],
 		);
+		let content_type = if self.faults.wrong_content_type {
+			oid::SIGNED_DATA
+		} else {
+			oid::TST_INFO
+		};
 		let mut attributes = vec![
-			attribute(oid::CONTENT_TYPE, &encode(tag::OID, oid::TST_INFO)),
+			attribute(oid::CONTENT_TYPE, &encode(tag::OID, content_type)),
 			attribute(oid::MESSAGE_DIGEST, &encode(tag::OCTET_STRING, &digest)),
-			attribute(oid::SIGNING_CERTIFICATE_V2, &ess),
 		];
+		if !self.faults.no_signing_certificate {
+			attributes.push(attribute(oid::SIGNING_CERTIFICATE_V2, &ess));
+		}
 		// DER orders the members of a SET OF by their encodings.
 		attributes.sort();
 		let content: Vec<u8> = attributes.concat();

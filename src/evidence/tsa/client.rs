@@ -11,7 +11,7 @@ use std::time::Duration;
 use super::request::{Request, build, random_nonce};
 use super::settings::Authority;
 use super::token::MAX_RESPONSE;
-use super::verify::{Stamp, verify};
+use super::verify::{Expected, Stamp, verify_expected};
 
 /// How long one exchange may take, connection included.
 pub const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -43,12 +43,15 @@ pub async fn obtain(authorities: &[Authority], digest: &[u8; 32]) -> Result<Obta
 		let request = build(digest, random_nonce());
 		match exchange(&client, &authority.url, &request).await {
 			Ok(response) => {
-				match verify(
-					&response,
+				let anchors = authority.anchor_hashes();
+				let policy = authority.policy_oid();
+				let expected = Expected {
 					digest,
-					Some(request.nonce),
-					&authority.anchor_hashes(),
-				) {
+					nonce: Some(request.nonce),
+					anchors: &anchors,
+					policy: policy.as_deref(),
+				};
+				match verify_expected(&response, &expected) {
 					Ok(stamp) => {
 						return Ok(Obtained {
 							response,

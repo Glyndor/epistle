@@ -26,6 +26,7 @@ fn settings(url: String, tsa: &FakeTsa) -> Settings {
 		authorities: vec![Authority {
 			url,
 			anchors: vec![to_hex(&tsa.anchor)],
+			policy: None,
 		}],
 	}
 }
