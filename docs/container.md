@@ -248,6 +248,30 @@ pids = 256
 same way, and `sudo epistle stack update` recreates the service with it. A
 value in `compose.override.yaml` works too and wins over both.
 
+### Sizing
+
+A message in flight takes about 2.9 times its size in `mail` (measured: a
+24 MiB BDAT transfer peaked at 55.7 MiB, the same over DATA and TLS at
+70 MiB). The message memory budget counts message bytes only, so when
+`message_memory_budget` is unset it is a quarter of the `mail` limit (at
+least `max_message_size`, at most 1 GiB): full, it costs about three quarters
+of the limit. Past it, a new message gets `452 4.3.1` and the sender retries
+later; nothing is lost. `mail` reads its limit from its cgroup, and
+`epistle status` warns when a budget you set yourself, times three, is more
+than 70% of it.
+
+Worked example: 5,000 messages, each with a 10 MiB attachment, arrive in a
+burst at a VPS with 8 GiB of memory and 500 GB of disk, installed with the
+defaults above.
+
+| What | On this host |
+|---|---|
+| Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
+| Memory in flight | `mail 2g` gives a 512 MiB budget: about 37 such messages at once, 9 of them from one sending address (it may hold a quarter of the budget), about 1.5 GiB at the peak. The limits add up to 6 GiB of the 8 |
+| Disk | 5,000 x 13.7 MiB = 67 GiB in each mailbox they land in, stored as received; the spool only holds a message until it is delivered. 500 GB (465 GiB) takes about six such bursts. `status` warns under 10% free, and SMTP refuses mail under 25 MiB free |
+| Quota | the default 5 GiB per account fills after about 370 of them; the rest get `452 4.2.2` and wait in the sender's queue. Raise it with `epistle account quota alice 100G`, `epistle limits set quota --domain example.org 100G` or `epistle limits set quota 100G` |
+| Time | the link is the bound: 67 GiB is about 10 minutes at 1 Gbit/s and about 1 h 40 min at 100 Mbit/s. 37 parallel transfers share the link, and `min_data_rate` only cuts a client below 10 KiB/s |
+
 ### Keys outside data_dir
 
 `mail` mounts data_dir read-write, and `epistle backup` archives it. The at-rest
