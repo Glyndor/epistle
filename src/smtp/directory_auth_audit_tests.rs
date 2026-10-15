@@ -86,9 +86,7 @@ fn run_with_capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
 	let events = cap.events.clone();
 	let subscriber = Registry::default().with(LevelFilter::INFO).with(cap);
 	tracing::subscriber::with_default(subscriber, f);
-	Arc::try_unwrap(events)
-		.map(|m| m.into_inner().unwrap())
-		.unwrap_or_default()
+	std::mem::take(&mut *events.lock().unwrap())
 }
 
 fn auth_events(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
@@ -407,9 +405,7 @@ async fn a_banned_ip_is_refused_before_hashing() {
 				"a banned IP must be refused even with the right password"
 			);
 		});
-		Arc::try_unwrap(events)
-			.map(|m| m.into_inner().unwrap())
-			.unwrap_or_default()
+		std::mem::take(&mut *events.lock().unwrap())
 	};
 
 	// The ban store was consulted exactly once for the IP.
