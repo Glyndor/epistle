@@ -19,6 +19,7 @@ pub mod merkle;
 pub mod record;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod tsa;
 pub mod verify;
 
 pub use class::{CLASS_HEADER, ClassSources, MailClass};
