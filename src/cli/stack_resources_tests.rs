@@ -162,6 +162,18 @@ fn set_refuses_what_init_refuses_and_writes_nothing() {
 			"resources.web is not a service of the stack; use one of mail, db, clamav, freshclam",
 		),
 		("clamav", None, None, "give --memory, --pids or both"),
+		(
+			"clamav",
+			Some("99999999999g"),
+			None,
+			"resources.clamav.memory \"99999999999g\" is more than 64-bit sizes reach",
+		),
+		(
+			"db",
+			Some("6143k"),
+			None,
+			"resources.db.memory \"6143k\" is under the 6m Podman accepts",
+		),
 	] {
 		assert_eq!(
 			set_limits(&text, service, memory, pids).map(|_| ()),
