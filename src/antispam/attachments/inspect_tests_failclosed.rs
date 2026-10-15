@@ -145,8 +145,8 @@ fn an_image_or_pdf_the_bytes_do_not_confirm_is_a_mismatch() {
 	assert_eq!(report.parts[1].reasons, vec![Reason::TypeMismatch]);
 	assert_eq!(
 		report.parts[2].reasons,
-		vec![Reason::AmbiguousImage],
-		"an svgz that does not decompress is not clean"
+		vec![Reason::ActiveImage],
+		"an svgz is an svg, readable or not"
 	);
 }
 

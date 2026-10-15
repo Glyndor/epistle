@@ -132,13 +132,13 @@ fn every_known_archive_and_image_evasion_keeps_its_verdict() {
 				"Content-Type: application/octet-stream; name=a.svgz",
 				b"\x1f\x8b\x08 broken",
 			),
-			AmbiguousImage,
+			ActiveImage,
 		),
 		(
 			"utf-16 svg with a script",
 			one(
 				"Content-Type: image/png; name=a.png",
-				&svg::tests::utf16le("<svg><script>go()</script></svg>"),
+				&svg::tests::utf16("<svg><script>go()</script></svg>", true, true),
 			),
 			ActiveImage,
 		),
@@ -164,7 +164,7 @@ fn every_known_archive_and_image_evasion_keeps_its_verdict() {
 				"Content-Type: image/svg+xml; name=a.svg",
 				b"<!DOCTYPE svg [<!ENTITY a 'x'>]><svg/>",
 			),
-			AmbiguousImage,
+			ActiveImage,
 		),
 		(
 			"jpeg with a fake end in an APP segment",
@@ -195,6 +195,51 @@ fn every_known_archive_and_image_evasion_keeps_its_verdict() {
 				webp
 			}),
 			AmbiguousImage,
+		),
+		(
+			"plain svg attachment",
+			one(
+				"Content-Type: image/svg+xml; name=logo.svg",
+				b"<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>",
+			),
+			ActiveImage,
+		),
+		(
+			"svg bytes behind a png claim are a mismatch",
+			one(
+				"Content-Type: image/png; name=logo.png",
+				b"<svg><rect/></svg>",
+			),
+			TypeMismatch,
+		),
+		(
+			"svg name read through a full-width dot",
+			one(
+				"Content-Type: application/octet-stream; name=\"=?utf-8?q?logo=EF=BC=8Esvg?=\"",
+				b"x",
+			),
+			ActiveImage,
+		),
+		(
+			"svg nested inside another xml root",
+			one(
+				"Content-Type: application/xml; name=doc.xml",
+				b"<?xml version='1.0'?><doc><svg/></doc>",
+			),
+			ActiveImage,
+		),
+		(
+			"utf-16 svg without a byte-order mark",
+			one(
+				"Content-Type: application/octet-stream; name=a.bin",
+				&svg::tests::utf16("<svg/>", false, false),
+			),
+			ActiveImage,
+		),
+		(
+			"svg by declared type only",
+			one("Content-Type: image/svg+xml; name=a.bin", b"x"),
+			ActiveImage,
 		),
 	];
 	let mut failures = Vec::new();

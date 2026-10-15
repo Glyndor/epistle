@@ -33,3 +33,21 @@ fn an_ambiguous_structure_is_reported() {
 	assert!(report.ambiguous);
 	assert_eq!(report.reasons(), vec![Reason::AmbiguousMime]);
 }
+
+#[test]
+fn an_operator_can_allow_svg() {
+	let raw = corpus::message(&[attachment(
+		"Content-Type: image/svg+xml; name=logo.svg",
+		b"<svg><rect/></svg>",
+	)]);
+	let allow = Extensions::new(&[], &["svg".to_string()]);
+	assert_eq!(
+		inspect(&raw, &Extensions::default(), Budget::bytes(1 << 20)).reasons(),
+		vec![Reason::ActiveImage]
+	);
+	assert!(
+		inspect(&raw, &allow, Budget::bytes(1 << 20))
+			.reasons()
+			.is_empty()
+	);
+}

@@ -124,10 +124,9 @@ fn html_attachments_are_flagged_by_name_or_content() {
 		named("statement.txt", "text/plain", RealType::Html),
 		vec![Reason::HtmlAttachment]
 	);
-	assert_eq!(
-		named("logo.svg", "image/svg+xml", RealType::Unknown),
-		vec![Reason::HtmlAttachment]
-	);
+	// SVG is not judged here: any SVG reading is active-image, decided
+	// with the content in the inspection.
+	assert!(named("logo.svg", "image/svg+xml", RealType::Unknown).is_empty());
 }
 
 #[test]
@@ -297,4 +296,13 @@ fn a_name_is_judged_whole_and_cut_at_a_nul() {
 		),
 		vec![Reason::DangerousExtension]
 	);
+}
+
+#[test]
+fn svg_bytes_behind_a_raster_claim_are_a_mismatch_but_not_under_their_own_type() {
+	assert_eq!(
+		named("logo.png", "image/png", RealType::Svg),
+		vec![Reason::TypeMismatch]
+	);
+	assert!(named("logo.svg", "image/svg+xml", RealType::Svg).is_empty());
 }

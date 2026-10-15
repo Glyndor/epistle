@@ -113,9 +113,7 @@ const ARCHIVE_EXTENSIONS: &[&str] = &[
 	"lha", "arj", "ace", "cab", "iso", "img", "vhd", "vhdx", "dmg", "uue", "xxe",
 ];
 
-const HTML_EXTENSIONS: &[&str] = &[
-	"htm", "html", "shtml", "xht", "xhtml", "mht", "mhtml", "svg",
-];
+const HTML_EXTENSIONS: &[&str] = &["htm", "html", "shtml", "xht", "xhtml", "mht", "mhtml"];
 
 /// Bidirectional and invisible formatting characters. U+202E (RIGHT-TO-LEFT
 /// OVERRIDE) makes `invoice<RLO>gpj.exe` display as `invoiceexe.jpg`; the
@@ -145,8 +143,8 @@ pub enum Reason {
 	TypeMismatch,
 	/// An HTML page sent as an attachment, the usual fake login form.
 	HtmlAttachment,
-	/// An SVG image with script, event handlers, script URLs or embedded
-	/// documents.
+	/// An SVG image by any reading: name, declared type or content. SVG can
+	/// carry script, and telling script from drawing is never complete.
 	ActiveImage,
 	/// A raster image with a program, a script or a zip after its end or
 	/// inside its metadata.
@@ -210,6 +208,7 @@ impl Reason {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Extensions {
 	blocked: BTreeSet<String>,
+	allowed: BTreeSet<String>,
 }
 
 impl Extensions {
@@ -224,7 +223,15 @@ impl Extensions {
 		for ext in allow {
 			blocked.remove(ext);
 		}
-		Self { blocked }
+		Self {
+			blocked,
+			allowed: allow.iter().cloned().collect(),
+		}
+	}
+
+	/// Whether the operator listed `ext` in `allow_extensions`.
+	pub fn allows(&self, ext: &str) -> bool {
+		self.allowed.contains(ext)
 	}
 
 	fn is_dangerous(&self, ext: &str) -> bool {
@@ -432,8 +439,10 @@ fn extensions_of(name: &str) -> (Option<String>, Option<String>) {
 	}
 }
 
+/// A raster image claim. SVG is not one: it is judged as active-image.
 fn claims_image(ext: Option<&str>, declared_type: &str) -> bool {
-	ext.is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext)) || declared_type.starts_with("image/")
+	ext.is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext))
+		|| declared_type.starts_with("image/") && declared_type != "image/svg+xml"
 }
 
 fn claims_sniffable_image(ext: Option<&str>, declared_type: &str) -> bool {

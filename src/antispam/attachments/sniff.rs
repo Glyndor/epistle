@@ -54,7 +54,8 @@ pub enum RealType {
 	Ico,
 	/// A HEIF image (HEIC, AVIF).
 	Heif,
-	/// An SVG image, which is XML and may carry script.
+	/// An SVG image, which is XML and may carry script. Not a raster image:
+	/// a raster claim on SVG bytes is a type mismatch.
 	Svg,
 	/// A RAR archive.
 	Rar,
@@ -114,7 +115,7 @@ impl RealType {
 				| Self::Jpeg | Self::Gif
 				| Self::Webp | Self::Bmp
 				| Self::Tiff | Self::Ico
-				| Self::Heif | Self::Svg
+				| Self::Heif
 		)
 	}
 

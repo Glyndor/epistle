@@ -153,7 +153,7 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		},
 		extensions,
 	);
-	reasons.extend(image_reasons(leaf, real_type));
+	reasons.extend(image_reasons(leaf, real_type, extensions));
 	reasons.extend(limits_only(leaf));
 	if disguised {
 		reasons.push(Reason::TypeMismatch);
@@ -168,34 +168,29 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 	}
 }
 
-/// What an image part hides. An SVG is judged when its bytes are SVG, or
-/// when any name or declared type says SVG (gzip-compressed or not, which
-/// is how `.svgz` travels); raster images are walked to their end.
-fn image_reasons(leaf: &Leaf, real_type: RealType) -> Vec<Reason> {
-	let claims_svg = leaf
+/// What an image part hides. Any reading that says SVG makes the part
+/// active-image: a name ending `.svg` or `.svgz` (after the name readings
+/// the rules use), the declared type `image/svg+xml`, an `svg` element in
+/// the bytes, or one behind gzip together with an SVG name or type. An
+/// operator who lists `svg` in `allow_extensions` opts out. Raster images
+/// are walked to their end.
+fn image_reasons(leaf: &Leaf, real_type: RealType, extensions: &Extensions) -> Vec<Reason> {
+	let named_svg = leaf.names.iter().any(|name| {
+		rules::name_variants(name).iter().any(|variant| {
+			let variant = variant.to_lowercase();
+			variant.ends_with(".svg") || variant.ends_with(".svgz")
+		})
+	});
+	let typed_svg = leaf
 		.declared_types
 		.iter()
-		.any(|kind| kind == "image/svg+xml")
-		|| leaf.names.iter().any(|name| {
-			let name = name.to_ascii_lowercase();
-			name.ends_with(".svg") || name.ends_with(".svgz")
-		});
-	let svg = if leaf.content.starts_with(b"\x1f\x8b") && claims_svg {
-		svg::gunzip(&leaf.content).map(|plain| svg::inspect_svg(&plain))
-	} else if real_type == RealType::Svg || claims_svg {
-		Some(svg::inspect_svg(&leaf.content))
-	} else {
-		None
-	};
+		.any(|kind| kind == "image/svg+xml");
+	let gzip_svg = (named_svg || typed_svg)
+		&& svg::gunzip(&leaf.content).is_some_and(|plain| svg::is_svg(&plain));
+	let svg = named_svg || typed_svg || gzip_svg || svg::is_svg(&leaf.content);
 	let mut reasons = Vec::new();
-	match svg {
-		Some(svg::SvgVerdict::Active) => reasons.push(Reason::ActiveImage),
-		Some(svg::SvgVerdict::Clean) => {}
-		Some(svg::SvgVerdict::Ambiguous) => reasons.push(Reason::AmbiguousImage),
-		None if leaf.content.starts_with(b"\x1f\x8b") && claims_svg => {
-			reasons.push(Reason::AmbiguousImage);
-		}
-		None => {}
+	if svg && !extensions.allows("svg") {
+		reasons.push(Reason::ActiveImage);
 	}
 	let raster = image::inspect_raster(real_type, &leaf.content);
 	if raster.payload {
