@@ -18,6 +18,7 @@ pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
 pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
+pub use session_time::DEFAULT_MAX_SESSION_TIME_SECS;
 
 mod builder;
 mod data_rate;
@@ -25,6 +26,7 @@ mod dnsbl_check;
 mod run;
 mod run_auth;
 mod run_band;
+mod session_time;
 
 /// Read buffer size per connection.
 const READ_BUFFER: usize = 4096;
@@ -197,6 +199,9 @@ pub struct Server {
 	/// Commands without progress a session may send before it is closed;
 	/// `0` turns the limit off.
 	junk_command_limit: u32,
+	/// How long one session may last before it is closed at the next
+	/// command boundary; zero turns the limit off.
+	max_session_time: Duration,
 	/// The authentication protocol this listener serves. Sessions tag every
 	/// password attempt through this server with it, so a per-account
 	/// `allowed_protocols` set that does not include the listener's kind

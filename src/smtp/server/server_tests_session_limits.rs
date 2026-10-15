@@ -14,7 +14,7 @@ const TOO_MANY: &str = "421 4.7.0 too many commands without progress, closing co
 
 /// A listener for one address that admits one connection from it at a time,
 /// with a budget for one small message.
-fn one_slot_server(
+pub(super) fn one_slot_server(
 	budget: &Arc<MemoryBudget>,
 	configure: impl FnOnce(Server) -> Server,
 ) -> (Arc<Server>, Arc<MemorySink>) {
@@ -28,7 +28,7 @@ fn one_slot_server(
 }
 
 /// Start `server` on a listener whose connections the test hands over.
-fn listen(
+pub(super) fn listen(
 	server: &Arc<Server>,
 ) -> (
 	mpsc::UnboundedSender<tokio::io::DuplexStream>,
@@ -44,7 +44,7 @@ fn listen(
 
 /// Connect again from the same address and deliver one message: possible
 /// only once the earlier connection gave its slot and its octets back.
-async fn the_address_delivers_again(
+pub(super) async fn the_address_delivers_again(
 	arrive: &mpsc::UnboundedSender<tokio::io::DuplexStream>,
 	sink: &MemorySink,
 ) {

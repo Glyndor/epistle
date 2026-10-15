@@ -97,3 +97,7 @@ mod tests_bdat_growth;
 #[cfg(test)]
 #[path = "server_tests_session_limits.rs"]
 mod tests_session_limits;
+
+#[cfg(test)]
+#[path = "server_tests_session_time.rs"]
+mod tests_session_time;

@@ -13,6 +13,7 @@ use crate::smtp::trace::{
 };
 
 use super::data_rate::{Cut, RateWindow, send_within};
+use super::session_time::{SessionClock, end_session};
 use super::{
 	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, end_cut, read_chunk,
 	send,
@@ -45,6 +46,8 @@ impl Server {
 		// ends, so the time between chunks and the commands sent in it
 		// count against the same clock.
 		let mut body_window: Option<RateWindow> = None;
+		// The lifetime of the session, checked at every command boundary.
+		let mut clock = SessionClock::start(self.max_session_time);
 
 		loop {
 			let line = match decoder.next_line() {
@@ -57,6 +60,7 @@ impl Server {
 					let off = RateWindow::off();
 					let window = body_window.as_ref().unwrap_or(&off);
 					let reading = window.guard(stream.read(&mut buffer));
+					let reading = clock.guard(body_window.is_none(), reading);
 					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
 					{
@@ -64,9 +68,12 @@ impl Server {
 							send(&mut stream, &Reply::single(421, "4.3.2 shutting down")).await?;
 							return Ok(());
 						}
-						Some(Ok(Some(Ok(n)))) => n,
-						Some(Ok(Some(Err(e)))) => return Err(e),
-						Some(Ok(None)) => return end_cut(&mut stream, Cut::TooSlow, session).await,
+						Some(Ok(Some(Some(Ok(n))))) => n,
+						Some(Ok(Some(Some(Err(e))))) => return Err(e),
+						Some(Ok(Some(None))) => {
+							return end_cut(&mut stream, Cut::TooSlow, session).await;
+						}
+						Some(Ok(None)) => return end_session(&mut stream, session).await,
 						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
@@ -89,6 +96,16 @@ impl Server {
 				}
 			};
 
+			// A command or AUTH line past the session's lifetime is not run
+			// (QUIT still is: the client is leaving); a message body being
+			// received is left to finish.
+			if mode != Mode::Data
+				&& body_window.is_none()
+				&& clock.expired()
+				&& !line.eq_ignore_ascii_case(b"QUIT")
+			{
+				return end_session(&mut stream, session).await;
+			}
 			// In Data mode, pass raw bytes to support 8BITMIME (RFC 6152).
 			let action = if mode == Mode::Data {
 				session.data_line(&line)
@@ -152,8 +169,8 @@ impl Server {
 			};
 			// The window ends with the transaction: the dot, the LAST
 			// chunk, RSET, or any refusal that resets it.
-			if !session.in_transaction() {
-				body_window = None;
+			if !session.in_transaction() && body_window.take().is_some() {
+				clock.body_ended();
 			}
 			match action {
 				Action::Continue(reply) => {
