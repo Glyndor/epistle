@@ -205,6 +205,14 @@ impl Server {
 		self
 	}
 
+	/// Hold every message transaction on this listener to `rate`: the
+	/// minimum average transfer rate once its grace period is over. A
+	/// floor of `0` turns the check off.
+	pub fn with_data_rate(mut self, rate: super::DataRate) -> Self {
+		self.data_rate = rate;
+		self
+	}
+
 	/// Provide the `tls-server-end-point` certificate hash, enabling
 	/// SCRAM-SHA-256-PLUS once a session is inside TLS.
 	pub fn with_channel_binding(mut self, cert_hash: crate::tls::EndPoint) -> Self {

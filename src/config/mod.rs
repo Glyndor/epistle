@@ -323,6 +323,17 @@ pub struct Config {
 	/// rounded down to the nearest MiB).
 	#[serde(default)]
 	pub message_memory_budget: Option<u64>,
+	/// Minimum average transfer rate of one message transaction, in
+	/// bytes per second, once `data_rate_grace` is over. A client below it
+	/// is answered `421 4.4.2 transfer too slow, closing connection` and
+	/// closed. Absent uses 10240; `0` turns the check off.
+	#[serde(default)]
+	pub min_data_rate: Option<u64>,
+	/// Seconds from the start of a message transaction (the 354 of DATA,
+	/// or the first BDAT chunk) before `min_data_rate` applies. Absent
+	/// uses 120; from 1 to 3600.
+	#[serde(default)]
+	pub data_rate_grace: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -465,6 +476,8 @@ impl std::fmt::Debug for Config {
 			)
 			.field("max_connections_per_ip", &self.max_connections_per_ip)
 			.field("message_memory_budget", &self.message_memory_budget)
+			.field("min_data_rate", &self.min_data_rate)
+			.field("data_rate_grace", &self.data_rate_grace)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)

@@ -17,6 +17,7 @@ use crate::metrics::Metrics;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::memory_budget;
 use crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP;
+use crate::smtp::server::DataRate;
 use crate::smtp::server::MemoryBudget;
 use crate::storage::CorrespondentStore;
 
@@ -51,6 +52,9 @@ pub(super) struct SmtpSharedState {
 	/// operator-set `[server] message_memory_budget` produces a budget
 	/// shared by every SMTP listener.
 	pub memory_budget: Option<Arc<MemoryBudget>>,
+	/// The minimum transfer rate every SMTP listener holds a message
+	/// transaction to (`[server] min_data_rate` and `data_rate_grace`).
+	pub data_rate: DataRate,
 	/// Optional external content scanner hook.
 	pub scanner_hook: Option<Arc<dyn MailHook>>,
 	/// The clamd client behind `scanner_hook` when clamd is the scanner,
@@ -119,6 +123,18 @@ pub(super) fn build_smtp_shared_state(
 		None => clamd.clone().map(|clamd| clamd as Arc<dyn MailHook>),
 	};
 	let llm_hook = LlmHook::from_config(config.antispam_llm.as_ref())?;
+	// Absent keys keep the built-in floor and grace; a configured 0 floor
+	// is forwarded as is and turns the check off.
+	let data_rate = DataRate::new(
+		config
+			.min_data_rate
+			.unwrap_or(crate::smtp::server::DEFAULT_MIN_DATA_RATE),
+		Duration::from_secs(
+			config
+				.data_rate_grace
+				.unwrap_or(crate::smtp::server::DEFAULT_DATA_RATE_GRACE_SECS),
+		),
+	);
 	// A configured 0 on the per-IP cap means "use the protocol default",
 	// not "0 concurrent connections per peer". When the operator omits the
 	// key the listener keeps its built-in default; an explicit 0 falls back
@@ -137,6 +153,7 @@ pub(super) fn build_smtp_shared_state(
 		max_connections_per_ip,
 		max_message_size,
 		memory_budget,
+		data_rate,
 		scanner_hook,
 		clamd,
 		llm_hook,

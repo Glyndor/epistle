@@ -2,6 +2,9 @@
 //! SMTP server holds a body in memory while it arrives, so a budget smaller
 //! than the largest message would answer every such message with 452,
 //! which senders retry for days and then bounce.
+//!
+//! The minimum transfer rate of a message transaction is checked here too,
+//! with its grace period.
 
 use super::{Config, ConfigError};
 
@@ -30,9 +33,39 @@ impl Config {
 				 message_memory_budget = 0 to turn the budget off"
 			)));
 		}
+		self.validate_data_rate()
+	}
+
+	/// The rate floor is off at `0` and cannot ask for more than any real
+	/// client link gives; its grace must leave a client time to start and
+	/// must not hand a slow client its reservation for more than an hour.
+	fn validate_data_rate(&self) -> Result<(), ConfigError> {
+		if self
+			.min_data_rate
+			.is_some_and(|rate| rate > MAX_MIN_DATA_RATE)
+		{
+			return Err(ConfigError::Invalid(format!(
+				"min_data_rate must be at most {MAX_MIN_DATA_RATE} bytes per second \
+				 (0 turns it off)"
+			)));
+		}
+		if self
+			.data_rate_grace
+			.is_some_and(|grace| !(1..=MAX_DATA_RATE_GRACE_SECS).contains(&grace))
+		{
+			return Err(ConfigError::Invalid(format!(
+				"data_rate_grace must be between 1 and {MAX_DATA_RATE_GRACE_SECS} seconds"
+			)));
+		}
 		Ok(())
 	}
 }
+
+/// The highest `min_data_rate` accepted: 1 GiB/s.
+const MAX_MIN_DATA_RATE: u64 = 1024 * 1024 * 1024;
+
+/// The longest `data_rate_grace` accepted, in seconds.
+const MAX_DATA_RATE_GRACE_SECS: u64 = 3600;
 
 #[cfg(test)]
 mod tests {
@@ -78,6 +111,45 @@ mod tests {
 			validate("max_message_size = 0"),
 			Ok(()),
 			"0 is the default size"
+		);
+	}
+
+	#[test]
+	fn a_rate_floor_and_grace_in_range_are_accepted() {
+		for settings in [
+			"min_data_rate = 0",
+			"min_data_rate = 20480\ndata_rate_grace = 300",
+			"min_data_rate = 1073741824",
+			"data_rate_grace = 1",
+			"data_rate_grace = 3600",
+		] {
+			assert_eq!(validate(settings), Ok(()), "{settings}");
+		}
+	}
+
+	#[test]
+	fn a_grace_outside_one_second_to_an_hour_is_refused() {
+		// No grace cuts every client before its first octet arrives; a
+		// grace longer than an hour gives a slow client its reservation
+		// back for that long.
+		for settings in ["data_rate_grace = 0", "data_rate_grace = 3601"] {
+			assert_eq!(
+				validate(settings),
+				Err(
+					"invalid configuration: data_rate_grace must be between 1 and 3600 seconds"
+						.to_string()
+				),
+				"{settings}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_floor_above_one_gib_per_second_is_refused() {
+		assert_eq!(
+			validate("min_data_rate = 1073741825"),
+			Err("invalid configuration: min_data_rate must be at most 1073741824 bytes per second (0 turns it off)"
+				.to_string())
 		);
 	}
 }
