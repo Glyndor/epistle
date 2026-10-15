@@ -51,3 +51,25 @@ fn an_operator_can_allow_svg() {
 			.is_empty()
 	);
 }
+
+#[test]
+fn allowing_svg_never_hides_what_the_bytes_are() {
+	let allow = Extensions::new(&[], &["svg".to_string()]);
+	let raw = corpus::message(&[attachment(
+		"Content-Type: image/svg+xml; name=x.svg",
+		&corpus::pe(),
+	)]);
+	let reasons = inspect(&raw, &allow, Budget::bytes(1 << 20)).reasons();
+	assert!(reasons.contains(&Reason::ExecutableContent), "{reasons:?}");
+	assert!(reasons.contains(&Reason::TypeMismatch), "{reasons:?}");
+	let mixed = corpus::message(&[attachment(
+		"Content-Type: image/svg+xml; name=x.html\r\nContent-Disposition: attachment; filename=x.svg",
+		b"<svg/>",
+	)]);
+	assert!(
+		inspect(&mixed, &allow, Budget::bytes(1 << 20))
+			.reasons()
+			.contains(&Reason::ActiveImage),
+		"a second name that is not .svg is not covered"
+	);
+}

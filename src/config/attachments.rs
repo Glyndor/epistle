@@ -92,6 +92,15 @@ impl Config {
 				)));
 			}
 		}
+		if let Some(always) = section.allow_extensions.iter().find(|allow| {
+			crate::antispam::attachments::rules::ALWAYS_DANGEROUS
+				.contains(&normalise_extension(allow).as_str())
+		}) {
+			return Err(ConfigError::Invalid(format!(
+				"[attachments] allow_extensions: {} is always dangerous and cannot be allowed",
+				normalise_extension(always)
+			)));
+		}
 		if let Some(both) = section.block_extensions.iter().find(|block| {
 			section
 				.allow_extensions

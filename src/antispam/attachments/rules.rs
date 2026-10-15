@@ -203,8 +203,16 @@ impl Reason {
 	}
 }
 
-/// The effective dangerous extension set: the built-in list plus
-/// `block_extensions`, minus `allow_extensions`.
+/// Extensions no `allow_extensions` entry may cover; the configuration
+/// refuses them.
+pub const ALWAYS_DANGEROUS: &[&str] = &[
+	"exe", "scr", "com", "pif", "bat", "cmd", "js", "vbs", "hta", "lnk", "msi", "ps1", "jar", "iso",
+];
+
+/// The dangerous extension set (the built-in list plus
+/// `block_extensions`) and the operator's `allow_extensions`. An allowed
+/// extension only cancels what its own name says: see
+/// [`Extensions::covering`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Extensions {
 	blocked: BTreeSet<String>,
@@ -213,25 +221,40 @@ pub struct Extensions {
 
 impl Extensions {
 	/// Build the set from the operator's lists, which are already
-	/// validated (lower case, no leading dot).
+	/// validated (lower case, no leading dot). An always-dangerous
+	/// extension in `allow` is ignored.
 	pub fn new(block: &[String], allow: &[String]) -> Self {
 		let mut blocked: BTreeSet<String> = DANGEROUS_EXTENSIONS
 			.iter()
 			.map(|ext| ext.to_string())
 			.collect();
 		blocked.extend(block.iter().cloned());
-		for ext in allow {
-			blocked.remove(ext);
-		}
 		Self {
 			blocked,
-			allowed: allow.iter().cloned().collect(),
+			allowed: allow
+				.iter()
+				.filter(|ext| !ALWAYS_DANGEROUS.contains(&ext.as_str()))
+				.cloned()
+				.collect(),
 		}
 	}
 
-	/// Whether the operator listed `ext` in `allow_extensions`.
-	pub fn allows(&self, ext: &str) -> bool {
-		self.allowed.contains(ext)
+	/// The allowed extension every reading of every name ends in, if there
+	/// is one: only then does the allowance apply. No names, names that
+	/// disagree, or a double extension such as `a.svg.exe` are not covered.
+	pub fn covering(&self, names: &[String]) -> Option<String> {
+		let mut common: Option<String> = None;
+		for name in names {
+			for variant in name_variants(name) {
+				let ext = extensions_of(&variant).0?;
+				match &common {
+					None => common = Some(ext),
+					Some(seen) if *seen == ext => {}
+					Some(_) => return None,
+				}
+			}
+		}
+		common.filter(|ext| self.allowed.contains(ext))
 	}
 
 	fn is_dangerous(&self, ext: &str) -> bool {
@@ -267,11 +290,12 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 	if facts.filenames.iter().any(|name| name.contains(FORMATTING)) {
 		reasons.insert(Reason::BidiName);
 	}
+	let covered = extensions.covering(facts.filenames);
 	let mut claimed: Vec<Option<String>> = Vec::new();
 	for name in facts.filenames.iter().flat_map(|name| name_variants(name)) {
 		let (last, previous) = extensions_of(&name);
 		if let Some(ext) = last.as_deref() {
-			if extensions.is_dangerous(ext) {
+			if extensions.is_dangerous(ext) && covered.as_deref() != Some(ext) {
 				reasons.insert(Reason::DangerousExtension);
 				if previous
 					.as_deref()
@@ -317,7 +341,9 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 				&& !real.is_image()
 				&& (real != RealType::Unknown || claims_sniffable_image(ext, kind));
 			let mismatched_pdf = claims_pdf(ext, kind) && real != RealType::Pdf;
-			if mismatched_image || mismatched_pdf {
+			let mismatched_svg =
+				claims_svg(ext, kind) && real != RealType::Svg && real != RealType::Unknown;
+			if mismatched_image || mismatched_pdf || mismatched_svg {
 				reasons.insert(Reason::TypeMismatch);
 			}
 		}
@@ -448,6 +474,10 @@ fn claims_image(ext: Option<&str>, declared_type: &str) -> bool {
 fn claims_sniffable_image(ext: Option<&str>, declared_type: &str) -> bool {
 	ext.is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext))
 		|| SNIFFABLE_IMAGE_TYPES.contains(&declared_type)
+}
+
+fn claims_svg(ext: Option<&str>, declared_type: &str) -> bool {
+	matches!(ext, Some("svg" | "svgz")) || declared_type == "image/svg+xml"
 }
 
 fn claims_pdf(ext: Option<&str>, declared_type: &str) -> bool {

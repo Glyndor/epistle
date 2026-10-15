@@ -189,7 +189,12 @@ fn image_reasons(leaf: &Leaf, real_type: RealType, extensions: &Extensions) -> V
 		&& svg::gunzip(&leaf.content).is_some_and(|plain| svg::is_svg(&plain));
 	let svg = named_svg || typed_svg || gzip_svg || svg::is_svg(&leaf.content);
 	let mut reasons = Vec::new();
-	if svg && !extensions.allows("svg") {
+	// allow_extensions cancels this only for a part every name of which
+	// is an allowed .svg or .svgz, and never what the bytes say.
+	let allowed = extensions
+		.covering(&leaf.names)
+		.is_some_and(|ext| ext == "svg" || ext == "svgz");
+	if svg && !allowed {
 		reasons.push(Reason::ActiveImage);
 	}
 	let raster = image::inspect_raster(real_type, &leaf.content);

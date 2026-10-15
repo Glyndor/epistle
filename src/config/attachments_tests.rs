@@ -24,13 +24,13 @@ fn an_absent_section_flags_so_an_upgrade_changes_nothing_silently() {
 fn every_key_is_read() {
 	let config = parse(
 		"[attachments]\nmode = \"reject\"\nblock_extensions = [\".DOCM\"]\n\
-		 allow_extensions = [\"iso\"]\nmacros = \"allow\"\nencrypted_archives = \"quarantine\"",
+		 allow_extensions = [\"reg\"]\nmacros = \"allow\"\nencrypted_archives = \"quarantine\"",
 	)
 	.expect("loads");
 	let section = &config.attachments;
 	assert_eq!(section.mode, AttachmentMode::Reject);
 	assert_eq!(section.block_extensions, vec![".DOCM"]);
-	assert_eq!(section.allow_extensions, vec!["iso"]);
+	assert_eq!(section.allow_extensions, vec!["reg"]);
 	assert_eq!(section.macros, ContentAction::Allow);
 	assert_eq!(section.encrypted_archives, ContentAction::Quarantine);
 	assert_eq!(normalise_extension(" .DOCM"), "docm");
@@ -46,8 +46,8 @@ fn bad_extensions_and_contradictions_are_refused() {
 			"is not an extension",
 		),
 		(
-			"block_extensions = [\"js\"]\nallow_extensions = [\".JS\"]",
-			"js is in both",
+			"block_extensions = [\"reg\"]\nallow_extensions = [\".REG\"]",
+			"reg is in both",
 		),
 	] {
 		let error = parse(&format!("[attachments]\n{extra}"))
@@ -75,4 +75,19 @@ fn bad_extensions_and_contradictions_are_refused() {
 fn unknown_keys_and_values_are_refused() {
 	assert!(parse("[attachments]\nmode = \"delete\"").is_err());
 	assert!(parse("[attachments]\nmacro = \"allow\"").is_err());
+}
+
+#[test]
+fn an_always_dangerous_extension_cannot_be_allowed() {
+	for value in ["exe", ".EXE", "js", "iso"] {
+		let error = parse(&format!("[attachments]\nallow_extensions = [\"{value}\"]"))
+			.err()
+			.map(|error| error.to_string())
+			.expect("must be refused");
+		assert!(
+			error.contains("is always dangerous and cannot be allowed"),
+			"{value}: {error}"
+		);
+	}
+	assert!(parse("[attachments]\nallow_extensions = [\"svg\", \"reg\"]").is_ok());
 }
