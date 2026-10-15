@@ -82,6 +82,15 @@ impl Inner {
 		}
 	}
 
+	/// Bring the pace of `group` back within reach of `now`: only a clock
+	/// set back leaves it further ahead (see [`pacing::bounded`]).
+	fn settle_pace(&mut self, group: Group, now: u64) {
+		let schedule = self.state.group_mut(group);
+		if let Some(cap) = schedule.cap {
+			schedule.tat_ms = pacing::bounded(cap, schedule.tat_ms, now.saturating_mul(1000));
+		}
+	}
+
 	/// Remember that `sender` has mail waiting for the cap of `group`. At
 	/// most [`state::MAX_SENDERS`] senders are told apart; past it, those no
 	/// longer waiting are forgotten, and then the rest share one entry.
@@ -186,7 +195,20 @@ impl Warmup {
 	fn roll(&self, inner: &mut Inner, now: u64) -> Vec<Event> {
 		let today = day_of(now);
 		let day = inner.state.day;
-		if day >= today {
+		if day > today {
+			// The clock went back past midnight. Today's use carries on
+			// under today, rather than shutting every cap until the clock
+			// catches up with the day it had reached.
+			tracing::warn!(
+				day,
+				today,
+				"the clock went back; the warm-up day follows it"
+			);
+			inner.state.day = today;
+			self.save(&inner.state);
+			return Vec::new();
+		}
+		if day == today {
 			return Vec::new();
 		}
 		let events = match inner.settings.enabled {
@@ -242,6 +264,7 @@ impl Warmup {
 		if !inner.settings.enabled {
 			return None;
 		}
+		inner.settle_pace(group, now);
 		let schedule = inner.state.group(group);
 		let share = schedule.cap.map(|cap| inner.share(group, sender, cap, now));
 		let until = wait(&schedule, sender, share, now);
@@ -257,6 +280,7 @@ impl Warmup {
 		if !inner.settings.enabled {
 			return Grant::Unlimited;
 		}
+		inner.settle_pace(group, now);
 		let before = inner.state.group(group);
 		let Some(cap) = before.cap else {
 			return Grant::Unlimited;
@@ -379,3 +403,7 @@ mod tests;
 #[cfg(test)]
 #[path = "controller_tests_share.rs"]
 mod share_tests;
+
+#[cfg(test)]
+#[path = "controller_tests_clock.rs"]
+mod clock_tests;

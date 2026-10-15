@@ -27,12 +27,22 @@ fn tolerance_ms(cap: u32) -> u64 {
 	u64::from(burst(cap) - 1) * interval_ms(cap)
 }
 
+/// The arrival time `tat_ms` no further ahead of `now_ms` than taking a
+/// whole burst can put it. Only a clock set back leaves it further: the
+/// wait it would cause is cut to one unit instead of the jump.
+pub fn bounded(cap: u32, tat_ms: u64, now_ms: u64) -> u64 {
+	let furthest = now_ms
+		.saturating_add(tolerance_ms(cap))
+		.saturating_add(interval_ms(cap));
+	tat_ms.min(furthest)
+}
+
 /// Take up to `wanted` units at `now_ms`, when the theoretical arrival time
 /// is `tat_ms`. Returns how many may go now and the new arrival time.
 pub fn take(cap: u32, tat_ms: u64, now_ms: u64, wanted: u32) -> (u32, u64) {
 	let interval = interval_ms(cap);
 	let limit = now_ms.saturating_add(tolerance_ms(cap));
-	let mut tat = tat_ms.max(now_ms);
+	let mut tat = bounded(cap, tat_ms, now_ms).max(now_ms);
 	let mut taken = 0;
 	while taken < wanted && tat <= limit {
 		tat = tat.saturating_add(interval);
@@ -48,7 +58,9 @@ pub fn give_back(cap: u32, tat_ms: u64, count: u32) -> u64 {
 
 /// The earliest time, at or after `now_ms`, at which one unit may go.
 pub fn next_ms(cap: u32, tat_ms: u64, now_ms: u64) -> u64 {
-	tat_ms.saturating_sub(tolerance_ms(cap)).max(now_ms)
+	bounded(cap, tat_ms, now_ms)
+		.saturating_sub(tolerance_ms(cap))
+		.max(now_ms)
 }
 
 #[cfg(test)]

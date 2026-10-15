@@ -53,5 +53,14 @@ fn units_given_back_can_be_taken_again() {
 fn far_future_times_saturate_instead_of_wrapping() {
 	let (taken, tat) = take(1, u64::MAX - 5, u64::MAX - 5, 3);
 	assert_eq!((taken, tat), (1, u64::MAX));
-	assert_eq!(next_ms(1, u64::MAX, 0), u64::MAX);
+}
+
+#[test]
+fn an_arrival_time_left_far_ahead_by_the_clock_waits_one_unit() {
+	// The clock went back after a unit was taken at a later time.
+	assert_eq!(next_ms(1, u64::MAX, 0), DAY_MS);
+	assert_eq!(
+		next_ms(50, MIDNIGHT + DAY_MS, MIDNIGHT),
+		MIDNIGHT + 1_728_000
+	);
 }
