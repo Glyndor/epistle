@@ -55,6 +55,11 @@ fn dangerous_content_follows_the_mode() {
 			expected,
 			"{mode:?}"
 		);
+		assert_eq!(
+			action(&policy, &[Reason::AmbiguousArchive]),
+			expected,
+			"{mode:?}"
+		);
 	}
 }
 
@@ -65,7 +70,6 @@ fn what_was_not_inspected_is_at_least_flagged_and_never_rejected_alone() {
 		Reason::ScanLimit,
 		Reason::AmbiguousMime,
 		Reason::UnreadableArchive,
-		Reason::AmbiguousArchive,
 		Reason::NestedArchive,
 	] {
 		assert_eq!(

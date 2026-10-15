@@ -47,7 +47,7 @@ fn an_unknown_compression_method_is_unreadable() {
 }
 
 #[test]
-fn encryption_on_some_files_only_is_unreadable() {
+fn encryption_on_some_files_only_is_ambiguous() {
 	let zip = corpus::zip(&[
 		ZipEntry {
 			name: "readme.txt",
@@ -60,12 +60,12 @@ fn encryption_on_some_files_only_is_unreadable() {
 	]);
 	let listing = list_zip(&zip);
 	assert!(listing.encrypted);
-	assert!(listing.unreadable);
+	assert!(listing.ambiguous);
 	let all = corpus::zip(&[ZipEntry {
 		name: "payload.pdf",
 		encrypted: true,
 	}]);
-	assert!(!list_zip(&all).unreadable);
+	assert!(!list_zip(&all).ambiguous);
 }
 
 #[test]
@@ -117,14 +117,17 @@ fn a_zip64_directory_is_followed() {
 }
 
 #[test]
-fn local_headers_with_data_descriptors_are_walked_to_the_next_signature() {
+fn a_data_descriptor_in_a_local_header_is_not_a_simple_zip() {
 	let mut zip = corpus::zip_of(&["a.txt", "b.exe"]);
-	zip.truncate(find(&zip, b"PK\x01\x02"));
 	zip[6] |= 0x08;
 	zip[18..22].copy_from_slice(&0u32.to_le_bytes());
 	let listing = list_zip(&zip);
-	assert_eq!(listing.names, vec!["a.txt", "b.exe"]);
-	assert!(listing.unreadable);
+	assert_eq!(
+		listing.names,
+		vec!["a.txt", "b.exe"],
+		"the directory still names both"
+	);
+	assert!(listing.ambiguous);
 }
 
 #[test]

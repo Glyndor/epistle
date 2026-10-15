@@ -245,7 +245,7 @@ fn every_known_evasion_keeps_its_verdict() {
 					},
 				]),
 			),
-			UnreadableArchive,
+			AmbiguousArchive,
 		),
 		(
 			"nested archive",
@@ -421,7 +421,7 @@ fn every_known_evasion_keeps_its_verdict() {
 		(
 			"directory offset into prefixed data",
 			zip_part(archive::tests_sources::offset_into_prefixed_data()),
-			DangerousArchiveEntry,
+			AmbiguousArchive,
 		),
 		(
 			"unicode path field",

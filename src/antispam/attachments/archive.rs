@@ -3,12 +3,13 @@
 //! encrypted. Office macros are detected here too, since an OOXML document
 //! is a zip and an OLE2 file keeps its macro storage in its directory.
 //!
-//! Extractors disagree on which records they trust: most read the central
-//! directory, streaming ones read the local headers, some take the first
-//! end record and some the last, 7-Zip and WinRAR prefer a Unicode Path
-//! field. Every source is read and every name from any of them counts; a
-//! disagreement makes the archive [`Listing::ambiguous`], and anything this
-//! reader cannot follow makes it [`Listing::unreadable`], never clean.
+//! This does not try to reproduce every extractor. The names of every
+//! source (central directories, local headers, Unicode Path fields) are
+//! listed and judged, but only a simple, consistent zip comes out clean:
+//! any disagreement between sources makes the archive
+//! [`Listing::ambiguous`], and anything this reader cannot follow makes it
+//! [`Listing::unreadable`]. The end record is searched for only in the last
+//! 65,557 bytes, and the records read from all sources are capped.
 
 /// Most entries listed from one archive. An archive with more is reported
 /// as [`Listing::too_many`] and judged on the entries read so far.
@@ -29,16 +30,15 @@ const KNOWN_METHODS: &[u16] = &[0, 8, 9, 12, 14, 93, 95, 98, 99];
 const CENTRAL: &[u8] = b"PK\x01\x02";
 const LOCAL: &[u8] = b"PK\x03\x04";
 
-/// End of central directory records looked at, last first. Extractors
-/// differ on which one they believe; a fake one hidden in the archive
-/// comment is the classic case.
+/// End of central directory records read, last first. More than this is
+/// ambiguous on its own.
 const MAX_END_RECORDS: usize = 4;
 
-/// Directory records read from one directory before giving up: repeated
-/// names do not grow the listing, so this bounds the work.
-const MAX_RECORDS: usize = 4 * MAX_ENTRIES;
+/// Records read from all sources together (each directory and the local
+/// headers). Past this the listing is a scan-limit.
+const MAX_RECORDS: usize = 10_000;
 
-/// The Info-ZIP Unicode Path extra field: 7-Zip and WinRAR show this name
+/// The Info-ZIP Unicode Path extra field: some extractors show this name
 /// instead of the one in the header.
 const UNICODE_PATH: u16 = 0x7075;
 
@@ -48,30 +48,64 @@ const EFS: u16 = 0x0800;
 /// What the directory of a zip says.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Listing {
-	/// Entry names from every source (each end record's directory, the
-	/// local headers, Unicode Path fields, each reading of the bytes).
+	/// Entry names from every source, lossily decoded as UTF-8.
 	pub names: Vec<String>,
 	/// At least one entry is encrypted (traditional, strong or AES).
 	pub encrypted: bool,
-	/// The archive has more than [`MAX_ENTRIES`] entries.
+	/// More than [`MAX_ENTRIES`] names, or more than [`MAX_RECORDS`]
+	/// records across all sources.
 	pub too_many: bool,
 	/// Something could not be read: no end record, a directory that ends
-	/// early, an unknown compression method, encryption on some files only.
+	/// early, an unknown compression method.
 	pub unreadable: bool,
-	/// The sources disagree, so two extractors can unpack different files:
-	/// several end records, data in front, central and local names that
-	/// differ, entries only the local headers list, a Unicode Path that
-	/// differs from the name, or a name that is not valid UTF-8 although it
-	/// says it is.
+	/// The archive is not one simple, consistent zip, so extractors can
+	/// unpack different files from it: more than one end record, data in
+	/// front of the first local header or an offset that does not match,
+	/// central and local records that differ, entries only the local
+	/// headers list, a Unicode Path field, a name that is not the UTF-8 it
+	/// claims, or encryption on some files only.
 	pub ambiguous: bool,
 }
 
-impl Listing {
+/// The listing being built, with the bookkeeping that bounds it.
+struct Builder {
+	listing: Listing,
+	seen: std::collections::HashSet<String>,
+	records: usize,
+	encrypted_files: usize,
+	plain_files: usize,
+}
+
+impl Builder {
 	fn add(&mut self, name: String) {
-		if self.names.len() == MAX_ENTRIES {
-			self.too_many = true;
-		} else if !self.names.contains(&name) {
-			self.names.push(name);
+		if self.seen.contains(&name) {
+			return;
+		}
+		if self.listing.names.len() == MAX_ENTRIES {
+			self.listing.too_many = true;
+			return;
+		}
+		self.seen.insert(name.clone());
+		self.listing.names.push(name);
+	}
+
+	/// Count one record read; false once the budget is spent.
+	fn record(&mut self) -> bool {
+		self.records += 1;
+		if self.records > MAX_RECORDS {
+			self.listing.too_many = true;
+		}
+		!self.listing.too_many
+	}
+
+	fn tally(&mut self, name: &str, encrypted: bool) {
+		if name.ends_with('/') {
+			return;
+		}
+		if encrypted {
+			self.encrypted_files += 1;
+		} else {
+			self.plain_files += 1;
 		}
 	}
 }
@@ -82,123 +116,119 @@ pub fn has_end_record(bytes: &[u8]) -> bool {
 	!end_records(bytes).is_empty()
 }
 
-/// Counts of encrypted and plain files, directories left out.
-#[derive(Default)]
-struct Tally {
-	encrypted: usize,
-	plain: usize,
-}
-
-impl Tally {
-	fn count(&mut self, name: &str, encrypted: bool) {
-		if name.ends_with('/') {
-			return;
-		}
-		if encrypted {
-			self.encrypted += 1;
-		} else {
-			self.plain += 1;
-		}
-	}
-}
-
-/// List `zip` from every directory any extractor may read and from its
-/// local headers.
+/// List `zip` from its central directories and its local headers. Only a
+/// simple, consistent zip comes out neither ambiguous nor unreadable; the
+/// names of every source are listed either way.
 pub fn list_zip(zip: &[u8]) -> Listing {
-	let mut listing = Listing::default();
-	let mut tally = Tally::default();
-	let directories = central_directories(zip);
+	let mut build = Builder {
+		listing: Listing::default(),
+		seen: Default::default(),
+		records: 0,
+		encrypted_files: 0,
+		plain_files: 0,
+	};
+	let records = end_records(zip);
+	build.listing.ambiguous |= records.len() > 1;
+	let directories: Vec<Directory> = records
+		.iter()
+		.take(MAX_END_RECORDS)
+		.filter_map(|&eocd| directory_from(zip, eocd))
+		.collect();
 	if directories.is_empty() {
-		listing.unreadable = true;
-	}
-	if directories.len() > 1 || directories.iter().any(|directory| directory.shift != 0) {
-		listing.ambiguous = true;
+		build.listing.unreadable = true;
 	}
 	for directory in &directories {
-		read_directory(zip, directory, &mut listing, &mut tally);
+		build.listing.ambiguous |= directory.shift != 0;
+		read_directory(zip, directory, &mut build);
 	}
-	// Streaming extractors read the local headers in file order: a file
-	// no central directory lists still comes out of them.
-	let mut at = zip
+	// The local headers, in file order, as streaming extractors read them.
+	// Anything in front of the first one is data a zip does not carry.
+	let first = zip
 		.windows(4)
 		.take(MAX_COMMENT)
-		.position(|window| window == LOCAL)
-		.unwrap_or(zip.len());
-	let mut steps = 0;
-	while steps < MAX_ENTRIES
-		&& let Some(local) = local_entry(zip, at)
-	{
-		steps += 1;
-		let next = local.next(zip);
-		listing.ambiguous |= local.ambiguous;
+		.position(|window| window == LOCAL);
+	build.listing.ambiguous |= first.is_some_and(|at| at != 0);
+	let mut at = first.unwrap_or(zip.len());
+	while let Some(local) = local_entry(zip, at) {
+		if !build.record() {
+			break;
+		}
+		build.listing.ambiguous |= local.ambiguous;
 		for name in local.names {
-			if !listing.names.contains(&name) {
-				listing.ambiguous = true;
-				tally.count(&name, local.encrypted);
-				listing.encrypted |= local.encrypted;
-				listing.add(name);
+			if !build.seen.contains(&name) {
+				build.listing.ambiguous = true;
+				build.tally(&name, local.encrypted);
+				build.listing.encrypted |= local.encrypted;
+				build.add(name);
 			}
 		}
-		let Some(next) = next else {
-			break;
-		};
-		at = next;
+		match local.data {
+			// Data descriptors and ZIP64 sizes hide where the next header is;
+			// a simple zip has neither in its local headers.
+			None => {
+				build.listing.ambiguous = true;
+				break;
+			}
+			Some((start, size)) => match start.checked_add(size) {
+				Some(next) if next > at => at = next,
+				_ => break,
+			},
+		}
 	}
-	listing.unreadable |= tally.encrypted > 0 && tally.plain > 0;
-	listing
+	build.listing.ambiguous |= build.encrypted_files > 0 && build.plain_files > 0;
+	build.listing
 }
 
 /// Read one central directory and the local header of each entry.
-fn read_directory(zip: &[u8], directory: &Directory, listing: &mut Listing, tally: &mut Tally) {
+fn read_directory(zip: &[u8], directory: &Directory, build: &mut Builder) {
 	let mut at = directory.start;
 	let mut read = 0u64;
-	while read < directory.entries && !listing.too_many {
-		if read as usize >= MAX_RECORDS {
-			listing.too_many = true;
-			break;
+	while read < directory.entries {
+		if !build.record() {
+			return;
 		}
 		let Some(entry) = central_entry(zip, at) else {
-			listing.unreadable = true;
-			break;
+			build.listing.unreadable = true;
+			return;
 		};
 		read += 1;
-		tally.count(&entry.names[0], entry.encrypted);
-		listing.encrypted |= entry.encrypted;
-		listing.unreadable |= !KNOWN_METHODS.contains(&entry.method);
-		listing.ambiguous |= entry.ambiguous;
+		build.tally(&entry.names[0], entry.encrypted);
+		build.listing.encrypted |= entry.encrypted;
+		build.listing.unreadable |= !KNOWN_METHODS.contains(&entry.method);
+		build.listing.ambiguous |= entry.ambiguous;
 		match entry
 			.local_offset
 			.and_then(|offset| offset.checked_add(directory.shift))
 			.and_then(|offset| local_entry(zip, offset))
 		{
 			Some(local) => {
-				listing.ambiguous |= local.names != entry.names || local.ambiguous;
-				listing.unreadable |=
-					local.encrypted != entry.encrypted || local.method != entry.method;
+				build.listing.ambiguous |= local.names != entry.names
+					|| local.ambiguous
+					|| local.encrypted != entry.encrypted;
+				build.listing.unreadable |= local.method != entry.method;
 				for name in local.names {
-					listing.add(name);
+					build.add(name);
 				}
 			}
-			None => listing.unreadable = true,
+			None => build.listing.unreadable = true,
 		}
-		let next = entry.next;
 		for name in entry.names {
-			listing.add(name);
+			build.add(name);
 		}
-		at = next;
+		at = entry.next;
 	}
 }
 
 /// Where a central directory starts, how many entries it declares and
 /// how far data before the archive shifted the offsets.
-#[derive(PartialEq, Eq)]
 struct Directory {
 	start: usize,
 	entries: u64,
 	shift: usize,
 }
 
-/// End records in the tail, last first, at most [`MAX_END_RECORDS`].
+/// End records in the last 22 + 65,535 bytes, last first, one more than
+/// [`MAX_END_RECORDS`] at most so the caller can tell there were too many.
 fn end_records(zip: &[u8]) -> Vec<usize> {
 	let lowest = zip.len().saturating_sub(EOCD_LEN + MAX_COMMENT);
 	let Some(last) = zip.len().checked_sub(EOCD_LEN) else {
@@ -207,31 +237,13 @@ fn end_records(zip: &[u8]) -> Vec<usize> {
 	(lowest..=last)
 		.rev()
 		.filter(|&at| zip[at..].starts_with(b"PK\x05\x06"))
-		.take(MAX_END_RECORDS)
+		.take(MAX_END_RECORDS + 1)
 		.collect()
 }
 
-/// Every directory an extractor may read: from each end record, both
-/// where its size says the directory ends (what tolerant extractors use
-/// when data sits in front) and where its offset says it starts.
-fn central_directories(zip: &[u8]) -> Vec<Directory> {
-	let mut directories = Vec::new();
-	for eocd in end_records(zip) {
-		let Some(found) = directory_from(zip, eocd) else {
-			continue;
-		};
-		for directory in found {
-			let plausible = zip.get(directory.start..directory.start + 4) == Some(CENTRAL)
-				|| directory.entries == 0;
-			if plausible && !directories.contains(&directory) {
-				directories.push(directory);
-			}
-		}
-	}
-	directories
-}
-
-fn directory_from(zip: &[u8], eocd: usize) -> Option<Vec<Directory>> {
+/// The directory an end record describes, placed where its size says it
+/// ends; data in front shows as a shift between that and its offset.
+fn directory_from(zip: &[u8], eocd: usize) -> Option<Directory> {
 	let mut entries = u64::from(u16_at(zip, eocd + 10)?);
 	let mut size = u64::from(u32_at(zip, eocd + 12)?);
 	let mut offset = u64::from(u32_at(zip, eocd + 16)?);
@@ -253,30 +265,19 @@ fn directory_from(zip: &[u8], eocd: usize) -> Option<Vec<Directory>> {
 		end = record;
 	}
 	let start = end.checked_sub(usize::try_from(size).ok()?)?;
-	let offset = usize::try_from(offset).ok()?;
-	let mut found = Vec::new();
-	if let Some(shift) = start.checked_sub(offset) {
-		found.push(Directory {
-			start,
-			entries,
-			shift,
-		});
-	}
-	if offset != start && offset < end {
-		found.push(Directory {
-			start: offset,
-			entries,
-			shift: 0,
-		});
-	}
-	Some(found)
+	let shift = start.checked_sub(usize::try_from(offset).ok()?)?;
+	Some(Directory {
+		start,
+		entries,
+		shift,
+	})
 }
 
 /// One record from either directory.
 struct Entry {
-	/// The header name, each reading of its bytes, then the Unicode Path.
+	/// The header name, then the Unicode Path when there is one.
 	names: Vec<String>,
-	/// The readings disagree, or the name is not the UTF-8 it claims.
+	/// A Unicode Path is present, or the name is not the UTF-8 it claims.
 	ambiguous: bool,
 	encrypted: bool,
 	method: u16,
@@ -285,26 +286,8 @@ struct Entry {
 	/// Central records: where the next record starts.
 	next: usize,
 	/// Local records: where the compressed data starts and its size, when
-	/// the header records it (no data descriptor).
+	/// the header records it (no data descriptor, no ZIP64 size).
 	data: Option<(usize, usize)>,
-	at: usize,
-}
-
-impl Entry {
-	/// The next local header: right after the data when its size is known,
-	/// otherwise the next local signature, as streaming extractors look for.
-	fn next(&self, zip: &[u8]) -> Option<usize> {
-		match self.data {
-			Some((start, size)) => start.checked_add(size),
-			None => {
-				let from = self.at + 4;
-				zip.get(from..)?
-					.windows(4)
-					.position(|window| window == LOCAL)
-					.map(|offset| from + offset)
-			}
-		}
-	}
 }
 
 fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
@@ -331,7 +314,6 @@ fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
 		local_offset,
 		next: at + 46 + name_len + extra_len + comment_len,
 		data: None,
-		at,
 	})
 }
 
@@ -373,8 +355,6 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 	let extra = zip.get(at + 30 + name_len..at + 30 + name_len + extra_len)?;
 	let (names, ambiguous) = names_of(raw_name, flags, extra);
 	let start = at + 30 + name_len + extra_len;
-	// With a data descriptor (bit 3), or a ZIP64 size, the header does not
-	// say where the data ends.
 	let data = (flags & 0x0008 == 0 && compressed != 0xffff_ffff).then_some((start, compressed));
 	Some(Entry {
 		names,
@@ -384,27 +364,22 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 		local_offset: None,
 		next: start,
 		data,
-		at,
 	})
 }
 
-/// Every reading of a name: as UTF-8 (lossy), byte for byte as a legacy
-/// code page when it is not ASCII and does not claim UTF-8, and the
-/// Unicode Path field when there is one. Ambiguous when the UTF-8 flag is
-/// set on bytes that are not UTF-8, or the Unicode Path differs.
+/// The name as UTF-8 (lossy), plus the Unicode Path field when there is
+/// one. Ambiguous when that field is present at all, or when the UTF-8 flag
+/// is set on bytes that are not UTF-8.
 fn names_of(raw: &[u8], flags: u16, extra: &[u8]) -> (Vec<String>, bool) {
 	let raw = &raw[..raw.len().min(MAX_NAME_BYTES)];
 	let mut names = vec![String::from_utf8_lossy(raw).into_owned()];
 	let mut ambiguous = flags & EFS != 0 && std::str::from_utf8(raw).is_err();
-	if flags & EFS == 0 && !raw.is_ascii() {
-		names.push(raw.iter().map(|&byte| char::from(byte)).collect());
-	}
-	if let Some(body) = extra_field(extra, UNICODE_PATH)
-		&& let Some(path) = body.get(5..)
-	{
-		let path = String::from_utf8_lossy(&path[..path.len().min(MAX_NAME_BYTES)]).into_owned();
-		ambiguous |= path != names[0];
-		names.push(path);
+	if let Some(body) = extra_field(extra, UNICODE_PATH) {
+		ambiguous = true;
+		if let Some(path) = body.get(5..) {
+			let path = &path[..path.len().min(MAX_NAME_BYTES)];
+			names.push(String::from_utf8_lossy(path).into_owned());
+		}
 	}
 	names.dedup();
 	(names, ambiguous)

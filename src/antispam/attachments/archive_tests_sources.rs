@@ -118,14 +118,10 @@ fn an_earlier_end_record_is_read_too() {
 }
 
 #[test]
-fn a_directory_offset_read_without_the_shift_is_read_too() {
+fn a_directory_offset_that_does_not_match_is_ambiguous() {
 	let listing = list_zip(&offset_into_prefixed_data());
 	assert!(
 		listing.names.iter().any(|name| name == "a.txt"),
-		"{listing:?}"
-	);
-	assert!(
-		listing.names.iter().any(|name| name == "evil.js"),
 		"{listing:?}"
 	);
 	assert!(listing.ambiguous);
@@ -152,19 +148,104 @@ fn a_name_that_claims_utf8_and_is_not_is_ambiguous() {
 }
 
 #[test]
-fn a_legacy_code_page_name_is_read_both_ways() {
+fn a_legacy_code_page_name_is_listed_and_still_judged() {
 	let listing = list_zip(&corpus::zip_raw(&[RawEntry {
 		name: b"r\x82sum\x82.exe",
 		flags: 0,
 		central_extra: Vec::new(),
 	}]));
-	assert_eq!(listing.names.len(), 2, "{listing:?}");
-	assert!(listing.names.iter().all(|name| name.ends_with(".exe")));
+	assert_eq!(listing.names.len(), 1, "{listing:?}");
+	assert!(listing.names[0].ends_with(".exe"));
 	assert!(!listing.ambiguous);
+}
+
+#[test]
+fn a_unicode_path_field_is_ambiguous_even_when_it_agrees() {
+	let mut extra = 0x7075u16.to_le_bytes().to_vec();
+	extra.extend_from_slice(&((5 + 8) as u16).to_le_bytes());
+	extra.push(1);
+	extra.extend_from_slice(&[0; 4]);
+	extra.extend_from_slice(b"same.txt");
+	let listing = list_zip(&corpus::zip_raw(&[RawEntry {
+		name: b"same.txt",
+		flags: 0,
+		central_extra: extra,
+	}]));
+	assert_eq!(listing.names, vec!["same.txt"]);
+	assert!(listing.ambiguous);
+}
+
+#[test]
+fn more_than_four_end_records_is_ambiguous_and_the_scan_stays_in_the_tail() {
+	let mut zip = corpus::zip_of(&["a.txt"]);
+	let comment: Vec<u8> = b"PK\x05\x06".repeat(10);
+	let len = zip.len();
+	zip[len - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+	zip.extend_from_slice(&comment);
+	let listing = list_zip(&zip);
+	assert!(listing.ambiguous, "{listing:?}");
+	assert_eq!(super::end_records(&zip).len(), MAX_END_RECORDS + 1);
+}
+
+#[test]
+fn a_file_full_of_fake_signatures_is_read_in_linear_time() {
+	let pattern = b"PK\x05\x06PK\x03\x04PK\x01\x02\x08\x00";
+	let mut sizes = Vec::new();
+	for size in [1usize << 20, 25 << 20] {
+		let file: Vec<u8> = pattern.iter().copied().cycle().take(size).collect();
+		let started = std::time::Instant::now();
+		let listing = list_zip(&file);
+		let _ = has_end_record(&file);
+		sizes.push(started.elapsed());
+		assert!(
+			listing.ambiguous || listing.unreadable,
+			"{:?}",
+			listing.names.len()
+		);
+	}
+	assert!(
+		sizes[1] < std::time::Duration::from_secs(5),
+		"25 MiB took {:?}",
+		sizes[1]
+	);
 }
 
 #[test]
 fn a_plain_zip_is_neither_ambiguous_nor_unreadable() {
 	let listing = list_zip(&corpus::zip_of(&["a.txt", "b/c.pdf"]));
 	assert!(!listing.ambiguous && !listing.unreadable, "{listing:?}");
+}
+
+#[test]
+fn records_past_the_shared_cap_are_a_scan_limit() {
+	let entries: Vec<RawEntry<'_>> = (0..10_001)
+		.map(|_| RawEntry {
+			name: b"a.txt",
+			flags: 0,
+			central_extra: Vec::new(),
+		})
+		.collect();
+	let listing = list_zip(&corpus::zip_raw(&entries));
+	assert_eq!(listing.names, vec!["a.txt"]);
+	assert!(listing.too_many, "repeated records still count");
+}
+
+#[test]
+fn data_in_front_of_the_first_local_header_is_ambiguous_even_with_fixed_offsets() {
+	let plain = corpus::zip_of(&["a.txt"]);
+	let prefix = b"self-extractor stub ".to_vec();
+	let shift = prefix.len() as u32;
+	let mut zip = prefix;
+	zip.extend_from_slice(&plain);
+	let central = find(&zip, b"PK\x01\x02");
+	let local_offset = central + 42;
+	let old = u32::from_le_bytes(zip[local_offset..local_offset + 4].try_into().unwrap());
+	zip[local_offset..local_offset + 4].copy_from_slice(&(old + shift).to_le_bytes());
+	let end = zip.len() - 22;
+	let old = u32::from_le_bytes(zip[end + 16..end + 20].try_into().unwrap());
+	zip[end + 16..end + 20].copy_from_slice(&(old + shift).to_le_bytes());
+	let listing = list_zip(&zip);
+	assert_eq!(listing.names, vec!["a.txt"]);
+	assert!(!listing.unreadable, "{listing:?}");
+	assert!(listing.ambiguous, "{listing:?}");
 }
