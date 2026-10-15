@@ -65,3 +65,11 @@ mod tests_budget;
 #[cfg(test)]
 #[path = "server_tests_sender_verified.rs"]
 mod tests_sender_verified;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate.rs"]
+mod tests_data_rate;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_bdat.rs"]
+mod tests_data_rate_bdat;

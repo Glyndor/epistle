@@ -55,6 +55,7 @@ impl Server {
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
+			data_rate: super::DataRate::default(),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
 		}
