@@ -160,6 +160,7 @@ fn order_text(order: &Order) -> String {
 		Action::Next => format!("{} next", order.group),
 		Action::Reset => format!("{} reset", order.group),
 		Action::Start { cap } => format!("{} start {}", order.group, self::cap(cap)),
+		Action::Force { cap } => format!("{} start {} --force", order.group, self::cap(cap)),
 	}
 }
 

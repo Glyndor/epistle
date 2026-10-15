@@ -127,11 +127,7 @@ fn plan(data_dir: &Path, args: &StartArgs, now: u64) -> Result<Vec<Row>, String>
 		.map(|group| {
 			let cap = starting_cap(args.ip_age, args.daily_volume);
 			let current = state.group(group).cap;
-			let lowers = match (cap, current) {
-				(Some(cap), Some(current)) => cap < current,
-				(Some(_), None) => true,
-				(None, _) => false,
-			};
+			let lowers = schedule::lowers(cap, current);
 			let days = days_to_reach(cap, args.daily_volume);
 			Row {
 				group: group.label(),
@@ -259,7 +255,11 @@ pub(super) fn run_start(
 	settings.enabled = true;
 	for row in rows.iter().filter(|row| row.applies) {
 		if let Some(group) = Group::parse(row.group) {
-			settings.order(group, Action::Start { cap: row.cap });
+			let action = match args.force {
+				true => Action::Force { cap: row.cap },
+				false => Action::Start { cap: row.cap },
+			};
+			settings.order(group, action);
 		}
 	}
 	if let Err(error) = settings::save(data_dir, &settings) {

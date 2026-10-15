@@ -39,9 +39,16 @@ pub enum Action {
 	/// Start the group over at its starting cap.
 	Reset,
 	/// Start the group at a stage derived from the address's age and
-	/// volume (see [`super::stages`]): the cap is set as is, not on trial.
-	/// `None` is no cap.
+	/// volume (see [`super::stages`]): the cap is set as is, not on trial,
+	/// unless the group's cap is higher or lifted by the time the server
+	/// reads the order, which it keeps. `None` is no cap.
 	Start {
+		/// Recipients a day, or none.
+		cap: Option<u32>,
+	},
+	/// [`Action::Start`] that lowers a higher or lifted cap too
+	/// (`warmup start --force`).
+	Force {
 		/// Recipients a day, or none.
 		cap: Option<u32>,
 	},
@@ -92,7 +99,9 @@ impl Settings {
 				return Err(format!("more than one order for {}", order.group));
 			}
 			let cap = match order.action {
-				Action::Set { cap } | Action::Start { cap: Some(cap) } => Some(cap),
+				Action::Set { cap }
+				| Action::Start { cap: Some(cap) }
+				| Action::Force { cap: Some(cap) } => Some(cap),
 				_ => None,
 			};
 			if let Some(cap) = cap

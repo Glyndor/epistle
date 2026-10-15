@@ -165,7 +165,10 @@ pub fn apply(schedule: &mut GroupState, action: Action, today: i64) {
 			schedule.cap = grown(current);
 		}
 		(Action::Next, None) => {}
-		(Action::Start { cap }, _) => {
+		// The cap rose, or was lifted, after `warmup start` looked: only
+		// `--force` lowers it.
+		(Action::Start { cap }, current) if lowers(cap, current) => {}
+		(Action::Start { cap } | Action::Force { cap }, _) => {
 			schedule.raise = None;
 			schedule.cap = cap;
 		}
@@ -174,6 +177,16 @@ pub fn apply(schedule: &mut GroupState, action: Action, today: i64) {
 			schedule.cap = Some(START_CAP);
 			schedule.tat_ms = 0;
 		}
+	}
+}
+
+/// Whether setting the cap to `cap` lowers `current`: a number under it,
+/// or any number where there was no cap.
+pub fn lowers(cap: Option<u32>, current: Option<u32>) -> bool {
+	match (cap, current) {
+		(Some(cap), Some(current)) => cap < current,
+		(Some(_), None) => true,
+		(None, _) => false,
 	}
 }
 

@@ -218,7 +218,7 @@ impl Change {
 			Change::Order(_, Action::Set { .. }) => "set",
 			Change::Order(_, Action::Next) => "next",
 			Change::Order(_, Action::Reset) => "reset",
-			Change::Order(_, Action::Start { .. }) => "start",
+			Change::Order(_, Action::Start { .. } | Action::Force { .. }) => "start",
 		}
 	}
 
@@ -243,9 +243,9 @@ impl Change {
 			Change::Order(group, Action::Reset) => {
 				format!("Start the {group} cap over at {START_CAP} recipients a day? [y/N]")
 			}
-			Change::Pause | Change::Resume | Change::Order(_, Action::Start { .. }) => {
-				String::new()
-			}
+			Change::Pause
+			| Change::Resume
+			| Change::Order(_, Action::Start { .. } | Action::Force { .. }) => String::new(),
 		}
 	}
 

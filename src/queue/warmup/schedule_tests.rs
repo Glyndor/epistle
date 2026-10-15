@@ -260,3 +260,22 @@ fn a_bad_day_names_the_accounts_behind_it() {
 		}]
 	);
 }
+
+#[test]
+fn a_start_order_never_lowers_a_cap_the_server_raised_since() {
+	// `warmup start` saw 50 and asked for 50; the day ended and grew the
+	// cap to 75 before the server read the order.
+	let mut grown = state(Some(75), 0).group(Group::Gmail);
+	apply(&mut grown, Action::Start { cap: Some(50) }, DAY);
+	assert_eq!(grown.cap, Some(75));
+	// A group lifted since is not capped again either.
+	let mut lifted = state(None, 0).group(Group::Gmail);
+	apply(&mut lifted, Action::Start { cap: Some(50) }, DAY);
+	assert_eq!(lifted.cap, None);
+	// A start that raises or lifts applies.
+	let mut low = state(Some(50), 0).group(Group::Gmail);
+	apply(&mut low, Action::Start { cap: Some(250) }, DAY);
+	assert_eq!(low.cap, Some(250));
+	apply(&mut low, Action::Start { cap: None }, DAY);
+	assert_eq!(low.cap, None);
+}
