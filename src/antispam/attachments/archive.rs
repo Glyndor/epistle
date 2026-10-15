@@ -456,11 +456,23 @@ fn descriptor_end(
 /// all, when the UTF-8 flag is set on bytes that are not UTF-8, or when the
 /// name had to be cut.
 fn names_of(raw: &[u8], flags: u16, extra: &[u8]) -> (Vec<String>, bool) {
-	let (raw, cut) = bounded_name(raw);
+	let whole = raw;
+	let (raw, cut) = bounded_name(whole);
 	let mut names = vec![String::from_utf8_lossy(&raw).into_owned()];
 	let mut ambiguous = cut || (flags & EFS != 0 && std::str::from_utf8(&raw).is_err());
 	if flags & EFS == 0 && !raw.is_ascii() {
 		names.push(raw.iter().map(|&byte| cp437(byte)).collect());
+	}
+	// C extractors stop at a NUL. When the cut dropped it with the middle
+	// of the name, the name up to it is a reading of its own.
+	if let Some(nul) = whole.iter().position(|&byte| byte == 0)
+		&& cut && !raw.contains(&0)
+	{
+		let (head, _) = bounded_name(&whole[..nul]);
+		names.push(String::from_utf8_lossy(&head).into_owned());
+		if flags & EFS == 0 && !head.is_ascii() {
+			names.push(head.iter().map(|&byte| cp437(byte)).collect());
+		}
 	}
 	if let Some(body) = extra_field(extra, UNICODE_PATH) {
 		ambiguous = true;

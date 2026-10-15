@@ -296,3 +296,33 @@ fn data_in_front_of_the_first_local_header_is_ambiguous_even_with_fixed_offsets(
 	assert!(!listing.unreadable, "{listing:?}");
 	assert!(listing.ambiguous, "{listing:?}");
 }
+
+#[test]
+fn a_nul_in_the_cut_middle_of_a_long_name_still_ends_a_reading() {
+	// A C extractor stops at the NUL and writes `xxx...x.exe`; the cut
+	// keeps the head and the tail and drops the NUL with the middle.
+	let mut name = vec![b'x'; 795];
+	name.extend_from_slice(b".exe\0");
+	name.extend_from_slice(&[b'y'; 1000]);
+	name.extend_from_slice(b".pdf");
+	let zip = corpus::zip_raw(&[RawEntry {
+		name: &name,
+		flags: 0,
+		central_extra: Vec::new(),
+	}]);
+	let raw = corpus::message(&[corpus::attachment(
+		"Content-Type: application/zip; name=\"a.zip\"",
+		&zip,
+	)]);
+	let reasons = crate::antispam::attachments::inspect(
+		&raw,
+		&crate::antispam::attachments::rules::Extensions::default(),
+		crate::antispam::attachments::Budget::bytes(1 << 20),
+	)
+	.reasons();
+	assert!(
+		reasons.contains(&crate::antispam::attachments::rules::Reason::DangerousArchiveEntry),
+		"{reasons:?}"
+	);
+	assert!(reasons.contains(&crate::antispam::attachments::rules::Reason::AmbiguousArchive));
+}
