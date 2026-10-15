@@ -1,18 +1,21 @@
 use super::*;
+use crate::evidence::tsa::der::unsigned_content;
 use crate::evidence::tsa::der::{encode, encode_all};
 use crate::evidence::tsa::fake::FakeTsa;
-use crate::evidence::tsa::request::build;
+use crate::evidence::tsa::request::{build, random_nonce};
 
 #[test]
 fn a_response_is_taken_apart() {
 	let tsa = FakeTsa::new(1_792_038_711);
-	let request = build(&[9; 32], 42);
+	let nonce = random_nonce();
+	let digest = crate::evidence::record::sha256(b"stamped");
+	let request = build(&digest, nonce);
 	let response = tsa.respond(&request.der);
 	let token = parse_response(&response).expect("token");
-	assert_eq!(token.tst.hashed_message, &[9; 32]);
+	assert_eq!(token.tst.hashed_message, &digest);
 	assert_eq!(token.tst.hash_algorithm, oid::SHA256);
 	assert_eq!(token.tst.gen_time, 1_792_038_711);
-	assert_eq!(token.tst.nonce, Some(&[42u8][..]));
+	assert_eq!(token.tst.nonce, Some(unsigned_content(nonce).as_slice()));
 	assert_eq!(token.certificates.len(), 2);
 	assert_eq!(
 		token

@@ -1,6 +1,6 @@
 use super::*;
 use crate::evidence::tsa::fake::{FakeTsa, Faults};
-use crate::evidence::tsa::request::build;
+use crate::evidence::tsa::request::{build, random_nonce};
 
 /// The digest the captured fixtures stamp: SHA-256 of
 /// "epistle evidence fixture\n".
@@ -16,9 +16,9 @@ fn digest() -> [u8; 32] {
 fn stamped(faults: Faults) -> (FakeTsa, Result<Stamp, VerifyError>) {
 	let mut tsa = FakeTsa::new(NOW);
 	tsa.faults = faults;
-	let request = build(&digest(), 77);
+	let request = build(&digest(), random_nonce());
 	let response = tsa.respond(&request.der);
-	let result = verify(&response, &digest(), Some(77), &[tsa.anchor]);
+	let result = verify(&response, &digest(), Some(request.nonce), &[tsa.anchor]);
 	(tsa, result)
 }
 
@@ -42,7 +42,7 @@ fn a_token_for_another_digest_is_refused() {
 #[test]
 fn a_token_with_another_nonce_is_refused() {
 	let (_, result) = stamped(Faults {
-		nonce: Some(78),
+		nonce: Some(random_nonce()),
 		..Faults::default()
 	});
 	assert_eq!(result, Err(VerifyError::Nonce));
@@ -158,11 +158,12 @@ fn a_signed_content_type_other_than_tstinfo_is_refused() {
 #[test]
 fn a_configured_policy_must_match() {
 	let tsa = FakeTsa::new(NOW);
-	let response = tsa.respond(&build(&digest(), 3).der);
+	let request = build(&digest(), random_nonce());
+	let response = tsa.respond(&request.der);
 	let stamped_digest = digest();
 	let expected = |policy: &'static [u8]| Expected {
 		digest: &stamped_digest,
-		nonce: Some(3),
+		nonce: Some(request.nonce),
 		anchors: std::slice::from_ref(&tsa.anchor),
 		policy: Some(policy),
 	};
@@ -179,7 +180,7 @@ fn a_configured_policy_must_match() {
 fn the_report_names_every_check_and_its_outcome() {
 	let mut tsa = FakeTsa::new(NOW);
 	tsa.faults.extra_usage = true;
-	let response = tsa.respond(&build(&digest(), 4).der);
+	let response = tsa.respond(&build(&digest(), random_nonce()).der);
 	let other = FakeTsa::new(NOW);
 	let report = check(
 		&response,
@@ -229,15 +230,23 @@ fn the_report_names_every_check_and_its_outcome() {
 fn a_chain_to_an_unpinned_root_is_refused() {
 	let tsa = FakeTsa::new(NOW);
 	let other = FakeTsa::new(NOW);
-	let request = build(&digest(), 1);
+	let request = build(&digest(), random_nonce());
 	let response = tsa.respond(&request.der);
 	assert_eq!(
-		verify(&response, &digest(), Some(1), &[other.anchor]),
+		verify(&response, &digest(), Some(request.nonce), &[other.anchor]),
 		Err(VerifyError::Untrusted(
 			"the chain does not reach a pinned anchor"
 		))
 	);
-	assert!(verify(&response, &digest(), Some(1), &[other.anchor, tsa.anchor]).is_ok());
+	assert!(
+		verify(
+			&response,
+			&digest(),
+			Some(request.nonce),
+			&[other.anchor, tsa.anchor]
+		)
+		.is_ok()
+	);
 }
 
 #[test]
@@ -253,10 +262,10 @@ fn a_refusal_is_reported_with_its_status() {
 fn a_signer_outside_its_validity_at_the_stamped_time_is_refused() {
 	let mut tsa = FakeTsa::new(1_000);
 	tsa.faults = Faults::default();
-	let request = build(&digest(), 5);
+	let request = build(&digest(), random_nonce());
 	let response = tsa.respond(&request.der);
 	assert_eq!(
-		verify(&response, &digest(), Some(5), &[tsa.anchor]),
+		verify(&response, &digest(), Some(request.nonce), &[tsa.anchor]),
 		Err(VerifyError::Untrusted(
 			"the signer certificate was not valid at the stamped time"
 		))
@@ -335,7 +344,7 @@ fn openssl_accepts_the_tokens_the_fake_authority_issues() {
 		return;
 	}
 	let tsa = FakeTsa::new(NOW);
-	let request = build(&digest(), 9);
+	let request = build(&digest(), random_nonce());
 	let response = tsa.respond(&request.der);
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::write(dir.path().join("token.tsr"), &response).expect("token");

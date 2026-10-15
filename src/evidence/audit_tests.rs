@@ -2,7 +2,7 @@ use super::*;
 use crate::evidence::key::EvidenceKey;
 use crate::evidence::test_support::{accepted, at, delivered};
 use crate::evidence::tsa::fake::FakeTsa;
-use crate::evidence::tsa::request::build;
+use crate::evidence::tsa::request::{build, random_nonce};
 
 pub(crate) const DAY: i64 = 20_740;
 
@@ -45,7 +45,7 @@ impl Fixture {
 				continue;
 			}
 			let json = std::fs::read(&paths.json).expect("json");
-			let response = self.tsa.respond(&build(&sha256(&json), 1).der);
+			let response = self.tsa.respond(&build(&sha256(&json), random_nonce()).der);
 			std::fs::write(&paths.tsr, response).expect("tsr");
 		}
 	}
@@ -138,7 +138,9 @@ fn a_re_signed_middle_day_is_named_by_the_next_checkpoint() {
 	let json = std::fs::read(&paths.json).expect("json");
 	std::fs::write(
 		&paths.tsr,
-		fixture.tsa.respond(&build(&sha256(&json), 1).der),
+		fixture
+			.tsa
+			.respond(&build(&sha256(&json), random_nonce()).der),
 	)
 	.expect("tsr");
 	let report = fixture.verify();
@@ -332,7 +334,11 @@ fn a_token_issued_long_after_its_checkpoint_is_refused() {
 	let late = FakeTsa::new(at(DAY + 10, 0));
 	let paths = files(fixture.root(), Day(DAY + 2));
 	let json = std::fs::read(&paths.json).expect("json");
-	std::fs::write(&paths.tsr, late.respond(&build(&sha256(&json), 1).der)).expect("tsr");
+	std::fs::write(
+		&paths.tsr,
+		late.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
 	let report = verify(
 		fixture.root(),
 		&Options {
