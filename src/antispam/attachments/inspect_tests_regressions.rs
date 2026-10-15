@@ -442,6 +442,15 @@ fn every_known_evasion_keeps_its_verdict() {
 			}])),
 			AmbiguousArchive,
 		),
+		(
+			"entry name longer than the cap",
+			zip_part(corpus::zip_raw(&[corpus::RawEntry {
+				name: &[b"a".repeat(1100), b".exe".to_vec()].concat(),
+				flags: 0,
+				central_extra: Vec::new(),
+			}])),
+			DangerousArchiveEntry,
+		),
 	];
 	let mut failures = Vec::new();
 	for (name, message, expected) in &cases {

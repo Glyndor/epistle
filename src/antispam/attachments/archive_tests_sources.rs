@@ -148,15 +148,62 @@ fn a_name_that_claims_utf8_and_is_not_is_ambiguous() {
 }
 
 #[test]
-fn a_legacy_code_page_name_is_listed_and_still_judged() {
+fn a_legacy_name_is_also_read_as_code_page_437() {
 	let listing = list_zip(&corpus::zip_raw(&[RawEntry {
 		name: b"r\x82sum\x82.exe",
 		flags: 0,
 		central_extra: Vec::new(),
 	}]));
-	assert_eq!(listing.names.len(), 1, "{listing:?}");
-	assert!(listing.names[0].ends_with(".exe"));
+	assert!(
+		listing.names.iter().any(|name| name == "résumé.exe"),
+		"{listing:?}"
+	);
 	assert!(!listing.ambiguous);
+}
+
+#[test]
+fn a_cut_name_keeps_its_extension_and_is_ambiguous() {
+	let mut name = vec![b'a'; 1100];
+	name.extend_from_slice(b".exe");
+	let listing = list_zip(&corpus::zip_raw(&[RawEntry {
+		name: &name,
+		flags: 0,
+		central_extra: Vec::new(),
+	}]));
+	assert!(
+		listing.names.iter().all(|name| name.ends_with(".exe")),
+		"{:?}",
+		listing.names.len()
+	);
+	assert!(listing.ambiguous);
+}
+
+#[test]
+fn data_in_front_larger_than_the_window_is_ambiguous() {
+	let plain = corpus::zip_of(&["a.txt"]);
+	let prefix = vec![b' '; 70 * 1024];
+	let shift = prefix.len() as u32;
+	let mut zip = prefix;
+	zip.extend_from_slice(&plain);
+	let central = find(&zip, b"PK\x01\x02");
+	let local_offset = central + 42;
+	let old = u32::from_le_bytes(zip[local_offset..local_offset + 4].try_into().unwrap());
+	zip[local_offset..local_offset + 4].copy_from_slice(&(old + shift).to_le_bytes());
+	let end = zip.len() - 22;
+	let old = u32::from_le_bytes(zip[end + 16..end + 20].try_into().unwrap());
+	zip[end + 16..end + 20].copy_from_slice(&(old + shift).to_le_bytes());
+	let listing = list_zip(&zip);
+	assert_eq!(listing.names, vec!["a.txt"]);
+	assert!(listing.ambiguous, "{listing:?}");
+}
+
+#[test]
+fn a_directory_pointing_at_no_local_header_is_ambiguous() {
+	let mut zip = corpus::zip_of(&["a.txt"]);
+	let central = find(&zip, b"PK\x01\x02");
+	zip[central + 42..central + 46].copy_from_slice(&7u32.to_le_bytes());
+	let listing = list_zip(&zip);
+	assert!(listing.unreadable && listing.ambiguous, "{listing:?}");
 }
 
 #[test]

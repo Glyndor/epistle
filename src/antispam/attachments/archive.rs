@@ -15,8 +15,12 @@
 /// as [`Listing::too_many`] and judged on the entries read so far.
 pub const MAX_ENTRIES: usize = 1000;
 
-/// Longest entry name kept, in bytes; the rest of a longer name is cut.
+/// Longest entry name kept, in bytes. A longer name keeps its head and
+/// its last [`NAME_TAIL_BYTES`], so the extension survives the cut.
 const MAX_NAME_BYTES: usize = 1024;
+
+/// Bytes kept from the end of a name that is cut.
+const NAME_TAIL_BYTES: usize = 255;
 
 /// End of central directory record: signature plus fixed fields.
 const EOCD_LEN: usize = 22;
@@ -36,7 +40,7 @@ const MAX_END_RECORDS: usize = 4;
 
 /// Records read from all sources together (each directory and the local
 /// headers). Past this the listing is a scan-limit.
-const MAX_RECORDS: usize = 10_000;
+pub const MAX_RECORDS: usize = 10_000;
 
 /// The Info-ZIP Unicode Path extra field: some extractors show this name
 /// instead of the one in the header.
@@ -148,6 +152,9 @@ pub fn list_zip(zip: &[u8]) -> Listing {
 		.take(MAX_COMMENT)
 		.position(|window| window == LOCAL);
 	build.listing.ambiguous |= first.is_some_and(|at| at != 0);
+	// A directory with no local header in the window means data in front
+	// larger than the window: not a simple zip.
+	build.listing.ambiguous |= first.is_none() && !directories.is_empty();
 	let mut at = first.unwrap_or(zip.len());
 	while let Some(local) = local_entry(zip, at) {
 		if !build.record() {
@@ -210,7 +217,12 @@ fn read_directory(zip: &[u8], directory: &Directory, build: &mut Builder) {
 					build.add(name);
 				}
 			}
-			None => build.listing.unreadable = true,
+			None => {
+				// No local header where the directory says: the offsets do
+				// not describe this file, so extractors will disagree.
+				build.listing.unreadable = true;
+				build.listing.ambiguous = true;
+			}
 		}
 		for name in entry.names {
 			build.add(name);
@@ -367,22 +379,58 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 	})
 }
 
-/// The name as UTF-8 (lossy), plus the Unicode Path field when there is
-/// one. Ambiguous when that field is present at all, or when the UTF-8 flag
-/// is set on bytes that are not UTF-8.
+/// The name as UTF-8 (lossy); as code page 437, which unzip and Windows
+/// use, when it does not claim UTF-8 and is not ASCII; and the Unicode
+/// Path field when there is one. Ambiguous when that field is present at
+/// all, when the UTF-8 flag is set on bytes that are not UTF-8, or when the
+/// name had to be cut.
 fn names_of(raw: &[u8], flags: u16, extra: &[u8]) -> (Vec<String>, bool) {
-	let raw = &raw[..raw.len().min(MAX_NAME_BYTES)];
-	let mut names = vec![String::from_utf8_lossy(raw).into_owned()];
-	let mut ambiguous = flags & EFS != 0 && std::str::from_utf8(raw).is_err();
+	let (raw, cut) = bounded_name(raw);
+	let mut names = vec![String::from_utf8_lossy(&raw).into_owned()];
+	let mut ambiguous = cut || (flags & EFS != 0 && std::str::from_utf8(&raw).is_err());
+	if flags & EFS == 0 && !raw.is_ascii() {
+		names.push(raw.iter().map(|&byte| cp437(byte)).collect());
+	}
 	if let Some(body) = extra_field(extra, UNICODE_PATH) {
 		ambiguous = true;
 		if let Some(path) = body.get(5..) {
-			let path = &path[..path.len().min(MAX_NAME_BYTES)];
-			names.push(String::from_utf8_lossy(path).into_owned());
+			let (path, cut) = bounded_name(path);
+			ambiguous |= cut;
+			names.push(String::from_utf8_lossy(&path).into_owned());
 		}
 	}
 	names.dedup();
 	(names, ambiguous)
+}
+
+/// `raw`, or its head and its last [`NAME_TAIL_BYTES`] when it is longer
+/// than [`MAX_NAME_BYTES`], with whether it was cut.
+fn bounded_name(raw: &[u8]) -> (Vec<u8>, bool) {
+	if raw.len() <= MAX_NAME_BYTES {
+		return (raw.to_vec(), false);
+	}
+	let mut kept = raw[..MAX_NAME_BYTES - NAME_TAIL_BYTES].to_vec();
+	kept.extend_from_slice(&raw[raw.len() - NAME_TAIL_BYTES..]);
+	(kept, true)
+}
+
+/// One byte as code page 437 reads it.
+fn cp437(byte: u8) -> char {
+	const HIGH: [char; 128] = [
+		'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ',
+		'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú',
+		'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', '╡',
+		'╢', '╖', '╕', '╣', '║', '╗', '╝', '╜', '╛', '┐', '└', '┴', '┬', '├', '─', '┼', '╞', '╟',
+		'╚', '╔', '╩', '╦', '╠', '═', '╬', '╧', '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘',
+		'┌', '█', '▄', '▌', '▐', '▀', 'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ',
+		'∞', 'φ', 'ε', '∩', '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²',
+		'■', '\u{a0}',
+	];
+	if byte.is_ascii() {
+		char::from(byte)
+	} else {
+		HIGH[usize::from(byte - 0x80)]
+	}
 }
 
 /// Bit 0 marks traditional encryption, bit 6 strong encryption, and
