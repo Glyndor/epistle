@@ -12,10 +12,10 @@ use std::sync::Arc;
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, autoconfig,
-	autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, export, import, init,
-	local, masked, mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status,
-	style, suppression, tls_cli, verify, verify_dns, warmup,
+	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, attachments,
+	autoconfig, autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, export, import,
+	init, local, masked, mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack,
+	status, style, suppression, tls_cli, verify, verify_dns, warmup,
 };
 use crate::config::Config;
 
@@ -406,6 +406,11 @@ impl Cli {
 				dry_run,
 				json,
 			} => antispam::run(&config, action, dry_run, json),
+			Command::Attachments {
+				config,
+				action,
+				dry_run,
+			} => attachments::run(&config, action, dry_run),
 			Command::Alias {
 				config,
 				action,

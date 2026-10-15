@@ -29,6 +29,7 @@ impl Command {
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
 			| Command::Antispam { .. }
+			| Command::Attachments { .. }
 			| Command::Alias { .. }
 			| Command::Domain { .. }
 			| Command::ConfigCheck { .. }

@@ -609,6 +609,21 @@ pub enum Command {
 		#[command(subcommand)]
 		action: antispam::AntispamCli,
 	},
+	/// Show or edit the attachment policy, or check a message.
+	///
+	/// What each attachment really is, and what the `[attachments]` policy
+	/// does with it.
+	Attachments {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Attachments action.
+		#[command(subcommand)]
+		action: attachments::AttachmentsCli,
+	},
 	/// Manage multi-target aliases.
 	///
 	/// Show, add, remove or edit them; enable or disable them.

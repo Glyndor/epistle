@@ -42,7 +42,8 @@ pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
 pub use attachments::{
-	AttachmentMode, Attachments, ContentAction, normalise_extension, valid_extension,
+	AttachmentMode, Attachments, ContentAction, MAX_EXTENSION_LEN, normalise_extension,
+	valid_extension,
 };
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};

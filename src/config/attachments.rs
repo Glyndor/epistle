@@ -6,7 +6,7 @@ use serde::Deserialize;
 use super::{Config, ConfigError};
 
 /// Longest extension accepted in `block_extensions` or `allow_extensions`.
-const MAX_EXTENSION_LEN: usize = 32;
+pub const MAX_EXTENSION_LEN: usize = 32;
 /// Most entries in either list.
 const MAX_EXTENSIONS: usize = 256;
 

@@ -19,7 +19,9 @@ fn report(reasons: &[Reason]) -> Report {
 	Report {
 		parts: vec![PartReport {
 			filename: Some("x".into()),
+			names: vec!["x".into()],
 			declared_type: "application/octet-stream".into(),
+			declared_types: vec!["application/octet-stream".into()],
 			real_type: RealType::Unknown,
 			reasons: reasons.to_vec(),
 		}],
