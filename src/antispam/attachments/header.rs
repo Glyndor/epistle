@@ -1,0 +1,175 @@
+//! What one MIME header block declares, read the way the most permissive
+//! mail client would read it.
+//!
+//! Clients disagree on duplicated headers and on which of several names to
+//! show, and an attacker can aim the scanner at one reading while the
+//! recipient's client uses another. So every candidate name is kept (both
+//! `filename` and `name`, from every copy of the header, RFC 2231 and
+//! RFC 2047 decoded by mail-parser), and anything two readers could see
+//! differently marks the part ambiguous.
+
+use mail_parser::{ContentType, HeaderName, MessageParser};
+
+/// RFC 2046 section 5.1.1 caps a boundary at 70 characters. Clients accept
+/// longer ones, so the walk does too, and marks the part ambiguous.
+const RFC_BOUNDARY_LEN: usize = 70;
+
+/// A boundary longer than a line could never be matched; past this the
+/// declaration is ignored, and the part is ambiguous.
+const MAX_BOUNDARY_LEN: usize = 998;
+
+/// How a part's body is encoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+	/// 7bit, 8bit, binary or no header.
+	Identity,
+	/// Base64.
+	Base64,
+	/// Quoted-printable.
+	QuotedPrintable,
+	/// uuencode (`x-uuencode`, `uuencode`, `x-uue`).
+	Uuencode,
+}
+
+/// What one header block declares.
+#[derive(Debug)]
+pub struct PartHeader {
+	/// Every distinct candidate file name, in header order.
+	pub names: Vec<String>,
+	/// The declared `type/subtype`, lower case; `text/plain` when absent.
+	pub declared_type: String,
+	/// The part is an attachment rather than message text.
+	pub attachment: bool,
+	/// The body's transfer encoding.
+	pub encoding: Encoding,
+	/// The multipart boundary, when the part is a usable multipart.
+	pub boundary: Option<Vec<u8>>,
+	/// Two readers could see this part differently.
+	pub ambiguous: bool,
+}
+
+/// Parse one header block with mail-parser.
+pub fn parse(block: &[u8]) -> PartHeader {
+	let mut block = block.to_vec();
+	block.extend_from_slice(b"\r\n");
+	let parsed = MessageParser::new().parse_headers(&block);
+	let headers = parsed
+		.as_ref()
+		.map(|message| message.headers())
+		.unwrap_or(&[]);
+	let mut types: Vec<&ContentType<'_>> = Vec::new();
+	let mut dispositions: Vec<&ContentType<'_>> = Vec::new();
+	let mut encodings: Vec<String> = Vec::new();
+	for header in headers {
+		match header.name {
+			HeaderName::ContentType => types.extend(header.value.as_content_type()),
+			HeaderName::ContentDisposition => dispositions.extend(header.value.as_content_type()),
+			HeaderName::ContentTransferEncoding => encodings.extend(
+				header
+					.value
+					.as_text()
+					.map(|value| value.trim().to_ascii_lowercase()),
+			),
+			_ => {}
+		}
+	}
+	// A block mail-parser cannot read at all is scanned as an opaque
+	// attachment rather than skipped as text.
+	let unreadable = parsed.is_none() && block.iter().any(|byte| !byte.is_ascii_whitespace());
+	let mut ambiguous =
+		unreadable || types.len() > 1 || dispositions.len() > 1 || encodings.len() > 1;
+
+	let declared_type = types
+		.first()
+		.map(|ct| match ct.subtype() {
+			Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
+			None => ct.ctype().to_string(),
+		})
+		.map(|value| value.to_ascii_lowercase())
+		.unwrap_or_else(|| "text/plain".to_string());
+
+	let mut names: Vec<String> = Vec::new();
+	for (params, keys) in [
+		(&dispositions, &["filename", "name"][..]),
+		(&types, &["name", "filename"][..]),
+	] {
+		for ct in params.iter() {
+			for attribute in ct.attributes().unwrap_or(&[]) {
+				let key = attribute.name.trim_end_matches('*');
+				if keys.iter().any(|wanted| key.eq_ignore_ascii_case(wanted))
+					&& !attribute.value.is_empty()
+					&& !names.iter().any(|seen| *seen == attribute.value)
+				{
+					names.push(attribute.value.to_string());
+				}
+			}
+		}
+	}
+	ambiguous |= names_disagree(&names);
+
+	let encoding = match encodings.first().map(String::as_str) {
+		None | Some("7bit" | "8bit" | "binary" | "") => Encoding::Identity,
+		Some("base64") => Encoding::Base64,
+		Some("quoted-printable") => Encoding::QuotedPrintable,
+		Some("x-uuencode" | "uuencode" | "x-uue") => Encoding::Uuencode,
+		Some(_) => {
+			// An encoding nobody can name is read as-is, and flagged.
+			ambiguous = true;
+			Encoding::Identity
+		}
+	};
+
+	let multipart = declared_type.starts_with("multipart/");
+	let boundary = types
+		.first()
+		.filter(|_| multipart)
+		.and_then(|ct| ct.attribute("boundary"))
+		.filter(|value| !value.is_empty() && value.len() <= MAX_BOUNDARY_LEN)
+		.map(|value| value.as_bytes().to_vec());
+	if multipart && boundary.as_ref().is_none_or(|b| b.len() > RFC_BOUNDARY_LEN) {
+		ambiguous = true;
+	}
+	if multipart
+		&& types
+			.iter()
+			.filter_map(|ct| ct.attribute("boundary"))
+			.count() > 1
+	{
+		ambiguous = true;
+	}
+
+	let disposition_attachment = dispositions
+		.iter()
+		.any(|cd| cd.ctype().eq_ignore_ascii_case("attachment"));
+	// A multipart nobody can split is scanned as one opaque attachment.
+	let attachment = unreadable
+		|| !names.is_empty()
+		|| disposition_attachment
+		|| !(declared_type.starts_with("text/") || multipart)
+		|| (multipart && boundary.is_none());
+	PartHeader {
+		names,
+		declared_type,
+		attachment,
+		encoding,
+		boundary,
+		ambiguous,
+	}
+}
+
+/// Candidate names whose extensions differ: one client may show `a.pdf`
+/// and save `a.exe`.
+fn names_disagree(names: &[String]) -> bool {
+	let extension = |name: &str| {
+		name.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+			.rsplit_once('.')
+			.map(|(_, ext)| ext.trim().to_lowercase())
+	};
+	names
+		.windows(2)
+		.any(|pair| extension(&pair[0]) != extension(&pair[1]))
+}
+
+#[cfg(test)]
+#[path = "header_tests.rs"]
+mod tests;

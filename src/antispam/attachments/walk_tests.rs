@@ -9,7 +9,11 @@ const LIMITS: Limits = Limits {
 
 fn leaves(raw: &[u8], limits: &Limits) -> (Vec<Leaf>, Result<usize, Stop>) {
 	let mut out = Vec::new();
-	let result = walk(raw, limits, |leaf| out.push(leaf));
+	let walked = walk(raw, limits, |leaf| out.push(leaf));
+	let result = match walked.stopped {
+		Some(stop) => Err(stop),
+		None => Ok(walked.parts),
+	};
 	(out, result)
 }
 
@@ -27,7 +31,7 @@ fn an_attachment_comes_with_its_name_declared_type_and_decoded_content() {
 	assert_eq!(found[0].declared_type, "text/plain");
 	let attachment = &found[1];
 	assert!(attachment.attachment);
-	assert_eq!(attachment.filename.as_deref(), Some("photo.jpg"));
+	assert_eq!(attachment.filename(), Some("photo.jpg"));
 	assert_eq!(attachment.declared_type, "image/jpeg");
 	assert_eq!(attachment.depth, 1);
 	assert!(
@@ -45,7 +49,7 @@ fn the_content_type_name_is_used_when_the_disposition_has_none() {
 	)]);
 	let (found, _) = leaves(&raw, &LIMITS);
 	assert_eq!(found.len(), 2, "the text and the attachment");
-	assert_eq!(found[1].filename.as_deref(), Some("setup.exe"));
+	assert_eq!(found[1].filename(), Some("setup.exe"));
 }
 
 #[test]
@@ -57,7 +61,7 @@ fn an_rfc2231_continued_and_encoded_filename_is_decoded() {
 	)]);
 	let (found, _) = leaves(&raw, &LIMITS);
 	assert_eq!(found.len(), 2, "the text and the attachment");
-	assert_eq!(found[1].filename.as_deref(), Some("résumé.pdf.exe"));
+	assert_eq!(found[1].filename(), Some("résumé.pdf.exe"));
 }
 
 #[test]
@@ -92,7 +96,7 @@ fn nesting_up_to_ten_levels_is_walked_and_the_eleventh_stops_the_walk() {
 	assert_eq!(result, Ok(11));
 	assert_eq!(found.len(), 1);
 	assert_eq!(found[0].depth, 10);
-	assert_eq!(found[0].filename.as_deref(), Some("deep.exe"));
+	assert_eq!(found[0].filename(), Some("deep.exe"));
 	let (_, result) = leaves(&nested(11), &LIMITS);
 	assert_eq!(result, Err(Stop::TooDeep));
 }
@@ -169,7 +173,7 @@ fn a_base64_encoded_nested_message_is_walked_too() {
 	assert_eq!(result, Ok(6));
 	let hidden = found
 		.iter()
-		.find(|leaf| leaf.filename.as_deref() == Some("hidden.exe"))
+		.find(|leaf| leaf.filename() == Some("hidden.exe"))
 		.expect("the nested attachment is visited");
 	assert_eq!(hidden.depth, 3);
 	assert!(hidden.content == corpus::pe(), "nested content differs");

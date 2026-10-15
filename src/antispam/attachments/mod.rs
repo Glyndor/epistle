@@ -9,6 +9,8 @@
 //! files that say one thing and carry another.
 
 pub mod archive;
+pub mod decode;
+pub mod header;
 pub mod rules;
 pub mod sniff;
 pub mod walk;
@@ -42,6 +44,8 @@ pub struct Report {
 	pub parts: Vec<PartReport>,
 	/// Why the walk stopped early, if it did.
 	pub stopped: Option<Stop>,
+	/// The structure itself could be split differently by another reader.
+	pub ambiguous: bool,
 }
 
 impl Report {
@@ -55,6 +59,9 @@ impl Report {
 			.collect();
 		if self.stopped.is_some() {
 			all.push(Reason::MimeTooComplex);
+		}
+		if self.ambiguous {
+			all.push(Reason::AmbiguousMime);
 		}
 		all.sort();
 		all.dedup();
@@ -71,12 +78,13 @@ pub fn inspect(raw: &[u8], extensions: &Extensions, max_decoded: usize) -> Repor
 		max_decoded,
 	};
 	let mut report = Report::default();
-	let outcome = walk::walk(raw, &limits, |leaf| {
-		if leaf.attachment {
+	let walked = walk::walk(raw, &limits, |leaf| {
+		if leaf.attachment || leaf.ambiguous {
 			report.parts.push(judge_leaf(&leaf, extensions));
 		}
 	});
-	report.stopped = outcome.err();
+	report.stopped = walked.stopped;
+	report.ambiguous = walked.ambiguous;
 	report
 }
 
@@ -90,18 +98,34 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		real_type = RealType::Ooxml;
 	}
 	let ole_macros = real_type == RealType::Ole2 && archive::ole2_has_macros(&leaf.content);
-	let reasons = rules::judge(
-		&Facts {
-			filename: leaf.filename.as_deref(),
-			declared_type: &leaf.declared_type,
-			real_type,
-			listing: listing.as_ref(),
-			ole_macros,
-		},
-		extensions,
-	);
+	// Every candidate name is judged: clients disagree on which one they
+	// show and which one they save under.
+	let mut names: Vec<Option<&str>> = leaf.names.iter().map(|name| Some(name.as_str())).collect();
+	if names.is_empty() {
+		names.push(None);
+	}
+	let mut reasons: Vec<Reason> = names
+		.into_iter()
+		.flat_map(|filename| {
+			rules::judge(
+				&Facts {
+					filename,
+					declared_type: &leaf.declared_type,
+					real_type,
+					listing: listing.as_ref(),
+					ole_macros,
+				},
+				extensions,
+			)
+		})
+		.collect();
+	if leaf.ambiguous {
+		reasons.push(Reason::AmbiguousMime);
+	}
+	reasons.sort();
+	reasons.dedup();
 	PartReport {
-		filename: leaf.filename.clone(),
+		filename: leaf.filename().map(str::to_string),
 		declared_type: leaf.declared_type.clone(),
 		real_type,
 		reasons,
@@ -115,3 +139,7 @@ pub(crate) mod corpus;
 #[cfg(test)]
 #[path = "inspect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "inspect_tests_evasion.rs"]
+mod tests_evasion;

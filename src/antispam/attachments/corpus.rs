@@ -136,3 +136,29 @@ pub fn message(parts: &[Part<'_>]) -> Vec<u8> {
 	out.push_str("--outer--\r\n");
 	out.into_bytes()
 }
+
+/// uuencode `bytes` the way `uuencode(1)` does, with a backquote for zero.
+pub fn uu(name: &str, bytes: &[u8]) -> String {
+	let char_of = |value: u8| {
+		if value == 0 {
+			'`'
+		} else {
+			(value + b' ') as char
+		}
+	};
+	let mut out = format!("begin 644 {name}\n");
+	for line in bytes.chunks(45) {
+		out.push(char_of(line.len() as u8));
+		for group in line.chunks(3) {
+			let mut padded = [0u8; 3];
+			padded[..group.len()].copy_from_slice(group);
+			out.push(char_of(padded[0] >> 2));
+			out.push(char_of(((padded[0] & 3) << 4) | (padded[1] >> 4)));
+			out.push(char_of(((padded[1] & 15) << 2) | (padded[2] >> 6)));
+			out.push(char_of(padded[2] & 63));
+		}
+		out.push('\n');
+	}
+	out.push_str("`\nend\n");
+	out
+}

@@ -130,6 +130,9 @@ pub enum Reason {
 	/// The message is nested too deeply, has too many parts or a header
 	/// block too large to inspect.
 	MimeTooComplex,
+	/// Two mail clients could read the MIME structure, a header or an
+	/// encoding differently.
+	AmbiguousMime,
 }
 
 impl Reason {
@@ -148,6 +151,7 @@ impl Reason {
 			Self::ArchiveTooComplex => "archive-too-complex",
 			Self::Macro => "macro",
 			Self::MimeTooComplex => "mime-too-complex",
+			Self::AmbiguousMime => "ambiguous-mime",
 		}
 	}
 }

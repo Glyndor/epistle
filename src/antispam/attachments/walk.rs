@@ -1,18 +1,18 @@
 //! One forward pass over a raw message that hands every leaf MIME part to a
-//! visitor, with its declared name and type and its decoded content.
+//! visitor, with its declared names and type and its decoded content.
 //!
 //! The walk never recurses: open multipart boundaries live on a stack that
 //! [`Limits::max_depth`] caps, every line is read once, and a line is only
 //! compared with the open boundaries when it starts with `--`, so the cost
-//! is linear in the message size. Header parsing (RFC 2231 parameters,
-//! RFC 2047 encoded words) is mail-parser's, run on one part's header block
-//! at a time.
+//! is linear in the message size. Header blocks are read by
+//! [`super::header`], bodies decoded by [`super::decode`].
+//!
+//! Where a client could read the message differently, the walk takes the
+//! reading that shows more content and reports the message as ambiguous;
+//! it never settles on the reading that hides a part.
 
-use mail_parser::{MessageParser, MimeHeaders};
-
-/// RFC 2046 section 5.1.1 caps a boundary at 70 characters. A longer one
-/// is not a boundary this walk will look for.
-const MAX_BOUNDARY_LEN: usize = 70;
+use super::decode;
+use super::header::{self, Encoding, PartHeader};
 
 /// Largest header block a single part may carry.
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -44,7 +44,7 @@ pub struct Limits {
 	pub max_depth: usize,
 	/// Most MIME parts counted, containers included.
 	pub max_parts: usize,
-	/// Total decoded bytes across every attachment.
+	/// Total decoded bytes across every part.
 	pub max_decoded: usize,
 }
 
@@ -62,57 +62,71 @@ pub enum Stop {
 /// One leaf part, as the visitor sees it.
 #[derive(Debug)]
 pub struct Leaf {
-	/// The declared file name (`Content-Disposition` `filename`, then
-	/// `Content-Type` `name`), decoded.
-	pub filename: Option<String>,
+	/// Every candidate file name, in header order (`Content-Disposition`
+	/// `filename`, `Content-Type` `name`, each copy of each header).
+	pub names: Vec<String>,
 	/// The declared `type/subtype`, lower case; `text/plain` when absent.
 	pub declared_type: String,
-	/// Whether the part is an attachment rather than message text: it has
-	/// a name, is marked `attachment`, or is not `text/*`.
+	/// Whether the part is an attachment rather than message text.
 	pub attachment: bool,
 	/// Nesting depth; the top-level entity is 0.
 	pub depth: usize,
-	/// The decoded content of an attachment (empty for message text).
+	/// The decoded content (empty for a container nobody decodes).
 	pub content: Vec<u8>,
 	/// `content` holds only a prefix because the decode budget ran out.
 	pub truncated: bool,
+	/// Two readers could see this part differently.
+	pub ambiguous: bool,
 }
 
-/// Walk `raw` and call `visit` for every leaf part. Returns the number of
-/// parts seen, or why the walk stopped; leaves visited before a stop have
-/// already been handed over.
+impl Leaf {
+	/// The name a client most likely shows: the first candidate.
+	pub fn filename(&self) -> Option<&str> {
+		self.names.first().map(String::as_str)
+	}
+}
+
+/// How a walk ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Walked {
+	/// Parts counted, containers included.
+	pub parts: usize,
+	/// A delimiter-like line two readers could split on differently.
+	pub ambiguous: bool,
+	/// Why the walk stopped early; what follows was not seen.
+	pub stopped: Option<Stop>,
+}
+
+/// Walk `raw` and call `visit` for every leaf part. Leaves visited before
+/// a stop have already been handed over.
 ///
 /// A `message/rfc822` part sent base64 or quoted-printable is decoded and
 /// walked after the buffer that holds it, from a work list rather than by
-/// recursion, so an attachment cannot hide one encoding layer down.
-pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Result<usize, Stop> {
+/// recursion, so an attachment cannot hide one encoding layer down. A
+/// uuencoded file pasted into a text body is handed over as a leaf of its
+/// own, since clients show it as an attachment.
+pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Walked {
 	let mut shared = Shared {
-		parts: 1,
+		walked: Walked {
+			parts: 1,
+			..Walked::default()
+		},
 		decoded: 0,
 		pending: Vec::new(),
 	};
-	Walker {
-		raw,
-		limits,
-		stack: Vec::new(),
-		shared: &mut shared,
+	let mut result = Walker::new(raw, limits, &mut shared).run(0, &mut visit);
+	while result.is_ok()
+		&& let Some((nested, depth)) = shared.pending.pop()
+	{
+		result = Walker::new(&nested, limits, &mut shared).run(depth, &mut visit);
 	}
-	.run(0, &mut visit)?;
-	while let Some((nested, depth)) = shared.pending.pop() {
-		Walker {
-			raw: &nested,
-			limits,
-			stack: Vec::new(),
-			shared: &mut shared,
-		}
-		.run(depth, &mut visit)?;
-	}
-	Ok(shared.parts)
+	shared.walked.stopped = result.err();
+	shared.walked
 }
 
 /// What every buffer of one walk draws from.
 struct Shared {
-	parts: usize,
+	walked: Walked,
 	decoded: usize,
 	/// Decoded nested messages still to walk, with their depth.
 	pending: Vec<(Vec<u8>, usize)>,
@@ -138,22 +152,6 @@ enum State {
 	Skip,
 }
 
-/// What one header block declares.
-struct PartHeader {
-	filename: Option<String>,
-	declared_type: String,
-	attachment: bool,
-	encoding: Encoding,
-	boundary: Option<Vec<u8>>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Encoding {
-	Identity,
-	Base64,
-	QuotedPrintable,
-}
-
 struct Walker<'a> {
 	raw: &'a [u8],
 	limits: &'a Limits,
@@ -161,7 +159,16 @@ struct Walker<'a> {
 	shared: &'a mut Shared,
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
+	fn new(raw: &'a [u8], limits: &'a Limits, shared: &'a mut Shared) -> Self {
+		Self {
+			raw,
+			limits,
+			stack: Vec::new(),
+			shared,
+		}
+	}
+
 	fn run(&mut self, depth: usize, visit: &mut impl FnMut(Leaf)) -> Result<(), Stop> {
 		let raw = self.raw;
 		let mut state = State::Headers { start: 0, depth };
@@ -189,12 +196,14 @@ impl Walker<'_> {
 				};
 			} else if let State::Headers { start, depth } = state {
 				if line.is_empty() {
-					state = self.entered(parse_header(&raw[start..pos]), depth, next)?;
+					state = self.entered(header::parse(&raw[start..pos]), depth, next)?;
 				} else if pos - start > MAX_HEADER_BYTES {
 					return Err(Stop::HeaderTooLarge);
 				}
 			}
 			if end >= raw.len() {
+				// A missing closing delimiter still ends the last part here,
+				// where clients end it too.
 				return self.finish(state, raw.len(), visit);
 			}
 			pos = next;
@@ -209,6 +218,7 @@ impl Walker<'_> {
 			if depth + 1 > self.limits.max_depth {
 				return Err(Stop::TooDeep);
 			}
+			self.shared.walked.ambiguous |= header.ambiguous;
 			let mut delimiter = b"--".to_vec();
 			delimiter.extend_from_slice(boundary);
 			self.stack.push(Frame {
@@ -221,6 +231,7 @@ impl Walker<'_> {
 			if depth + 1 > self.limits.max_depth {
 				return Err(Stop::TooDeep);
 			}
+			self.shared.walked.ambiguous |= header.ambiguous;
 			self.count_part()?;
 			return Ok(State::Headers {
 				start: next,
@@ -235,32 +246,44 @@ impl Walker<'_> {
 	}
 
 	fn count_part(&mut self) -> Result<(), Stop> {
-		self.shared.parts += 1;
-		if self.shared.parts > self.limits.max_parts {
+		self.shared.walked.parts += 1;
+		if self.shared.walked.parts > self.limits.max_parts {
 			return Err(Stop::TooManyParts);
 		}
 		Ok(())
 	}
 
 	/// The open boundary `line` is a delimiter for, innermost first, and
-	/// whether it closes that multipart.
-	fn delimiter(&self, line: &[u8]) -> Option<(usize, bool)> {
+	/// whether it closes that multipart. A line that a lenient client could
+	/// take for a delimiter (trailing junk, other letter case) is not one
+	/// here, and marks the message ambiguous.
+	fn delimiter(&mut self, line: &[u8]) -> Option<(usize, bool)> {
 		if !line.starts_with(b"--") {
 			return None;
 		}
+		let mut near_miss = false;
 		for (index, frame) in self.stack.iter().enumerate().rev() {
-			step(frame.delimiter.len().min(line.len()));
-			let Some(rest) = line.strip_prefix(frame.delimiter.as_slice()) else {
+			let len = frame.delimiter.len();
+			step(len.min(line.len()));
+			let Some(head) = line.get(..len) else {
 				continue;
 			};
-			let (closing, rest) = match rest.strip_prefix(b"--") {
-				Some(rest) => (true, rest),
+			if !head.eq_ignore_ascii_case(&frame.delimiter) {
+				continue;
+			}
+			let rest = &line[len..];
+			let (closing, tail) = match rest.strip_prefix(b"--") {
+				Some(tail) => (true, tail),
 				None => (false, rest),
 			};
-			if rest.iter().all(|&byte| byte == b' ' || byte == b'\t') {
+			if head == frame.delimiter.as_slice()
+				&& tail.iter().all(|&byte| byte == b' ' || byte == b'\t')
+			{
 				return Some((index, closing));
 			}
+			near_miss = true;
 		}
+		self.shared.walked.ambiguous |= near_miss;
 		None
 	}
 
@@ -275,7 +298,7 @@ impl Walker<'_> {
 		let (header, start, depth) = match state {
 			State::Skip => return Ok(()),
 			State::Headers { start, depth } => {
-				(parse_header(&self.raw[start..end.max(start)]), end, depth)
+				(header::parse(&self.raw[start..end.max(start)]), end, depth)
 			}
 			State::Body {
 				header,
@@ -287,132 +310,76 @@ impl Walker<'_> {
 		let mut body = &self.raw[start.min(end)..end];
 		body = body.strip_suffix(b"\n").unwrap_or(body);
 		body = body.strip_suffix(b"\r").unwrap_or(body);
-		let (content, truncated) = if header.attachment {
+		let text = header.declared_type.starts_with("text/") && !header.attachment;
+		let (content, truncated, garbled) = if header.attachment || text {
 			self.decode(body, header.encoding)
 		} else {
-			(Vec::new(), false)
+			(Vec::new(), false, false)
 		};
 		if header.declared_type == "message/rfc822" && !truncated {
 			if depth + 1 > self.limits.max_depth {
 				return Err(Stop::TooDeep);
 			}
 			self.count_part()?;
+			self.shared.walked.ambiguous |= header.ambiguous || garbled;
 			self.shared.pending.push((content, depth + 1));
 			return Ok(());
 		}
+		if text {
+			for embedded in decode::embedded_uuencode(&content) {
+				self.count_part()?;
+				visit(Leaf {
+					names: vec![embedded.name],
+					declared_type: "application/octet-stream".to_string(),
+					attachment: true,
+					depth: depth + 1,
+					content: embedded.content,
+					truncated,
+					ambiguous: false,
+				});
+			}
+		}
 		visit(Leaf {
-			filename: header.filename,
+			names: header.names,
 			declared_type: header.declared_type,
 			attachment: header.attachment,
 			depth,
 			content,
 			truncated,
+			ambiguous: header.ambiguous || garbled,
 		});
 		Ok(())
 	}
 
 	/// Decode `body` within what is left of the decode budget; past it,
-	/// keep only a prefix long enough to identify the content.
-	fn decode(&mut self, body: &[u8], encoding: Encoding) -> (Vec<u8>, bool) {
+	/// keep only a prefix long enough to identify the content. The third
+	/// value says the encoding itself was ambiguous.
+	fn decode(&mut self, body: &[u8], encoding: Encoding) -> (Vec<u8>, bool, bool) {
 		let remaining = self.limits.max_decoded.saturating_sub(self.shared.decoded);
 		let estimate = match encoding {
-			Encoding::Base64 => body.len() / 4 * 3 + 3,
+			Encoding::Base64 | Encoding::Uuencode => body.len() / 4 * 3 + 3,
 			Encoding::Identity | Encoding::QuotedPrintable => body.len(),
 		};
 		let (input, truncated) = if estimate <= remaining {
 			(body, false)
 		} else {
 			let keep = match encoding {
-				Encoding::Base64 => (TRUNCATED_PREFIX / 3 + 1) * 4 * 2,
+				Encoding::Base64 | Encoding::Uuencode => (TRUNCATED_PREFIX / 3 + 1) * 4 * 2,
 				Encoding::Identity | Encoding::QuotedPrintable => TRUNCATED_PREFIX * 3,
 			};
 			(&body[..body.len().min(keep)], true)
 		};
-		let mut content = match encoding {
-			Encoding::Identity => input.to_vec(),
-			Encoding::Base64 => decode_base64(input),
-			Encoding::QuotedPrintable => {
-				mail_parser::decoders::quoted_printable::quoted_printable_decode(input)
-					.unwrap_or_else(|| input.to_vec())
-			}
+		let (mut content, garbled) = match encoding {
+			Encoding::Identity => (input.to_vec(), false),
+			Encoding::Base64 => decode::base64(input),
+			Encoding::QuotedPrintable => (decode::quoted_printable(input), false),
+			Encoding::Uuencode => (decode::uuencode(input), false),
 		};
 		if truncated {
 			content.truncate(TRUNCATED_PREFIX);
 		}
 		self.shared.decoded = self.shared.decoded.saturating_add(content.len());
-		(content, truncated)
-	}
-}
-
-/// Base64 as mail clients read it: characters outside the alphabet are
-/// skipped and the data ends at the first `=`, so a sender cannot hide a
-/// payload from the scan with stray bytes the recipient's client ignores.
-fn decode_base64(input: &[u8]) -> Vec<u8> {
-	use base64::Engine as _;
-	use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-	const LENIENT: GeneralPurpose = GeneralPurpose::new(
-		&base64::alphabet::STANDARD,
-		GeneralPurposeConfig::new()
-			.with_decode_allow_trailing_bits(true)
-			.with_decode_padding_mode(DecodePaddingMode::Indifferent),
-	);
-	let mut clean: Vec<u8> = input
-		.iter()
-		.copied()
-		.take_while(|&byte| byte != b'=')
-		.filter(|byte| byte.is_ascii_alphanumeric() || *byte == b'+' || *byte == b'/')
-		.collect();
-	if clean.len() % 4 == 1 {
-		clean.pop();
-	}
-	LENIENT.decode(&clean).unwrap_or_default()
-}
-
-/// Parse one header block with mail-parser.
-fn parse_header(block: &[u8]) -> PartHeader {
-	let mut block = block.to_vec();
-	block.extend_from_slice(b"\r\n");
-	let parsed = MessageParser::new().parse_headers(&block);
-	let content_type = parsed.as_ref().and_then(|message| message.content_type());
-	let declared_type = content_type
-		.map(|ct| match ct.subtype() {
-			Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
-			None => ct.ctype().to_string(),
-		})
-		.map(|value| value.to_ascii_lowercase())
-		.unwrap_or_else(|| "text/plain".to_string());
-	let disposition = parsed
-		.as_ref()
-		.and_then(|message| message.content_disposition());
-	let filename = disposition
-		.and_then(|cd| cd.attribute("filename"))
-		.or_else(|| content_type.and_then(|ct| ct.attribute("name")))
-		.map(str::to_string)
-		.filter(|name| !name.is_empty());
-	let boundary = content_type
-		.filter(|_| declared_type.starts_with("multipart/"))
-		.and_then(|ct| ct.attribute("boundary"))
-		.filter(|value| !value.is_empty() && value.len() <= MAX_BOUNDARY_LEN)
-		.map(|value| value.as_bytes().to_vec());
-	let encoding = match parsed
-		.as_ref()
-		.and_then(|message| message.content_transfer_encoding())
-		.map(str::to_ascii_lowercase)
-		.as_deref()
-	{
-		Some("base64") => Encoding::Base64,
-		Some("quoted-printable") => Encoding::QuotedPrintable,
-		_ => Encoding::Identity,
-	};
-	let attachment = filename.is_some()
-		|| disposition.is_some_and(|cd| cd.ctype().eq_ignore_ascii_case("attachment"))
-		|| !(declared_type.starts_with("text/") || declared_type.starts_with("multipart/"));
-	PartHeader {
-		filename,
-		declared_type,
-		attachment,
-		encoding,
-		boundary,
+		(content, truncated, garbled)
 	}
 }
 
@@ -423,3 +390,7 @@ fn trim_cr(line: &[u8]) -> &[u8] {
 #[cfg(test)]
 #[path = "walk_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "walk_tests_differential.rs"]
+mod tests_differential;
