@@ -251,3 +251,7 @@ mod tests_regressions;
 #[cfg(test)]
 #[path = "inspect_tests_regressions_b.rs"]
 mod tests_regressions_b;
+
+#[cfg(test)]
+#[path = "docs_tests.rs"]
+mod docs_tests;

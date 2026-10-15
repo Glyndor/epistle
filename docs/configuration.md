@@ -137,6 +137,19 @@ it: while scans keep failing, the antivirus area warns with how many failed,
 since when, and whether that mail was accepted unscanned or deferred, even
 if clamd answers `PING` at that moment.
 
+## `[attachments]` attachment policy
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `mode` | `off`, `flag`, `quarantine` or `reject` | `flag` (`epistle init` writes `quarantine`) | What a disguised or dangerous attachment does: a warning header, the Rejects mailbox, or `550 5.7.1` during SMTP. |
+| `macros` | `allow`, `flag` or `quarantine` | `flag` (`init`: `quarantine`) | Office documents with VBA macros, never above `mode`. |
+| `encrypted_archives` | `allow`, `flag` or `quarantine` | `flag` | Archives no scanner can read, never above `mode`. |
+| `block_extensions` | list | empty | Extensions treated as dangerous on top of the built-in list. |
+| `allow_extensions` | list | empty | Extensions taken off the dangerous list, for names only. The always-dangerous ones are refused. |
+
+What each finding means, what `allow_extensions` can and cannot do, and the
+residual risks are in [attachments.md](attachments.md).
+
 ## Listeners
 
 Each `[[listeners]]` opens one service. Listeners bind to **loopback by
