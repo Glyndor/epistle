@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::config::{Config, ListenerKind};
 use crate::directory_store::FileWatcher;
 use crate::smtp::server::{Server, TlsMode};
-use crate::smtp::sink::MessageSink;
 
 use super::serve_dkim::SplitCompanions;
 use super::serve_ratelimit::RateLimiters;
@@ -176,15 +175,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
 	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
 	// sink through `submit`; the antivirus scan wraps it there.
-	let sink: Arc<dyn MessageSink> =
-		crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
-			config.antispam.scan_authenticated,
-			Arc::new(split),
-			clamd,
-			attachment_policy.clone(),
-			Some(metrics.clone()),
-			webhook.clone(),
-		)?;
+	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
+		config.antispam.scan_authenticated,
+		Arc::new(split),
+		clamd,
+		attachment_policy.clone(),
+		Some(metrics.clone()),
+		webhook.clone(),
+	)?;
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the
@@ -513,9 +511,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(hook) = &scanner_hook {
 					server = server.with_hook(Arc::clone(hook));
 				}
-				if let Some(policy) = &attachment_policy {
-					server = server.with_attachment_policy(Arc::clone(policy));
-				}
+				server = server.with_attachment_policy(attachment_policy.clone());
 				// LLM hook only fires when the Bayesian corpus is also wired
 				// in: without it the uncertain-band check has nothing to read.
 				if let (Some(llm_hook), Some(_)) = (&llm_hook, &reputation_pool) {

@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 use crate::config::Listener;
-use crate::smtp::sink::MemorySink;
+use crate::smtp::sink::{MemorySink, MessageSink};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 

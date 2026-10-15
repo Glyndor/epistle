@@ -301,12 +301,13 @@ impl Server {
 		self
 	}
 
-	/// Apply the `[attachments]` policy to unauthenticated inbound mail.
+	/// Apply the `[attachments]` policy to unauthenticated inbound mail;
+	/// `None` (`mode = "off"`) applies none.
 	pub fn with_attachment_policy(
 		mut self,
-		policy: Arc<crate::antispam::attachments::policy::Policy>,
+		policy: impl Into<Option<Arc<crate::antispam::attachments::policy::Policy>>>,
 	) -> Self {
-		self.attachments = Some(policy);
+		self.attachments = policy.into();
 		self
 	}
 
