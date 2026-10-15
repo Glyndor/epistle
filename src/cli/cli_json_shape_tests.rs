@@ -173,7 +173,7 @@ fn app_password_list_json() {
 		json: true,
 	};
 	assert_eq!(
-		crate::cli::app_passwords::run(&config, action, &mut out),
+		crate::cli::app_passwords::run(&config, action, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let value: Value = serde_json::from_slice(&out).expect("valid JSON");

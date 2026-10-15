@@ -32,7 +32,7 @@ fn seeded(data_dir: &std::path::Path) -> Config {
 
 fn listed(config: &Config, action: AppPasswordCli) -> String {
 	let mut out = Vec::new();
-	assert_eq!(run(config, action, &mut out), ExitCode::SUCCESS);
+	assert_eq!(run(config, action, false, &mut out), ExitCode::SUCCESS);
 	String::from_utf8(out).expect("utf8")
 }
 

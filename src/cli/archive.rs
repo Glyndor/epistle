@@ -73,15 +73,19 @@ pub enum Subcommand {
 }
 
 /// Dispatch a parsed subcommand.
-pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn dispatch(
+	subcommand: Subcommand,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	match subcommand {
 		Subcommand::List {
 			config,
 			account,
-			json,
+			json: leaf,
 		} => match Config::load(&config) {
 			Ok(config) => match message_crypto(&config) {
-				Ok(crypto) => list(&config.data_dir, &account, &crypto, json, out),
+				Ok(crypto) => list(&config.data_dir, &account, &crypto, leaf || json, out),
 				Err(code) => code,
 			},
 			Err(error) => error_exit(error),
@@ -92,7 +96,7 @@ pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) ->
 			id,
 		} => match Config::load(&config) {
 			Ok(config) => match message_crypto(&config) {
-				Ok(crypto) => restore(&config.data_dir, &account, id, &crypto, out),
+				Ok(crypto) => restore(&config.data_dir, (&account, id), &crypto, json, out),
 				Err(code) => code,
 			},
 			Err(error) => error_exit(error),
@@ -103,7 +107,13 @@ pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) ->
 			older_than_days,
 			yes,
 		} => match Config::load(&config) {
-			Ok(config) => purge(&config.data_dir, &account, older_than_days, yes, out),
+			Ok(config) => purge(
+				&config.data_dir,
+				&account,
+				(older_than_days, yes),
+				json,
+				out,
+			),
 			Err(error) => error_exit(error),
 		},
 	}
@@ -166,15 +176,19 @@ fn render_entries(entries: &[ArchivedMessage], out: &mut impl std::io::Write) {
 
 fn restore(
 	data_dir: &Path,
-	account: &str,
-	id: Uuid,
+	(account, id): (&str, Uuid),
 	crypto: &crate::storage::MessageCrypto,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	match archive::restore(data_dir, account, id, crypto) {
 		Ok(target) => {
-			let _ = writeln!(out, "restored {id} to {target}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("restored {id} to {target}"));
+			let fields = serde_json::json!({
+				"account": account, "id": id.to_string(), "mailbox": target.to_string(),
+			});
+			report.change("restore", true, fields, None)
 		}
 		Err(error) => {
 			super::style::error(format_args!("restoring archive entry: {error}"));
@@ -186,8 +200,8 @@ fn restore(
 fn purge(
 	data_dir: &Path,
 	account: &str,
-	older_than_days: Option<u64>,
-	yes: bool,
+	(older_than_days, yes): (Option<u64>, bool),
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Ok(parsed) = AccountName::new(account) else {
@@ -237,8 +251,10 @@ fn purge(
 	}
 	match archive::purge(&account_root, threshold, now) {
 		Ok(removed) => {
-			let _ = writeln!(out, "purged {removed} archived entries");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("purged {removed} archived entries"));
+			let fields = serde_json::json!({ "account": account, "purged": removed });
+			report.change("purge", removed > 0, fields, None)
 		}
 		Err(error) => {
 			super::style::error(format_args!("purging archive: {error}"));

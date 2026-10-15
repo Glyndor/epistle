@@ -269,6 +269,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
 		#[command(subcommand)]
 		action: Option<queue::QueueCli>,
@@ -297,6 +300,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Ban action (`list`, `add`, `remove`, `allow`).
 		#[command(subcommand)]
 		action: ban::BanCli,
@@ -309,6 +315,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
 		#[command(subcommand)]
 		action: masked::MaskedCli,
@@ -318,6 +327,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// App password action (`list`, `create`, `revoke`).
 		#[command(subcommand)]
 		action: app_passwords::AppPasswordCli,
@@ -333,6 +345,9 @@ pub enum Command {
 	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
 	/// Each subcommand targets one account.
 	Archive {
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The archive sub-action (`list`, `restore`, `purge`).
 		#[command(subcommand)]
 		action: archive::Subcommand,
@@ -582,6 +597,9 @@ pub enum Command {
 			default_value = DEFAULT_CONFIG
 		)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
@@ -591,6 +609,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Database action (`upgrade`).
 		#[command(subcommand)]
 		action: db_upgrade::DbCli,
@@ -603,6 +624,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// DKIM action (`show`, `rotate`, `cleanup`).
 		#[command(subcommand)]
 		action: dkim_cli::DkimCli,
@@ -615,6 +639,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// TLS action (`show`, `renew`).
 		#[command(subcommand)]
 		action: tls_cli::TlsCli,
@@ -624,6 +651,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// API key action (`list`, `create`, `revoke`, `rotate`).
 		#[command(subcommand)]
 		action: api_keys::ApiKeyCli,

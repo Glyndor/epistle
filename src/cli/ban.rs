@@ -120,6 +120,7 @@ pub(super) fn now_epoch() -> u64 {
 pub(super) fn run(
 	config: &Config,
 	action: BanCli,
+	json: bool,
 	now: u64,
 	out: &mut impl Write,
 	err: &mut impl Write,
@@ -155,7 +156,7 @@ pub(super) fn run(
 			}
 		};
 		let store = PgBanStore::new(pool, None);
-		match execute(&store, action, now, out, err).await {
+		match execute(&store, action, json, now, out, err).await {
 			Ok(code) => code,
 			Err(error) => {
 				super::style::error_to(err, format_args!("database: {error}"));
@@ -175,14 +176,15 @@ struct BanJson<'a> {
 async fn execute(
 	store: &PgBanStore,
 	action: BanCli,
+	json: bool,
 	now: u64,
 	out: &mut impl Write,
 	err: &mut impl Write,
 ) -> Result<ExitCode, sqlx::Error> {
 	match action {
-		BanCli::List { json } => {
+		BanCli::List { json: leaf } => {
 			let rows = store.list_bans(now).await?;
-			if json {
+			if leaf || json {
 				let rows: Vec<BanJson> = rows
 					.iter()
 					.map(|r| BanJson {
@@ -222,8 +224,10 @@ async fn execute(
 			}
 			let until = now.saturating_add(duration.unwrap_or(DEFAULT_BAN_SECS));
 			store.add_ban(target, now, until).await?;
-			let _ = writeln!(out, "banned {target} until {until}");
-			Ok(ExitCode::SUCCESS)
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("banned {target} until {until}"));
+			let fields = serde_json::json!({ "target": target.to_string(), "until": until });
+			Ok(report.change("add", true, fields, None))
 		}
 		BanCli::Remove { target } => {
 			let (bans, failures) = store.remove_ban(target).await?;
@@ -231,26 +235,30 @@ async fn execute(
 				super::style::error_to(err, format_args!("{target} has no ban or failure record"));
 				return Ok(ExitCode::FAILURE);
 			}
-			let _ = writeln!(
-				out,
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
 				"unbanned {target} ({bans} bans, {failures} failures cleared)"
-			);
-			Ok(ExitCode::SUCCESS)
+			));
+			let fields = serde_json::json!({
+				"target": target.to_string(), "bans": bans, "failures": failures,
+			});
+			Ok(report.change("remove", true, fields, None))
 		}
-		BanCli::Allow { action } => allow(store, action, out, err).await,
+		BanCli::Allow { action } => allow(store, action, json, out, err).await,
 	}
 }
 
 async fn allow(
 	store: &PgBanStore,
 	action: AllowCli,
+	json: bool,
 	out: &mut impl Write,
 	err: &mut impl Write,
 ) -> Result<ExitCode, sqlx::Error> {
 	match action {
-		AllowCli::List { json } => {
+		AllowCli::List { json: leaf } => {
 			let entries = store.allow_list().await?;
-			if json {
+			if leaf || json {
 				return print_json(&entries, out, err);
 			}
 			for entry in &entries {
@@ -261,17 +269,20 @@ async fn allow(
 		}
 		AllowCli::Add { cidr } => {
 			let added = store.allow_add(cidr).await?;
-			let _ = writeln!(
-				out,
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
 				"{} {cidr}",
 				if added { "allowed" } else { "already allowed" }
-			);
-			Ok(ExitCode::SUCCESS)
+			));
+			let fields = serde_json::json!({ "cidr": cidr.to_string() });
+			Ok(report.change("allow add", added, fields, None))
 		}
 		AllowCli::Remove { cidr } => {
 			if store.allow_remove(cidr).await? {
-				let _ = writeln!(out, "removed {cidr} from the allow list");
-				Ok(ExitCode::SUCCESS)
+				let mut report = super::json_out::Report::new(out, json);
+				report.line(format_args!("removed {cidr} from the allow list"));
+				let fields = serde_json::json!({ "cidr": cidr.to_string() });
+				Ok(report.change("allow remove", true, fields, None))
 			} else {
 				super::style::error_to(err, format_args!("{cidr} is not on the allow list"));
 				Ok(ExitCode::FAILURE)

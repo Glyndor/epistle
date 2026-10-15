@@ -49,7 +49,7 @@ fn list_json_prints_every_key_without_its_hash() {
 	let mut out = Vec::new();
 	let action = crate::cli::api_keys::ApiKeyCli::List { json: true };
 	assert_eq!(
-		crate::cli::api_keys::run(&config_value, action, &mut out),
+		crate::cli::api_keys::run(&config_value, action, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");

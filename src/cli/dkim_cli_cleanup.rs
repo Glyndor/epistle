@@ -19,13 +19,14 @@ pub(super) fn cleanup(
 	config: &Config,
 	dry_run: bool,
 	yes: bool,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let provider = config
 		.dns
 		.as_ref()
 		.and_then(|dns| dns.build_for_host(&config.hostname));
-	cleanup_with(config, provider.as_deref(), dry_run, yes, out)
+	cleanup_with(config, provider.as_deref(), dry_run, yes, json, out)
 }
 
 /// [`cleanup`] against any provider; `None` when there is none to list.
@@ -34,6 +35,7 @@ pub(super) fn cleanup_with(
 	provider: Option<&dyn DnsProvider>,
 	dry_run: bool,
 	yes: bool,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Some(dkim) = &config.dkim else {
@@ -74,22 +76,34 @@ pub(super) fn cleanup_with(
 			return ExitCode::FAILURE;
 		}
 	};
+	let mut report = crate::cli::json_out::Report::new(out, json);
 	if let Some(reason) = &orphans.unlisted {
-		let _ = writeln!(out, "TXT records not checked: {reason}");
+		report.line(format_args!("TXT records not checked: {reason}"));
 	}
 	for path in &orphans.key_files {
-		let _ = writeln!(out, "remove key file {}", path.display());
+		report.line(format_args!("remove key file {}", path.display()));
 	}
 	for name in &orphans.records {
-		let _ = writeln!(out, "delete TXT {name}");
+		report.line(format_args!("delete TXT {name}"));
 	}
+	let files: Vec<String> = orphans
+		.key_files
+		.iter()
+		.map(|path| path.display().to_string())
+		.collect();
+	let mut result = serde_json::json!({
+		"result": "queued", "action": "cleanup", "key_files": files,
+		"records": orphans.records, "records_unchecked": orphans.unlisted,
+	});
 	if orphans.is_empty() {
-		let _ = writeln!(out, "nothing to clean up");
-		return ExitCode::SUCCESS;
+		report.line("nothing to clean up");
+		result["result"] = "unchanged".into();
+		return report.object(result);
 	}
 	if dry_run {
-		let _ = writeln!(out, "dry run: nothing changed");
-		return ExitCode::SUCCESS;
+		report.line("dry run: nothing changed");
+		result["result"] = "dry-run".into();
+		return report.object(result);
 	}
 	if !served {
 		style::error(
@@ -109,11 +123,10 @@ pub(super) fn cleanup_with(
 		style::error(format_args!("cannot write the cleanup request: {error}"));
 		return ExitCode::FAILURE;
 	}
-	let _ = writeln!(
-		out,
-		"queued: the running server removes what is still unused within a minute (at its next start if it is stopped)"
+	report.line(
+		"queued: the running server removes what is still unused within a minute (at its next start if it is stopped)",
 	);
-	ExitCode::SUCCESS
+	report.object(result)
 }
 
 #[cfg(test)]

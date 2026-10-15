@@ -5,7 +5,7 @@
 //! without a dispatch arm here is a compile error, which is the same
 //! correction the inline dispatch used to give us.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -19,44 +19,9 @@ use super::{
 };
 use crate::config::Config;
 
-/// Run the `restore` subcommand: read the archive from stdin, load the
-/// config, hand the bytes to [`backup::run_restore`]. Lives here rather
-/// than in the match arm so the dispatch table stays compact and the
-/// per-file line budget keeps `dispatch.rs` under 500 code lines.
-pub(super) fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool, yes: bool) -> ExitCode {
-	let config = match Config::load(&config) {
-		Ok(config) => config,
-		Err(error) => {
-			style::error(error);
-			return ExitCode::FAILURE;
-		}
-	};
-	// stdin carries the archive, so the question is answered on the
-	// terminal. `--yes` answers it; it never stands in for `--force`, and
-	// the restore still refuses an unsafe target without `--force`.
-	let question = format!(
-		"Restore the archive on stdin into {}, replacing what is there? [y/N]",
-		config.data_dir.display()
-	);
-	if !dry_run
-		&& let Err(code) = super::prompt::confirm_destructive_on_terminal("restore", &question, yes)
-	{
-		return code;
-	}
-	let mut input = Vec::new();
-	if let Err(error) = std::io::Read::read_to_end(&mut super::prompt::stdin(), &mut input) {
-		style::error(format_args!("reading archive from stdin: {error}"));
-		return ExitCode::FAILURE;
-	}
-	backup::run_restore(
-		&config,
-		&input,
-		force,
-		dry_run,
-		&mut std::io::stdout().lock(),
-		&mut style::stderr(),
-	)
-}
+#[path = "dispatch_restore.rs"]
+mod restore;
+pub(in crate::cli) use restore::dispatch_restore;
 
 /// Run `f` with the loaded config, or surface a `style::error` and the
 /// non-zero exit code on a parse failure. The closure shape lets the
@@ -243,7 +208,11 @@ impl Cli {
 					}
 				}
 			}
-			Command::Queue { config, action } => match Config::load(&config) {
+			Command::Queue {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
 				Ok(config) => {
 					let webhook = config.webhook.as_ref().map(|wh| {
 						Arc::new(
@@ -256,6 +225,7 @@ impl Cli {
 						config.storage.as_ref(),
 						config.delivery_log_days(),
 						action,
+						json,
 						queue::now_epoch(),
 						webhook.as_ref(),
 						&mut std::io::stdout().lock(),
@@ -294,10 +264,15 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Ban { config, action } => match Config::load(&config) {
+			Command::Ban {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
 				Ok(config) => ban::run(
 					&config,
 					action,
+					json,
 					ban::now_epoch(),
 					&mut std::io::stdout().lock(),
 					&mut style::stderr(),
@@ -307,10 +282,15 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Masked { config, action } => match Config::load(&config) {
+			Command::Masked {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
 				Ok(config) => masked::run(
 					&config,
 					action,
+					json,
 					ban::now_epoch(),
 					&mut std::io::stdout().lock(),
 					&mut style::stderr(),
@@ -324,14 +304,22 @@ impl Cli {
 			Command::StorageKeygen => storage_keygen(),
 			Command::OauthKeygen { out } => oauth_keygen(&out),
 			Command::TokenHash => token_hash(),
-			Command::AppPassword { config, action } => match Config::load(&config) {
-				Ok(config) => app_passwords::run(&config, action, &mut std::io::stdout().lock()),
+			Command::AppPassword {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
+				Ok(config) => {
+					app_passwords::run(&config, action, json, &mut std::io::stdout().lock())
+				}
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
-			Command::Archive { action } => archive::dispatch(action, &mut std::io::stdout().lock()),
+			Command::Archive { json, action } => {
+				archive::dispatch(action, json, &mut std::io::stdout().lock())
+			}
 			Command::Reports { config, days } => with_config(&config, |config| {
 				reports::run(config, days, &mut std::io::stdout().lock())
 			}),
@@ -414,45 +402,62 @@ impl Cli {
 			} => domain::run(&config, action, dry_run, json),
 			Command::Stack {
 				config,
+				json,
 				action: stack::StackCli::Rollback { to, yes },
-			} => super::stack_rollback::run_as_root(&config, to.as_deref(), yes),
-			Command::Stack { config, action } => match Config::load(&config) {
-				Ok(config) => stack::run(&config, action.into()),
+			} => super::stack_rollback::run_as_root(&config, to.as_deref(), yes, json),
+			Command::Stack {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
+				Ok(config) => stack::run_reporting(&config, action, json),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
-			Command::Dkim { config, action } => match Config::load(&config) {
+			Command::Dkim {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
 				Ok(config) => match action {
 					action @ dkim_cli::DkimCli::Rotate { .. } => {
-						live::run("dkim rotate", false, |mut out| {
-							dkim_cli::run(&config, action, &mut out)
+						live::run("dkim rotate", json, |mut out| {
+							dkim_cli::run(&config, action, json, &mut out)
 						})
 					}
-					action => dkim_cli::run(&config, action, &mut std::io::stdout().lock()),
+					action => dkim_cli::run(&config, action, json, &mut std::io::stdout().lock()),
 				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
-			Command::Tls { config, action } => match Config::load(&config) {
+			Command::Tls {
+				config,
+				json,
+				action,
+			} => match Config::load(&config) {
 				Ok(config) => match action {
 					action @ tls_cli::TlsCli::Renew { .. } => {
-						live::run("tls renew", false, |mut out| {
-							tls_cli::run(&config, action, &mut out)
+						live::run("tls renew", json, |mut out| {
+							tls_cli::run(&config, action, json, &mut out)
 						})
 					}
-					action => tls_cli::run(&config, action, &mut std::io::stdout().lock()),
+					action => tls_cli::run(&config, action, json, &mut std::io::stdout().lock()),
 				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
-			Command::ApiKey { config, action } => with_config(&config, |config| {
-				api_keys::run(config, action, &mut std::io::stdout().lock())
+			Command::ApiKey {
+				config,
+				json,
+				action,
+			} => with_config(&config, |config| {
+				api_keys::run(config, action, json, &mut std::io::stdout().lock())
 			}),
 			Command::Probe { config, json } => with_config(&config, |config| {
 				live::run("probe", json, |mut out| probe::run(config, json, &mut out))
@@ -460,9 +465,13 @@ impl Cli {
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),
 			Command::MoveSubids(args) => super::subid::run(args),
-			Command::Db { config, action } => {
-				with_config(&config, |config| super::db_upgrade::run(config, action))
-			}
+			Command::Db {
+				config,
+				json,
+				action,
+			} => with_config(&config, |config| {
+				super::db_upgrade::run(config, action, json)
+			}),
 		}
 	}
 }

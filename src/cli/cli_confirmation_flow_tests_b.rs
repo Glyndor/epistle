@@ -35,6 +35,7 @@ fn masked_remove_asks_naming_address_and_account() {
 			masked::run(
 				&load(cfg.path()),
 				action,
+				false,
 				1_000,
 				&mut Vec::new(),
 				&mut Vec::new(),

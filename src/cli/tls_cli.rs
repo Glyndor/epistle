@@ -51,17 +51,22 @@ pub(super) struct TlsView {
 }
 
 /// Run one `tls` action.
-pub(super) fn run(config: &Config, action: TlsCli, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn run(
+	config: &Config,
+	action: TlsCli,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let now = super::dkim_cli::now_epoch();
 	match action {
-		TlsCli::Show { json } => match view(config, now) {
-			Ok(view) => render(&view, json, out),
+		TlsCli::Show { json: leaf } => match view(config, now) {
+			Ok(view) => render(&view, leaf || json, out),
 			Err(error) => {
 				super::style::error(error);
 				ExitCode::FAILURE
 			}
 		},
-		TlsCli::Renew { force } => renew(config, force, now, out),
+		TlsCli::Renew { force } => renew(config, force, now, json, out),
 	}
 }
 
@@ -177,6 +182,7 @@ pub(super) fn renew(
 	config: &Config,
 	force: bool,
 	now: u64,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Some(acme) = &config.acme else {
@@ -190,22 +196,25 @@ pub(super) fn renew(
 		return ExitCode::FAILURE;
 	}
 	let window = u64::from(acme.renew_before_days);
+	let mut report = super::json_out::Report::new(out, json);
+	let mut result = serde_json::json!({
+		"result": "queued", "action": "renew", "force": force, "renew_before_days": window,
+	});
 	if !force && !crate::acme::renew::needs_renewal(&config.data_dir, window, now) {
-		let _ = writeln!(
-			out,
+		report.line(format_args!(
 			"not due: the certificate is outside its {window} day renewal window; use --force to renew anyway"
-		);
-		return ExitCode::SUCCESS;
+		));
+		result["result"] = "unchanged".into();
+		return report.object(result);
 	}
 	if let Err(error) = crate::acme::renew_request::request_renewal(&config.data_dir, force, now) {
 		super::style::error(format_args!("cannot write the renewal request: {error}"));
 		return ExitCode::FAILURE;
 	}
-	let _ = writeln!(
-		out,
-		"queued: the running server renews within a minute (at its next start if it is stopped); follow it with `epistle tls show`"
+	report.line(
+		"queued: the running server renews within a minute (at its next start if it is stopped); follow it with `epistle tls show`",
 	);
-	ExitCode::SUCCESS
+	report.object(result)
 }
 
 #[cfg(test)]

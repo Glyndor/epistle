@@ -68,6 +68,11 @@ pub fn epistle_in(args: &[&str], stdin: &[u8], path_first: Option<&Path>) -> Out
 		path.push(":");
 		path.push(std::env::var_os("PATH").unwrap_or_default());
 		command.env("PATH", path);
+		// The podman socket check only looks for the file.
+		let runtime = dir.join("runtime");
+		std::fs::create_dir_all(runtime.join("podman")).expect("runtime dir");
+		std::fs::write(runtime.join("podman/podman.sock"), b"").expect("socket marker");
+		command.env("XDG_RUNTIME_DIR", runtime);
 	}
 	let mut child = command.spawn().expect("spawn epistle");
 	child
@@ -116,4 +121,26 @@ pub fn add_account(env: &Env, name: &str) {
 		"account add failed: {}",
 		String::from_utf8_lossy(&output.stderr)
 	);
+}
+
+/// A stub `podup` in `<env>/bin` that answers `--version` with the floor,
+/// prints a line on its own stdout for every other call (the line must
+/// never reach epistle's stdout under `--json`), and a compose file for
+/// it to be pointed at. Returns the directory to put first on `PATH`.
+#[allow(dead_code)]
+pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
+	let bin = env.dir.path().join("bin");
+	std::fs::create_dir_all(&bin).expect("bin dir");
+	let shim = bin.join("podup");
+	std::fs::write(
+		&shim,
+		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.10.13'; exit 0; fi\n\
+		 echo \"podup says: $*\"\nexit 0\n",
+	)
+	.expect("write shim");
+	std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+	let compose = env.data_dir().join("compose/compose.yaml");
+	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
+	std::fs::write(&compose, b"# compose fixture\n").expect("write compose");
+	bin
 }

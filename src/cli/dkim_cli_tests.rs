@@ -36,7 +36,7 @@ fn refuses_without_dns_exactly_as_the_server_stays_off() {
 	assert!(refusal(&config, 5 * DAY).contains("[dns] is not configured"));
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, None, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, false, &mut out),
 		ExitCode::FAILURE
 	);
 	assert!(
@@ -60,7 +60,7 @@ fn refuses_an_out_of_zone_signing_domain_like_the_server() {
 	);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, None, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, false, &mut out),
 		ExitCode::FAILURE
 	);
 	assert!(!dir.path().join(REQUEST_FILE).exists());
@@ -102,7 +102,7 @@ fn dry_run_describes_the_rotation_and_writes_nothing() {
 	let config = config_with(dir.path(), "['example.org']", DNS);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, true, 5 * DAY, None, &mut out),
+		rotate_now(&config, true, 5 * DAY, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -121,7 +121,7 @@ fn rotate_queues_one_request_for_the_server() {
 	let config = config_with(dir.path(), "['example.org']", DNS);
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, false, 5 * DAY, None, &mut out),
+		rotate_now(&config, false, 5 * DAY, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert!(String::from_utf8(out).expect("utf8").contains("queued"));
@@ -153,7 +153,7 @@ fn dry_run_with_dual_signing_names_both_keys() {
 	std::fs::write(dir.path().join(STATE_FILE), state).expect("state");
 	let mut out = Vec::new();
 	assert_eq!(
-		rotate_now(&config, true, 5 * DAY, None, &mut out),
+		rotate_now(&config, true, 5 * DAY, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -188,6 +188,7 @@ fn domain_refusal(domain: &str) -> String {
 		false,
 		5 * DAY,
 		Some(domain.into()),
+		false,
 		&mut err,
 		&mut out,
 	);

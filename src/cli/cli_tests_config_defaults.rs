@@ -57,7 +57,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Tls { config, .. }
 		| Command::ApiKey { config, .. }
 		| Command::Db { config, .. } => Some(config),
-		Command::Archive { action } => match action {
+		Command::Archive { action, .. } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
 			| archive::Subcommand::Purge { config, .. } => Some(config),

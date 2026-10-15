@@ -49,7 +49,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, None, 0, action, now, None, &mut out);
+	let code = run(dir, None, 0, action, false, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -304,6 +304,7 @@ fn remove_writes_a_canceled_record_for_each_pending_recipient() {
 		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -347,6 +348,7 @@ fn remove_with_log_disabled_does_not_write_records() {
 		None,
 		0,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -390,6 +392,7 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		Some(&webhook),
 		&mut out,
@@ -467,6 +470,7 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 		Some(&storage),
 		0,
 		Some(QueueCli::Show { id, json: false }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,

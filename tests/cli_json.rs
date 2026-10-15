@@ -13,3 +13,9 @@ mod config_edits;
 
 #[path = "cli_json/alias_domain.rs"]
 mod alias_domain;
+
+#[path = "cli_json/stores.rs"]
+mod stores;
+
+#[path = "cli_json/stack.rs"]
+mod stack;

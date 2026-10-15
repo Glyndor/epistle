@@ -21,7 +21,7 @@ fn config(dir: &std::path::Path, extra: &str) -> Config {
 /// Run an action and return the exit code, stdout and stderr.
 fn exec(config: &Config, action: MaskedCli) -> (ExitCode, String, String) {
 	let (mut out, mut err) = (Vec::new(), Vec::new());
-	let code = run(config, action, 1_700_000_000, &mut out, &mut err);
+	let code = run(config, action, false, 1_700_000_000, &mut out, &mut err);
 	(
 		code,
 		String::from_utf8(out).expect("utf8"),

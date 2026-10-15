@@ -70,7 +70,7 @@ fn show_prints_text_and_json() {
 	let config = config_in(dir.path(), false);
 	let mut text = Vec::new();
 	assert_eq!(
-		run(&config, TlsCli::Show { json: false }, &mut text),
+		run(&config, TlsCli::Show { json: false }, false, &mut text),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(text).expect("utf8");
@@ -80,7 +80,7 @@ fn show_prints_text_and_json() {
 	);
 	let mut json = Vec::new();
 	assert_eq!(
-		run(&config, TlsCli::Show { json: true }, &mut json),
+		run(&config, TlsCli::Show { json: true }, false, &mut json),
 		ExitCode::SUCCESS
 	);
 	let json: serde_json::Value = serde_json::from_slice(&json).expect("json");
@@ -93,12 +93,18 @@ fn renew_refuses_without_acme_or_without_tls() {
 	let dir = tempfile::tempdir().expect("dir");
 	let no_acme = config_in(dir.path(), false);
 	let mut out = Vec::new();
-	assert_eq!(renew(&no_acme, true, NOW, &mut out), ExitCode::FAILURE);
+	assert_eq!(
+		renew(&no_acme, true, NOW, false, &mut out),
+		ExitCode::FAILURE
+	);
 	assert!(pending_request(dir.path()).is_none());
 
 	let mut no_tls = config_in(dir.path(), true);
 	no_tls.tls = None;
-	assert_eq!(renew(&no_tls, true, NOW, &mut out), ExitCode::FAILURE);
+	assert_eq!(
+		renew(&no_tls, true, NOW, false, &mut out),
+		ExitCode::FAILURE
+	);
 	assert!(
 		pending_request(dir.path()).is_none(),
 		"refusals must not queue anything"
@@ -120,7 +126,10 @@ fn renew_without_force_waits_for_the_window() {
 	// outside the default 30 day renewal window.
 	let mut out = Vec::new();
 	let early = NOW - 100 * 86_400;
-	assert_eq!(renew(&config, false, early, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		renew(&config, false, early, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	assert!(String::from_utf8(out).expect("utf8").starts_with("not due"));
 	assert!(
 		pending_request(dir.path()).is_none(),
@@ -140,7 +149,10 @@ fn renew_force_queues_a_forced_request() {
 		31,
 	);
 	let mut out = Vec::new();
-	assert_eq!(renew(&config, true, NOW, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		renew(&config, true, NOW, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	assert!(String::from_utf8(out).expect("utf8").contains("queued"));
 	let request = pending_request(dir.path()).expect("request");
 	assert!(request.force);
@@ -160,7 +172,10 @@ fn renew_inside_the_window_queues_without_force() {
 		10,
 	);
 	let mut out = Vec::new();
-	assert_eq!(renew(&config, false, NOW, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		renew(&config, false, NOW, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	let request = pending_request(dir.path()).expect("request");
 	assert!(!request.force, "a due certificate does not need force");
 }

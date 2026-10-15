@@ -80,7 +80,7 @@ fn an_override_key_and_record_are_never_offered_for_removal() {
 		"ed5._domainkey.example.net.",
 	];
 	let mut out = Vec::new();
-	let code = cleanup_with(&config, Some(&Listed(zone)), true, true, &mut out);
+	let code = cleanup_with(&config, Some(&Listed(zone)), true, true, false, &mut out);
 	let text = String::from_utf8(out).expect("utf-8");
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert_eq!(

@@ -106,7 +106,7 @@ fn without_a_database_every_action_says_bans_are_not_manageable() {
 			panic!("not a ban command");
 		};
 		let (mut out, mut err) = (Vec::new(), Vec::new());
-		let code = run(&config, action, 100, &mut out, &mut err);
+		let code = run(&config, action, false, 100, &mut out, &mut err);
 		assert_eq!(code, ExitCode::FAILURE, "{args:?}");
 		assert!(out.is_empty(), "{args:?}");
 		let err = String::from_utf8(err).expect("utf8");

@@ -76,7 +76,7 @@ const ZONE: [&str; 3] = [
 
 fn run(config: &Config, provider: Option<&dyn DnsProvider>, dry_run: bool) -> (ExitCode, String) {
 	let mut out = Vec::new();
-	let code = cleanup_with(config, provider, dry_run, true, &mut out);
+	let code = cleanup_with(config, provider, dry_run, true, false, &mut out);
 	(code, String::from_utf8(out).expect("utf-8"))
 }
 

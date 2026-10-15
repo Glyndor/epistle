@@ -290,11 +290,11 @@ pub(super) fn run(command: Legacy) -> ExitCode {
 			with_config(&config, |_| account::run(&config, action, false, &mut out))
 		}
 		Resource::AppPassword(action) => with_config(&config, |config| {
-			app_passwords::run(config, action, &mut out)
+			app_passwords::run(config, action, false, &mut out)
 		}),
-		Resource::ApiKey(action) => {
-			with_config(&config, |config| api_keys::run(config, action, &mut out))
-		}
+		Resource::ApiKey(action) => with_config(&config, |config| {
+			api_keys::run(config, action, false, &mut out)
+		}),
 	}
 }
 

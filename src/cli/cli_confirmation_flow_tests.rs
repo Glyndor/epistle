@@ -245,6 +245,7 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 				None,
 				0,
 				Some(QueueCli::Remove { id: *id, yes }),
+				false,
 				queue::now_epoch(),
 				None,
 				&mut Vec::new(),
@@ -289,6 +290,7 @@ fn purge(cfg: &Path, older_than_days: Option<u64>, yes: bool) -> ExitCode {
 			older_than_days,
 			yes,
 		},
+		false,
 		&mut Vec::new(),
 	)
 }
@@ -337,11 +339,11 @@ fn api_key_revoke_asks_with_the_key_scopes() {
 				scopes: vec!["read".to_string()],
 				..api_keys::NewKey::default()
 			};
-			let created = api_keys::create(&load(cfg.path()), key, &mut Vec::new());
+			let created = api_keys::create(&load(cfg.path()), key, false, &mut Vec::new());
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},
-		|(_, cfg), yes| api_keys::revoke(&load(cfg.path()), "ci", yes, &mut Vec::new()),
+		|(_, cfg), yes| api_keys::revoke(&load(cfg.path()), "ci", yes, false, &mut Vec::new()),
 		|(dir, _)| {
 			crate::api::ApiKeyStore::open(dir.path())
 				.expect("open")
@@ -365,13 +367,21 @@ fn app_password_revoke_asks_naming_label_and_account() {
 				None,
 				None,
 				None,
+				false,
 				&mut Vec::new(),
 			);
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},
 		|(_, cfg), yes| {
-			app_passwords::revoke(&load(cfg.path()), NAME, "phone", yes, &mut Vec::new())
+			app_passwords::revoke(
+				&load(cfg.path()),
+				NAME,
+				"phone",
+				yes,
+				false,
+				&mut Vec::new(),
+			)
 		},
 		|(dir, _)| {
 			AppPasswordStore::open(dir.path())
