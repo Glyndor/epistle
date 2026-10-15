@@ -107,16 +107,15 @@ impl Server {
 				return end_session(&mut stream, session).await;
 			}
 			// In Data mode, pass raw bytes to support 8BITMIME (RFC 6152).
-			let action = if mode == Mode::Data {
-				session.data_line(&line)
-			} else {
+			let action = 'line: {
+				if mode == Mode::Data {
+					break 'line session.data_line(&line);
+				}
 				let Ok(line_str) = String::from_utf8(line) else {
+					// A command that is not UTF-8 is refused and counted like
+					// any syntax error.
 					if mode == Mode::Commands {
-						let reply = Reply::syntax_error();
-						if send_within(&mut stream, &reply, body_window.as_ref()).await? {
-							continue;
-						}
-						return Ok(());
+						break 'line Some(session.unreadable_command());
 					}
 					// Auth responses must be ASCII; abort.
 					send(

@@ -217,3 +217,61 @@ async fn a_message_the_server_refuses_does_not_forgive_earlier_refusals() {
 	);
 	assert!(sink.messages().is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn command_lines_that_are_not_utf8_count_as_refusals() {
+	// Each line that is not UTF-8 is answered 500 like any syntax error, and
+	// counts like one: a recipient accepted between them keeps the
+	// consecutive-error guard away, but the 101st still closes the session.
+	let sink = Arc::new(MemorySink::new());
+	let server = Arc::new(
+		Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
+			.with_directory(test_directory()),
+	);
+	let mut client = Client::connect(&server);
+	let mut session = b"EHLO client.example.org\r\n".to_vec();
+	for pairs in [60, 41] {
+		session.extend_from_slice(
+			b"RSET\r\nMAIL FROM:<a@example.net>\r\nRCPT TO:<bob@example.org>\r\n",
+		);
+		for _ in 0..pairs {
+			session.extend_from_slice(b"\xff\xfe\r\nRCPT TO:<bob@example.org>\r\n");
+		}
+	}
+	session.extend_from_slice(b"QUIT\r\n");
+	client.send(&session).await;
+	let output = client.finish().await;
+	let codes = reply_codes(&output);
+	assert_eq!(
+		codes.iter().filter(|code| **code == "500").count(),
+		100,
+		"100 lines that are not UTF-8 are answered"
+	);
+	assert!(
+		output.ends_with(TOO_MANY),
+		"the 101st line that is not UTF-8 closes the session"
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn twenty_lines_in_a_row_that_are_not_utf8_hit_the_error_guard() {
+	let sink = Arc::new(MemorySink::new());
+	let server = Arc::new(
+		Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
+			.with_directory(test_directory()),
+	);
+	let mut client = Client::connect(&server);
+	let mut session = b"EHLO client.example.org\r\n".to_vec();
+	session.extend_from_slice(&b"\xff\xfe\r\n".repeat(25));
+	client.send(&session).await;
+	let output = client.finish().await;
+	assert_eq!(
+		reply_codes(&output).len(),
+		22,
+		"greeting, EHLO, 19 x 500, 421"
+	);
+	assert!(
+		output.ends_with("421 4.7.0 too many errors, closing connection\r\n"),
+		"the consecutive-error guard sees them too"
+	);
+}

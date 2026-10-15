@@ -78,6 +78,12 @@ impl Session {
 		self.junk.refused = 0;
 	}
 
+	/// Refuse a command line that is not UTF-8 as the syntax error it is,
+	/// and count it like one.
+	pub fn unreadable_command(&mut self) -> Action {
+		self.count_junk(false, Action::Continue(Reply::syntax_error()))
+	}
+
 	/// Whether `parsed` is a command that never moves a message forward,
 	/// whatever its reply.
 	pub(super) fn is_junk(&self, parsed: &Result<Command, ParseError>) -> bool {
