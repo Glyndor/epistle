@@ -73,6 +73,7 @@ impl Worker {
 			reply: reply.map(str::to_string),
 			attempt,
 			extra: envelope.extra.clone(),
+			class: envelope.class,
 		};
 		if let Err(error) = log.append(&record) {
 			tracing::warn!(id = %envelope.id, %error, "delivery log write failed");

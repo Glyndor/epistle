@@ -238,6 +238,13 @@ pub async fn remove_account(
 
 	let app_passwords = store.remove_all_app_passwords(name)?;
 
+	// A recreated account with the same name must not inherit the class
+	// the previous owner's mail was granted.
+	crate::evidence::bindings::update(data_dir, |bindings| {
+		bindings.accounts.remove(&name.to_ascii_lowercase());
+	})
+	.map_err(StoreError::Io)?;
+
 	let suppression = SuppressionList::open(data_dir).map_err(StoreError::Io)?;
 	let suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
 
@@ -302,3 +309,7 @@ mod tests;
 #[cfg(test)]
 #[path = "removal_tests_containment.rs"]
 mod containment_tests;
+
+#[cfg(test)]
+#[path = "removal_tests_class.rs"]
+mod class_tests;

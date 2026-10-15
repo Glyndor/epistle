@@ -100,7 +100,7 @@ impl MessageSink for ScanningSink {
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
-		extra: &std::collections::BTreeMap<String, String>,
+		submission: &crate::smtp::sink::Submission,
 	) -> Result<(), SinkError> {
 		if let Some(policy) = &self.attachments {
 			self.check_attachments(policy, &message.data, account)?;
@@ -138,7 +138,7 @@ impl MessageSink for ScanningSink {
 			self.notify(account, &signature);
 			return Err(SinkError::VirusDetected(signature));
 		}
-		self.inner.submit(message, queue_id, account, extra)
+		self.inner.submit(message, queue_id, account, submission)
 	}
 }
 

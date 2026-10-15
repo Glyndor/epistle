@@ -1,6 +1,7 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod account;
+mod account_class;
 mod account_json;
 mod account_name;
 mod account_reload;
@@ -54,6 +55,8 @@ mod resource;
 mod role_addresses;
 mod serve;
 mod serve_dkim;
+mod serve_evidence;
+mod serve_listeners;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;

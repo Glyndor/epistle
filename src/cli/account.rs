@@ -158,6 +158,18 @@ pub enum Subcommand {
 		#[arg(value_name = "LIST")]
 		list: String,
 	},
+	/// Change account settings.
+	///
+	/// `--default-class` sets the class granted to the account's mail when
+	/// neither the request nor the credential names one (`none` clears it).
+	Set {
+		/// The account login name.
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		name: String,
+		/// `transactional`, `marketing`, `personal`, or `none`.
+		#[arg(long = "default-class", value_name = "CLASS")]
+		default_class: String,
+	},
 	/// Set whether the server saves a Sent copy of every send.
 	SaveSent {
 		/// The account login name.
@@ -496,6 +508,10 @@ pub(super) fn run(
 			};
 			protocols_with_store(&store, &name, parsed, out, json)
 		}
+		Subcommand::Set {
+			name,
+			default_class,
+		} => super::account_class::set(config_path, &name, &default_class),
 		Subcommand::SaveSent { name, state } => {
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,

@@ -26,6 +26,8 @@ pub(super) struct SplitCompanions {
 	pub webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// The ARC sealer, present when `[arc]` is configured.
 	pub arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
+	/// The evidence service and the class bindings.
+	pub evidence: super::serve_evidence::Evidence,
 }
 
 /// Load every per-domain DKIM override from the configuration: each
@@ -64,7 +66,9 @@ pub(super) fn build_split_with_companions(
 	directory: DirectoryHandle,
 	crypto: MessageCrypto,
 ) -> std::io::Result<SplitCompanions> {
+	let evidence = super::serve_evidence::open(config, &crypto)?;
 	let mut split = SplitDelivery::new_with_crypto(&config.data_dir, directory, crypto)?
+		.with_evidence(Arc::clone(&evidence.service))
 		.with_rules(config.rules.clone())
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
@@ -110,6 +114,7 @@ pub(super) fn build_split_with_companions(
 		dkim_signer,
 		webhook,
 		arc_sealer,
+		evidence,
 	})
 }
 

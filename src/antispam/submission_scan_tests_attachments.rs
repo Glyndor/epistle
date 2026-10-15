@@ -47,7 +47,7 @@ fn submit_with(
 		disguised(),
 		uuid::Uuid::now_v7(),
 		"alice",
-		&std::collections::BTreeMap::new(),
+		&crate::smtp::sink::Submission::default(),
 	);
 	(result, inner)
 }

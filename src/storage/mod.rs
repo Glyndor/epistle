@@ -45,7 +45,8 @@ pub use save_sent::{
 	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
 	store_copy as save_sent_copy,
 };
-pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
+pub use spool::leftovers::Leftover;
+pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry, StoreOptions};
 pub use vacation_store::{
 	MAX_BODY_BYTES, VacationSetting, clear as clear_vacation, read as read_vacation,
 	write as write_vacation,

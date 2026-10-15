@@ -25,7 +25,7 @@ fn fixture_key() -> [u8; 32] {
 
 const DOMAIN: &str = "example.org";
 
-fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpool) {
+pub(super) fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpool) {
 	let store = Arc::new(
 		AccountStore::open(
 			dir,
@@ -73,7 +73,7 @@ fn add_account(store: &AccountStore, name: &str, address: &str) {
 /// mailbox, one masked address, one app password, one suppressed
 /// recipient, plus two queued messages from the account's reverse
 /// path and one from a different account.
-fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSpool, name: &str) {
+pub(super) fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSpool, name: &str) {
 	let address = format!("{name}@{DOMAIN}");
 	add_account(store, name, &address);
 

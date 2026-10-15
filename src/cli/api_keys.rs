@@ -21,6 +21,8 @@ pub(super) struct NewKey {
 	pub(super) domains: Vec<String>,
 	/// The one account the key is bound to.
 	pub(super) account: Option<String>,
+	/// The class granted to mail sent with the key.
+	pub(super) class: Option<crate::evidence::MailClass>,
 }
 
 /// Generate a strong random key, hash it (SHA-256) and store it under
@@ -44,6 +46,7 @@ pub(super) fn create(
 		scopes,
 		domains,
 		account,
+		class,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
 	if scopes.is_empty() {
@@ -83,9 +86,19 @@ pub(super) fn create(
 		"label": label, "key": secret, "scopes": scopes, "domains": domains,
 		"account": account, "expires_at": expires_at, "ip_cidr": ip_cidr,
 	});
+	let hash = crate::api::api_keys::sha256_hash(&secret);
+	if let Some(class) = class {
+		let binding = crate::evidence::bindings::api_key_key(&hash);
+		if let Err(error) = crate::evidence::bindings::update(&config.data_dir, |bindings| {
+			bindings.credentials.insert(binding, class);
+		}) {
+			super::style::error(format_args!("binding the class: {error}"));
+			return ExitCode::FAILURE;
+		}
+	}
 	let key = ApiKey {
 		label: label.to_string(),
-		hash: crate::api::api_keys::sha256_hash(&secret),
+		hash,
 		expires_at,
 		ip_cidr,
 		scopes,
@@ -148,8 +161,31 @@ pub(super) fn rotate(
 			return ExitCode::FAILURE;
 		}
 	};
-	match store.rotate(label, crate::api::api_keys::sha256_hash(&secret)) {
+	let hash = crate::api::api_keys::sha256_hash(&secret);
+	// The class follows the key to its new secret: bound to the new digest
+	// before the rotation, the old binding dropped after it.
+	let old = store
+		.hash_of(label)
+		.map(|old| crate::evidence::bindings::api_key_key(&old));
+	let new = crate::evidence::bindings::api_key_key(&hash);
+	if let Some(old) = &old
+		&& let Err(error) = crate::evidence::bindings::update(&config.data_dir, |bindings| {
+			if let Some(class) = bindings.credentials.get(old).copied() {
+				bindings.credentials.insert(new.clone(), class);
+			}
+		}) {
+		super::style::error(format_args!("carrying the class over: {error}"));
+		return ExitCode::FAILURE;
+	}
+	match store.rotate(label, hash) {
 		Ok(()) => {
+			if let Some(old) = &old
+				&& let Err(error) =
+					crate::evidence::bindings::update(&config.data_dir, |bindings| {
+						bindings.credentials.remove(old);
+					}) {
+				super::style::error(format_args!("dropping the old class binding: {error}"));
+			}
 			let mut report = super::json_out::Report::new(out, json);
 			report.line(format_args!(
 				"rotated API key \"{label}\"; the old key stops working within seconds"
@@ -206,6 +242,10 @@ pub enum ApiKeyCli {
 		/// so `--domain` cannot be combined with it.
 		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
+		/// The class granted to mail `/api/v1/send` submits with this key
+		/// when the request names none.
+		#[arg(long, value_name = "CLASS", value_parser = crate::evidence::class::parse_arg)]
+		class: Option<crate::evidence::MailClass>,
 	},
 	/// Revoke an API key by label.
 	///
@@ -245,6 +285,7 @@ pub(super) fn run(
 			scopes,
 			domains,
 			account,
+			class,
 		} => create(
 			config,
 			NewKey {
@@ -254,6 +295,7 @@ pub(super) fn run(
 				scopes,
 				domains,
 				account,
+				class,
 			},
 			json,
 			out,

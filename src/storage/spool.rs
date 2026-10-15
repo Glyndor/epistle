@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::smtp::session::AcceptedMessage;
-use crate::smtp::sink::{MessageSink, SinkError};
+use crate::smtp::sink::{MessageSink, SinkError, Submission};
 use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
@@ -22,6 +22,19 @@ pub use super::spool_recipients::{RecipientState, RecipientStatus};
 mod envelope;
 pub use envelope::Envelope;
 use envelope::LAST_ERROR_MAX;
+
+/// How [`FsSpool::store_with`] stores one message.
+pub struct StoreOptions<'a> {
+	/// The submitting account, `None` for relayed mail.
+	pub account: Option<&'a str>,
+	/// The caller-supplied correlation map.
+	pub extra: &'a BTreeMap<String, String>,
+	/// The class the server granted.
+	pub class: crate::evidence::MailClass,
+	/// Writes the evidence acceptance record for the queued bytes; `None`
+	/// when no evidence is kept for this message.
+	pub evidence: Option<&'a dyn Fn(&[u8]) -> std::io::Result<()>>,
+}
 
 /// One spooled message: envelope plus raw message bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +225,34 @@ impl FsSpool {
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
 	) -> std::io::Result<Uuid> {
-		let account = account
+		self.store_with(
+			message,
+			id,
+			&StoreOptions {
+				account,
+				extra,
+				class: crate::evidence::MailClass::Personal,
+				evidence: None,
+			},
+		)
+	}
+
+	/// Store `message` under `id` with `options`. Both files are written and
+	/// synced under `tmp/` first. Then the evidence hook, when there is one,
+	/// runs on the exact bytes queued: it writes the acceptance record, and
+	/// only when it succeeds are the files renamed into `new/`, envelope last,
+	/// where the worker can see them. A hook failure removes the staged files
+	/// and is returned, so nothing is queued that has no record. A crash
+	/// between the hook and the renames leaves the staged files for
+	/// [`FsSpool::leftovers`] to find at the next start.
+	pub fn store_with(
+		&self,
+		message: &AcceptedMessage,
+		id: Uuid,
+		options: &StoreOptions<'_>,
+	) -> std::io::Result<Uuid> {
+		let account = options
+			.account
 			.filter(|value| !value.is_empty())
 			.map(str::to_string);
 		let envelope = Envelope {
@@ -229,7 +269,9 @@ impl FsSpool {
 			last_error: None,
 			recipient_state: BTreeMap::new(),
 			account,
-			extra: extra.clone(),
+			extra: options.extra.clone(),
+			class: options.class,
+			evidence: options.evidence.is_some(),
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;
@@ -243,7 +285,18 @@ impl FsSpool {
 			.crypto
 			.encode_with_aad(&envelope_bytes, id.as_bytes())?;
 		write_sync(&tmp_envelope, &envelope_sealed)?;
-
+		if let Some(record) = options.evidence
+			&& let Err(error) = record(&message.data)
+		{
+			let _ = fs::remove_file(&tmp_envelope);
+			let _ = fs::remove_file(&tmp_message);
+			return Err(error);
+		}
+		#[cfg(test)]
+		if std::env::var_os("EPISTLE_TEST_ABORT_AFTER_EVIDENCE").is_some() {
+			// The crash test: die between the evidence record and the queue.
+			std::process::abort();
+		}
 		fs::rename(&tmp_message, &final_message)?;
 		fs::rename(&tmp_envelope, &final_envelope)?;
 		Ok(id)
@@ -450,7 +503,7 @@ impl FsSpool {
 
 impl MessageSink for FsSpool {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.submit(message, Uuid::now_v7(), "", &BTreeMap::new())
+		self.submit(message, Uuid::now_v7(), "", &Submission::default())
 	}
 
 	fn submit(
@@ -458,13 +511,22 @@ impl MessageSink for FsSpool {
 		message: AcceptedMessage,
 		queue_id: Uuid,
 		account: &str,
-		extra: &BTreeMap<String, String>,
+		submission: &Submission,
 	) -> Result<(), SinkError> {
-		self.store_as(&message, queue_id, Some(account), extra)
+		let options = StoreOptions {
+			account: Some(account),
+			extra: &submission.extra,
+			class: submission.class,
+			evidence: None,
+		};
+		self.store_with(&message, queue_id, &options)
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
 }
+
+#[path = "spool_leftovers.rs"]
+pub(super) mod leftovers;
 
 #[cfg(test)]
 #[path = "spool_tests.rs"]

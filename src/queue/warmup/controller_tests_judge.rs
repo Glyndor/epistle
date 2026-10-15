@@ -156,6 +156,7 @@ fn a_smarthost_throttling_relayed_mail_does_not_back_a_group_off() {
 			reply: Some(reply.into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		})
 		.expect("append");
 	}

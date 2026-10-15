@@ -12,6 +12,7 @@ fn record(outcome: DeliveryOutcome, remote: Option<&str>, reply: &str) -> Delive
 		reply: Some(reply.to_string()),
 		attempt: 1,
 		extra: Default::default(),
+		class: Default::default(),
 	}
 }
 

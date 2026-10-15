@@ -371,6 +371,19 @@ impl ApiKeyStore {
 	/// so there is no moment with both or neither accepted. `NotFound` if the
 	/// label is absent.
 	pub fn rotate(&mut self, label: &str, hash: String) -> std::io::Result<()> {
+		self.rotate_inner(label, hash)
+	}
+
+	/// The stored digest of the key labelled `label`, which names it for the
+	/// class bindings (see [`crate::evidence::bindings`]).
+	pub fn hash_of(&self, label: &str) -> Option<String> {
+		self.keys
+			.iter()
+			.find(|key| key.label == label)
+			.map(|key| key.hash.clone())
+	}
+
+	fn rotate_inner(&mut self, label: &str, hash: String) -> std::io::Result<()> {
 		let label_owned = label.to_string();
 		let new_state = crate::storage::locked::edit(
 			&self.path,

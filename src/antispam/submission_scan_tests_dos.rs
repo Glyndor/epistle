@@ -50,7 +50,7 @@ fn submit(sink: &ScanningSink, account: &str, data: Vec<u8>) -> Result<(), SinkE
 		message(data),
 		uuid::Uuid::now_v7(),
 		account,
-		&std::collections::BTreeMap::new(),
+		&crate::smtp::sink::Submission::default(),
 	)
 }
 

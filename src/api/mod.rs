@@ -221,6 +221,10 @@ mod send_tests_outbound;
 mod send_tests_save_sent;
 
 #[cfg(test)]
+#[path = "send_tests_class.rs"]
+mod send_tests_class;
+
+#[cfg(test)]
 #[path = "send_tests_rich.rs"]
 mod send_tests_rich;
 

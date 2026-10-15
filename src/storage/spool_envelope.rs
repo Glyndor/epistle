@@ -64,6 +64,20 @@ pub struct Envelope {
 	/// a header). Empty in every envelope written before this field existed.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub extra: BTreeMap<String, String>,
+	/// The class the server granted the submission. Written by the server,
+	/// never by the client; `personal` for every envelope written before the
+	/// field existed and for mail that arrived from elsewhere.
+	#[serde(default, skip_serializing_if = "is_personal")]
+	pub class: crate::evidence::MailClass,
+	/// Whether an evidence acceptance record is written for this entry, so
+	/// its outcomes are recorded too and a crash before it was queued leaves
+	/// an `abandoned` record.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub evidence: bool,
+}
+
+fn is_personal(class: &crate::evidence::MailClass) -> bool {
+	*class == crate::evidence::MailClass::Personal
 }
 
 fn is_zero(value: &u64) -> bool {

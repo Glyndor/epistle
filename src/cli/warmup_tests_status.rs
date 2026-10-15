@@ -52,6 +52,7 @@ fn server_files() -> tempfile::TempDir {
 			reply: Some("250 OK".into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		})
 		.expect("log");
 	}

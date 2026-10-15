@@ -155,6 +155,50 @@ fn submit_email(
 	// RFC 8621 section 7.5: the Bcc header never leaves; those recipients
 	// are on the envelope.
 	let stamped = crate::smtp::trace::strip_bcc(&stamped);
+	// The class: the `epistle:class` extension property, else the account
+	// default; never the message, whose class header is removed here.
+	let explicit = match submission.get("epistle:class") {
+		None | Some(Value::Null) => None,
+		Some(value) => Some(
+			value
+				.as_str()
+				.and_then(crate::evidence::MailClass::parse)
+				.ok_or(Refusal {
+					kind: "invalidProperties",
+					description: Some(
+						"epistle:class must be transactional, marketing or personal".into(),
+					),
+				})?,
+		),
+	};
+	let mut queued = crate::smtp::session::AcceptedMessage {
+		reverse_path: mail_from.clone(),
+		recipients,
+		data: stamped,
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: true,
+		no_dsn: Vec::new(),
+	};
+	let sources = state.class_sources(None, account, explicit);
+	let prepared =
+		crate::evidence::submission::prepare(&mut queued, sources, Some(state.data_dir()))
+			.map_err(|refusal| Refusal {
+				kind: "forbiddenToSend",
+				description: Some(refusal.message().to_string()),
+			})?;
+	if queued.recipients.is_empty() {
+		return Err(Refusal {
+			kind: "forbiddenToSend",
+			description: Some("every recipient is on the suppression list".into()),
+		});
+	}
+	let crate::smtp::session::AcceptedMessage {
+		recipients,
+		data: stamped,
+		..
+	} = queued;
 	// Submission rate limits: the per-account limit and every tenant of
 	// the account, the same limiters SMTP and `POST /api/v1/send` charge.
 	// Asked here so a sender with no room left is refused before anything
@@ -226,7 +270,7 @@ fn submit_email(
 		.and_then(|update| update.get("mailboxIds"))
 		.and_then(Value::as_object)
 		.is_some_and(|ids| ids.keys().any(|key| key.eq_ignore_ascii_case("Sent")));
-	let sent_copy = stamped.clone();
+	let sent_copy = prepared.class.allows_sent_copy().then(|| stamped.clone());
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
 		recipients,
@@ -242,7 +286,11 @@ fn submit_email(
 	let charge = budget
 		.charge(recipient_count, now)
 		.map_err(|_| rate_limited())?;
-	let id = match state.submit(account, message, &std::collections::BTreeMap::new()) {
+	let id = match state.submit(
+		account,
+		message,
+		&crate::smtp::sink::Submission::of_class(prepared.class),
+	) {
 		Ok(id) => id,
 		Err(error) => {
 			charge.refund();
@@ -265,13 +313,20 @@ fn submit_email(
 					kind: "serverFail",
 					description: Some("content scan unavailable, try again later".into()),
 				},
+				crate::smtp::sink::SinkError::EvidenceUnavailable(_) => Refusal {
+					kind: "serverUnavailable",
+					description: Some(
+						"transactional mail cannot be recorded as evidence right now".into(),
+					),
+				},
 			});
 		}
 	};
 	// Save the Sent copy unless the JMAP submission already places
 	// the email in Sent, or the caller opted out with `saveSent:
 	// false`, or the account-wide setting is off.
-	if !jmap_email_in_sent {
+	// Transactional mail is never copied to Sent.
+	if !jmap_email_in_sent && let Some(sent_copy) = sent_copy {
 		state.save_sent_copy(account, &sent_copy, request_save_sent);
 	}
 	Ok(id.to_string())

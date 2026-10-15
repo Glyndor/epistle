@@ -17,6 +17,7 @@ fn record(time: u64, recipient: &str) -> DeliveryRecord {
 		reply: Some("250 OK".into()),
 		attempt: 1,
 		extra: Default::default(),
+		class: Default::default(),
 	}
 }
 

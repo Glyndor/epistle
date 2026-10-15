@@ -34,7 +34,7 @@ fn create_list_revoke_roundtrip() {
 	// Create prints the secret once.
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "alice", "phone", None, None, None, false, &mut out),
+		create(&config, "alice", "phone", None, None, None, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let created = String::from_utf8(out).expect("utf8");
@@ -86,6 +86,7 @@ fn create_with_expiry_and_cidr_is_stored() {
 			Some(9999),
 			Some("203.0.113.0/24".to_string()),
 			None,
+			None,
 			false,
 			&mut out,
 		),
@@ -111,6 +112,7 @@ fn create_rejects_bad_cidr() {
 			None,
 			Some("not-a-cidr".to_string()),
 			None,
+			None,
 			false,
 			&mut out,
 		),
@@ -135,7 +137,7 @@ fn create_refuses_unknown_account_and_writes_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	let exit = create(&config, "ghost", "phone", None, None, None, false, &mut out);
+	let exit = create(&config, "ghost", "phone", None, None, None, None, false, &mut out);
 	assert_eq!(exit, ExitCode::from(2), "unknown account must be refused");
 	// The store has no row, so no orphan credential is left behind:
 	// the check ran before any persistence.
@@ -161,11 +163,36 @@ fn create_refuses_static_account() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
-	let exit = create(&config, "alice", "phone", None, None, None, false, &mut out);
+	let exit = create(&config, "alice", "phone", None, None, None, None, false, &mut out);
 	assert_eq!(
 		exit,
 		ExitCode::from(3),
 		"static account must be refused by policy"
 	);
 	assert!(!dir.path().join("app_passwords.toml").exists());
+}
+
+#[test]
+fn a_class_is_bound_to_the_new_credential_not_to_its_label() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	seed_dynamic_account(dir.path(), "alice", "alice@example.org");
+	let config = config(dir.path());
+	let created = create(
+		&config,
+		"alice",
+		"notices",
+		None,
+		None,
+		None,
+		Some(crate::evidence::MailClass::Transactional),
+		&mut Vec::new(),
+	);
+	assert_eq!(created, ExitCode::SUCCESS);
+	let store = AppPasswordStore::open(dir.path()).expect("store");
+	let hash = store.for_account("alice")[0].hash.clone();
+	let bindings = crate::evidence::bindings::BindingSet::open(dir.path()).expect("bindings");
+	assert_eq!(
+		bindings.credential(&crate::evidence::bindings::app_password_key(&hash)),
+		Some(crate::evidence::MailClass::Transactional)
+	);
 }

@@ -53,6 +53,7 @@ struct Inner {
 	/// this; tests can swap it out via [`ApiState::with_correspondents`]
 	/// so the same test tempdir is reused across handlers.
 	correspondents: Option<crate::storage::CorrespondentStore>,
+	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
 	/// Cap on first-time recipients per account in any rolling 24h window.
 	/// `None` disables the cap (the default). Lives on `ApiState` so
 	/// the REST and JMAP submission paths share a single source of
@@ -246,6 +247,7 @@ impl ApiState {
 					std::time::Instant::now(),
 				)),
 				correspondents: None,
+				class_bindings: None,
 				new_recipients_per_day: None,
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(
@@ -804,6 +806,9 @@ mod outbound;
 
 #[path = "state_submission.rs"]
 mod submission;
+
+#[path = "state_classes.rs"]
+mod classes;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

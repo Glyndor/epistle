@@ -50,6 +50,7 @@ impl Server {
 			drain: None,
 			quota: None,
 			correspondents: None,
+			class_bindings: None,
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			memory_budget: None,
@@ -137,6 +138,16 @@ impl Server {
 	/// of DATA (see [`crate::smtp::quota`]).
 	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
 		self.quota = Some(quota);
+		self
+	}
+
+	/// Attach the class bindings: the default class of each account and
+	/// credential, applied to authenticated submissions.
+	pub fn with_class_bindings(
+		mut self,
+		bindings: Arc<crate::evidence::bindings::BindingSet>,
+	) -> Self {
+		self.class_bindings = Some(bindings);
 		self
 	}
 

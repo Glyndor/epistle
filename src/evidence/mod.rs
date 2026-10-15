@@ -10,6 +10,7 @@
 pub mod ack;
 pub mod anchor;
 pub mod audit;
+pub mod bindings;
 pub mod chain;
 pub mod checkpoint;
 pub mod class;
@@ -21,6 +22,8 @@ pub mod marketing;
 pub mod merkle;
 pub mod policy;
 pub mod record;
+pub mod service;
+pub mod submission;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tsa;

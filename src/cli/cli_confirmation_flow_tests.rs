@@ -368,6 +368,7 @@ fn app_password_revoke_asks_naming_label_and_account() {
 				None,
 				None,
 				None,
+				None,
 				false,
 				&mut Vec::new(),
 			);

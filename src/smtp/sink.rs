@@ -18,20 +18,38 @@ pub trait MessageSink: Send + Sync {
 	/// to name and delivers as usual; a sink that queues, or that treats
 	/// submissions differently, overrides this.
 	///
-	/// `extra` is the caller-supplied correlation map the API may attach to
-	/// a submission (see `POST /api/v1/send`); the spool stores it on the
-	/// envelope so the delivery log and webhooks can copy it onto every
-	/// record they emit, but it is never written into the message itself.
-	/// The SMTP submission path passes an empty map.
+	/// `submission` carries what the server decided about it: the class it
+	/// granted and the caller-supplied correlation map the API may attach
+	/// (see `POST /api/v1/send`). The spool stores both on the envelope; the
+	/// map is never written into the message itself.
 	fn submit(
 		&self,
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
-		extra: &std::collections::BTreeMap<String, String>,
+		submission: &Submission,
 	) -> Result<(), SinkError> {
-		let _ = (queue_id, account, extra);
+		let _ = (queue_id, account, submission);
 		self.deliver(message)
+	}
+}
+
+/// What the server decided about a submission, besides the message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Submission {
+	/// The caller-supplied correlation map (API only; empty for SMTP).
+	pub extra: std::collections::BTreeMap<String, String>,
+	/// The class the server granted.
+	pub class: crate::evidence::MailClass,
+}
+
+impl Submission {
+	/// A submission of `class` with no correlation map.
+	pub fn of_class(class: crate::evidence::MailClass) -> Self {
+		Submission {
+			extra: std::collections::BTreeMap::new(),
+			class,
+		}
 	}
 }
 
@@ -61,6 +79,10 @@ pub enum SinkError {
 	/// large.
 	#[error("message too large for the content scan")]
 	ScanTooLarge,
+	/// Transactional mail whose evidence cannot be recorded, or that is held
+	/// while the evidence does not verify. Transient: the client retries.
+	#[error("evidence unavailable: {0}")]
+	EvidenceUnavailable(String),
 }
 
 impl SinkError {
@@ -71,6 +93,10 @@ impl SinkError {
 			SinkError::Unavailable(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}
+			SinkError::EvidenceUnavailable(_) => Reply::single(
+				451,
+				"4.3.0 transactional mail cannot be recorded as evidence right now, try again later",
+			),
 			SinkError::VirusDetected(signature) => Reply::single(
 				554,
 				&format!("5.7.1 message rejected: virus detected ({signature})"),

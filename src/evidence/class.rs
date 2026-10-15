@@ -75,6 +75,12 @@ impl MailClass {
 	}
 }
 
+/// Parse a class named on the command line.
+pub fn parse_arg(value: &str) -> Result<MailClass, String> {
+	MailClass::parse(value)
+		.ok_or_else(|| format!("unknown class {value:?}: use transactional, marketing or personal"))
+}
+
 impl std::fmt::Display for MailClass {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		formatter.write_str(self.as_str())

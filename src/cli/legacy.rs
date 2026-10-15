@@ -275,6 +275,7 @@ impl Legacy {
 					expires_at,
 					ip_cidr,
 					save_sent,
+					class: None,
 				}),
 			),
 			Legacy::AppPasswords { config, json } => (
@@ -316,6 +317,7 @@ impl Legacy {
 					scopes,
 					domains,
 					account,
+					class: None,
 				}),
 			),
 			Legacy::ApiKeys { config, json } => {

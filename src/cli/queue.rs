@@ -192,6 +192,7 @@ pub(super) fn run(
 									reply: state.last_error.clone(),
 									attempt: state.attempts,
 									extra: BTreeMap::new(),
+									class: envelope.class,
 								};
 								if let Err(error) = log.append(&record) {
 									tracing::warn!(%id, %error, "delivery log write failed");

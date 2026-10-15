@@ -64,7 +64,7 @@ fn submit(sink: &Arc<dyn MessageSink>) -> Result<(), SinkError> {
 		disguised(),
 		uuid::Uuid::now_v7(),
 		"alice",
-		&std::collections::BTreeMap::new(),
+		&crate::smtp::sink::Submission::default(),
 	)
 }
 

@@ -751,6 +751,9 @@ mod scram_upgrade;
 #[path = "directory_bans.rs"]
 pub mod bans;
 
+#[path = "directory_credential.rs"]
+mod credential;
+
 #[cfg(test)]
 #[path = "directory_tests.rs"]
 mod tests;

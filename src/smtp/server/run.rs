@@ -483,6 +483,17 @@ impl Server {
 					// (the antivirus on outbound mail among them).
 					let handed = match session.authenticated() {
 						Some(account) => {
+							// The class: from the credential and the
+							// account, never from the message, and with
+							// the marketing rules applied.
+							let prepared =
+								match self.prepare_submission(&session, account, &mut message) {
+									Ok(prepared) => prepared,
+									Err(refused) => {
+										send(&mut stream, &refused).await?;
+										continue;
+									}
+								};
 							// Per-account settings may disable the save
 							// (`save_sent: false` on the account, on the
 							// app password that authenticated this
@@ -494,16 +505,22 @@ impl Server {
 							// copy recipient (RFC 5322 §3.6.3). It is stored
 							// only once the sink accepted the message: one the
 							// scan or the attachment policy refused, or asked
-							// to retry, was never sent.
-							let sent_copy = self
-								.save_sent_enabled_for(&session)
-								.then(|| message.data.clone());
-							let submitted = self.sink.submit(
-								message,
-								uuid::Uuid::now_v7(),
-								account,
-								&std::collections::BTreeMap::new(),
-							);
+							// to retry, was never sent. Transactional mail is
+							// never copied to Sent.
+							let sent_copy = (prepared.class.allows_sent_copy()
+								&& self.save_sent_enabled_for(&session))
+							.then(|| message.data.clone());
+							let submitted = if message.recipients.is_empty() {
+								// Every recipient was suppressed: nothing to send.
+								Ok(())
+							} else {
+								self.sink.submit(
+									message,
+									uuid::Uuid::now_v7(),
+									account,
+									&crate::smtp::sink::Submission::of_class(prepared.class),
+								)
+							};
 							if let (Ok(()), Some(copy)) = (&submitted, sent_copy) {
 								self.save_sent_copy(&session, account, &copy);
 							}
