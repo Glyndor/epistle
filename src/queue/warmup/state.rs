@@ -5,9 +5,10 @@
 //! verdict, and the days already judged. Each write replaces the file
 //! atomically at mode `0600`.
 //!
-//! The file is read back only when it is a regular file of this process's
-//! user that no other user can write: a link, another user's file, or one
-//! open to group or world writes could carry caps somebody else lifted.
+//! The file is read back only when it is a regular file that no other user
+//! can write, owned by this process's user, by root, or by the owner of the
+//! data directory: a link, another user's file, or one open to group or
+//! world writes could carry caps somebody else lifted.
 //! Such a file, or one that does not parse, is not trusted: every group
 //! goes back to its starting cap and the day counts as fully used, the most
 //! restrictive reading (see [`State::distrusted`]).
@@ -263,9 +264,9 @@ pub fn path(data_dir: &Path) -> PathBuf {
 /// Why a warm-up file was not read.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
-	/// The file is a link, not a regular file, not ours, or writable by
-	/// others.
-	#[error("{0} is not a private file of this user; not trusted")]
+	/// The file is a link, not a regular file, another user's, or
+	/// writable by others.
+	#[error("{0} is not a private file of this server; not trusted")]
 	Insecure(String),
 	/// The file is larger than any this server writes.
 	#[error("{0} is larger than {MAX_STATE_BYTES} bytes; not trusted")]
@@ -303,7 +304,8 @@ pub fn read_private(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, ReadErro
 	let meta = file
 		.metadata()
 		.map_err(|error| ReadError::Io(shown.clone(), error))?;
-	if !meta.is_file() || !private(&meta) {
+	let folder = path.parent().and_then(|dir| std::fs::metadata(dir).ok());
+	if !meta.is_file() || !private(&meta, folder.as_ref()) {
 		return Err(ReadError::Insecure(shown));
 	}
 	if meta.len() > limit {
@@ -319,18 +321,29 @@ pub fn read_private(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, ReadErro
 	Ok(Some(bytes))
 }
 
-/// Whether a file is this process's user's and nobody else may write it.
+/// Whether a file in a directory described by `folder` belongs to a user
+/// this process trusts and nobody else may write it.
 #[cfg(unix)]
-fn private(meta: &std::fs::Metadata) -> bool {
+fn private(meta: &std::fs::Metadata, folder: Option<&std::fs::Metadata>) -> bool {
 	use std::os::unix::fs::MetadataExt;
 	// SAFETY: geteuid takes no arguments and cannot fail.
 	let euid = unsafe { libc::geteuid() };
-	meta.uid() == euid && meta.mode() & 0o022 == 0
+	trusted_owner(meta.uid(), euid, folder.map(MetadataExt::uid)) && meta.mode() & 0o022 == 0
 }
 
 #[cfg(not(unix))]
-fn private(_meta: &std::fs::Metadata) -> bool {
+fn private(_meta: &std::fs::Metadata, _folder: Option<&std::fs::Metadata>) -> bool {
 	true
+}
+
+/// Whether a file owned by `owner` is trusted by a process running as
+/// `euid`, in a directory owned by `folder_owner`: its own, root's, or the
+/// directory owner's, who can replace any file in it anyway. A server
+/// started as root that drops to the service user later (`[privileges]`)
+/// opens the warm-up before the drop, and must not take the service
+/// user's files for somebody else's.
+fn trusted_owner(owner: u32, euid: u32, folder_owner: Option<u32>) -> bool {
+	owner == euid || owner == 0 || Some(owner) == folder_owner
 }
 
 /// Read the state under `data_dir`; `None` when there is none yet.

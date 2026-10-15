@@ -140,6 +140,6 @@ the address there before you start.
 `<data_dir>/warmup.json` holds your settings and orders, written only by
 `epistle warmup`. `<data_dir>/warmup-state.json` holds caps, today's use
 and 90 days of history, written only by the server. Both are `0600`. A
-file that is a link, another user's, or writable by others is not
-trusted: the server keeps the caps on and starts every group over, with
+file that is a link, writable by others, or owned by anyone but the
+server's user, root or the owner of the data directory is not trusted: the server keeps the caps on and starts every group over, with
 the day counted as used.

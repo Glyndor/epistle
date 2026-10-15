@@ -138,3 +138,18 @@ fn a_cap_this_server_never_writes_is_not_trusted() {
 		);
 	}
 }
+
+#[test]
+fn a_server_still_root_trusts_the_files_of_the_data_directory_owner() {
+	// With `[privileges]`, the server opens the warm-up as root and drops
+	// to the service user later; the files are the service user's.
+	assert!(trusted_owner(1000, 0, Some(1000)), "written after the drop");
+	assert!(
+		trusted_owner(0, 1000, Some(1000)),
+		"written before the drop"
+	);
+	assert!(trusted_owner(1000, 1000, Some(1000)), "its own");
+	assert!(!trusted_owner(1001, 0, Some(1000)), "another user's");
+	assert!(!trusted_owner(1001, 1000, Some(1000)), "another user's");
+	assert!(!trusted_owner(1001, 1000, None), "another user's");
+}
