@@ -14,8 +14,11 @@ pub struct ImageFacts {
 	pub ambiguous: bool,
 }
 
-/// Where an image ends, and the byte ranges of its metadata blocks
-/// (comments, text chunks, EXIF, XMP, application extensions).
+/// Where an image ends, and the byte ranges of every block that is not
+/// compressed pixel data. Decoders skip any block they do not need by its
+/// length, so a table, a private chunk or an unknown extension carries a
+/// program as well as a comment does; only pixel data, which matches a
+/// signature by chance, is left out.
 struct Layout {
 	end: usize,
 	metadata: Vec<(usize, usize)>,
@@ -51,7 +54,7 @@ pub fn inspect_raster(real: RealType, content: &[u8]) -> ImageFacts {
 /// PNG chunks, by their lengths, to the end of IEND. A length that runs
 /// past the file is a structure that cannot be followed.
 fn png(png: &[u8]) -> Option<Layout> {
-	const METADATA: &[&[u8]] = &[b"tEXt", b"zTXt", b"iTXt", b"eXIf"];
+	const PIXELS: &[&[u8]] = &[b"IDAT", b"fdAT"];
 	let mut metadata = Vec::new();
 	let mut at = 8;
 	loop {
@@ -62,7 +65,7 @@ fn png(png: &[u8]) -> Option<Layout> {
 		if next > png.len() {
 			return None;
 		}
-		if METADATA.contains(&kind) {
+		if !PIXELS.contains(&kind) {
 			metadata.push((data, data + len));
 		}
 		if kind == b"IEND" {
@@ -104,9 +107,7 @@ fn jpeg(jpeg: &[u8]) -> Option<Layout> {
 				if len < 2 || next > jpeg.len() {
 					return None;
 				}
-				if (0xe0..=0xef).contains(&marker) || marker == 0xfe {
-					metadata.push((at + 4, next));
-				}
+				metadata.push((at + 4, next));
 				at = next;
 				if marker == 0xda {
 					while at + 1 < jpeg.len()
@@ -123,8 +124,8 @@ fn jpeg(jpeg: &[u8]) -> Option<Layout> {
 	None
 }
 
-/// GIF blocks to the trailer; comment, application and plain-text
-/// extensions are metadata.
+/// GIF blocks to the trailer; every extension is scanned, image data is
+/// not.
 fn gif(gif: &[u8]) -> Option<Layout> {
 	let mut metadata = Vec::new();
 	let flags = *gif.get(10)?;
@@ -141,12 +142,11 @@ fn gif(gif: &[u8]) -> Option<Layout> {
 				});
 			}
 			0x21 => {
-				let label = *gif.get(at + 1)?;
+				// The label byte must be there; every label is scanned.
+				gif.get(at + 1)?;
 				let start = at + 2;
 				at = skip_sub_blocks(gif, start)?;
-				if matches!(label, 0xfe | 0xff | 0x01) {
-					metadata.push((start, at));
-				}
+				metadata.push((start, at));
 			}
 			0x2c => {
 				let local = *gif.get(at + 9)?;
@@ -176,7 +176,7 @@ fn skip_sub_blocks(gif: &[u8], mut at: usize) -> Option<usize> {
 }
 
 /// WebP: the RIFF size must fit the file, and the chunks inside it must
-/// add up to it. EXIF and XMP chunks are metadata.
+/// add up to it. Every chunk but the image data is scanned.
 fn webp(webp: &[u8]) -> Option<Layout> {
 	let size = u32::from_le_bytes(webp.get(4..8)?.try_into().ok()?) as usize;
 	let end = 8usize.checked_add(size)?;
@@ -193,7 +193,7 @@ fn webp(webp: &[u8]) -> Option<Layout> {
 		if next > end {
 			return None;
 		}
-		if kind == b"EXIF" || kind == b"XMP " {
+		if ![&b"VP8 "[..], b"VP8L", b"ALPH", b"ANMF"].contains(&kind) {
 			metadata.push((data, data + len));
 		}
 		at = next;

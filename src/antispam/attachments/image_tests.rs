@@ -188,3 +188,38 @@ fn a_shebang_inside_appended_media_is_not_a_payload() {
 		"a script appended right after the image still is"
 	);
 }
+
+#[test]
+fn a_payload_in_any_block_that_is_not_pixel_data_is_found() {
+	// Decoders skip a block they do not need by its length, so any of them
+	// can carry a program as well as a comment can.
+	let pe = pe_header();
+	let mut jpeg = vec![0xff, 0xd8, 0xff, 0xdb];
+	jpeg.extend_from_slice(&((pe.len() + 2) as u16).to_be_bytes());
+	jpeg.extend_from_slice(&pe);
+	jpeg.extend_from_slice(&jpeg_then(b"")[2..]);
+	assert!(facts(RealType::Jpeg, &jpeg).payload, "JPEG table segment");
+
+	let png = png_then(b"");
+	let iend = png.len() - 12;
+	let mut private = png[..iend].to_vec();
+	private.extend_from_slice(&(pe.len() as u32).to_be_bytes());
+	private.extend_from_slice(b"prVt");
+	private.extend_from_slice(&pe);
+	private.extend_from_slice(&[0; 4]);
+	private.extend_from_slice(&png[iend..]);
+	assert!(facts(RealType::Png, &private).payload, "PNG private chunk");
+
+	let mut gif = gif_then(b"");
+	let trailer = gif.len() - 1;
+	let block = [0x21, 0x42, 0x05, 0x7f, b'E', b'L', b'F', 0x02, 0x00];
+	gif.splice(trailer..trailer, block);
+	assert!(facts(RealType::Gif, &gif).payload, "GIF unknown extension");
+
+	let mut webp = b"RIFF".to_vec();
+	webp.extend_from_slice(&(4u32 + 8 + 4).to_le_bytes());
+	webp.extend_from_slice(b"WEBPICCP");
+	webp.extend_from_slice(&4u32.to_le_bytes());
+	webp.extend_from_slice(b"\x7fELF");
+	assert!(facts(RealType::Webp, &webp).payload, "WebP ICC chunk");
+}
