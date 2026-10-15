@@ -22,6 +22,8 @@ mod reports;
 mod scheduler;
 #[path = "worker_waiting.rs"]
 mod waiting;
+#[path = "worker_warmup.rs"]
+mod warmup;
 
 /// Default give-up window: a message older than this is bounced (RFC 5321
 /// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
@@ -86,6 +88,9 @@ pub struct Worker {
 	/// spool at every scan and kept in step with what this worker writes
 	/// there, so it never allows what the spool would defer.
 	holds: std::sync::Mutex<super::backoff::Holds>,
+	/// The IP warm-up, when one applies: recipients over the daily cap of
+	/// their receiver group wait for it.
+	warmup: Option<Arc<super::warmup::Warmup>>,
 }
 
 impl Worker {
@@ -115,6 +120,7 @@ impl Worker {
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
 			attempt_limit: super::timeouts::ATTEMPT,
 			holds: Default::default(),
+			warmup: None,
 		}
 	}
 
@@ -350,6 +356,14 @@ impl Worker {
 		self.spool.update_envelope(id, |envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
+				if let Some(capped) = conversation.capped_for(recipient) {
+					// Over the warm-up cap: not attempted, so nothing of
+					// the attempt is written.
+					state.wait_for_cap(capped.group.label(), capped.until, now);
+					envelope.set_recipient_state(recipient, state);
+					continue;
+				}
+				state.end_cap_wait(now);
 				state.remote = conversation.remote.clone();
 				match result {
 					// Left for another transaction: due again now, and not
@@ -426,16 +440,20 @@ impl Worker {
 			.lock()
 			.unwrap_or_else(|poisoned| poisoned.into_inner());
 		let envelope = self.spool.load_envelope(id)?;
-		let age = self.message_age(id, now).saturating_sub(envelope.held_secs);
-		let idle: Vec<String> = envelope
+		// Give up by message age, not attempt count: a recipient down for
+		// hours must not lose mail (RFC 5321 §4.5.4.1). The time an operator
+		// held the message and the time a recipient waited for the warm-up
+		// cap are not part of that age.
+		let expired: Vec<String> = envelope
 			.pending()
 			.into_iter()
 			.filter(|recipient| !self.claims.holds(id, recipient))
+			.filter(|recipient| {
+				self.window_used(id, &envelope, recipient, now) >= self.max_age_secs
+			})
 			.collect();
-		if !idle.is_empty() && age >= self.max_age_secs {
-			// Give up by message age, not attempt count: a recipient down for
-			// hours must not lose mail (RFC 5321 §4.5.4.1).
-			self.expire(id, &idle)?;
+		if !expired.is_empty() {
+			self.expire(id, &expired)?;
 		}
 		if delivered {
 			self.metric(|m| m.relayed());
@@ -444,14 +462,26 @@ impl Worker {
 			self.metric(|m| m.bounced());
 		}
 		let envelope = self.spool.load_envelope(id)?;
-		if envelope.pending().is_empty() {
+		let pending = envelope.pending();
+		if pending.is_empty() {
 			return self.spool.remove(id);
 		}
+		let age = pending
+			.iter()
+			.map(|recipient| self.window_used(id, &envelope, recipient, now))
+			.max()
+			.unwrap_or(0);
 		if age >= self.schedule.delay_warning {
 			self.warn_delayed(id);
 		}
-		tracing::debug!(%id, age, "delivery deferred");
-		self.metric(|m| m.deferred());
+		let capped = pending
+			.iter()
+			.all(|recipient| envelope.recipient_state(recipient).warmup.is_some());
+		if !capped {
+			// Waiting for the warm-up cap is not a deferral.
+			tracing::debug!(%id, age, "delivery deferred");
+			self.metric(|m| m.deferred());
+		}
 		Ok(())
 	}
 }

@@ -153,6 +153,10 @@ impl Worker {
 		let message_id = message_id_of(entry);
 		let retry_now = conversation.retry_now();
 		for (recipient, result) in &conversation.results {
+			if conversation.capped_for(recipient).is_some() {
+				// Over the warm-up cap: not attempted, nothing to report.
+				continue;
+			}
 			if retry_now.contains(recipient) {
 				tracing::debug!(%id, %recipient, remote, "left for another transaction");
 				continue;

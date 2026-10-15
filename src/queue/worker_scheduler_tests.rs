@@ -47,6 +47,7 @@ fn job(domain: &str, account: &str) -> Job {
 		domain: Destination::domain(domain),
 		sender: sender(account),
 		recipients: vec![format!("user@{domain}")],
+		group: None,
 	}
 }
 
@@ -254,6 +255,7 @@ fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 		results: vec![("b@busy.example".to_string(), Ok(()))],
 		slowed: None,
 		held_until: None,
+		capped: None,
 	};
 	let entry = |id| worker.spool.load(id).expect("entry");
 

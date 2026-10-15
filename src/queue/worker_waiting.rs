@@ -50,6 +50,9 @@ pub(super) struct Job {
 	/// Whose message it is, for the per-sender share of the slots.
 	pub(super) sender: Sender,
 	pub(super) recipients: Vec<String>,
+	/// The warm-up group the recipients wait for, when they all wait for
+	/// one: the job does not start while its cap is closed.
+	pub(super) group: Option<crate::queue::warmup::Group>,
 }
 
 /// One sender's waiting jobs, by domain.

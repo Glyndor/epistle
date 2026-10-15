@@ -119,7 +119,7 @@ impl Worker {
 			// Skip entries already in hand, held, or still backing off.
 			if !schedule.rounds.contains_key(&id)
 				&& envelope.held.is_none()
-				&& envelope.next_attempt <= now
+				&& self.wakes(&envelope, now)
 			{
 				due_entries.push((id, envelope));
 			}
@@ -152,11 +152,10 @@ impl Worker {
 	/// until its turn comes.
 	fn overdue(&self, id: Uuid, envelope: &crate::storage::Envelope, now: u64) -> bool {
 		envelope.held.is_none()
-			&& self.message_age(id, now).saturating_sub(envelope.held_secs) >= self.max_age_secs
-			&& envelope
-				.pending()
-				.iter()
-				.any(|recipient| !self.claims.holds(id, recipient))
+			&& envelope.pending().iter().any(|recipient| {
+				!self.claims.holds(id, recipient)
+					&& self.window_used(id, envelope, recipient, now) >= self.max_age_secs
+			})
 	}
 
 	/// Queue the due recipients of one entry, one job per destination,
@@ -169,8 +168,8 @@ impl Worker {
 		envelope: &crate::storage::Envelope,
 		now: u64,
 	) -> std::io::Result<()> {
-		let due: Vec<String> = envelope
-			.due(now)
+		let due: Vec<String> = self
+			.due_now(envelope, now)
 			.into_iter()
 			.filter(|recipient| !self.claims.holds(id, recipient))
 			.collect();
@@ -218,11 +217,13 @@ impl Worker {
 		schedule.rounds.insert(id, (by_destination.len(), false));
 		let sender = Sender::of(envelope);
 		for (destination, recipients) in by_destination {
+			let group = Self::waiting_group(envelope, &recipients);
 			schedule.waiting.push_back(Job {
 				id,
 				domain: destination,
 				sender: sender.clone(),
 				recipients,
+				group,
 			});
 		}
 		Ok(())
@@ -330,6 +331,11 @@ impl Worker {
 	/// Claim the recipients of `job` and start its conversation, unless no
 	/// slot is free or nothing is left to send.
 	fn start(&self, job: Job) -> Started<'_> {
+		// The cap its recipients wait for may have closed again since the
+		// scan, taken by the conversations started before it.
+		if self.job_capped(job.group, &job.sender, self.now_epoch()) {
+			return Started::Dropped(job.id);
+		}
 		let taken = self.claims.take(
 			self.limits,
 			job.id,
@@ -416,6 +422,7 @@ impl Worker {
 					domain: job.domain.clone(),
 					sender: job.sender.clone(),
 					recipients: retry_now,
+					group: None,
 				});
 			}
 		}

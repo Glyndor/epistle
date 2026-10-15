@@ -156,6 +156,7 @@ impl Worker {
 					results,
 					slowed: None,
 					held_until: None,
+					capped: None,
 				},
 				false,
 			),
