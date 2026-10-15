@@ -20,6 +20,26 @@ use super::Reply;
 /// Default lifetime of one session, in seconds.
 pub const DEFAULT_MAX_SESSION_TIME_SECS: u64 = 1800;
 
+/// The limits that end a session holding a connection without moving a
+/// message forward: the commands without progress it may send and how long
+/// it may last. Zero turns either off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionLimits {
+	/// Commands without progress before `421 4.7.0`.
+	pub junk_commands: u32,
+	/// Lifetime before `421 4.4.2`.
+	pub max_session_time: Duration,
+}
+
+impl Default for SessionLimits {
+	fn default() -> Self {
+		SessionLimits {
+			junk_commands: crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT,
+			max_session_time: Duration::from_secs(DEFAULT_MAX_SESSION_TIME_SECS),
+		}
+	}
+}
+
 /// When the session that started at [`SessionClock::start`] runs out.
 #[derive(Debug)]
 pub(super) struct SessionClock {

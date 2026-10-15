@@ -222,6 +222,12 @@ impl Server {
 		self
 	}
 
+	/// Apply both session limits at once (see [`super::SessionLimits`]).
+	pub fn with_session_limits(self, limits: super::SessionLimits) -> Self {
+		self.with_junk_command_limit(limits.junk_commands)
+			.with_max_session_time(limits.max_session_time)
+	}
+
 	/// Close a session on this listener once it is older than `limit`, at
 	/// the next command boundary (never while a message body is being
 	/// received). Zero turns the limit off.

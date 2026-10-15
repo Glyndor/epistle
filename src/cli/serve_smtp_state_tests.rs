@@ -231,3 +231,39 @@ fn the_rate_floor_config_threads_through_smtp_shared_state() {
 		DataRate::new(20_480, Duration::from_secs(60))
 	);
 }
+
+#[test]
+fn the_session_limits_config_threads_through_smtp_shared_state() {
+	use crate::smtp::server::SessionLimits;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let limits = |settings: &str| {
+		build_smtp_shared_state(&build_config(dir.path(), settings), &metrics)
+			.expect("state")
+			.session_limits
+	};
+	assert_eq!(
+		limits(""),
+		SessionLimits {
+			junk_commands: 100,
+			max_session_time: Duration::from_secs(1800),
+		},
+		"absent: 100 commands, 1800 s"
+	);
+	assert_eq!(
+		limits("junk_command_limit = 25\nmax_session_time = 600"),
+		SessionLimits {
+			junk_commands: 25,
+			max_session_time: Duration::from_secs(600),
+		},
+		"configured values reach every listener"
+	);
+	assert_eq!(
+		limits("junk_command_limit = 0\nmax_session_time = 0"),
+		SessionLimits {
+			junk_commands: 0,
+			max_session_time: Duration::ZERO,
+		},
+		"0 is forwarded as is and turns each limit off"
+	);
+}

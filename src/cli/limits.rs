@@ -166,7 +166,7 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 		let default = configured.is_none() || configured == key.default_value();
 		let value = match configured.or(key.default_value()) {
 			Some(0) if matches!(key, Key::Quota) => "unlimited".into(),
-			Some(0) if matches!(key, Key::MinDataRate) => "disabled".into(),
+			Some(0) if key.zero_turns_off() => "disabled".into(),
 			Some(value) => match key.unit() {
 				values::Unit::Size => format!("{value} bytes"),
 				values::Unit::Rate => format!("{value} bytes per second"),
@@ -214,7 +214,7 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 			serde_json::json!({
 				"value": configured
 					.or(key.default_value())
-					.filter(|value| !(matches!(key, Key::Quota | Key::MinDataRate) && *value == 0)),
+					.filter(|value| !((matches!(key, Key::Quota) || key.zero_turns_off()) && *value == 0)),
 				"unit": unit,
 				"source": if default { "default" } else { "configured" },
 			}),
@@ -424,6 +424,10 @@ mod tests_domains;
 #[cfg(test)]
 #[path = "limits_tests_data_rate.rs"]
 mod tests_data_rate;
+
+#[cfg(test)]
+#[path = "limits_tests_session_limits.rs"]
+mod tests_session_limits;
 
 #[cfg(test)]
 #[path = "limits_tests_schedule.rs"]

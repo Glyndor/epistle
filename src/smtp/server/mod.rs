@@ -18,7 +18,7 @@ pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
 pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
-pub use session_time::DEFAULT_MAX_SESSION_TIME_SECS;
+pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 
 mod builder;
 mod data_rate;

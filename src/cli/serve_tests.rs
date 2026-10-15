@@ -286,3 +286,57 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 		"the configured floor cuts the chunk: {output}"
 	);
 }
+
+#[tokio::test]
+async fn serve_applies_the_junk_command_limit_to_smtp() {
+	// With the limit at 10 the listener `serve` builds cuts the 11th NOOP,
+	// not the 101st.
+	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+		.await
+		.expect("probe bind");
+	let port = probe.local_addr().expect("addr").port();
+	drop(probe);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let listener: Listener = toml::from_str(&format!(
+		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
+	))
+	.expect("listener config");
+	let mut config = test_config(dir.path(), vec![listener]);
+	config.junk_command_limit = Some(10);
+	let server = tokio::spawn(serve(config));
+	let mut stream = None;
+	for _ in 0..100 {
+		match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+			Ok(connected) => {
+				stream = Some(connected);
+				break;
+			}
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+		}
+	}
+	let mut stream = stream.expect("the SMTP listener comes up");
+	let mut script = b"EHLO client.example.org\r\n".to_vec();
+	script.extend_from_slice(&b"NOOP\r\n".repeat(20));
+	stream.write_all(&script).await.expect("write");
+	let mut output = Vec::new();
+	let read = tokio::time::timeout(
+		std::time::Duration::from_secs(60),
+		stream.read_to_end(&mut output),
+	)
+	.await;
+	server.abort();
+	let output = String::from_utf8_lossy(&output);
+	assert!(read.is_ok(), "the connection is closed: {output}");
+	assert!(
+		output.ends_with("421 4.7.0 too many commands without progress, closing connection\r\n"),
+		"the configured limit cuts: {output}"
+	);
+	assert_eq!(
+		output
+			.lines()
+			.filter(|line| line.starts_with("250 "))
+			.count(),
+		11,
+		"the EHLO and ten NOOPs are answered, the eleventh NOOP is cut: {output}"
+	);
+}

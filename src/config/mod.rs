@@ -334,6 +334,18 @@ pub struct Config {
 	/// uses 120; from 1 to 3600.
 	#[serde(default)]
 	pub data_rate_grace: Option<u64>,
+	/// Commands that bring an SMTP session no closer to a delivered
+	/// message (NOOP, RSET, VRFY, AUTH response lines, refused commands)
+	/// one session may send before it is answered `421 4.7.0` and closed.
+	/// Absent uses 100; `0` turns the limit off, else from 10 to 10000.
+	#[serde(default)]
+	pub junk_command_limit: Option<u64>,
+	/// Seconds an SMTP session may last before it is answered `421 4.4.2`
+	/// and closed at the next command boundary (never while a message body
+	/// is being received). Absent uses 1800; `0` turns the limit off, else
+	/// from 60 to 86400.
+	#[serde(default)]
+	pub max_session_time: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -478,6 +490,8 @@ impl std::fmt::Debug for Config {
 			.field("message_memory_budget", &self.message_memory_budget)
 			.field("min_data_rate", &self.min_data_rate)
 			.field("data_rate_grace", &self.data_rate_grace)
+			.field("junk_command_limit", &self.junk_command_limit)
+			.field("max_session_time", &self.max_session_time)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)

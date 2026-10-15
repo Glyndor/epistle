@@ -168,6 +168,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		max_message_size,
 		memory_budget,
 		data_rate,
+		session_limits,
 		scanner_hook,
 		clamd,
 		llm_hook,
@@ -492,6 +493,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
 					.with_data_rate(data_rate)
+					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
 					// The Sent copy of a submission is written into the account's
 					// mailboxes, encrypted at rest like any other stored message.
