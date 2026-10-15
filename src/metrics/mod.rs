@@ -99,6 +99,8 @@ const COUNTERS: &[(&str, &str)] = &[
 	("reports_dropped", "reports_dropped"),
 	("mta_sts_connections_dropped", "mta_sts_connections_dropped"),
 	("accept_failed", "accept_failed"),
+	("warmup_held", "warmup_held"),
+	("warmup_backoff", "warmup_backoff"),
 ];
 
 /// Failed accepts on any listener. Process-wide rather than per
@@ -161,6 +163,8 @@ pub struct Metrics {
 	llm_failed: AtomicU64,
 	subjectpass_passed: AtomicU64,
 	subjectpass_challenged: AtomicU64,
+	warmup_held: AtomicU64,
+	warmup_backoff: AtomicU64,
 }
 
 impl Metrics {
@@ -320,6 +324,18 @@ impl Metrics {
 		counter.fetch_add(count, Ordering::Relaxed);
 	}
 
+	/// Count an IP warm-up day that went badly for a receiver group: the
+	/// group's cap held.
+	pub fn warmup_held(&self) {
+		self.warmup_held.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an IP warm-up day that went very badly for a receiver group,
+	/// or an operator raise that did not hold: the group's cap went back.
+	pub fn warmup_backoff(&self) {
+		self.warmup_backoff.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count an inbound report that was too large, malformed, or whose
 	/// encoding we did not support.
 	pub fn reports_dropped(&self) {
@@ -435,6 +451,8 @@ impl Metrics {
 			"reports_dropped" => &self.reports_dropped,
 			"mta_sts_connections_dropped" => &self.mta_sts_connections_dropped,
 			"accept_failed" => &ACCEPT_FAILED,
+			"warmup_held" => &self.warmup_held,
+			"warmup_backoff" => &self.warmup_backoff,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
