@@ -7,7 +7,15 @@
 //! that a message was sent on a given day to given people and that nobody,
 //! the operator included, rewrote the record afterwards.
 
+pub mod anchor;
+pub mod chain;
 pub mod class;
+pub mod day;
+pub mod lines;
 pub mod marketing;
+pub mod record;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub mod verify;
 
 pub use class::{CLASS_HEADER, ClassSources, MailClass};
