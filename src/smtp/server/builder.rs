@@ -55,6 +55,7 @@ impl Server {
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
+			data_rate: super::DataRate::default(),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
 		}
@@ -201,6 +202,14 @@ impl Server {
 		if bytes > 0 {
 			self.max_message_size = bytes;
 		}
+		self
+	}
+
+	/// Hold every message transaction on this listener to `rate`: the
+	/// minimum average transfer rate once its grace period is over. A
+	/// floor of `0` turns the check off.
+	pub fn with_data_rate(mut self, rate: super::DataRate) -> Self {
+		self.data_rate = rate;
 		self
 	}
 

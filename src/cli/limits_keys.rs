@@ -51,10 +51,16 @@ pub enum Key {
 	/// Per-client-IP concurrent connection cap. A peer over the cap
 	/// is answered `421 4.7.0` and closed. Default is 20.
 	MaxConnectionsPerIp,
+	/// Minimum average rate of one message transaction in bytes per
+	/// second, once its grace is over. Default is 10240; `0` turns it off.
+	MinDataRate,
+	/// Seconds from the start of a message transaction before the rate
+	/// floor applies. Default is 120.
+	DataRateGrace,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 19] = [
+	pub(super) const ALL: [Self; 21] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -74,6 +80,8 @@ impl Key {
 		Self::MaxMessageSize,
 		Self::MessageMemoryBudget,
 		Self::MaxConnectionsPerIp,
+		Self::MinDataRate,
+		Self::DataRateGrace,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -97,6 +105,8 @@ impl Key {
 			Self::MaxMessageSize => "max-message-size",
 			Self::MessageMemoryBudget => "message-memory-budget",
 			Self::MaxConnectionsPerIp => "max-connections-per-ip",
+			Self::MinDataRate => "min-data-rate",
+			Self::DataRateGrace => "data-rate-grace",
 		}
 	}
 
@@ -121,6 +131,8 @@ impl Key {
 			Self::MaxMessageSize => "max_message_size",
 			Self::MessageMemoryBudget => "message_memory_budget",
 			Self::MaxConnectionsPerIp => "max_connections_per_ip",
+			Self::MinDataRate => "min_data_rate",
+			Self::DataRateGrace => "data_rate_grace",
 		}
 	}
 
@@ -155,7 +167,9 @@ impl Key {
 	pub(super) fn unit(self) -> Unit {
 		match self {
 			Self::Quota | Self::MaxMessageSize | Self::MessageMemoryBudget => Unit::Size,
+			Self::MinDataRate => Unit::Rate,
 			Self::QueueGiveUp
+			| Self::DataRateGrace
 			| Self::QueueRetryBase
 			| Self::QueueRetryCap
 			| Self::QueueDelayWarning
@@ -210,6 +224,8 @@ impl Key {
 			Self::MaxMessageSize => config.max_message_size.filter(|value| *value != 0),
 			Self::MessageMemoryBudget => config.message_memory_budget,
 			Self::MaxConnectionsPerIp => config.max_connections_per_ip.map(|value| value as u64),
+			Self::MinDataRate => config.min_data_rate,
+			Self::DataRateGrace => config.data_rate_grace,
 		}
 	}
 
@@ -231,6 +247,8 @@ impl Key {
 			Self::MaxConnectionsPerIp => {
 				Some(crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP as u64)
 			}
+			Self::MinDataRate => Some(crate::smtp::server::DEFAULT_MIN_DATA_RATE),
+			Self::DataRateGrace => Some(crate::smtp::server::DEFAULT_DATA_RATE_GRACE_SECS),
 			_ => None,
 		}
 	}

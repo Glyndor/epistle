@@ -65,3 +65,27 @@ mod tests_budget;
 #[cfg(test)]
 #[path = "server_tests_sender_verified.rs"]
 mod tests_sender_verified;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate.rs"]
+mod tests_data_rate;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_bdat.rs"]
+mod tests_data_rate_bdat;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_config.rs"]
+mod tests_data_rate_config;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_writes.rs"]
+mod tests_data_rate_writes;
+
+#[cfg(test)]
+#[path = "server_tests_data_rate_legit.rs"]
+mod tests_data_rate_legit;
+
+#[cfg(test)]
+#[path = "server_tests_tls_drip.rs"]
+mod tests_tls_drip;

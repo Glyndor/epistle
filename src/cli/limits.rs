@@ -166,8 +166,10 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 		let default = configured.is_none() || configured == key.default_value();
 		let value = match configured.or(key.default_value()) {
 			Some(0) if matches!(key, Key::Quota) => "unlimited".into(),
+			Some(0) if matches!(key, Key::MinDataRate) => "disabled".into(),
 			Some(value) => match key.unit() {
 				values::Unit::Size => format!("{value} bytes"),
+				values::Unit::Rate => format!("{value} bytes per second"),
 				values::Unit::Duration => format!("{value} seconds"),
 				values::Unit::Count => value.to_string(),
 			},
@@ -183,7 +185,8 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 /// `limits show --json`: `{"<limit>": {"value", "unit", "source"}, "domain-overrides":
 /// {"<domain>": {"submission-rate": N, "quota": N}}, "tenants": {"<name>": {"submission-rate": N}}}`,
 /// where `value` is the effective number (`null` when the limit is off or left to
-/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`, `seconds` or `count`.
+/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`, `bytes-per-second`,
+/// `seconds` or `count`.
 pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	let mut limits = serde_json::Map::new();
 	for key in Key::ALL {
@@ -202,6 +205,7 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 		let default = configured.is_none() || configured == key.default_value();
 		let unit = match key.unit() {
 			values::Unit::Size => "bytes",
+			values::Unit::Rate => "bytes-per-second",
 			values::Unit::Duration => "seconds",
 			values::Unit::Count => "count",
 		};
@@ -210,7 +214,7 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 			serde_json::json!({
 				"value": configured
 					.or(key.default_value())
-					.filter(|value| !(matches!(key, Key::Quota) && *value == 0)),
+					.filter(|value| !(matches!(key, Key::Quota | Key::MinDataRate) && *value == 0)),
 				"unit": unit,
 				"source": if default { "default" } else { "configured" },
 			}),
@@ -416,6 +420,10 @@ mod tests_config;
 #[cfg(test)]
 #[path = "limits_tests_domains.rs"]
 mod tests_domains;
+
+#[cfg(test)]
+#[path = "limits_tests_data_rate.rs"]
+mod tests_data_rate;
 
 #[cfg(test)]
 #[path = "limits_tests_schedule.rs"]

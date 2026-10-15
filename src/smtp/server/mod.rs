@@ -16,8 +16,10 @@ pub use super::reply::Reply;
 pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
+pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
 
 mod builder;
+mod data_rate;
 mod dnsbl_check;
 mod run;
 mod run_auth;
@@ -188,6 +190,9 @@ pub struct Server {
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; raise or lower
 	/// with [`Server::with_max_message_size`].
 	max_message_size: usize,
+	/// The minimum average rate of one DATA body or one BDAT chunk once
+	/// its grace period is over (see [`DataRate`]).
+	data_rate: DataRate,
 	/// The authentication protocol this listener serves. Sessions tag every
 	/// password attempt through this server with it, so a per-account
 	/// `allowed_protocols` set that does not include the listener's kind
@@ -478,33 +483,54 @@ impl Server {
 	}
 }
 
+/// Write one reply. A client that stops reading must not keep the
+/// connection, nor whatever its session holds on the memory budget, in a
+/// write that never ends: the write gives up after the same idle timeout
+/// as a read.
 async fn send<W>(writer: &mut W, reply: &Reply) -> std::io::Result<()>
 where
 	W: AsyncWrite + Unpin + ?Sized,
 {
-	writer.write_all(reply.to_string().as_bytes()).await?;
-	writer.flush().await
+	let writing = async {
+		writer.write_all(reply.to_string().as_bytes()).await?;
+		writer.flush().await
+	};
+	tokio::time::timeout(COMMAND_TIMEOUT, writing)
+		.await
+		.unwrap_or_else(|_| {
+			Err(std::io::Error::new(
+				std::io::ErrorKind::TimedOut,
+				"SMTP reply write timed out",
+			))
+		})
 }
 
 /// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
 /// already buffered in the decoder, then read from the stream, feeding any
-/// overshoot (the next pipelined command) back into the decoder. Returns
-/// `Ok(None)` if the peer closes or times out before `size` bytes arrive.
+/// overshoot (the next pipelined command) back into the decoder. `window`
+/// is the rate window of the whole transaction, so the chunk adds its
+/// octets to it. Ends with a [`data_rate::Cut`] if the peer closes or times out, or
+/// falls below the rate floor, before `size` bytes arrive.
 async fn read_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
 	size: usize,
-) -> std::io::Result<Option<Vec<u8>>> {
+	window: &mut data_rate::RateWindow,
+) -> std::io::Result<Result<Vec<u8>, data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
 	let mut chunk = decoder.take_buffered(size);
+	window.record(chunk.len());
 	let mut buffer = [0u8; READ_BUFFER];
 	while chunk.len() < size {
-		let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer)).await {
-			Ok(Ok(0)) | Err(_) => return Ok(None),
-			Ok(Ok(n)) => n,
-			Ok(Err(error)) => return Err(error),
+		let reading = tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer));
+		let read = match window.guard(reading).await {
+			None => return Ok(Err(data_rate::Cut::TooSlow)),
+			Some(Ok(Ok(0)) | Err(_)) => return Ok(Err(data_rate::Cut::Closed)),
+			Some(Ok(Ok(n))) => n,
+			Some(Ok(Err(error))) => return Err(error),
 		};
 		let need = size - chunk.len();
+		window.record(read.min(need));
 		if read <= need {
 			chunk.extend_from_slice(&buffer[..read]);
 		} else {
@@ -512,28 +538,34 @@ async fn read_chunk(
 			decoder.feed(&buffer[need..read]);
 		}
 	}
-	Ok(Some(chunk))
+	Ok(Ok(chunk))
 }
 
 /// Read `size` bytes of a refused BDAT chunk and throw them away, without
 /// holding them: first the bytes already buffered in the decoder, then the
 /// stream through a fixed buffer, feeding any overshoot (the next pipelined
-/// command) back into the decoder. `Ok(false)` if the peer closes or times
-/// out first.
+/// command) back into the decoder. The rate floor applies as to a kept
+/// chunk: a dripped chunk still holds a connection and a per-IP slot.
 async fn discard_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
 	size: usize,
-) -> std::io::Result<bool> {
+	window: &mut data_rate::RateWindow,
+) -> std::io::Result<Result<(), data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
-	let mut left = size - decoder.discard_buffered(size);
+	let buffered = decoder.discard_buffered(size);
+	window.record(buffered);
+	let mut left = size - buffered;
 	let mut buffer = [0u8; READ_BUFFER];
 	while left > 0 {
-		let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer)).await {
-			Ok(Ok(0)) | Err(_) => return Ok(false),
-			Ok(Ok(n)) => n,
-			Ok(Err(error)) => return Err(error),
+		let reading = tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer));
+		let read = match window.guard(reading).await {
+			None => return Ok(Err(data_rate::Cut::TooSlow)),
+			Some(Ok(Ok(0)) | Err(_)) => return Ok(Err(data_rate::Cut::Closed)),
+			Some(Ok(Ok(n))) => n,
+			Some(Ok(Err(error))) => return Err(error),
 		};
+		window.record(read.min(left));
 		if read <= left {
 			left -= read;
 		} else {
@@ -541,7 +573,24 @@ async fn discard_chunk(
 			left = 0;
 		}
 	}
-	Ok(true)
+	Ok(Ok(()))
+}
+
+/// End a connection whose read was cut: a client below the rate floor is
+/// told why first. The session goes before the 421 is written, so a client
+/// that does not read it gives its reservation back at the cut, not when
+/// the write gives up.
+async fn end_cut(
+	stream: &mut Box<dyn Connection>,
+	cut: data_rate::Cut,
+	session: Session,
+) -> std::io::Result<()> {
+	drop(session);
+	if cut == data_rate::Cut::TooSlow {
+		tracing::info!("closing a client below the DATA/BDAT rate floor");
+		send(stream, &data_rate::too_slow()).await?;
+	}
+	Ok(())
 }
 
 #[cfg(test)]

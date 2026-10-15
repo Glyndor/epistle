@@ -205,3 +205,29 @@ async fn clamd_startup_applies_configured_timeout() {
 	assert_eq!(metrics.snapshot().get("scanner_clamd_failed"), Some(&1));
 	assert!(task.await.expect("peer").starts_with(b"zINSTREAM\0"));
 }
+
+#[test]
+fn the_rate_floor_config_threads_through_smtp_shared_state() {
+	use crate::smtp::server::DataRate;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let rate = |settings: &str| {
+		build_smtp_shared_state(&build_config(dir.path(), settings), &metrics)
+			.expect("state")
+			.data_rate
+	};
+	assert_eq!(
+		rate(""),
+		DataRate::new(10_240, Duration::from_secs(120)),
+		"absent: 10 KiB/s after 120 s"
+	);
+	assert_eq!(
+		rate("min_data_rate = 0"),
+		DataRate::new(0, Duration::from_secs(120)),
+		"0 is forwarded and turns the floor off"
+	);
+	assert_eq!(
+		rate("min_data_rate = 20480\ndata_rate_grace = 60"),
+		DataRate::new(20_480, Duration::from_secs(60))
+	);
+}

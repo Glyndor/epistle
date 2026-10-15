@@ -12,8 +12,10 @@ use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
 };
 
+use super::data_rate::{Cut, RateWindow, send_within};
 use super::{
-	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, read_chunk, send,
+	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, end_cut, read_chunk,
+	send,
 };
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
@@ -38,6 +40,11 @@ impl Server {
 		let mut buffer = [0u8; READ_BUFFER];
 		// Consecutive error replies; too many means an abusive client.
 		let mut error_streak = 0u32;
+		// The rate window of the message being received: started at the
+		// 354 or at the first BDAT chunk, and kept until the transaction
+		// ends, so the time between chunks and the commands sent in it
+		// count against the same clock.
+		let mut body_window: Option<RateWindow> = None;
 
 		loop {
 			let line = match decoder.next_line() {
@@ -46,7 +53,10 @@ impl Server {
 					// A drain waits for an open transaction, DATA or AUTH to end.
 					let idle = mode == Mode::Commands && !session.in_transaction();
 					let drain = self.drain.as_deref().filter(|_| idle);
-					let reading = stream.read(&mut buffer);
+					// A message being received is held to the rate floor.
+					let off = RateWindow::off();
+					let window = body_window.as_ref().unwrap_or(&off);
+					let reading = window.guard(stream.read(&mut buffer));
 					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
 					{
@@ -54,8 +64,9 @@ impl Server {
 							send(&mut stream, &Reply::single(421, "4.3.2 shutting down")).await?;
 							return Ok(());
 						}
-						Some(Ok(Ok(n))) => n,
-						Some(Ok(Err(e))) => return Err(e),
+						Some(Ok(Some(Ok(n)))) => n,
+						Some(Ok(Some(Err(e)))) => return Err(e),
+						Some(Ok(None)) => return end_cut(&mut stream, Cut::TooSlow, session).await,
 						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
@@ -63,6 +74,11 @@ impl Server {
 					};
 					if read == 0 {
 						return Ok(());
+					}
+					if mode == Mode::Data
+						&& let Some(window) = body_window.as_mut()
+					{
+						window.record(read);
 					}
 					decoder.feed(&buffer[..read]);
 					continue;
@@ -79,8 +95,11 @@ impl Server {
 			} else {
 				let Ok(line_str) = String::from_utf8(line) else {
 					if mode == Mode::Commands {
-						send(&mut stream, &Reply::syntax_error()).await?;
-						continue;
+						let reply = Reply::syntax_error();
+						if send_within(&mut stream, &reply, body_window.as_ref()).await? {
+							continue;
+						}
+						return Ok(());
 					}
 					// Auth responses must be ASCII; abort.
 					send(
@@ -107,24 +126,34 @@ impl Server {
 			// Deliver for the LAST chunk — so the full delivery path still runs).
 			let action = loop {
 				action = match action {
+					// The first chunk starts the window of the transaction.
 					Action::CollectChunk { size, last } => {
-						let chunk = match read_chunk(&mut stream, &mut decoder, size).await {
-							Ok(Some(chunk)) => chunk,
-							Ok(None) => return Ok(()), // client closed mid-chunk
-							Err(error) => return Err(error),
-						};
+						let window = body_window.get_or_insert_with(|| self.message_window());
+						let chunk =
+							match read_chunk(&mut stream, &mut decoder, size, window).await? {
+								Ok(chunk) => chunk,
+								Err(cut) => return end_cut(&mut stream, cut, session).await,
+							};
 						session.bdat_chunk(&chunk, last)
 					}
 					// A refused chunk is consumed without being kept.
 					Action::DiscardChunk { size, reply } => {
-						if !discard_chunk(&mut stream, &mut decoder, size).await? {
-							return Ok(()); // client closed mid-chunk
+						let window = body_window.get_or_insert_with(|| self.message_window());
+						if let Err(cut) =
+							discard_chunk(&mut stream, &mut decoder, size, window).await?
+						{
+							return end_cut(&mut stream, cut, session).await;
 						}
 						Action::Continue(reply)
 					}
 					resolved => break resolved,
 				};
 			};
+			// The window ends with the transaction: the dot, the LAST
+			// chunk, RSET, or any refusal that resets it.
+			if !session.in_transaction() {
+				body_window = None;
+			}
 			match action {
 				Action::Continue(reply) => {
 					// Abuse guard: disconnect a client that only produces errors.
@@ -142,11 +171,15 @@ impl Server {
 					} else {
 						error_streak = 0;
 					}
-					send(&mut stream, &reply).await?;
+					// Inside a transaction an unread reply counts as idle time.
+					if !send_within(&mut stream, &reply, body_window.as_ref()).await? {
+						return Ok(());
+					}
 				}
 				Action::CollectData(reply) => {
 					mode = Mode::Data;
 					send(&mut stream, &reply).await?;
+					body_window = Some(self.message_window());
 				}
 				// BDAT chunk reads are resolved into a terminal action above.
 				Action::CollectChunk { .. } | Action::DiscardChunk { .. } => {
