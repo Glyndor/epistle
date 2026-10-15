@@ -45,6 +45,10 @@ pub struct Authority {
 	/// operator requires one.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub policy: Option<String>,
+	/// A test authority on loopback, reached over plain HTTP. Refused
+	/// outside the test build.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub local_test: bool,
 }
 
 /// The timestamp settings.
@@ -64,6 +68,7 @@ impl Default for Settings {
 				url: DEFAULT_TSA_URL.to_string(),
 				anchors: vec![DEFAULT_TSA_ANCHOR.to_string()],
 				policy: None,
+				local_test: false,
 			}],
 		}
 	}
@@ -113,11 +118,18 @@ impl Settings {
 			));
 		}
 		for authority in &self.authorities {
-			check_url(&authority.url)?;
+			// Plain HTTP exists for the loopback authority the tests run;
+			// a release build never accepts it.
+			check_url(&authority.url, authority.local_test && cfg!(test))?;
 			if authority.anchors.is_empty() || authority.anchors.len() > MAX_ANCHORS {
 				return Err(SettingsError(format!(
 					"each authority needs 1 to {MAX_ANCHORS} anchors"
 				)));
+			}
+			if authority.policy.is_some() && authority.policy_oid().is_none() {
+				return Err(SettingsError(
+					"a policy is a dotted object identifier".into(),
+				));
 			}
 			if authority
 				.anchors
@@ -160,8 +172,9 @@ pub fn oid_from_dotted(dotted: &str) -> Option<Vec<u8>> {
 	Some(out)
 }
 
-/// Refuse a URL that is not `https`, or `http` to loopback.
-fn check_url(value: &str) -> Result<(), SettingsError> {
+/// Refuse a URL that is not `https`, or plain `http` to loopback when
+/// `plain_allowed`.
+fn check_url(value: &str, plain_allowed: bool) -> Result<(), SettingsError> {
 	let url = url::Url::parse(value)
 		.map_err(|_| SettingsError("a timestamp authority URL does not parse".into()))?;
 	let loopback = match url.host() {
@@ -172,21 +185,52 @@ fn check_url(value: &str) -> Result<(), SettingsError> {
 	};
 	match url.scheme() {
 		"https" if url.host().is_some() => Ok(()),
-		"http" if loopback => Ok(()),
+		"http" if plain_allowed && loopback => Ok(()),
 		_ => Err(SettingsError(
-			"a timestamp authority URL must be https (http only to loopback)".into(),
+			"a timestamp authority URL must be https (plain http only for a local test authority)"
+				.into(),
 		)),
 	}
 }
 
 /// The settings under `evidence_root`: the defaults when none were saved.
+///
+/// A file that is a link, is not owned by this user, or that group or
+/// others may write, is refused (`PermissionDenied`): whoever can write it
+/// decides which authorities are trusted. A file that does not parse or
+/// does not validate is refused (`InvalidData`). None of these falls back
+/// to the defaults; the caller keeps the settings it had, or stops.
 pub fn load(evidence_root: &Path) -> std::io::Result<Settings> {
 	let path = evidence_root.join(FILE);
+	match std::fs::symlink_metadata(&path) {
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			return Ok(Settings::default());
+		}
+		Err(error) => return Err(error),
+		Ok(meta) => check_owner_only(&meta)?,
+	}
 	let Some(bytes) = crate::evidence::checkpoint::read_bounded(&path, 64 * 1024)? else {
 		return Ok(Settings::default());
 	};
-	serde_json::from_slice(&bytes)
-		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+	let settings: Settings = serde_json::from_slice(&bytes)
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+	settings
+		.validate()
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.0))?;
+	Ok(settings)
+}
+
+fn check_owner_only(meta: &std::fs::Metadata) -> std::io::Result<()> {
+	use std::os::unix::fs::MetadataExt;
+	// SAFETY: geteuid has no preconditions and cannot fail.
+	let me = unsafe { libc::geteuid() };
+	if !meta.file_type().is_file() || meta.uid() != me || meta.mode() & 0o022 != 0 {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::PermissionDenied,
+			"timestamp settings are writable by other users: refused",
+		));
+	}
+	Ok(())
 }
 
 /// Save `settings` under `evidence_root` after checking them.
@@ -199,6 +243,37 @@ pub fn save(evidence_root: &Path, settings: &Settings) -> std::io::Result<()> {
 	crate::storage::write_secret(&evidence_root.join(FILE), &bytes)
 }
 
+/// Save `settings` and record the change in the evidence chain, naming
+/// the `operator` who made it.
+pub fn record_change(
+	evidence_root: &Path,
+	settings: &Settings,
+	operator: &str,
+) -> std::io::Result<()> {
+	save(evidence_root, settings)?;
+	let value = if settings.enabled {
+		let urls: Vec<&str> = settings
+			.authorities
+			.iter()
+			.map(|a| a.url.as_str())
+			.collect();
+		format!("enabled ({}) by {operator}", urls.join(", "))
+	} else {
+		format!("disabled by {operator}")
+	};
+	crate::evidence::chain::Chain::open(evidence_root)?.append(
+		crate::evidence::record::Entry::Setting(crate::evidence::record::Setting {
+			name: "timestamp".into(),
+			value: crate::evidence::record::bounded(&value),
+		}),
+	)?;
+	Ok(())
+}
+
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "settings_tests_fail_closed.rs"]
+mod tests_fail_closed;

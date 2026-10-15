@@ -7,6 +7,7 @@ fn with(url: &str, anchors: Vec<String>) -> Settings {
 			url: url.to_string(),
 			anchors,
 			policy: None,
+			local_test: true,
 		}],
 	}
 }

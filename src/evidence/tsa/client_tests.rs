@@ -13,6 +13,7 @@ fn authority(url: String, tsa: &FakeTsa) -> Authority {
 		url,
 		anchors: vec![crate::evidence::record::to_hex(&tsa.anchor)],
 		policy: None,
+		local_test: true,
 	}
 }
 

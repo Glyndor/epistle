@@ -107,10 +107,10 @@ pub async fn stamp_due(
 	settings: &Settings,
 	now: u64,
 ) -> std::io::Result<Pass> {
+	// Whether a day needs a token is the checkpoint's to say (it follows the
+	// chain), never this file's: a settings file edited to "off" must not
+	// leave a sealed day unstamped.
 	let mut pass = Pass::default();
-	if !settings.enabled {
-		return Ok(pass);
-	}
 	let pending = unstamped(evidence_root)?;
 	let mut state = waiting(evidence_root)?;
 	let before = state.clone();

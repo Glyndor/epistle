@@ -27,6 +27,7 @@ fn settings(url: String, tsa: &FakeTsa) -> Settings {
 			url,
 			anchors: vec![to_hex(&tsa.anchor)],
 			policy: None,
+			local_test: true,
 		}],
 	}
 }
@@ -88,7 +89,9 @@ async fn a_failure_waits_with_backoff_and_is_shown() {
 }
 
 #[tokio::test]
-async fn nothing_is_asked_when_timestamping_is_off() {
+async fn a_settings_file_saying_off_does_not_stop_a_checkpoint_that_expects_a_token() {
+	// The mode comes from the chain (the checkpoint says enabled); a file
+	// edited to say otherwise must not leave the day unstamped.
 	let dir = sealed_day();
 	let tsa = Arc::new(FakeTsa::new(at(DAY + 1, 0)));
 	let url = Arc::clone(&tsa).serve().await;
@@ -97,8 +100,7 @@ async fn nothing_is_asked_when_timestamping_is_off() {
 	let pass = stamp_due(dir.path(), &settings, at(DAY + 1, 0))
 		.await
 		.expect("pass");
-	assert_eq!(pass, Pass::default());
-	assert!(tsa.received.lock().expect("lock").is_empty());
+	assert_eq!(pass.stamped, vec![Day(DAY)]);
 }
 
 #[test]
