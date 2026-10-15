@@ -162,3 +162,18 @@ fn status_json_carries_both_findings() {
 		})
 	);
 }
+
+#[test]
+fn control_characters_in_service_names_are_not_echoed() {
+	let (level, detail) = containers(
+		&[("evil\u{1b}]0;x\u{7}", "7g"), ("mail", "7g")],
+		Some(8 * 1024 * 1024),
+	);
+	assert_eq!(level, Level::Warn);
+	assert!(detail.contains("the largest are evil"), "{detail}");
+	assert!(
+		!detail.chars().any(|c| c == '\u{1b}' || c == '\u{7}'),
+		"{:?}",
+		detail.escape_debug().to_string()
+	);
+}

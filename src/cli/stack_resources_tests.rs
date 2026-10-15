@@ -201,3 +201,40 @@ fn the_command_line_reads_set_and_json_on_either_side() {
 			if service == "clamav" && memory.as_deref() == Some("2g")
 	));
 }
+
+#[test]
+fn a_compose_file_over_one_mib_is_refused_unread() {
+	let (_dir, compose) = stack();
+	let mut text = std::fs::read_to_string(&compose).expect("read");
+	text.push_str(&" ".repeat(2 * 1024 * 1024));
+	std::fs::write(&compose, &text).expect("pad");
+	let mut out = Vec::new();
+	assert_eq!(run(&compose, None, true, &mut out), ExitCode::FAILURE);
+	assert!(out.is_empty(), "nothing listed");
+	let code = run(&compose, set("clamav", Some("2g"), None), true, &mut out);
+	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(
+		std::fs::read_to_string(&compose).expect("read").len(),
+		text.len(),
+		"the file is left as it was"
+	);
+}
+
+#[test]
+fn control_characters_in_the_compose_file_do_not_reach_the_terminal() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let compose = dir.path().join("compose.yaml");
+	std::fs::write(
+		&compose,
+		r#"{"services":{"mail\u001b[2J":{"mem_limit":"1g\u001b]0;x\u0007","pids_limit":5}}}"#,
+	)
+	.expect("compose");
+	let mut out = Vec::new();
+	assert_eq!(run(&compose, None, false, &mut out), ExitCode::SUCCESS);
+	let printed = String::from_utf8(out).expect("utf8");
+	assert!(
+		!printed.chars().any(|c| c == '\u{1b}' || c == '\u{7}'),
+		"escape bytes were printed: {:?}",
+		printed.escape_debug().to_string()
+	);
+}
