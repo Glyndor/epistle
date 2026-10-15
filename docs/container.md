@@ -199,12 +199,12 @@ service without the capability, or without the writable path, and reading the
 failure; the writes were listed with `podman diff` after mail in, a
 submission, an IMAP read, a 20 MB message and an EICAR scan.
 
-| Service | Runs as | Capabilities | Writable besides its volumes | Memory | Processes |
+| Service | Runs as | Capabilities | Writable besides its volumes | Memory (8 GiB host) | Processes |
 |---|---|---|---|---|---|
-| `mail` | 65532 | none | nothing | `1g` | 1024 |
+| `mail` | 65532 | none | nothing | `2g` | 1024 |
 | `db` | 999 (postgres) | none | `/tmp` | `1g` | 256 |
-| `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `3g` | 128 |
-| `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `2g` | 32 |
+| `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `2g` | 128 |
+| `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `1g` | 32 |
 
 `clamav` keeps its root entrypoint: it chowns and chmods the socket volume and
 clamd then steps down to the `clamav` user. Ports below 1024 reach `mail`
@@ -216,7 +216,25 @@ IMAP sessions: `mail` peaked at 47 MB of anonymous memory and 62 tasks, `db`
 at 113 MB plus 148 MB of shared buffers, clamd at 1.99 GB while it reloaded
 its signatures (it loads the new set before it frees the old one), and
 freshclam at 860 MB while it tested a download. Podman lets each container
-swap as much again. To change a limit, put it in the answers file:
+swap as much again.
+
+`init` picks the memory limits from the host's `MemTotal`:
+
+| Host memory | `mail` | `db` | `clamav` | `freshclam` |
+|---|---|---|---|---|
+| under 4 GiB | `2g` | `1g` | left out | left out |
+| 4 to 8 GiB | `2g` | `1g` | `2g` | `1g` |
+| over 8, up to 16 GiB | `2g` | `1g` | `3g` | `2g` |
+| over 16 GiB | `4g` | `2g` | `3g` | `2g` |
+
+Below 4 GiB clamav (1 GiB resident, 2 GiB while it reloads) is left out, the
+config gets no `clamd_socket`, and `init` says so; `antivirus = true` under
+`[services]` in the answers file keeps it. A rerun of `init` and `stack update`
+keep what an install already has: the limits an older release wrote stay
+(`mail 1g`, `db 1g`, `clamav 3g`, `freshclam 2g`), and the `resources` area of
+`epistle status` lists the commands that adopt the new ones. See
+[Sizing](#sizing) for what the limits mean under load. To change a limit, put
+it in the answers file:
 
 ```toml
 [resources.clamav]

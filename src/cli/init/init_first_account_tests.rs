@@ -31,6 +31,7 @@ fn init(file: std::path::PathBuf, dry_run: bool) -> (ExitCode, String) {
 	let probes = Probes {
 		detector: &detector,
 		resolver: &resolver,
+		meminfo: std::path::Path::new(""),
 	};
 	let mut out = Vec::new();
 	let code = run_with(

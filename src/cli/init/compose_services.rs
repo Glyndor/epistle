@@ -99,7 +99,10 @@ impl ComposeService {
 				"epistle-pgsock:/run/postgresql".to_string(),
 			));
 		}
-		volumes.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
+		let antivirus = answers.services.antivirus != Some(false);
+		if antivirus {
+			volumes.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
+		}
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());
 		if let Some(dns) = &answers.dns {
@@ -191,12 +194,14 @@ impl ComposeService {
 			),
 			depends_on: Some({
 				let mut map = BTreeMap::new();
-				map.insert(
-					"clamav".to_string(),
-					DependsOn {
-						condition: "service_healthy".to_string(),
-					},
-				);
+				if antivirus {
+					map.insert(
+						"clamav".to_string(),
+						DependsOn {
+							condition: "service_healthy".to_string(),
+						},
+					);
+				}
 				if database {
 					map.insert(
 						"db".to_string(),
@@ -206,7 +211,8 @@ impl ComposeService {
 					);
 				}
 				map
-			}),
+			})
+			.filter(|map| !map.is_empty()),
 			// Healthcheck the running mail listeners from inside the
 			// container. The distroless base image ships neither a
 			// shell nor curl, so the only viable probe is the

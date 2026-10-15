@@ -19,6 +19,7 @@ fn dry_run_prints_the_block_and_still_exits_0_with_a_missing_ptr() {
 	let probes = Probes {
 		detector: &Scripted::found(None, None),
 		resolver: &fake,
+		meminfo: std::path::Path::new(""),
 	};
 	let mut out = Vec::new();
 	let args = dry_run_args(dir.path(), "public_ipv4 = \"8.8.8.8\"\n");
@@ -46,6 +47,7 @@ fn a_detected_address_gets_its_ptr_checked_too() {
 	let probes = Probes {
 		detector: &Scripted::found(Some(v4()), None),
 		resolver: &fake,
+		meminfo: std::path::Path::new(""),
 	};
 	let mut out = Vec::new();
 	let code = run_with(dry_run_args(dir.path(), ""), &probes, &mut out);
@@ -68,6 +70,7 @@ fn no_address_prints_no_block_and_builds_no_resolver() {
 	let probes = Probes {
 		detector: &Scripted::found(None, None),
 		resolver: &resolver,
+		meminfo: std::path::Path::new(""),
 	};
 	let mut out = Vec::new();
 	let code = run_with(dry_run_args(dir.path(), ""), &probes, &mut out);

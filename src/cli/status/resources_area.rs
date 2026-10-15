@@ -10,6 +10,7 @@ use std::path::Path;
 
 use super::Ctx;
 use super::report::{AreaReport, Item, Level};
+use crate::cli::init::host_sizing;
 use crate::cli::term::sanitize;
 use crate::config::Config;
 use crate::smtp::memory_fit;
@@ -32,17 +33,82 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 fn evaluate(config: &Config, compose: &Path, meminfo: &Path) -> AreaReport {
 	let containers = containers_item(compose, meminfo);
 	let budget = budget_item(config, compose);
-	let warnings: Vec<&str> = [&containers, &budget]
-		.into_iter()
+	let summary = format!("{}; message budget {}", containers.detail, budget.detail);
+	let mut items = vec![containers];
+	items.extend(suggested_item(compose, meminfo));
+	items.push(budget);
+	let warnings: Vec<&str> = items
+		.iter()
 		.filter(|item| item.status != Level::Ok)
 		.map(|item| item.detail.as_str())
 		.collect();
 	let summary = if warnings.is_empty() {
-		format!("{}; message budget {}", containers.detail, budget.detail)
+		summary
 	} else {
 		warnings.join("; ")
 	};
-	AreaReport::from_items(vec![containers, budget], summary)
+	AreaReport::from_items(items, summary)
+}
+
+/// The suggested finding: the limits a new install on this host would get
+/// (see [`host_sizing`]) against the ones the compose file has, with the
+/// commands that adopt them. `init` never changes an existing install's
+/// limits, so this is where the operator hears of them. A warning when the
+/// `mail` limit is below the suggestion, since that is the container a
+/// burst of large messages fills; `None` when the compose file or
+/// `MemTotal` cannot be read (the containers finding says which).
+fn suggested_item(compose: &Path, meminfo: &Path) -> Option<Item> {
+	let document: serde_json::Value = serde_json::from_str(&read_bounded(compose)?).ok()?;
+	let total = host_sizing::mem_total(meminfo)?;
+	let sizing = host_sizing::for_host(total);
+	let current = crate::cli::stack_resources::read_limits(&document);
+	let host = format!("a new install on this host ({})", gib(total));
+	let mut differences = Vec::new();
+	let mut commands = Vec::new();
+	let mut level = Level::Ok;
+	for (service, wanted) in sizing.memory {
+		let Some(limit) = current.iter().find(|limit| limit.service == service) else {
+			continue;
+		};
+		if matches!(service, "clamav" | "freshclam") && !sizing.antivirus {
+			continue;
+		}
+		let wanted_bytes = memory_fit::parse_memory(wanted);
+		if limit.memory_bytes == wanted_bytes {
+			continue;
+		}
+		if limit.service == "mail" && limit.memory_bytes < wanted_bytes {
+			level = Level::Warn;
+		}
+		differences.push(format!(
+			"{service} {wanted} (now {})",
+			sanitize(limit.memory.as_deref().unwrap_or("none"))
+		));
+		commands.push(format!(
+			"`epistle stack resources set {service} --memory {wanted}`"
+		));
+	}
+	let mut detail = match commands.len() {
+		0 => format!("the limits are what {host} would get"),
+		count => {
+			let (last, rest) = commands.split_last().expect("one command at least");
+			let listed = if rest.is_empty() {
+				last.clone()
+			} else {
+				format!("{} and {last}", rest.join(", "))
+			};
+			format!(
+				"{host} would get {}; adopt {} with {listed}, then `epistle stack update`",
+				differences.join(", "),
+				if count == 1 { "it" } else { "them" }
+			)
+		}
+	};
+	let runs_clamav = current.iter().any(|limit| limit.service == "clamav");
+	if runs_clamav && !sizing.antivirus {
+		detail.push_str("; a new install on this host leaves clamav and freshclam out");
+	}
+	Some(Item::new("suggested", level, detail))
 }
 
 /// The share of the host's memory, in percent, the containers' limits may
@@ -74,7 +140,7 @@ fn containers_item(compose: &Path, meminfo: &Path) -> Item {
 			.into_iter()
 			.filter_map(|limit| Some((limit.service, limit.memory_bytes?, limit.memory?)))
 			.collect();
-	let Some(total) = mem_total(meminfo) else {
+	let Some(total) = host_sizing::mem_total(meminfo) else {
 		return Item::new(
 			NAME,
 			Level::Warn,
@@ -116,23 +182,13 @@ fn containers_item(compose: &Path, meminfo: &Path) -> Item {
 	)
 }
 
-/// The host's `MemTotal`, in bytes, from a `/proc/meminfo` at `meminfo`.
-fn mem_total(meminfo: &Path) -> Option<u64> {
-	let text = read_bounded(meminfo)?;
-	let line = text
-		.lines()
-		.find_map(|line| line.strip_prefix("MemTotal:"))?;
-	let kib: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
-	kib.checked_mul(1024).filter(|bytes| *bytes > 0)
-}
-
 /// Bytes as GiB with one decimal.
 fn gib(bytes: u64) -> String {
 	format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
-/// At most 1 MiB of `path` as text: `/proc/meminfo` and the compose file
-/// `epistle init` writes are a few KiB.
+/// At most 1 MiB of `path` as text: the compose file `epistle init` writes
+/// is a few KiB.
 fn read_bounded(path: &Path) -> Option<String> {
 	use std::io::Read;
 	let mut text = String::new();
@@ -189,3 +245,7 @@ mod tests;
 #[cfg(test)]
 #[path = "resources_area_tests_containers.rs"]
 mod tests_containers;
+
+#[cfg(test)]
+#[path = "resources_area_tests_suggest.rs"]
+mod tests_suggest;
