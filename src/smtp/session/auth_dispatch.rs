@@ -128,11 +128,13 @@ impl Session {
 		}
 	}
 
-	/// Feed the response line of a challenged AUTH (server sent 334). A
-	/// cancelled or failed exchange counts as a command without progress.
+	/// Feed the response line of a challenged AUTH (server sent 334). Every
+	/// response line counts as a command without progress, whatever its
+	/// outcome: an exchange answered one line every few minutes, or
+	/// restarted after each failure, must not hold the connection.
 	pub fn auth_line(&mut self, line: &str) -> Action {
 		let action = self.auth_response(line);
-		self.count_junk(false, action)
+		self.count_junk(true, action)
 	}
 
 	fn auth_response(&mut self, line: &str) -> Action {

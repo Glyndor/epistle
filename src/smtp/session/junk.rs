@@ -1,7 +1,7 @@
 //! The limit on commands that bring a session no closer to a delivered
 //! message. Outside a transaction a connection costs a slot of the listener
 //! and of its client's address, and NOOP, RSET, VRFY, a refused command or
-//! a cancelled AUTH every few minutes kept it for ever. Past the limit the
+//! an AUTH response line every few minutes kept it for ever. Past the limit the
 //! client is answered `421 4.7.0` and the connection is closed. The count
 //! covers the whole session: a delivered message does not reset it, and a
 //! logged-in client has the same limit.
@@ -21,8 +21,9 @@ impl Session {
 	}
 
 	/// Count the step that produced `action` when it brought the session no
-	/// closer to a message: a `junk` command (NOOP, RSET, VRFY) whatever its
-	/// reply, and every refusal. Past the limit the transaction is dropped
+	/// closer to a message: a `junk` step (NOOP, RSET, VRFY, an AUTH
+	/// response line) whatever its reply, and every refusal. A successful
+	/// AUTH resets nothing. Past the limit the transaction is dropped
 	/// and the session ends with `421 4.7.0`.
 	pub(super) fn count_junk(&mut self, junk: bool, action: Action) -> Action {
 		let refused = match &action {

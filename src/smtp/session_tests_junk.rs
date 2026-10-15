@@ -146,3 +146,38 @@ fn a_lower_limit_is_honoured() {
 		Some(TOO_MANY)
 	);
 }
+
+#[test]
+fn every_auth_continuation_line_counts() {
+	// A LOGIN exchange that is answered one line at a time and then
+	// cancelled costs two: the username line and the cancellation.
+	let mut session = tls_session();
+	for round in 0..50 {
+		assert_eq!(reply_code(&session.command_line("AUTH LOGIN")), 334);
+		let username = session.auth_line("YWxpY2U=");
+		assert_eq!(reply_code(&username), 334, "username in round {round}");
+		assert_eq!(reply_code(&session.auth_line("*")), 501);
+	}
+	assert_eq!(reply_code(&session.command_line("AUTH LOGIN")), 334);
+	assert_eq!(
+		closing(&session.auth_line("YWxpY2U=")).as_deref(),
+		Some(TOO_MANY),
+		"the 101st continuation line closes the session"
+	);
+}
+
+#[test]
+fn a_successful_auth_does_not_reset_the_count() {
+	let mut session = tls_session();
+	send_kept(&mut session, "NOOP", 99);
+	assert_eq!(reply_code(&session.command_line("AUTH PLAIN")), 334);
+	let password = crate::smtp::auth::tests::fixture_password();
+	let action = session.auth_line(&super::tests_auth::plain("alice", password));
+	assert_eq!(reply_code(&action), 235, "the login itself is answered");
+	assert_eq!(session.authenticated(), Some("alice"));
+	assert_eq!(
+		closing(&session.command_line("NOOP")).as_deref(),
+		Some(TOO_MANY),
+		"99 NOOP, the credentials line and one more NOOP make 101"
+	);
+}
