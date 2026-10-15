@@ -170,3 +170,50 @@ async fn a_relay_delivering_a_list_with_many_unknown_recipients_is_not_cut() {
 	);
 	assert!(output.ends_with("221 2.0.0 closing connection\r\n"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_message_the_server_refuses_does_not_forgive_earlier_refusals() {
+	// The same list traffic as above, but every message is refused once
+	// its body is in (here as a mail loop): no message is accepted, so the
+	// 101st refused recipient closes the session.
+	let sink = Arc::new(MemorySink::new());
+	let server = Arc::new(
+		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
+			.with_directory(test_directory()),
+	);
+	let mut client = Client::connect(&server);
+	let looping = "Received: from relay.example.net\r\n".repeat(100);
+	let mut session = b"EHLO lists.example.net\r\n".to_vec();
+	for message in 0..3 {
+		session.extend_from_slice(b"MAIL FROM:<list@lists.example.net>\r\n");
+		for run in 0..2 {
+			for unknown in 0..19 {
+				let line = format!("RCPT TO:<gone{message}x{run}x{unknown}@example.org>\r\n");
+				session.extend_from_slice(line.as_bytes());
+			}
+			session.extend_from_slice(b"RCPT TO:<bob@example.org>\r\n");
+		}
+		session.extend_from_slice(b"DATA\r\n");
+		session.extend_from_slice(looping.as_bytes());
+		session.extend_from_slice(b"Subject: list\r\n\r\nhello\r\n.\r\n");
+	}
+	session.extend_from_slice(b"QUIT\r\n");
+	client.send(&session).await;
+	let output = client.finish().await;
+	let codes = reply_codes(&output);
+	assert_eq!(
+		codes.iter().filter(|code| **code == "554").count(),
+		2,
+		"the first two messages are refused as loops"
+	);
+	assert_eq!(
+		codes.iter().filter(|code| **code == "550").count(),
+		100,
+		"100 refused recipients are answered"
+	);
+	assert!(
+		output.ends_with(TOO_MANY),
+		"the 101st refused recipient closes the session: nothing was accepted"
+	);
+	assert!(sink.messages().is_empty());
+}

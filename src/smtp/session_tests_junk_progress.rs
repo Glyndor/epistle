@@ -1,7 +1,7 @@
 //! What counts against the junk-command limit and what does not. Commands
 //! that never move a message (NOOP, RSET, VRFY, unknown verbs, a repeated
 //! greeting, an empty BDAT chunk) count for the whole session. Refused
-//! commands count only since the last message the session accepted: a
+//! commands count only since the last message the server accepted: a
 //! relay delivering a list with many unknown recipients across several
 //! messages is not cut, while a client that only collects refusals is.
 
@@ -9,7 +9,8 @@ use super::tests_basic::{greeted, reply_code};
 use super::tests_junk::{TOO_MANY, closing, send_kept};
 use super::*;
 
-/// Send one message to the known recipient and assert it is accepted.
+/// Send one message to the known recipient, accepted by the session and
+/// then by the server.
 fn deliver(session: &mut Session) {
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<list@lists.example.net>")),
@@ -22,6 +23,7 @@ fn deliver(session: &mut Session) {
 	assert_eq!(reply_code(&session.command_line("DATA")), 354);
 	assert!(session.data_line(b"Subject: hi").is_none());
 	assert_eq!(reply_code(&session.data_line(b".").expect("end")), 250);
+	session.message_delivered();
 }
 
 #[test]
@@ -49,6 +51,8 @@ fn a_list_with_many_unknown_recipients_is_not_cut_while_its_messages_are_accepte
 		assert_eq!(reply_code(&session.command_line("DATA")), 354);
 		assert!(session.data_line(b"Subject: list").is_none());
 		assert_eq!(reply_code(&session.data_line(b".").expect("end")), 250);
+		// The connection loop reports the message handed on.
+		session.message_delivered();
 	}
 	assert_eq!(
 		reply_code(&session.command_line("NOOP")),

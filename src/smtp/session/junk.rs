@@ -11,7 +11,7 @@
 //! last, an AUTH response line) count for the whole session: a delivered
 //! message or a login does not reset them, and a logged-in client has the
 //! same limit. Refused commands (syntax errors, refused MAIL and RCPT,
-//! commands out of sequence) count only since the last message the session
+//! commands out of sequence) count only since the last message the server
 //! accepted: a relay delivering a list with many recipients that no longer
 //! exist keeps its connection as long as its messages go through, while a
 //! client that only collects refusals is a scanner and is cut.
@@ -60,12 +60,6 @@ impl JunkCount {
 		}
 		self.junk > self.limit || self.refused > self.limit
 	}
-
-	/// The session accepted a message: the refusals that came before it
-	/// were part of a real delivery.
-	pub(super) fn message_accepted(&mut self) {
-		self.refused = 0;
-	}
 }
 
 impl Session {
@@ -75,6 +69,13 @@ impl Session {
 	pub fn with_junk_command_limit(mut self, limit: u32) -> Self {
 		self.junk.limit = limit;
 		self
+	}
+
+	/// The server accepted the message this session sent (after every
+	/// check on its body, not only the session's own): the refusals that
+	/// came before it were part of a real delivery and are forgiven.
+	pub fn message_delivered(&mut self) {
+		self.junk.refused = 0;
 	}
 
 	/// Whether `parsed` is a command that never moves a message forward,

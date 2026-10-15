@@ -481,6 +481,7 @@ impl Server {
 					let reply = match handed {
 						Ok(()) => {
 							charge.accept();
+							session.message_delivered();
 							self.metrics.accepted();
 							for report in quota_reports {
 								if let Err(error) = self.sink.deliver(report) {
