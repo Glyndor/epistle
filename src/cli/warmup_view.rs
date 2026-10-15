@@ -22,33 +22,33 @@ use crate::storage::{DeliveryLog, FsSpool, RecipientStatus};
 
 /// One group's line.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub(super) struct GroupView {
-	pub(super) group: &'static str,
-	pub(super) cap: Option<u32>,
-	pub(super) sent: u32,
-	pub(super) attempted: u32,
-	pub(super) deferred_percent: f64,
-	pub(super) bounced_percent: f64,
-	pub(super) spam_blocks: u32,
-	pub(super) verdict: &'static str,
-	pub(super) next_cap: Option<u32>,
-	pub(super) raise: Option<&'static str>,
-	pub(super) waiting: u64,
-	pub(super) last: Option<DayRecord>,
+pub(in crate::cli) struct GroupView {
+	pub(in crate::cli) group: &'static str,
+	pub(in crate::cli) cap: Option<u32>,
+	pub(in crate::cli) sent: u32,
+	pub(in crate::cli) attempted: u32,
+	pub(in crate::cli) deferred_percent: f64,
+	pub(in crate::cli) bounced_percent: f64,
+	pub(in crate::cli) spam_blocks: u32,
+	pub(in crate::cli) verdict: &'static str,
+	pub(in crate::cli) next_cap: Option<u32>,
+	pub(in crate::cli) raise: Option<&'static str>,
+	pub(in crate::cli) waiting: u64,
+	pub(in crate::cli) last: Option<DayRecord>,
 }
 
 /// The whole report.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub(super) struct View {
-	pub(super) enabled: bool,
-	pub(super) paused: bool,
-	pub(super) day: String,
-	pub(super) groups: Vec<GroupView>,
+pub(in crate::cli) struct View {
+	pub(in crate::cli) enabled: bool,
+	pub(in crate::cli) paused: bool,
+	pub(in crate::cli) day: String,
+	pub(in crate::cli) groups: Vec<GroupView>,
 	/// Orders written that the server has not applied yet.
-	pub(super) pending: Vec<Order>,
+	pub(in crate::cli) pending: Vec<Order>,
 	/// Why the state could not be read, when it could not.
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) problem: Option<String>,
+	pub(in crate::cli) problem: Option<String>,
 }
 
 /// Recipients waiting for the cap of each group, from the spool.
@@ -78,7 +78,7 @@ fn waiting(data_dir: &Path, storage: Option<&Storage>) -> BTreeMap<Group, u64> {
 }
 
 /// Build the report as of `now`.
-pub(super) fn build(
+pub(in crate::cli) fn build(
 	data_dir: &Path,
 	storage: Option<&Storage>,
 	delivery_log_days: u64,
@@ -141,12 +141,12 @@ pub(super) fn build(
 }
 
 /// A cap as printed: a number, or `none` when the group has no cap.
-pub(super) fn cap(cap: Option<u32>) -> String {
+pub(in crate::cli) fn cap(cap: Option<u32>) -> String {
 	cap.map_or_else(|| "none".to_string(), |cap| cap.to_string())
 }
 
 /// `on`, `on, paused` or `off`.
-pub(super) fn mode(view: &View) -> &'static str {
+pub(in crate::cli) fn mode(view: &View) -> &'static str {
 	match (view.enabled, view.paused) {
 		(false, _) => "off",
 		(true, false) => "on",
@@ -193,7 +193,7 @@ fn last_text(group: &str, record: &DayRecord) -> String {
 }
 
 /// Print `view` as text lines.
-pub(super) fn render(view: &View, out: &mut impl Write) -> std::io::Result<()> {
+pub(in crate::cli) fn render(view: &View, out: &mut impl Write) -> std::io::Result<()> {
 	writeln!(out, "warm-up: {} (UTC day {})", mode(view), view.day)?;
 	if let Some(problem) = &view.problem {
 		writeln!(

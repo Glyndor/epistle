@@ -26,6 +26,7 @@ mod subid_area;
 mod test_support;
 mod tls_area;
 mod tls_tlsa;
+mod warmup_area;
 
 pub(crate) use dns_area::TimeoutDns;
 
@@ -72,6 +73,8 @@ pub enum CheckArea {
 	Spool,
 	/// The service account's subordinate id ranges overlap no other account's.
 	Subid,
+	/// The IP warm-up: each receiver group's cap, use, health and verdict.
+	Warmup,
 }
 
 impl CheckArea {
@@ -88,6 +91,7 @@ impl CheckArea {
 		CheckArea::Disk,
 		CheckArea::Spool,
 		CheckArea::Subid,
+		CheckArea::Warmup,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -104,6 +108,7 @@ impl CheckArea {
 			CheckArea::Disk => "disk",
 			CheckArea::Spool => "spool",
 			CheckArea::Subid => "subid",
+			CheckArea::Warmup => "warmup",
 		}
 	}
 }
@@ -244,6 +249,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Disk => disk_area::check(ctx).await,
 		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
+		CheckArea::Warmup => warmup_area::check(ctx).await,
 	}
 }
 

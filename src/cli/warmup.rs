@@ -21,7 +21,7 @@ use crate::queue::warmup::settings::{self, Action, Settings};
 #[path = "warmup_start.rs"]
 mod start;
 #[path = "warmup_view.rs"]
-mod view;
+pub(in crate::cli) mod view;
 
 /// Parse a receiver group name.
 fn group(value: &str) -> Result<Group, String> {

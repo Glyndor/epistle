@@ -188,3 +188,28 @@ fn sealed_envelopes_are_read_with_the_configured_key() {
 		"a sealed entry must not be reported unreadable: {report:?}"
 	);
 }
+
+#[test]
+fn mail_waiting_for_the_warm_up_cap_is_not_stuck() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = enqueue(dir.path(), 3 * 86_400, 0, 0);
+	let path = dir
+		.path()
+		.join("spool")
+		.join("new")
+		.join(format!("{id}.json"));
+	let mut envelope: Envelope =
+		serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
+	let mut state = envelope.recipient_state("bob@example.net");
+	state.wait_for_cap("gmail", NOW as u64 + 600, NOW as u64 - 3 * 86_400);
+	envelope.set_recipient_state("bob@example.net", state);
+	std::fs::write(&path, serde_json::to_vec(&envelope).expect("json")).expect("write");
+	let report = evaluate(dir.path(), None, NOW);
+	assert_eq!(
+		(report.status, report.detail.as_str()),
+		(
+			Level::Ok,
+			"1 queued, 0 deferred, 1 waiting for the warm-up cap"
+		)
+	);
+}
