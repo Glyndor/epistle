@@ -16,6 +16,7 @@ pub mod timeouts;
 pub mod tls_outcome;
 pub(crate) mod tls_required;
 mod transport;
+pub mod warmup;
 pub use transport::relay_connect;
 mod worker;
 

@@ -23,6 +23,8 @@ use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord, Envelope, FsS
 
 #[path = "queue_destinations.rs"]
 mod destinations;
+#[path = "queue_warmup.rs"]
+mod warmup;
 
 /// Operator actions on the outbound queue.
 #[derive(Debug, Subcommand)]
@@ -220,6 +222,7 @@ pub(super) fn list(data_dir: &Path, storage: Option<&Storage>, out: &mut impl Wr
 			};
 			let state = match (envelope.held.is_some(), envelope.attempts) {
 				(true, _) => "held",
+				(false, _) if warmup::only_waits(&envelope) => "warm-up cap",
 				(false, 0) => "queued",
 				(false, _) => "deferred",
 			};
@@ -242,6 +245,8 @@ pub(super) fn list(data_dir: &Path, storage: Option<&Storage>, out: &mut impl Wr
 		};
 		let held = if envelope.held.is_some() {
 			"\theld"
+		} else if warmup::waits(&envelope) {
+			"\twarm-up cap"
 		} else {
 			""
 		};
@@ -264,6 +269,9 @@ fn held_destinations(spool: &FsSpool, out: &mut impl Write) {
 	if let Some(line) = destinations::summary(spool, now_epoch()) {
 		let _ = writeln!(out, "{line}");
 	}
+	if let Some(line) = warmup::summary(spool) {
+		let _ = writeln!(out, "{line}");
+	}
 }
 
 fn sender(envelope: &Envelope) -> &str {
@@ -283,6 +291,8 @@ struct Row<'a> {
 	attempts: u32,
 	next_attempt: u64,
 	held: bool,
+	/// A pending recipient waits for the warm-up cap of its group.
+	warmup_cap: bool,
 	last_error: Option<&'a str>,
 }
 
@@ -304,6 +314,7 @@ fn list_json(spool: &FsSpool, out: &mut impl Write) -> ExitCode {
 			attempts: e.attempts,
 			next_attempt: e.next_attempt,
 			held: e.held.is_some(),
+			warmup_cap: warmup::waits(e),
 			last_error: e.last_error.as_deref(),
 		})
 		.collect();

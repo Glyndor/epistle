@@ -166,6 +166,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	match outcome.error {
 		None => {
 			report_ptr(&answers, probes, out);
+			offer_warmup(&answers.data_dir, out);
 			ExitCode::from(EXIT_OK)
 		}
 		Some(error) => {
@@ -222,6 +223,22 @@ fn report_ptr(answers: &Answers, probes: &Probes, out: &mut dyn Write) {
 	}
 	let resolver = (probes.resolver)();
 	ptr::render(&answers.hostname, &addresses, resolver.as_deref(), out);
+}
+
+/// Offer the IP warm-up to a new install: one whose data directory has
+/// no warm-up settings yet. It stays off until the operator starts it, as
+/// on every install that predates it.
+fn offer_warmup(data_dir: &std::path::Path, out: &mut dyn Write) {
+	if crate::queue::warmup::settings::path(data_dir).exists() {
+		return;
+	}
+	let _ = writeln!(
+		out,
+		"warm-up: a new sending address has no reputation yet, and large receivers defer or \
+		 junk its mail when the volume jumps. To ramp it up per receiver group, run\n  \
+		 epistle warmup plan --ip-age 0d --daily-volume <recipients a day>\n\
+		 and then the same with `start`."
+	);
 }
 
 fn render_warnings(warnings: &[Warning]) {
@@ -284,3 +301,7 @@ mod tests_ptr;
 #[cfg(test)]
 #[path = "init_first_account_tests.rs"]
 mod tests_first_account;
+
+#[cfg(test)]
+#[path = "init_tests_warmup.rs"]
+mod tests_warmup;

@@ -86,6 +86,16 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	),
 	(&["account", "show", "alice"], true),
 	(&["queue"], true),
+	(&["warmup", "status"], true),
+	(&["warmup", "status", "--json"], true),
+	(&["warmup", "enable", "--yes"], true),
+	(&["warmup", "set", "gmail", "--cap", "200", "--yes"], true),
+	(&["warmup", "reset", "outlook", "--yes"], true),
+	(
+		&["warmup", "plan", "--ip-age", "3w", "--daily-volume", "1000"],
+		true,
+	),
+	(&["warmup", "start", "--ip-age", "6m", "--yes"], true),
 	(&["queue", "list", "--json"], true),
 	(
 		&["queue", "show", "00000000-0000-0000-0000-000000000000"],

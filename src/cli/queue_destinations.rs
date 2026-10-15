@@ -47,8 +47,12 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 		Ok(held) => held,
 		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
 	};
+	let capped = match super::warmup::waiting(spool) {
+		Ok(capped) => capped,
+		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
+	};
 	if json {
-		let rows: Vec<serde_json::Value> = held
+		let mut rows: Vec<serde_json::Value> = held
 			.iter()
 			.map(|(destination, hold)| {
 				serde_json::json!({
@@ -60,6 +64,7 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 				})
 			})
 			.collect();
+		rows.extend(super::warmup::json_rows(&capped));
 		return crate::cli::json_out::print(out, &serde_json::Value::Array(rows));
 	}
 	// The name and the reply come from remote servers: their control
@@ -77,6 +82,10 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 		);
 	}
 	let _ = writeln!(out, "{} destinations on hold", held.len());
+	if !capped.is_empty() {
+		super::warmup::lines(&capped, now, out);
+		let _ = writeln!(out, "{} groups at the warm-up cap", capped.len());
+	}
 	ExitCode::SUCCESS
 }
 

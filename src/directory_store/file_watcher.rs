@@ -74,6 +74,24 @@ pub trait ApiKeyReloader: Send + Sync {
 	fn reload_api_keys_from(&self, text: &str) -> std::io::Result<()>;
 }
 
+/// Hot-reload target for `warmup.json`, the operator's IP warm-up
+/// settings (see [`crate::queue::warmup`]). Held as a trait object for
+/// the same reason as [`ApiKeyReloader`].
+pub trait WarmupReloader: Send + Sync {
+	/// Read the settings file again and apply its new orders. The
+	/// implementor reads the file itself, so it can refuse one that is not
+	/// a private file of the server's user; a refusal leaves the running
+	/// settings untouched.
+	fn reload_warmup(&self) -> std::io::Result<()>;
+}
+
+/// The reloaders the watcher feeds besides the account store.
+#[derive(Clone, Copy, Default)]
+struct Targets<'a> {
+	api_keys: Option<&'a dyn ApiKeyReloader>,
+	warmup: Option<&'a dyn WarmupReloader>,
+}
+
 /// The watched path and the reload step it triggers. One entry per
 /// dynamic-store file. Adding a new on-disk sidecar that the runtime
 /// directory depends on means adding one entry here and one
@@ -85,6 +103,7 @@ enum ReloadKind {
 	Masked,
 	Aliases,
 	ApiKeys,
+	Warmup,
 }
 
 impl ReloadKind {
@@ -95,6 +114,7 @@ impl ReloadKind {
 			ReloadKind::Masked => "masked.json",
 			ReloadKind::Aliases => "aliases.json",
 			ReloadKind::ApiKeys => "api_keys.toml",
+			ReloadKind::Warmup => crate::queue::warmup::settings::SETTINGS_FILE,
 		}
 	}
 
@@ -105,7 +125,7 @@ impl ReloadKind {
 	fn apply(
 		self,
 		store: &AccountStore,
-		api_keys: Option<&dyn ApiKeyReloader>,
+		targets: Targets<'_>,
 		text: &str,
 	) -> Result<(), StoreError> {
 		match self {
@@ -113,7 +133,13 @@ impl ReloadKind {
 			ReloadKind::AppPasswords => store.reload_app_passwords_from(text),
 			ReloadKind::Masked => store.reload_masked_from(text),
 			ReloadKind::Aliases => store.reload_aliases_from(text),
-			ReloadKind::ApiKeys => match api_keys {
+			ReloadKind::Warmup => match targets.warmup {
+				Some(reloader) => reloader
+					.reload_warmup()
+					.map_err(|error| StoreError::Invalid(error.to_string())),
+				None => Ok(()),
+			},
+			ReloadKind::ApiKeys => match targets.api_keys {
 				Some(reloader) => reloader
 					.reload_api_keys_from(text)
 					.map_err(|error| StoreError::Invalid(error.to_string())),
@@ -135,16 +161,16 @@ impl ReloadKind {
 	fn apply_from_disk(
 		self,
 		store: &AccountStore,
-		api_keys: Option<&dyn ApiKeyReloader>,
+		targets: Targets<'_>,
 		path: &Path,
 	) -> Result<bool, StoreError> {
 		match std::fs::read_to_string(path) {
 			Ok(text) => {
-				self.apply(store, api_keys, &text)?;
+				self.apply(store, targets, &text)?;
 				Ok(true)
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				self.apply(store, api_keys, "")?;
+				self.apply(store, targets, "")?;
 				Ok(true)
 			}
 			Err(error) => Err(StoreError::Io(error)),
@@ -176,6 +202,8 @@ pub struct FileWatcher {
 	/// invoked. The watcher always polls the file either way, so a
 	/// later `with_api_keys` upgrade keeps the same fingerprint cache.
 	api_keys: Option<Arc<dyn ApiKeyReloader>>,
+	/// Optional hot-reload target for `warmup.json`.
+	warmup: Option<Arc<dyn WarmupReloader>>,
 	/// The data dir the watcher polls under; cached so the reload
 	/// status file is written back to the same root.
 	data_dir: PathBuf,
@@ -227,6 +255,8 @@ pub enum PollTarget {
 	Aliases,
 	/// The `api_keys.toml` sidecar.
 	ApiKeys,
+	/// The `warmup.json` warm-up settings.
+	Warmup,
 }
 
 impl From<ReloadKind> for PollTarget {
@@ -237,6 +267,7 @@ impl From<ReloadKind> for PollTarget {
 			ReloadKind::Masked => PollTarget::Masked,
 			ReloadKind::Aliases => PollTarget::Aliases,
 			ReloadKind::ApiKeys => PollTarget::ApiKeys,
+			ReloadKind::Warmup => PollTarget::Warmup,
 		}
 	}
 }
@@ -268,6 +299,10 @@ impl FileWatcher {
 				path: data_dir.join("api_keys.toml"),
 				kind: ReloadKind::ApiKeys,
 			},
+			Watch {
+				path: data_dir.join(ReloadKind::Warmup.label()),
+				kind: ReloadKind::Warmup,
+			},
 		];
 		let mut last = HashMap::with_capacity(watches.len());
 		let mut last_warned = HashMap::with_capacity(watches.len());
@@ -282,6 +317,7 @@ impl FileWatcher {
 			last_warned,
 			store,
 			api_keys: None,
+			warmup: None,
 			data_dir,
 		}
 	}
@@ -295,6 +331,20 @@ impl FileWatcher {
 	pub fn with_api_keys(mut self, reloader: Arc<dyn ApiKeyReloader>) -> Self {
 		self.api_keys = Some(reloader);
 		self
+	}
+
+	/// Attach the reloader for `warmup.json`, before [`spawn`](Self::spawn).
+	pub fn with_warmup(mut self, reloader: Arc<dyn WarmupReloader>) -> Self {
+		self.warmup = Some(reloader);
+		self
+	}
+
+	/// The reloaders to feed.
+	fn targets(&self) -> Targets<'_> {
+		Targets {
+			api_keys: self.api_keys.as_deref(),
+			warmup: self.warmup.as_deref(),
+		}
 	}
 
 	/// Run one poll cycle. Cheap when nothing changed. Returns the
@@ -353,10 +403,7 @@ impl FileWatcher {
 						return PollEvent::BadParse(target);
 					}
 				};
-				match watch
-					.kind
-					.apply(&self.store, self.api_keys.as_deref(), &text)
-				{
+				match watch.kind.apply(&self.store, self.targets(), &text) {
 					Ok(()) => {
 						self.last.insert(watch.path.clone(), Some(now));
 						self.last_warned.insert(watch.path.clone(), None);
@@ -399,7 +446,7 @@ impl FileWatcher {
 				}
 				match watch
 					.kind
-					.apply_from_disk(&self.store, self.api_keys.as_deref(), &watch.path)
+					.apply_from_disk(&self.store, self.targets(), &watch.path)
 				{
 					Ok(_) => {
 						self.last.insert(watch.path.clone(), None);
@@ -525,3 +572,7 @@ mod tests;
 #[cfg(test)]
 #[path = "file_watcher_status_tests.rs"]
 mod status_tests;
+
+#[cfg(test)]
+#[path = "file_watcher_tests_warmup.rs"]
+mod warmup_tests;

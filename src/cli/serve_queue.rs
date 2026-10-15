@@ -10,6 +10,38 @@ use crate::metrics::Metrics;
 use crate::smtp::sink::MessageSink;
 use crate::storage::MessageCrypto;
 
+/// Open the IP warm-up under the data directory, judging days from the
+/// delivery log and reporting them to the metrics and the webhook, and
+/// close each day on a one-minute timer so a day is judged and reported
+/// even when no mail is waiting.
+pub(super) fn open_warmup(
+	config: &Config,
+	metrics: &Arc<Metrics>,
+	webhook: Option<&Arc<crate::webhook::Webhook>>,
+) -> Arc<crate::queue::warmup::Warmup> {
+	let log = crate::storage::DeliveryLog::open(&config.data_dir, config.delivery_log_days());
+	let now = crate::storage::delivery_log::now_epoch();
+	let mut warmup = crate::queue::warmup::Warmup::open(&config.data_dir, Some(log), now)
+		.with_relays(crate::queue::warmup::relay_hosts(&config.transport))
+		.with_metrics(Arc::clone(metrics));
+	if let Some(webhook) = webhook {
+		warmup = warmup.with_webhook(Arc::clone(webhook));
+	}
+	let warmup = Arc::new(warmup);
+	let ticking = Arc::clone(&warmup);
+	tokio::spawn(async move {
+		let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+		loop {
+			ticks.tick().await;
+			let ticking = Arc::clone(&ticking);
+			let now = crate::storage::delivery_log::now_epoch();
+			// Closing a day reads the day's delivery log: off the runtime.
+			let _ = tokio::task::spawn_blocking(move || ticking.tick(now)).await;
+		}
+	});
+	warmup
+}
+
 /// Build the queue worker and spawn it, unless outbound delivery is held.
 /// A resolver or MTA-STS fetcher that cannot be built, or an unreadable
 /// spool or suppression list, stops the start.
@@ -20,6 +52,7 @@ pub(super) fn spawn_queue_worker(
 	spf_dns: Arc<dyn crate::spf::DnsLookup>,
 	metrics: &Arc<Metrics>,
 	webhook: Option<&Arc<crate::webhook::Webhook>>,
+	warmup: Arc<crate::queue::warmup::Warmup>,
 ) -> std::io::Result<()> {
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
 	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
@@ -53,7 +86,8 @@ pub(super) fn spawn_queue_worker(
 	.with_delivery_log(crate::storage::DeliveryLog::open(
 		&config.data_dir,
 		config.delivery_log_days(),
-	));
+	))
+	.with_warmup(warmup);
 	if let Some(webhook) = webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

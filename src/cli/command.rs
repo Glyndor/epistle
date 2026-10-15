@@ -270,6 +270,18 @@ pub enum Command {
 		#[command(subcommand)]
 		action: Option<queue::QueueCli>,
 	},
+	/// See and steer the IP warm-up of a new sending address.
+	///
+	/// A daily cap per receiver group that grows on good days and backs off
+	/// on bad ones.
+	Warmup {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Warm-up action (`status`, `enable`, `disable`, `pause`, `resume`, `set`, `reset`).
+		#[command(subcommand)]
+		action: warmup::WarmupCli,
+	},
 	/// Read the per-recipient delivery log (metadata only).
 	///
 	/// Without an action it lists the log, like `delivery list`.

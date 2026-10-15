@@ -614,6 +614,10 @@ fn parse_offset(offset: &str) -> Result<i64, String> {
 	Ok(hours * 3600 + minutes * 60)
 }
 
+#[path = "delivery_log_day.rs"]
+mod day;
+pub use day::{MAX_LINE, day_name};
+
 #[cfg(test)]
 #[path = "delivery_log_tests.rs"]
 mod tests;

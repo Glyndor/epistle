@@ -15,7 +15,7 @@ use super::{
 	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, autoconfig,
 	autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, export, import, init,
 	local, masked, mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status,
-	style, suppression, tls_cli, verify, verify_dns,
+	style, suppression, tls_cli, verify, verify_dns, warmup,
 };
 use crate::config::Config;
 
@@ -257,6 +257,21 @@ impl Cli {
 						&mut std::io::stdout().lock(),
 					)
 				}
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Warmup { config, action } => match Config::load(&config) {
+				Ok(config) => warmup::run(
+					&config.data_dir,
+					config.storage.as_ref(),
+					config.delivery_log_days(),
+					&crate::queue::warmup::relay_hosts(&config.transport),
+					action,
+					queue::now_epoch(),
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

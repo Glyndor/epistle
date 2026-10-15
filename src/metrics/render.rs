@@ -161,6 +161,16 @@ impl Metrics {
 				&self.mta_sts_connections_dropped,
 			),
 			(
+				"mail_warmup_held_total",
+				"IP warm-up days that went badly for a receiver group; its cap held.",
+				&self.warmup_held,
+			),
+			(
+				"mail_warmup_backoff_total",
+				"IP warm-up days that went very badly for a receiver group, or raises that did not hold; its cap went back.",
+				&self.warmup_backoff,
+			),
+			(
 				"mail_accept_failed_total",
 				"Failed accepts on any listener (out of descriptors, aborted connections); the listener keeps running.",
 				&ACCEPT_FAILED,

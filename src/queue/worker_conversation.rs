@@ -22,6 +22,9 @@ pub(super) struct Conversation {
 	/// Set when no exchanger was spoken to because each one reached was on
 	/// hold: the recipients wait until then, with no attempt counted.
 	pub(super) held_until: Option<u64>,
+	/// The recipients left waiting for the warm-up cap of their group
+	/// (see [`super::warmup`]): they were not attempted.
+	pub(super) capped: Option<super::warmup::Capped>,
 }
 
 impl Conversation {
@@ -79,6 +82,7 @@ impl Conversation {
 				.collect(),
 			slowed: None,
 			held_until: None,
+			capped: None,
 		}
 	}
 }
@@ -269,10 +273,12 @@ impl Worker {
 				conversation.slowed = conversation.slowed.take().or(slowed);
 				return conversation;
 			}
+			// A host on hold, or whose receiver group is at its warm-up
+			// cap, is not even connected to.
 			let on_hold = move |host: &str| {
 				self.holds()
 					.held(&Destination::exchanger(host), now)
-					.is_some()
+					.is_some() || self.host_closed(&route.entry.envelope, host, now).is_some()
 			};
 			let connection = match self
 				.connector
@@ -294,6 +300,16 @@ impl Worker {
 			// another of its domains) is left before a word is said.
 			let exchanger = Destination::exchanger(&connection.host);
 			let hold = self.holds().held(&exchanger, now).cloned();
+			// A host whose receiver group is at its warm-up cap is left
+			// before a word is said: its recipients wait for the cap.
+			if hold.is_none()
+				&& let Some((group, until)) =
+					self.host_closed(&route.entry.envelope, &connection.host, now)
+			{
+				let mut capped = Conversation::capped(route.recipients, group, until);
+				capped.slowed = slowed;
+				return capped;
+			}
 			// A host named without a connection was on hold when asked for,
 			// and stays passed over even should its hold just have ended.
 			let hold = hold.or_else(|| {
@@ -319,7 +335,28 @@ impl Worker {
 				held = Some(waiting);
 				continue;
 			}
-			let (conversation, next) = self.attempt_direct(route, connection).await;
+			let admitted = self.admit(route, &connection.host, now);
+			let granted = admitted.map_or(route.recipients.len(), |(_, granted, _)| granted);
+			if let Some((group, 0, until)) = admitted {
+				let mut capped = Conversation::capped(route.recipients, group, until);
+				capped.slowed = slowed;
+				return capped;
+			}
+			let going = Route {
+				recipients: &route.recipients[..granted],
+				..*route
+			};
+			let (mut conversation, next) = self.attempt_direct(&going, connection).await;
+			if let Some((group, _, until)) = admitted {
+				// Only a session that ended before the mail transaction
+				// began offered nothing: once MAIL is sent, recipients are
+				// offered and the message may be written out, whatever
+				// the remote then answers or fails to.
+				if next {
+					self.give_back_unoffered(&route.entry.envelope, group, &conversation, now);
+				}
+				conversation.add_capped(&route.recipients[granted..], group, until);
+			}
 			if !next {
 				let mut conversation = conversation;
 				conversation.slowed = slowed;
