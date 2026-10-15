@@ -121,3 +121,24 @@ fn set_replaces_and_the_file_round_trips() {
 	let text = std::fs::read_to_string(dir.path().join("policy.json")).expect("read");
 	assert!(text.contains("\"scope\": \"tenant\""), "{text}");
 }
+
+#[test]
+fn a_narrower_scope_beats_a_narrower_class() {
+	let mut policy = Policy::default();
+	policy.set(rule(
+		Scope::Tenant("sena".into()),
+		Some(MailClass::Transactional),
+		Mode::Full,
+		365,
+	));
+	policy.set(rule(
+		Scope::Account("notices".into()),
+		None,
+		Mode::Metadata,
+		30,
+	));
+	assert_eq!(
+		policy.retention("notices", Some("sena"), MailClass::Transactional),
+		metadata(30)
+	);
+}
