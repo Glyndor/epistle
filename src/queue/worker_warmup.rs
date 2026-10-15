@@ -230,3 +230,7 @@ impl Worker {
 #[cfg(test)]
 #[path = "worker_tests_warmup.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worker_tests_warmup_volume.rs"]
+mod volume_tests;
