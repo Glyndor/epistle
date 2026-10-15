@@ -57,6 +57,36 @@ async fn the_guard_gives_up_at_the_deadline_and_not_before() {
 	assert_eq!(ready, Some(7), "a ready read wins over a passed deadline");
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_configured_extremes_give_exact_deadlines() {
+	// The floor and grace `validate_data_rate` accepts at both ends, with a
+	// full 25 MiB counted: 1 B/s puts the deadline 303 days out, and the
+	// timer still fires there, not early and not wrapped; 1 GiB/s leaves
+	// the grace to decide.
+	let full = 25 * 1024 * 1024;
+	let mut slowest = DataRate::new(1, Duration::from_secs(3600)).start();
+	slowest.bytes = full;
+	let due = slowest.start + Duration::from_secs(full) + Duration::from_nanos(1);
+	assert_eq!(slowest.deadline(), Some(due));
+	assert_eq!(slowest.guard(std::future::pending::<()>()).await, None);
+	let late = tokio::time::Instant::now() - due;
+	assert!(
+		late < Duration::from_millis(2),
+		"the far timer fires at its deadline, {late:?} late"
+	);
+	let mut fastest = DataRate::new(1024 * 1024 * 1024, Duration::from_secs(1)).start();
+	fastest.bytes = full;
+	assert_eq!(
+		fastest.deadline(),
+		Some(fastest.start + Duration::from_secs(1))
+	);
+	fastest.bytes = 0;
+	assert_eq!(
+		fastest.deadline(),
+		Some(fastest.start + Duration::from_secs(1))
+	);
+}
+
 #[test]
 fn the_reply_is_the_exact_line() {
 	assert_eq!(
