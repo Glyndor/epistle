@@ -18,7 +18,7 @@ fn a_local_name_that_differs_from_the_central_one_counts_too() {
 	let listing = list_zip(&zip);
 	assert!(listing.names.iter().any(|name| name == "aaaaa.exe"));
 	assert!(listing.names.iter().any(|name| name == "aaaaa.txt"));
-	assert!(listing.unreadable);
+	assert!(listing.ambiguous);
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn data_in_front_of_the_archive_is_unreadable_but_still_listed() {
 	assert!(has_end_record(&zip));
 	let listing = list_zip(&zip);
 	assert_eq!(listing.names, vec!["x.js"]);
-	assert!(listing.unreadable);
+	assert!(listing.ambiguous);
 }
 
 #[test]

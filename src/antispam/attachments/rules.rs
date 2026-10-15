@@ -155,6 +155,11 @@ pub enum Reason {
 	/// 7z (never listed), a zip with a missing or inconsistent directory,
 	/// data before it, an unknown method, or encryption on some files only.
 	UnreadableArchive,
+	/// Two extractors would unpack different files from this zip: several
+	/// end records, data in front, central and local names that differ,
+	/// entries only the local headers list, a Unicode Path field that
+	/// differs from the name, a name that is not the UTF-8 it claims.
+	AmbiguousArchive,
 	/// An Office document carries a VBA project.
 	Macro,
 	/// Two mail clients could read the MIME structure, a header or an
@@ -180,6 +185,7 @@ impl Reason {
 			Self::NestedArchive => "nested-archive",
 			Self::EncryptedArchive => "encrypted-archive",
 			Self::UnreadableArchive => "unreadable-archive",
+			Self::AmbiguousArchive => "ambiguous-archive",
 			Self::Macro => "macro",
 			Self::AmbiguousMime => "ambiguous-mime",
 			Self::ScanLimit => "scan-limit",
@@ -328,6 +334,9 @@ fn judge_listing(
 	}
 	if listing.unreadable {
 		reasons.insert(Reason::UnreadableArchive);
+	}
+	if listing.ambiguous {
+		reasons.insert(Reason::AmbiguousArchive);
 	}
 	for entry in &listing.names {
 		if entry.contains(FORMATTING) {

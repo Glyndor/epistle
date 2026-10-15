@@ -119,7 +119,7 @@ fn a_zip_with_data_in_front_is_still_opened() {
 	assert_eq!(report.parts[0].real_type, RealType::Zip);
 	assert_eq!(
 		report.parts[0].reasons,
-		vec![Reason::DangerousArchiveEntry, Reason::UnreadableArchive]
+		vec![Reason::DangerousArchiveEntry, Reason::AmbiguousArchive]
 	);
 }
 

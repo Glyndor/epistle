@@ -171,6 +171,7 @@ fn archive_entries_encryption_and_size_are_judged() {
 		encrypted: true,
 		too_many: false,
 		unreadable: false,
+		ambiguous: false,
 	};
 	assert_eq!(
 		archive(&encrypted, RealType::Zip),
@@ -181,6 +182,7 @@ fn archive_entries_encryption_and_size_are_judged() {
 		encrypted: false,
 		too_many: true,
 		unreadable: false,
+		ambiguous: false,
 	};
 	assert_eq!(archive(&crowded, RealType::Zip), vec![Reason::ScanLimit]);
 	assert!(archive(&list_zip(&corpus::zip_of(&["a.txt"])), RealType::Zip).is_empty());
@@ -223,6 +225,7 @@ fn reason_codes_are_stable() {
 		Reason::NestedArchive,
 		Reason::EncryptedArchive,
 		Reason::UnreadableArchive,
+		Reason::AmbiguousArchive,
 		Reason::Macro,
 		Reason::AmbiguousMime,
 		Reason::ScanLimit,
@@ -244,6 +247,7 @@ fn reason_codes_are_stable() {
 			"nested-archive",
 			"encrypted-archive",
 			"unreadable-archive",
+			"ambiguous-archive",
 			"macro",
 			"ambiguous-mime",
 			"scan-limit",

@@ -33,15 +33,34 @@ pub struct ZipEntry<'a> {
 /// A stored (uncompressed) zip with one byte per entry, a central
 /// directory and an end record.
 pub fn zip(entries: &[ZipEntry<'_>]) -> Vec<u8> {
+	let raw: Vec<RawEntry<'_>> = entries
+		.iter()
+		.map(|entry| RawEntry {
+			name: entry.name.as_bytes(),
+			flags: if entry.encrypted { 1 } else { 0 },
+			central_extra: Vec::new(),
+		})
+		.collect();
+	zip_raw(&raw)
+}
+
+/// A zip entry with raw name bytes, flags and a central extra field.
+pub struct RawEntry<'a> {
+	pub name: &'a [u8],
+	pub flags: u16,
+	pub central_extra: Vec<u8>,
+}
+
+/// [`zip`] from raw entries.
+pub fn zip_raw(entries: &[RawEntry<'_>]) -> Vec<u8> {
 	let mut out = Vec::new();
 	let mut central = Vec::new();
 	for entry in entries {
 		let offset = out.len() as u32;
-		let flags: u16 = if entry.encrypted { 1 } else { 0 };
-		let name = entry.name.as_bytes();
+		let name = entry.name;
 		out.extend_from_slice(b"PK\x03\x04");
 		out.extend_from_slice(&20u16.to_le_bytes());
-		out.extend_from_slice(&flags.to_le_bytes());
+		out.extend_from_slice(&entry.flags.to_le_bytes());
 		out.extend_from_slice(&0u16.to_le_bytes()); // stored
 		out.extend_from_slice(&[0; 8]); // time, date, crc
 		out.extend_from_slice(&1u32.to_le_bytes());
@@ -53,15 +72,17 @@ pub fn zip(entries: &[ZipEntry<'_>]) -> Vec<u8> {
 		central.extend_from_slice(b"PK\x01\x02");
 		central.extend_from_slice(&20u16.to_le_bytes());
 		central.extend_from_slice(&20u16.to_le_bytes());
-		central.extend_from_slice(&flags.to_le_bytes());
+		central.extend_from_slice(&entry.flags.to_le_bytes());
 		central.extend_from_slice(&0u16.to_le_bytes());
 		central.extend_from_slice(&[0; 8]);
 		central.extend_from_slice(&1u32.to_le_bytes());
 		central.extend_from_slice(&1u32.to_le_bytes());
 		central.extend_from_slice(&(name.len() as u16).to_le_bytes());
-		central.extend_from_slice(&[0; 12]); // extra, comment, disk, attrs
+		central.extend_from_slice(&(entry.central_extra.len() as u16).to_le_bytes());
+		central.extend_from_slice(&[0; 10]); // comment, disk, attrs
 		central.extend_from_slice(&offset.to_le_bytes());
 		central.extend_from_slice(name);
+		central.extend_from_slice(&entry.central_extra);
 	}
 	let start = out.len() as u32;
 	out.extend_from_slice(&central);

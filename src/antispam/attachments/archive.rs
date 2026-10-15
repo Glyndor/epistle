@@ -4,10 +4,11 @@
 //! is a zip and an OLE2 file keeps its macro storage in its directory.
 //!
 //! Extractors disagree on which records they trust: most read the central
-//! directory, streaming ones read the local headers. Both are read, every
-//! name from either counts, and any disagreement between them, or anything
-//! this reader cannot follow, makes the archive [`Listing::unreadable`]
-//! rather than clean.
+//! directory, streaming ones read the local headers, some take the first
+//! end record and some the last, 7-Zip and WinRAR prefer a Unicode Path
+//! field. Every source is read and every name from any of them counts; a
+//! disagreement makes the archive [`Listing::ambiguous`], and anything this
+//! reader cannot follow makes it [`Listing::unreadable`], never clean.
 
 /// Most entries listed from one archive. An archive with more is reported
 /// as [`Listing::too_many`] and judged on the entries read so far.
@@ -28,19 +29,41 @@ const KNOWN_METHODS: &[u16] = &[0, 8, 9, 12, 14, 93, 95, 98, 99];
 const CENTRAL: &[u8] = b"PK\x01\x02";
 const LOCAL: &[u8] = b"PK\x03\x04";
 
+/// End of central directory records looked at, last first. Extractors
+/// differ on which one they believe; a fake one hidden in the archive
+/// comment is the classic case.
+const MAX_END_RECORDS: usize = 4;
+
+/// Directory records read from one directory before giving up: repeated
+/// names do not grow the listing, so this bounds the work.
+const MAX_RECORDS: usize = 4 * MAX_ENTRIES;
+
+/// The Info-ZIP Unicode Path extra field: 7-Zip and WinRAR show this name
+/// instead of the one in the header.
+const UNICODE_PATH: u16 = 0x7075;
+
+/// Bit 11 says the name is UTF-8.
+const EFS: u16 = 0x0800;
+
 /// What the directory of a zip says.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Listing {
-	/// Entry names from both directories, lossily decoded as UTF-8.
+	/// Entry names from every source (each end record's directory, the
+	/// local headers, Unicode Path fields, each reading of the bytes).
 	pub names: Vec<String>,
 	/// At least one entry is encrypted (traditional, strong or AES).
 	pub encrypted: bool,
 	/// The archive has more than [`MAX_ENTRIES`] entries.
 	pub too_many: bool,
-	/// Something in the archive could not be read completely or reads two
-	/// ways: a missing or inconsistent directory, data before the archive,
-	/// an unknown compression method, encryption on some files only.
+	/// Something could not be read: no end record, a directory that ends
+	/// early, an unknown compression method, encryption on some files only.
 	pub unreadable: bool,
+	/// The sources disagree, so two extractors can unpack different files:
+	/// several end records, data in front, central and local names that
+	/// differ, entries only the local headers list, a Unicode Path that
+	/// differs from the name, or a name that is not valid UTF-8 although it
+	/// says it is.
+	pub ambiguous: bool,
 }
 
 impl Listing {
@@ -56,60 +79,46 @@ impl Listing {
 /// Whether `bytes` ends like a zip, with an end of central directory
 /// record in its tail, wherever the archive starts.
 pub fn has_end_record(bytes: &[u8]) -> bool {
-	end_record(bytes).is_some()
+	!end_records(bytes).is_empty()
 }
 
-/// List `zip` from its central directory and its local headers.
+/// Counts of encrypted and plain files, directories left out.
+#[derive(Default)]
+struct Tally {
+	encrypted: usize,
+	plain: usize,
+}
+
+impl Tally {
+	fn count(&mut self, name: &str, encrypted: bool) {
+		if name.ends_with('/') {
+			return;
+		}
+		if encrypted {
+			self.encrypted += 1;
+		} else {
+			self.plain += 1;
+		}
+	}
+}
+
+/// List `zip` from every directory any extractor may read and from its
+/// local headers.
 pub fn list_zip(zip: &[u8]) -> Listing {
 	let mut listing = Listing::default();
-	let mut encrypted_files = 0usize;
-	let mut plain_files = 0usize;
-	let mut tally = |name: &str, encrypted: bool| {
-		if !name.ends_with('/') {
-			if encrypted {
-				encrypted_files += 1;
-			} else {
-				plain_files += 1;
-			}
-		}
-	};
-	match central_directory(zip) {
-		Some(directory) => {
-			// Data before the archive moves every offset; extractors cope,
-			// and polyglot files rely on it.
-			listing.unreadable |= directory.shift != 0;
-			let mut at = directory.start;
-			let mut read = 0u64;
-			while read < directory.entries && !listing.too_many {
-				let Some(entry) = central_entry(zip, at) else {
-					listing.unreadable = true;
-					break;
-				};
-				read += 1;
-				tally(&entry.name, entry.encrypted);
-				listing.encrypted |= entry.encrypted;
-				listing.unreadable |= !KNOWN_METHODS.contains(&entry.method);
-				match entry
-					.local_offset
-					.and_then(|offset| offset.checked_add(directory.shift))
-					.and_then(|offset| local_entry(zip, offset))
-				{
-					Some(local) => {
-						listing.unreadable |= local.name != entry.name
-							|| local.encrypted != entry.encrypted
-							|| local.method != entry.method;
-						listing.add(local.name);
-					}
-					None => listing.unreadable = true,
-				}
-				listing.add(entry.name);
-				at = entry.next;
-			}
-		}
-		None => listing.unreadable = true,
+	let mut tally = Tally::default();
+	let directories = central_directories(zip);
+	if directories.is_empty() {
+		listing.unreadable = true;
+	}
+	if directories.len() > 1 || directories.iter().any(|directory| directory.shift != 0) {
+		listing.ambiguous = true;
+	}
+	for directory in &directories {
+		read_directory(zip, directory, &mut listing, &mut tally);
 	}
 	// Streaming extractors read the local headers in file order: a file
-	// the central directory does not list still comes out of them.
+	// no central directory lists still comes out of them.
 	let mut at = zip
 		.windows(4)
 		.take(MAX_COMMENT)
@@ -121,39 +130,108 @@ pub fn list_zip(zip: &[u8]) -> Listing {
 	{
 		steps += 1;
 		let next = local.next(zip);
-		if !listing.names.contains(&local.name) {
-			listing.unreadable = true;
-			tally(&local.name, local.encrypted);
-			listing.encrypted |= local.encrypted;
-			listing.add(local.name);
+		listing.ambiguous |= local.ambiguous;
+		for name in local.names {
+			if !listing.names.contains(&name) {
+				listing.ambiguous = true;
+				tally.count(&name, local.encrypted);
+				listing.encrypted |= local.encrypted;
+				listing.add(name);
+			}
 		}
 		let Some(next) = next else {
 			break;
 		};
 		at = next;
 	}
-	listing.unreadable |= encrypted_files > 0 && plain_files > 0;
+	listing.unreadable |= tally.encrypted > 0 && tally.plain > 0;
 	listing
 }
 
-/// Where the central directory starts, how many entries it declares and
+/// Read one central directory and the local header of each entry.
+fn read_directory(zip: &[u8], directory: &Directory, listing: &mut Listing, tally: &mut Tally) {
+	let mut at = directory.start;
+	let mut read = 0u64;
+	while read < directory.entries && !listing.too_many {
+		if read as usize >= MAX_RECORDS {
+			listing.too_many = true;
+			break;
+		}
+		let Some(entry) = central_entry(zip, at) else {
+			listing.unreadable = true;
+			break;
+		};
+		read += 1;
+		tally.count(&entry.names[0], entry.encrypted);
+		listing.encrypted |= entry.encrypted;
+		listing.unreadable |= !KNOWN_METHODS.contains(&entry.method);
+		listing.ambiguous |= entry.ambiguous;
+		match entry
+			.local_offset
+			.and_then(|offset| offset.checked_add(directory.shift))
+			.and_then(|offset| local_entry(zip, offset))
+		{
+			Some(local) => {
+				listing.ambiguous |= local.names != entry.names || local.ambiguous;
+				listing.unreadable |=
+					local.encrypted != entry.encrypted || local.method != entry.method;
+				for name in local.names {
+					listing.add(name);
+				}
+			}
+			None => listing.unreadable = true,
+		}
+		let next = entry.next;
+		for name in entry.names {
+			listing.add(name);
+		}
+		at = next;
+	}
+}
+
+/// Where a central directory starts, how many entries it declares and
 /// how far data before the archive shifted the offsets.
+#[derive(PartialEq, Eq)]
 struct Directory {
 	start: usize,
 	entries: u64,
 	shift: usize,
 }
 
-fn end_record(zip: &[u8]) -> Option<usize> {
+/// End records in the tail, last first, at most [`MAX_END_RECORDS`].
+fn end_records(zip: &[u8]) -> Vec<usize> {
 	let lowest = zip.len().saturating_sub(EOCD_LEN + MAX_COMMENT);
-	let last = zip.len().checked_sub(EOCD_LEN)?;
+	let Some(last) = zip.len().checked_sub(EOCD_LEN) else {
+		return Vec::new();
+	};
 	(lowest..=last)
 		.rev()
-		.find(|&at| zip[at..].starts_with(b"PK\x05\x06"))
+		.filter(|&at| zip[at..].starts_with(b"PK\x05\x06"))
+		.take(MAX_END_RECORDS)
+		.collect()
 }
 
-fn central_directory(zip: &[u8]) -> Option<Directory> {
-	let eocd = end_record(zip)?;
+/// Every directory an extractor may read: from each end record, both
+/// where its size says the directory ends (what tolerant extractors use
+/// when data sits in front) and where its offset says it starts.
+fn central_directories(zip: &[u8]) -> Vec<Directory> {
+	let mut directories = Vec::new();
+	for eocd in end_records(zip) {
+		let Some(found) = directory_from(zip, eocd) else {
+			continue;
+		};
+		for directory in found {
+			let plausible = zip.get(directory.start..directory.start + 4) == Some(CENTRAL)
+				|| directory.entries == 0;
+			if plausible && !directories.contains(&directory) {
+				directories.push(directory);
+			}
+		}
+	}
+	directories
+}
+
+fn directory_from(zip: &[u8], eocd: usize) -> Option<Vec<Directory>> {
 	let mut entries = u64::from(u16_at(zip, eocd + 10)?);
 	let mut size = u64::from(u32_at(zip, eocd + 12)?);
 	let mut offset = u64::from(u32_at(zip, eocd + 16)?);
@@ -175,17 +253,31 @@ fn central_directory(zip: &[u8]) -> Option<Directory> {
 		end = record;
 	}
 	let start = end.checked_sub(usize::try_from(size).ok()?)?;
-	let shift = start.checked_sub(usize::try_from(offset).ok()?)?;
-	Some(Directory {
-		start,
-		entries,
-		shift,
-	})
+	let offset = usize::try_from(offset).ok()?;
+	let mut found = Vec::new();
+	if let Some(shift) = start.checked_sub(offset) {
+		found.push(Directory {
+			start,
+			entries,
+			shift,
+		});
+	}
+	if offset != start && offset < end {
+		found.push(Directory {
+			start: offset,
+			entries,
+			shift: 0,
+		});
+	}
+	Some(found)
 }
 
 /// One record from either directory.
 struct Entry {
-	name: String,
+	/// The header name, each reading of its bytes, then the Unicode Path.
+	names: Vec<String>,
+	/// The readings disagree, or the name is not the UTF-8 it claims.
+	ambiguous: bool,
 	encrypted: bool,
 	method: u16,
 	/// Central records: where the local header is, when it can be read.
@@ -224,14 +316,16 @@ fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
 	let name_len = usize::from(u16_at(zip, at + 28)?);
 	let extra_len = usize::from(u16_at(zip, at + 30)?);
 	let comment_len = usize::from(u16_at(zip, at + 32)?);
-	let name = name_at(zip, at + 46, name_len)?;
+	let raw_name = zip.get(at + 46..at + 46 + name_len)?;
+	let extra = zip.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
+	let (names, ambiguous) = names_of(raw_name, flags, extra);
 	let mut local_offset = Some(u32_at(zip, at + 42)? as usize);
 	if local_offset == Some(0xffff_ffff) {
-		let extra = zip.get(at + 46 + name_len..at + 46 + name_len + extra_len)?;
 		local_offset = zip64_offset(zip, at, extra);
 	}
 	Some(Entry {
-		name,
+		names,
+		ambiguous,
 		encrypted: is_encrypted(flags, method),
 		method,
 		local_offset,
@@ -243,17 +337,23 @@ fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
 
 /// The local header offset from a ZIP64 extra field (id 1). It follows the
 /// 64-bit sizes that the central record also left at `0xffffffff`.
-fn zip64_offset(zip: &[u8], at: usize, mut extra: &[u8]) -> Option<usize> {
+fn zip64_offset(zip: &[u8], at: usize, extra: &[u8]) -> Option<usize> {
 	let skipped = [u32_at(zip, at + 24)?, u32_at(zip, at + 20)?]
 		.iter()
 		.filter(|&&size| size == 0xffff_ffff)
 		.count();
+	let body = extra_field(extra, 1)?;
+	usize::try_from(u64_at(body, skipped * 8)?).ok()
+}
+
+/// The body of the first extra field with this id.
+fn extra_field(mut extra: &[u8], wanted: u16) -> Option<&[u8]> {
 	while extra.len() >= 4 {
 		let id = u16_at(extra, 0)?;
 		let len = usize::from(u16_at(extra, 2)?);
 		let body = extra.get(4..4 + len)?;
-		if id == 1 {
-			return usize::try_from(u64_at(body, skipped * 8)?).ok();
+		if id == wanted {
+			return Some(body);
 		}
 		extra = &extra[4 + len..];
 	}
@@ -269,13 +369,16 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 	let compressed = u32_at(zip, at + 18)? as usize;
 	let name_len = usize::from(u16_at(zip, at + 26)?);
 	let extra_len = usize::from(u16_at(zip, at + 28)?);
-	let name = name_at(zip, at + 30, name_len)?;
+	let raw_name = zip.get(at + 30..at + 30 + name_len)?;
+	let extra = zip.get(at + 30 + name_len..at + 30 + name_len + extra_len)?;
+	let (names, ambiguous) = names_of(raw_name, flags, extra);
 	let start = at + 30 + name_len + extra_len;
 	// With a data descriptor (bit 3), or a ZIP64 size, the header does not
 	// say where the data ends.
 	let data = (flags & 0x0008 == 0 && compressed != 0xffff_ffff).then_some((start, compressed));
 	Some(Entry {
-		name,
+		names,
+		ambiguous,
 		encrypted: is_encrypted(flags, method),
 		method,
 		local_offset: None,
@@ -285,16 +388,32 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 	})
 }
 
+/// Every reading of a name: as UTF-8 (lossy), byte for byte as a legacy
+/// code page when it is not ASCII and does not claim UTF-8, and the
+/// Unicode Path field when there is one. Ambiguous when the UTF-8 flag is
+/// set on bytes that are not UTF-8, or the Unicode Path differs.
+fn names_of(raw: &[u8], flags: u16, extra: &[u8]) -> (Vec<String>, bool) {
+	let raw = &raw[..raw.len().min(MAX_NAME_BYTES)];
+	let mut names = vec![String::from_utf8_lossy(raw).into_owned()];
+	let mut ambiguous = flags & EFS != 0 && std::str::from_utf8(raw).is_err();
+	if flags & EFS == 0 && !raw.is_ascii() {
+		names.push(raw.iter().map(|&byte| char::from(byte)).collect());
+	}
+	if let Some(body) = extra_field(extra, UNICODE_PATH)
+		&& let Some(path) = body.get(5..)
+	{
+		let path = String::from_utf8_lossy(&path[..path.len().min(MAX_NAME_BYTES)]).into_owned();
+		ambiguous |= path != names[0];
+		names.push(path);
+	}
+	names.dedup();
+	(names, ambiguous)
+}
+
 /// Bit 0 marks traditional encryption, bit 6 strong encryption, and
 /// method 99 is WinZip AES.
 fn is_encrypted(flags: u16, method: u16) -> bool {
 	flags & 0x0001 != 0 || flags & 0x0040 != 0 || method == 99
-}
-
-fn name_at(zip: &[u8], at: usize, len: usize) -> Option<String> {
-	let bytes = zip.get(at..at + len)?;
-	let bytes = &bytes[..bytes.len().min(MAX_NAME_BYTES)];
-	Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
@@ -379,3 +498,7 @@ mod tests;
 #[cfg(test)]
 #[path = "archive_tests_damaged.rs"]
 mod tests_damaged;
+
+#[cfg(test)]
+#[path = "archive_tests_sources.rs"]
+pub(crate) mod tests_sources;

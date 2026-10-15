@@ -4,7 +4,8 @@
 //! Every reason maps to an action. Dangerous content follows `mode`;
 //! macros and encrypted archives follow their own setting, never above
 //! `mode`. What could not be inspected or reads two ways (`scan-limit`,
-//! `ambiguous-mime`, `unreadable-archive`, `nested-archive`) is at least
+//! `ambiguous-mime`, `unreadable-archive`, `ambiguous-archive`,
+//! `nested-archive`) is at least
 //! flagged and quarantined when `mode` quarantines, but never rejected on
 //! its own: a large or odd message is not proof of a disguise.
 
@@ -146,6 +147,7 @@ impl Policy {
 			Reason::ScanLimit
 			| Reason::AmbiguousMime
 			| Reason::UnreadableArchive
+			| Reason::AmbiguousArchive
 			| Reason::NestedArchive => ceiling.min(Action::Quarantine).max(Action::Flag),
 			_ => ceiling,
 		}

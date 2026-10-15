@@ -8,6 +8,10 @@ fn one(headers: &str, content: &[u8]) -> Vec<u8> {
 	corpus::message(&[attachment(headers, content)])
 }
 
+fn zip_part(zip: Vec<u8>) -> Vec<u8> {
+	one("Content-Type: application/zip; name=a.zip", &zip)
+}
+
 fn raw(text: &str) -> Vec<u8> {
 	text.as_bytes().to_vec()
 }
@@ -398,6 +402,45 @@ fn every_known_evasion_keeps_its_verdict() {
 				&one("Content-Type: application/octet-stream; name=x.exe", b"x"),
 			),
 			DangerousExtension,
+		),
+		(
+			"fake end record in the zip comment",
+			zip_part(archive::tests_sources::fake_end_record_in_comment()),
+			DangerousArchiveEntry,
+		),
+		(
+			"fake end record is ambiguous",
+			zip_part(archive::tests_sources::fake_end_record_in_comment()),
+			AmbiguousArchive,
+		),
+		(
+			"fake end record before the real directory",
+			zip_part(archive::tests_sources::earlier_fake_end_record()),
+			DangerousArchiveEntry,
+		),
+		(
+			"directory offset into prefixed data",
+			zip_part(archive::tests_sources::offset_into_prefixed_data()),
+			DangerousArchiveEntry,
+		),
+		(
+			"unicode path field",
+			zip_part(archive::tests_sources::unicode_path_differs()),
+			DangerousArchiveEntry,
+		),
+		(
+			"self-extracting stub in front",
+			zip_part(prefixed(&corpus::pe(), corpus::zip_of(&["x.vbs"]))),
+			DangerousArchiveEntry,
+		),
+		(
+			"invalid utf-8 that claims utf-8",
+			zip_part(corpus::zip_raw(&[corpus::RawEntry {
+				name: b"a\xff.exe",
+				flags: 0x0800,
+				central_extra: Vec::new(),
+			}])),
+			AmbiguousArchive,
 		),
 	];
 	let mut failures = Vec::new();
