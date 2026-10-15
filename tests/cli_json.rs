@@ -25,3 +25,6 @@ mod top_level;
 
 #[path = "cli_json/exit_codes.rs"]
 mod exit_codes;
+
+#[path = "cli_json/ban.rs"]
+mod ban;
