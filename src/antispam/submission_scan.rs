@@ -131,7 +131,20 @@ impl ScanningSink {
 			);
 			return Err(SinkError::ScanUnavailable);
 		};
-		let decision = off_the_runtime(|| policy.check(raw).1);
+		// A panic in the inspection is a temporary failure for this
+		// submission, never one that takes the session or the request with
+		// it. The inspection holds no shared state a panic could leave
+		// half-changed.
+		let decision = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			off_the_runtime(|| policy.check(raw).1)
+		}))
+		.map_err(|_| {
+			tracing::error!(
+				account = %crate::log_id::account(account),
+				"attachment inspection failed; asking the client to retry"
+			);
+			SinkError::ScanUnavailable
+		})?;
 		let codes: Vec<&str> = decision
 			.reasons
 			.iter()
@@ -217,3 +230,7 @@ mod tests_attachments;
 #[cfg(test)]
 #[path = "submission_scan_tests_dos.rs"]
 mod tests_dos;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_runtime.rs"]
+mod tests_runtime;
