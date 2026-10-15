@@ -78,6 +78,18 @@ struct Builder {
 	records: usize,
 	encrypted_files: usize,
 	plain_files: usize,
+	/// What the central directories say about the entry whose local header
+	/// sits at each offset: where data behind a data descriptor ends.
+	described: std::collections::HashMap<usize, Described>,
+}
+
+/// An entry's method, CRC and sizes as a central directory records them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Described {
+	method: u16,
+	crc: u32,
+	compressed: u32,
+	uncompressed: u32,
 }
 
 impl Builder {
@@ -130,6 +142,7 @@ pub fn list_zip(zip: &[u8]) -> Listing {
 		records: 0,
 		encrypted_files: 0,
 		plain_files: 0,
+		described: Default::default(),
 	};
 	let records = end_records(zip);
 	build.listing.ambiguous |= records.len() > 1;
@@ -161,25 +174,30 @@ pub fn list_zip(zip: &[u8]) -> Listing {
 			break;
 		}
 		build.listing.ambiguous |= local.ambiguous;
-		for name in local.names {
-			if !build.seen.contains(&name) {
+		for name in &local.names {
+			if !build.seen.contains(name) {
 				build.listing.ambiguous = true;
-				build.tally(&name, local.encrypted);
+				build.tally(name, local.encrypted);
 				build.listing.encrypted |= local.encrypted;
-				build.add(name);
+				build.add(name.clone());
 			}
 		}
-		match local.data {
-			// Data descriptors and ZIP64 sizes hide where the next header is;
-			// a simple zip has neither in its local headers.
-			None => {
-				build.listing.ambiguous = true;
-				break;
-			}
-			Some((start, size)) => match start.checked_add(size) {
-				Some(next) if next > at => at = next,
-				_ => break,
+		let next = match local.data {
+			Some((start, size)) => start.checked_add(size),
+			// A data descriptor leaves the size to the central directory.
+			// ZIP64 sizes, or a descriptor that does not match it, hide
+			// where the next header is.
+			None => match descriptor_end(zip, at, &local, &build.described) {
+				Some(next) => Some(next),
+				None => {
+					build.listing.ambiguous = true;
+					break;
+				}
 			},
+		};
+		match next {
+			Some(next) if next > at => at = next,
+			_ => break,
 		}
 	}
 	build.listing.ambiguous |= build.encrypted_files > 0 && build.plain_files > 0;
@@ -203,11 +221,13 @@ fn read_directory(zip: &[u8], directory: &Directory, build: &mut Builder) {
 		build.listing.encrypted |= entry.encrypted;
 		build.listing.unreadable |= !KNOWN_METHODS.contains(&entry.method);
 		build.listing.ambiguous |= entry.ambiguous;
-		match entry
+		let local_at = entry
 			.local_offset
-			.and_then(|offset| offset.checked_add(directory.shift))
-			.and_then(|offset| local_entry(zip, offset))
-		{
+			.and_then(|offset| offset.checked_add(directory.shift));
+		if let (Some(local_at), Some(sizes)) = (local_at, entry.sizes) {
+			build.described.entry(local_at).or_insert(sizes);
+		}
+		match local_at.and_then(|offset| local_entry(zip, offset)) {
 			Some(local) => {
 				build.listing.ambiguous |= local.names != entry.names
 					|| local.ambiguous
@@ -300,6 +320,10 @@ struct Entry {
 	/// Local records: where the compressed data starts and its size, when
 	/// the header records it (no data descriptor, no ZIP64 size).
 	data: Option<(usize, usize)>,
+	/// Local records: bit 3, the sizes follow the data in a descriptor.
+	descriptor: bool,
+	/// Central records: the method, CRC and sizes they record.
+	sizes: Option<Described>,
 }
 
 fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
@@ -326,6 +350,13 @@ fn central_entry(zip: &[u8], at: usize) -> Option<Entry> {
 		local_offset,
 		next: at + 46 + name_len + extra_len + comment_len,
 		data: None,
+		descriptor: false,
+		sizes: Some(Described {
+			method,
+			crc: u32_at(zip, at + 16)?,
+			compressed: u32_at(zip, at + 20)?,
+			uncompressed: u32_at(zip, at + 24)?,
+		}),
 	})
 }
 
@@ -376,7 +407,47 @@ fn local_entry(zip: &[u8], at: usize) -> Option<Entry> {
 		local_offset: None,
 		next: start,
 		data,
+		descriptor: flags & 0x0008 != 0,
+		sizes: None,
 	})
+}
+
+/// Where the next record starts after a local entry whose sizes are in a
+/// data descriptor, read from the central record for the same offset, or
+/// `None` when that would not be where every extractor looks. The
+/// descriptor must sit right after the data the central record sizes and
+/// repeat its CRC and sizes. A local header inside that data is one a
+/// streaming extractor could find by trusting where the deflate stream
+/// ends. Stored data has no end of its own, so only an empty stored entry
+/// with a signed descriptor right after it is followed.
+fn descriptor_end(
+	zip: &[u8],
+	at: usize,
+	local: &Entry,
+	described: &std::collections::HashMap<usize, Described>,
+) -> Option<usize> {
+	let central = described.get(&at)?;
+	if !local.descriptor || central.method != local.method {
+		return None;
+	}
+	let start = local.next;
+	let end = start.checked_add(usize::try_from(central.compressed).ok()?)?;
+	let data = zip.get(start..end)?;
+	if data.windows(LOCAL.len()).any(|window| window == LOCAL) {
+		return None;
+	}
+	let signed = zip.get(end..)?.starts_with(b"PK\x07\x08");
+	if central.method == 0 && (central.compressed != 0 || !signed) {
+		return None;
+	}
+	let fields = if signed { end + 4 } else { end };
+	let recorded = Described {
+		method: central.method,
+		crc: u32_at(zip, fields)?,
+		compressed: u32_at(zip, fields + 4)?,
+		uncompressed: u32_at(zip, fields + 8)?,
+	};
+	(recorded == *central).then_some(fields + 12)
 }
 
 /// The name as UTF-8 (lossy); as code page 437, which unzip and Windows
@@ -525,3 +596,7 @@ mod tests_damaged;
 #[cfg(test)]
 #[path = "archive_tests_sources.rs"]
 pub(crate) mod tests_sources;
+
+#[cfg(test)]
+#[path = "archive_tests_descriptors.rs"]
+mod tests_descriptors;
