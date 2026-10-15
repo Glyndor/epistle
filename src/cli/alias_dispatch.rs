@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::util::address::normalize;
 
 use super::alias_helpers::find_alias;
-use super::alias_writers::{commit_and_restart, set_enabled};
+use super::alias_writers::{commit_reporting, set_enabled_reporting};
 use super::{
 	AliasCli, MemberSubcommand, SenderSubcommand, add_alias, list, member_edit, open, remove_alias,
 	sender_edit, show,
@@ -59,7 +59,7 @@ fn refused(message: impl Into<String>) -> Outcome {
 
 /// Run the chosen alias action and produce an [`Outcome`] the umbrella's
 /// [`super::run`] can map to an exit code.
-pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
+pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) -> Outcome {
 	let mut out = std::io::stdout().lock();
 	let mut err = super::style::stderr();
 	let config = match Config::load(path) {
@@ -67,15 +67,18 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 		Err(error) => return Outcome::Error(error.to_string()),
 	};
 	match action {
-		AliasCli::List { json } => match list(&config, json, &mut out) {
+		AliasCli::List { json: leaf } => match list(&config, leaf || json, &mut out) {
 			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
 			Err(error) => Outcome::Error(error.to_string()),
 		},
-		AliasCli::Show { address, json } => {
+		AliasCli::Show {
+			address,
+			json: leaf,
+		} => {
 			if find_alias(&config, &address).is_none() {
 				return refused("alias not found");
 			}
-			match show(&config, &address, json, &mut out) {
+			match show(&config, &address, leaf || json, &mut out) {
 				Ok(()) => Outcome::Code(ExitCode::SUCCESS),
 				Err(error) => Outcome::Error(error.to_string()),
 			}
@@ -88,11 +91,11 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			if let Err(error) = add_alias(&config, &mut document, &args) {
 				return Outcome::Error(error);
 			}
-			match commit_and_restart(
+			match commit_reporting(
 				document,
 				&normalize(&args.address),
 				"added",
-				dry_run,
+				(dry_run, json),
 				&mut out,
 				&mut err,
 			) {
@@ -126,11 +129,11 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			{
 				return code.into();
 			}
-			match commit_and_restart(
+			match commit_reporting(
 				document,
 				&owned_address,
 				"removed",
-				dry_run,
+				(dry_run, json),
 				&mut out,
 				&mut err,
 			) {
@@ -164,7 +167,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			if let Err(error) = member_edit(&config, &mut document, args) {
 				return Outcome::Error(error);
 			}
-			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+			match commit_reporting(
+				document,
+				&address,
+				verb,
+				(dry_run, json),
+				&mut out,
+				&mut err,
+			) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					crate::cli::resource::ResourceError::Refusal(message) => {
@@ -195,7 +205,14 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			if let Err(error) = sender_edit(&config, &mut document, args) {
 				return Outcome::Error(error);
 			}
-			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+			match commit_reporting(
+				document,
+				&address,
+				verb,
+				(dry_run, json),
+				&mut out,
+				&mut err,
+			) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					crate::cli::resource::ResourceError::Refusal(message) => {
@@ -211,7 +228,7 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			if find_alias(&config, &address).is_none() {
 				return refused(format!("alias {address} not found"));
 			}
-			match set_enabled(&config, &address, true, &mut out, &mut err) {
+			match set_enabled_reporting(&config, &address, true, json, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					crate::cli::resource::ResourceError::Refusal(message) => {
@@ -227,7 +244,7 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			if find_alias(&config, &address).is_none() {
 				return refused(format!("alias {address} not found"));
 			}
-			match set_enabled(&config, &address, false, &mut out, &mut err) {
+			match set_enabled_reporting(&config, &address, false, json, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					crate::cli::resource::ResourceError::Refusal(message) => {

@@ -167,8 +167,8 @@ pub enum SenderSubcommand {
 }
 
 /// Run the chosen alias action.
-pub(super) fn run(path: &Path, action: AliasCli, dry_run: bool) -> ExitCode {
-	match execute(path, action, dry_run) {
+pub(super) fn run(path: &Path, action: AliasCli, dry_run: bool, json: bool) -> ExitCode {
+	match execute(path, action, dry_run, json) {
 		Outcome::Code(code) => code,
 		Outcome::Error(error) => {
 			style::error(error);

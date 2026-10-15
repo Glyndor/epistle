@@ -43,6 +43,7 @@ fn parsed_domain_action(argv: &[&str]) -> (std::path::PathBuf, bool, DomainCli) 
 			config,
 			dry_run,
 			action,
+			..
 		} => (config, dry_run, action),
 		other => panic!("expected Domain variant, got {other:?}"),
 	}

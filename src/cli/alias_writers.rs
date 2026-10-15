@@ -49,6 +49,7 @@ pub(super) fn upsert_alias_senders(
 }
 
 /// Validate and commit a config-edit alias mutation.
+#[cfg(test)]
 pub(crate) fn commit_and_restart(
 	document: ConfigDocument,
 	address: &str,
@@ -57,37 +58,79 @@ pub(crate) fn commit_and_restart(
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> Result<ExitCode, crate::cli::resource::ResourceError> {
+	commit_reporting(document, address, verb, (dry_run, false), out, status)
+}
+
+/// [`commit_and_restart`] with `(dry_run, json)`: with `json` the result
+/// is one object on `out`, its `action` the verb in the present tense
+/// (`member added` becomes `member add`).
+pub(crate) fn commit_reporting(
+	document: ConfigDocument,
+	address: &str,
+	verb: &str,
+	(dry_run, json): (bool, bool),
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
+	let failure = |e: std::io::Error| crate::cli::resource::ResourceError::Failure(e.to_string());
+	let action = verb.replace("added", "add").replace("removed", "remove");
+	let fields = serde_json::json!({ "alias": address });
 	if dry_run {
-		write!(out, "{}", document.dry_run()?)
-			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
+		let diff = document.dry_run()?;
+		if json {
+			let object = crate::cli::json_out::dry_run_object(&action, fields, diff);
+			return writeln!(out, "{object}")
+				.map(|()| ExitCode::SUCCESS)
+				.map_err(failure);
+		}
+		write!(out, "{diff}").map_err(failure)?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
 	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
-		writeln!(status, "alias {address} already {verb}; nothing changed.")
-			.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
-		return Ok(ExitCode::SUCCESS);
+	let (code, reload) = if outcome == Outcome::Unchanged {
+		writeln!(status, "alias {address} already {verb}; nothing changed.").map_err(failure)?;
+		(ExitCode::SUCCESS, crate::cli::json_out::Reload::None)
+	} else {
+		writeln!(status, "alias {address} {verb}.").map_err(failure)?;
+		crate::cli::config_edit::after_change_reporting(
+			&config,
+			outcome,
+			true,
+			status,
+			crate::cli::stack::run,
+		)?
+	};
+	if json {
+		let changed = outcome == Outcome::Changed;
+		let object = crate::cli::json_out::change_object(&action, changed, fields, Some(reload));
+		writeln!(out, "{object}").map_err(failure)?;
 	}
-	writeln!(status, "alias {address} {verb}.")
-		.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
-	crate::cli::config_edit::after_change_with(
-		&config,
-		outcome,
-		true,
-		status,
-		crate::cli::stack::run,
-	)
+	Ok(code)
 }
 
 /// Toggle the disabled flag on a multi-target alias via the dynamic
 /// store. This does not flow through the config-edit engine:
 /// `aliases.json` lives under `data_dir` and the running server reloads
 /// it on the 2 s file watcher, so no restart is required.
+#[cfg(test)]
 pub(super) fn set_enabled(
 	config: &Config,
 	address: &str,
 	enabled: bool,
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> Result<ExitCode, crate::cli::resource::ResourceError> {
+	set_enabled_reporting(config, address, enabled, false, out, status)
+}
+
+/// [`set_enabled`], printing one JSON object instead of the
+/// `address<TAB>state` line when `json` is set.
+pub(super) fn set_enabled_reporting(
+	config: &Config,
+	address: &str,
+	enabled: bool,
+	json: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> Result<ExitCode, crate::cli::resource::ResourceError> {
@@ -120,6 +163,15 @@ pub(super) fn set_enabled(
 			};
 			writeln!(status, "alias {address} {transition}.")
 				.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
+			if json {
+				let fields = serde_json::json!({ "alias": alias.address, "enabled": enabled });
+				let action = if enabled { "enable" } else { "disable" };
+				let changed = previous == enabled;
+				let object = crate::cli::json_out::change_object(action, changed, fields, None);
+				writeln!(out, "{object}")
+					.map_err(|e| crate::cli::resource::ResourceError::Failure(e.to_string()))?;
+				return Ok(ExitCode::SUCCESS);
+			}
 			writeln!(
 				out,
 				"{}\t{}",

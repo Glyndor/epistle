@@ -16,7 +16,7 @@ use super::{AlertCli, run};
 
 fn assert_unknown_alert_is_refused(action: AlertCli) {
 	let (_dir, file) = test_config("");
-	let code = run(file.path(), action, false);
+	let code = run(file.path(), action, false, false);
 	assert_eq!(
 		code,
 		ExitCode::from(exit::REFUSED),
@@ -43,6 +43,7 @@ fn unknown_alert_keeps_its_message_and_leaves_the_config_alone() {
 		AlertCli::Remove {
 			name: "nope".to_string(),
 		},
+		false,
 		false,
 		&mut Vec::new(),
 		&mut Vec::new(),

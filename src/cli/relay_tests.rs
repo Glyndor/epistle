@@ -33,6 +33,7 @@ fn capture(args: Vec<&str>) -> (Result<ExitCode, super::resource::ResourceError>
 		file.path(),
 		action,
 		false,
+		false,
 		&mut std::io::BufReader::new(std::io::empty()),
 		&mut out,
 		&mut Vec::new(),

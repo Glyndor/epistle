@@ -109,8 +109,8 @@ pub enum DomainAliasSubcommand {
 }
 
 /// Run the chosen domain action.
-pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool) -> ExitCode {
-	match execute(path, action, dry_run) {
+pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool, json: bool) -> ExitCode {
+	match execute(path, action, dry_run, json) {
 		Outcome::Code(code) => code,
 		Outcome::Error(error) => {
 			style::error(error);

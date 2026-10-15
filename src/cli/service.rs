@@ -174,8 +174,8 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<
 	Ok(())
 }
 
-pub(super) fn run(path: &Path, action: ServiceCli, dry_run: bool) -> ExitCode {
-	match execute(path, action, dry_run) {
+pub(super) fn run(path: &Path, action: ServiceCli, dry_run: bool, json: bool) -> ExitCode {
+	match execute(path, action, dry_run, json) {
 		Ok(code) => code,
 		Err(error) => {
 			super::style::error(error.to_string());
@@ -188,11 +188,13 @@ fn execute(
 	path: &Path,
 	action: ServiceCli,
 	dry_run: bool,
+	json: bool,
 ) -> Result<ExitCode, super::resource::ResourceError> {
 	execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
 		super::stack::run,
@@ -203,24 +205,35 @@ fn execute_with(
 	path: &Path,
 	action: ServiceCli,
 	dry_run: bool,
+	json: bool,
 	out: &mut impl Write,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
 ) -> Result<ExitCode, super::resource::ResourceError> {
 	let (name, enabled) = match action {
-		ServiceCli::List { json } => {
+		ServiceCli::List { json: leaf } => {
 			let config = Config::load(path)
 				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
-			list(&config, json, out)?;
+			list(&config, leaf || json, out)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		ServiceCli::Enable { name } => (name, true),
 		ServiceCli::Disable { name } => (name, false),
 	};
 	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
+	let action = if enabled { "enable" } else { "disable" };
+	let fields = serde_json::json!({ "service": name.as_str(), "enabled": enabled });
+	let failure =
+		|error: std::io::Error| super::resource::ResourceError::Failure(error.to_string());
 	if dry_run {
-		write!(out, "{}", document.dry_run()?)
-			.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
+		let diff = document.dry_run()?;
+		if json {
+			let object = super::json_out::dry_run_object(action, fields, diff);
+			return writeln!(out, "{object}")
+				.map(|()| ExitCode::SUCCESS)
+				.map_err(failure);
+		}
+		write!(out, "{diff}").map_err(failure)?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
@@ -233,13 +246,28 @@ fn execute_with(
 			name.as_str()
 		)
 		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
+		if json {
+			let object = super::json_out::change_object(
+				action,
+				false,
+				fields,
+				Some(super::json_out::Reload::None),
+			);
+			writeln!(out, "{object}").map_err(failure)?;
+		}
 		return Ok(ExitCode::SUCCESS);
 	}
 	writeln!(err, "{} {state}.", name.as_str())
 		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 	super::init::update_listener_ports(&config.data_dir, &config.listeners)
 		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
-	super::config_edit::after_ports_change_with(&config, outcome, err, restart)
+	let (code, reload) =
+		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
+	if json {
+		let object = super::json_out::change_object(action, true, fields, Some(reload));
+		writeln!(out, "{object}").map_err(failure)?;
+	}
+	Ok(code)
 }
 
 #[cfg(test)]

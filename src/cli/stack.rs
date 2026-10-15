@@ -438,7 +438,7 @@ pub(super) fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> Ex
 fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 	let status = match build_command(podup, compose, extra)
 		.stdin(Stdio::inherit())
-		.stdout(Stdio::inherit())
+		.stdout(super::json_out::child_stdout())
 		.stderr(Stdio::inherit())
 		.status()
 	{

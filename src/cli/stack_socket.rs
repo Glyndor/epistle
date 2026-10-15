@@ -44,7 +44,9 @@ pub(super) fn ensure() -> io::Result<()> {
 			let uid = 0;
 			PathBuf::from(format!("/run/user/{uid}"))
 		});
-	ensure_with(&runtime, Path::exists, |command| command.status())
+	ensure_with(&runtime, Path::exists, |command| {
+		command.stdout(super::json_out::child_stdout()).status()
+	})
 }
 
 #[cfg(test)]

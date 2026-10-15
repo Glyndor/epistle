@@ -396,6 +396,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Domain administration action.
 		#[command(subcommand)]
 		action: domain::DomainCli,
@@ -422,6 +425,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// DNS administration area.
 		#[command(subcommand)]
 		action: dns_provider::DnsCli,
@@ -434,6 +440,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Storage administration area.
 		#[command(subcommand)]
 		action: storage_blobs::StorageCli,
@@ -446,6 +455,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Webhook administration action.
 		#[command(subcommand)]
 		action: webhook_admin::WebhookCli,
@@ -458,6 +470,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Alert administration action.
 		#[command(subcommand)]
 		action: alert::AlertCli,
@@ -470,6 +485,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Relay administration action.
 		#[command(subcommand)]
 		action: relay::RelayCli,
@@ -482,6 +500,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Listener administration action.
 		#[command(subcommand)]
 		action: service::ServiceCli,
@@ -521,6 +542,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Antispam administration action.
 		#[command(subcommand)]
 		action: antispam::AntispamCli,
@@ -535,6 +559,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Alias administration action.
 		#[command(subcommand)]
 		action: alias::AliasCli,

@@ -7,3 +7,9 @@ mod harness;
 
 #[path = "cli_json/account.rs"]
 mod account;
+
+#[path = "cli_json/config_edits.rs"]
+mod config_edits;
+
+#[path = "cli_json/alias_domain.rs"]
+mod alias_domain;

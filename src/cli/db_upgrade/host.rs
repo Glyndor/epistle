@@ -97,6 +97,7 @@ impl Stack for Podup {
 		let status = self
 			.command(args)
 			.stdin(Stdio::null())
+			.stdout(crate::cli::json_out::child_stdout())
 			.status()
 			.map_err(|error| format!("cannot run podup: {error}"))?;
 		if status.success() {

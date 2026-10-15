@@ -57,7 +57,7 @@ fn domain_remove_asks_and_a_dry_run_asks_nothing() {
 				yes,
 			},
 		});
-		domain::run(cfg.path(), action, dry_run)
+		domain::run(cfg.path(), action, dry_run, false)
 	};
 	let present = |cfg: &tempfile::NamedTempFile| {
 		load(cfg.path())
@@ -89,7 +89,7 @@ fn domain_remove_asks_before_editing_the_configuration() {
 				domain: "example.org".to_string(),
 				yes,
 			};
-			domain::run(cfg.path(), action, false)
+			domain::run(cfg.path(), action, false, false)
 		},
 		|(_, cfg)| load(cfg.path()).domains.iter().any(|d| d == "example.org"),
 	);
@@ -110,7 +110,7 @@ fn alias_remove_asks_naming_the_alias() {
 				address: "team@example.org".to_string(),
 				yes,
 			};
-			alias::run(cfg.path(), action, false)
+			alias::run(cfg.path(), action, false, false)
 		},
 		|(_, cfg)| !load(cfg.path()).alias.is_empty(),
 	);

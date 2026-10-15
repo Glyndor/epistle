@@ -52,7 +52,11 @@ pub fn epistle(args: &[&str], stdin: &[u8]) -> Output {
 /// [`epistle`] with `path_first` put in front of `PATH`, for a stub
 /// `podup`.
 pub fn epistle_in(args: &[&str], stdin: &[u8], path_first: Option<&Path>) -> Output {
-	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
+	// `CLI_JSON_BIN` points the suite at another build, to watch it fail
+	// against a binary without these flags.
+	let binary =
+		std::env::var_os("CLI_JSON_BIN").unwrap_or_else(|| env!("CARGO_BIN_EXE_epistle").into());
+	let mut command = Command::new(binary);
 	command
 		.args(args)
 		.env("NO_COLOR", "1")

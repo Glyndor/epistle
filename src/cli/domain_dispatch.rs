@@ -9,7 +9,7 @@ use crate::cli::prompt;
 use crate::cli::resource::ResourceError;
 use crate::config::Config;
 
-use super::domain_writers::{commit_add, commit_alias, commit_remove};
+use super::domain_writers::{add_commit, alias_commit, commit, remove_commit};
 use super::{
 	DomainAliasSubcommand, DomainCli, add_alias_map, add_domain, list, open, remove_alias_map,
 	remove_domain, show,
@@ -74,7 +74,7 @@ fn known_domain_alias(config: &Config, alias: &str) -> bool {
 
 /// Run the chosen domain action and produce an [`Outcome`] the
 /// umbrella's [`super::run`] can map to an exit code.
-pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome {
+pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool) -> Outcome {
 	let mut out = std::io::stdout().lock();
 	let mut err = super::style::stderr();
 	let config = match Config::load(path) {
@@ -82,17 +82,17 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 		Err(error) => return Outcome::Error(error.to_string()),
 	};
 	match action {
-		DomainCli::List { json } => {
-			if let Err(error) = list(&config, json, &mut out) {
+		DomainCli::List { json: leaf } => {
+			if let Err(error) = list(&config, leaf || json, &mut out) {
 				return Outcome::Error(error.to_string());
 			}
 			Outcome::Code(ExitCode::SUCCESS)
 		}
-		DomainCli::Show { domain, json } => {
+		DomainCli::Show { domain, json: leaf } => {
 			if !known_domain(&config, &domain) {
 				return refused(format!("domain {domain} is not configured"));
 			}
-			if let Err(error) = show(&config, &domain, json, &mut out) {
+			if let Err(error) = show(&config, &domain, leaf || json, &mut out) {
 				return Outcome::Error(error.to_string());
 			}
 			Outcome::Code(ExitCode::SUCCESS)
@@ -105,7 +105,8 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 			if let Err(error) = add_domain(&config, &mut document, &domain) {
 				return Outcome::Error(error);
 			}
-			match commit_add(&config, document, &domain, dry_run, &mut out, &mut err) {
+			let mode = (dry_run, json);
+			match commit(document, add_commit(&domain), mode, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					ResourceError::Refusal(message) => Outcome::Refusal(message),
@@ -132,7 +133,8 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 			{
 				return code.into();
 			}
-			match commit_remove(document, &domain, dry_run, &mut out, &mut err) {
+			let mode = (dry_run, json);
+			match commit(document, remove_commit(&domain), mode, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => match error {
 					ResourceError::Refusal(message) => Outcome::Refusal(message),
@@ -150,7 +152,8 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 				if let Err(error) = add_alias_map(&config, &mut document, &alias, &target) {
 					return Outcome::Error(error);
 				}
-				match commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err) {
+				let edit = alias_commit(&owned_alias, "added");
+				match commit(document, edit, (dry_run, json), &mut out, &mut err) {
 					Ok(code) => Outcome::Code(code),
 					Err(error) => match error {
 						ResourceError::Refusal(message) => Outcome::Refusal(message),
@@ -177,14 +180,8 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome 
 				{
 					return code.into();
 				}
-				match commit_alias(
-					document,
-					&owned_alias,
-					"removed",
-					dry_run,
-					&mut out,
-					&mut err,
-				) {
+				let edit = alias_commit(&owned_alias, "removed");
+				match commit(document, edit, (dry_run, json), &mut out, &mut err) {
 					Ok(code) => Outcome::Code(code),
 					Err(error) => match error {
 						ResourceError::Refusal(message) => Outcome::Refusal(message),

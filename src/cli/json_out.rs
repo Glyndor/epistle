@@ -10,7 +10,8 @@
 //! `style`.
 
 use std::io::Write;
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 
@@ -37,6 +38,16 @@ pub(crate) enum Reload {
 	/// The server is running and had not loaded the write in time; it
 	/// will on its next poll.
 	TimedOut,
+	/// The stack's mail service was restarted to apply the change.
+	Restarted,
+	/// The restart of the stack's mail service failed; the exit code is
+	/// the restart's.
+	RestartFailed,
+	/// There is no stack to restart: the operator restarts the server.
+	RestartNeeded,
+	/// Nothing to apply: the change was empty or takes effect without a
+	/// restart.
+	None,
 }
 
 impl Reload {
@@ -46,6 +57,10 @@ impl Reload {
 			Reload::Loaded => "loaded",
 			Reload::NoServer => "no-server",
 			Reload::TimedOut => "timed-out",
+			Reload::Restarted => "restarted",
+			Reload::RestartFailed => "restart-failed",
+			Reload::RestartNeeded => "restart-needed",
+			Reload::None => "none",
 		}
 	}
 }
@@ -131,4 +146,59 @@ pub(crate) fn change_object(
 		object.insert("reload".into(), Value::from(reload.name()));
 	}
 	Value::Object(object)
+}
+
+/// Set once the parsed command line asked for `--json`.
+static STDOUT_RESERVED: AtomicBool = AtomicBool::new(false);
+
+/// Reserve stdout for the JSON result when any command on the parsed
+/// line carries `--json`: from then on a child process (podup,
+/// systemctl) writes its own stdout to stderr, so stdout stays one JSON
+/// document. The walk follows the one subcommand chain clap matched.
+pub(crate) fn reserve_stdout_if_json(matches: &clap::ArgMatches) {
+	let mut level = Some(matches);
+	while let Some(current) = level {
+		if let Ok(Some(true)) = current.try_get_one::<bool>("json") {
+			STDOUT_RESERVED.store(true, Ordering::Relaxed);
+			return;
+		}
+		level = current.subcommand().map(|(_, sub)| sub);
+	}
+}
+
+/// The stdout a child process gets: the inherited one, or with stdout
+/// reserved a copy of stderr. When stderr cannot be copied the child's
+/// stdout is discarded rather than allowed onto the JSON stream.
+pub(crate) fn child_stdout() -> Stdio {
+	if !STDOUT_RESERVED.load(Ordering::Relaxed) {
+		return Stdio::inherit();
+	}
+	use std::os::fd::AsFd;
+	match std::io::stderr().as_fd().try_clone_to_owned() {
+		Ok(fd) => Stdio::from(fd),
+		Err(_) => Stdio::null(),
+	}
+}
+
+/// With `--json`, the `ok\t<check>` lines a test command printed into
+/// `printed` become one object: `{"result": "passed", "action", "checks"}`.
+/// Only a passing test gets here; a failing one has printed its error on
+/// stderr and left stdout empty.
+pub(crate) fn passed(out: &mut impl Write, action: &str, printed: &[u8]) -> std::io::Result<()> {
+	let checks: Vec<&str> = std::str::from_utf8(printed)
+		.unwrap_or_default()
+		.lines()
+		.map(|line| line.strip_prefix("ok\t").unwrap_or(line))
+		.collect();
+	let value = serde_json::json!({ "result": "passed", "action": action, "checks": checks });
+	writeln!(out, "{value}")
+}
+
+/// The `--json` result of a `--dry-run`: the change object with `result`
+/// `dry-run` and the diff that was not written.
+pub(crate) fn dry_run_object(action: &str, fields: Value, diff: String) -> Value {
+	let mut object = change_object(action, false, fields, None);
+	object["result"] = "dry-run".into();
+	object["diff"] = diff.into();
+	object
 }

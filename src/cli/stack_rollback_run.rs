@@ -124,6 +124,7 @@ fn start_mail(user: &crate::cli::rootless::ServiceUser, compose: &Path) -> Resul
 	let podup = crate::cli::stack::build_command("podup", compose, &["start", "mail"]);
 	let status = crate::cli::rootless::account_command(user, "podup")
 		.args(podup.get_args())
+		.stdout(crate::cli::json_out::child_stdout())
 		.status()
 		.map_err(|error| format!("cannot start mail: {error}"))?;
 	if status.success() {

@@ -43,6 +43,7 @@ pub(super) fn run_with(
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut out,
 		&mut status,
 		no_restart,

@@ -231,11 +231,12 @@ fn add(
 	document.upsert_element("alerts", "name", &new.name, &fields)
 }
 
-pub(super) fn run(path: &Path, action: AlertCli, dry_run: bool) -> ExitCode {
+pub(super) fn run(path: &Path, action: AlertCli, dry_run: bool, json: bool) -> ExitCode {
 	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
 		super::stack::run,
@@ -246,16 +247,17 @@ fn execute_with(
 	path: &Path,
 	action: AlertCli,
 	dry_run: bool,
+	json: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
-	let change: resource::Change = match action {
-		AlertCli::List { json } => {
+	let (change, verb, name): (resource::Change, _, _) = match action {
+		AlertCli::List { json: leaf } => {
 			list(
 				&Config::load(path)
 					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
-				json,
+				leaf || json,
 				out,
 			)?;
 			return Ok(ExitCode::SUCCESS);
@@ -273,20 +275,35 @@ fn execute_with(
 			let new = validate(
 				name, metric, op, threshold, &window, &cooldown, webhook, email,
 			)?;
-			Box::new(move |document, config| {
+			let name = new.name.clone();
+			let change: resource::Change = Box::new(move |document, config| {
 				add(document, config, new).map_err(resource::ResourceError::Failure)
-			})
+			});
+			(change, "add", name)
 		}
-		AlertCli::Remove { name } => Box::new(move |document, config| {
-			if !config.alerts.iter().any(|alert| alert.name == name) {
-				return Err(resource::ResourceError::refused(format!(
-					"no alert named \"{name}\""
-				)));
-			}
-			document
-				.remove_elements("alerts", "name", &name)
-				.map_err(resource::ResourceError::Failure)
-		}),
+		AlertCli::Remove { name } => (
+			Box::new({
+				let name = name.clone();
+				move |document, config| {
+					if !config.alerts.iter().any(|alert| alert.name == name) {
+						return Err(resource::ResourceError::refused(format!(
+							"no alert named \"{name}\""
+						)));
+					}
+					document
+						.remove_elements("alerts", "name", &name)
+						.map_err(resource::ResourceError::Failure)
+				}
+			}),
+			"remove",
+			name,
+		),
 	};
-	resource::apply_edit(path, dry_run, "alert", out, status, restart, change)
+	let edit = resource::Edit {
+		label: "alert",
+		action: verb,
+		fields: serde_json::json!({ "alert": name }),
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }
