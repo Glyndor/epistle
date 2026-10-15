@@ -194,29 +194,42 @@ pub(super) fn run(
 	json: bool,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let result = read_compose(compose).and_then(|text| match action {
-		None => list(&text, json, out),
+	let result = match action {
+		None => read_compose(compose).and_then(|text| list(&text, json, out)),
 		Some(ResourcesCli::Set {
 			service,
 			memory,
 			pids,
 		}) => {
 			if let Some(problem) = mail_floor_problem(&service, memory.as_deref(), largest) {
-				return Err(problem);
+				return fail(problem);
 			}
-			let (written, change) = set_limits(&text, &service, memory.as_deref(), pids)?;
-			crate::storage::write_secret(compose, written.as_bytes())
-				.map_err(|error| format!("cannot write {}: {error}", compose.display()))?;
-			report_change(&change, compose, json, out)
+			// `stack update` rewrites the same file under the same lock: the
+			// file is read once the lock is held, so neither loses the
+			// other's change.
+			let lock = crate::storage::locked::lock_path(compose);
+			let _held = match crate::storage::lock::FileLock::acquire(&lock) {
+				Ok(held) => held,
+				Err(error) => return fail(format!("cannot lock {}: {error}", lock.display())),
+			};
+			read_compose(compose).and_then(|text| {
+				let (written, change) = set_limits(&text, &service, memory.as_deref(), pids)?;
+				crate::storage::write_secret(compose, written.as_bytes())
+					.map_err(|error| format!("cannot write {}: {error}", compose.display()))?;
+				report_change(&change, compose, json, out)
+			})
 		}
-	});
+	};
 	match result {
 		Ok(()) => ExitCode::SUCCESS,
-		Err(error) => {
-			crate::cli::style::error(error);
-			ExitCode::FAILURE
-		}
+		Err(error) => fail(error),
 	}
+}
+
+/// Print `error` and fail.
+fn fail(error: String) -> ExitCode {
+	crate::cli::style::error(error);
+	ExitCode::FAILURE
 }
 
 /// The compose file's text, read up to [`MAX_COMPOSE_BYTES`].
@@ -320,3 +333,7 @@ fn report_change(
 #[cfg(test)]
 #[path = "stack_resources_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stack_resources_tests_lock.rs"]
+mod tests_lock;
