@@ -99,3 +99,23 @@ fn scan_authenticated_defaults_on_and_can_be_turned_off() {
 	let config = load("[antispam]\nscan_authenticated = false").expect("off");
 	assert!(!config.antispam.scan_authenticated);
 }
+
+#[test]
+fn clamd_on_error_defaults_to_accept_and_takes_defer() {
+	assert_eq!(
+		load("").expect("default").antispam.clamd_on_error,
+		ClamdOnError::Accept
+	);
+	assert_eq!(
+		load("[antispam]\nclamd_on_error = 'defer'")
+			.expect("defer")
+			.antispam
+			.clamd_on_error,
+		ClamdOnError::Defer
+	);
+	let error = load("[antispam]\nclamd_on_error = 'drop'").expect_err("unknown value");
+	assert!(
+		error.to_string().contains("unknown variant `drop`"),
+		"{error}"
+	);
+}

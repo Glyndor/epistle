@@ -49,7 +49,8 @@ pub(super) struct DesiredConfig {
 /// Sections and keys `init` writes only into a configuration it creates.
 /// On an existing file they are left as the operator has them, so an
 /// upgrade that re-runs `init` keeps today's behaviour.
-pub(super) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] = &[("attachments", None)];
+pub(super) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] =
+	&[("attachments", None), ("antispam", Some("clamd_on_error"))];
 
 /// The `[attachments]` section for a new install: quarantine disguised
 /// files and macros, flag encrypted archives.
@@ -81,6 +82,9 @@ pub(super) struct DesiredAntispam {
 	/// The stack's clamd; absent when the stack runs no clamav.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	clamd_socket: Option<String>,
+	/// What a scan clamd cannot run does; absent without clamd.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	clamd_on_error: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -343,6 +347,7 @@ pub(super) fn build_config(
 		antispam: DesiredAntispam {
 			clamd_socket: (answers.services.antivirus != Some(false))
 				.then(|| "/run/clamav/clamd.sock".to_string()),
+			clamd_on_error: (answers.services.antivirus != Some(false)).then_some("defer"),
 		},
 		attachments: DesiredAttachments {
 			mode: "quarantine",
@@ -518,6 +523,9 @@ mod tests_clamav;
 #[cfg(test)]
 #[path = "apply_config_tests_attachments.rs"]
 mod tests_attachments;
+#[cfg(test)]
+#[path = "apply_config_tests_clamd_on_error.rs"]
+mod tests_clamd_on_error;
 
 #[cfg(test)]
 #[path = "apply_config_tests_database_off.rs"]

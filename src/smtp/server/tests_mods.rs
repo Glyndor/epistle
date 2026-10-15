@@ -28,6 +28,10 @@ mod tests_virus;
 mod tests_attachments;
 
 #[cfg(test)]
+#[path = "server_tests_clamd_defer.rs"]
+mod tests_clamd_defer;
+
+#[cfg(test)]
 #[path = "server_tests_trace.rs"]
 mod tests_trace;
 

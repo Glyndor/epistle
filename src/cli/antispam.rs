@@ -41,6 +41,8 @@ pub enum Key {
 	ClamdSocket,
 	/// Action on clamd detection (`[antispam] clamd_on_found`).
 	ClamdOnFound,
+	/// What a scan clamd could not run does (`[antispam] clamd_on_error`).
+	ClamdOnError,
 	/// clamd exchange timeout, in seconds (`[antispam] clamd_timeout_secs`).
 	ClamdTimeout,
 	/// clamd maximum message size, in bytes (`[antispam] clamd_max_bytes`).
@@ -71,6 +73,7 @@ impl Key {
 			Self::FirstTimeSenderDelay => "first-time-sender-delay",
 			Self::ClamdSocket => "clamd-socket",
 			Self::ClamdOnFound => "clamd-on-found",
+			Self::ClamdOnError => "clamd-on-error",
 			Self::ClamdTimeout => "clamd-timeout",
 			Self::ClamdMaxSize => "clamd-max-size",
 			Self::ScanAuthenticated => "scan-authenticated",
@@ -356,6 +359,19 @@ fn set_scalar_field(document: &mut ConfigDocument, key: Key, raw: &str) -> Resul
 			};
 			document.set_table_key(&["antispam"], "clamd_on_found", value)?;
 		}
+		Key::ClamdOnError => {
+			let lowered = raw.trim().to_ascii_lowercase();
+			let value = match lowered.as_str() {
+				"accept" => "accept",
+				"defer" => "defer",
+				other => {
+					return Err(format!(
+						"clamd-on-error expected accept or defer (got {other:?})"
+					));
+				}
+			};
+			document.set_table_key(&["antispam"], "clamd_on_error", value)?;
+		}
 		Key::ClamdTimeout => {
 			let value = parse_u64(raw).map_err(|e| format!("clamd-timeout: {e}"))?;
 			document.set_table_key(&["antispam"], "clamd_timeout_secs", value as i64)?;
@@ -412,6 +428,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 		Key::FirstTimeSenderDelay => document.remove_scalar("first_time_sender_delay_secs"),
 		Key::ClamdSocket => document.remove_table_key(&["antispam"], "clamd_socket")?,
 		Key::ClamdOnFound => document.remove_table_key(&["antispam"], "clamd_on_found")?,
+		Key::ClamdOnError => document.remove_table_key(&["antispam"], "clamd_on_error")?,
 		Key::ClamdTimeout => document.remove_table_key(&["antispam"], "clamd_timeout_secs")?,
 		Key::ClamdMaxSize => document.remove_table_key(&["antispam"], "clamd_max_bytes")?,
 		Key::ScanAuthenticated => document.remove_table_key(&["antispam"], "scan_authenticated")?,
@@ -533,6 +550,9 @@ mod tests_dry_run;
 #[cfg(test)]
 #[path = "antispam_tests_lists.rs"]
 mod tests_lists;
+#[cfg(test)]
+#[path = "antispam_tests_on_error.rs"]
+mod tests_on_error;
 #[cfg(test)]
 #[path = "antispam_tests_secrets.rs"]
 mod tests_secrets;

@@ -56,7 +56,7 @@ pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
-pub use scanner::{Antispam, ClamdOnFound};
+pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::attachments::gate;
 use super::attachments::policy::{Action, Policy};
 use super::clamd::{ClamdHook, Inspection};
+use crate::config::ClamdOnError;
 use crate::metrics::Metrics;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
@@ -27,6 +28,9 @@ const MAX_SIGNATURE_CHARS: usize = 120;
 pub struct ScanningSink {
 	inner: Arc<dyn MessageSink>,
 	scanner: Option<worker::Scanner>,
+	/// Whether a scan that could not run refuses the submission for now
+	/// (`clamd_on_error = "defer"`) instead of letting it through.
+	defer_unscanned: bool,
 	attachments: Option<Arc<Policy>>,
 	/// Caps on concurrent attachment inspections, total and per account.
 	gate: Arc<gate::Gate>,
@@ -69,8 +73,12 @@ impl ScanningSink {
 		if !scan_authenticated || (clamd.is_none() && attachments.is_none()) {
 			return Ok(inner);
 		}
+		let defer_unscanned = clamd
+			.as_ref()
+			.is_some_and(|clamd| clamd.on_error() == ClamdOnError::Defer);
 		Ok(Arc::new(ScanningSink {
 			inner,
+			defer_unscanned,
 			scanner: clamd.map(worker::Scanner::start).transpose()?,
 			attachments,
 			gate: gate::Gate::with_defaults(),
@@ -97,10 +105,18 @@ impl MessageSink for ScanningSink {
 		if let Some(policy) = &self.attachments {
 			self.check_attachments(policy, &message.data, account)?;
 		}
-		// Fail open like the inbound scan: an unreachable clamd is counted
-		// and recorded for `epistle status` inside the hook, and the mail
-		// goes on unscanned.
-		if let Inspection::Infected(signature) = self.scan(&message.data)? {
+		// An unreachable clamd is counted and recorded for `epistle status`
+		// inside the hook; the mail then goes on unscanned or waits for a
+		// retry, as `clamd_on_error` says, like inbound mail.
+		let inspection = self.scan(&message.data)?;
+		if inspection == Inspection::Unscanned && self.defer_unscanned {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"clamd could not scan a submission; asking the client to retry"
+			);
+			return Err(SinkError::ScanUnavailable);
+		}
+		if let Inspection::Infected(signature) = inspection {
 			let signature = bounded(&signature);
 			tracing::warn!(
 				account = %crate::log_id::account(account),
@@ -237,3 +253,7 @@ mod tests_dos;
 #[cfg(test)]
 #[path = "submission_scan_tests_runtime.rs"]
 mod tests_runtime;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_on_error.rs"]
+mod tests_on_error;

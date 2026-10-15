@@ -1,10 +1,11 @@
-//! A small on-disk record of clamd scans that failed open, so `epistle
-//! status` can say that mail has been accepted unscanned. The server writes
-//! it; the status check, a separate process, reads it.
+//! A small on-disk record of clamd scans that failed, so `epistle status`
+//! can say that mail has been accepted unscanned (or deferred, under
+//! `clamd_on_error = "defer"`). The server writes it; the status check, a
+//! separate process, reads it.
 //!
 //! The record is advisory. A write that fails is logged at debug and
-//! dropped: it must never hold up mail, which is already being accepted
-//! without a scan at that point.
+//! dropped: it must never hold up mail, whose fate is already decided at
+//! that point.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

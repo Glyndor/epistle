@@ -1,4 +1,5 @@
-//! Fail-open clamd scanning over a Unix socket, without local decompression.
+//! clamd scanning over a Unix socket, without local decompression. A scan
+//! that fails is accepted unscanned or deferred, as `clamd_on_error` says.
 
 use std::io;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::net::UnixStream;
 
 use super::hook::{HookVerdict, MailHook};
+use crate::config::ClamdOnError;
 use crate::metrics::Metrics;
 
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -22,6 +24,7 @@ const MAX_REPLY_BYTES: usize = 8 * 1024;
 pub struct ClamdHook {
 	socket: PathBuf,
 	on_found: HookVerdict,
+	on_error: ClamdOnError,
 	timeout: Duration,
 	max_bytes: usize,
 	metrics: Option<Arc<Metrics>>,
@@ -37,9 +40,13 @@ pub enum Inspection {
 	Clean,
 	/// clamd reported this signature (control characters already refused).
 	Infected(String),
-	/// The message was not scanned: clamd failed, timed out, or the message
-	/// was over the size limit. Callers fail open on it.
+	/// The message was not scanned because clamd failed or timed out.
+	/// Callers accept or defer it, as `clamd_on_error` says.
 	Unscanned,
+	/// The message was over `clamd_max_bytes` and never sent to clamd. It
+	/// is accepted whatever `clamd_on_error` says: a retry would be just as
+	/// large, so deferring it would only bounce it days later.
+	Skipped,
 }
 
 impl ClamdHook {
@@ -48,6 +55,7 @@ impl ClamdHook {
 		Self {
 			socket,
 			on_found: HookVerdict::Quarantine,
+			on_error: ClamdOnError::Accept,
 			timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
 			max_bytes: DEFAULT_MAX_BYTES,
 			metrics: None,
@@ -68,6 +76,17 @@ impl ClamdHook {
 	pub fn with_on_found(mut self, on_found: HookVerdict) -> Self {
 		self.on_found = on_found;
 		self
+	}
+
+	/// Set what a failed scan does: accept the message unscanned or defer it.
+	pub fn with_on_error(mut self, on_error: ClamdOnError) -> Self {
+		self.on_error = on_error;
+		self
+	}
+
+	/// What a failed scan does.
+	pub fn on_error(&self) -> ClamdOnError {
+		self.on_error
 	}
 
 	/// Bound the complete socket exchange, including connection and writes.
@@ -151,7 +170,10 @@ impl ClamdHook {
 			})
 			.is_ok()
 		{
-			tracing::warn!(%error, "clamd scan failed; accepting");
+			match self.on_error {
+				ClamdOnError::Accept => tracing::warn!(%error, "clamd scan failed; accepting"),
+				ClamdOnError::Defer => tracing::warn!(%error, "clamd scan failed; deferring"),
+			}
 		}
 		Inspection::Unscanned
 	}
@@ -169,7 +191,10 @@ impl ClamdHook {
 		Box::pin(async move {
 			match inspection.await {
 				Inspection::Infected(_) => self.on_found,
-				Inspection::Clean | Inspection::Unscanned => HookVerdict::Accept,
+				Inspection::Unscanned if self.on_error == ClamdOnError::Defer => HookVerdict::Defer,
+				Inspection::Clean | Inspection::Unscanned | Inspection::Skipped => {
+					HookVerdict::Accept
+				}
 			}
 		})
 	}
@@ -188,7 +213,7 @@ impl ClamdHook {
 				if let Some(metrics) = &self.metrics {
 					metrics.scanner_clamd_skipped();
 				}
-				Inspection::Unscanned
+				Inspection::Skipped
 			});
 		}
 		let body = raw.to_vec();
@@ -207,8 +232,8 @@ impl ClamdHook {
 		})
 	}
 
-	/// Scan `raw` and say what clamd found, failing open as [`MailHook::scan`]
-	/// does.
+	/// Scan `raw` and say what clamd found. The caller decides what an
+	/// [`Inspection::Unscanned`] means, as [`ClamdHook::on_error`] says.
 	pub async fn inspect(&self, raw: &[u8]) -> Inspection {
 		self.inspect_with(raw, UnixStream::connect(&self.socket))
 			.await
@@ -240,3 +265,7 @@ mod stream_tests;
 #[cfg(test)]
 #[path = "clamd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "clamd_tests_on_error.rs"]
+mod tests_on_error;

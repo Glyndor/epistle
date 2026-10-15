@@ -85,6 +85,7 @@ a connection URL.
 |---|---|---|---|
 | `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail, and of what local accounts submit (see `scan_authenticated`). Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
 | `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
+| `clamd_on_error` | `accept` or `defer` | `accept` | What a scan clamd could not run does. `accept` lets the message through unscanned; `defer` answers `451 4.7.1 content scan unavailable, try again later`, inbound and on submission, so the sender retries and nothing passes unscanned. `epistle init` writes `defer` into a new configuration with clamd; an existing configuration without the key keeps `accept`. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
 | `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
@@ -107,10 +108,13 @@ exceeding those limits yields a detection handled by `clamd_on_found`.
 Set `StreamMaxLength` at least as high as `clamd_max_bytes`.
 See the [clamd configuration reference](https://github.com/Cisco-Talos/clamav/blob/main/docs/man/clamd.conf.5.in).
 
-Scanner errors, missing sockets, malformed replies, and timeouts fail open:
-the message is accepted and `scanner_clamd_failed` increments. This includes
-`INSTREAM size limit exceeded. ERROR`. Oversize messages increment
-`scanner_clamd_skipped` instead. The Prometheus names are
+Scanner errors, missing sockets, malformed replies, and timeouts increment
+`scanner_clamd_failed`, and the message follows `clamd_on_error`: accepted
+unscanned with `accept`, refused for now with `451 4.7.1` with `defer`. This
+includes `INSTREAM size limit exceeded. ERROR`. Oversize messages increment
+`scanner_clamd_skipped` instead and are always accepted, also with `defer`:
+a retry would be just as large. Keep `clamd_max_bytes` at least as high as
+`max_message_size` so no message skips the scan. The Prometheus names are
 `mail_scanner_clamd_failed_total` and `mail_scanner_clamd_skipped_total`.
 Failure warnings are limited to one per minute per hook; detections log the
 signature and message size without message content.
@@ -123,12 +127,15 @@ detected (<signature>)` on SMTP, `422` with the code `virus_detected` on
 account's pseudonym and the signature, counts it in `outbound_virus`
 (`mail_outbound_virus_total`), and fires the `outbound_virus` webhook event,
 because an account sending malware is usually a compromised one. A clamd
-that cannot be reached fails open here too.
+that cannot be reached follows `clamd_on_error` here too: with `defer` the
+submission gets `451 4.7.1` on SMTP and `503` with the code
+`scan_unavailable` on `/api/v1/send`.
 
-Every scan that fails open is also recorded in `<data_dir>/clamd-health.json`,
+Every scan that fails is also recorded in `<data_dir>/clamd-health.json`,
 and the first one that works again closes the record. `epistle status` reads
-it: while scans keep failing, the antivirus area warns with how many failed
-and since when, even if clamd answers `PING` at that moment.
+it: while scans keep failing, the antivirus area warns with how many failed,
+since when, and whether that mail was accepted unscanned or deferred, even
+if clamd answers `PING` at that moment.
 
 ## Listeners
 

@@ -35,17 +35,28 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(None) => {
 			let now = epoch(ctx.now);
 			let report = evaluate(socket, now, NET_TIMEOUT).await;
-			with_scan_health(report, &config.data_dir, now)
+			with_scan_health(
+				report,
+				&config.data_dir,
+				now,
+				config.antispam.clamd_on_error,
+			)
 		}
 		Err(error) => AreaReport::fail(error),
 	}
 }
 
-/// Add what the server recorded about scans that failed open: clamd may
-/// answer `PING` now and still have let mail through unscanned, or answer
-/// it and fail every `INSTREAM`. A run of failures that has not ended
+/// Add what the server recorded about scans that failed: clamd may answer
+/// `PING` now and still have let mail through unscanned (or deferred it,
+/// under `clamd_on_error = "defer"`), or answer it and fail every
+/// `INSTREAM`. A run of failures that has not ended
 /// warns; one that ended is mentioned without changing the verdict.
-fn with_scan_health(mut report: AreaReport, data_dir: &Path, now: i64) -> AreaReport {
+fn with_scan_health(
+	mut report: AreaReport,
+	data_dir: &Path,
+	now: i64,
+	on_error: crate::config::ClamdOnError,
+) -> AreaReport {
 	let Some(health) = crate::antispam::clamd::health::read(data_dir) else {
 		return report;
 	};
@@ -53,11 +64,20 @@ fn with_scan_health(mut report: AreaReport, data_dir: &Path, now: i64) -> AreaRe
 	let item = if health.failures > 0 {
 		let since = health.failing_since.unwrap_or_default();
 		let hours = (now - i64::try_from(since).unwrap_or(now)).max(0) / 3600;
+		let (failed, outcome) = match on_error {
+			crate::config::ClamdOnError::Accept => {
+				("failed open", "that mail was accepted unscanned")
+			}
+			crate::config::ClamdOnError::Defer => (
+				"failed",
+				"that mail was deferred with 451 4.7.1 until clamd scans again",
+			),
+		};
 		Item::new(
 			"scans",
 			Level::Warn,
 			format!(
-				"{} scan{} failed open since {} ({hours} h), the last at {}: that mail was accepted unscanned",
+				"{} scan{} {failed} since {} ({hours} h), the last at {}: {outcome}",
 				health.failures,
 				if health.failures == 1 { "" } else { "s" },
 				when(health.failing_since),

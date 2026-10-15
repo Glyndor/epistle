@@ -35,6 +35,7 @@ fn sink_with_gate(gate: Arc<gate::Gate>, mode: AttachmentMode) -> (ScanningSink,
 	let sink = ScanningSink {
 		inner: inner.clone(),
 		scanner: None,
+		defer_unscanned: false,
 		attachments: Some(policy(mode)),
 		gate,
 		metrics: None,

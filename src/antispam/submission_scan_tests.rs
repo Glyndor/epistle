@@ -216,6 +216,7 @@ fn concrete(socket: &std::path::Path) -> ScanningSink {
 			worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
 				.expect("scanner"),
 		),
+		defer_unscanned: false,
 		attachments: None,
 		gate: gate::Gate::new(4, 1),
 		metrics: None,

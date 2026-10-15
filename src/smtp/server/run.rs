@@ -403,6 +403,17 @@ impl Server {
 								self.train_corpus(&message.data, true);
 								message.mailbox = Some("Rejects".to_string());
 							}
+							crate::antispam::hook::HookVerdict::Defer => {
+								send(
+									&mut stream,
+									&Reply::single(
+										451,
+										"4.7.1 content scan unavailable, try again later",
+									),
+								)
+								.await?;
+								continue;
+							}
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
