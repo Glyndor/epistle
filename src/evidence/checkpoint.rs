@@ -179,10 +179,23 @@ pub fn compute(
 			super::anchor::read(&evidence_root.join(super::chain::CHAIN_DIR))?.unwrap_or(GENESIS),
 		),
 	};
+	// The timestamp mode is the chain's: the previous checkpoint's, changed
+	// by any setting record of the day. `timestamp` only seeds the first.
+	let mut timestamp = match &before {
+		Some((_, bytes)) => serde_json::from_slice::<Checkpoint>(bytes)
+			.map(|previous| previous.timestamp == "enabled")
+			.unwrap_or(timestamp),
+		None => timestamp,
+	};
 	let mut tree = TreeBuilder::new();
 	let mut retain_until = day;
 	let walk = walk_day(evidence_root, day, expected, |_, record, hash| {
 		tree.push(leaf_hash(hash));
+		if let super::record::Entry::Setting(setting) = &record.entry
+			&& setting.name == "timestamp"
+		{
+			timestamp = setting.value.starts_with("enabled");
+		}
 		let until = Day(day.0 + i64::from(record.entry.retain_days()));
 		retain_until = retain_until.max(until);
 	})

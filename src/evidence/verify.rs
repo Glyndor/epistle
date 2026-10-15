@@ -58,6 +58,11 @@ impl std::fmt::Display for Break {
 			format!("{} line {}", self.day, self.line)
 		};
 		match &self.problem {
+			Problem::Unchained { expected, found } if self.line == 1 => write!(
+				formatter,
+				"{at}: the day does not follow the day before (prev {found}, expected {expected}): \
+				 a day is missing, or a day was rewritten"
+			),
 			Problem::Unchained { expected, found } => write!(
 				formatter,
 				"{at}: record does not chain onto the one before it (prev {found}, expected {expected}): \

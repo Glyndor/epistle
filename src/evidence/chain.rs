@@ -117,6 +117,11 @@ impl Chain {
 		if created {
 			File::open(&self.dir).and_then(|dir| dir.sync_all())?;
 		}
+		// The head lives outside the evidence directory, so restoring an
+		// older copy of the directory is visible to `verify`.
+		if let Some(root) = self.dir.parent() {
+			super::head::write(root, time, &hash)?;
+		}
 		Ok(hash)
 	}
 

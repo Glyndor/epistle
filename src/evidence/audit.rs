@@ -27,6 +27,8 @@ use super::verify::{Break, Problem, walk_day};
 /// Grace after midnight before a missing checkpoint is a break: the server
 /// seals closed days on a timer.
 pub const SEAL_GRACE_SECS: u64 = 3600;
+/// The latest a token may be issued after its checkpoint was made.
+pub const TOKEN_GRACE_SECS: u64 = 3 * 86_400;
 
 /// What `verify` found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -41,7 +43,9 @@ pub struct Report {
 	pub stamped: u32,
 	/// Days not sealed yet (today, or just closed).
 	pub open: Vec<Day>,
-	/// The first break, when there is one.
+	/// Breaks an operator acknowledged; the walk went on after each.
+	pub acknowledged: Vec<Break>,
+	/// The first break nobody acknowledged, when there is one.
 	pub first_break: Option<Break>,
 }
 
@@ -66,6 +70,18 @@ fn broken(day: Day, why: impl Into<String>) -> Break {
 	}
 }
 
+/// What the walk carries from one day to the next. Nothing of it is
+/// stored: every verification starts from the oldest kept day.
+struct Walker {
+	expected: Option<[u8; 32]>,
+	previous_checkpoint: Option<String>,
+	previous_key: Option<String>,
+	timestamping: bool,
+	head: Option<[u8; 32]>,
+	head_seen: bool,
+	last_purge: Option<super::record::Purge>,
+}
+
 /// Verify the evidence under `evidence_root`.
 pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report> {
 	let chain = Chain::open(evidence_root)?;
@@ -82,113 +98,185 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 	let from_start = options
 		.from
 		.is_none_or(|from| days.first().is_none_or(|first| *first >= from));
+	let to_end = options
+		.to
+		.is_none_or(|to| days.last().is_none_or(|last| *last <= to));
 	days.retain(|day| {
 		options.from.is_none_or(|from| *day >= from) && options.to.is_none_or(|to| *day <= to)
 	});
 	let mut report = Report::default();
+	let head = super::head::load(evidence_root)?;
 	let Some(first) = days.first().copied() else {
+		if head.is_some() && from_start && to_end {
+			report.first_break = Some(broken(
+				today,
+				"rollback: the head names a record, and no day is kept",
+			));
+		}
 		return Ok(report);
 	};
 	// Where the first day must start: the previous checkpoint, the purge
 	// anchor, or the very beginning.
 	let previous = checkpoint::previous(evidence_root, first)?;
-	let mut expected: Option<[u8; 32]> = match (&previous, &purged) {
-		(Some((_, bytes)), _) => parse(bytes)
-			.ok()
-			.and_then(|cp| hash_from_hex(&cp.last_hash)),
-		(None, Some(anchor)) => hash_from_hex(&anchor.last_hash),
-		(None, None) if from_start => Some(GENESIS),
-		(None, None) => None,
+	let previous = previous.and_then(|(_, bytes)| parse(&bytes).ok().map(|cp| (cp, bytes)));
+	let mut walker = Walker {
+		expected: match (&previous, &purged) {
+			(Some((cp, _)), _) => hash_from_hex(&cp.last_hash),
+			(None, Some(anchor)) => hash_from_hex(&anchor.last_hash),
+			(None, None) if from_start => Some(GENESIS),
+			(None, None) => None,
+		},
+		previous_checkpoint: match (&previous, &purged) {
+			(Some((_, bytes)), _) => Some(to_hex(&sha256(bytes))),
+			(None, Some(anchor)) => Some(anchor.checkpoint.clone()),
+			(None, None) => None,
+		},
+		previous_key: previous.as_ref().map(|(cp, _)| cp.key.clone()),
+		timestamping: previous
+			.as_ref()
+			.is_none_or(|(cp, _)| cp.timestamp == "enabled"),
+		head: head.as_ref().and_then(super::head::Head::hash),
+		head_seen: false,
+		last_purge: None,
 	};
-	let mut previous_checkpoint: Option<String> = match (&previous, &purged) {
-		(Some((_, bytes)), _) => Some(to_hex(&sha256(bytes))),
-		(None, Some(anchor)) => Some(anchor.checkpoint.clone()),
-		(None, None) => None,
-	};
-	let mut last_purge: Option<super::record::Purge> = None;
 	for day in days {
-		let mut tree = TreeBuilder::new();
-		let walk = walk_day(evidence_root, day, expected, |_, record, hash| {
-			tree.push(leaf_hash(hash));
-			if let Entry::Purge(purge) = &record.entry {
-				last_purge = Some(purge.clone());
-			}
-		});
-		let walk = match walk {
-			Ok(walk) => walk,
-			Err(at) => {
-				report.first_break = Some(at);
-				return Ok(report);
-			}
-		};
-		report.days += 1;
-		report.records += walk.records;
-		expected = Some(walk.last);
-		if day >= today
-			|| (day.0 + 1 == today.0 && options.now < today.start_epoch() + SEAL_GRACE_SECS)
+		if let Err(at) =
+			walk_and_check(evidence_root, day, today, options, &mut walker, &mut report)
 		{
-			if checkpoint::load(evidence_root, day)?.is_none() {
-				report.open.push(day);
+			if super::ack::is_acknowledged(evidence_root, &at.to_string()) {
+				// Accepted by the operator: carry on, unanchored, from the next day.
+				report.acknowledged.push(at);
+				walker.expected = None;
+				walker.previous_checkpoint = None;
 				continue;
 			}
-		}
-		let (root, _) = tree.finish(&[]);
-		match check_day(
-			evidence_root,
-			day,
-			&walk,
-			&root,
-			previous_checkpoint.as_deref(),
-			options,
-		) {
-			Ok((hash, stamped)) => {
-				report.sealed += 1;
-				report.stamped += u32::from(stamped);
-				previous_checkpoint = Some(hash);
-			}
-			Err(at) => {
-				report.first_break = Some(at);
-				return Ok(report);
-			}
+			report.first_break = Some(at);
+			return Ok(report);
 		}
 	}
-	match (&purged, &last_purge) {
+	report.first_break = final_checks(&purged, &walker, from_start, to_end, today, head.is_some());
+	Ok(report)
+}
+
+/// What can only be judged once every day was walked: the purge anchor and
+/// the head.
+fn final_checks(
+	purged: &Option<anchor::Anchor>,
+	walker: &Walker,
+	from_start: bool,
+	to_end: bool,
+	today: Day,
+	has_head: bool,
+) -> Option<Break> {
+	match (purged, &walker.last_purge) {
 		(Some(anchor), Some(purge))
 			if anchor.last_hash != purge.last_hash
 				|| anchor.checkpoint != purge.checkpoint
 				|| anchor.through != purge.through =>
 		{
-			report.first_break = Some(broken(
+			return Some(broken(
 				today,
 				"the purge anchor does not match the last purge record",
 			));
 		}
-		(Some(_), None) if from_start && options.to.is_none() => {
-			report.first_break = Some(broken(today, "days were purged without a purge record"));
+		(Some(_), None) if from_start && to_end => {
+			return Some(broken(today, "days were purged without a purge record"));
 		}
 		_ => {}
 	}
-	Ok(report)
+	if !to_end {
+		return None;
+	}
+	if !has_head {
+		return Some(broken(
+			today,
+			"the head is missing: the evidence may have been restored from an older copy",
+		));
+	}
+	if !walker.head_seen {
+		return Some(broken(
+			today,
+			"rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)",
+		));
+	}
+	None
+}
+
+fn walk_and_check(
+	evidence_root: &Path,
+	day: Day,
+	today: Day,
+	options: &Options,
+	walker: &mut Walker,
+	report: &mut Report,
+) -> Result<(), Break> {
+	let mut tree = TreeBuilder::new();
+	let mut timestamping = walker.timestamping;
+	let head = walker.head;
+	let mut head_seen = false;
+	let mut last_purge = None;
+	let walk = walk_day(evidence_root, day, walker.expected, |_, record, hash| {
+		tree.push(leaf_hash(hash));
+		head_seen |= head.as_ref() == Some(hash);
+		match &record.entry {
+			Entry::Purge(purge) => last_purge = Some(purge.clone()),
+			Entry::Setting(setting) if setting.name == "timestamp" => {
+				timestamping = setting.value.starts_with("enabled");
+			}
+			_ => {}
+		}
+	})?;
+	walker.head_seen |= head_seen;
+	if last_purge.is_some() {
+		walker.last_purge = last_purge;
+	}
+	walker.timestamping = timestamping;
+	report.days += 1;
+	report.records += walk.records;
+	walker.expected = Some(walk.last);
+	let just_closed = day.0 + 1 == today.0 && options.now < today.start_epoch() + SEAL_GRACE_SECS;
+	if (day >= today || just_closed)
+		&& checkpoint::load(evidence_root, day)
+			.ok()
+			.flatten()
+			.is_none()
+	{
+		report.open.push(day);
+		return Ok(());
+	}
+	let (root, _) = tree.finish(&[]);
+	let stamped = check_day(evidence_root, day, &walk, &root, walker, options)?;
+	report.sealed += 1;
+	report.stamped += u32::from(stamped.1);
+	walker.previous_checkpoint = Some(stamped.0);
+	walker.previous_key = Some(stamped.2);
+	Ok(())
 }
 
 fn parse(bytes: &[u8]) -> Result<Checkpoint, String> {
 	serde_json::from_slice(bytes).map_err(|error| format!("unreadable checkpoint ({error})"))
 }
 
-/// Check `day`'s checkpoint against its walk; returns the checkpoint hash
-/// and whether a valid token covers it.
+/// Check `day`'s checkpoint against its walk; returns the checkpoint hash,
+/// whether a valid token covers it, and the key that signed it.
 fn check_day(
 	evidence_root: &Path,
 	day: Day,
 	walk: &super::verify::DayWalk,
 	root: &[u8; 32],
-	previous_checkpoint: Option<&str>,
+	walker: &Walker,
 	options: &Options,
-) -> Result<(String, bool), Break> {
+) -> Result<(String, bool, String), Break> {
 	let io = |error: std::io::Error| broken(day, format!("cannot read ({})", error.kind()));
 	let (checkpoint, bytes) = checkpoint::load(evidence_root, day)
 		.map_err(io)?
 		.ok_or_else(|| broken(day, "missing: the day was never sealed"))?;
+	if checkpoint.v != checkpoint::CHECKPOINT_VERSION {
+		return Err(broken(
+			day,
+			format!("unsupported checkpoint version {}", checkpoint.v),
+		));
+	}
 	let mismatch = |what: &str| broken(day, format!("{what} does not match the day's records"));
 	if checkpoint.day != day.name() {
 		return Err(mismatch("the day"));
@@ -204,12 +292,20 @@ fn check_day(
 	{
 		return Err(mismatch("the first or last hash"));
 	}
-	if let Some(expected) = previous_checkpoint
-		&& checkpoint.prev_checkpoint.as_deref() != Some(expected)
+	if let Some(expected) = &walker.previous_checkpoint
+		&& checkpoint.prev_checkpoint.as_deref() != Some(expected.as_str())
 	{
 		return Err(broken(
 			day,
 			"does not name the previous checkpoint: a checkpoint was replaced",
+		));
+	}
+	if let Some(previous) = &walker.previous_key
+		&& *previous != checkpoint.key
+	{
+		return Err(broken(
+			day,
+			"signed with a different evidence key than the day before",
 		));
 	}
 	let signature = checkpoint::read_bounded(&files(evidence_root, day).sig, 64)
@@ -224,8 +320,15 @@ fn check_day(
 		return Err(broken(day, "the signature does not verify"));
 	}
 	let hash = to_hex(&sha256(&bytes));
-	if checkpoint.timestamp != "enabled" {
-		return Ok((hash, false));
+	let enabled = checkpoint.timestamp == "enabled";
+	if enabled != walker.timestamping {
+		return Err(broken(
+			day,
+			"timestamping is marked disabled while the chain has it enabled: a downgrade",
+		));
+	}
+	if !enabled {
+		return Ok((hash, false, checkpoint.key));
 	}
 	let token = checkpoint::read_bounded(
 		&files(evidence_root, day).tsr,
@@ -246,7 +349,13 @@ fn check_day(
 			"timestamp: the token predates the end of the day",
 		));
 	}
-	Ok((hash, true))
+	if stamp.gen_time > checkpoint.created.saturating_add(TOKEN_GRACE_SECS) {
+		return Err(broken(
+			day,
+			"timestamp: the token was issued more than 3 days after the checkpoint",
+		));
+	}
+	Ok((hash, true, checkpoint.key))
 }
 
 #[cfg(test)]
