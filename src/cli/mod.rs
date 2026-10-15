@@ -220,6 +220,10 @@ mod cli_consistency_tests;
 mod cli_json_shape_tests;
 
 #[cfg(test)]
+#[path = "cli_json_everywhere_tests.rs"]
+mod cli_json_everywhere_tests;
+
+#[cfg(test)]
 #[path = "cli_suppression_resource_tests.rs"]
 mod cli_suppression_resource_tests;
 
