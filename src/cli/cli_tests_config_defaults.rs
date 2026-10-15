@@ -26,6 +26,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { config, .. })
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
+		| Command::Warmup { config, .. }
 		| Command::Ban { config, .. } => Some(config),
 		Command::Delivery(args) => Some(&args.config),
 		Command::Masked { config, .. }

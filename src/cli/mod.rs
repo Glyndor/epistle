@@ -81,6 +81,7 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+mod warmup;
 mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
