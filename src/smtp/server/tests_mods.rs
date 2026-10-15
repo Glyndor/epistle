@@ -101,3 +101,7 @@ mod tests_session_limits;
 #[cfg(test)]
 #[path = "server_tests_session_time.rs"]
 mod tests_session_time;
+
+#[cfg(test)]
+#[path = "server_tests_session_time_abuse.rs"]
+mod tests_session_time_abuse;
