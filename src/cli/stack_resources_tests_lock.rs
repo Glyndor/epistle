@@ -44,3 +44,48 @@ fn set_waits_for_the_lock_and_keeps_what_landed_meanwhile() {
 		"both the rewrite and the new limit are on disk"
 	);
 }
+
+#[test]
+fn set_keeps_every_key_it_does_not_change() {
+	// compose.yaml is JSON, so it carries no comments; what it carries
+	// beyond the limit, an operator's key included, stays as it was.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let compose = dir.path().join("compose.yaml");
+	let text = crate::cli::init::rendered_for_tests(dir.path(), None);
+	let mut before: Value = serde_json::from_str(&text).expect("json");
+	before["x-operator"] = serde_json::json!({"note": "kept"});
+	before["services"]["clamav"]["labels"] = serde_json::json!({"owner": "ops"});
+	std::fs::write(&compose, before.to_string()).expect("compose");
+	let action = Some(ResourcesCli::Set {
+		service: "clamav".to_string(),
+		memory: Some("2g".to_string()),
+		pids: None,
+	});
+	assert_eq!(
+		run(&compose, 25 << 20, action, true, &mut Vec::new()),
+		ExitCode::SUCCESS
+	);
+	let mut after: Value =
+		serde_json::from_slice(&std::fs::read(&compose).expect("read")).expect("json");
+	assert_eq!(after["services"]["clamav"]["mem_limit"], "2g");
+	assert_eq!(after["x-epistle-resources"]["clamav"]["memory"], "2g");
+	// Everything else is what was there.
+	after["services"]["clamav"]["mem_limit"] = before["services"]["clamav"]["mem_limit"].clone();
+	after
+		.as_object_mut()
+		.expect("object")
+		.remove("x-epistle-resources");
+	before
+		.as_object_mut()
+		.expect("object")
+		.remove("x-epistle-resources");
+	assert_eq!(after, before);
+	use std::os::unix::fs::PermissionsExt;
+	assert_eq!(
+		std::fs::metadata(&compose)
+			.expect("stat")
+			.permissions()
+			.mode() & 0o777,
+		0o600
+	);
+}
