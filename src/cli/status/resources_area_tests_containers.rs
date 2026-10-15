@@ -137,11 +137,12 @@ fn status_json_carries_both_findings() {
 	let warning = "the containers may use 7.0 GiB of the host's 8.0 GiB (87%), more than 85%; \
 	               the largest are clamav (3g) and freshclam (2g); lower one with \
 	               `epistle stack resources set clamav --memory 2816m`";
-	let suggestion = "a new install on this host (8.0 GiB) would get mail 2g (now 1g), clamav \
-	                  2g (now 3g), freshclam 1g (now 2g); adopt them with `epistle stack \
-	                  resources set mail --memory 2g`, `epistle stack resources set clamav \
-	                  --memory 2g` and `epistle stack resources set freshclam --memory 1g`, then \
-	                  `epistle stack update`";
+	let suggestion = "a new install on this host (8.0 GiB) would get mail 2g (now 1g), db 896m \
+	                  (now 1g), clamav 2g (now 3g), freshclam 1g (now 2g); adopt them with \
+	                  `epistle stack resources set mail --memory 2g`, `epistle stack resources \
+	                  set db --memory 896m`, `epistle stack resources set clamav --memory 2g` \
+	                  and `epistle stack resources set freshclam --memory 1g`, then `epistle \
+	                  stack update`";
 	assert_eq!(
 		printed,
 		serde_json::json!({

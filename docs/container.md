@@ -202,7 +202,7 @@ submission, an IMAP read, a 20 MB message and an EICAR scan.
 | Service | Runs as | Capabilities | Writable besides its volumes | Memory (8 GiB host) | Processes |
 |---|---|---|---|---|---|
 | `mail` | 65532 | none | nothing | `2g` | 1024 |
-| `db` | 999 (postgres) | none | `/tmp` | `1g` | 256 |
+| `db` | 999 (postgres) | none | `/tmp` | `896m` | 256 |
 | `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `2g` | 128 |
 | `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `1g` | 32 |
 
@@ -222,12 +222,16 @@ swap as much again.
 
 | Host memory | `mail` | `db` | `clamav` | `freshclam` |
 |---|---|---|---|---|
-| under 4 GiB | `2g` | `1g` | left out | left out |
-| 4 to 8 GiB | `2g` | `1g` | `2g` | `1g` |
-| over 8, up to 16 GiB | `2g` | `1g` | `3g` | `2g` |
+| under 4 GiB | `1g` | `512m` | left out | left out |
+| 4 GiB to under 7 GiB | `1g` | `384m` | `1152m` | `896m` |
+| 7 GiB to 16 GiB | `2g` | `896m` | `2g` | `1g` |
 | over 16 GiB | `4g` | `2g` | `3g` | `2g` |
 
-Below 4 GiB clamav (1 GiB resident, 2 GiB while it reloads) is left out, the
+Each row adds up to less than 85% of the smallest host it is given to, the
+line `epistle status` warns at (under 4 GiB, 75% of a 2 GiB host). From 4 to
+7 GiB clamd has room for its signatures but not for a second copy while it
+reloads them, so a reload restarts the container instead. Below 4 GiB clamav
+(1 GiB resident, 2 GiB while it reloads) is left out, the
 config gets no `clamd_socket`, and `init` says so; `antivirus = true` under
 `[services]` in the answers file keeps it. A rerun of `init` and `stack update`
 keep what an install already has: the limits an older release wrote stay
@@ -267,7 +271,7 @@ defaults above.
 | What | On this host |
 |---|---|
 | Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
-| Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 6 GiB of the 8 |
+| Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 5.9 GiB of the 8 |
 | Disk | 5,000 x 13.7 MiB = 67 GiB in each mailbox they land in, stored as received; the spool only holds a message until it is delivered. 500 GB (465 GiB) takes about six such bursts. `status` warns under 10% free, and SMTP refuses mail under 25 MiB free |
 | Quota | the default 5 GiB per account fills after about 370 of them; the rest get `452 4.2.2` and wait in the sender's queue. Raise it with `epistle account quota alice 100G`, `epistle limits set quota --domain example.org 100G` or `epistle limits set quota 100G` |
 | Time | the link is the bound: 67 GiB is about 10 minutes at 1 Gbit/s and about 1 h 40 min at 100 Mbit/s. 29 parallel transfers share the link, and `min_data_rate` only cuts a client below 10 KiB/s |

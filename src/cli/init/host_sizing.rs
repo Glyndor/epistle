@@ -2,10 +2,9 @@
 //! host's memory.
 //!
 //! The limits are ceilings, not reservations, but their sum is what the
-//! host has to hold when every service peaks at once. On 8 GiB they add up
-//! to 6 GiB, 75%, under the 85% `epistle status` warns at; between 4 and
-//! about 7 GiB the same set passes that line, and `status` says so. `mail`
-//! gets 2g from the start: a full message memory budget (a fifth of the
+//! host has to hold when every service peaks at once, so every tier in
+//! [`TIERS`] stays under the 85% `epistle status` warns at on the smallest
+//! host it is given to. A full message memory budget (a fifth of the `mail`
 //! limit) costs about three times its size while a burst of large messages
 //! arrives. clamav needs about 1 GiB resident and 2 GiB while it reloads its
 //! signatures, so below 4 GiB it is left out.
@@ -29,43 +28,88 @@ pub(crate) struct Sizing {
 	pub(crate) antivirus: bool,
 }
 
-/// The limits for a host whose `MemTotal` is `mem_total` bytes.
-pub(crate) fn for_host(mem_total: u64) -> Sizing {
-	let memory = if mem_total <= 8 * GIB {
-		// 6 GiB in all: 75% of 8 GiB. clamav keeps the 2 GiB its reload
-		// peaked at; freshclam tested a download in 860 MB.
-		[
+/// One row of [`TIERS`]: what a host with at least `from` bytes gets.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Tier {
+	/// The least `MemTotal` the tier is given to.
+	pub(crate) from: u64,
+	/// The memory limit of each service, as compose writes it.
+	pub(crate) memory: [(&'static str, &'static str); 4],
+	/// Whether clamav and freshclam run.
+	pub(crate) antivirus: bool,
+}
+
+/// The tiers in ascending order of `from`. Each one adds up to less than
+/// 85% of the smallest host it is given to, the line `epistle status` warns
+/// at; under 4 GiB, where only mail and db run, to at most 75% of a 2 GiB
+/// host, the smallest the tiers are sized for.
+pub(crate) const TIERS: [Tier; 4] = [
+	// 1.5 GiB of a 2 GiB host. The clamav and freshclam limits only apply
+	// when the answers ask for the antivirus anyway.
+	Tier {
+		from: 0,
+		memory: [
+			("mail", "1g"),
+			("db", "512m"),
+			("clamav", "1152m"),
+			("freshclam", "896m"),
+		],
+		antivirus: false,
+	},
+	// 3456 MiB, 84% of 4 GiB. clamd holds about 944 MiB with the full
+	// signature set and freshclam about 820 MiB while it tests a download,
+	// so both keep that with some room; db takes what is left above its
+	// 250 MiB measured peak. clamd reloading the signatures in place needs
+	// about twice its resident size, which this tier cannot hold: the
+	// reload costs a container restart.
+	Tier {
+		from: 4 * GIB,
+		memory: [
+			("mail", "1g"),
+			("db", "384m"),
+			("clamav", "1152m"),
+			("freshclam", "896m"),
+		],
+		antivirus: true,
+	},
+	// 5.875 GiB, 84% of 7 GiB: clamav keeps the 2 GiB its reload peaked at.
+	// db gives up 128 MiB of its 1 GiB so the set fits from 7 GiB on.
+	Tier {
+		from: 7 * GIB,
+		memory: [
 			("mail", "2g"),
-			("db", "1g"),
+			("db", "896m"),
 			("clamav", "2g"),
 			("freshclam", "1g"),
-		]
-	} else if mem_total <= 16 * GIB {
-		// The clamav and freshclam limits of the fixed defaults, which
-		// leave room for a larger signature set.
-		[
-			("mail", "2g"),
-			("db", "1g"),
-			("clamav", "3g"),
-			("freshclam", "2g"),
-		]
-	} else {
-		// The derived message budget reaches its 1 GiB ceiling at 4g.
-		[
+		],
+		antivirus: true,
+	},
+	// The derived message budget reaches its 1 GiB ceiling at 5g.
+	Tier {
+		from: 16 * GIB + 1,
+		memory: [
 			("mail", "4g"),
 			("db", "2g"),
 			("clamav", "3g"),
 			("freshclam", "2g"),
-		]
-	};
+		],
+		antivirus: true,
+	},
+];
+
+/// The limits for a host whose `MemTotal` is `mem_total` bytes: the last
+/// tier it reaches.
+pub(crate) fn for_host(mem_total: u64) -> Sizing {
+	let tier = TIERS
+		.iter()
+		.rev()
+		.find(|tier| mem_total >= tier.from)
+		.unwrap_or(&TIERS[0]);
 	Sizing {
-		memory,
-		antivirus: mem_total >= MIN_ANTIVIRUS_HOST,
+		memory: tier.memory,
+		antivirus: tier.antivirus,
 	}
 }
-
-/// The least host memory clamav is started on: 4 GiB.
-const MIN_ANTIVIRUS_HOST: u64 = 4 * GIB;
 
 /// The host's `MemTotal`, in bytes, from a `/proc/meminfo` at `meminfo`.
 pub(crate) fn mem_total(meminfo: &Path) -> Option<u64> {

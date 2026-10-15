@@ -28,7 +28,7 @@ fn init_reports_the_limits_it_picked_for_the_host() {
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.lines().any(|line| line
-			== "container memory for a host with 16.0 GiB: mail 2g, clamav 3g, freshclam 2g"),
+			== "container memory for a host with 16.0 GiB: mail 2g, clamav 2g, freshclam 1g"),
 		"{text}"
 	);
 }

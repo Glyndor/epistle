@@ -49,10 +49,11 @@ fn an_install_with_the_old_limits_is_told_how_to_adopt_the_new_ones() {
 		),
 		(
 			Level::Warn,
-			"a new install on this host (8.0 GiB) would get mail 2g (now 1g), clamav 2g (now \
-			 3g), freshclam 1g (now 2g); adopt them with `epistle stack resources set mail \
-			 --memory 2g`, `epistle stack resources set clamav --memory 2g` and `epistle stack \
-			 resources set freshclam --memory 1g`, then `epistle stack update`"
+			"a new install on this host (8.0 GiB) would get mail 2g (now 1g), db 896m (now 1g), \
+			 clamav 2g (now 3g), freshclam 1g (now 2g); adopt them with `epistle stack \
+			 resources set mail --memory 2g`, `epistle stack resources set db --memory 896m`, \
+			 `epistle stack resources set clamav --memory 2g` and `epistle stack resources set \
+			 freshclam --memory 1g`, then `epistle stack update`"
 				.to_string()
 		)
 	);
@@ -64,7 +65,7 @@ fn limits_that_match_say_so() {
 		suggested(
 			&[
 				("mail", "2g"),
-				("db", "1g"),
+				("db", "896m"),
 				("clamav", "2g"),
 				("freshclam", "1g")
 			],
@@ -83,7 +84,7 @@ fn a_mail_limit_above_the_suggestion_is_only_a_suggestion() {
 		suggested(
 			&[
 				("mail", "4g"),
-				("db", "1g"),
+				("db", "896m"),
 				("clamav", "2g"),
 				("freshclam", "1g")
 			],
@@ -107,8 +108,9 @@ fn under_4_gib_a_running_clamav_is_named() {
 		),
 		(
 			Level::Ok,
-			"the limits are what a new install on this host (3.7 GiB) would get; a new \
-			 install on this host leaves clamav and freshclam out"
+			"a new install on this host (3.7 GiB) would get mail 1g (now 2g); adopt it with \
+			 `epistle stack resources set mail --memory 1g`, then `epistle stack update`; a \
+			 new install on this host leaves clamav and freshclam out"
 				.to_string()
 		)
 	);
