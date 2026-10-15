@@ -44,6 +44,10 @@ mod tests_urlbl;
 mod tests_save_sent;
 
 #[cfg(test)]
+#[path = "server_tests_sent_refused.rs"]
+mod tests_sent_refused;
+
+#[cfg(test)]
 #[path = "server_tests_correspondents.rs"]
 mod tests_correspondents;
 

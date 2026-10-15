@@ -483,16 +483,23 @@ impl Server {
 							// account when it sets a value. The copy is
 							// taken from `message.data` after the Bcc
 							// strip, so it never names a blind-carbon
-							// copy recipient (RFC 5322 §3.6.3).
-							if self.save_sent_enabled_for(&session) {
-								self.save_sent_copy(&session, account, &message.data);
-							}
-							self.sink.submit(
+							// copy recipient (RFC 5322 §3.6.3). It is stored
+							// only once the sink accepted the message: one the
+							// scan or the attachment policy refused, or asked
+							// to retry, was never sent.
+							let sent_copy = self
+								.save_sent_enabled_for(&session)
+								.then(|| message.data.clone());
+							let submitted = self.sink.submit(
 								message,
 								uuid::Uuid::now_v7(),
 								account,
 								&std::collections::BTreeMap::new(),
-							)
+							);
+							if let (Ok(()), Some(copy)) = (&submitted, sent_copy) {
+								self.save_sent_copy(&session, account, &copy);
+							}
+							submitted
 						}
 						None => self.sink.deliver(message),
 					};
