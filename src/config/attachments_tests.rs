@@ -24,13 +24,13 @@ fn an_absent_section_flags_so_an_upgrade_changes_nothing_silently() {
 fn every_key_is_read() {
 	let config = parse(
 		"[attachments]\nmode = \"reject\"\nblock_extensions = [\".DOCM\"]\n\
-		 allow_extensions = [\"reg\"]\nmacros = \"allow\"\nencrypted_archives = \"quarantine\"",
+		 allow_extensions = [\"dmg\"]\nmacros = \"allow\"\nencrypted_archives = \"quarantine\"",
 	)
 	.expect("loads");
 	let section = &config.attachments;
 	assert_eq!(section.mode, AttachmentMode::Reject);
 	assert_eq!(section.block_extensions, vec![".DOCM"]);
-	assert_eq!(section.allow_extensions, vec!["reg"]);
+	assert_eq!(section.allow_extensions, vec!["dmg"]);
 	assert_eq!(section.macros, ContentAction::Allow);
 	assert_eq!(section.encrypted_archives, ContentAction::Quarantine);
 	assert_eq!(normalise_extension(" .DOCM"), "docm");
@@ -46,8 +46,8 @@ fn bad_extensions_and_contradictions_are_refused() {
 			"is not an extension",
 		),
 		(
-			"block_extensions = [\"reg\"]\nallow_extensions = [\".REG\"]",
-			"reg is in both",
+			"block_extensions = [\"dmg\"]\nallow_extensions = [\".DMG\"]",
+			"dmg is in both",
 		),
 	] {
 		let error = parse(&format!("[attachments]\n{extra}"))
@@ -89,5 +89,29 @@ fn an_always_dangerous_extension_cannot_be_allowed() {
 			"{value}: {error}"
 		);
 	}
-	assert!(parse("[attachments]\nallow_extensions = [\"svg\", \"reg\"]").is_ok());
+	assert!(parse("[attachments]\nallow_extensions = [\"svg\", \"dmg\"]").is_ok());
+}
+
+#[test]
+fn script_hosts_shortcuts_and_installers_cannot_be_allowed() {
+	let accepted: Vec<&str> = crate::antispam::attachments::rules::ALWAYS_DANGEROUS
+		.iter()
+		.copied()
+		.filter(|ext| {
+			let refused = parse(&format!("[attachments]\nallow_extensions = [\"{ext}\"]"))
+				.err()
+				.map(|error| error.to_string());
+			refused
+				!= Some(format!(
+					"invalid configuration: [attachments] allow_extensions: {ext} is always dangerous and cannot be allowed"
+				))
+		})
+		.collect();
+	assert_eq!(accepted, Vec::<&str>::new());
+	for ext in ["url", "website", "appref-ms", "ps1xml", "chm", "reg"] {
+		assert!(
+			crate::antispam::attachments::rules::ALWAYS_DANGEROUS.contains(&ext),
+			"{ext} is always dangerous"
+		);
+	}
 }

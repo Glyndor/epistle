@@ -131,7 +131,7 @@ fn html_attachments_are_flagged_by_name_or_content() {
 
 #[test]
 fn block_and_allow_lists_change_the_extension_set() {
-	let extensions = Extensions::new(&["docx".to_string()], &["reg".to_string()]);
+	let extensions = Extensions::new(&["docx".to_string()], &["inf".to_string()]);
 	let judge_name = |name: &str| {
 		judge(
 			&Facts {
@@ -145,7 +145,7 @@ fn block_and_allow_lists_change_the_extension_set() {
 		)
 	};
 	assert_eq!(judge_name("report.docx"), vec![Reason::DangerousExtension]);
-	assert!(judge_name("settings.reg").is_empty());
+	assert!(judge_name("setup.inf").is_empty());
 	assert_eq!(judge_name("run.exe"), vec![Reason::DangerousExtension]);
 }
 
@@ -309,7 +309,7 @@ fn svg_bytes_behind_a_raster_claim_are_a_mismatch_but_not_under_their_own_type()
 
 #[test]
 fn an_allowance_covers_only_its_own_name() {
-	let allow = Extensions::new(&[], &["reg".to_string(), "exe".to_string()]);
+	let allow = Extensions::new(&[], &["inf".to_string(), "exe".to_string()]);
 	let judge_names = |names: &[&str]| {
 		let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 		judge(
@@ -323,14 +323,14 @@ fn an_allowance_covers_only_its_own_name() {
 			&allow,
 		)
 	};
-	assert!(judge_names(&["settings.reg"]).is_empty());
+	assert!(judge_names(&["setup.inf"]).is_empty());
 	assert_eq!(
-		judge_names(&["settings.reg", "settings.txt"]),
+		judge_names(&["setup.inf", "setup.txt"]),
 		vec![Reason::DangerousExtension],
 		"names that disagree are not covered"
 	);
 	assert_eq!(
-		judge_names(&["photo.reg.scr"]),
+		judge_names(&["photo.inf.scr"]),
 		vec![Reason::DangerousExtension],
 		"a double extension is not covered"
 	);
@@ -339,11 +339,11 @@ fn an_allowance_covers_only_its_own_name() {
 		vec![Reason::DangerousExtension],
 		"an always-dangerous extension is never allowed"
 	);
-	let entries = list_zip(&corpus::zip_of(&["settings.reg"]));
+	let entries = list_zip(&corpus::zip_of(&["setup.inf"]));
 	assert_eq!(
 		judge(
 			&Facts {
-				filenames: &["settings.reg".to_string()],
+				filenames: &["setup.inf".to_string()],
 				declared_types: &["application/zip".to_string()],
 				real_type: RealType::Zip,
 				listing: Some(&entries),
