@@ -238,6 +238,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		&metrics,
 		webhook.as_ref(),
 		warmup,
+		Arc::clone(&evidence.service),
 	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.

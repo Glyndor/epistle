@@ -25,6 +25,9 @@ pub(super) struct Conversation {
 	/// The recipients left waiting for the warm-up cap of their group
 	/// (see [`super::warmup`]): they were not attempted.
 	pub(super) capped: Option<super::warmup::Capped>,
+	/// How the message was handed over, for the evidence of delivered
+	/// recipients.
+	pub(super) facts: crate::queue::client::SessionFacts,
 }
 
 impl Conversation {
@@ -83,6 +86,7 @@ impl Conversation {
 			slowed: None,
 			held_until: None,
 			capped: None,
+			facts: Default::default(),
 		}
 	}
 }

@@ -139,6 +139,24 @@ pub struct Trace {
 	/// 4.5.3.2.6). Shared so the caller can see it while the reply is
 	/// awaited.
 	pub sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
+	/// What the session was: the reply that accepted the message, the TLS
+	/// version and cipher, whether DANE authenticated the server.
+	pub facts: SessionFacts,
+}
+
+/// What a delivery session showed about how the message was handed over,
+/// for the evidence of a delivered recipient.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionFacts {
+	/// The reply to the final dot, when the remote accepted the message.
+	pub reply: Option<String>,
+	/// The TLS protocol version and cipher suite, when the session was
+	/// encrypted.
+	pub tls: Option<(String, String)>,
+	/// Whether DANE (TLSA records) authenticated the server.
+	pub dane: bool,
+	/// The MTA-STS mode of the recipient domain, when it published one.
+	pub mta_sts: Option<String>,
 }
 
 /// The remote's answer for one recipient of a conversation.
@@ -210,8 +228,19 @@ where
 			})?;
 		// DANE: authenticate the presented chain against validated TLSA records.
 		// With none, this is a no-op (opportunistic); a mismatch fails closed.
+		{
+			let (_, connection) = stream.get_ref();
+			let version = connection
+				.protocol_version()
+				.map(|version| format!("{version:?}"));
+			let cipher = connection
+				.negotiated_cipher_suite()
+				.map(|suite| format!("{:?}", suite.suite()));
+			trace.facts.tls = version.zip(cipher);
+		}
 		match verify_chain(tlsa, &peer_chain) {
-			DaneOutcome::Authenticated | DaneOutcome::NoRecords => {}
+			DaneOutcome::Authenticated => trace.facts.dane = true,
+			DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {
 				trace.tls = Some(TlsOutcome::Failure(TLSA_INVALID));
 				return Err(DeliveryError::Transient(format!(
@@ -277,9 +306,15 @@ where
 			conn.expect(250, Phase::DataEnd).await
 		}
 		.await;
-		if let Err(error) = sent {
-			for (_, outcome) in results.iter_mut().filter(|(_, outcome)| outcome.is_ok()) {
-				*outcome = Err(error.clone());
+		match sent {
+			Ok(()) => {
+				let reply = super::reply::normalize(250, conn.last_reply());
+				trace.facts.reply = Some(reply.chars().take(998).collect());
+			}
+			Err(error) => {
+				for (_, outcome) in results.iter_mut().filter(|(_, outcome)| outcome.is_ok()) {
+					*outcome = Err(error.clone());
+				}
 			}
 		}
 	}
@@ -462,3 +497,7 @@ mod timeout_tests;
 #[path = "client_probe.rs"]
 mod probe;
 pub use probe::probe;
+
+#[cfg(test)]
+#[path = "client_tls_tests_facts.rs"]
+mod tls_facts_tests;

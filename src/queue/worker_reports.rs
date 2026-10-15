@@ -124,6 +124,17 @@ impl Worker {
 				envelope.settle();
 			})?;
 			for recipient in &skipped {
+				self.record_outcome(
+					envelope,
+					super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Suppressed,
+						attempt: 0,
+						remote: None,
+						reply: Some("recipient is on the suppression list"),
+						facts: None,
+					},
+				);
 				self.log_outcome(
 					envelope,
 					recipient,
@@ -165,12 +176,25 @@ impl Worker {
 			match result {
 				Ok(()) => {
 					tracing::debug!(%id, %recipient, remote, "delivered");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Delivered,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: None,
+							facts: Some(&conversation.facts),
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Delivered,
 						Some(remote),
-						Some("250 OK"),
+						Some(&Self::bounded_reply(
+							conversation.facts.reply.as_deref().unwrap_or("250 OK"),
+						)),
 						attempt_of(entry, recipient),
 					);
 					self.notify_delivered(
@@ -209,6 +233,17 @@ impl Worker {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Bounced,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: Some(reason),
+							facts: None,
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
@@ -380,6 +415,17 @@ impl Worker {
 			let class = classify_reason(reason, false).class.label();
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
+			self.record_outcome(
+				&envelope,
+				super::evidence::Recorded {
+					recipient,
+					result: crate::evidence::record::OutcomeKind::Expired,
+					attempt: state.attempts,
+					remote: state.remote.as_deref(),
+					reply: Some(reason),
+					facts: None,
+				},
+			);
 			self.log_outcome(
 				&envelope,
 				recipient,

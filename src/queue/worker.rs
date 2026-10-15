@@ -16,6 +16,8 @@ mod attempt;
 mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
+#[path = "worker_evidence.rs"]
+mod evidence;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -72,6 +74,8 @@ pub struct Worker {
 	/// (`[storage] delivery_log_days = 0`); the writer is then a no-op
 	/// and no records are produced.
 	delivery_log: Option<crate::storage::DeliveryLog>,
+	/// Records the outcomes of messages that keep evidence.
+	evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
 	/// How many conversations run at once, overall and per domain.
 	limits: super::limits::Limits,
 	/// Recipients in conversation, and the slots in use.
@@ -114,6 +118,7 @@ impl Worker {
 			schedule: super::RetrySchedule::default(),
 			jitter: super::schedule::random_factor,
 			delivery_log: None,
+			evidence: None,
 			limits: super::limits::Limits::default(),
 			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
@@ -525,6 +530,10 @@ mod tests_webhook;
 #[cfg(test)]
 #[path = "worker_tests_schedule.rs"]
 mod tests_schedule;
+
+#[cfg(test)]
+#[path = "worker_tests_evidence.rs"]
+mod tests_evidence;
 
 #[cfg(test)]
 #[path = "worker_tests_delivery_log.rs"]

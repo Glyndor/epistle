@@ -256,6 +256,7 @@ fn a_delivery_under_way_does_not_lift_a_hold_still_in_force() {
 		slowed: None,
 		held_until: None,
 		capped: None,
+		facts: Default::default(),
 	};
 	let entry = |id| worker.spool.load(id).expect("entry");
 

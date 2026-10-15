@@ -53,6 +53,7 @@ pub(super) fn spawn_queue_worker(
 	metrics: &Arc<Metrics>,
 	webhook: Option<&Arc<crate::webhook::Webhook>>,
 	warmup: Arc<crate::queue::warmup::Warmup>,
+	evidence: Arc<crate::evidence::service::EvidenceService>,
 ) -> std::io::Result<()> {
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
 	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
@@ -87,7 +88,8 @@ pub(super) fn spawn_queue_worker(
 		&config.data_dir,
 		config.delivery_log_days(),
 	))
-	.with_warmup(warmup);
+	.with_warmup(warmup)
+	.with_evidence(evidence);
 	if let Some(webhook) = webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

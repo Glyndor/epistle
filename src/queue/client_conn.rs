@@ -36,6 +36,11 @@ impl Conn {
 		self.stream
 	}
 
+	/// The last reply, as one line.
+	pub(super) fn last_reply(&self) -> &str {
+		&self.last_reply
+	}
+
 	pub(super) fn last_reply_contains(&self, needle: &str) -> bool {
 		self.last_reply.contains(needle)
 	}
