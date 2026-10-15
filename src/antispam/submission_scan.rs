@@ -27,6 +27,8 @@ pub struct ScanningSink {
 	inner: Arc<dyn MessageSink>,
 	scanner: Option<worker::Scanner>,
 	attachments: Option<Arc<Policy>>,
+	/// Caps on concurrent attachment inspections, total and per account.
+	gate: gate::Gate,
 	metrics: Option<Arc<Metrics>>,
 	webhook: Option<Arc<Webhook>>,
 	/// The threads scans ran on, so a test can tell how many there were.
@@ -67,6 +69,10 @@ impl ScanningSink {
 			inner,
 			scanner: clamd.map(worker::Scanner::start).transpose()?,
 			attachments,
+			gate: gate::Gate::new(
+				gate::default_global_cap(),
+				gate::default_account_cap(gate::default_global_cap()),
+			),
 			metrics,
 			webhook,
 			#[cfg(test)]
@@ -88,33 +94,12 @@ impl MessageSink for ScanningSink {
 		extra: &std::collections::BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
 		if let Some(policy) = &self.attachments {
-			let (_, decision) = policy.check(&message.data);
-			let codes: Vec<&str> = decision
-				.reasons
-				.iter()
-				.map(|reason| reason.code())
-				.collect();
-			match decision.action {
-				Action::Reject | Action::Quarantine => {
-					tracing::warn!(
-						account = %crate::log_id::account(account),
-						reasons = %codes.join(","),
-						"attachment policy refused a submission"
-					);
-					return Err(SinkError::AttachmentRefused(codes.join(",")));
-				}
-				Action::Flag => tracing::info!(
-					account = %crate::log_id::account(account),
-					reasons = %codes.join(","),
-					"attachment policy flagged a submission"
-				),
-				Action::Deliver => {}
-			}
+			self.check_attachments(policy, &message.data, account)?;
 		}
 		// Fail open like the inbound scan: an unreachable clamd is counted
 		// and recorded for `epistle status` inside the hook, and the mail
 		// goes on unscanned.
-		if let Inspection::Infected(signature) = self.scan(&message.data) {
+		if let Inspection::Infected(signature) = self.scan(&message.data)? {
 			let signature = bounded(&signature);
 			tracing::warn!(
 				account = %crate::log_id::account(account),
@@ -132,17 +117,61 @@ impl MessageSink for ScanningSink {
 }
 
 impl ScanningSink {
-	/// Scan `raw` and say what clamd found.
-	fn scan(&self, raw: &[u8]) -> Inspection {
-		let Some(scanner) = &self.scanner else {
-			return Inspection::Clean;
+	/// Apply the attachment policy to a submission. A quarantine or a
+	/// reject refuses it, permanently: the same message would be refused
+	/// again, so nothing retries it forever.
+	fn check_attachments(
+		&self,
+		policy: &Policy,
+		raw: &[u8],
+		account: &str,
+	) -> Result<(), SinkError> {
+		let Some(_permit) = self.gate.try_enter(account) else {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"attachment inspection busy; asking the client to retry"
+			);
+			return Err(SinkError::ScanUnavailable);
 		};
-		let (inspection, _worker) = scanner.scan(raw);
+		let decision = off_the_runtime(|| policy.check(raw).1);
+		let codes: Vec<&str> = decision
+			.reasons
+			.iter()
+			.map(|reason| reason.code())
+			.collect();
+		match decision.action {
+			Action::Reject | Action::Quarantine => {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					reasons = %codes.join(","),
+					"attachment policy refused a submission"
+				);
+				Err(SinkError::AttachmentRefused(codes.join(",")))
+			}
+			Action::Flag => {
+				tracing::info!(
+					account = %crate::log_id::account(account),
+					reasons = %codes.join(","),
+					"attachment policy flagged a submission"
+				);
+				Ok(())
+			}
+			Action::Deliver => Ok(()),
+		}
+	}
+
+	/// Scan `raw` and say what clamd found; a full scan queue asks the
+	/// client to retry.
+	fn scan(&self, raw: &[u8]) -> Result<Inspection, SinkError> {
+		let Some(scanner) = &self.scanner else {
+			return Ok(Inspection::Clean);
+		};
+		let (inspection, _worker) = scanner.scan(raw).ok_or(SinkError::ScanUnavailable)?;
 		#[cfg(test)]
 		if let (Some(worker), Ok(mut workers)) = (_worker, self.workers.lock()) {
 			workers.insert(worker);
 		}
-		inspection
+		Ok(inspection)
 	}
 
 	/// Fire the `outbound_virus` webhook in the background. It is
@@ -161,6 +190,16 @@ impl ScanningSink {
 	}
 }
 
+/// Run CPU-bound `work` so it does not hold an async worker: on a
+/// multi-threaded runtime the worker hands its other tasks on first. Other
+/// callers (a current-thread runtime, plain threads) run it in place.
+fn off_the_runtime<T>(work: impl FnOnce() -> T) -> T {
+	match tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()) {
+		Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(work),
+		_ => work(),
+	}
+}
+
 /// `signature`, cut to [`MAX_SIGNATURE_CHARS`] characters.
 fn bounded(signature: &str) -> String {
 	signature.chars().take(MAX_SIGNATURE_CHARS).collect()
@@ -169,6 +208,9 @@ fn bounded(signature: &str) -> String {
 #[path = "submission_scan_worker.rs"]
 mod worker;
 
+#[path = "submission_scan_gate.rs"]
+mod gate;
+
 #[cfg(test)]
 #[path = "submission_scan_tests.rs"]
 mod tests;
@@ -176,3 +218,7 @@ mod tests;
 #[cfg(test)]
 #[path = "submission_scan_tests_attachments.rs"]
 mod tests_attachments;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_dos.rs"]
+mod tests_dos;

@@ -188,6 +188,7 @@ pub async fn send(
 			return Err(match error {
 				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
 				SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
+				SinkError::ScanUnavailable => ApiError::scan_unavailable(),
 				SinkError::Unavailable(_) => ApiError::internal(),
 			});
 		}
