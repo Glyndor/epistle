@@ -24,6 +24,7 @@ mod builder;
 mod data_rate;
 mod dnsbl_check;
 mod run;
+mod run_attachments;
 mod run_auth;
 mod run_band;
 mod run_sent;
@@ -96,6 +97,8 @@ pub struct Server {
 	bayes: Option<std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
+	/// The `[attachments]` policy for unauthenticated mail; `None` when off.
+	attachments: Option<Arc<crate::antispam::attachments::policy::Policy>>,
 	/// Optional LLM hook consulted for unauthenticated mail whose Bayesian
 	/// score sits inside the configured uncertain band. Outside the band the
 	/// classifier is not consulted at all, so a non-`None` value is cheap.

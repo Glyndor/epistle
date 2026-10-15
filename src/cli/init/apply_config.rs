@@ -41,6 +41,23 @@ pub(super) struct DesiredConfig {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) acme: Option<DesiredAcme>,
 	pub(super) antispam: DesiredAntispam,
+	/// The attachment policy for a new install. Never merged into an
+	/// existing configuration: see [`NEW_INSTALL_ONLY`].
+	pub(super) attachments: DesiredAttachments,
+}
+
+/// Sections and keys `init` writes only into a configuration it creates.
+/// On an existing file they are left as the operator has them, so an
+/// upgrade that re-runs `init` keeps today's behaviour.
+pub(super) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] = &[("attachments", None)];
+
+/// The `[attachments]` section for a new install: quarantine disguised
+/// files and macros, flag encrypted archives.
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAttachments {
+	mode: &'static str,
+	macros: &'static str,
+	encrypted_archives: &'static str,
 }
 
 /// The `[acme]` section `init` writes when the answers (or the
@@ -327,6 +344,11 @@ pub(super) fn build_config(
 			clamd_socket: (answers.services.antivirus != Some(false))
 				.then(|| "/run/clamav/clamd.sock".to_string()),
 		},
+		attachments: DesiredAttachments {
+			mode: "quarantine",
+			macros: "quarantine",
+			encrypted_archives: "flag",
+		},
 	})
 }
 
@@ -492,6 +514,10 @@ pub(super) use super::apply_config_merge::{
 #[cfg(test)]
 #[path = "apply_config_tests_clamav.rs"]
 mod tests_clamav;
+
+#[cfg(test)]
+#[path = "apply_config_tests_attachments.rs"]
+mod tests_attachments;
 
 #[cfg(test)]
 #[path = "apply_config_tests_database_off.rs"]

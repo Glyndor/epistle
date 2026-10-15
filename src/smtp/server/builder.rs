@@ -29,6 +29,7 @@ impl Server {
 			reputation: None,
 			bayes: None,
 			hook: None,
+			attachments: None,
 			llm: None,
 			subjectpass: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
@@ -297,6 +298,16 @@ impl Server {
 	/// Consult an external scanner hook for unauthenticated inbound mail.
 	pub fn with_hook(mut self, hook: Arc<dyn crate::antispam::hook::MailHook>) -> Self {
 		self.hook = Some(hook);
+		self
+	}
+
+	/// Apply the `[attachments]` policy to unauthenticated inbound mail;
+	/// `None` (`mode = "off"`) applies none.
+	pub fn with_attachment_policy(
+		mut self,
+		policy: impl Into<Option<Arc<crate::antispam::attachments::policy::Policy>>>,
+	) -> Self {
+		self.attachments = policy.into();
 		self
 	}
 

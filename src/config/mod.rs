@@ -11,6 +11,7 @@ mod alias;
 mod antispam;
 mod api;
 mod arc;
+mod attachments;
 mod auth;
 mod database;
 mod dkim;
@@ -40,6 +41,9 @@ pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
+pub use attachments::{
+	AttachmentMode, Attachments, ContentAction, normalise_extension, valid_extension,
+};
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
@@ -217,6 +221,10 @@ pub struct Config {
 	/// Unix socket scanner configuration. Absent disables clamd.
 	#[serde(default)]
 	pub antispam: Antispam,
+	/// What to do with attachments that are not what they claim. Absent
+	/// flags them.
+	#[serde(default)]
+	pub attachments: Attachments,
 	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
 	/// lands in an uncertain band. Absent disables the hook.
 	pub antispam_llm: Option<Llm>,
@@ -455,6 +463,7 @@ impl std::fmt::Debug for Config {
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
 			.field("antispam", &self.antispam)
+			.field("attachments", &self.attachments)
 			.field("antispam_llm", &self.antispam_llm)
 			.field("subjectpass", &self.subjectpass)
 			.field("listeners", &self.listeners)

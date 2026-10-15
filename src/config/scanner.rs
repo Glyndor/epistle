@@ -113,7 +113,8 @@ impl Config {
 				)));
 			}
 		}
-		Ok(())
+		// The attachment policy is the other content screen.
+		self.validate_attachments()
 	}
 }
 

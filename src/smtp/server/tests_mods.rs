@@ -24,6 +24,10 @@ mod tests_bcc;
 mod tests_virus;
 
 #[cfg(test)]
+#[path = "server_tests_attachments.rs"]
+mod tests_attachments;
+
+#[cfg(test)]
 #[path = "server_tests_trace.rs"]
 mod tests_trace;
 
@@ -109,3 +113,7 @@ mod tests_session_time_abuse;
 #[cfg(test)]
 #[path = "server_tests_bdat_share.rs"]
 mod tests_bdat_share;
+
+#[cfg(test)]
+#[path = "server_tests_attachments_flood.rs"]
+mod tests_attachments_flood;
