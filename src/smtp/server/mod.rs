@@ -26,6 +26,7 @@ mod dnsbl_check;
 mod run;
 mod run_auth;
 mod run_band;
+mod run_sent;
 mod session_time;
 
 /// Read buffer size per connection.
