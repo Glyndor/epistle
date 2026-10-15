@@ -349,6 +349,14 @@ pub(super) struct ComposeFile {
 	name: String,
 	#[serde(rename = "x-epistle-managed-image")]
 	managed_image: bool,
+	/// `false` when the stack runs no clamav on purpose, which `stack
+	/// update` reads back; absent otherwise, so a file from before clamav
+	/// was part of the stack still gets it.
+	#[serde(
+		rename = "x-epistle-antivirus",
+		skip_serializing_if = "Option::is_none"
+	)]
+	antivirus: Option<bool>,
 	/// The limits the answers set, which `stack update` reads back.
 	#[serde(
 		rename = "x-epistle-resources",
@@ -371,14 +379,18 @@ impl ComposeFile {
 			"mail".to_string(),
 			ComposeService::new_mail(&image, answers, database, published_ports),
 		);
-		services.insert(
-			"clamav".to_string(),
-			ComposeService::new_clamav(answers, false),
-		);
-		services.insert(
-			"freshclam".to_string(),
-			ComposeService::new_clamav(answers, true),
-		);
+		// Off only when the answers or the host's memory said so.
+		let antivirus = answers.services.antivirus != Some(false);
+		if antivirus {
+			services.insert(
+				"clamav".to_string(),
+				ComposeService::new_clamav(answers, false),
+			);
+			services.insert(
+				"freshclam".to_string(),
+				ComposeService::new_clamav(answers, true),
+			);
+		}
 		let mut secrets = BTreeMap::new();
 		for (name, path) in KEY_SECRETS {
 			secrets.insert(
@@ -390,8 +402,10 @@ impl ComposeFile {
 		}
 		let mut configs = BTreeMap::new();
 		let mut volumes = BTreeMap::new();
-		volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
-		volumes.insert("clamav-db".to_string(), TopLevelVolume {});
+		if antivirus {
+			volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
+			volumes.insert("clamav-db".to_string(), TopLevelVolume {});
+		}
 		if database {
 			services.insert("db".to_string(), ComposeService::new_db());
 			secrets.insert(
@@ -427,6 +441,7 @@ impl ComposeFile {
 		Self {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
+			antivirus: (!antivirus).then_some(false),
 			resources: answers.resources.clone(),
 			services,
 			secrets,
@@ -487,6 +502,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 		first_account: None,
 		dns: None,
 		services: crate::cli::init::answers::Services {
+			antivirus: None,
 			imap: true,
 			submission: true,
 			pop3: false,
@@ -529,6 +545,10 @@ pub(super) fn render(answers: &crate::cli::init::Answers, database: bool) -> ser
 #[cfg(test)]
 #[path = "compose_tests_clamav.rs"]
 mod tests_clamav;
+
+#[cfg(test)]
+#[path = "compose_tests_antivirus.rs"]
+mod tests_antivirus;
 
 #[cfg(test)]
 #[path = "compose_tests_db_startup.rs"]

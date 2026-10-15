@@ -84,6 +84,11 @@ pub(crate) fn regenerate(
 			webdav: false,
 			api: false,
 			database,
+			// A stack that runs no clamav on purpose keeps running none.
+			antivirus: document
+				.get("x-epistle-antivirus")
+				.and_then(Value::as_bool)
+				.filter(|on| !on),
 		},
 		image,
 		first_account: None,

@@ -98,6 +98,15 @@ pub enum StackCli {
 	/// The database half of `rollback`, run as the service account.
 	#[command(hide = true)]
 	RollbackDb,
+	/// List each service's memory and process limits, or change one with `set`.
+	Resources {
+		/// Print JSON instead of a table.
+		#[arg(long, global = true)]
+		json: bool,
+		/// `set <SERVICE> --memory <SIZE>`; without it the limits are listed.
+		#[command(subcommand)]
+		action: Option<super::stack_resources::ResourcesCli>,
+	},
 }
 
 impl From<StackCli> for StackAction {
@@ -119,6 +128,7 @@ impl From<StackCli> for StackAction {
 			},
 			StackCli::Rollback { .. } => StackAction::Rollback,
 			StackCli::RollbackDb => StackAction::RollbackDb,
+			StackCli::Resources { json, action } => StackAction::Resources { action, json },
 		}
 	}
 }
@@ -171,6 +181,13 @@ pub(crate) enum StackAction {
 	Rollback,
 	/// Stop mail and restore the pre-update dump if the schema moved.
 	RollbackDb,
+	/// Show or change the limits in the compose file; podup is not run.
+	Resources {
+		/// `set`, or `None` to list.
+		action: Option<super::stack_resources::ResourcesCli>,
+		/// Print JSON.
+		json: bool,
+	},
 	/// `podup -f <compose> up -d <service>`, recreate one service from
 	/// the current compose file. A restart keeps the container as it was
 	/// created, so a change to its published ports needs this.
@@ -200,6 +217,19 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	}
+	// The limits live in the compose file alone: no podup, no socket.
+	let action = match action {
+		StackAction::Resources { action, json } => {
+			return super::stack_resources::run(
+				&compose,
+				crate::smtp::memory_fit::largest_message(config.max_message_size),
+				action,
+				json,
+				&mut std::io::stdout(),
+			);
+		}
+		action => action,
+	};
 	if let Err(error) = super::stack_socket::ensure() {
 		super::style::error(error);
 		return ExitCode::FAILURE;
@@ -292,6 +322,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
 		}
+		StackAction::Resources { action, json } => super::stack_resources::run(
+			&compose,
+			crate::smtp::memory_fit::largest_message(config.max_message_size),
+			action,
+			json,
+			&mut std::io::stdout(),
+		),
 	}
 }
 

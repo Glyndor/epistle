@@ -158,3 +158,59 @@ fn update_pulls_then_recreates_for_a_custom_image_compose() {
 		"custom mode must leave the operator's image untouched"
 	);
 }
+
+#[test]
+fn update_waits_while_another_command_holds_the_compose_file() {
+	use std::os::fd::AsRawFd;
+	let dir = tempfile::tempdir().unwrap();
+	let shim = dir.path().join("bin");
+	let log = dir.path().join("argv.log");
+	install_podup_shim(&shim, &healthy_shim(&log));
+	let data = data_dir_with_compose(dir.path());
+	let compose = data.join("compose/compose.yaml");
+	let cfg = write_config(&data);
+	std::fs::write(
+		&compose,
+		format!(
+			r#"{{"x-epistle-managed-image":false,"services":{{"mail":{{"image":"ghcr.io/example/mail:0.9.1","command":["serve","--config",{cfg:?}],"volumes":["data:/data"]}}}},"volumes":{{"data":{{}}}}}}"#
+		),
+	)
+	.unwrap();
+	// The lock `epistle stack resources set` holds while it rewrites the file.
+	let lock = std::fs::OpenOptions::new()
+		.create(true)
+		.truncate(false)
+		.read(true)
+		.write(true)
+		.open(compose.with_file_name(".compose.yaml.lock"))
+		.unwrap();
+	// SAFETY: the descriptor is open for the whole call.
+	assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+	let before = std::fs::read(&compose).unwrap();
+	let child = std::process::Command::new(binary())
+		.args(["stack", "--config", cfg.to_str().unwrap(), "update"])
+		.env("PATH", path_with_shim_first(&shim))
+		.env("XDG_RUNTIME_DIR", fake_podman_runtime(&shim))
+		.env("NO_COLOR", "1")
+		.stdin(std::process::Stdio::null())
+		.stdout(std::process::Stdio::piped())
+		.stderr(std::process::Stdio::piped())
+		.spawn()
+		.unwrap();
+	std::thread::sleep(std::time::Duration::from_secs(3));
+	let held = (changes(&log), std::fs::read(&compose).unwrap() == before);
+	drop(lock);
+	let out = child.wait_with_output().unwrap();
+	assert_eq!(
+		held,
+		(vec!["--version".to_string()], true),
+		"update ran podup or rewrote the file while the lock was held"
+	);
+	assert_eq!(
+		out.status.code(),
+		Some(0),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	assert!(changes(&log).len() > 1, "update ran once the lock was free");
+}

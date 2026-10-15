@@ -268,7 +268,6 @@ impl Key {
 				Some(crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY as u64)
 			}
 			Self::MaxMessageSize => Some(crate::smtp::session::MAX_MESSAGE_SIZE as u64),
-			Self::MessageMemoryBudget => Some(crate::smtp::memory_budget::DEFAULT_BUDGET_BYTES),
 			Self::MaxConnectionsPerIp => {
 				Some(crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP as u64)
 			}

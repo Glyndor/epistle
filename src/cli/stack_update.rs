@@ -148,6 +148,17 @@ fn changes(path: &str, old: &Value, new: &Value) -> Vec<String> {
 /// Run `stack update`: plan, dump the database, write the new compose
 /// file and run the podup steps.
 pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
+	// `stack resources set` rewrites the same file under the same lock. It
+	// is held from the read to the last step, so a limit set meanwhile is
+	// neither lost under the new file nor written over the update.
+	let lock = crate::storage::locked::lock_path(compose);
+	let _held = match crate::storage::lock::FileLock::acquire(&lock) {
+		Ok(held) => held,
+		Err(error) => {
+			super::style::error(format_args!("cannot lock {}: {error}", lock.display()));
+			return ExitCode::FAILURE;
+		}
+	};
 	let plan = match plan_update(compose, &config.data_dir, &config.listeners) {
 		Ok(plan) => plan,
 		Err(error) => {

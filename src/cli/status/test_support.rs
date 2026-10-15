@@ -24,5 +24,6 @@ pub(super) fn ctx(dir: &Path, extra: &str) -> Ctx {
 		path,
 		now: SystemTime::now(),
 		podup: "sh".to_string(),
+		meminfo: dir.join("meminfo"),
 	}
 }

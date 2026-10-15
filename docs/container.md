@@ -199,12 +199,12 @@ service without the capability, or without the writable path, and reading the
 failure; the writes were listed with `podman diff` after mail in, a
 submission, an IMAP read, a 20 MB message and an EICAR scan.
 
-| Service | Runs as | Capabilities | Writable besides its volumes | Memory | Processes |
+| Service | Runs as | Capabilities | Writable besides its volumes | Memory (8 GiB host) | Processes |
 |---|---|---|---|---|---|
-| `mail` | 65532 | none | nothing | `1g` | 1024 |
-| `db` | 999 (postgres) | none | `/tmp` | `1g` | 256 |
-| `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `3g` | 128 |
-| `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `2g` | 32 |
+| `mail` | 65532 | none | nothing | `2g` | 1024 |
+| `db` | 999 (postgres) | none | `/tmp` | `896m` | 256 |
+| `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `2g` | 128 |
+| `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `1g` | 32 |
 
 `clamav` keeps its root entrypoint: it chowns and chmods the socket volume and
 clamd then steps down to the `clamav` user. Ports below 1024 reach `mail`
@@ -216,7 +216,29 @@ IMAP sessions: `mail` peaked at 47 MB of anonymous memory and 62 tasks, `db`
 at 113 MB plus 148 MB of shared buffers, clamd at 1.99 GB while it reloaded
 its signatures (it loads the new set before it frees the old one), and
 freshclam at 860 MB while it tested a download. Podman lets each container
-swap as much again. To change a limit, put it in the answers file:
+swap as much again.
+
+`init` picks the memory limits from the host's `MemTotal`:
+
+| Host memory | `mail` | `db` | `clamav` | `freshclam` |
+|---|---|---|---|---|
+| under 4 GiB | `1g` | `512m` | left out | left out |
+| 4 GiB to under 7 GiB | `1g` | `384m` | `1152m` | `896m` |
+| 7 GiB to 16 GiB | `2g` | `896m` | `2g` | `1g` |
+| over 16 GiB | `4g` | `2g` | `3g` | `2g` |
+
+Each row adds up to less than 85% of the smallest host it is given to, the
+line `epistle status` warns at (under 4 GiB, 75% of a 2 GiB host). From 4 to
+7 GiB clamd has room for its signatures but not for a second copy while it
+reloads them, so a reload restarts the container instead. Below 4 GiB clamav
+(1 GiB resident, 2 GiB while it reloads) is left out, the
+config gets no `clamd_socket`, and `init` says so; `antivirus = true` under
+`[services]` in the answers file keeps it. A rerun of `init` and `stack update`
+keep what an install already has: the limits an older release wrote stay
+(`mail 1g`, `db 1g`, `clamav 3g`, `freshclam 2g`), and the `resources` area of
+`epistle status` lists the commands that adopt the new ones. See
+[Sizing](#sizing) for what the limits mean under load. To change a limit, put
+it in the answers file:
 
 ```toml
 [resources.clamav]
@@ -225,8 +247,34 @@ pids = 256
 ```
 
 `init` records the answered values in `compose.yaml` under
-`x-epistle-resources`, and `stack update` keeps them. A value in
-`compose.override.yaml` works too and wins over both.
+`x-epistle-resources`, and `stack update` keeps them. On a running install,
+`sudo epistle stack resources set clamav --memory 2g` records a value the
+same way, and `sudo epistle stack update` recreates the service with it. A
+value in `compose.override.yaml` works too and wins over both.
+
+### Sizing
+
+A message in flight takes about 2.9 times its size in `mail` (measured: a
+24 MiB BDAT transfer peaked at 55.7 MiB, the same over DATA and TLS at
+70 MiB). The message memory budget counts message bytes only, so when
+`message_memory_budget` is unset it is a fifth of the `mail` limit (at
+least `max_message_size`, at most 1 GiB): full, it costs about 60% of the
+limit, under the 70% line below. Past it, a new message gets `452 4.3.1` and the sender retries
+later; nothing is lost. `mail` reads its limit from its cgroup, and
+`epistle status` warns when a budget you set yourself, times three, is more
+than 70% of it.
+
+Worked example: 5,000 messages, each with a 10 MiB attachment, arrive in a
+burst at a VPS with 8 GiB of memory and 500 GB of disk, installed with the
+defaults above.
+
+| What | On this host |
+|---|---|
+| Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
+| Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 5.9 GiB of the 8 |
+| Disk | 5,000 x 13.7 MiB = 67 GiB in each mailbox they land in, stored as received; the spool only holds a message until it is delivered. 500 GB (465 GiB) takes about six such bursts. `status` warns under 10% free, and SMTP refuses mail under 25 MiB free |
+| Quota | the default 5 GiB per account fills after about 370 of them; the rest get `452 4.2.2` and wait in the sender's queue. Raise it with `epistle account quota alice 100G`, `epistle limits set quota --domain example.org 100G` or `epistle limits set quota 100G` |
+| Time | the link is the bound: 67 GiB is about 10 minutes at 1 Gbit/s and about 1 h 40 min at 100 Mbit/s. 29 parallel transfers share the link, and `min_data_rate` only cuts a client below 10 KiB/s |
 
 ### Keys outside data_dir
 

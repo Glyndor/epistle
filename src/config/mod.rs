@@ -318,9 +318,9 @@ pub struct Config {
 	/// cap the message is refused with `452 4.3.1 insufficient system
 	/// resources; try again later`, so a busy server cannot grow without
 	/// bound. `0` disables the cap (every reservation succeeds, the
-	/// historical behaviour). Absent uses the built-in default of 256
-	/// MiB (a quarter of the `mail` container's 1 GiB `mem_limit`,
-	/// rounded down to the nearest MiB).
+	/// historical behaviour). Absent derives it from the memory the `mail`
+	/// container may use (see [`crate::smtp::memory_fit`]): a fifth of
+	/// the limit, at least `max_message_size`, at most 1 GiB.
 	#[serde(default)]
 	pub message_memory_budget: Option<u64>,
 	/// Minimum average transfer rate of one message transaction, in

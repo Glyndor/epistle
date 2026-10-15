@@ -16,6 +16,7 @@ use crate::config::Config;
 use crate::metrics::Metrics;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::memory_budget;
+use crate::smtp::memory_fit;
 use crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP;
 use crate::smtp::server::DataRate;
 use crate::smtp::server::MemoryBudget;
@@ -49,9 +50,9 @@ pub(super) struct SmtpSharedState {
 	/// session's built-in default ([`crate::smtp::session::MAX_MESSAGE_SIZE`]).
 	pub max_message_size: usize,
 	/// Optional shared byte budget every `DATA` / `BDAT` reservation
-	/// draws from. `None` keeps the historical unbounded behaviour; an
-	/// operator-set `[server] message_memory_budget` produces a budget
-	/// shared by every SMTP listener.
+	/// draws from, shared by every SMTP listener: `[server]
+	/// message_memory_budget`, or when unset the one derived from the mail
+	/// container's memory limit. `None` when it is set to `0`.
 	pub memory_budget: Option<Arc<MemoryBudget>>,
 	/// The minimum transfer rate every SMTP listener holds a message
 	/// transaction to (`[server] min_data_rate` and `data_rate_grace`).
@@ -78,6 +79,17 @@ pub(super) fn build_smtp_shared_state(
 	config: &Config,
 	metrics: &Arc<Metrics>,
 ) -> std::io::Result<SmtpSharedState> {
+	let limit = memory_fit::container_limit(&memory_fit::LimitPaths::system(&config.data_dir));
+	build_smtp_shared_state_with(config, metrics, limit)
+}
+
+/// [`build_smtp_shared_state`] with the mail container's memory limit
+/// given, so the tests never read the host's cgroup.
+pub(super) fn build_smtp_shared_state_with(
+	config: &Config,
+	metrics: &Arc<Metrics>,
+	limit: memory_fit::ContainerLimit,
+) -> std::io::Result<SmtpSharedState> {
 	let tenant_limits = Arc::new(TenantLimits::from_config(&config.tenants));
 	let correspondents =
 		Arc::new(CorrespondentStore::open(&config.data_dir).map_err(std::io::Error::other)?);
@@ -89,21 +101,31 @@ pub(super) fn build_smtp_shared_state(
 		.max_message_size
 		.map(|value| value as usize)
 		.unwrap_or(0);
+	let largest = match max_message_size {
+		0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+		size => size as u64,
+	};
+	// An unset budget follows the memory the mail container may use; a
+	// configured one is kept, with a warning when it does not fit.
+	let budget = memory_fit::effective(config.message_memory_budget, largest, limit);
+	if let Some(warning) = memory_fit::warning(&budget) {
+		tracing::warn!("{warning}");
+	} else if budget.derived {
+		tracing::info!(
+			budget_mib = memory_fit::mib(budget.bytes),
+			limit_mib = memory_fit::mib(limit.bytes),
+			limit_source = limit.source.describe(),
+			"message memory budget derived from the mail container's memory limit"
+		);
+	}
 	// `0` disables the budget (the historical unbounded behaviour) so a
 	// configured 0 leaves the slot empty. Any other value becomes a shared
 	// budget for every SMTP listener.
-	let memory_budget = match config
-		.message_memory_budget
-		.unwrap_or(memory_budget::DEFAULT_BUDGET_BYTES)
-	{
+	let memory_budget = match budget.bytes {
 		0 => None,
 		cap => {
 			// One client gets a quarter of the budget, but always room for
 			// one message of the largest size.
-			let largest = match max_message_size {
-				0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
-				size => size as u64,
-			};
 			let share = (cap / memory_budget::CLIENT_SHARE_DIVISOR).max(largest);
 			Some(Arc::new(
 				memory_budget::MemoryBudget::with_cap(cap).with_client_share(share),

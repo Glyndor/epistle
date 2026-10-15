@@ -16,22 +16,19 @@
 //! resources; try again later` at DATA, and a BDAT chunk that would push
 //! past the cap is refused the same way.
 //!
-//! The default cap is derived from the container memory the operator
-//! configured in `init` answers (1 GiB for `mail`), a quarter of it
-//! rounded down to the nearest MiB, so a busy server stays well clear of
-//! the OOM. A `[server] message_memory_budget` overrides the derived
-//! default; setting it to `0` disables the budget (every reservation
-//! succeeds, the historical behaviour).
+//! The default cap is derived from the memory the `mail` container may use
+//! (see [`crate::smtp::memory_fit`]), a fifth of it, so a busy server
+//! stays clear of the OOM. A `[server] message_memory_budget` overrides the
+//! derived default; setting it to `0` disables the budget (every
+//! reservation succeeds, the historical behaviour).
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
-/// Default byte budget for the DATA / BDAT path when no
-/// `[server] message_memory_budget` is configured. A quarter of the
-/// container's `mem_limit 1g` rounded down to the nearest MiB keeps the
-/// worst case below the cgroup ceiling even when every connection has a
-/// full message buffered.
+/// A quarter of 1 GiB, the fixed budget releases before the derived one
+/// used. The server no longer falls back to it; tests use it as the budget
+/// of a small install.
 pub const DEFAULT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The share of the budget one client may hold by default: a quarter, so a

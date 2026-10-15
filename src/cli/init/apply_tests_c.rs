@@ -228,6 +228,7 @@ fn answers_with_dns_and_extra_services() -> Answers {
 			token_env: None,
 		}),
 		services: Services {
+			antivirus: None,
 			imap: false,
 			submission: false,
 			pop3: true,
@@ -350,6 +351,7 @@ fn build_config_includes_the_api_listener_when_services_request_it() {
 	// drop the api branch.
 	let mut answers = answers_minimal();
 	answers.services = Services {
+		antivirus: None,
 		imap: false,
 		submission: false,
 		pop3: false,

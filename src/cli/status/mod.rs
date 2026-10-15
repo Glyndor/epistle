@@ -20,6 +20,7 @@ mod in_stack;
 mod ports;
 mod queue_area;
 mod report;
+mod resources_area;
 mod spool_area;
 mod subid_area;
 #[cfg(test)]
@@ -75,6 +76,9 @@ pub enum CheckArea {
 	Subid,
 	/// The IP warm-up: each receiver group's cap, use, health and verdict.
 	Warmup,
+	/// The containers' memory limits fit the host, and the message memory
+	/// budget fits the mail container's.
+	Resources,
 }
 
 impl CheckArea {
@@ -92,6 +96,7 @@ impl CheckArea {
 		CheckArea::Spool,
 		CheckArea::Subid,
 		CheckArea::Warmup,
+		CheckArea::Resources,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -109,6 +114,7 @@ impl CheckArea {
 			CheckArea::Spool => "spool",
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
+			CheckArea::Resources => "resources",
 		}
 	}
 }
@@ -121,6 +127,8 @@ pub(super) struct Ctx {
 	pub(super) now: SystemTime,
 	/// The `podup` program that reports the stack's container state.
 	pub(super) podup: String,
+	/// The host's `/proc/meminfo`, which `resources` reads `MemTotal` from.
+	pub(super) meminfo: PathBuf,
 }
 
 impl Ctx {
@@ -138,6 +146,7 @@ impl Ctx {
 			config: Config::load(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
+			meminfo: PathBuf::from("/proc/meminfo"),
 		}
 	}
 }
@@ -250,6 +259,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
+		CheckArea::Resources => resources_area::check(ctx).await,
 	}
 }
 

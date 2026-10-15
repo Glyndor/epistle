@@ -197,6 +197,7 @@ fn automatic_dns_outside_zone_is_an_error() {
 fn disabling_both_imap_and_submission_warns() {
 	let mut answers = minimal(Manual);
 	answers.services = Services {
+		antivirus: None,
 		imap: false,
 		submission: false,
 		pop3: false,

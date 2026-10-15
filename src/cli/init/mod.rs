@@ -15,6 +15,7 @@ pub(crate) mod db_roles;
 mod detect;
 mod first_account;
 pub(crate) mod host_secrets;
+pub(crate) mod host_sizing;
 pub(crate) mod images;
 mod plan;
 mod ptr;
@@ -65,6 +66,7 @@ pub fn run(args: Args) -> ExitCode {
 	let probes = Probes {
 		detector: &detect::LiveDetector,
 		resolver: &ptr::system_resolver,
+		meminfo: std::path::Path::new("/proc/meminfo"),
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
@@ -76,6 +78,8 @@ struct Probes<'a> {
 	detector: &'a dyn detect::Detector,
 	/// Built only when there is an address to look up.
 	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
+	/// The host's `/proc/meminfo`, which sizes the containers.
+	meminfo: &'a std::path::Path,
 }
 
 /// [`run`] with the probes and the stream for the detection notices and
@@ -106,6 +110,9 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
 	};
+	for note in host_sizing::fill(&mut answers, probes.meminfo) {
+		let _ = writeln!(out, "{note}");
+	}
 	answers.normalise();
 	match answers.validate() {
 		Ok(warnings) => render_warnings(&warnings),
@@ -305,3 +312,7 @@ mod tests_first_account;
 #[cfg(test)]
 #[path = "init_tests_warmup.rs"]
 mod tests_warmup;
+
+#[cfg(test)]
+#[path = "init_tests_sizing.rs"]
+mod tests_sizing;

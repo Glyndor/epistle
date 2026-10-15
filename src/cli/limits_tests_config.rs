@@ -94,12 +94,12 @@ fn limits_invalid_values_leave_config_bytes_untouched() {
 fn limits_refuse_a_message_size_the_memory_budget_cannot_hold() {
 	let (_dir, file) = config_file();
 	let original = std::fs::read(file.path()).unwrap();
-	let result = change_config(file.path(), Key::MaxMessageSize, Some("300M"));
+	let result = change_config(file.path(), Key::MaxMessageSize, Some("1025M"));
 	assert!(
 		result
 			.err()
 			.is_some_and(|message| message.contains("message_memory_budget")),
-		"a size over the 256 MiB default budget is refused"
+		"a size over the 1 GiB a derived budget can reach is refused"
 	);
 	assert!(
 		std::fs::read(file.path()).unwrap() == original,
@@ -146,7 +146,7 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 	show(&config, &mut out).unwrap();
 	assert_eq!(
 		String::from_utf8(out).unwrap(),
-		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\nqueue-concurrency\t8\tdefault\nqueue-per-domain-concurrency\t2\tdefault\nqueue-backoff\t60,300,900,3600 seconds\tdefault\nmax-message-size\t26214400 bytes\tdefault\nmessage-memory-budget\t268435456 bytes\tdefault\nmax-connections-per-ip\t20\tdefault\nmin-data-rate\t10240 bytes per second\tdefault\ndata-rate-grace\t120 seconds\tdefault\njunk-command-limit\t100\tdefault\nmax-session-time\t1800 seconds\tdefault\n",
+		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\nqueue-concurrency\t8\tdefault\nqueue-per-domain-concurrency\t2\tdefault\nqueue-backoff\t60,300,900,3600 seconds\tdefault\nmax-message-size\t26214400 bytes\tdefault\nmessage-memory-budget\tauto (204 MiB, no mail container limit found, 1g assumed)\tderived\nmax-connections-per-ip\t20\tdefault\nmin-data-rate\t10240 bytes per second\tdefault\ndata-rate-grace\t120 seconds\tdefault\njunk-command-limit\t100\tdefault\nmax-session-time\t1800 seconds\tdefault\n",
 		"limits show must print each effective value and mark built-in defaults"
 	);
 	change_config(file.path(), Key::SubmissionRate, Some("120")).unwrap();

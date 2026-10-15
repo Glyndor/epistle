@@ -53,6 +53,9 @@ pub(crate) fn limits(
 	))
 }
 
+/// The least memory limit Podman creates a container with: 6 MiB.
+const MIN_MEMORY: u64 = 6 * 1024 * 1024;
+
 /// Every problem with the answered overrides, as `(field, reason)`.
 pub(crate) fn problems(
 	overrides: &std::collections::BTreeMap<String, ServiceResources>,
@@ -70,13 +73,22 @@ pub(crate) fn problems(
 			));
 			continue;
 		}
-		if let Some(memory) = &resources.memory
-			&& !is_memory(memory)
-		{
-			found.push((
-				format!("resources.{service}.memory"),
-				format!("{memory:?} is not a whole number above 0 followed by k, m or g"),
-			));
+		if let Some(memory) = &resources.memory {
+			let reason = if !is_memory(memory) {
+				Some("is not a whole number above 0 followed by k, m or g")
+			} else {
+				match crate::smtp::memory_fit::parse_memory(memory) {
+					None => Some("is more than 64-bit sizes reach"),
+					Some(bytes) if bytes < MIN_MEMORY => Some("is under the 6m Podman accepts"),
+					Some(_) => None,
+				}
+			};
+			if let Some(reason) = reason {
+				found.push((
+					format!("resources.{service}.memory"),
+					format!("{memory:?} {reason}"),
+				));
+			}
 		}
 		if resources.pids == Some(0) {
 			found.push((

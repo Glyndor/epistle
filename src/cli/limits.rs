@@ -149,6 +149,30 @@ fn change_config(path: &Path, key: Key, value: Option<&str>) -> Result<Option<Co
 	Ok((document.commit()? == super::config_edit::Outcome::Changed).then_some(config))
 }
 
+/// The budget the server derives when `message_memory_budget` is unset, in
+/// bytes, and how `limits show` words it. `None` when it is set. The mail
+/// container's limit is read from the compose file, as `epistle status`
+/// does: this process runs outside the container's cgroup.
+fn derived_budget(config: &Config) -> Option<(u64, String)> {
+	use crate::smtp::memory_fit;
+	if config.message_memory_budget.is_some() {
+		return None;
+	}
+	let limit = memory_fit::compose_or_fallback(&super::stack::compose_path(&config.data_dir));
+	let bytes = memory_fit::derive(
+		limit.bytes,
+		memory_fit::largest_message(config.max_message_size),
+	);
+	let mib = memory_fit::mib(bytes);
+	let text = match limit.source {
+		memory_fit::LimitSource::Fallback => {
+			format!("auto ({mib} MiB, no mail container limit found, 1g assumed)")
+		}
+		_ => format!("auto ({mib} MiB from the mail container limit)"),
+	};
+	Some((bytes, text))
+}
+
 fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 	for key in Key::ALL {
 		if let Some((values, default)) = key.list(config) {
@@ -160,6 +184,12 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 				key.name(),
 				joined.join(",")
 			)?;
+			continue;
+		}
+		if matches!(key, Key::MessageMemoryBudget)
+			&& let Some((_, text)) = derived_budget(config)
+		{
+			writeln!(out, "{}\t{text}\tderived", key.name())?;
 			continue;
 		}
 		let configured = key.value(config);
@@ -186,7 +216,8 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 /// {"<domain>": {"submission-rate": N, "quota": N}}, "tenants": {"<name>": {"submission-rate": N}}}`,
 /// where `value` is the effective number (`null` when the limit is off or left to
 /// the protocol, an array for `queue-backoff`) and `unit` is `bytes`, `bytes-per-second`,
-/// `seconds` or `count`.
+/// `seconds` or `count`. `source` is `default`, `configured`, or `derived` for a
+/// `message-memory-budget` the server derives from the mail container's limit.
 pub(super) fn show_json(config: &Config) -> serde_json::Value {
 	let mut limits = serde_json::Map::new();
 	for key in Key::ALL {
@@ -198,6 +229,15 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 					"unit": "seconds",
 					"source": if default { "default" } else { "configured" },
 				}),
+			);
+			continue;
+		}
+		if matches!(key, Key::MessageMemoryBudget)
+			&& let Some((bytes, _)) = derived_budget(config)
+		{
+			limits.insert(
+				key.name().to_string(),
+				serde_json::json!({"value": bytes, "unit": "bytes", "source": "derived"}),
 			);
 			continue;
 		}
@@ -440,3 +480,7 @@ mod tests_queue;
 #[cfg(test)]
 #[path = "limits_tests_tenants.rs"]
 mod tests_tenants;
+
+#[cfg(test)]
+#[path = "limits_tests_budget.rs"]
+mod tests_budget;

@@ -61,7 +61,9 @@ pub(super) struct DesiredAcme {
 
 #[derive(Debug, Serialize)]
 pub(super) struct DesiredAntispam {
-	clamd_socket: String,
+	/// The stack's clamd; absent when the stack runs no clamav.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	clamd_socket: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -322,7 +324,8 @@ pub(super) fn build_config(
 		database,
 		acme: acme_block,
 		antispam: DesiredAntispam {
-			clamd_socket: "/run/clamav/clamd.sock".to_string(),
+			clamd_socket: (answers.services.antivirus != Some(false))
+				.then(|| "/run/clamav/clamd.sock".to_string()),
 		},
 	})
 }
