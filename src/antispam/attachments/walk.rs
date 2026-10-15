@@ -46,7 +46,12 @@ pub struct Limits {
 	pub max_parts: usize,
 	/// Total decoded bytes across every part.
 	pub max_decoded: usize,
+	/// When the walk gives up, checked every [`DEADLINE_STRIDE`] lines.
+	pub deadline: Option<std::time::Instant>,
 }
+
+/// Lines between two looks at the clock.
+pub const DEADLINE_STRIDE: usize = 1024;
 
 /// Why a walk stopped before the end of the message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +62,8 @@ pub enum Stop {
 	TooManyParts,
 	/// A part's header block is larger than [`MAX_HEADER_BYTES`].
 	HeaderTooLarge,
+	/// [`Limits::deadline`] passed.
+	OutOfTime,
 }
 
 /// One leaf part, as the visitor sees it.
@@ -112,6 +119,7 @@ pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Walked 
 			..Walked::default()
 		},
 		decoded: 0,
+		lines: 0,
 		pending: Vec::new(),
 	};
 	let mut result = Walker::new(raw, limits, &mut shared).run(0, &mut visit);
@@ -128,6 +136,7 @@ pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Walked 
 struct Shared {
 	walked: Walked,
 	decoded: usize,
+	lines: usize,
 	/// Decoded nested messages still to walk, with their depth.
 	pending: Vec<(Vec<u8>, usize)>,
 }
@@ -174,6 +183,15 @@ impl<'a> Walker<'a> {
 		let mut state = State::Headers { start: 0, depth };
 		let mut pos = 0;
 		loop {
+			if self.shared.lines.is_multiple_of(DEADLINE_STRIDE)
+				&& self
+					.limits
+					.deadline
+					.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+			{
+				return Err(Stop::OutOfTime);
+			}
+			self.shared.lines += 1;
 			let end = raw[pos..]
 				.iter()
 				.position(|&byte| byte == b'\n')
@@ -325,8 +343,11 @@ impl<'a> Walker<'a> {
 			self.shared.pending.push((content, depth + 1));
 			return Ok(());
 		}
+		let mut truncated = truncated;
 		if text {
-			for embedded in decode::embedded_uuencode(&content) {
+			let (blocks, capped) = decode::embedded_uuencode(&content);
+			truncated |= capped;
+			for embedded in blocks {
 				self.count_part()?;
 				visit(Leaf {
 					names: vec![embedded.name],
@@ -372,7 +393,7 @@ impl<'a> Walker<'a> {
 		let (mut content, garbled) = match encoding {
 			Encoding::Identity => (input.to_vec(), false),
 			Encoding::Base64 => decode::base64(input),
-			Encoding::QuotedPrintable => (decode::quoted_printable(input), false),
+			Encoding::QuotedPrintable => decode::quoted_printable(input),
 			Encoding::Uuencode => (decode::uuencode(input), false),
 		};
 		if truncated {

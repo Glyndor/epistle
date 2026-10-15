@@ -23,7 +23,8 @@ fn uuencode_round_trips() {
 #[test]
 fn an_embedded_block_needs_a_real_begin_line() {
 	let text = format!("hello\n{}bye\n", uu("tool.exe", b"MZ\x90\x00"));
-	let found = embedded_uuencode(text.as_bytes());
+	let (found, capped) = embedded_uuencode(text.as_bytes());
+	assert!(!capped);
 	assert_eq!(
 		found,
 		vec![Embedded {
@@ -31,12 +32,21 @@ fn an_embedded_block_needs_a_real_begin_line() {
 			content: b"MZ\x90\x00".to_vec()
 		}]
 	);
-	assert!(embedded_uuencode(b"begin the meeting at 9\nend\n").is_empty());
-	assert!(embedded_uuencode(b"begin 999 x.exe\n").is_empty());
+	assert!(
+		embedded_uuencode(b"begin the meeting at 9\nend\n")
+			.0
+			.is_empty()
+	);
+	assert!(embedded_uuencode(b"begin 999 x.exe\n").0.is_empty());
 }
 
 #[test]
 fn embedded_blocks_are_capped() {
 	let text = uu("a.txt", b"x").repeat(MAX_EMBEDDED + 10);
-	assert_eq!(embedded_uuencode(text.as_bytes()).len(), MAX_EMBEDDED);
+	let (found, capped) = embedded_uuencode(text.as_bytes());
+	assert_eq!(found.len(), MAX_EMBEDDED);
+	assert!(
+		capped,
+		"blocks past the cap were not read, and that must show"
+	);
 }

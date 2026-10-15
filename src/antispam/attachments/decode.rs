@@ -12,6 +12,7 @@ pub const MAX_EMBEDDED: usize = 64;
 pub fn base64(input: &[u8]) -> (Vec<u8>, bool) {
 	let mut out = Vec::with_capacity(input.len() / 4 * 3);
 	let mut segments = 0;
+	let mut failed = false;
 	for segment in input.split(|&byte| byte == b'=') {
 		let clean: Vec<u8> = segment
 			.iter()
@@ -22,14 +23,14 @@ pub fn base64(input: &[u8]) -> (Vec<u8>, bool) {
 			continue;
 		}
 		segments += 1;
-		decode_group(&clean, &mut out);
+		failed |= !decode_group(&clean, &mut out);
 	}
-	(out, segments > 1)
+	(out, segments > 1 || failed)
 }
 
 /// Decode alphabet-only base64 without padding, dropping a lone final
-/// character that cannot form a byte.
-fn decode_group(clean: &[u8], out: &mut Vec<u8>) {
+/// character that cannot form a byte. False when the group did not decode.
+fn decode_group(clean: &[u8], out: &mut Vec<u8>) -> bool {
 	use base64::Engine as _;
 	use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 	const LENIENT: GeneralPurpose = GeneralPurpose::new(
@@ -39,16 +40,58 @@ fn decode_group(clean: &[u8], out: &mut Vec<u8>) {
 			.with_decode_padding_mode(DecodePaddingMode::Indifferent),
 	);
 	let usable = clean.len() - usize::from(clean.len() % 4 == 1);
-	if let Ok(bytes) = LENIENT.decode(&clean[..usable]) {
-		out.extend_from_slice(&bytes);
+	match LENIENT.decode(&clean[..usable]) {
+		Ok(bytes) => {
+			out.extend_from_slice(&bytes);
+			true
+		}
+		Err(_) => false,
 	}
 }
 
-/// Quoted-printable, falling back to the raw bytes when mail-parser
-/// refuses the input.
-pub fn quoted_printable(input: &[u8]) -> Vec<u8> {
-	mail_parser::decoders::quoted_printable::quoted_printable_decode(input)
-		.unwrap_or_else(|| input.to_vec())
+/// Quoted-printable as clients read it: `=XX` in either case is a byte, a
+/// `=` at the end of a line (trailing whitespace allowed) is a soft break,
+/// and any other `=` is kept as it is. The second value says such an
+/// invalid escape was seen, since clients do not agree on it.
+pub fn quoted_printable(input: &[u8]) -> (Vec<u8>, bool) {
+	let mut out = Vec::with_capacity(input.len());
+	let mut invalid = false;
+	let mut at = 0;
+	while at < input.len() {
+		let byte = input[at];
+		at += 1;
+		if byte != b'=' {
+			out.push(byte);
+			continue;
+		}
+		let rest = &input[at..];
+		let blanks = rest
+			.iter()
+			.take_while(|&&byte| byte == b' ' || byte == b'\t')
+			.count();
+		let after = &rest[blanks..];
+		if after.starts_with(b"\r\n") {
+			at += blanks + 2;
+		} else if after.starts_with(b"\n") {
+			at += blanks + 1;
+		} else if let (Some(high), Some(low)) = (
+			rest.first().and_then(|&b| hex(b)),
+			rest.get(1).and_then(|&b| hex(b)),
+		) {
+			out.push((high << 4) | low);
+			at += 2;
+		} else if after.is_empty() {
+			at += blanks;
+		} else {
+			invalid = true;
+			out.push(b'=');
+		}
+	}
+	(out, invalid)
+}
+
+fn hex(byte: u8) -> Option<u8> {
+	(byte as char).to_digit(16).map(|digit| digit as u8)
 }
 
 /// The body of a uuencoded block, from the line after `begin` to `end`
@@ -105,9 +148,10 @@ pub struct Embedded {
 	pub content: Vec<u8>,
 }
 
-/// Find the uuencoded blocks in a text body, at most [`MAX_EMBEDDED`]. One
-/// pass: a block's lines are consumed by the block.
-pub fn embedded_uuencode(text: &[u8]) -> Vec<Embedded> {
+/// Find the uuencoded blocks in a text body, at most [`MAX_EMBEDDED`]; the
+/// flag says more were left unread. One pass: a block's lines are consumed
+/// by the block.
+pub fn embedded_uuencode(text: &[u8]) -> (Vec<Embedded>, bool) {
 	let mut found = Vec::new();
 	let mut lines = text.split(|&byte| byte == b'\n');
 	while let Some(line) = lines.next() {
@@ -116,7 +160,7 @@ pub fn embedded_uuencode(text: &[u8]) -> Vec<Embedded> {
 			continue;
 		};
 		if found.len() == MAX_EMBEDDED {
-			break;
+			return (found, true);
 		}
 		let body: Vec<&[u8]> = lines
 			.by_ref()
@@ -127,7 +171,7 @@ pub fn embedded_uuencode(text: &[u8]) -> Vec<Embedded> {
 			content: uuencode_lines(body.into_iter()),
 		});
 	}
-	found
+	(found, false)
 }
 
 /// `begin 644 name`: three or four octal digits, then the name.

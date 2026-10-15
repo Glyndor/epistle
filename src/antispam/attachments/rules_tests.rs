@@ -32,7 +32,11 @@ fn archive(listing: &Listing, real: RealType) -> Vec<Reason> {
 fn a_decoy_extension_before_a_dangerous_one_is_a_double_extension() {
 	assert_eq!(
 		named("factura.pdf.exe", "application/pdf", RealType::Unknown),
-		vec![Reason::DangerousExtension, Reason::DoubleExtension]
+		vec![
+			Reason::DangerousExtension,
+			Reason::DoubleExtension,
+			Reason::TypeMismatch
+		]
 	);
 	assert_eq!(
 		named("setup.exe", "application/octet-stream", RealType::Unknown),
@@ -61,7 +65,11 @@ fn trailing_dots_and_spaces_do_not_hide_the_extension() {
 fn a_right_to_left_override_is_flagged_and_the_real_extension_judged() {
 	assert_eq!(
 		named("invoice\u{202e}gpj.exe", "image/jpeg", RealType::Unknown),
-		vec![Reason::DangerousExtension, Reason::BidiName]
+		vec![
+			Reason::DangerousExtension,
+			Reason::BidiName,
+			Reason::TypeMismatch
+		]
 	);
 	assert_eq!(
 		named("notes\u{202e}txt.md", "text/plain", RealType::Unknown),
@@ -97,12 +105,12 @@ fn an_image_or_pdf_that_is_something_else_is_a_type_mismatch() {
 	);
 	assert_eq!(
 		named("unnamed", "image/gif", RealType::Rar),
-		vec![Reason::TypeMismatch]
+		vec![Reason::TypeMismatch, Reason::UnreadableArchive]
 	);
-	// Another image format, or bytes the table does not know, are not a
-	// disguise.
+	// Another image format, or an image type the table has no signature
+	// for, is not a disguise.
 	assert!(named("photo.jpg", "image/jpeg", RealType::Png).is_empty());
-	assert!(named("photo.heic", "image/heic", RealType::Unknown).is_empty());
+	assert!(named("photo.jxl", "image/jxl", RealType::Unknown).is_empty());
 	assert!(named("scan.pdf", "application/pdf", RealType::Pdf).is_empty());
 }
 
@@ -162,6 +170,7 @@ fn archive_entries_encryption_and_size_are_judged() {
 		names: vec!["a.pdf".into()],
 		encrypted: true,
 		too_many: false,
+		unreadable: false,
 	};
 	assert_eq!(
 		archive(&encrypted, RealType::Zip),
@@ -171,11 +180,9 @@ fn archive_entries_encryption_and_size_are_judged() {
 		names: vec!["a.txt".into()],
 		encrypted: false,
 		too_many: true,
+		unreadable: false,
 	};
-	assert_eq!(
-		archive(&crowded, RealType::Zip),
-		vec![Reason::ArchiveTooComplex]
-	);
+	assert_eq!(archive(&crowded, RealType::Zip), vec![Reason::ScanLimit]);
 	assert!(archive(&list_zip(&corpus::zip_of(&["a.txt"])), RealType::Zip).is_empty());
 }
 
@@ -210,10 +217,12 @@ fn reason_codes_are_stable() {
 		Reason::TypeMismatch,
 		Reason::HtmlAttachment,
 		Reason::DangerousArchiveEntry,
+		Reason::NestedArchive,
 		Reason::EncryptedArchive,
-		Reason::ArchiveTooComplex,
+		Reason::UnreadableArchive,
 		Reason::Macro,
-		Reason::MimeTooComplex,
+		Reason::AmbiguousMime,
+		Reason::ScanLimit,
 	]
 	.iter()
 	.map(|reason| reason.code())
@@ -229,10 +238,12 @@ fn reason_codes_are_stable() {
 			"type-mismatch",
 			"html-attachment",
 			"dangerous-archive-entry",
+			"nested-archive",
 			"encrypted-archive",
-			"archive-too-complex",
+			"unreadable-archive",
 			"macro",
-			"mime-too-complex",
+			"ambiguous-mime",
+			"scan-limit",
 		]
 	);
 }

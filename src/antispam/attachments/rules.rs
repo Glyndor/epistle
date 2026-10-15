@@ -85,8 +85,32 @@ const DECOY_EXTENSIONS: &[&str] = &[
 	"zip",
 ];
 
+/// Image extensions whose formats [`super::sniff`] recognises, so content
+/// it does not recognise under one of these names is not that image.
 const IMAGE_EXTENSIONS: &[&str] = &[
-	"jpg", "jpeg", "jpe", "png", "gif", "webp", "bmp", "tif", "tiff", "ico", "heic",
+	"jpg", "jpeg", "jpe", "png", "gif", "webp", "bmp", "tif", "tiff", "ico", "heic", "heif", "avif",
+];
+
+/// Declared image types [`super::sniff`] recognises.
+const SNIFFABLE_IMAGE_TYPES: &[&str] = &[
+	"image/jpeg",
+	"image/pjpeg",
+	"image/png",
+	"image/gif",
+	"image/webp",
+	"image/bmp",
+	"image/tiff",
+	"image/x-icon",
+	"image/vnd.microsoft.icon",
+	"image/heic",
+	"image/heif",
+	"image/avif",
+];
+
+/// Archive formats inside an archive: their content is not listed.
+const ARCHIVE_EXTENSIONS: &[&str] = &[
+	"zip", "zipx", "rar", "7z", "tar", "gz", "tgz", "bz2", "tbz", "xz", "txz", "z", "lz", "lzh",
+	"lha", "arj", "ace", "cab", "iso", "img", "vhd", "vhdx", "dmg", "uue", "xxe",
 ];
 
 const HTML_EXTENSIONS: &[&str] = &[
@@ -121,18 +145,22 @@ pub enum Reason {
 	HtmlAttachment,
 	/// An archive holds an entry with a dangerous extension.
 	DangerousArchiveEntry,
+	/// An archive holds another archive, whose content is not listed.
+	NestedArchive,
 	/// An archive holds encrypted entries no scanner can read.
 	EncryptedArchive,
-	/// An archive has more entries than are listed.
-	ArchiveTooComplex,
+	/// An archive could not be read completely or reads two ways: RAR and
+	/// 7z (never listed), a zip with a missing or inconsistent directory,
+	/// data before it, an unknown method, or encryption on some files only.
+	UnreadableArchive,
 	/// An Office document carries a VBA project.
 	Macro,
-	/// The message is nested too deeply, has too many parts or a header
-	/// block too large to inspect.
-	MimeTooComplex,
 	/// Two mail clients could read the MIME structure, a header or an
 	/// encoding differently.
 	AmbiguousMime,
+	/// A cap was hit (depth, parts, header size, decoded bytes, archive
+	/// entries or time) and what lay beyond it was not inspected.
+	ScanLimit,
 }
 
 impl Reason {
@@ -147,11 +175,12 @@ impl Reason {
 			Self::TypeMismatch => "type-mismatch",
 			Self::HtmlAttachment => "html-attachment",
 			Self::DangerousArchiveEntry => "dangerous-archive-entry",
+			Self::NestedArchive => "nested-archive",
 			Self::EncryptedArchive => "encrypted-archive",
-			Self::ArchiveTooComplex => "archive-too-complex",
+			Self::UnreadableArchive => "unreadable-archive",
 			Self::Macro => "macro",
-			Self::MimeTooComplex => "mime-too-complex",
 			Self::AmbiguousMime => "ambiguous-mime",
+			Self::ScanLimit => "scan-limit",
 		}
 	}
 }
@@ -238,13 +267,17 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 	if real == RealType::Html {
 		reasons.insert(Reason::HtmlAttachment);
 	}
-	if claims_image(last.as_deref(), facts.declared_type)
-		&& real != RealType::Unknown
+	if matches!(real, RealType::Rar | RealType::SevenZip) {
+		reasons.insert(Reason::UnreadableArchive);
+	}
+	// The bytes decide: an image or PDF claim on content of another format,
+	// or on content that is not the claimed format at all, is a disguise.
+	let mismatched_image = claims_image(last.as_deref(), facts.declared_type)
 		&& !real.is_image()
-		|| claims_pdf(last.as_deref(), facts.declared_type)
-			&& real != RealType::Unknown
-			&& real != RealType::Pdf
-	{
+		&& (real != RealType::Unknown
+			|| claims_sniffable_image(last.as_deref(), facts.declared_type));
+	let mismatched_pdf = claims_pdf(last.as_deref(), facts.declared_type) && real != RealType::Pdf;
+	if mismatched_image || mismatched_pdf {
 		reasons.insert(Reason::TypeMismatch);
 	}
 	if let Some(listing) = facts.listing {
@@ -252,7 +285,17 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 			reasons.insert(Reason::EncryptedArchive);
 		}
 		if listing.too_many {
-			reasons.insert(Reason::ArchiveTooComplex);
+			reasons.insert(Reason::ScanLimit);
+		}
+		if listing.unreadable {
+			reasons.insert(Reason::UnreadableArchive);
+		}
+		if listing.names.iter().any(|entry| {
+			extensions_of(&normalise_name(entry))
+				.0
+				.is_some_and(|ext| ARCHIVE_EXTENSIONS.contains(&ext.as_str()))
+		}) {
+			reasons.insert(Reason::NestedArchive);
 		}
 		if listing.names.iter().any(|entry| {
 			entry.contains(BIDI_CONTROLS)
@@ -272,10 +315,12 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 	reasons.into_iter().collect()
 }
 
-/// The name as Windows would open it: the last path component, without
+/// The name as Windows would open it: cut at the first NUL (where C
+/// extractors stop reading), the last path component, without
 /// bidirectional controls, and without the trailing dots and spaces the
 /// file system drops (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`).
 fn normalise_name(name: &str) -> String {
+	let name = name.split('\0').next().unwrap_or(name);
 	let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
 	let cleaned: String = base
 		.chars()
@@ -307,6 +352,11 @@ fn extensions_of(name: &str) -> (Option<String>, Option<String>) {
 
 fn claims_image(ext: Option<&str>, declared_type: &str) -> bool {
 	ext.is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext)) || declared_type.starts_with("image/")
+}
+
+fn claims_sniffable_image(ext: Option<&str>, declared_type: &str) -> bool {
+	ext.is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext))
+		|| SNIFFABLE_IMAGE_TYPES.contains(&declared_type)
 }
 
 fn claims_pdf(ext: Option<&str>, declared_type: &str) -> bool {

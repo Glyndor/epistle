@@ -107,7 +107,19 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	}
 	ambiguous |= names_disagree(&names);
 
-	let encoding = match encodings.first().map(String::as_str) {
+	// `Base64 `, `"base64"` and `base64; x=y` all reach some client as
+	// base64; anything past case and outer whitespace is flagged.
+	let encoding_token = encodings.first().map(|value| {
+		let token = value
+			.trim_matches('"')
+			.split(|c: char| c == ';' || c.is_whitespace())
+			.next()
+			.unwrap_or("")
+			.to_string();
+		ambiguous |= token != *value;
+		token
+	});
+	let encoding = match encoding_token.as_deref() {
 		None | Some("7bit" | "8bit" | "binary" | "") => Encoding::Identity,
 		Some("base64") => Encoding::Base64,
 		Some("quoted-printable") => Encoding::QuotedPrintable,

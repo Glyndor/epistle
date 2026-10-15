@@ -5,6 +5,7 @@ const LIMITS: Limits = Limits {
 	max_depth: 10,
 	max_parts: 1000,
 	max_decoded: 1 << 20,
+	deadline: None,
 };
 
 fn leaves(raw: &[u8], limits: &Limits) -> (Vec<Leaf>, Result<usize, Stop>) {

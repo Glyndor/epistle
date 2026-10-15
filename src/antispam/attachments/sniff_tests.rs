@@ -67,3 +67,21 @@ fn executable_and_image_families_are_what_the_rules_rely_on() {
 	assert!(!RealType::Pdf.is_image());
 	assert_eq!(RealType::SevenZip.as_str(), "7z");
 }
+
+#[test]
+fn bmp_tiff_ico_and_heif_are_images_and_text_is_not() {
+	let mut bmp = b"BM\x36\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00".to_vec();
+	bmp.resize(64, 0);
+	assert_eq!(sniff(&bmp), RealType::Bmp);
+	assert_eq!(sniff(b"II*\x00\x08\x00"), RealType::Tiff);
+	assert_eq!(sniff(b"\x00\x00\x01\x00\x01\x00\x10\x10"), RealType::Ico);
+	assert_eq!(sniff(b"\x00\x00\x00\x18ftypheic\x00\x00"), RealType::Heif);
+	assert_eq!(
+		sniff(b"BMW meeting notes, nothing binary"),
+		RealType::Unknown
+	);
+	for kind in [RealType::Bmp, RealType::Tiff, RealType::Ico, RealType::Heif] {
+		assert!(kind.is_image() && kind.is_binary(), "{kind:?}");
+	}
+	assert!(!RealType::Script.is_binary());
+}

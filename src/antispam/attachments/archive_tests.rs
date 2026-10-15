@@ -52,6 +52,10 @@ fn a_zip_without_its_end_record_is_listed_from_local_headers() {
 	zip.truncate(end);
 	let listing = list_zip(&zip);
 	assert_eq!(listing.names, vec!["one.txt", "two.vbs"]);
+	assert!(
+		listing.unreadable,
+		"no central directory is not a clean read"
+	);
 }
 
 #[test]

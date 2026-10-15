@@ -5,7 +5,7 @@ use super::*;
 use crate::antispam::attachments::corpus::{self, attachment};
 
 fn inspect_default(raw: &[u8]) -> Report {
-	inspect(raw, &Extensions::default(), 1 << 20)
+	inspect(raw, &Extensions::default(), Budget::bytes(1 << 20))
 }
 
 #[test]

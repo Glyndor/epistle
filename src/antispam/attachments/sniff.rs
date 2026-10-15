@@ -43,6 +43,14 @@ pub enum RealType {
 	Gif,
 	/// A WebP image.
 	Webp,
+	/// A BMP image.
+	Bmp,
+	/// A TIFF image.
+	Tiff,
+	/// A Windows icon.
+	Ico,
+	/// A HEIF image (HEIC, AVIF).
+	Heif,
 	/// A RAR archive.
 	Rar,
 	/// A 7z archive.
@@ -72,6 +80,10 @@ impl RealType {
 			Self::Jpeg => "jpeg",
 			Self::Gif => "gif",
 			Self::Webp => "webp",
+			Self::Bmp => "bmp",
+			Self::Tiff => "tiff",
+			Self::Ico => "ico",
+			Self::Heif => "heif",
 			Self::Rar => "rar",
 			Self::SevenZip => "7z",
 			Self::Iso => "iso9660",
@@ -90,7 +102,20 @@ impl RealType {
 
 	/// The raster image formats in the table.
 	pub fn is_image(self) -> bool {
-		matches!(self, Self::Png | Self::Jpeg | Self::Gif | Self::Webp)
+		matches!(
+			self,
+			Self::Png
+				| Self::Jpeg | Self::Gif
+				| Self::Webp | Self::Bmp
+				| Self::Tiff | Self::Ico
+				| Self::Heif
+		)
+	}
+
+	/// A binary format no text body starts with: everything in the table
+	/// except HTML and scripts, which are text themselves.
+	pub fn is_binary(self) -> bool {
+		!matches!(self, Self::Unknown | Self::Html | Self::Script)
 	}
 }
 
@@ -119,6 +144,8 @@ pub fn sniff(content: &[u8]) -> RealType {
 		(b"\xff\xd8\xff", RealType::Jpeg),
 		(b"GIF87a", RealType::Gif),
 		(b"GIF89a", RealType::Gif),
+		(b"II*\x00", RealType::Tiff),
+		(b"MM\x00*", RealType::Tiff),
 		(b"Rar!\x1a\x07", RealType::Rar),
 		(b"7z\xbc\xaf\x27\x1c", RealType::SevenZip),
 	];
@@ -129,6 +156,29 @@ pub fn sniff(content: &[u8]) -> RealType {
 	}
 	if content.len() >= 12 && &content[..4] == b"RIFF" && &content[8..12] == b"WEBP" {
 		return RealType::Webp;
+	}
+	// BMP and ICO signatures are short, so their reserved zero fields are
+	// checked too, which keeps a text starting with "BM" from matching.
+	if content.len() >= 14 && content.starts_with(b"BM") && content[6..10] == [0; 4] {
+		return RealType::Bmp;
+	}
+	if content.len() >= 6 && content.starts_with(b"\x00\x00\x01\x00") && content[4..6] != [0, 0] {
+		return RealType::Ico;
+	}
+	if content.len() >= 12
+		&& &content[4..8] == b"ftyp"
+		&& [
+			&b"heic"[..],
+			b"heix",
+			b"hevc",
+			b"mif1",
+			b"msf1",
+			b"avif",
+			b"avis",
+		]
+		.contains(&&content[8..12])
+	{
+		return RealType::Heif;
 	}
 	let head = &content[..content.len().min(PDF_SEARCH)];
 	if head.windows(5).any(|window| window == b"%PDF-") {

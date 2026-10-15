@@ -58,7 +58,7 @@ impl Report {
 			.flat_map(|part| part.reasons.iter().copied())
 			.collect();
 		if self.stopped.is_some() {
-			all.push(Reason::MimeTooComplex);
+			all.push(Reason::ScanLimit);
 		}
 		if self.ambiguous {
 			all.push(Reason::AmbiguousMime);
@@ -69,18 +69,39 @@ impl Report {
 	}
 }
 
-/// Inspect `raw`, decoding at most `max_decoded` bytes of attachment
-/// content in total.
-pub fn inspect(raw: &[u8], extensions: &Extensions, max_decoded: usize) -> Report {
+/// How much one inspection may spend.
+#[derive(Clone, Copy, Debug)]
+pub struct Budget {
+	/// Decoded bytes across every part.
+	pub max_decoded: usize,
+	/// When to give up; what was not reached gets [`Reason::ScanLimit`].
+	pub deadline: Option<std::time::Instant>,
+}
+
+impl Budget {
+	/// A byte budget and no deadline.
+	pub fn bytes(max_decoded: usize) -> Self {
+		Self {
+			max_decoded,
+			deadline: None,
+		}
+	}
+}
+
+/// Inspect `raw` within `budget`. Whatever could not be inspected
+/// completely carries a reason; nothing unread is reported clean.
+pub fn inspect(raw: &[u8], extensions: &Extensions, budget: Budget) -> Report {
 	let limits = Limits {
 		max_depth: MAX_DEPTH,
 		max_parts: MAX_PARTS,
-		max_decoded,
+		max_decoded: budget.max_decoded,
+		deadline: budget.deadline,
 	};
 	let mut report = Report::default();
 	let walked = walk::walk(raw, &limits, |leaf| {
-		if leaf.attachment || leaf.ambiguous {
-			report.parts.push(judge_leaf(&leaf, extensions));
+		let part = judge_leaf(&leaf, extensions);
+		if leaf.attachment || !part.reasons.is_empty() {
+			report.parts.push(part);
 		}
 	});
 	report.stopped = walked.stopped;
@@ -90,8 +111,28 @@ pub fn inspect(raw: &[u8], extensions: &Extensions, max_decoded: usize) -> Repor
 
 fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 	let mut real_type = sniff::sniff(&leaf.content);
+	// Bytes in front of a zip hide its signature but not its end record,
+	// and extractors open it anyway.
+	if real_type == RealType::Unknown && archive::has_end_record(&leaf.content) {
+		real_type = RealType::Zip;
+	}
+	// Message text is only judged when its bytes are a binary format; a
+	// text part that is really a program or an archive is a disguise.
+	let text_body = !leaf.attachment;
+	let disguised = text_body
+		&& real_type.is_binary()
+		&& (real_type != RealType::Pdf || leaf.content.starts_with(b"%PDF-"));
+	if text_body && !disguised {
+		return PartReport {
+			filename: leaf.filename().map(str::to_string),
+			declared_type: leaf.declared_type.clone(),
+			real_type,
+			reasons: limits_only(leaf),
+		};
+	}
 	// A truncated zip has lost its central directory; listing it from the
-	// prefix alone would miss entries, so only a complete one is listed.
+	// prefix alone would miss entries, so only a complete one is listed,
+	// and the truncation itself is a scan-limit.
 	let listing =
 		(real_type == RealType::Zip && !leaf.truncated).then(|| archive::list_zip(&leaf.content));
 	if listing.as_ref().is_some_and(archive::is_ooxml) {
@@ -119,8 +160,9 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 			)
 		})
 		.collect();
-	if leaf.ambiguous {
-		reasons.push(Reason::AmbiguousMime);
+	reasons.extend(limits_only(leaf));
+	if disguised {
+		reasons.push(Reason::TypeMismatch);
 	}
 	reasons.sort();
 	reasons.dedup();
@@ -130,6 +172,18 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		real_type,
 		reasons,
 	}
+}
+
+/// The reasons a part earns for how it was read, whatever it contains.
+fn limits_only(leaf: &Leaf) -> Vec<Reason> {
+	let mut reasons = Vec::new();
+	if leaf.ambiguous {
+		reasons.push(Reason::AmbiguousMime);
+	}
+	if leaf.truncated {
+		reasons.push(Reason::ScanLimit);
+	}
+	reasons
 }
 
 #[cfg(test)]
@@ -143,3 +197,7 @@ mod tests;
 #[cfg(test)]
 #[path = "inspect_tests_evasion.rs"]
 mod tests_evasion;
+
+#[cfg(test)]
+#[path = "inspect_tests_failclosed.rs"]
+mod tests_failclosed;

@@ -4,7 +4,7 @@ use super::*;
 use crate::antispam::attachments::corpus::{self, ZipEntry, attachment};
 
 fn inspect_default(raw: &[u8]) -> Report {
-	inspect(raw, &Extensions::default(), 1 << 20)
+	inspect(raw, &Extensions::default(), Budget::bytes(1 << 20))
 }
 
 fn only_part(report: &Report) -> &PartReport {
@@ -116,7 +116,7 @@ fn a_part_bomb_and_deep_nesting_are_too_complex() {
 	bomb.push_str("--z--\r\n");
 	let report = inspect_default(bomb.as_bytes());
 	assert_eq!(report.stopped, Some(Stop::TooManyParts));
-	assert_eq!(report.reasons(), vec![Reason::MimeTooComplex]);
+	assert_eq!(report.reasons(), vec![Reason::ScanLimit]);
 
 	let mut deep = String::new();
 	for level in 0..40 {
@@ -126,7 +126,7 @@ fn a_part_bomb_and_deep_nesting_are_too_complex() {
 	}
 	let report = inspect_default(deep.as_bytes());
 	assert_eq!(report.stopped, Some(Stop::TooDeep));
-	assert_eq!(report.reasons(), vec![Reason::MimeTooComplex]);
+	assert_eq!(report.reasons(), vec![Reason::ScanLimit]);
 }
 
 #[test]
@@ -167,8 +167,12 @@ fn a_zip_cut_by_the_decode_budget_is_not_listed() {
 		"Content-Type: application/zip; name=\"big.zip\"",
 		&corpus::zip_of(&names),
 	)]);
-	let report = inspect(&raw, &Extensions::default(), 1024);
+	let report = inspect(&raw, &Extensions::default(), Budget::bytes(1024));
 	let part = only_part(&report);
 	assert_eq!(part.real_type, RealType::Zip);
-	assert!(part.reasons.is_empty(), "a prefix cannot be listed");
+	assert_eq!(
+		part.reasons,
+		vec![Reason::ScanLimit],
+		"a prefix cannot be listed, so it is not clean"
+	);
 }
