@@ -1,6 +1,6 @@
 use super::*;
 use crate::evidence::chain::Chain;
-use crate::evidence::record::{Entry, FORMAT_VERSION, Record};
+use crate::evidence::record::{Entry, FORMAT_VERSION, Record, sha256};
 use crate::evidence::test_support::{accepted, at, delivered};
 
 const DAY: i64 = 20_740;
@@ -47,7 +47,7 @@ fn write_lines(root: &Path, lines: &[Vec<u8>]) {
 }
 
 fn first_break(root: &Path) -> String {
-	walk_day(root, Day(DAY), Some(GENESIS), |_, _, _| {})
+	walk_day(root, Day(DAY), Some(Position::START), |_, _, _| {})
 		.expect_err("the day must not verify")
 		.to_string()
 }
@@ -65,13 +65,16 @@ fn unchained(line: u64, found: &[u8; 32], expected: &[u8; 32]) -> String {
 fn an_untouched_day_verifies() {
 	let (dir, _, hashes) = four_records();
 	let mut seen = Vec::new();
-	let walk = walk_day(dir.path(), Day(DAY), Some(GENESIS), |line, _, hash| {
-		seen.push((line, *hash))
-	})
+	let walk = walk_day(
+		dir.path(),
+		Day(DAY),
+		Some(Position::START),
+		|line, _, hash| seen.push((line, *hash)),
+	)
 	.expect("verifies");
 	assert_eq!(walk.records, 4);
-	assert_eq!(walk.first_prev, GENESIS);
-	assert_eq!(walk.last, hashes[3]);
+	assert_eq!(walk.first_prev, crate::evidence::record::GENESIS);
+	assert_eq!(walk.last.hash, hashes[3]);
 	assert_eq!(
 		seen.iter().map(|(_, hash)| *hash).collect::<Vec<_>>(),
 		hashes
@@ -115,6 +118,7 @@ fn an_inserted_record_is_found_even_when_it_chains_onto_its_predecessor() {
 	let (dir, mut lines, hashes) = four_records();
 	let forged = Record {
 		v: FORMAT_VERSION,
+		seq: 2,
 		prev: to_hex(&hashes[0]),
 		time: at(DAY, 0),
 		entry: accepted(99),

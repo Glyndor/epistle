@@ -21,6 +21,31 @@ pub const FORMAT_VERSION: u32 = 1;
 /// The `prev` of the first record ever written.
 pub const GENESIS: [u8; 32] = [0; 32];
 
+/// The most records one day may hold.
+pub const MAX_RECORDS_PER_DAY: u64 = 50_000_000;
+
+/// Where the chain stands after a record: its hash, sequence number and
+/// time. The next record must carry `hash` as `prev`, `seq + 1`, and a time
+/// no earlier than `time`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+	/// SHA-256 of the record's line.
+	pub hash: [u8; 32],
+	/// Its sequence number.
+	pub seq: u64,
+	/// Its time, epoch seconds.
+	pub time: u64,
+}
+
+impl Position {
+	/// Before the first record ever written.
+	pub const START: Position = Position {
+		hash: GENESIS,
+		seq: 0,
+		time: 0,
+	};
+}
+
 /// The longest line a record may take. The largest record is an acceptance
 /// with every recipient a submission may carry, far below this.
 pub const MAX_LINE: usize = 256 * 1024;
@@ -33,6 +58,9 @@ pub const MAX_FIELD: usize = 998;
 pub struct Record {
 	/// Format version ([`FORMAT_VERSION`]).
 	pub v: u32,
+	/// Position in the chain: one more than the record before it, starting
+	/// at 1.
+	pub seq: u64,
 	/// Hex SHA-256 of the previous line.
 	pub prev: String,
 	/// Epoch seconds the record was written.
@@ -57,6 +85,8 @@ pub enum Entry {
 	Purge(Purge),
 	/// An evidence setting changed (for example timestamping).
 	Setting(Setting),
+	/// An operator acknowledged a break, signed with the evidence key.
+	Acknowledged(super::ack::Acknowledged),
 }
 
 /// How much of a message is kept, and for how long.
@@ -209,7 +239,7 @@ impl Entry {
 			Entry::Accepted(accepted) => accepted.retention.days,
 			Entry::Outcome(outcome) => outcome.retain_days,
 			Entry::Abandoned(abandoned) => abandoned.retain_days,
-			Entry::Purge(_) | Entry::Setting(_) => 0,
+			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) => 0,
 		}
 	}
 
@@ -219,7 +249,7 @@ impl Entry {
 			Entry::Accepted(accepted) => Some(accepted.spool_id),
 			Entry::Outcome(outcome) => Some(outcome.spool_id),
 			Entry::Abandoned(abandoned) => Some(abandoned.spool_id),
-			Entry::Purge(_) | Entry::Setting(_) => None,
+			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) => None,
 		}
 	}
 }
@@ -274,6 +304,30 @@ pub fn bounded(value: &str) -> String {
 }
 
 impl Record {
+	/// Parse a line, accepting only the exact bytes this build would write
+	/// for the record it holds: no unknown or duplicate field, no other key
+	/// order, no other spacing or escaping. Two different lines can never
+	/// stand for the same record.
+	pub fn parse_canonical(line: &[u8]) -> Result<Record, String> {
+		let record: Record = serde_json::from_slice(line).map_err(|error| error.to_string())?;
+		if record.v != FORMAT_VERSION {
+			return Err(format!("format version {}", record.v));
+		}
+		match record.to_line() {
+			Ok(canonical) if canonical == line => Ok(record),
+			_ => Err("not in canonical form (unknown, duplicate or reordered fields)".into()),
+		}
+	}
+
+	/// The position this record, written as `line`, leaves the chain at.
+	pub fn position(&self, line: &[u8]) -> Position {
+		Position {
+			hash: sha256(line),
+			seq: self.seq,
+			time: self.time,
+		}
+	}
+
 	/// The line for this record, without the newline, refusing one longer
 	/// than [`MAX_LINE`].
 	pub fn to_line(&self) -> std::io::Result<Vec<u8>> {

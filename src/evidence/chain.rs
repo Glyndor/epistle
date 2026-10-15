@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use super::day::Day;
-use super::record::{Entry, FORMAT_VERSION, GENESIS, MAX_LINE, Record, sha256, to_hex};
+use super::record::{Entry, FORMAT_VERSION, MAX_LINE, Position, Record, sha256, to_hex};
 
 /// The name of the directory holding the day files, under the evidence root.
 pub const CHAIN_DIR: &str = "chain";
@@ -93,13 +93,15 @@ impl Chain {
 			.map_err(|_| std::io::Error::other("evidence chain lock poisoned"))?;
 		let lock = self.lock_file()?;
 		lock.lock()?;
-		let time = clock();
-		let day = Day::of_epoch(time);
-		let path = self.day_file(day);
-		let prev = self.last_hash_before_append(day)?;
+		let now = clock();
+		let last = self.last_position_before_append(Day::of_epoch(now))?;
+		// Times never go backwards in the chain, even when the clock does.
+		let time = now.max(last.time);
+		let path = self.day_file(Day::of_epoch(time));
 		let record = Record {
 			v: FORMAT_VERSION,
-			prev: to_hex(&prev),
+			seq: last.seq + 1,
+			prev: to_hex(&last.hash),
 			time,
 			entry,
 		};
@@ -125,20 +127,23 @@ impl Chain {
 		Ok(hash)
 	}
 
-	/// The hash the next record must carry as `prev`: the last line of the
-	/// newest day file up to `day`, or the purge anchor, or [`GENESIS`].
-	fn last_hash_before_append(&self, day: Day) -> std::io::Result<[u8; 32]> {
-		// Nearly every append lands on a day that already has records.
-		if let Some(hash) = last_line_hash(&self.day_file(day), true)? {
-			return Ok(hash);
+	/// Where the chain stands: the last record of the newest day file up to
+	/// `day` (any later file is newer still, so it is looked at first), or
+	/// the purge anchor, or the start.
+	fn last_position_before_append(&self, day: Day) -> std::io::Result<Position> {
+		let mut days = self.days()?;
+		days.retain(|candidate| *candidate >= day);
+		if let Some(later) = days.last()
+			&& let Some(position) = last_position(&self.day_file(*later), true)?
+		{
+			return Ok(position);
 		}
 		for candidate in self.days_newest_first(day)? {
-			let path = self.day_file(candidate);
-			if let Some(hash) = last_line_hash(&path, true)? {
-				return Ok(hash);
+			if let Some(position) = last_position(&self.day_file(candidate), true)? {
+				return Ok(position);
 			}
 		}
-		Ok(super::anchor::read(&self.dir)?.unwrap_or(GENESIS))
+		Ok(super::anchor::read(&self.dir)?.unwrap_or(Position::START))
 	}
 
 	/// The days that have a file, newest first, none after `until`.
@@ -198,18 +203,52 @@ fn append_file(path: &Path) -> std::io::Result<File> {
 	let mut options = OpenOptions::new();
 	options.create(true).append(true).read(true);
 	#[cfg(unix)]
-	options.mode(0o600);
+	options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
 	options.open(path)
 }
 
-/// The hash of the last complete line of `path`, `None` for a missing or
-/// empty file. With `repair`, a torn last line (no newline) is cut off
+/// Open a day file for reading without following a link in its last
+/// component: a day file replaced by a symlink is refused, not read.
+pub fn open_day(path: &Path) -> std::io::Result<File> {
+	let mut options = OpenOptions::new();
+	options.read(true);
+	#[cfg(unix)]
+	options.custom_flags(libc::O_NOFOLLOW);
+	options.open(path)
+}
+
+/// Where the last complete record of `path` leaves the chain, `None` for a
+/// missing or empty file. A last record that is not canonical is an error:
+/// nothing is appended onto a tail that cannot be read.
+pub fn last_position(path: &Path, repair: bool) -> std::io::Result<Option<Position>> {
+	let Some(line) = last_line(path, repair)? else {
+		return Ok(None);
+	};
+	let record = Record::parse_canonical(&line).map_err(|why| {
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			format!("evidence chain: the last record does not parse ({why})"),
+		)
+	})?;
+	Ok(Some(record.position(&line)))
+}
+
+/// The hash of the last complete line of `path` (see [`last_line`]).
+pub fn last_line_hash(path: &Path, repair: bool) -> std::io::Result<Option<[u8; 32]>> {
+	Ok(last_line(path, repair)?.map(|line| sha256(&line)))
+}
+
+/// The last complete line of `path`, `None` for a missing or empty file. With `repair`, a torn last line (no newline) is cut off
 /// first; without it, the hash is that of the last complete line. The file
 /// is read backwards a chunk at a time, so the cost is that of the last
 /// line, not of the day.
-pub fn last_line_hash(path: &Path, repair: bool) -> std::io::Result<Option<[u8; 32]>> {
+fn last_line(path: &Path, repair: bool) -> std::io::Result<Option<Vec<u8>>> {
 	const CHUNK: u64 = 8 * 1024;
-	let mut file = match OpenOptions::new().read(true).write(repair).open(path) {
+	let mut options = OpenOptions::new();
+	options.read(true).write(repair);
+	#[cfg(unix)]
+	options.custom_flags(libc::O_NOFOLLOW);
+	let mut file = match options.open(path) {
 		Ok(file) => file,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 		Err(error) => return Err(error),
@@ -227,7 +266,7 @@ pub fn last_line_hash(path: &Path, repair: bool) -> std::io::Result<Option<[u8; 
 					file.sync_data()?;
 				}
 				let first = start.map_or(0, |at| at + 1);
-				return Ok(Some(sha256(&tail[first..end])));
+				return Ok(Some(tail[first..end].to_vec()));
 			}
 		} else if position == 0 {
 			if length > 0 && repair {

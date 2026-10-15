@@ -21,7 +21,7 @@ use super::checkpoint::{self, Checkpoint, files};
 use super::day::Day;
 use super::key;
 use super::merkle::{TreeBuilder, leaf_hash};
-use super::record::{Entry, GENESIS, hash_from_hex, sha256, to_hex};
+use super::record::{Entry, Position, hash_from_hex, sha256, to_hex};
 use super::verify::{Break, Problem, walk_day};
 
 /// Grace after midnight before a missing checkpoint is a break: the server
@@ -73,7 +73,7 @@ fn broken(day: Day, why: impl Into<String>) -> Break {
 /// What the walk carries from one day to the next. Nothing of it is
 /// stored: every verification starts from the oldest kept day.
 struct Walker {
-	expected: Option<[u8; 32]>,
+	expected: Option<Position>,
 	previous_checkpoint: Option<String>,
 	previous_key: Option<String>,
 	timestamping: bool,
@@ -121,9 +121,13 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 	let previous = previous.and_then(|(_, bytes)| parse(&bytes).ok().map(|cp| (cp, bytes)));
 	let mut walker = Walker {
 		expected: match (&previous, &purged) {
-			(Some((cp, _)), _) => hash_from_hex(&cp.last_hash),
-			(None, Some(anchor)) => hash_from_hex(&anchor.last_hash),
-			(None, None) if from_start => Some(GENESIS),
+			(Some((cp, _)), _) => hash_from_hex(&cp.last_hash).map(|hash| Position {
+				hash,
+				seq: cp.last_seq,
+				time: cp.last_time,
+			}),
+			(None, Some(anchor)) => anchor.position(),
+			(None, None) if from_start => Some(Position::START),
 			(None, None) => None,
 		},
 		previous_checkpoint: match (&previous, &purged) {
@@ -143,7 +147,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		if let Err(at) =
 			walk_and_check(evidence_root, day, today, options, &mut walker, &mut report)
 		{
-			if super::ack::is_acknowledged(evidence_root, &at.to_string()) {
+			if super::ack::is_acknowledged(evidence_root, &at) {
 				// Accepted by the operator: carry on, unanchored, from the next day.
 				report.acknowledged.push(at);
 				walker.expected = None;
@@ -288,7 +292,9 @@ fn check_day(
 		return Err(mismatch("the Merkle root"));
 	}
 	if checkpoint.first_prev != to_hex(&walk.first_prev)
-		|| checkpoint.last_hash != to_hex(&walk.last)
+		|| checkpoint.last_hash != to_hex(&walk.last.hash)
+		|| checkpoint.last_seq != walk.last.seq
+		|| checkpoint.last_time != walk.last.time
 	{
 		return Err(mismatch("the first or last hash"));
 	}
@@ -299,6 +305,17 @@ fn check_day(
 			day,
 			"does not name the previous checkpoint: a checkpoint was replaced",
 		));
+	}
+	match key::pinned_id(evidence_root) {
+		Ok(Some(pinned)) if pinned == checkpoint.key => {}
+		Ok(Some(_)) => {
+			return Err(broken(
+				day,
+				"signed with a key other than the pinned evidence key",
+			));
+		}
+		Ok(None) => return Err(broken(day, "the evidence key pin is missing")),
+		Err(error) => return Err(io(error)),
 	}
 	if let Some(previous) = &walker.previous_key
 		&& *previous != checkpoint.key
@@ -360,4 +377,4 @@ fn check_day(
 
 #[cfg(test)]
 #[path = "audit_tests.rs"]
-mod tests;
+pub(crate) mod tests;

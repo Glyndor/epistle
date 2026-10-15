@@ -17,7 +17,7 @@ use super::chain::create_private_dir;
 use super::day::Day;
 use super::key::EvidenceKey;
 use super::merkle::{TreeBuilder, leaf_hash};
-use super::record::{GENESIS, hash_from_hex, sha256, to_hex};
+use super::record::{Position, hash_from_hex, sha256, to_hex};
 use super::verify::{Break, walk_day};
 
 /// The checkpoint directory, under the evidence root.
@@ -42,6 +42,10 @@ pub struct Checkpoint {
 	pub first_prev: String,
 	/// Hex hash of the last record.
 	pub last_hash: String,
+	/// Sequence number of the last record.
+	pub last_seq: u64,
+	/// Time of the last record, epoch seconds.
+	pub last_time: u64,
 	/// Hex SHA-256 of the previous checkpoint file, `None` for the first.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub prev_checkpoint: Option<String>,
@@ -173,10 +177,15 @@ pub fn compute(
 		Some((_, bytes)) => {
 			let previous: Checkpoint = serde_json::from_slice(bytes)
 				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-			hash_from_hex(&previous.last_hash)
+			hash_from_hex(&previous.last_hash).map(|hash| Position {
+				hash,
+				seq: previous.last_seq,
+				time: previous.last_time,
+			})
 		}
 		None => Some(
-			super::anchor::read(&evidence_root.join(super::chain::CHAIN_DIR))?.unwrap_or(GENESIS),
+			super::anchor::read(&evidence_root.join(super::chain::CHAIN_DIR))?
+				.unwrap_or(Position::START),
 		),
 	};
 	// The timestamp mode is the chain's: the previous checkpoint's, changed
@@ -207,7 +216,9 @@ pub fn compute(
 		records: walk.records,
 		merkle_root: to_hex(&root),
 		first_prev: to_hex(&walk.first_prev),
-		last_hash: to_hex(&walk.last),
+		last_hash: to_hex(&walk.last.hash),
+		last_seq: walk.last.seq,
+		last_time: walk.last.time,
 		prev_checkpoint: before.map(|(_, bytes)| to_hex(&sha256(&bytes))),
 		retain_until: retain_until.name(),
 		timestamp: if timestamp { "enabled" } else { "disabled" }.to_string(),

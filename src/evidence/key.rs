@@ -57,6 +57,16 @@ impl EvidenceKey {
 			)
 		})?;
 		let key = EvidenceKey { pair };
+		match pinned_id(evidence_root)? {
+			Some(pinned) if pinned != key.id() => {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::InvalidData,
+					"the evidence key does not match the pinned key: refusing to sign with it",
+				));
+			}
+			Some(_) => {}
+			None => pin(evidence_root, &key.id())?,
+		}
 		key.publish(evidence_root)?;
 		Ok(key)
 	}
@@ -111,6 +121,34 @@ fn generate_into(path: &Path) -> std::io::Result<()> {
 		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
 		Err(error) => Err(error),
 	}
+}
+
+/// Where the id of the evidence key is pinned: next to the evidence
+/// directory, so replacing the key inside it is visible.
+pub fn pin_path(evidence_root: &Path) -> PathBuf {
+	evidence_root.with_extension("key-id")
+}
+
+/// The pinned key id, `None` when no key was ever made.
+pub fn pinned_id(evidence_root: &Path) -> std::io::Result<Option<String>> {
+	let Some(bytes) = super::checkpoint::read_bounded(&pin_path(evidence_root), 128)? else {
+		return Ok(None);
+	};
+	let id = String::from_utf8(bytes)
+		.ok()
+		.map(|text| text.trim().to_string())
+		.filter(|id| super::record::hash_from_hex(id).is_some())
+		.ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"the evidence key pin is malformed",
+			)
+		})?;
+	Ok(Some(id))
+}
+
+fn pin(evidence_root: &Path, id: &str) -> std::io::Result<()> {
+	crate::storage::write_secret(&pin_path(evidence_root), format!("{id}\n").as_bytes())
 }
 
 /// The SPKI DER of a raw Ed25519 public key.

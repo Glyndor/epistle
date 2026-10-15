@@ -15,6 +15,7 @@ fn hex_round_trips_and_refuses_anything_else() {
 fn a_record_is_one_json_line_with_its_kind() {
 	let record = Record {
 		v: FORMAT_VERSION,
+		seq: 1,
 		prev: to_hex(&GENESIS),
 		time: 1,
 		entry: accepted(7),
@@ -22,7 +23,10 @@ fn a_record_is_one_json_line_with_its_kind() {
 	let line = record.to_line().expect("line");
 	assert!(!line.contains(&b'\n'), "a record is a single line");
 	let text = String::from_utf8(line.clone()).expect("utf8");
-	assert!(text.starts_with("{\"v\":1,\"prev\":\"0000"), "{text}");
+	assert!(
+		text.starts_with("{\"v\":1,\"seq\":1,\"prev\":\"0000"),
+		"{text}"
+	);
 	assert!(text.contains("\"kind\":\"accepted\""), "{text}");
 	assert!(text.contains("\"class\":\"transactional\""), "{text}");
 	let back: Record = serde_json::from_slice(&line).expect("parse");

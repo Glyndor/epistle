@@ -33,7 +33,7 @@ fn a_closed_day_is_sealed_with_its_root_hashes_and_signature() {
 	let (root, _) = tree.finish(&[]);
 	assert_eq!(first.records, 2);
 	assert_eq!(first.merkle_root, to_hex(&root));
-	assert_eq!(first.first_prev, to_hex(&GENESIS));
+	assert_eq!(first.first_prev, to_hex(&crate::evidence::record::GENESIS));
 	assert_eq!(first.last_hash, to_hex(&hashes[1]));
 	assert_eq!(first.prev_checkpoint, None);
 	assert_eq!(first.retain_until, Day(DAY + 365).name());

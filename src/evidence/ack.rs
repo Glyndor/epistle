@@ -2,108 +2,223 @@
 //!
 //! While the evidence does not verify, new transactional mail is refused:
 //! its evidence would be appended to a chain that cannot prove anything.
-//! The operator lifts that with `epistle evidence acknowledge`, which names
-//! the exact break being accepted and a reason. The acknowledgement is
-//! signed with the evidence key into `<evidence>/acknowledged/<id>.json`
-//! (`<id>` is the SHA-256 of the break's description) and recorded in the
-//! chain, so the acceptance itself becomes evidence. It covers that break
-//! only: a different or later one refuses transactional mail again.
+//! The operator lifts that with `epistle evidence acknowledge`, run on the
+//! server by root or by the owner of the data directory; nothing else
+//! (the API, the mail listeners) can make one.
+//!
+//! An acknowledgement is its own record in the chain. It names the exact
+//! break (day, line, and the SHA-256 of its description), the reason and the
+//! operator (uid, user, host), and carries an Ed25519 signature by the
+//! pinned evidence key over those fields. It counts only when it sits in the
+//! chain after the break it names and its signature verifies; a dropped
+//! file, an edited record or a different break counts for nothing.
 
-use std::path::{Path, PathBuf};
+use std::io::BufReader;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use super::chain::{CHAIN_DIR, Chain, day_file, open_day};
 use super::key::{self, EvidenceKey};
-use super::record::{Entry, Setting, bounded, sha256, to_hex};
+use super::lines::{Line, Lines};
+use super::record::{Entry, Record, bounded, hash_from_hex, sha256, to_hex};
+use super::verify::Break;
 
-/// The directory of acknowledgements, under the evidence root.
-pub const ACK_DIR: &str = "acknowledged";
-
-/// What an acknowledgement says.
+/// The record an acknowledgement leaves in the chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Acknowledgement {
-	/// The break, as `verify` described it.
-	pub break_text: String,
+pub struct Acknowledged {
+	/// The day of the break (`YYYY-MM-DD`).
+	pub break_day: String,
+	/// Its line, `0` for the day as a whole.
+	pub break_line: u64,
+	/// Hex SHA-256 of the break's description.
+	pub break_id: String,
 	/// Why the operator accepts it.
 	pub reason: String,
-	/// Epoch seconds it was made.
-	pub time: u64,
+	/// Who acknowledged it: uid, user and host.
+	pub operator: String,
 	/// The id of the key that signed it.
 	pub key: String,
+	/// Hex Ed25519 signature over [`statement`].
+	pub signature: String,
 }
 
-/// The id of the break described by `break_text`.
-pub fn id(break_text: &str) -> String {
-	to_hex(&sha256(break_text.as_bytes()))
+/// Who runs the command: the real uid, the user that asked for it through
+/// `sudo` when there is one, and the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operator(String);
+
+impl Operator {
+	/// The operator of this process. Refused unless the process runs as root
+	/// or as the owner of `evidence_root`.
+	pub fn current(evidence_root: &Path) -> std::io::Result<Operator> {
+		use std::os::unix::fs::MetadataExt;
+		// SAFETY: getuid and geteuid have no preconditions and cannot fail.
+		let (uid, euid) = unsafe { (libc::getuid(), libc::geteuid()) };
+		let owner = std::fs::metadata(evidence_root)?.uid();
+		if euid != 0 && euid != owner {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::PermissionDenied,
+				"only root or the owner of the data directory may acknowledge a break",
+			));
+		}
+		let sudo = std::env::var("SUDO_USER").unwrap_or_default();
+		let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+		Ok(Operator(bounded(&format!(
+			"uid={uid} sudo_user={} host={}",
+			printable(&sudo),
+			printable(host.trim())
+		))))
+	}
+
+	/// An operator named explicitly, for tests.
+	#[cfg(test)]
+	pub(crate) fn named(name: &str) -> Operator {
+		Operator(name.to_string())
+	}
+
+	/// The operator as recorded.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
 }
 
-fn paths(evidence_root: &Path, break_text: &str) -> (PathBuf, PathBuf) {
-	let base = evidence_root.join(ACK_DIR).join(id(break_text));
-	(base.with_extension("json"), base.with_extension("sig"))
+fn printable(value: &str) -> String {
+	value
+		.chars()
+		.filter(|c| c.is_ascii_graphic())
+		.take(64)
+		.collect()
 }
 
-/// Acknowledge `break_text` for `reason`: sign it, store it, and record it
-/// in the chain, stamped with the clock.
+/// The id of a break: the SHA-256 of its description.
+pub fn id(at: &Break) -> String {
+	to_hex(&sha256(at.to_string().as_bytes()))
+}
+
+/// The bytes an acknowledgement signs.
+pub fn statement(record: &Acknowledged) -> Vec<u8> {
+	format!(
+		"epistle evidence acknowledgement\n{}\n{}\n{}\n{}\n{}\n{}\n",
+		record.break_day,
+		record.break_line,
+		record.break_id,
+		record.reason,
+		record.operator,
+		record.key
+	)
+	.into_bytes()
+}
+
+/// Acknowledge `at` for `reason` as `operator`: sign it and append it to the
+/// chain.
 pub fn acknowledge(
 	evidence_root: &Path,
 	key: &EvidenceKey,
-	break_text: &str,
+	at: &Break,
 	reason: &str,
+	operator: &Operator,
 ) -> std::io::Result<()> {
-	acknowledge_at(
-		evidence_root,
-		key,
-		break_text,
-		reason,
-		crate::storage::delivery_log::now_epoch(),
-	)
-}
-
-/// [`acknowledge`] at a fixed time.
-pub(crate) fn acknowledge_at(
-	evidence_root: &Path,
-	key: &EvidenceKey,
-	break_text: &str,
-	reason: &str,
-	now: u64,
-) -> std::io::Result<()> {
-	let acknowledgement = Acknowledgement {
-		break_text: bounded(break_text),
-		reason: bounded(reason),
-		time: now,
-		key: key.id(),
-	};
-	let bytes = serde_json::to_vec_pretty(&acknowledgement).map_err(std::io::Error::other)?;
-	super::chain::create_private_dir(&evidence_root.join(ACK_DIR))?;
-	let (json, sig) = paths(evidence_root, break_text);
-	crate::storage::write_secret(&sig, &key.sign(&bytes))?;
-	crate::storage::write_secret(&json, &bytes)?;
-	super::chain::Chain::open(evidence_root)?.append_at(
-		now,
-		Entry::Setting(Setting {
-			name: "acknowledge".into(),
-			value: format!("{} {}", id(break_text), bounded(reason)),
-		}),
-	)?;
+	let record = signed(key, at, reason, operator);
+	Chain::open(evidence_root)?.append(Entry::Acknowledged(record))?;
 	Ok(())
 }
 
-/// Whether `break_text` was acknowledged with a valid signature by a
-/// published evidence key.
-pub fn is_acknowledged(evidence_root: &Path, break_text: &str) -> bool {
-	let (json, sig) = paths(evidence_root, break_text);
-	let (Ok(bytes), Ok(signature)) = (std::fs::read(&json), std::fs::read(&sig)) else {
+/// [`acknowledge`] at a fixed time, for tests.
+#[cfg(test)]
+pub(crate) fn acknowledge_at(
+	evidence_root: &Path,
+	key: &EvidenceKey,
+	at: &Break,
+	reason: &str,
+	operator: &Operator,
+	now: u64,
+) -> std::io::Result<()> {
+	let record = signed(key, at, reason, operator);
+	Chain::open(evidence_root)?.append_at(now, Entry::Acknowledged(record))?;
+	Ok(())
+}
+
+fn signed(key: &EvidenceKey, at: &Break, reason: &str, operator: &Operator) -> Acknowledged {
+	let mut record = Acknowledged {
+		break_day: at.day.name(),
+		break_line: at.line,
+		break_id: id(at),
+		reason: bounded(
+			&reason
+				.chars()
+				.filter(|c| !c.is_control())
+				.collect::<String>(),
+		),
+		operator: operator.0.clone(),
+		key: key.id(),
+		signature: String::new(),
+	};
+	record.signature = to_hex(&key.sign(&statement(&record)));
+	record
+}
+
+/// Whether `at` is acknowledged: a record in the chain after it names it,
+/// and is signed by the pinned evidence key.
+pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
+	let Ok(Some(pinned)) = key::pinned_id(evidence_root) else {
 		return false;
 	};
-	let Ok(acknowledgement) = serde_json::from_slice::<Acknowledgement>(&bytes) else {
-		return false;
-	};
-	if acknowledgement.break_text != bounded(break_text) {
-		return false;
-	}
-	std::fs::read_to_string(key::public_key_path(evidence_root, &acknowledgement.key))
+	let Some(public) = std::fs::read_to_string(key::public_key_path(evidence_root, &pinned))
 		.ok()
 		.and_then(|pem| key::parse_public_pem(&pem))
-		.filter(|public| key::key_id(public) == acknowledgement.key)
-		.is_some_and(|public| key::verify(&public, &bytes, &signature))
+		.filter(|public| key::key_id(public) == pinned)
+	else {
+		return false;
+	};
+	let wanted = id(at);
+	let Ok(days) = Chain::open(evidence_root).and_then(|chain| chain.days()) else {
+		return false;
+	};
+	for day in days.into_iter().filter(|day| *day >= at.day) {
+		let Ok(file) = open_day(&day_file(&evidence_root.join(CHAIN_DIR), day)) else {
+			continue;
+		};
+		let mut lines = Lines::new(BufReader::new(file));
+		while let Ok(Some((number, line))) = lines.next_line() {
+			let Line::Complete(bytes) = line else {
+				continue;
+			};
+			if day == at.day && number <= at.line {
+				continue;
+			}
+			let Ok(Record {
+				entry: Entry::Acknowledged(record),
+				..
+			}) = Record::parse_canonical(bytes)
+			else {
+				continue;
+			};
+			let valid = record.break_id == wanted
+				&& record.break_day == at.day.name()
+				&& record.break_line == at.line
+				&& record.key == pinned
+				&& decode_signature(&record.signature)
+					.is_some_and(|signature| key::verify(&public, &statement(&record), &signature));
+			if valid {
+				return true;
+			}
+		}
+	}
+	false
 }
+
+/// The 64 bytes of a hex Ed25519 signature.
+fn decode_signature(hex: &str) -> Option<Vec<u8>> {
+	if hex.len() != 128 {
+		return None;
+	}
+	let (left, right) = hex.split_at(64);
+	let mut out = hash_from_hex(left)?.to_vec();
+	out.extend_from_slice(&hash_from_hex(right)?);
+	Some(out)
+}
+
+#[cfg(test)]
+#[path = "ack_tests.rs"]
+mod tests;

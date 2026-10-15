@@ -4,17 +4,17 @@ use crate::evidence::test_support::{accepted, at, delivered};
 use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::build;
 
-const DAY: i64 = 20_740;
+pub(crate) const DAY: i64 = 20_740;
 
-struct Fixture {
-	dir: tempfile::TempDir,
-	key: EvidenceKey,
-	tsa: FakeTsa,
+pub(crate) struct Fixture {
+	pub(crate) dir: tempfile::TempDir,
+	pub(crate) key: EvidenceKey,
+	pub(crate) tsa: FakeTsa,
 }
 
 impl Fixture {
 	/// Three sealed and stamped days.
-	fn new() -> Self {
+	pub(crate) fn new() -> Self {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let key = EvidenceKey::load_or_create(dir.path()).expect("key");
 		let tsa = FakeTsa::new(at(DAY + 3, 1));
@@ -33,7 +33,7 @@ impl Fixture {
 		fixture
 	}
 
-	fn root(&self) -> &Path {
+	pub(crate) fn root(&self) -> &Path {
 		self.dir.path()
 	}
 
@@ -50,7 +50,7 @@ impl Fixture {
 		}
 	}
 
-	fn verify(&self) -> Report {
+	pub(crate) fn verify(&self) -> Report {
 		verify(
 			self.root(),
 			&Options {
@@ -75,14 +75,25 @@ impl Fixture {
 		if !keep_token {
 			std::fs::remove_file(&paths.tsr).expect("remove tsr");
 		}
-		chain
-			.append_at(at(DAY + offset, 1), accepted(90))
-			.expect("append");
+		// Written by hand, as the writer never goes back to a past day.
+		let (before, _) = checkpoint::load(self.root(), Day(DAY + offset - 1))
+			.expect("load")
+			.expect("the day before is sealed");
+		let line = crate::evidence::record::Record {
+			v: crate::evidence::record::FORMAT_VERSION,
+			seq: before.last_seq + 1,
+			prev: before.last_hash.clone(),
+			time: at(DAY + offset, 1),
+			entry: accepted(90),
+		}
+		.to_line()
+		.expect("line");
+		std::fs::write(chain.day_file(day), [line, b"\n".to_vec()].concat()).expect("write");
 		checkpoint::seal(self.root(), day, &self.key, true, at(DAY + 3, 0)).expect("re-seal");
 	}
 }
 
-fn reason(report: &Report) -> String {
+pub(crate) fn reason(report: &Report) -> String {
 	report.first_break.as_ref().expect("a break").to_string()
 }
 
@@ -299,7 +310,7 @@ fn a_checkpoint_signed_by_another_key_is_a_break() {
 	});
 	assert_eq!(
 		reason(&fixture.verify()),
-		"2026-10-15: checkpoint: signed with a different evidence key than the day before"
+		"2026-10-15: checkpoint: signed with a key other than the pinned evidence key"
 	);
 }
 
@@ -336,36 +347,4 @@ fn a_token_issued_long_after_its_checkpoint_is_refused() {
 		reason(&report),
 		"2026-10-16: checkpoint: timestamp: the token was issued more than 3 days after the checkpoint"
 	);
-}
-
-#[test]
-fn an_acknowledged_break_is_reported_and_the_walk_goes_on() {
-	let fixture = Fixture::new();
-	let paths = files(fixture.root(), Day(DAY));
-	std::fs::remove_file(&paths.tsr).expect("rm token");
-	let first = reason(&fixture.verify());
-	crate::evidence::ack::acknowledge_at(
-		fixture.root(),
-		&fixture.key,
-		&first,
-		"token lost in a disk failure",
-		at(DAY + 3, 13),
-	)
-	.expect("acknowledge");
-	let report = fixture.verify();
-	assert_eq!(report.acknowledged.len(), 1);
-	assert_eq!(report.acknowledged[0].to_string(), first);
-	assert_eq!(report.first_break, None);
-	assert_eq!(
-		report.sealed, 2,
-		"the days after the acknowledged one are still checked"
-	);
-	// A forged acknowledgement (bad signature) does not count.
-	let id = crate::evidence::ack::id(&first);
-	let sig = fixture
-		.root()
-		.join("acknowledged")
-		.join(format!("{id}.sig"));
-	std::fs::write(&sig, [0u8; 64]).expect("forge");
-	assert_eq!(reason(&fixture.verify()), first);
 }
