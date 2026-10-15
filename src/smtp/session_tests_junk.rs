@@ -7,10 +7,11 @@ use super::tests_basic::{greeted, reply_code};
 use super::*;
 
 /// The line a session past its junk-command limit is closed with.
-const TOO_MANY: &str = "421 4.7.0 too many commands without progress, closing connection\r\n";
+pub(super) const TOO_MANY: &str =
+	"421 4.7.0 too many commands without progress, closing connection\r\n";
 
 /// The reply of a step that closes the connection; `None` otherwise.
-fn closing(action: &Action) -> Option<String> {
+pub(super) fn closing(action: &Action) -> Option<String> {
 	match action {
 		Action::Close(reply) => Some(reply.to_string()),
 		_ => None,
@@ -18,7 +19,7 @@ fn closing(action: &Action) -> Option<String> {
 }
 
 /// Send `command` `times` times and assert none of them closes the session.
-fn send_kept(session: &mut Session, command: &str, times: usize) {
+pub(super) fn send_kept(session: &mut Session, command: &str, times: usize) {
 	for sent in 1..=times {
 		let action = session.command_line(command);
 		assert_eq!(
@@ -50,16 +51,39 @@ fn every_kind_of_command_without_progress_counts() {
 		"VRFY bob",
 		"EXPN staff",
 		"HELP",
+		"ETRN example.org",
 		"FROB",
+		"NOOP",
+	];
+	for sent in 0..100 {
+		let command = junk[sent % junk.len()];
+		assert_eq!(
+			closing(&session.command_line(command)),
+			None,
+			"{command} as command {sent} is still under the limit"
+		);
+	}
+	assert_eq!(
+		closing(&session.command_line("NOOP")).as_deref(),
+		Some(TOO_MANY),
+		"the 101st command without progress closes the session"
+	);
+}
+
+#[test]
+fn every_kind_of_refusal_counts_until_a_message_is_accepted() {
+	let mut session = greeted();
+	let refused = [
 		"MAIL FROM:<not an address",
 		"RCPT TO:<bob@example.org>",
 		"MAIL FROM:<a@example.org> BOGUS=1",
-		"NOOP",
 		"DATA",
+		"AUTH PLAIN",
 	];
-	for round in 0..10 {
-		for command in junk {
+	for round in 0..20 {
+		for command in refused {
 			let action = session.command_line(command);
+			assert!(reply_code(&action) >= 500, "{command} is refused");
 			assert_eq!(
 				closing(&action),
 				None,
@@ -67,7 +91,7 @@ fn every_kind_of_command_without_progress_counts() {
 			);
 		}
 	}
-	// A refused RCPT is junk too, inside a transaction that was opened.
+	// A refused RCPT counts too, inside a transaction that was opened.
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<a@example.org>")),
 		250
@@ -75,7 +99,7 @@ fn every_kind_of_command_without_progress_counts() {
 	assert_eq!(
 		closing(&session.command_line("RCPT TO:<someone@elsewhere.example>")).as_deref(),
 		Some(TOO_MANY),
-		"the 101st command without progress is a refused relay"
+		"the 101st refusal is a refused relay"
 	);
 }
 

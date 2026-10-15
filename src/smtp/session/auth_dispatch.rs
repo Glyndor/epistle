@@ -15,7 +15,7 @@ impl Session {
 	/// Feed one command line (CRLF already stripped and enforced upstream).
 	pub fn command_line(&mut self, line: &str) -> Action {
 		let parsed = crate::smtp::command::parse(line);
-		let junk = matches!(parsed, Ok(Command::Noop | Command::Rset | Command::Vrfy));
+		let junk = self.is_junk(&parsed);
 		let action = self.dispatch(parsed);
 		self.count_junk(junk, action)
 	}

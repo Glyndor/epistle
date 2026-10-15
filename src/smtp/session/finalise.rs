@@ -173,6 +173,7 @@ fn inner_finalise(
 		Some(message) => {
 			session.policy.hold_charge(charge);
 			session.delivery_reservation = reserved;
+			session.junk.message_accepted();
 			Action::Deliver(Reply::ok(), message)
 		}
 		None => {

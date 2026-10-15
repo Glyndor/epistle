@@ -36,6 +36,9 @@ mod tests_diskspace;
 #[path = "../session_tests_junk.rs"]
 mod tests_junk;
 #[cfg(test)]
+#[path = "../session_tests_junk_progress.rs"]
+mod tests_junk_progress;
+#[cfg(test)]
 #[path = "../session_tests_memory_budget.rs"]
 mod tests_memory_budget;
 #[cfg(test)]

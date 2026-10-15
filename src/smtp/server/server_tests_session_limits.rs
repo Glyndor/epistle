@@ -130,3 +130,43 @@ async fn a_listener_with_no_junk_limit_keeps_answering() {
 	);
 	assert!(output.ends_with("221 2.0.0 closing connection\r\n"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_relay_delivering_a_list_with_many_unknown_recipients_is_not_cut() {
+	// Three messages of a list, each to 38 addresses that no longer exist
+	// and two that do, in runs shorter than the consecutive-error guard:
+	// 114 refusals in one session, and every message is delivered.
+	let sink = Arc::new(MemorySink::new());
+	let server = Arc::new(
+		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
+			.with_directory(test_directory()),
+	);
+	let mut client = Client::connect(&server);
+	let mut session = b"EHLO lists.example.net\r\n".to_vec();
+	for message in 0..3 {
+		session.extend_from_slice(b"MAIL FROM:<list@lists.example.net>\r\n");
+		for run in 0..2 {
+			for unknown in 0..19 {
+				let line = format!("RCPT TO:<gone{message}x{run}x{unknown}@example.org>\r\n");
+				session.extend_from_slice(line.as_bytes());
+			}
+			session.extend_from_slice(b"RCPT TO:<bob@example.org>\r\n");
+		}
+		session.extend_from_slice(b"DATA\r\nSubject: list\r\n\r\nhello\r\n.\r\n");
+	}
+	session.extend_from_slice(b"QUIT\r\n");
+	client.send(&session).await;
+	let output = client.finish().await;
+	assert!(
+		!output.contains("421"),
+		"no refusal count closes a relay whose messages are accepted"
+	);
+	let codes = reply_codes(&output);
+	assert_eq!(codes.iter().filter(|code| **code == "550").count(), 114);
+	assert_eq!(
+		sink.messages().len(),
+		3,
+		"every message of the list arrives"
+	);
+	assert!(output.ends_with("221 2.0.0 closing connection\r\n"));
+}
