@@ -14,7 +14,11 @@ fn four_records() -> (tempfile::TempDir, Vec<Vec<u8>>, Vec<[u8; 32]>) {
 		.into_iter()
 		.enumerate()
 	{
-		hashes.push(chain.append(at(DAY, hour as u64), entry).expect("append"));
+		hashes.push(
+			chain
+				.append_at(at(DAY, hour as u64), entry)
+				.expect("append"),
+		);
 	}
 	let lines = read_lines(dir.path());
 	(dir, lines, hashes)

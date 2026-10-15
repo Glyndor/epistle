@@ -59,16 +59,41 @@ impl Chain {
 		day_file(&self.dir, day)
 	}
 
-	/// Append one record for `entry` written at `time` (epoch seconds) and
-	/// return the hash of its line. The record is on disk and synced when
-	/// this returns `Ok`; on `Err` nothing was appended.
-	pub fn append(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
+	/// Append one record for `entry`, stamped with the clock read under the
+	/// chain lock, and return the hash of its line. The record is on disk and
+	/// synced when this returns `Ok`; on `Err` nothing was appended.
+	///
+	/// Reading the clock under the lock is what makes sealing a day safe: a
+	/// checkpoint is computed under the same lock, so no record can be
+	/// stamped before midnight and land after its day was sealed.
+	pub fn append(&self, entry: Entry) -> std::io::Result<[u8; 32]> {
+		self.append_with(crate::storage::delivery_log::now_epoch, entry)
+	}
+
+	/// [`Chain::append`] at a fixed `time`, for tests and replays.
+	pub(crate) fn append_at(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
+		self.append_with(|| time, entry)
+	}
+
+	/// Run `work` holding the chain lock, so no record is appended meanwhile.
+	pub fn locked<T>(&self, work: impl FnOnce() -> T) -> std::io::Result<T> {
 		let _local = self
 			.local
 			.lock()
 			.map_err(|_| std::io::Error::other("evidence chain lock poisoned"))?;
 		let lock = self.lock_file()?;
 		lock.lock()?;
+		Ok(work())
+	}
+
+	fn append_with(&self, clock: impl FnOnce() -> u64, entry: Entry) -> std::io::Result<[u8; 32]> {
+		let _local = self
+			.local
+			.lock()
+			.map_err(|_| std::io::Error::other("evidence chain lock poisoned"))?;
+		let lock = self.lock_file()?;
+		lock.lock()?;
+		let time = clock();
 		let day = Day::of_epoch(time);
 		let path = self.day_file(day);
 		let prev = self.last_hash_before_append(day)?;

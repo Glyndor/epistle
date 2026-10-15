@@ -9,8 +9,10 @@
 
 pub mod anchor;
 pub mod chain;
+pub mod checkpoint;
 pub mod class;
 pub mod day;
+pub mod key;
 pub mod lines;
 pub mod marketing;
 pub mod merkle;

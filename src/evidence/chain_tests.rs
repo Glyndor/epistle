@@ -22,8 +22,8 @@ fn prev_of(line: &[u8]) -> [u8; 32] {
 fn each_record_names_the_hash_of_the_line_before_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("open");
-	let first = chain.append(at(DAY, 1), accepted(1)).expect("append");
-	let second = chain.append(at(DAY, 2), delivered(1)).expect("append");
+	let first = chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	let second = chain.append_at(at(DAY, 2), delivered(1)).expect("append");
 	let lines = lines_of(&chain, Day(DAY));
 	assert_eq!(lines.len(), 2);
 	assert_eq!(prev_of(&lines[0]), GENESIS);
@@ -37,11 +37,11 @@ fn the_chain_continues_across_days_and_reopens() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let last_of_day = {
 		let chain = Chain::open(dir.path()).expect("open");
-		chain.append(at(DAY, 23), accepted(1)).expect("append")
+		chain.append_at(at(DAY, 23), accepted(1)).expect("append")
 	};
 	let chain = Chain::open(dir.path()).expect("reopen");
 	chain
-		.append(at(DAY + 2, 1), accepted(2))
+		.append_at(at(DAY + 2, 1), accepted(2))
 		.expect("append next day");
 	let lines = lines_of(&chain, Day(DAY + 2));
 	assert_eq!(prev_of(&lines[0]), last_of_day);
@@ -53,7 +53,7 @@ fn files_and_directory_are_owner_only() {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("open");
-	chain.append(at(DAY, 1), accepted(1)).expect("append");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
 	let file = fs::metadata(chain.day_file(Day(DAY))).expect("stat file");
 	assert_eq!(file.permissions().mode() & 0o777, 0o600);
 	let directory = fs::metadata(chain.dir()).expect("stat dir");
@@ -64,14 +64,14 @@ fn files_and_directory_are_owner_only() {
 fn an_interrupted_last_line_is_cut_off_before_the_next_append() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("open");
-	let kept = chain.append(at(DAY, 1), accepted(1)).expect("append");
+	let kept = chain.append_at(at(DAY, 1), accepted(1)).expect("append");
 	let path = chain.day_file(Day(DAY));
 	let mut file = OpenOptions::new().append(true).open(&path).expect("open");
 	file.write_all(b"{\"v\":1,\"prev\":\"00")
 		.expect("torn write");
 	drop(file);
 	chain
-		.append(at(DAY, 2), accepted(2))
+		.append_at(at(DAY, 2), accepted(2))
 		.expect("append after torn");
 	let lines = lines_of(&chain, Day(DAY));
 	assert_eq!(lines.len(), 2, "the torn bytes are gone");
@@ -83,7 +83,7 @@ fn a_torn_first_line_leaves_the_day_empty() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("open");
 	fs::write(chain.day_file(Day(DAY)), b"{\"v\":1").expect("torn");
-	chain.append(at(DAY, 2), accepted(2)).expect("append");
+	chain.append_at(at(DAY, 2), accepted(2)).expect("append");
 	let lines = lines_of(&chain, Day(DAY));
 	assert_eq!(lines.len(), 1);
 	assert_eq!(prev_of(&lines[0]), GENESIS);
@@ -95,7 +95,7 @@ fn the_last_hash_is_found_without_reading_the_day() {
 	let chain = Chain::open(dir.path()).expect("open");
 	let mut last = GENESIS;
 	for n in 0..300 {
-		last = chain.append(at(DAY, 1), accepted(n)).expect("append");
+		last = chain.append_at(at(DAY, 1), accepted(n)).expect("append");
 	}
 	let path = chain.day_file(Day(DAY));
 	assert_eq!(last_line_hash(&path, false).expect("tail"), Some(last));
@@ -115,7 +115,7 @@ fn an_oversized_record_is_refused_and_nothing_is_written() {
 	if let Entry::Accepted(accepted) = &mut entry {
 		accepted.recipients = vec!["r@example.net".repeat(64); 400];
 	}
-	let error = chain.append(at(DAY, 1), entry).expect_err("too long");
+	let error = chain.append_at(at(DAY, 1), entry).expect_err("too long");
 	assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 	assert!(!chain.day_file(Day(DAY)).exists());
 }
@@ -131,7 +131,7 @@ fn two_writers_never_fork_the_chain() {
 				let chain = Chain::open(&root).expect("open");
 				for n in 0..50 {
 					chain
-						.append(at(DAY, 1), accepted(writer * 100 + n))
+						.append_at(at(DAY, 1), accepted(writer * 100 + n))
 						.expect("append");
 				}
 			})
