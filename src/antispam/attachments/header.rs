@@ -37,7 +37,11 @@ pub struct PartHeader {
 	/// Every distinct candidate file name, in header order.
 	pub names: Vec<String>,
 	/// The declared `type/subtype`, lower case; `text/plain` when absent.
+	/// The walk follows this one, the first, as clients do.
 	pub declared_type: String,
+	/// Every declared `type/subtype`, from every copy of the header, for
+	/// the rules: any of them may be the one a client believes.
+	pub declared_types: Vec<String>,
 	/// The part is an attachment rather than message text.
 	pub attachment: bool,
 	/// The body's transfer encoding.
@@ -60,9 +64,15 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	let mut types: Vec<&ContentType<'_>> = Vec::new();
 	let mut dispositions: Vec<&ContentType<'_>> = Vec::new();
 	let mut encodings: Vec<String> = Vec::new();
+	// A Content-Type mail-parser could not read as a type: clients fall
+	// back to text or to an opaque file, so the part is scanned as a file.
+	let mut unparsed_type = false;
 	for header in headers {
 		match header.name {
-			HeaderName::ContentType => types.extend(header.value.as_content_type()),
+			HeaderName::ContentType => match header.value.as_content_type() {
+				Some(ct) => types.push(ct),
+				None => unparsed_type = true,
+			},
 			HeaderName::ContentDisposition => dispositions.extend(header.value.as_content_type()),
 			HeaderName::ContentTransferEncoding => encodings.extend(
 				header
@@ -76,16 +86,28 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	// A block mail-parser cannot read at all is scanned as an opaque
 	// attachment rather than skipped as text.
 	let unreadable = parsed.is_none() && block.iter().any(|byte| !byte.is_ascii_whitespace());
-	let mut ambiguous =
-		unreadable || types.len() > 1 || dispositions.len() > 1 || encodings.len() > 1;
+	let mut ambiguous = unreadable
+		|| unparsed_type
+		|| types.len() > 1
+		|| dispositions.len() > 1
+		|| encodings.len() > 1;
 
-	let declared_type = types
-		.first()
-		.map(|ct| match ct.subtype() {
+	let type_name = |ct: &&ContentType<'_>| {
+		match ct.subtype() {
 			Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
 			None => ct.ctype().to_string(),
-		})
-		.map(|value| value.to_ascii_lowercase())
+		}
+		.to_ascii_lowercase()
+	};
+	let mut declared_types: Vec<String> = Vec::new();
+	for name in types.iter().map(type_name) {
+		if !declared_types.contains(&name) {
+			declared_types.push(name);
+		}
+	}
+	let declared_type = declared_types
+		.first()
+		.cloned()
 		.unwrap_or_else(|| "text/plain".to_string());
 
 	let mut names: Vec<String> = Vec::new();
@@ -155,13 +177,17 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		.any(|cd| cd.ctype().eq_ignore_ascii_case("attachment"));
 	// A multipart nobody can split is scanned as one opaque attachment.
 	let attachment = unreadable
+		|| unparsed_type
 		|| !names.is_empty()
 		|| disposition_attachment
-		|| !(declared_type.starts_with("text/") || multipart)
+		|| declared_types
+			.iter()
+			.any(|kind| !(kind.starts_with("text/") || kind.starts_with("multipart/")))
 		|| (multipart && boundary.is_none());
 	PartHeader {
 		names,
 		declared_type,
+		declared_types,
 		attachment,
 		encoding,
 		boundary,

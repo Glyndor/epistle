@@ -1,15 +1,15 @@
 use super::*;
-use crate::antispam::attachments::archive::{Listing, list_zip};
+use crate::antispam::attachments::archive::{Listing, Ole, list_zip};
 use crate::antispam::attachments::corpus;
 
 fn named(name: &str, declared: &str, real: RealType) -> Vec<Reason> {
 	judge(
 		&Facts {
-			filename: Some(name),
-			declared_type: declared,
+			filenames: &[name.to_string()],
+			declared_types: &[declared.to_string()],
 			real_type: real,
 			listing: None,
-			ole_macros: false,
+			ole: None,
 		},
 		&Extensions::default(),
 	)
@@ -18,11 +18,11 @@ fn named(name: &str, declared: &str, real: RealType) -> Vec<Reason> {
 fn archive(listing: &Listing, real: RealType) -> Vec<Reason> {
 	judge(
 		&Facts {
-			filename: Some("files.zip"),
-			declared_type: "application/zip",
+			filenames: &["files.zip".to_string()],
+			declared_types: &["application/zip".to_string()],
 			real_type: real,
 			listing: Some(listing),
-			ole_macros: false,
+			ole: None,
 		},
 		&Extensions::default(),
 	)
@@ -136,11 +136,11 @@ fn block_and_allow_lists_change_the_extension_set() {
 	let judge_name = |name: &str| {
 		judge(
 			&Facts {
-				filename: Some(name),
-				declared_type: "application/octet-stream",
+				filenames: &[name.to_string()],
+				declared_types: &["application/octet-stream".to_string()],
 				real_type: RealType::Unknown,
 				listing: None,
-				ole_macros: false,
+				ole: None,
 			},
 			&extensions,
 		)
@@ -195,11 +195,14 @@ fn office_macros_are_flagged() {
 	assert_eq!(archive(&docm, RealType::Ooxml), vec![Reason::Macro]);
 	let ole = judge(
 		&Facts {
-			filename: Some("old.doc"),
-			declared_type: "application/msword",
+			filenames: &["old.doc".to_string()],
+			declared_types: &["application/msword".to_string()],
 			real_type: RealType::Ole2,
 			listing: None,
-			ole_macros: true,
+			ole: Some(Ole {
+				macros: true,
+				..Ole::default()
+			}),
 		},
 		&Extensions::default(),
 	);
@@ -245,5 +248,43 @@ fn reason_codes_are_stable() {
 			"ambiguous-mime",
 			"scan-limit",
 		]
+	);
+}
+
+#[test]
+fn every_declared_type_is_checked_against_the_bytes() {
+	let reasons = judge(
+		&Facts {
+			filenames: &[],
+			declared_types: &[
+				"application/octet-stream".to_string(),
+				"image/png".to_string(),
+			],
+			real_type: RealType::Zip,
+			listing: None,
+			ole: None,
+		},
+		&Extensions::default(),
+	);
+	assert_eq!(reasons, vec![Reason::TypeMismatch]);
+}
+
+#[test]
+fn a_name_is_judged_whole_and_cut_at_a_nul() {
+	assert_eq!(
+		named(
+			"notes.txt\0x.exe",
+			"application/octet-stream",
+			RealType::Unknown
+		),
+		vec![Reason::DangerousExtension]
+	);
+	assert_eq!(
+		named(
+			"x.exe\0notes.txt",
+			"application/octet-stream",
+			RealType::Unknown
+		),
+		vec![Reason::DangerousExtension]
 	);
 }

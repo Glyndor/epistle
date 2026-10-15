@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use super::archive::Listing;
+use super::archive::{Listing, Ole};
 use super::sniff::RealType;
 
 /// Extensions Windows (and a few other desktops) run or mount on a double
@@ -117,11 +117,13 @@ const HTML_EXTENSIONS: &[&str] = &[
 	"htm", "html", "shtml", "xht", "xhtml", "mht", "mhtml", "svg",
 ];
 
-/// Bidirectional and zero-width formatting characters. U+202E (RIGHT-TO-LEFT
-/// OVERRIDE) makes `invoice<RLO>gpj.exe` display as `invoiceexe.jpg`.
-const BIDI_CONTROLS: &[char] = &[
-	'\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}',
-	'\u{2067}', '\u{2068}', '\u{2069}',
+/// Bidirectional and invisible formatting characters. U+202E (RIGHT-TO-LEFT
+/// OVERRIDE) makes `invoice<RLO>gpj.exe` display as `invoiceexe.jpg`; the
+/// zero-width ones split an extension so a plain match misses it.
+const FORMATTING: &[char] = &[
+	'\u{00ad}', '\u{180e}', '\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}', '\u{202a}',
+	'\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2060}', '\u{2061}', '\u{2062}', '\u{2063}',
+	'\u{2064}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{feff}',
 ];
 
 /// Why an attachment was singled out. The codes are a stable interface:
@@ -132,7 +134,7 @@ pub enum Reason {
 	DangerousExtension,
 	/// A decoy extension sits before a dangerous one: `factura.pdf.exe`.
 	DoubleExtension,
-	/// The name carries bidirectional formatting characters.
+	/// The name carries bidirectional or invisible formatting characters.
 	BidiName,
 	/// The content is an executable or a script, whatever the name says.
 	ExecutableContent,
@@ -220,42 +222,47 @@ impl Default for Extensions {
 
 /// The facts about one attachment the rules read.
 pub struct Facts<'a> {
-	/// The declared file name, if any.
-	pub filename: Option<&'a str>,
-	/// The declared `type/subtype`, lower case.
-	pub declared_type: &'a str,
+	/// Every candidate file name; empty when the part has none.
+	pub filenames: &'a [String],
+	/// Every declared `type/subtype`, lower case.
+	pub declared_types: &'a [String],
 	/// The content's real type.
 	pub real_type: RealType,
-	/// The zip directory, when the content is a zip.
+	/// The zip directory, when the content opens as a zip.
 	pub listing: Option<&'a Listing>,
-	/// An OLE2 file with a VBA project.
-	pub ole_macros: bool,
+	/// The OLE2 directory, when the content is OLE2.
+	pub ole: Option<Ole>,
 }
 
-/// Judge one attachment. The result is sorted and has no duplicates.
+/// Judge one attachment: every rule runs on every reading of every
+/// candidate name and on every declared type, and a finding from any of
+/// them stands. The result is sorted and has no duplicates.
 pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 	let mut reasons = BTreeSet::new();
-	let name = facts.filename.map(normalise_name);
-	if facts
-		.filename
-		.is_some_and(|name| name.contains(BIDI_CONTROLS))
-	{
+	if facts.filenames.iter().any(|name| name.contains(FORMATTING)) {
 		reasons.insert(Reason::BidiName);
 	}
-	let (last, previous) = name.as_deref().map(extensions_of).unwrap_or((None, None));
-	if let Some(ext) = last.as_deref() {
-		if extensions.is_dangerous(ext) {
-			reasons.insert(Reason::DangerousExtension);
-			if previous
-				.as_deref()
-				.is_some_and(|prev| DECOY_EXTENSIONS.contains(&prev))
-			{
-				reasons.insert(Reason::DoubleExtension);
+	let mut claimed: Vec<Option<String>> = Vec::new();
+	for name in facts.filenames.iter().flat_map(|name| name_variants(name)) {
+		let (last, previous) = extensions_of(&name);
+		if let Some(ext) = last.as_deref() {
+			if extensions.is_dangerous(ext) {
+				reasons.insert(Reason::DangerousExtension);
+				if previous
+					.as_deref()
+					.is_some_and(|prev| DECOY_EXTENSIONS.contains(&prev))
+				{
+					reasons.insert(Reason::DoubleExtension);
+				}
+			}
+			if HTML_EXTENSIONS.contains(&ext) {
+				reasons.insert(Reason::HtmlAttachment);
 			}
 		}
-		if HTML_EXTENSIONS.contains(&ext) {
-			reasons.insert(Reason::HtmlAttachment);
-		}
+		claimed.push(last);
+	}
+	if claimed.is_empty() {
+		claimed.push(None);
 	}
 	let real = facts.real_type;
 	if real.is_executable() {
@@ -270,65 +277,119 @@ pub fn judge(facts: &Facts<'_>, extensions: &Extensions) -> Vec<Reason> {
 	if matches!(real, RealType::Rar | RealType::SevenZip) {
 		reasons.insert(Reason::UnreadableArchive);
 	}
-	// The bytes decide: an image or PDF claim on content of another format,
-	// or on content that is not the claimed format at all, is a disguise.
-	let mismatched_image = claims_image(last.as_deref(), facts.declared_type)
-		&& !real.is_image()
-		&& (real != RealType::Unknown
-			|| claims_sniffable_image(last.as_deref(), facts.declared_type));
-	let mismatched_pdf = claims_pdf(last.as_deref(), facts.declared_type) && real != RealType::Pdf;
-	if mismatched_image || mismatched_pdf {
-		reasons.insert(Reason::TypeMismatch);
+	// The bytes decide: an image or PDF claim, by any name or any declared
+	// type, on content of another format, or on content that is not the
+	// claimed format at all, is a disguise.
+	let declared: Vec<&str> = if facts.declared_types.is_empty() {
+		vec![""]
+	} else {
+		facts.declared_types.iter().map(String::as_str).collect()
+	};
+	for ext in &claimed {
+		for kind in &declared {
+			let ext = ext.as_deref();
+			let mismatched_image = claims_image(ext, kind)
+				&& !real.is_image()
+				&& (real != RealType::Unknown || claims_sniffable_image(ext, kind));
+			let mismatched_pdf = claims_pdf(ext, kind) && real != RealType::Pdf;
+			if mismatched_image || mismatched_pdf {
+				reasons.insert(Reason::TypeMismatch);
+			}
+		}
 	}
 	if let Some(listing) = facts.listing {
-		if listing.encrypted {
-			reasons.insert(Reason::EncryptedArchive);
-		}
-		if listing.too_many {
-			reasons.insert(Reason::ScanLimit);
-		}
-		if listing.unreadable {
-			reasons.insert(Reason::UnreadableArchive);
-		}
-		if listing.names.iter().any(|entry| {
-			extensions_of(&normalise_name(entry))
-				.0
-				.is_some_and(|ext| ARCHIVE_EXTENSIONS.contains(&ext.as_str()))
-		}) {
-			reasons.insert(Reason::NestedArchive);
-		}
-		if listing.names.iter().any(|entry| {
-			entry.contains(BIDI_CONTROLS)
-				|| extensions_of(&normalise_name(entry))
-					.0
-					.is_some_and(|ext| extensions.is_dangerous(&ext))
-		}) {
-			reasons.insert(Reason::DangerousArchiveEntry);
-		}
-		if real == RealType::Ooxml && super::archive::ooxml_has_macros(listing) {
+		judge_listing(listing, real, extensions, &mut reasons);
+	}
+	if let Some(ole) = facts.ole {
+		if ole.macros {
 			reasons.insert(Reason::Macro);
 		}
-	}
-	if facts.ole_macros {
-		reasons.insert(Reason::Macro);
+		if ole.encrypted {
+			reasons.insert(Reason::EncryptedArchive);
+		}
+		if ole.unreadable {
+			reasons.insert(Reason::UnreadableArchive);
+		}
 	}
 	reasons.into_iter().collect()
 }
 
-/// The name as Windows would open it: cut at the first NUL (where C
-/// extractors stop reading), the last path component, without
-/// bidirectional controls, and without the trailing dots and spaces the
-/// file system drops (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`).
-fn normalise_name(name: &str) -> String {
-	let name = name.split('\0').next().unwrap_or(name);
-	let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
-	let cleaned: String = base
-		.chars()
-		.filter(|c| !BIDI_CONTROLS.contains(c))
+fn judge_listing(
+	listing: &Listing,
+	real: RealType,
+	extensions: &Extensions,
+	reasons: &mut BTreeSet<Reason>,
+) {
+	if listing.encrypted {
+		reasons.insert(Reason::EncryptedArchive);
+	}
+	if listing.too_many {
+		reasons.insert(Reason::ScanLimit);
+	}
+	if listing.unreadable {
+		reasons.insert(Reason::UnreadableArchive);
+	}
+	for entry in &listing.names {
+		if entry.contains(FORMATTING) {
+			reasons.insert(Reason::DangerousArchiveEntry);
+		}
+		for name in name_variants(entry) {
+			let Some(ext) = extensions_of(&name).0 else {
+				continue;
+			};
+			if extensions.is_dangerous(&ext) {
+				reasons.insert(Reason::DangerousArchiveEntry);
+			}
+			if ARCHIVE_EXTENSIONS.contains(&ext.as_str()) {
+				reasons.insert(Reason::NestedArchive);
+			}
+		}
+	}
+	if matches!(real, RealType::Ooxml | RealType::Zip) && super::archive::ooxml_has_macros(listing)
+	{
+		reasons.insert(Reason::Macro);
+	}
+}
+
+/// Every way a client or an extractor may read `name`, each reduced to
+/// the name a file system would open: formatting characters removed;
+/// whole and cut at the first NUL (C extractors stop there); as written
+/// and folded with NFKC plus the dots and slashes NFKC leaves alone
+/// (`photo\u{ff0e}exe` reads as `photo.exe`); then the last path
+/// component, without the trailing dots and spaces Windows drops
+/// (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`).
+pub(super) fn name_variants(name: &str) -> Vec<String> {
+	use unicode_normalization::UnicodeNormalization as _;
+	let visible: String = name.chars().filter(|c| !FORMATTING.contains(c)).collect();
+	let mut forms = vec![visible.clone()];
+	if let Some((head, _)) = visible.split_once('\0') {
+		forms.push(head.to_string());
+	}
+	let folded: Vec<String> = forms
+		.iter()
+		.map(|form| {
+			form.nfkc()
+				.map(|c| match c {
+					'\u{3002}' | '\u{ff61}' | '\u{fe12}' => '.',
+					'\u{2215}' | '\u{2044}' | '\u{29f8}' => '/',
+					'\u{29f5}' | '\u{29f9}' => '\\',
+					other => other,
+				})
+				.collect()
+		})
 		.collect();
-	cleaned
-		.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
-		.to_string()
+	forms.extend(folded);
+	let mut variants: Vec<String> = Vec::new();
+	for form in forms {
+		let base = form.rsplit(['/', '\\']).next().unwrap_or(&form);
+		let trimmed = base
+			.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+			.to_string();
+		if !variants.contains(&trimmed) {
+			variants.push(trimmed);
+		}
+	}
+	variants
 }
 
 /// The last and second-to-last extensions, lower case and trimmed, so

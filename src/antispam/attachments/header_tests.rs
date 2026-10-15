@@ -48,3 +48,15 @@ fn a_repeated_content_type_or_encoding_is_ambiguous() {
 	}
 	assert!(!parse(b"Content-Type: application/pdf\r\n").ambiguous);
 }
+
+#[test]
+fn an_unreadable_content_type_or_any_binary_type_makes_an_attachment() {
+	let unparsed = parse(b"Content-Type: ;;;\r\n");
+	assert!(unparsed.attachment && unparsed.ambiguous, "{unparsed:?}");
+	let doubled = parse(b"Content-Type: text/plain\r\nContent-Type: application/x-msdownload\r\n");
+	assert!(doubled.attachment, "{doubled:?}");
+	assert_eq!(
+		doubled.declared_types,
+		vec!["text/plain", "application/x-msdownload"]
+	);
+}

@@ -113,16 +113,20 @@ pub fn inspect(raw: &[u8], extensions: &Extensions, budget: Budget) -> Report {
 
 fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 	let mut real_type = sniff::sniff(&leaf.content);
-	// Bytes in front of a zip hide its signature but not its end record,
-	// and extractors open it anyway.
-	if real_type == RealType::Unknown && archive::has_end_record(&leaf.content) {
+	// A zip opens from its end record, wherever it starts: one with data
+	// in front, or glued behind a PDF or an image, is listed too. A
+	// truncated part has lost its end record; the truncation is a
+	// scan-limit of its own.
+	let opens_as_zip =
+		!leaf.truncated && (real_type == RealType::Zip || archive::has_end_record(&leaf.content));
+	if real_type == RealType::Unknown && opens_as_zip {
 		real_type = RealType::Zip;
 	}
 	// Message text is only judged when its bytes are a binary format; a
 	// text part that is really a program or an archive is a disguise.
 	let text_body = !leaf.attachment;
 	let disguised = text_body
-		&& real_type.is_binary()
+		&& (real_type.is_binary() || opens_as_zip)
 		&& (real_type != RealType::Pdf || leaf.content.starts_with(b"%PDF-"));
 	if text_body && !disguised {
 		return PartReport {
@@ -132,36 +136,21 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 			reasons: limits_only(leaf),
 		};
 	}
-	// A truncated zip has lost its central directory; listing it from the
-	// prefix alone would miss entries, so only a complete one is listed,
-	// and the truncation itself is a scan-limit.
-	let listing =
-		(real_type == RealType::Zip && !leaf.truncated).then(|| archive::list_zip(&leaf.content));
-	if listing.as_ref().is_some_and(archive::is_ooxml) {
+	let listing = opens_as_zip.then(|| archive::list_zip(&leaf.content));
+	if real_type == RealType::Zip && listing.as_ref().is_some_and(archive::is_ooxml) {
 		real_type = RealType::Ooxml;
 	}
-	let ole_macros = real_type == RealType::Ole2 && archive::ole2_has_macros(&leaf.content);
-	// Every candidate name is judged: clients disagree on which one they
-	// show and which one they save under.
-	let mut names: Vec<Option<&str>> = leaf.names.iter().map(|name| Some(name.as_str())).collect();
-	if names.is_empty() {
-		names.push(None);
-	}
-	let mut reasons: Vec<Reason> = names
-		.into_iter()
-		.flat_map(|filename| {
-			rules::judge(
-				&Facts {
-					filename,
-					declared_type: &leaf.declared_type,
-					real_type,
-					listing: listing.as_ref(),
-					ole_macros,
-				},
-				extensions,
-			)
-		})
-		.collect();
+	let ole = (real_type == RealType::Ole2).then(|| archive::inspect_ole2(&leaf.content));
+	let mut reasons = rules::judge(
+		&Facts {
+			filenames: &leaf.names,
+			declared_types: &leaf.declared_types,
+			real_type,
+			listing: listing.as_ref(),
+			ole,
+		},
+		extensions,
+	);
 	reasons.extend(limits_only(leaf));
 	if disguised {
 		reasons.push(Reason::TypeMismatch);
@@ -203,3 +192,7 @@ mod tests_evasion;
 #[cfg(test)]
 #[path = "inspect_tests_failclosed.rs"]
 mod tests_failclosed;
+
+#[cfg(test)]
+#[path = "inspect_tests_regressions.rs"]
+mod tests_regressions;

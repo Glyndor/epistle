@@ -74,6 +74,8 @@ pub struct Leaf {
 	pub names: Vec<String>,
 	/// The declared `type/subtype`, lower case; `text/plain` when absent.
 	pub declared_type: String,
+	/// Every declared `type/subtype`, from every copy of the header.
+	pub declared_types: Vec<String>,
 	/// Whether the part is an attachment rather than message text.
 	pub attachment: bool,
 	/// Nesting depth; the top-level entity is 0.
@@ -352,6 +354,7 @@ impl<'a> Walker<'a> {
 				visit(Leaf {
 					names: vec![embedded.name],
 					declared_type: "application/octet-stream".to_string(),
+					declared_types: vec!["application/octet-stream".to_string()],
 					attachment: true,
 					depth: depth + 1,
 					content: embedded.content,
@@ -363,6 +366,7 @@ impl<'a> Walker<'a> {
 		visit(Leaf {
 			names: header.names,
 			declared_type: header.declared_type,
+			declared_types: header.declared_types,
 			attachment: header.attachment,
 			depth,
 			content,
