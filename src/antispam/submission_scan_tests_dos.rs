@@ -155,3 +155,69 @@ fn a_full_clamd_queue_answers_busy_at_once() {
 		);
 	}
 }
+
+#[test]
+fn a_clamd_that_never_answers_gives_its_slot_back() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let clamd = Arc::new(
+		ClamdHook::new(stalled_clamd(dir.path())).with_timeout(Duration::from_millis(300)),
+	);
+	let scanner = worker::Scanner::start_with(clamd, 1, 1).expect("scanner");
+	for round in 0..3 {
+		let started = Instant::now();
+		let (inspection, _) = scanner.scan(b"x").expect("admitted, not busy");
+		assert_eq!(inspection, Inspection::Unscanned, "round {round}");
+		assert!(
+			started.elapsed() < Duration::from_secs(3),
+			"round {round} waited past the deadline"
+		);
+	}
+}
+
+#[test]
+fn one_account_flooding_heavy_messages_does_not_stall_another() {
+	let (sink, inner) = sink_with_gate(gate::Gate::new(4, 1), AttachmentMode::Flag);
+	let sink = Arc::new(sink);
+	let heavy = corpus::message(&[corpus::attachment(
+		"Content-Type: application/octet-stream; name=a.bin",
+		&vec![b'A'; 2 << 20],
+	)]);
+	let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+	let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+	let mut flooders = Vec::new();
+	for _ in 0..6 {
+		let (sink, heavy, stop, busy) = (
+			Arc::clone(&sink),
+			heavy.clone(),
+			Arc::clone(&stop),
+			Arc::clone(&busy),
+		);
+		flooders.push(std::thread::spawn(move || {
+			while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+				if let Err(SinkError::ScanUnavailable) = submit(&sink, "mallory", heavy.clone()) {
+					busy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				}
+			}
+		}));
+	}
+	std::thread::sleep(Duration::from_millis(200));
+	let mut slowest = Duration::ZERO;
+	for _ in 0..5 {
+		let started = Instant::now();
+		submit(&sink, "alice", b"Subject: s\r\n\r\nhello\r\n".to_vec()).expect("alice is admitted");
+		slowest = slowest.max(started.elapsed());
+	}
+	stop.store(true, std::sync::atomic::Ordering::Relaxed);
+	for flooder in flooders {
+		flooder.join().expect("flooder");
+	}
+	assert!(
+		slowest < Duration::from_secs(1),
+		"alice waited {slowest:?} behind mallory"
+	);
+	assert!(
+		busy.load(std::sync::atomic::Ordering::Relaxed) > 0,
+		"mallory was held to her share"
+	);
+	assert!(inner.messages().len() >= 5);
+}

@@ -72,7 +72,13 @@ impl Scanner {
 						};
 						let clamd = Arc::clone(&clamd);
 						tokio::spawn(async move {
-							let inspection = clamd.inspect(&job.raw).await;
+							// clamd's own deadline bounds the exchange; this one
+							// also bounds anything around it, so a slot always
+							// comes back.
+							let inspection =
+								tokio::time::timeout(deadline, clamd.inspect(&job.raw))
+									.await
+									.unwrap_or(Inspection::Unscanned);
 							let _ = job.answer.send((inspection, std::thread::current().id()));
 							drop(slot);
 						});
