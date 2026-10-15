@@ -28,7 +28,7 @@ fn an_override_publishes_its_own_key_even_under_the_default_selector_name() {
 	))
 	.expect("config");
 	let mut out = Vec::new();
-	assert_eq!(run(&config, &mut out), ExitCode::SUCCESS);
+	assert_eq!(run(&config, false, &mut out), ExitCode::SUCCESS);
 	let text = String::from_utf8(out).expect("utf-8");
 	let record = |name: &str| -> Vec<&str> {
 		text.lines()

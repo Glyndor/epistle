@@ -19,3 +19,6 @@ mod stores;
 
 #[path = "cli_json/stack.rs"]
 mod stack;
+
+#[path = "cli_json/top_level.rs"]
+mod top_level;

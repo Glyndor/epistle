@@ -18,6 +18,7 @@ pub(super) fn run(
 	account: &str,
 	crypto: &MessageCrypto,
 	reader: impl BufRead,
+	json: bool,
 ) -> ExitCode {
 	let mut current: Option<Vec<u8>> = None;
 	let mut imported = 0u64;
@@ -63,7 +64,21 @@ pub(super) fn run(
 		progress.tick(imported as usize);
 	}
 	progress.finish(&format!("imported {imported} messages into {account}"));
-	ExitCode::SUCCESS
+	imported_json(json, account, imported)
+}
+
+/// With `json`, the result of an import: `{"result": "saved", "action":
+/// "import", "account", "imported"}` on stdout. The count is on stderr
+/// too, through the progress line.
+fn imported_json(json: bool, account: &str, imported: u64) -> ExitCode {
+	if !json {
+		return ExitCode::SUCCESS;
+	}
+	let result = serde_json::json!({
+		"result": if imported > 0 { "saved" } else { "unchanged" },
+		"action": "import", "account": account, "imported": imported,
+	});
+	super::json_out::print(&mut std::io::stdout().lock(), &result)
 }
 
 /// Undo mboxrd quoting: a `>*From ` line loses one leading `>`.
@@ -86,6 +101,7 @@ pub(super) fn run_maildir(
 	account: &str,
 	crypto: &MessageCrypto,
 	maildir: &Path,
+	json: bool,
 ) -> ExitCode {
 	// Collect every (mailbox, folder) target: INBOX at the root plus each valid
 	// Maildir++ subfolder.
@@ -162,7 +178,7 @@ pub(super) fn run_maildir(
 	let mut progress = super::style::Progress::start("importing");
 	progress.tick(imported as usize);
 	progress.finish(&format!("imported {imported} messages into {account}"));
-	ExitCode::SUCCESS
+	imported_json(json, account, imported)
 }
 
 /// The mailbox a Maildir++ folder directory (`.Work.Project`) holds. `.` is

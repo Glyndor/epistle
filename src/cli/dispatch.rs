@@ -72,10 +72,10 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::ConfigCheck { config } => {
+			Command::ConfigCheck { config, json } => {
 				let mut out = std::io::stdout().lock();
 				let mut err = style::stderr();
-				super::config_check::run(&config, &mut out, &mut err)
+				super::config_check::run(&config, json, &mut out, &mut err)
 			}
 			Command::Export {
 				config,
@@ -107,15 +107,19 @@ impl Cli {
 				config,
 				account,
 				maildir,
+				json,
 			} => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
 					Ok(crypto) => match maildir {
-						Some(dir) => import::run_maildir(&config.data_dir, &account, &crypto, &dir),
+						Some(dir) => {
+							import::run_maildir(&config.data_dir, &account, &crypto, &dir, json)
+						}
 						None => import::run(
 							&config.data_dir,
 							&account,
 							&crypto,
 							std::io::stdin().lock(),
+							json,
 						),
 					},
 					Err(code) => code,
@@ -133,11 +137,12 @@ impl Cli {
 				force,
 				dry_run,
 				yes,
-			} => dispatch_restore(config, force, dry_run, yes),
-			Command::Verify { config } => match Config::load(&config) {
+				json,
+			} => dispatch_restore(config, (force, dry_run, yes), json),
+			Command::Verify { config, json } => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => live::run("verify", false, |mut out| {
-						verify::run(&config.data_dir, &crypto, &mut out)
+					Ok(crypto) => live::run("verify", json, |mut out| {
+						verify::run(&config.data_dir, &crypto, json, &mut out)
 					}),
 					Err(code) => code,
 				},
@@ -146,17 +151,17 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::VerifyDns { config } => with_config(&config, |config| {
-				verify_dns::run(config, &mut std::io::stdout().lock())
+			Command::VerifyDns { config, json } => with_config(&config, |config| {
+				verify_dns::run(config, json, &mut std::io::stdout().lock())
 			}),
-			Command::DnsRecords { config } => with_config(&config, |config| {
-				dns_records::run(config, &mut std::io::stdout().lock())
+			Command::DnsRecords { config, json } => with_config(&config, |config| {
+				dns_records::run(config, json, &mut std::io::stdout().lock())
 			}),
 			Command::Mobileconfig { config, account } => with_config(&config, |config| {
 				mobileconfig::run(config, &account, &mut std::io::stdout().lock())
 			}),
-			Command::SrvRecords { config } => with_config(&config, |config| {
-				srv::run(config, &mut std::io::stdout().lock())
+			Command::SrvRecords { config, json } => with_config(&config, |config| {
+				srv::run(config, json, &mut std::io::stdout().lock())
 			}),
 			Command::Autoconfig { config, domain } => with_config(&config, |config| {
 				autoconfig::run(config, domain.as_deref(), &mut std::io::stdout().lock())
@@ -300,10 +305,15 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::DkimKeygen { out, rsa, bits } => dkim_keygen(&out, rsa, bits),
-			Command::StorageKeygen => storage_keygen(),
-			Command::OauthKeygen { out } => oauth_keygen(&out),
-			Command::TokenHash => token_hash(),
+			Command::DkimKeygen {
+				out,
+				rsa,
+				bits,
+				json,
+			} => dkim_keygen(&out, rsa, bits, json),
+			Command::StorageKeygen { json } => storage_keygen(json),
+			Command::OauthKeygen { out, json } => oauth_keygen(&out, json),
+			Command::TokenHash { json } => token_hash(json),
 			Command::AppPassword {
 				config,
 				json,
@@ -320,18 +330,20 @@ impl Cli {
 			Command::Archive { json, action } => {
 				archive::dispatch(action, json, &mut std::io::stdout().lock())
 			}
-			Command::Reports { config, days } => with_config(&config, |config| {
-				reports::run(config, days, &mut std::io::stdout().lock())
+			Command::Reports { config, days, json } => with_config(&config, |config| {
+				reports::run(config, days, json, &mut std::io::stdout().lock())
 			}),
 			Command::Local { dir, port_base } => local::run(dir, port_base),
 			Command::Init {
 				answers,
 				dry_run,
 				print_answers,
+				json,
 			} => init::run(init::Args {
 				answers,
 				dry_run,
 				print_answers,
+				json,
 			}),
 			Command::Service {
 				config,

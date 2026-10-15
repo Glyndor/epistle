@@ -65,7 +65,7 @@ async fn report_fails_and_prints_on_missing_records() {
 		None,
 		&dns,
 		&config,
-		&mut out,
+		(false, &mut out),
 		crate::cli::style::Progress::start("checking"),
 	)
 	.await;
@@ -109,7 +109,7 @@ async fn report_succeeds_when_records_present() {
 		None,
 		&dns,
 		&config,
-		&mut out,
+		(false, &mut out),
 		crate::cli::style::Progress::start("checking"),
 	)
 	.await;
@@ -227,7 +227,7 @@ key_file = "/etc/mail/dkim.pem"
 	.expect("config");
 	let mut out = Vec::new();
 	let mut err = Vec::new();
-	let _ = run_with_writers(&config, &mut out, &mut err);
+	let _ = run_with_writers(&config, false, &mut out, &mut err);
 	let err_text = String::from_utf8_lossy(&err);
 	assert!(
 		err_text.contains("warning:"),
@@ -259,7 +259,7 @@ rsa_key_file = "/etc/mail/rsa.pem"
 	.expect("config");
 	let mut out = Vec::new();
 	let mut err = Vec::new();
-	let _ = run_with_writers(&config, &mut out, &mut err);
+	let _ = run_with_writers(&config, false, &mut out, &mut err);
 	let err_text = String::from_utf8_lossy(&err);
 	assert!(
 		!err_text.contains("signs with one key only"),
@@ -372,7 +372,7 @@ fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
 			None,
 			&dns,
 			&config,
-			&mut out,
+			(false, &mut out),
 			crate::cli::style::Progress::start("checking"),
 		))
 	});

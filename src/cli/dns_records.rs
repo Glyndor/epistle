@@ -9,7 +9,9 @@ use crate::dns::provider::RecordKind;
 use crate::dns::records::{self, PublishRecord, Services, txt_zone_form};
 
 /// Compute and print the expected records for the configured domains.
-pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+/// With `json` the records are one JSON array of `{"name", "ttl", "type",
+/// "value"}` objects, the TXT values unsplit.
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	// DKIM records from the configured signer: the ed25519 selector always
 	// (the one the rotator currently has in service, or the configured one
 	// before the first tick), plus the optional RSA dual-signing selector
@@ -67,7 +69,24 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		config.public_ipv4,
 		config.public_ipv6,
 	);
+	if json {
+		return super::json_out::print(out, &records_json(&recs));
+	}
 	report(&recs, out)
+}
+
+/// The records as the JSON array `--json` prints.
+pub(super) fn records_json(records: &[PublishRecord]) -> serde_json::Value {
+	records
+		.iter()
+		.map(|entry| {
+			let record = &entry.record;
+			serde_json::json!({
+				"name": record.name, "ttl": record.ttl,
+				"type": record.kind.as_str(), "value": record.value,
+			})
+		})
+		.collect()
 }
 
 /// The default `[dkim]` selector (and its optional RSA partner) as
@@ -229,7 +248,7 @@ key_file = "{}"
 		);
 		let config: Config = toml::from_str(&toml).expect("config");
 		let mut out = Vec::new();
-		assert_eq!(run(&config, &mut out), ExitCode::SUCCESS);
+		assert_eq!(run(&config, false, &mut out), ExitCode::SUCCESS);
 		let text = String::from_utf8_lossy(&out);
 		assert!(
 			text.contains("ed-rotated._domainkey.example.org"),

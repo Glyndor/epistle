@@ -100,7 +100,8 @@ fn import_delivers_mbox_messages_to_inbox() {
 			dir.path(),
 			"alice",
 			&crate::storage::MessageCrypto::disabled(),
-			Cursor::new(mbox)
+			Cursor::new(mbox),
+			false
 		),
 		ExitCode::SUCCESS
 	);
@@ -145,7 +146,8 @@ fn import_maildir_delivers_to_inbox_and_nested_folders_with_flags() {
 			dir.path(),
 			"alice",
 			&crate::storage::MessageCrypto::disabled(),
-			&src
+			&src,
+			false
 		),
 		ExitCode::SUCCESS
 	);

@@ -49,6 +49,10 @@ pub struct Args {
 	pub dry_run: bool,
 	/// Print the answers template and exit.
 	pub print_answers: bool,
+	/// Print the result as one JSON object on stdout: the plan for a dry
+	/// run, the report after a run. The human plan and report stay on
+	/// stderr either way.
+	pub json: bool,
 }
 
 /// Exit codes: 0 done or nothing to do; 1 a step failed after
@@ -87,6 +91,10 @@ struct Probes<'a> {
 fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	let detector = probes.detector;
 	if args.print_answers {
+		if args.json {
+			let result = serde_json::json!({ "answers_template": Answers::template().to_string() });
+			return crate::cli::json_out::print(&mut std::io::stdout().lock(), &result);
+		}
 		println!("{}", Answers::template());
 		return ExitCode::from(EXIT_OK);
 	}
@@ -138,15 +146,26 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		}
 	};
 	render_plan(&plan);
+	let plan_lines = lines(|text| plan.write_to(&mut StringWriter::new(text)).is_ok());
+	let result = |result: &str, report: &[String]| {
+		let value = serde_json::json!({
+			"result": result, "action": "init", "config": answers.config_path.display().to_string(),
+			"plan": plan_lines, "report": report,
+		});
+		match args.json {
+			true => crate::cli::json_out::print(&mut std::io::stdout().lock(), &value),
+			false => ExitCode::from(EXIT_OK),
+		}
+	};
 	if args.dry_run {
 		let _ = writeln!(out, "dry-run: nothing was written");
 		report_ptr(&answers, probes, out);
-		return ExitCode::from(EXIT_OK);
+		return result("dry-run", &[]);
 	}
 	if args.answers.is_none() && !confirm(std::io::stdin().lock(), crate::cli::style::stderr()) {
 		let mut out = crate::cli::style::stderr();
 		let _ = writeln!(out, "aborted: nothing was written");
-		return ExitCode::from(EXIT_OK);
+		return result("unchanged", &[]);
 	}
 	// From an answers file the password is read now, after the plan and
 	// before anything is written, so a refused one leaves nothing behind.
@@ -174,7 +193,8 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		None => {
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
-			ExitCode::from(EXIT_OK)
+			let report = lines(|text| outcome.report.write_to(text).is_ok());
+			result("saved", &report)
 		}
 		Some(error) => {
 			crate::cli::style::error(error);
@@ -264,6 +284,19 @@ fn render_report(report: &apply::Report) {
 	let mut out = crate::cli::style::stderr();
 	let _ = writeln!(out, "report:");
 	let _ = report.write_to(&mut out);
+}
+
+/// The non-empty lines `write` renders into a buffer, trimmed, for the
+/// `--json` result.
+fn lines(write: impl FnOnce(&mut Vec<u8>) -> bool) -> Vec<String> {
+	let mut text = Vec::new();
+	write(&mut text);
+	String::from_utf8_lossy(&text)
+		.lines()
+		.map(str::trim)
+		.filter(|line| !line.is_empty())
+		.map(str::to_string)
+		.collect()
 }
 
 /// Tiny `fmt::Write` adapter that proxies into a `std::io::Write`.

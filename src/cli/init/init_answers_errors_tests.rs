@@ -26,6 +26,7 @@ fn run_with_answers(body: &str) -> (ExitCode, tempfile::TempDir) {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert!(
@@ -53,6 +54,7 @@ fn run_exits_2_when_answers_file_does_not_exist() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(
@@ -166,6 +168,7 @@ fn run_exits_2_when_config_path_has_no_file_name() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(
@@ -203,6 +206,7 @@ fn run_exits_2_when_config_path_equals_data_dir() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(

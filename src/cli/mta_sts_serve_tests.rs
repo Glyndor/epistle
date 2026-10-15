@@ -48,7 +48,10 @@ fn dns_command_uses_policy_content_identifier() {
 		config.mta_sts.mode = mode;
 		let publication = crate::mtasts::publish::publication(&config);
 		let mut output = Vec::new();
-		assert_eq!(dns_records::run(&config, &mut output), ExitCode::SUCCESS);
+		assert_eq!(
+			dns_records::run(&config, false, &mut output),
+			ExitCode::SUCCESS
+		);
 		let output = String::from_utf8(output).expect("DNS text");
 		let record = output
 			.lines()

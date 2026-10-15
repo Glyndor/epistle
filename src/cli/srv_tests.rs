@@ -18,7 +18,7 @@ fn config(domains: &[&str]) -> Config {
 fn emits_srv_records_per_domain() {
 	let config = config(&["example.org", "example.net"]);
 	let mut out = Vec::new();
-	assert_eq!(run(&config, &mut out), ExitCode::SUCCESS);
+	assert_eq!(run(&config, false, &mut out), ExitCode::SUCCESS);
 	let text = String::from_utf8(out).expect("utf8");
 	// Secure services for each domain, pointing at the server hostname.
 	assert!(text.contains("_imaps._tcp.example.org. 3600 IN SRV 10 1 993 mail.example.org."));
@@ -34,6 +34,6 @@ fn emits_srv_records_per_domain() {
 fn no_domains_is_an_error() {
 	let config = config(&[]);
 	let mut out = Vec::new();
-	assert_eq!(run(&config, &mut out), ExitCode::FAILURE);
+	assert_eq!(run(&config, false, &mut out), ExitCode::FAILURE);
 	assert!(out.is_empty());
 }

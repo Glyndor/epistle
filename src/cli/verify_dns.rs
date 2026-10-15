@@ -12,8 +12,8 @@ use crate::dns::{self, Status};
 use crate::spf::{DnsLookup, SystemDns};
 
 /// Run the DNS check against the system resolver.
-pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
-	run_with_writers(config, out, &mut super::style::stderr())
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
+	run_with_writers(config, json, out, &mut super::style::stderr())
 }
 
 /// Same as [`run`], but writes the startup warnings (and any errors
@@ -22,6 +22,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 /// the process.
 pub(super) fn run_with_writers(
 	config: &Config,
+	json: bool,
 	out: &mut impl std::io::Write,
 	err: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -60,7 +61,7 @@ pub(super) fn run_with_writers(
 		config.public_ipv6,
 		&dns,
 		config,
-		out,
+		(json, out),
 		progress,
 	))
 }
@@ -131,10 +132,18 @@ async fn report(
 	public_ipv6: Option<std::net::Ipv6Addr>,
 	dns: &dyn DnsLookup,
 	config: &Config,
-	out: &mut impl std::io::Write,
+	(json, out): (bool, &mut impl std::io::Write),
 	mut progress: crate::cli::style::Progress,
 ) -> ExitCode {
-	let decor = crate::cli::term::stdout(false);
+	let decor = crate::cli::term::stdout(json);
+	let mut groups: Vec<serde_json::Value> = Vec::new();
+	let mut print_group = |out: &mut _, name: &str, checks: &[dns::Check], separator, decor| {
+		if json {
+			groups.push(group_json(name, checks));
+		} else {
+			print_group(out, name, checks, separator, decor);
+		}
+	};
 	let labels: Vec<&str> = std::iter::once(hostname)
 		.chain(domains.iter().map(String::as_str))
 		.collect();
@@ -185,11 +194,36 @@ async fn report(
 	} else {
 		progress.finish(&summary);
 	}
-	if all_ok {
+	let code = if all_ok {
 		ExitCode::SUCCESS
 	} else {
 		ExitCode::FAILURE
+	};
+	if json {
+		let result = serde_json::json!({ "ok": all_ok, "groups": groups });
+		if super::json_out::print(out, &result) != ExitCode::SUCCESS {
+			return ExitCode::FAILURE;
+		}
 	}
+	code
+}
+
+/// One group of checks as the `--json` result lists it.
+fn group_json(name: &str, checks: &[dns::Check]) -> serde_json::Value {
+	let checks: Vec<serde_json::Value> = checks
+		.iter()
+		.map(|check| {
+			let status = match check.status {
+				Status::Ok => "ok",
+				Status::Missing => "missing",
+				Status::LookupError => "error",
+			};
+			serde_json::json!({
+				"kind": check.kind, "name": check.name, "status": status, "detail": check.detail,
+			})
+		})
+		.collect();
+	serde_json::json!({ "name": name, "checks": checks })
 }
 
 /// Write one group (`name:` and a line per record) in one go, with any

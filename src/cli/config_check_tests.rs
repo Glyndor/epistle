@@ -23,7 +23,7 @@ data_dir = "/var/lib/mail"
 	let mut out = Vec::new();
 	let mut err = Vec::new();
 	assert_eq!(
-		super::run(file.path(), &mut out, &mut err),
+		super::run(file.path(), false, &mut out, &mut err),
 		ExitCode::SUCCESS
 	);
 	let out_text = String::from_utf8_lossy(&out);
@@ -53,7 +53,7 @@ key_file = "/etc/mail/dkim.pem"
 	let mut out = Vec::new();
 	let mut err = Vec::new();
 	assert_eq!(
-		super::run(file.path(), &mut out, &mut err),
+		super::run(file.path(), false, &mut out, &mut err),
 		ExitCode::SUCCESS,
 		"warning must not change the exit code"
 	);
@@ -107,7 +107,7 @@ rsa_key_file = {:?}
 	let mut out = Vec::new();
 	let mut err = Vec::new();
 	assert_eq!(
-		super::run(file.path(), &mut out, &mut err),
+		super::run(file.path(), false, &mut out, &mut err),
 		ExitCode::SUCCESS
 	);
 	let err_text = String::from_utf8_lossy(&err);

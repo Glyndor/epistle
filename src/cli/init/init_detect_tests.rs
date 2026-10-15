@@ -35,6 +35,7 @@ pub(super) fn dry_run_args(dir: &std::path::Path, extra: &str) -> Args {
 		answers: Some(answers_file),
 		dry_run: true,
 		print_answers: false,
+		json: false,
 	}
 }
 

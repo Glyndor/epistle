@@ -399,8 +399,13 @@ fn restore_refuses_a_piped_run_or_a_no_before_reading_the_archive() {
 		"Restore the archive on stdin into {}, replacing what is there? [y/N]",
 		dir.path().canonicalize().expect("canonical").display()
 	);
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, false);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, false),
+			false,
+		)
+	};
 	let piped = scripted(false, None, "y\n", restore);
 	assert_eq!(piped.value, ExitCode::from(2));
 	assert_eq!(piped.stderr, error(&refused_message("restore")));
@@ -423,8 +428,13 @@ fn restore_yes_or_a_y_answer_never_stands_in_for_force() {
 		b"Subject: hi\r\n\r\nbody".to_vec(),
 	)])
 	.expect("archive");
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, true);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, true),
+			false,
+		)
+	};
 	let flag = scripted(false, None, &archive, restore);
 	assert_eq!(
 		flag.value,
@@ -434,8 +444,13 @@ fn restore_yes_or_a_y_answer_never_stands_in_for_force() {
 	assert_eq!(flag.unread, 0, "the archive was read");
 	let mut typed = b"y\n".to_vec();
 	typed.extend_from_slice(&archive);
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, false);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, false),
+			false,
+		)
+	};
 	let answered = scripted(true, None, &typed, restore);
 	assert_eq!(
 		answered.value,

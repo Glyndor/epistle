@@ -6,17 +6,17 @@ use std::path::Path;
 fn config_path(command: &Command) -> Option<&Path> {
 	match command {
 		Command::Serve { config }
-		| Command::ConfigCheck { config }
+		| Command::ConfigCheck { config, .. }
 		| Command::Probe { config, .. }
 		| Command::Export { config, .. }
 		| Command::Import { config, .. }
 		| Command::Backup { config }
 		| Command::Restore { config, .. }
-		| Command::Verify { config }
-		| Command::VerifyDns { config }
-		| Command::DnsRecords { config }
+		| Command::Verify { config, .. }
+		| Command::VerifyDns { config, .. }
+		| Command::DnsRecords { config, .. }
 		| Command::Mobileconfig { config, .. }
-		| Command::SrvRecords { config }
+		| Command::SrvRecords { config, .. }
 		| Command::Autoconfig { config, .. }
 		| Command::Autodiscover { config, .. }
 		| Command::Suppression { config, .. }
@@ -64,9 +64,9 @@ fn config_path(command: &Command) -> Option<&Path> {
 		},
 		Command::MtaStsServe { .. }
 		| Command::DkimKeygen { .. }
-		| Command::StorageKeygen
+		| Command::StorageKeygen { .. }
 		| Command::OauthKeygen { .. }
-		| Command::TokenHash
+		| Command::TokenHash { .. }
 		| Command::Local { .. }
 		| Command::Completions { .. }
 		| Command::Manpages { .. }

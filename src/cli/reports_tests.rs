@@ -90,7 +90,7 @@ fn fixture_with_reports() -> (tempfile::TempDir, String) {
 
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let _ = run(&cfg, DEFAULT_DAYS, &mut out);
+	let _ = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	(dir, String::from_utf8(out).expect("utf8"))
 }
 
@@ -133,7 +133,7 @@ fn older_than_the_window_is_skipped() {
 
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let _ = run(&cfg, DEFAULT_DAYS, &mut out);
+	let _ = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	let output = String::from_utf8(out).expect("utf8");
 	assert!(
 		!output.contains("203.0.113.7"),
@@ -152,7 +152,7 @@ fn no_reports_directory_yet_is_empty_summary() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let code = run(&cfg, DEFAULT_DAYS, &mut out);
+	let code = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	assert_eq!(code, ExitCode::SUCCESS);
 	let output = String::from_utf8(out).expect("utf8");
 	assert!(output.contains("DMARC aggregate reports"), "{output}");
