@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::Group;
 use super::health::{DayTally, tally_day};
 use super::pacing;
-use super::schedule::{self, Event};
+use super::schedule;
 use super::settings::{self, Settings};
-use super::state::{self, State};
+use super::state::{self, Closing, State};
 use crate::storage::DeliveryLog;
 
 /// How long recipients wait when the state could not be written.
@@ -182,17 +182,18 @@ impl Warmup {
 		}
 	}
 
-	/// The lock, after closing any day that ended and reporting it.
+	/// The lock, after closing any day that ended. Closing a day reads
+	/// nothing: what each group sent is kept for [`Self::tick`] to judge.
 	fn current(&self, now: u64) -> MutexGuard<'_, Inner> {
 		let mut inner = self.lock();
-		let events = self.roll(&mut inner, now);
-		self.notify.send(&events);
+		self.roll(&mut inner, now);
 		inner
 	}
 
-	/// Close the day the counts belong to when it has ended. Days the
-	/// server did not run had no mail from it and are not judged.
-	fn roll(&self, inner: &mut Inner, now: u64) -> Vec<Event> {
+	/// Close the day the counts belong to when it has ended, keeping what
+	/// each group sent for the judgement, and open today. Days the server
+	/// did not run had no mail from it and are not judged.
+	fn roll(&self, inner: &mut Inner, now: u64) {
 		let today = day_of(now);
 		let day = inner.state.day;
 		if day > today {
@@ -206,21 +207,24 @@ impl Warmup {
 			);
 			inner.state.day = today;
 			self.save(&inner.state);
-			return Vec::new();
+			return;
 		}
 		if day == today {
-			return Vec::new();
+			return;
 		}
-		let events = match inner.settings.enabled {
-			true => {
-				let tally = self.tally(day);
-				schedule::close_day(&mut inner.state, day, &tally, inner.settings.paused)
+		if inner.settings.enabled {
+			let closing = Closing::of(&inner.state, day, inner.settings.paused);
+			if !closing.sent.is_empty()
+				&& let Some(earlier) = inner.state.closing.replace(closing)
+			{
+				tracing::warn!(
+					day = earlier.day,
+					"a warm-up day ended before the one before it was judged; it is not judged"
+				);
 			}
-			false => Vec::new(),
-		};
+		}
 		schedule::open_day(&mut inner.state, today);
 		self.save(&inner.state);
-		events
 	}
 
 	/// The tally of `day`, empty when the log is off or unreadable.
@@ -340,10 +344,27 @@ impl Warmup {
 		self.save(&inner.state);
 	}
 
-	/// Close a day that ended, if one did, and report it. The server calls
-	/// this on a timer so a day is reported even when no mail is waiting.
+	/// Close a day that ended, if one did, judge the day waiting to be
+	/// judged, and report it. The server calls this on a timer, off the
+	/// runtime, so a day is reported even when no mail is waiting. The day
+	/// of the delivery log is read without the lock: the queue goes on
+	/// meanwhile.
 	pub fn tick(&self, now: u64) {
-		drop(self.current(now));
+		let Some(closing) = self.current(now).state.closing.clone() else {
+			return;
+		};
+		let tally = self.tally(closing.day);
+		let events = {
+			let mut inner = self.lock();
+			if inner.state.closing.as_ref() != Some(&closing) {
+				return;
+			}
+			inner.state.closing = None;
+			let events = schedule::judge_day(&mut inner.state, &closing, &tally);
+			self.save(&inner.state);
+			events
+		};
+		self.notify.send(&events);
 	}
 
 	/// Read the settings file again, after `epistle warmup` wrote it, and
@@ -407,3 +428,7 @@ mod share_tests;
 #[cfg(test)]
 #[path = "controller_tests_clock.rs"]
 mod clock_tests;
+
+#[cfg(test)]
+#[path = "controller_tests_judge.rs"]
+mod judge_tests;

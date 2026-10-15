@@ -113,7 +113,8 @@ far, the verdict the day would get now, the cap it would leave, and the
 mail waiting. Then the last judged day, with the accounts behind most bad
 replies, and any order the server has not applied yet.
 
-Each judged day is also sent as a webhook event, `warmup.ok`,
+A day is judged within a minute of its end. Each judged day is also
+sent as a webhook event, `warmup.ok`,
 `warmup.held` or `warmup.backoff`, with the group, day, cap, shares,
 verdict, next cap, raise outcome and those accounts. The counters
 `warmup_held` and `warmup_backoff` can drive an `epistle alert` rule.

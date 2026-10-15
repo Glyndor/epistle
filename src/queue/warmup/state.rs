@@ -167,6 +167,40 @@ impl GroupState {
 	}
 }
 
+/// A day that ended and is still to be judged: what each group sent on
+/// it. Judging reads the whole day of the delivery log, so the day is
+/// closed at once and judged a little later, off the queue's path (see
+/// [`super::Warmup::tick`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Closing {
+	/// The UTC day.
+	pub day: i64,
+	/// The schedule was paused when the day ended: no cap moves.
+	#[serde(default)]
+	pub paused: bool,
+	/// Recipients each group let go that day; groups that sent none are
+	/// left out.
+	#[serde(default)]
+	pub sent: BTreeMap<Group, u32>,
+}
+
+impl Closing {
+	/// What `state` let go on `day`, as it stands.
+	pub fn of(state: &State, day: i64, paused: bool) -> Self {
+		Closing {
+			day,
+			paused,
+			sent: state
+				.groups
+				.iter()
+				.filter(|(_, schedule)| schedule.sent > 0)
+				.map(|(group, schedule)| (*group, schedule.sent))
+				.collect(),
+		}
+	}
+}
+
 /// Everything the warm-up keeps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -179,6 +213,9 @@ pub struct State {
 	/// Each group's schedule.
 	#[serde(default)]
 	pub groups: BTreeMap<Group, GroupState>,
+	/// The last day that ended, while it waits to be judged.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub closing: Option<Closing>,
 }
 
 impl State {
@@ -191,6 +228,7 @@ impl State {
 				.into_iter()
 				.map(|group| (group, GroupState::default()))
 				.collect(),
+			closing: None,
 		}
 	}
 

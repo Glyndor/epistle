@@ -7,7 +7,7 @@ use super::Group;
 use super::health::DayTally;
 use super::policy::{START_CAP, Verdict, filled, grown, judge, step_back};
 use super::settings::Action;
-use super::state::{DayRecord, GroupState, Raise, RaiseOutcome, State};
+use super::state::{Closing, DayRecord, GroupState, Raise, RaiseOutcome, State};
 
 /// How a judged day is reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,27 +43,37 @@ pub struct Event {
 	pub record: DayRecord,
 }
 
-/// Judge `day` for every group that sent mail on it, move each cap by the
-/// verdict, keep the record, and return what to report. Nothing moves
-/// while `paused`.
+/// Judge `day` for every group that sent mail on it, as `state` counts
+/// it now, move each cap by the verdict, keep the record, and return what
+/// to report. Nothing moves while `paused`.
 pub fn close_day(state: &mut State, day: i64, tally: &DayTally, paused: bool) -> Vec<Event> {
+	let closing = Closing::of(state, day, paused);
+	judge_day(state, &closing, tally)
+}
+
+/// Judge the day that `closing` kept for every group that sent mail on
+/// it, move each cap by the verdict, keep the record, and return what to
+/// report.
+pub fn judge_day(state: &mut State, closing: &Closing, tally: &DayTally) -> Vec<Event> {
+	let (day, paused) = (closing.day, closing.paused);
 	let mut events = Vec::new();
 	for group in Group::ALL {
-		let schedule = state.group_mut(group);
-		if schedule.sent == 0 {
+		let sent = closing.sent.get(&group).copied().unwrap_or(0);
+		if sent == 0 {
 			continue;
 		}
+		let schedule = state.group_mut(group);
 		let counts = tally.of(group);
 		let verdict = judge(group, &counts);
 		let cap = schedule.cap;
 		let raise = match paused {
 			true => schedule.raise.map(|_| RaiseOutcome::Pending),
-			false => decide(schedule, day, verdict),
+			false => decide(schedule, day, verdict, sent),
 		};
 		let record = DayRecord {
 			day,
 			cap,
-			sent: schedule.sent,
+			sent,
 			attempted: counts.attempted,
 			deferred: counts.deferred,
 			bounced: counts.bounced,
@@ -93,7 +103,12 @@ pub fn close_day(state: &mut State, day: i64, tally: &DayTally, paused: bool) ->
 
 /// Move the cap of `schedule` after `day` was judged `verdict`, and say
 /// what became of a raise on trial.
-fn decide(schedule: &mut GroupState, day: i64, verdict: Verdict) -> Option<RaiseOutcome> {
+fn decide(
+	schedule: &mut GroupState,
+	day: i64,
+	verdict: Verdict,
+	sent: u32,
+) -> Option<RaiseOutcome> {
 	if let Some(raise) = schedule.raise {
 		if day < raise.trial_day || verdict == Verdict::Idle {
 			return Some(RaiseOutcome::Pending);
@@ -110,7 +125,7 @@ fn decide(schedule: &mut GroupState, day: i64, verdict: Verdict) -> Option<Raise
 		return None;
 	};
 	schedule.cap = match verdict {
-		Verdict::Good if filled(schedule.sent, cap) => grown(cap),
+		Verdict::Good if filled(sent, cap) => grown(cap),
 		Verdict::VeryBad => Some(step_back(cap)),
 		Verdict::Good | Verdict::Bad | Verdict::Idle => Some(cap),
 	};
