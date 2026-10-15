@@ -273,13 +273,42 @@ pub fn mib(bytes: u64) -> u64 {
 
 /// Read at most [`MAX_FILE_BYTES`] of `path` as text.
 fn read_bounded(path: &Path) -> Option<String> {
+	read_regular(path, MAX_FILE_BYTES).ok()
+}
+
+/// Read at most `max` bytes of the regular file at `path` as text.
+///
+/// The server reads the compose file before it drops its privileges, from
+/// a directory the service account writes, so a symlink at `path` is
+/// refused (`O_NOFOLLOW`) rather than followed to a file root may read, and
+/// the open never waits (`O_NONBLOCK`): a FIFO there would hold start-up
+/// until a writer came. Anything but a regular file, judged on the open
+/// descriptor, is refused, so a device is never read either.
+pub(crate) fn read_regular(path: &Path, max: u64) -> std::io::Result<String> {
 	use std::io::Read;
-	let file = std::fs::File::open(path).ok()?;
+	let mut options = std::fs::OpenOptions::new();
+	options.read(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+	}
+	let file = options.open(path)?;
+	if !file.metadata()?.is_file() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"not a regular file",
+		));
+	}
 	let mut text = String::new();
-	file.take(MAX_FILE_BYTES).read_to_string(&mut text).ok()?;
-	Some(text)
+	file.take(max).read_to_string(&mut text)?;
+	Ok(text)
 }
 
 #[cfg(test)]
 #[path = "memory_fit_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "memory_fit_tests_hostile.rs"]
+mod tests_hostile;

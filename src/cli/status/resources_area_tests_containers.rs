@@ -178,3 +178,37 @@ fn control_characters_in_service_names_are_not_echoed() {
 		detail.escape_debug().to_string()
 	);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_for_a_compose_file_does_not_hang_status() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ctx = ctx(dir.path(), "");
+	let compose = dir.path().join("compose.yaml");
+	let c_path = std::ffi::CString::new(compose.to_str().expect("utf-8")).expect("nul-free");
+	// SAFETY: `c_path` is a NUL-terminated string valid for the call.
+	assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+	let meminfo = meminfo(dir.path(), 8 * 1024 * 1024);
+	let config = ctx.config.clone().expect("config");
+	let (sender, receiver) = std::sync::mpsc::channel();
+	let reading = compose.clone();
+	std::thread::spawn(move || {
+		let report = evaluate(&config, &reading, &meminfo);
+		let _ = sender.send(report.items[0].detail.clone());
+	});
+	let answer = receiver.recv_timeout(std::time::Duration::from_secs(5));
+	if answer.is_err() {
+		// Release the blocked reader: a writer that opens and closes.
+		for _ in 0..3 {
+			drop(std::fs::OpenOptions::new().write(true).open(&compose));
+		}
+	}
+	assert_eq!(
+		answer,
+		Ok(format!(
+			"no compose file at {}, no limits to add up",
+			compose.display()
+		)),
+		"status blocked on a FIFO"
+	);
+}

@@ -193,12 +193,7 @@ pub(super) fn run(
 
 /// The compose file's text, read up to [`MAX_COMPOSE_BYTES`].
 fn read_compose(compose: &Path) -> Result<String, String> {
-	use std::io::Read;
-	let file = std::fs::File::open(compose)
-		.map_err(|error| format!("cannot read {}: {error}", compose.display()))?;
-	let mut text = String::new();
-	file.take(MAX_COMPOSE_BYTES + 1)
-		.read_to_string(&mut text)
+	let text = crate::smtp::memory_fit::read_regular(compose, MAX_COMPOSE_BYTES + 1)
 		.map_err(|error| format!("cannot read {}: {error}", compose.display()))?;
 	if text.len() as u64 > MAX_COMPOSE_BYTES {
 		return Err(format!(

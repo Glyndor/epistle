@@ -113,13 +113,7 @@ pub(crate) fn for_host(mem_total: u64) -> Sizing {
 
 /// The host's `MemTotal`, in bytes, from a `/proc/meminfo` at `meminfo`.
 pub(crate) fn mem_total(meminfo: &Path) -> Option<u64> {
-	use std::io::Read;
-	let mut text = String::new();
-	std::fs::File::open(meminfo)
-		.ok()?
-		.take(1024 * 1024)
-		.read_to_string(&mut text)
-		.ok()?;
+	let text = crate::smtp::memory_fit::read_regular(meminfo, 1024 * 1024).ok()?;
 	let line = text
 		.lines()
 		.find_map(|line| line.strip_prefix("MemTotal:"))?;
@@ -190,9 +184,9 @@ pub(super) fn fill(answers: &mut Answers, meminfo: &Path) -> Vec<String> {
 /// Services it recorded nothing for keep the fixed defaults, as `stack
 /// update` renders them.
 fn keep_existing(answers: &mut Answers, compose: &Path) {
-	let Some(document) = std::fs::read(compose)
+	let Some(document) = crate::smtp::memory_fit::read_regular(compose, 1024 * 1024)
 		.ok()
-		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+		.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
 	else {
 		return;
 	};

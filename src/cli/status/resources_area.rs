@@ -187,17 +187,11 @@ fn gib(bytes: u64) -> String {
 	format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
-/// At most 1 MiB of `path` as text: the compose file `epistle init` writes
-/// is a few KiB.
+/// At most 1 MiB of the regular file at `path` as text: the compose file
+/// `epistle init` writes is a few KiB, and a FIFO there must not hang
+/// `status`.
 fn read_bounded(path: &Path) -> Option<String> {
-	use std::io::Read;
-	let mut text = String::new();
-	std::fs::File::open(path)
-		.ok()?
-		.take(1024 * 1024)
-		.read_to_string(&mut text)
-		.ok()?;
-	Some(text)
+	memory_fit::read_regular(path, 1024 * 1024).ok()
 }
 
 /// The message budget finding: the budget in effect against the `mail`
