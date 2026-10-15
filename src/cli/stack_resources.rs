@@ -17,6 +17,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::init::resources::{ServiceResources, problems};
+use crate::cli::term::sanitize;
 use crate::smtp::memory_fit::parse_memory;
 
 /// The most bytes of `compose.yaml` read: the file `epistle init` writes is
@@ -116,7 +117,8 @@ pub(crate) fn set_limits(
 	};
 	let one = BTreeMap::from([(service.to_string(), asked.clone())]);
 	if let Some((field, reason)) = problems(&one).into_iter().next() {
-		return Err(format!("{field} {reason}"));
+		// The service name is the operator's argument as typed.
+		return Err(format!("{} {reason}", sanitize(&field)));
 	}
 	let mut document: Value = serde_json::from_str(text)
 		.map_err(|error| format!("compose.yaml is not the JSON epistle init writes: {error}"))?;
@@ -134,7 +136,11 @@ pub(crate) fn set_limits(
 		.or_insert_with(|| Value::Object(Default::default()));
 	let mut merged: ServiceResources = match recorded.get(service) {
 		Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
-			format!("compose.yaml has an x-epistle-resources epistle init did not write: {error}")
+			// serde names an unknown key as the file spells it.
+			format!(
+				"compose.yaml has an x-epistle-resources epistle init did not write: {}",
+				sanitize(&error.to_string())
+			)
 		})?,
 		None => ServiceResources::default(),
 	};
@@ -271,8 +277,8 @@ fn list(text: &str, json: bool, out: &mut impl Write) -> Result<(), String> {
 		for limit in &limits {
 			lines.push(format!(
 				"{:<10} {:<7} {}",
-				crate::cli::term::sanitize(&limit.service),
-				crate::cli::term::sanitize(limit.memory.as_deref().unwrap_or("none")),
+				sanitize(&limit.service),
+				sanitize(limit.memory.as_deref().unwrap_or("none")),
 				limit
 					.pids
 					.map_or("none".to_string(), |pids| pids.to_string())
@@ -301,8 +307,9 @@ fn report_change(
 		if change.before.memory != change.after.memory {
 			parts.push(format!(
 				"memory {} -> {}",
-				change.before.memory.clone().unwrap_or_else(none),
-				change.after.memory.clone().unwrap_or_else(none)
+				// The old value is whatever compose.yaml held.
+				sanitize(change.before.memory.as_deref().unwrap_or("none")),
+				sanitize(change.after.memory.as_deref().unwrap_or("none"))
 			));
 		}
 		if change.before.pids != change.after.pids {
@@ -337,3 +344,7 @@ mod tests;
 #[cfg(test)]
 #[path = "stack_resources_tests_lock.rs"]
 mod tests_lock;
+
+#[cfg(test)]
+#[path = "stack_resources_tests_escapes.rs"]
+mod tests_escapes;
