@@ -6,6 +6,7 @@
 //! through: a share that could not be recorded would be given again after a
 //! restart.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -40,16 +41,61 @@ pub fn day_of(now: u64) -> i64 {
 	i64::try_from(now / 86_400).unwrap_or(i64::MAX)
 }
 
-/// The share of a group's day one sender may take: three quarters of the
-/// cap, at least one, so one sender queueing thousands of messages leaves
-/// room for everyone else's mail to the same provider.
+/// The share of a group's day one sender may take while another sender
+/// has mail waiting for the same cap: three quarters of the cap, at least
+/// one, so one sender queueing thousands of messages leaves room for
+/// everyone else's mail to the same provider. A sender alone may use the
+/// whole cap.
 pub fn sender_share(cap: u32) -> u32 {
 	(u64::from(cap) * 3 / 4).max(1).min(u64::from(cap)) as u32
 }
 
+/// How long a sender told to wait for a group's cap still counts as
+/// waiting. The queue asks again for every waiting recipient at each scan,
+/// every 30 seconds, so a sender with mail still waiting is seen again
+/// well within it.
+const WAITING_SECS: u64 = 900;
+
 struct Inner {
 	settings: Settings,
 	state: State,
+	/// When each sender was last told to wait for each group's cap.
+	waiting: BTreeMap<Group, HashMap<String, u64>>,
+}
+
+impl Inner {
+	/// Whether a sender other than `sender` has mail waiting for the cap
+	/// of `group` at `now`.
+	fn contested(&self, group: Group, sender: &str, now: u64) -> bool {
+		self.waiting.get(&group).is_some_and(|senders| {
+			senders
+				.iter()
+				.any(|(other, at)| other != sender && now.saturating_sub(*at) < WAITING_SECS)
+		})
+	}
+
+	/// The share of `cap` that `sender` may use today in `group`.
+	fn share(&self, group: Group, sender: &str, cap: u32, now: u64) -> u32 {
+		match self.contested(group, sender, now) {
+			true => sender_share(cap),
+			false => cap,
+		}
+	}
+
+	/// Remember that `sender` has mail waiting for the cap of `group`. At
+	/// most [`state::MAX_SENDERS`] senders are told apart; past it, those no
+	/// longer waiting are forgotten, and then the rest share one entry.
+	fn note_waiting(&mut self, group: Group, sender: &str, now: u64) {
+		let senders = self.waiting.entry(group).or_default();
+		if !senders.contains_key(sender) && senders.len() >= state::MAX_SENDERS {
+			senders.retain(|_, at| now.saturating_sub(*at) < WAITING_SECS);
+		}
+		let key = match senders.contains_key(sender) || senders.len() < state::MAX_SENDERS {
+			true => sender,
+			false => state::OVERFLOW_SENDER,
+		};
+		senders.insert(key.to_string(), now);
+	}
 }
 
 /// The warm-up of one server.
@@ -83,7 +129,11 @@ impl Warmup {
 		let warmup = Warmup {
 			data_dir: data_dir.to_path_buf(),
 			log,
-			inner: Mutex::new(Inner { settings, state }),
+			inner: Mutex::new(Inner {
+				settings,
+				state,
+				waiting: BTreeMap::new(),
+			}),
 			notify: super::events::Notify::default(),
 		};
 		{
@@ -188,11 +238,17 @@ impl Warmup {
 	/// When `sender` may next send to `group`, or `None` when one recipient
 	/// may go now (or no cap applies). Takes nothing.
 	pub fn blocked(&self, group: Group, sender: &str, now: u64) -> Option<u64> {
-		let inner = self.current(now);
+		let mut inner = self.current(now);
 		if !inner.settings.enabled {
 			return None;
 		}
-		wait(&inner.state.group(group), sender, now)
+		let schedule = inner.state.group(group);
+		let share = schedule.cap.map(|cap| inner.share(group, sender, cap, now));
+		let until = wait(&schedule, sender, share, now);
+		if until.is_some() {
+			inner.note_waiting(group, sender, now);
+		}
+		until
 	}
 
 	/// Let up to `wanted` recipients of `sender` go to `group` now.
@@ -205,12 +261,13 @@ impl Warmup {
 		let Some(cap) = before.cap else {
 			return Grant::Unlimited;
 		};
+		let share = inner.share(group, sender, cap, now);
 		let schedule = inner.state.group_mut(group);
 		let key = schedule.sender_key(sender).to_string();
 		let used = schedule.senders.get(&key).copied().unwrap_or(0);
 		let room = cap
 			.saturating_sub(schedule.sent)
-			.min(sender_share(cap).saturating_sub(used));
+			.min(share.saturating_sub(used));
 		let wanted32 = u32::try_from(wanted).unwrap_or(u32::MAX).min(room);
 		let (taken, tat) = pacing::take(cap, schedule.tat_ms, now.saturating_mul(1000), wanted32);
 		if taken > 0 {
@@ -226,8 +283,11 @@ impl Warmup {
 			}
 		}
 		let granted = taken as usize;
+		if granted < wanted {
+			inner.note_waiting(group, sender, now);
+		}
 		let until = match granted < wanted {
-			true => wait(&inner.state.group(group), sender, now)
+			true => wait(&inner.state.group(group), sender, Some(share), now)
 				.unwrap_or(now.saturating_add(RETRY_AFTER_ERROR_SECS)),
 			false => now,
 		};
@@ -289,16 +349,17 @@ impl crate::directory_store::file_watcher::WarmupReloader for Warmup {
 	}
 }
 
-/// When `sender` may next send to a group in `schedule`, or `None` when a
-/// recipient may go now or the group has no cap.
-fn wait(schedule: &state::GroupState, sender: &str, now: u64) -> Option<u64> {
+/// When `sender`, whose share of the day is `share`, may next send to a
+/// group in `schedule`, or `None` when a recipient may go now or the group
+/// has no cap.
+fn wait(schedule: &state::GroupState, sender: &str, share: Option<u32>, now: u64) -> Option<u64> {
 	let cap = schedule.cap?;
 	let used = schedule
 		.senders
 		.get(schedule.sender_key(sender))
 		.copied()
 		.unwrap_or(0);
-	if schedule.sent >= cap || used >= sender_share(cap) {
+	if schedule.sent >= cap || used >= share.unwrap_or(cap) {
 		let tomorrow = day_of(now).saturating_add(1);
 		return Some(
 			u64::try_from(tomorrow)
@@ -314,3 +375,7 @@ fn wait(schedule: &state::GroupState, sender: &str, now: u64) -> Option<u64> {
 #[cfg(test)]
 #[path = "controller_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "controller_tests_share.rs"]
+mod share_tests;

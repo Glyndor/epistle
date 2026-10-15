@@ -44,9 +44,10 @@ A new address that needs 1,000 a day reaches it after 8 good days.
   it on a label boundary.
 - **The cap** is recipients a day per group. It is spread across the day
   (one every 24 h divided by the cap, after a burst of an hour's share),
-  so 50 a day is not 50 at midnight. One account takes at most three
-  quarters of a group's day; mail the server sends on its own shares one
-  `system` share.
+  so 50 a day is not 50 at midnight. An account sending alone may use
+  the whole cap. While another account has mail waiting for the same
+  cap, each takes at most three quarters of the group's day; mail the
+  server sends on its own counts as one more account, `system`.
 - **Over the cap** a recipient waits in the queue. That is not a failure
   and not a deferral: no attempt is counted, nothing goes to the delivery
   log or the webhook, and `epistle queue list` shows `warm-up cap`. The

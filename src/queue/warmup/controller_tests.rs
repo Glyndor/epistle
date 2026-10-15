@@ -9,7 +9,7 @@ use crate::storage::{DeliveryOutcome, DeliveryRecord};
 const MIDNIGHT: u64 = 20_375 * 86_400;
 const GMAIL_MX: &str = "gmail-smtp-in.l.google.com";
 
-fn enable(dir: &Path, change: impl FnOnce(&mut Settings)) {
+pub(super) fn enable(dir: &Path, change: impl FnOnce(&mut Settings)) {
 	let mut settings = settings::load(dir).expect("load").unwrap_or_default();
 	settings.enabled = true;
 	change(&mut settings);
@@ -21,7 +21,7 @@ fn on(dir: &Path, now: u64) -> Warmup {
 	Warmup::open(dir, Some(DeliveryLog::open(dir, 30)), now)
 }
 
-fn granted(grant: Grant) -> (usize, u64) {
+pub(super) fn granted(grant: Grant) -> (usize, u64) {
 	match grant {
 		Grant::Limited { granted, until } => (granted, until),
 		Grant::Unlimited => panic!("expected a cap"),
@@ -64,30 +64,6 @@ fn a_cap_lets_the_burst_go_then_paces_the_rest() {
 	assert_eq!(
 		granted(warmup.grant(Group::Outlook, "account:sena", 2, MIDNIGHT)),
 		(2, MIDNIGHT)
-	);
-}
-
-#[test]
-fn one_sender_takes_at_most_three_quarters_of_the_day() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	enable(dir.path(), |settings| {
-		settings.order(Group::Gmail, Action::Set { cap: 24 });
-	});
-	let warmup = Warmup::open(dir.path(), None, MIDNIGHT);
-	let mut sent = 0;
-	for hour in 0..24 {
-		let now = MIDNIGHT + hour * 3600;
-		sent += granted(warmup.grant(Group::Gmail, "account:bulk", 10, now)).0;
-	}
-	assert_eq!(sent, 18);
-	assert_eq!(
-		warmup.blocked(Group::Gmail, "account:bulk", MIDNIGHT + 23 * 3600),
-		Some(MIDNIGHT + 86_400)
-	);
-	// Someone else still gets through the same day.
-	assert_eq!(
-		granted(warmup.grant(Group::Gmail, "system", 1, MIDNIGHT + 23 * 3600 + 600)),
-		(1, MIDNIGHT + 23 * 3600 + 600)
 	);
 }
 
