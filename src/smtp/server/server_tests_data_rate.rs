@@ -51,9 +51,15 @@ pub(super) struct Client {
 
 impl Client {
 	pub(super) fn connect(server: &Arc<Server>) -> Self {
+		Self::connect_from(server, None)
+	}
+
+	/// A connection from `peer`, so the per-client share of the budget
+	/// applies to it.
+	pub(super) fn connect_from(server: &Arc<Server>, peer: Option<std::net::IpAddr>) -> Self {
 		let (client, server_stream) = tokio::io::duplex(64 * 1024);
 		let server = Arc::clone(server);
-		let task = tokio::spawn(async move { server.handle(server_stream, None).await });
+		let task = tokio::spawn(async move { server.handle(server_stream, peer).await });
 		Client {
 			task: Some(task),
 			..Self::over(client)
@@ -61,7 +67,7 @@ impl Client {
 	}
 
 	/// The client end of a connection a listener accepts on its own.
-	fn over(stream: DuplexStream) -> Self {
+	pub(super) fn over(stream: DuplexStream) -> Self {
 		let (read, write) = tokio::io::split(stream);
 		Client {
 			read,
@@ -225,9 +231,9 @@ async fn a_fast_data_client_is_never_cut_even_when_it_pauses() {
 
 /// A listener whose connections arrive when the test sends them, all from
 /// one peer address.
-struct Arrivals {
-	next: tokio::sync::Mutex<mpsc::UnboundedReceiver<DuplexStream>>,
-	peer: SocketAddr,
+pub(super) struct Arrivals {
+	pub(super) next: tokio::sync::Mutex<mpsc::UnboundedReceiver<DuplexStream>>,
+	pub(super) peer: SocketAddr,
 }
 
 impl crate::net::accept::Accept for Arrivals {

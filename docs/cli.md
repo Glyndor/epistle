@@ -342,6 +342,8 @@ stack.
 | `message-memory-budget` | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from, default 256 MiB; one client may hold a quarter of it. Refused below `max-message-size`. `0` disables the cap. |
 | `min-data-rate` | Minimum average rate of one inbound message, in bytes per second (`K`/`M`/`G` suffixes), default 10240 (a 25 MiB message has about 43 minutes). Measured over the whole `DATA` or `BDAT` transaction, time between chunks included; below it the client gets `421 4.4.2` and is disconnected. `0` turns it off and shows as `disabled`. |
 | `data-rate-grace` | Time from the start of a message before `min-data-rate` applies, once per transaction, default 120 seconds, between 1 second and 1 hour. |
+| `junk-command-limit` | Commands without progress (`NOOP`, `RSET`, `VRFY`, unknown commands, a repeated `EHLO`, an empty `BDAT` chunk, `AUTH` response lines) one SMTP session may send before `421 4.7.0` and a disconnect, default 100, never reset during the session; refused commands count against the same limit since the last accepted message. `0` turns it off and shows as `disabled`; otherwise between 10 and 10000. |
+| `max-session-time` | How long one SMTP session may last before `421 4.4.2` at the next command boundary, default 1800 seconds; a message body being received is never cut. `0` turns it off and shows as `disabled`; otherwise between 1 minute and 1 day. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |

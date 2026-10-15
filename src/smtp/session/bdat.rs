@@ -29,23 +29,31 @@ impl Session {
 				reply: Reply::bad_sequence(),
 			};
 		}
-		// Claim the chunk from the shared memory budget before it is read.
-		// The claim waits in `chunk_reservation` until `bdat_chunk` adds it
-		// to the body; a client that never sends the chunk drops it with
-		// the session. A refused chunk is still consumed, without being
-		// kept, so its octets are never parsed as commands.
-		let mut chunk = Reservation::none();
-		if let Some(budget) = &self.memory_budget
-			&& chunk.try_grow(budget, self.peer_ip, size as u64).is_err()
-		{
-			self.reset();
-			return Action::DiscardChunk {
-				size,
-				reply: Reply::single(452, "4.3.1 insufficient system resources; try again later"),
-			};
-		}
-		self.chunk_reservation = chunk;
+		// Nothing is claimed for the announced size: the octets are charged
+		// to the budget as they arrive (`reserve_chunk`), so a client that
+		// announces a large chunk and drips it holds only what it sent.
+		self.chunk_reservation = Reservation::none();
 		Action::CollectChunk { size, last }
+	}
+
+	/// Charge `bytes` more octets of the chunk being read to the memory
+	/// budget, before the network layer keeps them. `false` when the budget
+	/// or the client's share has no room: the caller then answers
+	/// [`Self::refuse_chunk`] and reads the rest of the chunk away.
+	pub fn reserve_chunk(&mut self, bytes: usize) -> bool {
+		let Some(budget) = &self.memory_budget else {
+			return true;
+		};
+		self.chunk_reservation
+			.try_grow(budget, self.peer_ip, bytes as u64)
+			.is_ok()
+	}
+
+	/// End the transaction whose chunk did not fit the memory budget: the
+	/// body and the part of the chunk already charged go back with it.
+	pub fn refuse_chunk(&mut self) -> Action {
+		self.reset();
+		Action::Continue(budget_refusal())
 	}
 
 	/// Feed one BDAT chunk's raw bytes (already read by the network layer).
@@ -54,6 +62,17 @@ impl Session {
 	pub fn bdat_chunk(&mut self, data: &[u8], last: bool) -> Action {
 		let over;
 		let finalize;
+		// Octets the network layer did not charge while reading (a caller
+		// that hands the chunk over whole) are charged here.
+		let uncharged = data
+			.len()
+			.saturating_sub(usize::try_from(self.chunk_reservation.bytes()).unwrap_or(usize::MAX));
+		if uncharged > 0
+			&& matches!(self.state, State::ReceivingData { .. })
+			&& !self.reserve_chunk(uncharged)
+		{
+			return self.refuse_chunk();
+		}
 		let chunk = std::mem::take(&mut self.chunk_reservation);
 		{
 			let State::ReceivingData {
@@ -112,4 +131,9 @@ impl Session {
 		};
 		super::finalise::finalise(self, message, running_size)
 	}
+}
+
+/// The reply to a chunk the memory budget has no room for.
+fn budget_refusal() -> Reply {
+	Reply::single(452, "4.3.1 insufficient system resources; try again later")
 }

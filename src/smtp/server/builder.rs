@@ -56,6 +56,8 @@ impl Server {
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			data_rate: super::DataRate::default(),
+			junk_command_limit: crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT,
+			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
 		}
@@ -210,6 +212,27 @@ impl Server {
 	/// floor of `0` turns the check off.
 	pub fn with_data_rate(mut self, rate: super::DataRate) -> Self {
 		self.data_rate = rate;
+		self
+	}
+
+	/// Close a session on this listener after `limit` commands that bring
+	/// it no closer to a delivered message (`0` turns the limit off).
+	pub fn with_junk_command_limit(mut self, limit: u32) -> Self {
+		self.junk_command_limit = limit;
+		self
+	}
+
+	/// Apply both session limits at once (see [`super::SessionLimits`]).
+	pub fn with_session_limits(self, limits: super::SessionLimits) -> Self {
+		self.with_junk_command_limit(limits.junk_commands)
+			.with_max_session_time(limits.max_session_time)
+	}
+
+	/// Close a session on this listener once it is older than `limit`, at
+	/// the next command boundary (never while a message body is being
+	/// received). Zero turns the limit off.
+	pub fn with_max_session_time(mut self, limit: std::time::Duration) -> Self {
+		self.max_session_time = limit;
 		self
 	}
 

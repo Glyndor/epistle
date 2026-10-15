@@ -154,7 +154,11 @@ async fn a_cut_client_gives_its_reservation_back_before_the_421_is_written() {
 	let started = Instant::now();
 	stalled.write(b"BDAT 4096\r\n").await;
 	stalled.write(&[b'x'; 100]).await;
-	assert_eq!(stalled.budget.used(), 4096, "the announced chunk is held");
+	assert_eq!(
+		stalled.budget.used(),
+		100,
+		"the octets of the chunk that arrived are held"
+	);
 	let (freed, ended) = stalled.watch(started, Duration::from_secs(900), 0).await;
 	assert!(
 		on_step(freed, GRACE),

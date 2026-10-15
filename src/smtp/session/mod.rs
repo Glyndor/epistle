@@ -16,6 +16,7 @@ mod author;
 mod bdat;
 pub mod cap;
 mod finalise;
+mod junk;
 mod login;
 mod oauth;
 mod scram;
@@ -35,6 +36,7 @@ mod auth_dispatch;
 mod transaction_policy;
 #[path = "types.rs"]
 mod types;
+pub use junk::DEFAULT_JUNK_COMMAND_LIMIT;
 use transaction_policy::TransactionPolicy;
 use types::State;
 pub use types::{AcceptedMessage, Action};
@@ -123,13 +125,16 @@ pub struct Session {
 	/// every path that drops the body. `None` (the default) leaves the
 	/// historical unbounded behaviour in place.
 	memory_budget: Option<Arc<MemoryBudget>>,
-	/// The claim for a BDAT chunk announced but not read yet. It joins the
-	/// body in `bdat_chunk`, or goes back with the session if the client
-	/// never sends the chunk.
+	/// The octets of the BDAT chunk being read, charged as they arrive. They
+	/// join the body in `bdat_chunk`, or go back with the session if the
+	/// client never sends the rest of the chunk.
 	chunk_reservation: Reservation,
 	/// The claim for the body last accepted, held while the connection
 	/// loop delivers it: the body is still in memory until then.
 	delivery_reservation: Reservation,
+	/// Commands without progress and refusals sent so far, and how many
+	/// are allowed; see the `junk` module.
+	junk: junk::JunkCount,
 }
 
 impl Session {
@@ -164,6 +169,7 @@ impl Session {
 			memory_budget: None,
 			chunk_reservation: Reservation::none(),
 			delivery_reservation: Reservation::none(),
+			junk: junk::JunkCount::default(),
 		}
 	}
 

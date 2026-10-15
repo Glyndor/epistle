@@ -89,3 +89,23 @@ mod tests_data_rate_legit;
 #[cfg(test)]
 #[path = "server_tests_tls_drip.rs"]
 mod tests_tls_drip;
+
+#[cfg(test)]
+#[path = "server_tests_bdat_growth.rs"]
+mod tests_bdat_growth;
+
+#[cfg(test)]
+#[path = "server_tests_session_limits.rs"]
+mod tests_session_limits;
+
+#[cfg(test)]
+#[path = "server_tests_session_time.rs"]
+mod tests_session_time;
+
+#[cfg(test)]
+#[path = "server_tests_session_time_abuse.rs"]
+mod tests_session_time_abuse;
+
+#[cfg(test)]
+#[path = "server_tests_bdat_share.rs"]
+mod tests_bdat_share;

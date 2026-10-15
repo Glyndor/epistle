@@ -39,15 +39,16 @@ fn deliver_by_data(session: &mut Session, lines: usize) -> u16 {
 
 #[test]
 fn a_bdat_chunk_never_read_is_released_when_the_session_goes_away() {
-	// `BDAT n` reserves n octets before the chunk is read off the wire.
-	// A client that announces the chunk and disconnects (or times out)
-	// drops the session before `bdat_chunk` runs.
+	// A client that announces a chunk, sends part of it and disconnects
+	// (or times out) drops the session before `bdat_chunk` runs, with the
+	// octets charged so far still on the budget.
 	let budget = Arc::new(MemoryBudget::with_cap(1000));
 	for _ in 0..ROUNDS {
 		let mut session = session_on(&budget);
 		open_transaction(&mut session);
 		let action = session.command_line("BDAT 600");
 		assert!(matches!(action, Action::CollectChunk { size: 600, .. }));
+		assert!(session.reserve_chunk(400), "the part that arrived fits");
 		drop(session);
 	}
 	assert_eq!(budget.used(), 0, "every unread chunk is released");

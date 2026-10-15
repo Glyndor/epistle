@@ -57,10 +57,17 @@ pub enum Key {
 	/// Seconds from the start of a message transaction before the rate
 	/// floor applies. Default is 120.
 	DataRateGrace,
+	/// Commands without progress one SMTP session may send before it is
+	/// closed with `421 4.7.0`. Default is 100; `0` turns it off.
+	JunkCommandLimit,
+	/// Seconds one SMTP session may last before it is closed with
+	/// `421 4.4.2` at the next command boundary. Default is 1800; `0`
+	/// turns it off.
+	MaxSessionTime,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 21] = [
+	pub(super) const ALL: [Self; 23] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -82,6 +89,8 @@ impl Key {
 		Self::MaxConnectionsPerIp,
 		Self::MinDataRate,
 		Self::DataRateGrace,
+		Self::JunkCommandLimit,
+		Self::MaxSessionTime,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -107,6 +116,8 @@ impl Key {
 			Self::MaxConnectionsPerIp => "max-connections-per-ip",
 			Self::MinDataRate => "min-data-rate",
 			Self::DataRateGrace => "data-rate-grace",
+			Self::JunkCommandLimit => "junk-command-limit",
+			Self::MaxSessionTime => "max-session-time",
 		}
 	}
 
@@ -133,6 +144,8 @@ impl Key {
 			Self::MaxConnectionsPerIp => "max_connections_per_ip",
 			Self::MinDataRate => "min_data_rate",
 			Self::DataRateGrace => "data_rate_grace",
+			Self::JunkCommandLimit => "junk_command_limit",
+			Self::MaxSessionTime => "max_session_time",
 		}
 	}
 
@@ -144,6 +157,14 @@ impl Key {
 			}
 			_ => None,
 		}
+	}
+
+	/// Whether a configured `0` turns the limit off, shown as `disabled`.
+	pub(super) fn zero_turns_off(self) -> bool {
+		matches!(
+			self,
+			Self::MinDataRate | Self::JunkCommandLimit | Self::MaxSessionTime
+		)
 	}
 
 	/// Whether the key takes a comma-separated list of values.
@@ -170,6 +191,7 @@ impl Key {
 			Self::MinDataRate => Unit::Rate,
 			Self::QueueGiveUp
 			| Self::DataRateGrace
+			| Self::MaxSessionTime
 			| Self::QueueRetryBase
 			| Self::QueueRetryCap
 			| Self::QueueDelayWarning
@@ -185,7 +207,8 @@ impl Key {
 			Self::SubmissionRate
 			| Self::NewRecipientsPerDay
 			| Self::InboundRatePerIp
-			| Self::InboundRatePerSender => u32::MAX as u64,
+			| Self::InboundRatePerSender
+			| Self::JunkCommandLimit => u32::MAX as u64,
 			Self::MaxConnectionsPerListener
 			| Self::MaskedAddressesMax
 			| Self::MaxConnectionsPerIp => (usize::MAX as u64).min(i64::MAX as u64),
@@ -226,6 +249,8 @@ impl Key {
 			Self::MaxConnectionsPerIp => config.max_connections_per_ip.map(|value| value as u64),
 			Self::MinDataRate => config.min_data_rate,
 			Self::DataRateGrace => config.data_rate_grace,
+			Self::JunkCommandLimit => config.junk_command_limit,
+			Self::MaxSessionTime => config.max_session_time,
 		}
 	}
 
@@ -249,6 +274,10 @@ impl Key {
 			}
 			Self::MinDataRate => Some(crate::smtp::server::DEFAULT_MIN_DATA_RATE),
 			Self::DataRateGrace => Some(crate::smtp::server::DEFAULT_DATA_RATE_GRACE_SECS),
+			Self::JunkCommandLimit => {
+				Some(u64::from(crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT))
+			}
+			Self::MaxSessionTime => Some(crate::smtp::server::DEFAULT_MAX_SESSION_TIME_SECS),
 			_ => None,
 		}
 	}

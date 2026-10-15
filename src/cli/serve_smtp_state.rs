@@ -19,6 +19,7 @@ use crate::smtp::memory_budget;
 use crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP;
 use crate::smtp::server::DataRate;
 use crate::smtp::server::MemoryBudget;
+use crate::smtp::server::SessionLimits;
 use crate::storage::CorrespondentStore;
 
 /// Everything `serve` attaches to every SMTP listener that comes from
@@ -55,6 +56,9 @@ pub(super) struct SmtpSharedState {
 	/// The minimum transfer rate every SMTP listener holds a message
 	/// transaction to (`[server] min_data_rate` and `data_rate_grace`).
 	pub data_rate: DataRate,
+	/// The junk-command limit and session lifetime of every SMTP listener
+	/// (`[server] junk_command_limit` and `max_session_time`).
+	pub session_limits: SessionLimits,
 	/// Optional external content scanner hook.
 	pub scanner_hook: Option<Arc<dyn MailHook>>,
 	/// The clamd client behind `scanner_hook` when clamd is the scanner,
@@ -154,10 +158,28 @@ pub(super) fn build_smtp_shared_state(
 		max_message_size,
 		memory_budget,
 		data_rate,
+		session_limits: session_limits(config),
 		scanner_hook,
 		clamd,
 		llm_hook,
 	})
+}
+
+/// The session limits of every SMTP listener: absent keys keep the
+/// built-in ones, a configured 0 is forwarded as is and turns that limit
+/// off. Validation has already bounded both.
+fn session_limits(config: &Config) -> SessionLimits {
+	let built_in = SessionLimits::default();
+	SessionLimits {
+		junk_commands: config
+			.junk_command_limit
+			.map_or(built_in.junk_commands, |limit| {
+				u32::try_from(limit).unwrap_or(u32::MAX)
+			}),
+		max_session_time: config
+			.max_session_time
+			.map_or(built_in.max_session_time, Duration::from_secs),
+	}
 }
 
 #[cfg(test)]
