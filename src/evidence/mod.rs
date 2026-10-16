@@ -34,6 +34,8 @@ pub mod tasks;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tsa;
+#[cfg(test)]
+mod vectors_tests;
 pub mod verify;
 
 pub use class::{CLASS_HEADER, ClassSources, MailClass};
