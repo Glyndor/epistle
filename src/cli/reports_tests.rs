@@ -205,3 +205,29 @@ fn failing_count_aggregates_tlsrpt_sessions() {
 		Some(&2)
 	);
 }
+
+/// `--json` carries what the text summary shows: the reporters, the row
+/// totals and the failing sources, per policy domain and per kind.
+#[test]
+fn json_summary_carries_the_totals_and_the_failing_sources() {
+	let (dir, _) = fixture_with_reports();
+	let mut out = Vec::new();
+	let code = run(&load_test_config(dir.path()), DEFAULT_DAYS, true, &mut out);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let printed: serde_json::Value = serde_json::from_slice(&out).expect("one json document");
+	assert_eq!(
+		printed,
+		serde_json::json!({
+			"dmarc": {"ingested": 1, "domains": [{
+				"domain": "example.org", "reporters": ["google.com"], "total_rows": 8,
+				"failing_by_ip": [{"key": "203.0.113.7", "count": 3}],
+				"failing_by_result": [],
+			}]},
+			"tlsrpt": {"ingested": 1, "domains": [{
+				"domain": "example.org", "reporters": ["google.com"], "total_rows": 2,
+				"failing_by_ip": [{"key": "192.0.2.10", "count": 2}],
+				"failing_by_result": [{"key": "starttls-not-supported", "count": 2}],
+			}]},
+		})
+	);
+}

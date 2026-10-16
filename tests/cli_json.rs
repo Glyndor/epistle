@@ -40,3 +40,9 @@ mod default_actions;
 
 #[path = "cli_json/limits.rs"]
 mod limits;
+
+#[path = "cli_json/integrity.rs"]
+mod integrity;
+
+#[path = "cli_json/init.rs"]
+mod init;
