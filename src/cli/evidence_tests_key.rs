@@ -30,6 +30,8 @@ fn export(server: &Server, message: u32) -> (tempfile::TempDir, PathBuf) {
 fn check(server: &Server, bundle: &Path, keys: &[String]) -> (ExitCode, serde_json::Value) {
 	let action = EvidenceCli::Check {
 		bundle: bundle.to_path_buf(),
+		message_id: None,
+		recipient: None,
 		keys: keys.to_vec(),
 		anchors: vec![to_hex(&server.tsa.anchor)],
 		json: true,
@@ -301,4 +303,44 @@ fn an_older_key_is_anchored_with_the_day_its_period_ended() {
 		Ok(vec![format!("{id}@2026-10-17")])
 	);
 	assert!(keys(&[format!("{id}@2026-02-30")]).is_err(), "not a day");
+}
+
+#[test]
+fn check_tells_the_scope_and_refuses_a_bundle_about_something_else() {
+	let server = Server::new();
+	let key = key_of(&server);
+	let (_dir, bundle) = export(&server, 1);
+	let run_check = |message_id: Option<&str>, recipient: Option<&str>| {
+		let action = EvidenceCli::Check {
+			bundle: bundle.clone(),
+			keys: vec![key.clone()],
+			message_id: message_id.map(String::from),
+			recipient: recipient.map(String::from),
+			anchors: vec![to_hex(&server.tsa.anchor)],
+			json: false,
+		};
+		let mut out = Vec::new();
+		let code = run(Path::new("/nonexistent.toml"), action, now(), &mut out);
+		(code, text(&out))
+	};
+	let (code, said) = run_check(Some("<1@example.org>"), Some("student1@example.net"));
+	assert_eq!(code, ExitCode::SUCCESS, "{said}");
+	assert!(
+		said.contains("note  scope: message <1@example.org>: every recipient was checked"),
+		"{said}"
+	);
+	let (code, said) = run_check(Some("<2@example.org>"), None);
+	assert_eq!(code, ExitCode::FAILURE, "{said}");
+	assert!(
+		said.contains(
+			"the bundle was made for message <1@example.org>, not for message <2@example.org>"
+		),
+		"{said}"
+	);
+	let (code, said) = run_check(None, Some("nobody@example.net"));
+	assert_eq!(code, ExitCode::FAILURE, "{said}");
+	assert!(
+		said.contains("was not sent to nobody@example.net"),
+		"{said}"
+	);
 }

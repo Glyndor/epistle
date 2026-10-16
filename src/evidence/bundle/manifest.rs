@@ -49,6 +49,15 @@ struct Manifest {
 	scope: Scope,
 }
 
+/// What the reader says the bundle must be about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Expectation {
+	/// The `Message-ID` the bundle must be of.
+	pub message_id: Option<String>,
+	/// A recipient the bundle must cover.
+	pub recipient: Option<String>,
+}
+
 /// Write the manifest of an export made for `selector`.
 pub(super) fn write(out: &Path, selector: &Selector) -> std::io::Result<()> {
 	let scope = match selector {
@@ -74,14 +83,45 @@ struct Held {
 	outcomes: Vec<String>,
 }
 
+impl Scope {
+	/// What the bundle was made for, in words.
+	fn describe(&self) -> String {
+		match self {
+			Scope::Message { message_id } => format!("message {message_id}"),
+			Scope::Recipient { address, .. } => format!("recipient {address}"),
+		}
+	}
+}
+
 /// Check that every message in the bundle in `dir` is accounted for, for the
-/// recipients its manifest names.
-pub(super) fn complete(dir: &Path) -> Result<(), String> {
+/// recipients its manifest names, and that the manifest is what `expected`
+/// asks for and what the records are about. Returns what was verified, to
+/// be told to the reader.
+pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, String> {
 	let manifest: Manifest =
 		serde_json::from_slice(&read(&dir.join(FILE)).map_err(|why| format!("{FILE}: {why}"))?)
 			.map_err(|_| format!("{FILE}: not a manifest"))?;
 	if manifest.v != VERSION {
 		return Err(format!("{FILE}: unknown version"));
+	}
+	if let Some(wanted) = &expected.message_id {
+		match &manifest.scope {
+			Scope::Message { message_id } if message_id == wanted => {}
+			other => {
+				return Err(format!(
+					"the bundle was made for {}, not for message {wanted}",
+					other.describe()
+				));
+			}
+		}
+	}
+	if let Some(wanted) = &expected.recipient
+		&& let Scope::Recipient { address, .. } = &manifest.scope
+		&& !address.eq_ignore_ascii_case(wanted)
+	{
+		return Err(format!(
+			"the bundle was made for recipient {address}, not for recipient {wanted}"
+		));
 	}
 	let mut held: BTreeMap<Uuid, Held> = BTreeMap::new();
 	let mut total = 0usize;
@@ -136,6 +176,30 @@ pub(super) fn complete(dir: &Path) -> Result<(), String> {
 				false => format!("{id}: accepted more than once"),
 			});
 		};
+		match &manifest.scope {
+			Scope::Message { message_id } if accepted.message_id.as_deref() != Some(message_id) => {
+				return Err(format!(
+					"{id}: its Message-ID is not the Message-ID the manifest names"
+				));
+			}
+			Scope::Recipient { address, .. }
+				if !accepted
+					.recipients
+					.iter()
+					.any(|r| r.eq_ignore_ascii_case(address)) =>
+			{
+				return Err(format!("{id}: was not sent to {address}"));
+			}
+			_ => {}
+		}
+		if let Some(wanted) = &expected.recipient
+			&& !accepted
+				.recipients
+				.iter()
+				.any(|r| r.eq_ignore_ascii_case(wanted))
+		{
+			return Err(format!("{id}: was not sent to {wanted}"));
+		}
 		let covered: Vec<String> = match &manifest.scope {
 			Scope::Message { .. } => accepted
 				.recipients
@@ -169,5 +233,14 @@ pub(super) fn complete(dir: &Path) -> Result<(), String> {
 			}
 		}
 	}
-	Ok(())
+	Ok(match &manifest.scope {
+		Scope::Message { .. } => format!(
+			"scope: {}: every recipient was checked",
+			manifest.scope.describe()
+		),
+		Scope::Recipient { from, to, .. } => format!(
+			"scope: {} ({from} to {to}): the outcomes of the other recipients were NOT checked, and the bundle does not say whether they exist",
+			manifest.scope.describe()
+		),
+	})
 }

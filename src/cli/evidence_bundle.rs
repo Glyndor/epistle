@@ -68,6 +68,7 @@ fn evidence_key(value: &str) -> Result<String, String> {
 pub(super) fn check(
 	dir: &Path,
 	keys: &[String],
+	expected: &bundle::Expectation,
 	extra: &[String],
 	as_json: bool,
 	out: &mut impl Write,
@@ -80,7 +81,7 @@ pub(super) fn check(
 		Ok(keys) => keys,
 		Err(why) => return super::exit::refused(why),
 	};
-	let report = match bundle::check(dir, &anchors, &keys) {
+	let report = match bundle::check_expecting(dir, &anchors, &keys, expected) {
 		Ok(report) => report,
 		Err(error) => return failed(&error),
 	};

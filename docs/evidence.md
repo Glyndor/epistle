@@ -167,6 +167,17 @@ longer accounted for and the check fails. A message still in the queue has no
 outcome yet, so a bundle made too early does not verify: export it again
 later. A bundle says nothing about messages it does not contain.
 
+The manifest is part of the bundle and is not signed, so a bundle for one
+recipient could be made to look like the whole story of a message. `check`
+prints what the bundle covers, says when the outcomes of other recipients were
+**not** checked, and checks the manifest against the records. Say what the
+story is about and the check holds the bundle to it:
+
+```sh
+epistle evidence check --key 3f2a...e91c --message-id '<notice-42@school.example>' notice-42
+epistle evidence check --key 3f2a...e91c --recipient student@example.net student
+```
+
 ## Limits
 
 - The service account holds the evidence key and the data. Until a day is

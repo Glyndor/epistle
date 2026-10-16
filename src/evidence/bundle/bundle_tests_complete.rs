@@ -234,3 +234,176 @@ fn a_bundle_for_one_recipient_needs_that_recipients_outcome_and_not_the_others()
 		"{failed:?}"
 	);
 }
+
+/// Message 4 to two students, one delivered and one bounced, sealed.
+fn two_recipients() -> Fixture {
+	let mut fixture = fixture();
+	let chain = Chain::open(fixture.root()).expect("chain");
+	let crate::evidence::record::Entry::Accepted(mut two) = accepted(4) else {
+		unreachable!()
+	};
+	two.recipients = vec!["ana@example.net".into(), "bea@example.net".into()];
+	two.message_id = Some("<4@example.org>".into());
+	chain
+		.append_at(at(DAY + 1, 1), Entry::Accepted(two))
+		.expect("accepted");
+	for (recipient, result) in [
+		("ana@example.net", OutcomeKind::Delivered),
+		("bea@example.net", OutcomeKind::Bounced),
+	] {
+		let Entry::Outcome(mut outcome) = delivered(4) else {
+			unreachable!()
+		};
+		outcome.recipient = recipient.into();
+		outcome.result = result;
+		chain
+			.append_at(at(DAY + 1, 2), Entry::Outcome(outcome))
+			.expect("outcome");
+	}
+	seal_closed_days(fixture.root(), &fixture.key, true, at(DAY + 2, 0)).expect("seal");
+	fixture.tsa.gen_time = at(DAY + 2, 1);
+	let paths = files(fixture.root(), Day(DAY + 1));
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		fixture
+			.tsa
+			.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
+	fixture
+}
+
+/// The bundle of message 4 with the manifest of a bundle for `address`, the
+/// outcome of every other recipient taken out.
+fn narrowed_to(fixture: &Fixture, address: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+	let (out, bundle) =
+		super::tests::exported(fixture, &Selector::MessageId("<4@example.org>".into()));
+	std::fs::write(
+		bundle.join("manifest.json"),
+		format!(
+			"{{\"v\":1,\"scope\":\"recipient\",\"address\":\"{address}\",\"from\":\"{0}\",\"to\":\"{0}\"}}",
+			Day(DAY + 1).name()
+		),
+	)
+	.expect("manifest");
+	let records = bundle.join(format!("records/{}.jsonl", Day(DAY + 1).name()));
+	let proofs = bundle.join(format!("proofs/{}.json", Day(DAY + 1).name()));
+	let text = std::fs::read_to_string(&records).expect("read");
+	let mut proof: DayProof =
+		serde_json::from_slice(&std::fs::read(&proofs).expect("proofs")).expect("parse");
+	let (mut kept, mut entries) = (Vec::new(), Vec::new());
+	for (line, entry) in text.lines().zip(proof.entries.clone()) {
+		let other = line.contains("\"kind\":\"outcome\"") && !line.contains(address);
+		if !other {
+			kept.push(line);
+			entries.push(entry);
+		}
+	}
+	proof.entries = entries;
+	std::fs::write(&records, format!("{}\n", kept.join("\n"))).expect("write");
+	std::fs::write(&proofs, serde_json::to_vec_pretty(&proof).expect("json")).expect("write");
+	resum(&bundle);
+	(out, bundle)
+}
+
+fn expecting(
+	fixture: &Fixture,
+	bundle: &std::path::Path,
+	expected: &Expectation,
+) -> (Vec<String>, Vec<String>) {
+	let report = check_expecting(bundle, &[fixture.tsa.anchor], &[fixture.key.id()], expected)
+		.expect("check");
+	(failures(&report), report.notes.clone())
+}
+
+#[test]
+fn a_narrowed_manifest_hides_a_bounce_unless_the_reader_expects_the_whole_message() {
+	let fixture = two_recipients();
+	let (_out, bundle) = narrowed_to(&fixture, "ana@example.net");
+	// Taken on its own word, the bundle says what it covers and what it does not.
+	let (failed, notes) = expecting(&fixture, &bundle, &Expectation::default());
+	assert_eq!(failed, Vec::<String>::new());
+	assert!(
+		notes.iter().any(|n| n.contains("recipient ana@example.net")
+			&& n.contains("outcomes of the other recipients were NOT checked")),
+		"{notes:?}"
+	);
+	// A reader who asks about the message is not given the narrowed bundle.
+	let (failed, _) = expecting(
+		&fixture,
+		&bundle,
+		&Expectation {
+			message_id: Some("<4@example.org>".into()),
+			recipient: None,
+		},
+	);
+	assert_eq!(
+		failed,
+		vec!["every message is accounted for: the bundle was made for recipient ana@example.net, not for message <4@example.org>".to_string()]
+	);
+}
+
+#[test]
+fn the_scope_must_name_the_message_and_the_recipient_the_records_are_about() {
+	let fixture = two_recipients();
+	// A recipient the message was never sent to.
+	let (_out, bundle) = narrowed_to(&fixture, "carl@example.net");
+	let (failed, _) = expecting(&fixture, &bundle, &Expectation::default());
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("was not sent to carl@example.net")),
+		"{failed:?}"
+	);
+	// A message id that is not the message's.
+	let (_out, whole) =
+		super::tests::exported(&fixture, &Selector::MessageId("<4@example.org>".into()));
+	std::fs::write(
+		whole.join("manifest.json"),
+		"{\"v\":1,\"scope\":\"message\",\"message_id\":\"<other@example.org>\"}",
+	)
+	.expect("manifest");
+	resum(&whole);
+	let (failed, _) = expecting(&fixture, &whole, &Expectation::default());
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("is not the Message-ID the manifest names")),
+		"{failed:?}"
+	);
+}
+
+#[test]
+fn the_expected_scope_is_checked_and_the_report_lists_the_scope() {
+	let fixture = two_recipients();
+	let (_out, bundle) =
+		super::tests::exported(&fixture, &Selector::MessageId("<4@example.org>".into()));
+	let (failed, notes) = expecting(
+		&fixture,
+		&bundle,
+		&Expectation {
+			message_id: Some("<4@example.org>".into()),
+			recipient: Some("BEA@example.net".into()),
+		},
+	);
+	assert_eq!(failed, Vec::<String>::new());
+	assert!(
+		notes
+			.iter()
+			.any(|n| n.contains("message <4@example.org>: every recipient was checked")),
+		"{notes:?}"
+	);
+	let (failed, _) = expecting(
+		&fixture,
+		&bundle,
+		&Expectation {
+			message_id: Some("<5@example.org>".into()),
+			recipient: None,
+		},
+	);
+	assert_eq!(
+		failed,
+		vec!["every message is accounted for: the bundle was made for message <4@example.org>, not for message <5@example.org>".to_string()]
+	);
+}

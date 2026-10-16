@@ -75,6 +75,14 @@ pub enum EvidenceCli {
 		/// not seal a later day.
 		#[arg(long = "key", value_name = "FINGERPRINT|FILE")]
 		keys: Vec<String>,
+		/// Require the bundle to be about this `Message-ID`, exactly as
+		/// sent (with the brackets). A bundle's own manifest is not signed,
+		/// so say what the story is about.
+		#[arg(long)]
+		message_id: Option<String>,
+		/// Require the bundle to cover this recipient.
+		#[arg(long)]
+		recipient: Option<String>,
 		/// Also trust this timestamp key: hex SHA-256 of its
 		/// SubjectPublicKeyInfo. The default authority's is always trusted.
 		#[arg(long = "anchor", value_name = "SHA256")]
@@ -241,11 +249,17 @@ pub(super) fn run(
 	if let EvidenceCli::Check {
 		bundle,
 		keys,
+		message_id,
+		recipient,
 		anchors,
 		json,
 	} = action
 	{
-		return super::evidence_bundle::check(&bundle, &keys, &anchors, json, out);
+		let expected = crate::evidence::bundle::Expectation {
+			message_id,
+			recipient,
+		};
+		return super::evidence_bundle::check(&bundle, &keys, &expected, &anchors, json, out);
 	}
 	let config = match Config::load(config_path) {
 		Ok(config) => config,

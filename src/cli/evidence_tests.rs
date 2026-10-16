@@ -145,6 +145,8 @@ fn check_runs_without_any_configuration_file() {
 	let missing = out_dir.path().join("no-such-config.toml");
 	let action = EvidenceCli::Check {
 		bundle: bundle.clone(),
+		message_id: None,
+		recipient: None,
 		keys: vec![key.clone()],
 		anchors: vec![anchor.clone()],
 		json: true,
@@ -159,14 +161,17 @@ fn check_runs_without_any_configuration_file() {
 	let report: serde_json::Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(report["passed"], true);
 	assert!(
-		report["notes"][0]
-			.as_str()
-			.expect("note")
-			.contains("not checked")
+		report["notes"]
+			.as_array()
+			.expect("notes")
+			.iter()
+			.any(|note| note.as_str().is_some_and(|n| n.contains("not checked")))
 	);
 	// Without the anchor, only the default authority is trusted: it fails.
 	let action = EvidenceCli::Check {
 		bundle: bundle.clone(),
+		message_id: None,
+		recipient: None,
 		keys: vec![key],
 		anchors: Vec::new(),
 		json: false,
@@ -176,6 +181,8 @@ fn check_runs_without_any_configuration_file() {
 	assert!(text(&out).contains("FAIL") && text(&out).contains("does NOT verify"));
 	let action = EvidenceCli::Check {
 		bundle,
+		message_id: None,
+		recipient: None,
 		keys: Vec::new(),
 		anchors: vec!["zz".into()],
 		json: false,

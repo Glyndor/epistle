@@ -21,7 +21,7 @@ mod manifest;
 mod readme;
 mod sums;
 
-pub use check::{CheckReport, check};
+pub use check::{CheckReport, Expectation, check, check_expecting};
 pub use export::{Exported, Selector, export};
 
 use std::path::Path;

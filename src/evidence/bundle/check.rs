@@ -12,6 +12,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 use super::anchor::{self, Anchors};
+pub use super::manifest::Expectation;
 use super::{BundleError, DayProof, MAX_FILE, MAX_RECORDS};
 use crate::evidence::checkpoint::{CHECKPOINT_VERSION, Checkpoint};
 use crate::evidence::day::Day;
@@ -82,6 +83,18 @@ pub fn check(
 	anchors: &[[u8; 32]],
 	keys: &[String],
 ) -> Result<CheckReport, BundleError> {
+	check_expecting(dir, anchors, keys, &Expectation::default())
+}
+
+/// [`check`], also requiring the bundle to be about what the reader asked
+/// for. A bundle's own manifest says what it covers but is not signed, so a
+/// reader who knows which message or recipient the story is about says so.
+pub fn check_expecting(
+	dir: &Path,
+	anchors: &[[u8; 32]],
+	keys: &[String],
+	expected: &Expectation,
+) -> Result<CheckReport, BundleError> {
 	let mut report = CheckReport::default();
 	report.add(
 		"SHA256SUMS lists every file, and every file matches",
@@ -133,10 +146,11 @@ pub fn check(
 			vouched.extend(files);
 		}
 	}
-	report.add(
-		"every message is accounted for",
-		super::manifest::complete(dir),
-	);
+	let scope = super::manifest::complete(dir, expected);
+	if let Ok(words) = &scope {
+		report.notes.push(words.clone());
+	}
+	report.add("every message is accounted for", scope.map(|_| ()));
 	report.add(
 		"every file belongs to a verified day or an accepted record",
 		strays(dir, &vouched),
