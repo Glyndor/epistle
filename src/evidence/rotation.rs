@@ -35,26 +35,46 @@ pub struct Rotation {
 	pub old: String,
 	/// The id of the key taking over.
 	pub new: String,
+	/// The UTC day (`YYYY-MM-DD`) of the hand-over: the first day the new key
+	/// seals, and the first the old key may not.
+	pub day: String,
 	/// Hex Ed25519 signature by `old` over [`statement`].
 	pub signature: String,
 }
 
-/// The bytes a rotation signs.
-pub fn statement(old: &str, new: &str) -> Vec<u8> {
-	format!("epistle evidence key rotation\n{old}\n{new}\n").into_bytes()
+/// The bytes a rotation signs: the date is part of it, so a reader who holds
+/// the old key's id learns from the statement alone when the key stopped.
+pub fn statement(old: &str, new: &str, day: &str) -> Vec<u8> {
+	format!("epistle evidence key rotation\n{old}\n{new}\n{day}\n").into_bytes()
 }
 
 impl Rotation {
-	/// Whether the ids are key ids and `old_public` (whose id must be
-	/// `old`) signed the hand-over.
+	/// The hand-over from `old` to the key `new`, effective on `day`, signed
+	/// by `old`.
+	pub fn signed(old: &EvidenceKey, new: &str, day: &str) -> Rotation {
+		Rotation {
+			old: old.id(),
+			new: new.to_string(),
+			day: day.to_string(),
+			signature: to_hex(&old.sign(&statement(&old.id(), new, day))),
+		}
+	}
+
+	/// Whether the ids are key ids, the day is a day and `old_public` (whose
+	/// id must be `old`) signed the hand-over.
 	pub fn verifies(&self, old_public: &[u8; 32]) -> bool {
 		let Some(signature) = hex_bytes(&self.signature) else {
 			return false;
 		};
 		hash_from_hex(&self.old).is_some()
 			&& hash_from_hex(&self.new).is_some()
+			&& Day::parse(&self.day).is_some()
 			&& key::key_id(old_public) == self.old
-			&& key::verify(old_public, &statement(&self.old, &self.new), &signature)
+			&& key::verify(
+				old_public,
+				&statement(&self.old, &self.new, &self.day),
+				&signature,
+			)
 	}
 }
 
@@ -295,11 +315,8 @@ pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Resul
 	super::checkpoint::seal_closed_days(evidence_root, &old, timestamp, now)
 		.map_err(|error| std::io::Error::other(error.to_string()))?;
 	let new = EvidenceKey::stage_next(evidence_root)?;
-	let rotation = Rotation {
-		old: old.id(),
-		new: new.id(),
-		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-	};
+	let rotation = Rotation::signed(&old, &new.id(), &Day::of_epoch(now).name());
+
 	let bytes = serde_json::to_vec_pretty(&rotation).map_err(std::io::Error::other)?;
 	super::chain::create_private_dir(&evidence_root.join(ROTATIONS_DIR))?;
 	crate::storage::write_secret(&path(evidence_root, &rotation.new), &bytes)?;

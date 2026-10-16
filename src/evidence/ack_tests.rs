@@ -243,15 +243,11 @@ fn an_acknowledgement_after_a_rotation_signed_by_the_key_in_force_counts() {
 
 #[test]
 fn an_acknowledgement_signed_by_a_key_before_its_rotation_record_does_not_count() {
-	use crate::evidence::rotation::{ROTATIONS_DIR, Rotation, path, statement as hand_over};
+	use crate::evidence::rotation::{ROTATIONS_DIR, Rotation, path};
 	let fixture = Fixture::new();
 	let first = break_on_first_day(&fixture);
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
-	let rotation = Rotation {
-		old: fixture.key.id(),
-		new: new.id(),
-		signature: to_hex(&fixture.key.sign(&hand_over(&fixture.key.id(), &new.id()))),
-	};
+	let rotation = Rotation::signed(&fixture.key, &new.id(), "2026-10-17");
 	crate::evidence::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	std::fs::write(
 		path(fixture.root(), &new.id()),

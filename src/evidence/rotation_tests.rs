@@ -135,11 +135,7 @@ fn a_key_taken_without_a_rotation_record_is_a_break() {
 		.expect("append");
 	// A signed statement and a promoted key, but no record in the chain.
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
-	let rotation = Rotation {
-		old: old.id(),
-		new: new.id(),
-		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-	};
+	let rotation = Rotation::signed(&old, &new.id(), "2026-10-17");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	std::fs::write(
 		path(fixture.root(), &new.id()),
@@ -163,7 +159,8 @@ fn a_statement_the_old_key_did_not_sign_is_not_followed() {
 	let forged = Rotation {
 		old: fixture.key.id(),
 		new: new.id(),
-		signature: to_hex(&other.sign(&statement(&fixture.key.id(), &new.id()))),
+		day: "2026-10-17".into(),
+		signature: to_hex(&other.sign(&statement(&fixture.key.id(), &new.id(), "2026-10-17"))),
 	};
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	std::fs::write(
@@ -229,6 +226,7 @@ fn a_rotation_record_without_its_statement_is_a_break() {
 	let rotation = Rotation {
 		old: fixture.key.id(),
 		new: "ab".repeat(32),
+		day: "2026-10-17".into(),
 		signature: "cd".repeat(64),
 	};
 	Chain::open(fixture.root())
@@ -298,11 +296,7 @@ fn a_pinned_key_that_took_over_without_a_record_is_a_break() {
 	let fixture = Fixture::new();
 	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
-	let rotation = Rotation {
-		old: old.id(),
-		new: new.id(),
-		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-	};
+	let rotation = Rotation::signed(&old, &new.id(), "2026-10-17");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	std::fs::write(
 		path(fixture.root(), &new.id()),
@@ -323,11 +317,7 @@ fn hand_overs_that_lead_back_to_a_key_already_met_stop_the_walk() {
 	let b = EvidenceKey::stage_next(fixture.root()).expect("stage");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	for (old, new) in [(&a, &b), (&b, &a)] {
-		let rotation = Rotation {
-			old: old.id(),
-			new: new.id(),
-			signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-		};
+		let rotation = Rotation::signed(&old, &new.id(), "2026-10-17");
 		std::fs::write(
 			path(fixture.root(), &new.id()),
 			serde_json::to_vec(&rotation).expect("json"),
@@ -348,11 +338,7 @@ fn a_record_whose_statement_does_not_verify_is_not_believed() {
 	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
-	let genuine = Rotation {
-		old: old.id(),
-		new: new.id(),
-		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-	};
+	let genuine = Rotation::signed(&old, &new.id(), "2026-10-17");
 	std::fs::write(
 		path(fixture.root(), &new.id()),
 		serde_json::to_vec(&genuine).expect("json"),
@@ -400,11 +386,7 @@ fn a_bounded_audit_still_needs_a_record_for_a_change_of_signer() {
 			.expect("append");
 	}
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
-	let rotation = Rotation {
-		old: old.id(),
-		new: new.id(),
-		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
-	};
+	let rotation = Rotation::signed(&old, &new.id(), "2026-10-17");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	std::fs::write(
 		path(fixture.root(), &new.id()),
@@ -427,5 +409,30 @@ fn a_bounded_audit_still_needs_a_record_for_a_change_of_signer() {
 	assert_eq!(
 		reason(&report),
 		"2026-10-17: checkpoint: signed with a different evidence key than the day before, and no rotation record explains it"
+	);
+}
+
+#[test]
+fn a_rotation_record_names_the_day_it_sits_in() {
+	let mut fixture = Fixture::new();
+	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	// Signed for another day than the one the record lands in.
+	let rotation = Rotation::signed(&old, &new.id(), "2026-10-20");
+	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	std::fs::write(
+		path(fixture.root(), &new.id()),
+		serde_json::to_vec(&rotation).expect("json"),
+	)
+	.expect("statement");
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), Entry::KeyRotated(rotation))
+		.expect("append");
+	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
+	seal(&mut fixture, at(DAY + 4, 0));
+	assert_eq!(
+		reason(&verified(&fixture, at(DAY + 4, 12))),
+		"2026-10-18: checkpoint: the key rotation record names another day than the one it sits in"
 	);
 }

@@ -199,7 +199,11 @@ fn a_hand_over_the_old_key_did_not_sign_breaks_the_chain() {
 		serde_json::from_slice(&std::fs::read(&statement).expect("read")).expect("parse");
 	let other_root = tempfile::tempdir().expect("tempdir");
 	let other = EvidenceKey::load_or_create(other_root.path()).expect("other");
-	rotation.signature = to_hex(&other.sign(&crate::evidence::rotation::statement(&old, &new)));
+	rotation.signature = to_hex(&other.sign(&crate::evidence::rotation::statement(
+		&old,
+		&new,
+		&rotation.day,
+	)));
 	std::fs::write(
 		&statement,
 		serde_json::to_vec_pretty(&rotation).expect("json"),

@@ -219,9 +219,15 @@ fn final_checks(
 		}
 		previous = Some(signer);
 	}
-	for (_, rotation) in &walker.handovers {
+	for ((day, _), rotation) in &walker.handovers {
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
 			return Some(broken(today, why));
+		}
+		if rotation.day != day.name() {
+			return Some(broken(
+				today,
+				"the key rotation record names another day than the one it sits in",
+			));
 		}
 	}
 	for (at, purge) in &walker.purges {
