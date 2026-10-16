@@ -23,6 +23,9 @@ mod envelope;
 pub use envelope::Envelope;
 use envelope::LAST_ERROR_MAX;
 
+/// Writes the evidence acceptance record for the bytes about to be queued.
+pub type EvidenceHook<'a> = &'a dyn Fn(&[u8]) -> std::io::Result<()>;
+
 /// How [`FsSpool::store_with`] stores one message.
 pub struct StoreOptions<'a> {
 	/// The submitting account, `None` for relayed mail.
@@ -33,7 +36,7 @@ pub struct StoreOptions<'a> {
 	pub class: crate::evidence::MailClass,
 	/// Writes the evidence acceptance record for the queued bytes; `None`
 	/// when no evidence is kept for this message.
-	pub evidence: Option<&'a dyn Fn(&[u8]) -> std::io::Result<()>>,
+	pub evidence: Option<EvidenceHook<'a>>,
 }
 
 /// One spooled message: envelope plus raw message bytes.

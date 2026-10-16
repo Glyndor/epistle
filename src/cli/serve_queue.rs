@@ -45,6 +45,7 @@ pub(super) fn open_warmup(
 /// Build the queue worker and spawn it, unless outbound delivery is held.
 /// A resolver or MTA-STS fetcher that cannot be built, or an unreadable
 /// spool or suppression list, stops the start.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_queue_worker(
 	config: &Config,
 	crypto: MessageCrypto,
