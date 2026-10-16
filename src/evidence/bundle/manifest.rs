@@ -20,6 +20,7 @@ use super::MAX_RECORDS;
 use super::check::read;
 use super::export::Selector;
 use crate::evidence::day::Day;
+use crate::evidence::hidden::is_hidden;
 use crate::evidence::lines::{Line, Lines};
 use crate::evidence::record::{Accepted, Entry, Record};
 
@@ -101,18 +102,7 @@ impl Scope {
 /// Whether `text` can be shown on a terminal as it is: no control character
 /// and none of the format characters that reorder or hide text.
 fn plain(text: &str) -> bool {
-	!text.is_empty()
-		&& text.chars().all(|c| {
-			!c.is_control()
-				&& !matches!(
-					c,
-					'\u{200b}'..='\u{200f}'
-						| '\u{2028}'..='\u{202e}'
-						| '\u{2060}'..='\u{2064}'
-						| '\u{2066}'..='\u{206f}'
-						| '\u{feff}'
-				)
-		})
+	!text.is_empty() && text.chars().all(|c| !c.is_control() && !is_hidden(c))
 }
 
 /// The manifest in `dir`, read as the untrusted thing it is: every field

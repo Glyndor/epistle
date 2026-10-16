@@ -147,6 +147,12 @@ fn sanitize_escapes_controls_and_the_format_characters_that_disguise_text() {
 		"\u{200b}",
 		"\u{2066}",
 		"\u{feff}",
+		"\u{61c}",
+		"\u{180e}",
+		"\u{3164}",
+		"\u{e0041}",
+		"\u{fe0f}",
+		"\u{ad}",
 	] {
 		let shown = sanitize(&format!("a{raw}b"));
 		assert!(

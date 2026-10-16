@@ -22,6 +22,7 @@ pub mod day_state;
 mod end_to_end_tests;
 mod final_break;
 pub mod head;
+pub mod hidden;
 pub mod key;
 pub mod lines;
 pub mod marketing;

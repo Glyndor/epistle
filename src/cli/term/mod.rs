@@ -268,9 +268,9 @@ pub(crate) fn is_invisible_format(c: char) -> bool {
 	matches!(
 		c,
 		'\u{200B}'..='\u{200F}'
-			| '\u{2028}'..='\u{202E}'
+			| '\u{202A}'..='\u{202E}'
 			| '\u{2060}'..='\u{2064}'
-			| '\u{2066}'..='\u{206F}'
+			| '\u{2066}'..='\u{2069}'
 			| '\u{FEFF}'
 	)
 }
@@ -281,7 +281,7 @@ pub(crate) fn is_invisible_format(c: char) -> bool {
 pub(crate) fn sanitize(text: &str) -> String {
 	text.chars()
 		.flat_map(|c| {
-			if c.is_control() || is_invisible_format(c) {
+			if c.is_control() || crate::evidence::hidden::is_hidden(c) {
 				c.escape_default().collect::<Vec<_>>()
 			} else {
 				vec![c]
