@@ -10,8 +10,8 @@ use crate::cli::config_edit::{ConfigDocument, Outcome, after_change_with};
 use crate::cli::resource::ResourceError;
 use crate::cli::stack::StackAction;
 use crate::config::{
-	AttachmentMode, Attachments, Config, ContentAction, MAX_EXTENSION_LEN, normalise_extension,
-	valid_extension,
+	AttachmentMode, Attachments, Config, ContentAction, MAX_EXTENSION_LEN, MAX_EXTENSIONS,
+	normalise_extension, valid_extension,
 };
 
 impl PolicyKey {
@@ -75,6 +75,14 @@ fn apply_set(
 	let name = key.name();
 	match key {
 		PolicyKey::BlockExtensions | PolicyKey::AllowExtensions => {
+			// Refused before any per-value work, so the cost of a refusal does
+			// not grow with what was typed.
+			if values.len() > MAX_EXTENSIONS {
+				return Err(ResourceError::refused(format!(
+					"{name} takes at most {MAX_EXTENSIONS} extensions (received {})",
+					values.len()
+				)));
+			}
 			let mut list = toml_edit::Array::new();
 			let mut seen = Vec::new();
 			for value in values {

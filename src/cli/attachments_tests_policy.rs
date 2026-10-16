@@ -249,3 +249,34 @@ fn dry_run_prints_the_diff_and_writes_nothing() {
 	assert_eq!(status, "");
 	assert_eq!(std::fs::read(&path).unwrap(), before);
 }
+
+#[test]
+fn a_huge_extension_list_is_refused_in_linear_time() {
+	let (_dir, path) = fixture("");
+	let values: Vec<String> = (0..200_000).map(|n| format!("x{n}")).collect();
+	let values: Vec<&str> = values.iter().map(String::as_str).collect();
+	let started = std::time::Instant::now();
+	let (result, _, _) = run(&path, set(PolicyKey::BlockExtensions, &values), false);
+	assert_eq!(
+		result,
+		Err("block-extensions takes at most 256 extensions (received 200000)".to_string())
+	);
+	assert!(
+		started.elapsed() < std::time::Duration::from_secs(2),
+		"refused before any per-value work"
+	);
+}
+
+#[test]
+fn exactly_the_cap_is_accepted_and_written() {
+	let (_dir, path) = fixture("");
+	let values: Vec<String> = (0..256).map(|n| format!("x{n}")).collect();
+	let values: Vec<&str> = values.iter().map(String::as_str).collect();
+	let (result, _, _) = run(&path, set(PolicyKey::BlockExtensions, &values), false);
+	assert!(result.is_ok(), "256 extensions are the loader's own limit");
+	let written = section(&path);
+	assert_eq!(
+		written["block_extensions"].as_array().map(Vec::len),
+		Some(256)
+	);
+}
