@@ -153,6 +153,9 @@ impl Tasks {
 				Day::of_epoch(wall).name()
 			));
 		}
+		if let Some(warning) = self.service.quota_warning() {
+			errors.push(warning);
+		}
 		let root = self.service.root().to_path_buf();
 		let enabled = current.enabled;
 		let trusted = anchors(&current);

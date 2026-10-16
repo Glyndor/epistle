@@ -29,6 +29,7 @@ pub mod lines;
 pub mod marketing;
 pub mod merkle;
 pub mod policy;
+pub mod quota;
 pub mod record;
 pub mod retention;
 pub mod rotation;

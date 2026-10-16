@@ -219,3 +219,72 @@ fn the_bytes_stay_when_the_record_may_have_been_written() {
 	let kept = walk_kept(&dir.path().join("evidence/messages"));
 	assert_eq!(kept.len(), 1, "the record's message was destroyed");
 }
+
+#[test]
+fn one_account_flooding_the_log_is_refused_and_the_others_are_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path()).with_limits(crate::evidence::quota::Limits {
+		account_accepted: 5,
+		account_kept_bytes: 10_000,
+		day_records: 100,
+	});
+	let recipients = vec!["a@example.net".to_string()];
+	let retention = Retention {
+		mode: RetentionMode::Metadata,
+		days: 30,
+	};
+	let from = |account: &'static str, n: u128| Submitted {
+		spool_id: Uuid::from_u128(n),
+		account,
+		..submitted(b"Subject: x\r\n\r\nbody\r\n", &recipients)
+	};
+	for n in 0..5 {
+		service
+			.accept(&from("noisy", n), retention)
+			.expect("within");
+	}
+	let refused = service
+		.accept(&from("noisy", 5), retention)
+		.expect_err("past the account's limit");
+	assert_eq!(
+		refused.kind(),
+		std::io::ErrorKind::QuotaExceeded,
+		"{refused}"
+	);
+	service
+		.accept(&from("quiet", 6), retention)
+		.expect("another account is not held up");
+	assert_eq!(records(dir.path()).len(), 6, "the refused one was recorded");
+	assert!(
+		service.quota_warning().is_some(),
+		"no warning near the limit"
+	);
+}
+
+#[test]
+fn the_bytes_an_account_may_keep_are_bounded_and_nothing_is_written_past_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path()).with_limits(crate::evidence::quota::Limits {
+		account_accepted: 100,
+		account_kept_bytes: 1000,
+		day_records: 100,
+	});
+	let recipients = vec!["a@example.net".to_string()];
+	let full = Retention {
+		mode: RetentionMode::Full,
+		days: 30,
+	};
+	service
+		.accept(&submitted(&[b'x'; 600], &recipients), full)
+		.expect("within the bytes");
+	let big = Submitted {
+		spool_id: Uuid::from_u128(8),
+		..submitted(&[b'y'; 600], &recipients)
+	};
+	service.accept(&big, full).expect_err("past the bytes");
+	assert_eq!(
+		walk_kept(&dir.path().join("evidence/messages")).len(),
+		1,
+		"bytes were written past the limit"
+	);
+}

@@ -98,6 +98,7 @@ pub struct EvidenceService {
 	policy_error: RwLock<Option<String>>,
 	gate: RwLock<Gate>,
 	crypto: MessageCrypto,
+	quota: super::quota::Quota,
 }
 
 impl EvidenceService {
@@ -123,7 +124,24 @@ impl EvidenceService {
 				open_until: std::time::Instant::now(),
 			}),
 			crypto,
+			quota: super::quota::Quota::new(super::quota::Limits::default()),
 		})
+	}
+
+	/// The same service with other daily limits, for tests.
+	#[cfg(test)]
+	pub(crate) fn with_limits(mut self, limits: super::quota::Limits) -> Self {
+		self.quota = super::quota::Quota::new(limits);
+		self
+	}
+
+	/// Which daily limit is near or reached, when one is.
+	pub fn quota_warning(&self) -> Option<String> {
+		self.quota.warning(self.today())
+	}
+
+	fn today(&self) -> super::day::Day {
+		super::day::Day::of_epoch(self.chain.time().read().time)
 	}
 
 	/// The evidence root.
@@ -228,6 +246,14 @@ impl EvidenceService {
 	/// first when it is kept in full, then the record, synced before this
 	/// returns.
 	pub fn accept(&self, submitted: &Submitted<'_>, retention: Retention) -> std::io::Result<()> {
+		let kept_bytes = match retention.mode {
+			RetentionMode::Full => submitted.data.len() as u64,
+			_ => 0,
+		};
+		// One client's flood must not make the verification of the whole log
+		// so long that every tenant's mail is held.
+		self.quota
+			.admit(submitted.account, kept_bytes, self.today())?;
 		let kept = match retention.mode {
 			RetentionMode::Full => Some(self.keep_message(submitted, retention)?),
 			_ => None,
@@ -264,6 +290,8 @@ impl EvidenceService {
 			}
 			return Err(error);
 		}
+		self.quota
+			.charge(Some(submitted.account), 1, kept_bytes, self.today());
 		Ok(())
 	}
 
@@ -292,6 +320,7 @@ impl EvidenceService {
 			mta_sts: delivery.mta_sts.map(bounded),
 			retain_days: delivery.retain_days,
 		}))?;
+		self.quota.charge(None, 1, 0, self.today());
 		Ok(())
 	}
 
