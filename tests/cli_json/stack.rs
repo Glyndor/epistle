@@ -81,3 +81,46 @@ fn stack_logs_refuses_json() {
 		"error: stack logs streams the services' raw log lines; it has no --json form\n"
 	);
 }
+
+#[test]
+fn up_down_stop_and_start_print_one_object_each() {
+	let env = env("");
+	let bin = chatty_podup(&env);
+	let cases: [(&[&str], serde_json::Value); 6] = [
+		(
+			&["up"],
+			json!({"result": "done", "action": "up", "service": null}),
+		),
+		(
+			&["down"],
+			json!({"result": "done", "action": "down", "service": null}),
+		),
+		(
+			&["stop"],
+			json!({"result": "done", "action": "stop", "service": null}),
+		),
+		(
+			&["stop", "mail"],
+			json!({"result": "done", "action": "stop", "service": "mail"}),
+		),
+		(
+			&["start"],
+			json!({"result": "done", "action": "start", "service": null}),
+		),
+		(
+			&["start", "mail"],
+			json!({"result": "done", "action": "start", "service": "mail"}),
+		),
+	];
+	for (args, expected) in cases {
+		let mut full = vec!["stack", "--config", &env.config];
+		full.extend_from_slice(args);
+		full.push("--json");
+		let output = epistle_in(&full, b"", Some(&bin));
+		assert_eq!(json(&output), (0, expected), "{args:?}");
+		assert!(
+			String::from_utf8_lossy(&output.stderr).contains("podup says:"),
+			"{args:?}: podup's output should have gone to stderr"
+		);
+	}
+}
