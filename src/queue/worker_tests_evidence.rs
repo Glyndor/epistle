@@ -406,3 +406,25 @@ fn the_bare_spool_refuses_transactional_mail_it_would_queue_without_evidence() {
 		.expect("personal mail");
 	assert_eq!(spool.list().expect("list").len(), 1);
 }
+
+#[tokio::test]
+async fn a_clock_that_jumps_a_year_ahead_does_not_expire_mail_that_only_waited() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["late@remote.example"], true);
+	let remote = FakeRemote::default();
+	remote.script(
+		"remote.example",
+		Script::rcpt("late@remote.example", "451 4.3.0 later"),
+	);
+	let worker = worker(dir.path(), spool, &remote).with_max_age(3600);
+	let time = worker.evidence.as_ref().expect("evidence").time();
+	worker.pass().await.expect("pass");
+	// Seconds later by the monotonic clock, a year later by the wall clock.
+	time.skew(400 * 86_400);
+	worker.pass().await.expect("pass");
+	assert!(
+		outcomes(dir.path()).is_empty(),
+		"mail that only waited was given up on"
+	);
+	assert_eq!(worker.spool.list().expect("list").len(), 1);
+}

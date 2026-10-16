@@ -272,6 +272,11 @@ impl Worker {
 		if test_clock != 0 {
 			return test_clock;
 		}
+		// A message ages by the cross-checked time: a clock that jumped
+		// ahead must not expire mail that only waited.
+		if let Some(evidence) = &self.evidence {
+			return evidence.time().read().cautious();
+		}
 		SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.map(|d| d.as_secs())
