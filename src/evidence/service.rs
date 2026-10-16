@@ -251,11 +251,21 @@ impl EvidenceService {
 			_ => 0,
 		};
 		// One client's flood must not make the verification of the whole log
-		// so long that every tenant's mail is held.
-		self.quota
-			.admit(submitted.account, kept_bytes, self.today())?;
+		// so long that every tenant's mail is held. The room is reserved with
+		// the check; it goes back if nothing was written.
+		let reservation = self.quota.reserve(
+			submitted.account,
+			(1 + submitted.recipients.len() as u64, kept_bytes),
+			self.today(),
+		)?;
 		let kept = match retention.mode {
-			RetentionMode::Full => Some(self.keep_message(submitted, retention)?),
+			RetentionMode::Full => match self.keep_message(submitted, retention) {
+				Ok(path) => Some(path),
+				Err(error) => {
+					self.quota.release(reservation);
+					return Err(error);
+				}
+			},
 			_ => None,
 		};
 		let header = |name: &str| {
@@ -283,15 +293,14 @@ impl EvidenceService {
 			// must not stay for the whole retention, one copy per retry. But
 			// only a failure that wrote nothing says so: when the record may
 			// be on disk the bytes stay, and the sweeper decides.
-			if let Some(kept) = kept
-				&& !super::chain::Unconfirmed::is(&error)
-			{
-				let _ = std::fs::remove_file(kept);
+			if !super::chain::Unconfirmed::is(&error) {
+				if let Some(kept) = kept {
+					let _ = std::fs::remove_file(kept);
+				}
+				self.quota.release(reservation);
 			}
 			return Err(error);
 		}
-		self.quota
-			.charge(Some(submitted.account), 1, kept_bytes, self.today());
 		Ok(())
 	}
 
@@ -320,7 +329,6 @@ impl EvidenceService {
 			mta_sts: delivery.mta_sts.map(bounded),
 			retain_days: delivery.retain_days,
 		}))?;
-		self.quota.charge(None, 1, 0, self.today());
 		Ok(())
 	}
 

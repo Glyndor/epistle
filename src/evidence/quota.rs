@@ -4,10 +4,14 @@
 //! verification that takes too long holds transactional mail for everybody.
 //! The log grows with what its clients send, so without a bound one credential
 //! that sends a great deal can make every other tenant's mail wait. Each
-//! acceptance is charged to its account and to the day: past a limit the
-//! acceptance is refused (the client is told to retry, `451`), and the status
-//! says so well before. Outcomes of mail already accepted are never refused:
-//! they are owed. The counts live in memory and start again with the process.
+//! acceptance is charged to its account and to the day, for the record of the
+//! acceptance and the outcome it will owe each recipient, before anything is
+//! written: past a limit the acceptance is refused (the client is told to
+//! retry, `451`), and the status says so well before. What was reserved is
+//! given back when nothing was written. The outcomes themselves are never
+//! refused: they were paid for. An account's share of the day is a tenth of
+//! it, so no account, with any fan-out, uses up what the others need. The
+//! counts live in memory and start again with the process.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -17,8 +21,8 @@ use super::day::Day;
 /// The limits, per UTC day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-	/// Acceptances one account may have recorded.
-	pub account_accepted: u64,
+	/// Records (an acceptance and the outcomes it owes) one account may add.
+	pub account_records: u64,
 	/// Bytes one account may have kept in full.
 	pub account_kept_bytes: u64,
 	/// Records of every kind the whole log may take.
@@ -28,7 +32,7 @@ pub struct Limits {
 impl Default for Limits {
 	fn default() -> Self {
 		Limits {
-			account_accepted: 200_000,
+			account_records: 500_000,
 			account_kept_bytes: 4 * 1024 * 1024 * 1024,
 			day_records: 5_000_000,
 		}
@@ -43,6 +47,17 @@ struct Used {
 	day: Option<Day>,
 	records: u64,
 	accounts: BTreeMap<String, (u64, u64)>,
+}
+
+/// Room set aside for one acceptance, to be given back with
+/// [`Quota::release`] if nothing came of it.
+#[derive(Debug)]
+#[must_use]
+pub struct Reservation {
+	account: String,
+	records: u64,
+	kept: u64,
+	day: Day,
 }
 
 /// The counts, and the limits they are held to.
@@ -71,43 +86,61 @@ impl Quota {
 		used
 	}
 
-	/// Whether `account` may have one more acceptance recorded, keeping
-	/// `kept` bytes, on `today`. An error says which limit.
-	pub fn admit(&self, account: &str, kept: u64, today: Day) -> std::io::Result<()> {
+	/// Reserve room for one acceptance of `account` that will owe `records`
+	/// records and keeps `kept` bytes, on `today`, or say which limit it would
+	/// pass. Checking and reserving are one step, so concurrent submissions
+	/// cannot all pass the check before any is counted.
+	pub fn reserve(
+		&self,
+		account: &str,
+		(records, kept): (u64, u64),
+		today: Day,
+	) -> std::io::Result<Reservation> {
+		let held = Reservation {
+			account: account.to_string(),
+			records,
+			kept,
+			day: today,
+		};
 		let Ok(mut used) = self.used.lock() else {
-			return Ok(());
+			return Ok(held);
 		};
 		let used = self.rolled(&mut used, today);
-		let (accepted, bytes) = used.accounts.get(account).copied().unwrap_or_default();
+		let (counted, bytes) = used.accounts.get(account).copied().unwrap_or_default();
 		let over = |what: &str| {
 			Err(std::io::Error::new(
 				std::io::ErrorKind::QuotaExceeded,
 				format!("{what} for today: retry later"),
 			))
 		};
-		if used.records >= self.limits.day_records {
+		if used.records.saturating_add(records) > self.limits.day_records {
 			return over("the evidence log is full");
 		}
-		if accepted >= self.limits.account_accepted {
-			return over("this account has recorded as many acceptances as it may");
+		if counted.saturating_add(records) > self.limits.account_records {
+			return over("this account has added as many records as it may");
 		}
 		if bytes.saturating_add(kept) > self.limits.account_kept_bytes {
 			return over("this account has kept as many bytes as it may");
 		}
-		Ok(())
+		used.records += records;
+		let entry = used.accounts.entry(account.to_string()).or_default();
+		entry.0 += records;
+		entry.1 += kept;
+		Ok(held)
 	}
 
-	/// Count `records` records written for `account`, and `kept` bytes.
-	pub fn charge(&self, account: Option<&str>, records: u64, kept: u64, today: Day) {
+	/// Give back a reservation that wrote nothing.
+	pub fn release(&self, held: Reservation) {
 		let Ok(mut used) = self.used.lock() else {
 			return;
 		};
-		let used = self.rolled(&mut used, today);
-		used.records += records;
-		if let Some(account) = account {
-			let entry = used.accounts.entry(account.to_string()).or_default();
-			entry.0 += records;
-			entry.1 += kept;
+		if used.day != Some(held.day) {
+			return;
+		}
+		used.records = used.records.saturating_sub(held.records);
+		if let Some(entry) = used.accounts.get_mut(&held.account) {
+			entry.0 = entry.0.saturating_sub(held.records);
+			entry.1 = entry.1.saturating_sub(held.kept);
 		}
 	}
 
@@ -129,12 +162,12 @@ impl Quota {
 		used.accounts
 			.iter()
 			.find(|(_, (accepted, bytes))| {
-				near(*accepted, self.limits.account_accepted)
+				near(*accepted, self.limits.account_records)
 					|| near(*bytes, self.limits.account_kept_bytes)
 			})
 			.map(|(account, (accepted, bytes))| {
 				format!(
-					"account {} is near its evidence limits today ({accepted} acceptances, {bytes} bytes kept)",
+					"account {} is near its evidence limits today ({accepted} records, {bytes} bytes kept)",
 					crate::log_id::account(account)
 				)
 			})

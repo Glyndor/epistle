@@ -220,31 +220,45 @@ fn the_bytes_stay_when_the_record_may_have_been_written() {
 	assert_eq!(kept.len(), 1, "the record's message was destroyed");
 }
 
+fn limited(dir: &Path, account_records: u64, day_records: u64) -> EvidenceService {
+	service(dir).with_limits(crate::evidence::quota::Limits {
+		account_records,
+		account_kept_bytes: 10_000,
+		day_records,
+	})
+}
+
+fn from<'a>(
+	account: &'static str,
+	n: u128,
+	recipients: &'a [String],
+	data: &'a [u8],
+) -> Submitted<'a> {
+	Submitted {
+		spool_id: Uuid::from_u128(n),
+		account,
+		..submitted(data, recipients)
+	}
+}
+
+const METADATA: Retention = Retention {
+	mode: RetentionMode::Metadata,
+	days: 30,
+};
+
 #[test]
 fn one_account_flooding_the_log_is_refused_and_the_others_are_not() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let service = service(dir.path()).with_limits(crate::evidence::quota::Limits {
-		account_accepted: 5,
-		account_kept_bytes: 10_000,
-		day_records: 100,
-	});
+	// Each message owes two records: its own and one outcome.
+	let service = limited(dir.path(), 10, 100);
 	let recipients = vec!["a@example.net".to_string()];
-	let retention = Retention {
-		mode: RetentionMode::Metadata,
-		days: 30,
-	};
-	let from = |account: &'static str, n: u128| Submitted {
-		spool_id: Uuid::from_u128(n),
-		account,
-		..submitted(b"Subject: x\r\n\r\nbody\r\n", &recipients)
-	};
 	for n in 0..5 {
 		service
-			.accept(&from("noisy", n), retention)
+			.accept(&from("noisy", n, &recipients, b"x"), METADATA)
 			.expect("within");
 	}
 	let refused = service
-		.accept(&from("noisy", 5), retention)
+		.accept(&from("noisy", 5, &recipients, b"x"), METADATA)
 		.expect_err("past the account's limit");
 	assert_eq!(
 		refused.kind(),
@@ -252,7 +266,7 @@ fn one_account_flooding_the_log_is_refused_and_the_others_are_not() {
 		"{refused}"
 	);
 	service
-		.accept(&from("quiet", 6), retention)
+		.accept(&from("quiet", 6, &recipients, b"x"), METADATA)
 		.expect("another account is not held up");
 	assert_eq!(records(dir.path()).len(), 6, "the refused one was recorded");
 	assert!(
@@ -262,10 +276,106 @@ fn one_account_flooding_the_log_is_refused_and_the_others_are_not() {
 }
 
 #[test]
+fn concurrent_submissions_of_one_account_cannot_all_pass_the_check_first() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let threads = 8u64;
+	// Room for seven of the eight, at two records each.
+	let service = std::sync::Arc::new(limited(dir.path(), (threads - 1) * 2, 1000));
+	let recipients = vec!["a@example.net".to_string()];
+	let start = std::sync::Arc::new(std::sync::Barrier::new(threads as usize));
+	let handles: Vec<_> = (0..threads)
+		.map(|n| {
+			let (service, start, recipients) = (
+				std::sync::Arc::clone(&service),
+				std::sync::Arc::clone(&start),
+				recipients.clone(),
+			);
+			std::thread::spawn(move || {
+				start.wait();
+				service
+					.accept(&from("noisy", u128::from(n), &recipients, b"x"), METADATA)
+					.is_ok()
+			})
+		})
+		.collect();
+	let admitted = handles
+		.into_iter()
+		.map(|handle| handle.join().expect("thread"))
+		.filter(|admitted| *admitted)
+		.count();
+	assert_eq!(admitted as u64, threads - 1, "the quota was passed");
+	assert_eq!(records(dir.path()).len() as u64, threads - 1);
+}
+
+#[test]
+fn room_reserved_for_a_record_that_was_not_written_is_given_back() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = limited(dir.path(), 2, 100);
+	let recipients = vec!["a@example.net".to_string()];
+	let today = super::super::day::Day::of_epoch(service.time().read().time);
+	let blocked = dir
+		.path()
+		.join("evidence/chain")
+		.join(format!("{}.jsonl", today.name()));
+	std::fs::create_dir_all(&blocked).expect("block the day");
+	for n in 0..3 {
+		let refused = service
+			.accept(&from("a", n, &recipients, b"x"), METADATA)
+			.expect_err("the log refuses");
+		assert_ne!(
+			refused.kind(),
+			std::io::ErrorKind::QuotaExceeded,
+			"attempt {n}"
+		);
+	}
+	std::fs::remove_dir(&blocked).expect("unblock");
+	service
+		.accept(&from("a", 9, &recipients, b"x"), METADATA)
+		.expect("the failed attempts did not use the room up");
+}
+
+#[test]
+fn room_stays_reserved_when_the_record_may_have_been_written() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = limited(dir.path(), 2, 100);
+	let recipients = vec!["a@example.net".to_string()];
+	std::fs::create_dir(crate::evidence::head::path(&dir.path().join("evidence")))
+		.expect("block the head");
+	let first = service
+		.accept(&from("a", 1, &recipients, b"x"), METADATA)
+		.expect_err("the head is blocked");
+	assert!(crate::evidence::chain::Unconfirmed::is(&first));
+	let second = service
+		.accept(&from("a", 2, &recipients, b"x"), METADATA)
+		.expect_err("the first may be on disk and counts");
+	assert_eq!(second.kind(), std::io::ErrorKind::QuotaExceeded);
+}
+
+#[test]
+fn an_account_with_many_recipients_cannot_use_up_the_room_of_the_others() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// A tenth of the day each, as the defaults.
+	let service = limited(dir.path(), 1000, 10_000);
+	let many: Vec<String> = (0..100).map(|n| format!("r{n}@example.net")).collect();
+	let one = vec!["a@example.net".to_string()];
+	let mut sent = 0;
+	while service
+		.accept(&from("noisy", 100 + sent, &many, b"x"), METADATA)
+		.is_ok()
+	{
+		sent += 1;
+		assert!(sent < 100, "never refused");
+	}
+	service
+		.accept(&from("other", 1, &one, b"x"), METADATA)
+		.expect("another account is not held up");
+}
+
+#[test]
 fn the_bytes_an_account_may_keep_are_bounded_and_nothing_is_written_past_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let service = service(dir.path()).with_limits(crate::evidence::quota::Limits {
-		account_accepted: 100,
+		account_records: 100,
 		account_kept_bytes: 1000,
 		day_records: 100,
 	});

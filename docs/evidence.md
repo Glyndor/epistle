@@ -267,6 +267,14 @@ refuses to run at a clock more than 35 days past the newest record.
   log kept for a year has to stay below the number of records that fits.
   There is no incremental verification: caching a verified day would trust the
   files not to have changed, which is what the verification is for.
+- One account may add 500 000 records a day (an acceptance and the outcome it
+  owes each recipient, counted when it is accepted) and keep 4 GiB in full, and
+  the whole log takes 5 000 000 records a day, so no account, whatever its
+  fan-out, uses more than a tenth of what the others need. Past a limit the
+  acceptance is refused with the retry-later answer, nothing is written, and
+  `epistle status` warns at 80 percent. The counts are in memory and start
+  again with the server. They keep the verification, which reads every record,
+  from outgrowing its ten minutes; they are not a measurement of that time.
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,
