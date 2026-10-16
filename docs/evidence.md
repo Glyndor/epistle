@@ -182,6 +182,17 @@ A bundle with no acceptance of what was asked about checks nothing, and fails.
 The report says what was verified: how many acceptances, on which days, and
 that the other recipients' outcomes were not checked when the bundle is for one.
 
+## The clock
+
+Every record carries the time of the machine. A clock that jumps forward would
+send the records after it to a day that has not come, and one that goes back
+would send them into a day that is already sealed, so the log refuses both:
+nothing is written (transactional mail is refused with the usual `451` or
+`503`, and the server logs an error) when the clock is more than five minutes
+ahead of the monotonic clock since the last record, more than an hour behind
+the newest record, or would put a record in a sealed day. Put the time right;
+a clock that jumped forward needs the server restarted once it is.
+
 ## Limits
 
 - The service account holds the evidence key and the data. Until a day is
