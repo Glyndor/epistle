@@ -71,6 +71,21 @@ fn broken(day: Day, why: impl Into<String>) -> Break {
 	}
 }
 
+/// A break at `line` of `day` that names the state it describes, so an
+/// acknowledgement of it covers that state and no other.
+fn broken_in(day: Day, line: u64, why: &str, state: &str) -> Break {
+	Break {
+		day,
+		line,
+		problem: Problem::Checkpoint(format!("{why} [{state}]")),
+	}
+}
+
+/// The first bytes of a hash, enough to tell one state from another.
+fn short(hash: &str) -> &str {
+	hash.get(..16).unwrap_or(hash)
+}
+
 /// What the walk carries from one day to the next. Nothing of it is
 /// stored: every verification starts from the oldest kept day.
 struct Walker {
@@ -89,9 +104,11 @@ struct Walker {
 	/// Every key rotation record met, oldest first, with its place.
 	handovers: Vec<(At, super::rotation::Rotation)>,
 	/// The day and signer of every checkpoint verified, in order.
-	signers: Vec<(Day, String)>,
+	signers: Vec<(Day, String, String)>,
 	/// The signer of the newest checkpoint before the first day walked.
 	before: Option<String>,
+	/// Where the last day walked ends.
+	end: Option<Position>,
 	/// The oldest day under verification: where breaks about the chain as a
 	/// whole are put.
 	first_day: Day,
@@ -166,6 +183,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		signers: Vec::new(),
 		before: previous.as_ref().map(|(cp, _)| cp.key.clone()),
 		first_day: first,
+		end: None,
 	};
 	for day in days {
 		if let Err(at) =
@@ -187,7 +205,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		&purged,
 		&walker,
 		(from_start, to_end),
-		head.is_some(),
+		head.as_ref(),
 	) {
 		match super::ack::is_acknowledged(evidence_root, &fault) {
 			true => report.acknowledged.push(fault),
@@ -212,7 +230,7 @@ fn final_checks(
 	purged: &Option<anchor::Anchor>,
 	walker: &Walker,
 	(from_start, to_end): (bool, bool),
-	has_head: bool,
+	head: Option<&super::head::Head>,
 ) -> Vec<Break> {
 	let whole = walker.first_day;
 	let mut found: Vec<Break> = Vec::new();
@@ -221,33 +239,46 @@ fn final_checks(
 	// A change of signer between two sealed days needs the record that
 	// hands over, even when the walk stopped before the end of the chain.
 	let mut previous = walker.before.as_deref();
-	for (day, signer) in &walker.signers {
+	for (day, signer, checkpoint) in &walker.signers {
+		let state = format!("checkpoint {}, key {}", short(checkpoint), short(signer));
 		if let Err(fault) = timeline.check_seal(signer, *day) {
-			found.push(broken(*day, fault.to_string()));
+			found.push(broken_in(*day, 0, &fault.to_string(), &state));
 		} else if let Some(before) = previous
 			&& before != signer
 			&& !timeline.explains(before, signer, *day)
 		{
-			found.push(broken(
+			found.push(broken_in(
 				*day,
+				0,
 				"signed with a different evidence key than the day before, and no rotation record explains it",
+				&state,
 			));
 		}
 		previous = Some(signer);
 	}
-	for ((day, _), rotation) in &walker.handovers {
+	for ((day, line), rotation) in &walker.handovers {
+		let state = format!("hand-over {}", short(&rotation.signature));
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
-			found.push(broken(*day, why));
+			found.push(broken_in(*day, *line, why, &state));
 		} else if rotation.day != day.name() {
-			found.push(broken(
+			found.push(broken_in(
 				*day,
+				*line,
 				"the key rotation record names another day than the one it sits in",
+				&state,
 			));
 		}
 	}
-	for (at, purge) in &walker.purges {
-		if let Err(why) = super::retention::check_statement(evidence_root, purge, *at, &timeline) {
-			found.push(broken(at.0, why));
+	for ((day, line), purge) in &walker.purges {
+		if let Err(why) =
+			super::retention::check_statement(evidence_root, purge, (*day, *line), &timeline)
+		{
+			found.push(broken_in(
+				*day,
+				*line,
+				why,
+				&format!("statement {}", short(&purge.statement)),
+			));
 		}
 	}
 	match (purged, &walker.last_purge) {
@@ -256,25 +287,53 @@ fn final_checks(
 				|| anchor.checkpoint != purge.checkpoint
 				|| anchor.through != purge.through =>
 		{
-			found.push(broken(
+			found.push(broken_in(
 				whole,
+				0,
 				"the purge anchor does not match the last purge record",
+				&format!(
+					"anchor {} {}, record {} {}",
+					anchor.through,
+					short(&anchor.last_hash),
+					purge.through,
+					short(&purge.last_hash)
+				),
 			));
 		}
-		(Some(_), None) if from_start && to_end => {
-			found.push(broken(whole, "days were purged without a purge record"));
+		(Some(anchor), None) if from_start && to_end => {
+			found.push(broken_in(
+				whole,
+				0,
+				"days were purged without a purge record",
+				&format!(
+					"anchor {} {} {}",
+					anchor.through,
+					short(&anchor.last_hash),
+					short(&anchor.checkpoint)
+				),
+			));
 		}
 		_ => {}
 	}
-	if to_end && !has_head {
-		found.push(broken(
+	// Where the chain ends: the same words for another end is another break.
+	let ends = walker.end.map_or_else(
+		|| "no day".to_string(),
+		|end| format!("seq {} {}", end.seq, short(&to_hex(&end.hash))),
+	);
+	if to_end && head.is_none() {
+		found.push(broken_in(
 			whole,
+			0,
 			"the head is missing: the evidence may have been restored from an older copy",
+			&format!("the chain ends at {ends}"),
 		));
 	} else if to_end && !walker.head_seen {
-		found.push(broken(
+		let named = head.map_or_else(String::new, |head| short(&head.last_hash).to_string());
+		found.push(broken_in(
 			whole,
+			0,
 			"rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)",
+			&format!("head {named}, the chain ends at {ends}"),
 		));
 	}
 	found.truncate(MAX_FINAL_BREAKS);
@@ -326,6 +385,7 @@ fn walk_and_check(
 	report.days += 1;
 	report.records += walk.records;
 	walker.expected = Some(walk.last);
+	walker.end = Some(walk.last);
 	let just_closed = day.0 + 1 == today.0 && options.now < today.start_epoch() + SEAL_GRACE_SECS;
 	if (day >= today || just_closed)
 		&& checkpoint::load(evidence_root, day)
@@ -339,7 +399,9 @@ fn walk_and_check(
 	let (root, _) = tree.finish(&[]);
 	let stamped = check_day(evidence_root, day, &walk, &root, walker, options)?;
 	report.sealed += 1;
-	walker.signers.push((day, stamped.2.clone()));
+	walker
+		.signers
+		.push((day, stamped.2.clone(), stamped.0.clone()));
 	report.stamped += u32::from(stamped.1);
 	walker.previous_checkpoint = Some(stamped.0);
 	walker.previous_key = Some(stamped.2);
@@ -465,3 +527,6 @@ pub(crate) fn token_window(
 #[cfg(test)]
 #[path = "audit_tests.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "audit_tests_identity.rs"]
+mod tests_identity;

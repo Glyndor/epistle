@@ -236,7 +236,7 @@ fn a_rotation_record_without_its_statement_is_a_break() {
 	seal(&mut fixture, at(DAY + 4, 0));
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 4, 12))),
-		"2026-10-17: checkpoint: the key rotation statement is missing or not signed by the old key"
+		"2026-10-17 line 1: checkpoint: the key rotation statement is missing or not signed by the old key"
 	);
 }
 
@@ -433,6 +433,6 @@ fn a_rotation_record_names_the_day_it_sits_in() {
 	seal(&mut fixture, at(DAY + 4, 0));
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 4, 12))),
-		"2026-10-17: checkpoint: the key rotation record names another day than the one it sits in"
+		"2026-10-17 line 1: checkpoint: the key rotation record names another day than the one it sits in"
 	);
 }

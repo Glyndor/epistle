@@ -158,7 +158,10 @@ fn an_anchor_moved_without_its_purge_record_is_a_break() {
 	std::fs::remove_file(chain.day_file(Day(DAY))).expect("rm");
 	let report = verified(dir.path(), &tsa, at(DAY + 4, 12));
 	assert_eq!(
-		report.first_break.map(|b| b.to_string()).as_deref(),
+		report
+			.first_break
+			.map(|b| crate::evidence::audit::tests::plain(b.to_string()))
+			.as_deref(),
 		Some("2026-10-15: checkpoint: days were purged without a purge record")
 	);
 }
@@ -333,8 +336,11 @@ fn the_statement_names_what_went_and_cannot_be_changed() {
 	std::fs::write(&path, edited).expect("write");
 	let report = verified(dir.path(), &tsa, now);
 	assert_eq!(
-		report.first_break.map(|at| at.to_string()).as_deref(),
-		Some("2026-10-19: checkpoint: the purge statement is not the one its record names")
+		report
+			.first_break
+			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.as_deref(),
+		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
 	);
 	std::fs::remove_file(&path).expect("remove");
 	let report = verified(dir.path(), &tsa, now);
@@ -437,9 +443,9 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 	assert_eq!(
 		verified(dir.path(), &tsa, now)
 			.first_break
-			.map(|at| at.to_string())
+			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
 			.as_deref(),
-		Some("2026-10-19: checkpoint: the purge statement is not the one its record names")
+		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
 	);
 }
 
@@ -469,9 +475,12 @@ fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
 	assert_eq!(swept.days, 3, "{:?}", swept.refused);
 	let report = verified(dir.path(), &tsa, at(DAY + 5, 13));
 	assert_eq!(
-		report.first_break.map(|at| at.to_string()).as_deref(),
+		report
+			.first_break
+			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.as_deref(),
 		Some(
-			"2026-10-19: checkpoint: the purge statement was not signed by the evidence key in force"
+			"2026-10-19 line 2: checkpoint: the purge statement was not signed by the evidence key in force"
 		)
 	);
 }

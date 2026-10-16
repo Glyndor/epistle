@@ -94,7 +94,16 @@ impl Fixture {
 }
 
 pub(crate) fn reason(report: &Report) -> String {
-	report.first_break.as_ref().expect("a break").to_string()
+	plain(report.first_break.as_ref().expect("a break").to_string())
+}
+
+/// A break's words without the state it names (`[..]` at the end), which
+/// holds hashes that differ from run to run.
+pub(crate) fn plain(text: String) -> String {
+	match text.rsplit_once(" [") {
+		Some((words, state)) if state.ends_with(']') => words.to_string(),
+		_ => text,
+	}
 }
 
 #[test]
