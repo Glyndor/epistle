@@ -18,7 +18,9 @@ pub(super) fn write(out: &Path) -> std::io::Result<()> {
 		if name == FILE {
 			continue;
 		}
-		let bytes = std::fs::read(out.join(&relative))?;
+		let bytes =
+			crate::evidence::checkpoint::read_bounded(&out.join(&relative), super::MAX_FILE)?
+				.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
 		text.push_str(&format!("{}  {name}\n", to_hex(&sha256(&bytes))));
 	}
 	super::write_file(&out.join(FILE), text.as_bytes())

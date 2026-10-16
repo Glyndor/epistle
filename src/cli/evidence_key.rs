@@ -34,7 +34,12 @@ fn show(root: &Path, as_json: bool, out: &mut impl Write) -> ExitCode {
 			"no evidence key yet: it is made when the first message is accepted",
 		);
 	};
-	let pem = std::fs::read_to_string(key::public_key_path(root, current)).unwrap_or_default();
+	let pem =
+		crate::evidence::checkpoint::read_bounded(&key::public_key_path(root, current), 64 * 1024)
+			.ok()
+			.flatten()
+			.and_then(|pem| String::from_utf8(pem).ok())
+			.unwrap_or_default();
 	let previous: Vec<_> = periods[1..]
 		.iter()
 		.map(|(id, until)| json!({ "key": id, "until": until }))

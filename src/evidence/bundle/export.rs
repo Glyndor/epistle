@@ -172,15 +172,22 @@ fn find_kept(evidence_root: &Path, id: Uuid, day: Day, days: u32) -> Result<Vec<
 			.join(candidate.name())
 			.join(days.to_string())
 			.join(format!("{id}.eml"));
-		match std::fs::read(&path) {
-			Ok(stored) => return Ok(stored),
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+		match crate::evidence::checkpoint::read_bounded(&path, super::MAX_FILE) {
+			Ok(Some(stored)) => return Ok(stored),
+			Ok(None) => {}
 			Err(error) => return Err(error.into()),
 		}
 	}
 	Err(BundleError::Refused(format!(
 		"the message {id} is recorded as kept and is not in the evidence directory"
 	)))
+}
+
+/// A small file of the evidence directory (a key, a signature, a statement):
+/// refused when it is larger than any of them, missing when it is not there.
+fn read_small(path: &Path) -> std::io::Result<Vec<u8>> {
+	crate::evidence::checkpoint::read_bounded(path, 256 * 1024)?
+		.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
 }
 
 /// Write the public keys that signed the exported days and, for each, the
@@ -202,11 +209,11 @@ fn write_keys(
 		}
 	}
 	for key in keys {
-		let pem = std::fs::read(crate::evidence::key::public_key_path(evidence_root, &key))?;
+		let pem = read_small(&crate::evidence::key::public_key_path(evidence_root, &key))?;
 		write_file(&out.join("keys").join(format!("{key}.pem")), &pem)?;
 	}
 	for new in statements {
-		let bytes = std::fs::read(rotation::path(evidence_root, &new))?;
+		let bytes = read_small(&rotation::path(evidence_root, &new))?;
 		write_file(
 			&out.join("keys")
 				.join("rotations")
@@ -318,9 +325,12 @@ fn write_day(
 	write_file(&out.join("checkpoints").join(format!("{name}.json")), json)?;
 	write_file(
 		&out.join("checkpoints").join(format!("{name}.sig")),
-		&std::fs::read(&paths.sig)?,
+		&read_small(&paths.sig)?,
 	)?;
-	if let Ok(token) = std::fs::read(&paths.tsr) {
+	if let Ok(Some(token)) = crate::evidence::checkpoint::read_bounded(
+		&paths.tsr,
+		crate::evidence::tsa::token::MAX_RESPONSE as u64,
+	) {
 		write_file(&out.join("checkpoints").join(format!("{name}.tsr")), &token)?;
 		if let Ok(chain) = super::token_chain_pem(&token) {
 			write_file(

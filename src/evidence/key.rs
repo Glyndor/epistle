@@ -93,7 +93,8 @@ impl EvidenceKey {
 				"the evidence key file belongs to another user",
 			));
 		}
-		let pkcs8 = std::fs::read(path)?;
+		let pkcs8 = super::checkpoint::read_bounded(path, 64 * 1024)?
+			.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
 		let pair = Ed25519KeyPair::from_pkcs8(&pkcs8).map_err(|_| {
 			std::io::Error::new(
 				std::io::ErrorKind::InvalidData,

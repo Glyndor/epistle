@@ -516,11 +516,16 @@ fn check_day(
 	let signature = checkpoint::read_bounded(&files(evidence_root, day).sig, 64)
 		.map_err(io)?
 		.ok_or_else(|| broken(day, "the signature is missing"))?;
-	let public = std::fs::read_to_string(key::public_key_path(evidence_root, &checkpoint.key))
-		.ok()
-		.and_then(|pem| key::parse_public_pem(&pem))
-		.filter(|public| key::key_id(public) == checkpoint.key)
-		.ok_or_else(|| broken(day, "the signing key is not published"))?;
+	let public = checkpoint::read_bounded(
+		&key::public_key_path(evidence_root, &checkpoint.key),
+		64 * 1024,
+	)
+	.ok()
+	.flatten()
+	.and_then(|pem| String::from_utf8(pem).ok())
+	.and_then(|pem| key::parse_public_pem(&pem))
+	.filter(|public| key::key_id(public) == checkpoint.key)
+	.ok_or_else(|| broken(day, "the signing key is not published"))?;
 	if !key::verify(&public, &bytes, &signature) {
 		return Err(broken(day, "the signature does not verify"));
 	}

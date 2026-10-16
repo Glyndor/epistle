@@ -39,23 +39,12 @@ pub fn day_state(
 	before_line: Option<u64>,
 ) -> std::io::Result<String> {
 	let mut context = ring::digest::Context::new(&ring::digest::SHA256);
-	context.update(b"epistle evidence day state 1\n");
+	context.update(b"epistle evidence day state 2\n");
 	match open_day(&day_file(&evidence_root.join(CHAIN_DIR), day)) {
 		Ok(file) => {
-			let mut reader = BufReader::new(file);
-			let mut line = Vec::new();
-			let mut number = 0u64;
-			loop {
-				number += 1;
-				if before_line.is_some_and(|before| number >= before) {
-					break;
-				}
-				line.clear();
-				if reader.read_until(b'\n', &mut line)? == 0 {
-					break;
-				}
-				part(&mut context, "line", Some(&line));
-			}
+			let length = stream_lines(&mut context, BufReader::new(file), before_line)?;
+			context.update(b"lines");
+			context.update(&length.to_be_bytes());
 		}
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
 			part(&mut context, "day", None);
@@ -71,6 +60,50 @@ pub fn day_state(
 		part(&mut context, name, read_bounded(path, MAX_FILE)?.as_deref());
 	}
 	Ok(to_hex(context.finish().as_ref()))
+}
+
+/// Feed the bytes of the lines before line `before_line` (all of them for
+/// `None`) to `context`, a buffer at a time, and return how many bytes that
+/// was. A line is never held: one with no end is hashed as it comes, so
+/// the cost in memory is the buffer's, whatever the file holds, and two files
+/// that differ only inside a line of any length have different digests.
+fn stream_lines(
+	context: &mut ring::digest::Context,
+	mut reader: impl BufRead,
+	before_line: Option<u64>,
+) -> std::io::Result<u64> {
+	// The complete lines wanted; the file's own end otherwise.
+	let wanted = before_line.map(|before| before.saturating_sub(1));
+	let (mut seen, mut length) = (0u64, 0u64);
+	if wanted == Some(0) {
+		return Ok(0);
+	}
+	loop {
+		let buffer = reader.fill_buf()?;
+		if buffer.is_empty() {
+			return Ok(length);
+		}
+		let mut end = buffer.len();
+		let mut reached = false;
+		if let Some(wanted) = wanted {
+			for (index, byte) in buffer.iter().enumerate() {
+				if *byte == b'\n' {
+					seen += 1;
+					if seen == wanted {
+						end = index + 1;
+						reached = true;
+						break;
+					}
+				}
+			}
+		}
+		context.update(&buffer[..end]);
+		length += end as u64;
+		reader.consume(end);
+		if reached {
+			return Ok(length);
+		}
+	}
 }
 
 #[cfg(test)]
