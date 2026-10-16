@@ -138,8 +138,10 @@ is kept in the evidence and travels in every bundle, so a reader who
 anchored the key that was current when a day was sealed (or any key before
 it) follows the hand-overs to the key that signed it. Anchor the oldest key
 you have published; a key only vouches for days signed by it or by keys that
-took over from it. After a rotation the old key may not sign any later day,
-and `verify` says so.
+took over from it. A key signs from the rotation record that introduces it to the one that
+hands over from it: the day a rotation is recorded in is sealed by the new
+key, and an acknowledgement or a purge statement written after a rotation
+must be signed by the key then in force. `verify` says so when it is not.
 
 A token stamped long after its day ended shows when the day was sealed, not
 when its mail was sent, so `check` fails a day whose token is dated more

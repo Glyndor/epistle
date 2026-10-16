@@ -279,9 +279,14 @@ pub fn sweep(
 }
 
 /// Whether the signed statement of `purge` is there, is the one the record
-/// names, was signed by the evidence key (the pinned one, or one it took over
-/// from), and says what the record says.
-pub fn check_statement(evidence_root: &Path, purge: &Purge) -> Result<(), &'static str> {
+/// names, was signed by the evidence key in force at `at` (where the purge
+/// record sits), and says what the record says.
+pub fn check_statement(
+	evidence_root: &Path,
+	purge: &Purge,
+	at: super::rotation::At,
+	timeline: &super::rotation::Timeline,
+) -> Result<(), &'static str> {
 	let Some(through) = Day::parse(&purge.through) else {
 		return Err("the purge record names no day");
 	};
@@ -296,14 +301,12 @@ pub fn check_statement(evidence_root: &Path, purge: &Purge) -> Result<(), &'stat
 	if to_hex(&sha256(&bytes)) != purge.statement {
 		return Err("the purge statement is not the one its record names");
 	}
-	// The signer is named by the statement, and trusted only when it is the
-	// pinned key or one it took over from by a signed rotation.
+	// The statement names its signer, who must be the key in force where the
+	// purge record sits in the chain.
 	let statement: Statement =
 		serde_json::from_slice(&bytes).map_err(|_| "the purge statement is malformed")?;
-	let lineage =
-		super::rotation::lineage(evidence_root).map_err(|_| "the evidence key is not pinned")?;
-	if !lineage.contains(&statement.key) {
-		return Err("the purge statement was not signed by the evidence key");
+	if timeline.check(&statement.key, at).is_err() {
+		return Err("the purge statement was not signed by the evidence key in force");
 	}
 	let public =
 		super::rotation::public_key(&evidence_root.join(super::key::KEYS_DIR), &statement.key)

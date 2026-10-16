@@ -166,3 +166,112 @@ fn an_acknowledgement_signed_before_a_rotation_still_counts() {
 	assert_eq!(report.first_break, None);
 	assert_eq!(report.acknowledged, vec![first]);
 }
+
+/// A break on the first day, a rotation, then an acknowledgement written
+/// after it and signed by `signer`.
+fn acknowledged_after_a_rotation(
+	fixture: &Fixture,
+	signer: &EvidenceKey,
+) -> crate::evidence::audit::Report {
+	let first = break_on_first_day(fixture);
+	crate::evidence::rotation::rotate(fixture.root(), true, at(DAY + 3, 13)).expect("rotate");
+	acknowledge_at(
+		fixture.root(),
+		signer,
+		&first,
+		"token lost in a disk failure",
+		&operator(),
+		at(DAY + 3, 14),
+	)
+	.expect("acknowledge");
+	crate::evidence::audit::verify(
+		fixture.root(),
+		&crate::evidence::audit::Options {
+			from: None,
+			to: None,
+			anchors: vec![fixture.tsa.anchor],
+			now: at(DAY + 3, 15),
+		},
+	)
+	.expect("verify")
+}
+
+#[test]
+fn an_acknowledgement_after_a_rotation_must_be_signed_by_the_key_in_force() {
+	let fixture = Fixture::new();
+	let report = acknowledged_after_a_rotation(&fixture, &fixture.key);
+	assert!(report.acknowledged.is_empty(), "the old key acknowledged");
+	assert_eq!(
+		report.first_break.map(|at| at.to_string()).as_deref(),
+		Some(
+			"2026-10-14: checkpoint: not timestamped: the token is missing (still being requested, or the day was re-signed)"
+		)
+	);
+}
+
+#[test]
+fn an_acknowledgement_after_a_rotation_signed_by_the_key_in_force_counts() {
+	let fixture = Fixture::new();
+	let rotated_key = {
+		// The key in force after the rotation the helper performs.
+		crate::evidence::rotation::rotate(fixture.root(), true, at(DAY + 3, 12)).expect("rotate");
+		EvidenceKey::load_or_create(fixture.root()).expect("key")
+	};
+	let first = break_on_first_day(&fixture);
+	acknowledge_at(
+		fixture.root(),
+		&rotated_key,
+		&first,
+		"token lost in a disk failure",
+		&operator(),
+		at(DAY + 3, 14),
+	)
+	.expect("acknowledge");
+	let report = crate::evidence::audit::verify(
+		fixture.root(),
+		&crate::evidence::audit::Options {
+			from: None,
+			to: None,
+			anchors: vec![fixture.tsa.anchor],
+			now: at(DAY + 3, 15),
+		},
+	)
+	.expect("verify");
+	assert_eq!(report.first_break, None);
+	assert_eq!(report.acknowledged, vec![first]);
+}
+
+#[test]
+fn an_acknowledgement_signed_by_a_key_before_its_rotation_record_does_not_count() {
+	use crate::evidence::rotation::{ROTATIONS_DIR, Rotation, path, statement as hand_over};
+	let fixture = Fixture::new();
+	let first = break_on_first_day(&fixture);
+	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	let rotation = Rotation {
+		old: fixture.key.id(),
+		new: new.id(),
+		signature: to_hex(&fixture.key.sign(&hand_over(&fixture.key.id(), &new.id()))),
+	};
+	crate::evidence::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	std::fs::write(
+		path(fixture.root(), &new.id()),
+		serde_json::to_vec(&rotation).expect("json"),
+	)
+	.expect("statement");
+	// The next key signs before the record that introduces it.
+	acknowledge_at(
+		fixture.root(),
+		&new,
+		&first,
+		"token lost in a disk failure",
+		&operator(),
+		at(DAY + 3, 13),
+	)
+	.expect("acknowledge");
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 14), Entry::KeyRotated(rotation))
+		.expect("record");
+	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
+	assert!(!is_acknowledged(fixture.root(), &first));
+}

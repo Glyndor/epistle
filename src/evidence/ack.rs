@@ -159,10 +159,10 @@ fn signed(key: &EvidenceKey, at: &Break, reason: &str, operator: &Operator) -> A
 }
 
 /// Whether `at` is acknowledged: a record in the chain after it names it,
-/// and is signed by the pinned evidence key or by one it took over from by a
-/// signed rotation (an acknowledgement made before a rotation still counts).
+/// and is signed by the evidence key in force at its place in the chain (an
+/// acknowledgement made before a rotation still counts).
 pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
-	let Ok(lineage) = super::rotation::lineage(evidence_root) else {
+	let Ok(timeline) = super::rotation::Timeline::load(evidence_root) else {
 		return false;
 	};
 	let keys_dir = evidence_root.join(key::KEYS_DIR);
@@ -192,7 +192,7 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 			let valid = record.break_id == wanted
 				&& record.break_day == at.day.name()
 				&& record.break_line == at.line
-				&& lineage.contains(&record.key)
+				&& timeline.check(&record.key, (day, number)).is_ok()
 				&& super::rotation::public_key(&keys_dir, &record.key)
 					.zip(decode_signature(&record.signature))
 					.is_some_and(|(public, signature)| {

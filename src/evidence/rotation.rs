@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::chain::Chain;
+use super::day::Day;
 use super::key::{self, EvidenceKey};
 use super::record::{Entry, hash_from_hex, to_hex};
 
@@ -150,6 +151,119 @@ pub fn ancestry(evidence_root: &Path, id: &str) -> Vec<Rotation> {
 /// a signed rotation: the repair after a crash between the two.
 pub(crate) fn took_over(evidence_root: &Path, pinned: &str, id: &str) -> bool {
 	verified(evidence_root, id).is_some_and(|rotation| rotation.old == pinned)
+}
+
+/// A place in the chain: the day and the 1-based line in its file.
+pub type At = (Day, u64);
+
+/// Why a key may not sign at a place in the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+	/// It is not the pinned key nor one it took over from.
+	Unknown,
+	/// The rotation that introduced it comes later in the chain.
+	NotYet,
+	/// A rotation record before this place handed over from it.
+	HandedOver,
+	/// Another key took over from it, and the chain has no record of when.
+	Unrecorded,
+}
+
+impl std::fmt::Display for Fault {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str(match self {
+			Fault::Unknown => {
+				"signed with a key other than the pinned evidence key, or one it took over from by a signed rotation"
+			}
+			Fault::NotYet => "signed with a key before the rotation record that introduces it",
+			Fault::HandedOver => {
+				"signed with a key that had already handed over to another: only the key now in force signs after a rotation"
+			}
+			Fault::Unrecorded => {
+				"signed with a key another took over from, with no rotation record in the chain"
+			}
+		})
+	}
+}
+
+/// Which key is in force at each place of the chain: the one rule the audit,
+/// the acknowledgements and the purge statements share. A key signs from the
+/// rotation record that introduces it to the one that hands over from it.
+/// A record of the hand-over that is not in the chain walked is taken to lie
+/// before everything kept (purged), unless the walk stopped early.
+#[derive(Debug, Clone)]
+pub struct Timeline {
+	lineage: Vec<String>,
+	handovers: Vec<(At, Rotation)>,
+	reaches_end: bool,
+}
+
+impl Timeline {
+	/// A timeline from the `lineage` (newest first) and the rotation records
+	/// met in chain order. `reaches_end` is false when the walk stopped
+	/// before the end of the chain, so a missing record may still come.
+	pub fn new(lineage: Vec<String>, handovers: Vec<(At, Rotation)>, reaches_end: bool) -> Self {
+		Timeline {
+			lineage,
+			handovers,
+			reaches_end,
+		}
+	}
+
+	/// The timeline of the whole chain under `evidence_root`.
+	pub fn load(evidence_root: &Path) -> std::io::Result<Self> {
+		let lineage = lineage(evidence_root)?;
+		let mut handovers = Vec::new();
+		for day in Chain::open(evidence_root)?.days()? {
+			// A day that does not verify is read as far as it goes: an
+			// acknowledged break must not hide the rotations around it.
+			let _ = super::verify::walk_day(evidence_root, day, None, |line, record, _| {
+				if let Entry::KeyRotated(rotation) = &record.entry
+					&& handovers.len() <= MAX_ROTATIONS
+				{
+					handovers.push(((day, line), rotation.clone()));
+				}
+			});
+		}
+		Ok(Timeline::new(lineage, handovers, true))
+	}
+
+	fn position(&self, old: &str, new: &str) -> Option<At> {
+		self.handovers
+			.iter()
+			.find(|(_, rotation)| rotation.old == old && rotation.new == new)
+			.map(|(at, _)| *at)
+	}
+
+	/// Whether `key` is the one in force at `at`.
+	pub fn check(&self, key: &str, at: At) -> Result<(), Fault> {
+		let index = self
+			.lineage
+			.iter()
+			.position(|known| known == key)
+			.ok_or(Fault::Unknown)?;
+		if let Some(predecessor) = self.lineage.get(index + 1)
+			&& let Some(introduced) = self.position(predecessor, key)
+			&& introduced >= at
+		{
+			return Err(Fault::NotYet);
+		}
+		if index > 0 {
+			match self.position(key, &self.lineage[index - 1]) {
+				Some(handed_over) if at < handed_over => {}
+				Some(_) => return Err(Fault::HandedOver),
+				None if !self.reaches_end => {}
+				None => return Err(Fault::Unrecorded),
+			}
+		}
+		Ok(())
+	}
+
+	/// Whether `key` may seal `day`: the key in force once every rotation
+	/// record of that day was written, since a day is sealed after it ends.
+	pub fn check_seal(&self, key: &str, day: Day) -> Result<(), Fault> {
+		self.check(key, (Day(day.0 + 1), 0))
+	}
 }
 
 /// Rotate the evidence key at `now`: returns the new key's id.

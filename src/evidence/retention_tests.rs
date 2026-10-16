@@ -457,3 +457,34 @@ fn a_purge_statement_signed_before_a_rotation_still_verifies() {
 	let report = verified(dir.path(), &tsa, at(DAY + 5, 15));
 	assert_eq!(report.first_break.map(|at| at.to_string()), None);
 }
+
+#[test]
+fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
+	let (dir, old, tsa, _chain) = short_lived();
+	crate::evidence::rotation::rotate(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
+	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
+	assert_ne!(new.id(), old.id());
+	// The same purge, statement signed by the key that handed over.
+	let swept = sweep(dir.path(), &old, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	let report = verified(dir.path(), &tsa, at(DAY + 5, 13));
+	assert_eq!(
+		report.first_break.map(|at| at.to_string()).as_deref(),
+		Some(
+			"2026-10-19: checkpoint: the purge statement was not signed by the evidence key in force"
+		)
+	);
+}
+
+#[test]
+fn a_purge_after_a_rotation_signed_by_the_key_in_force_verifies() {
+	let (dir, _old, tsa, _chain) = short_lived();
+	crate::evidence::rotation::rotate(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
+	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
+	let swept = sweep(dir.path(), &new, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(
+		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
+		None
+	);
+}

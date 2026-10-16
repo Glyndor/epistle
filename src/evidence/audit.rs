@@ -22,6 +22,7 @@ use super::day::Day;
 use super::key;
 use super::merkle::{TreeBuilder, leaf_hash};
 use super::record::{Entry, Position, hash_from_hex, sha256, to_hex};
+use super::rotation::At;
 use super::verify::{Break, Problem, walk_day};
 
 /// Grace after midnight before a missing checkpoint is a break: the server
@@ -80,15 +81,15 @@ struct Walker {
 	head: Option<[u8; 32]>,
 	head_seen: bool,
 	last_purge: Option<super::record::Purge>,
-	/// Every purge record met, oldest first: each statement is checked.
-	purges: Vec<super::record::Purge>,
+	/// Every purge record met, oldest first, with its place: each
+	/// statement is checked against the key in force there.
+	purges: Vec<(At, super::record::Purge)>,
 	/// The pinned key and the keys it took over from, by signed rotations.
 	lineage: Vec<String>,
-	/// Every key rotation record met, oldest first.
-	rotations: Vec<super::rotation::Rotation>,
-	/// Keys that handed over in a day before the one being checked: none may
-	/// sign again, whatever the lineage says.
-	retired: std::collections::BTreeSet<String>,
+	/// Every key rotation record met, oldest first, with its place.
+	handovers: Vec<(At, super::rotation::Rotation)>,
+	/// The day and signer of every checkpoint verified, in order.
+	signers: Vec<(Day, String)>,
 }
 
 /// The most purge records one verification checks.
@@ -156,8 +157,8 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		last_purge: None,
 		purges: Vec::new(),
 		lineage: super::rotation::lineage(evidence_root)?,
-		rotations: Vec::new(),
-		retired: std::collections::BTreeSet::new(),
+		handovers: Vec::new(),
+		signers: Vec::new(),
 	};
 	for day in days {
 		if let Err(at) =
@@ -195,27 +196,20 @@ fn final_checks(
 	today: Day,
 	has_head: bool,
 ) -> Option<Break> {
-	if to_end
-		&& let Some(last) = &walker.previous_key
-		&& let Some(from) = walker.lineage.iter().position(|id| id == last)
-		&& walker.lineage[..=from].windows(2).any(|pair| {
-			!walker
-				.rotations
-				.iter()
-				.any(|rotation| rotation.old == pair[1] && rotation.new == pair[0])
-		}) {
-		return Some(broken(
-			today,
-			"the pinned evidence key took over with no rotation record in the chain",
-		));
+	let timeline =
+		super::rotation::Timeline::new(walker.lineage.clone(), walker.handovers.clone(), to_end);
+	for (day, signer) in &walker.signers {
+		if let Err(fault) = timeline.check_seal(signer, *day) {
+			return Some(broken(*day, fault.to_string()));
+		}
 	}
-	for rotation in &walker.rotations {
+	for (_, rotation) in &walker.handovers {
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
 			return Some(broken(today, why));
 		}
 	}
-	for purge in &walker.purges {
-		if let Err(why) = super::retention::check_statement(evidence_root, purge) {
+	for (at, purge) in &walker.purges {
+		if let Err(why) = super::retention::check_statement(evidence_root, purge, *at, &timeline) {
 			return Some(broken(today, why));
 		}
 	}
@@ -267,12 +261,12 @@ fn walk_and_check(
 	let mut head_seen = false;
 	let mut purges = Vec::new();
 	let mut rotations = Vec::new();
-	let walk = walk_day(evidence_root, day, walker.expected, |_, record, hash| {
+	let walk = walk_day(evidence_root, day, walker.expected, |line, record, hash| {
 		tree.push(leaf_hash(hash));
 		head_seen |= head.as_ref() == Some(hash);
 		match &record.entry {
-			Entry::Purge(purge) => purges.push(purge.clone()),
-			Entry::KeyRotated(rotation) => rotations.push(rotation.clone()),
+			Entry::Purge(purge) => purges.push(((day, line), purge.clone())),
+			Entry::KeyRotated(rotation) => rotations.push(((day, line), rotation.clone())),
 			Entry::Setting(setting) if setting.name == "timestamp" => {
 				timestamping = setting.value.starts_with("enabled");
 			}
@@ -280,19 +274,15 @@ fn walk_and_check(
 		}
 	})?;
 	walker.head_seen |= head_seen;
-	if let Some(last) = purges.last() {
+	if let Some((_, last)) = purges.last() {
 		walker.last_purge = Some(last.clone());
 	}
 	walker.purges.extend(purges);
 	if walker.purges.len() > MAX_PURGES {
 		return Err(broken(day, "more purge records than a verification checks"));
 	}
-	let handed_over: Vec<String> = rotations
-		.iter()
-		.map(|rotation| rotation.old.clone())
-		.collect();
-	walker.rotations.extend(rotations);
-	if walker.rotations.len() > super::rotation::MAX_ROTATIONS {
+	walker.handovers.extend(rotations);
+	if walker.handovers.len() > super::rotation::MAX_ROTATIONS {
 		return Err(broken(
 			day,
 			"more key rotations than a verification follows",
@@ -310,15 +300,12 @@ fn walk_and_check(
 			.is_none()
 	{
 		report.open.push(day);
-		walker.retired.extend(handed_over);
 		return Ok(());
 	}
 	let (root, _) = tree.finish(&[]);
-	let checked = check_day(evidence_root, day, &walk, &root, walker, options);
-	// A key that hands over on this day may still sign it; from the next day on it may not.
-	walker.retired.extend(handed_over);
-	let stamped = checked?;
+	let stamped = check_day(evidence_root, day, &walk, &root, walker, options)?;
 	report.sealed += 1;
+	walker.signers.push((day, stamped.2.clone()));
 	report.stamped += u32::from(stamped.1);
 	walker.previous_checkpoint = Some(stamped.0);
 	walker.previous_key = Some(stamped.2);
@@ -381,24 +368,6 @@ fn check_day(
 		return Err(broken(
 			day,
 			"signed with a key other than the pinned evidence key, or one it took over from by a signed rotation",
-		));
-	}
-	if walker.retired.contains(&checkpoint.key) {
-		return Err(broken(
-			day,
-			"signed with a key that had already handed over to another: only the key now in force signs after a rotation",
-		));
-	}
-	if let Some(previous) = &walker.previous_key
-		&& *previous != checkpoint.key
-		&& !walker
-			.rotations
-			.iter()
-			.any(|rotation| rotation.old == *previous && rotation.new == checkpoint.key)
-	{
-		return Err(broken(
-			day,
-			"signed with a different evidence key than the day before, and no rotation record explains it",
 		));
 	}
 	let signature = checkpoint::read_bounded(&files(evidence_root, day).sig, 64)

@@ -121,7 +121,7 @@ fn a_key_change_no_record_explains_is_a_break() {
 	let text = reason(&verified(&fixture, at(DAY + 4, 12)));
 	assert_eq!(
 		text,
-		"2026-10-17: checkpoint: signed with a different evidence key than the day before, and no rotation record explains it"
+		"2026-10-14: checkpoint: signed with a key another took over from, with no rotation record in the chain"
 	);
 }
 
@@ -150,7 +150,7 @@ fn a_key_taken_without_a_rotation_record_is_a_break() {
 	seal(&mut fixture, at(DAY + 4, 0));
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 4, 12))),
-		"2026-10-17: checkpoint: signed with a different evidence key than the day before, and no rotation record explains it"
+		"2026-10-14: checkpoint: signed with a key another took over from, with no rotation record in the chain"
 	);
 }
 
@@ -243,16 +243,28 @@ fn a_rotation_record_without_its_statement_is_a_break() {
 }
 
 #[test]
-fn a_key_that_handed_over_cannot_sign_a_later_day() {
+fn the_old_key_cannot_seal_the_day_of_its_own_hand_over() {
+	// The rotation record sits in DAY+3; that day is sealed after it ends, by
+	// the key in force then.
 	let (mut fixture, _new) = rotated();
-	// The rotation record sits in DAY+3, which the old key may still seal.
 	let Fixture { dir, key, tsa } = &mut fixture;
 	seal_with(dir.path(), tsa, key, at(DAY + 4, 0));
-	Chain::open(dir.path())
+	assert_eq!(
+		reason(&verified(&fixture, at(DAY + 4, 12))),
+		"2026-10-17: checkpoint: signed with a key that had already handed over to another: only the key now in force signs after a rotation"
+	);
+}
+
+#[test]
+fn a_key_that_handed_over_cannot_sign_a_later_day() {
+	let (mut fixture, _new) = rotated();
+	seal(&mut fixture, at(DAY + 4, 0));
+	Chain::open(fixture.root())
 		.expect("chain")
 		.append_at(at(DAY + 4, 1), accepted(8))
 		.expect("append");
-	// A leaked old key seals the next day too: the same signer as the day before.
+	// A leaked old key seals the next day.
+	let Fixture { dir, key, tsa } = &mut fixture;
 	seal_with(dir.path(), tsa, key, at(DAY + 5, 0));
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 5, 12))),
@@ -300,7 +312,7 @@ fn a_pinned_key_that_took_over_without_a_record_is_a_break() {
 	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 3, 12))),
-		"2026-10-17: checkpoint: the pinned evidence key took over with no rotation record in the chain"
+		"2026-10-14: checkpoint: signed with a key another took over from, with no rotation record in the chain"
 	);
 }
 
