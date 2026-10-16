@@ -80,5 +80,5 @@ their SHA-256 is the `sha256` of its `accepted` record.
 		records = exported.records,
 		messages = messages.join("\n"),
 	);
-	std::fs::write(out.join("README.md"), text)
+	super::write_file(&out.join("README.md"), text.as_bytes())
 }

@@ -48,18 +48,15 @@ pub struct Exported {
 const OUTCOME_DAYS: i64 = 7;
 
 /// Export what `selector` names from `evidence_root` into `out`, a
-/// directory that must not exist yet.
+/// directory that must not exist yet and whose parent must. The directory is
+/// created by one call that fails when anything, a link included, is already
+/// there, so a path planted between a check and the creation is not followed.
 pub fn export(
 	evidence_root: &Path,
 	crypto: &MessageCrypto,
 	selector: &Selector,
 	out: &Path,
 ) -> Result<Exported, BundleError> {
-	if out.exists() {
-		return Err(BundleError::Refused(
-			"the output directory already exists".into(),
-		));
-	}
 	let days = Chain::open(evidence_root)?.days()?;
 	let (first, last) = match selector {
 		Selector::MessageId(_) => (days.first().copied(), days.last().copied()),
@@ -115,7 +112,7 @@ pub fn export(
 	if spool_ids.is_empty() {
 		return Err(BundleError::Refused("no evidence matches".into()));
 	}
-	create_dir(out)?;
+	super::create_root(out)?;
 	let mut done = Exported {
 		messages: spool_ids.iter().copied().collect(),
 		..Exported::default()
@@ -274,11 +271,6 @@ fn write_day(
 			)?;
 		}
 	}
-	Ok(())
-}
-
-fn create_dir(out: &Path) -> Result<(), BundleError> {
-	std::fs::create_dir_all(out)?;
 	Ok(())
 }
 

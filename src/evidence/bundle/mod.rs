@@ -145,3 +145,6 @@ pub(super) fn token_chain_pem(token: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "bundle_tests_private.rs"]
+mod tests_private;

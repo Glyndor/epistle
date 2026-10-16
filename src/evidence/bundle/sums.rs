@@ -21,5 +21,5 @@ pub(super) fn write(out: &Path) -> std::io::Result<()> {
 		let bytes = std::fs::read(out.join(&relative))?;
 		text.push_str(&format!("{}  {name}\n", to_hex(&sha256(&bytes))));
 	}
-	std::fs::write(out.join(FILE), text)
+	super::write_file(&out.join(FILE), text.as_bytes())
 }
