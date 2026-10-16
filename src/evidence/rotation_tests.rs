@@ -6,6 +6,7 @@ use crate::evidence::checkpoint::{files, seal_closed_days};
 use crate::evidence::day::Day;
 use crate::evidence::record::sha256;
 use crate::evidence::test_support::{accepted, at};
+use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
 
 /// The fixture's three days are sealed by the first key. A fourth day gets
@@ -23,15 +24,18 @@ fn rotated() -> (Fixture, String) {
 /// Seal what is closed with the key now in force, and stamp it.
 fn seal(fixture: &mut Fixture, now: u64) {
 	let key = EvidenceKey::load_or_create(fixture.root()).expect("key");
-	seal_closed_days(fixture.root(), &key, true, now).expect("seal");
-	fixture.tsa.gen_time = now + 3600;
-	for offset in 0..5 {
-		let paths = files(fixture.root(), Day(DAY + offset));
+	seal_with(fixture.dir.path(), &mut fixture.tsa, &key, now);
+}
+
+/// Seal what is closed with `key`, and stamp it.
+fn seal_with(root: &Path, tsa: &mut FakeTsa, key: &EvidenceKey, now: u64) {
+	seal_closed_days(root, key, true, now).expect("seal");
+	tsa.gen_time = now + 3600;
+	for offset in 0..6 {
+		let paths = files(root, Day(DAY + offset));
 		if paths.json.exists() && !paths.tsr.exists() {
 			let json = std::fs::read(&paths.json).expect("json");
-			let token = fixture
-				.tsa
-				.respond(&build(&sha256(&json), random_nonce()).der);
+			let token = tsa.respond(&build(&sha256(&json), random_nonce()).der);
 			std::fs::write(&paths.tsr, token).expect("tsr");
 		}
 	}
@@ -235,5 +239,67 @@ fn a_rotation_record_without_its_statement_is_a_break() {
 	assert_eq!(
 		reason(&verified(&fixture, at(DAY + 4, 12))),
 		"2026-10-18: checkpoint: the key rotation statement is missing or not signed by the old key"
+	);
+}
+
+#[test]
+fn a_key_that_handed_over_cannot_sign_a_later_day() {
+	let (mut fixture, _new) = rotated();
+	// The rotation record sits in DAY+3, which the old key may still seal.
+	let Fixture { dir, key, tsa } = &mut fixture;
+	seal_with(dir.path(), tsa, key, at(DAY + 4, 0));
+	Chain::open(dir.path())
+		.expect("chain")
+		.append_at(at(DAY + 4, 1), accepted(8))
+		.expect("append");
+	// A leaked old key seals the next day too: the same signer as the day before.
+	seal_with(dir.path(), tsa, key, at(DAY + 5, 0));
+	assert_eq!(
+		reason(&verified(&fixture, at(DAY + 5, 12))),
+		"2026-10-18: checkpoint: signed with a key that had already handed over to another: only the key now in force signs after a rotation"
+	);
+}
+
+#[test]
+fn an_oldest_key_cannot_sign_once_the_chain_reached_the_third() {
+	let (mut fixture, _b) = rotated();
+	seal(&mut fixture, at(DAY + 4, 0));
+	let c = rotate(fixture.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	seal(&mut fixture, at(DAY + 5, 0));
+	assert_eq!(verified(&fixture, at(DAY + 5, 12)).first_break, None);
+	assert_eq!(lineage(fixture.root()).expect("lineage").len(), 3);
+	assert_eq!(key::pinned_id(fixture.root()).expect("pin"), Some(c));
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 5, 1), accepted(8))
+		.expect("append");
+	let Fixture { dir, key, tsa } = &mut fixture;
+	seal_with(dir.path(), tsa, key, at(DAY + 6, 0));
+	assert_eq!(
+		reason(&verified(&fixture, at(DAY + 6, 12))),
+		"2026-10-19: checkpoint: signed with a key that had already handed over to another: only the key now in force signs after a rotation"
+	);
+}
+
+#[test]
+fn a_pinned_key_that_took_over_without_a_record_is_a_break() {
+	let fixture = Fixture::new();
+	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	let rotation = Rotation {
+		old: old.id(),
+		new: new.id(),
+		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
+	};
+	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	std::fs::write(
+		path(fixture.root(), &new.id()),
+		serde_json::to_vec(&rotation).expect("json"),
+	)
+	.expect("statement");
+	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
+	assert_eq!(
+		reason(&verified(&fixture, at(DAY + 3, 12))),
+		"2026-10-17: checkpoint: the pinned evidence key took over with no rotation record in the chain"
 	);
 }

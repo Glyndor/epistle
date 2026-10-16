@@ -86,6 +86,9 @@ struct Walker {
 	lineage: Vec<String>,
 	/// Every key rotation record met, oldest first.
 	rotations: Vec<super::rotation::Rotation>,
+	/// Keys that handed over in a day before the one being checked: none may
+	/// sign again, whatever the lineage says.
+	retired: std::collections::BTreeSet<String>,
 }
 
 /// The most purge records one verification checks.
@@ -154,6 +157,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		purges: Vec::new(),
 		lineage: super::rotation::lineage(evidence_root)?,
 		rotations: Vec::new(),
+		retired: std::collections::BTreeSet::new(),
 	};
 	for day in days {
 		if let Err(at) =
@@ -191,6 +195,20 @@ fn final_checks(
 	today: Day,
 	has_head: bool,
 ) -> Option<Break> {
+	if to_end
+		&& let Some(last) = &walker.previous_key
+		&& let Some(from) = walker.lineage.iter().position(|id| id == last)
+		&& walker.lineage[..=from].windows(2).any(|pair| {
+			!walker
+				.rotations
+				.iter()
+				.any(|rotation| rotation.old == pair[1] && rotation.new == pair[0])
+		}) {
+		return Some(broken(
+			today,
+			"the pinned evidence key took over with no rotation record in the chain",
+		));
+	}
 	for rotation in &walker.rotations {
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
 			return Some(broken(today, why));
@@ -269,6 +287,10 @@ fn walk_and_check(
 	if walker.purges.len() > MAX_PURGES {
 		return Err(broken(day, "more purge records than a verification checks"));
 	}
+	let handed_over: Vec<String> = rotations
+		.iter()
+		.map(|rotation| rotation.old.clone())
+		.collect();
 	walker.rotations.extend(rotations);
 	if walker.rotations.len() > super::rotation::MAX_ROTATIONS {
 		return Err(broken(
@@ -288,10 +310,14 @@ fn walk_and_check(
 			.is_none()
 	{
 		report.open.push(day);
+		walker.retired.extend(handed_over);
 		return Ok(());
 	}
 	let (root, _) = tree.finish(&[]);
-	let stamped = check_day(evidence_root, day, &walk, &root, walker, options)?;
+	let checked = check_day(evidence_root, day, &walk, &root, walker, options);
+	// A key that hands over on this day may still sign it; from the next day on it may not.
+	walker.retired.extend(handed_over);
+	let stamped = checked?;
 	report.sealed += 1;
 	report.stamped += u32::from(stamped.1);
 	walker.previous_checkpoint = Some(stamped.0);
@@ -355,6 +381,12 @@ fn check_day(
 		return Err(broken(
 			day,
 			"signed with a key other than the pinned evidence key, or one it took over from by a signed rotation",
+		));
+	}
+	if walker.retired.contains(&checkpoint.key) {
+		return Err(broken(
+			day,
+			"signed with a key that had already handed over to another: only the key now in force signs after a rotation",
 		));
 	}
 	if let Some(previous) = &walker.previous_key
