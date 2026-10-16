@@ -336,11 +336,17 @@ fn write_day(
 pub(super) fn relative_files(out: &Path) -> std::io::Result<Vec<PathBuf>> {
 	let mut found = Vec::new();
 	let mut pending = vec![out.to_path_buf()];
+	let mut directories = 0usize;
 	while let Some(dir) = pending.pop() {
 		for entry in std::fs::read_dir(&dir)? {
 			let entry = entry?;
 			let kind = entry.file_type()?;
 			if kind.is_dir() {
+				// Empty ones count as well: they are work and memory too.
+				directories += 1;
+				if directories > super::MAX_FILES {
+					return Err(std::io::Error::other("too many files in the bundle"));
+				}
 				pending.push(entry.path());
 			} else if kind.is_file()
 				&& let Ok(relative) = entry.path().strip_prefix(out)

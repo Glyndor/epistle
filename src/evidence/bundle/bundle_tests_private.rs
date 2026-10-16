@@ -102,3 +102,18 @@ fn the_readme_and_the_sums_do_not_write_through_a_link() {
 	assert!(sums::write(&bundle).is_err());
 	assert_eq!(std::fs::read_to_string(&victim).expect("read"), "precious");
 }
+
+#[test]
+fn a_bundle_of_countless_empty_directories_is_refused_by_count_not_by_exhaustion() {
+	let fixture = Fixture::new();
+	let scratch = tempfile::tempdir().expect("tempdir");
+	let out = scratch.path().join("bundle");
+	run(&fixture, &out).expect("export");
+	let flood = out.join("flood");
+	std::fs::create_dir(&flood).expect("dir");
+	for index in 0..=MAX_FILES {
+		std::fs::create_dir(flood.join(index.to_string())).expect("subdir");
+	}
+	let error = export::relative_files(&out).expect_err("a flood of directories");
+	assert_eq!(error.to_string(), "too many files in the bundle");
+}
