@@ -29,6 +29,9 @@ pub enum AttachmentsCli {
 		/// Print one JSON object instead of text.
 		#[arg(long)]
 		json: bool,
+		/// Exit with 1 when the verdict is quarantine or reject.
+		#[arg(long)]
+		strict: bool,
 	},
 }
 
@@ -93,7 +96,9 @@ pub(super) fn run(path: &Path, action: AttachmentsCli, dry_run: bool) -> ExitCod
 			&mut style::stderr(),
 			super::stack::run,
 		),
-		AttachmentsCli::Check { file, json } => check::execute(path, &file, json, &mut out),
+		AttachmentsCli::Check { file, json, strict } => {
+			check::execute(path, &file, json, strict, &mut out)
+		}
 	};
 	match result {
 		Ok(code) => code,
@@ -133,6 +138,9 @@ mod policy;
 #[cfg(test)]
 #[path = "attachments_tests_check.rs"]
 mod tests_check;
+#[cfg(test)]
+#[path = "attachments_tests_check_strict.rs"]
+mod tests_check_strict;
 #[cfg(test)]
 #[path = "attachments_tests_check_submission.rs"]
 mod tests_check_submission;

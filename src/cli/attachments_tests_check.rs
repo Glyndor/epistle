@@ -39,7 +39,8 @@ pub(super) fn run(
 	json: bool,
 ) -> (Result<ExitCode, String>, String) {
 	let mut out = Vec::new();
-	let result = check::execute(config, eml, json, &mut out).map_err(|error| error.to_string());
+	let result =
+		check::execute(config, eml, json, false, &mut out).map_err(|error| error.to_string());
 	(result, String::from_utf8(out).expect("output is UTF-8"))
 }
 

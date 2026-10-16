@@ -26,6 +26,7 @@ pub(super) fn execute(
 	config_path: &Path,
 	file: &Path,
 	json: bool,
+	strict: bool,
 	out: &mut impl Write,
 ) -> Result<ExitCode, ResourceError> {
 	let config =
@@ -63,6 +64,13 @@ pub(super) fn execute(
 	// and only if the server inspects what its accounts submit.
 	let inspected = config.antispam.scan_authenticated;
 	let refused = inspected && decision.action >= Action::Quarantine;
+	// `--strict` turns a verdict the server would not deliver as it is into
+	// exit 1, like `epistle status` on a failing area.
+	let code = if strict && decision.action >= Action::Quarantine {
+		ExitCode::FAILURE
+	} else {
+		ExitCode::SUCCESS
+	};
 	if json {
 		print_json(
 			out,
@@ -76,11 +84,11 @@ pub(super) fn execute(
 				"ambiguous-mime": report.ambiguous,
 			}),
 		)?;
-		return Ok(ExitCode::SUCCESS);
+		return Ok(code);
 	}
 	write_text(out, &report, &decision, off, refused, inspected)
 		.map_err(|error| ResourceError::Failure(error.to_string()))?;
-	Ok(ExitCode::SUCCESS)
+	Ok(code)
 }
 
 /// Read `file`, refusing anything but a regular file and anything over

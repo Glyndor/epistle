@@ -666,6 +666,7 @@ epistle attachments policy set allow-extensions svg --dry-run
 epistle attachments policy unset allow-extensions
 epistle attachments check suspicious.eml
 epistle attachments check suspicious.eml --json
+epistle attachments check suspicious.eml --strict
 ```
 
 `policy show` prints one `key<TAB>value` line per key in effect: `mode`,
@@ -692,7 +693,10 @@ is `deliver`. Names and types come from the sender: the text output shows
 control and formatting characters as `\u{202e}` escapes, and `--json`
 escapes every character outside ASCII. A file over `max_message_size` is
 refused before it is read (exit `2`; an unreadable file exits `1`). The
-exit code is `0` whenever the message was judged, whatever the verdict.
+exit code is `0` whenever the message was judged, whatever the verdict;
+with `--strict` it is `1` when the verdict is `quarantine` or `reject`
+(the code `epistle status` uses for a failing area), so a script can gate
+on it. `--json` prints the same object either way.
 See [attachments.md](attachments.md) for what is detected.
 
 ## Stack (`epistle stack`)
