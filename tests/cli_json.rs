@@ -31,3 +31,6 @@ mod ban;
 
 #[path = "cli_json/legacy.rs"]
 mod legacy;
+
+#[path = "cli_json/dkim.rs"]
+mod dkim;
