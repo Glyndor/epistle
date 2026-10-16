@@ -7,18 +7,19 @@
 //!   8058), sent with `Precedence: bulk`, never to a suppressed address.
 //! - `personal`: everything else, and the default.
 //!
-//! The class is decided by the server: an explicit field on the API request,
-//! else the default bound to the credential that authenticated, else the
-//! account default. A client may write the [`CLASS_HEADER`] field into the
-//! message, but its only effect is a downgrade to `personal`: the field is
-//! removed from every submission, so it never travels and never upgrades.
+//! The class is decided by the server. What is bound to the credential that
+//! authenticated, else to the account, is a floor: an explicit field on the
+//! API request may ask for a stricter class, never a looser one, so a key
+//! made for notices cannot send mail that skips their evidence. The message
+//! itself decides nothing: the [`CLASS_HEADER`] field is removed from every
+//! submission and ignored.
 
 use serde::{Deserialize, Serialize};
 
 use crate::smtp::trace::{header_values, strip_headers_in_place};
 
-/// The header field a client may use to ask for `personal`. Any other value
-/// is ignored, and the field is always removed before the message is queued.
+/// The header field that used to let a client name a class. It is ignored
+/// whatever it says, and always removed before the message is queued.
 pub const CLASS_HEADER: &str = "Epistle-Class";
 
 /// The class of one submitted message.
@@ -35,6 +36,16 @@ pub enum MailClass {
 }
 
 impl MailClass {
+	/// How much the server asks of the sender: a stricter class is never
+	/// replaced by a looser one that was merely requested.
+	fn strictness(self) -> u8 {
+		match self {
+			Self::Personal => 0,
+			Self::Marketing => 1,
+			Self::Transactional => 2,
+		}
+	}
+
 	/// Every class, in a fixed order (for listings and policy tables).
 	pub const ALL: [MailClass; 3] = [
 		MailClass::Transactional,
@@ -102,34 +113,28 @@ pub struct ClassSources {
 }
 
 impl ClassSources {
-	/// The class the server grants, before the message is looked at.
+	/// The class the server grants, before the message is looked at: what is
+	/// bound to the credential, else to the account, is the floor; an
+	/// explicit field may only raise it.
 	pub fn granted(&self) -> MailClass {
-		self.explicit
-			.or(self.credential)
-			.or(self.account)
-			.unwrap_or_default()
+		let floor = self.credential.or(self.account);
+		match (self.explicit, floor) {
+			(Some(asked), Some(floor)) if asked.strictness() < floor.strictness() => floor,
+			(Some(asked), _) => asked,
+			(None, Some(floor)) => floor,
+			(None, None) => MailClass::default(),
+		}
 	}
 }
 
 /// Decide the class of a submission and remove [`CLASS_HEADER`] from
-/// `data`. The result is the class the server grants, except that a field
-/// asking for `personal` downgrades it; any other value of the field is
-/// ignored, so the message can never raise its own class.
+/// `data`. The field changes nothing: the class is the one the server
+/// grants, so a message can neither raise nor lower its own.
 pub fn resolve(sources: ClassSources, data: &mut Vec<u8>) -> MailClass {
-	let granted = sources.granted();
-	let asked = header_values(data, CLASS_HEADER);
-	if asked.is_empty() {
-		return granted;
+	if !header_values(data, CLASS_HEADER).is_empty() {
+		strip_headers_in_place(data, &[CLASS_HEADER]);
 	}
-	strip_headers_in_place(data, &[CLASS_HEADER]);
-	let downgrade = asked
-		.iter()
-		.any(|value| value.eq_ignore_ascii_case(MailClass::Personal.as_str()));
-	if downgrade {
-		MailClass::Personal
-	} else {
-		granted
-	}
+	sources.granted()
 }
 
 #[cfg(test)]

@@ -136,12 +136,9 @@ async fn the_account_default_applies_and_a_held_gate_answers_503() {
 	let (status, body) = send(&app, json!({})).await;
 	assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
 	assert_eq!(body["error"]["code"], "evidence_unavailable");
-	let (status, _) = send(&app, json!({"class": "personal"})).await;
-	assert_eq!(
-		status,
-		StatusCode::OK,
-		"an explicit personal send is not held"
-	);
+	// The account default is a floor: asking for personal does not skip it.
+	let (status, body) = send(&app, json!({"class": "personal"})).await;
+	assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
 }
 
 #[test]
@@ -165,7 +162,11 @@ fn the_class_bound_to_an_api_key_is_found_by_its_token() {
 		MailClass::Transactional
 	);
 	let explicit = state.class_sources(Some(&key), "alice", Some(MailClass::Personal));
-	assert_eq!(explicit.granted(), MailClass::Personal);
+	assert_eq!(
+		explicit.granted(),
+		MailClass::Transactional,
+		"the key's class is a floor for the request"
+	);
 	let configured = MatchedAuth {
 		configured: true,
 		..key

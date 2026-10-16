@@ -234,3 +234,73 @@ async fn jmap_refuses_transactional_mail_it_cannot_record() {
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	assert!(spool.list().expect("list").is_empty(), "queued anyway");
 }
+
+const CLASSES: [MailClass; 3] = [
+	MailClass::Personal,
+	MailClass::Marketing,
+	MailClass::Transactional,
+];
+
+fn stricter(a: MailClass, b: MailClass) -> MailClass {
+	let rank = |class: MailClass| CLASSES.iter().position(|c| *c == class);
+	if rank(a) >= rank(b) { a } else { b }
+}
+
+/// A server whose account `alice` is bound to `floor`.
+fn bound_state(dir: &std::path::Path, floor: MailClass) -> axum::Router {
+	std::fs::create_dir_all(dir.join("accounts/alice")).expect("mkdir");
+	crate::evidence::bindings::update(dir, |bindings| {
+		bindings.accounts.insert("alice".into(), floor);
+	})
+	.expect("bind");
+	router(state(dir).0)
+}
+
+#[tokio::test]
+async fn over_rest_the_bound_class_is_a_floor_for_every_requested_class() {
+	for floor in CLASSES {
+		for asked in CLASSES {
+			let dir = tempfile::tempdir().expect("tempdir");
+			let app = bound_state(dir.path(), floor);
+			let mut request = marketing_request(&["bob@elsewhere.example"]);
+			request["class"] = json!(asked.as_str());
+			let (status, body) = send(&app, request).await;
+			assert_eq!(status, StatusCode::OK, "{floor} / {asked}: {body}");
+			assert_eq!(
+				body["class"],
+				stricter(floor, asked).as_str(),
+				"bound to {floor}, the request asks {asked}"
+			);
+		}
+	}
+}
+
+#[tokio::test]
+async fn over_jmap_the_bound_class_is_a_floor_for_every_requested_class() {
+	for floor in CLASSES {
+		for asked in CLASSES {
+			let dir = tempfile::tempdir().expect("tempdir");
+			let app = bound_state(dir.path(), floor);
+			let response = jmap(
+				dir.path(),
+				&app,
+				UNSUBSCRIBE,
+				&["bob@elsewhere.example"],
+				asked.as_str(),
+			)
+			.await;
+			let id = response["created"]["s1"]["id"]
+				.as_str()
+				.unwrap_or_else(|| panic!("{floor} / {asked}: {response}"));
+			let entry = FsSpool::open(dir.path())
+				.expect("spool")
+				.load(uuid::Uuid::parse_str(id).expect("uuid"))
+				.expect("queued");
+			assert_eq!(
+				entry.envelope.class,
+				stricter(floor, asked),
+				"bound to {floor}, the request asks {asked}"
+			);
+		}
+	}
+}

@@ -23,18 +23,19 @@ fn parse_and_name_round_trip() {
 }
 
 #[test]
-fn explicit_beats_credential_beats_account() {
+fn the_credential_binds_before_the_account() {
 	let all = ClassSources {
-		explicit: Some(MailClass::Marketing),
+		explicit: None,
 		credential: Some(MailClass::Transactional),
 		account: Some(MailClass::Personal),
 	};
-	assert_eq!(all.granted(), MailClass::Marketing);
-	let no_explicit = ClassSources {
-		explicit: None,
+	assert_eq!(all.granted(), MailClass::Transactional);
+	let credential_looser = ClassSources {
+		credential: Some(MailClass::Personal),
+		account: Some(MailClass::Transactional),
 		..all
 	};
-	assert_eq!(no_explicit.granted(), MailClass::Transactional);
+	assert_eq!(credential_looser.granted(), MailClass::Personal);
 	let account_only = ClassSources {
 		account: Some(MailClass::Transactional),
 		..ClassSources::default()
@@ -56,10 +57,10 @@ fn a_header_cannot_raise_the_class() {
 }
 
 #[test]
-fn a_header_may_downgrade_to_personal() {
+fn a_header_cannot_lower_the_class_either() {
 	let mut data = message("epistle-class:   Personal\r\n");
 	let class = resolve(bound_to(MailClass::Transactional), &mut data);
-	assert_eq!(class, MailClass::Personal);
+	assert_eq!(class, MailClass::Transactional);
 }
 
 #[test]
@@ -114,4 +115,78 @@ fn many_header_fields_are_handled_in_one_pass() {
 		"20000 fields took {:?}",
 		started.elapsed()
 	);
+}
+
+const ALL: [MailClass; 3] = [
+	MailClass::Personal,
+	MailClass::Marketing,
+	MailClass::Transactional,
+];
+
+/// How strict a class is: what the server asks of the sender.
+fn strictness(class: MailClass) -> u8 {
+	match class {
+		MailClass::Personal => 0,
+		MailClass::Marketing => 1,
+		MailClass::Transactional => 2,
+	}
+}
+
+#[test]
+fn the_class_bound_to_a_credential_or_account_is_a_floor_for_the_explicit_field() {
+	for floor in ALL {
+		for asked in ALL {
+			for (credential, account) in [(Some(floor), None), (None, Some(floor))] {
+				let sources = ClassSources {
+					explicit: Some(asked),
+					credential,
+					account,
+				};
+				let expected = if strictness(asked) >= strictness(floor) {
+					asked
+				} else {
+					floor
+				};
+				assert_eq!(
+					sources.granted(),
+					expected,
+					"bound to {floor}, the request asks {asked}"
+				);
+			}
+		}
+		// Asking for nothing keeps the binding.
+		assert_eq!(bound_to(floor).granted(), floor);
+	}
+	// With no binding the field decides, as before.
+	for asked in ALL {
+		let sources = ClassSources {
+			explicit: Some(asked),
+			..ClassSources::default()
+		};
+		assert_eq!(sources.granted(), asked);
+	}
+}
+
+#[test]
+fn a_header_never_changes_the_class_whatever_it_says_and_whatever_is_bound() {
+	for bound in [
+		None,
+		Some(MailClass::Personal),
+		Some(MailClass::Marketing),
+		Some(MailClass::Transactional),
+	] {
+		for asked in ["personal", "Personal", "marketing", "transactional", "x"] {
+			let mut data = message(&format!("Epistle-Class: {asked}\r\n"));
+			let sources = ClassSources {
+				credential: bound,
+				..ClassSources::default()
+			};
+			assert_eq!(
+				resolve(sources, &mut data),
+				sources.granted(),
+				"bound to {bound:?}, the header says {asked}"
+			);
+			assert!(data == message(""), "the header stayed in the message");
+		}
+	}
 }

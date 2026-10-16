@@ -29,11 +29,13 @@ Every message has a class, decided by the server, never by the message:
 | `marketing` | Refused without a one-click unsubscribe (RFC 8058); sent with `Precedence: bulk`; never to a suppressed address |
 | `personal` | The default; no evidence unless a policy asks for it |
 
-The class comes from, in order: the `class` field of an API request, the
-credential (`epistle app-password create --class`, `epistle api-key create
---class`), the account (`epistle account set <name> --default-class`). An
-`Epistle-Class` header in the message can only lower it to `personal`, and
-is removed before the message is queued.
+What is bound to the credential (`epistle app-password create --class`,
+`epistle api-key create --class`), else to the account (`epistle account set
+<name> --default-class`), is a floor. The `class` field of an API request or a
+JMAP submission may ask for a stricter class, in the order personal,
+marketing, transactional, and never for a looser one: a key made for notices
+cannot send mail that skips their evidence. An `Epistle-Class` header in the
+message changes nothing, and is removed before the message is queued.
 
 ## What is kept
 

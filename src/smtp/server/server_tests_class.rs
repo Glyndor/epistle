@@ -106,13 +106,13 @@ fn the_class_bound_to_the_app_password_applies_and_a_header_cannot_raise_it() {
 			.class,
 		MailClass::Transactional
 	);
-	// The client may only step down.
+	// The message cannot step the class down either.
 	assert_eq!(
 		server
 			.prepare_submission(&bound, "alice", &mut submitted)
 			.expect("ok")
 			.class,
-		MailClass::Personal
+		MailClass::Transactional
 	);
 	let mut primary = crate::smtp::session::Session::new("mail.example.org");
 	primary.mark_authenticated_for_test("alice");
@@ -262,4 +262,47 @@ async fn transactional_smtp_mail_that_cannot_be_recorded_gets_a_temporary_failur
 	assert!(after.starts_with("451 4.3.0"), "{after}");
 	assert!(submitted.is_empty());
 	assert_eq!(sent, 0, "a refused message was copied to Sent");
+}
+
+#[test]
+fn over_smtp_no_header_changes_the_class_bound_to_the_credential() {
+	for bound in [
+		MailClass::Personal,
+		MailClass::Marketing,
+		MailClass::Transactional,
+	] {
+		for asked in ["personal", "marketing", "transactional"] {
+			let dir = tempfile::tempdir().expect("tempdir");
+			let hash = crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password());
+			update(dir.path(), |bindings| {
+				bindings.credentials.insert(app_password_key(&hash), bound);
+			})
+			.expect("bind");
+			let directory = DirectoryHandle::new(
+				crate::smtp::directory::Directory::new(
+					["example.org".to_string()],
+					[("alice@example.org".to_string(), "alice".to_string())],
+				)
+				.with_app_passwords([("alice".to_string(), app_password("notices", &hash))]),
+			);
+			let server = Server::new(
+				"mail.example.org",
+				Arc::new(ClassSink::default()) as Arc<dyn MessageSink>,
+			)
+			.with_directory(directory)
+			.with_data_dir(dir.path().to_path_buf())
+			.with_class_bindings(Arc::new(BindingSet::open(dir.path()).expect("bindings")));
+			let mut session = crate::smtp::session::Session::new("mail.example.org");
+			session.mark_authenticated_with_app_password_for_test("alice", "notices");
+			// A one-click unsubscribe, so a marketing message is not refused.
+			let mut data = message(&format!(
+				"Epistle-Class: {asked}\r\nList-Unsubscribe: <https://example.org/u>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"
+			));
+			let class = server
+				.prepare_submission(&session, "alice", &mut data)
+				.expect("accepted")
+				.class;
+			assert_eq!(class, bound, "bound to {bound}, the header says {asked}");
+		}
+	}
 }
