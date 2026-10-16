@@ -37,6 +37,9 @@ pub struct StoreOptions<'a> {
 	/// Writes the evidence acceptance record for the queued bytes; `None`
 	/// when no evidence is kept for this message.
 	pub evidence: Option<EvidenceHook<'a>>,
+	/// Days the acceptance is kept, which its outcomes inherit; `0` when no
+	/// evidence is kept.
+	pub retain_days: u32,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -236,6 +239,7 @@ impl FsSpool {
 				extra,
 				class: crate::evidence::MailClass::Personal,
 				evidence: None,
+				retain_days: 0,
 			},
 		)
 	}
@@ -275,6 +279,7 @@ impl FsSpool {
 			extra: options.extra.clone(),
 			class: options.class,
 			evidence: options.evidence.is_some(),
+			retain_days: options.retain_days,
 			outcomes_pending: Vec::new(),
 		};
 
@@ -522,6 +527,7 @@ impl MessageSink for FsSpool {
 			extra: &submission.extra,
 			class: submission.class,
 			evidence: None,
+			retain_days: 0,
 		};
 		self.store_with(&message, queue_id, &options)
 			.map(|_| ())

@@ -79,14 +79,21 @@ impl Worker {
 		envelope: &Envelope,
 		outcome: &PendingOutcome,
 	) -> std::io::Result<()> {
-		let account = envelope.account.as_deref().unwrap_or_default();
 		// The outcome keeps what the acceptance was given, not what the
-		// policy says by the time it arrives.
-		let retain_days = service
-			.retention(account, &envelope.reverse_path, envelope.class)
-			.map_or(crate::evidence::policy::DEFAULT_DAYS, |retention| {
-				retention.days
-			});
+		// policy says by the time it arrives; an envelope from before the
+		// acceptance's days were kept in it follows the policy.
+		let retain_days = match envelope.retain_days {
+			0 => service
+				.retention(
+					envelope.account.as_deref().unwrap_or_default(),
+					&envelope.reverse_path,
+					envelope.class,
+				)
+				.map_or(crate::evidence::policy::DEFAULT_DAYS, |retention| {
+					retention.days
+				}),
+			days => days,
+		};
 		service.outcome(&Delivery {
 			spool_id: envelope.id,
 			class: envelope.class,

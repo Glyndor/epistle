@@ -106,7 +106,7 @@ impl SplitDelivery {
 				queue_id,
 				Some(account),
 				&submission.extra,
-				(class, true),
+				(class, Some(retention.days)),
 				Some(signed),
 			);
 			if let Err(error) = &routed {
@@ -141,6 +141,7 @@ impl SplitDelivery {
 			extra: &submission.extra,
 			class,
 			evidence: Some(&record),
+			retain_days: retention.days,
 		};
 		match self.outbound.store_with(&message, queue_id, &options) {
 			Ok(_) => Ok(()),

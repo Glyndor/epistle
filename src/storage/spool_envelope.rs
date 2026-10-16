@@ -74,6 +74,11 @@ pub struct Envelope {
 	/// an `abandoned` record.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub evidence: bool,
+	/// Days the acceptance is kept, which its outcomes inherit, whatever the
+	/// policy says by the time they arrive. `0` in an envelope written before
+	/// the field existed, whose outcomes follow the policy.
+	#[serde(default, skip_serializing_if = "is_zero_days")]
+	pub retain_days: u32,
 	/// Outcomes of recipients that were delivered, bounced or expired but
 	/// could not be written to the evidence log. The entry stays in the queue
 	/// until each is written, and is not sent again meanwhile.
@@ -109,6 +114,10 @@ pub struct PendingOutcome {
 
 fn is_personal(class: &crate::evidence::MailClass) -> bool {
 	*class == crate::evidence::MailClass::Personal
+}
+
+fn is_zero_days(value: &u32) -> bool {
+	*value == 0
 }
 
 fn is_zero(value: &u64) -> bool {

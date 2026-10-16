@@ -34,6 +34,7 @@ fn store(dir: &std::path::Path, recipients: &[&str], evidence: bool) -> FsSpool 
 		extra: &BTreeMap::new(),
 		class: MailClass::Transactional,
 		evidence: evidence.then_some(&recorded as &dyn Fn(&[u8]) -> std::io::Result<()>),
+		retain_days: 365,
 	};
 	spool
 		.store_with(&message, uuid::Uuid::now_v7(), &options)
@@ -230,5 +231,34 @@ async fn personal_mail_is_still_settled_when_its_outcome_cannot_be_written() {
 			.expect("list")
 			.is_empty(),
 		"personal mail waits for nothing"
+	);
+}
+
+#[tokio::test]
+async fn an_outcome_keeps_the_retention_of_its_acceptance_not_the_policy_of_the_day_it_arrives() {
+	use crate::evidence::policy::{Mode, Policy, Rule, Scope, save};
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Accepted with a year of retention (the helper stores 365)...
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	// ...and the operator shortens the policy before the delivery.
+	let mut policy = Policy::default();
+	policy.set(Rule {
+		scope: Scope::Server,
+		class: Some(MailClass::Transactional),
+		mode: Mode::Metadata,
+		days: 30,
+	});
+	save(&dir.path().join("evidence"), &policy).expect("policy");
+	let remote = FakeRemote::default();
+	remote.script("remote.example", Script::default());
+	worker(dir.path(), spool, &remote)
+		.pass()
+		.await
+		.expect("pass");
+	let written = outcomes(dir.path());
+	assert_eq!(written.len(), 1);
+	assert_eq!(
+		written[0].retain_days, 365,
+		"the policy of the day was used"
 	);
 }

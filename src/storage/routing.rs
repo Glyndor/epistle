@@ -224,7 +224,7 @@ impl MessageSink for SplitDelivery {
 			uuid::Uuid::now_v7(),
 			None,
 			&BTreeMap::new(),
-			(crate::evidence::MailClass::Personal, false),
+			(crate::evidence::MailClass::Personal, None),
 			None,
 		)
 	}
@@ -252,7 +252,7 @@ impl MessageSink for SplitDelivery {
 				queue_id,
 				Some(account),
 				&submission.extra,
-				(submission.class, false),
+				(submission.class, None),
 				None,
 			),
 		}
@@ -272,7 +272,7 @@ impl SplitDelivery {
 		queue_id: uuid::Uuid,
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
-		(class, evidence): (crate::evidence::MailClass, bool),
+		(class, evidence): (crate::evidence::MailClass, Option<u32>),
 		presigned: Option<Vec<u8>>,
 	) -> Result<(), SinkError> {
 		let mut local = Vec::new();
@@ -406,7 +406,8 @@ impl SplitDelivery {
 				account,
 				extra,
 				class,
-				evidence: evidence.then_some(&recorded as &dyn Fn(&[u8]) -> std::io::Result<()>),
+				evidence: evidence.map(|_| &recorded as &dyn Fn(&[u8]) -> std::io::Result<()>),
+				retain_days: evidence.unwrap_or(0),
 			};
 			self.outbound
 				.store_with(&outbound_message, queue_id, &options)
