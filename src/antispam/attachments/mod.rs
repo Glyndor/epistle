@@ -245,6 +245,10 @@ mod tests_evasion;
 mod tests_failclosed;
 
 #[cfg(test)]
+#[path = "inspect_tests_names.rs"]
+mod tests_names;
+
+#[cfg(test)]
 #[path = "inspect_tests_regressions.rs"]
 mod tests_regressions;
 

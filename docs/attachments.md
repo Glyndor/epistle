@@ -40,7 +40,10 @@ Every finding is a stable reason code. Only codes reach the
 Names are read the way clients and extractors read them: RFC 2231 and RFC
 2047 decoding, Unicode NFKC folding with full-width dots and slashes, the
 name cut at a NUL, trailing dots and spaces dropped, and zip names also as
-code page 437. A finding from any reading stands. Nothing that could not be
+code page 437. A name is also read up to its first colon, the stream
+suffix NTFS ignores (`invoice.exe::$DATA` opens `invoice.exe`). A header
+block over 64 KiB (a name of megabytes) is never parsed: the inspection
+stops with `scan-limit`. A finding from any reading stands. Nothing that could not be
 read completely is called clean.
 
 ## The policy

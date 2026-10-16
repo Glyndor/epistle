@@ -457,7 +457,9 @@ fn judge_listing(
 /// and folded with NFKC plus the dots and slashes NFKC leaves alone
 /// (`photo\u{ff0e}exe` reads as `photo.exe`); then the last path
 /// component, without the trailing dots and spaces Windows drops
-/// (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`).
+/// (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`) and also cut at
+/// the first colon, the alternate data stream suffix NTFS ignores
+/// (`a.exe::$DATA` opens `a.exe`).
 pub(super) fn name_variants(name: &str) -> Vec<String> {
 	use unicode_normalization::UnicodeNormalization as _;
 	let visible: String = name.chars().filter(|c| !FORMATTING.contains(c)).collect();
@@ -482,11 +484,16 @@ pub(super) fn name_variants(name: &str) -> Vec<String> {
 	let mut variants: Vec<String> = Vec::new();
 	for form in forms {
 		let base = form.rsplit(['/', '\\']).next().unwrap_or(&form);
-		let trimmed = base
-			.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
-			.to_string();
-		if !variants.contains(&trimmed) {
-			variants.push(trimmed);
+		// NTFS opens `a.exe::$DATA` and `a.exe:stream` as `a.exe`: the name
+		// is also read up to the first colon.
+		let stream_less = base.split(':').next().unwrap_or(base);
+		for read in [base, stream_less] {
+			let trimmed = read
+				.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+				.to_string();
+			if !variants.contains(&trimmed) {
+				variants.push(trimmed);
+			}
 		}
 	}
 	variants
