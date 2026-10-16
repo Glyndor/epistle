@@ -225,6 +225,7 @@ impl MessageSink for SplitDelivery {
 			None,
 			&BTreeMap::new(),
 			(crate::evidence::MailClass::Personal, false),
+			None,
 		)
 	}
 
@@ -252,6 +253,7 @@ impl MessageSink for SplitDelivery {
 				Some(account),
 				&submission.extra,
 				(submission.class, false),
+				None,
 			),
 		}
 	}
@@ -262,6 +264,8 @@ impl SplitDelivery {
 	/// outbound spool under `queue_id`, DKIM-signed when a signer is set.
 	/// `account` is the local account that submitted, when known; `extra` is
 	/// the caller-supplied correlation map (the API may attach one).
+	/// `presigned` is the exact outbound copy when the caller recorded
+	/// evidence over it.
 	pub(super) fn route_classed(
 		&self,
 		message: AcceptedMessage,
@@ -269,6 +273,7 @@ impl SplitDelivery {
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
 		(class, evidence): (crate::evidence::MailClass, bool),
+		presigned: Option<Vec<u8>>,
 	) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
@@ -388,7 +393,12 @@ impl SplitDelivery {
 				recipients: remote,
 				..message
 			};
-			self.sign_outbound(&mut outbound_message);
+			// With evidence the acceptance was recorded over the signed bytes
+			// already: queue exactly those, never a second signature.
+			match presigned {
+				Some(signed) => outbound_message.data = signed,
+				None => self.sign_outbound(&mut outbound_message),
+			}
 			// The acceptance was recorded before routing: the queue entry
 			// only has to say so, so its outcomes are recorded too.
 			let recorded = |_: &[u8]| Ok(());

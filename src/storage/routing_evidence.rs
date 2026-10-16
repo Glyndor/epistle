@@ -51,16 +51,25 @@ impl SplitDelivery {
 		Ok(service.retention(account, &message.reverse_path, class))
 	}
 
+	/// How many recipients leave the server.
+	fn remote_count(&self, message: &AcceptedMessage) -> usize {
+		message
+			.recipients
+			.iter()
+			.filter(|recipient| {
+				Address::parse(recipient).is_ok_and(|address| {
+					matches!(
+						self.directory.current().resolve(&address),
+						Resolution::NotLocal
+					)
+				})
+			})
+			.count()
+	}
+
 	/// Whether every recipient leaves the server.
 	fn all_remote(&self, message: &AcceptedMessage) -> bool {
-		message.recipients.iter().all(|recipient| {
-			Address::parse(recipient).is_ok_and(|address| {
-				matches!(
-					self.directory.current().resolve(&address),
-					Resolution::NotLocal
-				)
-			})
-		})
+		self.remote_count(message) == message.recipients.len()
 	}
 
 	pub(super) fn route_with_evidence(
@@ -76,13 +85,20 @@ impl SplitDelivery {
 		};
 		let class = submission.class;
 		if !self.all_remote(&message) {
+			// Local and remote recipients at once: the remote copy is signed
+			// here, once, and the acceptance is recorded over those bytes.
+			let mut outbound = message.clone();
+			if self.remote_count(&message) > 0 {
+				self.sign_outbound(&mut outbound);
+			}
+			let signed = outbound.data;
 			let submitted = Submitted {
 				spool_id: queue_id,
 				account,
 				class,
 				from: &message.reverse_path,
 				recipients: &message.recipients,
-				data: &message.data,
+				data: &signed,
 			};
 			record_or_refuse(service.accept(&submitted, retention), class)?;
 			let routed = self.route_classed(
@@ -91,6 +107,7 @@ impl SplitDelivery {
 				Some(account),
 				&submission.extra,
 				(class, true),
+				Some(signed),
 			);
 			if let Err(error) = &routed {
 				abandon(&service, queue_id, error);
