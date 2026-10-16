@@ -46,3 +46,6 @@ mod integrity;
 
 #[path = "cli_json/init.rs"]
 mod init;
+
+#[path = "cli_json/sweep.rs"]
+mod sweep;
