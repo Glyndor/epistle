@@ -200,13 +200,13 @@ a clock that jumped forward needs the server restarted once it is.
 ## Limits
 
 - The server verifies the whole kept log every five minutes, from the oldest
-  day. That reads every record again, by design (a changed day is found the
-  next tick). Measured in a debug build it takes about a second per eight
-  thousand records and a flat 40 MB of memory; a release build is several
-  times faster. If a verification takes more than ten minutes the server holds
-  transactional mail until it does not: with a year of retention that is a
-  volume of hundreds of millions of records, far above a notices sender's.
-
+  day. That reads every record again, by design: a changed day is found on the
+  next tick. In a debug build it took about 47 seconds for 400 000 records, in
+  flat memory; a release build was not measured. If a verification takes more
+  than ten minutes the server holds transactional mail until it does not, so a
+  log kept for a year has to stay below the number of records that fits.
+  There is no incremental verification: caching a verified day would trust the
+  files not to have changed, which is what the verification is for.
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,
