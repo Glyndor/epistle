@@ -63,3 +63,43 @@ fn a_line_without_an_end_is_hashed_as_it_comes_and_still_tells_files_apart() {
 		"one line is the whole file"
 	);
 }
+
+#[test]
+fn bytes_moved_across_the_end_of_the_day_make_another_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = dir.path();
+	let chain = crate::evidence::chain::Chain::open(root).expect("chain");
+	let path = chain.day_file(Day(DAY));
+	let checkpoint = files(root, Day(DAY));
+	std::fs::create_dir_all(checkpoint.json.parent().expect("dir")).expect("mkdir");
+	let state = |day: &[u8], json: Option<&[u8]>| {
+		std::fs::write(&path, day).expect("day");
+		match json {
+			Some(json) => std::fs::write(&checkpoint.json, json).expect("json"),
+			None => {
+				let _ = std::fs::remove_file(&checkpoint.json);
+			}
+		}
+		day_state(root, Day(DAY), None).expect("state")
+	};
+	// What the day ends with, moved to what comes after it, and the trailer
+	// an older encoding put after the day's bytes inside the day.
+	let trailer = [b"lines".as_slice(), &12u64.to_be_bytes()].concat();
+	let pairs = [
+		(
+			state(b"abc\n", Some(b"def")),
+			state(b"abc\nd\n", Some(b"ef")),
+		),
+		(
+			state(b"abc\n", Some(b"json")),
+			state(&[b"abc\n".as_slice(), &trailer].concat(), None),
+		),
+		(
+			state(&[b"abc\n".as_slice(), &trailer].concat(), Some(b"x")),
+			state(b"abc\n", Some(&[trailer.as_slice(), b"x"].concat())),
+		),
+	];
+	for (index, (one, other)) in pairs.iter().enumerate() {
+		assert_ne!(one, other, "pair {index} shares a digest");
+	}
+}

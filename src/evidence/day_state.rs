@@ -18,7 +18,12 @@ use super::record::to_hex;
 /// The largest checkpoint file read.
 const MAX_FILE: u64 = 1024 * 1024;
 
+/// One field of the digest: its name (prefixed by its length), then its
+/// length, then its bytes, or a length no bytes can have for a field that is
+/// not there. Every field has a known size before the next one starts, so no
+/// two different inputs can be read as the same sequence.
 fn part(context: &mut ring::digest::Context, name: &str, bytes: Option<&[u8]>) {
+	context.update(&[name.len() as u8]);
 	context.update(name.as_bytes());
 	match bytes {
 		Some(bytes) => {
@@ -39,12 +44,16 @@ pub fn day_state(
 	before_line: Option<u64>,
 ) -> std::io::Result<String> {
 	let mut context = ring::digest::Context::new(&ring::digest::SHA256);
-	context.update(b"epistle evidence day state 2\n");
+	context.update(b"epistle evidence day state 3\n");
 	match open_day(&day_file(&evidence_root.join(CHAIN_DIR), day)) {
 		Ok(file) => {
-			let length = stream_lines(&mut context, BufReader::new(file), before_line)?;
-			context.update(b"lines");
-			context.update(&length.to_be_bytes());
+			// The lines go through a digest of their own, so what follows
+			// them in this one is a field of fixed size, however long the
+			// day is or what it ends with.
+			let mut lines = ring::digest::Context::new(&ring::digest::SHA256);
+			let length = stream_lines(&mut lines, BufReader::new(file), before_line)?;
+			lines.update(&length.to_be_bytes());
+			part(&mut context, "day", Some(lines.finish().as_ref()));
 		}
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
 			part(&mut context, "day", None);
