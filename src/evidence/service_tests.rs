@@ -197,3 +197,25 @@ fn walk_kept(root: &Path) -> Vec<std::path::PathBuf> {
 	}
 	found
 }
+
+#[test]
+fn the_bytes_stay_when_the_record_may_have_been_written() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	// The head cannot be written after the record was synced: the record is
+	// durable, and the call still fails.
+	std::fs::create_dir(crate::evidence::head::path(&dir.path().join("evidence")))
+		.expect("block the head");
+	let recipients = vec!["a@example.net".to_string()];
+	let retention = Retention {
+		mode: RetentionMode::Full,
+		days: 365,
+	};
+	let error = service
+		.accept(&submitted(&[b'x'; 64], &recipients), retention)
+		.expect_err("the head is blocked");
+	assert!(crate::evidence::chain::Unconfirmed::is(&error), "{error}");
+	assert_eq!(records(dir.path()).len(), 1, "the record is on disk");
+	let kept = walk_kept(&dir.path().join("evidence/messages"));
+	assert_eq!(kept.len(), 1, "the record's message was destroyed");
+}

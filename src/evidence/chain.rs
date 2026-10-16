@@ -31,6 +31,38 @@ use super::timeref::TimeRef;
 /// The name of the directory holding the day files, under the evidence root.
 pub const CHAIN_DIR: &str = "chain";
 
+/// A failure after the record may already be on disk: it was written, and
+/// what followed (the directory's sync, the head) failed, or the line could
+/// not be cut off after a failed write. Whoever holds something that goes
+/// with the record (a kept message) must not destroy it on this.
+#[derive(Debug)]
+pub struct Unconfirmed(std::io::Error);
+
+impl Unconfirmed {
+	fn wrap(error: std::io::Error) -> std::io::Error {
+		std::io::Error::new(error.kind(), Unconfirmed(error))
+	}
+
+	/// Whether `error` is one of these.
+	pub fn is(error: &std::io::Error) -> bool {
+		error
+			.get_ref()
+			.is_some_and(|inner| inner.downcast_ref::<Unconfirmed>().is_some())
+	}
+}
+
+impl std::fmt::Display for Unconfirmed {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(
+			formatter,
+			"the record may have been written, but it was not confirmed: {}",
+			self.0
+		)
+	}
+}
+
+impl std::error::Error for Unconfirmed {}
+
 /// The writer of the evidence chain.
 #[derive(Debug)]
 pub struct Chain {
@@ -195,17 +227,24 @@ impl Chain {
 		let mut file = append_file(&path)?;
 		let length = file.seek(SeekFrom::End(0))?;
 		if let Err(error) = file.write_all(&line).and_then(|()| file.sync_data()) {
-			// Never leave a partial line behind a failure we report.
-			let _ = file.set_len(length);
-			return Err(error);
+			// Never leave a partial line behind a failure we report. If the
+			// line cannot be cut off, it may be on disk: the failure is not
+			// one that says nothing was written.
+			return Err(match file.set_len(length) {
+				Ok(()) => error,
+				Err(_) => Unconfirmed::wrap(error),
+			});
 		}
+		// From here the record is durable: a failure says so.
 		if created {
-			File::open(&self.dir).and_then(|dir| dir.sync_all())?;
+			File::open(&self.dir)
+				.and_then(|dir| dir.sync_all())
+				.map_err(Unconfirmed::wrap)?;
 		}
 		// The head lives outside the evidence directory, so restoring an
 		// older copy of the directory is visible to `verify`.
 		if let Some(root) = self.dir.parent() {
-			super::head::write(root, time, &hash)?;
+			super::head::write(root, time, &hash).map_err(Unconfirmed::wrap)?;
 		}
 		self.time.raise_floor(time);
 		Ok(hash)

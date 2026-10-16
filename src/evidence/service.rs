@@ -254,8 +254,12 @@ impl EvidenceService {
 		};
 		if let Err(error) = self.chain.append(Entry::Accepted(accepted)) {
 			// Nothing refers to the bytes of a message that was refused: they
-			// must not stay for the whole retention, one copy per retry.
-			if let Some(kept) = kept {
+			// must not stay for the whole retention, one copy per retry. But
+			// only a failure that wrote nothing says so: when the record may
+			// be on disk the bytes stay, and the sweeper decides.
+			if let Some(kept) = kept
+				&& !super::chain::Unconfirmed::is(&error)
+			{
 				let _ = std::fs::remove_file(kept);
 			}
 			return Err(error);
