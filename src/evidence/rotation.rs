@@ -167,6 +167,22 @@ pub fn ancestry(evidence_root: &Path, id: &str) -> Vec<Rotation> {
 	found
 }
 
+/// The pinned key and every key before it, newest first, each with the day
+/// it handed over (`None` for the pinned key): what an operator publishes so
+/// a reader can anchor every key with its period.
+pub fn periods(evidence_root: &Path) -> std::io::Result<Vec<(String, Option<String>)>> {
+	let ids = lineage(evidence_root)?;
+	let mut out = Vec::new();
+	for (index, id) in ids.iter().enumerate() {
+		let until = match index {
+			0 => None,
+			_ => verified(evidence_root, &ids[index - 1]).map(|rotation| rotation.day),
+		};
+		out.push((id.clone(), until));
+	}
+	Ok(out)
+}
+
 /// Whether the key now in `key.pk8` (`id`) took over from the pinned one by
 /// a signed rotation: the repair after a crash between the two.
 pub(crate) fn took_over(evidence_root: &Path, pinned: &str, id: &str) -> bool {

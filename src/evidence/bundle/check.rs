@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::io::BufReader;
 use std::path::Path;
 
+use super::anchor::{self, Anchors};
 use super::{BundleError, DayProof, MAX_FILE, MAX_RECORDS};
 use crate::evidence::checkpoint::{CHECKPOINT_VERSION, Checkpoint};
 use crate::evidence::day::Day;
@@ -57,7 +58,7 @@ impl CheckReport {
 }
 
 /// A regular file of the bundle, never through a link.
-fn read(path: &Path) -> Result<Vec<u8>, String> {
+pub(super) fn read(path: &Path) -> Result<Vec<u8>, String> {
 	match std::fs::symlink_metadata(path) {
 		Ok(meta) if !meta.file_type().is_file() => return Err("not a regular file".into()),
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
@@ -72,9 +73,6 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 /// How long after a day ends its token may be dated: the audit's grace for a
 /// missing token, plus a day for the seal itself.
 const STAMP_WINDOW_SECS: u64 = crate::evidence::audit::TOKEN_GRACE_SECS + 86_400;
-
-/// The most hand-overs followed from a signer to an anchored key.
-const MAX_HOPS: usize = crate::evidence::rotation::MAX_ROTATIONS;
 
 /// Check the bundle in `dir`, trusting the timestamp keys in `anchors` and
 /// the evidence keys whose ids are in `keys`. Without a key the check
@@ -110,22 +108,24 @@ pub fn check(
 			false => Ok(()),
 		},
 	);
+	let trust = Anchors::parse(keys);
 	report.add(
 		"the evidence key is anchored",
-		match keys.is_empty() {
-			true => Err(
-				"no key given: pass --key <fingerprint|file> with the key the operator published"
-					.into(),
-			),
-			false => Ok(()),
-		},
+		trust.as_ref().map(|_| ()).map_err(Clone::clone),
 	);
+	let handovers = anchor::statements(dir);
+	report.add(
+		"every hand-over in the bundle is signed by the key it replaces",
+		handovers.as_ref().map(|_| ()).map_err(Clone::clone),
+	);
+	let trusted = trust.is_ok() && handovers.is_ok();
+	let (trust, handovers) = (trust.unwrap_or_default(), handovers.unwrap_or_default());
 	let mut vouched = BTreeSet::new();
 	for day in days {
 		let before = report.findings.len();
-		let files = check_day(dir, day, anchors, keys, &mut report);
+		let files = check_day(dir, day, anchors, (&trust, &handovers), &mut report);
 		// Only a day every one of whose checks passed vouches for its files.
-		if !keys.is_empty()
+		if trusted
 			&& report.findings[before..]
 				.iter()
 				.all(|finding| finding.result.is_ok())
@@ -220,7 +220,7 @@ fn check_day(
 	dir: &Path,
 	day: Day,
 	anchors: &[[u8; 32]],
-	keys: &[String],
+	(trust, handovers): (&Anchors, &[Rotation]),
 	report: &mut CheckReport,
 ) -> Files {
 	let name = day.name();
@@ -253,15 +253,12 @@ fn check_day(
 		format!("{name}: signed by the evidence key it names"),
 		signature(dir, &base, &checkpoint, &json),
 	);
-	let mut hand_overs = Vec::new();
-	if !keys.is_empty() {
-		let followed = follow(dir, &checkpoint.key, keys);
-		report.add(
-			format!("{name}: the signing key is the anchored key or took over from it"),
-			followed.as_ref().map(|_| ()).map_err(Clone::clone),
-		);
-		hand_overs = followed.unwrap_or_default();
-	}
+	let followed = anchor::vouch(&checkpoint.key, day, trust, handovers);
+	report.add(
+		format!("{name}: the signing key is the anchored key or took over from it"),
+		followed.as_ref().map(|_| ()).map_err(Clone::clone),
+	);
+	let hand_overs = followed.unwrap_or_default();
 	if checkpoint.timestamp == "enabled" {
 		timestamp(dir, &base, &name, day, &json, anchors, report);
 	} else {
@@ -290,48 +287,6 @@ fn check_day(
 		included.map(|_| ()),
 	);
 	files
-}
-
-/// Follow the signed hand-overs from `signer` back to the oldest key the
-/// bundle leads to, checking every one, and require that an anchored key is
-/// on the way (the signer itself counts). Returns the bundle paths read.
-fn follow(dir: &Path, signer: &str, keys: &[String]) -> Result<Vec<String>, String> {
-	let mut files = Vec::new();
-	let mut current = signer.to_string();
-	let mut seen = BTreeSet::new();
-	let mut anchored = false;
-	for _ in 0..=MAX_HOPS {
-		anchored |= keys.contains(&current);
-		if hash_from_hex(&current).is_none() || !seen.insert(current.clone()) {
-			break;
-		}
-		let relative = format!("keys/rotations/{current}.json");
-		let Ok(bytes) = read(&dir.join(&relative)) else {
-			break;
-		};
-		let rotation: Rotation =
-			serde_json::from_slice(&bytes).map_err(|_| format!("{relative}: not a hand-over"))?;
-		let old_pem = read(&dir.join("keys").join(format!("{}.pem", rotation.old)))
-			.map_err(|why| format!("keys/{}.pem: {why}", rotation.old))?;
-		let old = std::str::from_utf8(&old_pem)
-			.ok()
-			.and_then(key::parse_public_pem)
-			.ok_or("the previous key's file is not an Ed25519 public key")?;
-		if rotation.new != current || !rotation.verifies(&old) {
-			return Err(format!(
-				"{relative}: not signed by the key it says it took over from"
-			));
-		}
-		files.push(relative);
-		files.push(format!("keys/{}.pem", rotation.old));
-		current = rotation.old;
-	}
-	match anchored {
-		true => Ok(files),
-		false => Err(format!(
-			"signed by key {signer}, which is neither an anchored key nor took over from one by signed hand-overs"
-		)),
-	}
 }
 
 fn signature(dir: &Path, base: &Path, checkpoint: &Checkpoint, json: &[u8]) -> Result<(), String> {

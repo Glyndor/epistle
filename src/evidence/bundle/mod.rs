@@ -13,6 +13,7 @@
 //! - `messages/<id>.eml`: the exact bytes, when they were kept;
 //! - `README.md` and `SHA256SUMS`.
 
+mod anchor;
 mod check;
 mod export;
 mod readme;
@@ -151,6 +152,9 @@ mod tests_private;
 #[cfg(test)]
 #[path = "bundle_tests_readme.rs"]
 mod tests_readme;
+#[cfg(test)]
+#[path = "bundle_tests_retired.rs"]
+mod tests_retired;
 #[cfg(test)]
 #[path = "bundle_tests_stray.rs"]
 mod tests_stray;

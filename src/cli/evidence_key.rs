@@ -22,34 +22,39 @@ pub(super) fn run(root: &Path, action: KeyCli, now: u64, out: &mut impl Write) -
 }
 
 fn show(root: &Path, as_json: bool, out: &mut impl Write) -> ExitCode {
-	let lineage = match rotation::lineage(root) {
-		Ok(lineage) => lineage,
+	let periods = match rotation::periods(root) {
+		Ok(periods) => periods,
 		Err(error) => {
 			super::style::error(format_args!("evidence key: {}", error.kind()));
 			return ExitCode::FAILURE;
 		}
 	};
-	let Some(current) = lineage.first() else {
+	let Some((current, _)) = periods.first() else {
 		return super::exit::refused(
 			"no evidence key yet: it is made when the first message is accepted",
 		);
 	};
 	let pem = std::fs::read_to_string(key::public_key_path(root, current)).unwrap_or_default();
+	let previous: Vec<_> = periods[1..]
+		.iter()
+		.map(|(id, until)| json!({ "key": id, "until": until }))
+		.collect();
 	if as_json {
 		return super::evidence::json(
 			out,
-			&json!({ "key": current, "public_key": pem, "previous": &lineage[1..] }),
+			&json!({ "key": current, "public_key": pem, "previous": previous }),
 		);
 	}
 	let _ = writeln!(out, "evidence key: {current}");
-	for previous in &lineage[1..] {
-		let _ = writeln!(out, "took over from: {previous}");
+	for (previous, until) in &periods[1..] {
+		let until = until.as_deref().unwrap_or("?");
+		let _ = writeln!(out, "took over from: {previous} (until {until})");
 	}
 	let _ = writeln!(out, "{pem}");
 	let _ = writeln!(
 		out,
-		"publish the key above where a third party can compare it, and give it \
-		 to epistle evidence check --key"
+		"publish the key above with the period of each earlier one, and give them \
+		 to epistle evidence check --key: the current one bare, each earlier one as KEY@UNTIL"
 	);
 	ExitCode::SUCCESS
 }

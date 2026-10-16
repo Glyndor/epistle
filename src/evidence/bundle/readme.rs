@@ -35,7 +35,8 @@ revocation (CRL, OCSP) of the timestamp authority is not checked.
 SHA-256 of the key's DER form. Do not trust the key file in this bundle on
 its word: compare the name with the fingerprint the operator published, which
 `epistle evidence check --key` also needs. If the key was rotated, the files
-under `keys/rotations/` are statements, each signed by the key it replaces.
+under `keys/rotations/` are statements, each signed by the key it replaces and
+naming the day it handed over: a key signs nothing from that day on.
 
     openssl pkey -pubin -in keys/<key>.pem -outform DER | sha256sum
 

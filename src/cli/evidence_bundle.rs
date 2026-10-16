@@ -32,10 +32,17 @@ pub(super) fn evidence_keys(given: &[String]) -> Result<Vec<String>, String> {
 
 fn evidence_key(value: &str) -> Result<String, String> {
 	let value = value.trim();
-	if hash_from_hex(value).is_some() {
-		return Ok(value.to_string());
+	// `KEY@YYYY-MM-DD`: the day an older key's period ended.
+	let (target, period) = match value.rsplit_once('@') {
+		Some((target, day)) if crate::evidence::day::Day::parse(day).is_some() => {
+			(target, format!("@{day}"))
+		}
+		_ => (value, String::new()),
+	};
+	if hash_from_hex(target).is_some() {
+		return Ok(format!("{target}{period}"));
 	}
-	let bytes = crate::evidence::checkpoint::read_bounded(Path::new(value), 64 * 1024)
+	let bytes = crate::evidence::checkpoint::read_bounded(Path::new(target), 64 * 1024)
 		.ok()
 		.flatten()
 		.ok_or_else(|| {
@@ -46,10 +53,10 @@ fn evidence_key(value: &str) -> Result<String, String> {
 		})?;
 	let text = String::from_utf8(bytes).map_err(|_| "the key file is not text".to_string())?;
 	if let Some(public) = crate::evidence::key::parse_public_pem(&text) {
-		return Ok(crate::evidence::key::key_id(&public));
+		return Ok(format!("{}{period}", crate::evidence::key::key_id(&public)));
 	}
 	match text.trim() {
-		id if hash_from_hex(id).is_some() => Ok(id.to_string()),
+		id if hash_from_hex(id).is_some() => Ok(format!("{id}{period}")),
 		_ => Err(format!(
 			"{:?} holds neither a PEM public key nor a key id",
 			sanitize(value)

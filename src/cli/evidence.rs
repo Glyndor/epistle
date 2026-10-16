@@ -68,10 +68,11 @@ pub enum EvidenceCli {
 		/// The bundle directory.
 		bundle: PathBuf,
 		/// The evidence key the operator published: its id (hex SHA-256 of
-		/// the public key) or a file holding the public key as PEM. A bundle
-		/// is accepted only when its days were signed by this key or by one
-		/// that took over from it; repeatable. Required: a bundle cannot
-		/// vouch for the key that signed it.
+		/// the public key) or a file holding the public key as PEM. The
+		/// current key goes bare; each earlier one needs the day its period
+		/// ended, `KEY@YYYY-MM-DD`. Repeatable. Required: a bundle cannot
+		/// vouch for the key that signed it, and a key that handed over must
+		/// not seal a later day.
 		#[arg(long = "key", value_name = "FINGERPRINT|FILE")]
 		keys: Vec<String>,
 		/// Also trust this timestamp key: hex SHA-256 of its

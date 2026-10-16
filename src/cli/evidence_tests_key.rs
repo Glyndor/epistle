@@ -246,7 +246,10 @@ fn key_show_names_the_fingerprint_and_the_keys_it_took_over_from() {
 	assert_eq!(code, ExitCode::SUCCESS);
 	let shown: serde_json::Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(shown["key"], new);
-	assert_eq!(shown["previous"], serde_json::json!([old]));
+	assert_eq!(
+		shown["previous"],
+		serde_json::json!([{ "key": old, "until": Day(Day::of_epoch(now()).0 - 2).name() }])
+	);
 	assert!(
 		shown["public_key"]
 			.as_str()
@@ -277,4 +280,21 @@ fn key_rotate_hands_over_and_the_evidence_still_verifies() {
 	let new = rotated["key"].as_str().expect("key").to_string();
 	assert_ne!(new, old);
 	assert_eq!(key_of(&server), new);
+}
+
+#[test]
+fn an_older_key_is_anchored_with_the_day_its_period_ended() {
+	let server = Server::new();
+	let id = key_of(&server);
+	let pem = server.root().join("keys").join(format!("{id}.pem"));
+	let keys = super::super::evidence_bundle::evidence_keys;
+	assert_eq!(
+		keys(&[format!("{id}@2026-10-17")]),
+		Ok(vec![format!("{id}@2026-10-17")])
+	);
+	assert_eq!(
+		keys(&[format!("{}@2026-10-17", pem.display())]),
+		Ok(vec![format!("{id}@2026-10-17")])
+	);
+	assert!(keys(&[format!("{id}@2026-02-30")]).is_err(), "not a day");
 }

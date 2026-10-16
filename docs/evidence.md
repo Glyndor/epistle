@@ -124,24 +124,29 @@ the stamped time.
 
 A bundle cannot vouch for the key that signed it: whoever holds the data
 could re-sign every day with another key and put that key in the bundle. So
-the reader brings the key, and `check` fails without `--key`
-(a fingerprint, or a PEM file). A day passes only when its signer is that
-key or took over from it.
+the reader brings the keys, and `check` fails without `--key` (a
+fingerprint, or a PEM file).
 
 ```sh
-epistle evidence key show     # the fingerprint to publish, and the keys it took over from
+epistle evidence key show     # the fingerprints to publish, with the day each earlier one handed over
 epistle evidence key rotate   # asks; --yes off a terminal
+epistle evidence check --key 3f2a...e91c --key 91b0...47aa@2026-10-17 notice-42
 ```
 
-A rotation is a statement signed by the old key that names the new one. It
-is kept in the evidence and travels in every bundle, so a reader who
-anchored the key that was current when a day was sealed (or any key before
-it) follows the hand-overs to the key that signed it. Anchor the oldest key
-you have published; a key only vouches for days signed by it or by keys that
-took over from it. A key signs from the rotation record that introduces it to the one that
-hands over from it: the day a rotation is recorded in is sealed by the new
-key, and an acknowledgement or a purge statement written after a rotation
-must be signed by the key then in force. `verify` says so when it is not.
+A rotation is a statement the old key signs. It names the new key and the
+day of the hand-over, is kept in the evidence, and travels in every bundle
+that needs it. The old key seals nothing from that day on, and the new one
+nothing before it. A key that has handed over could otherwise be leaked and
+used to seal a day that never existed, so the reader anchors the **current
+key bare and every earlier one with the day its period ended**
+(`KEY@YYYY-MM-DD`, the "until" that `key show` prints). `check` refuses
+several bare keys, refuses a day sealed by an earlier key on or after its
+`until`, and refuses a day sealed by a key whose hand-over, found in the
+bundle, was earlier. A key signs from the rotation record that introduces it
+to the one that hands over from it: the day a rotation is recorded in is
+sealed by the new key, and an acknowledgement or a purge statement written
+after a rotation must be signed by the key then in force. `verify` says so
+when it is not.
 
 A token stamped long after its day ended shows when the day was sealed, not
 when its mail was sent, so `check` fails a day whose token is dated more
@@ -156,5 +161,5 @@ than four days after the day ended.
 - The evidence shows what this server sent and was told. It cannot show
   what the receiving server did next.
 - Publish the evidence key's fingerprint (`epistle evidence key show`)
-  where a third party can read it, and keep every earlier one. The check is
+  where a third party can read it, with the period of every earlier one. The check is
   only as good as the key the reader brings.
