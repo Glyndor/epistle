@@ -403,3 +403,38 @@ fn timestamps_disable_and_enable_are_recorded() {
 	assert_eq!(shown["authorities"][0], "timestamp.sectigo.com");
 	assert!(last_setting(&server).starts_with("timestamp enabled (timestamp.sectigo.com)"));
 }
+
+#[test]
+fn clock_accept_leaves_a_request_the_server_can_take() {
+	let server = Server::new();
+	let mut out = Vec::new();
+	let code = super::super::evidence_clock::run(
+		server.root(),
+		super::ClockCli::Accept {
+			yes: true,
+			json: true,
+		},
+		now(),
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let reply: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert_eq!(reply["accepted"], now());
+	assert!(crate::evidence::clock_accept::take(
+		server.root(),
+		now() + 5
+	));
+	if !std::io::stdin().is_terminal() {
+		let unconfirmed = super::super::evidence_clock::run(
+			server.root(),
+			super::ClockCli::Accept {
+				yes: false,
+				json: false,
+			},
+			now(),
+			&mut Vec::new(),
+		);
+		assert_eq!(unconfirmed, ExitCode::from(2), "no terminal and no --yes");
+		assert!(!crate::evidence::clock_accept::take(server.root(), now()));
+	}
+}

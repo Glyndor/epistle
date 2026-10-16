@@ -417,11 +417,7 @@ pub(crate) fn rotate_steps(
 	}
 	// The rotation seals every closed day and names today in its statement:
 	// at a clock the log does not agree with, it would seal the wrong days.
-	if !Chain::open(evidence_root)?
-		.time()
-		.read_at(now, std::time::Instant::now())
-		.sound
-	{
+	if !Chain::open(evidence_root)?.time().allows_operator(now) {
 		return Err(std::io::Error::new(
 			std::io::ErrorKind::InvalidInput,
 			"the clock does not agree with the newest record of the evidence log: \

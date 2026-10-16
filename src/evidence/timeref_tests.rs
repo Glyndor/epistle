@@ -59,9 +59,9 @@ fn time_that_really_passed_is_no_jump() {
 
 #[test]
 fn a_start_is_judged_by_the_newest_record_the_disk_holds() {
-	let newest = NOW - 3 * DAY;
+	let newest = NOW - 5 * 3600;
 	let start = Instant::now();
-	// A few days after the newest record: believed.
+	// Hours after the newest record: believed.
 	assert!(TimeRef::new(newest).read_at(NOW, start).sound);
 	// A year after: not believed, and nothing is later than the record.
 	let ahead = TimeRef::new(newest).read_at(newest + 400 * DAY, start);
@@ -136,4 +136,89 @@ fn what_waits_is_aged_by_the_earlier_of_the_clock_and_the_estimate() {
 	// And one that fell behind does not either.
 	let behind = time.read_at(NOW - 7200, start + Duration::from_secs(20));
 	assert_eq!(behind.cautious(), NOW - 7200);
+}
+
+/// Readings of a wall clock that runs `num`/`den` times as fast as the
+/// monotonic one, one a minute for `days`, and how many were believed.
+fn believed_by_a_clock_running(num: u64, den: u64, days: u64) -> (usize, Vec<bool>) {
+	let time = TimeRef::new(0);
+	let start = Instant::now();
+	let mut said = Vec::new();
+	for minute in 0..days * 24 * 60 {
+		let passed = minute * 60;
+		let reading = time.read_at(
+			NOW + passed * num / den,
+			start + Duration::from_secs(passed),
+		);
+		said.push(reading.sound);
+	}
+	(said.iter().filter(|sound| **sound).count(), said)
+}
+
+#[test]
+fn a_clock_that_gains_a_little_on_every_reading_is_not_walked_ahead() {
+	// Ten percent fast: every refresh is within the slack of the one
+	// before, and the sum is days.
+	let (_, said) = believed_by_a_clock_running(11, 10, 3);
+	assert!(!said.last().copied().unwrap_or(true), "believed at the end");
+	let lost = said.iter().position(|sound| !sound).expect("lost");
+	assert!(
+		said[lost..].iter().all(|sound| !sound),
+		"a clock that was lost was believed again"
+	);
+	assert!(lost * 60 < 3600 * 2, "believed for {} minutes", lost);
+}
+
+#[test]
+fn the_drift_of_a_real_clock_is_believed_for_a_month() {
+	// Two hundred parts per million fast.
+	let (believed, said) = believed_by_a_clock_running(1_000_200, 1_000_000, 30);
+	assert_eq!(believed, said.len());
+}
+
+#[test]
+fn a_start_that_could_not_read_the_log_believes_nothing_until_a_token() {
+	let time = TimeRef::unknown();
+	let start = Instant::now();
+	let reading = time.read_at(NOW, start);
+	assert!(!reading.sound);
+	let later = time.read_at(NOW + 5, start + Duration::from_secs(5));
+	assert_eq!((later.time, later.sound), (NOW + 5, false));
+	time.witness(NOW, start);
+	assert!(time.read_at(NOW + 5, start + Duration::from_secs(5)).sound);
+}
+
+#[test]
+fn a_start_after_a_stop_waits_for_a_token_before_it_is_believed() {
+	let newest = NOW - 2 * DAY;
+	let time = TimeRef::new(newest);
+	let start = Instant::now();
+	assert!(!time.read_at(NOW, start).sound);
+	time.witness(NOW, start);
+	assert!(time.read_at(NOW + 1, start + Duration::from_secs(1)).sound);
+}
+
+#[test]
+fn an_operator_command_waits_out_a_stop_but_not_a_year_or_an_unreadable_log() {
+	let newest = NOW - 10 * DAY;
+	let time = TimeRef::new(newest);
+	assert!(time.allows_operator(NOW));
+	assert!(!time.allows_operator(newest + 400 * DAY));
+	assert!(!time.allows_operator(newest - 7200));
+	assert!(!TimeRef::unknown().allows_operator(NOW));
+	assert!(TimeRef::new(0).allows_operator(NOW));
+}
+
+#[test]
+fn a_start_a_few_days_after_the_newest_record_dates_by_the_clock_but_deletes_nothing() {
+	let newest = NOW - 3 * DAY;
+	let time = TimeRef::new(newest);
+	let start = Instant::now();
+	let reading = time.read_at(NOW, start);
+	assert_eq!((reading.time, reading.sound), (NOW, false));
+	// What waits is still aged by the estimate, which does not run ahead.
+	assert_eq!(reading.cautious(), newest);
+	// A year on is not a clock to date by either.
+	let year = TimeRef::new(newest).read_at(newest + 400 * DAY, start);
+	assert_eq!((year.time, year.sound), (newest, false));
 }

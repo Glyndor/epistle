@@ -43,19 +43,50 @@ pub struct Chain {
 
 impl Chain {
 	/// Open the chain under `evidence_root`, creating its directory `0700`.
-	/// The time reference starts from the newest record the head names.
+	/// The time reference starts from the newest record the log holds.
 	pub fn open(evidence_root: &Path) -> std::io::Result<Self> {
 		let dir = evidence_root.join(CHAIN_DIR);
 		create_private_dir(&dir)?;
-		let newest = super::head::load(evidence_root)
-			.ok()
-			.flatten()
-			.map_or(0, |head| head.time);
-		Ok(Chain {
+		let mut chain = Chain {
 			dir,
 			local: Mutex::new(()),
-			time: Arc::new(TimeRef::new(newest)),
-		})
+			time: Arc::new(TimeRef::new(0)),
+		};
+		chain.time = Arc::new(chain.start_reference(evidence_root));
+		Ok(chain)
+	}
+
+	/// What is known to have happened, from the head and the newest record.
+	/// A log that has nothing is new; one that cannot be read is not
+	/// "nothing": it starts believing no clock at all.
+	fn start_reference(&self, evidence_root: &Path) -> TimeRef {
+		let head = super::head::load(evidence_root).map(|head| head.map(|head| head.time));
+		let newest = self.newest_time();
+		match (head, newest) {
+			(Ok(head), Ok(newest)) => TimeRef::new(head.max(newest).unwrap_or(0)),
+			(Err(_), Ok(Some(newest))) => TimeRef::new(newest),
+			(Ok(Some(head)), Err(_)) => TimeRef::new(head),
+			(head, newest) => {
+				tracing::error!(
+					head = ?head.err().map(|error| error.kind()),
+					chain = ?newest.err().map(|error| error.kind()),
+					"the evidence log cannot be read to learn the time of its newest record; \
+					 no clock is believed until a timestamp authority or the operator confirms the date"
+				);
+				TimeRef::unknown()
+			}
+		}
+	}
+
+	/// The time of the newest record on disk: the last one of the newest day
+	/// file that has any, else the purge anchor's.
+	fn newest_time(&self) -> std::io::Result<Option<u64>> {
+		for day in self.days_newest_first(Day(i64::MAX))? {
+			if let Some(position) = last_position(&self.day_file(day), false)? {
+				return Ok(Some(position.time));
+			}
+		}
+		Ok(super::anchor::read(&self.dir)?.map(|position| position.time))
 	}
 
 	/// The time reference every record is stamped from, shared with whatever

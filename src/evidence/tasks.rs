@@ -30,6 +30,9 @@ use super::verify::Problem;
 const STATUS_FILE: &str = "status.json";
 /// How often the server runs a tick.
 pub const TICK: Duration = Duration::from_secs(300);
+/// Why mail is held while the clock is not believed.
+const CLOCK_NOT_BELIEVED: &str =
+	"the clock does not agree with the evidence log (see `epistle evidence clock accept`)";
 /// The longest one verification may run before the gate closes.
 pub const AUDIT_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -130,6 +133,11 @@ impl Tasks {
 		let mut reading = time.read_at(wall, mono);
 		let mut errors = Vec::new();
 		let current = self.reload(&mut errors);
+		if !reading.sound && super::clock_accept::take(self.service.root(), wall) {
+			// The operator looked at the date and said it is right.
+			time.witness(wall, mono);
+			reading = time.read_at(wall, mono);
+		}
 		if !reading.sound && current.enabled {
 			// A clock nobody agrees with: ask the timestamp authority.
 			if let Some(told) = probe(&current).await {
@@ -234,11 +242,13 @@ impl Tasks {
 			}
 		};
 		let (mut held, pending) = gate(&report, self.service.root(), now);
-		if !reading.sound && held.is_none() {
-			held = Some(
-				"the clock does not agree with the evidence log: records are dated by an estimate"
-					.into(),
-			);
+		if !reading.sound {
+			// The cause comes first: whatever else the check found may only
+			// be that nothing could be sealed on a clock nobody believes.
+			held = Some(match held {
+				Some(other) => format!("{CLOCK_NOT_BELIEVED}; {other}"),
+				None => CLOCK_NOT_BELIEVED.to_string(),
+			});
 		}
 		self.finish(Status {
 			time: now,

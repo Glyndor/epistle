@@ -107,6 +107,16 @@ pub enum EvidenceCli {
 		#[command(subcommand)]
 		action: KeyCli,
 	},
+	/// Tell the server the machine's clock is right.
+	///
+	/// A server stopped for more than a day, or that could not read its log,
+	/// seals, purges and expires nothing until a timestamp authority or you
+	/// vouch for the clock.
+	Clock {
+		/// Clock action (`accept`).
+		#[command(subcommand)]
+		action: ClockCli,
+	},
 	/// Show or set what evidence is kept, and for how long.
 	Policy {
 		/// Policy action (`show`, `set`).
@@ -149,6 +159,20 @@ pub enum KeyCli {
 	///
 	/// The old key signs the hand-over, which is recorded in the evidence.
 	Rotate {
+		/// Do not ask; required when there is no terminal.
+		#[arg(long)]
+		yes: bool,
+		/// Print one JSON object instead of text.
+		#[arg(long)]
+		json: bool,
+	},
+}
+
+/// Clock actions.
+#[derive(Debug, Subcommand)]
+pub enum ClockCli {
+	/// Take the clock this machine reads now as the real date.
+	Accept {
 		/// Do not ask; required when there is no terminal.
 		#[arg(long)]
 		yes: bool,
@@ -323,6 +347,7 @@ pub(super) fn run(
 			)
 		}
 		EvidenceCli::Key { action } => super::evidence_key::run(&root, action, now, out),
+		EvidenceCli::Clock { action } => super::evidence_clock::run(&root, action, now, out),
 		EvidenceCli::Policy { action } => super::evidence_policy::run(&root, action, out),
 		EvidenceCli::Timestamp { action } => super::evidence_timestamp::run(&root, action, out),
 		EvidenceCli::Acknowledge { reason, yes, json } => {

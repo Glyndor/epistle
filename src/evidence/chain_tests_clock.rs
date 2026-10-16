@@ -1,5 +1,7 @@
 //! A clock that jumps cannot send a record to a sealed day or a far future.
 
+use std::path::Path;
+
 use super::tests_lines;
 use super::*;
 use crate::evidence::audit::tests::{DAY, Fixture};
@@ -113,4 +115,40 @@ fn a_record_dated_in_the_future_does_not_lock_the_log_for_a_new_process() {
 		.append(accepted(2))
 		.expect("the log is not locked until the date arrives");
 	assert_eq!(tests_lines(&reopened, Day::of_epoch(future)), 2);
+}
+
+fn open_after(dir: &Path, damage: impl FnOnce(&Chain)) -> Chain {
+	let chain = Chain::open(dir).expect("chain");
+	chain
+		.append_at(at(DAY + 3, 10), accepted(1))
+		.expect("record");
+	damage(&chain);
+	Chain::open(dir).expect("reopened")
+}
+
+#[test]
+fn a_head_that_cannot_be_read_does_not_mean_there_is_no_log() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let chain = open_after(dir.path(), |_| {
+		std::fs::write(crate::evidence::head::path(dir.path()), b"{").expect("corrupt");
+	});
+	assert_eq!(chain.time().floor(), at(DAY + 3, 10), "the newest record");
+	// And a clock a year on from it is not believed because the head broke.
+	let reading = chain
+		.time()
+		.read_at(at(DAY + 3, 10) + 365 * 86_400, std::time::Instant::now());
+	assert!(!reading.sound);
+}
+
+#[test]
+fn a_log_that_cannot_be_read_at_all_starts_believing_no_clock() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let chain = open_after(dir.path(), |chain| {
+		std::fs::remove_file(crate::evidence::head::path(dir.path())).expect("head");
+		std::fs::write(chain.day_file(Day(DAY + 3)), b"not a record\n").expect("corrupt");
+	});
+	let reading = chain
+		.time()
+		.read_at(at(DAY + 3, 11), std::time::Instant::now());
+	assert!(!reading.sound, "a clock was believed on a log nobody read");
 }

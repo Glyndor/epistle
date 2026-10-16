@@ -195,27 +195,39 @@ their retention; the queue gives up on mail that only waited. So none of
 those read the machine's clock raw. They read one time reference that checks
 it:
 
-- against the monotonic clock: once a reading was believed, a clock more than
-  five minutes ahead of what the monotonic clock says passed, or more than an
-  hour behind, has jumped;
-- at start, against the newest record in the log: a clock before it, or more
-  than 35 days after it, is not believed;
+- against the monotonic clock: once a reading was believed, the reference
+  moves only forward with the monotonic clock, never to a wall clock that is
+  ahead of it. A clock more than five minutes ahead of it (plus one second per
+  thousand that passed, the drift of a real clock) or more than an hour behind
+  has jumped, and a clock that gains a little on every reading does not get
+  believed by small steps: it drifts away until it is not;
+- at start, against the newest record in the log (the head, else the newest
+  record on disk): a clock before it, or more than a day after it, is not
+  believed for sealing, purging or expiring. A log that cannot be read at
+  start is not an empty log: nothing is believed;
 - against a timestamp authority, when timestamping is on: a token is a time
-  somebody else vouches for, and it settles a clock that cannot be judged
-  otherwise, such as a server that was stopped for two months.
+  somebody else vouches for, and the server asks for one by itself when it
+  does not believe the clock;
+- against you: `epistle evidence clock accept` says the date this machine
+  reads is the real one (for a server stopped for days, with no authority to
+  ask). The running server takes it at its next check if it is less than an
+  hour old.
 
-While the clock is not believed, nothing is sealed, purged or expired on it.
-Records are still written, dated by the best estimate (the last believed time
-plus the monotonic clock, never earlier than the newest record), so a wrong
-clock never loses an acceptance and never refuses an outcome, an
-acknowledgement or the repair at start. Mail in the queue ages by the earlier
-of the clock and the estimate. Transactional mail is held, `epistle status`
-and the server log say why, and the kept bytes and the records stay where they
-are. When the clock is right again the tasks go on by themselves. Starting the
-server again is also enough: the new process judges the clock by the log, not
-by what the old one had seen. A clock that is behind a record dated in the
-future (the log keeps its time, and a record cannot be removed) is believed
-again only when the date arrives.
+While the clock is not believed, nothing is sealed, purged or expired on it,
+the kept bytes and the records stay where they are, transactional mail is held,
+and `epistle status` and the server log say why. Records are still written, so
+a wrong clock never loses an acceptance and never refuses an outcome, an
+acknowledgement or the repair at start: they are dated by the clock when it is
+within 35 days after the newest record, else by an estimate (the last believed
+time plus the monotonic clock, never earlier than the newest record). Mail in
+the queue ages by the earlier of the clock and the estimate (a log that
+could not be read leaves the queue nothing to compare to, so it ages by the
+clock). When the clock
+agrees again the tasks go on by themselves; starting the server again is also
+enough, because the new process judges the clock by the log, not by what the
+old one had seen. A clock that is behind a record dated in the future (a record
+cannot be removed) is believed again when the date arrives. A key rotation
+refuses to run at a clock more than 35 days past the newest record.
 
 ## Limits
 

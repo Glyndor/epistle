@@ -157,3 +157,9 @@ fn a_rotation_at_a_clock_the_log_does_not_agree_with_seals_nothing() {
 	);
 	assert!(!fixture.root().join("rotations").exists());
 }
+
+#[test]
+fn a_rotation_a_few_days_after_the_last_record_is_not_refused() {
+	let fixture = Fixture::new();
+	rotate(fixture.root(), true, at(DAY + 10, 5)).expect("a quiet week");
+}

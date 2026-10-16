@@ -15,6 +15,7 @@ pub mod bundle;
 pub mod chain;
 pub mod checkpoint;
 pub mod class;
+pub mod clock_accept;
 pub mod day;
 #[cfg(test)]
 mod end_to_end_tests;

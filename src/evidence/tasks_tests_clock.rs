@@ -164,3 +164,97 @@ async fn a_timestamp_authority_settles_a_long_stop_by_itself() {
 	assert_eq!(status.held, None, "{:?}", status.errors);
 	assert_eq!(status.stamped, 1, "the old day was sealed and stamped");
 }
+
+#[tokio::test]
+async fn an_unreadable_head_with_a_clock_a_year_ahead_purges_nothing() {
+	let (dir, original, _tasks, start, kept) = sealed().await;
+	std::fs::write(crate::evidence::head::path(original.root()), b"{").expect("corrupt");
+	// A new process: it cannot read the head, and must not take that for
+	// a log with nothing in it.
+	let reopened = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&reopened)).expect("tasks");
+	let status = tasks
+		.tick_at(at(DAY + 3, 1) + YEAR, start + Duration::from_secs(600))
+		.await;
+	assert!(status.held.is_some(), "{:?}", status.errors);
+	assert!(kept[0].exists() && kept[1].exists());
+	assert_eq!(
+		Chain::open(reopened.root())
+			.expect("chain")
+			.days()
+			.expect("days")
+			.len(),
+		3
+	);
+	assert!(!reopened.root().join("purges").exists());
+}
+
+#[tokio::test]
+async fn a_restart_after_a_long_stop_seals_nothing_until_the_date_is_confirmed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	settings::save(
+		&root,
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY, 1), accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	// Three days after the newest record, no authority to ask.
+	let status = tasks.tick_at(at(DAY + 3, 1), Instant::now()).await;
+	let held = status.held.expect("held");
+	assert!(held.contains("clock"), "{held}");
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_none(),
+		"a day was sealed on a date nobody confirmed"
+	);
+}
+
+#[tokio::test]
+async fn the_operator_can_confirm_a_date_when_there_is_no_authority_to_ask() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	settings::save(
+		&root,
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY, 1), accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let start = Instant::now();
+	assert!(tasks.tick_at(at(DAY + 3, 1), start).await.held.is_some());
+	crate::evidence::clock_accept::request(&root, at(DAY + 3, 1)).expect("request");
+	let status = tasks
+		.tick_at(at(DAY + 3, 1) + 60, start + Duration::from_secs(60))
+		.await;
+	assert!(
+		!status
+			.errors
+			.iter()
+			.any(|error| error.contains("the clock")),
+		"{:?}",
+		status.errors
+	);
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_some(),
+		"the stopped days were sealed once the date was confirmed"
+	);
+}
