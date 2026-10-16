@@ -16,6 +16,8 @@ pub mod chain;
 pub mod checkpoint;
 pub mod class;
 pub mod day;
+#[cfg(test)]
+mod end_to_end_tests;
 pub mod head;
 pub mod key;
 pub mod lines;
