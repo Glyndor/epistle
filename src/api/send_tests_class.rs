@@ -13,7 +13,7 @@ use crate::evidence::bindings::{BindingSet, api_key_key_of_token, update};
 use crate::evidence::service::EvidenceService;
 use crate::storage::{FsSpool, MessageCrypto, SplitDelivery};
 
-fn state(dir: &std::path::Path) -> (ApiState, Arc<EvidenceService>) {
+pub(super) fn state(dir: &std::path::Path) -> (ApiState, Arc<EvidenceService>) {
 	let directory =
 		crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::new(
 			["example.org".to_string()],
@@ -34,7 +34,7 @@ fn state(dir: &std::path::Path) -> (ApiState, Arc<EvidenceService>) {
 	(state, service)
 }
 
-async fn send(app: &axum::Router, extra: Value) -> (StatusCode, Value) {
+pub(super) async fn send(app: &axum::Router, extra: Value) -> (StatusCode, Value) {
 	let mut body = json!({"from": "alice@example.org", "to": ["bob@elsewhere.example"], "subject": "s", "text": "hi"});
 	for (key, value) in extra.as_object().expect("object") {
 		body[key] = value.clone();
@@ -49,7 +49,7 @@ async fn send(app: &axum::Router, extra: Value) -> (StatusCode, Value) {
 	.await
 }
 
-fn sent_count(dir: &std::path::Path) -> usize {
+pub(super) fn sent_count(dir: &std::path::Path) -> usize {
 	std::fs::read_dir(dir.join("accounts/alice/folders/Sent/new"))
 		.map(|entries| {
 			entries
