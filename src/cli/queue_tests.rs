@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 const BODY: &str = "Subject: hi\r\n\r\ntop secret body text\r\n";
 
-fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
+pub(super) fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let ids = (0..count)

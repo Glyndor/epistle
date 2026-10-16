@@ -155,6 +155,9 @@ pub enum OutcomeKind {
 	Expired,
 	/// The address was on a suppression list and was never contacted.
 	Suppressed,
+	/// An operator took the message out of the queue before it was
+	/// delivered, or an account's removal discarded it.
+	Canceled,
 }
 
 /// How the TLS session with the receiving server ended.

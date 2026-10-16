@@ -185,3 +185,18 @@ fn records_and_proofs_moved_together_are_refused_not_read_another_way() {
 		"{failed:?}"
 	);
 }
+
+#[test]
+fn a_canceled_recipient_is_counted_and_is_not_a_delivery() {
+	let delivery = Delivery {
+		canceled: 1,
+		..Delivery::default()
+	};
+	assert!(!delivery.all_delivered());
+	assert_eq!(delivery.total(), 1);
+	assert!(
+		delivery
+			.words()
+			.contains("canceled (an operator removed it")
+	);
+}

@@ -103,6 +103,8 @@ pub struct Delivery {
 	pub suppressed: usize,
 	/// Accepted, and never sent: the submission did not reach the queue.
 	pub abandoned: usize,
+	/// Taken out of the queue by an operator before it was delivered.
+	pub canceled: usize,
 	/// Records of the days the bundle covers that it does not hold, as the
 	/// days' checkpoints count them. Any of them may be an outcome after the
 	/// ones shown: the bundle cannot rule it out.
@@ -112,7 +114,12 @@ pub struct Delivery {
 impl Delivery {
 	/// Every recipient covered.
 	pub fn total(&self) -> usize {
-		self.delivered + self.bounced + self.expired + self.suppressed + self.abandoned
+		self.delivered
+			+ self.bounced
+			+ self.expired
+			+ self.suppressed
+			+ self.abandoned
+			+ self.canceled
 	}
 
 	/// Whether every recipient covered was delivered, and there was one.
@@ -128,6 +135,10 @@ impl Delivery {
 			(self.expired, "expired (the queue gave up)"),
 			(self.suppressed, "suppressed (not sent)"),
 			(self.abandoned, "abandoned (nothing was sent)"),
+			(
+				self.canceled,
+				"canceled (an operator removed it from the queue)",
+			),
 		] {
 			if count > 0 {
 				parts.push(format!("{count} {what}"));
@@ -398,6 +409,7 @@ pub(super) fn complete(
 				OutcomeKind::Bounced => delivery.bounced += 1,
 				OutcomeKind::Expired => delivery.expired += 1,
 				OutcomeKind::Suppressed => delivery.suppressed += 1,
+				OutcomeKind::Canceled => delivery.canceled += 1,
 			}
 		}
 	}

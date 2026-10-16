@@ -112,6 +112,7 @@ pub(super) fn check(
 				"expired": delivery.expired,
 				"suppressed": delivery.suppressed,
 				"abandoned": delivery.abandoned,
+				"canceled": delivery.canceled,
 				"records_left_out": delivery.records_left_out,
 				"every_record_of_the_days_is_here": delivery.records_left_out == 0,
 			})

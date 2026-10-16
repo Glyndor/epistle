@@ -73,3 +73,50 @@ async fn discarding_the_queue_of_a_removed_account_does_not_erase_a_delivery_owe
 	);
 	assert!(spool.list().expect("list").contains(&id), "the entry went");
 }
+
+#[tokio::test]
+async fn discarding_the_queue_of_a_removed_account_records_the_cancellation() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	seed(dir.path(), &store, &spool, "notices");
+	let id = spool.list().expect("list")[0];
+	spool
+		.update_envelope(id, |envelope| {
+			envelope.reverse_path = "notices@example.org".into();
+			envelope.evidence = true;
+			envelope.class = MailClass::Transactional;
+			envelope.retain_days = 365;
+		})
+		.expect("evidence");
+	remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"notices",
+		QueuePolicy::Discard,
+		None,
+	)
+	.await
+	.expect("remove");
+	assert!(
+		!spool.list().expect("list").contains(&id),
+		"the entry stayed"
+	);
+	let root = crate::evidence::service::root_of(dir.path());
+	let mut canceled = 0;
+	for day in crate::evidence::chain::Chain::open(&root)
+		.expect("chain")
+		.days()
+		.expect("days")
+	{
+		crate::evidence::verify::walk_day(&root, day, None, |_, record, _| {
+			if let crate::evidence::record::Entry::Outcome(outcome) = &record.entry
+				&& outcome.result == crate::evidence::record::OutcomeKind::Canceled
+			{
+				canceled += 1;
+			}
+		})
+		.expect("walk");
+	}
+	assert_eq!(canceled, 1, "the message vanished without a record");
+}

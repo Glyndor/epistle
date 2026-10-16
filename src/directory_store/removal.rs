@@ -162,6 +162,7 @@ fn walk_and_remove(dir: &Path, visited: &mut u64) -> std::io::Result<()> {
 /// membership test stays O(1) per envelope.
 fn process_spool_queue(
 	spool: &FsSpool,
+	data_dir: &Path,
 	addresses: &[String],
 	policy: QueuePolicy,
 ) -> std::io::Result<(u32, u32)> {
@@ -178,6 +179,18 @@ fn process_spool_queue(
 			.any(|address| entry.envelope.reverse_path.eq_ignore_ascii_case(address));
 		match (matches, policy) {
 			(true, QueuePolicy::Discard) => {
+				// A message that kept evidence ends on record, not by vanishing
+				// from the queue; an entry still owed an outcome stays.
+				if !entry.envelope.outcomes_pending.is_empty() {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::ResourceBusy,
+						"the entry has evidence outcomes waiting to be written: it stays until they are",
+					));
+				}
+				crate::evidence::cancel::record(
+					&crate::evidence::service::root_of(data_dir),
+					&entry.envelope,
+				)?;
 				spool.remove(id)?;
 				discarded += 1;
 			}
@@ -232,7 +245,7 @@ pub async fn remove_account(
 		.unwrap_or_default();
 
 	let (queued_messages_discarded, queued_messages_left) =
-		process_spool_queue(spool, &addresses, queue).map_err(StoreError::Io)?;
+		process_spool_queue(spool, data_dir, &addresses, queue).map_err(StoreError::Io)?;
 
 	let masked_addresses = store.remove_all_masked(name)?;
 
