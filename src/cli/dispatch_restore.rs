@@ -52,13 +52,12 @@ pub(in crate::cli) fn dispatch_restore(
 			&mut style::stderr(),
 		);
 	}
-	let mut printed = Vec::new();
-	let code = backup::run_restore(
+	let (code, summary) = backup::run_restore_reporting(
 		&config,
 		&input,
 		force,
 		dry_run,
-		&mut printed,
+		&mut std::io::sink(),
 		&mut style::stderr(),
 	);
 	if code != ExitCode::SUCCESS {
@@ -66,28 +65,24 @@ pub(in crate::cli) fn dispatch_restore(
 	}
 	crate::cli::json_out::print(
 		&mut std::io::stdout().lock(),
-		&restore_json(&printed, dry_run),
+		&restore_json(&summary, dry_run),
 	)
 }
 
-/// The `--json` result of a restore, from the summary `run_restore`
-/// printed: `would restore N entries:` and one indented line per entry
-/// for a dry run, `restored N entries` otherwise.
-fn restore_json(printed: &[u8], dry_run: bool) -> serde_json::Value {
-	let text = String::from_utf8_lossy(printed);
-	let mut lines = text.lines();
-	let entries: u64 = lines
-		.next()
-		.and_then(|first| first.split_whitespace().find_map(|word| word.parse().ok()))
-		.unwrap_or(0);
+/// The `--json` result of a restore: the entry count and, for a dry run,
+/// the destination of each entry, as the restore itself counted them.
+fn restore_json(summary: &backup::RestoreSummary, dry_run: bool) -> serde_json::Value {
 	if !dry_run {
-		return serde_json::json!({ "result": "saved", "action": "restore", "entries": entries });
+		return serde_json::json!({
+			"result": "saved", "action": "restore", "entries": summary.entries,
+		});
 	}
-	let paths: Vec<&str> = lines
-		.filter(|line| line.starts_with("  "))
-		.map(str::trim)
-		.collect();
 	serde_json::json!({
-		"result": "dry-run", "action": "restore", "entries": entries, "paths": paths,
+		"result": "dry-run", "action": "restore", "entries": summary.entries,
+		"paths": summary.paths,
 	})
 }
+
+#[cfg(test)]
+#[path = "dispatch_restore_tests.rs"]
+mod tests;
