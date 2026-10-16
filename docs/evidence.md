@@ -286,9 +286,11 @@ refuses to run at a clock more than 35 days past the newest record.
   acceptance paid for, for up to 8 192 messages per account and 65 536 in all
   (eight accounts at their bound at once); an account with that many messages
   waiting for their outcomes has its acceptances refused with the retry-later
-  answer, and so has everybody if the whole memory is full, with a warning in
-  the status; nothing is forgotten to make room. Mail whose evidence is not
-  mandatory is sent all the same. The counts keep the verification,
+  answer. When the whole memory is full, only the accounts above their fair
+  share (the average over the accounts that have entries, and never less than
+  64) are refused, with a warning in the status; the others go on up to a
+  ceiling an eighth above the full mark. Nothing is ever forgotten to make
+  room. Mail whose evidence is not mandatory is sent all the same. The counts keep the verification,
   which reads every record, from outgrowing its ten minutes; they are not a
   measurement of that time.
 - The service account holds the evidence key and the data. Until a day is

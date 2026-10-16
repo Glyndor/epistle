@@ -344,41 +344,64 @@ fn an_account_with_too_many_messages_waiting_is_refused_and_the_others_are_not()
 }
 
 #[test]
-fn a_full_memory_refuses_new_acceptances_and_forgets_nothing() {
+fn a_full_memory_refuses_only_the_accounts_above_their_fair_share_and_forgets_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = roomy(dir.path());
-	let accounts = MAX_OWED / MAX_OWED_PER_ACCOUNT;
 	let mut n = 0u128;
-	for account in 0..accounts {
-		for _ in 0..MAX_OWED_PER_ACCOUNT {
+	let mut fill = |account: String, count: usize| {
+		for _ in 0..count {
 			let _ = quota
-				.reserve(&format!("big{account}"), id(n), (1, 0), TODAY)
+				.reserve(&account, id(n), (1, 0), TODAY)
 				.expect("reserved");
 			n += 1;
 		}
+	};
+	// Eight accounts with 4 096 entries and thirty-two with 1 024: full.
+	for account in 0..8 {
+		fill(format!("big{account}"), 4096);
+	}
+	for account in 0..32 {
+		fill(format!("small{account}"), 1024);
 	}
 	let full = quota.state();
 	assert_eq!(full.owed.len(), MAX_OWED);
-	assert!(
-		quota
-			.warning(TODAY)
-			.expect("alarm")
-			.contains("wait for their outcomes")
-	);
+	assert!(quota.warning(TODAY).expect("alarm").contains("fair share"));
+	// The average is 1 638: a big account is turned away, a small one is not.
 	let refused = quota
-		.reserve("late", id(u128::MAX), (1, 0), TODAY)
-		.expect_err("the whole memory is full");
+		.reserve("big0", id(u128::MAX), (1, 0), TODAY)
+		.expect_err("above its share");
 	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
 	assert_eq!(quota.state(), full, "a refusal touched the book");
+	let _ = quota
+		.reserve("small0", id(u128::MAX - 1), (1, 0), TODAY)
+		.expect("below its share");
+	let _ = quota
+		.reserve("newcomer", id(u128::MAX - 2), (1, 0), TODAY)
+		.expect("a new account");
+	// Nothing anybody had was changed.
+	let after = quota.state();
+	assert_eq!(after.owed.len(), MAX_OWED + 2);
+	assert_eq!(after.owed_per["big0"], 4096);
+	assert_eq!(after.owed_per["small1"], 1024);
+	// The ceiling holds even for the accounts below their share.
+	let mut admitted = 0;
+	for k in 0..(MAX_OWED_CEILING as u128) {
+		if quota
+			.reserve(&format!("tiny{k}"), id(1 << 60 | k), (1, 0), TODAY)
+			.is_ok()
+		{
+			admitted += 1;
+		}
+	}
+	assert_eq!(quota.state().owed.len(), MAX_OWED_CEILING);
+	assert!(admitted > 0);
 	// A message with no recipients waits for nothing.
 	let _ = quota
-		.reserve("late", id(u128::MAX - 1), (0, 0), TODAY)
+		.reserve("big0", id(u128::MAX - 3), (0, 0), TODAY)
 		.expect("owes no outcome");
 	// Outcomes coming frees room, for anybody.
 	quota.fact(None, id(0), TODAY);
-	let _ = quota
-		.reserve("late", id(u128::MAX - 2), (1, 0), TODAY)
-		.expect("room again");
+	assert!(quota.state().owed.len() < MAX_OWED_CEILING);
 }
 
 #[test]

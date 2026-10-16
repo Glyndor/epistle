@@ -45,11 +45,13 @@
 //! and an outcome for each recipient, and the book remembers which outcomes
 //! are paid for so that none is counted twice. That memory is bounded per
 //! account (`MAX_OWED_PER_ACCOUNT` messages waiting for their outcomes) and
-//! in all (`MAX_OWED`, room for eight accounts at their bound at once).
+//! in all (`MAX_OWED`, room for eight accounts at their bound at once, and a
+//! ceiling a little above it).
 //! Nothing is ever forgotten to make room: an account with no room has its
-//! acceptances refused until its outcomes come, and so has everyone when the
-//! whole memory is full, with an alarm in the status; the facts are still
-//! taken and counted. An outcome that comes after a restart, or another day,
+//! acceptances refused until its outcomes come. When the whole memory is full
+//! only the accounts above their fair share are refused (the others go on, up
+//! to a ceiling a little above the full mark), with an alarm in the status;
+//! the facts are still taken and counted. An outcome that comes after a restart, or another day,
 //! is counted as a fact to the account of its acceptance when the log of the
 //! last days still names it. (Mail whose evidence is not mandatory is sent
 //! all the same when its acceptance cannot be recorded.)
@@ -77,6 +79,12 @@ const OWED_DAYS: i64 = 14;
 /// account.
 const MAX_OWED: usize = 65_536;
 const MAX_OWED_PER_ACCOUNT: usize = 8_192;
+/// Once the memory is full, an account below this many entries is still
+/// admitted, whatever the average is.
+const MIN_OWED_GUARANTEED: usize = 64;
+/// The hard ceiling of the memory: a little above the full mark, the room
+/// that accounts below their fair share have.
+const MAX_OWED_CEILING: usize = MAX_OWED + MAX_OWED / 8;
 /// The most messages of the last days whose account is remembered at start.
 const MAX_NAMED: usize = 1_000_000;
 /// What is counted at which percent of a limit the status warns.
@@ -214,10 +222,23 @@ impl State {
 	}
 
 	/// Whether `account` may have one more message whose prepaid outcomes
-	/// are remembered.
+	/// are remembered. While the memory has room, every account has its own
+	/// bound. Once it is full, only the accounts below their fair share (the
+	/// average over the accounts that have entries, and never less than
+	/// [`MIN_OWED_GUARANTEED`]) go on, up to a ceiling a little above the
+	/// full mark; the ones above it wait. Nothing is ever taken from anybody.
+	/// Every question is a few lookups, whatever the memory holds.
 	fn has_room_for(&self, account: &str) -> bool {
-		self.owed.len() < MAX_OWED
-			&& self.owed_per.get(account).copied().unwrap_or(0) < MAX_OWED_PER_ACCOUNT
+		let mine = self.owed_per.get(account).copied().unwrap_or(0);
+		if mine >= MAX_OWED_PER_ACCOUNT {
+			return false;
+		}
+		let held = self.owed.len();
+		if held < MAX_OWED {
+			return true;
+		}
+		let fair = (held / self.owed_per.len().max(1)).max(MIN_OWED_GUARANTEED);
+		held < MAX_OWED_CEILING && mine < fair
 	}
 
 	/// Remember that message `id` has `owed.left` prepaid outcomes to come.
@@ -571,7 +592,7 @@ impl Quota {
 		};
 		if near(state.owed.len() as u64, MAX_OWED as u64) {
 			return Some(format!(
-				"{} messages wait for their outcomes of the {MAX_OWED} the evidence quota remembers: past it new acceptances are refused",
+				"{} messages wait for their outcomes of the {MAX_OWED} the evidence quota remembers: past it only the accounts below their fair share are accepted",
 				state.owed.len()
 			));
 		}
