@@ -11,6 +11,7 @@ pub mod ack;
 pub mod anchor;
 pub mod audit;
 pub mod bindings;
+pub mod bundle;
 pub mod chain;
 pub mod checkpoint;
 pub mod class;

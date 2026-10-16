@@ -1,0 +1,307 @@
+//! `epistle evidence check <bundle>`: verify a bundle offline.
+//!
+//! Nothing here reads the server's configuration or data: only the bundle,
+//! and the anchors the caller trusts (the built-in default authority's, and
+//! any given with `--anchor`). An anchor carried by the bundle is never
+//! trusted on its own word.
+
+use std::collections::BTreeSet;
+use std::io::BufReader;
+use std::path::Path;
+
+use super::{BundleError, DayProof, MAX_FILE, MAX_RECORDS};
+use crate::evidence::checkpoint::{CHECKPOINT_VERSION, Checkpoint};
+use crate::evidence::day::Day;
+use crate::evidence::key;
+use crate::evidence::lines::{Line, Lines};
+use crate::evidence::merkle::{leaf_hash, verify_inclusion};
+use crate::evidence::record::{Entry, Record, hash_from_hex, sha256, to_hex};
+use crate::evidence::tsa::{Check, Expected, Outcome};
+
+/// One named check and its result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+	/// What was checked.
+	pub name: String,
+	/// `Ok` or why it failed.
+	pub result: Result<(), String>,
+}
+
+/// Every check of a bundle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckReport {
+	/// The findings, in the order they were made.
+	pub findings: Vec<Finding>,
+	/// What was not checked, for the reader.
+	pub notes: Vec<String>,
+}
+
+/// What the report says about revocation, always.
+pub const REVOCATION_NOTE: &str = "revocation (CRL, OCSP) of the timestamp authority's certificates: not checked; they are judged valid at the stamped time";
+
+impl CheckReport {
+	/// Whether every check passed.
+	pub fn passed(&self) -> bool {
+		!self.findings.is_empty() && self.findings.iter().all(|finding| finding.result.is_ok())
+	}
+
+	fn add(&mut self, name: impl Into<String>, result: Result<(), String>) {
+		self.findings.push(Finding {
+			name: name.into(),
+			result,
+		});
+	}
+}
+
+/// A regular file of the bundle, never through a link.
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+	match std::fs::symlink_metadata(path) {
+		Ok(meta) if !meta.file_type().is_file() => return Err("not a regular file".into()),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
+		Err(error) => return Err(format!("unreadable ({})", error.kind())),
+		Ok(_) => {}
+	}
+	crate::evidence::checkpoint::read_bounded(path, MAX_FILE)
+		.map_err(|error| format!("unreadable ({})", error.kind()))?
+		.ok_or_else(|| "missing".to_string())
+}
+
+/// Check the bundle in `dir`, trusting the timestamp keys in `anchors`.
+pub fn check(dir: &Path, anchors: &[[u8; 32]]) -> Result<CheckReport, BundleError> {
+	let mut report = CheckReport::default();
+	report.add(
+		"SHA256SUMS lists every file, and every file matches",
+		sums(dir),
+	);
+	let mut days = Vec::new();
+	let checkpoints = dir.join("checkpoints");
+	for entry in std::fs::read_dir(&checkpoints)? {
+		let name = entry?.file_name();
+		if let Some(day) = name
+			.to_str()
+			.and_then(|n| n.strip_suffix(".json"))
+			.and_then(Day::parse)
+		{
+			days.push(day);
+		}
+	}
+	days.sort();
+	days.dedup();
+	report.add(
+		"the bundle holds at least one sealed day",
+		match days.is_empty() {
+			true => Err("no checkpoint".into()),
+			false => Ok(()),
+		},
+	);
+	for day in days {
+		check_day(dir, day, anchors, &mut report);
+	}
+	report.notes.push(REVOCATION_NOTE.into());
+	Ok(report)
+}
+
+fn sums(dir: &Path) -> Result<(), String> {
+	let listed = String::from_utf8(read(&dir.join(super::sums::FILE))?)
+		.map_err(|_| "not text".to_string())?;
+	let mut names = BTreeSet::new();
+	for line in listed.lines() {
+		if names.len() >= super::MAX_FILES {
+			return Err("more files than a bundle holds".into());
+		}
+		let (hash, name) = line
+			.split_once("  ")
+			.ok_or("a line is not `<hash>  <file>`")?;
+		if name.contains("..") || name.starts_with('/') {
+			return Err(format!("{name}: not a path inside the bundle"));
+		}
+		let bytes = read(&dir.join(name)).map_err(|why| format!("{name}: {why}"))?;
+		if to_hex(&sha256(&bytes)) != hash {
+			return Err(format!("{name}: does not match its checksum"));
+		}
+		if !names.insert(name.to_string()) {
+			return Err(format!("{name}: listed twice"));
+		}
+	}
+	for file in super::export::relative_files(dir).map_err(|error| error.kind().to_string())? {
+		let name = file.to_string_lossy().to_string();
+		if name != super::sums::FILE && !names.contains(name.as_str()) {
+			return Err(format!("{name}: not listed"));
+		}
+	}
+	Ok(())
+}
+
+fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckReport) {
+	let name = day.name();
+	let base = dir.join("checkpoints").join(&name);
+	let json = match read(&base.with_extension("json")) {
+		Ok(json) => json,
+		Err(why) => return report.add(format!("{name}: checkpoint"), Err(why)),
+	};
+	let checkpoint: Checkpoint = match serde_json::from_slice(&json) {
+		Ok(checkpoint) => checkpoint,
+		Err(_) => {
+			return report.add(
+				format!("{name}: checkpoint"),
+				Err("not a checkpoint".into()),
+			);
+		}
+	};
+	report.add(format!("{name}: checkpoint version and day"), {
+		if checkpoint.v != CHECKPOINT_VERSION || checkpoint.day != name {
+			Err("unknown version, or another day".into())
+		} else {
+			Ok(())
+		}
+	});
+	report.add(
+		format!("{name}: signed by the evidence key it names"),
+		signature(dir, &base, &checkpoint, &json),
+	);
+	if checkpoint.timestamp == "enabled" {
+		timestamp(&base, &name, day, &json, anchors, report);
+	} else {
+		report.add(
+			format!("{name}: timestamp token"),
+			Err("timestamps were disabled: the day rests on the evidence key alone".into()),
+		);
+	}
+	report.add(
+		format!("{name}: every record is included under the signed root"),
+		inclusion(dir, &name, &checkpoint),
+	);
+}
+
+fn signature(dir: &Path, base: &Path, checkpoint: &Checkpoint, json: &[u8]) -> Result<(), String> {
+	// The id names a file: only a hex hash may.
+	if hash_from_hex(&checkpoint.key).is_none() {
+		return Err("the checkpoint names a key that is not a key id".into());
+	}
+	let pem = read(&dir.join("keys").join(format!("{}.pem", checkpoint.key)))?;
+	let public = std::str::from_utf8(&pem)
+		.ok()
+		.and_then(key::parse_public_pem)
+		.ok_or("the key file is not an Ed25519 public key")?;
+	if key::key_id(&public) != checkpoint.key {
+		return Err("the key file is not the key the checkpoint names".into());
+	}
+	let signature = read(&base.with_extension("sig"))?;
+	match key::verify(&public, json, &signature) {
+		true => Ok(()),
+		false => Err("the signature does not verify".into()),
+	}
+}
+
+fn timestamp(
+	base: &Path,
+	name: &str,
+	day: Day,
+	json: &[u8],
+	anchors: &[[u8; 32]],
+	report: &mut CheckReport,
+) {
+	let token = match read(&base.with_extension("tsr")) {
+		Ok(token) => token,
+		Err(why) => return report.add(format!("{name}: timestamp token"), Err(why)),
+	};
+	let expected = Expected {
+		digest: &sha256(json),
+		nonce: None,
+		anchors,
+		policy: None,
+	};
+	let checked = match crate::evidence::tsa::check(&token, &expected) {
+		Ok(checked) => checked,
+		Err(error) => {
+			return report.add(format!("{name}: timestamp token"), Err(error.to_string()));
+		}
+	};
+	for (check, outcome) in &checked.checks {
+		if *check == Check::Nonce {
+			continue;
+		}
+		let result = match outcome {
+			Outcome::Passed | Outcome::NotApplicable => Ok(()),
+			Outcome::Failed(why) => Err((*why).to_string()),
+		};
+		report.add(format!("{name}: timestamp {}", check.label()), result);
+	}
+	report.add(
+		format!("{name}: stamped after the day ended"),
+		match checked.gen_time >= Day(day.0 + 1).start_epoch() {
+			true => Ok(()),
+			false => Err("the token predates the end of the day".into()),
+		},
+	);
+}
+
+fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<(), String> {
+	let proof: DayProof =
+		serde_json::from_slice(&read(&dir.join("proofs").join(format!("{name}.json")))?)
+			.map_err(|_| "the proof file is malformed".to_string())?;
+	if proof.tree_size != checkpoint.records || proof.merkle_root != checkpoint.merkle_root {
+		return Err("the proof file does not match the checkpoint".into());
+	}
+	let root = hash_from_hex(&checkpoint.merkle_root).ok_or("bad root")?;
+	let path = dir.join("records").join(format!("{name}.jsonl"));
+	if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file()) {
+		return Err("the records file is missing or not a regular file".into());
+	}
+	let file = std::fs::File::open(&path).map_err(|error| error.kind().to_string())?;
+	let mut lines = Lines::new(BufReader::new(file));
+	let mut entries = proof.entries.iter();
+	let mut count = 0usize;
+	while let Some((number, line)) = lines
+		.next_line()
+		.map_err(|error| error.kind().to_string())?
+	{
+		count += 1;
+		if count > MAX_RECORDS {
+			return Err("more records than a bundle holds".into());
+		}
+		let Line::Complete(bytes) = line else {
+			return Err(format!("record {number}: not a complete line"));
+		};
+		let record =
+			Record::parse_canonical(bytes).map_err(|why| format!("record {number}: {why}"))?;
+		if Day::of_epoch(record.time).name() != name {
+			return Err(format!("record {number}: not of this day"));
+		}
+		let entry = entries.next().ok_or(format!("record {number}: no proof"))?;
+		let hash = sha256(bytes);
+		let path: Vec<[u8; 32]> = entry
+			.proof
+			.iter()
+			.filter_map(|hex| hash_from_hex(hex))
+			.collect();
+		if to_hex(&hash) != entry.sha256
+			|| path.len() != entry.proof.len()
+			|| !verify_inclusion(
+				entry.index,
+				checkpoint.records,
+				&leaf_hash(&hash),
+				&path,
+				&root,
+			) {
+			return Err(format!(
+				"record {number}: not included under the signed root"
+			));
+		}
+		if let Entry::Accepted(accepted) = &record.entry {
+			let kept = dir
+				.join("messages")
+				.join(format!("{}.eml", accepted.spool_id));
+			if kept.exists() && to_hex(&sha256(&read(&kept)?)) != accepted.sha256 {
+				return Err(format!(
+					"message {}: does not match its record",
+					accepted.spool_id
+				));
+			}
+		}
+	}
+	if entries.next().is_some() {
+		return Err("a proof has no record".into());
+	}
+	Ok(())
+}
