@@ -327,10 +327,11 @@ pub enum Command {
 	///
 	/// Without an action it lists the log, like `delivery list`.
 	Delivery(delivery::DeliveryConfig),
-	/// Evidence of sending: verify, export and check bundles, set what is
-	/// kept, and manage timestamping.
+	/// Evidence of sending, and the bundles that prove it.
 	///
-	/// `check` runs anywhere, without configuration or server data.
+	/// Verify the log, export and check bundles, set what is kept, and manage
+	/// timestamping and the signing key. `check` runs anywhere, without
+	/// configuration or server data.
 	Evidence {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]

@@ -18,8 +18,10 @@ use crate::evidence::policy::Mode;
 /// Evidence actions.
 #[derive(Debug, Subcommand)]
 pub enum EvidenceCli {
-	/// Verify the evidence log from its oldest kept day, as the server does
-	/// every five minutes. Exit code 1 when it does not verify.
+	/// Verify the evidence log from its oldest kept day.
+	///
+	/// This is what the server does every five minutes. Exit code 1 when the
+	/// evidence does not verify.
 	Verify {
 		/// First day to verify (`YYYY-MM-DD`).
 		#[arg(long, value_parser = parse_day)]
@@ -31,8 +33,9 @@ pub enum EvidenceCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Export the evidence of one message, or of every message to one
-	/// recipient, as a bundle anyone can check without the server.
+	/// Export the evidence of a message or a recipient as a bundle.
+	///
+	/// Anyone can check the bundle without the server.
 	Export {
 		/// The message's `Message-ID`, exactly as sent (with the brackets).
 		#[arg(
@@ -82,9 +85,10 @@ pub enum EvidenceCli {
 		#[command(subcommand)]
 		action: TimestampCli,
 	},
-	/// Accept the first break in the evidence, so transactional mail is
-	/// taken again. The acknowledgement is signed and kept in the chain; the
-	/// break stays visible.
+	/// Accept the first break in the evidence and take transactional mail again.
+	///
+	/// The acknowledgement is signed and kept in the chain; the break stays
+	/// visible.
 	Acknowledge {
 		/// Why the break is accepted (kept in the evidence).
 		#[arg(long)]
@@ -107,8 +111,9 @@ pub enum PolicyCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Set the rule for one class (or `all`) on the server, a tenant or an
-	/// account. Transactional mail always keeps evidence.
+	/// Set the rule for one class (or `all`) on the server, tenant or account.
+	///
+	/// Transactional mail always keeps evidence.
 	Set {
 		/// `transactional`, `marketing`, `personal` or `all`.
 		#[arg(long)]
@@ -160,8 +165,9 @@ pub enum TimestampCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Turn timestamping off. Recorded in the evidence; sealed days then
-	/// rest on the evidence key alone.
+	/// Turn timestamping off, recorded in the evidence.
+	///
+	/// Days sealed from then on rest on the evidence key alone.
 	Disable {
 		/// Do not ask; required when there is no terminal.
 		#[arg(long)]
