@@ -70,6 +70,7 @@ network at all and are reached only through Unix sockets.
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
 | [IP warm-up](docs/warmup.md) | Ramping a new sending address up per receiver group |
 | [Attachments](docs/attachments.md) | What the attachment policy detects, its defaults and limits |
+| [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
 | [Migration](docs/migration.md) | Moving from Mox, Stalwart or any IMAP server |
 | [Container stack](docs/container.md) | What `epistle stack` runs and how it is built |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |

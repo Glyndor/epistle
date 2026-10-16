@@ -41,6 +41,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `db` | `upgrade`, `status` | |
+| `evidence` | `verify`, `export`, `check`, `policy show\|set`, `timestamp show\|enable\|disable`, `acknowledge` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
@@ -73,6 +74,7 @@ Every change is validated before it is written, keeps the comments in
 | [Bans and the IP allow list](#authentication-bans) | `epistle ban …` |
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
 | [IP warm-up for a new sending address](warmup.md) | `epistle warmup …` |
+| [Evidence of sending: verify, export, check](evidence.md) | `epistle evidence …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
 | [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
 | [Relay through a smarthost](#smarthost-relay-epistle-relay) | `epistle relay …` |
