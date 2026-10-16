@@ -57,7 +57,7 @@ pub(super) fn list_row(name: &str, values: &[String]) -> String {
 }
 
 /// Every key the show path walks, in stable order.
-pub(super) fn all_keys() -> [Key; 16] {
+pub(super) fn all_keys() -> [Key; 17] {
 	[
 		Key::DnsblZones,
 		Key::DnsblDomainZones,
@@ -66,6 +66,7 @@ pub(super) fn all_keys() -> [Key; 16] {
 		Key::FirstTimeSenderDelay,
 		Key::ClamdSocket,
 		Key::ClamdOnFound,
+		Key::ClamdOnError,
 		Key::ClamdTimeout,
 		Key::ClamdMaxSize,
 		Key::ScanAuthenticated,
@@ -99,6 +100,13 @@ fn render_row(config: &Config, key: Key) -> String {
 			Some(match config.antispam.clamd_on_found {
 				crate::config::ClamdOnFound::Quarantine => "quarantine",
 				crate::config::ClamdOnFound::Reject => "reject",
+			}),
+		),
+		Key::ClamdOnError => scalar_row(
+			key.name(),
+			Some(match config.antispam.clamd_on_error {
+				crate::config::ClamdOnError::Accept => "accept",
+				crate::config::ClamdOnError::Defer => "defer",
 			}),
 		),
 		Key::ClamdTimeout => scalar_row(key.name(), Some(config.antispam.clamd_timeout_secs)),

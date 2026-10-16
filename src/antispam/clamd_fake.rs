@@ -35,6 +35,15 @@ pub(crate) struct FakeClamd {
 
 impl FakeClamd {
 	pub(crate) fn start() -> Self {
+		Self::start_with(None)
+	}
+
+	/// A fake that answers every request with `reply` (without the NUL).
+	pub(crate) fn start_replying(reply: &'static str) -> Self {
+		Self::start_with(Some(reply))
+	}
+
+	fn start_with(fixed: Option<&'static str>) -> Self {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let socket = dir.path().join("clamd.sock");
 		let listener = UnixListener::bind(&socket).expect("bind fake clamd");
@@ -50,7 +59,9 @@ impl FakeClamd {
 				};
 				counter.fetch_add(1, Ordering::SeqCst);
 				let infected = String::from_utf8_lossy(&payload).contains(&eicar());
-				let reply = if infected {
+				let reply = if let Some(fixed) = fixed {
+					format!("{fixed}\0")
+				} else if infected {
 					format!("stream: {SIGNATURE} FOUND\0")
 				} else {
 					"stream: OK\0".to_string()

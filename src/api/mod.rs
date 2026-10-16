@@ -241,6 +241,9 @@ mod jmap_tests_email_create;
 mod send_tests_bcc;
 
 #[cfg(test)]
+#[path = "send_tests_toolarge.rs"]
+mod send_tests_toolarge;
+#[cfg(test)]
 #[path = "send_tests_virus.rs"]
 mod send_tests_virus;
 

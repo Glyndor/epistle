@@ -29,7 +29,7 @@ fn scanned_state(dir: &std::path::Path, enabled: bool, clamd: &FakeClamd) -> Api
 	test_state(dir, 0).with_outbound(sink)
 }
 
-fn queued(dir: &std::path::Path) -> usize {
+pub(super) fn queued(dir: &std::path::Path) -> usize {
 	FsSpool::open(dir)
 		.expect("spool")
 		.list()
@@ -37,7 +37,7 @@ fn queued(dir: &std::path::Path) -> usize {
 		.len()
 }
 
-async fn api_send(app: &axum::Router, to: &str, text: &str) -> (StatusCode, Value) {
+pub(super) async fn api_send(app: &axum::Router, to: &str, text: &str) -> (StatusCode, Value) {
 	request_with_body(
 		app,
 		"POST",
@@ -81,7 +81,7 @@ async fn api_send_with_the_scan_off_or_a_clean_message_goes_through() {
 }
 
 /// Store `raw` as a draft of alice and submit it over JMAP; the response.
-async fn jmap_submit(app: &axum::Router, dir: &std::path::Path, raw: &str) -> Value {
+pub(super) async fn jmap_submit(app: &axum::Router, dir: &std::path::Path, raw: &str) -> Value {
 	let inbox = dir.join("accounts").join("alice").join("new");
 	std::fs::create_dir_all(&inbox).expect("mkdir");
 	let id = uuid::Uuid::now_v7();
@@ -101,7 +101,7 @@ async fn jmap_submit(app: &axum::Router, dir: &std::path::Path, raw: &str) -> Va
 	body["methodResponses"][0][1].clone()
 }
 
-fn draft(body: &str) -> String {
+pub(super) fn draft(body: &str) -> String {
 	format!("From: alice@example.org\r\nTo: bob@elsewhere.example\r\nSubject: s\r\n\r\n{body}\r\n")
 }
 

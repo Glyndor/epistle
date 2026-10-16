@@ -28,6 +28,13 @@ mod tests_virus;
 mod tests_attachments;
 
 #[cfg(test)]
+#[path = "server_tests_clamd_defer.rs"]
+mod tests_clamd_defer;
+#[cfg(test)]
+#[path = "server_tests_clamd_toolarge.rs"]
+mod tests_clamd_toolarge;
+
+#[cfg(test)]
 #[path = "server_tests_trace.rs"]
 mod tests_trace;
 
@@ -38,6 +45,10 @@ mod tests_urlbl;
 #[cfg(test)]
 #[path = "server_tests_save_sent.rs"]
 mod tests_save_sent;
+
+#[cfg(test)]
+#[path = "server_tests_sent_refused.rs"]
+mod tests_sent_refused;
 
 #[cfg(test)]
 #[path = "server_tests_correspondents.rs"]

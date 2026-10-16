@@ -111,14 +111,14 @@ impl Scanner {
 				return None;
 			}
 			Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-				tracing::warn!("submission scanner is gone; accepting unscanned");
+				tracing::warn!("submission scanner is gone; the message is unscanned");
 				return Some((Inspection::Unscanned, None));
 			}
 		}
 		Some(match answered.recv_timeout(self.deadline) {
 			Ok((inspection, worker)) => (inspection, Some(worker)),
 			Err(_) => {
-				tracing::warn!("submission scanner did not answer; accepting unscanned");
+				tracing::warn!("submission scanner did not answer; the message is unscanned");
 				(Inspection::Unscanned, None)
 			}
 		})

@@ -215,10 +215,13 @@ impl<'a> Walker<'a> {
 					}
 				};
 			} else if let State::Headers { start, depth } = state {
+				// Checked before the block is parsed: a header line of
+				// megabytes is never read, only counted.
+				if pos - start > MAX_HEADER_BYTES {
+					return Err(Stop::HeaderTooLarge);
+				}
 				if line.is_empty() {
 					state = self.entered(header::parse(&raw[start..pos]), depth, next)?;
-				} else if pos - start > MAX_HEADER_BYTES {
-					return Err(Stop::HeaderTooLarge);
 				}
 			}
 			if end >= raw.len() {
@@ -318,6 +321,9 @@ impl<'a> Walker<'a> {
 		let (header, start, depth) = match state {
 			State::Skip => return Ok(()),
 			State::Headers { start, depth } => {
+				if end.saturating_sub(start) > MAX_HEADER_BYTES {
+					return Err(Stop::HeaderTooLarge);
+				}
 				(header::parse(&self.raw[start..end.max(start)]), end, depth)
 			}
 			State::Body {

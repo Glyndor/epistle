@@ -21,6 +21,11 @@ pub(crate) const FILE_LIMIT: u64 = 16 * 1024 * 1024;
 /// each and the DKIM keys beside them (64 KiB each at most).
 pub(crate) const CONFIG_DIR_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// A message file to inspect: what the server accepts by default, the
+/// largest message `epistle attachments check` reads from root without a
+/// larger `max_message_size` in the configuration.
+pub(crate) const MESSAGE_LIMIT: u64 = crate::smtp::session::MAX_MESSAGE_SIZE as u64;
+
 /// A Maildir to import. The copy sits on the data disk the running server
 /// writes mail to until the import ends, and the import then writes the same
 /// mail again, so a staged Maildir costs twice its size in free space. Past
@@ -111,6 +116,14 @@ pub(crate) const STAGED: &[Staged] = &[
 		kind: Kind::WriteDir,
 	},
 	Staged {
+		command: &["attachments", "check"],
+		arg: "file",
+		kind: Kind::ReadFile {
+			limit: MESSAGE_LIMIT,
+			secret: false,
+		},
+	},
+	Staged {
 		command: &["init"],
 		arg: "answers",
 		kind: Kind::ReadFile {
@@ -194,10 +207,62 @@ pub(crate) fn find(args: &[OsString], table: &[Staged]) -> Vec<Found> {
 			.and_then(clap::Arg::get_long);
 		if let Some(long) = long {
 			scan(args, long, entry.kind, &mut found);
+		} else {
+			positional(args, &root, level, entry, &mut found);
 		}
 	}
 	found.sort_by_key(|found| found.token);
 	found
+}
+
+/// The most tokens of one value tried as the place of a positional; a line
+/// repeating one text more often than this stages nothing and the run
+/// reports the unreadable file.
+const MAX_PROBES: usize = 64;
+
+/// Push the values of the positional argument `entry` names, each at the
+/// token clap read it from. Matching the text is not enough, the same text
+/// can also be the value of another flag. So each token with that text is
+/// replaced by a marker no operator typed and the line parsed again: the
+/// token that changes the positional is the one.
+fn positional(
+	args: &[OsString],
+	root: &clap::Command,
+	matches: &clap::ArgMatches,
+	entry: &Staged,
+	found: &mut Vec<Found>,
+) {
+	let Ok(Some(values)) = matches.try_get_raw(entry.arg) else {
+		return;
+	};
+	for value in values {
+		let marker = OsString::from("\u{1}epistle-positional-probe");
+		let probe = |index: usize| {
+			let mut line = args.to_vec();
+			line[index] = marker.clone();
+			let argv = std::iter::once(OsString::from("epistle")).chain(line);
+			let parsed = root.clone().ignore_errors(true).try_get_matches_from(argv);
+			let mut level = parsed.as_ref().ok()?;
+			while let Some((_, sub)) = level.subcommand() {
+				level = sub;
+			}
+			let mut raw = level.try_get_raw(entry.arg).ok()??;
+			Some(raw.any(|seen| seen == marker))
+		};
+		let token = (0..args.len())
+			.filter(|index| args[*index] == value)
+			.filter(|index| !found.iter().any(|f| f.token == *index))
+			.take(MAX_PROBES)
+			.find(|index| probe(*index) == Some(true));
+		if let Some(token) = token {
+			found.push(Found {
+				token,
+				prefix: None,
+				value: PathBuf::from(value),
+				kind: entry.kind,
+			});
+		}
+	}
 }
 
 /// Push every `--long VALUE` and `--long=VALUE` before a `--` terminator.

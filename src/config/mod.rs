@@ -42,7 +42,8 @@ pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
 pub use attachments::{
-	AttachmentMode, Attachments, ContentAction, normalise_extension, valid_extension,
+	AttachmentMode, Attachments, ContentAction, MAX_EXTENSION_LEN, MAX_EXTENSIONS,
+	normalise_extension, valid_extension,
 };
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
@@ -56,7 +57,7 @@ pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
-pub use scanner::{Antispam, ClamdOnFound};
+pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;

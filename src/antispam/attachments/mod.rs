@@ -34,8 +34,12 @@ pub const MAX_PARTS: usize = 1000;
 pub struct PartReport {
 	/// The declared file name, decoded.
 	pub filename: Option<String>,
+	/// Every candidate file name the rules read, decoded, in header order.
+	pub names: Vec<String>,
 	/// The declared `type/subtype`.
 	pub declared_type: String,
+	/// Every declared `type/subtype`, from every copy of the header.
+	pub declared_types: Vec<String>,
 	/// What the content really is.
 	pub real_type: RealType,
 	/// What the rules found, sorted.
@@ -134,7 +138,9 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 	if text_body && !disguised {
 		return PartReport {
 			filename: leaf.filename().map(str::to_string),
+			names: leaf.names.clone(),
 			declared_type: leaf.declared_type.clone(),
+			declared_types: leaf.declared_types.clone(),
 			real_type,
 			reasons: limits_only(leaf),
 		};
@@ -163,7 +169,9 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 	reasons.dedup();
 	PartReport {
 		filename: leaf.filename().map(str::to_string),
+		names: leaf.names.clone(),
 		declared_type: leaf.declared_type.clone(),
+		declared_types: leaf.declared_types.clone(),
 		real_type,
 		reasons,
 	}
@@ -237,9 +245,17 @@ mod tests_evasion;
 mod tests_failclosed;
 
 #[cfg(test)]
+#[path = "inspect_tests_names.rs"]
+mod tests_names;
+
+#[cfg(test)]
 #[path = "inspect_tests_regressions.rs"]
 mod tests_regressions;
 
 #[cfg(test)]
 #[path = "inspect_tests_regressions_b.rs"]
 mod tests_regressions_b;
+
+#[cfg(test)]
+#[path = "docs_tests.rs"]
+mod docs_tests;

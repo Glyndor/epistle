@@ -11,6 +11,9 @@ mod account;
 #[path = "cli_json/config_edits.rs"]
 mod config_edits;
 
+#[path = "cli_json/attachments.rs"]
+mod attachments;
+
 #[path = "cli_json/alias_domain.rs"]
 mod alias_domain;
 

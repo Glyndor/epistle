@@ -9,6 +9,7 @@ use tokio::net::UnixListener;
 use super::{evaluate, with_scan_health};
 use crate::antispam::clamd::health::HealthFile;
 use crate::cli::status::report::{AreaReport, Level};
+use crate::config::ClamdOnError;
 
 /// 2026-10-09T08:00:00Z.
 const BUILT: i64 = 1_791_532_800;
@@ -138,27 +139,52 @@ fn scans_that_keep_failing_open_turn_a_healthy_clamd_into_a_warning() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let healthy = || AreaReport::ok("clamd answers; ClamAV 1.0.1");
 	assert_eq!(
-		with_scan_health(healthy(), dir.path(), BUILT),
+		with_scan_health(healthy(), dir.path(), BUILT, ClamdOnError::Accept),
 		healthy(),
 		"nothing recorded, nothing added"
 	);
 	let file = HealthFile::new(dir.path());
 	file.failed();
 	file.failed();
-	let report = with_scan_health(healthy(), dir.path(), BUILT);
+	let report = with_scan_health(healthy(), dir.path(), BUILT, ClamdOnError::Accept);
 	assert_eq!(report.status, Level::Warn, "{report:?}");
 	assert!(
 		report.detail.contains("2 scans failed open since"),
 		"{report:?}"
 	);
 	assert!(report.detail.contains("accepted unscanned"), "{report:?}");
-	let broken = with_scan_health(AreaReport::fail("cannot connect"), dir.path(), BUILT);
+	let broken = with_scan_health(
+		AreaReport::fail("cannot connect"),
+		dir.path(),
+		BUILT,
+		ClamdOnError::Accept,
+	);
 	assert_eq!(broken.status, Level::Fail, "a failure stays a failure");
 	file.succeeded();
-	let report = with_scan_health(healthy(), dir.path(), BUILT);
+	let report = with_scan_health(healthy(), dir.path(), BUILT, ClamdOnError::Accept);
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 	assert!(
 		report.items[0].detail.starts_with("scanning again since"),
 		"{report:?}"
+	);
+}
+
+#[test]
+fn with_defer_a_failing_clamd_says_the_mail_waits_instead_of_passing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let file = HealthFile::new(dir.path());
+	file.failed();
+	let report = with_scan_health(
+		AreaReport::ok("clamd answers; ClamAV 1.0.1"),
+		dir.path(),
+		BUILT,
+		ClamdOnError::Defer,
+	);
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	let detail = &report.items[0].detail;
+	assert!(detail.starts_with("1 scan failed since "), "{detail}");
+	assert!(
+		detail.ends_with(": that mail was deferred with 451 4.7.1 until clamd scans again"),
+		"{detail}"
 	);
 }

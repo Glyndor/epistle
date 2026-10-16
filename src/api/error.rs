@@ -153,6 +153,16 @@ impl ApiError {
 		}
 	}
 
+	/// `413` for a message too large for the content scan while the server
+	/// lets nothing pass unscanned: retrying cannot help, nothing was sent.
+	pub fn scan_too_large() -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "scan_too_large",
+			message: "The message is too large for the content scan and was not sent.".to_string(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

@@ -51,6 +51,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }
+		| Command::Attachments { config, .. }
 		| Command::Alias { config, .. }
 		| Command::Domain { config, .. }
 		| Command::Dkim { config, .. }

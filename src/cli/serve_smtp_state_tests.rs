@@ -206,6 +206,38 @@ async fn clamd_startup_applies_action_size_and_shared_metrics() {
 }
 
 #[tokio::test]
+async fn clamd_startup_applies_on_error_to_inbound_and_submission() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let socket = dir.path().join("clamd.sock");
+	for (setting, expected) in [
+		("", HookVerdict::Accept),
+		("clamd_on_error = 'accept'", HookVerdict::Accept),
+		("clamd_on_error = 'defer'", HookVerdict::Defer),
+	] {
+		let config = config(
+			dir.path(),
+			&format!(
+				"[antispam]\nclamd_socket = '{}'\n{setting}",
+				socket.display()
+			),
+		);
+		let metrics = Arc::new(Metrics::new());
+		let state = build_smtp_shared_state(&config, &metrics).expect("state");
+		let hook = state.scanner_hook.expect("clamd enabled");
+		let verdict = tokio::time::timeout(Duration::from_secs(2), hook.scan(b"msg"))
+			.await
+			.expect("deadline");
+		assert_eq!(verdict, expected, "inbound with {setting:?}");
+		let submission = state.clamd.expect("clamd for submissions");
+		assert_eq!(
+			submission.on_error(),
+			config.antispam.clamd_on_error,
+			"submission with {setting:?}"
+		);
+	}
+}
+
+#[tokio::test]
 async fn clamd_startup_applies_configured_timeout() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let socket = dir.path().join("clamd.sock");

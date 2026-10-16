@@ -58,6 +58,7 @@ pub const DANGEROUS_EXTENSIONS: &[&str] = &[
 	"psc1",
 	"psd1",
 	"psm1",
+	"ps1xml",
 	"reg",
 	"scf",
 	"scr",
@@ -72,6 +73,7 @@ pub const DANGEROUS_EXTENSIONS: &[&str] = &[
 	"vhd",
 	"vhdx",
 	"vxd",
+	"website",
 	"ws",
 	"wsc",
 	"wsf",
@@ -204,9 +206,53 @@ impl Reason {
 }
 
 /// Extensions no `allow_extensions` entry may cover; the configuration
-/// refuses them.
+/// refuses them. Each one runs code, installs something or changes the
+/// system on a double click, with at most a prompt users learn to accept,
+/// and none is a format people need to mail each other.
 pub const ALWAYS_DANGEROUS: &[&str] = &[
-	"exe", "scr", "com", "pif", "bat", "cmd", "js", "vbs", "hta", "lnk", "msi", "ps1", "jar", "iso",
+	// Programs.
+	"exe",
+	"scr",
+	"com",
+	"pif",
+	"cpl",
+	// Command and script hosts: cmd, Windows Script Host (JScript,
+	// VBScript, their encoded forms and .wsf/.wsh), PowerShell (scripts,
+	// formatting files that can carry script blocks, console files), Java.
+	"bat",
+	"cmd",
+	"js",
+	"jse",
+	"vbs",
+	"vbe",
+	"wsf",
+	"wsh",
+	"ps1",
+	"ps1xml",
+	"psc1",
+	"jar",
+	// HTML applications and compiled help, which run script with the
+	// user's rights.
+	"hta",
+	"chm",
+	// Installers and patches, management console snap-ins, registry files.
+	"msi",
+	"msp",
+	"mst",
+	"msc",
+	"reg",
+	// Shortcuts that open a program or a remote location: shell links,
+	// Explorer commands, Internet and pinned-site shortcuts, ClickOnce
+	// deployments, desktop gadgets.
+	"lnk",
+	"scf",
+	"url",
+	"website",
+	"appref-ms",
+	"application",
+	"gadget",
+	// Disk images, which mount and hide their content from a scan.
+	"iso",
 ];
 
 /// The dangerous extension set (the built-in list plus
@@ -411,7 +457,9 @@ fn judge_listing(
 /// and folded with NFKC plus the dots and slashes NFKC leaves alone
 /// (`photo\u{ff0e}exe` reads as `photo.exe`); then the last path
 /// component, without the trailing dots and spaces Windows drops
-/// (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`).
+/// (`a.pdf.exe.` and `a.pdf.exe ` both open `a.pdf.exe`) and also cut at
+/// the first colon, the alternate data stream suffix NTFS ignores
+/// (`a.exe::$DATA` opens `a.exe`).
 pub(super) fn name_variants(name: &str) -> Vec<String> {
 	use unicode_normalization::UnicodeNormalization as _;
 	let visible: String = name.chars().filter(|c| !FORMATTING.contains(c)).collect();
@@ -436,11 +484,16 @@ pub(super) fn name_variants(name: &str) -> Vec<String> {
 	let mut variants: Vec<String> = Vec::new();
 	for form in forms {
 		let base = form.rsplit(['/', '\\']).next().unwrap_or(&form);
-		let trimmed = base
-			.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
-			.to_string();
-		if !variants.contains(&trimmed) {
-			variants.push(trimmed);
+		// NTFS opens `a.exe::$DATA` and `a.exe:stream` as `a.exe`: the name
+		// is also read up to the first colon.
+		let stream_less = base.split(':').next().unwrap_or(base);
+		for read in [base, stream_less] {
+			let trimmed = read
+				.trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+				.to_string();
+			if !variants.contains(&trimmed) {
+				variants.push(trimmed);
+			}
 		}
 	}
 	variants
@@ -487,3 +540,7 @@ fn claims_pdf(ext: Option<&str>, declared_type: &str) -> bool {
 #[cfg(test)]
 #[path = "rules_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rules_tests_always.rs"]
+mod tests_always;

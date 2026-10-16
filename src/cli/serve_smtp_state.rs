@@ -140,6 +140,7 @@ pub(super) fn build_smtp_shared_state_with(
 		Arc::new(
 			ClamdHook::new(socket.clone())
 				.with_on_found(config.antispam.clamd_on_found.into())
+				.with_on_error(config.antispam.clamd_on_error)
 				.with_timeout(Duration::from_secs(config.antispam.clamd_timeout_secs))
 				.with_max_bytes(config.antispam.clamd_max_bytes)
 				.with_metrics(Arc::clone(metrics))

@@ -101,7 +101,7 @@ async fn replies_select_verdict_and_count_errors() {
 			0,
 		),
 		(
-			b"INSTREAM size limit exceeded. ERROR\0",
+			b"stream: lstat() failed. ERROR\0",
 			HookVerdict::Reject,
 			HookVerdict::Accept,
 			1,

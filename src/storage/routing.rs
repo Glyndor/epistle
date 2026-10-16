@@ -219,13 +219,20 @@ impl MessageSink for SplitDelivery {
 		self.route(message, uuid::Uuid::now_v7(), None, &BTreeMap::new())
 	}
 
+	/// Mail one of our accounts sends: only the server's own inspection may
+	/// speak in the attachment warning header, so whatever the sender wrote
+	/// there is dropped before any copy is stored, queued or signed.
 	fn submit(
 		&self,
-		message: AcceptedMessage,
+		mut message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
 		extra: &BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
+		crate::smtp::trace::strip_headers_in_place(
+			&mut message.data,
+			&[crate::antispam::attachments::policy::WARNING_HEADER],
+		);
 		self.route(message, queue_id, Some(account), extra)
 	}
 }
@@ -474,3 +481,7 @@ mod tests_forward;
 #[cfg(test)]
 #[path = "routing_tests_vacation.rs"]
 mod tests_vacation;
+
+#[cfg(test)]
+#[path = "routing_tests_warning.rs"]
+mod tests_warning;

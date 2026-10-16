@@ -283,6 +283,13 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		&["antispam", "remove", "dnsbl-zones", "zen.spamhaus.org"],
 		true,
 	),
+	(&["attachments", "policy", "show"], true),
+	(
+		&["attachments", "policy", "set", "mode", "quarantine"],
+		true,
+	),
+	(&["attachments", "policy", "unset", "mode"], true),
+	(&["attachments", "check", "message.eml"], true),
 	(&["alias", "list"], true),
 	(&["alias", "show", "team@example.org"], true),
 	(

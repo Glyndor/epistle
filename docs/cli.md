@@ -72,6 +72,7 @@ Every change is validated before it is written, keeps the comments in
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
 | [IP warm-up for a new sending address](warmup.md) | `epistle warmup …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
+| [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
 | [Relay through a smarthost](#smarthost-relay-epistle-relay) | `epistle relay …` |
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
@@ -623,6 +624,7 @@ epistle antispam show
 epistle antispam set greylist-delay 5m
 epistle antispam set clamd-socket /run/clamav/clamd.sock
 epistle antispam set clamd-on-found reject
+epistle antispam set clamd-on-error defer
 epistle antispam set scan-authenticated off
 epistle antispam unset greylist-delay
 epistle antispam add dnsbl-zones zen.spamhaus.org
@@ -651,6 +653,55 @@ never accepted as command-line arguments (the LLM endpoint and model
 live in the config, and the API key is the name of an environment
 variable the server reads at startup). `--dry-run` prints the validated
 unified diff without writing or restarting.
+
+## Attachments (`epistle attachments`)
+
+```sh
+epistle attachments policy show
+epistle attachments policy show --json
+epistle attachments policy set mode quarantine
+epistle attachments policy set macros quarantine
+epistle attachments policy set block-extensions docm xlsm
+epistle attachments policy set allow-extensions svg --dry-run
+epistle attachments policy unset allow-extensions
+epistle attachments check suspicious.eml
+epistle attachments check suspicious.eml --json
+epistle attachments check suspicious.eml --strict
+```
+
+`policy show` prints one `key<TAB>value` line per key in effect: `mode`,
+`macros`, `encrypted-archives`, `block-extensions`, `allow-extensions`, and
+the built-in `always-dangerous` list no allowance can cover. `--json` prints
+the same as one object, the lists as arrays.
+
+`policy set <key> <value>` writes one key into `[attachments]`; for the two
+extension lists the values replace the list and are stored without the dot
+and in lower case. `policy unset <key>` restores the default. Each edit is
+validated before it is written: an always-dangerous extension in
+`allow-extensions` is refused with the loader's message. With `--json`,
+`set` and `unset` print the result object of the other configuration edits
+(`result`, `action`, `key`, for `set` the `value` stored, and `reload`);
+`--dry-run` prints the diff instead, inside the object under `--json`. The
+mail service is restarted as for the other configuration edits.
+
+`check <file.eml>` inspects one message with the policy in the
+configuration and delivers nothing. For every attachment it prints the
+name candidates, the declared types, the real type and the reasons, then
+the verdict (`deliver`, `flag`, `quarantine` or `reject`, with the reasons
+that decided it) and whether a submission of that message would be
+refused (never, when `scan_authenticated` is off). With `mode = "off"` the
+parts are still judged, and the verdict is `deliver`. Names and types come from the sender: the text output shows
+control and formatting characters as `\u{202e}` escapes, and `--json`
+escapes every character outside ASCII. A file over `max_message_size` is
+refused before it is read (exit `2`; an unreadable file exits `1`). Run
+with `sudo`, the file is copied for the service account up to 25 MiB, the
+default message size, so a larger message has to be checked by running the
+command as the service account. A link is refused, not followed. The
+exit code is `0` whenever the message was judged, whatever the verdict;
+with `--strict` it is `3`, a refusal by policy, when the verdict is
+`quarantine` or `reject`, so a script can gate on it and tell it from an
+unreadable file (`1`) or a bad argument (`2`). `--json` prints the same
+object either way. See [attachments.md](attachments.md) for what is detected.
 
 ## Stack (`epistle stack`)
 

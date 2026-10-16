@@ -189,6 +189,7 @@ pub async fn send(
 				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
 				SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
 				SinkError::ScanUnavailable => ApiError::scan_unavailable(),
+				SinkError::ScanTooLarge => ApiError::scan_too_large(),
 				SinkError::Unavailable(_) => ApiError::internal(),
 			});
 		}

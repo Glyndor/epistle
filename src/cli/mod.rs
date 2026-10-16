@@ -11,6 +11,7 @@ mod antispam;
 mod api_keys;
 mod app_passwords;
 mod archive;
+mod attachments;
 mod autoconfig;
 mod autodiscover;
 mod backup;
