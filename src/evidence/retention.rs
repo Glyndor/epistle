@@ -415,3 +415,6 @@ fn sweep_messages(evidence_root: &Path, today: Day) -> std::io::Result<usize> {
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "retention_tests_keys.rs"]
+mod tests_keys;
