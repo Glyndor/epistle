@@ -138,3 +138,22 @@ fn a_second_process_promoting_the_same_key_ends_the_same() {
 	EvidenceKey::promote_next(root, &new).expect("second, nothing left to move");
 	assert_eq!(key::pinned_id(root).expect("pin"), Some(new));
 }
+
+#[test]
+fn a_rotation_at_a_clock_the_log_does_not_agree_with_seals_nothing() {
+	let fixture = Fixture::new();
+	let before = std::fs::read_dir(fixture.root().join("checkpoints"))
+		.expect("dir")
+		.count();
+	let refused = rotate(fixture.root(), true, at(DAY + 400, 5)).expect_err("a clock far ahead");
+	assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+	assert!(refused.to_string().contains("does not agree"), "{refused}");
+	assert_eq!(
+		std::fs::read_dir(fixture.root().join("checkpoints"))
+			.expect("dir")
+			.count(),
+		before,
+		"a day was sealed at a doubtful time"
+	);
+	assert!(!fixture.root().join("rotations").exists());
+}
