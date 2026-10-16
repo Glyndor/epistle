@@ -153,3 +153,47 @@ fn an_open_gate_closes_again_when_no_verification_follows() {
 	service.set_gate(None);
 	assert_eq!(service.held(), None);
 }
+
+#[test]
+fn the_bytes_of_an_acceptance_that_was_refused_do_not_stay_for_the_retention() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	// The log cannot take today's record.
+	let today = super::super::day::Day::of_epoch(service.time().read().time);
+	std::fs::create_dir_all(
+		dir.path()
+			.join("evidence/chain")
+			.join(format!("{}.jsonl", today.name())),
+	)
+	.expect("block the day");
+	let recipients = vec!["a@example.net".to_string()];
+	let retention = Retention {
+		mode: RetentionMode::Full,
+		days: 365,
+	};
+	for _ in 0..3 {
+		service
+			.accept(&submitted(&[b'x'; 4096], &recipients), retention)
+			.expect_err("the record is refused");
+	}
+	let left: Vec<_> = walk_kept(&dir.path().join("evidence/messages"));
+	assert_eq!(left, Vec::<std::path::PathBuf>::new(), "bytes were left");
+}
+
+fn walk_kept(root: &Path) -> Vec<std::path::PathBuf> {
+	let mut found = Vec::new();
+	let mut pending = vec![root.to_path_buf()];
+	while let Some(dir) = pending.pop() {
+		let Ok(entries) = std::fs::read_dir(&dir) else {
+			continue;
+		};
+		for entry in entries.flatten() {
+			let path = entry.path();
+			match path.is_dir() {
+				true => pending.push(path),
+				false => found.push(path),
+			}
+		}
+	}
+	found
+}

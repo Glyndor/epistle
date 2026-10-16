@@ -228,9 +228,10 @@ impl EvidenceService {
 	/// first when it is kept in full, then the record, synced before this
 	/// returns.
 	pub fn accept(&self, submitted: &Submitted<'_>, retention: Retention) -> std::io::Result<()> {
-		if retention.mode == RetentionMode::Full {
-			self.keep_message(submitted, retention)?;
-		}
+		let kept = match retention.mode {
+			RetentionMode::Full => Some(self.keep_message(submitted, retention)?),
+			_ => None,
+		};
 		let header = |name: &str| {
 			crate::smtp::trace::header_values(submitted.data, name)
 				.into_iter()
@@ -251,7 +252,14 @@ impl EvidenceService {
 			size: submitted.data.len() as u64,
 			retention,
 		};
-		self.chain.append(Entry::Accepted(accepted))?;
+		if let Err(error) = self.chain.append(Entry::Accepted(accepted)) {
+			// Nothing refers to the bytes of a message that was refused: they
+			// must not stay for the whole retention, one copy per retry.
+			if let Some(kept) = kept {
+				let _ = std::fs::remove_file(kept);
+			}
+			return Err(error);
+		}
 		Ok(())
 	}
 
@@ -286,7 +294,11 @@ impl EvidenceService {
 	/// Keep the exact bytes, sealed under the at-rest key when one is set,
 	/// in `messages/<day>/<days>/<id>.eml`, so the sweeper can drop a whole
 	/// directory once its retention has passed.
-	fn keep_message(&self, submitted: &Submitted<'_>, retention: Retention) -> std::io::Result<()> {
+	fn keep_message(
+		&self,
+		submitted: &Submitted<'_>,
+		retention: Retention,
+	) -> std::io::Result<PathBuf> {
 		let day = super::day::Day::of_epoch(self.chain.time().read().time);
 		let dir = self
 			.root
@@ -297,7 +309,9 @@ impl EvidenceService {
 		let sealed = self
 			.crypto
 			.encode_with_aad(submitted.data, submitted.spool_id.as_bytes())?;
-		crate::storage::write_secret(&dir.join(format!("{}.eml", submitted.spool_id)), &sealed)
+		let path = dir.join(format!("{}.eml", submitted.spool_id));
+		crate::storage::write_secret(&path, &sealed)?;
+		Ok(path)
 	}
 }
 
