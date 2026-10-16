@@ -37,6 +37,7 @@ fn remove(dir: &Path, id: Uuid) -> ExitCode {
 		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut Vec::new(),

@@ -191,6 +191,7 @@ fn a_class_is_bound_to_the_new_credential_not_to_its_label() {
 		None,
 		None,
 		Some(crate::evidence::MailClass::Transactional),
+		false,
 		&mut Vec::new(),
 	);
 	assert_eq!(created, ExitCode::SUCCESS);

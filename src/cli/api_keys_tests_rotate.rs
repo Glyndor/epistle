@@ -115,6 +115,7 @@ fn a_class_bound_at_creation_follows_the_key_through_a_rotation() {
 			class: Some(crate::evidence::MailClass::Transactional),
 			..NewKey::default()
 		},
+		false,
 		&mut out,
 	);
 	assert_eq!(created, ExitCode::SUCCESS);
@@ -129,7 +130,10 @@ fn a_class_bound_at_creation_follows_the_key_through_a_rotation() {
 		Some(crate::evidence::MailClass::Transactional)
 	);
 	let mut rotated = Vec::new();
-	assert_eq!(rotate(&config, "notices", &mut rotated), ExitCode::SUCCESS);
+	assert_eq!(
+		rotate(&config, "notices", false, &mut rotated),
+		ExitCode::SUCCESS
+	);
 	let second = secret_in(&rotated);
 	assert_eq!(
 		class(&second),
