@@ -214,6 +214,15 @@ impl SplitDelivery {
 	}
 }
 
+/// What happened to the recipients delivered on this server.
+#[derive(Debug, Clone)]
+pub(super) struct LocalDone {
+	/// The recipients that resolved to an account or an alias.
+	pub recipients: Vec<String>,
+	/// Why a rule of theirs rejected the message, when one did.
+	pub reject: Option<String>,
+}
+
 impl MessageSink for SplitDelivery {
 	/// Mail from elsewhere: whatever `TLS-Required` it carries is not ours
 	/// to honour, so it never reaches a copy we store or forward.
@@ -272,8 +281,28 @@ impl SplitDelivery {
 		queue_id: uuid::Uuid,
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
+		class: (crate::evidence::MailClass, Option<u32>),
+		presigned: Option<Vec<u8>>,
+	) -> Result<(), SinkError> {
+		self.route_reporting(
+			message,
+			(queue_id, account, extra),
+			class,
+			presigned,
+			&mut None,
+		)
+	}
+
+	/// [`route_classed`](Self::route_classed), telling `done` which
+	/// recipients were delivered locally and whether a rule rejected them,
+	/// as soon as that is so: a later failure does not undo it.
+	pub(super) fn route_reporting(
+		&self,
+		message: AcceptedMessage,
+		(queue_id, account, extra): (uuid::Uuid, Option<&str>, &BTreeMap<String, String>),
 		(class, evidence): (crate::evidence::MailClass, Option<u32>),
 		presigned: Option<Vec<u8>>,
+		done: &mut Option<LocalDone>,
 	) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
@@ -315,6 +344,10 @@ impl SplitDelivery {
 			let delivered = self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
+			*done = Some(LocalDone {
+				recipients: local_message.recipients.clone(),
+				reject: delivered.reject.clone(),
+			});
 			// Notify the webhook for messages that actually landed (not rejected).
 			if delivered.reject.is_none()
 				&& let Some(webhook) = &self.webhook

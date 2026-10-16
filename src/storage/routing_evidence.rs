@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use super::SplitDelivery;
 use crate::evidence::MailClass;
-use crate::evidence::record::Retention;
-use crate::evidence::service::{EvidenceService, Submitted};
+use crate::evidence::record::{OutcomeKind, Retention};
+use crate::evidence::service::{Delivery, EvidenceService, Submitted};
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
@@ -101,15 +101,23 @@ impl SplitDelivery {
 				data: &signed,
 			};
 			record_or_refuse(service.accept(&submitted, retention), class)?;
-			let routed = self.route_classed(
+			let mut local = None;
+			let routed = self.route_reporting(
 				message,
-				queue_id,
-				Some(account),
-				&submission.extra,
+				(queue_id, Some(account), &submission.extra),
 				(class, Some(retention.days)),
 				Some(signed),
+				&mut local,
 			);
-			if let Err(error) = &routed {
+			// What was delivered on this server has its ending now, so the
+			// message can be shown whole; and an acceptance that was
+			// delivered here is not "abandoned: nothing was sent".
+			if let Some(done) = &local {
+				record_local(&service, queue_id, class, retention.days, done);
+			}
+			if let Err(error) = &routed
+				&& local.is_none()
+			{
 				abandon(&service, queue_id, error);
 			}
 			return routed;
@@ -153,6 +161,40 @@ impl SplitDelivery {
 				abandon(&service, queue_id, &error);
 				Err(error)
 			}
+		}
+	}
+}
+
+/// Record the ending of each recipient delivered on this server: delivered,
+/// or refused by a rule of theirs. Best effort, like the abandonment: the
+/// message is already in the mailbox.
+fn record_local(
+	service: &EvidenceService,
+	id: uuid::Uuid,
+	class: MailClass,
+	retain_days: u32,
+	done: &super::LocalDone,
+) {
+	let (result, reply) = match &done.reject {
+		Some(reason) => (OutcomeKind::Bounced, Some(reason.as_str())),
+		None => (OutcomeKind::Delivered, None),
+	};
+	for recipient in &done.recipients {
+		let outcome = service.outcome(&Delivery {
+			spool_id: id,
+			class,
+			recipient,
+			result,
+			attempt: 1,
+			remote: None,
+			reply,
+			tls: None,
+			dane: false,
+			mta_sts: None,
+			retain_days,
+		});
+		if let Err(error) = outcome {
+			tracing::warn!(%id, %error, "could not record the delivery of a local recipient");
 		}
 	}
 }

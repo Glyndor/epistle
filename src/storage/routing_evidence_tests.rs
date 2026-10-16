@@ -191,6 +191,90 @@ fn a_local_recipient_gets_the_acceptance_before_delivery() {
 	assert!(matches!(records[0].entry, Entry::Accepted(_)));
 }
 
+fn outcomes_of(records: &[Record]) -> Vec<(String, crate::evidence::record::OutcomeKind)> {
+	records
+		.iter()
+		.filter_map(|record| match &record.entry {
+			Entry::Outcome(outcome) => Some((outcome.recipient.clone(), outcome.result)),
+			_ => None,
+		})
+		.collect()
+}
+
+#[test]
+fn a_recipient_delivered_here_has_its_ending_so_the_message_can_be_shown_whole() {
+	use crate::evidence::record::OutcomeKind;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (split, _) = sink(dir.path());
+	split
+		.submit(
+			message(&["notices@example.org"]),
+			uuid::Uuid::now_v7(),
+			"notices",
+			&transactional(),
+		)
+		.expect("delivered locally");
+	assert_eq!(
+		outcomes_of(&records(dir.path())),
+		vec![("notices@example.org".to_string(), OutcomeKind::Delivered)]
+	);
+	assert!(
+		!records(dir.path())
+			.iter()
+			.any(|record| matches!(record.entry, Entry::Abandoned(_))),
+		"a message delivered here is not one nothing was sent of"
+	);
+}
+
+#[test]
+fn with_local_and_remote_recipients_only_the_local_one_has_its_ending_at_once() {
+	use crate::evidence::record::OutcomeKind;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (split, _) = sink(dir.path());
+	split
+		.submit(
+			message(&["notices@example.org", "student@remote.example"]),
+			uuid::Uuid::now_v7(),
+			"notices",
+			&transactional(),
+		)
+		.expect("routed");
+	// The remote recipient waits in the queue for its own ending.
+	assert_eq!(
+		outcomes_of(&records(dir.path())),
+		vec![("notices@example.org".to_string(), OutcomeKind::Delivered)]
+	);
+}
+
+#[test]
+fn a_queue_that_fails_after_the_local_delivery_does_not_make_the_message_abandoned() {
+	use crate::evidence::record::OutcomeKind;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (split, _) = sink(dir.path());
+	// The remote copy cannot be staged.
+	std::fs::remove_dir_all(dir.path().join("spool/tmp")).expect("rm tmp");
+	std::fs::write(dir.path().join("spool/tmp"), b"not a directory").expect("block");
+	split
+		.submit(
+			message(&["notices@example.org", "student@remote.example"]),
+			uuid::Uuid::now_v7(),
+			"notices",
+			&transactional(),
+		)
+		.expect_err("the remote copy was not queued");
+	let found = records(dir.path());
+	assert_eq!(
+		outcomes_of(&found),
+		vec![("notices@example.org".to_string(), OutcomeKind::Delivered)]
+	);
+	assert!(
+		!found
+			.iter()
+			.any(|record| matches!(record.entry, Entry::Abandoned(_))),
+		"nothing was sent, said a record, of a message that was delivered here"
+	);
+}
+
 /// The crash test: a child process stores a transactional message and dies
 /// (abort) between writing the evidence and queueing the message. The
 /// parent then finds the record, the staged files, nothing queued, and
