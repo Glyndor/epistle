@@ -505,17 +505,32 @@ impl FsSpool {
 	/// An entry whose outcomes the evidence log has not taken yet is not
 	/// removed: that would erase the only trace of a delivery that was made.
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
+		self.remove_with(id, |_| Ok(())).map(|_| ())
+	}
+
+	/// [`remove`](Self::remove), calling `before` with the envelope as it is
+	/// under the spool's lock, and removing the entry only if it returns `Ok`.
+	/// Reading the envelope, deciding and unlinking are one step: nothing can
+	/// change the entry between them, so what `before` writes about it is what
+	/// is removed. Returns the envelope that was removed.
+	pub fn remove_with(
+		&self,
+		id: Uuid,
+		before: impl FnOnce(&Envelope) -> std::io::Result<()>,
+	) -> std::io::Result<Envelope> {
 		let _guard = self.lock()?;
-		if !self.read_envelope_unlocked(id)?.outcomes_pending.is_empty() {
+		let envelope = self.read_envelope_unlocked(id)?;
+		if !envelope.outcomes_pending.is_empty() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::ResourceBusy,
 				"the entry has evidence outcomes waiting to be written: it stays until they are",
 			));
 		}
+		before(&envelope)?;
 		// Envelope first: a message file without an envelope is invisible.
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Eml)?)?;
-		Ok(())
+		Ok(envelope)
 	}
 }
 

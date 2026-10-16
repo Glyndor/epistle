@@ -428,3 +428,30 @@ async fn a_clock_that_jumps_a_year_ahead_does_not_expire_mail_that_only_waited()
 	);
 	assert_eq!(worker.spool.list().expect("list").len(), 1);
 }
+
+#[tokio::test]
+async fn what_a_removed_entry_was_owed_is_written_from_the_entry_as_it_was() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["late@remote.example"], true);
+	let mut envelope = spool
+		.load_envelope(spool.list().expect("list")[0])
+		.expect("envelope");
+	envelope
+		.outcomes_pending
+		.push(crate::storage::PendingOutcome {
+			recipient: "late@remote.example".into(),
+			result: OutcomeKind::Delivered,
+			attempt: 1,
+			remote: Some("mx.remote.example".into()),
+			reply: None,
+			tls: None,
+			dane: false,
+			mta_sts: None,
+		});
+	let remote = FakeRemote::default();
+	let worker = worker(dir.path(), spool, &remote);
+	worker.write_owed(&envelope);
+	let written = outcomes(dir.path());
+	assert_eq!(written.len(), 1);
+	assert_eq!(written[0].result, OutcomeKind::Delivered);
+}

@@ -363,7 +363,7 @@ impl Worker {
 	) -> std::io::Result<()> {
 		let retry_now = conversation.retry_now();
 		let slow = self.slow_down(entry, conversation, now);
-		self.spool.update_envelope(id, |envelope| {
+		let apply = |envelope: &mut crate::storage::Envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
 				if let Some(capped) = conversation.capped_for(recipient) {
@@ -449,7 +449,21 @@ impl Worker {
 				}
 			}
 			envelope.settle();
-		})?;
+		};
+		match self.spool.update_envelope(id, &apply) {
+			Ok(_) => {}
+			// An operator took the entry out while it was in conversation. The
+			// delivery was made all the same: what it owes the evidence log is
+			// written now, from the entry as it was, so the log does not say
+			// the message was never delivered.
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+				let mut gone = entry.envelope.clone();
+				apply(&mut gone);
+				self.write_owed(&gone);
+				return Err(error);
+			}
+			Err(error) => return Err(error),
+		}
 		if let Some(slow) = slow {
 			let mut holds = self.holds();
 			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);

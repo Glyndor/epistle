@@ -83,14 +83,18 @@ pub async fn remove(
 	if state.spool().load(id).is_err() {
 		return Err(ApiError::not_found("no such queue entry"));
 	}
-	state
-		.spool()
-		.remove(id)
-		.map_err(|error| match error.kind() {
-			std::io::ErrorKind::ResourceBusy => ApiError::conflict(
-				"the entry has evidence outcomes waiting to be written: it stays until they are",
-			),
-			_ => ApiError::internal(),
-		})?;
+	// The cancellation is recorded, and the entry removed, as one step.
+	crate::evidence::cancel::remove(
+		state.spool(),
+		&crate::evidence::service::root_of(state.data_dir()),
+		id,
+	)
+	.map_err(|error| match error.kind() {
+		std::io::ErrorKind::NotFound => ApiError::not_found("no such queue entry"),
+		std::io::ErrorKind::ResourceBusy => ApiError::conflict(
+			"the entry has evidence outcomes waiting to be written: it stays until they are",
+		),
+		_ => ApiError::internal(),
+	})?;
 	Ok(Json(Removed { removed: id }))
 }

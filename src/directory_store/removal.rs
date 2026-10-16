@@ -181,17 +181,11 @@ fn process_spool_queue(
 			(true, QueuePolicy::Discard) => {
 				// A message that kept evidence ends on record, not by vanishing
 				// from the queue; an entry still owed an outcome stays.
-				if !entry.envelope.outcomes_pending.is_empty() {
-					return Err(std::io::Error::new(
-						std::io::ErrorKind::ResourceBusy,
-						"the entry has evidence outcomes waiting to be written: it stays until they are",
-					));
-				}
-				crate::evidence::cancel::record(
+				crate::evidence::cancel::remove(
+					spool,
 					&crate::evidence::service::root_of(data_dir),
-					&entry.envelope,
+					id,
 				)?;
-				spool.remove(id)?;
 				discarded += 1;
 			}
 			(true, QueuePolicy::Drain) => left += 1,

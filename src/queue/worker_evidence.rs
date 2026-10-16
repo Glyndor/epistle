@@ -94,6 +94,19 @@ impl Worker {
 		}
 	}
 
+	/// Write every outcome `envelope` is owed, for an entry that is no longer
+	/// in the queue to keep them. Best effort: the log is what is left.
+	pub(super) fn write_owed(&self, envelope: &Envelope) {
+		let (Some(service), true) = (&self.evidence, envelope.evidence) else {
+			return;
+		};
+		for pending in &envelope.outcomes_pending {
+			if let Err(error) = self.write_outcome(service, envelope, pending) {
+				tracing::error!(id = %envelope.id, %error, "an outcome of a removed entry could not be recorded");
+			}
+		}
+	}
+
 	/// Write one outcome through `service`.
 	fn write_outcome(
 		&self,

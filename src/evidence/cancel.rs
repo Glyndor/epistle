@@ -15,6 +15,20 @@ use crate::storage::{Envelope, RecipientStatus};
 /// What the outcome says happened to the message.
 pub const REASON: &str = "removed from the queue before it was delivered";
 
+/// Take entry `id` out of `spool`, leaving the record of it. The envelope is
+/// read again under the spool's lock, the cancellation is recorded from that
+/// one, and only then are the files unlinked, all as one step: a worker that
+/// settled, delivered or marked an outcome owed in the meantime is seen, and an
+/// entry that is owed an outcome, or whose record cannot be written, stays.
+/// Returns the envelope as it was removed.
+pub fn remove(
+	spool: &crate::storage::FsSpool,
+	evidence_root: &Path,
+	id: uuid::Uuid,
+) -> std::io::Result<Envelope> {
+	spool.remove_with(id, |fresh| record(evidence_root, fresh).map(|_| ()))
+}
+
 /// Record a `canceled` outcome for every recipient of `envelope` still
 /// waiting, when the entry keeps evidence. Returns how many were written.
 /// The entry must not be removed unless this returned `Ok`.
@@ -49,3 +63,7 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 	}
 	Ok(written)
 }
+
+#[cfg(test)]
+#[path = "cancel_tests.rs"]
+mod tests;

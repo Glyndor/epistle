@@ -169,24 +169,14 @@ pub(super) fn run(
 			if let Err(code) = super::prompt::confirm_destructive("queue remove", &question, yes) {
 				return code;
 			}
-			// An entry that kept evidence ends on record, not by vanishing.
-			// One still owed an outcome stays until the worker has written it.
-			if !envelope.outcomes_pending.is_empty() {
-				return fail(format_args!(
-					"{id}: the evidence log is owed an outcome for it; try again once the server has written it"
-				));
-			}
-			if let Err(error) = crate::evidence::cancel::record(
+			// An entry that kept evidence ends on record, not by vanishing: the
+			// cancellation is recorded and the entry removed as one step.
+			match crate::evidence::cancel::remove(
+				&spool,
 				&crate::evidence::service::root_of(data_dir),
-				&envelope,
+				id,
 			) {
-				return fail(format_args!(
-					"{id} was not removed: recording the cancellation in the evidence log failed ({})",
-					error.kind()
-				));
-			}
-			match spool.remove(id) {
-				Ok(()) => {
+				Ok(envelope) => {
 					// Record the cancel for every recipient that was still
 					// pending. Already-delivered recipients are not touched
 					// (their `delivered` record is the only thing the log
