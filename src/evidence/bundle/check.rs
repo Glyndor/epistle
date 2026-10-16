@@ -221,7 +221,7 @@ fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckRepor
 		signature(dir, &base, &checkpoint, &json),
 	);
 	if checkpoint.timestamp == "enabled" {
-		timestamp(&base, &name, day, &json, anchors, report);
+		timestamp(dir, &base, &name, day, &json, anchors, report);
 	} else {
 		report.add(
 			format!("{name}: timestamp token"),
@@ -270,6 +270,7 @@ fn signature(dir: &Path, base: &Path, checkpoint: &Checkpoint, json: &[u8]) -> R
 }
 
 fn timestamp(
+	dir: &Path,
 	base: &Path,
 	name: &str,
 	day: Day,
@@ -303,6 +304,20 @@ fn timestamp(
 		};
 		report.add(format!("{name}: timestamp {}", check.label()), result);
 	}
+	// The README tells the reader to verify with this file as the untrusted
+	// intermediates: it must be what the token carries, not what a re-sum
+	// of SHA256SUMS lets through.
+	report.add(
+		format!("{name}: the certificate chain file is the one the token carries"),
+		match (
+			read(&dir.join("tsa").join(format!("{name}-chain.pem"))),
+			super::token_chain_pem(&token),
+		) {
+			(Ok(file), Ok(carried)) if file == carried.as_bytes() => Ok(()),
+			(Err(why), _) => Err(why),
+			_ => Err("differs from the certificates in the token".into()),
+		},
+	);
 	report.add(
 		format!("{name}: stamped after the day ended"),
 		match checked.gen_time >= Day(day.0 + 1).start_epoch() {

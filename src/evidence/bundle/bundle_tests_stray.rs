@@ -104,3 +104,29 @@ fn the_files_of_a_day_that_fails_are_not_vouched_for() {
 		"{failed:?}"
 	);
 }
+
+#[test]
+fn an_altered_certificate_chain_file_fails_even_with_fresh_checksums() {
+	let fixture = Fixture::new();
+	let (_out, bundle) = exported(&fixture, &by_id(1));
+	let chain = bundle.join("tsa").join(format!("{DAY_NAME}-chain.pem"));
+	let text = std::fs::read_to_string(&chain).expect("chain");
+	std::fs::write(&chain, text.replacen('A', "B", 1)).expect("write");
+	resum(&bundle);
+	let failed = stray_failures(&fixture, &bundle);
+	assert_eq!(
+		failed.first().map(String::as_str),
+		Some(
+			"2026-10-15: the certificate chain file is the one the token carries: differs from the certificates in the token"
+		),
+		"{failed:?}"
+	);
+	std::fs::remove_file(&chain).expect("remove");
+	resum(&bundle);
+	let failed = stray_failures(&fixture, &bundle);
+	assert_eq!(
+		failed.first().map(String::as_str),
+		Some("2026-10-15: the certificate chain file is the one the token carries: missing"),
+		"{failed:?}"
+	);
+}
