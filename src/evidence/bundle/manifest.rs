@@ -22,7 +22,7 @@ use super::export::Selector;
 use crate::evidence::day::Day;
 use crate::evidence::hidden::is_hidden;
 use crate::evidence::lines::{Line, Lines};
-use crate::evidence::record::{Accepted, Entry, Record};
+use crate::evidence::record::{Accepted, Entry, OutcomeKind, Record};
 
 /// The file's name.
 pub(super) const FILE: &str = "manifest.json";
@@ -86,7 +86,60 @@ pub(super) fn write(out: &Path, selector: &Selector) -> std::io::Result<()> {
 struct Held {
 	accepted: Vec<(Day, Accepted)>,
 	abandoned: bool,
-	outcomes: Vec<String>,
+	outcomes: Vec<(String, OutcomeKind)>,
+}
+
+/// What became of the recipients a bundle covers: the answer a reader wants
+/// from it, which "the records are all there" does not give.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Delivery {
+	/// Handed to the receiving server, which accepted it.
+	pub delivered: usize,
+	/// Refused by the receiving server for good.
+	pub bounced: usize,
+	/// Given up on after the queue's time ran out.
+	pub expired: usize,
+	/// Not sent, because the address was on the suppression list.
+	pub suppressed: usize,
+	/// Accepted, and never sent: the submission did not reach the queue.
+	pub abandoned: usize,
+}
+
+impl Delivery {
+	/// Every recipient covered.
+	pub fn total(&self) -> usize {
+		self.delivered + self.bounced + self.expired + self.suppressed + self.abandoned
+	}
+
+	/// Whether every recipient covered was delivered, and there was one.
+	pub fn all_delivered(&self) -> bool {
+		self.total() > 0 && self.delivered == self.total()
+	}
+
+	/// The count in words, naming what did not reach the recipient.
+	pub fn words(&self) -> String {
+		let mut parts = vec![format!("{} delivered", self.delivered)];
+		for (count, what) in [
+			(self.bounced, "bounced (refused by the receiving server)"),
+			(self.expired, "expired (the queue gave up)"),
+			(self.suppressed, "suppressed (not sent)"),
+			(self.abandoned, "abandoned (nothing was sent)"),
+		] {
+			if count > 0 {
+				parts.push(format!("{count} {what}"));
+			}
+		}
+		parts.join(", ")
+	}
+}
+
+/// What a complete bundle says, for the reader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completeness {
+	/// What the bundle was found to cover, and what it was not.
+	pub scope: String,
+	/// What became of the recipients covered.
+	pub delivery: Delivery,
 }
 
 impl Scope {
@@ -138,7 +191,7 @@ pub(super) fn complete(
 	dir: &Path,
 	expected: &Expectation,
 	verified: &BTreeSet<String>,
-) -> Result<String, String> {
+) -> Result<Completeness, String> {
 	let (manifest, range) = load(dir)?;
 	if let Some(wanted) = &expected.message_id {
 		match &manifest.scope {
@@ -208,11 +261,12 @@ pub(super) fn complete(
 					.entry(outcome.spool_id)
 					.or_default()
 					.outcomes
-					.push(outcome.recipient.to_ascii_lowercase()),
+					.push((outcome.recipient.to_ascii_lowercase(), outcome.result)),
 				_ => {}
 			}
 		}
 	}
+	let mut delivery = Delivery::default();
 	let mut checked = 0usize;
 	let mut asked_found = (false, false);
 	let mut days: Vec<Day> = Vec::new();
@@ -289,9 +343,10 @@ pub(super) fn complete(
 			if !message.outcomes.is_empty() {
 				return Err(format!("{id}: abandoned, and yet it has outcomes"));
 			}
+			delivery.abandoned += covered.len();
 			continue;
 		}
-		for outcome in &message.outcomes {
+		for (outcome, _) in &message.outcomes {
 			let known = accepted
 				.recipients
 				.iter()
@@ -303,10 +358,22 @@ pub(super) fn complete(
 			}
 		}
 		for recipient in &covered {
-			if !message.outcomes.contains(recipient) {
+			// The newest outcome of a recipient is what became of it.
+			let Some((_, result)) = message
+				.outcomes
+				.iter()
+				.rev()
+				.find(|(named, _)| named == recipient)
+			else {
 				return Err(format!(
 					"{id}: no outcome for {recipient}, and not abandoned: a record is missing, or the message is still in the queue"
 				));
+			};
+			match result {
+				OutcomeKind::Delivered => delivery.delivered += 1,
+				OutcomeKind::Bounced => delivery.bounced += 1,
+				OutcomeKind::Expired => delivery.expired += 1,
+				OutcomeKind::Suppressed => delivery.suppressed += 1,
 			}
 		}
 	}
@@ -337,14 +404,15 @@ pub(super) fn complete(
 		(Some(first), Some(last)) => format!("acceptances on {} to {}", first.name(), last.name()),
 		_ => String::new(),
 	};
-	Ok(match &manifest.scope {
+	let scope = match &manifest.scope {
 		Scope::Message { .. } => format!(
-			"scope: {}: every recipient was checked ({checked} acceptance, {found})",
+			"scope: {} ({checked} acceptance, {found}): the records of all the recipients it names were looked at",
 			manifest.scope.describe()
 		),
 		Scope::Recipient { .. } => format!(
-			"scope: {} ({checked} acceptances, {found}): the outcomes of the other recipients were NOT checked, and the bundle does not say whether they exist",
+			"scope: {} ({checked} acceptances, {found}): the outcomes of the other recipients were NOT checked, and neither were messages to this recipient that are not in the bundle, whatever days the manifest names",
 			manifest.scope.describe()
 		),
-	})
+	};
+	Ok(Completeness { scope, delivery })
 }

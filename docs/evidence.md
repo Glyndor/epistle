@@ -192,7 +192,16 @@ epistle evidence check --key 3f2a...e91c --recipient student@example.net --from 
 
 A bundle with no acceptance of what was asked about checks nothing, and fails.
 The report says what was verified: how many acceptances, on which days, and
-that the other recipients' outcomes were not checked when the bundle is for one.
+that the other recipients' outcomes were not checked when the bundle is for one,
+and that messages to that recipient which are not in the bundle were not
+checked either, whatever days it names.
+
+A bundle that verifies proves what the records say, which is not always that
+the message arrived. `check` counts what became of the recipients it covers
+(delivered, bounced, expired, suppressed, or abandoned: nothing was sent), says
+so in a `delivery:` note and in the last line, and puts the counts and
+`all_delivered` in the JSON. `--require-delivered` makes the exit code 1
+unless every recipient covered was delivered.
 
 ## The clock
 

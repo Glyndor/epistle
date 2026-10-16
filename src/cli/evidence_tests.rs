@@ -151,6 +151,7 @@ fn check_runs_without_any_configuration_file() {
 		to: None,
 		keys: vec![key.clone()],
 		anchors: vec![anchor.clone()],
+		require_delivered: false,
 		json: true,
 	};
 	let mut out = Vec::new();
@@ -178,6 +179,7 @@ fn check_runs_without_any_configuration_file() {
 		to: None,
 		keys: vec![key],
 		anchors: Vec::new(),
+		require_delivered: false,
 		json: false,
 	};
 	let mut out = Vec::new();
@@ -191,6 +193,7 @@ fn check_runs_without_any_configuration_file() {
 		to: None,
 		keys: Vec::new(),
 		anchors: vec!["zz".into()],
+		require_delivered: false,
 		json: false,
 	};
 	assert_eq!(

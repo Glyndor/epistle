@@ -103,7 +103,8 @@ fn a_narrowed_manifest_hides_a_bounce_unless_the_reader_expects_the_whole_messag
 	assert_eq!(failed, Vec::<String>::new());
 	assert!(
 		notes.iter().any(|n| n.contains("recipient ana@example.net")
-			&& n.contains("outcomes of the other recipients were NOT checked")),
+			&& n.contains("outcomes of the other recipients were NOT checked")
+			&& n.contains("messages to this recipient that are not in the bundle")),
 		"{notes:?}"
 	);
 	// A reader who asks about the message is not given the narrowed bundle.
@@ -118,7 +119,7 @@ fn a_narrowed_manifest_hides_a_bounce_unless_the_reader_expects_the_whole_messag
 	);
 	assert_eq!(
 		failed,
-		vec!["every message is accounted for: the bundle was made for recipient ana@example.net, not for message <4@example.org>".to_string()]
+		vec!["every message in the bundle has an outcome for each recipient it covers: the bundle was made for recipient ana@example.net, not for message <4@example.org>".to_string()]
 	);
 }
 
@@ -170,7 +171,7 @@ fn the_expected_scope_is_checked_and_the_report_lists_the_scope() {
 	assert!(
 		notes
 			.iter()
-			.any(|n| n.contains("message <4@example.org>: every recipient was checked")),
+			.any(|n| n.contains("the records of all the recipients it names were looked at")),
 		"{notes:?}"
 	);
 	let (failed, _) = expecting(
@@ -184,7 +185,7 @@ fn the_expected_scope_is_checked_and_the_report_lists_the_scope() {
 	);
 	assert_eq!(
 		failed,
-		vec!["every message is accounted for: the bundle was made for message <4@example.org>, not for message <5@example.org>".to_string()]
+		vec!["every message in the bundle has an outcome for each recipient it covers: the bundle was made for message <4@example.org>, not for message <5@example.org>".to_string()]
 	);
 }
 
@@ -297,6 +298,9 @@ fn nothing_in_a_manifest_is_taken_that_could_move_a_terminal() {
 		"a\rb",
 		"a\nb",
 		"a\u{202e}b",
+		"a\u{61c}b",
+		"a\u{3164}b",
+		"a\u{e0041}b",
 	] {
 		let (_out, bundle) = narrowed_to(&fixture, "ana@example.net");
 		std::fs::write(

@@ -97,6 +97,11 @@ pub enum EvidenceCli {
 		/// SubjectPublicKeyInfo. The default authority's is always trusted.
 		#[arg(long = "anchor", value_name = "SHA256")]
 		anchors: Vec<String>,
+		/// Exit with 1 unless every recipient the bundle covers was delivered.
+		/// Without it a bundle that proves a message bounced, expired or
+		/// was never sent verifies, and says so.
+		#[arg(long)]
+		require_delivered: bool,
 		/// Print one JSON object instead of text.
 		#[arg(long)]
 		json: bool,
@@ -288,6 +293,7 @@ pub(super) fn run(
 		from,
 		to,
 		anchors,
+		require_delivered,
 		json,
 	} = action
 	{
@@ -297,7 +303,14 @@ pub(super) fn run(
 			from,
 			to,
 		};
-		return super::evidence_bundle::check(&bundle, &keys, &expected, &anchors, json, out);
+		return super::evidence_bundle::check(
+			&bundle,
+			&keys,
+			&expected,
+			(&anchors, require_delivered),
+			json,
+			out,
+		);
 	}
 	let config = match Config::load(config_path) {
 		Ok(config) => config,

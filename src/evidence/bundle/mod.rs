@@ -195,6 +195,9 @@ mod tests;
 #[path = "bundle_tests_complete.rs"]
 mod tests_complete;
 #[cfg(test)]
+#[path = "bundle_tests_delivery.rs"]
+mod tests_delivery;
+#[cfg(test)]
 #[path = "bundle_tests_export.rs"]
 mod tests_export;
 #[cfg(test)]

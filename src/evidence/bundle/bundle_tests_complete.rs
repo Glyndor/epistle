@@ -114,7 +114,7 @@ fn leaving_out_the_abandonment_does_not_verify() {
 	assert_eq!(
 		failed,
 		vec![format!(
-			"every message is accounted for: {}: no outcome for student1@example.net, and not abandoned: a record is missing, or the message is still in the queue",
+			"every message in the bundle has an outcome for each recipient it covers: {}: no outcome for student1@example.net, and not abandoned: a record is missing, or the message is still in the queue",
 			Uuid::from_u128(1)
 		)]
 	);

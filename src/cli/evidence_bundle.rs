@@ -69,7 +69,7 @@ pub(super) fn check(
 	dir: &Path,
 	keys: &[String],
 	expected: &bundle::Expectation,
-	extra: &[String],
+	(extra, require_delivered): (&[String], bool),
 	as_json: bool,
 	out: &mut impl Write,
 ) -> ExitCode {
@@ -86,7 +86,10 @@ pub(super) fn check(
 		Err(error) => return failed(&error),
 	};
 	let passed = report.passed();
-	let code = match passed {
+	let delivered = report
+		.delivery
+		.is_some_and(|delivery| delivery.all_delivered());
+	let code = match passed && (delivered || !require_delivered) {
 		true => ExitCode::SUCCESS,
 		false => ExitCode::FAILURE,
 	};
@@ -102,10 +105,21 @@ pub(super) fn check(
 				})
 			})
 			.collect();
+		let delivery = report.delivery.map(|delivery| {
+			json!({
+				"delivered": delivery.delivered,
+				"bounced": delivery.bounced,
+				"expired": delivery.expired,
+				"suppressed": delivery.suppressed,
+				"abandoned": delivery.abandoned,
+			})
+		});
 		let printed = super::evidence::json(
 			out,
 			&json!({
 				"passed": passed,
+				"all_delivered": delivered,
+				"delivery": delivery,
 				"findings": findings,
 				"notes": report.notes.iter().map(|note| sanitize(note)).collect::<Vec<_>>(),
 			}),
@@ -125,9 +139,18 @@ pub(super) fn check(
 	for note in &report.notes {
 		let _ = writeln!(out, "note  {}", sanitize(note));
 	}
-	let _ = match passed {
-		true => writeln!(out, "the bundle verifies"),
-		false => writeln!(out, "the bundle does NOT verify"),
+	let _ = match (passed, report.delivery) {
+		(false, _) => writeln!(out, "the bundle does NOT verify"),
+		(true, Some(delivery)) if delivery.all_delivered() => writeln!(
+			out,
+			"the bundle verifies, and every recipient it covers was delivered"
+		),
+		(true, Some(delivery)) => writeln!(
+			out,
+			"the bundle verifies, but it does NOT show that every recipient it covers was delivered ({})",
+			delivery.words()
+		),
+		(true, None) => writeln!(out, "the bundle verifies"),
 	};
 	code
 }

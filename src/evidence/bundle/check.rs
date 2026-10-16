@@ -12,7 +12,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 use super::anchor::{self, Anchors};
-pub use super::manifest::Expectation;
+pub use super::manifest::{Delivery, Expectation};
 use super::{BundleError, DayProof, MAX_FILE, MAX_RECORDS};
 use crate::evidence::checkpoint::{CHECKPOINT_VERSION, Checkpoint};
 use crate::evidence::day::Day;
@@ -39,6 +39,8 @@ pub struct CheckReport {
 	pub findings: Vec<Finding>,
 	/// What was not checked, for the reader.
 	pub notes: Vec<String>,
+	/// What became of the recipients the bundle covers, when it could be told.
+	pub delivery: Option<Delivery>,
 }
 
 /// What the report says about revocation, always.
@@ -154,10 +156,17 @@ pub fn check_expecting(
 		}
 	}
 	let scope = super::manifest::complete(dir, expected, &verified_days);
-	if let Ok(words) = &scope {
-		report.notes.push(words.clone());
+	if let Ok(complete) = &scope {
+		report.notes.push(complete.scope.clone());
+		report
+			.notes
+			.push(format!("delivery: {}", complete.delivery.words()));
+		report.delivery = Some(complete.delivery);
 	}
-	report.add("every message is accounted for", scope.map(|_| ()));
+	report.add(
+		"every message in the bundle has an outcome for each recipient it covers",
+		scope.map(|_| ()),
+	);
 	report.add(
 		"every file belongs to a verified day or an accepted record",
 		strays(dir, &vouched),
