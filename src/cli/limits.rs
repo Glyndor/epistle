@@ -401,12 +401,6 @@ fn run_with_restart(
 			tenant.as_deref(),
 			value.as_deref(),
 		)?;
-		if dry_run {
-			write!(out, "{}", document.dry_run()?).map_err(|error| error.to_string())?;
-			return Ok(ExitCode::SUCCESS);
-		}
-		let config = document.config()?;
-		let outcome = document.commit()?;
 		let kind = match &value {
 			Some(_) => "set",
 			None => "unset",
@@ -418,6 +412,19 @@ fn run_with_restart(
 		} else {
 			serde_json::json!({"type": "global"})
 		};
+		if dry_run {
+			let diff = document.dry_run()?;
+			if json {
+				let fields = serde_json::json!({"key": key.name(), "scope": scope});
+				let plan = super::json_out::dry_run_object(kind, fields, diff);
+				writeln!(out, "{plan}").map_err(|error| error.to_string())?;
+			} else {
+				write!(out, "{diff}").map_err(|error| error.to_string())?;
+			}
+			return Ok(ExitCode::SUCCESS);
+		}
+		let config = document.config()?;
+		let outcome = document.commit()?;
 		if json {
 			let payload = serde_json::json!({
 				"result": if outcome == super::config_edit::Outcome::Changed { "saved" } else { "unchanged" },
