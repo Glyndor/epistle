@@ -161,3 +161,55 @@ fn a_command_line_missing_a_required_argument_is_still_searched() {
 	assert_eq!(found.len(), 1);
 	assert_eq!(found[0].value, PathBuf::from("/tmp/pw"));
 }
+
+const MESSAGE: Kind = Kind::ReadFile {
+	limit: MESSAGE_LIMIT,
+	secret: false,
+};
+
+fn message_found(token: usize, value: &str) -> Found {
+	Found {
+		token,
+		prefix: None,
+		value: value.into(),
+		kind: MESSAGE,
+	}
+}
+
+#[test]
+fn a_positional_path_is_found_by_its_place_on_the_line() {
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "/tmp/m.eml", "--json"]),
+			STAGED
+		),
+		[message_found(2, "/tmp/m.eml")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "--json", "/tmp/m.eml"]),
+			STAGED
+		),
+		[message_found(3, "/tmp/m.eml")]
+	);
+}
+
+#[test]
+fn a_positional_path_after_the_terminator_is_still_a_path() {
+	// A file called `--json` can only be named after `--`.
+	assert_eq!(
+		find(&args(&["attachments", "check", "--", "--json"]), STAGED),
+		[message_found(3, "--json")]
+	);
+	// And a file called like the subcommand is the last token, not the command.
+	assert_eq!(
+		find(&args(&["attachments", "check", "check"]), STAGED),
+		[message_found(2, "check")]
+	);
+}
+
+#[test]
+fn only_check_stages_a_path_in_attachments() {
+	assert!(find(&args(&["attachments", "policy", "show"]), STAGED).is_empty());
+	assert!(find(&args(&["attachments", "check"]), STAGED).is_empty());
+}

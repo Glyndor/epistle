@@ -21,6 +21,11 @@ pub(crate) const FILE_LIMIT: u64 = 16 * 1024 * 1024;
 /// each and the DKIM keys beside them (64 KiB each at most).
 pub(crate) const CONFIG_DIR_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// A message file to inspect: what the server accepts by default, the
+/// largest message `epistle attachments check` reads from root without a
+/// larger `max_message_size` in the configuration.
+pub(crate) const MESSAGE_LIMIT: u64 = crate::smtp::session::MAX_MESSAGE_SIZE as u64;
+
 /// A Maildir to import. The copy sits on the data disk the running server
 /// writes mail to until the import ends, and the import then writes the same
 /// mail again, so a staged Maildir costs twice its size in free space. Past
@@ -111,6 +116,14 @@ pub(crate) const STAGED: &[Staged] = &[
 		kind: Kind::WriteDir,
 	},
 	Staged {
+		command: &["attachments", "check"],
+		arg: "file",
+		kind: Kind::ReadFile {
+			limit: MESSAGE_LIMIT,
+			secret: false,
+		},
+	},
+	Staged {
 		command: &["init"],
 		arg: "answers",
 		kind: Kind::ReadFile {
@@ -194,10 +207,41 @@ pub(crate) fn find(args: &[OsString], table: &[Staged]) -> Vec<Found> {
 			.and_then(clap::Arg::get_long);
 		if let Some(long) = long {
 			scan(args, long, entry.kind, &mut found);
+		} else {
+			positional(args, level, entry, &mut found);
 		}
 	}
 	found.sort_by_key(|found| found.token);
 	found
+}
+
+/// Push the values of the positional argument `entry` names. clap says
+/// what they are; the token is the last one on the line equal to the value
+/// (a positional follows its subcommand, so a file called like it is still
+/// the later token) and not already taken.
+fn positional(
+	args: &[OsString],
+	matches: &clap::ArgMatches,
+	entry: &Staged,
+	found: &mut Vec<Found>,
+) {
+	let Ok(Some(values)) = matches.try_get_raw(entry.arg) else {
+		return;
+	};
+	for value in values {
+		let taken = |index: &usize| found.iter().any(|f| f.token == *index);
+		if let Some(token) = (0..args.len())
+			.rev()
+			.find(|index| args[*index] == value && !taken(index))
+		{
+			found.push(Found {
+				token,
+				prefix: None,
+				value: PathBuf::from(value),
+				kind: entry.kind,
+			});
+		}
+	}
 }
 
 /// Push every `--long VALUE` and `--long=VALUE` before a `--` terminator.

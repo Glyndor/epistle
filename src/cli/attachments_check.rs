@@ -86,20 +86,20 @@ pub(super) fn execute(
 /// stops one byte past the limit, so a file that grows meanwhile is still
 /// refused without being read whole.
 fn read_bounded(file: &Path, limit: usize) -> Result<Vec<u8>, ResourceError> {
-	let cannot = |error: std::io::Error| {
-		ResourceError::Failure(format!("cannot read {}: {error}", file.display()))
-	};
+	// Run by root, the account reads a staged copy: messages name the file
+	// the operator typed.
+	let named = crate::cli::staging::shown(&file.display().to_string());
+	let cannot =
+		|error: std::io::Error| ResourceError::Failure(format!("cannot read {named}: {error}"));
 	let too_large = || {
 		ResourceError::refused(format!(
-			"{} is larger than the message size limit ({limit} bytes)",
-			file.display()
+			"{named} is larger than the message size limit ({limit} bytes)"
 		))
 	};
 	let metadata = std::fs::metadata(file).map_err(cannot)?;
 	if !metadata.is_file() {
 		return Err(ResourceError::refused(format!(
-			"{} is not a regular file",
-			file.display()
+			"{named} is not a regular file"
 		)));
 	}
 	if metadata.len() > limit as u64 {

@@ -346,3 +346,6 @@ fn stage_dir(
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "mod_tests_message.rs"]
+mod tests_message;
