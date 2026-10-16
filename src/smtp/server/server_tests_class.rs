@@ -16,7 +16,11 @@ use crate::smtp::sink::{SinkError, Submission};
 
 /// Keeps what was submitted and with which class.
 #[derive(Default)]
-struct ClassSink(Mutex<Vec<(AcceptedMessage, MailClass)>>);
+struct ClassSink(
+	Mutex<Vec<(AcceptedMessage, MailClass)>>,
+	/// Answer every submission as a sink that cannot record its evidence.
+	bool,
+);
 
 impl MessageSink for ClassSink {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
@@ -34,6 +38,9 @@ impl MessageSink for ClassSink {
 		_: &str,
 		submission: &Submission,
 	) -> Result<(), SinkError> {
+		if self.1 {
+			return Err(SinkError::EvidenceUnavailable("test".into()));
+		}
 		self.0
 			.lock()
 			.expect("lock")
@@ -130,13 +137,21 @@ async fn submit(
 	class: MailClass,
 	data: &[u8],
 ) -> (String, Vec<(AcceptedMessage, MailClass)>, usize) {
+	submit_with(class, data, false).await
+}
+
+async fn submit_with(
+	class: MailClass,
+	data: &[u8],
+	refuse: bool,
+) -> (String, Vec<(AcceptedMessage, MailClass)>, usize) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	update(dir.path(), |bindings| {
 		bindings.accounts.insert("alice".into(), class);
 	})
 	.expect("bind");
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
-	let sink = Arc::new(ClassSink::default());
+	let sink = Arc::new(ClassSink(Mutex::default(), refuse));
 	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
 		.with_directory(directory_with_password())
 		.with_data_dir(dir.path().to_path_buf())
@@ -234,4 +249,17 @@ async fn marketing_smtp_mail_without_one_click_is_refused() {
 		"{after}"
 	);
 	assert!(submitted.is_empty(), "the refused message reached the sink");
+}
+
+#[tokio::test]
+async fn transactional_smtp_mail_that_cannot_be_recorded_gets_a_temporary_failure() {
+	let (after, submitted, sent) = submit_with(
+		MailClass::Transactional,
+		b"From: alice@example.org\r\nSubject: Aviso\r\n\r\nbody\r\n",
+		true,
+	)
+	.await;
+	assert!(after.starts_with("451 4.3.0"), "{after}");
+	assert!(submitted.is_empty());
+	assert_eq!(sent, 0, "a refused message was copied to Sent");
 }
