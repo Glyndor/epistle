@@ -230,3 +230,19 @@ fn a_dry_run_prints_the_diff_inside_the_object() {
 		before
 	);
 }
+
+#[test]
+fn setting_an_antispam_key_to_its_value_again_reports_unchanged() {
+	let env = env("");
+	let set = ["set", "greylist-delay", "5m"];
+	assert_eq!(run(&env.config, "antispam", &set, b"").1["result"], "saved");
+	assert_eq!(
+		run(&env.config, "antispam", &set, b""),
+		(
+			0,
+			json!({
+				"result": "unchanged", "action": "set", "key": "greylist-delay", "reload": "none",
+			})
+		)
+	);
+}

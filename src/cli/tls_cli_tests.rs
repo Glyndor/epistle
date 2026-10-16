@@ -179,3 +179,54 @@ fn renew_inside_the_window_queues_without_force() {
 	let request = pending_request(dir.path()).expect("request");
 	assert!(!request.force, "a due certificate does not need force");
 }
+
+fn acme_dir_with_cert(expiry_day: u8) -> (tempfile::TempDir, Config) {
+	let dir = tempfile::tempdir().expect("dir");
+	let config = config_in(dir.path(), true);
+	std::fs::create_dir(dir.path().join("acme")).expect("acme dir");
+	write_cert(
+		&dir.path().join("acme/cert.pem"),
+		&dir.path().join("acme/key.pem"),
+		"mail.example.org",
+		expiry_day,
+	);
+	(dir, config)
+}
+
+fn renew_json(config: &Config, force: bool, now: u64) -> (ExitCode, serde_json::Value) {
+	let mut out = Vec::new();
+	let code = renew(config, force, now, true, &mut out);
+	let text = String::from_utf8(out).expect("utf8");
+	assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
+	(code, serde_json::from_str(&text).expect("json"))
+}
+
+#[test]
+fn renew_json_says_unchanged_while_the_certificate_is_not_due() {
+	let (dir, config) = acme_dir_with_cert(31);
+	assert_eq!(
+		renew_json(&config, false, NOW - 100 * 86_400),
+		(
+			ExitCode::SUCCESS,
+			serde_json::json!({
+				"result": "unchanged", "action": "renew", "force": false, "renew_before_days": 30,
+			})
+		)
+	);
+	assert!(pending_request(dir.path()).is_none());
+}
+
+#[test]
+fn renew_json_says_queued_when_it_wrote_the_request() {
+	let (dir, config) = acme_dir_with_cert(31);
+	assert_eq!(
+		renew_json(&config, true, NOW),
+		(
+			ExitCode::SUCCESS,
+			serde_json::json!({
+				"result": "queued", "action": "renew", "force": true, "renew_before_days": 30,
+			})
+		)
+	);
+	assert!(pending_request(dir.path()).is_some_and(|request| request.force));
+}

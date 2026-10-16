@@ -144,3 +144,57 @@ fn an_unreadable_state_refuses_to_guess() {
 	assert_eq!(code, ExitCode::FAILURE);
 	assert!(text.is_empty(), "{text}");
 }
+
+/// `run` with `--json`: the exit code and the one object printed.
+fn run_json(
+	config: &Config,
+	provider: Option<&dyn DnsProvider>,
+	dry_run: bool,
+) -> (ExitCode, serde_json::Value) {
+	let mut out = Vec::new();
+	let code = cleanup_with(config, provider, dry_run, true, true, &mut out);
+	let text = String::from_utf8(out).expect("utf-8");
+	assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
+	(code, serde_json::from_str(&text).expect("json"))
+}
+
+#[test]
+fn json_names_the_unused_files_and_records_and_the_request() {
+	let dir = tempfile::tempdir().expect("dir");
+	let config = config(dir.path(), true);
+	let orphan = dir.path().join("dkim-ed5.key").display().to_string();
+	let expected = |result: &str| {
+		serde_json::json!({
+			"result": result, "action": "cleanup", "key_files": [orphan],
+			"records": ["ed5._domainkey.example.org"], "records_unchecked": null,
+		})
+	};
+	assert_eq!(
+		run_json(&config, Some(&Listed(ZONE.to_vec())), true),
+		(ExitCode::SUCCESS, expected("dry-run"))
+	);
+	assert!(!dir.path().join(CLEANUP_FILE).exists());
+	assert_eq!(
+		run_json(&config, Some(&Listed(ZONE.to_vec())), false),
+		(ExitCode::SUCCESS, expected("queued"))
+	);
+	assert!(dir.path().join(CLEANUP_FILE).exists());
+}
+
+#[test]
+fn json_with_nothing_unused_is_unchanged_and_queues_nothing() {
+	let dir = tempfile::tempdir().expect("dir");
+	let config = config(dir.path(), true);
+	std::fs::remove_file(dir.path().join("dkim-ed5.key")).expect("remove");
+	assert_eq!(
+		run_json(&config, Some(&Listed(vec![ZONE[0]])), false),
+		(
+			ExitCode::SUCCESS,
+			serde_json::json!({
+				"result": "unchanged", "action": "cleanup", "key_files": [],
+				"records": [], "records_unchecked": null,
+			})
+		)
+	);
+	assert!(!dir.path().join(CLEANUP_FILE).exists());
+}
