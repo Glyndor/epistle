@@ -181,3 +181,105 @@ fn a_new_key_cannot_seal_a_day_before_the_day_it_took_over() {
 		failures(&report)
 	);
 }
+
+/// A bundle of a day nobody sealed, made by whoever holds the leaked K1: its
+/// own hand-over from K1 to a key of its own, dated `taken`, and a day
+/// sealed by that key.
+fn forged_by_a_successor_of_the_leaked_key(leaked: &[u8], taken: &str) -> (Fixture, Selector) {
+	use crate::evidence::rotation::{ROTATIONS_DIR, Rotation, path};
+	let evil = tempfile::tempdir().expect("evil");
+	std::fs::write(evil.path().join("key.pk8"), leaked).expect("plant");
+	let k1 = EvidenceKey::load_or_create(evil.path()).expect("k1 again");
+	let k3 = EvidenceKey::stage_next(evil.path()).expect("k3");
+	crate::evidence::chain::create_private_dir(&evil.path().join(ROTATIONS_DIR)).expect("dir");
+	std::fs::write(
+		path(evil.path(), &k3.id()),
+		serde_json::to_vec(&Rotation::signed(&k1, &k3.id(), taken)).expect("json"),
+	)
+	.expect("statement");
+	EvidenceKey::promote_next(evil.path(), &k3.id()).expect("promote");
+	Chain::open(evil.path())
+		.expect("chain")
+		.append_at(at(DAY + 4, 1), accepted(99))
+		.expect("forged acceptance");
+	let mut fixture = Fixture {
+		dir: evil,
+		key: k3,
+		tsa: FakeTsa::new(at(DAY + 5, 1)),
+	};
+	let Fixture { dir, tsa, key } = &mut fixture;
+	stamp(dir.path(), tsa, key, at(DAY + 5, 0));
+	(fixture, selector(99))
+}
+
+#[test]
+fn an_anchor_with_a_period_cannot_hand_over_to_a_key_the_reader_did_not_anchor() {
+	let (_server, k1, k2, leaked) = rotated();
+	// Dated after the period, on it, and before it: none validates a key the
+	// reader never named.
+	for taken in ["2026-10-18", R, "2026-10-15"] {
+		let (evil, wanted) = forged_by_a_successor_of_the_leaked_key(&leaked, taken);
+		let (_out, bundle) = exported(&evil, &wanted);
+		let report = check(
+			&bundle,
+			&[evil.tsa.anchor],
+			&[format!("{k1}@{R}"), k2.clone()],
+		)
+		.expect("check");
+		assert!(!report.passed(), "{taken}: the forged hand-over validated");
+		assert!(
+			failures(&report)
+				.iter()
+				.any(|f| f.contains("did not anchor")
+					|| f.contains("names another day than the period")),
+			"{taken}: {:?}",
+			failures(&report)
+		);
+	}
+}
+
+#[test]
+fn a_hand_over_dated_other_than_the_period_given_is_refused_even_to_an_anchored_key() {
+	let (server, k1, k2, _) = rotated();
+	let (_out, bundle) = exported(&server, &selector(7));
+	// The reader says K1 ended a day later than the statement says.
+	let report = check(
+		&bundle,
+		&[server.tsa.anchor],
+		&[format!("{k1}@2026-10-18"), k2],
+	)
+	.expect("check");
+	assert!(
+		failures(&report)
+			.iter()
+			.any(|f| f.contains("names another day than the period")),
+		"{:?}",
+		failures(&report)
+	);
+}
+
+#[test]
+fn a_day_sealed_by_an_intermediate_key_after_its_period_fails() {
+	let (mut server, k1, k2, _) = rotated();
+	// K2 leaks, then hands over to K3 on the next day.
+	let leaked_k2 = std::fs::read(server.root().join("key.pk8")).expect("k2");
+	let k3 = rotate(server.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	let current = EvidenceKey::load_or_create(server.root()).expect("k3");
+	let Fixture { dir, tsa, .. } = &mut server;
+	stamp(dir.path(), tsa, &current, at(DAY + 5, 0));
+	let (evil, wanted) = forged(&leaked_k2);
+	let (_out, bundle) = exported(&evil, &wanted);
+	let report = check(
+		&bundle,
+		&[evil.tsa.anchor],
+		&[format!("{k1}@{R}"), format!("{k2}@2026-10-18"), k3],
+	)
+	.expect("check");
+	assert!(
+		failures(&report).iter().any(|f| f.contains(&format!(
+			"signed by key {k2} on 2026-10-18, but it was in force only until 2026-10-18"
+		))),
+		"{:?}",
+		failures(&report)
+	);
+}

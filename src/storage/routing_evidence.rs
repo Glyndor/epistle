@@ -171,3 +171,6 @@ fn abandon(service: &EvidenceService, id: uuid::Uuid, why: &SinkError) {
 #[cfg(test)]
 #[path = "routing_evidence_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "routing_evidence_tests_signed.rs"]
+mod tests_signed;

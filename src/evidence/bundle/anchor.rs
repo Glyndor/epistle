@@ -152,6 +152,24 @@ pub(super) fn vouch(
 				rotation.day
 			));
 		}
+		// An older key the reader gave a period can hand over only on the day
+		// the period ended, and only to a key the reader anchored too.
+		if let Some(older) = anchors.get(&rotation.old)
+			&& let Some(until) = older.until
+		{
+			if rotation.day != until.name() {
+				return Err(format!(
+					"the hand-over from {} names another day than the period given ({until})",
+					rotation.old
+				));
+			}
+			if anchors.get(&current).is_none() {
+				return Err(format!(
+					"key {} took over from {}, which has a period, but you did not anchor it",
+					current, rotation.old
+				));
+			}
+		}
 		files.push(format!("{ROTATIONS_DIR}/{current}.json"));
 		files.push(format!("keys/{}.pem", rotation.old));
 		current = rotation.old.clone();
