@@ -208,7 +208,8 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 
 /// The 64 bytes of a hex Ed25519 signature.
 fn decode_signature(hex: &str) -> Option<Vec<u8>> {
-	if hex.len() != 128 {
+	// 128 ASCII bytes: split in the middle of a character would panic.
+	if hex.len() != 128 || !hex.is_ascii() {
 		return None;
 	}
 	let (left, right) = hex.split_at(64);

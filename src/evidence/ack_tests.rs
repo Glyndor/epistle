@@ -330,3 +330,26 @@ fn a_break_found_only_after_the_whole_walk_can_be_acknowledged() {
 	assert_eq!(report.first_break, None);
 	assert_eq!(report.acknowledged, vec![found]);
 }
+
+#[test]
+fn a_signature_with_a_multibyte_character_is_not_a_signature_and_does_not_panic() {
+	let fixture = Fixture::new();
+	let first = break_on_first_day(&fixture);
+	// 128 bytes, with a two-byte character across the middle.
+	let signature = format!("{}\u{e9}{}", "a".repeat(63), "a".repeat(63));
+	assert_eq!(signature.len(), 128);
+	let record = Acknowledged {
+		break_day: first.day.name(),
+		break_line: first.line,
+		break_id: crate::evidence::ack::id(&first),
+		reason: "r".into(),
+		operator: "o".into(),
+		key: fixture.key.id(),
+		signature,
+	};
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 13), Entry::Acknowledged(record))
+		.expect("append");
+	assert!(!is_acknowledged(fixture.root(), &first));
+}
