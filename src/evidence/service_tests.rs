@@ -313,6 +313,8 @@ fn room_reserved_for_a_record_that_was_not_written_is_given_back() {
 	let service = limited(dir.path(), 2, 100);
 	let recipients = vec!["a@example.net".to_string()];
 	let today = super::super::day::Day::of_epoch(service.time().read().time);
+	// The quota reads the log on first use: let it, before the log is blocked.
+	assert_eq!(service.quota_warning(), None);
 	let blocked = dir
 		.path()
 		.join("evidence/chain")

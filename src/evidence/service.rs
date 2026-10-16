@@ -116,7 +116,7 @@ impl EvidenceService {
 		let root = root_of(data_dir);
 		let chain = Chain::open(&root)?;
 		let policy = super::policy::load(&root)?;
-		let root_for_quota = root.clone();
+		let quota = super::quota::Quota::start(&root, super::quota::Limits::default());
 		Ok(EvidenceService {
 			root,
 			chain,
@@ -128,14 +128,14 @@ impl EvidenceService {
 				open_until: std::time::Instant::now(),
 			}),
 			crypto,
-			quota: super::quota::Quota::open(&root_for_quota, super::quota::Limits::default()),
+			quota,
 		})
 	}
 
 	/// The same service with other daily limits, for tests.
 	#[cfg(test)]
 	pub(crate) fn with_limits(mut self, limits: super::quota::Limits) -> Self {
-		self.quota = super::quota::Quota::open(&self.root, limits);
+		self.quota = super::quota::Quota::start(&self.root, limits);
 		self
 	}
 
@@ -260,7 +260,7 @@ impl EvidenceService {
 		let reservation = self.quota.reserve(
 			submitted.account,
 			submitted.spool_id,
-			(1 + submitted.recipients.len() as u64, kept_bytes),
+			(submitted.recipients.len() as u64, kept_bytes),
 			self.today(),
 		)?;
 		let kept = match retention.mode {
@@ -332,17 +332,13 @@ impl EvidenceService {
 
 	/// Give back what an acceptance reserved when nothing was written.
 	fn release(&self, reservation: super::quota::Reservation) {
-		if let Err(error) = self.quota.release(reservation) {
-			tracing::warn!(%error, "the evidence quota could not take back a reservation");
-		}
+		self.quota.release(reservation);
 	}
 
 	/// Count a record that is a fact (an outcome, an abandonment): never
-	/// refused, so a failure to count it is only said.
+	/// refused.
 	fn count_fact(&self, account: Option<&str>, spool_id: Uuid) {
-		if let Err(error) = self.quota.fact(account, spool_id, self.today()) {
-			tracing::warn!(%error, "the evidence quota could not count a record");
-		}
+		self.quota.fact(account, spool_id, self.today());
 	}
 
 	/// Record one recipient outcome.

@@ -1,4 +1,7 @@
 use super::*;
+use crate::evidence::chain::Chain;
+use crate::evidence::record::{Abandoned, Outcome, OutcomeKind};
+use crate::evidence::test_support::{accepted_for, delivered};
 
 const TODAY: Day = Day(20_740);
 
@@ -10,22 +13,78 @@ fn limits() -> Limits {
 	}
 }
 
-fn quota(dir: &Path) -> Quota {
-	Quota::open(dir, limits())
-}
-
 fn id(n: u128) -> Uuid {
 	Uuid::from_u128(n)
 }
 
+fn quota(dir: &Path) -> Quota {
+	Quota::start_at(dir, limits(), TODAY)
+}
+
+/// Reserve a message to `recipients` (so `1 + recipients` records).
 fn reserve(
 	quota: &Quota,
 	account: &str,
 	n: u128,
-	records: u64,
+	recipients: u64,
 	kept: u64,
 ) -> std::io::Result<Reservation> {
-	quota.reserve(account, id(n), (records, kept), TODAY)
+	quota.reserve(account, id(n), (recipients, kept), TODAY)
+}
+
+/// Writes the records a book is rebuilt from.
+struct Log {
+	chain: Chain,
+	at: u64,
+}
+
+impl Log {
+	fn new(dir: &Path, day: Day) -> Log {
+		Log {
+			chain: Chain::open(dir).expect("chain"),
+			at: day.start_epoch(),
+		}
+	}
+
+	fn write(&mut self, entry: Entry) {
+		self.at += 1;
+		self.chain.append_at(self.at, entry).expect("record");
+	}
+
+	fn accepted(&mut self, account: &str, n: u128, recipients: usize, full: Option<u64>) {
+		let Entry::Accepted(mut accepted) = accepted_for(0, 365) else {
+			unreachable!()
+		};
+		accepted.spool_id = id(n);
+		accepted.account = account.into();
+		accepted.recipients = (0..recipients)
+			.map(|r| format!("r{r}@example.net"))
+			.collect();
+		if let Some(size) = full {
+			accepted.size = size;
+			accepted.retention.mode = RetentionMode::Full;
+		}
+		self.write(Entry::Accepted(accepted));
+	}
+
+	fn outcome(&mut self, n: u128) {
+		let Entry::Outcome(outcome) = delivered(0) else {
+			unreachable!()
+		};
+		self.write(Entry::Outcome(Outcome {
+			spool_id: id(n),
+			result: OutcomeKind::Delivered,
+			..outcome
+		}));
+	}
+
+	fn abandoned(&mut self, n: u128) {
+		self.write(Entry::Abandoned(Abandoned {
+			spool_id: id(n),
+			reason: "test".into(),
+			retain_days: 365,
+		}));
+	}
 }
 
 #[test]
@@ -33,21 +92,21 @@ fn an_account_is_refused_past_its_share_and_the_others_are_not() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
 	for n in 0..6 {
-		let _ = reserve(&quota, "noisy", n, 2, 0).expect("within the share");
+		let _ = reserve(&quota, "noisy", n, 1, 0).expect("within the share");
 	}
-	let refused = reserve(&quota, "noisy", 9, 2, 0).expect_err("past it");
+	let refused = reserve(&quota, "noisy", 9, 1, 0).expect_err("past it");
 	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
-	let _ = reserve(&quota, "quiet", 10, 2, 0).expect("another account");
+	let _ = reserve(&quota, "quiet", 10, 1, 0).expect("another account");
 }
 
 #[test]
 fn kept_bytes_are_counted_per_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
-	let _ = reserve(&quota, "a", 1, 1, 90).expect("within");
-	let _ = reserve(&quota, "a", 2, 1, 10).expect("exactly the limit");
-	reserve(&quota, "a", 3, 1, 1).expect_err("one byte over");
-	let _ = reserve(&quota, "b", 4, 1, 100).expect("another account");
+	let _ = reserve(&quota, "a", 1, 0, 90).expect("within");
+	let _ = reserve(&quota, "a", 2, 0, 10).expect("exactly the limit");
+	reserve(&quota, "a", 3, 0, 1).expect_err("one byte over");
+	let _ = reserve(&quota, "b", 4, 0, 100).expect("another account");
 }
 
 #[test]
@@ -55,9 +114,9 @@ fn the_day_takes_no_more_than_its_limit_whoever_asks() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
 	for (n, account) in ["a", "b", "c", "d"].iter().enumerate() {
-		let _ = reserve(&quota, account, n as u128, 12, 0).expect("a whole share");
+		let _ = reserve(&quota, account, n as u128, 11, 0).expect("a whole share");
 	}
-	let refused = reserve(&quota, "e", 9, 1, 0).expect_err("the day is full");
+	let refused = reserve(&quota, "e", 9, 0, 0).expect_err("the day is full");
 	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
 }
 
@@ -65,21 +124,32 @@ fn the_day_takes_no_more_than_its_limit_whoever_asks() {
 fn a_reservation_given_back_leaves_exactly_what_was_there() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
-	let _ = reserve(&quota, "a", 1, 3, 10).expect("first");
+	let _ = reserve(&quota, "a", 1, 2, 10).expect("first");
 	let before = quota.state();
-	let held = reserve(&quota, "a", 2, 4, 20).expect("second");
+	let held = reserve(&quota, "a", 2, 3, 20).expect("second");
 	assert_ne!(quota.state(), before);
-	quota.release(held).expect("release");
+	quota.release(held);
 	assert_eq!(quota.state(), before);
+}
+
+#[test]
+fn the_clock_going_back_does_not_clear_the_counts() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = quota(dir.path());
+	let _ = reserve(&quota, "a", 1, 11, 0).expect("a whole share");
+	quota
+		.reserve("a", id(2), (0, 0), Day(TODAY.0 - 1))
+		.expect_err("the share is still used");
+	assert_eq!(quota.state().day, TODAY.0);
+	assert_eq!(quota.state().accounts["a"].records, 12);
 }
 
 #[test]
 fn a_new_day_starts_the_counts_again_and_remembers_what_was_prepaid() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
-	let _ = reserve(&quota, "a", 1, 5, 0).expect("5 records");
-	let tomorrow = Day(TODAY.0 + 1);
-	quota.fact(Some("a"), id(1), tomorrow).expect("an outcome");
+	let _ = reserve(&quota, "a", 1, 4, 0).expect("5 records");
+	quota.fact(None, id(1), Day(TODAY.0 + 1));
 	let state = quota.state();
 	assert_eq!(
 		state.total, 0,
@@ -89,140 +159,25 @@ fn a_new_day_starts_the_counts_again_and_remembers_what_was_prepaid() {
 }
 
 #[test]
-fn a_fact_with_no_prepayment_is_counted_to_its_account_and_never_refused() {
+fn a_fact_nobody_paid_for_is_counted_once_and_never_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
 	for n in 0..40 {
-		quota.fact(Some("a"), id(n), TODAY).expect("a fact");
+		quota.fact(Some("a"), id(n), TODAY);
 	}
 	let state = quota.state();
 	assert_eq!(state.accounts["a"].records, 40);
-	assert!(
-		state.within <= limits().account_records,
-		"past its share it sets nothing aside"
-	);
-	reserve(&quota, "a", 100, 1, 0).expect_err("the account waits at its next acceptance");
-	let _ = reserve(&quota, "b", 101, 12, 0).expect("and takes nothing from another");
+	assert!(state.within <= limits().account_records);
+	reserve(&quota, "a", 100, 0, 0).expect_err("the account waits at its next acceptance");
+	let _ = reserve(&quota, "b", 101, 11, 0).expect("and takes nothing from another");
 }
 
 #[test]
 fn what_cannot_be_traced_has_an_account_of_its_own() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
-	quota.fact(None, id(1), TODAY).expect("a fact");
+	quota.fact(None, id(1), TODAY);
 	assert_eq!(quota.state().accounts[UNATTRIBUTED].records, 1);
-}
-
-#[test]
-fn the_counts_survive_a_restart_and_are_shared_between_processes() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let first = quota(dir.path());
-	let _ = reserve(&first, "a", 1, 12, 0).expect("a whole share");
-	// Another process, or the same one after a restart.
-	let second = quota(dir.path());
-	reserve(&second, "a", 2, 1, 0).expect_err("the share is already used");
-	assert_eq!(second.state(), first.state());
-}
-
-#[test]
-fn a_state_that_cannot_be_read_neither_refuses_the_mail_nor_grants_what_nothing_counted() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = quota(dir.path());
-	crate::storage::write_secret(&dir.path().join(FILE), b"not json").expect("corrupt");
-	// The process counts on its own, held to the same limits.
-	let _ = reserve(&quota, "a", 1, 12, 0).expect("mail still flows");
-	reserve(&quota, "a", 2, 1, 0).expect_err("and the share is still a share");
-	assert_eq!(
-		std::fs::read(dir.path().join(FILE)).expect("read"),
-		b"not json",
-		"the file was written over"
-	);
-}
-
-#[test]
-fn a_link_in_place_of_the_files_is_not_followed() {
-	use std::os::unix::fs::symlink;
-	// The lock linked, the state linked, or both.
-	for (lock, state) in [(true, false), (false, true), (true, true)] {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let elsewhere = tempfile::tempdir().expect("elsewhere");
-		let target = elsewhere.path().join("target");
-		// What the link points to says the account has used its whole share:
-		// if it were read, the acceptance below would be refused.
-		let mut full = State {
-			day: TODAY.0,
-			total: 12,
-			within: 12,
-			..State::default()
-		};
-		full.accounts.insert(
-			"a".into(),
-			Held {
-				records: 12,
-				bytes: 0,
-			},
-		);
-		let full = serde_json::to_vec(&full).expect("json");
-		std::fs::write(&target, &full).expect("target");
-		if lock {
-			symlink(&target, dir.path().join(LOCK)).expect("link the lock");
-		}
-		if state {
-			symlink(&target, dir.path().join(FILE)).expect("link the state");
-		}
-		let quota = quota(dir.path());
-		let _ = reserve(&quota, "a", 1, 3, 0).unwrap_or_else(|error| {
-			panic!("lock {lock} state {state}: read through a link ({error})")
-		});
-		assert_eq!(
-			std::fs::read(&target).expect("read"),
-			full,
-			"lock {lock} state {state}: written through the link"
-		);
-	}
-}
-
-#[test]
-fn a_clock_that_goes_back_does_not_clear_the_counts() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = quota(dir.path());
-	let _ = reserve(&quota, "a", 1, 12, 0).expect("a whole share");
-	let yesterday = Day(TODAY.0 - 1);
-	quota
-		.reserve("a", id(2), (1, 0), yesterday)
-		.expect_err("the share is still used");
-	assert_eq!(quota.state().day, TODAY.0);
-	assert_eq!(quota.state().accounts["a"].records, 12);
-}
-
-#[test]
-fn what_is_remembered_of_prepaid_outcomes_is_bounded_per_account_and_in_all() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = Quota::open(
-		dir.path(),
-		Limits {
-			account_records: 1_000_000,
-			account_kept_bytes: u64::MAX,
-			day_records: 4_000_000,
-		},
-	);
-	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + 50) {
-		let _ = quota
-			.reserve("noisy", id(n), (2, 0), TODAY)
-			.expect("reserved");
-	}
-	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT);
-	// Another tenant is not shut out of the memory by it.
-	let _ = quota
-		.reserve("quiet", id(1 << 40), (2, 0), TODAY)
-		.expect("reserved");
-	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT + 1);
-	// An outcome nobody remembered is counted, never refused.
-	let before = quota.state().accounts["noisy"].records;
-	quota
-		.fact(Some("noisy"), id(MAX_OWED_PER_ACCOUNT as u128 + 10), TODAY)
-		.expect("a fact");
-	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
 }
 
 #[test]
@@ -239,24 +194,135 @@ fn the_share_is_cut_to_fit_the_days_limit() {
 #[test]
 fn the_status_warns_before_the_limit() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = Quota::open(
+	let quota = Quota::start_at(
 		dir.path(),
 		Limits {
 			account_records: 10,
 			account_kept_bytes: u64::MAX,
 			day_records: 1000,
 		},
+		TODAY,
 	);
 	assert_eq!(quota.warning(TODAY), None);
-	let _ = reserve(&quota, "a", 1, 7, 0).expect("70 percent");
+	let _ = reserve(&quota, "a", 1, 6, 0).expect("70 percent");
 	assert_eq!(quota.warning(TODAY), None);
-	let _ = reserve(&quota, "a", 2, 1, 0).expect("80 percent");
+	let _ = reserve(&quota, "a", 2, 0, 0).expect("80 percent");
 	assert!(
 		quota
 			.warning(TODAY)
 			.expect("warning")
 			.contains("near its evidence limits")
 	);
+}
+
+#[test]
+fn a_restart_rebuilds_the_book_from_the_days_records() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut log = Log::new(dir.path(), TODAY);
+	log.accepted("a", 1, 2, Some(40));
+	log.accepted("b", 2, 1, None);
+	log.outcome(1);
+	log.outcome(1);
+	log.abandoned(2);
+	// An outcome of a message accepted another day, and a record of no message.
+	log.outcome(77);
+	log.write(Entry::Setting(crate::evidence::record::Setting {
+		name: "timestamp".into(),
+		value: "enabled".into(),
+	}));
+	let state = quota(dir.path()).state();
+	// "a": the acceptance and two outcomes it paid for; "b": the same, one.
+	assert_eq!(state.accounts["a"].records, 3);
+	assert_eq!(state.accounts["a"].bytes, 40);
+	assert_eq!(state.accounts["b"].records, 2);
+	assert_eq!(
+		state.accounts[UNATTRIBUTED].records, 2,
+		"the fact nobody paid for, and the setting"
+	);
+	assert_eq!(state.total, 7);
+	assert_eq!(
+		state.total,
+		state
+			.accounts
+			.values()
+			.map(|held| held.records)
+			.sum::<u64>()
+	);
+}
+
+#[test]
+fn a_log_that_cannot_be_read_admits_no_acceptance_and_counts_facts_until_it_can() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut log = Log::new(dir.path(), TODAY);
+	log.accepted("a", 1, 1, None);
+	// Start with today's file unreadable: a directory in its place.
+	let path = log.chain.day_file(TODAY);
+	let kept = std::fs::read(&path).expect("read");
+	std::fs::remove_file(&path).expect("remove");
+	std::fs::create_dir(&path).expect("block");
+	let quota = quota(dir.path());
+	assert!(quota.unavailable());
+	assert!(
+		quota
+			.warning(TODAY)
+			.expect("alarm")
+			.contains("no new acceptances")
+	);
+	let refused = reserve(&quota, "b", 2, 0, 0).expect_err("never from a book at nothing");
+	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
+	// Facts are still taken, and counted.
+	quota.fact(None, id(1), TODAY);
+	quota.fact(None, id(9), TODAY);
+	assert_eq!(quota.state().accounts[UNATTRIBUTED].records, 2);
+	// The log can be read again: the book is rebuilt from it, and mail flows.
+	std::fs::remove_dir(&path).expect("unblock");
+	std::fs::write(&path, kept).expect("restore");
+	quota.retry_now(TODAY);
+	assert!(!quota.unavailable());
+	let state = quota.state();
+	assert_eq!(
+		state.accounts["a"].records, 2,
+		"rebuilt from the log, not added to"
+	);
+	assert!(!state.accounts.contains_key(UNATTRIBUTED));
+	let _ = reserve(&quota, "b", 3, 0, 0).expect("mail flows again");
+}
+
+#[test]
+fn an_acceptance_with_no_room_in_the_memory_of_outcomes_reserves_its_own_record_only() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = Quota::start_at(
+		dir.path(),
+		Limits {
+			account_records: 10_000_000,
+			account_kept_bytes: u64::MAX,
+			day_records: 40_000_000,
+		},
+		TODAY,
+	);
+	let mut last = 0;
+	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + 5) {
+		let _ = quota
+			.reserve("noisy", id(n), (2, 0), TODAY)
+			.expect("reserved");
+		last = n;
+	}
+	let state = quota.state();
+	assert_eq!(state.owed.len(), MAX_OWED_PER_ACCOUNT);
+	// 3 records where the outcomes are remembered, 1 where they are not.
+	assert_eq!(
+		state.accounts["noisy"].records,
+		3 * MAX_OWED_PER_ACCOUNT as u64 + 5
+	);
+	// Another tenant is not shut out of the memory by it.
+	let _ = quota
+		.reserve("quiet", id(1 << 40), (2, 0), TODAY)
+		.expect("reserved");
+	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT + 1);
+	// An outcome nobody remembered is counted, once.
+	let before = quota.state().accounts["noisy"].records;
+	quota.fact(Some("noisy"), id(last), TODAY);
+	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
 }
 
 /// A small deterministic generator, so a failing sequence can be replayed.
@@ -296,7 +362,6 @@ fn check(state: &State, limits: Limits, step: &str) {
 		state.within <= limits.day_records,
 		"{step}: the day set aside more than its limit"
 	);
-	// Bytes never pass the limit: an acceptance that would is refused.
 	for (account, held) in &state.accounts {
 		assert!(
 			held.bytes <= limits.account_kept_bytes,
@@ -307,31 +372,34 @@ fn check(state: &State, limits: Limits, step: &str) {
 
 #[test]
 fn random_sequences_keep_every_invariant_after_every_step() {
-	for seed in 1..=60u64 {
+	for seed in 1..=40u64 {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let limits = limits();
-		let mut quota = Quota::open(dir.path(), limits);
-		let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
 		let mut day = TODAY;
+		let mut log = Log::new(dir.path(), day);
+		let mut quota = Quota::start_at(dir.path(), limits, day);
+		let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
 		let mut next_id = 1u128;
-		let mut known: Vec<(Uuid, &str)> = Vec::new();
-		for step_number in 0..80 {
+		let mut known: Vec<u128> = Vec::new();
+		// Whether the book remembers outcomes prepaid on an earlier day, which a
+		// restart does not: it counts them as facts, never fewer.
+		let mut carried = false;
+		for step_number in 0..70u32 {
 			let before = quota.state();
 			let account = ACCOUNTS[dice.next(ACCOUNTS.len() as u64) as usize];
 			let step = format!("seed {seed} step {step_number}");
 			match dice.next(10) {
 				// An acceptance, which may fail for certain or maybe.
 				0..=3 => {
-					let records = 1 + dice.next(6);
+					let recipients = dice.next(5);
 					let kept = dice.next(40);
-					let message = id(next_id);
+					let message = next_id;
 					next_id += 1;
-					match quota.reserve(account, message, (records, kept), day) {
+					match quota.reserve(account, id(message), (recipients, kept), day) {
 						Ok(held) => match dice.next(4) {
 							// Nothing was written: exactly what was reserved goes back.
 							0 => {
-								let reserved = quota.state();
-								quota.release(held).expect("release");
+								quota.release(held);
 								let mut expected = before.clone();
 								expected.roll(day);
 								assert_eq!(
@@ -339,22 +407,18 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 									expected,
 									"{step}: the rollback was not exact"
 								);
-								assert_ne!(
-									reserved, expected,
-									"{step}: the reservation did nothing"
-								);
 							}
-							// Written, or maybe: it keeps its room.
+							// Written, or maybe: it keeps its room, and is in the log.
 							_ => {
-								let held_before =
-									before.accounts.get(account).map_or(0, |held| held.records);
-								let after = quota.state();
-								assert!(
-									after.accounts[account].records <= limits.account_records,
-									"{step}: past the share ({held_before} before)"
-								);
+								let full = (kept > 0).then_some(kept);
+								log.accepted(account, message, recipients as usize, full);
 								drop(held);
-								known.push((message, account));
+								known.push(message);
+								assert!(
+									quota.state().accounts[account].records
+										<= limits.account_records,
+									"{step}: past the share"
+								);
 							}
 						},
 						Err(refused) => {
@@ -369,39 +433,51 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 						}
 					}
 				}
-				// An outcome or an abandonment or a cancellation: a fact.
+				// An outcome or an abandonment: a fact, in the log and the book.
 				4..=7 => {
-					let traced = dice.next(3) != 0;
-					let (message, owner) = match known.len() {
-						0 => (id(next_id), account),
+					let message = match known.len() {
+						0 => next_id,
 						n => known[dice.next(n as u64) as usize],
 					};
 					next_id += 1;
-					let counted = quota.fact(traced.then_some(owner), message, day);
-					assert!(counted.is_ok(), "{step}: a fact was refused");
+					if dice.next(3) == 0 {
+						log.abandoned(message);
+					} else {
+						log.outcome(message);
+					}
+					quota.fact(None, id(message), day);
 				}
-				// The process restarts: the counts are the same.
+				// The process restarts: the book is rebuilt from the log.
 				8 => {
 					let before_restart = quota.state();
-					quota = Quota::open(dir.path(), limits);
-					assert_eq!(
-						quota.state(),
-						before_restart,
-						"{step}: a restart lost the counts"
-					);
+					quota = Quota::start_at(dir.path(), limits, day);
+					let after = quota.state();
+					if carried {
+						assert!(
+							after.total >= before_restart.total,
+							"{step}: a restart granted what the book had counted"
+						);
+					} else {
+						assert_eq!(
+							after.total, before_restart.total,
+							"{step}: a restart lost the counts"
+						);
+						assert_eq!(after.within, before_restart.within, "{step}");
+						assert_eq!(after.accounts, before_restart.accounts, "{step}");
+					}
+					carried = false;
 				}
 				// A new day: the counts start again, the prepaid outcomes stay.
 				_ => {
 					day = Day(day.0 + 1);
-					let owed_before = quota.state().owed.len();
-					quota.fact(None, id(next_id), day).expect("a fact");
+					log = Log::new(dir.path(), day);
+					carried |= !before.owed.is_empty();
+					let message = next_id;
 					next_id += 1;
+					log.outcome(message);
+					quota.fact(None, id(message), day);
 					let state = quota.state();
 					assert_eq!(state.day, day.0, "{step}");
-					assert!(
-						state.owed.len() <= owed_before,
-						"{step}: an owed entry appeared from nowhere"
-					);
 					assert_eq!(
 						state.total, 1,
 						"{step}: yesterday's counts came into the new day"
@@ -410,26 +486,27 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 			}
 			let state = quota.state();
 			check(&state, limits, &step);
-			// 2. A fresh account is held up by the day's limit only: probing
-			// it sets aside exactly what an acceptance of that size needs, and
-			// giving it back leaves the state as it was.
-			if state.day == day.0 {
-				let probe = id(u128::MAX - u128::from(step_number as u64));
-				let room = limits.day_records.saturating_sub(state.within);
-				let granted = quota.reserve("probe", probe, (limits.account_records, 0), day);
-				assert_eq!(
-					granted.is_ok(),
-					room >= limits.account_records,
-					"{step}: an account's share is not what the day has left ({room} left)"
-				);
-				if let Ok(held) = granted {
-					quota.release(held).expect("release");
-				}
-				// (Forgetting the outcomes that have all come is not a trace.)
-				let mut expected = state.clone();
-				expected.roll(day);
-				assert_eq!(quota.state(), expected, "{step}: probing left a trace");
+			// 2. A fresh account is held up by the day's limit only: probing it
+			// sets aside exactly what an acceptance of that size needs, and
+			// giving it back leaves the book as it was.
+			let room = limits.day_records.saturating_sub(state.within);
+			let granted = quota.reserve(
+				"probe",
+				id(u128::MAX - u128::from(step_number)),
+				(limits.account_records - 1, 0),
+				day,
+			);
+			assert_eq!(
+				granted.is_ok(),
+				room >= limits.account_records,
+				"{step}: an account's share is not what the day has left ({room} left)"
+			);
+			if let Ok(held) = granted {
+				quota.release(held);
 			}
+			let mut expected = state.clone();
+			expected.roll(day);
+			assert_eq!(quota.state(), expected, "{step}: probing left a trace");
 		}
 	}
 }

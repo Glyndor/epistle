@@ -273,13 +273,18 @@ refuses to run at a clock more than 35 days past the newest record.
   fan-out, uses more than a tenth of what the others need. Past a limit the
   acceptance is refused with the retry-later answer, nothing is written, and
   `epistle status` warns at 80 percent. An outcome, an abandonment or a
-  cancellation is a fact and is never refused: it is counted to the account
-  that sent the message, and an account past its share waits at its next
-  acceptance. The counts are in `quota.json` in the evidence directory, shared
-  by the server and the commands, and survive restarts. If that file cannot be
-  used, each process counts in memory, held to the same limits. They keep the
-  verification, which reads every record, from outgrowing its ten minutes; they
-  are not a measurement of that time.
+  cancellation is a fact and is never refused: it is counted once, to the
+  account that sent the message, and an account past its share waits at its
+  next acceptance. The counts are kept in memory in one book, rebuilt at start
+  from the day's records in the log, so there is no file of their own to
+  corrupt or link. A log that cannot be read at start admits no new
+  acceptances, and says so in the status, until it can be; it never starts the
+  book from nothing in the middle of a day. What a command writes from another
+  process (a cancellation) is counted from the next start. An outcome that
+  comes after a restart or on another day was not paid for when the message was
+  accepted, and is counted when it comes. The counts keep the verification,
+  which reads every record, from outgrowing its ten minutes; they are not a
+  measurement of that time.
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,
