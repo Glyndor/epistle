@@ -151,3 +151,6 @@ mod tests_private;
 #[cfg(test)]
 #[path = "bundle_tests_stray.rs"]
 mod tests_stray;
+#[cfg(test)]
+#[path = "bundle_tests_window.rs"]
+mod tests_window;

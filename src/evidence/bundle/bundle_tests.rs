@@ -16,7 +16,7 @@ use crate::evidence::tsa::request::{build, random_nonce};
 use crate::storage::MessageCrypto;
 
 /// The id of the evidence key under `root`.
-fn key_of(root: &Path) -> String {
+pub(super) fn key_of(root: &Path) -> String {
 	EvidenceKey::load_or_create(root).expect("key").id()
 }
 
@@ -268,11 +268,11 @@ fn a_bundle_without_any_checkpoint_does_not_pass() {
 }
 
 /// One transactional message kept in full, sealed and stamped.
-struct Kept {
-	dir: tempfile::TempDir,
-	tsa: FakeTsa,
-	id: Uuid,
-	crypto: MessageCrypto,
+pub(super) struct Kept {
+	pub(super) dir: tempfile::TempDir,
+	pub(super) tsa: FakeTsa,
+	pub(super) id: Uuid,
+	pub(super) crypto: MessageCrypto,
 }
 
 const BODY: &[u8] = b"Subject: notice\r\n\r\nYou were withdrawn from the course.\r\n";
@@ -281,7 +281,7 @@ fn kept(encrypted: bool) -> Kept {
 	kept_stamped_at(encrypted, at(DAY + 1, 1))
 }
 
-fn kept_stamped_at(encrypted: bool, gen_time: u64) -> Kept {
+pub(super) fn kept_stamped_at(encrypted: bool, gen_time: u64) -> Kept {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
 	let tsa = FakeTsa::new(gen_time);

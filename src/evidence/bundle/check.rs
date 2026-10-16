@@ -69,6 +69,10 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 		.ok_or_else(|| "missing".to_string())
 }
 
+/// How long after a day ends its token may be dated: the audit's grace for a
+/// missing token, plus a day for the seal itself.
+const STAMP_WINDOW_SECS: u64 = crate::evidence::audit::TOKEN_GRACE_SECS + 86_400;
+
 /// The most hand-overs followed from a signer to an anchored key.
 const MAX_HOPS: usize = crate::evidence::rotation::MAX_ROTATIONS;
 
@@ -404,6 +408,18 @@ fn timestamp(
 		match checked.gen_time >= Day(day.0 + 1).start_epoch() {
 			true => Ok(()),
 			false => Err("the token predates the end of the day".into()),
+		},
+	);
+	// A key holder can re-sign a day long afterwards and have it stamped
+	// then; only a token close to the day vouches for when it was sealed.
+	report.add(
+		format!("{name}: stamped within days of the day ending"),
+		match checked.gen_time <= Day(day.0 + 1).start_epoch() + STAMP_WINDOW_SECS {
+			true => Ok(()),
+			false => Err(
+				"the token was issued long after the day ended: it shows when the day was sealed, not when its mail was sent"
+					.into(),
+			),
 		},
 	);
 }
