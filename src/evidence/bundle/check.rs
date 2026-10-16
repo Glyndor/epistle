@@ -94,9 +94,22 @@ pub fn check(dir: &Path, anchors: &[[u8; 32]]) -> Result<CheckReport, BundleErro
 			false => Ok(()),
 		},
 	);
+	let mut vouched = BTreeSet::new();
 	for day in days {
-		check_day(dir, day, anchors, &mut report);
+		let before = report.findings.len();
+		let files = check_day(dir, day, anchors, &mut report);
+		// Only a day every one of whose checks passed vouches for its files.
+		if report.findings[before..]
+			.iter()
+			.all(|finding| finding.result.is_ok())
+		{
+			vouched.extend(files);
+		}
 	}
+	report.add(
+		"every file belongs to a verified day or an accepted record",
+		strays(dir, &vouched),
+	);
 	report.notes.push(REVOCATION_NOTE.into());
 	Ok(report)
 }
@@ -132,20 +145,68 @@ fn sums(dir: &Path) -> Result<(), String> {
 	Ok(())
 }
 
-fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckReport) {
+/// The bundle-relative paths a verified day accounts for.
+type Files = Vec<String>;
+
+/// The files nothing vouched for: everything below the bundle's root except
+/// its README and its checksum list, whatever the checksum list says.
+/// Links and other special files count, listed or not.
+fn strays(dir: &Path, vouched: &BTreeSet<String>) -> Result<(), String> {
+	let mut pending = vec![(dir.to_path_buf(), String::new(), 0usize)];
+	let mut seen = 0usize;
+	let mut stray = BTreeSet::new();
+	while let Some((path, prefix, depth)) = pending.pop() {
+		for entry in std::fs::read_dir(&path).map_err(|error| error.kind().to_string())? {
+			let entry = entry.map_err(|error| error.kind().to_string())?;
+			seen += 1;
+			if seen > super::MAX_FILES {
+				return Err("more files than a bundle holds".into());
+			}
+			let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+			let kind = entry
+				.file_type()
+				.map_err(|error| error.kind().to_string())?;
+			if kind.is_dir() {
+				if depth >= 2 {
+					return Err(format!("{name}: nested deeper than a bundle goes"));
+				}
+				pending.push((entry.path(), format!("{name}/"), depth + 1));
+			} else if !vouched.contains(&name)
+				&& !["README.md", super::sums::FILE].contains(&name.as_str())
+			{
+				stray.insert(name);
+			}
+		}
+	}
+	// The first in name order, so the message does not depend on the disk.
+	match stray.first() {
+		None => Ok(()),
+		Some(first) if stray.len() == 1 => Err(format!("{first}: not vouched for by any check")),
+		Some(first) => Err(format!(
+			"{first}: not vouched for by any check (and {} more)",
+			stray.len() - 1
+		)),
+	}
+}
+
+fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckReport) -> Files {
 	let name = day.name();
 	let base = dir.join("checkpoints").join(&name);
 	let json = match read(&base.with_extension("json")) {
 		Ok(json) => json,
-		Err(why) => return report.add(format!("{name}: checkpoint"), Err(why)),
+		Err(why) => {
+			report.add(format!("{name}: checkpoint"), Err(why));
+			return Files::new();
+		}
 	};
 	let checkpoint: Checkpoint = match serde_json::from_slice(&json) {
 		Ok(checkpoint) => checkpoint,
 		Err(_) => {
-			return report.add(
+			report.add(
 				format!("{name}: checkpoint"),
 				Err("not a checkpoint".into()),
 			);
+			return Files::new();
 		}
 	};
 	report.add(format!("{name}: checkpoint version and day"), {
@@ -167,10 +228,25 @@ fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckRepor
 			Err("timestamps were disabled: the day rests on the evidence key alone".into()),
 		);
 	}
+	let included = inclusion(dir, &name, &checkpoint);
+	let mut files: Files = ["json", "sig", "tsr"]
+		.iter()
+		.map(|extension| format!("checkpoints/{name}.{extension}"))
+		.collect();
+	files.extend([
+		format!("records/{name}.jsonl"),
+		format!("proofs/{name}.json"),
+		format!("tsa/{name}-chain.pem"),
+		format!("keys/{}.pem", checkpoint.key),
+	]);
+	if let Ok(messages) = &included {
+		files.extend(messages.iter().map(|id| format!("messages/{id}.eml")));
+	}
 	report.add(
 		format!("{name}: every record is included under the signed root"),
-		inclusion(dir, &name, &checkpoint),
+		included.map(|_| ()),
 	);
+	files
 }
 
 fn signature(dir: &Path, base: &Path, checkpoint: &Checkpoint, json: &[u8]) -> Result<(), String> {
@@ -236,7 +312,9 @@ fn timestamp(
 	);
 }
 
-fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<(), String> {
+/// Check every record of the day against the signed root; returns the
+/// spool ids of the acceptances whose kept message is in the bundle.
+fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<Vec<uuid::Uuid>, String> {
 	let proof: DayProof =
 		serde_json::from_slice(&read(&dir.join("proofs").join(format!("{name}.json")))?)
 			.map_err(|_| "the proof file is malformed".to_string())?;
@@ -252,6 +330,7 @@ fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<(), Stri
 	let mut lines = Lines::new(BufReader::new(file));
 	let mut entries = proof.entries.iter();
 	let mut count = 0usize;
+	let mut kept_messages = Vec::new();
 	while let Some((number, line)) = lines
 		.next_line()
 		.map_err(|error| error.kind().to_string())?
@@ -292,16 +371,19 @@ fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<(), Stri
 			let kept = dir
 				.join("messages")
 				.join(format!("{}.eml", accepted.spool_id));
-			if kept.exists() && to_hex(&sha256(&read(&kept)?)) != accepted.sha256 {
-				return Err(format!(
-					"message {}: does not match its record",
-					accepted.spool_id
-				));
+			if std::fs::symlink_metadata(&kept).is_ok() {
+				if to_hex(&sha256(&read(&kept)?)) != accepted.sha256 {
+					return Err(format!(
+						"message {}: does not match its record",
+						accepted.spool_id
+					));
+				}
+				kept_messages.push(accepted.spool_id);
 			}
 		}
 	}
 	if entries.next().is_some() {
 		return Err("a proof has no record".into());
 	}
-	Ok(())
+	Ok(kept_messages)
 }

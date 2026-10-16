@@ -113,7 +113,9 @@ without any configuration:
 epistle evidence check notice-42
 ```
 
-Each check is reported by name. Certificate revocation (CRL, OCSP) of the
+Each check is reported by name. A file that no verified day and no
+accepted record accounts for fails the check, even when `SHA256SUMS` lists
+it, so nothing can be added to a bundle without being noticed. Certificate revocation (CRL, OCSP) of the
 timestamp authority is **not** checked; certificates are judged valid at
 the stamped time.
 

@@ -15,11 +15,11 @@ use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
 use crate::storage::MessageCrypto;
 
-fn by_id(n: u32) -> Selector {
+pub(super) fn by_id(n: u32) -> Selector {
 	Selector::MessageId(format!("<{n}@example.org>"))
 }
 
-fn exported(fixture: &Fixture, selector: &Selector) -> (tempfile::TempDir, PathBuf) {
+pub(super) fn exported(fixture: &Fixture, selector: &Selector) -> (tempfile::TempDir, PathBuf) {
 	let out = tempfile::tempdir().expect("tempdir");
 	let bundle = out.path().join("bundle");
 	export(
@@ -32,7 +32,7 @@ fn exported(fixture: &Fixture, selector: &Selector) -> (tempfile::TempDir, PathB
 	(out, bundle)
 }
 
-fn failures(report: &CheckReport) -> Vec<String> {
+pub(super) fn failures(report: &CheckReport) -> Vec<String> {
 	report
 		.findings
 		.iter()
@@ -43,7 +43,7 @@ fn failures(report: &CheckReport) -> Vec<String> {
 		.collect()
 }
 
-fn resum(bundle: &Path) {
+pub(super) fn resum(bundle: &Path) {
 	std::fs::remove_file(bundle.join("SHA256SUMS")).expect("remove sums");
 	super::sums::write(bundle).expect("sums");
 }
