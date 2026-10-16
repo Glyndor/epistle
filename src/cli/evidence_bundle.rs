@@ -112,6 +112,8 @@ pub(super) fn check(
 				"expired": delivery.expired,
 				"suppressed": delivery.suppressed,
 				"abandoned": delivery.abandoned,
+				"records_left_out": delivery.records_left_out,
+				"every_record_of_the_days_is_here": delivery.records_left_out == 0,
 			})
 		});
 		let printed = super::evidence::json(
@@ -141,9 +143,16 @@ pub(super) fn check(
 	}
 	let _ = match (passed, report.delivery) {
 		(false, _) => writeln!(out, "the bundle does NOT verify"),
+		(true, Some(delivery)) if delivery.all_delivered() && delivery.records_left_out == 0 => {
+			writeln!(
+				out,
+				"the bundle verifies, and every recipient it covers was delivered"
+			)
+		}
 		(true, Some(delivery)) if delivery.all_delivered() => writeln!(
 			out,
-			"the bundle verifies, and every recipient it covers was delivered"
+			"the bundle verifies, and every recipient it covers was delivered in the records shown; \
+			 an outcome after them cannot be ruled out"
 		),
 		(true, Some(delivery)) => writeln!(
 			out,

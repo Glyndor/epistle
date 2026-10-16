@@ -201,7 +201,11 @@ the message arrived. `check` counts what became of the recipients it covers
 (delivered, bounced, expired, suppressed, or abandoned: nothing was sent), says
 so in a `delivery:` note and in the last line, and puts the counts and
 `all_delivered` in the JSON. `--require-delivered` makes the exit code 1
-unless every recipient covered was delivered.
+unless every recipient covered was delivered. A recipient with two different
+endings in the records fails the check. A bundle holds a selection of the
+log, so it cannot show that no outcome came after the ones it holds: `check`
+says how many records of the days it covers are not in the bundle, and that an
+outcome among them cannot be ruled out.
 
 ## The clock
 

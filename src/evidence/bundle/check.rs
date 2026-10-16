@@ -161,6 +161,12 @@ pub fn check_expecting(
 		report
 			.notes
 			.push(format!("delivery: {}", complete.delivery.words()));
+		report.notes.push(match complete.delivery.records_left_out {
+			0 => "the bundle holds every record of the days it covers".to_string(),
+			left => format!(
+				"the records are a selection of the log ({left} records of the days it covers are not here): an outcome after the ones shown cannot be ruled out"
+			),
+		});
 		report.delivery = Some(complete.delivery);
 	}
 	report.add(
@@ -434,6 +440,7 @@ fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<Vec<uuid
 	let mut entries = proof.entries.iter();
 	let mut count = 0usize;
 	let mut kept_messages = Vec::new();
+	let mut last_index: Option<u64> = None;
 	while let Some((number, line)) = lines
 		.next_line()
 		.map_err(|error| error.kind().to_string())?
@@ -451,6 +458,14 @@ fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<Vec<uuid
 			return Err(format!("record {number}: not of this day"));
 		}
 		let entry = entries.next().ok_or(format!("record {number}: no proof"))?;
+		// The records come in the order of the day: a bundle whose proofs
+		// run backwards, or repeat, is arranged to be read another way.
+		if last_index.is_some_and(|last| entry.index <= last) {
+			return Err(format!(
+				"record {number}: its place in the day does not come after the record before it"
+			));
+		}
+		last_index = Some(entry.index);
 		let hash = sha256(bytes);
 		let path: Vec<[u8; 32]> = entry
 			.proof

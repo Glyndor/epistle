@@ -103,6 +103,10 @@ pub struct Delivery {
 	pub suppressed: usize,
 	/// Accepted, and never sent: the submission did not reach the queue.
 	pub abandoned: usize,
+	/// Records of the days the bundle covers that it does not hold, as the
+	/// days' checkpoints count them. Any of them may be an outcome after the
+	/// ones shown: the bundle cannot rule it out.
+	pub records_left_out: u64,
 }
 
 impl Delivery {
@@ -131,6 +135,18 @@ impl Delivery {
 		}
 		parts.join(", ")
 	}
+}
+
+/// How many records of `name`'s day the checkpoint counts and the bundle's
+/// records file does not hold. A file that cannot be read counts as none left
+/// out here: the day would not have verified.
+fn left_out(dir: &Path, name: &str) -> u64 {
+	let proof = read(&dir.join("proofs").join(format!("{name}.json")))
+		.ok()
+		.and_then(|bytes| serde_json::from_slice::<super::DayProof>(&bytes).ok());
+	proof.map_or(0, |proof| {
+		proof.tree_size.saturating_sub(proof.entries.len() as u64)
+	})
 }
 
 /// What a complete bundle says, for the reader.
@@ -358,17 +374,25 @@ pub(super) fn complete(
 			}
 		}
 		for recipient in &covered {
-			// The newest outcome of a recipient is what became of it.
-			let Some((_, result)) = message
+			let mut results = message
 				.outcomes
 				.iter()
-				.rev()
-				.find(|(named, _)| named == recipient)
-			else {
+				.filter(|(named, _)| named == recipient)
+				.map(|(_, result)| *result);
+			let Some(result) = results.next() else {
 				return Err(format!(
 					"{id}: no outcome for {recipient}, and not abandoned: a record is missing, or the message is still in the queue"
 				));
 			};
+			// One recipient does not have two different endings. The records
+			// are in the order the bundle gives them, which proves nothing
+			// about which came last, so a recipient with both is not one that
+			// can be called delivered.
+			if results.any(|other| other != result) {
+				return Err(format!(
+					"{id}: contradictory outcomes for {recipient}: the records do not agree on what became of it"
+				));
+			}
 			match result {
 				OutcomeKind::Delivered => delivery.delivered += 1,
 				OutcomeKind::Bounced => delivery.bounced += 1,
@@ -376,6 +400,9 @@ pub(super) fn complete(
 				OutcomeKind::Suppressed => delivery.suppressed += 1,
 			}
 		}
+	}
+	for name in verified {
+		delivery.records_left_out += left_out(dir, name);
 	}
 	// A story is about something: with nothing accepted that matches it,
 	// nothing was checked.
