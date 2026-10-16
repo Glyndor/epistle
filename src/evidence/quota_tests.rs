@@ -1,7 +1,9 @@
 use super::*;
 use crate::evidence::chain::Chain;
+use crate::evidence::record::Record;
 use crate::evidence::record::{Abandoned, Outcome, OutcomeKind};
 use crate::evidence::test_support::{accepted_for, delivered};
+use std::time::{Duration, Instant};
 
 const TODAY: Day = Day(20_740);
 
@@ -289,7 +291,8 @@ fn a_log_that_cannot_be_read_admits_no_acceptance_and_counts_facts_until_it_can(
 }
 
 #[test]
-fn an_acceptance_with_no_room_in_the_memory_of_outcomes_reserves_its_own_record_only() {
+fn an_acceptance_always_reserves_its_outcomes_and_a_full_memory_forgets_the_biggest_accounts_oldest()
+ {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = Quota::start_at(
 		dir.path(),
@@ -300,29 +303,131 @@ fn an_acceptance_with_no_room_in_the_memory_of_outcomes_reserves_its_own_record_
 		},
 		TODAY,
 	);
-	let mut last = 0;
-	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + 5) {
+	let extra = 5;
+	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + extra) {
 		let _ = quota
 			.reserve("noisy", id(n), (2, 0), TODAY)
 			.expect("reserved");
-		last = n;
 	}
 	let state = quota.state();
-	assert_eq!(state.owed.len(), MAX_OWED_PER_ACCOUNT);
-	// 3 records where the outcomes are remembered, 1 where they are not.
+	// Nothing was reserved short: three records for every message.
 	assert_eq!(
 		state.accounts["noisy"].records,
-		3 * MAX_OWED_PER_ACCOUNT as u64 + 5
+		3 * (MAX_OWED_PER_ACCOUNT as u64 + extra as u64)
 	);
-	// Another tenant is not shut out of the memory by it.
+	assert_eq!(state.owed.len(), MAX_OWED_PER_ACCOUNT);
+	assert_eq!(state.owed_by["noisy"].len(), MAX_OWED_PER_ACCOUNT);
+	// Another tenant keeps its place whatever the first sent.
 	let _ = quota
 		.reserve("quiet", id(1 << 40), (2, 0), TODAY)
 		.expect("reserved");
 	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT + 1);
-	// An outcome nobody remembered is counted, once.
+	// The oldest of the noisy account were forgotten: their outcomes are
+	// counted when they come, as facts. The newest were not.
 	let before = quota.state().accounts["noisy"].records;
-	quota.fact(Some("noisy"), id(last), TODAY);
+	quota.fact(Some("noisy"), id(0), TODAY);
 	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
+	let before = quota.state().accounts["noisy"].records;
+	quota.fact(
+		Some("noisy"),
+		id(MAX_OWED_PER_ACCOUNT as u128 + extra - 1),
+		TODAY,
+	);
+	assert_eq!(quota.state().accounts["noisy"].records, before, "paid for");
+}
+
+#[test]
+fn a_few_accounts_cannot_fill_the_whole_memory_of_outcomes_against_the_rest() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = Quota::start_at(
+		dir.path(),
+		Limits {
+			account_records: 100_000_000,
+			account_kept_bytes: u64::MAX,
+			day_records: 800_000_000,
+		},
+		TODAY,
+	);
+	let accounts = MAX_OWED / MAX_OWED_PER_ACCOUNT;
+	let mut n = 0u128;
+	for account in 0..accounts {
+		for _ in 0..MAX_OWED_PER_ACCOUNT {
+			let _ = quota
+				.reserve(&format!("big{account}"), id(n), (1, 0), TODAY)
+				.expect("reserved");
+			n += 1;
+		}
+	}
+	assert_eq!(quota.state().owed.len(), MAX_OWED);
+	// A small account still gets its place: the biggest gives one up.
+	let _ = quota
+		.reserve("small", id(u128::MAX), (1, 0), TODAY)
+		.expect("reserved");
+	let state = quota.state();
+	assert_eq!(state.owed.len(), MAX_OWED);
+	assert!(state.owed.contains_key(&id(u128::MAX)));
+	assert_eq!(state.owed_by["small"].len(), 1);
+}
+
+#[test]
+fn an_outcome_is_counted_to_the_account_that_was_accepted_for_it_after_a_restart() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Yesterday: an acceptance. Today: its outcomes, which nothing paid for
+	// any more, and an outcome of a message nobody knows.
+	let mut yesterday = Log::new(dir.path(), Day(TODAY.0 - 1));
+	yesterday.accepted("a", 1, 1, None);
+	let mut log = Log::new(dir.path(), TODAY);
+	log.outcome(1);
+	log.outcome(77);
+	let state = quota(dir.path()).state();
+	assert_eq!(state.accounts["a"].records, 1);
+	assert_eq!(state.accounts[UNATTRIBUTED].records, 1);
+}
+
+#[test]
+fn rebuilding_a_day_of_many_records_is_linear() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = dir.path();
+	let chain = Chain::open(root).expect("chain");
+	let path = chain.day_file(TODAY);
+	// A day of 150 000 acceptances by three accounts, written straight to the
+	// file: the book must not look through a table for each of them.
+	let mut bytes = Vec::new();
+	for n in 0..150_000u64 {
+		let Entry::Accepted(mut accepted) = accepted_for(0, 365) else {
+			unreachable!()
+		};
+		accepted.spool_id = id(u128::from(n) + 1);
+		accepted.account = ["a", "b", "c"][(n % 3) as usize].into();
+		let line = Record {
+			v: crate::evidence::record::FORMAT_VERSION,
+			seq: n + 1,
+			prev: "0".repeat(64),
+			time: TODAY.start_epoch() + n / 10,
+			entry: Entry::Accepted(accepted),
+		}
+		.to_line()
+		.expect("line");
+		bytes.extend_from_slice(&line);
+		bytes.push(b'\n');
+	}
+	std::fs::write(&path, bytes).expect("write");
+	let started = Instant::now();
+	let quota = Quota::start_at(
+		root,
+		Limits {
+			account_records: u64::MAX / 8,
+			account_kept_bytes: u64::MAX,
+			day_records: u64::MAX / 2,
+		},
+		TODAY,
+	);
+	let took = started.elapsed();
+	assert_eq!(quota.state().accounts["a"].records, 100_000);
+	assert!(
+		took < Duration::from_secs(30),
+		"rebuilding 150 000 records took {took:?}: the cost is not linear"
+	);
 }
 
 /// A small deterministic generator, so a failing sequence can be replayed.
@@ -380,7 +485,7 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 		let mut quota = Quota::start_at(dir.path(), limits, day);
 		let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
 		let mut next_id = 1u128;
-		let mut known: Vec<u128> = Vec::new();
+		let mut known: Vec<(u128, &str)> = Vec::new();
 		// Whether the book remembers outcomes prepaid on an earlier day, which a
 		// restart does not: it counts them as facts, never fewer.
 		let mut carried = false;
@@ -413,7 +518,7 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 								let full = (kept > 0).then_some(kept);
 								log.accepted(account, message, recipients as usize, full);
 								drop(held);
-								known.push(message);
+								known.push((message, account));
 								assert!(
 									quota.state().accounts[account].records
 										<= limits.account_records,
@@ -435,9 +540,12 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 				}
 				// An outcome or an abandonment: a fact, in the log and the book.
 				4..=7 => {
-					let message = match known.len() {
-						0 => next_id,
-						n => known[dice.next(n as u64) as usize],
+					let (message, owner) = match known.len() {
+						0 => (next_id, None),
+						n => {
+							let (message, owner) = known[dice.next(n as u64) as usize];
+							(message, Some(owner))
+						}
 					};
 					next_id += 1;
 					if dice.next(3) == 0 {
@@ -445,7 +553,7 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 					} else {
 						log.outcome(message);
 					}
-					quota.fact(None, id(message), day);
+					quota.fact(owner, id(message), day);
 				}
 				// The process restarts: the book is rebuilt from the log.
 				8 => {
@@ -471,7 +579,9 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 				_ => {
 					day = Day(day.0 + 1);
 					log = Log::new(dir.path(), day);
-					carried |= !before.owed.is_empty();
+					// What is older than the last two days is not named at a restart.
+					carried = true;
+					known.clear();
 					let message = next_id;
 					next_id += 1;
 					log.outcome(message);

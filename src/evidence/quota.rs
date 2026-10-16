@@ -41,13 +41,16 @@
 //! 6. **Shares fit the limit.** The limit is at least [`MIN_SHARES`] shares, and
 //!    what is set aside never passes it.
 //!
-//! The day only moves forward. What is remembered of prepaid outcomes is
-//! bounded in all and per account, in memory: an acceptance with no room in
-//! it reserves its own record only and its outcomes are counted when they
-//! come, once. An outcome that comes after a restart, or another day, is
-//! counted as a fact to the account the book can name.
+//! The day only moves forward. An acceptance always reserves its own record
+//! and an outcome for each recipient. What is remembered of the outcomes paid
+//! for is bounded in all and per account, in memory, so that none is counted
+//! twice: when it is full, the oldest entry of the account with the most goes,
+//! and the outcomes of that message, when they come, are counted as facts (the
+//! one who pays for it is the account that filled the memory). An outcome that
+//! comes after a restart, or another day, is counted as a fact to the account
+//! of its acceptance when the log of the last days still names it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -69,6 +72,8 @@ const OWED_DAYS: i64 = 40;
 /// account.
 const MAX_OWED: usize = 65_536;
 const MAX_OWED_PER_ACCOUNT: usize = 8_192;
+/// The most messages of the last days whose account is remembered at start.
+const MAX_NAMED: usize = 1_000_000;
 /// What is counted at which percent of a limit the status warns.
 const WARN_PERCENT: u64 = 80;
 /// How often a book that could not be rebuilt tries again.
@@ -130,6 +135,9 @@ pub struct State {
 	pub(crate) accounts: BTreeMap<String, Held>,
 	/// Outcomes still to come of acceptances that paid for them, by queue id.
 	owed: BTreeMap<Uuid, Owed>,
+	/// The queue ids in `owed`, by account, oldest first: counting them and
+	/// finding the one to forget are cheap whatever the table holds.
+	owed_by: BTreeMap<String, BTreeSet<Uuid>>,
 }
 
 /// Exactly what one acceptance added, to be taken back if nothing came of it.
@@ -142,7 +150,6 @@ pub struct Reservation {
 	kept: u64,
 	within: u64,
 	day: i64,
-	owed: bool,
 }
 
 #[derive(Debug)]
@@ -173,11 +180,18 @@ impl State {
 			self.total = 0;
 			self.within = 0;
 			self.accounts.clear();
+			// Forgetting the old ones is the work of a new day, not of every call.
+			let old: Vec<Uuid> = self
+				.owed
+				.iter()
+				.filter(|(_, owed)| today.0 - owed.day > OWED_DAYS)
+				.map(|(id, _)| *id)
+				.collect();
+			for id in old {
+				self.untrack(id);
+			}
 		}
-		let day = self.day;
-		self.owed
-			.retain(|_, owed| owed.left > 0 && day - owed.day <= OWED_DAYS);
-		day
+		self.day
 	}
 
 	/// Count `records` to `account`: the part up to its share, and up to what
@@ -194,14 +208,48 @@ impl State {
 		aside
 	}
 
-	/// Whether `account` may have prepaid outcomes remembered.
-	fn has_room_for(&self, account: &str) -> bool {
-		self.owed.len() < MAX_OWED
-			&& self
-				.owed
-				.values()
-				.filter(|owed| owed.account == account)
-				.count() < MAX_OWED_PER_ACCOUNT
+	/// Remember that message `id` of `account` has `left` prepaid outcomes
+	/// to come, making room by forgetting the oldest entry of the account
+	/// with the most when the table is full.
+	fn track(&mut self, id: Uuid, owed: Owed) {
+		let mine = self.owed_by.get(&owed.account).map_or(0, BTreeSet::len);
+		if mine >= MAX_OWED_PER_ACCOUNT {
+			self.forget_oldest_of(&owed.account.clone());
+		} else if self.owed.len() >= MAX_OWED
+			&& let Some(biggest) = self
+				.owed_by
+				.iter()
+				.max_by_key(|(_, ids)| ids.len())
+				.map(|(account, _)| account.clone())
+		{
+			self.forget_oldest_of(&biggest);
+		}
+		self.owed_by
+			.entry(owed.account.clone())
+			.or_default()
+			.insert(id);
+		self.owed.insert(id, owed);
+	}
+
+	fn forget_oldest_of(&mut self, account: &str) {
+		let oldest = self
+			.owed_by
+			.get(account)
+			.and_then(|ids| ids.first().copied());
+		if let Some(oldest) = oldest {
+			self.untrack(oldest);
+		}
+	}
+
+	fn untrack(&mut self, id: Uuid) {
+		if let Some(owed) = self.owed.remove(&id)
+			&& let Some(ids) = self.owed_by.get_mut(&owed.account)
+		{
+			ids.remove(&id);
+			if ids.is_empty() {
+				self.owed_by.remove(&owed.account);
+			}
+		}
 	}
 }
 
@@ -251,7 +299,9 @@ impl Quota {
 				let kept = std::mem::take(&mut book.state.owed);
 				book.state = state;
 				for (id, owed) in kept {
-					book.state.owed.entry(id).or_insert(owed);
+					if !book.state.owed.contains_key(&id) {
+						book.state.track(id, owed);
+					}
 				}
 			}
 			Err(error) => {
@@ -263,6 +313,27 @@ impl Quota {
 		}
 	}
 
+	/// Which account each message of the last days was accepted for, from the
+	/// day files before `today`. Bounded: past [`MAX_NAMED`] it learns no more.
+	fn accepted_before(&self, today: Day, names: &mut HashMap<Uuid, String>) {
+		for back in [2, 1] {
+			let Ok(file) = open_day(&day_file(&self.root.join(CHAIN_DIR), Day(today.0 - back)))
+			else {
+				continue;
+			};
+			let mut lines = Lines::new(std::io::BufReader::new(file));
+			while let Ok(Some((_, line))) = lines.next_line() {
+				if let Line::Complete(bytes) = line
+					&& let Ok(Entry::Accepted(accepted)) =
+						Record::parse_canonical(bytes).map(|record| record.entry)
+					&& names.len() < MAX_NAMED
+				{
+					names.insert(accepted.spool_id, accepted.account);
+				}
+			}
+		}
+	}
+
 	/// The counts of the records of `today` in the chain.
 	fn read_day(&self, today: Day) -> std::io::Result<State> {
 		let share = (self.limits.account_records, self.limits.day_records);
@@ -270,6 +341,8 @@ impl Quota {
 			day: today.0,
 			..State::default()
 		};
+		let mut names: HashMap<Uuid, String> = HashMap::new();
+		self.accepted_before(today, &mut names);
 		let file = match open_day(&day_file(&self.root.join(CHAIN_DIR), today)) {
 			Ok(file) => file,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(state),
@@ -292,19 +365,13 @@ impl Quota {
 			match Record::parse_canonical(bytes).map(|record| record.entry) {
 				Ok(Entry::Accepted(accepted)) => {
 					let recipients = accepted.recipients.len() as u64;
-					let paid = state.has_room_for(&accepted.account);
 					let kept = match accepted.retention.mode {
 						RetentionMode::Full => accepted.size,
 						_ => 0,
 					};
-					state.add(
-						&accepted.account,
-						1 + if paid { recipients } else { 0 },
-						kept,
-						share,
-					);
-					if paid {
-						state.owed.insert(
+					state.add(&accepted.account, 1 + recipients, kept, share);
+					if recipients > 0 {
+						state.track(
 							accepted.spool_id,
 							Owed {
 								left: recipients,
@@ -313,10 +380,14 @@ impl Quota {
 							},
 						);
 					}
+					if names.len() < MAX_NAMED {
+						names.insert(accepted.spool_id, accepted.account);
+					}
 				}
 				Ok(Entry::Outcome(super::record::Outcome { spool_id, .. }))
 				| Ok(Entry::Abandoned(super::record::Abandoned { spool_id, .. })) => {
-					Self::settle(&mut state, None, spool_id, share);
+					let account = names.get(&spool_id).map(String::as_str);
+					Self::settle(&mut state, account, spool_id, share);
 				}
 				_ => {
 					state.add(UNATTRIBUTED, 1, 0, share);
@@ -332,6 +403,9 @@ impl Quota {
 			&& owed.left > 0
 		{
 			owed.left -= 1;
+			if owed.left == 0 {
+				state.untrack(id);
+			}
 			return;
 		}
 		state.add(account.unwrap_or(UNATTRIBUTED), 1, 0, share);
@@ -345,9 +419,8 @@ impl Quota {
 
 	/// Reserve room for one acceptance of `account` for a message to
 	/// `recipients` that keeps `kept` bytes, or say which limit it would pass.
-	/// The reservation is its own record and, when the book has room to
-	/// remember it, an outcome for each recipient. Checking and reserving are
-	/// one step.
+	/// The reservation is its own record and an outcome for each recipient,
+	/// always. Checking and reserving are one step.
 	pub fn reserve(
 		&self,
 		account: &str,
@@ -373,8 +446,7 @@ impl Quota {
 			}
 		}
 		let day = book.state.roll(today);
-		let paid = book.state.has_room_for(account);
-		let records = 1 + if paid { recipients } else { 0 };
+		let records = 1 + recipients;
 		let held = book
 			.state
 			.accounts
@@ -397,8 +469,8 @@ impl Quota {
 			kept,
 			(limits.account_records, limits.day_records),
 		);
-		if paid {
-			book.state.owed.insert(
+		if recipients > 0 {
+			book.state.track(
 				id,
 				Owed {
 					left: recipients,
@@ -414,7 +486,6 @@ impl Quota {
 			kept,
 			within,
 			day,
-			owed: paid,
 		})
 	}
 
@@ -422,9 +493,7 @@ impl Quota {
 	pub fn release(&self, held: Reservation) {
 		let mut book = self.book();
 		let state = &mut book.state;
-		if held.owed {
-			state.owed.remove(&held.id);
-		}
+		state.untrack(held.id);
 		if state.day != held.day {
 			return;
 		}
