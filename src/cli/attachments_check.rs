@@ -59,8 +59,10 @@ pub(super) fn execute(
 	} else {
 		decision
 	};
-	// A submission is refused when the policy would quarantine or reject.
-	let refused = decision.action >= Action::Quarantine;
+	// A submission is refused when the policy would quarantine or reject,
+	// and only if the server inspects what its accounts submit.
+	let inspected = config.antispam.scan_authenticated;
+	let refused = inspected && decision.action >= Action::Quarantine;
 	if json {
 		print_json(
 			out,
@@ -76,7 +78,7 @@ pub(super) fn execute(
 		)?;
 		return Ok(ExitCode::SUCCESS);
 	}
-	write_text(out, &report, &decision, off, refused)
+	write_text(out, &report, &decision, off, refused, inspected)
 		.map_err(|error| ResourceError::Failure(error.to_string()))?;
 	Ok(ExitCode::SUCCESS)
 }
@@ -123,6 +125,7 @@ fn write_text(
 	decision: &Decision,
 	off: bool,
 	refused: bool,
+	inspected: bool,
 ) -> std::io::Result<()> {
 	if report.parts.is_empty() {
 		writeln!(out, "no attachments")?;
@@ -154,9 +157,14 @@ fn write_text(
 	} else {
 		writeln!(out, "verdict: {action} ({})", reasons.join(", "))?;
 	}
+	let note = if inspected {
+		""
+	} else {
+		" (scan_authenticated = false)"
+	};
 	writeln!(
 		out,
-		"a submission would be {}",
+		"a submission would be {}{note}",
 		if refused { "refused" } else { "accepted" }
 	)
 }

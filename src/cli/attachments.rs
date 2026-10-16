@@ -134,5 +134,8 @@ mod policy;
 #[path = "attachments_tests_check.rs"]
 mod tests_check;
 #[cfg(test)]
+#[path = "attachments_tests_check_submission.rs"]
+mod tests_check_submission;
+#[cfg(test)]
 #[path = "attachments_tests_policy.rs"]
 mod tests_policy;

@@ -6,14 +6,14 @@ use std::process::ExitCode;
 
 use super::check;
 
-const EXE_AS_PDF: &str = "From: x@example.net\r\nTo: alice@example.org\r\nSubject: invoice\r\n\
+pub(super) const EXE_AS_PDF: &str = "From: x@example.net\r\nTo: alice@example.org\r\nSubject: invoice\r\n\
 	MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\n\
 	Content-Type: text/plain\r\n\r\nsee attached\r\n--b\r\n\
 	Content-Type: application/pdf; name=invoice.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n\
 	TVqQAAMAAAAEAAAA\r\n--b--\r\n";
 
 /// A configuration in a temporary directory, and a message file next to it.
-fn fixture(
+pub(super) fn fixture(
 	settings: &str,
 	message: &[u8],
 ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -33,7 +33,7 @@ fn fixture(
 	(dir, config, eml)
 }
 
-fn run(
+pub(super) fn run(
 	config: &std::path::Path,
 	eml: &std::path::Path,
 	json: bool,
