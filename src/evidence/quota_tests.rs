@@ -348,16 +348,21 @@ fn a_few_accounts_cannot_fill_the_whole_memory_of_outcomes_against_the_rest() {
 		},
 		TODAY,
 	);
-	let accounts = MAX_OWED / MAX_OWED_PER_ACCOUNT;
+	// Seven accounts at the most one may hold, and two with half of that.
 	let mut n = 0u128;
-	for account in 0..accounts {
-		for _ in 0..MAX_OWED_PER_ACCOUNT {
+	let mut fill = |account: String, count: usize| {
+		for _ in 0..count {
 			let _ = quota
-				.reserve(&format!("big{account}"), id(n), (1, 0), TODAY)
+				.reserve(&account, id(n), (1, 0), TODAY)
 				.expect("reserved");
 			n += 1;
 		}
+	};
+	for account in 0..7 {
+		fill(format!("big{account}"), MAX_OWED_PER_ACCOUNT);
 	}
+	fill("half1".into(), MAX_OWED_PER_ACCOUNT / 2);
+	fill("half2".into(), MAX_OWED_PER_ACCOUNT / 2);
 	assert_eq!(quota.state().owed.len(), MAX_OWED);
 	// A small account still gets its place: the biggest gives one up.
 	let _ = quota
@@ -367,6 +372,9 @@ fn a_few_accounts_cannot_fill_the_whole_memory_of_outcomes_against_the_rest() {
 	assert_eq!(state.owed.len(), MAX_OWED);
 	assert!(state.owed.contains_key(&id(u128::MAX)));
 	assert_eq!(state.owed_by["small"].len(), 1);
+	// It was the biggest that gave up one, not the smaller ones.
+	assert_eq!(state.owed_by["half1"].len(), MAX_OWED_PER_ACCOUNT / 2);
+	assert_eq!(state.owed_by["half2"].len(), MAX_OWED_PER_ACCOUNT / 2);
 }
 
 #[test]
