@@ -59,9 +59,9 @@ fn time_that_really_passed_is_no_jump() {
 
 #[test]
 fn a_start_is_judged_by_the_newest_record_the_disk_holds() {
-	let newest = NOW - 5 * 3600;
+	let newest = NOW - 300;
 	let start = Instant::now();
-	// Hours after the newest record: believed.
+	// Minutes after the newest record: believed.
 	assert!(TimeRef::new(newest).read_at(NOW, start).sound);
 	// A year after: not believed, and nothing is later than the record.
 	let ahead = TimeRef::new(newest).read_at(newest + 400 * DAY, start);
@@ -85,7 +85,7 @@ fn the_estimate_after_a_refused_start_keeps_counting() {
 
 #[test]
 fn a_clock_that_is_corrected_after_the_start_is_believed_once_it_is_right() {
-	let newest = NOW - DAY;
+	let newest = NOW - 300;
 	let time = TimeRef::new(newest);
 	let start = Instant::now();
 	// Started with the clock in 1970, as a machine with a dead RTC does.
@@ -199,26 +199,31 @@ fn a_start_after_a_stop_waits_for_a_token_before_it_is_believed() {
 }
 
 #[test]
-fn an_operator_command_waits_out_a_stop_but_not_a_year_or_an_unreadable_log() {
-	let newest = NOW - 10 * DAY;
-	let time = TimeRef::new(newest);
-	assert!(time.allows_operator(NOW));
-	assert!(!time.allows_operator(newest + 400 * DAY));
-	assert!(!time.allows_operator(newest - 7200));
-	assert!(!TimeRef::unknown().allows_operator(NOW));
-	assert!(TimeRef::new(0).allows_operator(NOW));
-}
-
-#[test]
-fn a_start_a_few_days_after_the_newest_record_dates_by_the_clock_but_deletes_nothing() {
-	let newest = NOW - 3 * DAY;
+fn a_start_hours_after_the_newest_record_is_not_dated_by_the_clock() {
+	// A command run later than a restart is, or a server after a stop: the
+	// clock may be a month ahead, and the records after it would be too.
+	let newest = NOW - 3 * 3600;
 	let time = TimeRef::new(newest);
 	let start = Instant::now();
 	let reading = time.read_at(NOW, start);
-	assert_eq!((reading.time, reading.sound), (NOW, false));
-	// What waits is still aged by the estimate, which does not run ahead.
+	assert_eq!((reading.time, reading.sound), (newest, false));
 	assert_eq!(reading.cautious(), newest);
-	// A year on is not a clock to date by either.
-	let year = TimeRef::new(newest).read_at(newest + 400 * DAY, start);
-	assert_eq!((year.time, year.sound), (newest, false));
+	let month = TimeRef::new(newest).read_at(newest + 30 * DAY, start);
+	assert_eq!((month.time, month.sound), (newest, false));
+}
+
+#[test]
+fn the_allowance_for_drift_has_a_ceiling_whatever_the_uptime() {
+	let time = TimeRef::new(0);
+	let start = Instant::now();
+	assert!(time.read_at(NOW, start).sound);
+	// A year of uptime on a clock that follows the monotonic one exactly, then
+	// a jump of an hour: the drift allowance would have grown to 8 hours.
+	let year = start + Duration::from_secs(365 * DAY);
+	assert!(time.read_at(NOW + 365 * DAY, year).sound);
+	let after = time.read_at(NOW + 365 * DAY + 3600, year + Duration::from_secs(60));
+	assert!(
+		!after.sound,
+		"an hour ahead was believed after a year of uptime"
+	);
 }

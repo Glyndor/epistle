@@ -77,6 +77,11 @@ impl Chain {
 	/// Open the chain under `evidence_root`, creating its directory `0700`.
 	/// The time reference starts from the newest record the log holds.
 	pub fn open(evidence_root: &Path) -> std::io::Result<Self> {
+		Self::open_at(evidence_root, crate::storage::delivery_log::now_epoch())
+	}
+
+	/// [`Chain::open`] for a process that read the wall clock as `wall`.
+	pub fn open_at(evidence_root: &Path, wall: u64) -> std::io::Result<Self> {
 		let dir = evidence_root.join(CHAIN_DIR);
 		create_private_dir(&dir)?;
 		let mut chain = Chain {
@@ -85,7 +90,23 @@ impl Chain {
 			time: Arc::new(TimeRef::new(0)),
 		};
 		chain.time = Arc::new(chain.start_reference(evidence_root));
+		chain.confirm_from_running_server(evidence_root, wall);
 		Ok(chain)
+	}
+
+	/// A process with no history of its own (every command, and a server that
+	/// has just started) believes the machine's clock only within a margin of
+	/// the newest record. Past it, the running server's word will do: its last
+	/// tick says what time it believed, and a clock within a quarter of an hour
+	/// of that is the one it believed.
+	fn confirm_from_running_server(&self, evidence_root: &Path, wall: u64) {
+		const AGREE_SECS: u64 = 900;
+		let Ok(Some(status)) = super::tasks::last_status(evidence_root) else {
+			return;
+		};
+		if status.clock_sound && status.time.abs_diff(wall) <= AGREE_SECS {
+			self.time.witness(wall, std::time::Instant::now());
+		}
 	}
 
 	/// What is known to have happened, from the head and the newest record.

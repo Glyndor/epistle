@@ -30,6 +30,11 @@ impl Fixture {
 				.expect("append");
 		}
 		fixture.seal_and_stamp();
+		// A server is running, and believes the clock: commands may date by it.
+		crate::evidence::test_support::running_server(
+			fixture.root(),
+			crate::storage::delivery_log::now_epoch(),
+		);
 		fixture
 	}
 

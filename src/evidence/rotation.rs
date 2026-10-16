@@ -396,6 +396,33 @@ pub fn resume(evidence_root: &Path) -> std::io::Result<Option<String>> {
 /// rotation that was cut short is finished, never repeated: the staged key,
 /// the statement and the record are each made once.
 pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Result<String> {
+	// The rotation seals every closed day and names today in its statement:
+	// at a clock nobody has confirmed, it would seal the wrong days. A
+	// rotation cut short is finished whatever the clock says.
+	if resume(evidence_root)?.is_none()
+		&& !Chain::open_at(evidence_root, now)?
+			.time()
+			.read_at(now, std::time::Instant::now())
+			.sound
+	{
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"the clock is not confirmed: the server's last check does not agree with it, and the \
+			 newest record of the evidence log is further back than a restart; start the server \
+			 or run epistle evidence clock accept first",
+		));
+	}
+	rotate_steps(evidence_root, timestamp, now, |_| false)
+}
+
+/// [`rotate`] without asking whether the clock is right, for tests that give
+/// their own times.
+#[cfg(test)]
+pub(crate) fn rotate_at(
+	evidence_root: &Path,
+	timestamp: bool,
+	now: u64,
+) -> std::io::Result<String> {
 	rotate_steps(evidence_root, timestamp, now, |_| false)
 }
 
@@ -415,18 +442,14 @@ pub(crate) fn rotate_steps(
 	if let Some(done) = resume(evidence_root)? {
 		return Ok(done);
 	}
-	// The rotation seals every closed day and names today in its statement:
-	// at a clock the log does not agree with, it would seal the wrong days.
-	if !Chain::open(evidence_root)?.time().allows_operator(now) {
-		return Err(std::io::Error::new(
-			std::io::ErrorKind::InvalidInput,
-			"the clock does not agree with the newest record of the evidence log: \
-			 fix it before rotating the key",
-		));
-	}
 	let old = EvidenceKey::load_or_create(evidence_root)?;
-	super::checkpoint::seal_closed_days(evidence_root, &old, timestamp, now)
-		.map_err(|error| std::io::Error::other(error.to_string()))?;
+	super::checkpoint::seal_closed_days(
+		evidence_root,
+		&old,
+		timestamp,
+		now.saturating_sub(super::timeref::SEAL_MARGIN_SECS),
+	)
+	.map_err(|error| std::io::Error::other(error.to_string()))?;
 	cut(Step::Sealed)?;
 	let new = EvidenceKey::stage_next(evidence_root)?;
 	cut(Step::Staged)?;

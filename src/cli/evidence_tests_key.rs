@@ -155,7 +155,8 @@ fn rotated_server() -> (Server, String, String) {
 		.expect("chain")
 		.append_at(at(day, 2), crate::evidence::test_support::delivered(9))
 		.expect("outcome");
-	let new = crate::evidence::rotation::rotate(server.root(), true, at(day, 5)).expect("rotate");
+	let new =
+		crate::evidence::rotation::rotate_at(server.root(), true, at(day, 5)).expect("rotate");
 	let current = EvidenceKey::load_or_create(server.root()).expect("key");
 	seal_closed_days(server.root(), &current, true, at(day + 1, 0)).expect("seal");
 	server.tsa.gen_time = at(day + 1, 1);

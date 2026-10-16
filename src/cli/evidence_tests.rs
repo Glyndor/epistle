@@ -54,6 +54,8 @@ impl Server {
 			)
 			.expect("tsr");
 		}
+		// A server is running, and believes the clock: commands may date by it.
+		crate::evidence::test_support::running_server(dir.path(), now());
 		Server { dir, tsa, first }
 	}
 

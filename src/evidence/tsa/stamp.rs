@@ -128,10 +128,20 @@ pub async fn stamp_due(
 		.take(MAX_DAYS_PER_PASS)
 		.collect();
 	for day in due {
-		let Some((_, bytes)) = load(evidence_root, day)? else {
+		let Some((checkpoint, bytes)) = load(evidence_root, day)? else {
 			continue;
 		};
-		match obtain(&settings.authorities, &sha256(&bytes)).await {
+		let obtained = obtain(&settings.authorities, &sha256(&bytes))
+			.await
+			.and_then(|obtained| {
+				// A token the audit would refuse is not kept: the file is written
+				// once, so a token from before the day ended would be a break
+				// that nothing mends. It is asked for again, after the backoff.
+				crate::evidence::audit::token_window(day, &checkpoint, &obtained.stamp)
+					.map(|()| obtained)
+					.map_err(|why| format!("the authority's token was not kept: {why}"))
+			});
+		match obtained {
 			Ok(obtained) => {
 				crate::storage::write_secret(&files(evidence_root, day).tsr, &obtained.response)?;
 				state.remove(&day.name());

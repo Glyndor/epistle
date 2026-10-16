@@ -461,7 +461,8 @@ fn a_purge_statement_signed_before_a_rotation_still_verifies() {
 		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
 		None
 	);
-	let new = crate::evidence::rotation::rotate(dir.path(), true, at(DAY + 5, 14)).expect("rotate");
+	let new =
+		crate::evidence::rotation::rotate_at(dir.path(), true, at(DAY + 5, 14)).expect("rotate");
 	assert_ne!(new, key.id());
 	let report = verified(dir.path(), &tsa, at(DAY + 5, 15));
 	assert_eq!(report.first_break.map(|at| at.to_string()), None);

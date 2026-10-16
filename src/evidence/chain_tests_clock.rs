@@ -152,3 +152,34 @@ fn a_log_that_cannot_be_read_at_all_starts_believing_no_clock() {
 		.read_at(at(DAY + 3, 11), std::time::Instant::now());
 	assert!(!reading.sound, "a clock was believed on a log nobody read");
 }
+
+#[test]
+fn a_command_with_the_clock_a_month_ahead_cannot_date_the_servers_records_in_the_future() {
+	use std::time::{Duration, Instant};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let today = at(DAY + 3, 10);
+	let server = Chain::open(dir.path()).expect("server");
+	let start = Instant::now();
+	server
+		.append_clocked(today, start, accepted(1))
+		.expect("the server's record");
+	// A command run by hand: its own process, no history, a clock 30 days on.
+	let command = Chain::open(dir.path()).expect("command");
+	command
+		.append_clocked(today + 30 * 86_400, Instant::now(), accepted(2))
+		.expect("the command still records what it was asked to");
+	// The server, with its clock right, goes on: nothing it writes is dated
+	// by what the command left behind.
+	server
+		.append_clocked(today + 60, start + Duration::from_secs(60), accepted(3))
+		.expect("the server's next record");
+	let days = Chain::open(dir.path())
+		.expect("reopened")
+		.days()
+		.expect("days");
+	assert_eq!(
+		days,
+		vec![Day(DAY + 3)],
+		"a record went to another day: {days:?}"
+	);
+}

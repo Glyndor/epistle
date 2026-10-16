@@ -226,13 +226,16 @@ it:
 - against the monotonic clock: once a reading was believed, the reference
   moves only forward with the monotonic clock, never to a wall clock that is
   ahead of it. A clock more than five minutes ahead of it (plus one second per
-  thousand that passed, the drift of a real clock) or more than an hour behind
-  has jumped, and a clock that gains a little on every reading does not get
+  thousand that passed, up to ten minutes, the drift of a real clock) or more
+  than an hour behind has jumped, and a clock that gains a little on every reading does not get
   believed by small steps: it drifts away until it is not;
 - at start, against the newest record in the log (the head, else the newest
-  record on disk): a clock before it, or more than a day after it, is not
-  believed for sealing, purging or expiring. A log that cannot be read at
-  start is not an empty log: nothing is believed;
+  record on disk): a clock before it, or more than ten minutes after it (the
+  margin of a restart, not of a stop), is not believed. Every command is a
+  start of its own, so this holds for them too; a command run while the server
+  is up is believed if the clock agrees, within a quarter of an hour, with the
+  time the server's last check believed (`status.json`). A log that cannot be
+  read at start is not an empty log: nothing is believed;
 - against a timestamp authority, when timestamping is on: a token is a time
   somebody else vouches for, and the server asks for one by itself when it
   does not believe the clock;
@@ -243,19 +246,26 @@ it:
 
 While the clock is not believed, nothing is sealed, purged or expired on it,
 the kept bytes and the records stay where they are, transactional mail is held,
-and `epistle status` and the server log say why. Records are still written, so
-a wrong clock never loses an acceptance and never refuses an outcome, an
-acknowledgement or the repair at start: they are dated by the clock when it is
-within 35 days after the newest record, else by an estimate (the last believed
-time plus the monotonic clock, never earlier than the newest record). Mail in
-the queue ages by the earlier of the clock and the estimate (a log that
-could not be read leaves the queue nothing to compare to, so it ages by the
-clock). When the clock
-agrees again the tasks go on by themselves; starting the server again is also
-enough, because the new process judges the clock by the log, not by what the
-old one had seen. A clock that is behind a record dated in the future (a record
-cannot be removed) is believed again when the date arrives. A key rotation
-refuses to run at a clock more than 35 days past the newest record.
+and `epistle status` and the server log say why. Records are still written,
+so a wrong clock never loses an acceptance and never refuses an outcome or the
+repair at start, but they are dated by an estimate (the last believed time
+plus the monotonic clock, never earlier than the newest record), never by a
+clock nobody agrees with: a command run with the clock a month ahead does not
+date the server's records in the future. That has a price: a command run
+while the server is stopped for more than ten minutes, or at a clock the
+server did not believe, writes a record dated by the estimate, which may fall
+in a day already sealed and be refused; start the server (it asks the timestamp
+authority) or run `epistle evidence clock accept` first. A key rotation refuses
+to run at a clock that is not believed. A day is sealed half an hour after
+midnight, more than a believed clock can be ahead of the true time, and a
+token the authority gives for a day that had not ended by its own clock is not
+kept: it is asked for again. Mail in the queue ages by the earlier of the clock
+and the estimate (a log that could not be read leaves the queue nothing to
+compare to, so it ages by the clock). When the clock agrees again the tasks go
+on by themselves; starting the server again is also enough, because the new
+process judges the clock by the log, not by what the old one had seen. A clock
+that is behind a record dated in the future (a record cannot be removed) is
+believed again when the date arrives.
 
 ## Limits
 

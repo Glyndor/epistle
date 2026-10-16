@@ -86,7 +86,7 @@ fn finished(fixture: &mut Fixture, step: Step) {
 fn running_rotate_again_finishes_a_rotation_cut_at_any_step_once() {
 	for step in STEPS {
 		let mut fixture = cut_after(step);
-		let new = rotate(fixture.root(), true, at(DAY + 4, 1)).expect("rotate again");
+		let new = rotate_at(fixture.root(), true, at(DAY + 4, 1)).expect("rotate again");
 		assert_eq!(
 			EvidenceKey::load_or_create(fixture.root())
 				.expect("key")
@@ -147,7 +147,7 @@ fn a_rotation_at_a_clock_the_log_does_not_agree_with_seals_nothing() {
 		.count();
 	let refused = rotate(fixture.root(), true, at(DAY + 400, 5)).expect_err("a clock far ahead");
 	assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
-	assert!(refused.to_string().contains("does not agree"), "{refused}");
+	assert!(refused.to_string().contains("not confirmed"), "{refused}");
 	assert_eq!(
 		std::fs::read_dir(fixture.root().join("checkpoints"))
 			.expect("dir")
@@ -159,7 +159,12 @@ fn a_rotation_at_a_clock_the_log_does_not_agree_with_seals_nothing() {
 }
 
 #[test]
-fn a_rotation_a_few_days_after_the_last_record_is_not_refused() {
+fn a_rotation_after_a_quiet_week_needs_the_running_servers_word() {
 	let fixture = Fixture::new();
-	rotate(fixture.root(), true, at(DAY + 10, 5)).expect("a quiet week");
+	let now = at(DAY + 10, 5);
+	// Nobody confirmed that clock: a month ahead would look the same.
+	rotate(fixture.root(), true, now).expect_err("not confirmed");
+	// The server's last tick believed it.
+	crate::evidence::test_support::running_server(fixture.root(), now);
+	rotate(fixture.root(), true, now).expect("the server's word");
 }

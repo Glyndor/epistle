@@ -55,6 +55,11 @@ pub struct Status {
 	pub stamped: u32,
 	/// Problems reading settings, policy or bindings, or running a step.
 	pub errors: Vec<String>,
+	/// Whether the server believed the machine's clock at this tick. A
+	/// command that runs while the server does reads it to know the clock is
+	/// right, so that it does not date a record by one nobody has checked.
+	#[serde(default)]
+	pub clock_sound: bool,
 }
 
 /// The evidence tasks.
@@ -71,6 +76,8 @@ pub struct Tasks {
 	/// that time passes by the same amount on both clocks.
 	#[cfg(test)]
 	following: Mutex<Option<(u64, std::time::Instant)>>,
+	/// Whether the clock was believed at the tick that is running.
+	sound: AtomicBool,
 }
 
 /// Clears the running flag when the verification ends, even by a panic.
@@ -96,6 +103,7 @@ impl Tasks {
 			audit_delay: Duration::ZERO,
 			#[cfg(test)]
 			following: Mutex::new(None),
+			sound: AtomicBool::new(false),
 		})
 	}
 
@@ -146,6 +154,7 @@ impl Tasks {
 			}
 		}
 		let now = reading.time;
+		self.sound.store(reading.sound, Ordering::SeqCst);
 		if !reading.sound {
 			errors.push(format!(
 				"the clock ({}) does not agree with the evidence log or the monotonic clock: \
@@ -262,6 +271,7 @@ impl Tasks {
 			records: report.records,
 			stamped: report.stamped,
 			errors,
+			clock_sound: false,
 		})
 	}
 
@@ -293,7 +303,8 @@ impl Tasks {
 		}
 	}
 
-	fn finish(&self, status: Status) -> Status {
+	fn finish(&self, mut status: Status) -> Status {
+		status.clock_sound = self.sound.load(Ordering::SeqCst);
 		self.service.set_gate(status.held.clone());
 		if let Ok(bytes) = serde_json::to_vec_pretty(&status) {
 			let _ = crate::storage::write_secret(&self.service.root().join(STATUS_FILE), &bytes);
@@ -331,8 +342,15 @@ fn seal_and_sweep(
 ) -> Result<Option<String>, String> {
 	let key =
 		EvidenceKey::load_or_create(root).map_err(|error| format!("evidence key: {error}"))?;
-	super::checkpoint::seal_closed_days(root, &key, timestamp, now)
-		.map_err(|error| format!("sealing: {error}"))?;
+	// A day is sealed a margin after midnight, so a believed clock that is a
+	// little ahead of the true time never seals a day that has not ended.
+	super::checkpoint::seal_closed_days(
+		root,
+		&key,
+		timestamp,
+		now.saturating_sub(super::timeref::SEAL_MARGIN_SECS),
+	)
+	.map_err(|error| format!("sealing: {error}"))?;
 	let swept = super::retention::sweep(root, &key, anchors, now)
 		.map_err(|error| format!("retention sweep: {}", error.kind()))?;
 	Ok(swept.refused)

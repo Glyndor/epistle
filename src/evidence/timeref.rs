@@ -45,25 +45,28 @@ const DRIFT_DIVISOR: u64 = 1000;
 /// in seconds: a step back of the clock, not a clock gone wrong.
 pub const BEHIND_SECS: u64 = 3600;
 /// How long after the newest record a start is believed without a token, in
-/// seconds. A server that was down longer waits for a timestamp authority
-/// (or the operator) to say what day it is before it seals or purges.
-pub const START_SLACK_SECS: u64 = 86_400;
-/// How long after the newest record a start still dates records by the
-/// clock, and the operator's own commands (a key rotation, which names the
-/// day it happens) go ahead, in seconds. Dating is not deleting: past
-/// [`START_SLACK_SECS`] nothing is sealed, purged or expired, but the
-/// log keeps taking records.
-pub const DATING_SLACK_SECS: u64 = 35 * 86_400;
+/// seconds: the margin of a normal restart, not of a stop. A process that
+/// starts later than that (every command, and a server after a longer
+/// stop) waits for a timestamp authority, the running server's word or the
+/// operator to say what day it is before it dates, seals or purges.
+pub const START_SLACK_SECS: u64 = 600;
+/// The most the allowance for a real clock's drift ever grows to, in seconds,
+/// however long ago the reference was set.
+const DRIFT_CAP_SECS: u64 = 600;
+/// How long after midnight a day waits to be sealed, in seconds: more than
+/// the clock may be ahead of the true time at its widest believed (the start
+/// margin, the slack and the drift together), so that a believed clock that
+/// is a little ahead never seals a day that has not ended.
+pub const SEAL_MARGIN_SECS: u64 = 1800;
 /// The reference moves at most this often, in seconds.
 const REFRESH_SECS: u64 = 60;
 
 /// The time to act on, and whether it was believed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reading {
-	/// Epoch seconds to date a record by: the wall clock when it was believed
-	/// (or, at a start, when it is within [`DATING_SLACK_SECS`] of the
-	/// newest record: a record dated a little wrong harms nothing that
-	/// deleting on it would), else the estimate.
+	/// Epoch seconds to date a record by: the wall clock when it was believed,
+	/// else the estimate. A record is never dated by a clock nobody agrees
+	/// with: the dates of the log are what it is for.
 	pub time: u64,
 	/// Whether the wall clock agreed with everything known about the time.
 	pub sound: bool,
@@ -150,19 +153,6 @@ impl TimeRef {
 		self.state.lock().map_or(u64::MAX, |state| state.floor)
 	}
 
-	/// Whether `wall` is a time an operator's own command (a key rotation,
-	/// which seals the closed days and names today) may act on: not before
-	/// the newest record, nor more than [`DATING_SLACK_SECS`] after it. A
-	/// log that could not be read allows nothing.
-	pub fn allows_operator(&self, wall: u64) -> bool {
-		self.state.lock().is_ok_and(|state| {
-			!state.unknown
-				&& (state.floor == 0
-					|| (wall.saturating_add(BEHIND_SECS) >= state.floor
-						&& wall <= state.floor.saturating_add(DATING_SLACK_SECS)))
-		})
-	}
-
 	/// The time now.
 	pub fn read(&self) -> Reading {
 		let wall = crate::storage::delivery_log::now_epoch();
@@ -188,22 +178,22 @@ impl TimeRef {
 				estimate: 0,
 			};
 		};
-		let near_floor = |state: &State, slack: u64| {
+		let near_floor = |state: &State| {
 			!state.unknown
 				&& (state.floor == 0
 					|| (wall.saturating_add(BEHIND_SECS) >= state.floor
-						&& wall <= state.floor.saturating_add(slack)))
+						&& wall <= state.floor.saturating_add(START_SLACK_SECS)))
 		};
 		let believed = match state.anchor {
 			Some((time, then)) => {
 				let expected = time.saturating_add(elapsed(then, mono));
-				let drift = state
-					.origin
-					.map_or(0, |origin| elapsed(origin, mono) / DRIFT_DIVISOR);
+				let drift = state.origin.map_or(0, |origin| {
+					(elapsed(origin, mono) / DRIFT_DIVISOR).min(DRIFT_CAP_SECS)
+				});
 				wall <= expected.saturating_add(SLACK_SECS).saturating_add(drift)
 					&& wall.saturating_add(BEHIND_SECS) >= expected
 			}
-			None => near_floor(&state, START_SLACK_SECS),
+			None => near_floor(&state),
 		};
 		if believed {
 			match state.anchor {
@@ -248,11 +238,8 @@ impl TimeRef {
 				 nothing is deleted, sealed or expired on it"
 			);
 		}
-		// A start a while after the newest record dates by the clock; any
-		// other clock that is not believed, by the estimate.
-		let dating = state.anchor.is_none() && near_floor(&state, DATING_SLACK_SECS);
 		Reading {
-			time: if dating { wall } else { estimate },
+			time: estimate,
 			sound: false,
 			wall,
 			estimate,

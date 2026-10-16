@@ -53,3 +53,18 @@ pub(crate) fn delivered(n: u32) -> Entry {
 pub(crate) fn at(day: i64, hour: u64) -> u64 {
 	u64::try_from(day).expect("positive day") * 86_400 + hour * 3600
 }
+
+/// Say the way a running server does that the clock read `wall` is right, so
+/// that a command run at that time dates its records by it.
+pub(crate) fn running_server(evidence_root: &std::path::Path, wall: u64) {
+	let status = super::tasks::Status {
+		time: wall,
+		clock_sound: true,
+		..super::tasks::Status::default()
+	};
+	crate::storage::write_secret(
+		&evidence_root.join("status.json"),
+		&serde_json::to_vec(&status).expect("json"),
+	)
+	.expect("status");
+}

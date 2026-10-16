@@ -258,3 +258,99 @@ async fn the_operator_can_confirm_a_date_when_there_is_no_authority_to_ask() {
 		"the stopped days were sealed once the date was confirmed"
 	);
 }
+
+#[tokio::test]
+async fn a_believed_clock_a_few_seconds_ahead_does_not_seal_a_day_that_has_not_ended() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let midnight = at(DAY + 1, 0);
+	// The authority's clock says four seconds before midnight when ours says
+	// one second after: a drift nobody would call a jump.
+	let _tsa = with_tsa(dir.path(), midnight - 4).await;
+	let root = crate::evidence::service::root_of(dir.path());
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(midnight - 300, accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let start = Instant::now();
+	let status = tasks.tick_at(midnight + 1, start).await;
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_none(),
+		"the day was sealed a second after midnight by the clock: {:?}",
+		status.errors
+	);
+	assert_eq!(
+		status.held, None,
+		"within the seal's grace: {:?}",
+		status.errors
+	);
+}
+
+#[tokio::test]
+async fn a_token_from_before_the_day_ended_is_not_kept() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let midnight = at(DAY + 1, 0);
+	// An authority whose clock is behind ours by more than the margin.
+	let _tsa = with_tsa(dir.path(), midnight - 4).await;
+	let root = crate::evidence::service::root_of(dir.path());
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(midnight - 300, accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let start = Instant::now();
+	tasks.tick_at(midnight + 1, start).await;
+	// Past the margin the day is sealed, and the token asked for is refused.
+	let later = midnight + crate::evidence::timeref::SEAL_MARGIN_SECS + 60;
+	tasks
+		.tick_at(later, start + Duration::from_secs(later - midnight - 1))
+		.await;
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_some(),
+		"the day was not sealed past the margin"
+	);
+	assert!(
+		!crate::evidence::checkpoint::files(service.root(), Day(DAY))
+			.tsr
+			.exists(),
+		"a token from before the day ended was written, once and for ever"
+	);
+	let waiting = crate::evidence::tsa::stamp::waiting(service.root()).expect("state");
+	assert!(
+		waiting[&Day(DAY).name()].last_error.contains("not kept"),
+		"{waiting:?}"
+	);
+}
+
+#[tokio::test]
+async fn a_start_hours_ahead_of_the_newest_record_does_not_seal_the_open_day() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// The newest record is at 10:00; the authority says 11:00; the machine says
+	// it is 08:00 the next day, 21 hours too far on.
+	let _tsa = with_tsa(dir.path(), at(DAY, 11)).await;
+	let root = crate::evidence::service::root_of(dir.path());
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY, 10), accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_at(at(DAY + 1, 8), Instant::now()).await;
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_none(),
+		"the open day was sealed on a clock the authority contradicts"
+	);
+	assert!(status.held.is_some());
+	// The record of the real day still has a day to go to.
+	service
+		.abandon(uuid::Uuid::from_u128(9), "test")
+		.expect("the day was not sealed");
+}
