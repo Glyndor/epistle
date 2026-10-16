@@ -130,6 +130,23 @@ impl Config {
 				)));
 			}
 		}
+		// Defer promises that nothing passes unscanned. A message over
+		// `clamd_max_bytes` is never sent to clamd, so every message the
+		// server accepts has to fit under it.
+		let largest = match self.max_message_size.unwrap_or(0) {
+			0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+			size => size,
+		};
+		if self.antispam.clamd_socket.is_some()
+			&& self.antispam.clamd_on_error == ClamdOnError::Defer
+			&& largest > self.antispam.clamd_max_bytes as u64
+		{
+			return Err(ConfigError::Invalid(format!(
+				"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes ({}) of at least \
+				 max_message_size ({largest}): a larger message would pass unscanned",
+				self.antispam.clamd_max_bytes
+			)));
+		}
 		// The attachment policy is the other content screen.
 		self.validate_attachments()
 	}

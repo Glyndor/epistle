@@ -119,3 +119,42 @@ fn clamd_on_error_defaults_to_accept_and_takes_defer() {
 		"{error}"
 	);
 }
+
+const CLAMD: &str = "[antispam]\nclamd_socket = '/run/clamav/clamd.sock'\n";
+
+#[test]
+fn defer_needs_clamd_to_take_every_message_the_server_accepts() {
+	// 50 MiB messages against the default 25 MiB clamd limit: the largest
+	// ones would pass unscanned, which defer promises never to allow.
+	let error = load(&format!(
+		"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'defer'\n"
+	))
+	.expect_err("a message over clamd_max_bytes would pass unscanned");
+	let message = error.to_string();
+	assert!(
+		message.contains(
+			"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes (26214400) of at least \
+			 max_message_size (52428800)"
+		),
+		"{message}"
+	);
+}
+
+#[test]
+fn defer_is_accepted_when_clamd_takes_the_largest_message() {
+	load(&format!(
+		"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'defer'\nclamd_max_bytes = 52428800\n"
+	))
+	.expect("clamd_max_bytes covers max_message_size");
+	load(&format!("{CLAMD}clamd_on_error = 'defer'\n")).expect("the defaults agree");
+}
+
+#[test]
+fn the_size_rule_applies_only_to_defer_with_clamd() {
+	load(&format!(
+		"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'accept'\n"
+	))
+	.expect("accept keeps its behaviour");
+	load("max_message_size = 52428800\n[antispam]\nclamd_on_error = 'defer'\n")
+		.expect("no clamd, nothing to scan");
+}
