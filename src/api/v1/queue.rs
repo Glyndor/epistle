@@ -83,6 +83,14 @@ pub async fn remove(
 	if state.spool().load(id).is_err() {
 		return Err(ApiError::not_found("no such queue entry"));
 	}
-	state.spool().remove(id).map_err(|_| ApiError::internal())?;
+	state
+		.spool()
+		.remove(id)
+		.map_err(|error| match error.kind() {
+			std::io::ErrorKind::ResourceBusy => ApiError::conflict(
+				"the entry has evidence outcomes waiting to be written: it stays until they are",
+			),
+			_ => ApiError::internal(),
+		})?;
 	Ok(Json(Removed { removed: id }))
 }

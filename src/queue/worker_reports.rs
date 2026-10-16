@@ -23,7 +23,7 @@ fn message_id_of(entry: &SpoolEntry) -> Option<String> {
 
 /// The number of the attempt a conversation just made for `recipient`,
 /// counting from one: those recorded before it, plus this one.
-fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
+pub(super) fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
 	entry
 		.envelope
 		.recipient_state(recipient)
@@ -120,6 +120,17 @@ impl Worker {
 					state.reported = true;
 					state.last_error = Some("recipient is on the suppression list".into());
 					envelope.set_recipient_state(recipient, state);
+					super::evidence::intend(
+						envelope,
+						&super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Suppressed,
+							attempt: 0,
+							remote: None,
+							reply: Some("recipient is on the suppression list"),
+							facts: None,
+						},
+					);
 				}
 				envelope.settle();
 			})?;
@@ -405,7 +416,20 @@ impl Worker {
 				if state.last_error.is_none() {
 					state.last_error = Some("message expired in the queue".into());
 				}
+				let reason = state.last_error.clone().unwrap_or_default();
+				let (attempts, remote) = (state.attempts, state.remote.clone());
 				envelope.set_recipient_state(recipient, state);
+				super::evidence::intend(
+					envelope,
+					&super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Expired,
+						attempt: attempts,
+						remote: remote.as_deref(),
+						reply: Some(&reason),
+						facts: None,
+					},
+				);
 			}
 			envelope.settle();
 		})?;

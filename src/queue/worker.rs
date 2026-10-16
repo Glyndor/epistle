@@ -332,7 +332,6 @@ impl Worker {
 	/// returns once they have all ended. Returns the number of entries that
 	/// had at least one recipient delivered in this pass.
 	pub async fn pass(&self) -> std::io::Result<usize> {
-		self.write_waiting_outcomes();
 		let mut schedule = scheduler::Schedule::default();
 		self.scan(&mut schedule)?;
 		self.drain(&mut schedule).await;
@@ -415,6 +414,34 @@ impl Worker {
 					}
 				}
 				envelope.set_recipient_state(recipient, state);
+				// What this delivery owes the evidence log is saved with it.
+				let kind = match result {
+					Ok(()) => Some(crate::evidence::record::OutcomeKind::Delivered),
+					Err(DeliveryError::Permanent(_)) => {
+						Some(crate::evidence::record::OutcomeKind::Bounced)
+					}
+					Err(_) => None,
+				};
+				if let Some(kind) = kind
+					&& !retry_now.contains(recipient)
+				{
+					let reason = match result {
+						Err(DeliveryError::Permanent(reason)) => Some(reason.as_str()),
+						_ => None,
+					};
+					evidence::intend(
+						envelope,
+						&evidence::Recorded {
+							recipient,
+							result: kind,
+							attempt: reports::attempt_of(entry, recipient),
+							remote: Some(conversation.remote.as_deref().unwrap_or("-")),
+							reply: reason,
+							facts: (kind == crate::evidence::record::OutcomeKind::Delivered)
+								.then_some(&conversation.facts),
+						},
+					);
+				}
 			}
 			envelope.settle();
 		})?;

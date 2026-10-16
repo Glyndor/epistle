@@ -501,8 +501,17 @@ impl FsSpool {
 	}
 
 	/// Remove a spooled message after successful processing.
+	///
+	/// An entry whose outcomes the evidence log has not taken yet is not
+	/// removed: that would erase the only trace of a delivery that was made.
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
 		let _guard = self.lock()?;
+		if !self.read_envelope_unlocked(id)?.outcomes_pending.is_empty() {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::ResourceBusy,
+				"the entry has evidence outcomes waiting to be written: it stays until they are",
+			));
+		}
 		// Envelope first: a message file without an envelope is invisible.
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Eml)?)?;

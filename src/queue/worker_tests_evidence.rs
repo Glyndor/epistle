@@ -262,3 +262,110 @@ async fn an_outcome_keeps_the_retention_of_its_acceptance_not_the_policy_of_the_
 		"the policy of the day was used"
 	);
 }
+
+#[tokio::test]
+async fn a_delivery_whose_outcome_was_never_attempted_is_written_by_the_next_worker() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	let remote = FakeRemote::default();
+	remote.script("remote.example", Script::default());
+	// A worker that dies before it writes anything: no evidence service, so
+	// the delivery is settled and nothing is recorded.
+	Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example")
+		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
+		.with_suppression(SuppressionList::open(dir.path()).expect("suppression"))
+		.pass()
+		.await
+		.expect("pass");
+	assert_eq!(remote.copies("ana@remote.example"), 1);
+	assert!(outcomes(dir.path()).is_empty());
+	let left = FsSpool::open(dir.path())
+		.expect("spool")
+		.list()
+		.expect("list");
+	assert_eq!(left.len(), 1, "the entry went with its outcome unwritten");
+	// The next worker has the service and finds what is owed.
+	worker(
+		dir.path(),
+		FsSpool::open(dir.path()).expect("spool"),
+		&remote,
+	)
+	.pass()
+	.await
+	.expect("pass");
+	let written = outcomes(dir.path());
+	assert_eq!(written.len(), 1, "{written:?}");
+	assert_eq!(written[0].result, OutcomeKind::Delivered);
+	assert_eq!(remote.copies("ana@remote.example"), 1, "sent again");
+	assert!(
+		FsSpool::open(dir.path())
+			.expect("spool")
+			.list()
+			.expect("list")
+			.is_empty()
+	);
+}
+
+#[tokio::test]
+async fn the_running_worker_retries_waiting_outcomes_without_a_pass() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	let blocked = block_evidence(dir.path());
+	let remote = FakeRemote::default();
+	remote.script("remote.example", Script::default());
+	let running = Arc::new(worker(dir.path(), spool, &remote));
+	let task = tokio::spawn(Arc::clone(&running).run(std::time::Duration::from_millis(20)));
+	let root = dir.path().to_path_buf();
+	tokio::task::yield_now().await;
+	// Delivered, and the entry waits for its outcome.
+	let started = std::time::Instant::now();
+	while remote.copies("ana@remote.example") == 0 {
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(10),
+			"never delivered"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+	}
+	std::fs::remove_dir(&blocked).expect("unblock");
+	let started = std::time::Instant::now();
+	while outcomes(&root).is_empty() {
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(10),
+			"the waiting outcome was never written"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+	}
+	task.abort();
+	assert_eq!(remote.copies("ana@remote.example"), 1);
+}
+
+#[test]
+fn an_entry_with_outcomes_waiting_cannot_be_removed_from_outside_the_worker() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	let id = spool.list().expect("list")[0];
+	spool
+		.update_envelope(id, |envelope| {
+			envelope
+				.outcomes_pending
+				.push(crate::storage::PendingOutcome {
+					recipient: "ana@remote.example".into(),
+					result: OutcomeKind::Delivered,
+					attempt: 1,
+					remote: None,
+					reply: None,
+					tls: None,
+					dane: false,
+					mta_sts: None,
+				});
+		})
+		.expect("pending");
+	let refused = spool
+		.remove(id)
+		.expect_err("removed with an outcome waiting");
+	assert!(
+		refused.to_string().contains("evidence outcomes waiting"),
+		"{refused}"
+	);
+	assert_eq!(spool.list().expect("list").len(), 1);
+}

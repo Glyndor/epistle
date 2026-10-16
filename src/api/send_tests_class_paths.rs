@@ -304,3 +304,43 @@ async fn over_jmap_the_bound_class_is_a_floor_for_every_requested_class() {
 		}
 	}
 }
+
+#[tokio::test]
+async fn an_entry_with_evidence_outcomes_waiting_is_not_removed_over_the_api() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (state, _) = state(dir.path());
+	let app = router(state);
+	let (_, body) = send(&app, json!({"class": "transactional"})).await;
+	let id = body["queued"].as_str().expect("id").to_string();
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	spool
+		.update_envelope(uuid::Uuid::parse_str(&id).expect("uuid"), |envelope| {
+			envelope
+				.outcomes_pending
+				.push(crate::storage::PendingOutcome {
+					recipient: "bob@elsewhere.example".into(),
+					result: crate::evidence::record::OutcomeKind::Delivered,
+					attempt: 1,
+					remote: None,
+					reply: None,
+					tls: None,
+					dane: false,
+					mta_sts: None,
+				});
+		})
+		.expect("pending");
+	let (status, body) = request_with_body(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some(TOKEN.as_str()),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(
+		spool.list().expect("list").len(),
+		1,
+		"the entry was removed"
+	);
+}

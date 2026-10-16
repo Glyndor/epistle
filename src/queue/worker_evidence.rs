@@ -20,6 +20,40 @@ pub(super) struct Recorded<'a> {
 	pub(super) facts: Option<&'a SessionFacts>,
 }
 
+/// The outcome as it is kept in an envelope.
+fn pending_from(outcome: &Recorded<'_>) -> PendingOutcome {
+	PendingOutcome {
+		recipient: outcome.recipient.to_string(),
+		result: outcome.result,
+		attempt: outcome.attempt,
+		remote: outcome
+			.remote
+			.filter(|remote| !remote.is_empty() && *remote != "-")
+			.map(String::from),
+		reply: outcome
+			.facts
+			.and_then(|facts| facts.reply.clone())
+			.or_else(|| outcome.reply.map(String::from)),
+		tls: outcome.facts.and_then(|facts| facts.tls.clone()),
+		dane: outcome.facts.is_some_and(|facts| facts.dane),
+		mta_sts: outcome.facts.and_then(|facts| facts.mta_sts.clone()),
+	}
+}
+
+/// Note in `envelope`, to be saved with the state of the delivery it comes
+/// from, that this outcome is owed to the evidence log. Only for entries
+/// whose evidence is mandatory; the others lose nothing the log requires.
+pub(super) fn intend(envelope: &mut Envelope, outcome: &Recorded<'_>) {
+	if !envelope.evidence || !envelope.class.evidence_mandatory() {
+		return;
+	}
+	let pending = pending_from(outcome);
+	if !envelope.outcomes_pending.contains(&pending) {
+		envelope.outcomes_pending.push(pending);
+	}
+	envelope.last_error = Some("an evidence outcome is waiting to be written".into());
+}
+
 impl Worker {
 	/// Record the outcomes of messages that keep evidence through `service`.
 	pub fn with_evidence(mut self, service: Arc<EvidenceService>) -> Self {
@@ -27,47 +61,35 @@ impl Worker {
 		self
 	}
 
-	/// Record one outcome when `envelope` keeps evidence. The delivery has
-	/// happened, so for mail whose evidence is mandatory an outcome the log
-	/// would not take is kept in the envelope and the entry stays in the
-	/// queue until it is written, never sent again; the failure is an error
-	/// in the log, not a warning.
+	/// Write the outcome of a delivery that was made, and let go of the note
+	/// kept for it. The note (see [`intend`]) was written to the envelope in
+	/// the same step as the delivery itself, so a worker that dies, or a log
+	/// that will not take the record, leaves the outcome owed and the entry in
+	/// the queue, never sent again. Mail whose evidence is not mandatory is
+	/// only warned about.
 	pub(super) fn record_outcome(&self, envelope: &Envelope, outcome: Recorded<'_>) {
 		let (Some(service), true) = (&self.evidence, envelope.evidence) else {
 			return;
 		};
-		let pending = PendingOutcome {
-			recipient: outcome.recipient.to_string(),
-			result: outcome.result,
-			attempt: outcome.attempt,
-			remote: outcome
-				.remote
-				.filter(|remote| !remote.is_empty() && *remote != "-")
-				.map(String::from),
-			reply: outcome
-				.facts
-				.and_then(|facts| facts.reply.clone())
-				.or_else(|| outcome.reply.map(String::from)),
-			tls: outcome.facts.and_then(|facts| facts.tls.clone()),
-			dane: outcome.facts.is_some_and(|facts| facts.dane),
-			mta_sts: outcome.facts.and_then(|facts| facts.mta_sts.clone()),
-		};
-		if let Err(error) = self.write_outcome(service, envelope, &pending) {
-			if !envelope.class.evidence_mandatory() {
-				tracing::warn!(id = %envelope.id, %error, "evidence outcome not recorded");
-				return;
+		let pending = pending_from(&outcome);
+		match self.write_outcome(service, envelope, &pending) {
+			Ok(()) => {
+				let _ = self.spool.update_envelope(envelope.id, |stored| {
+					stored.outcomes_pending.retain(|kept| *kept != pending);
+					if stored.outcomes_pending.is_empty() {
+						stored.last_error = None;
+					}
+				});
 			}
-			tracing::error!(
-				id = %envelope.id,
-				%error,
-				"the outcome of a transactional message could not be recorded; it is kept and tried again"
-			);
-			let kept = self.spool.update_envelope(envelope.id, |stored| {
-				stored.outcomes_pending.push(pending);
-				stored.last_error = Some("an evidence outcome is waiting to be written".into());
-			});
-			if let Err(error) = kept {
-				tracing::error!(id = %envelope.id, %error, "the outcome could not be kept either");
+			Err(error) if envelope.class.evidence_mandatory() => {
+				tracing::error!(
+					id = %envelope.id,
+					%error,
+					"the outcome of a transactional message could not be recorded; it is kept and tried again"
+				);
+			}
+			Err(error) => {
+				tracing::warn!(id = %envelope.id, %error, "evidence outcome not recorded");
 			}
 		}
 	}
@@ -142,6 +164,12 @@ impl Worker {
 			if written.is_empty() {
 				continue;
 			}
+			// Under the lock `finish` takes: no conversation of this entry is
+			// being settled while its note is dropped and the entry let go.
+			let _settling = self
+				.settling
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
 			let Ok(updated) = self.spool.update_envelope(id, |stored| {
 				stored
 					.outcomes_pending
