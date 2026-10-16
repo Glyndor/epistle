@@ -92,10 +92,14 @@ pub(super) fn execute(
 }
 
 /// Read `file`, refusing anything but a regular file and anything over
-/// `limit` bytes. The size is checked before reading and the read itself
-/// stops one byte past the limit, so a file that grows meanwhile is still
-/// refused without being read whole.
-fn read_bounded(file: &Path, limit: usize) -> Result<Vec<u8>, ResourceError> {
+/// `limit` bytes. The file is opened once, without following a link and
+/// without waiting for a writer, and judged by the descriptor it opened, so
+/// it cannot be swapped between the check and the read. The size is checked
+/// before reading and the read itself stops one byte past the limit, so a
+/// file that grows meanwhile, or reports a size it does not have (`/proc`),
+/// is refused without being read whole.
+pub(super) fn read_bounded(file: &Path, limit: usize) -> Result<Vec<u8>, ResourceError> {
+	use std::os::unix::fs::OpenOptionsExt;
 	// Run by root, the account reads a staged copy: messages name the file
 	// the operator typed.
 	let named = crate::cli::staging::shown(&file.display().to_string());
@@ -106,7 +110,17 @@ fn read_bounded(file: &Path, limit: usize) -> Result<Vec<u8>, ResourceError> {
 			"{named} is larger than the message size limit ({limit} bytes)"
 		))
 	};
-	let metadata = std::fs::metadata(file).map_err(cannot)?;
+	let opened = std::fs::OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+		.open(file)
+		.map_err(|error| match error.raw_os_error() {
+			Some(libc::ELOOP) => {
+				ResourceError::refused(format!("{named} is a link; links are not followed"))
+			}
+			_ => cannot(error),
+		})?;
+	let metadata = opened.metadata().map_err(cannot)?;
 	if !metadata.is_file() {
 		return Err(ResourceError::refused(format!(
 			"{named} is not a regular file"
@@ -115,15 +129,18 @@ fn read_bounded(file: &Path, limit: usize) -> Result<Vec<u8>, ResourceError> {
 	if metadata.len() > limit as u64 {
 		return Err(too_large());
 	}
-	let mut raw = Vec::new();
-	std::fs::File::open(file)
-		.map_err(cannot)?
-		.take(limit as u64 + 1)
-		.read_to_end(&mut raw)
-		.map_err(cannot)?;
+	let raw = read_capped(opened, limit).map_err(cannot)?;
 	if raw.len() > limit {
 		return Err(too_large());
 	}
+	Ok(raw)
+}
+
+/// Everything `reader` gives, but never more than `limit` plus one byte: the
+/// extra byte tells a file of exactly `limit` from one that goes on.
+pub(super) fn read_capped(reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+	let mut raw = Vec::new();
+	reader.take(limit as u64 + 1).read_to_end(&mut raw)?;
 	Ok(raw)
 }
 
