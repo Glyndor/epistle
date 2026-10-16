@@ -124,3 +124,74 @@ fn up_down_stop_and_start_print_one_object_each() {
 		);
 	}
 }
+
+/// A compose file with the four services and their limits, as JSON.
+fn limits_compose(env: &crate::harness::Env) {
+	let compose = env.data_dir().join("compose/compose.yaml");
+	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
+	std::fs::write(
+		&compose,
+		r#"{"services":{
+			"mail":{"mem_limit":"1g","pids_limit":1024},
+			"db":{"mem_limit":"1g","pids_limit":256},
+			"clamav":{"mem_limit":"3g","pids_limit":128},
+			"freshclam":{"mem_limit":"2g","pids_limit":32}}}"#,
+	)
+	.expect("write compose");
+}
+
+/// `stdout` must be exactly one JSON document, however many lines it takes.
+fn single_document(output: &std::process::Output) -> serde_json::Value {
+	let mut documents = serde_json::Deserializer::from_slice(&output.stdout)
+		.into_iter::<serde_json::Value>()
+		.collect::<Result<Vec<_>, _>>()
+		.unwrap_or_else(|error| panic!("stdout is not JSON: {error}"));
+	assert_eq!(
+		documents.len(),
+		1,
+		"stdout holds {} documents: {}",
+		documents.len(),
+		String::from_utf8_lossy(&output.stdout)
+	);
+	documents.remove(0)
+}
+
+#[test]
+fn resources_prints_one_document() {
+	let env = env("");
+	limits_compose(&env);
+	let output = epistle_in(
+		&["stack", "--config", &env.config, "resources", "--json"],
+		b"",
+		None,
+	);
+	assert_eq!(output.status.code(), Some(0));
+	let listed = single_document(&output);
+	assert_eq!(listed["total_bytes"], 7 * 1024 * 1024 * 1024_u64);
+	assert_eq!(listed["services"][0]["service"], "clamav");
+}
+
+#[test]
+fn resources_set_prints_one_document() {
+	let env = env("");
+	limits_compose(&env);
+	let output = epistle_in(
+		&[
+			"stack",
+			"--config",
+			&env.config,
+			"resources",
+			"set",
+			"clamav",
+			"--memory",
+			"2g",
+			"--json",
+		],
+		b"",
+		None,
+	);
+	assert_eq!(output.status.code(), Some(0));
+	let changed = single_document(&output);
+	assert_eq!(changed["before"]["memory"], "3g");
+	assert_eq!(changed["after"]["memory"], "2g");
+}

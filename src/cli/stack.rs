@@ -200,8 +200,8 @@ pub(crate) enum StackAction {
 /// Run the `stack` subcommand the operator typed. With `json`, podup's
 /// own output has gone to stderr and a success prints one object naming
 /// the verb and the service: `{"result": "done", "action", "service"}`.
-/// `ps` prints its own JSON, and `logs` streams raw lines, so it refuses
-/// `--json`.
+/// `ps` and `resources` print their own JSON, and `logs` streams raw lines,
+/// so it refuses `--json`.
 pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitCode {
 	let (verb, service) = match &cli {
 		StackCli::Logs { .. } if json => {
@@ -219,7 +219,11 @@ pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitC
 		StackCli::Restart { service } => ("restart", service.clone()),
 		StackCli::Stop { service } => ("stop", service.clone()),
 		StackCli::Start { service } => ("start", service.clone()),
-		_ => ("", None),
+		// These print their own output (or none), so no object follows.
+		StackCli::Logs { .. }
+		| StackCli::Resources { .. }
+		| StackCli::Rollback { .. }
+		| StackCli::RollbackDb => return run(config, cli.into()),
 	};
 	let code = run(config, cli.into());
 	if !json || code != ExitCode::SUCCESS {
