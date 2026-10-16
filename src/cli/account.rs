@@ -511,7 +511,7 @@ pub(super) fn run(
 		Subcommand::Set {
 			name,
 			default_class,
-		} => super::account_class::set(config_path, &name, &default_class),
+		} => super::account_class::set(config_path, &name, &default_class, json, out),
 		Subcommand::SaveSent { name, state } => {
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,

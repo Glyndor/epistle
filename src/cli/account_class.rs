@@ -7,7 +7,13 @@ use crate::evidence::MailClass;
 
 /// Bind `class` (or clear the binding with `none`) as the default class of
 /// the account `name`.
-pub(super) fn set(config_path: &Path, name: &str, class: &str) -> ExitCode {
+pub(super) fn set(
+	config_path: &Path,
+	name: &str,
+	class: &str,
+	json: bool,
+	out: &mut dyn std::io::Write,
+) -> ExitCode {
 	let class = match class {
 		"none" => None,
 		other => match crate::evidence::class::parse_arg(other) {
@@ -27,11 +33,16 @@ pub(super) fn set(config_path: &Path, name: &str, class: &str) -> ExitCode {
 	};
 	match bind(&data_dir, name, class) {
 		Ok(()) => {
-			match class {
-				Some(class) => println!("default class set to {class}"),
-				None => println!("default class cleared"),
-			}
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(match class {
+				Some(class) => format!("default class set to {class}"),
+				None => "default class cleared".to_string(),
+			});
+			let fields = serde_json::json!({
+				"account": name,
+				"default_class": class.map(|class| class.to_string()),
+			});
+			report.change("set", true, fields, None)
 		}
 		Err(error) => {
 			super::style::error(format_args!("account {name}: {error}"));

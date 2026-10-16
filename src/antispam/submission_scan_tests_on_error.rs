@@ -1,7 +1,6 @@
 //! `clamd_on_error` on submissions: with `defer`, a scan that could not run
 //! asks the client to retry instead of sending the message unscanned.
 
-
 use super::*;
 use crate::config::ClamdOnError;
 use crate::smtp::sink::MemorySink;

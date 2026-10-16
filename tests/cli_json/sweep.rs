@@ -277,6 +277,32 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("api-key revoke", &["ci", "--yes"], Done),
 	("account remove", &["alice", "--queue", "drain", "--yes"], Done),
 	("db status", &[], Refused(3)),
+
+	("evidence verify", &[], Done),
+	("evidence policy show", &[], Done),
+	(
+		"evidence policy set",
+		&["--class", "personal", "--mode", "metadata", "--days", "30"],
+		Done,
+	),
+	("evidence timestamp show", &[], Done),
+	("evidence timestamp disable", &["--yes"], Done),
+	("evidence timestamp enable", &[], Done),
+	("evidence key show", &[], Refused(2)),
+	("evidence key rotate", &["--yes"], Done),
+	("evidence acknowledge", &["--reason", "sweep", "--yes"], Done),
+	("evidence clock accept", &["--yes"], Done),
+	(
+		"evidence export",
+		&["--message-id", "<none@example.org>", "--out", "@TMP/sweep-bundle"],
+		Refused(2),
+	),
+	(
+		"evidence check",
+		&["@TMP/sweep-no-bundle", "--key", "abababababababababababababababababababababababababababababababab"],
+		Refused(1),
+	),
+	("account set", &["bob", "--default-class", "marketing"], Done),
 	("stack resources", &[], Done),
 	("stack resources set", &["clamav", "--memory", "2g"], Done),
 ];
