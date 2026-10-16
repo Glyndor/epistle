@@ -19,6 +19,7 @@ use super::anchor;
 use super::chain::{CHAIN_DIR, Chain};
 use super::checkpoint::{self, Checkpoint, files};
 use super::day::Day;
+use super::final_break::FinalBreak;
 use super::key;
 use super::merkle::{TreeBuilder, leaf_hash};
 use super::record::{Entry, Position, hash_from_hex, sha256, to_hex};
@@ -69,37 +70,6 @@ fn broken(day: Day, why: impl Into<String>) -> Break {
 		line: 0,
 		problem: Problem::Checkpoint(why.into()),
 	}
-}
-
-/// A break at `line` of `day` that names the state it describes, so an
-/// acknowledgement of it covers that state and no other.
-fn broken_in(day: Day, line: u64, why: &str, state: &str) -> Break {
-	Break {
-		day,
-		line,
-		problem: Problem::Checkpoint(format!("{why} [{state}]")),
-	}
-}
-
-/// A digest of everything a break was judged from, in full: two states
-/// that differ in any byte of it are two breaks, however alike they look.
-fn state_id(parts: &[String]) -> String {
-	let mut all = Vec::new();
-	for part in parts {
-		all.extend_from_slice(&(part.len() as u64).to_be_bytes());
-		all.extend_from_slice(part.as_bytes());
-	}
-	to_hex(&sha256(&all))
-}
-
-fn json_of(value: &impl serde::Serialize) -> String {
-	serde_json::to_string(value).unwrap_or_default()
-}
-
-/// What the purge anchor mismatch names: the whole anchor and the whole
-/// purge record it was compared with.
-fn mismatch_state(anchor: &anchor::Anchor, purge: &super::record::Purge) -> String {
-	format!("state {}", state_id(&[json_of(anchor), json_of(purge)]))
 }
 
 /// What the walk carries from one day to the next. Nothing of it is
@@ -248,62 +218,71 @@ fn final_checks(
 	(from_start, to_end): (bool, bool),
 	head: Option<&super::head::Head>,
 ) -> Vec<Break> {
-	let whole = walker.first_day;
-	let mut found: Vec<Break> = Vec::new();
+	let whole = walker.first_day.name();
+	let mut found: Vec<FinalBreak> = Vec::new();
 	let timeline =
 		super::rotation::Timeline::new(walker.lineage.clone(), walker.handovers.clone(), to_end);
+	// What the key checks were judged from, besides the day itself.
+	let placed: Vec<(String, u64, &super::rotation::Rotation)> = walker
+		.handovers
+		.iter()
+		.map(|((day, line), rotation)| (day.name(), *line, rotation))
+		.collect();
+	let inputs = serde_json::to_string(&(&walker.lineage, placed)).unwrap_or_default();
 	// A change of signer between two sealed days needs the record that
 	// hands over, even when the walk stopped before the end of the chain.
 	let mut previous = walker.before.as_deref();
 	for (day, signer, checkpoint) in &walker.signers {
-		let state = format!(
-			"state {}",
-			state_id(&[day.name(), signer.clone(), checkpoint.clone()])
-		);
 		if let Err(fault) = timeline.check_seal(signer, *day) {
-			found.push(broken_in(*day, 0, &fault.to_string(), &state));
+			found.push(FinalBreak::Signer {
+				day: day.name(),
+				key: signer.clone(),
+				checkpoint: checkpoint.clone(),
+				why: fault.to_string(),
+				timeline: inputs.clone(),
+			});
 		} else if let Some(before) = previous
 			&& before != signer
 			&& !timeline.explains(before, signer, *day)
 		{
-			found.push(broken_in(
-				*day,
-				0,
-				"signed with a different evidence key than the day before, and no rotation record explains it",
-				&state,
-			));
+			found.push(FinalBreak::Switch {
+				day: day.name(),
+				key: signer.clone(),
+				before: before.to_string(),
+				checkpoint: checkpoint.clone(),
+				timeline: inputs.clone(),
+			});
 		}
 		previous = Some(signer);
 	}
 	for ((day, line), rotation) in &walker.handovers {
-		let state = format!("state {}", state_id(&[json_of(rotation)]));
-		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
-			found.push(broken_in(*day, *line, why, &state));
-		} else if rotation.day != day.name() {
-			found.push(broken_in(
-				*day,
-				*line,
-				"the key rotation record names another day than the one it sits in",
-				&state,
-			));
-		}
+		let why = match super::rotation::check_record(evidence_root, rotation) {
+			Err(why) => why,
+			Ok(()) if rotation.day != day.name() => {
+				"the key rotation record names another day than the one it sits in"
+			}
+			Ok(()) => continue,
+		};
+		found.push(FinalBreak::HandOver {
+			day: day.name(),
+			line: *line,
+			record: rotation.clone(),
+			files: super::rotation::files_digest(evidence_root, rotation),
+			why: why.to_string(),
+		});
 	}
 	for ((day, line), purge) in &walker.purges {
 		if let Err(why) =
 			super::retention::check_statement(evidence_root, purge, (*day, *line), &timeline)
 		{
-			found.push(broken_in(
-				*day,
-				*line,
-				why,
-				&format!(
-					"state {}",
-					state_id(&[
-						json_of(purge),
-						super::retention::statement_files_digest(evidence_root, purge)
-					])
-				),
-			));
+			found.push(FinalBreak::Purge {
+				day: day.name(),
+				line: *line,
+				record: purge.clone(),
+				files: super::retention::statement_files_digest(evidence_root, purge),
+				timeline: inputs.clone(),
+				why: why.to_string(),
+			});
 		}
 	}
 	match (purged, &walker.last_purge) {
@@ -312,20 +291,17 @@ fn final_checks(
 				|| anchor.checkpoint != purge.checkpoint
 				|| anchor.through != purge.through =>
 		{
-			found.push(broken_in(
-				whole,
-				0,
-				"the purge anchor does not match the last purge record",
-				&mismatch_state(anchor, purge),
-			));
+			found.push(FinalBreak::AnchorMismatch {
+				day: whole.clone(),
+				anchor: anchor.clone(),
+				record: purge.clone(),
+			});
 		}
 		(Some(anchor), None) if from_start && to_end => {
-			found.push(broken_in(
-				whole,
-				0,
-				"days were purged without a purge record",
-				&format!("state {}", state_id(&[json_of(anchor)])),
-			));
+			found.push(FinalBreak::AnchorOrphan {
+				day: whole.clone(),
+				anchor: anchor.clone(),
+			});
 		}
 		_ => {}
 	}
@@ -335,23 +311,21 @@ fn final_checks(
 		|end| format!("{} {} {}", end.seq, to_hex(&end.hash), end.time),
 	);
 	if to_end && head.is_none() {
-		found.push(broken_in(
-			whole,
-			0,
-			"the head is missing: the evidence may have been restored from an older copy",
-			&format!("state {}", state_id(&[ends])),
-		));
+		found.push(FinalBreak::HeadMissing {
+			day: whole,
+			end: ends,
+		});
 	} else if to_end && !walker.head_seen {
-		let named = head.map_or_else(String::new, json_of);
-		found.push(broken_in(
-			whole,
-			0,
-			"rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)",
-			&format!("state {}", state_id(&[named, ends])),
-		));
+		found.push(FinalBreak::Rollback {
+			day: whole,
+			head: head.map_or_else(String::new, |head| {
+				serde_json::to_string(head).unwrap_or_default()
+			}),
+			end: ends,
+		});
 	}
 	found.truncate(MAX_FINAL_BREAKS);
-	found
+	found.iter().map(FinalBreak::to_break).collect()
 }
 
 fn walk_and_check(

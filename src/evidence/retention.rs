@@ -286,13 +286,22 @@ pub fn statement_files_digest(evidence_root: &Path, purge: &Purge) -> String {
 		return String::new();
 	};
 	let base = evidence_root.join(PURGES_DIR).join(through.name());
-	let digest = |extension: &str| {
-		checkpoint::read_bounded(&base.with_extension(extension), 1024 * 1024)
-			.ok()
-			.flatten()
-			.map_or_else(String::new, |bytes| to_hex(&sha256(&bytes)))
-	};
-	format!("{}:{}", digest("json"), digest("sig"))
+	let read = |path: &Path| checkpoint::read_bounded(path, 1024 * 1024).ok().flatten();
+	let digest = |bytes: Option<Vec<u8>>| bytes.map_or_else(String::new, |b| to_hex(&sha256(&b)));
+	let json = read(&base.with_extension("json"));
+	// The key the statement names: its published file is read to verify it.
+	let signer = json
+		.as_deref()
+		.and_then(|bytes| serde_json::from_slice::<Statement>(bytes).ok())
+		.map(|statement| statement.key)
+		.filter(|key| hash_from_hex(key).is_some())
+		.and_then(|key| read(&super::key::public_key_path(evidence_root, &key)));
+	format!(
+		"{}:{}:{}",
+		digest(json),
+		digest(read(&base.with_extension("sig"))),
+		digest(signer)
+	)
 }
 
 /// Whether the signed statement of `purge` is there, is the one the record

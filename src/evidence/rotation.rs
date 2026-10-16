@@ -167,6 +167,27 @@ pub fn ancestry(evidence_root: &Path, id: &str) -> Vec<Rotation> {
 	found
 }
 
+/// A digest of the files `rotation` is judged against: its statement and the
+/// published key of the key that handed over. A change in either, with the
+/// record the same, is another state of the same break.
+pub fn files_digest(evidence_root: &Path, rotation: &Rotation) -> String {
+	let digest = |path: PathBuf| {
+		super::checkpoint::read_bounded(&path, 4096)
+			.ok()
+			.flatten()
+			.map_or_else(String::new, |bytes| to_hex(&super::record::sha256(&bytes)))
+	};
+	let statement = match hash_from_hex(&rotation.new) {
+		Some(_) => digest(path(evidence_root, &rotation.new)),
+		None => String::new(),
+	};
+	let old = match hash_from_hex(&rotation.old) {
+		Some(_) => digest(key::public_key_path(evidence_root, &rotation.old)),
+		None => String::new(),
+	};
+	format!("{statement}:{old}")
+}
+
 /// The pinned key and every key before it, newest first, each with the day
 /// it handed over (`None` for the pinned key): what an operator publishes so
 /// a reader can anchor every key with its period.

@@ -18,6 +18,7 @@ pub mod class;
 pub mod day;
 #[cfg(test)]
 mod end_to_end_tests;
+mod final_break;
 pub mod head;
 pub mod key;
 pub mod lines;
