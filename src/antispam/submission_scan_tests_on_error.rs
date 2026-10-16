@@ -49,3 +49,45 @@ fn accept_sends_the_same_submission_unscanned() {
 	assert_eq!(outcome, Ok(()));
 	assert_eq!(handed_on, 1);
 }
+
+/// Submit [`message`] through a sink whose clamd cannot take it.
+fn submit_too_large(on_error: ClamdOnError, clamd: ClamdHook) -> (Result<(), String>, usize) {
+	let inner = Arc::new(MemorySink::new());
+	let clamd = Arc::new(clamd.with_on_error(on_error));
+	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None).expect("sink");
+	let outcome = sink
+		.submit(message(), uuid::Uuid::now_v7(), "alice", &BTreeMap::new())
+		.map_err(|error| error.smtp_reply().to_string());
+	(outcome, inner.messages().len())
+}
+
+const TOO_LARGE: &str = "552 5.3.4 message too large for the content scan\r\n";
+
+#[test]
+fn defer_refuses_a_submission_over_clamd_max_bytes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let clamd = ClamdHook::new(dir.path().join("clamd.sock")).with_max_bytes(4);
+	let (outcome, handed_on) = submit_too_large(ClamdOnError::Defer, clamd);
+	assert_eq!(outcome, Err(TOO_LARGE.to_string()));
+	assert_eq!(handed_on, 0, "nothing left unscanned");
+}
+
+#[test]
+fn accept_sends_a_submission_over_clamd_max_bytes_unscanned() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let clamd = ClamdHook::new(dir.path().join("clamd.sock")).with_max_bytes(4);
+	let (outcome, handed_on) = submit_too_large(ClamdOnError::Accept, clamd);
+	assert_eq!(outcome, Ok(()));
+	assert_eq!(handed_on, 1);
+}
+
+#[test]
+fn defer_refuses_a_submission_clamd_says_is_over_its_stream_limit() {
+	let fake = crate::antispam::clamd::fake::FakeClamd::start_replying(
+		"INSTREAM size limit exceeded. ERROR",
+	);
+	let (outcome, handed_on) =
+		submit_too_large(ClamdOnError::Defer, ClamdHook::new(fake.socket.clone()));
+	assert_eq!(outcome, Err(TOO_LARGE.to_string()));
+	assert_eq!(handed_on, 0);
+}

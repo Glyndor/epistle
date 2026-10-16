@@ -63,17 +63,61 @@ async fn defer_also_covers_a_clamd_that_does_not_answer_in_time() {
 }
 
 #[tokio::test]
-async fn defer_never_holds_back_a_message_over_the_size_limit() {
+async fn defer_refuses_for_good_a_message_over_the_size_limit() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let metrics = Arc::new(Metrics::new());
 	let hook = ClamdHook::new(missing_socket(dir.path()))
 		.with_on_error(ClamdOnError::Defer)
 		.with_max_bytes(4)
 		.with_metrics(metrics.clone());
-	// A retry would be just as large: deferring would only bounce it later.
-	assert_eq!(verdict(&hook, b"12345").await, HookVerdict::Accept);
+	// A retry would be just as large, and nothing may pass unscanned: the
+	// sender is told now instead of after days of retries.
+	assert_eq!(verdict(&hook, b"12345").await, HookVerdict::Refuse);
 	assert_eq!(counters(&metrics), (Some(0), Some(1)));
 	assert_eq!(hook.inspect(b"12345").await, Inspection::Skipped);
+}
+
+#[tokio::test]
+async fn accept_still_lets_a_message_over_the_size_limit_through() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let hook = ClamdHook::new(missing_socket(dir.path())).with_max_bytes(4);
+	assert_eq!(verdict(&hook, b"12345").await, HookVerdict::Accept);
+}
+
+const STREAM_LIMIT: &str = "INSTREAM size limit exceeded. ERROR";
+
+#[tokio::test]
+async fn defer_refuses_for_good_what_clamd_says_is_over_its_stream_limit() {
+	let clamd = FakeClamd::start_replying(STREAM_LIMIT);
+	let metrics = Arc::new(Metrics::new());
+	let hook = ClamdHook::new(clamd.socket.clone())
+		.with_on_error(ClamdOnError::Defer)
+		.with_metrics(metrics.clone());
+	assert_eq!(
+		verdict(&hook, b"Subject: s\r\n\r\nhi\r\n").await,
+		HookVerdict::Refuse
+	);
+	// clamd answered: this is not a failure of clamd to count or retry.
+	assert_eq!(counters(&metrics), (Some(0), Some(1)));
+	assert_eq!(
+		hook.inspect(b"Subject: s\r\n\r\nhi\r\n").await,
+		Inspection::Skipped
+	);
+}
+
+#[tokio::test]
+async fn accept_lets_through_what_clamd_says_is_over_its_stream_limit() {
+	let clamd = FakeClamd::start_replying(STREAM_LIMIT);
+	let hook = ClamdHook::new(clamd.socket.clone());
+	assert_eq!(verdict(&hook, b"x").await, HookVerdict::Accept);
+}
+
+#[tokio::test]
+async fn defer_keeps_retrying_an_error_that_may_pass() {
+	// Another clamd error can be transient (a reload, a full disk): defer.
+	let clamd = FakeClamd::start_replying("stream: lstat() failed. ERROR");
+	let hook = ClamdHook::new(clamd.socket.clone()).with_on_error(ClamdOnError::Defer);
+	assert_eq!(verdict(&hook, b"x").await, HookVerdict::Defer);
 }
 
 #[tokio::test]

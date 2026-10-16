@@ -56,6 +56,11 @@ pub enum SinkError {
 	/// nothing passes unscanned.
 	#[error("content scan unavailable")]
 	ScanUnavailable,
+	/// The message is over what clamd can take, and `clamd_on_error =
+	/// "defer"` lets nothing pass unscanned. Permanent: a retry is just as
+	/// large.
+	#[error("message too large for the content scan")]
+	ScanTooLarge,
 }
 
 impl SinkError {
@@ -75,6 +80,9 @@ impl SinkError {
 			}
 			SinkError::ScanUnavailable => {
 				Reply::single(451, "4.7.1 content scan unavailable, try again later")
+			}
+			SinkError::ScanTooLarge => {
+				Reply::single(552, "5.3.4 message too large for the content scan")
 			}
 		}
 	}

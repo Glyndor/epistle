@@ -16,9 +16,24 @@ use crate::config::ClamdOnError;
 use crate::metrics::Metrics;
 
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 30;
-pub(crate) const DEFAULT_MAX_BYTES: usize = 25 * 1024 * 1024;
+/// Room the server's own headers (trace, authentication) take on top of a
+/// message of the largest size it accepts, before the scan sees it.
+pub(crate) const HEADROOM_BYTES: usize = 64 * 1024;
+/// The default message size plus [`HEADROOM_BYTES`].
+pub(crate) const DEFAULT_MAX_BYTES: usize = crate::smtp::session::MAX_MESSAGE_SIZE + HEADROOM_BYTES;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_REPLY_BYTES: usize = 8 * 1024;
+
+/// clamd's answer when a stream is over its `StreamMaxLength`: the same
+/// message gets it every time.
+const STREAM_LIMIT_REPLY: &str = "INSTREAM size limit exceeded. ERROR";
+
+/// What clamd said about one stream.
+enum Reply {
+	Clean,
+	Found(String),
+	TooLarge,
+}
 
 /// Scan raw messages using clamd's NUL-framed INSTREAM protocol.
 pub struct ClamdHook {
@@ -43,9 +58,11 @@ pub enum Inspection {
 	/// The message was not scanned because clamd failed or timed out.
 	/// Callers accept or defer it, as `clamd_on_error` says.
 	Unscanned,
-	/// The message was over `clamd_max_bytes` and never sent to clamd. It
-	/// is accepted whatever `clamd_on_error` says: a retry would be just as
-	/// large, so deferring it would only bounce it days later.
+	/// The message is too large for clamd: over `clamd_max_bytes` and never
+	/// sent, or clamd answered that it is over its own stream limit. A
+	/// retry would be just as large, so it is never deferred. It is
+	/// accepted unscanned under `clamd_on_error = "accept"` and refused
+	/// for good under `"defer"`, which lets nothing pass unscanned.
 	Skipped,
 }
 
@@ -111,7 +128,7 @@ impl ClamdHook {
 		&self,
 		mut stream: impl AsyncRead + AsyncWrite + Unpin,
 		raw: &[u8],
-	) -> io::Result<Option<String>> {
+	) -> io::Result<Reply> {
 		stream.write_all(b"zINSTREAM\0").await?;
 		for chunk in raw.chunks(CHUNK_BYTES) {
 			stream
@@ -131,7 +148,10 @@ impl ClamdHook {
 		let reply = std::str::from_utf8(&reply[..reply.len() - 1])
 			.map_err(|_| io::Error::other("invalid clamd reply encoding"))?;
 		if reply == "stream: OK" {
-			return Ok(None);
+			return Ok(Reply::Clean);
+		}
+		if reply == STREAM_LIMIT_REPLY {
+			return Ok(Reply::TooLarge);
 		}
 		if let Some(signature) = reply
 			.strip_prefix("stream: ")
@@ -143,7 +163,7 @@ impl ClamdHook {
 				message_bytes = raw.len(),
 				"clamd detected a signature"
 			);
-			return Ok(Some(signature.to_string()));
+			return Ok(Reply::Found(signature.to_string()));
 		}
 		// Never include an unrecognized reply in logs: it may contain message data.
 		Err(io::Error::other(if reply.ends_with(" ERROR") {
@@ -192,6 +212,7 @@ impl ClamdHook {
 			match inspection.await {
 				Inspection::Infected(_) => self.on_found,
 				Inspection::Unscanned if self.on_error == ClamdOnError::Defer => HookVerdict::Defer,
+				Inspection::Skipped if self.on_error == ClamdOnError::Defer => HookVerdict::Refuse,
 				Inspection::Clean | Inspection::Unscanned | Inspection::Skipped => {
 					HookVerdict::Accept
 				}
@@ -220,11 +241,20 @@ impl ClamdHook {
 		Box::pin(async move {
 			let exchange = async { self.exchange(connect.await?, &body).await };
 			match tokio::time::timeout(self.timeout, exchange).await {
-				Ok(Ok(found)) => {
+				Ok(Ok(reply)) => {
 					if let Some(health) = &self.health {
 						health.succeeded();
 					}
-					found.map_or(Inspection::Clean, Inspection::Infected)
+					match reply {
+						Reply::Clean => Inspection::Clean,
+						Reply::Found(signature) => Inspection::Infected(signature),
+						Reply::TooLarge => {
+							if let Some(metrics) = &self.metrics {
+								metrics.scanner_clamd_skipped();
+							}
+							Inspection::Skipped
+						}
+					}
 				}
 				Ok(Err(error)) => self.failed(&error, self.started.elapsed()),
 				Err(error) => self.failed(&error, self.started.elapsed()),

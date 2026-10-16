@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::{Config, ConfigError};
-use crate::antispam::clamd::{DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_SECS};
+use crate::antispam::clamd::{DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_SECS, HEADROOM_BYTES};
 use crate::antispam::hook::HookVerdict;
 
 /// Action to apply when clamd reports a signature.
@@ -132,18 +132,20 @@ impl Config {
 		}
 		// Defer promises that nothing passes unscanned. A message over
 		// `clamd_max_bytes` is never sent to clamd, so every message the
-		// server accepts has to fit under it.
+		// server accepts has to fit under it once the server has added its
+		// own headers.
 		let largest = match self.max_message_size.unwrap_or(0) {
 			0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
 			size => size,
 		};
 		if self.antispam.clamd_socket.is_some()
 			&& self.antispam.clamd_on_error == ClamdOnError::Defer
-			&& largest > self.antispam.clamd_max_bytes as u64
+			&& largest + HEADROOM_BYTES as u64 > self.antispam.clamd_max_bytes as u64
 		{
 			return Err(ConfigError::Invalid(format!(
 				"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes ({}) of at least \
-				 max_message_size ({largest}): a larger message would pass unscanned",
+				 max_message_size ({largest}) plus {HEADROOM_BYTES} for the headers the server adds: \
+				 a larger message would not be scanned",
 				self.antispam.clamd_max_bytes
 			)));
 		}

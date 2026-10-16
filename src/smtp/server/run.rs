@@ -414,6 +414,14 @@ impl Server {
 								.await?;
 								continue;
 							}
+							crate::antispam::hook::HookVerdict::Refuse => {
+								send(
+									&mut stream,
+									&crate::smtp::sink::SinkError::ScanTooLarge.smtp_reply(),
+								)
+								.await?;
+								continue;
+							}
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}

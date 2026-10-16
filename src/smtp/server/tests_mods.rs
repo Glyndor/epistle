@@ -30,6 +30,9 @@ mod tests_attachments;
 #[cfg(test)]
 #[path = "server_tests_clamd_defer.rs"]
 mod tests_clamd_defer;
+#[cfg(test)]
+#[path = "server_tests_clamd_toolarge.rs"]
+mod tests_clamd_toolarge;
 
 #[cfg(test)]
 #[path = "server_tests_trace.rs"]

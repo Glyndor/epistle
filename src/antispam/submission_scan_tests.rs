@@ -65,6 +65,9 @@ async fn a_submission_carrying_a_virus_is_refused_with_its_signature() {
 		Err(SinkError::ScanUnavailable) => {
 			panic!("expected a virus refusal, got a busy scanner")
 		}
+		Err(SinkError::ScanTooLarge) => {
+			panic!("expected a virus refusal, got a message too large to scan")
+		}
 		Ok(()) => panic!("expected a virus refusal, the submission was accepted"),
 	}
 	assert!(

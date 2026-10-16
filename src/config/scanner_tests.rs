@@ -28,7 +28,11 @@ fn scanner_defaults_and_overrides_load() {
 	);
 	assert_eq!(config.antispam.clamd_on_found, ClamdOnFound::Quarantine);
 	assert_eq!(config.antispam.clamd_timeout_secs, 30);
-	assert_eq!(config.antispam.clamd_max_bytes, 25 * 1024 * 1024);
+	// The default message size plus room for the headers the server adds.
+	assert_eq!(
+		config.antispam.clamd_max_bytes,
+		25 * 1024 * 1024 + 64 * 1024
+	);
 	let config = load("[antispam]\nclamd_socket = '/tmp/clamd.sock'\nclamd_on_found = 'reject'\nclamd_timeout_secs = 2\nclamd_max_bytes = 1024").expect("overrides");
 	assert_eq!(config.antispam.clamd_on_found, ClamdOnFound::Reject);
 	assert_eq!(config.antispam.clamd_timeout_secs, 2);
@@ -124,8 +128,8 @@ const CLAMD: &str = "[antispam]\nclamd_socket = '/run/clamav/clamd.sock'\n";
 
 #[test]
 fn defer_needs_clamd_to_take_every_message_the_server_accepts() {
-	// 50 MiB messages against the default 25 MiB clamd limit: the largest
-	// ones would pass unscanned, which defer promises never to allow.
+	// 50 MiB messages against the default clamd limit: the largest ones
+	// would pass unscanned, which defer promises never to allow.
 	let error = load(&format!(
 		"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'defer'\n"
 	))
@@ -133,19 +137,29 @@ fn defer_needs_clamd_to_take_every_message_the_server_accepts() {
 	let message = error.to_string();
 	assert!(
 		message.contains(
-			"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes (26214400) of at least \
-			 max_message_size (52428800)"
+			"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes (26279936) of at least \
+			 max_message_size (52428800) plus 65536 for the headers the server adds"
 		),
 		"{message}"
 	);
 }
 
 #[test]
-fn defer_is_accepted_when_clamd_takes_the_largest_message() {
-	load(&format!(
-		"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'defer'\nclamd_max_bytes = 52428800\n"
-	))
-	.expect("clamd_max_bytes covers max_message_size");
+fn defer_leaves_room_for_the_headers_added_before_the_scan() {
+	// A message of exactly max_message_size is stamped with trace and
+	// authentication headers before it is scanned.
+	let settings = |limit: u64| {
+		format!(
+			"max_message_size = 52428800\n{CLAMD}clamd_on_error = 'defer'\nclamd_max_bytes = {limit}\n"
+		)
+	};
+	let error = load(&settings(52428800)).expect_err("no room for the headers");
+	assert!(error.to_string().contains("plus 65536"), "{error}");
+	load(&settings(52428800 + 65536)).expect("room for the headers");
+}
+
+#[test]
+fn defer_is_accepted_with_the_defaults() {
 	load(&format!("{CLAMD}clamd_on_error = 'defer'\n")).expect("the defaults agree");
 }
 

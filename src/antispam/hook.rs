@@ -22,6 +22,10 @@ pub enum HookVerdict {
 	/// The scanner could not judge the message and is configured to hold
 	/// it back: answer with a temporary failure so the sender retries.
 	Defer,
+	/// The scanner cannot take this message and a retry will not change
+	/// that (it is over the size clamd accepts), and the operator asked
+	/// that nothing pass unscanned: refuse it for good.
+	Refuse,
 }
 
 type ScanFuture<'a> = Pin<Box<dyn Future<Output = HookVerdict> + Send + 'a>>;

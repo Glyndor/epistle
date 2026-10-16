@@ -85,9 +85,9 @@ a connection URL.
 |---|---|---|---|
 | `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail, and of what local accounts submit (see `scan_authenticated`). Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
 | `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
-| `clamd_on_error` | `accept` or `defer` | `accept` | What a scan clamd could not run does. `accept` lets the message through unscanned; `defer` answers `451 4.7.1 content scan unavailable, try again later`, inbound and on submission, so the sender retries and nothing passes unscanned. `epistle init` writes `defer` into a new configuration with clamd; an existing configuration without the key keeps `accept`. |
+| `clamd_on_error` | `accept` or `defer` | `accept` | What a scan clamd could not run does. `accept` lets the message through unscanned; `defer` answers `451 4.7.1 content scan unavailable, try again later`, inbound and on submission, so the sender retries and nothing passes unscanned. A message clamd can never take (see `clamd_max_bytes`) is refused for good with `552 5.3.4`, not retried. `epistle init` writes `defer` into a new configuration with clamd; an existing configuration without the key keeps `accept`. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
-| `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
+| `clamd_max_bytes` | integer | `26279936` (25 MiB + 64 KiB) | Messages above this size are not sent to clamd. With `clamd_on_error = "accept"` they are accepted unscanned; with `defer` they are refused with `552 5.3.4 message too large for the content scan`. The size counts the trace and authentication headers the server adds, so `defer` requires at least `max_message_size` + 64 KiB (the configuration is refused otherwise). A message exactly at the limit is scanned. |
 | `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
@@ -97,7 +97,7 @@ a connection URL.
 clamd_socket = "/run/clamav/clamd.sock"
 clamd_on_found = "quarantine"
 clamd_timeout_secs = 30
-clamd_max_bytes = 26214400
+clamd_max_bytes = 26279936
 ```
 
 Epistle sends the raw message using clamd's
@@ -105,16 +105,19 @@ Epistle sends the raw message using clamd's
 It decompresses nothing locally. Set `MaxScanSize` and `MaxRecursion` in
 `clamd.conf` to bound decompression, and enable `AlertExceedsMax yes` so
 exceeding those limits yields a detection handled by `clamd_on_found`.
-Set `StreamMaxLength` at least as high as `clamd_max_bytes`.
+Set `StreamMaxLength` at least as high as `clamd_max_bytes`; when clamd
+answers `INSTREAM size limit exceeded. ERROR` the message is treated as too
+large, like one over `clamd_max_bytes`, because every retry gets the same answer.
 See the [clamd configuration reference](https://github.com/Cisco-Talos/clamav/blob/main/docs/man/clamd.conf.5.in).
 
 Scanner errors, missing sockets, malformed replies, and timeouts increment
 `scanner_clamd_failed`, and the message follows `clamd_on_error`: accepted
-unscanned with `accept`, refused for now with `451 4.7.1` with `defer`. This
-includes `INSTREAM size limit exceeded. ERROR`. Oversize messages increment
-`scanner_clamd_skipped` instead and are always accepted, also with `defer`:
-a retry would be just as large. Keep `clamd_max_bytes` at least as high as
-`max_message_size` so no message skips the scan. The Prometheus names are
+unscanned with `accept`, refused for now with `451 4.7.1` with `defer`. A
+message too large for clamd (over `clamd_max_bytes`, or answered with
+`INSTREAM size limit exceeded. ERROR`) increments `scanner_clamd_skipped`
+instead and is never deferred, since a retry would be just as large: it is
+accepted unscanned with `accept`, and refused for good with `552 5.3.4` with
+`defer`, which is what keeps "nothing passes unscanned" true. The Prometheus names are
 `mail_scanner_clamd_failed_total` and `mail_scanner_clamd_skipped_total`.
 Failure warnings are limited to one per minute per hook; detections log the
 signature and message size without message content.

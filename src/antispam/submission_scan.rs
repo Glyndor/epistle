@@ -116,6 +116,15 @@ impl MessageSink for ScanningSink {
 			);
 			return Err(SinkError::ScanUnavailable);
 		}
+		// Too large for clamd, and a retry would be just as large: with defer
+		// nothing passes unscanned, so the submission is refused for good.
+		if inspection == Inspection::Skipped && self.defer_unscanned {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"a submission is too large for clamd; refusing it"
+			);
+			return Err(SinkError::ScanTooLarge);
+		}
 		if let Inspection::Infected(signature) = inspection {
 			let signature = bounded(&signature);
 			tracing::warn!(

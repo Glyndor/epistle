@@ -75,7 +75,7 @@ async fn stream_verdicts_and_failures() {
 			0,
 		),
 		(
-			b"INSTREAM size limit exceeded. ERROR\0",
+			b"stream: lstat() failed. ERROR\0",
 			HookVerdict::Reject,
 			HookVerdict::Accept,
 			1,
