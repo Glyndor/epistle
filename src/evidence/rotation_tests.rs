@@ -303,3 +303,29 @@ fn a_pinned_key_that_took_over_without_a_record_is_a_break() {
 		"2026-10-17: checkpoint: the pinned evidence key took over with no rotation record in the chain"
 	);
 }
+
+#[test]
+fn hand_overs_that_lead_back_to_a_key_already_met_stop_the_walk() {
+	let fixture = Fixture::new();
+	let a = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	let b = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	for (old, new) in [(&a, &b), (&b, &a)] {
+		let rotation = Rotation {
+			old: old.id(),
+			new: new.id(),
+			signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
+		};
+		std::fs::write(
+			path(fixture.root(), &new.id()),
+			serde_json::to_vec(&rotation).expect("json"),
+		)
+		.expect("statement");
+	}
+	EvidenceKey::promote_next(fixture.root(), &b.id()).expect("promote");
+	assert_eq!(
+		lineage(fixture.root()).expect("lineage"),
+		vec![b.id(), a.id()]
+	);
+	assert_eq!(ancestry(fixture.root(), &b.id()).len(), 1);
+}
