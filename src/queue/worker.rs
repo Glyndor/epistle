@@ -332,6 +332,7 @@ impl Worker {
 	/// returns once they have all ended. Returns the number of entries that
 	/// had at least one recipient delivered in this pass.
 	pub async fn pass(&self) -> std::io::Result<usize> {
+		self.write_waiting_outcomes();
 		let mut schedule = scheduler::Schedule::default();
 		self.scan(&mut schedule)?;
 		self.drain(&mut schedule).await;
@@ -469,7 +470,12 @@ impl Worker {
 		let envelope = self.spool.load_envelope(id)?;
 		let pending = envelope.pending();
 		if pending.is_empty() {
-			return self.spool.remove(id);
+			// An outcome the log has not taken keeps the entry: it is
+			// removed when the outcome is written.
+			return match envelope.outcomes_pending.is_empty() {
+				true => self.spool.remove(id),
+				false => Ok(()),
+			};
 		}
 		let age = pending
 			.iter()

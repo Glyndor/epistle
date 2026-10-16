@@ -20,8 +20,8 @@ use super::spool_permissions::{
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
 #[path = "spool_envelope.rs"]
 mod envelope;
-pub use envelope::Envelope;
 use envelope::LAST_ERROR_MAX;
+pub use envelope::{Envelope, PendingOutcome};
 
 /// Writes the evidence acceptance record for the bytes about to be queued.
 pub type EvidenceHook<'a> = &'a dyn Fn(&[u8]) -> std::io::Result<()>;
@@ -275,6 +275,7 @@ impl FsSpool {
 			extra: options.extra.clone(),
 			class: options.class,
 			evidence: options.evidence.is_some(),
+			outcomes_pending: Vec::new(),
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;

@@ -146,3 +146,89 @@ async fn a_message_without_evidence_records_nothing() {
 		.expect("pass");
 	assert!(outcomes(dir.path()).is_empty());
 }
+
+/// Put a directory where today's day file must go, so no record can be written.
+fn block_evidence(dir: &std::path::Path) -> std::path::PathBuf {
+	let today = crate::evidence::day::Day::of_epoch(crate::storage::delivery_log::now_epoch());
+	let blocked = dir
+		.join("evidence/chain")
+		.join(format!("{}.jsonl", today.name()));
+	std::fs::create_dir_all(&blocked).expect("block the day file");
+	blocked
+}
+
+#[tokio::test]
+async fn an_outcome_that_cannot_be_written_is_kept_and_written_later_without_sending_again() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	let blocked = block_evidence(dir.path());
+	let remote = FakeRemote::default();
+	remote.script("remote.example", Script::default());
+	let worker = worker(dir.path(), spool, &remote);
+	worker.pass().await.expect("pass");
+	assert_eq!(remote.copies("ana@remote.example"), 1, "delivered once");
+	let left = FsSpool::open(dir.path())
+		.expect("spool")
+		.list()
+		.expect("list");
+	assert_eq!(
+		left.len(),
+		1,
+		"the entry was settled with its outcome unwritten"
+	);
+	assert!(outcomes(dir.path()).is_empty());
+	// While it cannot be written the entry waits, and is not sent again.
+	worker.pass().await.expect("pass");
+	assert_eq!(remote.copies("ana@remote.example"), 1);
+	assert_eq!(
+		FsSpool::open(dir.path())
+			.expect("spool")
+			.list()
+			.expect("list")
+			.len(),
+		1
+	);
+	// The evidence log takes records again.
+	std::fs::remove_dir(&blocked).expect("unblock");
+	worker.pass().await.expect("pass");
+	let written = outcomes(dir.path());
+	assert_eq!(written.len(), 1, "{written:?}");
+	assert_eq!(written[0].result, OutcomeKind::Delivered);
+	assert_eq!(written[0].reply.as_deref(), Some("250 2.0.0 queued"));
+	assert_eq!(remote.copies("ana@remote.example"), 1, "sent again");
+	assert!(
+		FsSpool::open(dir.path())
+			.expect("spool")
+			.list()
+			.expect("list")
+			.is_empty(),
+		"the entry stayed after its outcome was written"
+	);
+}
+
+#[tokio::test]
+async fn personal_mail_is_still_settled_when_its_outcome_cannot_be_written() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = store(dir.path(), &["ana@remote.example"], true);
+	// The entry keeps evidence but is not transactional.
+	spool
+		.update_envelope(spool.list().expect("list")[0], |envelope| {
+			envelope.class = MailClass::Personal;
+		})
+		.expect("class");
+	block_evidence(dir.path());
+	let remote = FakeRemote::default();
+	remote.script("remote.example", Script::default());
+	worker(dir.path(), spool, &remote)
+		.pass()
+		.await
+		.expect("pass");
+	assert!(
+		FsSpool::open(dir.path())
+			.expect("spool")
+			.list()
+			.expect("list")
+			.is_empty(),
+		"personal mail waits for nothing"
+	);
+}

@@ -74,6 +74,37 @@ pub struct Envelope {
 	/// an `abandoned` record.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub evidence: bool,
+	/// Outcomes of recipients that were delivered, bounced or expired but
+	/// could not be written to the evidence log. The entry stays in the queue
+	/// until each is written, and is not sent again meanwhile.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub outcomes_pending: Vec<PendingOutcome>,
+}
+
+/// An outcome the evidence log has not taken yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingOutcome {
+	/// The recipient.
+	pub recipient: String,
+	/// What happened.
+	pub result: crate::evidence::record::OutcomeKind,
+	/// The attempt that produced it.
+	pub attempt: u32,
+	/// The receiving server, when one answered.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub remote: Option<String>,
+	/// Its reply, or the reason.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reply: Option<String>,
+	/// The TLS version and cipher, when there was a session.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tls: Option<(String, String)>,
+	/// Whether DANE authenticated the server.
+	#[serde(default)]
+	pub dane: bool,
+	/// The MTA-STS mode of the recipient domain.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mta_sts: Option<String>,
 }
 
 fn is_personal(class: &crate::evidence::MailClass) -> bool {
