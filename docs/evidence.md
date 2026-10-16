@@ -86,7 +86,11 @@ The server verifies the whole log every five minutes. It takes no
 when the last clean one is more than 15 minutes old, nor while anything is
 wrong (a changed record, a day left unsealed, a seal or token that does not
 verify, a check that fails or runs past ten minutes). `epistle status` says
-why. A token still being requested is not a break for three days. The
+why. A token still being requested is not a break for three days. After three days
+without one it is: a token issued later is refused, since it would date the
+seal and not the sending, so the day stays without a timestamp. Acknowledge the
+break to take transactional mail again; that day rests on the evidence key
+alone, and `check` fails it for lack of a token. The
 decision lives in the server's memory: no file can open it.
 
 ```sh
@@ -194,6 +198,14 @@ the newest record, or would put a record in a sealed day. Put the time right;
 a clock that jumped forward needs the server restarted once it is.
 
 ## Limits
+
+- The server verifies the whole kept log every five minutes, from the oldest
+  day. That reads every record again, by design (a changed day is found the
+  next tick). Measured in a debug build it takes about a second per eight
+  thousand records and a flat 40 MB of memory; a release build is several
+  times faster. If a verification takes more than ten minutes the server holds
+  transactional mail until it does not: with a year of retention that is a
+  volume of hundreds of millions of records, far above a notices sender's.
 
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
