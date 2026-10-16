@@ -244,6 +244,10 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON, for the listing without an action and
+		/// for whichever action follows.
+		#[arg(long)]
+		json: bool,
 		/// Suppression action (`list`, `add`, `remove`).
 		#[command(subcommand)]
 		action: Option<suppression::SuppressionCli>,

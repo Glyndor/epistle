@@ -56,6 +56,54 @@ pub enum SuppressionCli {
 	},
 }
 
+impl SuppressionCli {
+	/// The action to run for a command line whose `--json` came before the
+	/// action, or with no action at all: `address_to_remove` and `account`
+	/// are the older flat forms, which list or remove when no action is
+	/// named.
+	pub(super) fn with_json(
+		action: Option<Self>,
+		json: bool,
+		address_to_remove: Option<String>,
+		account: Option<String>,
+	) -> Option<Self> {
+		if !json {
+			return action;
+		}
+		Some(match action {
+			Some(SuppressionCli::List { account, .. }) => SuppressionCli::List {
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Add {
+				address, account, ..
+			}) => SuppressionCli::Add {
+				address,
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Remove {
+				address, account, ..
+			}) => SuppressionCli::Remove {
+				address,
+				account,
+				json: true,
+			},
+			None => match address_to_remove {
+				Some(address) => SuppressionCli::Remove {
+					address,
+					account,
+					json: true,
+				},
+				None => SuppressionCli::List {
+					account,
+					json: true,
+				},
+			},
+		})
+	}
+}
+
 /// Add `address` to the suppression list (the global one, or `account`'s).
 pub(super) fn add(
 	config: &Config,

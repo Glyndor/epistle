@@ -34,3 +34,6 @@ mod legacy;
 
 #[path = "cli_json/dkim.rs"]
 mod dkim;
+
+#[path = "cli_json/default_actions.rs"]
+mod default_actions;

@@ -168,11 +168,17 @@ impl Cli {
 			}),
 			Command::Suppression {
 				config,
+				json,
 				action,
 				remove,
 				account,
 			} => match Config::load(&config) {
-				Ok(config) => match action {
+				Ok(config) => match suppression::SuppressionCli::with_json(
+					action,
+					json,
+					remove.clone(),
+					account.clone(),
+				) {
 					Some(action) => {
 						suppression::run(&config, action, &mut std::io::stdout().lock())
 					}
@@ -260,7 +266,7 @@ impl Cli {
 				Ok(config) => delivery::run(
 					&config.data_dir,
 					config.delivery_log_days(),
-					args.action,
+					args.into_action(),
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
 				),

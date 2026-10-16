@@ -101,6 +101,28 @@ fn leaves(hidden: bool) -> Vec<(String, clap::Command)> {
 	out
 }
 
+/// Every visible command that has subcommands but runs on its own when none
+/// is named (`suppression`, `delivery`, `queue`, `stack resources`): a leaf
+/// in practice, so it takes `--json` as well.
+fn default_action_groups() -> Vec<(String, clap::Command)> {
+	fn walk(prefix: &str, command: &clap::Command, out: &mut Vec<(String, clap::Command)>) {
+		for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+			let path = format!("{prefix} {}", sub.get_name());
+			if sub.has_subcommands() {
+				if !sub.is_subcommand_required_set() && !sub.is_arg_required_else_help_set() {
+					out.push((path.clone(), sub.clone()));
+				}
+				walk(&path, sub, out);
+			}
+		}
+	}
+	let mut root = Cli::command();
+	root.build();
+	let mut out = Vec::new();
+	walk("epistle", &root, &mut out);
+	out
+}
+
 /// Every visible leaf command, as its path from the root.
 fn visible_leaves() -> Vec<(String, clap::Command)> {
 	leaves(false)
@@ -121,6 +143,36 @@ fn every_leaf_takes_json_unless_exempt() {
 	assert!(
 		missing.is_empty(),
 		"leaf commands without --json: {missing:#?}"
+	);
+}
+
+#[test]
+fn every_command_with_a_default_action_takes_json() {
+	let groups = default_action_groups();
+	for expected in [
+		"epistle suppression",
+		"epistle delivery",
+		"epistle queue",
+		"epistle stack resources",
+	] {
+		assert!(
+			groups.iter().any(|(path, _)| path == expected),
+			"{expected} should run without an action; found {:?}",
+			groups.iter().map(|(path, _)| path).collect::<Vec<_>>()
+		);
+	}
+	let missing: Vec<&String> = groups
+		.iter()
+		.filter(|(_, command)| {
+			!command
+				.get_arguments()
+				.any(|arg| arg.get_long() == Some("json"))
+		})
+		.map(|(path, _)| path)
+		.collect();
+	assert!(
+		missing.is_empty(),
+		"commands that list by default and lack --json: {missing:#?}"
 	);
 }
 

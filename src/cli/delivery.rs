@@ -22,9 +22,27 @@ pub struct DeliveryConfig {
 	/// Path to the configuration file; accepted before or after the action.
 	#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG_PATH)]
 	pub config: PathBuf,
+	/// Print the listing as JSON, with or without naming the action.
+	#[arg(long)]
+	pub json: bool,
 	/// Delivery log action (`list`).
 	#[command(subcommand)]
 	pub action: Option<DeliveryCli>,
+}
+
+impl DeliveryConfig {
+	/// The action to run: the one named, or the default listing, with
+	/// `--json` from this level applied to it.
+	pub fn into_action(self) -> Option<DeliveryCli> {
+		if !self.json {
+			return self.action;
+		}
+		let DeliveryCli::List(mut args) = self
+			.action
+			.unwrap_or(DeliveryCli::List(ListArgs::default()));
+		args.json = true;
+		Some(DeliveryCli::List(args))
+	}
 }
 
 /// Actions on the per-recipient delivery log. Without one, `epistle
