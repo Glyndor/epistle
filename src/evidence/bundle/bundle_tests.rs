@@ -214,7 +214,9 @@ fn unlisted_files_and_links_are_refused() {
 	);
 	std::fs::remove_file(bundle.join("extra.txt")).expect("remove");
 	// A link to an identical file outside the bundle is still refused.
-	let key = bundle.join("keys").join(format!("{}.pem", fixture.key.id()));
+	let key = bundle
+		.join("keys")
+		.join(format!("{}.pem", fixture.key.id()));
 	let outside = bundle.with_file_name("outside.pem");
 	std::fs::rename(&key, &outside).expect("move key");
 	std::os::unix::fs::symlink(&outside, &key).expect("link key");
@@ -518,5 +520,10 @@ fn a_token_dated_before_the_day_ended_fails() {
 	let selector = Selector::MessageId("<kept@example.org>".into());
 	export(kept.dir.path(), &kept.crypto, &selector, &bundle).expect("export");
 	let failed = failures(&check(&bundle, &[kept.tsa.anchor]).expect("check"));
-	assert!(failed.iter().any(|f| f.contains("stamped after the day ended")), "{failed:?}");
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("stamped after the day ended")),
+		"{failed:?}"
+	);
 }

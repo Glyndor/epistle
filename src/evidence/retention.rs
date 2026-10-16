@@ -145,9 +145,8 @@ fn unpurgeable(
 	let token = checkpoint::read_bounded(&files(evidence_root, day).tsr, 64 * 1024)
 		.ok()
 		.flatten();
-	let stamped = token.is_some_and(|token| {
-		super::tsa::verify(&token, &sha256(bytes), None, anchors).is_ok()
-	});
+	let stamped = token
+		.is_some_and(|token| super::tsa::verify(&token, &sha256(bytes), None, anchors).is_ok());
 	if !stamped {
 		return Some(format!("{day}: no timestamp token that verifies"));
 	}
@@ -183,7 +182,9 @@ pub fn sweep(
 		},
 	)?;
 	if let Some(at) = &report.first_break {
-		done.refused = Some(format!("purge refused: the evidence does not verify ({at})"));
+		done.refused = Some(format!(
+			"purge refused: the evidence does not verify ({at})"
+		));
 		return Ok(done);
 	}
 	let acknowledged = report.acknowledged.iter().map(|at| at.day).min();

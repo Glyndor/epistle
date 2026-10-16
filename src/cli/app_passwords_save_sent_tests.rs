@@ -105,7 +105,9 @@ fn create_without_save_sent_leaves_the_field_unset() {
 	let cfg = Config::load(cfg_file.path()).expect("load");
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&cfg, "alice", "phone", None, None, None, None, false, &mut out),
+		create(
+			&cfg, "alice", "phone", None, None, None, None, false, &mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let store = AppPasswordStore::open(dir.path()).expect("open");

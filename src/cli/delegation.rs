@@ -16,6 +16,11 @@ impl Command {
 				action: super::stack::StackCli::Rollback { .. },
 				..
 			} => false,
+			// A bundle check reads only the bundle: anyone may run it.
+			Command::Evidence {
+				action: super::evidence::EvidenceCli::Check { .. },
+				..
+			} => false,
 			Command::Init { .. }
 			| Command::Stack { .. }
 			| Command::Db { .. }
@@ -54,6 +59,7 @@ impl Command {
 			| Command::Warmup { .. }
 			| Command::Delivery { .. }
 			| Command::Ban { .. }
+			| Command::Evidence { .. }
 			| Command::Masked { .. }
 			| Command::AppPassword { .. }
 			| Command::Archive { .. }

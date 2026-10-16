@@ -34,7 +34,9 @@ fn create_list_revoke_roundtrip() {
 	// Create prints the secret once.
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "alice", "phone", None, None, None, None, false, &mut out),
+		create(
+			&config, "alice", "phone", None, None, None, None, false, &mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let created = String::from_utf8(out).expect("utf8");
@@ -137,7 +139,9 @@ fn create_refuses_unknown_account_and_writes_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	let exit = create(&config, "ghost", "phone", None, None, None, None, false, &mut out);
+	let exit = create(
+		&config, "ghost", "phone", None, None, None, None, false, &mut out,
+	);
 	assert_eq!(exit, ExitCode::from(2), "unknown account must be refused");
 	// The store has no row, so no orphan credential is left behind:
 	// the check ran before any persistence.
@@ -163,7 +167,9 @@ fn create_refuses_static_account() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
-	let exit = create(&config, "alice", "phone", None, None, None, None, false, &mut out);
+	let exit = create(
+		&config, "alice", "phone", None, None, None, None, false, &mut out,
+	);
 	assert_eq!(
 		exit,
 		ExitCode::from(3),

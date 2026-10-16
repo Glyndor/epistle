@@ -172,7 +172,10 @@ async fn a_check_that_runs_too_long_holds_mail_and_is_not_started_twice() {
 	assert!(held.contains("took longer than"), "{held}");
 	assert_eq!(service.held(), Some(held));
 	let again = tasks.tick(at(DAY, 2)).await;
-	assert_eq!(again.held.as_deref(), Some("the previous evidence check is still running"));
+	assert_eq!(
+		again.held.as_deref(),
+		Some("the previous evidence check is still running")
+	);
 }
 
 #[tokio::test]
@@ -190,10 +193,20 @@ async fn a_seal_that_keeps_failing_holds_mail_once_its_grace_passes() {
 	std::fs::write(service.root().join("key.pk8"), b"not a key").expect("corrupt");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
 	let early = tasks.tick(at(DAY + 1, 0)).await;
-	assert!(early.errors.iter().any(|error| error.starts_with("evidence key")), "{:?}", early.errors);
+	assert!(
+		early
+			.errors
+			.iter()
+			.any(|error| error.starts_with("evidence key")),
+		"{:?}",
+		early.errors
+	);
 	assert_eq!(early.held, None, "within the seal grace");
 	let late = tasks.tick(at(DAY + 1, 2)).await;
-	assert!(late.held.is_some(), "a day left unsealed past its grace holds mail");
+	assert!(
+		late.held.is_some(),
+		"a day left unsealed past its grace holds mail"
+	);
 	assert!(service.held().is_some());
 }
 
@@ -209,8 +222,17 @@ async fn the_status_file_cannot_open_the_gate() {
 	std::fs::write(&path, text.replacen("Notice 1", "Notice X", 1)).expect("tamper");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
 	assert!(tasks.tick(at(DAY, 3)).await.held.is_some());
-	let opened = Status { time: at(DAY, 3), ..Status::default() };
-	std::fs::write(service.root().join(STATUS_FILE), serde_json::to_vec(&opened).expect("json"))
-		.expect("write");
-	assert!(service.held().is_some(), "the gate is in memory, not in the report");
+	let opened = Status {
+		time: at(DAY, 3),
+		..Status::default()
+	};
+	std::fs::write(
+		service.root().join(STATUS_FILE),
+		serde_json::to_vec(&opened).expect("json"),
+	)
+	.expect("write");
+	assert!(
+		service.held().is_some(),
+		"the gate is in memory, not in the report"
+	);
 }
