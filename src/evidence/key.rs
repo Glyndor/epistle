@@ -20,6 +20,8 @@ use super::record::{sha256, to_hex};
 
 /// The private key file, under the evidence root.
 const KEY_FILE: &str = "key.pk8";
+/// The staged successor of the signing key, under the evidence root.
+const NEXT_FILE: &str = "key.next.pk8";
 /// The directory of published public keys, under the evidence root.
 pub const KEYS_DIR: &str = "keys";
 /// The DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410).
@@ -49,26 +51,63 @@ impl EvidenceKey {
 		if !path.exists() {
 			generate_into(&path)?;
 		}
-		let pkcs8 = std::fs::read(&path)?;
+		let key = Self::from_file(&path)?;
+		match pinned_id(evidence_root)? {
+			Some(pinned) if pinned == key.id() => {}
+			// A rotation that stopped between replacing the key and moving the
+			// pin: the old key signed the hand-over, so the pin follows it.
+			Some(pinned) if super::rotation::took_over(evidence_root, &pinned, &key.id()) => {
+				pin(evidence_root, &key.id())?;
+			}
+			Some(_) => {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::InvalidData,
+					"the evidence key does not match the pinned key: refusing to sign with it",
+				));
+			}
+			None => pin(evidence_root, &key.id())?,
+		}
+		key.publish(evidence_root)?;
+		Ok(key)
+	}
+
+	fn from_file(path: &Path) -> std::io::Result<Self> {
+		let pkcs8 = std::fs::read(path)?;
 		let pair = Ed25519KeyPair::from_pkcs8(&pkcs8).map_err(|_| {
 			std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
 				"evidence key is not an Ed25519 PKCS#8 key",
 			)
 		})?;
-		let key = EvidenceKey { pair };
-		match pinned_id(evidence_root)? {
-			Some(pinned) if pinned != key.id() => {
-				return Err(std::io::Error::new(
-					std::io::ErrorKind::InvalidData,
-					"the evidence key does not match the pinned key: refusing to sign with it",
-				));
-			}
-			Some(_) => {}
-			None => pin(evidence_root, &key.id())?,
+		Ok(EvidenceKey { pair })
+	}
+
+	/// The key that will take over, generated once and kept in
+	/// `key.next.pk8` until [`promote_next`](Self::promote_next); its public
+	/// half is published at once.
+	pub(crate) fn stage_next(evidence_root: &Path) -> std::io::Result<Self> {
+		let path = evidence_root.join(NEXT_FILE);
+		if !path.exists() {
+			generate_into(&path)?;
 		}
+		let key = Self::from_file(&path)?;
 		key.publish(evidence_root)?;
 		Ok(key)
+	}
+
+	/// Make the staged key the signing key and move the pin to it. `id` must
+	/// be the staged key's id.
+	pub(crate) fn promote_next(evidence_root: &Path, id: &str) -> std::io::Result<()> {
+		let staged = evidence_root.join(NEXT_FILE);
+		if Self::from_file(&staged)?.id() != id {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"the staged evidence key is not the one that was signed for",
+			));
+		}
+		std::fs::rename(&staged, evidence_root.join(KEY_FILE))?;
+		std::fs::File::open(evidence_root).and_then(|dir| dir.sync_all())?;
+		pin(evidence_root, id)
 	}
 
 	/// The raw 32-byte public key.

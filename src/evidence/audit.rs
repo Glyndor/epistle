@@ -82,6 +82,10 @@ struct Walker {
 	last_purge: Option<super::record::Purge>,
 	/// Every purge record met, oldest first: each statement is checked.
 	purges: Vec<super::record::Purge>,
+	/// The pinned key and the keys it took over from, by signed rotations.
+	lineage: Vec<String>,
+	/// Every key rotation record met, oldest first.
+	rotations: Vec<super::rotation::Rotation>,
 }
 
 /// The most purge records one verification checks.
@@ -148,6 +152,8 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		head_seen: false,
 		last_purge: None,
 		purges: Vec::new(),
+		lineage: super::rotation::lineage(evidence_root)?,
+		rotations: Vec::new(),
 	};
 	for day in days {
 		if let Err(at) =
@@ -185,6 +191,11 @@ fn final_checks(
 	today: Day,
 	has_head: bool,
 ) -> Option<Break> {
+	for rotation in &walker.rotations {
+		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
+			return Some(broken(today, why));
+		}
+	}
 	for purge in &walker.purges {
 		if let Err(why) = super::retention::check_statement(evidence_root, purge) {
 			return Some(broken(today, why));
@@ -237,11 +248,13 @@ fn walk_and_check(
 	let head = walker.head;
 	let mut head_seen = false;
 	let mut purges = Vec::new();
+	let mut rotations = Vec::new();
 	let walk = walk_day(evidence_root, day, walker.expected, |_, record, hash| {
 		tree.push(leaf_hash(hash));
 		head_seen |= head.as_ref() == Some(hash);
 		match &record.entry {
 			Entry::Purge(purge) => purges.push(purge.clone()),
+			Entry::KeyRotated(rotation) => rotations.push(rotation.clone()),
 			Entry::Setting(setting) if setting.name == "timestamp" => {
 				timestamping = setting.value.starts_with("enabled");
 			}
@@ -255,6 +268,13 @@ fn walk_and_check(
 	walker.purges.extend(purges);
 	if walker.purges.len() > MAX_PURGES {
 		return Err(broken(day, "more purge records than a verification checks"));
+	}
+	walker.rotations.extend(rotations);
+	if walker.rotations.len() > super::rotation::MAX_ROTATIONS {
+		return Err(broken(
+			day,
+			"more key rotations than a verification follows",
+		));
 	}
 	walker.timestamping = timestamping;
 	report.days += 1;
@@ -328,23 +348,25 @@ fn check_day(
 			"does not name the previous checkpoint: a checkpoint was replaced",
 		));
 	}
-	match key::pinned_id(evidence_root) {
-		Ok(Some(pinned)) if pinned == checkpoint.key => {}
-		Ok(Some(_)) => {
-			return Err(broken(
-				day,
-				"signed with a key other than the pinned evidence key",
-			));
-		}
-		Ok(None) => return Err(broken(day, "the evidence key pin is missing")),
-		Err(error) => return Err(io(error)),
+	if walker.lineage.is_empty() {
+		return Err(broken(day, "the evidence key pin is missing"));
+	}
+	if !walker.lineage.contains(&checkpoint.key) {
+		return Err(broken(
+			day,
+			"signed with a key other than the pinned evidence key, or one it took over from by a signed rotation",
+		));
 	}
 	if let Some(previous) = &walker.previous_key
 		&& *previous != checkpoint.key
+		&& !walker
+			.rotations
+			.iter()
+			.any(|rotation| rotation.old == *previous && rotation.new == checkpoint.key)
 	{
 		return Err(broken(
 			day,
-			"signed with a different evidence key than the day before",
+			"signed with a different evidence key than the day before, and no rotation record explains it",
 		));
 	}
 	let signature = checkpoint::read_bounded(&files(evidence_root, day).sig, 64)

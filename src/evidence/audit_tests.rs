@@ -312,7 +312,7 @@ fn a_checkpoint_signed_by_another_key_is_a_break() {
 	});
 	assert_eq!(
 		reason(&fixture.verify()),
-		"2026-10-15: checkpoint: signed with a key other than the pinned evidence key"
+		"2026-10-15: checkpoint: signed with a key other than the pinned evidence key, or one it took over from by a signed rotation"
 	);
 }
 

@@ -24,6 +24,7 @@ pub mod merkle;
 pub mod policy;
 pub mod record;
 pub mod retention;
+pub mod rotation;
 pub mod service;
 pub mod submission;
 pub mod tasks;

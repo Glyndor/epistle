@@ -87,6 +87,8 @@ pub enum Entry {
 	Setting(Setting),
 	/// An operator acknowledged a break, signed with the evidence key.
 	Acknowledged(super::ack::Acknowledged),
+	/// The evidence key handed over to a new one, signed by the old key.
+	KeyRotated(super::rotation::Rotation),
 }
 
 /// How much of a message is kept, and for how long.
@@ -243,7 +245,9 @@ impl Entry {
 			Entry::Accepted(accepted) => accepted.retention.days,
 			Entry::Outcome(outcome) => outcome.retain_days,
 			Entry::Abandoned(abandoned) => abandoned.retain_days,
-			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) => 0,
+			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) | Entry::KeyRotated(_) => {
+				0
+			}
 		}
 	}
 
@@ -253,7 +257,9 @@ impl Entry {
 			Entry::Accepted(accepted) => Some(accepted.spool_id),
 			Entry::Outcome(outcome) => Some(outcome.spool_id),
 			Entry::Abandoned(abandoned) => Some(abandoned.spool_id),
-			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) => None,
+			Entry::Purge(_) | Entry::Setting(_) | Entry::Acknowledged(_) | Entry::KeyRotated(_) => {
+				None
+			}
 		}
 	}
 }
