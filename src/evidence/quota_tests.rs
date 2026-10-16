@@ -5,9 +5,9 @@ use crate::evidence::record::{Abandoned, Outcome, OutcomeKind};
 use crate::evidence::test_support::{accepted_for, delivered};
 use std::time::{Duration, Instant};
 
-const TODAY: Day = Day(20_740);
+pub(super) const TODAY: Day = Day(20_740);
 
-fn limits() -> Limits {
+pub(super) fn limits() -> Limits {
 	Limits {
 		account_records: 12,
 		account_kept_bytes: 100,
@@ -15,7 +15,7 @@ fn limits() -> Limits {
 	}
 }
 
-fn id(n: u128) -> Uuid {
+pub(super) fn id(n: u128) -> Uuid {
 	Uuid::from_u128(n)
 }
 
@@ -35,25 +35,31 @@ fn reserve(
 }
 
 /// Writes the records a book is rebuilt from.
-struct Log {
-	chain: Chain,
+pub(super) struct Log {
+	pub(super) chain: Chain,
 	at: u64,
 }
 
 impl Log {
-	fn new(dir: &Path, day: Day) -> Log {
+	pub(super) fn new(dir: &Path, day: Day) -> Log {
 		Log {
 			chain: Chain::open(dir).expect("chain"),
 			at: day.start_epoch(),
 		}
 	}
 
-	fn write(&mut self, entry: Entry) {
+	pub(super) fn write(&mut self, entry: Entry) {
 		self.at += 1;
 		self.chain.append_at(self.at, entry).expect("record");
 	}
 
-	fn accepted(&mut self, account: &str, n: u128, recipients: usize, full: Option<u64>) {
+	pub(super) fn accepted(
+		&mut self,
+		account: &str,
+		n: u128,
+		recipients: usize,
+		full: Option<u64>,
+	) {
 		let Entry::Accepted(mut accepted) = accepted_for(0, 365) else {
 			unreachable!()
 		};
@@ -69,7 +75,7 @@ impl Log {
 		self.write(Entry::Accepted(accepted));
 	}
 
-	fn outcome(&mut self, n: u128) {
+	pub(super) fn outcome(&mut self, n: u128) {
 		let Entry::Outcome(outcome) = delivered(0) else {
 			unreachable!()
 		};
@@ -80,7 +86,7 @@ impl Log {
 		}));
 	}
 
-	fn abandoned(&mut self, n: u128) {
+	pub(super) fn abandoned(&mut self, n: u128) {
 		self.write(Entry::Abandoned(Abandoned {
 			spool_id: id(n),
 			reason: "test".into(),
@@ -290,91 +296,89 @@ fn a_log_that_cannot_be_read_admits_no_acceptance_and_counts_facts_until_it_can(
 	let _ = reserve(&quota, "b", 3, 0, 0).expect("mail flows again");
 }
 
-#[test]
-fn an_acceptance_always_reserves_its_outcomes_and_a_full_memory_forgets_the_biggest_accounts_oldest()
- {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = Quota::start_at(
-		dir.path(),
-		Limits {
-			account_records: 10_000_000,
-			account_kept_bytes: u64::MAX,
-			day_records: 40_000_000,
-		},
-		TODAY,
-	);
-	let extra = 5;
-	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + extra) {
-		let _ = quota
-			.reserve("noisy", id(n), (2, 0), TODAY)
-			.expect("reserved");
-	}
-	let state = quota.state();
-	// Nothing was reserved short: three records for every message.
-	assert_eq!(
-		state.accounts["noisy"].records,
-		3 * (MAX_OWED_PER_ACCOUNT as u64 + extra as u64)
-	);
-	assert_eq!(state.owed.len(), MAX_OWED_PER_ACCOUNT);
-	assert_eq!(state.owed_by["noisy"].len(), MAX_OWED_PER_ACCOUNT);
-	// Another tenant keeps its place whatever the first sent.
-	let _ = quota
-		.reserve("quiet", id(1 << 40), (2, 0), TODAY)
-		.expect("reserved");
-	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT + 1);
-	// The oldest of the noisy account were forgotten: their outcomes are
-	// counted when they come, as facts. The newest were not.
-	let before = quota.state().accounts["noisy"].records;
-	quota.fact(Some("noisy"), id(0), TODAY);
-	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
-	let before = quota.state().accounts["noisy"].records;
-	quota.fact(
-		Some("noisy"),
-		id(MAX_OWED_PER_ACCOUNT as u128 + extra - 1),
-		TODAY,
-	);
-	assert_eq!(quota.state().accounts["noisy"].records, before, "paid for");
-}
-
-#[test]
-fn a_few_accounts_cannot_fill_the_whole_memory_of_outcomes_against_the_rest() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let quota = Quota::start_at(
-		dir.path(),
+/// A quota whose limits are out of the way of the memory of outcomes.
+fn roomy(dir: &Path) -> Quota {
+	Quota::start_at(
+		dir,
 		Limits {
 			account_records: 100_000_000,
 			account_kept_bytes: u64::MAX,
 			day_records: 800_000_000,
 		},
 		TODAY,
-	);
-	// Seven accounts at the most one may hold, and two with half of that.
+	)
+}
+
+#[test]
+fn an_account_with_too_many_messages_waiting_is_refused_and_the_others_are_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = roomy(dir.path());
+	for n in 0..MAX_OWED_PER_ACCOUNT as u128 {
+		let _ = quota
+			.reserve("noisy", id(n), (2, 0), TODAY)
+			.expect("reserved");
+	}
+	let full = quota.state();
+	let refused = quota
+		.reserve("noisy", id(1 << 40), (2, 0), TODAY)
+		.expect_err("no room for another message to wait");
+	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
+	let _ = quota
+		.reserve("quiet", id(1 << 41), (2, 0), TODAY)
+		.expect("another account");
+	// Nothing was reserved short, and nothing of anybody's was forgotten.
+	let state = quota.state();
+	assert_eq!(state.owed.len(), full.owed.len() + 1);
+	assert_eq!(state.accounts["noisy"], full.accounts["noisy"]);
+	assert_eq!(state.owed_per["noisy"], MAX_OWED_PER_ACCOUNT);
+	// Facts are still taken, and counted to the account.
+	let before = state.accounts["noisy"].records;
+	quota.fact(Some("noisy"), id(1 << 50), TODAY);
+	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
+	// A message that gets its outcomes leaves room for the next.
+	quota.fact(Some("noisy"), id(0), TODAY);
+	quota.fact(Some("noisy"), id(0), TODAY);
+	let _ = quota
+		.reserve("noisy", id(1 << 40), (2, 0), TODAY)
+		.expect("room again");
+}
+
+#[test]
+fn a_full_memory_refuses_new_acceptances_and_forgets_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = roomy(dir.path());
+	let accounts = MAX_OWED / MAX_OWED_PER_ACCOUNT;
 	let mut n = 0u128;
-	let mut fill = |account: String, count: usize| {
-		for _ in 0..count {
+	for account in 0..accounts {
+		for _ in 0..MAX_OWED_PER_ACCOUNT {
 			let _ = quota
-				.reserve(&account, id(n), (1, 0), TODAY)
+				.reserve(&format!("big{account}"), id(n), (1, 0), TODAY)
 				.expect("reserved");
 			n += 1;
 		}
-	};
-	for account in 0..7 {
-		fill(format!("big{account}"), MAX_OWED_PER_ACCOUNT);
 	}
-	fill("half1".into(), MAX_OWED_PER_ACCOUNT / 2);
-	fill("half2".into(), MAX_OWED_PER_ACCOUNT / 2);
-	assert_eq!(quota.state().owed.len(), MAX_OWED);
-	// A small account still gets its place: the biggest gives one up.
+	let full = quota.state();
+	assert_eq!(full.owed.len(), MAX_OWED);
+	assert!(
+		quota
+			.warning(TODAY)
+			.expect("alarm")
+			.contains("wait for their outcomes")
+	);
+	let refused = quota
+		.reserve("late", id(u128::MAX), (1, 0), TODAY)
+		.expect_err("the whole memory is full");
+	assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded);
+	assert_eq!(quota.state(), full, "a refusal touched the book");
+	// A message with no recipients waits for nothing.
 	let _ = quota
-		.reserve("small", id(u128::MAX), (1, 0), TODAY)
-		.expect("reserved");
-	let state = quota.state();
-	assert_eq!(state.owed.len(), MAX_OWED);
-	assert!(state.owed.contains_key(&id(u128::MAX)));
-	assert_eq!(state.owed_by["small"].len(), 1);
-	// It was the biggest that gave up one, not the smaller ones.
-	assert_eq!(state.owed_by["half1"].len(), MAX_OWED_PER_ACCOUNT / 2);
-	assert_eq!(state.owed_by["half2"].len(), MAX_OWED_PER_ACCOUNT / 2);
+		.reserve("late", id(u128::MAX - 1), (0, 0), TODAY)
+		.expect("owes no outcome");
+	// Outcomes coming frees room, for anybody.
+	quota.fact(None, id(0), TODAY);
+	let _ = quota
+		.reserve("late", id(u128::MAX - 2), (1, 0), TODAY)
+		.expect("room again");
 }
 
 #[test]
@@ -431,202 +435,15 @@ fn rebuilding_a_day_of_many_records_is_linear() {
 		TODAY,
 	);
 	let took = started.elapsed();
-	assert_eq!(quota.state().accounts["a"].records, 100_000);
+	// 50 000 acceptances by "a", an outcome paid for only where the memory had room.
+	assert_eq!(
+		quota.state().accounts["a"].records,
+		50_000 + MAX_OWED_PER_ACCOUNT as u64
+	);
 	assert!(
 		took < Duration::from_secs(30),
 		"rebuilding 150 000 records took {took:?}: the cost is not linear"
 	);
-}
-
-/// A small deterministic generator, so a failing sequence can be replayed.
-struct Dice(u64);
-
-impl Dice {
-	fn next(&mut self, below: u64) -> u64 {
-		self.0 ^= self.0 << 13;
-		self.0 ^= self.0 >> 7;
-		self.0 ^= self.0 << 17;
-		self.0 % below
-	}
-}
-
-const ACCOUNTS: [&str; 5] = ["a", "b", "c", "d", "e"];
-
-/// The invariants of the module, checked on `state`.
-fn check(state: &State, limits: Limits, step: &str) {
-	// 1. One account per record: the total is the sum of the accounts'.
-	let sum: u64 = state.accounts.values().map(|held| held.records).sum();
-	assert_eq!(
-		state.total, sum,
-		"{step}: a record belongs to no account, or to two"
-	);
-	// 2 and 6. What is set aside is at most each account's share summed, and
-	// never more than the day's limit.
-	let shares: u64 = state
-		.accounts
-		.values()
-		.map(|held| held.records.min(limits.account_records))
-		.sum();
-	assert!(
-		state.within <= shares,
-		"{step}: an account set aside more than its share"
-	);
-	assert!(
-		state.within <= limits.day_records,
-		"{step}: the day set aside more than its limit"
-	);
-	for (account, held) in &state.accounts {
-		assert!(
-			held.bytes <= limits.account_kept_bytes,
-			"{step}: {account} kept too much"
-		);
-	}
-}
-
-#[test]
-fn random_sequences_keep_every_invariant_after_every_step() {
-	for seed in 1..=40u64 {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let limits = limits();
-		let mut day = TODAY;
-		let mut log = Log::new(dir.path(), day);
-		let mut quota = Quota::start_at(dir.path(), limits, day);
-		let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
-		let mut next_id = 1u128;
-		let mut known: Vec<(u128, &str)> = Vec::new();
-		// Whether the book remembers outcomes prepaid on an earlier day, which a
-		// restart does not: it counts them as facts, never fewer.
-		let mut carried = false;
-		for step_number in 0..70u32 {
-			let before = quota.state();
-			let account = ACCOUNTS[dice.next(ACCOUNTS.len() as u64) as usize];
-			let step = format!("seed {seed} step {step_number}");
-			match dice.next(10) {
-				// An acceptance, which may fail for certain or maybe.
-				0..=3 => {
-					let recipients = dice.next(5);
-					let kept = dice.next(40);
-					let message = next_id;
-					next_id += 1;
-					match quota.reserve(account, id(message), (recipients, kept), day) {
-						Ok(held) => match dice.next(4) {
-							// Nothing was written: exactly what was reserved goes back.
-							0 => {
-								quota.release(held);
-								let mut expected = before.clone();
-								expected.roll(day);
-								assert_eq!(
-									quota.state(),
-									expected,
-									"{step}: the rollback was not exact"
-								);
-							}
-							// Written, or maybe: it keeps its room, and is in the log.
-							_ => {
-								let full = (kept > 0).then_some(kept);
-								log.accepted(account, message, recipients as usize, full);
-								drop(held);
-								known.push((message, account));
-								assert!(
-									quota.state().accounts[account].records
-										<= limits.account_records,
-									"{step}: past the share"
-								);
-							}
-						},
-						Err(refused) => {
-							assert_eq!(refused.kind(), std::io::ErrorKind::QuotaExceeded, "{step}");
-							let mut rolled = before.clone();
-							rolled.roll(day);
-							assert_eq!(
-								quota.state(),
-								rolled,
-								"{step}: a refusal changed the counts"
-							);
-						}
-					}
-				}
-				// An outcome or an abandonment: a fact, in the log and the book.
-				4..=7 => {
-					let (message, owner) = match known.len() {
-						0 => (next_id, None),
-						n => {
-							let (message, owner) = known[dice.next(n as u64) as usize];
-							(message, Some(owner))
-						}
-					};
-					next_id += 1;
-					if dice.next(3) == 0 {
-						log.abandoned(message);
-					} else {
-						log.outcome(message);
-					}
-					quota.fact(owner, id(message), day);
-				}
-				// The process restarts: the book is rebuilt from the log.
-				8 => {
-					let before_restart = quota.state();
-					quota = Quota::start_at(dir.path(), limits, day);
-					let after = quota.state();
-					if carried {
-						assert!(
-							after.total >= before_restart.total,
-							"{step}: a restart granted what the book had counted"
-						);
-					} else {
-						assert_eq!(
-							after.total, before_restart.total,
-							"{step}: a restart lost the counts"
-						);
-						assert_eq!(after.within, before_restart.within, "{step}");
-						assert_eq!(after.accounts, before_restart.accounts, "{step}");
-					}
-					carried = false;
-				}
-				// A new day: the counts start again, the prepaid outcomes stay.
-				_ => {
-					day = Day(day.0 + 1);
-					log = Log::new(dir.path(), day);
-					// What is older than the last two days is not named at a restart.
-					carried = true;
-					known.clear();
-					let message = next_id;
-					next_id += 1;
-					log.outcome(message);
-					quota.fact(None, id(message), day);
-					let state = quota.state();
-					assert_eq!(state.day, day.0, "{step}");
-					assert_eq!(
-						state.total, 1,
-						"{step}: yesterday's counts came into the new day"
-					);
-				}
-			}
-			let state = quota.state();
-			check(&state, limits, &step);
-			// 2. A fresh account is held up by the day's limit only: probing it
-			// sets aside exactly what an acceptance of that size needs, and
-			// giving it back leaves the book as it was.
-			let room = limits.day_records.saturating_sub(state.within);
-			let granted = quota.reserve(
-				"probe",
-				id(u128::MAX - u128::from(step_number)),
-				(limits.account_records - 1, 0),
-				day,
-			);
-			assert_eq!(
-				granted.is_ok(),
-				room >= limits.account_records,
-				"{step}: an account's share is not what the day has left ({room} left)"
-			);
-			if let Ok(held) = granted {
-				quota.release(held);
-			}
-			let mut expected = state.clone();
-			expected.roll(day);
-			assert_eq!(quota.state(), expected, "{step}: probing left a trace");
-		}
-	}
 }
 
 use std::path::Path;

@@ -42,15 +42,19 @@
 //!    what is set aside never passes it.
 //!
 //! The day only moves forward. An acceptance always reserves its own record
-//! and an outcome for each recipient. What is remembered of the outcomes paid
-//! for is bounded in all and per account, in memory, so that none is counted
-//! twice: when it is full, the oldest entry of the account with the most goes,
-//! and the outcomes of that message, when they come, are counted as facts (the
-//! one who pays for it is the account that filled the memory). An outcome that
-//! comes after a restart, or another day, is counted as a fact to the account
-//! of its acceptance when the log of the last days still names it.
+//! and an outcome for each recipient, and the book remembers which outcomes
+//! are paid for so that none is counted twice. That memory is bounded per
+//! account ([`MAX_OWED_PER_ACCOUNT`] messages waiting for their outcomes) and
+//! in all ([`MAX_OWED`], room for eight accounts at their bound at once).
+//! Nothing is ever forgotten to make room: an account with no room has its
+//! acceptances refused until its outcomes come, and so has everyone when the
+//! whole memory is full, with an alarm in the status; the facts are still
+//! taken and counted. An outcome that comes after a restart, or another day,
+//! is counted as a fact to the account of its acceptance when the log of the
+//! last days still names it. (Mail whose evidence is not mandatory is sent
+//! all the same when its acceptance cannot be recorded.)
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -135,9 +139,9 @@ pub struct State {
 	pub(crate) accounts: BTreeMap<String, Held>,
 	/// Outcomes still to come of acceptances that paid for them, by queue id.
 	owed: BTreeMap<Uuid, Owed>,
-	/// The queue ids in `owed`, by account, oldest first: counting them and
-	/// finding the one to forget are cheap whatever the table holds.
-	owed_by: BTreeMap<String, BTreeSet<Uuid>>,
+	/// How many entries of `owed` each account has, so that asking is cheap
+	/// whatever the table holds.
+	owed_per: HashMap<String, usize>,
 }
 
 /// Exactly what one acceptance added, to be taken back if nothing came of it.
@@ -208,46 +212,28 @@ impl State {
 		aside
 	}
 
-	/// Remember that message `id` of `account` has `left` prepaid outcomes
-	/// to come, making room by forgetting the oldest entry of the account
-	/// with the most when the table is full.
-	fn track(&mut self, id: Uuid, owed: Owed) {
-		let mine = self.owed_by.get(&owed.account).map_or(0, BTreeSet::len);
-		if mine >= MAX_OWED_PER_ACCOUNT {
-			self.forget_oldest_of(&owed.account.clone());
-		} else if self.owed.len() >= MAX_OWED
-			&& let Some(biggest) = self
-				.owed_by
-				.iter()
-				.max_by_key(|(_, ids)| ids.len())
-				.map(|(account, _)| account.clone())
-		{
-			self.forget_oldest_of(&biggest);
-		}
-		self.owed_by
-			.entry(owed.account.clone())
-			.or_default()
-			.insert(id);
-		self.owed.insert(id, owed);
+	/// Whether `account` may have one more message whose prepaid outcomes
+	/// are remembered.
+	fn has_room_for(&self, account: &str) -> bool {
+		self.owed.len() < MAX_OWED
+			&& self.owed_per.get(account).copied().unwrap_or(0) < MAX_OWED_PER_ACCOUNT
 	}
 
-	fn forget_oldest_of(&mut self, account: &str) {
-		let oldest = self
-			.owed_by
-			.get(account)
-			.and_then(|ids| ids.first().copied());
-		if let Some(oldest) = oldest {
-			self.untrack(oldest);
-		}
+	/// Remember that message `id` has `owed.left` prepaid outcomes to come.
+	/// Nothing is ever forgotten to make room: callers ask [`has_room_for`]
+	/// first, and refuse the acceptance when there is none.
+	fn track(&mut self, id: Uuid, owed: Owed) {
+		*self.owed_per.entry(owed.account.clone()).or_default() += 1;
+		self.owed.insert(id, owed);
 	}
 
 	fn untrack(&mut self, id: Uuid) {
 		if let Some(owed) = self.owed.remove(&id)
-			&& let Some(ids) = self.owed_by.get_mut(&owed.account)
+			&& let Some(count) = self.owed_per.get_mut(&owed.account)
 		{
-			ids.remove(&id);
-			if ids.is_empty() {
-				self.owed_by.remove(&owed.account);
+			*count -= 1;
+			if *count == 0 {
+				self.owed_per.remove(&owed.account);
 			}
 		}
 	}
@@ -299,7 +285,8 @@ impl Quota {
 				let kept = std::mem::take(&mut book.state.owed);
 				book.state = state;
 				for (id, owed) in kept {
-					if !book.state.owed.contains_key(&id) {
+					if !book.state.owed.contains_key(&id) && book.state.has_room_for(&owed.account)
+					{
 						book.state.track(id, owed);
 					}
 				}
@@ -369,8 +356,17 @@ impl Quota {
 						RetentionMode::Full => accepted.size,
 						_ => 0,
 					};
-					state.add(&accepted.account, 1 + recipients, kept, share);
-					if recipients > 0 {
+					// History is not refused: an acceptance the memory has no room
+					// for is counted for its own record, and its outcomes when
+					// they are met, once.
+					let paid = recipients > 0 && state.has_room_for(&accepted.account);
+					state.add(
+						&accepted.account,
+						1 + if paid { recipients } else { 0 },
+						kept,
+						share,
+					);
+					if paid {
 						state.track(
 							accepted.spool_id,
 							Owed {
@@ -447,6 +443,9 @@ impl Quota {
 		}
 		let day = book.state.roll(today);
 		let records = 1 + recipients;
+		if recipients > 0 && !book.state.has_room_for(account) {
+			return over("too many messages of this account (or of all) wait for their outcomes");
+		}
 		let held = book
 			.state
 			.accounts
@@ -536,6 +535,12 @@ impl Quota {
 		let near = |count: u64, limit: u64| {
 			count.saturating_mul(100) >= limit.saturating_mul(WARN_PERCENT)
 		};
+		if near(state.owed.len() as u64, MAX_OWED as u64) {
+			return Some(format!(
+				"{} messages wait for their outcomes of the {MAX_OWED} the evidence quota remembers: past it new acceptances are refused",
+				state.owed.len()
+			));
+		}
 		if near(state.within, limits.day_records) {
 			return Some(format!(
 				"the evidence log set aside {} of {} records today: past it new acceptances are refused",
@@ -582,3 +587,6 @@ impl Quota {
 #[cfg(test)]
 #[path = "quota_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "quota_tests_property.rs"]
+mod tests_property;

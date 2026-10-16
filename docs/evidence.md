@@ -282,7 +282,13 @@ refuses to run at a clock more than 35 days past the newest record.
   book from nothing in the middle of a day. What a command writes from another
   process (a cancellation) is counted from the next start. An outcome that
   comes after a restart or on another day was not paid for when the message was
-  accepted, and is counted when it comes. The counts keep the verification,
+  accepted, and is counted when it comes. The book remembers which outcomes an
+  acceptance paid for, for up to 8 192 messages per account and 65 536 in all
+  (eight accounts at their bound at once); an account with that many messages
+  waiting for their outcomes has its acceptances refused with the retry-later
+  answer, and so has everybody if the whole memory is full, with a warning in
+  the status; nothing is forgotten to make room. Mail whose evidence is not
+  mandatory is sent all the same. The counts keep the verification,
   which reads every record, from outgrowing its ten minutes; they are not a
   measurement of that time.
 - The service account holds the evidence key and the data. Until a day is
