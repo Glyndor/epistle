@@ -82,3 +82,32 @@ fn nothing_is_said_of_a_message_whose_day_is_not_sealed() {
 		"the README names it"
 	);
 }
+
+#[test]
+fn a_day_altered_after_it_was_sealed_is_not_exported() {
+	use crate::evidence::audit::tests::Fixture;
+	use crate::evidence::chain::Chain;
+	let fixture = Fixture::new();
+	let path = Chain::open(fixture.root())
+		.expect("chain")
+		.day_file(Day(DAY + 1));
+	let edited = std::fs::read_to_string(&path)
+		.expect("read")
+		.replacen("student1", "student9", 1);
+	std::fs::write(&path, edited).expect("write");
+	let out = tempfile::tempdir().expect("tempdir");
+	let refused = export(
+		fixture.root(),
+		&crate::storage::MessageCrypto::disabled(),
+		&Selector::MessageId("<1@example.org>".into()),
+		&out.path().join("bundle"),
+	)
+	.expect_err("an altered day");
+	assert_eq!(
+		refused.to_string(),
+		format!(
+			"{}: the records no longer match their checkpoint: run epistle evidence verify",
+			Day(DAY + 1).name()
+		)
+	);
+}
