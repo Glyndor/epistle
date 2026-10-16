@@ -442,3 +442,18 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 		Some("2026-10-23: checkpoint: the purge statement is not the one its record names")
 	);
 }
+
+#[test]
+fn a_purge_statement_signed_before_a_rotation_still_verifies() {
+	let (dir, key, tsa, _chain) = short_lived();
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(
+		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
+		None
+	);
+	let new = crate::evidence::rotation::rotate(dir.path(), true, at(DAY + 5, 14)).expect("rotate");
+	assert_ne!(new, key.id());
+	let report = verified(dir.path(), &tsa, at(DAY + 5, 15));
+	assert_eq!(report.first_break.map(|at| at.to_string()), None);
+}

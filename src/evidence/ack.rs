@@ -159,18 +159,13 @@ fn signed(key: &EvidenceKey, at: &Break, reason: &str, operator: &Operator) -> A
 }
 
 /// Whether `at` is acknowledged: a record in the chain after it names it,
-/// and is signed by the pinned evidence key.
+/// and is signed by the pinned evidence key or by one it took over from by a
+/// signed rotation (an acknowledgement made before a rotation still counts).
 pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
-	let Ok(Some(pinned)) = key::pinned_id(evidence_root) else {
+	let Ok(lineage) = super::rotation::lineage(evidence_root) else {
 		return false;
 	};
-	let Some(public) = std::fs::read_to_string(key::public_key_path(evidence_root, &pinned))
-		.ok()
-		.and_then(|pem| key::parse_public_pem(&pem))
-		.filter(|public| key::key_id(public) == pinned)
-	else {
-		return false;
-	};
+	let keys_dir = evidence_root.join(key::KEYS_DIR);
 	let wanted = id(at);
 	let Ok(days) = Chain::open(evidence_root).and_then(|chain| chain.days()) else {
 		return false;
@@ -197,9 +192,12 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 			let valid = record.break_id == wanted
 				&& record.break_day == at.day.name()
 				&& record.break_line == at.line
-				&& record.key == pinned
-				&& decode_signature(&record.signature)
-					.is_some_and(|signature| key::verify(&public, &statement(&record), &signature));
+				&& lineage.contains(&record.key)
+				&& super::rotation::public_key(&keys_dir, &record.key)
+					.zip(decode_signature(&record.signature))
+					.is_some_and(|(public, signature)| {
+						key::verify(&public, &statement(&record), &signature)
+					});
 			if valid {
 				return true;
 			}

@@ -138,3 +138,31 @@ fn a_replaced_evidence_key_is_refused() {
 		"the evidence key does not match the pinned key: refusing to sign with it"
 	);
 }
+
+#[test]
+fn an_acknowledgement_signed_before_a_rotation_still_counts() {
+	let fixture = Fixture::new();
+	let first = break_on_first_day(&fixture);
+	acknowledge_at(
+		fixture.root(),
+		&fixture.key,
+		&first,
+		"token lost in a disk failure",
+		&operator(),
+		at(DAY + 3, 13),
+	)
+	.expect("acknowledge");
+	crate::evidence::rotation::rotate(fixture.root(), true, at(DAY + 3, 14)).expect("rotate");
+	let report = crate::evidence::audit::verify(
+		fixture.root(),
+		&crate::evidence::audit::Options {
+			from: None,
+			to: None,
+			anchors: vec![fixture.tsa.anchor],
+			now: at(DAY + 3, 15),
+		},
+	)
+	.expect("verify");
+	assert_eq!(report.first_break, None);
+	assert_eq!(report.acknowledged, vec![first]);
+}
