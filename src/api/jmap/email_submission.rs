@@ -28,7 +28,7 @@ pub(super) fn email_submission_set(
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (creation_id, submission) in create {
-			match submit_email(state, account, &view.addresses, submission) {
+			match submit_email(state, principal, account, &view.addresses, submission) {
 				Ok(id) => {
 					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
 				}
@@ -50,6 +50,7 @@ pub(super) fn email_submission_set(
 /// submission (DKIM for remote mail, local recipients to their mailboxes).
 fn submit_email(
 	state: &ApiState,
+	principal: &Principal,
 	account: &str,
 	addresses: &[String],
 	submission: &Value,
@@ -181,7 +182,16 @@ fn submit_email(
 		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
-	let sources = state.class_sources(None, account, explicit);
+	// The class bound to the API key that sent the request is a floor, as it
+	// is for `POST /api/v1/send`: a key made for notices cannot send mail
+	// that skips their evidence by going through JMAP.
+	let sources = state.class_sources_for_key(
+		principal
+			.credential()
+			.map(|credential| credential.token.as_str()),
+		account,
+		explicit,
+	);
 	let prepared =
 		crate::evidence::submission::prepare(&mut queued, sources, Some(state.data_dir()))
 			.map_err(|refusal| Refusal {
