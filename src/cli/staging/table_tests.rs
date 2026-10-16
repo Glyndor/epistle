@@ -213,3 +213,71 @@ fn only_check_stages_a_path_in_attachments() {
 	assert!(find(&args(&["attachments", "policy", "show"]), STAGED).is_empty());
 	assert!(find(&args(&["attachments", "check"]), STAGED).is_empty());
 }
+
+#[test]
+fn a_positional_path_is_found_by_its_place_not_by_its_value() {
+	// The same text is also the value of another flag: the file is the
+	// token clap read as the positional.
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "foo", "--config", "foo"]),
+			STAGED
+		),
+		[message_found(2, "foo")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "--config", "foo", "foo"]),
+			STAGED
+		),
+		[message_found(4, "foo")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "--config", "m.eml", "check", "m.eml"]),
+			STAGED
+		),
+		[message_found(4, "m.eml")]
+	);
+}
+
+#[test]
+fn a_line_repeating_the_path_many_times_is_searched_with_a_bound() {
+	// A synthetic command whose option can repeat, so that 5000 tokens
+	// read `foo` as an option value before the positional `foo`.
+	let root = clap::Command::new("epistle").subcommand(
+		clap::Command::new("c")
+			.arg(
+				clap::Arg::new("opt")
+					.long("opt")
+					.action(clap::ArgAction::Append),
+			)
+			.arg(clap::Arg::new("file")),
+	);
+	let mut line = args(&["c"]);
+	for _ in 0..5_000 {
+		line.extend(args(&["--opt", "foo"]));
+	}
+	line.push("foo".into());
+	let argv = std::iter::once(OsString::from("epistle")).chain(line.iter().cloned());
+	let matches = root.clone().try_get_matches_from(argv).unwrap();
+	let entry = Staged {
+		command: &["c"],
+		arg: "file",
+		kind: MESSAGE,
+	};
+	let mut found = Vec::new();
+	let started = std::time::Instant::now();
+	positional(
+		&line,
+		&root,
+		matches.subcommand_matches("c").unwrap(),
+		&entry,
+		&mut found,
+	);
+	assert!(
+		started.elapsed() < std::time::Duration::from_secs(5),
+		"the number of probes is bounded"
+	);
+	assert!(found.is_empty(), "past the bound nothing is staged");
+}

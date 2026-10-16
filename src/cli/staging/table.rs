@@ -208,19 +208,26 @@ pub(crate) fn find(args: &[OsString], table: &[Staged]) -> Vec<Found> {
 		if let Some(long) = long {
 			scan(args, long, entry.kind, &mut found);
 		} else {
-			positional(args, level, entry, &mut found);
+			positional(args, &root, level, entry, &mut found);
 		}
 	}
 	found.sort_by_key(|found| found.token);
 	found
 }
 
-/// Push the values of the positional argument `entry` names. clap says
-/// what they are; the token is the last one on the line equal to the value
-/// (a positional follows its subcommand, so a file called like it is still
-/// the later token) and not already taken.
+/// The most tokens of one value tried as the place of a positional; a line
+/// repeating one text more often than this stages nothing and the run
+/// reports the unreadable file.
+const MAX_PROBES: usize = 64;
+
+/// Push the values of the positional argument `entry` names, each at the
+/// token clap read it from. Matching the text is not enough, the same text
+/// can also be the value of another flag. So each token with that text is
+/// replaced by a marker no operator typed and the line parsed again: the
+/// token that changes the positional is the one.
 fn positional(
 	args: &[OsString],
+	root: &clap::Command,
 	matches: &clap::ArgMatches,
 	entry: &Staged,
 	found: &mut Vec<Found>,
@@ -229,11 +236,25 @@ fn positional(
 		return;
 	};
 	for value in values {
-		let taken = |index: &usize| found.iter().any(|f| f.token == *index);
-		if let Some(token) = (0..args.len())
-			.rev()
-			.find(|index| args[*index] == value && !taken(index))
-		{
+		let marker = OsString::from("\u{1}epistle-positional-probe");
+		let probe = |index: usize| {
+			let mut line = args.to_vec();
+			line[index] = marker.clone();
+			let argv = std::iter::once(OsString::from("epistle")).chain(line);
+			let parsed = root.clone().ignore_errors(true).try_get_matches_from(argv);
+			let mut level = parsed.as_ref().ok()?;
+			while let Some((_, sub)) = level.subcommand() {
+				level = sub;
+			}
+			let mut raw = level.try_get_raw(entry.arg).ok()??;
+			Some(raw.any(|seen| seen == marker))
+		};
+		let token = (0..args.len())
+			.filter(|index| args[*index] == value)
+			.filter(|index| !found.iter().any(|f| f.token == *index))
+			.take(MAX_PROBES)
+			.find(|index| probe(*index) == Some(true));
+		if let Some(token) = token {
 			found.push(Found {
 				token,
 				prefix: None,
