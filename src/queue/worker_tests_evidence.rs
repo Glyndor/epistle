@@ -369,3 +369,40 @@ fn an_entry_with_outcomes_waiting_cannot_be_removed_from_outside_the_worker() {
 	);
 	assert_eq!(spool.list().expect("list").len(), 1);
 }
+
+#[test]
+fn the_bare_spool_refuses_transactional_mail_it_would_queue_without_evidence() {
+	use crate::smtp::sink::{MessageSink, Submission};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let message = AcceptedMessage {
+		reverse_path: "notices@sender.example".into(),
+		recipients: vec!["ana@remote.example".into()],
+		data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: true,
+		no_dsn: Vec::new(),
+	};
+	let refused = spool.submit(
+		message.clone(),
+		uuid::Uuid::now_v7(),
+		"notices",
+		&Submission::of_class(MailClass::Transactional),
+	);
+	assert!(matches!(
+		refused,
+		Err(crate::smtp::sink::SinkError::EvidenceUnavailable(_))
+	));
+	assert!(spool.list().expect("list").is_empty());
+	spool
+		.submit(
+			message,
+			uuid::Uuid::now_v7(),
+			"notices",
+			&Submission::default(),
+		)
+		.expect("personal mail");
+	assert_eq!(spool.list().expect("list").len(), 1);
+}

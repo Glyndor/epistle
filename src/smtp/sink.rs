@@ -29,7 +29,14 @@ pub trait MessageSink: Send + Sync {
 		account: &str,
 		submission: &Submission,
 	) -> Result<(), SinkError> {
-		let _ = (queue_id, account, submission);
+		let _ = (queue_id, account);
+		// A sink that does not keep evidence must not take mail whose
+		// evidence is mandatory: it would be sent, with nothing to show.
+		if submission.class.evidence_mandatory() {
+			return Err(SinkError::EvidenceUnavailable(
+				"this sink keeps no evidence".into(),
+			));
+		}
 		self.deliver(message)
 	}
 }
@@ -161,5 +168,31 @@ mod tests {
 		};
 		sink.deliver(message.clone()).expect("delivery succeeds");
 		assert_eq!(sink.messages(), vec![message]);
+	}
+
+	#[test]
+	fn a_sink_that_keeps_no_evidence_refuses_transactional_mail() {
+		let sink = MemorySink::new();
+		let message = AcceptedMessage {
+			reverse_path: "a@example.org".into(),
+			recipients: vec!["b@example.org".into()],
+			data: b"hello\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			sender_verified: false,
+			no_dsn: Vec::new(),
+		};
+		let refused = sink.submit(
+			message.clone(),
+			uuid::Uuid::now_v7(),
+			"a",
+			&Submission::of_class(crate::evidence::MailClass::Transactional),
+		);
+		assert!(matches!(refused, Err(SinkError::EvidenceUnavailable(_))));
+		assert!(sink.messages().is_empty(), "the message was taken anyway");
+		sink.submit(message, uuid::Uuid::now_v7(), "a", &Submission::default())
+			.expect("personal mail is taken");
+		assert_eq!(sink.messages().len(), 1);
 	}
 }

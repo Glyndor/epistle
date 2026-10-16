@@ -531,6 +531,13 @@ impl MessageSink for FsSpool {
 		account: &str,
 		submission: &Submission,
 	) -> Result<(), SinkError> {
+		// The spool alone writes no acceptance: mail whose evidence is
+		// mandatory goes through the routing sink that does.
+		if submission.class.evidence_mandatory() {
+			return Err(SinkError::EvidenceUnavailable(
+				"the spool keeps no evidence".into(),
+			));
+		}
 		let options = StoreOptions {
 			account: Some(account),
 			extra: &submission.extra,
