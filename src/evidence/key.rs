@@ -75,6 +75,24 @@ impl EvidenceKey {
 	}
 
 	fn from_file(path: &Path) -> std::io::Result<Self> {
+		use std::os::unix::fs::MetadataExt;
+		let meta = std::fs::metadata(path)?;
+		// A restore can leave a private key readable by others, or owned by
+		// someone who is not the service: neither is signed with.
+		if meta.mode() & 0o077 != 0 {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::PermissionDenied,
+				"the evidence key file is readable or writable by others: it stays 0600",
+			));
+		}
+		// SAFETY: geteuid has no preconditions and cannot fail.
+		let euid = unsafe { libc::geteuid() };
+		if meta.uid() != euid && euid != 0 {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::PermissionDenied,
+				"the evidence key file belongs to another user",
+			));
+		}
 		let pkcs8 = std::fs::read(path)?;
 		let pair = Ed25519KeyPair::from_pkcs8(&pkcs8).map_err(|_| {
 			std::io::Error::new(

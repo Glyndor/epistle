@@ -63,3 +63,19 @@ fn the_pem_is_what_openssl_reads_and_only_ed25519_parses() {
 	);
 	assert_eq!(key_id(&raw).len(), 64);
 }
+
+#[test]
+fn a_key_file_others_can_read_is_refused() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	EvidenceKey::load_or_create(dir.path()).expect("create");
+	let path = dir.path().join(KEY_FILE);
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+	let refused = EvidenceKey::load_or_create(dir.path()).expect_err("a readable key");
+	assert_eq!(
+		refused.to_string(),
+		"the evidence key file is readable or writable by others: it stays 0600"
+	);
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+	EvidenceKey::load_or_create(dir.path()).expect("0600 loads");
+}

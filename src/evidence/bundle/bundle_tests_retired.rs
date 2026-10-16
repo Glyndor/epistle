@@ -62,7 +62,7 @@ fn rotated() -> (Fixture, String, String, Vec<u8>) {
 /// existed, the day after the rotation.
 fn forged(leaked: &[u8]) -> (Fixture, Selector) {
 	let evil = tempfile::tempdir().expect("evil");
-	std::fs::write(evil.path().join("key.pk8"), leaked).expect("plant");
+	crate::storage::write_secret(&evil.path().join("key.pk8"), leaked).expect("plant");
 	let key = EvidenceKey::load_or_create(evil.path()).expect("k1 again");
 	Chain::open(evil.path())
 		.expect("chain")
@@ -200,7 +200,7 @@ fn a_new_key_cannot_seal_a_day_before_the_day_it_took_over() {
 fn forged_by_a_successor_of_the_leaked_key(leaked: &[u8], taken: &str) -> (Fixture, Selector) {
 	use crate::evidence::rotation::{ROTATIONS_DIR, Rotation, path};
 	let evil = tempfile::tempdir().expect("evil");
-	std::fs::write(evil.path().join("key.pk8"), leaked).expect("plant");
+	crate::storage::write_secret(&evil.path().join("key.pk8"), leaked).expect("plant");
 	let k1 = EvidenceKey::load_or_create(evil.path()).expect("k1 again");
 	let k3 = EvidenceKey::stage_next(evil.path()).expect("k3");
 	crate::evidence::chain::create_private_dir(&evil.path().join(ROTATIONS_DIR)).expect("dir");
