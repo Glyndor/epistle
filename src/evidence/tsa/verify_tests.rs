@@ -375,3 +375,43 @@ fn openssl_accepts_the_tokens_the_fake_authority_issues() {
 	let bad = run(&to_hex(&sha256(b"other")));
 	assert!(!String::from_utf8_lossy(&bad.stdout).contains("Verification: OK"));
 }
+
+fn through(kind: super::super::fake::Intermediate) -> Result<Stamp, VerifyError> {
+	let mut tsa = FakeTsa::new(NOW);
+	tsa.faults.intermediate = Some(kind);
+	let request = build(&digest(), random_nonce());
+	let response = tsa.respond(&request.der);
+	verify(&response, &digest(), Some(request.nonce), &[tsa.anchor])
+}
+
+#[test]
+fn a_chain_through_a_proper_intermediate_verifies() {
+	assert!(through(super::super::fake::Intermediate::Proper).is_ok());
+}
+
+#[test]
+fn an_issuer_that_is_not_an_authority_or_may_not_sign_certificates_is_refused() {
+	use super::super::fake::Intermediate;
+	assert_eq!(
+		through(Intermediate::NotAnAuthority),
+		Err(VerifyError::Untrusted(
+			"an issuer in the chain is not a certificate authority"
+		))
+	);
+	assert_eq!(
+		through(Intermediate::CannotSignCertificates),
+		Err(VerifyError::Untrusted(
+			"an issuer in the chain may not sign certificates"
+		))
+	);
+}
+
+#[test]
+fn an_authority_that_allows_no_intermediate_below_it_is_not_followed_through_one() {
+	assert_eq!(
+		through(super::super::fake::Intermediate::TooLong),
+		Err(VerifyError::Untrusted(
+			"the chain is longer than an issuer allows"
+		))
+	);
+}

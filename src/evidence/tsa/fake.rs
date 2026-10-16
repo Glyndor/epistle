@@ -40,6 +40,21 @@ pub(crate) struct Faults {
 	pub(crate) wrong_message_digest: bool,
 	/// Refuse with this PKIStatus.
 	pub(crate) refuse: Option<u64>,
+	/// Sign through an intermediate that is what this says.
+	pub(crate) intermediate: Option<Intermediate>,
+}
+
+/// An intermediate certificate between the root and the signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Intermediate {
+	/// A certificate authority that may sign certificates.
+	Proper,
+	/// Not a certificate authority at all.
+	NotAnAuthority,
+	/// An authority whose key usage leaves out certificate signing.
+	CannotSignCertificates,
+	/// An authority that allows no intermediate below it, with one below.
+	TooLong,
 }
 
 /// A test TSA.
@@ -50,6 +65,9 @@ pub(crate) struct FakeTsa {
 	noncritical_signer_der: Vec<u8>,
 	extra_usage_signer_der: Vec<u8>,
 	expired_signer_der: Vec<u8>,
+	/// The signer issued by each kind of intermediate, with the intermediate(s)
+	/// it needs, nearest first.
+	through: Vec<(Intermediate, Vec<u8>, Vec<Vec<u8>>)>,
 	root_der: Vec<u8>,
 	/// Hex-free SHA-256 of the root's SubjectPublicKeyInfo: the pin.
 	pub(crate) anchor: [u8; 32],
@@ -138,6 +156,61 @@ impl FakeTsa {
 			.expect("signer")
 			.der()
 			.to_vec();
+		let through = [
+			Intermediate::Proper,
+			Intermediate::NotAnAuthority,
+			Intermediate::CannotSignCertificates,
+			Intermediate::TooLong,
+		]
+		.into_iter()
+		.map(|kind| {
+			let levels = if kind == Intermediate::TooLong { 2 } else { 1 };
+			let parts: Vec<(CertificateParams, KeyPair)> = (0..levels)
+				.map(|level| {
+					let key = KeyPair::generate().expect("intermediate key");
+					let mut params =
+						CertificateParams::new(Vec::<String>::new()).expect("intermediate params");
+					params
+						.distinguished_name
+						.push(DnType::CommonName, format!("Fake TSA Intermediate {level}"));
+					params.is_ca = match kind {
+						Intermediate::NotAnAuthority => IsCa::ExplicitNoCa,
+						// The first level allows no intermediate below it.
+						Intermediate::TooLong if level == 0 => {
+							IsCa::Ca(BasicConstraints::Constrained(0))
+						}
+						_ => IsCa::Ca(BasicConstraints::Unconstrained),
+					};
+					params.key_usages = match kind {
+						Intermediate::CannotSignCertificates => {
+							vec![rcgen::KeyUsagePurpose::DigitalSignature]
+						}
+						_ => vec![
+							rcgen::KeyUsagePurpose::KeyCertSign,
+							rcgen::KeyUsagePurpose::CrlSign,
+						],
+					};
+					(params, key)
+				})
+				.collect();
+			let mut chain = Vec::new();
+			for (index, (params, key)) in parts.iter().enumerate() {
+				let above = match index {
+					0 => Issuer::from_params(&root, &root_key),
+					_ => Issuer::from_params(&parts[index - 1].0, &parts[index - 1].1),
+				};
+				let certificate = params.signed_by(key, &above).expect("intermediate");
+				chain.insert(0, certificate.der().to_vec());
+			}
+			let last = parts.last().expect("an intermediate");
+			let signer_der = signer
+				.signed_by(&signer_key, &Issuer::from_params(&last.0, &last.1))
+				.expect("signer through an intermediate")
+				.der()
+				.to_vec();
+			(kind, signer_der, chain)
+		})
+		.collect();
 		let anchor = {
 			let (_, parsed) = X509Certificate::from_der(&root_der).expect("parse root");
 			sha256(parsed.public_key().raw)
@@ -149,6 +222,7 @@ impl FakeTsa {
 			noncritical_signer_der,
 			extra_usage_signer_der,
 			expired_signer_der,
+			through,
 			root_der,
 			anchor,
 			gen_time,
@@ -222,7 +296,14 @@ impl FakeTsa {
 	}
 
 	fn wrap(&self, tst: &[u8]) -> Vec<u8> {
-		let signer_der = if self.faults.no_timestamping {
+		let via = self.faults.intermediate.and_then(|kind| {
+			self.through
+				.iter()
+				.find(|(candidate, _, _)| *candidate == kind)
+		});
+		let signer_der = if let Some((_, signer_der, _)) = via {
+			signer_der
+		} else if self.faults.no_timestamping {
 			&self.plain_signer_der
 		} else if self.faults.noncritical_timestamping {
 			&self.noncritical_signer_der
@@ -305,7 +386,14 @@ impl FakeTsa {
 						&encode(tag::CONTEXT_0, &encode(tag::OCTET_STRING, tst)),
 					],
 				),
-				&encode_all(tag::CONTEXT_0, &[signer_der, &self.root_der]),
+				&encode_all(tag::CONTEXT_0, &{
+					let mut certificates: Vec<&[u8]> = vec![signer_der];
+					if let Some((_, _, chain)) = via {
+						certificates.extend(chain.iter().map(Vec::as_slice));
+					}
+					certificates.push(&self.root_der);
+					certificates
+				}),
 				&encode(tag::SET, &signer_info),
 			],
 		);

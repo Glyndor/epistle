@@ -409,6 +409,30 @@ fn validity(
 
 type ChainResult<'b, 'a> = Result<([u8; 32], Vec<&'b X509Certificate<'a>>), &'static str>;
 
+/// Whether `issuer` may issue certificates to something with `below`
+/// authorities between it and the signer: a CA, with keyCertSign when it
+/// states its key usage, and a path length constraint that allows `below`.
+fn authority(issuer: &X509Certificate<'_>, below: usize) -> Result<(), &'static str> {
+	let constraints = issuer
+		.basic_constraints()
+		.map_err(|_| "an issuer in the chain has unreadable basic constraints")?;
+	let Some(constraints) = constraints.filter(|ext| ext.value.ca) else {
+		return Err("an issuer in the chain is not a certificate authority");
+	};
+	if let Some(limit) = constraints.value.path_len_constraint
+		&& usize::try_from(limit).map_or(false, |limit| below > limit)
+	{
+		return Err("the chain is longer than an issuer allows");
+	}
+	let usage = issuer
+		.key_usage()
+		.map_err(|_| "an issuer in the chain has an unreadable key usage")?;
+	if usage.is_some_and(|ext| !ext.value.key_cert_sign()) {
+		return Err("an issuer in the chain may not sign certificates");
+	}
+	Ok(())
+}
+
 /// (a): walk issuers from `signer`, each verified as having signed the one
 /// below, until a pinned key. Returns the anchor and the issuers walked.
 fn chain_to_anchor<'b, 'a>(
@@ -433,6 +457,11 @@ fn chain_to_anchor<'b, 'a>(
 		if issuer.as_raw() == current.as_raw() {
 			// Self-signed and not pinned: nothing further up.
 			break;
+		}
+		// An issuer that is not pinned vouches for what is below it only if it
+		// is an authority allowed to, and with room for what is below it.
+		if !anchors.contains(&sha256(issuer.public_key().raw)) {
+			authority(issuer, path.len())?;
 		}
 		path.push(issuer);
 		current = issuer;
