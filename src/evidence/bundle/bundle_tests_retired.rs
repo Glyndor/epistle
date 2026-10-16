@@ -299,3 +299,33 @@ fn a_day_sealed_by_an_intermediate_key_after_its_period_fails() {
 		failures(&report)
 	);
 }
+
+#[test]
+fn an_old_publication_and_the_current_key_validate_the_current_keys_days_without_the_ones_between()
+{
+	let (mut server, k1, _k2, _) = rotated();
+	let k3 = rotate(server.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	let chain = Chain::open(server.root()).expect("chain");
+	chain
+		.append_at(at(DAY + 5, 1), accepted(8))
+		.expect("accepted");
+	chain
+		.append_at(at(DAY + 5, 2), delivered(8))
+		.expect("outcome");
+	let current = EvidenceKey::load_or_create(server.root()).expect("k3");
+	let Fixture { dir, tsa, .. } = &mut server;
+	stamp(dir.path(), tsa, &current, at(DAY + 6, 0));
+	let (_out, bundle) = exported(&server, &selector(8));
+	// K1 from the publication of its day, the current key bare: K2 is not
+	// among them. The day was sealed by K3, which the reader anchored.
+	let report = check(
+		&bundle,
+		&[server.tsa.anchor],
+		&[format!("{k1}@{R}"), k3.clone()],
+	)
+	.expect("check");
+	assert!(report.passed(), "{:?}", failures(&report));
+	// The current key alone passes the same bundle.
+	let alone = check(&bundle, &[server.tsa.anchor], &[k3]).expect("check");
+	assert!(alone.passed(), "{:?}", failures(&alone));
+}

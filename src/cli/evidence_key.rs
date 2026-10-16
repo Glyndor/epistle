@@ -75,8 +75,9 @@ fn rotate(root: &Path, yes: bool, now: u64, as_json: bool, out: &mut impl Write)
 			return ExitCode::FAILURE;
 		}
 	};
-	let question = "Rotate the evidence key? The old key signs the hand-over, so anyone who anchored it \
-	                still follows the new one. Publish the new key's id afterwards. [y/N] ";
+	let question = "Rotate the evidence key? The old key signs the hand-over. Publish the new key's id \
+	                and the old one's period (`epistle evidence key show` prints it): a reader who \
+	                anchored the old key without a period trusts it for ever. [y/N] ";
 	if let Err(code) =
 		super::prompt::confirm_destructive("rotating the evidence key", question, yes)
 	{

@@ -162,6 +162,13 @@ sealed by the new key, and an acknowledgement or a purge statement written
 after a rotation must be signed by the key then in force. `verify` says so
 when it is not.
 
+A reader need not anchor every key in between: an old publication (an earlier
+key with its period) and the current key are enough for the days the current
+key sealed. What is asked of the keys between is only what leads back to a key
+the reader did anchor: a path from the day's signer that reaches an anchored
+key is followed no further, and an older key with a period still cannot hand
+over to a key the reader has no path to.
+
 A token stamped long after its day ended shows when the day was sealed, not
 when its mail was sent, so `check` fails a day whose token is dated more
 than four days after the day ended.

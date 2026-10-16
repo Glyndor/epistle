@@ -163,7 +163,10 @@ pub(super) fn vouch(
 					rotation.old
 				));
 			}
-			if anchors.get(&current).is_none() {
+			// Not asked when the path already reached a key the reader
+			// anchored: those between it and the older key are none of their
+			// business, and a leaked older key forges nothing through them.
+			if !anchored && anchors.get(&current).is_none() {
 				return Err(format!(
 					"key {} took over from {}, which has a period, but you did not anchor it",
 					current, rotation.old
