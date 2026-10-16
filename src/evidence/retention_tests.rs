@@ -1,5 +1,5 @@
 use super::*;
-use crate::evidence::audit::{Options, verify};
+use crate::evidence::audit::{Options, TOKEN_GRACE_SECS, verify};
 use crate::evidence::checkpoint::seal_closed_days;
 use crate::evidence::test_support::{accepted_for, at, delivered};
 use crate::evidence::tsa::fake::FakeTsa;
@@ -344,5 +344,101 @@ fn the_statement_names_what_went_and_cannot_be_changed() {
 			.expect("a break")
 			.to_string()
 			.contains("statement is missing")
+	);
+}
+
+/// Replace `day`'s token with one stamped at `gen_time`.
+fn restamp(root: &Path, tsa: &mut FakeTsa, day: Day, gen_time: u64) {
+	tsa.gen_time = gen_time;
+	let paths = files(root, day);
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		tsa.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
+}
+
+fn judged(root: &Path, tsa: &FakeTsa, day: Day) -> Option<String> {
+	let (sealed, bytes) = checkpoint::load(root, day).expect("load").expect("sealed");
+	unpurgeable(root, day, &sealed, &bytes, &[tsa.anchor], at(DAY + 5, 12))
+}
+
+#[test]
+fn a_token_that_verifies_but_predates_the_end_of_the_day_does_not_vouch() {
+	let (dir, _key, mut tsa, _chain) = short_lived();
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)),
+		None,
+		"a token in its window"
+	);
+	restamp(dir.path(), &mut tsa, Day(DAY), at(DAY, 5));
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)).as_deref(),
+		Some("2026-10-14: no timestamp token that verifies: the token predates the end of the day")
+	);
+}
+
+#[test]
+fn a_token_issued_long_after_the_seal_does_not_vouch() {
+	let (dir, _key, mut tsa, _chain) = short_lived();
+	let (sealed, _) = checkpoint::load(dir.path(), Day(DAY))
+		.expect("load")
+		.expect("sealed");
+	restamp(
+		dir.path(),
+		&mut tsa,
+		Day(DAY),
+		sealed.created + TOKEN_GRACE_SECS + 1,
+	);
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)).as_deref(),
+		Some(
+			"2026-10-14: no timestamp token that verifies: the token was issued more than 3 days after the checkpoint"
+		)
+	);
+}
+
+#[test]
+fn every_purge_statement_is_checked_not_only_the_last() {
+	let (dir, key, mut tsa, chain) = short_lived();
+	// A day kept for a year stops the second purge before the first purge's record.
+	chain
+		.append_at(at(DAY + 4, 1), accepted_for(5, 365))
+		.expect("append");
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 5, 0));
+	let first = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(first.days, 3, "{:?}", first.refused);
+	chain
+		.append_at(at(DAY + 6, 1), accepted_for(9, 2))
+		.expect("append");
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 7, 0));
+	let second = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 9, 12)).expect("sweep");
+	assert_eq!((second.days, second.refused.as_deref()), (1, None));
+	let now = at(DAY + 9, 13);
+	assert_eq!(verified(dir.path(), &tsa, now).first_break, None);
+	// The earlier statement is edited after a later, valid one was written.
+	let path = dir
+		.path()
+		.join(PURGES_DIR)
+		.join(format!("{}.json", Day(DAY + 2).name()));
+	assert!(
+		path.exists()
+			&& dir
+				.path()
+				.join(PURGES_DIR)
+				.join(format!("{}.json", Day(DAY + 3).name()))
+				.exists()
+	);
+	let edited = std::fs::read_to_string(&path)
+		.expect("read")
+		.replace("\"records\": 3", "\"records\": 2");
+	std::fs::write(&path, edited).expect("write");
+	assert_eq!(
+		verified(dir.path(), &tsa, now)
+			.first_break
+			.map(|at| at.to_string())
+			.as_deref(),
+		Some("2026-10-23: checkpoint: the purge statement is not the one its record names")
 	);
 }

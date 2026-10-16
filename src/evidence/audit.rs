@@ -80,7 +80,12 @@ struct Walker {
 	head: Option<[u8; 32]>,
 	head_seen: bool,
 	last_purge: Option<super::record::Purge>,
+	/// Every purge record met, oldest first: each statement is checked.
+	purges: Vec<super::record::Purge>,
 }
+
+/// The most purge records one verification checks.
+const MAX_PURGES: usize = 10_000;
 
 /// Verify the evidence under `evidence_root`.
 pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report> {
@@ -142,6 +147,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		head: head.as_ref().and_then(super::head::Head::hash),
 		head_seen: false,
 		last_purge: None,
+		purges: Vec::new(),
 	};
 	for day in days {
 		if let Err(at) =
@@ -179,10 +185,10 @@ fn final_checks(
 	today: Day,
 	has_head: bool,
 ) -> Option<Break> {
-	if let Some(purge) = &walker.last_purge
-		&& let Err(why) = super::retention::check_statement(evidence_root, purge)
-	{
-		return Some(broken(today, why));
+	for purge in &walker.purges {
+		if let Err(why) = super::retention::check_statement(evidence_root, purge) {
+			return Some(broken(today, why));
+		}
 	}
 	match (purged, &walker.last_purge) {
 		(Some(anchor), Some(purge))
@@ -230,12 +236,12 @@ fn walk_and_check(
 	let mut timestamping = walker.timestamping;
 	let head = walker.head;
 	let mut head_seen = false;
-	let mut last_purge = None;
+	let mut purges = Vec::new();
 	let walk = walk_day(evidence_root, day, walker.expected, |_, record, hash| {
 		tree.push(leaf_hash(hash));
 		head_seen |= head.as_ref() == Some(hash);
 		match &record.entry {
-			Entry::Purge(purge) => last_purge = Some(purge.clone()),
+			Entry::Purge(purge) => purges.push(purge.clone()),
 			Entry::Setting(setting) if setting.name == "timestamp" => {
 				timestamping = setting.value.starts_with("enabled");
 			}
@@ -243,8 +249,12 @@ fn walk_and_check(
 		}
 	})?;
 	walker.head_seen |= head_seen;
-	if last_purge.is_some() {
-		walker.last_purge = last_purge;
+	if let Some(last) = purges.last() {
+		walker.last_purge = Some(last.clone());
+	}
+	walker.purges.extend(purges);
+	if walker.purges.len() > MAX_PURGES {
+		return Err(broken(day, "more purge records than a verification checks"));
 	}
 	walker.timestamping = timestamping;
 	report.days += 1;
@@ -372,19 +382,27 @@ fn check_day(
 	})?;
 	let stamp = super::tsa::verify(&token, &sha256(&bytes), None, &options.anchors)
 		.map_err(|error| broken(day, format!("timestamp: {error}")))?;
+	token_window(day, &checkpoint, &stamp)
+		.map_err(|why| broken(day, format!("timestamp: {why}")))?;
+	Ok((hash, true, checkpoint.key))
+}
+
+/// The times a token for `day`'s checkpoint may carry: after the day ended
+/// (every record of the day existed) and within [`TOKEN_GRACE_SECS`] of the
+/// seal. Shared by the audit and by the purge, which must not judge a token
+/// by a looser rule than the audit does.
+pub(crate) fn token_window(
+	day: Day,
+	checkpoint: &checkpoint::Checkpoint,
+	stamp: &super::tsa::Stamp,
+) -> Result<(), &'static str> {
 	if stamp.gen_time < Day(day.0 + 1).start_epoch() {
-		return Err(broken(
-			day,
-			"timestamp: the token predates the end of the day",
-		));
+		return Err("the token predates the end of the day");
 	}
 	if stamp.gen_time > checkpoint.created.saturating_add(TOKEN_GRACE_SECS) {
-		return Err(broken(
-			day,
-			"timestamp: the token was issued more than 3 days after the checkpoint",
-		));
+		return Err("the token was issued more than 3 days after the checkpoint");
 	}
-	Ok((hash, true, checkpoint.key))
+	Ok(())
 }
 
 #[cfg(test)]

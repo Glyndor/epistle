@@ -145,10 +145,13 @@ fn unpurgeable(
 	let token = checkpoint::read_bounded(&files(evidence_root, day).tsr, 64 * 1024)
 		.ok()
 		.flatten();
-	let stamped = token
-		.is_some_and(|token| super::tsa::verify(&token, &sha256(bytes), None, anchors).is_ok());
-	if !stamped {
+	let stamp =
+		token.and_then(|token| super::tsa::verify(&token, &sha256(bytes), None, anchors).ok());
+	let Some(stamp) = stamp else {
 		return Some(format!("{day}: no timestamp token that verifies"));
+	};
+	if let Err(why) = super::audit::token_window(day, sealed, &stamp) {
+		return Some(format!("{day}: no timestamp token that verifies: {why}"));
 	}
 	None
 }
