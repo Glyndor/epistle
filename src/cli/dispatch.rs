@@ -410,7 +410,8 @@ impl Cli {
 				config,
 				action,
 				dry_run,
-			} => attachments::run(&config, action, dry_run),
+				json,
+			} => attachments::run(&config, action, dry_run, json),
 			Command::Alias {
 				config,
 				action,

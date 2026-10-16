@@ -1,4 +1,4 @@
-//! `check --strict` exits 1 for a verdict the server would not deliver
+//! `check --strict` exits 3 (refused by policy) for a verdict the server would not deliver
 //! as it is; without the flag the exit code is 0 whatever the verdict.
 
 use std::process::ExitCode;
@@ -17,16 +17,16 @@ fn run(mode: &str, message: &[u8], json: bool, strict: bool) -> (ExitCode, Strin
 }
 
 #[test]
-fn strict_exits_1_for_reject() {
+fn strict_exits_3_for_reject() {
 	let (code, out) = run("reject", EXE_AS_PDF.as_bytes(), false, true);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(3));
 	assert!(out.contains("verdict: reject"), "{out}");
 }
 
 #[test]
-fn strict_exits_1_for_quarantine() {
+fn strict_exits_3_for_quarantine() {
 	let (code, out) = run("quarantine", EXE_AS_PDF.as_bytes(), false, true);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(3));
 	assert!(out.contains("verdict: quarantine"), "{out}");
 }
 
@@ -59,9 +59,9 @@ fn without_strict_every_verdict_exits_0() {
 }
 
 #[test]
-fn strict_with_json_still_prints_the_object_and_exits_1() {
+fn strict_with_json_still_prints_the_object_and_exits_3() {
 	let (code, out) = run("reject", EXE_AS_PDF.as_bytes(), true, true);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(3));
 	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
 	assert_eq!(value["verdict"], "reject");
 }

@@ -223,6 +223,10 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 		Done,
 	),
 	("antispam unset", &["greylist-delay"], Done),
+	("attachments policy show", &[], Done),
+	("attachments policy set", &["mode", "quarantine"], Done),
+	("attachments policy unset", &["mode"], Done),
+	("attachments check", &["@TMP/sweep.eml"], Done),
 	("alias list", &[], Done),
 	("alias add", &["team@example.org", "bob@example.org"], Done),
 	("alias show", &["team@example.org"], Done),
@@ -341,6 +345,13 @@ fn every_leaf_honours_json() {
 		// with it present a configuration edit would try to restart the stack.
 		if path.starts_with("stack resources") {
 			write_compose(&env);
+		}
+		if *path == "attachments check" {
+			std::fs::write(
+				env.dir.path().join("sweep.eml"),
+				"From: x@example.net\r\nSubject: hi\r\n\r\nhello\r\n",
+			)
+			.expect("write sweep.eml");
 		}
 		let mut full: Vec<String> = path.split(' ').map(str::to_string).collect();
 		full.extend(args.iter().map(|arg| arg.replace("@TMP", &tmp)));

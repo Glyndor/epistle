@@ -52,18 +52,12 @@ pub enum PolicyCli {
 		/// The new value, or the extensions for a list key.
 		#[arg(required = true)]
 		value: Vec<String>,
-		/// Print the policy in effect after the change as JSON.
-		#[arg(long)]
-		json: bool,
 	},
 	/// Remove one key, restoring its default.
 	Unset {
 		/// The policy key.
 		#[arg(value_enum)]
 		key: PolicyKey,
-		/// Print the policy in effect after the change as JSON.
-		#[arg(long)]
-		json: bool,
 	},
 }
 
@@ -85,20 +79,22 @@ pub enum PolicyKey {
 }
 
 /// Run one attachments action against the configuration at `path`.
-pub(super) fn run(path: &Path, action: AttachmentsCli, dry_run: bool) -> ExitCode {
+pub(super) fn run(path: &Path, action: AttachmentsCli, dry_run: bool, json: bool) -> ExitCode {
 	let mut out = std::io::stdout().lock();
 	let result = match action {
 		AttachmentsCli::Policy { action } => policy::execute(
 			path,
 			action,
-			dry_run,
+			(dry_run, json),
 			&mut out,
 			&mut style::stderr(),
 			super::stack::run,
 		),
-		AttachmentsCli::Check { file, json, strict } => {
-			check::execute(path, &file, json, strict, &mut out)
-		}
+		AttachmentsCli::Check {
+			file,
+			json: leaf,
+			strict,
+		} => check::execute(path, &file, leaf || json, strict, &mut out),
 	};
 	match result {
 		Ok(code) => code,

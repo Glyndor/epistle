@@ -65,9 +65,9 @@ pub(super) fn execute(
 	let inspected = config.antispam.scan_authenticated;
 	let refused = inspected && decision.action >= Action::Quarantine;
 	// `--strict` turns a verdict the server would not deliver as it is into
-	// exit 1, like `epistle status` on a failing area.
+	// the exit code of a refusal by policy.
 	let code = if strict && decision.action >= Action::Quarantine {
-		ExitCode::FAILURE
+		ExitCode::from(crate::cli::exit::POLICY)
 	} else {
 		ExitCode::SUCCESS
 	};

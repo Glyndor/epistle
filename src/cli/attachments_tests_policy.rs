@@ -30,8 +30,17 @@ fn run(
 	action: PolicyCli,
 	dry_run: bool,
 ) -> (Result<ExitCode, String>, String, String) {
+	run_with(path, action, (dry_run, false))
+}
+
+/// [`run`] with the command-level `--json` too.
+fn run_with(
+	path: &std::path::Path,
+	action: PolicyCli,
+	mode: (bool, bool),
+) -> (Result<ExitCode, String>, String, String) {
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	let result = policy::execute(path, action, dry_run, &mut out, &mut status, |_, _| {
+	let result = policy::execute(path, action, mode, &mut out, &mut status, |_, _| {
 		panic!("no stack in a test")
 	})
 	.map_err(|error: ResourceError| error.to_string());
@@ -46,7 +55,6 @@ fn set(key: PolicyKey, values: &[&str]) -> PolicyCli {
 	PolicyCli::Set {
 		key,
 		value: values.iter().map(|value| value.to_string()).collect(),
-		json: false,
 	}
 }
 
@@ -143,20 +151,81 @@ fn set_replaces_a_list_with_normalised_extensions() {
 }
 
 #[test]
-fn set_json_prints_the_policy_after_the_change() {
+fn set_json_prints_one_result_object() {
 	let (_dir, path) = fixture("");
-	let (result, out, _) = run(
-		&path,
-		PolicyCli::Set {
-			key: PolicyKey::AllowExtensions,
-			value: vec!["svg".into()],
-			json: true,
-		},
-		false,
-	);
+	let set = |values: &[&str]| set(PolicyKey::AllowExtensions, values);
+	let (result, out, status) = run_with(&path, set(&["SVG", ".svg"]), (false, true));
 	assert_eq!(result, Ok(ExitCode::SUCCESS));
-	let value: serde_json::Value = serde_json::from_str(&out).expect("JSON");
-	assert_eq!(value["allow-extensions"], serde_json::json!(["svg"]));
+	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
+	assert_eq!(
+		value,
+		serde_json::json!({
+			"result": "saved", "action": "set", "key": "allow-extensions",
+			"value": ["svg"], "reload": "restart-needed",
+		})
+	);
+	assert_eq!(out.lines().count(), 1, "one document");
+	assert_eq!(
+		status, "attachments allow-extensions set.\nThe server must be restarted.\n",
+		"the notes stay on the status stream"
+	);
+	// The same value again changes nothing.
+	let (_, out, _) = run_with(&path, set(&["svg"]), (false, true));
+	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
+	assert_eq!(value["result"], "unchanged");
+	assert_eq!(value["reload"], "none");
+}
+
+#[test]
+fn a_scalar_key_reports_its_value() {
+	let (_dir, path) = fixture("");
+	let (_, out, _) = run_with(&path, set(PolicyKey::Mode, &["Reject"]), (false, true));
+	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
+	assert_eq!(value["value"], "reject");
+}
+
+#[test]
+fn unset_json_prints_one_result_object() {
+	let (_dir, path) = fixture("[attachments]\nmode = \"reject\"\n");
+	let unset = PolicyCli::Unset {
+		key: PolicyKey::Mode,
+	};
+	let (result, out, _) = run_with(&path, unset, (false, true));
+	assert_eq!(result, Ok(ExitCode::SUCCESS));
+	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
+	assert_eq!(
+		value,
+		serde_json::json!({
+			"result": "saved", "action": "unset", "key": "mode", "reload": "restart-needed",
+		})
+	);
+}
+
+#[test]
+fn a_dry_run_with_json_carries_the_diff_and_writes_nothing() {
+	let (_dir, path) = fixture("");
+	let before = std::fs::read(&path).unwrap();
+	let (result, out, status) = run_with(&path, set(PolicyKey::Mode, &["reject"]), (true, true));
+	assert_eq!(result, Ok(ExitCode::SUCCESS));
+	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
+	assert_eq!(value["result"], "dry-run");
+	assert_eq!(value["action"], "set");
+	assert!(
+		value["diff"]
+			.as_str()
+			.is_some_and(|diff| diff.contains("reject")),
+		"{value}"
+	);
+	assert_eq!(status, "");
+	assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn a_refused_change_prints_nothing_on_stdout_under_json() {
+	let (_dir, path) = fixture("");
+	let (result, out, _) = run_with(&path, set(PolicyKey::Mode, &["delete"]), (false, true));
+	assert!(result.is_err());
+	assert_eq!(out, "");
 }
 
 #[test]
@@ -212,7 +281,6 @@ fn unset_restores_the_default() {
 		&path,
 		PolicyCli::Unset {
 			key: PolicyKey::Mode,
-			json: false,
 		},
 		false,
 	);
@@ -228,7 +296,6 @@ fn unset_restores_the_default() {
 		&path,
 		PolicyCli::Unset {
 			key: PolicyKey::AllowExtensions,
-			json: false,
 		},
 		false,
 	);

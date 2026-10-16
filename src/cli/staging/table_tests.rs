@@ -298,3 +298,22 @@ fn the_message_staged_for_check_is_bounded_by_the_default_message_size() {
 		}
 	);
 }
+
+#[test]
+fn the_path_of_check_is_found_among_the_global_flags() {
+	assert_eq!(
+		find(
+			&args(&[
+				"attachments",
+				"--config",
+				"/etc/mail.toml",
+				"check",
+				"/tmp/m.eml",
+				"--strict",
+				"--json"
+			]),
+			STAGED
+		),
+		[message_found(4, "/tmp/m.eml")]
+	);
+}

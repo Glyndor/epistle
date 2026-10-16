@@ -620,6 +620,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Attachments action.
 		#[command(subcommand)]
 		action: attachments::AttachmentsCli,

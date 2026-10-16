@@ -6,7 +6,8 @@ use std::process::ExitCode;
 
 use super::{PolicyCli, PolicyKey, print_json};
 use crate::antispam::attachments::rules::ALWAYS_DANGEROUS;
-use crate::cli::config_edit::{ConfigDocument, Outcome, after_change_with};
+use crate::cli::config_edit::{ConfigDocument, Outcome, after_change_reporting};
+use crate::cli::json_out::{change_object, dry_run_object};
 use crate::cli::resource::ResourceError;
 use crate::cli::stack::StackAction;
 use crate::config::{
@@ -39,30 +40,52 @@ impl PolicyKey {
 }
 
 /// Run one policy action; `restart` restarts the stack after a change.
+/// `json` is the command-level `--json`: `show` also takes its own, and a
+/// change prints one result object instead of its confirmation.
 pub(super) fn execute(
 	path: &Path,
 	action: PolicyCli,
-	dry_run: bool,
+	(dry_run, json): (bool, bool),
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, ResourceError> {
 	match action {
-		PolicyCli::Show { json } => {
+		PolicyCli::Show { json: leaf } => {
 			let config =
 				Config::load(path).map_err(|error| ResourceError::Failure(error.to_string()))?;
-			show(&config.attachments, json, out)?;
+			show(&config.attachments, leaf || json, out)?;
 			Ok(ExitCode::SUCCESS)
 		}
-		PolicyCli::Set { key, value, json } => {
+		PolicyCli::Set { key, value } => {
 			let mut document = ConfigDocument::open(path)?;
-			apply_set(&mut document, key, &value)?;
-			commit(document, key, "set", json, dry_run, out, status, restart)
+			let stored = apply_set(&mut document, key, &value)?;
+			let fields = serde_json::json!({ "key": key.name(), "value": stored });
+			commit(
+				document,
+				key,
+				"set",
+				fields,
+				(dry_run, json),
+				out,
+				status,
+				restart,
+			)
 		}
-		PolicyCli::Unset { key, json } => {
+		PolicyCli::Unset { key } => {
 			let mut document = ConfigDocument::open(path)?;
 			document.remove_table_key(&["attachments"], key.field())?;
-			commit(document, key, "unset", json, dry_run, out, status, restart)
+			let fields = serde_json::json!({ "key": key.name() });
+			commit(
+				document,
+				key,
+				"unset",
+				fields,
+				(dry_run, json),
+				out,
+				status,
+				restart,
+			)
 		}
 	}
 }
@@ -71,7 +94,7 @@ fn apply_set(
 	document: &mut ConfigDocument,
 	key: PolicyKey,
 	values: &[String],
-) -> Result<(), ResourceError> {
+) -> Result<serde_json::Value, ResourceError> {
 	let name = key.name();
 	match key {
 		PolicyKey::BlockExtensions | PolicyKey::AllowExtensions => {
@@ -98,6 +121,7 @@ fn apply_set(
 				}
 			}
 			document.set_table_key(&["attachments"], key.field(), list)?;
+			Ok(serde_json::Value::from(seen))
 		}
 		PolicyKey::Mode | PolicyKey::Macros | PolicyKey::EncryptedArchives => {
 			let [value] = values else {
@@ -122,32 +146,35 @@ fn apply_set(
 					"{name} expected {expected} (got {value:?})"
 				)));
 			}
-			document.set_table_key(&["attachments"], key.field(), value)?;
+			document.set_table_key(&["attachments"], key.field(), value.as_str())?;
+			Ok(serde_json::Value::from(value))
 		}
 	}
-	Ok(())
 }
 
-/// Write the change (or print it under `--dry-run`), then restart.
+/// Write the change (or print it under `--dry-run`), then restart. With
+/// `json` the result is one object on `out`, built like the other
+/// configuration edits: `result`, `action`, the `fields`, `reload`.
 #[allow(clippy::too_many_arguments)]
 fn commit(
 	document: ConfigDocument,
 	key: PolicyKey,
 	verb: &str,
-	json: bool,
-	dry_run: bool,
+	fields: serde_json::Value,
+	(dry_run, json): (bool, bool),
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, ResourceError> {
 	let failed = |error: std::io::Error| ResourceError::Failure(error.to_string());
 	if dry_run {
-		write!(
-			out,
-			"{}",
-			document.dry_run().map_err(ResourceError::Refusal)?
-		)
-		.map_err(failed)?;
+		let diff = document.dry_run().map_err(ResourceError::Refusal)?;
+		if json {
+			let object = dry_run_object(verb, fields, diff);
+			writeln!(out, "{object}").map_err(failed)?;
+		} else {
+			write!(out, "{diff}").map_err(failed)?;
+		}
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config().map_err(ResourceError::Refusal)?;
@@ -162,10 +189,13 @@ fn commit(
 	} else {
 		writeln!(status, "attachments {} {verb}.", key.name()).map_err(failed)?;
 	}
+	let (code, reload) = after_change_reporting(&config, outcome, true, status, restart)?;
 	if json {
-		show(&config.attachments, true, out)?;
+		let changed = outcome == Outcome::Changed;
+		let object = change_object(verb, changed, fields, Some(reload));
+		writeln!(out, "{object}").map_err(failed)?;
 	}
-	after_change_with(&config, outcome, true, status, restart)
+	Ok(code)
 }
 
 /// Print the policy in effect: one `key\tvalue` line per key, or one JSON
