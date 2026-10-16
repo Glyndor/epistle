@@ -301,7 +301,7 @@ fn follow(dir: &Path, signer: &str, keys: &[String]) -> Result<Vec<String>, Stri
 	let mut seen = BTreeSet::new();
 	let mut anchored = false;
 	for _ in 0..=MAX_HOPS {
-		anchored |= keys.iter().any(|anchor| *anchor == current);
+		anchored |= keys.contains(&current);
 		if hash_from_hex(&current).is_none() || !seen.insert(current.clone()) {
 			break;
 		}

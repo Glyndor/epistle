@@ -92,7 +92,7 @@ fn a_bundle_re_signed_with_another_key_fails_against_the_real_one() {
 	let real = key_of(&server);
 	let (_dir, bundle) = export(&server, 1);
 	assert_eq!(
-		check(&server, &bundle, &[real.clone()]).0,
+		check(&server, &bundle, std::slice::from_ref(&real)).0,
 		ExitCode::SUCCESS
 	);
 	// The operator re-signs every checkpoint with a key of their own and
