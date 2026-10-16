@@ -138,7 +138,7 @@ pub(super) fn export(
 	crypto: &MessageCrypto,
 	selector: &Selector,
 	dir: &Path,
-	as_json: bool,
+	(as_json, allow_unsealed): (bool, bool),
 	out: &mut impl Write,
 ) -> ExitCode {
 	let done = match bundle::export(root, crypto, selector, dir) {
@@ -146,9 +146,13 @@ pub(super) fn export(
 		Err(error) => return failed(&error),
 	};
 	let unsealed: Vec<String> = done.unsealed.iter().map(|day| day.name()).collect();
+	let code = match unsealed.is_empty() || allow_unsealed {
+		true => ExitCode::SUCCESS,
+		false => ExitCode::FAILURE,
+	};
 	if as_json {
 		let messages: Vec<String> = done.messages.iter().map(ToString::to_string).collect();
-		return super::evidence::json(
+		let printed = super::evidence::json(
 			out,
 			&json!({
 				"bundle": dir.display().to_string(),
@@ -157,6 +161,10 @@ pub(super) fn export(
 				"unsealed": unsealed,
 			}),
 		);
+		return match printed == ExitCode::SUCCESS {
+			true => code,
+			false => printed,
+		};
 	}
 	let _ = writeln!(
 		out,
@@ -168,7 +176,7 @@ pub(super) fn export(
 	if !unsealed.is_empty() {
 		let _ = writeln!(
 			out,
-			"not included, not sealed yet: {}; export again after the day is sealed and stamped",
+			"not included, not sealed yet: {}; export again after the day is sealed and stamped (or --allow-unsealed to keep this bundle)",
 			unsealed.join(", ")
 		);
 	}
@@ -176,7 +184,7 @@ pub(super) fn export(
 		out,
 		"check it with: epistle evidence check <bundle> (see its README.md)"
 	);
-	ExitCode::SUCCESS
+	code
 }
 
 fn failed(error: &BundleError) -> ExitCode {

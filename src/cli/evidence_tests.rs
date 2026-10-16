@@ -134,7 +134,7 @@ fn check_runs_without_any_configuration_file() {
 		&crate::storage::MessageCrypto::disabled(),
 		&selector,
 		&bundle,
-		false,
+		(false, false),
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS, "{}", text(&out));

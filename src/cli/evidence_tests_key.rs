@@ -20,7 +20,7 @@ fn export(server: &Server, message: u32) -> (tempfile::TempDir, PathBuf) {
 		&crate::storage::MessageCrypto::disabled(),
 		&selector,
 		&bundle,
-		false,
+		(false, false),
 		&mut Vec::new(),
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -347,4 +347,35 @@ fn check_tells_the_scope_and_refuses_a_bundle_about_something_else() {
 		said.contains("was not sent to nobody@example.net"),
 		"{said}"
 	);
+}
+
+#[test]
+fn an_export_that_leaves_records_out_for_want_of_a_seal_does_not_say_it_succeeded() {
+	let server = Server::new();
+	// A closed day nobody sealed.
+	let day = server.first + 3;
+	let chain = Chain::open(server.root()).expect("chain");
+	chain.append_at(at(day, 1), accepted(8)).expect("accepted");
+	chain
+		.append_at(at(day, 2), crate::evidence::test_support::delivered(8))
+		.expect("outcome");
+	let export_with = |allow: bool| {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut out = Vec::new();
+		let code = super::super::evidence_bundle::export(
+			server.root(),
+			&crate::storage::MessageCrypto::disabled(),
+			&crate::evidence::bundle::Selector::MessageId("<8@example.org>".into()),
+			&dir.path().join("bundle"),
+			(false, allow),
+			&mut out,
+		);
+		(code, text(&out))
+	};
+	let (code, said) = export_with(false);
+	assert_eq!(code, ExitCode::FAILURE, "{said}");
+	assert!(said.contains("not included, not sealed yet"), "{said}");
+	assert!(said.contains("--allow-unsealed"), "{said}");
+	let (code, said) = export_with(true);
+	assert_eq!(code, ExitCode::SUCCESS, "{said}");
 }

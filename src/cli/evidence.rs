@@ -56,6 +56,10 @@ pub enum EvidenceCli {
 		/// The bundle directory to create; it must not exist.
 		#[arg(long)]
 		out: PathBuf,
+		/// Succeed even when some of the records are of a day that is not
+		/// sealed yet, and so are left out of the bundle.
+		#[arg(long)]
+		allow_unsealed: bool,
 		/// Print one JSON object instead of text.
 		#[arg(long)]
 		json: bool,
@@ -291,6 +295,7 @@ pub(super) fn run(
 			from,
 			to,
 			out: bundle,
+			allow_unsealed,
 			json,
 		} => {
 			let crypto = match super::util::message_crypto(&config) {
@@ -308,7 +313,14 @@ pub(super) fn run(
 					);
 				}
 			};
-			super::evidence_bundle::export(&root, &crypto, &selector, &bundle, json, out)
+			super::evidence_bundle::export(
+				&root,
+				&crypto,
+				&selector,
+				&bundle,
+				(json, allow_unsealed),
+				out,
+			)
 		}
 		EvidenceCli::Key { action } => super::evidence_key::run(&root, action, now, out),
 		EvidenceCli::Policy { action } => super::evidence_policy::run(&root, action, out),

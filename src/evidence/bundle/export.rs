@@ -77,6 +77,7 @@ pub fn export(
 	let mut picked: BTreeMap<Day, Vec<(u64, Vec<u8>)>> = BTreeMap::new();
 	let mut spool_ids: BTreeSet<Uuid> = BTreeSet::new();
 	let mut kept: Vec<(Uuid, Day, u32, String)> = Vec::new();
+	let mut accepted: Vec<(Uuid, Day)> = Vec::new();
 	let mut total = 0usize;
 	for day in &span {
 		scan_day(
@@ -90,15 +91,16 @@ pub fn export(
 				if total > MAX_RECORDS {
 					return;
 				}
-				if let Entry::Accepted(accepted) = &record.entry
-					&& accepted.retention.mode == RetentionMode::Full
-				{
-					kept.push((
-						accepted.spool_id,
-						*day,
-						accepted.retention.days,
-						accepted.sha256.clone(),
-					));
+				if let Entry::Accepted(made) = &record.entry {
+					accepted.push((made.spool_id, *day));
+					if made.retention.mode == RetentionMode::Full {
+						kept.push((
+							made.spool_id,
+							*day,
+							made.retention.days,
+							made.sha256.clone(),
+						));
+					}
 				}
 				picked.entry(*day).or_default().push((index, line.to_vec()));
 			},
@@ -113,11 +115,9 @@ pub fn export(
 		return Err(BundleError::Refused("no evidence matches".into()));
 	}
 	super::create_root(out)?;
-	let mut done = Exported {
-		messages: spool_ids.iter().copied().collect(),
-		..Exported::default()
-	};
+	let mut done = Exported::default();
 	let mut keys: BTreeSet<String> = BTreeSet::new();
+	let mut written: BTreeSet<Day> = BTreeSet::new();
 	for (day, lines) in &picked {
 		let Some((checkpoint, json)) = checkpoint::load(evidence_root, *day)? else {
 			done.unsealed.push(*day);
@@ -126,17 +126,21 @@ pub fn export(
 		write_day(evidence_root, out, *day, lines, &checkpoint, &json)?;
 		keys.insert(checkpoint.key.clone());
 		done.records += lines.len();
+		written.insert(*day);
 	}
 	write_keys(evidence_root, out, keys)?;
-	for (id, day, days, digest) in kept {
-		let path = evidence_root
-			.join(crate::evidence::service::MESSAGES_DIR)
-			.join(day.name())
-			.join(days.to_string())
-			.join(format!("{id}.eml"));
-		let Ok(stored) = std::fs::read(&path) else {
-			continue;
-		};
+	// Only what the bundle covers is named or carried: a message of a day
+	// that is not sealed yet is neither.
+	done.messages = accepted
+		.iter()
+		.filter(|(_, day)| written.contains(day))
+		.map(|(id, _)| *id)
+		.collect();
+	for (id, day, days, digest) in kept
+		.into_iter()
+		.filter(|(_, day, _, _)| written.contains(day))
+	{
+		let stored = find_kept(evidence_root, id, day, days)?;
 		let bytes = if stored.starts_with(crate::storage::MAGIC) {
 			crypto
 				.decode_with_aad(&stored, id.as_bytes())
@@ -155,6 +159,28 @@ pub fn export(
 	super::readme::write(out, &done)?;
 	super::sums::write(out)?;
 	Ok(done)
+}
+
+/// The bytes of the message kept for `id`: under the day of its record or,
+/// when the clock that kept it read the next or the previous one across
+/// midnight, under that. A message recorded as kept and not there stops the
+/// export: a bundle must not say less than the log does.
+fn find_kept(evidence_root: &Path, id: Uuid, day: Day, days: u32) -> Result<Vec<u8>, BundleError> {
+	for candidate in [day, Day(day.0 + 1), Day(day.0 - 1)] {
+		let path = evidence_root
+			.join(crate::evidence::service::MESSAGES_DIR)
+			.join(candidate.name())
+			.join(days.to_string())
+			.join(format!("{id}.eml"));
+		match std::fs::read(&path) {
+			Ok(stored) => return Ok(stored),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
+		}
+	}
+	Err(BundleError::Refused(format!(
+		"the message {id} is recorded as kept and is not in the evidence directory"
+	)))
 }
 
 /// Write the public keys that signed the exported days and, for each, the
