@@ -132,9 +132,24 @@ fn an_unreadable_policy_keeps_the_last_good_one() {
 fn the_gate_holds_and_releases() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let service = service(dir.path());
-	assert_eq!(service.held(), None);
+	assert_eq!(
+		service.held().as_deref(),
+		Some(NOT_VERIFIED_YET),
+		"closed until a verification opens it"
+	);
 	service.set_gate(Some("the chain is broken".into()));
 	assert_eq!(service.held().as_deref(), Some("the chain is broken"));
+	service.set_gate(None);
+	assert_eq!(service.held(), None);
+}
+
+#[test]
+fn an_open_gate_closes_again_when_no_verification_follows() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	service.set_gate_for(None, std::time::Duration::ZERO);
+	let held = service.held().expect("a stale verification holds");
+	assert!(held.contains("has not been verified in the last"), "{held}");
 	service.set_gate(None);
 	assert_eq!(service.held(), None);
 }

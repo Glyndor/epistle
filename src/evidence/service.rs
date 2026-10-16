@@ -22,6 +22,13 @@ use crate::storage::MessageCrypto;
 
 /// The directory of kept messages, under the evidence root.
 pub const MESSAGES_DIR: &str = "messages";
+/// The evidence directory, under the data directory.
+pub const EVIDENCE_DIR: &str = "evidence";
+
+/// The evidence root of the server whose data directory is `data_dir`.
+pub fn root_of(data_dir: &Path) -> PathBuf {
+	data_dir.join(EVIDENCE_DIR)
+}
 
 /// What an acceptance is about.
 #[derive(Debug, Clone, Copy)]
@@ -67,6 +74,20 @@ pub struct Delivery<'a> {
 	pub retain_days: u32,
 }
 
+/// How long one clean verification keeps the gate open: three ticks of
+/// the evidence tasks. Past it, with no newer verification, mail is held.
+pub const GATE_FRESH: std::time::Duration = std::time::Duration::from_secs(900);
+/// Why mail is held before the first verification.
+pub const NOT_VERIFIED_YET: &str = "the evidence has not been verified since the start";
+
+/// The transactional gate: closed until a verification opens it, and only
+/// for [`GATE_FRESH`]. It lives in memory only; no file can open it.
+#[derive(Debug)]
+struct Gate {
+	reason: Option<String>,
+	open_until: std::time::Instant,
+}
+
 /// The server's evidence service.
 #[derive(Debug)]
 pub struct EvidenceService {
@@ -75,7 +96,7 @@ pub struct EvidenceService {
 	tenants: Vec<(String, Vec<String>)>,
 	policy: RwLock<Policy>,
 	policy_error: RwLock<Option<String>>,
-	gate: RwLock<Option<String>>,
+	gate: RwLock<Gate>,
 	crypto: MessageCrypto,
 }
 
@@ -88,7 +109,7 @@ impl EvidenceService {
 		tenants: Vec<(String, Vec<String>)>,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
-		let root = data_dir.join("evidence");
+		let root = root_of(data_dir);
 		let chain = Chain::open(&root)?;
 		let policy = super::policy::load(&root)?;
 		Ok(EvidenceService {
@@ -97,7 +118,10 @@ impl EvidenceService {
 			tenants,
 			policy: RwLock::new(policy),
 			policy_error: RwLock::new(None),
-			gate: RwLock::new(None),
+			gate: RwLock::new(Gate {
+				reason: Some(NOT_VERIFIED_YET.into()),
+				open_until: std::time::Instant::now(),
+			}),
 			crypto,
 		})
 	}
@@ -136,18 +160,35 @@ impl EvidenceService {
 			.and_then(|error| error.clone())
 	}
 
-	/// Hold transactional mail for `reason`, or release it with `None`.
+	/// Hold transactional mail for `reason`, or release it with `None`
+	/// for [`GATE_FRESH`]: the outcome of a verification that just ran.
 	pub fn set_gate(&self, reason: Option<String>) {
+		self.set_gate_for(reason, GATE_FRESH);
+	}
+
+	/// [`set_gate`](Self::set_gate), released for `fresh` only.
+	pub(crate) fn set_gate_for(&self, reason: Option<String>, fresh: std::time::Duration) {
 		if let Ok(mut gate) = self.gate.write() {
-			*gate = reason;
+			*gate = Gate {
+				reason,
+				open_until: std::time::Instant::now() + fresh,
+			};
 		}
 	}
 
-	/// Why transactional mail is held, when it is.
+	/// Why transactional mail is held, when it is: a break, no verification
+	/// yet, or none recent enough (the tasks stopped or hang).
 	pub fn held(&self) -> Option<String> {
 		// A poisoned lock holds the mail: the gate fails closed.
 		match self.gate.read() {
-			Ok(gate) => gate.clone(),
+			Ok(gate) => match &gate.reason {
+				Some(reason) => Some(reason.clone()),
+				None if std::time::Instant::now() >= gate.open_until => Some(format!(
+					"the evidence has not been verified in the last {} minutes",
+					GATE_FRESH.as_secs() / 60
+				)),
+				None => None,
+			},
 			Err(_) => Some("the evidence gate is unavailable".into()),
 		}
 	}

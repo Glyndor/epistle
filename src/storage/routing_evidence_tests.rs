@@ -37,6 +37,8 @@ fn sink(dir: &Path) -> (SplitDelivery, Arc<EvidenceService>) {
 	let service = Arc::new(
 		EvidenceService::open(dir, Vec::new(), MessageCrypto::disabled()).expect("evidence"),
 	);
+	// As after the server's first clean verification.
+	service.set_gate(None);
 	let split = SplitDelivery::new(dir, directory())
 		.expect("sink")
 		.with_evidence(Arc::clone(&service));

@@ -4,10 +4,19 @@
 //! evidence does not verify.
 //!
 //! The result is written to `<evidence>/status.json` for `epistle status`.
-//! That file is a report, never an input: every tick verifies from scratch.
+//! That file is a report, never an input: every tick verifies from scratch,
+//! and the gate it sets lives in memory only.
+//!
+//! The gate fails closed. The service starts with it closed, and only a
+//! clean verification opens it, for [`super::service::GATE_FRESH`]. A
+//! verification that errors, panics, or runs past [`AUDIT_TIMEOUT`]
+//! closes it; so does a seal or a token missing past its grace, which the
+//! verification reports as a break.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +29,9 @@ use super::verify::Problem;
 
 const STATUS_FILE: &str = "status.json";
 /// How often the server runs a tick.
-pub const TICK: std::time::Duration = std::time::Duration::from_secs(300);
+pub const TICK: Duration = Duration::from_secs(300);
+/// The longest one verification may run before the gate closes.
+pub const AUDIT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// What the last tick found, for `epistle status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +58,21 @@ pub struct Status {
 pub struct Tasks {
 	service: Arc<EvidenceService>,
 	settings: Mutex<Settings>,
+	audit_timeout: Duration,
+	/// A verification is still running (one that timed out keeps running).
+	auditing: Arc<AtomicBool>,
+	/// Added to every verification, for tests of the timeout.
+	#[cfg(test)]
+	audit_delay: Duration,
+}
+
+/// Clears the running flag when the verification ends, even by a panic.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+	fn drop(&mut self) {
+		self.0.store(false, Ordering::SeqCst);
+	}
 }
 
 impl Tasks {
@@ -57,7 +83,19 @@ impl Tasks {
 		Ok(Tasks {
 			service,
 			settings: Mutex::new(settings),
+			audit_timeout: AUDIT_TIMEOUT,
+			auditing: Arc::new(AtomicBool::new(false)),
+			#[cfg(test)]
+			audit_delay: Duration::ZERO,
 		})
+	}
+
+	/// The same tasks with another verification timeout, for tests.
+	#[cfg(test)]
+	pub(crate) fn with_audit_timeout(mut self, timeout: Duration, delay: Duration) -> Self {
+		self.audit_timeout = timeout;
+		self.audit_delay = delay;
+		self
 	}
 
 	/// Run one tick at `now`.
@@ -88,6 +126,7 @@ impl Tasks {
 		};
 		let root = self.service.root().to_path_buf();
 		let enabled = current.enabled;
+		let trusted = anchors(&current);
 		let sealed = tokio::task::spawn_blocking({
 			let root = root.clone();
 			move || seal_and_sweep(&root, enabled, &trusted, now)
@@ -103,7 +142,21 @@ impl Tasks {
 			errors.push(format!("timestamping: {}", error.kind()));
 		}
 		let anchors = anchors(&current);
-		let audited = tokio::task::spawn_blocking(move || {
+		if self.auditing.swap(true, Ordering::SeqCst) {
+			return self.finish(Status {
+				time: now,
+				held: Some("the previous evidence check is still running".into()),
+				errors,
+				..Status::default()
+			});
+		}
+		let running = Running(Arc::clone(&self.auditing));
+		#[cfg(test)]
+		let delay = self.audit_delay;
+		let audit = tokio::task::spawn_blocking(move || {
+			let _running = running;
+			#[cfg(test)]
+			std::thread::sleep(delay);
 			verify(
 				&root,
 				&Options {
@@ -113,8 +166,22 @@ impl Tasks {
 					now,
 				},
 			)
-		})
-		.await;
+		});
+		let audited = match tokio::time::timeout(self.audit_timeout, audit).await {
+			Ok(audited) => audited,
+			Err(_) => {
+				let reason = format!(
+					"the evidence check took longer than {:?}",
+					self.audit_timeout
+				);
+				return self.finish(Status {
+					time: now,
+					held: Some(reason),
+					errors,
+					..Status::default()
+				});
+			}
+		};
 		let report = match audited {
 			Ok(Ok(report)) => report,
 			Ok(Err(error)) => {
@@ -127,7 +194,6 @@ impl Tasks {
 				});
 			}
 			Err(error) => {
-		let trusted = anchors(&current);
 				let reason = format!("the evidence check failed: {error}");
 				return self.finish(Status {
 					time: now,
@@ -137,7 +203,7 @@ impl Tasks {
 				});
 			}
 		};
-		let (held, pending) = gate(&report, &self.service.root().to_path_buf(), now);
+		let (held, pending) = gate(&report, self.service.root(), now);
 		self.finish(Status {
 			time: now,
 			held,
@@ -188,7 +254,7 @@ fn seal_and_sweep(
 /// Whether the report holds transactional mail, and a pending token. A
 /// token missing from a checkpoint made less than [`TOKEN_GRACE_SECS`] ago
 /// is still being requested: reported, not held. Every other break holds.
-fn gate(report: &Report, root: &PathBuf, now: u64) -> (Option<String>, Option<String>) {
+fn gate(report: &Report, root: &Path, now: u64) -> (Option<String>, Option<String>) {
 	let Some(at) = &report.first_break else {
 		return (None, None);
 	};

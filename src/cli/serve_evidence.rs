@@ -38,10 +38,8 @@ pub(super) fn open(config: &Config, crypto: &MessageCrypto) -> std::io::Result<E
 	if reconciled > 0 {
 		tracing::warn!(reconciled, "discarded submissions a stop left half-queued");
 	}
-	// Transactional mail waits for the first verification.
-	service.set_gate(Some(
-		"the evidence has not been verified since the start".into(),
-	));
+	// Transactional mail waits for the first verification: the service
+	// opens with its gate closed, and only a clean tick opens it.
 	let tasks = Some(crate::evidence::tasks::Tasks::new(Arc::clone(&service))?);
 	Ok(Evidence {
 		service,

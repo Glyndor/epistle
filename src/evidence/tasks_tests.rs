@@ -158,3 +158,59 @@ async fn settings_that_turn_untrustworthy_keep_the_last_good_ones() {
 		"no last good copy at start: refuse"
 	);
 }
+
+#[tokio::test]
+async fn a_check_that_runs_too_long_holds_mail_and_is_not_started_twice() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service))
+		.expect("tasks")
+		.with_audit_timeout(Duration::from_millis(20), Duration::from_millis(400));
+	service.set_gate(None);
+	let status = tasks.tick(at(DAY, 1)).await;
+	let held = status.held.expect("held");
+	assert!(held.contains("took longer than"), "{held}");
+	assert_eq!(service.held(), Some(held));
+	let again = tasks.tick(at(DAY, 2)).await;
+	assert_eq!(again.held.as_deref(), Some("the previous evidence check is still running"));
+}
+
+#[tokio::test]
+async fn a_seal_that_keeps_failing_holds_mail_once_its_grace_passes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 1, 1)).await;
+	Chain::open(service.root())
+		.expect("chain")
+		.append_at(at(DAY, 1), accepted(1))
+		.expect("append");
+	// An unreadable signing key: sealing fails, even as root, while the
+	// verification (which needs only the public key) still runs.
+	EvidenceKey::load_or_create(service.root()).expect("key");
+	std::fs::write(service.root().join("key.pk8"), b"not a key").expect("corrupt");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let early = tasks.tick(at(DAY + 1, 0)).await;
+	assert!(early.errors.iter().any(|error| error.starts_with("evidence key")), "{:?}", early.errors);
+	assert_eq!(early.held, None, "within the seal grace");
+	let late = tasks.tick(at(DAY + 1, 2)).await;
+	assert!(late.held.is_some(), "a day left unsealed past its grace holds mail");
+	assert!(service.held().is_some());
+}
+
+#[tokio::test]
+async fn the_status_file_cannot_open_the_gate() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	chain.append_at(at(DAY, 2), accepted(2)).expect("append");
+	let path = chain.day_file(Day(DAY));
+	let text = std::fs::read_to_string(&path).expect("read");
+	std::fs::write(&path, text.replacen("Notice 1", "Notice X", 1)).expect("tamper");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	assert!(tasks.tick(at(DAY, 3)).await.held.is_some());
+	let opened = Status { time: at(DAY, 3), ..Status::default() };
+	std::fs::write(service.root().join(STATUS_FILE), serde_json::to_vec(&opened).expect("json"))
+		.expect("write");
+	assert!(service.held().is_some(), "the gate is in memory, not in the report");
+}
