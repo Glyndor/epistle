@@ -198,3 +198,36 @@ fn a_message_past_the_part_cap_stops_and_is_never_called_clean() {
 		 verdict: quarantine (scan-limit)\na submission would be refused\n"
 	);
 }
+
+/// Every path under `root` with its bytes, to compare before and after.
+fn snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+	let mut found = Vec::new();
+	let mut pending = vec![root.to_path_buf()];
+	while let Some(dir) = pending.pop() {
+		for entry in std::fs::read_dir(&dir).unwrap() {
+			let path = entry.unwrap().path();
+			if path.is_dir() {
+				found.push((path.clone(), Vec::new()));
+				pending.push(path);
+			} else {
+				let bytes = std::fs::read(&path).unwrap();
+				found.push((path, bytes));
+			}
+		}
+	}
+	found.sort();
+	found
+}
+
+#[test]
+fn checking_a_message_writes_nothing() {
+	let (dir, config, eml) = fixture("[attachments]\nmode = \"reject\"\n", EXE_AS_PDF.as_bytes());
+	let before = snapshot(dir.path());
+	let (result, out) = run(&config, &eml, false);
+	assert_eq!(result, Ok(ExitCode::SUCCESS));
+	assert!(
+		out.contains("verdict: reject"),
+		"the message was judged: {out}"
+	);
+	assert!(snapshot(dir.path()) == before, "check changed the files");
+}
