@@ -74,30 +74,39 @@ async fn a_broken_chain_holds_transactional_mail_until_acknowledged() {
 		"{reason}"
 	);
 	assert_eq!(service.held(), Some(reason));
-	let report = verify(
-		service.root(),
-		&Options {
-			from: None,
-			to: None,
-			anchors: Vec::new(),
-			now: at(DAY + 1, 2),
-		},
-	)
-	.expect("verify");
-	let at_break = report.first_break.expect("a break");
 	let key = EvidenceKey::load_or_create(service.root()).expect("key");
-	crate::evidence::ack::acknowledge_at(
-		service.root(),
-		&key,
-		&at_break,
-		"restored from backup, see ticket 12",
-		&crate::evidence::ack::Operator::named("uid=0 host=mail"),
-		at(DAY + 1, 3),
-	)
-	.expect("acknowledge");
-	let status = tasks.tick_following(at(DAY + 1, 4)).await;
+	// A break in a sealed day shows twice: the chain, then the seal that no
+	// longer matches. Each is accepted on its own.
+	let mut accepted = 0;
+	for hour in 3..6 {
+		let report = verify(
+			service.root(),
+			&Options {
+				from: None,
+				to: None,
+				anchors: Vec::new(),
+				now: at(DAY + 1, 2),
+			},
+		)
+		.expect("verify");
+		let Some(at_break) = report.first_break else {
+			break;
+		};
+		crate::evidence::ack::acknowledge_at(
+			service.root(),
+			&key,
+			&at_break,
+			"restored from backup, see ticket 12",
+			&crate::evidence::ack::Operator::named("uid=0 host=mail"),
+			at(DAY + 1, hour),
+		)
+		.expect("acknowledge");
+		accepted += 1;
+	}
+	assert_eq!(accepted, 2, "the chain and the seal");
+	let status = tasks.tick_following(at(DAY + 1, 6)).await;
 	assert_eq!(status.held, None);
-	assert_eq!(status.acknowledged, 1);
+	assert_eq!(status.acknowledged, 2);
 	assert_eq!(service.held(), None);
 }
 

@@ -69,6 +69,7 @@ fn a_forged_acknowledgement_lifts_nothing() {
 		reason: "forged".into(),
 		operator: "uid=1001".into(),
 		key: fixture.key.id(),
+		state: String::new(),
 		signature: "00".repeat(64),
 	};
 	Chain::open(fixture.root())
@@ -345,6 +346,7 @@ fn a_signature_with_a_multibyte_character_is_not_a_signature_and_does_not_panic(
 		reason: "r".into(),
 		operator: "o".into(),
 		key: fixture.key.id(),
+		state: String::new(),
 		signature,
 	};
 	Chain::open(fixture.root())

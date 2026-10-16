@@ -24,7 +24,7 @@ use super::key;
 use super::merkle::{TreeBuilder, leaf_hash};
 use super::record::{Entry, Position, hash_from_hex, sha256, to_hex};
 use super::rotation::At;
-use super::verify::{Break, Problem, walk_day};
+use super::verify::{Break, Problem, walk_day_accepting};
 
 /// Grace after midnight before a missing checkpoint is a break: the server
 /// seals closed days on a timer.
@@ -103,6 +103,26 @@ struct Walker {
 /// The most purge records one verification checks.
 const MAX_PURGES: usize = 10_000;
 
+/// The most breaks of one day a verification goes past, acknowledged.
+const MAX_ACKNOWLEDGED_PER_DAY: usize = 64;
+
+/// Where a day stopped verifying.
+enum Stop {
+	/// Reading the day's lines: nothing of the day is counted yet.
+	Line(Break),
+	/// Judging the day as a whole (its seal, its purges, its keys): its
+	/// records were read and counted.
+	Seal(Break),
+}
+
+impl Stop {
+	fn at(&self) -> &Break {
+		match self {
+			Stop::Line(at) | Stop::Seal(at) => at,
+		}
+	}
+}
+
 /// Verify the evidence under `evidence_root`.
 pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report> {
 	let chain = Chain::open(evidence_root)?;
@@ -172,18 +192,45 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		end: None,
 	};
 	for day in days {
-		if let Err(at) =
-			walk_and_check(evidence_root, day, today, options, &mut walker, &mut report)
-		{
-			if super::ack::is_acknowledged(evidence_root, &at) {
-				// Accepted by the operator: carry on, unanchored, from the next day.
-				report.acknowledged.push(at);
-				walker.expected = None;
-				walker.previous_checkpoint = None;
-				continue;
+		let mut accepted: Vec<u64> = Vec::new();
+		loop {
+			let Err(stop) = walk_and_check(
+				evidence_root,
+				day,
+				today,
+				options,
+				&mut walker,
+				&mut report,
+				&accepted,
+			) else {
+				break;
+			};
+			let at = stop.at().clone();
+			if accepted.len() >= MAX_ACKNOWLEDGED_PER_DAY
+				|| !super::ack::is_acknowledged(evidence_root, &at)
+			{
+				report.first_break = Some(at);
+				return Ok(report);
 			}
-			report.first_break = Some(at);
-			return Ok(report);
+			// Accepted by the operator, as the day was when they looked. What
+			// follows is still checked: the rest of the day, the day's seal
+			// and the link to the next day.
+			report.acknowledged.push(at.clone());
+			match stop {
+				Stop::Line(_) if at.line > 0 => accepted.push(at.line),
+				Stop::Line(_) => {
+					walker.expected = None;
+					walker.previous_checkpoint = None;
+					break;
+				}
+				Stop::Seal(_) => {
+					walker.previous_checkpoint = checkpoint::load(evidence_root, day)
+						.ok()
+						.flatten()
+						.map(|(_, bytes)| to_hex(&sha256(&bytes)));
+					break;
+				}
+			}
 		}
 	}
 	for fault in final_checks(
@@ -335,45 +382,56 @@ fn walk_and_check(
 	options: &Options,
 	walker: &mut Walker,
 	report: &mut Report,
-) -> Result<(), Break> {
+	accepted: &[u64],
+) -> Result<(), Stop> {
 	let mut tree = TreeBuilder::new();
 	let mut timestamping = walker.timestamping;
 	let head = walker.head;
 	let mut head_seen = false;
 	let mut purges = Vec::new();
 	let mut rotations = Vec::new();
-	let walk = walk_day(evidence_root, day, walker.expected, |line, record, hash| {
-		tree.push(leaf_hash(hash));
-		head_seen |= head.as_ref() == Some(hash);
-		match &record.entry {
-			Entry::Purge(purge) => purges.push(((day, line), purge.clone())),
-			Entry::KeyRotated(rotation) => rotations.push(((day, line), rotation.clone())),
-			Entry::Setting(setting) if setting.name == "timestamp" => {
-				timestamping = setting.value.starts_with("enabled");
+	let walk = walk_day_accepting(
+		evidence_root,
+		day,
+		walker.expected,
+		accepted,
+		|line, record, hash| {
+			tree.push(leaf_hash(hash));
+			head_seen |= head.as_ref() == Some(hash);
+			match &record.entry {
+				Entry::Purge(purge) => purges.push(((day, line), purge.clone())),
+				Entry::KeyRotated(rotation) => rotations.push(((day, line), rotation.clone())),
+				Entry::Setting(setting) if setting.name == "timestamp" => {
+					timestamping = setting.value.starts_with("enabled");
+				}
+				_ => {}
 			}
-			_ => {}
-		}
-	})?;
+		},
+	)
+	.map_err(Stop::Line)?;
 	walker.head_seen |= head_seen;
+	walker.expected = Some(walk.last);
+	walker.end = Some(walk.last);
 	if let Some((_, last)) = purges.last() {
 		walker.last_purge = Some(last.clone());
 	}
 	walker.purges.extend(purges);
 	if walker.purges.len() > MAX_PURGES {
-		return Err(broken(day, "more purge records than a verification checks"));
+		return Err(Stop::Seal(broken(
+			day,
+			"more purge records than a verification checks",
+		)));
 	}
 	walker.handovers.extend(rotations);
 	if walker.handovers.len() > super::rotation::MAX_ROTATIONS {
-		return Err(broken(
+		return Err(Stop::Seal(broken(
 			day,
 			"more key rotations than a verification follows",
-		));
+		)));
 	}
 	walker.timestamping = timestamping;
 	report.days += 1;
 	report.records += walk.records;
-	walker.expected = Some(walk.last);
-	walker.end = Some(walk.last);
 	let just_closed = day.0 + 1 == today.0 && options.now < today.start_epoch() + SEAL_GRACE_SECS;
 	if (day >= today || just_closed)
 		&& checkpoint::load(evidence_root, day)
@@ -385,7 +443,8 @@ fn walk_and_check(
 		return Ok(());
 	}
 	let (root, _) = tree.finish(&[]);
-	let stamped = check_day(evidence_root, day, &walk, &root, walker, options)?;
+	let stamped =
+		check_day(evidence_root, day, &walk, &root, walker, options).map_err(Stop::Seal)?;
 	report.sealed += 1;
 	walker
 		.signers

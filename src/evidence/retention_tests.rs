@@ -283,18 +283,21 @@ fn an_acknowledged_break_and_what_follows_are_never_purged() {
 	let (dir, key, tsa, chain) = short_lived();
 	tamper(&chain, Day(DAY + 1));
 	let now = at(DAY + 5, 12);
-	let at_break = verified(dir.path(), &tsa, now)
-		.first_break
-		.expect("a break");
-	crate::evidence::ack::acknowledge_at(
-		dir.path(),
-		&key,
-		&at_break,
-		"restored from backup",
-		&crate::evidence::ack::Operator::named("uid=0 host=mail"),
-		at(DAY + 5, 1),
-	)
-	.expect("acknowledge");
+	// The chain break, then the seal that no longer matches: each is accepted.
+	for hour in 1..3 {
+		let at_break = verified(dir.path(), &tsa, now)
+			.first_break
+			.expect("a break");
+		crate::evidence::ack::acknowledge_at(
+			dir.path(),
+			&key,
+			&at_break,
+			"restored from backup",
+			&crate::evidence::ack::Operator::named("uid=0 host=mail"),
+			at(DAY + 5, hour),
+		)
+		.expect("acknowledge");
+	}
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
 	assert_eq!(swept.days, 1, "only the day before the break");
 	assert!(

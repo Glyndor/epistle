@@ -93,6 +93,7 @@ fn samples() -> Vec<(&'static str, String)> {
 		reason: "restored".into(),
 		operator: "uid=0 host=mail".into(),
 		key: hex(7),
+		state: String::new(),
 		signature: "ab".repeat(64),
 	});
 	let rotated = Entry::KeyRotated(Rotation {

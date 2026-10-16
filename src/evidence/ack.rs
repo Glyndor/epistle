@@ -19,6 +19,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::chain::{CHAIN_DIR, Chain, day_file, open_day};
+use super::day_state::day_state;
 use super::key::{self, EvidenceKey};
 use super::lines::{Line, Lines};
 use super::record::{Entry, Record, bounded, hash_from_hex, sha256, to_hex};
@@ -39,6 +40,11 @@ pub struct Acknowledged {
 	pub operator: String,
 	/// The id of the key that signed it.
 	pub key: String,
+	/// The digest of the day as the operator saw it (see
+	/// [`super::day_state::day_state`]), for a break found while walking a
+	/// day. Empty for a break that names its own state.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub state: String,
 	/// Hex Ed25519 signature over [`statement`].
 	pub signature: String,
 }
@@ -98,7 +104,7 @@ pub fn id(at: &Break) -> String {
 
 /// The bytes an acknowledgement signs.
 pub fn statement(record: &Acknowledged) -> Vec<u8> {
-	format!(
+	let mut text = format!(
 		"epistle evidence acknowledgement\n{}\n{}\n{}\n{}\n{}\n{}\n",
 		record.break_day,
 		record.break_line,
@@ -106,8 +112,11 @@ pub fn statement(record: &Acknowledged) -> Vec<u8> {
 		record.reason,
 		record.operator,
 		record.key
-	)
-	.into_bytes()
+	);
+	if !record.state.is_empty() {
+		text.push_str(&format!("state {}\n", record.state));
+	}
+	text.into_bytes()
 }
 
 /// Acknowledge `at` for `reason` as `operator`: sign it and append it to the
@@ -119,7 +128,7 @@ pub fn acknowledge(
 	reason: &str,
 	operator: &Operator,
 ) -> std::io::Result<()> {
-	let record = signed(key, at, reason, operator);
+	let record = signed(key, at, reason, operator, state_of(evidence_root, at)?);
 	Chain::open(evidence_root)?.append(Entry::Acknowledged(record))?;
 	Ok(())
 }
@@ -134,12 +143,27 @@ pub(crate) fn acknowledge_at(
 	operator: &Operator,
 	now: u64,
 ) -> std::io::Result<()> {
-	let record = signed(key, at, reason, operator);
+	let record = signed(key, at, reason, operator, state_of(evidence_root, at)?);
 	Chain::open(evidence_root)?.append_at(now, Entry::Acknowledged(record))?;
 	Ok(())
 }
 
-fn signed(key: &EvidenceKey, at: &Break, reason: &str, operator: &Operator) -> Acknowledged {
+/// The state of the day the operator is accepting a break in, for a break
+/// found while walking it; a break judged from the whole chain names its own.
+fn state_of(evidence_root: &Path, at: &Break) -> std::io::Result<String> {
+	match at.names_state() {
+		true => Ok(String::new()),
+		false => day_state(evidence_root, at.day, None),
+	}
+}
+
+fn signed(
+	key: &EvidenceKey,
+	at: &Break,
+	reason: &str,
+	operator: &Operator,
+	state: String,
+) -> Acknowledged {
 	let mut record = Acknowledged {
 		break_day: at.day.name(),
 		break_line: at.line,
@@ -152,6 +176,7 @@ fn signed(key: &EvidenceKey, at: &Break, reason: &str, operator: &Operator) -> A
 		),
 		operator: operator.0.clone(),
 		key: key.id(),
+		state,
 		signature: String::new(),
 	};
 	record.signature = to_hex(&key.sign(&statement(&record)));
@@ -193,6 +218,7 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 				&& record.break_day == at.day.name()
 				&& record.break_line == at.line
 				&& timeline.check(&record.key, (day, number)).is_ok()
+				&& saw_the_day_as_it_is(evidence_root, at, &record, (day, number))
 				&& super::rotation::public_key(&keys_dir, &record.key)
 					.zip(decode_signature(&record.signature))
 					.is_some_and(|(public, signature)| {
@@ -204,6 +230,23 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 		}
 	}
 	false
+}
+
+/// Whether the state `record` names is the one the day is in now: every
+/// line before the acknowledgement (all of them when it sits in a later day)
+/// and the checkpoint files. A break that names its own state carries none.
+fn saw_the_day_as_it_is(
+	evidence_root: &Path,
+	at: &Break,
+	record: &Acknowledged,
+	(day, number): (super::day::Day, u64),
+) -> bool {
+	if at.names_state() {
+		return record.state.is_empty();
+	}
+	let before = (day == at.day).then_some(number);
+	!record.state.is_empty()
+		&& day_state(evidence_root, at.day, before).is_ok_and(|state| state == record.state)
 }
 
 /// The 64 bytes of a hex Ed25519 signature.
@@ -221,3 +264,6 @@ fn decode_signature(hex: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 #[path = "ack_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "ack_tests_state.rs"]
+mod tests_state;

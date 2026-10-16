@@ -27,6 +27,17 @@ pub struct Break {
 	pub problem: Problem,
 }
 
+impl Break {
+	/// Whether the break was judged from the whole chain and so ends with the
+	/// digest of what it was judged from (`[state ..]`), which an
+	/// acknowledgement of it names. A break found while walking one day
+	/// does not: the acknowledgement of that one carries the day's state.
+	pub fn names_state(&self) -> bool {
+		matches!(&self.problem, Problem::Checkpoint(why)
+			if why.rsplit_once(" [state ").is_some_and(|(_, tail)| tail.ends_with(']')))
+	}
+}
+
 /// What can be wrong with the evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
@@ -105,6 +116,21 @@ pub fn walk_day(
 	evidence_root: &Path,
 	day: Day,
 	expected: Option<Position>,
+	visit: impl FnMut(u64, &Record, &[u8; 32]),
+) -> Result<DayWalk, Break> {
+	walk_day_accepting(evidence_root, day, expected, &[], visit)
+}
+
+/// [`walk_day`], going on past the lines in `accepted`, which an operator
+/// acknowledged as breaks. A line that is a record but does not follow the
+/// one before it is taken as the new start of the chain; one that is not a
+/// record at all is left out, and the line after it starts the chain again.
+/// Every other line is held to what [`walk_day`] holds it to.
+pub fn walk_day_accepting(
+	evidence_root: &Path,
+	day: Day,
+	expected: Option<Position>,
+	accepted: &[u64],
 	mut visit: impl FnMut(u64, &Record, &[u8; 32]),
 ) -> Result<DayWalk, Break> {
 	let at = |line: u64, problem: Problem| Break { day, line, problem };
@@ -114,6 +140,7 @@ pub fn walk_day(
 	let mut lines = Lines::new(BufReader::new(file));
 	let mut expected = expected;
 	let mut first_prev = None;
+	let mut last = None;
 	let mut records = 0u64;
 	loop {
 		let line = lines
@@ -121,6 +148,14 @@ pub fn walk_day(
 			.map_err(|error| at(0, Problem::Unreadable(error.kind().to_string())))?;
 		let (number, bytes) = match line {
 			None => break,
+			Some((number, Line::TooLong)) if accepted.contains(&number) => {
+				expected = None;
+				continue;
+			}
+			Some((number, Line::Torn(_))) if accepted.contains(&number) => {
+				expected = None;
+				continue;
+			}
 			Some((number, Line::TooLong)) => return Err(at(number, Problem::TooLong)),
 			Some((number, Line::Torn(_))) => return Err(at(number, Problem::Torn)),
 			Some((number, Line::Complete(bytes))) => (number, bytes),
@@ -131,17 +166,36 @@ pub fn walk_day(
 				Problem::Malformed("more records than any day may hold".into()),
 			));
 		}
-		let record =
-			Record::parse_canonical(bytes).map_err(|why| at(number, Problem::Malformed(why)))?;
-		let prev = hash_from_hex(&record.prev)
-			.ok_or_else(|| at(number, Problem::Malformed("prev is not a SHA-256".into())))?;
+		let skip = accepted.contains(&number);
+		let record = match Record::parse_canonical(bytes) {
+			Ok(record) => record,
+			Err(_) if skip => {
+				expected = None;
+				continue;
+			}
+			Err(why) => return Err(at(number, Problem::Malformed(why))),
+		};
+		let Some(prev) = hash_from_hex(&record.prev) else {
+			if skip {
+				expected = None;
+				continue;
+			}
+			return Err(at(
+				number,
+				Problem::Malformed("prev is not a SHA-256".into()),
+			));
+		};
 		if Day::of_epoch(record.time) != day {
+			if skip {
+				expected = None;
+				continue;
+			}
 			return Err(at(
 				number,
 				Problem::Malformed("the record's time is not in this day".into()),
 			));
 		}
-		if let Some(expected) = expected {
+		if let Some(expected) = expected.filter(|_| !skip) {
 			if prev != expected.hash {
 				return Err(at(
 					number,
@@ -168,9 +222,10 @@ pub fn walk_day(
 		first_prev.get_or_insert(prev);
 		visit(number, &record, &position.hash);
 		expected = Some(position);
+		last = Some(position);
 		records += 1;
 	}
-	match (first_prev, expected) {
+	match (first_prev, last) {
 		(Some(first_prev), Some(last)) => Ok(DayWalk {
 			records,
 			first_prev,

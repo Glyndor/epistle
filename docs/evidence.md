@@ -102,6 +102,14 @@ An acknowledgement is signed, kept in the chain, and names the exact
 break; the break stays visible. Only root or the owner of the data
 directory may make one.
 
+A break found inside one day also names the day as it was when you looked: a
+digest of its lines before the acknowledgement and of its checkpoint,
+signature and token. Change the day afterwards, even leaving the break's
+words the same, and the break is back. What the acknowledgement does not name
+is still checked: the rest of the day, the day's seal and the link to the next
+day. A break in a sealed day therefore usually shows twice, the chain and then
+the seal that no longer matches; acknowledge each.
+
 ## Giving evidence to a third party
 
 ```sh
