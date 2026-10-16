@@ -44,8 +44,8 @@
 //! The day only moves forward. An acceptance always reserves its own record
 //! and an outcome for each recipient, and the book remembers which outcomes
 //! are paid for so that none is counted twice. That memory is bounded per
-//! account ([`MAX_OWED_PER_ACCOUNT`] messages waiting for their outcomes) and
-//! in all ([`MAX_OWED`], room for eight accounts at their bound at once).
+//! account (`MAX_OWED_PER_ACCOUNT` messages waiting for their outcomes) and
+//! in all (`MAX_OWED`, room for eight accounts at their bound at once).
 //! Nothing is ever forgotten to make room: an account with no room has its
 //! acceptances refused until its outcomes come, and so has everyone when the
 //! whole memory is full, with an alarm in the status; the facts are still
@@ -70,8 +70,9 @@ use super::record::{Entry, MAX_RECORDS_PER_DAY, Record, RetentionMode};
 pub const UNATTRIBUTED: &str = "unattributed";
 /// The fewest accounts' shares the day's limit must hold.
 pub const MIN_SHARES: u64 = 4;
-/// How many days the prepaid outcomes of a message are remembered.
-const OWED_DAYS: i64 = 40;
+/// How many days the prepaid outcomes of a message are remembered: well past
+/// the five days the queue gives up on mail by default.
+const OWED_DAYS: i64 = 14;
 /// The most messages whose prepaid outcomes are remembered, in all and per
 /// account.
 const MAX_OWED: usize = 65_536;
@@ -223,18 +224,26 @@ impl State {
 	/// Nothing is ever forgotten to make room: callers ask [`has_room_for`]
 	/// first, and refuse the acceptance when there is none.
 	fn track(&mut self, id: Uuid, owed: Owed) {
-		*self.owed_per.entry(owed.account.clone()).or_default() += 1;
-		self.owed.insert(id, owed);
+		let account = owed.account.clone();
+		// An id already there is replaced, not added: the counts follow the table.
+		if let Some(old) = self.owed.insert(id, owed) {
+			self.uncount(&old.account);
+		}
+		*self.owed_per.entry(account).or_default() += 1;
+	}
+
+	fn uncount(&mut self, account: &str) {
+		if let Some(count) = self.owed_per.get_mut(account) {
+			*count = count.saturating_sub(1);
+			if *count == 0 {
+				self.owed_per.remove(account);
+			}
+		}
 	}
 
 	fn untrack(&mut self, id: Uuid) {
-		if let Some(owed) = self.owed.remove(&id)
-			&& let Some(count) = self.owed_per.get_mut(&owed.account)
-		{
-			*count -= 1;
-			if *count == 0 {
-				self.owed_per.remove(&owed.account);
-			}
+		if let Some(owed) = self.owed.remove(&id) {
+			self.uncount(&owed.account);
 		}
 	}
 }
@@ -380,10 +389,13 @@ impl Quota {
 						names.insert(accepted.spool_id, accepted.account);
 					}
 				}
-				Ok(Entry::Outcome(super::record::Outcome { spool_id, .. }))
-				| Ok(Entry::Abandoned(super::record::Abandoned { spool_id, .. })) => {
+				Ok(Entry::Outcome(super::record::Outcome { spool_id, .. })) => {
 					let account = names.get(&spool_id).map(String::as_str);
-					Self::settle(&mut state, account, spool_id, share);
+					Self::settle(&mut state, account, (spool_id, false), share);
+				}
+				Ok(Entry::Abandoned(super::record::Abandoned { spool_id, .. })) => {
+					let account = names.get(&spool_id).map(String::as_str);
+					Self::settle(&mut state, account, (spool_id, true), share);
 				}
 				_ => {
 					state.add(UNATTRIBUTED, 1, 0, share);
@@ -393,16 +405,27 @@ impl Quota {
 		Ok(state)
 	}
 
-	/// Count a fact: not at all if its acceptance paid for it, else once.
-	fn settle(state: &mut State, account: Option<&str>, id: Uuid, share: (u64, u64)) {
-		if let Some(owed) = state.owed.get_mut(&id)
-			&& owed.left > 0
-		{
-			owed.left -= 1;
-			if owed.left == 0 {
+	/// Count a fact: not at all if its acceptance paid for it, else once. A
+	/// fact that `ends` the message (an abandonment, which stands for all its
+	/// outcomes) also forgets what was still owed for it.
+	fn settle(
+		state: &mut State,
+		account: Option<&str>,
+		(id, ends): (Uuid, bool),
+		share: (u64, u64),
+	) {
+		let prepaid = state.owed.get(&id).is_some_and(|owed| owed.left > 0);
+		if prepaid {
+			if let Some(owed) = state.owed.get_mut(&id) {
+				owed.left -= 1;
+			}
+			if ends || state.owed.get(&id).is_some_and(|owed| owed.left == 0) {
 				state.untrack(id);
 			}
 			return;
+		}
+		if ends {
+			state.untrack(id);
 		}
 		state.add(account.unwrap_or(UNATTRIBUTED), 1, 0, share);
 	}
@@ -512,11 +535,22 @@ impl Quota {
 	/// abandonment. Never refused, counted once (see invariant 3), to
 	/// `account` or [`UNATTRIBUTED`].
 	pub fn fact(&self, account: Option<&str>, id: Uuid, today: Day) {
+		self.settled(account, (id, false), today);
+	}
+
+	/// A fact that ends message `id`: an abandonment, which stands for all its
+	/// outcomes. Counted like any fact, and what was still owed for the
+	/// message is forgotten, so its room goes back to the account.
+	pub fn ended(&self, account: Option<&str>, id: Uuid, today: Day) {
+		self.settled(account, (id, true), today);
+	}
+
+	fn settled(&self, account: Option<&str>, which: (Uuid, bool), today: Day) {
 		let share = (self.limits.account_records, self.limits.day_records);
 		let mut book = self.book();
 		self.ensure(&mut book, today);
 		book.state.roll(today);
-		Self::settle(&mut book.state, account, id, share);
+		Self::settle(&mut book.state, account, which, share);
 	}
 
 	/// What to tell the operator when a limit is near or reached, or the

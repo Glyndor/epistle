@@ -123,10 +123,11 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 					next_id += 1;
 					if dice.next(3) == 0 {
 						log.abandoned(message);
+						quota.ended(owner, id(message), day);
 					} else {
 						log.outcome(message);
+						quota.fact(owner, id(message), day);
 					}
-					quota.fact(owner, id(message), day);
 				}
 				// The process restarts: the book is rebuilt from the log.
 				8 => {

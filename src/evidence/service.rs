@@ -326,7 +326,7 @@ impl EvidenceService {
 			reason: bounded(reason),
 			retain_days: super::policy::DEFAULT_DAYS,
 		}))?;
-		self.count_fact(account, spool_id);
+		self.quota.ended(account, spool_id, self.today());
 		Ok(())
 	}
 

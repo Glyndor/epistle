@@ -382,6 +382,71 @@ fn a_full_memory_refuses_new_acceptances_and_forgets_nothing() {
 }
 
 #[test]
+fn an_abandonment_ends_the_message_and_gives_its_room_back() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = roomy(dir.path());
+	for n in 0..MAX_OWED_PER_ACCOUNT as u128 {
+		let _ = quota.reserve("a", id(n), (3, 0), TODAY).expect("reserved");
+	}
+	quota
+		.reserve("a", id(1 << 40), (3, 0), TODAY)
+		.expect_err("the account is full");
+	let before = quota.state().accounts["a"].records;
+	// One abandonment stands for the three outcomes the message owed.
+	quota.ended(Some("a"), id(0), TODAY);
+	let state = quota.state();
+	assert_eq!(state.owed_per["a"], MAX_OWED_PER_ACCOUNT - 1);
+	assert!(!state.owed.contains_key(&id(0)));
+	assert_eq!(state.accounts["a"].records, before, "it was prepaid");
+	let _ = quota
+		.reserve("a", id(1 << 40), (3, 0), TODAY)
+		.expect("room again");
+}
+
+#[test]
+fn the_count_of_messages_waiting_follows_the_table_through_any_number_of_cycles() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = roomy(dir.path());
+	for round in 0..50u128 {
+		// The same id reserved twice replaces its entry; it is not two.
+		let first = quota.reserve("a", id(round), (2, 0), TODAY).expect("first");
+		let second = quota.reserve("a", id(round), (2, 0), TODAY).expect("again");
+		assert_eq!(quota.state().owed_per["a"], 1, "round {round}");
+		quota.release(second);
+		quota.release(first);
+		match round % 3 {
+			0 => {
+				let _ = quota.reserve("a", id(round), (2, 0), TODAY).expect("kept");
+				quota.fact(Some("a"), id(round), TODAY);
+				quota.fact(Some("a"), id(round), TODAY);
+			}
+			1 => {
+				let _ = quota.reserve("a", id(round), (2, 0), TODAY).expect("kept");
+				quota.ended(Some("a"), id(round), TODAY);
+			}
+			_ => {}
+		}
+		let state = quota.state();
+		assert!(state.owed.is_empty(), "round {round}: {:?}", state.owed);
+		assert!(
+			state.owed_per.is_empty(),
+			"round {round}: the count drifted"
+		);
+	}
+}
+
+#[test]
+fn a_message_forgotten_with_the_days_leaves_the_count_with_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = roomy(dir.path());
+	let _ = quota.reserve("a", id(1), (2, 0), TODAY).expect("reserved");
+	quota.fact(None, id(999), Day(TODAY.0 + OWED_DAYS + 1));
+	let state = quota.state();
+	assert!(state.owed.is_empty());
+	assert!(state.owed_per.is_empty());
+}
+
+#[test]
 fn an_outcome_is_counted_to_the_account_that_was_accepted_for_it_after_a_restart() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// Yesterday: an acceptance. Today: its outcomes, which nothing paid for
