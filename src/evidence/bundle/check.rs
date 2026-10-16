@@ -134,6 +134,10 @@ pub fn check(
 		}
 	}
 	report.add(
+		"every message is accounted for",
+		super::manifest::complete(dir),
+	);
+	report.add(
 		"every file belongs to a verified day or an accepted record",
 		strays(dir, &vouched),
 	);
@@ -199,7 +203,7 @@ fn strays(dir: &Path, vouched: &BTreeSet<String>) -> Result<(), String> {
 				}
 				pending.push((entry.path(), format!("{name}/"), depth + 1));
 			} else if !vouched.contains(&name)
-				&& !["README.md", super::sums::FILE].contains(&name.as_str())
+				&& !["README.md", super::sums::FILE, super::manifest::FILE].contains(&name.as_str())
 			{
 				stray.insert(name);
 			}

@@ -10,7 +10,7 @@ use crate::evidence::checkpoint::{files, seal_closed_days};
 use crate::evidence::day::Day;
 use crate::evidence::key::EvidenceKey;
 use crate::evidence::record::{Accepted, Entry, Retention, RetentionMode, sha256, to_hex};
-use crate::evidence::test_support::at;
+use crate::evidence::test_support::{at, delivered};
 use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
 use crate::storage::MessageCrypto;
@@ -313,6 +313,7 @@ pub(super) fn kept_stamped_at(encrypted: bool, gen_time: u64) -> Kept {
 			}),
 		)
 		.expect("append");
+	chain.append_at(at(DAY, 2), delivered(5)).expect("outcome");
 	let stored = dir.path().join("messages").join(Day(DAY).name()).join("30");
 	std::fs::create_dir_all(&stored).expect("dir");
 	let bytes = match encrypted {

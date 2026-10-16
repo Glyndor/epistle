@@ -151,6 +151,7 @@ pub fn export(
 		}
 		write_file(&out.join("messages").join(format!("{id}.eml")), &bytes)?;
 	}
+	super::manifest::write(out, selector)?;
 	super::readme::write(out, &done)?;
 	super::sums::write(out)?;
 	Ok(done)

@@ -154,6 +154,19 @@ A token stamped long after its day ended shows when the day was sealed, not
 when its mail was sent, so `check` fails a day whose token is dated more
 than four days after the day ended.
 
+## What a bundle can and cannot show it is complete
+
+Each record in a bundle is proved against the signed root of its day. That
+shows the records are the ones written; it cannot show that others were
+left out. What `check` does show is that the ones present contradict
+nothing: each message has its acceptance, and either an abandonment or an
+outcome (delivered, bounced, expired, suppressed) for every recipient the
+bundle covers, which `manifest.json` names (the whole message, or one
+recipient). Take out the abandonment, or a bounce, and the message is no
+longer accounted for and the check fails. A message still in the queue has no
+outcome yet, so a bundle made too early does not verify: export it again
+later. A bundle says nothing about messages it does not contain.
+
 ## Limits
 
 - The service account holds the evidence key and the data. Until a day is

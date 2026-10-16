@@ -11,11 +11,13 @@
 //! - `tsa/<day>-chain.pem`: the certificates the token carries;
 //! - `keys/<id>.pem`: the public evidence key;
 //! - `messages/<id>.eml`: the exact bytes, when they were kept;
+//! - `manifest.json`: what the export was for;
 //! - `README.md` and `SHA256SUMS`.
 
 mod anchor;
 mod check;
 mod export;
+mod manifest;
 mod readme;
 mod sums;
 
@@ -146,6 +148,9 @@ pub(super) fn token_chain_pem(token: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "bundle_tests_complete.rs"]
+mod tests_complete;
 #[cfg(test)]
 #[path = "bundle_tests_private.rs"]
 mod tests_private;

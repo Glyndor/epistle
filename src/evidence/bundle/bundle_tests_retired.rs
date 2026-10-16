@@ -10,7 +10,7 @@ use crate::evidence::day::Day;
 use crate::evidence::key::EvidenceKey;
 use crate::evidence::record::sha256;
 use crate::evidence::rotation::rotate;
-use crate::evidence::test_support::{accepted, at};
+use crate::evidence::test_support::{accepted, at, delivered};
 use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
 
@@ -47,6 +47,10 @@ fn rotated() -> (Fixture, String, String, Vec<u8>) {
 		.expect("chain")
 		.append_at(at(DAY + 3, 1), accepted(7))
 		.expect("append");
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 2), delivered(7))
+		.expect("outcome");
 	let k2 = rotate(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
 	let current = EvidenceKey::load_or_create(fixture.root()).expect("k2");
 	let Fixture { dir, tsa, .. } = &mut fixture;
@@ -64,6 +68,10 @@ fn forged(leaked: &[u8]) -> (Fixture, Selector) {
 		.expect("chain")
 		.append_at(at(DAY + 4, 1), accepted(99))
 		.expect("forged acceptance");
+	Chain::open(evil.path())
+		.expect("chain")
+		.append_at(at(DAY + 4, 2), delivered(99))
+		.expect("outcome");
 	let mut fixture = Fixture {
 		dir: evil,
 		key,
@@ -158,6 +166,10 @@ fn a_new_key_cannot_seal_a_day_before_the_day_it_took_over() {
 		.expect("chain")
 		.append_at(at(DAY + 3, 1), accepted(7))
 		.expect("append");
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 2), delivered(7))
+		.expect("outcome");
 	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
 	// The hand-over is dated three days after the day the new key seals.
 	let rotation = Rotation::signed(&old, &new.id(), "2026-10-20");
@@ -202,6 +214,10 @@ fn forged_by_a_successor_of_the_leaked_key(leaked: &[u8], taken: &str) -> (Fixtu
 		.expect("chain")
 		.append_at(at(DAY + 4, 1), accepted(99))
 		.expect("forged acceptance");
+	Chain::open(evil.path())
+		.expect("chain")
+		.append_at(at(DAY + 4, 2), delivered(99))
+		.expect("outcome");
 	let mut fixture = Fixture {
 		dir: evil,
 		key: k3,

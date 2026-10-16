@@ -73,7 +73,15 @@ hash, a node is SHA-256 of 0x01, left, right, and the proof leads to the
 `merkle_root` the checkpoint signed. `epistle evidence check <bundle>` runs
 all of the above offline, and reports each check by name.
 
-## 5. The message itself
+## 5. Nothing contradicts the story
+
+`manifest.json` says what the bundle covers. `epistle evidence check` fails when
+a message here lacks its acceptance, or lacks both an abandonment and an
+outcome for a recipient the manifest covers: the records are proved one by one,
+so this is how a record taken out shows. The bundle says nothing about
+messages it does not contain.
+
+## 6. The message itself
 
 When the message was kept, `messages/<id>.eml` holds its exact bytes:
 their SHA-256 is the `sha256` of its `accepted` record.
