@@ -107,10 +107,11 @@ The bundle holds the records, their inclusion proofs, each day's signed
 seal, its timestamp token and the authority's certificates, the public
 evidence key, the message when it was kept, and a `README.md` with the
 exact `sha256sum` and `openssl` steps. Anyone can check it, offline,
-without any configuration:
+without any server or configuration, once they hold the key the operator
+published (see below):
 
 ```sh
-epistle evidence check notice-42
+epistle evidence check --key 3f2a...e91c notice-42
 ```
 
 Each check is reported by name. A file that no verified day and no
@@ -118,6 +119,31 @@ accepted record accounts for fails the check, even when `SHA256SUMS` lists
 it, so nothing can be added to a bundle without being noticed. Certificate revocation (CRL, OCSP) of the
 timestamp authority is **not** checked; certificates are judged valid at
 the stamped time.
+
+## The signing key
+
+A bundle cannot vouch for the key that signed it: whoever holds the data
+could re-sign every day with another key and put that key in the bundle. So
+the reader brings the key, and `check` fails without `--key`
+(a fingerprint, or a PEM file). A day passes only when its signer is that
+key or took over from it.
+
+```sh
+epistle evidence key show     # the fingerprint to publish, and the keys it took over from
+epistle evidence key rotate   # asks; --yes off a terminal
+```
+
+A rotation is a statement signed by the old key that names the new one. It
+is kept in the evidence and travels in every bundle, so a reader who
+anchored the key that was current when a day was sealed (or any key before
+it) follows the hand-overs to the key that signed it. Anchor the oldest key
+you have published; a key only vouches for days signed by it or by keys that
+took over from it. After a rotation the old key may not sign any later day,
+and `verify` says so.
+
+A token stamped long after its day ended shows when the day was sealed, not
+when its mail was sent, so `check` fails a day whose token is dated more
+than four days after the day ended.
 
 ## Limits
 
@@ -127,6 +153,6 @@ the stamped time.
   a change to that day cannot be hidden.
 - The evidence shows what this server sent and was told. It cannot show
   what the receiving server did next.
-- Publish the evidence key's id (the file name under `keys/` in any
-  bundle) where a third party can compare it, so a bundle signed by
-  another key stands out.
+- Publish the evidence key's fingerprint (`epistle evidence key show`)
+  where a third party can read it, and keep every earlier one. The check is
+  only as good as the key the reader brings.

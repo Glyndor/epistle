@@ -32,8 +32,10 @@ revocation (CRL, OCSP) of the timestamp authority is not checked.
 ## 2. The evidence key signed each day's checkpoint
 
 `checkpoints/<day>.json` names the key that signed it (`"key"`): the
-SHA-256 of the key's DER form, which you can recompute and compare with the
-value the operator published:
+SHA-256 of the key's DER form. Do not trust the key file in this bundle on
+its word: compare the name with the fingerprint the operator published, which
+`epistle evidence check --key` also needs. If the key was rotated, the files
+under `keys/rotations/` are statements, each signed by the key it replaces.
 
     openssl pkey -pubin -in keys/<key>.pem -outform DER | sha256sum
 
