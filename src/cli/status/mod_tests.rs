@@ -142,7 +142,8 @@ fn status_covers_every_area_in_a_stable_order() {
 			"spool",
 			"subid",
 			"warmup",
-			"resources"
+			"resources",
+			"evidence"
 		]
 	);
 }
