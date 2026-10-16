@@ -145,11 +145,25 @@ async fn submit_with(
 	data: &[u8],
 	refuse: bool,
 ) -> (String, Vec<(AcceptedMessage, MailClass)>, usize) {
+	submit_to(class, data, refuse, (&[], &["bob@elsewhere.example"])).await
+}
+
+/// [`submit_with`] to the given recipients, some of them on the suppression list.
+async fn submit_to(
+	class: MailClass,
+	data: &[u8],
+	refuse: bool,
+	(suppressed, recipients): (&[&str], &[&str]),
+) -> (String, Vec<(AcceptedMessage, MailClass)>, usize) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	update(dir.path(), |bindings| {
 		bindings.accounts.insert("alice".into(), class);
 	})
 	.expect("bind");
+	let list = crate::queue::SuppressionList::open(dir.path()).expect("suppression");
+	for address in suppressed {
+		list.suppress(address);
+	}
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
 	let sink = Arc::new(ClassSink(Mutex::default(), refuse));
 	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
@@ -191,9 +205,12 @@ async fn submit_with(
 		.await
 		.expect("pass");
 	assert!(reply(&mut tls).await.starts_with("235 "), "auth");
-	tls.write_all(b"MAIL FROM:<alice@example.org>\r\nRCPT TO:<bob@elsewhere.example>\r\nDATA\r\n")
-		.await
-		.expect("envelope");
+	let mut envelope = String::from("MAIL FROM:<alice@example.org>\r\n");
+	for recipient in recipients {
+		envelope.push_str(&format!("RCPT TO:<{recipient}>\r\n"));
+	}
+	envelope.push_str("DATA\r\n");
+	tls.write_all(envelope.as_bytes()).await.expect("envelope");
 	let mut batch = String::new();
 	while !batch.contains("354 ") {
 		batch.push_str(&reply(&mut tls).await);
@@ -305,4 +322,42 @@ fn over_smtp_no_header_changes_the_class_bound_to_the_credential() {
 			assert_eq!(class, bound, "bound to {bound}, the header says {asked}");
 		}
 	}
+}
+
+const ONE_CLICK: &[u8] = b"From: alice@example.org\r\nSubject: offer\r\nList-Unsubscribe: <https://example.org/u>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nbody\r\n";
+
+#[tokio::test]
+async fn marketing_to_suppressed_recipients_only_is_refused_and_says_why() {
+	let (after, submitted, sent) = submit_to(
+		MailClass::Marketing,
+		ONE_CLICK,
+		false,
+		(&["gone@elsewhere.example"], &["gone@elsewhere.example"]),
+	)
+	.await;
+	assert!(
+		after.starts_with("550 5.7.1 every recipient is on the suppression list"),
+		"{after}"
+	);
+	assert!(submitted.is_empty(), "the message reached the sink");
+	assert_eq!(sent, 0, "a refused message was copied to Sent");
+}
+
+#[tokio::test]
+async fn marketing_to_some_suppressed_recipients_drops_them_and_says_how_many() {
+	let (after, submitted, _) = submit_to(
+		MailClass::Marketing,
+		ONE_CLICK,
+		false,
+		(
+			&["gone@elsewhere.example"],
+			&["kept@elsewhere.example", "gone@elsewhere.example"],
+		),
+	)
+	.await;
+	assert!(
+		after.starts_with("250 2.0.0 queued; 1 suppressed recipient dropped"),
+		"{after}"
+	);
+	assert_eq!(submitted[0].0.recipients, vec!["kept@elsewhere.example"]);
 }

@@ -481,6 +481,7 @@ impl Server {
 					// Mail an account submits goes through the submission
 					// path, which applies what holds for our own senders
 					// (the antivirus on outbound mail among them).
+					let mut dropped = 0usize;
 					let handed = match session.authenticated() {
 						Some(account) => {
 							// The class: from the credential and the
@@ -494,6 +495,20 @@ impl Server {
 										continue;
 									}
 								};
+							// Marketing mail to suppressed addresses only has
+							// nowhere to go: say so, as the API does.
+							if message.recipients.is_empty() {
+								send(
+									&mut stream,
+									&Reply::single(
+										550,
+										"5.7.1 every recipient is on the suppression list",
+									),
+								)
+								.await?;
+								continue;
+							}
+							dropped = prepared.suppressed.len();
 							// Per-account settings may disable the save
 							// (`save_sent: false` on the account, on the
 							// app password that authenticated this
@@ -510,17 +525,12 @@ impl Server {
 							let sent_copy = (prepared.class.allows_sent_copy()
 								&& self.save_sent_enabled_for(&session))
 							.then(|| message.data.clone());
-							let submitted = if message.recipients.is_empty() {
-								// Every recipient was suppressed: nothing to send.
-								Ok(())
-							} else {
-								self.sink.submit(
-									message,
-									uuid::Uuid::now_v7(),
-									account,
-									&crate::smtp::sink::Submission::of_class(prepared.class),
-								)
-							};
+							let submitted = self.sink.submit(
+								message,
+								uuid::Uuid::now_v7(),
+								account,
+								&crate::smtp::sink::Submission::of_class(prepared.class),
+							);
 							if let (Ok(()), Some(copy)) = (&submitted, sent_copy) {
 								self.save_sent_copy(&session, account, &copy);
 							}
@@ -548,7 +558,16 @@ impl Server {
 									false,
 								);
 							}
-							reply
+							match dropped {
+								0 => reply,
+								n => Reply::single(
+									250,
+									&format!(
+										"2.0.0 queued; {n} suppressed recipient{} dropped",
+										if n == 1 { "" } else { "s" }
+									),
+								),
+							}
 						}
 						Err(error) => {
 							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
