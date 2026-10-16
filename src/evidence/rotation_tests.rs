@@ -341,3 +341,91 @@ fn hand_overs_that_lead_back_to_a_key_already_met_stop_the_walk() {
 	);
 	assert_eq!(ancestry(fixture.root(), &b.id()).len(), 1);
 }
+
+#[test]
+fn a_record_whose_statement_does_not_verify_is_not_believed() {
+	let fixture = Fixture::new();
+	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	let genuine = Rotation {
+		old: old.id(),
+		new: new.id(),
+		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
+	};
+	std::fs::write(
+		path(fixture.root(), &new.id()),
+		serde_json::to_vec(&genuine).expect("json"),
+	)
+	.expect("statement");
+	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
+	// The chain carries the hand-over with another signature than the file's.
+	let altered = Rotation {
+		signature: "00".repeat(64),
+		..genuine
+	};
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), Entry::KeyRotated(altered))
+		.expect("append");
+	let timeline = Timeline::load(fixture.root()).expect("timeline");
+	assert_eq!(
+		timeline.check(&old.id(), (Day(DAY), 1)),
+		Err(Fault::Unrecorded),
+		"an altered record was taken as the hand-over"
+	);
+}
+
+#[test]
+fn more_verified_rotations_than_the_cap_are_an_error_not_a_truncation() {
+	let fixture = Fixture::new();
+	for _ in 0..=MAX_ROTATIONS {
+		rotate(fixture.root(), true, at(DAY + 3, 1)).expect("rotate");
+	}
+	let error = Timeline::load(fixture.root()).expect_err("over the cap");
+	assert_eq!(
+		error.to_string(),
+		"more key rotations than the evidence follows"
+	);
+}
+
+#[test]
+fn a_bounded_audit_still_needs_a_record_for_a_change_of_signer() {
+	let mut fixture = Fixture::new();
+	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	let chain = Chain::open(fixture.root()).expect("chain");
+	for offset in [3, 4] {
+		chain
+			.append_at(at(DAY + offset, 1), accepted(offset as u32 + 10))
+			.expect("append");
+	}
+	let new = EvidenceKey::stage_next(fixture.root()).expect("stage");
+	let rotation = Rotation {
+		old: old.id(),
+		new: new.id(),
+		signature: to_hex(&old.sign(&statement(&old.id(), &new.id()))),
+	};
+	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
+	std::fs::write(
+		path(fixture.root(), &new.id()),
+		serde_json::to_vec(&rotation).expect("json"),
+	)
+	.expect("statement");
+	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
+	// Two days sealed by the new key, with no record in the chain.
+	seal(&mut fixture, at(DAY + 5, 0));
+	let report = verify(
+		fixture.root(),
+		&Options {
+			from: Some(Day(DAY + 2)),
+			to: Some(Day(DAY + 3)),
+			anchors: vec![fixture.tsa.anchor],
+			now: at(DAY + 5, 12),
+		},
+	)
+	.expect("verify");
+	assert_eq!(
+		reason(&report),
+		"2026-10-17: checkpoint: signed with a different evidence key than the day before, and no rotation record explains it"
+	);
+}

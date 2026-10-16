@@ -90,6 +90,8 @@ struct Walker {
 	handovers: Vec<(At, super::rotation::Rotation)>,
 	/// The day and signer of every checkpoint verified, in order.
 	signers: Vec<(Day, String)>,
+	/// The signer of the newest checkpoint before the first day walked.
+	before: Option<String>,
 }
 
 /// The most purge records one verification checks.
@@ -159,6 +161,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		lineage: super::rotation::lineage(evidence_root)?,
 		handovers: Vec::new(),
 		signers: Vec::new(),
+		before: previous.as_ref().map(|(cp, _)| cp.key.clone()),
 	};
 	for day in days {
 		if let Err(at) =
@@ -198,10 +201,23 @@ fn final_checks(
 ) -> Option<Break> {
 	let timeline =
 		super::rotation::Timeline::new(walker.lineage.clone(), walker.handovers.clone(), to_end);
+	// A change of signer between two sealed days needs the record that
+	// hands over, even when the walk stopped before the end of the chain.
+	let mut previous = walker.before.as_deref();
 	for (day, signer) in &walker.signers {
 		if let Err(fault) = timeline.check_seal(signer, *day) {
 			return Some(broken(*day, fault.to_string()));
 		}
+		if let Some(before) = previous
+			&& before != signer
+			&& !timeline.explains(before, signer, *day)
+		{
+			return Some(broken(
+				*day,
+				"signed with a different evidence key than the day before, and no rotation record explains it",
+			));
+		}
+		previous = Some(signer);
 	}
 	for (_, rotation) in &walker.handovers {
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {

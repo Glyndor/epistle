@@ -210,20 +210,32 @@ impl Timeline {
 		}
 	}
 
-	/// The timeline of the whole chain under `evidence_root`.
+	/// The timeline of the whole chain under `evidence_root`, from the rotation
+	/// records whose statement verifies (signed by the key they replace). A
+	/// day is read as far as it goes, so a day with a break in it, which an
+	/// acknowledgement exists for, does not hide the rotations around it.
+	/// More verified rotations than [`MAX_ROTATIONS`] is an error, never a
+	/// truncation.
 	pub fn load(evidence_root: &Path) -> std::io::Result<Self> {
 		let lineage = lineage(evidence_root)?;
 		let mut handovers = Vec::new();
+		let mut seen = 0usize;
 		for day in Chain::open(evidence_root)?.days()? {
-			// A day that does not verify is read as far as it goes: an
-			// acknowledged break must not hide the rotations around it.
 			let _ = super::verify::walk_day(evidence_root, day, None, |line, record, _| {
 				if let Entry::KeyRotated(rotation) = &record.entry
-					&& handovers.len() <= MAX_ROTATIONS
+					&& check_record(evidence_root, rotation).is_ok()
 				{
-					handovers.push(((day, line), rotation.clone()));
+					seen += 1;
+					if seen <= MAX_ROTATIONS {
+						handovers.push(((day, line), rotation.clone()));
+					}
 				}
 			});
+		}
+		if seen > MAX_ROTATIONS {
+			return Err(std::io::Error::other(
+				"more key rotations than the evidence follows",
+			));
 		}
 		Ok(Timeline::new(lineage, handovers, true))
 	}
@@ -257,6 +269,14 @@ impl Timeline {
 			}
 		}
 		Ok(())
+	}
+
+	/// Whether a rotation record from `old` to `new` was written before the
+	/// day `day` was sealed: what must explain a change of signer between
+	/// two sealed days, whether or not the walk reached the end.
+	pub fn explains(&self, old: &str, new: &str, day: Day) -> bool {
+		self.position(old, new)
+			.is_some_and(|at| at < (Day(day.0 + 1), 0))
 	}
 
 	/// Whether `key` may seal `day`: the key in force once every rotation
