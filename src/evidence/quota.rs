@@ -1,29 +1,68 @@
-//! How much evidence one client, and the whole server, may add in a day.
+//! How much evidence one account, and the whole server, may add in a day.
 //!
-//! The server verifies the whole kept log every few minutes, and a
-//! verification that takes too long holds transactional mail for everybody.
-//! The log grows with what its clients send, so without a bound one credential
-//! that sends a great deal can make every other tenant's mail wait. Each
-//! acceptance is charged to its account and to the day, for the record of the
-//! acceptance and the outcome it will owe each recipient, before anything is
-//! written: past a limit the acceptance is refused (the client is told to
-//! retry, `451`), and the status says so well before. What was reserved is
-//! given back when nothing was written. The outcomes themselves are never
-//! refused: they were paid for. An account's share of the day is a tenth of
-//! it, so no account, with any fan-out, uses up what the others need. The
-//! counts live in memory and start again with the process.
+//! The kept log is verified in full every few minutes, and a verification
+//! that runs too long holds transactional mail for every tenant. The log
+//! grows with what its clients send, so each account has a share of the day
+//! and the server a limit, and an acceptance past either is refused (`451`,
+//! retry later) before anything is written.
+//!
+//! # Invariants
+//!
+//! The counts below are held to these, and `quota_tests.rs` checks them after
+//! every step of random sequences of acceptances, outcomes, abandonments,
+//! cancellations, restarts and new days:
+//!
+//! 1. **One account per record.** Every record counted is attributed to exactly
+//!    one account (`unattributed` when it cannot be known), and the day's total
+//!    is the sum of the accounts'.
+//! 2. **Isolation.** What the server has set aside for the day (`within`) is
+//!    at most the sum over the accounts of what each holds up to its own
+//!    share, and never more than the day's limit. An account past its share
+//!    adds nothing to it: it can take no room that another account's share
+//!    could use.
+//! 3. **Facts are never refused.** An outcome, an abandonment or a
+//!    cancellation records something that happened. It is counted to its
+//!    account, and an account past its share is turned away at its next
+//!    acceptance, not at the fact.
+//! 4. **Exact rollback.** An acceptance that wrote nothing gives back exactly
+//!    what it reserved. One that may have been written keeps it.
+//! 5. **The counts outlive the process and the day.** They are kept in a file
+//!    under the evidence root, shared by the server and the commands; a new day
+//!    starts the day's counts again, and what an acceptance prepaid for its
+//!    outcomes is remembered until they have come.
+//! 6. **Shares fit the limit.** The limit is at least [`MIN_SHARES`] shares, and
+//!    what is set aside never passes it.
+//!
+//! The state is read and written under the file's own lock. A state file that
+//! is there and cannot be read refuses acceptances rather than starting from
+//! nothing: a value that cannot be read grants no more than one that can.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::day::Day;
+
+/// The account a record is counted to when its message cannot be traced.
+pub const UNATTRIBUTED: &str = "unattributed";
+/// The fewest accounts' shares the day's limit must hold.
+pub const MIN_SHARES: u64 = 4;
+/// How many days the prepaid outcomes of a message are remembered.
+const OWED_DAYS: i64 = 40;
+/// What is counted at which percent of a limit the status warns.
+const WARN_PERCENT: u64 = 80;
+const FILE: &str = "quota.json";
+const LOCK: &str = "quota.lock";
 
 /// The limits, per UTC day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-	/// Records (an acceptance and the outcomes it owes) one account may add.
+	/// Records (an acceptance and the outcomes it owes) one account may add:
+	/// its share of the day.
 	pub account_records: u64,
-	/// Bytes one account may have kept in full.
+	/// Bytes one account may keep in full.
 	pub account_kept_bytes: u64,
 	/// Records of every kind the whole log may take.
 	pub day_records: u64,
@@ -39,169 +78,268 @@ impl Default for Limits {
 	}
 }
 
-/// What is counted at which fraction of a limit the status warns.
-const WARN_PERCENT: u64 = 80;
-
-#[derive(Debug, Default)]
-struct Used {
-	day: Option<Day>,
-	records: u64,
-	accounts: BTreeMap<String, (u64, u64)>,
-	/// Outcomes still to come of the acceptances reserved today, by queue id:
-	/// they are paid for, and are not counted again when they arrive.
-	owed: BTreeMap<uuid::Uuid, u64>,
+impl Limits {
+	/// The limits with the share cut down so that [`MIN_SHARES`] of them fit
+	/// the day, when it was set larger.
+	pub fn fitted(mut self) -> Self {
+		self.account_records = self.account_records.min(self.day_records / MIN_SHARES);
+		self
+	}
 }
 
-/// Room set aside for one acceptance, to be given back with
-/// [`Quota::release`] if nothing came of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Held {
+	records: u64,
+	bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Owed {
+	left: u64,
+	day: i64,
+}
+
+/// What the file holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct State {
+	day: i64,
+	/// Records counted today, all accounts.
+	total: u64,
+	/// What is set aside against the day's limit: each account's records up
+	/// to its share.
+	within: u64,
+	accounts: BTreeMap<String, Held>,
+	/// Outcomes still to come of acceptances that paid for them, by queue id.
+	owed: BTreeMap<String, Owed>,
+}
+
+/// Exactly what one acceptance added, to be taken back if nothing came of it.
 #[derive(Debug)]
 #[must_use]
 pub struct Reservation {
-	id: uuid::Uuid,
+	id: Uuid,
 	account: String,
 	records: u64,
 	kept: u64,
-	day: Day,
+	within: u64,
+	day: i64,
 }
 
-/// The counts, and the limits they are held to.
+/// The quota under an evidence root.
 #[derive(Debug)]
 pub struct Quota {
+	root: PathBuf,
 	limits: Limits,
-	used: Mutex<Used>,
+	/// Serialises threads of this process; the file lock covers others.
+	local: std::sync::Mutex<()>,
+}
+
+impl State {
+	fn roll(&mut self, today: Day) {
+		if self.day != today.0 {
+			self.day = today.0;
+			self.total = 0;
+			self.within = 0;
+			self.accounts.clear();
+		}
+		self.owed
+			.retain(|_, owed| owed.left > 0 && today.0 - owed.day <= OWED_DAYS);
+	}
+
+	/// Count `records` to `account`: the part up to its share, and up to what
+	/// the day's limit still has, is set aside.
+	fn add(&mut self, account: &str, records: u64, kept: u64, (share, day): (u64, u64)) -> u64 {
+		let held = self.accounts.entry(account.to_string()).or_default();
+		let aside = records
+			.min(share.saturating_sub(held.records))
+			.min(day.saturating_sub(self.within));
+		held.records += records;
+		held.bytes += kept;
+		self.total += records;
+		self.within += aside;
+		aside
+	}
 }
 
 impl Quota {
-	/// A quota with `limits`.
-	pub fn new(limits: Limits) -> Self {
+	/// The quota under `evidence_root` with `limits`, cut down to fit.
+	pub fn open(evidence_root: &Path, limits: Limits) -> Quota {
 		Quota {
-			limits,
-			used: Mutex::new(Used::default()),
+			root: evidence_root.to_path_buf(),
+			limits: limits.fitted(),
+			local: std::sync::Mutex::new(()),
 		}
 	}
 
-	fn rolled<'a>(&self, used: &'a mut Used, today: Day) -> &'a mut Used {
-		if used.day != Some(today) {
-			*used = Used {
-				day: Some(today),
-				..Used::default()
-			};
+	fn locked<T>(&self, work: impl FnOnce(&mut State) -> T) -> std::io::Result<T> {
+		let _local = self
+			.local
+			.lock()
+			.map_err(|_| std::io::Error::other("quota lock poisoned"))?;
+		super::chain::create_private_dir(&self.root)?;
+		let mut options = std::fs::OpenOptions::new();
+		options.create(true).truncate(false).write(true);
+		{
+			use std::os::unix::fs::OpenOptionsExt;
+			options.mode(0o600);
 		}
-		used
+		let lock = options.open(self.root.join(LOCK))?;
+		lock.lock()?;
+		let mut state =
+			match super::checkpoint::read_bounded(&self.root.join(FILE), 64 * 1024 * 1024)? {
+				None => State::default(),
+				Some(bytes) => serde_json::from_slice(&bytes)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+			};
+		let before = state.clone();
+		let value = work(&mut state);
+		if state != before {
+			let bytes = serde_json::to_vec(&state).map_err(std::io::Error::other)?;
+			crate::storage::write_secret(&self.root.join(FILE), &bytes)?;
+		}
+		Ok(value)
 	}
 
 	/// Reserve room for one acceptance of `account` that will owe `records`
-	/// records and keeps `kept` bytes, on `today`, or say which limit it would
-	/// pass. Checking and reserving are one step, so concurrent submissions
-	/// cannot all pass the check before any is counted.
+	/// records (its own and an outcome for each recipient) and keeps `kept`
+	/// bytes, or say which limit it would pass. Checking and reserving are
+	/// one step.
 	pub fn reserve(
 		&self,
 		account: &str,
-		id: uuid::Uuid,
+		id: Uuid,
 		(records, kept): (u64, u64),
 		today: Day,
 	) -> std::io::Result<Reservation> {
-		let held = Reservation {
-			id,
-			account: account.to_string(),
-			records,
-			kept,
-			day: today,
-		};
-		let Ok(mut used) = self.used.lock() else {
-			return Ok(held);
-		};
-		let used = self.rolled(&mut used, today);
-		let (counted, bytes) = used.accounts.get(account).copied().unwrap_or_default();
-		let over = |what: &str| {
-			Err(std::io::Error::new(
-				std::io::ErrorKind::QuotaExceeded,
-				format!("{what} for today: retry later"),
-			))
-		};
-		if used.records.saturating_add(records) > self.limits.day_records {
-			return over("the evidence log is full");
-		}
-		if counted.saturating_add(records) > self.limits.account_records {
-			return over("this account has added as many records as it may");
-		}
-		if bytes.saturating_add(kept) > self.limits.account_kept_bytes {
-			return over("this account has kept as many bytes as it may");
-		}
-		used.records += records;
-		let entry = used.accounts.entry(account.to_string()).or_default();
-		entry.0 += records;
-		entry.1 += kept;
-		used.owed.insert(id, records.saturating_sub(1));
-		Ok(held)
+		let limits = self.limits;
+		let account = account.to_string();
+		let refused = self.locked(|state| {
+			state.roll(today);
+			let held = state.accounts.get(&account).cloned().unwrap_or_default();
+			let over = |what: &str| {
+				Some(std::io::Error::new(
+					std::io::ErrorKind::QuotaExceeded,
+					format!("{what} for today: retry later"),
+				))
+			};
+			if held.records.saturating_add(records) > limits.account_records {
+				return Err(over("this account has added as many records as it may"));
+			}
+			if held.bytes.saturating_add(kept) > limits.account_kept_bytes {
+				return Err(over("this account has kept as many bytes as it may"));
+			}
+			let aside = records.min(limits.account_records.saturating_sub(held.records));
+			if state.within.saturating_add(aside) > limits.day_records {
+				return Err(over("the evidence log is full"));
+			}
+			let within = state.add(
+				&account,
+				records,
+				kept,
+				(limits.account_records, limits.day_records),
+			);
+			state.owed.insert(
+				id.to_string(),
+				Owed {
+					left: records.saturating_sub(1),
+					day: today.0,
+				},
+			);
+			Ok(Reservation {
+				id,
+				account: account.clone(),
+				records,
+				kept,
+				within,
+				day: today.0,
+			})
+		})?;
+		refused.map_err(|error| error.unwrap_or_else(|| std::io::Error::other("quota")))
 	}
 
-	/// Give back a reservation that wrote nothing.
-	pub fn release(&self, held: Reservation) {
-		let Ok(mut used) = self.used.lock() else {
-			return;
-		};
-		if used.day != Some(held.day) {
-			return;
-		}
-		used.owed.remove(&held.id);
-		used.records = used.records.saturating_sub(held.records);
-		if let Some(entry) = used.accounts.get_mut(&held.account) {
-			entry.0 = entry.0.saturating_sub(held.records);
-			entry.1 = entry.1.saturating_sub(held.kept);
-		}
+	/// Give back exactly what `held` reserved, when nothing was written.
+	pub fn release(&self, held: Reservation) -> std::io::Result<()> {
+		self.locked(|state| {
+			state.owed.remove(&held.id.to_string());
+			if state.day != held.day {
+				return;
+			}
+			state.total = state.total.saturating_sub(held.records);
+			state.within = state.within.saturating_sub(held.within);
+			if let Some(entry) = state.accounts.get_mut(&held.account) {
+				entry.records = entry.records.saturating_sub(held.records);
+				entry.bytes = entry.bytes.saturating_sub(held.kept);
+				// An account the reservation introduced goes with it.
+				if *entry == Held::default() {
+					state.accounts.remove(&held.account);
+				}
+			}
+		})
 	}
 
-	/// A record of message `id` was written, an outcome or an abandonment
-	/// (`account` when known). It cannot be refused: it is a fact. If it was
-	/// paid for in the reservation of today it is not counted again; if it
-	/// was not (it came another day, or after a restart that lost the
-	/// reservation) it is counted now, so the next acceptance of the account
-	/// that produces many of them is the one that waits.
-	pub fn settle(&self, id: uuid::Uuid, account: Option<&str>, today: Day) {
-		let Ok(mut used) = self.used.lock() else {
-			return;
-		};
-		let used = self.rolled(&mut used, today);
-		if let Some(owed) = used.owed.get_mut(&id)
-			&& *owed > 0
-		{
-			*owed -= 1;
-			return;
-		}
-		used.records += 1;
-		if let Some(account) = account {
-			used.accounts.entry(account.to_string()).or_default().0 += 1;
-		}
+	/// A record of message `id` was written that is a fact: an outcome, an
+	/// abandonment, a cancellation. Never refused. If the acceptance prepaid
+	/// for it, nothing more is counted; otherwise it is counted to `account`
+	/// (or [`UNATTRIBUTED`]) now.
+	pub fn fact(&self, account: Option<&str>, id: Uuid, today: Day) -> std::io::Result<()> {
+		let share = (self.limits.account_records, self.limits.day_records);
+		let account = account.unwrap_or(UNATTRIBUTED).to_string();
+		self.locked(|state| {
+			state.roll(today);
+			if let Some(owed) = state.owed.get_mut(&id.to_string())
+				&& owed.left > 0
+			{
+				owed.left -= 1;
+				return;
+			}
+			state.add(&account, 1, 0, share);
+		})
 	}
 
 	/// What to tell the operator when a limit is near or reached.
 	pub fn warning(&self, today: Day) -> Option<String> {
-		let used = self.used.lock().ok()?;
-		if used.day != Some(today) {
-			return None;
-		}
+		let limits = self.limits;
+		let state = self.locked(|state| {
+			state.roll(today);
+			state.clone()
+		});
+		let state = state.ok()?;
 		let near = |count: u64, limit: u64| {
 			count.saturating_mul(100) >= limit.saturating_mul(WARN_PERCENT)
 		};
-		if near(used.records, self.limits.day_records) {
+		if near(state.within, limits.day_records) {
 			return Some(format!(
-				"the evidence log took {} of {} records today: past it new acceptances are refused",
-				used.records, self.limits.day_records
+				"the evidence log set aside {} of {} records today: past it new acceptances are refused",
+				state.within, limits.day_records
 			));
 		}
-		used.accounts
+		state
+			.accounts
 			.iter()
-			.find(|(_, (accepted, bytes))| {
-				near(*accepted, self.limits.account_records)
-					|| near(*bytes, self.limits.account_kept_bytes)
+			.find(|(_, held)| {
+				near(held.records, limits.account_records)
+					|| near(held.bytes, limits.account_kept_bytes)
 			})
-			.map(|(account, (accepted, bytes))| {
+			.map(|(account, held)| {
 				format!(
-					"account {} is near its evidence limits today ({accepted} records, {bytes} bytes kept)",
-					crate::log_id::account(account)
+					"account {} is near its evidence limits today ({} records, {} bytes kept)",
+					crate::log_id::account(account),
+					held.records,
+					held.bytes
 				)
 			})
+	}
+
+	/// The state as the file holds it, for tests.
+	#[cfg(test)]
+	pub(crate) fn state(&self) -> State {
+		self.locked(|state| state.clone()).expect("state")
+	}
+
+	/// The limits in force.
+	#[cfg(test)]
+	pub(crate) fn limits(&self) -> Limits {
+		self.limits
 	}
 }
 

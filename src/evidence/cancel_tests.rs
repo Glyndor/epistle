@@ -128,3 +128,14 @@ fn nothing_is_removed_when_the_cancellation_cannot_be_written() {
 		.expect_err("the record is refused");
 	assert!(spool.load_envelope(id).is_ok(), "the entry went");
 }
+
+#[test]
+fn a_cancellation_is_counted_to_the_account_that_sent_the_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (spool, id) = two_recipients(dir.path());
+	let root = crate::evidence::service::root_of(dir.path());
+	remove(&spool, &root, id).expect("removed");
+	let quota =
+		crate::evidence::quota::Quota::open(&root, crate::evidence::quota::Limits::default());
+	assert_eq!(quota.state().accounts["notices"].records, 2);
+}

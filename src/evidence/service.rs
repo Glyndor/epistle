@@ -116,6 +116,7 @@ impl EvidenceService {
 		let root = root_of(data_dir);
 		let chain = Chain::open(&root)?;
 		let policy = super::policy::load(&root)?;
+		let root_for_quota = root.clone();
 		Ok(EvidenceService {
 			root,
 			chain,
@@ -127,14 +128,14 @@ impl EvidenceService {
 				open_until: std::time::Instant::now(),
 			}),
 			crypto,
-			quota: super::quota::Quota::new(super::quota::Limits::default()),
+			quota: super::quota::Quota::open(&root_for_quota, super::quota::Limits::default()),
 		})
 	}
 
 	/// The same service with other daily limits, for tests.
 	#[cfg(test)]
 	pub(crate) fn with_limits(mut self, limits: super::quota::Limits) -> Self {
-		self.quota = super::quota::Quota::new(limits);
+		self.quota = super::quota::Quota::open(&self.root, limits);
 		self
 	}
 
@@ -266,7 +267,7 @@ impl EvidenceService {
 			RetentionMode::Full => match self.keep_message(submitted, retention) {
 				Ok(path) => Some(path),
 				Err(error) => {
-					self.quota.release(reservation);
+					self.release(reservation);
 					return Err(error);
 				}
 			},
@@ -301,7 +302,7 @@ impl EvidenceService {
 				if let Some(kept) = kept {
 					let _ = std::fs::remove_file(kept);
 				}
-				self.quota.release(reservation);
+				self.release(reservation);
 			}
 			return Err(error);
 		}
@@ -310,13 +311,38 @@ impl EvidenceService {
 
 	/// Record that the acceptance of `spool_id` never reached the queue.
 	pub fn abandon(&self, spool_id: Uuid, reason: &str) -> std::io::Result<()> {
+		self.abandon_for(None, spool_id, reason)
+	}
+
+	/// [`abandon`](Self::abandon), counted to `account` when it is known.
+	pub fn abandon_for(
+		&self,
+		account: Option<&str>,
+		spool_id: Uuid,
+		reason: &str,
+	) -> std::io::Result<()> {
 		self.chain.append(Entry::Abandoned(Abandoned {
 			spool_id,
 			reason: bounded(reason),
 			retain_days: super::policy::DEFAULT_DAYS,
 		}))?;
-		self.quota.settle(spool_id, None, self.today());
+		self.count_fact(account, spool_id);
 		Ok(())
+	}
+
+	/// Give back what an acceptance reserved when nothing was written.
+	fn release(&self, reservation: super::quota::Reservation) {
+		if let Err(error) = self.quota.release(reservation) {
+			tracing::warn!(%error, "the evidence quota could not take back a reservation");
+		}
+	}
+
+	/// Count a record that is a fact (an outcome, an abandonment): never
+	/// refused, so a failure to count it is only said.
+	fn count_fact(&self, account: Option<&str>, spool_id: Uuid) {
+		if let Err(error) = self.quota.fact(account, spool_id, self.today()) {
+			tracing::warn!(%error, "the evidence quota could not count a record");
+		}
 	}
 
 	/// Record one recipient outcome.
@@ -334,8 +360,7 @@ impl EvidenceService {
 			mta_sts: delivery.mta_sts.map(bounded),
 			retain_days: delivery.retain_days,
 		}))?;
-		self.quota
-			.settle(delivery.spool_id, delivery.account, self.today());
+		self.count_fact(delivery.account, delivery.spool_id);
 		Ok(())
 	}
 

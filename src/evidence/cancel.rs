@@ -37,6 +37,8 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 		return Ok(0);
 	}
 	let chain = Chain::open(evidence_root)?;
+	let quota = super::quota::Quota::open(evidence_root, super::quota::Limits::default());
+	let today = super::day::Day::of_epoch(chain.time().read().time);
 	let mut written = 0;
 	for recipient in &envelope.recipients {
 		let state = envelope.recipient_state(recipient);
@@ -60,6 +62,11 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 			},
 		}))?;
 		written += 1;
+		// A fact: counted to the account that sent the message, never
+		// refused, and an acceptance that prepaid for it is not counted twice.
+		if let Err(error) = quota.fact(envelope.account.as_deref(), envelope.id, today) {
+			tracing::warn!(%error, "the evidence quota could not count a cancellation");
+		}
 	}
 	Ok(written)
 }

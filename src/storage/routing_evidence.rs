@@ -118,7 +118,7 @@ impl SplitDelivery {
 			if let Err(error) = &routed
 				&& local.is_none()
 			{
-				abandon(&service, queue_id, error);
+				abandon(&service, (queue_id, account), error);
 			}
 			return routed;
 		}
@@ -158,7 +158,7 @@ impl SplitDelivery {
 			}
 			Err(error) => {
 				let error = SinkError::Unavailable(error.to_string());
-				abandon(&service, queue_id, &error);
+				abandon(&service, (queue_id, account), &error);
 				Err(error)
 			}
 		}
@@ -215,7 +215,7 @@ fn record_or_refuse(recorded: std::io::Result<()>, class: MailClass) -> Result<(
 }
 
 /// Best effort: the acceptance is on record, the message is not queued.
-fn abandon(service: &EvidenceService, id: uuid::Uuid, why: &SinkError) {
+fn abandon(service: &EvidenceService, (id, account): (uuid::Uuid, &str), why: &SinkError) {
 	let reason = match why {
 		SinkError::VirusDetected(_) => "refused by the antivirus",
 		SinkError::AttachmentRefused(_) => "refused by the attachment policy",
@@ -224,7 +224,7 @@ fn abandon(service: &EvidenceService, id: uuid::Uuid, why: &SinkError) {
 		SinkError::EvidenceUnavailable(_) => "evidence unavailable",
 		SinkError::Unavailable(_) => "storage unavailable",
 	};
-	if let Err(error) = service.abandon(id, reason) {
+	if let Err(error) = service.abandon_for(Some(account), id, reason) {
 		tracing::warn!(%id, %error, "could not record an abandoned submission");
 	}
 }

@@ -272,9 +272,13 @@ refuses to run at a clock more than 35 days past the newest record.
   the whole log takes 5 000 000 records a day, so no account, whatever its
   fan-out, uses more than a tenth of what the others need. Past a limit the
   acceptance is refused with the retry-later answer, nothing is written, and
-  `epistle status` warns at 80 percent. The counts are in memory and start
-  again with the server. They keep the verification, which reads every record,
-  from outgrowing its ten minutes; they are not a measurement of that time.
+  `epistle status` warns at 80 percent. An outcome, an abandonment or a
+  cancellation is a fact and is never refused: it is counted to the account
+  that sent the message, and an account past its share waits at its next
+  acceptance. The counts are in `quota.json` in the evidence directory, shared
+  by the server and the commands, and survive restarts. They keep the
+  verification, which reads every record, from outgrowing its ten minutes; they
+  are not a measurement of that time.
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,
