@@ -60,7 +60,11 @@ pub(super) fn verify(
 		let printed = super::evidence::json(
 			out,
 			&json!({
-				"verified": first.is_none(),
+				// A break somebody accepted is still a break: "verified" is
+				// true only when there is none, accepted or not, and
+				// "no_open_break" is what lets transactional mail through.
+				"verified": first.is_none() && breaks.is_empty(),
+				"no_open_break": first.is_none(),
 				"days": report.days,
 				"records": report.records,
 				"sealed": report.sealed,
@@ -93,7 +97,12 @@ pub(super) fn verify(
 		let _ = writeln!(out, "acknowledged: {at}");
 	}
 	let _ = match &first {
-		None => writeln!(out, "the evidence verifies"),
+		None if breaks.is_empty() => writeln!(out, "the evidence verifies"),
+		None => writeln!(
+			out,
+			"the evidence verifies except for {} acknowledged break(s), listed above",
+			breaks.len()
+		),
 		Some(at) => writeln!(
 			out,
 			"BREAK: {at}\ntransactional mail is held until it is understood and acknowledged: \

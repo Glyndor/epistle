@@ -441,3 +441,38 @@ fn clock_accept_leaves_a_request_the_server_can_take() {
 		assert!(!crate::evidence::clock_accept::take(server.root(), now()));
 	}
 }
+
+#[test]
+fn an_accepted_break_is_not_reported_as_verified() {
+	let server = Server::new();
+	server.trust();
+	// A token lost: a break the seal alone accounts for.
+	std::fs::remove_file(crate::evidence::checkpoint::files(server.root(), Day(server.first)).tsr)
+		.expect("remove the token");
+	let code = super::super::evidence_verify::acknowledge(
+		server.root(),
+		"token lost in a disk failure",
+		true,
+		now(),
+		false,
+		&mut Vec::new(),
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let mut out = Vec::new();
+	let code =
+		super::super::evidence_verify::verify(server.root(), None, None, now(), true, &mut out);
+	assert_eq!(code, ExitCode::SUCCESS, "mail flows again");
+	let report: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert_eq!(report["no_open_break"], true);
+	assert_eq!(
+		report["verified"], false,
+		"an accepted break was called verified"
+	);
+	let mut out = Vec::new();
+	super::super::evidence_verify::verify(server.root(), None, None, now(), false, &mut out);
+	assert!(
+		text(&out).contains("verifies except for 1 acknowledged break"),
+		"{}",
+		text(&out)
+	);
+}

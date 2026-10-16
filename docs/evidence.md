@@ -52,8 +52,8 @@ epistle evidence policy set --class personal --tenant school --mode metadata --d
 ```
 
 Without a rule, `transactional` keeps metadata for 365 days. A rule may
-lengthen it or keep full messages, never turn it off. Every change is
-recorded in the evidence.
+change the days (from 1 to 9150, shorter than the default too) or keep full
+messages, but never turn evidence off. Every change is recorded in the evidence.
 
 Kept messages go when their own retention passes. Records go only when
 every record of their day has expired, and only while the whole evidence
@@ -279,6 +279,12 @@ refuses to run at a clock more than 35 days past the newest record.
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,
   a change to that day cannot be hidden.
+- A key that leaks can still seal a day that already closed, and have it
+  stamped by the authority, for as long as the token window lasts: a day's token
+  may be dated up to four days after the day ended. A rotation therefore
+  protects the days sealed by the old key only after that window, and the
+  period given for the old key (`KEY@YYYY-MM-DD`) is what makes a reader refuse
+  what the leaked key seals later.
 - The evidence shows what this server sent and was told. It cannot show
   what the receiving server did next.
 - Publish the evidence key's fingerprint (`epistle evidence key show`)
