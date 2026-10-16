@@ -420,7 +420,7 @@ fn authority(issuer: &X509Certificate<'_>, below: usize) -> Result<(), &'static 
 		return Err("an issuer in the chain is not a certificate authority");
 	};
 	if let Some(limit) = constraints.value.path_len_constraint
-		&& usize::try_from(limit).map_or(false, |limit| below > limit)
+		&& usize::try_from(limit).is_ok_and(|limit| below > limit)
 	{
 		return Err("the chain is longer than an issuer allows");
 	}

@@ -130,7 +130,7 @@ fn a_hand_over_in_the_bundle_retires_the_old_key_even_when_it_is_the_anchor() {
 	)
 	.expect("copy");
 	resum(&bundle);
-	let report = check(&bundle, &[evil.tsa.anchor], &[k1.clone()]).expect("check");
+	let report = check(&bundle, &[evil.tsa.anchor], std::slice::from_ref(&k1)).expect("check");
 	assert!(
 		failures(&report).iter().any(|f| f.contains(&format!(
 			"signed by key {k1} on 2026-10-18, but it handed over on {R}"

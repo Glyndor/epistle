@@ -317,7 +317,7 @@ fn hand_overs_that_lead_back_to_a_key_already_met_stop_the_walk() {
 	let b = EvidenceKey::stage_next(fixture.root()).expect("stage");
 	super::super::chain::create_private_dir(&fixture.root().join(ROTATIONS_DIR)).expect("dir");
 	for (old, new) in [(&a, &b), (&b, &a)] {
-		let rotation = Rotation::signed(&old, &new.id(), "2026-10-17");
+		let rotation = Rotation::signed(old, &new.id(), "2026-10-17");
 		std::fs::write(
 			path(fixture.root(), &new.id()),
 			serde_json::to_vec(&rotation).expect("json"),
