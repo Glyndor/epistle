@@ -28,3 +28,6 @@ mod exit_codes;
 
 #[path = "cli_json/ban.rs"]
 mod ban;
+
+#[path = "cli_json/legacy.rs"]
+mod legacy;

@@ -50,6 +50,7 @@ fn parses_account_remove_with_each_queue_policy() {
 			name,
 			queue,
 			yes: _,
+			json: _,
 		}) = cli.command
 		else {
 			panic!("expected AccountRemove, got: {:?}", cli.command);

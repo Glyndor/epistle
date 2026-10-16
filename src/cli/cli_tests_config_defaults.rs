@@ -21,7 +21,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Autodiscover { config, .. }
 		| Command::Suppression { config, .. }
 		| Command::ReportAbuse { config }
-		| Command::Legacy(crate::cli::legacy::Legacy::Accounts { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::Accounts { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountAdd { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { config, .. })
 		| Command::Account { config, .. }
@@ -31,11 +31,11 @@ fn config_path(command: &Command) -> Option<&Path> {
 		Command::Delivery(args) => Some(&args.config),
 		Command::Masked { config, .. }
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordCreate { config, .. })
-		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordRevoke { config, .. })
 		| Command::AppPassword { config, .. }
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyCreate { config, .. })
-		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
 		Command::MoveSubids(args) => Some(&args.config),

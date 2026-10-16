@@ -21,7 +21,8 @@ whose stdout already is the product take no `--json`: `serve`, `local` and
 `mta-sts-serve` (they run until stopped), `export` and `backup` (the mbox
 and the archive), `completions`, `report-abuse`, `mobileconfig`,
 `autoconfig` and `autodiscover` (the documents themselves); `stack logs`
-refuses it.
+refuses it. The older flat forms in the table below take `--json` too and
+print what the resource form prints.
 Exit codes: `0` done, `1` the operation failed (I/O, database), `2` usage
 error or not found (unknown name, rejected input, a destructive action
 without `--yes`), `3` refused by policy (a static account, a reached limit,
