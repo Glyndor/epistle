@@ -71,6 +71,7 @@ pub enum AppPasswordCli {
 /// mutable `AppPasswordStore`. The check opens the account store
 /// (the same kind of check `epistle masked` performs) so the failure
 /// surfaces before any persistence happens.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create(
 	config: &Config,
 	account: &str,
@@ -78,6 +79,7 @@ pub(super) fn create(
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
 	save_sent: Option<String>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Err(code) = ensure_known_dynamic_account(config, account) {
@@ -119,6 +121,10 @@ pub(super) fn create(
 			return ExitCode::FAILURE;
 		}
 	};
+	let fields = serde_json::json!({
+		"account": account, "label": label, "secret": secret,
+		"expires_at": expires_at, "ip_cidr": ip_cidr, "save_sent": save_sent,
+	});
 	let app = AppPassword {
 		label: label.to_string(),
 		hash,
@@ -128,9 +134,12 @@ pub(super) fn create(
 	};
 	match store.add(account, app) {
 		Ok(()) => {
-			let _ = writeln!(out, "created app password \"{label}\" for {account}");
-			let _ = writeln!(out, "secret (shown once): {secret}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
+				"created app password \"{label}\" for {account}"
+			));
+			report.line(format_args!("secret (shown once): {secret}"));
+			report.change("create", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);
@@ -159,7 +168,7 @@ fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), Ex
 		ExitCode::FAILURE
 	})?;
 	if store.is_static(account) {
-		return Err(super::exit::refused(format_args!(
+		return Err(super::exit::policy(format_args!(
 			"account {account} is a static account; edit mail.toml to manage its credentials"
 		)));
 	}
@@ -243,10 +252,14 @@ pub(super) fn list(
 pub(super) fn run(
 	config: &Config,
 	action: AppPasswordCli,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	match action {
-		AppPasswordCli::List { account, json } => list(config, account.as_deref(), json, out),
+		AppPasswordCli::List {
+			account,
+			json: leaf,
+		} => list(config, account.as_deref(), leaf || json, out),
 		AppPasswordCli::Create {
 			account,
 			label,
@@ -254,13 +267,13 @@ pub(super) fn run(
 			ip_cidr,
 			save_sent,
 		} => create(
-			config, &account, &label, expires_at, ip_cidr, save_sent, out,
+			config, &account, &label, expires_at, ip_cidr, save_sent, json, out,
 		),
 		AppPasswordCli::Revoke {
 			account,
 			label,
 			yes,
-		} => revoke(config, &account, &label, yes, out),
+		} => revoke(config, &account, &label, yes, json, out),
 	}
 }
 
@@ -274,6 +287,7 @@ pub(super) fn revoke(
 	account: &str,
 	label: &str,
 	yes: bool,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let mut store = match AppPasswordStore::open(&config.data_dir) {
@@ -299,8 +313,12 @@ pub(super) fn revoke(
 	}
 	match store.remove(account, label) {
 		Ok(()) => {
-			let _ = writeln!(out, "revoked app password \"{label}\" for {account}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
+				"revoked app password \"{label}\" for {account}"
+			));
+			let fields = serde_json::json!({ "account": account, "label": label });
+			report.change("revoke", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);

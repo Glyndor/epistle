@@ -89,7 +89,9 @@ fn stale_status_lets_the_command_exit_zero_at_once() {
 	let (dir, store) = fixture();
 	write_status(dir.path(), elsewhere(), Duration::from_secs(60));
 	let start = Instant::now();
-	let code = with_timeout(Duration::from_secs(3), || enable_with_store(&store, "bob"));
+	let code = with_timeout(Duration::from_secs(3), || {
+		enable_with_store(&store, "bob", &mut std::io::sink(), false)
+	});
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert!(
 		start.elapsed() < Duration::from_secs(1),
@@ -140,7 +142,7 @@ fn a_timed_out_wait_still_exits_zero() {
 	write_status(dir.path(), elsewhere(), Duration::ZERO);
 	let start = Instant::now();
 	let code = with_timeout(Duration::from_millis(300), || {
-		enable_with_store(&store, "bob")
+		enable_with_store(&store, "bob", &mut std::io::sink(), false)
 	});
 	assert!(
 		start.elapsed() >= Duration::from_millis(300),

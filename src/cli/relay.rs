@@ -219,11 +219,12 @@ fn show(
 	Ok(())
 }
 
-pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool) -> ExitCode {
+pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool, json: bool) -> ExitCode {
 	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdin().lock(),
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
@@ -231,31 +232,33 @@ pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool) -> ExitCode {
 	))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_with(
 	path: &Path,
 	action: RelayCli,
 	dry_run: bool,
+	json: bool,
 	input: &mut dyn BufRead,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
-	let change: resource::Change = match action {
-		RelayCli::List { json } => {
+	let (change, verb, fields): (resource::Change, _, _) = match action {
+		RelayCli::List { json: leaf } => {
 			list(
 				&Config::load(path)
 					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
-				json,
+				leaf || json,
 				out,
 			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
-		RelayCli::Show { json, target } => {
+		RelayCli::Show { json: leaf, target } => {
 			show(
 				&Config::load(path)
 					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
 				&target,
-				json,
+				leaf || json,
 				out,
 			)?;
 			return Ok(ExitCode::SUCCESS);
@@ -263,6 +266,13 @@ fn execute_with(
 		RelayCli::Test { target } => {
 			let config = Config::load(path)
 				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			if json {
+				let mut printed = Vec::new();
+				let code = probe::run(&config, &target, &mut printed, status)?;
+				super::json_out::passed(out, "test", &printed)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+				return Ok(code);
+			}
 			return probe::run(&config, &target, out, status);
 		}
 		RelayCli::Add {
@@ -279,6 +289,9 @@ fn execute_with(
 			} else {
 				None
 			};
+			let fields = serde_json::json!({
+				"account": target.account, "domain": target.domain, "host": host,
+			});
 			let request = edit::Request {
 				target,
 				host,
@@ -289,13 +302,23 @@ fn execute_with(
 				socks_proxy,
 				password_stdin,
 			};
-			Box::new(move |document, config| {
+			let change: resource::Change = Box::new(move |document, config| {
 				edit::add(document, config, request).map_err(resource::ResourceError::Failure)
-			})
+			});
+			(change, "add", fields)
 		}
 		RelayCli::Remove { target } => {
-			Box::new(move |document, config| edit::remove(document, config, &target))
+			let fields = serde_json::json!({ "account": target.account, "domain": target.domain });
+			let change: resource::Change =
+				Box::new(move |document, config| edit::remove(document, config, &target));
+			(change, "remove", fields)
 		}
 	};
-	resource::apply_edit(path, dry_run, "relay", out, status, restart, change)
+	let edit = resource::Edit {
+		label: "relay",
+		action: verb,
+		fields,
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }

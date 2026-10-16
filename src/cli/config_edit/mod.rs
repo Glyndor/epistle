@@ -10,7 +10,7 @@ mod restart;
 mod rules;
 mod tables;
 
-pub(crate) use restart::{after_change_with, after_ports_change_with};
+pub(crate) use restart::{after_change_reporting, after_change_with, after_ports_change_reporting};
 pub use rules::FieldChange;
 
 use std::path::{Path, PathBuf};

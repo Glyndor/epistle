@@ -43,6 +43,12 @@ pub(crate) fn wait_after_write(path: &Path, err: &mut impl Write) -> ExitCode {
 	ExitCode::SUCCESS
 }
 
+/// [`wait_after_write`], reporting how the wait ended for a `--json`
+/// result.
+pub(crate) fn wait(path: &Path, err: &mut impl Write) -> Waited {
+	wait_within(path, err, timeout())
+}
+
 /// [`wait_after_write`] with an explicit timeout, reporting how the
 /// wait ended.
 pub(crate) fn wait_within(path: &Path, err: &mut impl Write, timeout: Duration) -> Waited {

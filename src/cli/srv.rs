@@ -47,22 +47,36 @@ const SERVICES: &[Service] = &[
 
 /// Write the SRV (and a `_pop3._tcp` "unavailable") records for every configured
 /// domain, pointing at the server hostname.
-pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+/// With `json` the records are one JSON array of `{"name", "ttl", "type",
+/// "value"}` objects, the same shape `dns-records --json` prints.
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	if config.domains.is_empty() {
 		super::style::error("no domains are configured");
 		return ExitCode::FAILURE;
 	}
 	let host = &config.hostname;
+	let mut rows: Vec<(String, String)> = Vec::new();
 	for domain in &config.domains {
 		for service in SERVICES {
-			let _ = writeln!(
-				out,
-				"{}.{domain}. 3600 IN SRV {} 1 {} {host}.",
-				service.label, service.priority, service.port
-			);
+			rows.push((
+				format!("{}.{domain}.", service.label),
+				format!("{} 1 {} {host}.", service.priority, service.port),
+			));
 		}
 		// RFC 6186 §6: signal that plaintext POP3 is not available.
-		let _ = writeln!(out, "_pop3._tcp.{domain}. 3600 IN SRV 0 0 0 .");
+		rows.push((format!("_pop3._tcp.{domain}."), "0 0 0 .".to_string()));
+	}
+	if json {
+		let rows: Vec<serde_json::Value> = rows
+			.iter()
+			.map(
+				|(name, value)| serde_json::json!({ "name": name, "ttl": 3600, "type": "SRV", "value": value }),
+			)
+			.collect();
+		return super::json_out::print(out, &serde_json::Value::from(rows));
+	}
+	for (name, value) in rows {
+		let _ = writeln!(out, "{name} 3600 IN SRV {value}");
 	}
 	ExitCode::SUCCESS
 }

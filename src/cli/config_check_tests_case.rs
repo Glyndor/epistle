@@ -22,7 +22,7 @@ members = ["alice@example.org"]
 	let mut out = Vec::new();
 	let mut err = Vec::new();
 	assert_eq!(
-		super::run(file.path(), &mut out, &mut err),
+		super::run(file.path(), false, &mut out, &mut err),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(

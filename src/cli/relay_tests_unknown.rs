@@ -15,7 +15,7 @@ use crate::cli::resource::ResourceError;
 
 fn assert_unknown_relay_is_refused(action: RelayCli) {
 	let (_dir, file) = crate::cli::resource::test_config("");
-	let code = run(file.path(), action, false);
+	let code = run(file.path(), action, false, false);
 	assert_eq!(
 		code,
 		ExitCode::from(exit::REFUSED),
@@ -91,6 +91,7 @@ fn unknown_relay_keeps_its_message_and_leaves_the_config_alone() {
 				domain: None,
 			},
 		},
+		false,
 		false,
 		&mut std::io::empty(),
 		&mut Vec::new(),

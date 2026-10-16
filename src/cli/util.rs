@@ -3,8 +3,13 @@
 
 use std::process::ExitCode;
 
-pub(super) fn token_hash() -> ExitCode {
-	token_hash_from(std::io::stdin().lock())
+pub(super) fn token_hash(json: bool) -> ExitCode {
+	token_hash_from(std::io::stdin().lock(), json)
+}
+
+/// Print `value` as the `--json` result on stdout.
+fn print_json(value: &serde_json::Value) -> ExitCode {
+	super::json_out::print(&mut std::io::stdout().lock(), value)
 }
 
 /// Generate a strong random credential secret: 32 bytes from the system CSPRNG,
@@ -68,7 +73,7 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 	Ok(value)
 }
 
-pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
+pub(super) fn token_hash_from(reader: impl std::io::BufRead, json: bool) -> ExitCode {
 	// let-else for the same reason as the caller in `accounts.rs`: a returning
 	// match arm still counts as an arm of the expression that binds `token`.
 	let Ok(token) = read_line(reader) else {
@@ -83,6 +88,9 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
 			write!(s, "{b:02x}").ok();
 			s
 		});
+	if json {
+		return print_json(&serde_json::json!({ "token_hash": format!("sha256:{hex}") }));
+	}
 	println!("sha256:{hex}");
 	ExitCode::SUCCESS
 }
@@ -101,8 +109,9 @@ pub(super) fn message_crypto(
 /// `epistle storage-keygen`: print a fresh base64 32-byte at-rest encryption key
 /// to stdout for the operator to place in an env var or key file (off the data
 /// disk). Mirrors `dkim-keygen`; never writes into `data_dir`.
-pub(super) fn storage_keygen() -> ExitCode {
+pub(super) fn storage_keygen(json: bool) -> ExitCode {
 	match crate::storage::generate_key_base64() {
+		Some(key) if json => print_json(&serde_json::json!({ "key": key })),
 		Some(key) => {
 			println!("{key}");
 			ExitCode::SUCCESS
@@ -121,7 +130,7 @@ pub(super) fn storage_keygen() -> ExitCode {
 /// with the configured verifier). The private key is never printed, so it does
 /// not land in a terminal scrollback, a shell pipe or a CI log. An existing
 /// file is refused, like `dkim-keygen`.
-pub(super) fn oauth_keygen(out: &std::path::Path) -> ExitCode {
+pub(super) fn oauth_keygen(out: &std::path::Path, json: bool) -> ExitCode {
 	if out.exists() {
 		super::style::error(format_args!(
 			"{} already exists, refusing to overwrite",
@@ -139,6 +148,12 @@ pub(super) fn oauth_keygen(out: &std::path::Path) -> ExitCode {
 	if let Err(error) = crate::storage::write_secret(out, text.as_bytes()) {
 		super::style::error(format_args!("writing {}: {error}", out.display()));
 		return ExitCode::FAILURE;
+	}
+	if json {
+		return print_json(&serde_json::json!({
+			"result": "saved", "action": "oauth-keygen", "out": out.display().to_string(),
+			"public_key": public_b64, "algorithm": "ES256",
+		}));
 	}
 	println!("wrote the OAuth key pair to {} (mode 0600)", out.display());
 	ExitCode::SUCCESS
@@ -179,7 +194,7 @@ pub(super) fn derive_oauth_public_from_private(private_b64: &str) -> Option<Stri
 	Some(b64.encode(pair.public_key().as_ref()))
 }
 
-pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
+pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32, json: bool) -> ExitCode {
 	if out.exists() {
 		super::style::error(format_args!(
 			"{} already exists, refusing to overwrite",
@@ -211,6 +226,12 @@ pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCo
 	if let Err(error) = write_key_pem(out, &pem) {
 		super::style::error(format_args!("cannot write {}: {error}", out.display()));
 		return ExitCode::FAILURE;
+	}
+	if json {
+		return print_json(&serde_json::json!({
+			"result": "saved", "action": "dkim-keygen", "out": out.display().to_string(),
+			"algorithm": if rsa { "rsa" } else { "ed25519" }, "record": record,
+		}));
 	}
 	println!("private key written to {}", out.display());
 	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");

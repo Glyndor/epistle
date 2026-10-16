@@ -19,6 +19,7 @@ fn database_config(command: &Command) -> Option<&Path> {
 		| Command::Account {
 			config,
 			action: super::account::Subcommand::Remove { .. },
+			..
 		}
 		| Command::Legacy(super::legacy::Legacy::AccountRemove { config, .. }) => Some(config),
 		_ => None,

@@ -32,6 +32,7 @@ pub(super) fn run_with(extra: &str, args: &[&str], stdin: &str, dry_run: bool) -
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut std::io::BufReader::new(stdin.as_bytes()),
 		&mut out,
 		&mut status,

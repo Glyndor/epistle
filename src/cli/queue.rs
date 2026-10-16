@@ -87,35 +87,39 @@ pub struct Target {
 /// then records nothing. `webhook` is the optional advisory webhook the
 /// server is configured with; the `remove` action fires a `Canceled`
 /// event for every pending recipient when it is set.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run(
 	data_dir: &Path,
 	storage: Option<&Storage>,
 	delivery_log_days: u64,
 	action: Option<QueueCli>,
+	json: bool,
 	now: u64,
 	webhook: Option<&Arc<crate::webhook::Webhook>>,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let action = action.unwrap_or(QueueCli::List { json: false });
+	let action = action.unwrap_or(QueueCli::List { json });
 	let spool = match FsSpool::open_configured(data_dir, storage) {
 		Ok(spool) => spool,
 		Err(error) => return fail(format_args!("opening spool: {error}")),
 	};
 	let log = DeliveryLog::open(data_dir, delivery_log_days);
 	match action {
-		QueueCli::List { json: false } => list(data_dir, storage, out),
-		QueueCli::List { json: true } => list_json(&spool, out),
-		QueueCli::Show { id, json: false } => show(&spool, id, now, out),
-		QueueCli::Show { id, json: true } => show_json(&spool, id, out),
-		QueueCli::Retry(target) => edit_many(&spool, &target, "retried", out, |e| {
+		QueueCli::List { json: leaf } if leaf || json => list_json(&spool, out),
+		QueueCli::List { .. } => list(data_dir, storage, out),
+		QueueCli::Show { id, json: leaf } if leaf || json => show_json(&spool, id, out),
+		QueueCli::Show { id, .. } => show(&spool, id, now, out),
+		QueueCli::Retry(target) => edit_many(&spool, &target, "retried", json, out, |e| {
 			e.next_attempt = 0;
 		}),
-		QueueCli::Hold(target) => edit_many(&spool, &target, "held", out, |e| e.hold(now)),
-		QueueCli::Release(target) => edit_many(&spool, &target, "released", out, |e| {
+		QueueCli::Hold(target) => edit_many(&spool, &target, "held", json, out, |e| e.hold(now)),
+		QueueCli::Release(target) => edit_many(&spool, &target, "released", json, out, |e| {
 			e.release(now);
 		}),
-		QueueCli::Destinations { json } => destinations::list(&spool, now, json, out),
-		QueueCli::ReleaseDestination(target) => destinations::release(&spool, &target, now, out),
+		QueueCli::Destinations { json: leaf } => destinations::list(&spool, now, leaf || json, out),
+		QueueCli::ReleaseDestination(target) => {
+			destinations::release(&spool, &target, now, json, out)
+		}
 		QueueCli::Remove { id, yes } => {
 			let envelope = match spool.load_envelope(id) {
 				Ok(envelope) => envelope,
@@ -173,8 +177,10 @@ pub(super) fn run(
 							}
 						}
 					}
-					let _ = writeln!(out, "removed {id}");
-					ExitCode::SUCCESS
+					let mut report = super::json_out::Report::new(out, json);
+					report.line(format_args!("removed {id}"));
+					let fields = serde_json::json!({ "id": id.to_string() });
+					report.change("remove", true, fields, None)
 				}
 				Err(error) => entry_error(id, &error),
 			}
@@ -391,11 +397,23 @@ fn edit_many(
 	spool: &FsSpool,
 	target: &Target,
 	verb: &str,
+	json: bool,
 	out: &mut impl Write,
 	edit: impl Fn(&mut Envelope),
 ) -> ExitCode {
+	let action = match verb {
+		"retried" => "retry",
+		"held" => "hold",
+		_ => "release",
+	};
 	if let Some(id) = target.id {
 		return match spool.update_envelope(id, edit) {
+			Ok(envelope) if json => {
+				let fields = serde_json::json!({
+					"id": id.to_string(), "held": envelope.held.is_some(),
+				});
+				super::json_out::Report::new(out, json).change(action, true, fields, None)
+			}
 			Ok(envelope) => {
 				let _ = writeln!(out, "{verb} {id}");
 				note_if_held(verb, &envelope, out);
@@ -417,8 +435,14 @@ fn edit_many(
 			Err(error) => return entry_error(id, &error),
 		}
 	}
-	let _ = writeln!(out, "{verb} {changed} entries");
-	ExitCode::SUCCESS
+	let mut report = super::json_out::Report::new(out, json);
+	report.line(format_args!("{verb} {changed} entries"));
+	report.change(
+		action,
+		changed > 0,
+		serde_json::json!({ "entries": changed }),
+		None,
+	)
 }
 
 /// A retry does not lift a hold; tell the operator so they are not surprised.

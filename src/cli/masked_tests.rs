@@ -21,7 +21,7 @@ fn config(dir: &std::path::Path, extra: &str) -> Config {
 /// Run an action and return the exit code, stdout and stderr.
 fn exec(config: &Config, action: MaskedCli) -> (ExitCode, String, String) {
 	let (mut out, mut err) = (Vec::new(), Vec::new());
-	let code = run(config, action, 1_700_000_000, &mut out, &mut err);
+	let code = run(config, action, false, 1_700_000_000, &mut out, &mut err);
 	(
 		code,
 		String::from_utf8(out).expect("utf8"),
@@ -129,7 +129,7 @@ fn per_account_cap_applies() {
 	let config = config(dir.path(), "masked_addresses_max = 1");
 	assert_eq!(add(&config, "alice", "one", None).0, ExitCode::SUCCESS);
 	let (code, out) = add(&config, "alice", "two", None);
-	assert_eq!(code, ExitCode::from(2));
+	assert_eq!(code, ExitCode::from(3));
 	assert!(out.is_empty(), "{out}");
 	let listed = exec(
 		&config,

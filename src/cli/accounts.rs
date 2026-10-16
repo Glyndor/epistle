@@ -60,7 +60,8 @@ pub(super) fn add(
 	addresses: Vec<String>,
 	reader: impl std::io::BufRead,
 ) -> ExitCode {
-	add_with_display_name(config, name, addresses, None, reader)
+	let mut out = std::io::sink();
+	add_with_display_name(config, name, addresses, None, reader, &mut out, false)
 }
 
 /// [`add`] with an optional display name, checked before the password is
@@ -71,6 +72,8 @@ pub(super) fn add_with_display_name(
 	addresses: Vec<String>,
 	display_name: Option<&str>,
 	mut reader: impl std::io::BufRead,
+	out: &mut dyn std::io::Write,
+	json: bool,
 ) -> ExitCode {
 	let name = &super::account_name::for_new_account(name);
 	let display_name = match display_name.map(crate::directory_store::display_name::validate) {
@@ -110,9 +113,12 @@ pub(super) fn add_with_display_name(
 	else {
 		return ExitCode::from(super::exit::REFUSED);
 	};
+	let fields = serde_json::json!({
+		"account": name, "addresses": addresses, "display_name": display_name,
+	});
 	let account = match DynamicAccount::with_password(
 		name.to_string(),
-		addresses,
+		addresses.clone(),
 		&password,
 		&crate::password::Policy::from_config(&config.auth),
 		config.auth.scram,
@@ -129,11 +135,13 @@ pub(super) fn add_with_display_name(
 	};
 	match store.add(account) {
 		Ok(()) => {
-			println!("account created");
+			let mut report = super::json_out::Report::new(out, json);
+			report.line("account created");
 			// The store released its lock on `accounts.toml` when `add`
 			// returned, so the server's reload is free to run while
 			// this waits for it.
-			account_reload::wait_after_write(store.store_path(), &mut super::style::stderr())
+			let waited = account_reload::wait(store.store_path(), &mut super::style::stderr());
+			report.change("add", true, fields, Some(waited.into()))
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);
@@ -220,12 +228,25 @@ fn open_bayes_store(
 /// On a terminal it asks before touching anything (see
 /// [`removal_question`]); `yes` (`--yes` / `-y`) skips the question, and
 /// without a terminal or `--yes` it refuses with exit code 2.
+#[cfg(test)]
 pub(super) fn remove(
 	config: &Config,
 	name: &str,
 	queue: QueuePolicy,
 	yes: bool,
 	out: &mut impl std::io::Write,
+) -> ExitCode {
+	remove_reporting(config, name, queue, yes, out, false)
+}
+
+/// [`remove`], printing the counts as one JSON object when `json` is set.
+pub(super) fn remove_reporting(
+	config: &Config,
+	name: &str,
+	queue: QueuePolicy,
+	yes: bool,
+	out: &mut impl std::io::Write,
+	json: bool,
 ) -> ExitCode {
 	// Open without crypto: the removal path doesn't need to read message
 	// bodies, and `remove_account` uses the spool itself for the queue
@@ -245,7 +266,7 @@ pub(super) fn remove(
 		}
 	};
 	if store.is_static(name) {
-		return super::exit::refused(format_args!(
+		return super::exit::policy(format_args!(
 			"account {name}: edit the config file to change a static account"
 		));
 	}
@@ -288,6 +309,7 @@ pub(super) fn remove(
 		bayes_store.as_ref(),
 		out,
 		&mut err,
+		json,
 	)
 }
 
@@ -340,6 +362,7 @@ pub(super) fn remove_with_bayes(
 	bayes_store: Option<&crate::antispam::corpus::BayesStore>,
 	out: &mut impl std::io::Write,
 	err: &mut impl std::io::Write,
+	json: bool,
 ) -> ExitCode {
 	let result = runtime.block_on(remove_account(
 		store,
@@ -351,21 +374,38 @@ pub(super) fn remove_with_bayes(
 	));
 	match result {
 		Ok(counts) => {
-			let _ = writeln!(out, "removed account {name}");
-			let _ = writeln!(out, "mailbox_files: {}", counts.mailbox_files);
-			let _ = writeln!(out, "masked_addresses: {}", counts.masked_addresses);
-			let _ = writeln!(out, "app_passwords: {}", counts.app_passwords);
-			let _ = writeln!(out, "suppressed_addresses: {}", counts.suppressed_addresses);
-			let _ = writeln!(
-				out,
-				"queued_messages_discarded: {}",
-				counts.queued_messages_discarded
-			);
-			let _ = writeln!(out, "queued_messages_left: {}", counts.queued_messages_left);
-			let _ = writeln!(out, "bayes_tokens_removed: {}", counts.bayes_tokens_removed);
+			let removed = [
+				("mailbox_files", counts.mailbox_files),
+				("masked_addresses", u64::from(counts.masked_addresses)),
+				("app_passwords", u64::from(counts.app_passwords)),
+				(
+					"suppressed_addresses",
+					u64::from(counts.suppressed_addresses),
+				),
+				(
+					"queued_messages_discarded",
+					u64::from(counts.queued_messages_discarded),
+				),
+				(
+					"queued_messages_left",
+					u64::from(counts.queued_messages_left),
+				),
+				("bayes_tokens_removed", counts.bayes_tokens_removed),
+			];
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("removed account {name}"));
+			for (key, count) in removed {
+				report.line(format_args!("{key}: {count}"));
+			}
 			// `err` is stderr outside the tests, the same stream the
 			// other account commands print the note on.
-			account_reload::wait_after_write(store.store_path(), err)
+			let waited = account_reload::wait(store.store_path(), err);
+			let removed: serde_json::Map<String, serde_json::Value> = removed
+				.into_iter()
+				.map(|(key, count)| (key.to_string(), count.into()))
+				.collect();
+			let fields = serde_json::json!({ "account": name, "removed": removed });
+			report.change("remove", true, fields, Some(waited.into()))
 		}
 		Err(StoreError::NotFound(what)) => {
 			super::style::error_to(err, format_args!("no such dynamic account: {what}"));

@@ -24,6 +24,7 @@ fn print_answers_returns_the_template() {
 		answers: None,
 		dry_run: false,
 		print_answers: true,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -60,6 +61,7 @@ fn dry_run_writes_nothing() {
 		answers: Some(answers_file),
 		dry_run: true,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -76,6 +78,7 @@ fn invalid_answers_file_exits_invalid() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(code, ExitCode::from(2));
@@ -120,6 +123,7 @@ fn run_exits_2_when_plan_fails_and_nothing_was_touched() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(
@@ -163,6 +167,7 @@ fn run_exits_1_when_apply_partially_fails() {
 		answers: Some(answers_file),
 		dry_run: false,
 		print_answers: false,
+		json: false,
 	};
 	let code = run(args);
 	assert_eq!(

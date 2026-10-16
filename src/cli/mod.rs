@@ -160,6 +160,10 @@ mod cli_account_subcommand_tests;
 mod cli_account_subcommand_tests_b;
 
 #[cfg(test)]
+#[path = "cli_account_show_tests.rs"]
+mod cli_account_show_tests;
+
+#[cfg(test)]
 #[path = "cli_confirmation_flow_tests.rs"]
 mod cli_confirmation_flow_tests;
 
@@ -214,6 +218,10 @@ mod cli_consistency_tests;
 #[cfg(test)]
 #[path = "cli_json_shape_tests.rs"]
 mod cli_json_shape_tests;
+
+#[cfg(test)]
+#[path = "cli_json_everywhere_tests.rs"]
+mod cli_json_everywhere_tests;
 
 #[cfg(test)]
 #[path = "cli_suppression_resource_tests.rs"]

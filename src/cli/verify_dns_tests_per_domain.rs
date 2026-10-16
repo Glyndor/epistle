@@ -121,7 +121,7 @@ async fn per_domain_override_uses_its_own_selector() {
 		config.public_ipv6,
 		&dns,
 		&config,
-		&mut out,
+		(false, &mut out),
 		crate::cli::style::Progress::start("checking"),
 	)
 	.await;

@@ -35,6 +35,7 @@ fn masked_remove_asks_naming_address_and_account() {
 			masked::run(
 				&load(cfg.path()),
 				action,
+				false,
 				1_000,
 				&mut Vec::new(),
 				&mut Vec::new(),
@@ -57,7 +58,7 @@ fn domain_remove_asks_and_a_dry_run_asks_nothing() {
 				yes,
 			},
 		});
-		domain::run(cfg.path(), action, dry_run)
+		domain::run(cfg.path(), action, dry_run, false)
 	};
 	let present = |cfg: &tempfile::NamedTempFile| {
 		load(cfg.path())
@@ -89,7 +90,7 @@ fn domain_remove_asks_before_editing_the_configuration() {
 				domain: "example.org".to_string(),
 				yes,
 			};
-			domain::run(cfg.path(), action, false)
+			domain::run(cfg.path(), action, false, false)
 		},
 		|(_, cfg)| load(cfg.path()).domains.iter().any(|d| d == "example.org"),
 	);
@@ -110,7 +111,7 @@ fn alias_remove_asks_naming_the_alias() {
 				address: "team@example.org".to_string(),
 				yes,
 			};
-			alias::run(cfg.path(), action, false)
+			alias::run(cfg.path(), action, false, false)
 		},
 		|(_, cfg)| !load(cfg.path()).alias.is_empty(),
 	);
@@ -182,6 +183,7 @@ fn account_password_refuses_an_unknown_name_before_reading_anything() {
 			account::Subcommand::Password {
 				name: "ghost".to_string(),
 			},
+			false,
 			&mut Vec::new(),
 		)
 	});
@@ -205,6 +207,7 @@ fn account_password_asks_twice_for_a_known_name() {
 				account::Subcommand::Password {
 					name: NAME.to_string(),
 				},
+				false,
 				&mut Vec::new(),
 			)
 		},
@@ -224,6 +227,7 @@ fn account_show_reads_a_static_account() {
 			name: "bob".to_string(),
 			json: false,
 		},
+		false,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);

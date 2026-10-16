@@ -31,7 +31,12 @@ pub(super) struct NewKey {
 /// the account-scoped surface (JMAP and `/api/v1/send`) accepts it, so it
 /// may hold `read`, `write` and `send` but never `scim`, an administrative
 /// scope with no "own account" to act on.
-pub(super) fn create(config: &Config, key: NewKey, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn create(
+	config: &Config,
+	key: NewKey,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let NewKey {
 		label,
 		expires_at,
@@ -55,7 +60,7 @@ pub(super) fn create(config: &Config, key: NewKey, out: &mut impl std::io::Write
 			Err(code) => return code,
 		}
 		if scopes.iter().any(|scope| scope == "scim") {
-			return super::exit::refused(
+			return super::exit::policy(
 				"account-bound API keys cannot hold the scim scope (scim is administrative)",
 			);
 		}
@@ -74,6 +79,10 @@ pub(super) fn create(config: &Config, key: NewKey, out: &mut impl std::io::Write
 			return ExitCode::FAILURE;
 		}
 	};
+	let fields = serde_json::json!({
+		"label": label, "key": secret, "scopes": scopes, "domains": domains,
+		"account": account, "expires_at": expires_at, "ip_cidr": ip_cidr,
+	});
 	let key = ApiKey {
 		label: label.to_string(),
 		hash: crate::api::api_keys::sha256_hash(&secret),
@@ -85,12 +94,13 @@ pub(super) fn create(config: &Config, key: NewKey, out: &mut impl std::io::Write
 	};
 	match store.add(key) {
 		Ok(()) => {
-			let _ = writeln!(out, "created API key \"{label}\"");
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("created API key \"{label}\""));
 			if let Some(name) = account {
-				let _ = writeln!(out, "account-bound to {name}");
+				report.line(format_args!("account-bound to {name}"));
 			}
-			let _ = writeln!(out, "key (shown once): {secret}");
-			ExitCode::SUCCESS
+			report.line(format_args!("key (shown once): {secret}"));
+			report.change("create", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_io_error(&error);
@@ -121,7 +131,12 @@ fn account_known(config: &Config, name: &str) -> Result<bool, ExitCode> {
 /// Replace the secret of an API key, keeping its scopes, domains, expiry and
 /// CIDR. The new key is printed once; the old one stops authenticating when
 /// the running server's file watcher picks the change up.
-pub(super) fn rotate(config: &Config, label: &str, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn rotate(
+	config: &Config,
+	label: &str,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let Some(secret) = super::generate_secret() else {
 		super::style::error("cannot gather randomness for the key");
 		return ExitCode::FAILURE;
@@ -135,12 +150,13 @@ pub(super) fn rotate(config: &Config, label: &str, out: &mut impl std::io::Write
 	};
 	match store.rotate(label, crate::api::api_keys::sha256_hash(&secret)) {
 		Ok(()) => {
-			let _ = writeln!(
-				out,
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
 				"rotated API key \"{label}\"; the old key stops working within seconds"
-			);
-			let _ = writeln!(out, "key (shown once): {secret}");
-			ExitCode::SUCCESS
+			));
+			report.line(format_args!("key (shown once): {secret}"));
+			let fields = serde_json::json!({ "label": label, "key": secret });
+			report.change("rotate", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_io_error(&error);
@@ -214,9 +230,14 @@ pub enum ApiKeyCli {
 }
 
 /// Run one `epistle api-key <action>`.
-pub(super) fn run(config: &Config, action: ApiKeyCli, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn run(
+	config: &Config,
+	action: ApiKeyCli,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	match action {
-		ApiKeyCli::List { json } => list(config, json, out),
+		ApiKeyCli::List { json: leaf } => list(config, leaf || json, out),
 		ApiKeyCli::Create {
 			label,
 			expires_at,
@@ -234,10 +255,11 @@ pub(super) fn run(config: &Config, action: ApiKeyCli, out: &mut impl std::io::Wr
 				domains,
 				account,
 			},
+			json,
 			out,
 		),
-		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, out),
-		ApiKeyCli::Rotate { label } => rotate(config, &label, out),
+		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, json, out),
+		ApiKeyCli::Rotate { label } => rotate(config, &label, json, out),
 	}
 }
 
@@ -317,6 +339,7 @@ pub(super) fn revoke(
 	config: &Config,
 	label: &str,
 	yes: bool,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let mut store = match ApiKeyStore::open(&config.data_dir) {
@@ -338,8 +361,9 @@ pub(super) fn revoke(
 	}
 	match store.remove(label) {
 		Ok(()) => {
-			let _ = writeln!(out, "revoked API key \"{label}\"");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("revoked API key \"{label}\""));
+			report.change("revoke", true, serde_json::json!({ "label": label }), None)
 		}
 		Err(error) => {
 			let code = super::exit::for_io_error(&error);

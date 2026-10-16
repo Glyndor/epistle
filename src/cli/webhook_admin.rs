@@ -66,11 +66,12 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	writeln!(out, "url\t{}\nsecret\t{secret}", webhook.url).map_err(|error| error.to_string())
 }
 
-pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool) -> ExitCode {
+pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool, json: bool) -> ExitCode {
 	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdin().lock(),
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
@@ -78,21 +79,23 @@ pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool) -> ExitCode {
 	))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_with(
 	path: &Path,
 	action: WebhookCli,
 	dry_run: bool,
+	json: bool,
 	input: &mut dyn BufRead,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
-	let change: resource::Change = match action {
-		WebhookCli::Show { json } => {
+	let (change, verb, fields): (resource::Change, _, _) = match action {
+		WebhookCli::Show { json: leaf } => {
 			show(
 				&Config::load(path)
 					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
-				json,
+				leaf || json,
 				out,
 			)?;
 			return Ok(ExitCode::SUCCESS);
@@ -100,6 +103,13 @@ fn execute_with(
 		WebhookCli::Test => {
 			let config = Config::load(path)
 				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			if json {
+				let mut printed = Vec::new();
+				let code = probe::run(&config, &mut printed, status)?;
+				super::json_out::passed(out, "test", &printed)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+				return Ok(code);
+			}
 			return probe::run(&config, out, status);
 		}
 		WebhookCli::Set { url, secret_stdin } => {
@@ -109,7 +119,9 @@ fn execute_with(
 			} else {
 				None
 			};
-			Box::new(move |document, _| {
+			let shown =
+				json!({ "url": url, "secret": if secret.is_some() { "set" } else { "unchanged" } });
+			let change: resource::Change = Box::new(move |document, _| {
 				let mut fields = vec![("url", Some(TomlValue::from(url)))];
 				if let Some(secret) = secret {
 					fields.push(("secret", Some(TomlValue::from(secret))));
@@ -117,21 +129,32 @@ fn execute_with(
 				document
 					.set_table_fields(&["webhook"], &fields)
 					.map_err(resource::ResourceError::Failure)
-			})
+			});
+			(change, "set", shown)
 		}
-		WebhookCli::Unset => Box::new(|document, config| {
-			if let Some(alert) = config.alerts.iter().find(|alert| alert.webhook) {
-				return Err(format!(
-					"alert \"{}\" posts to the webhook; remove it or turn its webhook off first",
-					alert.name
-				)
-				.into());
-			}
-			document
-				.remove_table(&["webhook"])
-				.map(|_| ())
-				.map_err(resource::ResourceError::Failure)
-		}),
+		WebhookCli::Unset => (
+			Box::new(|document, config| {
+				if let Some(alert) = config.alerts.iter().find(|alert| alert.webhook) {
+					return Err(format!(
+						"alert \"{}\" posts to the webhook; remove it or turn its webhook off first",
+						alert.name
+					)
+					.into());
+				}
+				document
+					.remove_table(&["webhook"])
+					.map(|_| ())
+					.map_err(resource::ResourceError::Failure)
+			}),
+			"unset",
+			json!({}),
+		),
 	};
-	resource::apply_edit(path, dry_run, "webhook", out, status, restart, change)
+	let edit = resource::Edit {
+		label: "webhook",
+		action: verb,
+		fields,
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }

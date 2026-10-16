@@ -36,6 +36,9 @@ pub enum SuppressionCli {
 		/// Suppress it for this sending account only, not for everyone.
 		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Resume delivering to an address.
 	///
@@ -47,7 +50,58 @@ pub enum SuppressionCli {
 		/// Remove the per-account suppression for this sender only.
 		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
+}
+
+impl SuppressionCli {
+	/// The action to run for a command line whose `--json` came before the
+	/// action, or with no action at all: `address_to_remove` and `account`
+	/// are the older flat forms, which list or remove when no action is
+	/// named.
+	pub(super) fn with_json(
+		action: Option<Self>,
+		json: bool,
+		address_to_remove: Option<String>,
+		account: Option<String>,
+	) -> Option<Self> {
+		if !json {
+			return action;
+		}
+		Some(match action {
+			Some(SuppressionCli::List { account, .. }) => SuppressionCli::List {
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Add {
+				address, account, ..
+			}) => SuppressionCli::Add {
+				address,
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Remove {
+				address, account, ..
+			}) => SuppressionCli::Remove {
+				address,
+				account,
+				json: true,
+			},
+			None => match address_to_remove {
+				Some(address) => SuppressionCli::Remove {
+					address,
+					account,
+					json: true,
+				},
+				None => SuppressionCli::List {
+					account,
+					json: true,
+				},
+			},
+		})
+	}
 }
 
 /// Add `address` to the suppression list (the global one, or `account`'s).
@@ -55,6 +109,7 @@ pub(super) fn add(
 	config: &Config,
 	address: &str,
 	account: Option<&str>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	// Anything that is not a deliverable address would sit in the list
@@ -85,8 +140,10 @@ pub(super) fn add(
 			format!("suppressed {address}")
 		}
 	};
-	let _ = writeln!(out, "{line}");
-	ExitCode::SUCCESS
+	let mut report = super::json_out::Report::new(out, json);
+	report.line(line);
+	let fields = serde_json::json!({ "address": address, "account": account });
+	report.change("add", true, fields, None)
 }
 
 /// Remove one address from the suppression list (the per-account
@@ -95,6 +152,7 @@ pub(super) fn remove(
 	config: &Config,
 	address: &str,
 	account: Option<&str>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let list = match SuppressionList::open(&config.data_dir) {
@@ -110,8 +168,10 @@ pub(super) fn remove(
 	};
 	match result {
 		Ok(()) => {
-			let _ = writeln!(out, "removed {address}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!("removed {address}"));
+			let fields = serde_json::json!({ "address": address, "account": account });
+			report.change("remove", true, fields, None)
 		}
 		Err(error) => {
 			super::style::error(format_args!("cannot remove {address}: {error}"));
@@ -130,10 +190,16 @@ pub(super) fn run(
 ) -> ExitCode {
 	match action {
 		SuppressionCli::List { account, json } => list(config, account.as_deref(), json, out),
-		SuppressionCli::Add { address, account } => add(config, &address, account.as_deref(), out),
-		SuppressionCli::Remove { address, account } => {
-			remove(config, &address, account.as_deref(), out)
-		}
+		SuppressionCli::Add {
+			address,
+			account,
+			json,
+		} => add(config, &address, account.as_deref(), json, out),
+		SuppressionCli::Remove {
+			address,
+			account,
+			json,
+		} => remove(config, &address, account.as_deref(), json, out),
 	}
 }
 
@@ -148,7 +214,7 @@ pub(super) fn run_legacy(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Some(address) = address_to_remove {
-		return remove(config, address, account, out);
+		return remove(config, address, account, false, out);
 	}
 	list(config, account, false, out)
 }

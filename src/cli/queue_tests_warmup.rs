@@ -18,7 +18,7 @@ fn run_args(dir: &Path, args: &[&str]) -> (ExitCode, String) {
 		panic!("not a queue command");
 	};
 	let mut out = Vec::new();
-	let code = crate::cli::queue::run(dir, None, 0, action, NOW, None, &mut out);
+	let code = crate::cli::queue::run(dir, None, 0, action, false, NOW, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 

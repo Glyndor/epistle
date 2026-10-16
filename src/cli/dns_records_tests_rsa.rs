@@ -50,7 +50,7 @@ fn dns_records_prints_the_rotated_rsa_selector() {
 	};
 	let mut out = Vec::new();
 	assert_eq!(
-		super::run(&config, &mut out),
+		super::run(&config, false, &mut out),
 		std::process::ExitCode::SUCCESS
 	);
 	let text = String::from_utf8_lossy(&out);

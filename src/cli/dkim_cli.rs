@@ -65,13 +65,18 @@ pub(super) fn now_epoch() -> u64 {
 }
 
 /// Run one `dkim` action.
-pub(super) fn run(config: &Config, action: DkimCli, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn run(
+	config: &Config,
+	action: DkimCli,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	match action {
-		DkimCli::Show { json } => show(config, json, out),
+		DkimCli::Show { json: leaf } => show(config, leaf || json, out),
 		DkimCli::Rotate { dry_run, domain } => {
-			rotate_now(config, dry_run, now_epoch(), domain, out)
+			rotate_now(config, dry_run, now_epoch(), domain, json, out)
 		}
-		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, out),
+		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, json, out),
 	}
 }
 
@@ -189,6 +194,7 @@ pub(super) fn rotate_now(
 	dry_run: bool,
 	now: u64,
 	domain: Option<String>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	rotate_now_with(
@@ -196,6 +202,7 @@ pub(super) fn rotate_now(
 		dry_run,
 		now,
 		domain,
+		json,
 		&mut super::style::stderr(),
 		out,
 	)
@@ -209,6 +216,7 @@ pub(super) fn rotate_now_with(
 	dry_run: bool,
 	now: u64,
 	domain: Option<String>,
+	json: bool,
 	err: &mut impl std::io::Write,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -241,22 +249,28 @@ pub(super) fn rotate_now_with(
 			return ExitCode::FAILURE;
 		}
 	};
-	let _ = writeln!(out, "rotate {} -> {}", plan.active, plan.next);
+	let mut report = super::json_out::Report::new(out, json);
+	report.line(format_args!("rotate {} -> {}", plan.active, plan.next));
 	if let Some((active, next)) = &plan.rsa {
-		let _ = writeln!(out, "rotate {active} -> {next}");
+		report.line(format_args!("rotate {active} -> {next}"));
 	}
 	for name in &plan.names {
-		let _ = writeln!(out, "publish TXT {name}");
+		report.line(format_args!("publish TXT {name}"));
 	}
 	if let Some(previous) = &plan.retires {
-		let _ = writeln!(
-			out,
+		report.line(format_args!(
 			"retire {previous} now (older than the selector being replaced)"
-		);
+		));
 	}
+	let mut result = serde_json::json!({
+		"result": "queued", "action": "rotate", "active": plan.active, "next": plan.next,
+		"rsa": plan.rsa.as_ref().map(|(active, next)| serde_json::json!({ "active": active, "next": next })),
+		"publish": plan.names, "retires": plan.retires,
+	});
 	if dry_run {
-		let _ = writeln!(out, "dry run: nothing changed");
-		return ExitCode::SUCCESS;
+		report.line("dry run: nothing changed");
+		result["result"] = "dry-run".into();
+		return report.object(result);
 	}
 	if let Err(error) = rotate::request_rotation(&config.data_dir, now) {
 		super::style::error_to(
@@ -265,11 +279,10 @@ pub(super) fn rotate_now_with(
 		);
 		return ExitCode::FAILURE;
 	}
-	let _ = writeln!(
-		out,
-		"queued: the running server rotates within a minute (at its next start if it is stopped); follow it with `epistle dkim show`"
+	report.line(
+		"queued: the running server rotates within a minute (at its next start if it is stopped); follow it with `epistle dkim show`",
 	);
-	ExitCode::SUCCESS
+	report.object(result)
 }
 
 #[path = "dkim_cli_cleanup.rs"]

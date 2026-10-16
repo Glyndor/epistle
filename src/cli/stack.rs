@@ -197,6 +197,43 @@ pub(crate) enum StackAction {
 	},
 }
 
+/// Run the `stack` subcommand the operator typed. With `json`, podup's
+/// own output has gone to stderr and a success prints one object naming
+/// the verb and the service: `{"result": "done", "action", "service"}`.
+/// `ps` and `resources` print their own JSON, and `logs` streams raw lines,
+/// so it refuses `--json`.
+pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitCode {
+	let (verb, service) = match &cli {
+		StackCli::Logs { .. } if json => {
+			return super::exit::refused(
+				"stack logs streams the services' raw log lines; it has no --json form",
+			);
+		}
+		StackCli::Ps { json: leaf } => {
+			let as_json = *leaf || json;
+			return run(config, StackAction::Ps { as_json });
+		}
+		StackCli::Update => ("update", None),
+		StackCli::Up => ("up", None),
+		StackCli::Down => ("down", None),
+		StackCli::Restart { service } => ("restart", service.clone()),
+		StackCli::Stop { service } => ("stop", service.clone()),
+		StackCli::Start { service } => ("start", service.clone()),
+		// These print their own output (or none), so no object follows.
+		StackCli::Logs { .. }
+		| StackCli::Resources { .. }
+		| StackCli::Rollback { .. }
+		| StackCli::RollbackDb => return run(config, cli.into()),
+	};
+	let code = run(config, cli.into());
+	if !json || code != ExitCode::SUCCESS {
+		return code;
+	}
+	let mut out = std::io::stdout().lock();
+	let result = serde_json::json!({ "result": "done", "action": verb, "service": service });
+	super::json_out::print(&mut out, &result)
+}
+
 /// Run the `stack` subcommand. The config is loaded here only to read
 /// `data_dir`; the compose file is read with `metadata` to refuse
 /// early if `epistle init` has not been run, so the error names the
@@ -438,7 +475,7 @@ pub(super) fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> Ex
 fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 	let status = match build_command(podup, compose, extra)
 		.stdin(Stdio::inherit())
-		.stdout(Stdio::inherit())
+		.stdout(super::json_out::child_stdout())
 		.stderr(Stdio::inherit())
 		.status()
 	{

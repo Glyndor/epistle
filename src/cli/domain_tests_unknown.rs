@@ -27,7 +27,7 @@ fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 
 fn assert_unknown_domain_is_refused(action: DomainCli) {
 	let (_dir, file) = fixture("");
-	let code = run(file.path(), action, false);
+	let code = run(file.path(), action, false, false);
 	assert_eq!(
 		code,
 		ExitCode::from(super::super::exit::REFUSED),
@@ -82,6 +82,7 @@ fn unknown_domain_keeps_its_message_and_leaves_the_config_alone() {
 			domain: "ghost.example.org".to_string(),
 			yes: true,
 		},
+		false,
 		false,
 	);
 	let super::Outcome::Refusal(message) = outcome else {

@@ -19,7 +19,7 @@ fn field(text: &str, key: &str) -> String {
 fn writes_a_matching_pair_to_an_owner_only_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let out = dir.path().join("oauth.toml");
-	assert_eq!(oauth_keygen(&out), ExitCode::SUCCESS);
+	assert_eq!(oauth_keygen(&out, false), ExitCode::SUCCESS);
 	let text = std::fs::read_to_string(&out).expect("key file");
 	let private = field(&text, "signing_key");
 	let public = field(&text, "public_key");
@@ -43,6 +43,6 @@ fn refuses_to_overwrite_an_existing_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let out = dir.path().join("oauth.toml");
 	std::fs::write(&out, b"keep me").expect("seed");
-	assert_eq!(oauth_keygen(&out), ExitCode::FAILURE);
+	assert_eq!(oauth_keygen(&out, false), ExitCode::FAILURE);
 	assert_eq!(std::fs::read(&out).expect("read"), b"keep me");
 }

@@ -78,6 +78,7 @@ pub enum MaskedCli {
 pub(super) fn run(
 	config: &Config,
 	action: MaskedCli,
+	json: bool,
 	now: u64,
 	out: &mut impl Write,
 	err: &mut impl Write,
@@ -109,7 +110,7 @@ pub(super) fn run(
 		return ExitCode::from(super::exit::REFUSED);
 	};
 	let result = match action {
-		MaskedCli::List { json, .. } => return list(&store, account, json, out, err),
+		MaskedCli::List { json: leaf, .. } => return list(&store, account, leaf || json, out, err),
 		MaskedCli::Add { label, domain, .. } => {
 			let domain = match pick_domain(config, domain, &first_address) {
 				Ok(domain) => domain,
@@ -120,7 +121,11 @@ pub(super) fn run(
 			};
 			store
 				.add_masked(account, &label, &domain, now)
-				.map(|entry| entry.address)
+				.map(|entry| {
+					let fields =
+						serde_json::json!({ "address": entry.address, "label": entry.label });
+					(entry.address, "add", fields)
+				})
 		}
 		MaskedCli::Remove { address, yes, .. } => {
 			// An address the account does not own goes straight to the
@@ -136,21 +141,30 @@ pub(super) fn run(
 			{
 				return code;
 			}
+			let fields = serde_json::json!({ "address": address });
 			store
 				.remove_masked(account, &address)
-				.map(|()| format!("removed {address}"))
+				.map(|()| (format!("removed {address}"), "remove", fields))
 		}
-		MaskedCli::Enable { address, .. } => store
-			.set_masked_enabled(account, &address, true)
-			.map(|_| format!("enabled {address}")),
-		MaskedCli::Disable { address, .. } => store
-			.set_masked_enabled(account, &address, false)
-			.map(|_| format!("disabled {address}")),
+		MaskedCli::Enable { address, .. } => {
+			store.set_masked_enabled(account, &address, true).map(|_| {
+				let fields = serde_json::json!({ "address": address, "enabled": true });
+				(format!("enabled {address}"), "enable", fields)
+			})
+		}
+		MaskedCli::Disable { address, .. } => {
+			store.set_masked_enabled(account, &address, false).map(|_| {
+				let fields = serde_json::json!({ "address": address, "enabled": false });
+				(format!("disabled {address}"), "disable", fields)
+			})
+		}
 	};
 	match result {
-		Ok(line) => {
-			let _ = writeln!(out, "{line}");
-			ExitCode::SUCCESS
+		Ok((line, verb, mut fields)) => {
+			fields["account"] = account.into();
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(line);
+			report.change(verb, true, fields, None)
 		}
 		Err(error) => {
 			super::style::error_to(err, describe(&error));

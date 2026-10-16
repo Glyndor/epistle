@@ -30,7 +30,7 @@ fn load(path: &Path) -> Config {
 
 fn assert_unknown_alias_is_refused(action: AliasCli) {
 	let (_dir, file) = fixture("");
-	let code = run(file.path(), action, false);
+	let code = run(file.path(), action, false, false);
 	assert_eq!(
 		code,
 		ExitCode::from(super::super::exit::REFUSED),
@@ -127,6 +127,7 @@ fn unknown_alias_keeps_its_message_and_leaves_the_config_alone() {
 		AliasCli::Disable {
 			address: "ghost@example.org".to_string(),
 		},
+		false,
 		false,
 	);
 	let super::Outcome::Refusal(message) = outcome else {

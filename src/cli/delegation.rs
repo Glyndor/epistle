@@ -63,9 +63,9 @@ impl Command {
 			Command::Serve { .. }
 			| Command::MtaStsServe { .. }
 			| Command::DkimKeygen { .. }
-			| Command::StorageKeygen
+			| Command::StorageKeygen { .. }
 			| Command::OauthKeygen { .. }
-			| Command::TokenHash
+			| Command::TokenHash { .. }
 			| Command::Local { .. }
 			| Command::Probe { .. }
 			| Command::Completions { .. }

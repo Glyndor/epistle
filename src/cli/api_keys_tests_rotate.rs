@@ -24,6 +24,7 @@ fn create_key(config: &Config, label: &str) -> String {
 				domains: vec!["example.org".into()],
 				account: None,
 			},
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -47,7 +48,7 @@ fn rotate_keeps_every_attribute_and_swaps_the_secret() {
 	let before = ApiKeyStore::open(dir.path()).expect("open").keys()[0].clone();
 
 	let mut out = Vec::new();
-	assert_eq!(rotate(&config, "ci", &mut out), ExitCode::SUCCESS);
+	assert_eq!(rotate(&config, "ci", false, &mut out), ExitCode::SUCCESS);
 	let new = secret_in(&out);
 
 	let store = ApiKeyStore::open(dir.path()).expect("open");
@@ -77,7 +78,10 @@ fn rotate_unknown_label_fails_and_changes_nothing() {
 	let before = std::fs::read(dir.path().join("api_keys.toml")).expect("file");
 
 	let mut out = Vec::new();
-	assert_eq!(rotate(&config, "missing", &mut out), ExitCode::FAILURE);
+	assert_eq!(
+		rotate(&config, "missing", false, &mut out),
+		ExitCode::FAILURE
+	);
 
 	assert!(out.is_empty(), "a failed rotation prints no secret");
 	assert_eq!(
@@ -92,6 +96,6 @@ fn rotate_output_never_shows_the_hash() {
 	let config = config(dir.path());
 	create_key(&config, "ci");
 	let mut out = Vec::new();
-	assert_eq!(rotate(&config, "ci", &mut out), ExitCode::SUCCESS);
+	assert_eq!(rotate(&config, "ci", false, &mut out), ExitCode::SUCCESS);
 	assert!(!String::from_utf8_lossy(&out).contains("sha256:"));
 }

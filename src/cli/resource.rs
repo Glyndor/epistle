@@ -4,7 +4,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use super::config_edit::{ConfigDocument, Outcome, after_change_with};
+use super::config_edit::{ConfigDocument, Outcome, after_change_reporting};
 use super::stack::StackAction;
 use crate::config::Config;
 
@@ -99,31 +99,54 @@ pub(super) fn exit_resource(result: Result<ExitCode, ResourceError>) -> ExitCode
 	}
 }
 
+/// What a configuration edit reports: `label` names the resource in the
+/// status line ("relay saved"); with `json` the result goes to stdout as
+/// one object with `action` and the keys of `fields`.
+pub(super) struct Edit<'a> {
+	/// The resource name in the status line.
+	pub label: &'a str,
+	/// The `action` of the JSON result.
+	pub action: &'a str,
+	/// The keys that name what changed, an object.
+	pub fields: serde_json::Value,
+	/// Print the result as JSON.
+	pub json: bool,
+}
+
 /// Print a dry-run diff, or validate, write and apply the restart policy.
-/// `label` names the resource in the status line ("relay saved").
+/// With `--json` a dry run prints `{"result": "dry-run", ..., "diff"}` and
+/// a commit prints the change object with its `reload`.
 pub(super) fn finish(
 	document: ConfigDocument,
 	dry_run: bool,
-	label: &str,
+	edit: Edit,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, ResourceError> {
+	let failure = |error: std::io::Error| ResourceError::Failure(error.to_string());
 	if dry_run {
-		write!(out, "{}", document.dry_run()?)
-			.map_err(|error| ResourceError::Failure(error.to_string()))?;
+		let diff = document.dry_run()?;
+		if edit.json {
+			let object = super::json_out::dry_run_object(edit.action, edit.fields, diff);
+			writeln!(out, "{object}").map_err(failure)?;
+		} else {
+			write!(out, "{diff}").map_err(failure)?;
+		}
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
 	let outcome = document.commit()?;
-	let state = if outcome == Outcome::Changed {
-		"saved"
-	} else {
-		"unchanged"
-	};
-	writeln!(status, "{label} {state}")
-		.map_err(|error| ResourceError::Failure(error.to_string()))?;
-	after_change_with(&config, outcome, true, status, restart)
+	let changed = outcome == Outcome::Changed;
+	let state = if changed { "saved" } else { "unchanged" };
+	writeln!(status, "{} {state}", edit.label).map_err(failure)?;
+	let (code, reload) = after_change_reporting(&config, outcome, true, status, restart)?;
+	if edit.json {
+		let object =
+			super::json_out::change_object(edit.action, changed, edit.fields, Some(reload));
+		writeln!(out, "{object}").map_err(failure)?;
+	}
+	Ok(code)
 }
 
 /// A configuration edit chosen by a command, applied once the file is open.
@@ -133,7 +156,7 @@ pub(super) type Change = Box<dyn FnOnce(&mut ConfigDocument, &Config) -> Result<
 pub(super) fn apply_edit(
 	path: &Path,
 	dry_run: bool,
-	label: &str,
+	edit: Edit,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
@@ -142,7 +165,7 @@ pub(super) fn apply_edit(
 	let mut document = ConfigDocument::open(path).map_err(ResourceError::Failure)?;
 	let current = document.config().map_err(ResourceError::Failure)?;
 	change(&mut document, &current)?;
-	finish(document, dry_run, label, out, status, restart)
+	finish(document, dry_run, edit, out, status, restart)
 }
 
 /// Validate a DNS name taken from a flag and return it trimmed and lowercase.

@@ -168,6 +168,7 @@ pub(super) fn release(
 	spool: &FsSpool,
 	target: &DestinationTarget,
 	now: u64,
+	json: bool,
 	out: &mut impl Write,
 ) -> ExitCode {
 	// A name given on the command line may be a domain or an exchanger:
@@ -226,13 +227,17 @@ pub(super) fn release(
 			"no destination on hold: {}",
 			sanitize(wanted.as_str())
 		)),
-		Some((wanted, _)) => {
-			let _ = writeln!(out, "released {}", sanitize(wanted.as_str()));
-			ExitCode::SUCCESS
-		}
-		None => {
-			let _ = writeln!(out, "released {} destinations", released.len());
-			ExitCode::SUCCESS
+		wanted => {
+			let mut report = crate::cli::json_out::Report::new(out, json);
+			match &wanted {
+				Some((wanted, _)) => {
+					report.line(format_args!("released {}", sanitize(wanted.as_str())))
+				}
+				None => report.line(format_args!("released {} destinations", released.len())),
+			}
+			let names: Vec<&str> = released.iter().map(Destination::as_str).collect();
+			let fields = serde_json::json!({ "released": names });
+			report.change("release-destination", !released.is_empty(), fields, None)
 		}
 	}
 }

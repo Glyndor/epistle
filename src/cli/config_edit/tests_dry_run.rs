@@ -110,3 +110,39 @@ fn dry_run_keeps_unrelated_lines_byte_identical() {
 	assert!(rendered.contains("+quota_bytes = 2"), "{rendered}");
 	assert!(rendered.contains("-quota_bytes = 1"), "{rendered}");
 }
+
+/// A credential on a line that is only context, next to the line being
+/// edited, is redacted too: the diff shows three lines either side.
+#[test]
+fn dry_run_redacts_credentials_that_are_only_context() {
+	let dir = tempfile::tempdir_in(".").unwrap();
+	let path = write_mail_toml(
+		dir.path(),
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n\
+		 [[accounts]]\nname = \"postmaster\"\naddresses = [\"postmaster@example.org\"]\n\
+		 password_hash = \"$argon2id$v=19$m=65536,t=2,p=1$CONTEXTSALTAAAAAAAAAAA$CONTEXTHASHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"\n\
+		 [dns]\nprovider = \"route53\"\nzone = \"example.org\"\n\
+		 access_key = \"AKIACONTEXTKEYID\"\nconsumer_key = \"CONTEXTCONSUMER\"\nkey_name = \"k\"\n",
+	);
+	let mut doc = ConfigDocument::open(&path).unwrap();
+	doc.document["dns"]["zone"] = toml_edit::value("example.net");
+	let rendered = doc.dry_run().unwrap();
+	for leaked in [
+		"CONTEXTHASH",
+		"CONTEXTSALT",
+		"AKIACONTEXTKEYID",
+		"CONTEXTCONSUMER",
+	] {
+		assert!(
+			!rendered.contains(leaked),
+			"a credential reached the diff as context: {rendered}"
+		);
+	}
+	for redacted in [
+		" password_hash = <redacted>",
+		" access_key = <redacted>",
+		" consumer_key = <redacted>",
+	] {
+		assert!(rendered.contains(redacted), "{redacted}: {rendered}");
+	}
+}

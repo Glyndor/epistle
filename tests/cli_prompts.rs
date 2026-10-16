@@ -93,24 +93,26 @@ fn an_unknown_account_and_a_static_one_get_different_errors() {
 		dir.path(),
 		"[[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n",
 	);
-	let stderr = |args: &[&str]| {
+	// An unknown name is a usage error (2), a static account a refusal by
+	// policy (3).
+	let stderr = |args: &[&str], code: i32| {
 		let output = epistle(
 			&[&["account"], args, &["--config", config.as_str()]].concat(),
 			b"",
 		);
-		assert_eq!(output.status.code(), Some(2), "{args:?}");
+		assert_eq!(output.status.code(), Some(code), "{args:?}");
 		String::from_utf8_lossy(&output.stderr).into_owned()
 	};
 	assert_eq!(
-		stderr(&["disable", "ghost"]),
+		stderr(&["disable", "ghost"], 2),
 		"error: no such account: ghost\n"
 	);
 	assert_eq!(
-		stderr(&["password", "ghost"]),
+		stderr(&["password", "ghost"], 2),
 		"error: no such account: ghost\n"
 	);
 	assert_eq!(
-		stderr(&["disable", "bob"]),
+		stderr(&["disable", "bob"], 3),
 		"error: account bob: edit the config file to change a static account\n"
 	);
 	let shown = epistle(

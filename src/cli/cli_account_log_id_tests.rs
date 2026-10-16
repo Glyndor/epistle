@@ -55,7 +55,8 @@ fn find_log_id_maps_a_pseudonym_back_to_its_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with(dir.path(), &["bob", "carol"]);
 	let mut out = Vec::new();
-	let code = account::find_log_id_with_store(&store, &crate::log_id::account("carol"), &mut out);
+	let code =
+		account::find_log_id_with_store(&store, &crate::log_id::account("carol"), &mut out, false);
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert_eq!(String::from_utf8(out).expect("utf8"), "carol\n");
 }
@@ -69,6 +70,7 @@ fn find_log_id_matches_a_login_that_was_an_address() {
 		&store,
 		&crate::log_id::account("bob@example.org"),
 		&mut out,
+		false,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert_eq!(String::from_utf8(out).expect("utf8"), "bob\n");
@@ -79,7 +81,7 @@ fn find_log_id_reports_no_match_without_printing_anything() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with(dir.path(), &["bob"]);
 	let mut out = Vec::new();
-	let code = account::find_log_id_with_store(&store, "acct-000000000000", &mut out);
+	let code = account::find_log_id_with_store(&store, "acct-000000000000", &mut out, false);
 	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "a miss must print nothing on stdout");
 }

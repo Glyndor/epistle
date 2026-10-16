@@ -100,7 +100,8 @@ fn import_delivers_mbox_messages_to_inbox() {
 			dir.path(),
 			"alice",
 			&crate::storage::MessageCrypto::disabled(),
-			Cursor::new(mbox)
+			Cursor::new(mbox),
+			false
 		),
 		ExitCode::SUCCESS
 	);
@@ -145,7 +146,8 @@ fn import_maildir_delivers_to_inbox_and_nested_folders_with_flags() {
 			dir.path(),
 			"alice",
 			&crate::storage::MessageCrypto::disabled(),
-			&src
+			&src,
+			false
 		),
 		ExitCode::SUCCESS
 	);
@@ -264,6 +266,7 @@ fn archive_list_dispatch_runs_against_real_layout() {
 				account: "alice".to_string(),
 				json: false,
 			},
+			false,
 			&mut out,
 		),
 		ExitCode::SUCCESS,
@@ -315,6 +318,7 @@ fn archive_restore_dispatch_runs_against_real_layout() {
 				account: "alice".to_string(),
 				id,
 			},
+			false,
 			&mut out,
 		),
 		ExitCode::SUCCESS,
@@ -363,6 +367,7 @@ fn archive_purge_dispatch_runs_against_real_layout() {
 				older_than_days: None,
 				yes: true,
 			},
+			false,
 			&mut out,
 		),
 		ExitCode::SUCCESS,

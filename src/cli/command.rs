@@ -36,6 +36,9 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Generate a DKIM key and print the DNS record value.
 	DkimKeygen {
@@ -51,13 +54,20 @@ pub enum Command {
 		/// 2048 (default) or 4096.
 		#[arg(long, value_name = "BITS", default_value_t = 2048)]
 		bits: u32,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Generate an at-rest message-encryption key and print it.
 	///
 	/// Generate a base64 32-byte at-rest message-encryption key and print it to
 	/// stdout. Store it off the data disk (an env var or a key file), then
 	/// point `[storage]` at it; never written into data_dir.
-	StorageKeygen,
+	StorageKeygen {
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Generate the ES256 key pair for the built-in OAuth server.
 	///
 	/// Generate an ES256 key pair for the built-in OAuth authorization server
@@ -68,6 +78,9 @@ pub enum Command {
 		/// Where to write the key pair (mode 0600; an existing file is refused).
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Export an account's mail as mbox on stdout or as Maildir.
 	///
@@ -99,6 +112,9 @@ pub enum Command {
 		/// instead of an mbox stream on stdin.
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Write a consistent backup snapshot (gzip tar) to stdout.
 	///
@@ -137,12 +153,18 @@ pub enum Command {
 		/// the operator is asked to type `y`.
 		#[arg(long, short = 'y')]
 		yes: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Check published DNS records against what epistle expects.
 	///
@@ -152,6 +174,9 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Print the DNS records this deployment should publish.
 	///
@@ -161,6 +186,9 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Print an Apple `.mobileconfig` profile for an account.
 	///
@@ -179,6 +207,9 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Print the Thunderbird autoconfig XML for a domain.
 	///
@@ -213,6 +244,10 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON, for the listing without an action and
+		/// for whichever action follows.
+		#[arg(long)]
+		json: bool,
 		/// Suppression action (`list`, `add`, `remove`).
 		#[command(subcommand)]
 		action: Option<suppression::SuppressionCli>,
@@ -255,6 +290,9 @@ pub enum Command {
 			default_value = DEFAULT_CONFIG
 		)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The action to run on the account.
 		#[command(subcommand)]
 		action: account::Subcommand,
@@ -266,6 +304,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
 		#[command(subcommand)]
 		action: Option<queue::QueueCli>,
@@ -294,6 +335,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Ban action (`list`, `add`, `remove`, `allow`).
 		#[command(subcommand)]
 		action: ban::BanCli,
@@ -306,6 +350,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
 		#[command(subcommand)]
 		action: masked::MaskedCli,
@@ -315,6 +362,9 @@ pub enum Command {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// App password action (`list`, `create`, `revoke`).
 		#[command(subcommand)]
 		action: app_passwords::AppPasswordCli,
@@ -323,13 +373,20 @@ pub enum Command {
 	///
 	/// Reads the plaintext token from stdin (one line). Prints a
 	/// `sha256:<hex>` string to stdout, ready to paste into the config file.
-	TokenHash,
+	TokenHash {
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Inspect and restore an account's expunged-message archive.
 	///
 	/// Inspect and operate on the per-account expunged-message archive
 	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
 	/// Each subcommand targets one account.
 	Archive {
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The archive sub-action (`list`, `restore`, `purge`).
 		#[command(subcommand)]
 		action: archive::Subcommand,
@@ -347,6 +404,9 @@ pub enum Command {
 		/// ceiling lives in `crate::reports::RETENTION_DAYS`.
 		#[arg(long, value_name = "N", default_value_t = reports::DEFAULT_DAYS)]
 		days: u32,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Run a self-contained loopback test server.
 	///
@@ -381,6 +441,9 @@ pub enum Command {
 		/// Print the answers template to stdout and exit.
 		#[arg(long)]
 		print_answers: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Manage the configured mail domains and domain aliases.
 	///
@@ -393,6 +456,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Domain administration action.
 		#[command(subcommand)]
 		action: domain::DomainCli,
@@ -419,6 +485,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// DNS administration area.
 		#[command(subcommand)]
 		action: dns_provider::DnsCli,
@@ -431,6 +500,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Storage administration area.
 		#[command(subcommand)]
 		action: storage_blobs::StorageCli,
@@ -443,6 +515,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Webhook administration action.
 		#[command(subcommand)]
 		action: webhook_admin::WebhookCli,
@@ -455,6 +530,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Alert administration action.
 		#[command(subcommand)]
 		action: alert::AlertCli,
@@ -467,6 +545,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Relay administration action.
 		#[command(subcommand)]
 		action: relay::RelayCli,
@@ -479,6 +560,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Listener administration action.
 		#[command(subcommand)]
 		action: service::ServiceCli,
@@ -518,6 +602,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Antispam administration action.
 		#[command(subcommand)]
 		action: antispam::AntispamCli,
@@ -532,6 +619,9 @@ pub enum Command {
 		/// Print the validated diff without writing or restarting.
 		#[arg(long, global = true)]
 		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Alias administration action.
 		#[command(subcommand)]
 		action: alias::AliasCli,
@@ -552,6 +642,9 @@ pub enum Command {
 			default_value = DEFAULT_CONFIG
 		)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
@@ -561,6 +654,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// Database action (`upgrade`).
 		#[command(subcommand)]
 		action: db_upgrade::DbCli,
@@ -573,6 +669,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// DKIM action (`show`, `rotate`, `cleanup`).
 		#[command(subcommand)]
 		action: dkim_cli::DkimCli,
@@ -585,6 +684,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// TLS action (`show`, `renew`).
 		#[command(subcommand)]
 		action: tls_cli::TlsCli,
@@ -594,6 +696,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
 		/// API key action (`list`, `create`, `revoke`, `rotate`).
 		#[command(subcommand)]
 		action: api_keys::ApiKeyCli,

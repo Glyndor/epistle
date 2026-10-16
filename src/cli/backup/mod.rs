@@ -133,6 +133,64 @@ pub(super) fn run_restore_with(
 	status: &mut impl Write,
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> ExitCode {
+	restore_summarising(
+		config,
+		archive,
+		force,
+		dry_run,
+		out,
+		status,
+		resolver,
+		&mut RestoreSummary::default(),
+	)
+}
+
+/// What a restore did or, with `--dry-run`, would do: how many archive
+/// entries, and the destination of each, taken from the archive itself.
+#[derive(Debug, Default)]
+pub(in crate::cli) struct RestoreSummary {
+	/// Entries in the archive.
+	pub entries: usize,
+	/// Where each entry would be written, filled for a dry run only:
+	/// `data/<name>` for a file, `database.sql` for the dump.
+	pub paths: Vec<String>,
+}
+
+/// [`run_restore`] that also reports the [`RestoreSummary`], so a caller
+/// that prints JSON does not have to read the text listing back.
+pub(in crate::cli) fn run_restore_reporting(
+	config: &Config,
+	archive: &[u8],
+	force: bool,
+	dry_run: bool,
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> (ExitCode, RestoreSummary) {
+	let mut summary = RestoreSummary::default();
+	let exit = restore_summarising(
+		config,
+		archive,
+		force,
+		dry_run,
+		out,
+		status,
+		&db_dump::default_program_resolver,
+		&mut summary,
+	);
+	(exit, summary)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_summarising(
+	config: &Config,
+	archive: &[u8],
+	force: bool,
+	dry_run: bool,
+	out: &mut impl Write,
+	status: &mut impl Write,
+	resolver: &dyn Fn(&str) -> Option<PathBuf>,
+	summary: &mut RestoreSummary,
+) -> ExitCode {
 	let mut steps = if dry_run {
 		Steps::off()
 	} else {
@@ -164,17 +222,22 @@ pub(super) fn run_restore_with(
 		super::style::error(format_args!("{message}"));
 		return ExitCode::FAILURE;
 	}
+	summary.entries = entries.len();
 	if dry_run {
 		let _ = writeln!(out, "would restore {} entries:", entries.len());
 		for (name, _mode, content) in &entries {
 			if name == DATABASE_SQL_NAME {
+				summary.paths.push(DATABASE_SQL_NAME.to_string());
 				let _ = writeln!(
 					out,
 					"  database.sql ({} bytes, replayed to psql)",
 					content.len()
 				);
 			} else {
-				let _ = writeln!(out, "  data/{name}");
+				summary.paths.push(format!("data/{name}"));
+				// A name comes from the archive: escaped, it cannot pass
+				// for a further line of this listing.
+				let _ = writeln!(out, "  data/{}", super::term::sanitize(name));
 			}
 		}
 		let _ = writeln!(out, "no files written; rerun without --dry-run to apply");

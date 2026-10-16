@@ -23,7 +23,7 @@ fn save_sent_setter_persists_to_disk_and_rebuilds_the_directory() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::save_sent_with_store(&store, DYNAMIC_NAME, false),
+		account::save_sent_with_store(&store, DYNAMIC_NAME, false, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -34,7 +34,7 @@ fn save_sent_setter_persists_to_disk_and_rebuilds_the_directory() {
 	// Toggle back on.
 	let store = reload_store(&harness);
 	assert_eq!(
-		account::save_sent_with_store(&store, DYNAMIC_NAME, true),
+		account::save_sent_with_store(&store, DYNAMIC_NAME, true, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 	let store = reload_store(&harness);
@@ -52,7 +52,7 @@ fn save_sent_setter_rejects_a_static_account() {
 	// mutator returns `NotFound`, which the CLI surfaces as the
 	// "edit the config" hint.
 	assert_ne!(
-		account::save_sent_with_store(&store, STATIC_NAME, false),
+		account::save_sent_with_store(&store, STATIC_NAME, false, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 }
@@ -62,7 +62,7 @@ fn save_sent_setter_rejects_an_unknown_account() {
 	let harness = build();
 	let store = reload_store(&harness);
 	assert_ne!(
-		account::save_sent_with_store(&store, "carol", true),
+		account::save_sent_with_store(&store, "carol", true, &mut std::io::sink(), false),
 		ExitCode::SUCCESS
 	);
 }

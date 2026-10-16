@@ -39,6 +39,7 @@ pub(super) fn run_with(extra: &str, args: &[&str], dry_run: bool) -> Run {
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut out,
 		&mut status,
 		no_restart,

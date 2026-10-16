@@ -46,7 +46,7 @@ fn subfolders_export_as_maildir_plus_plus_and_import_back() {
 
 	let dest = tempfile::tempdir().expect("dest");
 	assert_eq!(
-		crate::cli::import::run_maildir(dest.path(), "bob", &crypto, out.path()),
+		crate::cli::import::run_maildir(dest.path(), "bob", &crypto, out.path(), false),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -68,7 +68,7 @@ fn a_dovecot_tree_imports_as_a_hierarchy_and_odd_dots_stay_flat() {
 	}
 	let dest = tempfile::tempdir().expect("dest");
 	assert_eq!(
-		crate::cli::import::run_maildir(dest.path(), "bob", &crypto, src.path()),
+		crate::cli::import::run_maildir(dest.path(), "bob", &crypto, src.path(), false),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(

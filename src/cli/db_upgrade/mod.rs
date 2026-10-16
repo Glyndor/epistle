@@ -24,7 +24,9 @@ pub enum DbCli {
 }
 
 /// Run an `epistle db` action.
-pub(super) fn run(config: &Config, action: DbCli) -> ExitCode {
+/// Run the database action. With `json` the steps stay on stderr and a
+/// success prints `{"result": "done", "action": "upgrade", "postgres"}`.
+pub(super) fn run(config: &Config, action: DbCli, json: bool) -> ExitCode {
 	match action {
 		DbCli::Upgrade => {
 			let mut stack = match host::Podup::new(config) {
@@ -34,7 +36,14 @@ pub(super) fn run(config: &Config, action: DbCli) -> ExitCode {
 					return ExitCode::FAILURE;
 				}
 			};
-			match flow::upgrade(&mut stack, crate::cli::init::images::postgres()) {
+			let target = crate::cli::init::images::postgres();
+			match flow::upgrade(&mut stack, target) {
+				Ok(()) if json => {
+					let result = serde_json::json!({
+						"result": "done", "action": "upgrade", "postgres": target,
+					});
+					super::json_out::print(&mut std::io::stdout().lock(), &result)
+				}
 				Ok(()) => ExitCode::SUCCESS,
 				Err(error) => {
 					super::style::error(format_args!("database upgrade failed: {error}"));

@@ -1,3 +1,26 @@
+epistle (0.12.1) UNRELEASED; urgency=medium
+
+  * CLI: every command that prints data takes `--json` and then prints one
+    JSON document on stdout, with notes and errors on stderr; the hidden flat
+    forms (`accounts`, `account-add`, `app-password-create`, `api-keys` and
+    the rest) take it too. The commands whose stdout is already the product
+    (`serve`, `local`, `mta-sts-serve`, `export`, `backup`, `completions`,
+    `report-abuse`, `mobileconfig`, `autoconfig`, `autodiscover`) and
+    `stack logs` do not. docs/cli.md lists the result object.
+  * CLI exit code 3 is new: the command is well formed and its target
+    exists, but a rule of the server refuses the change. It replaces exit 2
+    in four cases, so a script can tell "refused by policy or state" from "fix
+    the command" (2) and "retry later" (1): a static account that only the
+    configuration file may change (`account disable|remove|password|...`,
+    `app-password create`), a limit that is reached (the masked-address
+    limit, the other store limits), the `scim` scope on an API key bound to an
+    account, and `account forward add` while `srs_secret` is not set.
+    Unknown names, rejected input and a destructive action without `--yes`
+    stay 2. A script that treated any non-zero code other than 1 as a usage
+    error needs to read 3 as a refusal.
+
+ -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
+
 epistle (0.12.0) unstable; urgency=medium
 
   * Migration: `epistle migrate imap` copies a remote account from any IMAP

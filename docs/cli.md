@@ -7,11 +7,27 @@ Run `epistle <command> --help` for the exact flags.
 
 ## Resources
 
-Commands take the shape `epistle <resource> <action>`. Every `list` and `show`
-accepts `--json`: a list prints one JSON array, a show one object, on stdout.
+Commands take the shape `epistle <resource> <action>`. Every command accepts
+`--json` and then prints exactly one JSON document on stdout: a list an
+array, a show an object. A change prints one object with `result` (`saved`,
+`unchanged`, `dry-run`; `queued` for work the running server picks up,
+`done` once a stack command finished, `passed` for a test), `action`, the
+fields naming what changed (an account, an address, a label, a new secret
+shown once) and `reload` when the command waits for the server: `loaded`,
+`no-server`, `timed-out`, `restarted`, `restart-failed`, `restart-needed`
+or `none`. Notes and errors stay on stderr, and so does the output of the
+podup run a command starts, so a failure leaves stdout empty. The commands
+whose stdout already is the product take no `--json`: `serve`, `local` and
+`mta-sts-serve` (they run until stopped), `export` and `backup` (the mbox
+and the archive), `completions`, `report-abuse`, `mobileconfig`,
+`autoconfig` and `autodiscover` (the documents themselves); `stack logs`
+refuses it. The older flat forms in the table below take `--json` too and
+print what the resource form prints.
 Exit codes: `0` done, `1` the operation failed (I/O, database), `2` usage
-error or refused (unknown name, rejected input, a static account, a
-destructive action without `--yes`).
+error or not found (unknown name, rejected input, a destructive action
+without `--yes`), `3` refused by policy (a static account, a reached limit,
+a setting the change needs that is missing, such as `srs_secret` for a
+forward). Policy refusals exited `2` before they had their own code.
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|

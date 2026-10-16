@@ -49,7 +49,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, None, 0, action, now, None, &mut out);
+	let code = run(dir, None, 0, action, false, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -304,6 +304,7 @@ fn remove_writes_a_canceled_record_for_each_pending_recipient() {
 		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -347,6 +348,7 @@ fn remove_with_log_disabled_does_not_write_records() {
 		None,
 		0,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -390,6 +392,7 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		Some(&webhook),
 		&mut out,
@@ -467,6 +470,7 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 		Some(&storage),
 		0,
 		Some(QueueCli::Show { id, json: false }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -475,5 +479,47 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 		code,
 		ExitCode::SUCCESS,
 		"show must read the sealed envelope"
+	);
+}
+
+/// `run_args` with `--json`: the exit code and the one object printed.
+fn run_json(dir: &Path, args: &[&str], now: u64) -> (ExitCode, serde_json::Value) {
+	let mut argv = vec!["epistle", "queue"];
+	argv.extend(args);
+	let cli = Cli::try_parse_from(argv).expect("parse");
+	let Command::Queue { action, .. } = cli.command else {
+		panic!("not a queue command");
+	};
+	let mut out = Vec::new();
+	let code = run(dir, None, 0, action, true, now, None, &mut out);
+	let text = String::from_utf8(out).expect("utf8");
+	assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
+	(code, serde_json::from_str(&text).expect("json"))
+}
+
+#[test]
+fn hold_retry_and_release_by_id_print_the_entry_and_whether_it_is_held() {
+	let (dir, _spool, ids) = spool_with(2);
+	let id = ids[0].to_string();
+	let object = |action: &str, held: bool| serde_json::json!({"result": "saved", "action": action, "id": id, "held": held});
+	assert_eq!(
+		run_json(dir.path(), &["hold", &id], 1_000),
+		(ExitCode::SUCCESS, object("hold", true))
+	);
+	assert_eq!(
+		run_json(dir.path(), &["retry", &id], 1_100),
+		(ExitCode::SUCCESS, object("retry", true)),
+		"a retry does not lift a hold"
+	);
+	assert_eq!(
+		run_json(dir.path(), &["release", &id], 1_200),
+		(ExitCode::SUCCESS, object("release", false))
+	);
+	assert_eq!(
+		run_json(dir.path(), &["hold", "--all"], 2_000),
+		(
+			ExitCode::SUCCESS,
+			serde_json::json!({"result": "saved", "action": "hold", "entries": 2})
+		)
 	);
 }
