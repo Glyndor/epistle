@@ -51,6 +51,9 @@ impl EvidenceKey {
 		if !path.exists() {
 			generate_into(&path)?;
 		}
+		// A recorded rotation that was cut short is finished before anything
+		// signs with the key it replaces.
+		super::rotation::resume(evidence_root)?;
 		let key = Self::from_file(&path)?;
 		match pinned_id(evidence_root)? {
 			Some(pinned) if pinned == key.id() => {}
@@ -95,17 +98,33 @@ impl EvidenceKey {
 		Ok(key)
 	}
 
+	/// The staged key.
+	pub(crate) fn staged(evidence_root: &Path) -> std::io::Result<Self> {
+		Self::from_file(&evidence_root.join(NEXT_FILE))
+	}
+
 	/// Make the staged key the signing key and move the pin to it. `id` must
-	/// be the staged key's id.
+	/// be the staged key's id. Done twice, or by two processes, it ends the
+	/// same: a staged key that is already in place only has its pin checked.
 	pub(crate) fn promote_next(evidence_root: &Path, id: &str) -> std::io::Result<()> {
 		let staged = evidence_root.join(NEXT_FILE);
+		if !staged.exists() && Self::from_file(&evidence_root.join(KEY_FILE))?.id() == id {
+			return pin(evidence_root, id);
+		}
 		if Self::from_file(&staged)?.id() != id {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
 				"the staged evidence key is not the one that was signed for",
 			));
 		}
-		std::fs::rename(&staged, evidence_root.join(KEY_FILE))?;
+		match std::fs::rename(&staged, evidence_root.join(KEY_FILE)) {
+			Ok(()) => {}
+			// Another process promoted it between the check and here.
+			Err(error)
+				if error.kind() == std::io::ErrorKind::NotFound
+					&& Self::from_file(&evidence_root.join(KEY_FILE))?.id() == id => {}
+			Err(error) => return Err(error),
+		}
 		std::fs::File::open(evidence_root).and_then(|dir| dir.sync_all())?;
 		pin(evidence_root, id)
 	}

@@ -92,6 +92,9 @@ struct Walker {
 	signers: Vec<(Day, String)>,
 	/// The signer of the newest checkpoint before the first day walked.
 	before: Option<String>,
+	/// The oldest day under verification: where breaks about the chain as a
+	/// whole are put.
+	first_day: Day,
 }
 
 /// The most purge records one verification checks.
@@ -162,6 +165,7 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 		handovers: Vec::new(),
 		signers: Vec::new(),
 		before: previous.as_ref().map(|(cp, _)| cp.key.clone()),
+		first_day: first,
 	};
 	for day in days {
 		if let Err(at) =
@@ -178,27 +182,40 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 			return Ok(report);
 		}
 	}
-	report.first_break = final_checks(
+	for fault in final_checks(
 		evidence_root,
 		&purged,
 		&walker,
 		(from_start, to_end),
-		today,
 		head.is_some(),
-	);
+	) {
+		match super::ack::is_acknowledged(evidence_root, &fault) {
+			true => report.acknowledged.push(fault),
+			false if report.first_break.is_none() => report.first_break = Some(fault),
+			false => {}
+		}
+	}
 	Ok(report)
 }
 
-/// What can only be judged once every day was walked: the purge anchor and
-/// the head.
+/// The most breaks the whole-walk checks report at once.
+const MAX_FINAL_BREAKS: usize = 16;
+
+/// What can only be judged once every day was walked: who signed what, the
+/// hand-overs and purges, the purge anchor and the head. Every break is
+/// returned, so an acknowledged one does not hide the next. Those about the
+/// chain as a whole are put on the oldest day under verification, which does
+/// not change from one run to the next, so an acknowledgement keeps naming
+/// the same break.
 fn final_checks(
 	evidence_root: &Path,
 	purged: &Option<anchor::Anchor>,
 	walker: &Walker,
 	(from_start, to_end): (bool, bool),
-	today: Day,
 	has_head: bool,
-) -> Option<Break> {
+) -> Vec<Break> {
+	let whole = walker.first_day;
+	let mut found: Vec<Break> = Vec::new();
 	let timeline =
 		super::rotation::Timeline::new(walker.lineage.clone(), walker.handovers.clone(), to_end);
 	// A change of signer between two sealed days needs the record that
@@ -206,13 +223,12 @@ fn final_checks(
 	let mut previous = walker.before.as_deref();
 	for (day, signer) in &walker.signers {
 		if let Err(fault) = timeline.check_seal(signer, *day) {
-			return Some(broken(*day, fault.to_string()));
-		}
-		if let Some(before) = previous
+			found.push(broken(*day, fault.to_string()));
+		} else if let Some(before) = previous
 			&& before != signer
 			&& !timeline.explains(before, signer, *day)
 		{
-			return Some(broken(
+			found.push(broken(
 				*day,
 				"signed with a different evidence key than the day before, and no rotation record explains it",
 			));
@@ -221,18 +237,17 @@ fn final_checks(
 	}
 	for ((day, _), rotation) in &walker.handovers {
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
-			return Some(broken(today, why));
-		}
-		if rotation.day != day.name() {
-			return Some(broken(
-				today,
+			found.push(broken(*day, why));
+		} else if rotation.day != day.name() {
+			found.push(broken(
+				*day,
 				"the key rotation record names another day than the one it sits in",
 			));
 		}
 	}
 	for (at, purge) in &walker.purges {
 		if let Err(why) = super::retention::check_statement(evidence_root, purge, *at, &timeline) {
-			return Some(broken(today, why));
+			found.push(broken(at.0, why));
 		}
 	}
 	match (purged, &walker.last_purge) {
@@ -241,32 +256,29 @@ fn final_checks(
 				|| anchor.checkpoint != purge.checkpoint
 				|| anchor.through != purge.through =>
 		{
-			return Some(broken(
-				today,
+			found.push(broken(
+				whole,
 				"the purge anchor does not match the last purge record",
 			));
 		}
 		(Some(_), None) if from_start && to_end => {
-			return Some(broken(today, "days were purged without a purge record"));
+			found.push(broken(whole, "days were purged without a purge record"));
 		}
 		_ => {}
 	}
-	if !to_end {
-		return None;
-	}
-	if !has_head {
-		return Some(broken(
-			today,
+	if to_end && !has_head {
+		found.push(broken(
+			whole,
 			"the head is missing: the evidence may have been restored from an older copy",
 		));
-	}
-	if !walker.head_seen {
-		return Some(broken(
-			today,
+	} else if to_end && !walker.head_seen {
+		found.push(broken(
+			whole,
 			"rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)",
 		));
 	}
-	None
+	found.truncate(MAX_FINAL_BREAKS);
+	found
 }
 
 fn walk_and_check(

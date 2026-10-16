@@ -1,0 +1,140 @@
+//! A rotation that is cut short can be finished, once, from any step.
+
+use super::*;
+use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::{Options, verify};
+use crate::evidence::checkpoint::{files, seal_closed_days};
+use crate::evidence::day::Day;
+use crate::evidence::record::sha256;
+use crate::evidence::test_support::{accepted, at};
+use crate::evidence::tsa::request::{build, random_nonce};
+
+fn seal_with_current_key(fixture: &mut Fixture, now: u64) {
+	let key = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	seal_closed_days(fixture.root(), &key, true, now).expect("seal");
+	fixture.tsa.gen_time = now + 3600;
+	for offset in 0..8 {
+		let paths = files(fixture.root(), Day(DAY + offset));
+		if paths.json.exists() && !paths.tsr.exists() {
+			let json = std::fs::read(&paths.json).expect("json");
+			let token = fixture
+				.tsa
+				.respond(&build(&sha256(&json), random_nonce()).der);
+			std::fs::write(&paths.tsr, token).expect("tsr");
+		}
+	}
+}
+
+fn first_break(fixture: &Fixture, now: u64) -> Option<String> {
+	verify(
+		fixture.root(),
+		&Options {
+			from: None,
+			to: None,
+			anchors: vec![fixture.tsa.anchor],
+			now,
+		},
+	)
+	.expect("verify")
+	.first_break
+	.map(|at| at.to_string())
+}
+
+/// How many `key_rotated` records the chain holds.
+fn records(root: &Path) -> usize {
+	let mut count = 0;
+	for day in Chain::open(root).expect("chain").days().expect("days") {
+		let _ = crate::evidence::verify::walk_day(root, day, None, |_, record, _| {
+			count += usize::from(matches!(record.entry, Entry::KeyRotated(_)));
+		});
+	}
+	count
+}
+
+const STEPS: [Step; 4] = [Step::Sealed, Step::Staged, Step::Statement, Step::Recorded];
+
+/// A server with one record on `DAY + 3`, whose rotation is cut after `step`.
+fn cut_after(step: Step) -> Fixture {
+	let fixture = Fixture::new();
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), accepted(7))
+		.expect("append");
+	let cut = rotate_steps(fixture.root(), true, at(DAY + 3, 5), |at_step| {
+		at_step == step
+	});
+	assert_eq!(cut.expect_err("cut").to_string(), "stopped", "{step:?}");
+	fixture
+}
+
+/// What must hold once the rotation is finished, however it was cut.
+fn finished(fixture: &mut Fixture, step: Step) {
+	let root = fixture.root().to_path_buf();
+	assert_eq!(records(&root), 1, "{step:?}: one hand-over in the chain");
+	let periods = periods(&root).expect("periods");
+	assert_eq!(periods.len(), 2, "{step:?}: {periods:?}");
+	assert_eq!(
+		key::pinned_id(&root).expect("pin"),
+		Some(periods[0].0.clone()),
+		"{step:?}"
+	);
+	seal_with_current_key(fixture, at(DAY + 5, 0));
+	assert_eq!(first_break(fixture, at(DAY + 5, 1)), None, "{step:?}");
+}
+
+#[test]
+fn running_rotate_again_finishes_a_rotation_cut_at_any_step_once() {
+	for step in STEPS {
+		let mut fixture = cut_after(step);
+		let new = rotate(fixture.root(), true, at(DAY + 4, 1)).expect("rotate again");
+		assert_eq!(
+			EvidenceKey::load_or_create(fixture.root())
+				.expect("key")
+				.id(),
+			new,
+			"{step:?}"
+		);
+		finished(&mut fixture, step);
+	}
+}
+
+#[test]
+fn a_restart_finishes_a_rotation_that_was_recorded_before_anything_signs_again() {
+	let mut fixture = cut_after(Step::Recorded);
+	let before = key::pinned_id(fixture.root()).expect("pin");
+	// The server's next tick loads the key to seal with.
+	let key = EvidenceKey::load_or_create(fixture.root()).expect("key");
+	assert_ne!(
+		Some(key.id()),
+		before,
+		"still signing with the key that handed over"
+	);
+	finished(&mut fixture, Step::Recorded);
+}
+
+#[test]
+fn a_rotation_cut_before_the_record_keeps_the_old_key_and_breaks_nothing() {
+	for step in [Step::Sealed, Step::Staged, Step::Statement] {
+		let mut fixture = cut_after(step);
+		let before = key::pinned_id(fixture.root()).expect("pin");
+		assert_eq!(
+			EvidenceKey::load_or_create(fixture.root())
+				.map(|k| Some(k.id()))
+				.expect("key"),
+			before,
+			"{step:?}"
+		);
+		seal_with_current_key(&mut fixture, at(DAY + 4, 0));
+		assert_eq!(first_break(&fixture, at(DAY + 4, 1)), None, "{step:?}");
+	}
+}
+
+#[test]
+fn a_second_process_promoting_the_same_key_ends_the_same() {
+	let fixture = cut_after(Step::Recorded);
+	let root = fixture.root();
+	let new = EvidenceKey::staged(root).expect("staged").id();
+	EvidenceKey::promote_next(root, &new).expect("first");
+	EvidenceKey::promote_next(root, &new).expect("second, nothing left to move");
+	assert_eq!(key::pinned_id(root).expect("pin"), Some(new));
+}

@@ -271,3 +271,62 @@ fn an_acknowledgement_signed_by_a_key_before_its_rotation_record_does_not_count(
 	EvidenceKey::promote_next(fixture.root(), &new.id()).expect("promote");
 	assert!(!is_acknowledged(fixture.root(), &first));
 }
+
+#[test]
+fn a_break_found_only_after_the_whole_walk_can_be_acknowledged() {
+	// A day sealed by a key that had handed over: the walk finds it last.
+	let mut fixture = Fixture::new();
+	fixture.tsa.gen_time = at(DAY + 4, 1);
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), crate::evidence::test_support::accepted(7))
+		.expect("append");
+	crate::evidence::rotation::rotate(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	crate::evidence::checkpoint::seal_closed_days(
+		fixture.root(),
+		&fixture.key,
+		true,
+		at(DAY + 4, 0),
+	)
+	.expect("seal with the old key");
+	let paths = files(fixture.root(), Day(DAY + 3));
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		fixture.tsa.respond(
+			&crate::evidence::tsa::request::build(
+				&crate::evidence::record::sha256(&json),
+				crate::evidence::tsa::request::random_nonce(),
+			)
+			.der,
+		),
+	)
+	.expect("token");
+	let verify_at = |now| {
+		crate::evidence::audit::verify(
+			fixture.root(),
+			&crate::evidence::audit::Options {
+				from: None,
+				to: None,
+				anchors: vec![fixture.tsa.anchor],
+				now,
+			},
+		)
+		.expect("verify")
+	};
+	let found = verify_at(at(DAY + 4, 1)).first_break.expect("a break");
+	assert!(found.to_string().contains("already handed over"), "{found}");
+	let current = EvidenceKey::load_or_create(fixture.root()).expect("current key");
+	acknowledge_at(
+		fixture.root(),
+		&current,
+		&found,
+		"sealed by the old key before the rotation finished",
+		&operator(),
+		at(DAY + 4, 2),
+	)
+	.expect("acknowledge");
+	let report = verify_at(at(DAY + 4, 3));
+	assert_eq!(report.first_break, None);
+	assert_eq!(report.acknowledged, vec![found]);
+}

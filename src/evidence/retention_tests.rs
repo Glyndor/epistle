@@ -159,7 +159,7 @@ fn an_anchor_moved_without_its_purge_record_is_a_break() {
 	let report = verified(dir.path(), &tsa, at(DAY + 4, 12));
 	assert_eq!(
 		report.first_break.map(|b| b.to_string()).as_deref(),
-		Some("2026-10-18: checkpoint: days were purged without a purge record")
+		Some("2026-10-15: checkpoint: days were purged without a purge record")
 	);
 }
 
@@ -439,7 +439,7 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 			.first_break
 			.map(|at| at.to_string())
 			.as_deref(),
-		Some("2026-10-23: checkpoint: the purge statement is not the one its record names")
+		Some("2026-10-19: checkpoint: the purge statement is not the one its record names")
 	);
 }
 

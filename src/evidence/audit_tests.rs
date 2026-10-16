@@ -252,7 +252,7 @@ fn a_deleted_latest_day_is_a_rollback() {
 	}
 	assert_eq!(
 		reason(&fixture.verify()),
-		"2026-10-17: checkpoint: rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)"
+		"2026-10-14: checkpoint: rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)"
 	);
 }
 
@@ -271,7 +271,7 @@ fn a_truncated_tail_is_a_rollback() {
 	std::fs::write(&path, kept).expect("truncate");
 	assert_eq!(
 		reason(&fixture.verify()),
-		"2026-10-17: checkpoint: rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)"
+		"2026-10-14: checkpoint: rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)"
 	);
 }
 
@@ -281,7 +281,7 @@ fn a_missing_head_is_a_break() {
 	std::fs::remove_file(crate::evidence::head::path(fixture.root())).expect("rm head");
 	assert_eq!(
 		reason(&fixture.verify()),
-		"2026-10-17: checkpoint: the head is missing: the evidence may have been restored from an older copy"
+		"2026-10-14: checkpoint: the head is missing: the evidence may have been restored from an older copy"
 	);
 }
 

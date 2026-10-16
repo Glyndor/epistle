@@ -322,21 +322,99 @@ impl Timeline {
 	}
 }
 
+/// Where `rotate` can be cut short, for the tests that cut it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+	/// The closed days are sealed with the old key.
+	Sealed,
+	/// The next key is staged.
+	Staged,
+	/// The signed statement is on disk.
+	Statement,
+	/// The hand-over is in the chain.
+	Recorded,
+}
+
+/// Whether the chain holds `rotation`, byte for byte as it would write it.
+fn recorded(evidence_root: &Path, rotation: &Rotation) -> std::io::Result<bool> {
+	let mut found = false;
+	for day in Chain::open(evidence_root)?.days()? {
+		// A day is read as far as it goes: a break elsewhere does not hide it.
+		let _ = super::verify::walk_day(evidence_root, day, None, |_, record, _| {
+			found |= matches!(&record.entry, Entry::KeyRotated(seen) if seen == rotation);
+		});
+	}
+	Ok(found)
+}
+
+/// Finish a rotation that was recorded and cut short before the new key took
+/// over: returns the new key's id when it did. The statement is verified and
+/// the record must be in the chain, so nothing else can promote a key.
+pub fn resume(evidence_root: &Path) -> std::io::Result<Option<String>> {
+	let staged = evidence_root.join("key.next.pk8");
+	if !staged.exists() {
+		return Ok(None);
+	}
+	let new = EvidenceKey::staged(evidence_root)?.id();
+	let Some(pinned) = key::pinned_id(evidence_root)? else {
+		return Ok(None);
+	};
+	match verified(evidence_root, &new) {
+		Some(rotation) if rotation.old == pinned && recorded(evidence_root, &rotation)? => {
+			EvidenceKey::promote_next(evidence_root, &new)?;
+			Ok(Some(new))
+		}
+		_ => Ok(None),
+	}
+}
+
 /// Rotate the evidence key at `now`: returns the new key's id.
 ///
 /// Every closed day is sealed with the old key first, so no day is left to
-/// be sealed by the new one without a record explaining the change.
+/// be sealed by the new one without a record explaining the change. A
+/// rotation that was cut short is finished, never repeated: the staged key,
+/// the statement and the record are each made once.
 pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Result<String> {
+	rotate_steps(evidence_root, timestamp, now, |_| false)
+}
+
+/// [`rotate`], stopping with an error after the steps `stop` names.
+pub(crate) fn rotate_steps(
+	evidence_root: &Path,
+	timestamp: bool,
+	now: u64,
+	stop: impl Fn(Step) -> bool,
+) -> std::io::Result<String> {
+	let cut = |step: Step| -> std::io::Result<()> {
+		match stop(step) {
+			true => Err(std::io::Error::other("stopped")),
+			false => Ok(()),
+		}
+	};
+	if let Some(done) = resume(evidence_root)? {
+		return Ok(done);
+	}
 	let old = EvidenceKey::load_or_create(evidence_root)?;
 	super::checkpoint::seal_closed_days(evidence_root, &old, timestamp, now)
 		.map_err(|error| std::io::Error::other(error.to_string()))?;
+	cut(Step::Sealed)?;
 	let new = EvidenceKey::stage_next(evidence_root)?;
-	let rotation = Rotation::signed(&old, &new.id(), &Day::of_epoch(now).name());
-
+	cut(Step::Staged)?;
+	// A statement already recorded keeps its day; one that never reached the
+	// chain is signed again for today, so the record names the day it sits in.
+	let kept = verified(evidence_root, &new.id()).filter(|kept| kept.old == old.id());
+	let rotation = match kept {
+		Some(kept) if recorded(evidence_root, &kept)? => kept,
+		_ => Rotation::signed(&old, &new.id(), &Day::of_epoch(now).name()),
+	};
 	let bytes = serde_json::to_vec_pretty(&rotation).map_err(std::io::Error::other)?;
 	super::chain::create_private_dir(&evidence_root.join(ROTATIONS_DIR))?;
 	crate::storage::write_secret(&path(evidence_root, &rotation.new), &bytes)?;
-	Chain::open(evidence_root)?.append_at(now, Entry::KeyRotated(rotation.clone()))?;
+	cut(Step::Statement)?;
+	if !recorded(evidence_root, &rotation)? {
+		Chain::open(evidence_root)?.append_at(now, Entry::KeyRotated(rotation.clone()))?;
+	}
+	cut(Step::Recorded)?;
 	EvidenceKey::promote_next(evidence_root, &rotation.new)?;
 	Ok(rotation.new)
 }
@@ -344,3 +422,6 @@ pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Resul
 #[cfg(test)]
 #[path = "rotation_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "rotation_tests_crash.rs"]
+mod tests_crash;
