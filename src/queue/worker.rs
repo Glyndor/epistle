@@ -450,7 +450,7 @@ impl Worker {
 			}
 			envelope.settle();
 		};
-		match self.spool.update_envelope(id, &apply) {
+		match self.spool.update_envelope(id, apply) {
 			Ok(_) => {}
 			// An operator took the entry out while it was in conversation. The
 			// delivery was made all the same: what it owes the evidence log is

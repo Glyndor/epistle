@@ -33,9 +33,19 @@
 //! 6. **Shares fit the limit.** The limit is at least [`MIN_SHARES`] shares, and
 //!    what is set aside never passes it.
 //!
-//! The state is read and written under the file's own lock. A state file that
-//! is there and cannot be read refuses acceptances rather than starting from
-//! nothing: a value that cannot be read grants no more than one that can.
+//! The state is read and written under the file's own lock, opened without
+//! following a link. A file that cannot be used (its owner, a link in its
+//! place, a state too large or corrupt) neither refuses all the mail nor
+//! grants what nothing counted: the process counts in memory, held to the same
+//! limits, and says so once. The day only moves forward, and what is
+//! remembered of prepaid outcomes is bounded in all and per account, so one
+//! tenant cannot swell the file every other tenant's call rewrites.
+//!
+//! The counts could be rebuilt from the chain at start, with no file. They
+//! are kept because the commands (a cancellation, an abandonment found at
+//! start) write facts from other processes that a server's memory would not
+//! see, and because attributing an outcome to its account needs the
+//! acceptance, which may be days back, where a rebuild would read only today.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +61,14 @@ pub const UNATTRIBUTED: &str = "unattributed";
 pub const MIN_SHARES: u64 = 4;
 /// How many days the prepaid outcomes of a message are remembered.
 const OWED_DAYS: i64 = 40;
+/// The most messages whose prepaid outcomes are remembered, in all and per
+/// account. Past them an acceptance still reserves, but its outcomes are
+/// counted when they come, as facts: the state stays small enough to read and
+/// rewrite on every call, whatever one tenant sends.
+const MAX_OWED: usize = 4096;
+const MAX_OWED_PER_ACCOUNT: usize = 1024;
+/// The largest state file read.
+const MAX_STATE: u64 = 4 * 1024 * 1024;
 /// What is counted at which percent of a limit the status warns.
 const WARN_PERCENT: u64 = 80;
 const FILE: &str = "quota.json";
@@ -88,15 +106,16 @@ impl Limits {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Held {
-	records: u64,
-	bytes: u64,
+pub(crate) struct Held {
+	pub(crate) records: u64,
+	pub(crate) bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Owed {
 	left: u64,
 	day: i64,
+	account: String,
 }
 
 /// What the file holds.
@@ -108,7 +127,7 @@ pub struct State {
 	/// What is set aside against the day's limit: each account's records up
 	/// to its share.
 	within: u64,
-	accounts: BTreeMap<String, Held>,
+	pub(crate) accounts: BTreeMap<String, Held>,
 	/// Outcomes still to come of acceptances that paid for them, by queue id.
 	owed: BTreeMap<String, Owed>,
 }
@@ -123,6 +142,7 @@ pub struct Reservation {
 	kept: u64,
 	within: u64,
 	day: i64,
+	owed: bool,
 }
 
 /// The quota under an evidence root.
@@ -132,18 +152,27 @@ pub struct Quota {
 	limits: Limits,
 	/// Serialises threads of this process; the file lock covers others.
 	local: std::sync::Mutex<()>,
+	/// The counts of this process alone, used while the file cannot be.
+	fallback: std::sync::Mutex<State>,
+	/// Whether the file's failure was said already.
+	said: std::sync::atomic::AtomicBool,
 }
 
 impl State {
-	fn roll(&mut self, today: Day) {
-		if self.day != today.0 {
+	/// Start the day's counts again when `today` is later than the state's.
+	/// The day only moves forward: a clock that went back does not clear
+	/// the counts. Returns the day the state is in.
+	fn roll(&mut self, today: Day) -> i64 {
+		if today.0 > self.day {
 			self.day = today.0;
 			self.total = 0;
 			self.within = 0;
 			self.accounts.clear();
 		}
+		let day = self.day;
 		self.owed
-			.retain(|_, owed| owed.left > 0 && today.0 - owed.day <= OWED_DAYS);
+			.retain(|_, owed| owed.left > 0 && day - owed.day <= OWED_DAYS);
+		day
 	}
 
 	/// Count `records` to `account`: the part up to its share, and up to what
@@ -168,34 +197,74 @@ impl Quota {
 			root: evidence_root.to_path_buf(),
 			limits: limits.fitted(),
 			local: std::sync::Mutex::new(()),
+			fallback: std::sync::Mutex::new(State::default()),
+			said: std::sync::atomic::AtomicBool::new(false),
 		}
 	}
 
-	fn locked<T>(&self, work: impl FnOnce(&mut State) -> T) -> std::io::Result<T> {
+	/// Run `work` on the counts under the file's lock, and write them back.
+	/// A file that cannot be used (its owner, its permissions, a link in its
+	/// place, a state too large or unreadable) must neither refuse all the mail
+	/// nor grant what nothing counted: the process then counts on its own, in
+	/// memory, held to the same limits, and says so once.
+	fn locked<T>(&self, mut work: impl FnMut(&mut State) -> T) -> std::io::Result<T> {
 		let _local = self
 			.local
 			.lock()
 			.map_err(|_| std::io::Error::other("quota lock poisoned"))?;
+		match self.on_file(&mut work) {
+			Ok(value) => {
+				self.said.store(false, std::sync::atomic::Ordering::Relaxed);
+				Ok(value)
+			}
+			Err(error) => {
+				if !self.said.swap(true, std::sync::atomic::Ordering::Relaxed) {
+					tracing::error!(%error, "the evidence quota file cannot be used; counting in memory");
+				}
+				let mut state = self
+					.fallback
+					.lock()
+					.map_err(|_| std::io::Error::other("quota lock poisoned"))?;
+				Ok(work(&mut state))
+			}
+		}
+	}
+
+	fn on_file<T>(&self, work: &mut impl FnMut(&mut State) -> T) -> std::io::Result<T> {
+		use std::os::unix::fs::OpenOptionsExt;
 		super::chain::create_private_dir(&self.root)?;
 		let mut options = std::fs::OpenOptions::new();
-		options.create(true).truncate(false).write(true);
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
+		options
+			.create(true)
+			.truncate(false)
+			.write(true)
+			.mode(0o600)
+			.custom_flags(libc::O_NOFOLLOW);
 		let lock = options.open(self.root.join(LOCK))?;
 		lock.lock()?;
-		let mut state =
-			match super::checkpoint::read_bounded(&self.root.join(FILE), 64 * 1024 * 1024)? {
-				None => State::default(),
-				Some(bytes) => serde_json::from_slice(&bytes)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
-			};
+		let path = self.root.join(FILE);
+		let mut state = match super::chain::open_day(&path) {
+			Ok(file) => {
+				use std::io::Read;
+				let mut bytes = Vec::new();
+				file.take(MAX_STATE + 1).read_to_end(&mut bytes)?;
+				if bytes.len() as u64 > MAX_STATE {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						"the quota state is larger than expected",
+					));
+				}
+				serde_json::from_slice(&bytes)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
+			}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => State::default(),
+			Err(error) => return Err(error),
+		};
 		let before = state.clone();
 		let value = work(&mut state);
 		if state != before {
 			let bytes = serde_json::to_vec(&state).map_err(std::io::Error::other)?;
-			crate::storage::write_secret(&self.root.join(FILE), &bytes)?;
+			crate::storage::write_secret(&path, &bytes)?;
 		}
 		Ok(value)
 	}
@@ -214,7 +283,7 @@ impl Quota {
 		let limits = self.limits;
 		let account = account.to_string();
 		let refused = self.locked(|state| {
-			state.roll(today);
+			let day = state.roll(today);
 			let held = state.accounts.get(&account).cloned().unwrap_or_default();
 			let over = |what: &str| {
 				Some(std::io::Error::new(
@@ -238,20 +307,31 @@ impl Quota {
 				kept,
 				(limits.account_records, limits.day_records),
 			);
-			state.owed.insert(
-				id.to_string(),
-				Owed {
-					left: records.saturating_sub(1),
-					day: today.0,
-				},
-			);
+			// Remembered only while the memory of prepaid outcomes has room.
+			let mine = state
+				.owed
+				.values()
+				.filter(|owed| owed.account == account)
+				.count();
+			let owed = state.owed.len() < MAX_OWED && mine < MAX_OWED_PER_ACCOUNT;
+			if owed {
+				state.owed.insert(
+					id.to_string(),
+					Owed {
+						left: records.saturating_sub(1),
+						day,
+						account: account.clone(),
+					},
+				);
+			}
 			Ok(Reservation {
 				id,
 				account: account.clone(),
 				records,
 				kept,
 				within,
-				day: today.0,
+				day,
+				owed,
 			})
 		})?;
 		refused.map_err(|error| error.unwrap_or_else(|| std::io::Error::other("quota")))
@@ -260,7 +340,9 @@ impl Quota {
 	/// Give back exactly what `held` reserved, when nothing was written.
 	pub fn release(&self, held: Reservation) -> std::io::Result<()> {
 		self.locked(|state| {
-			state.owed.remove(&held.id.to_string());
+			if held.owed {
+				state.owed.remove(&held.id.to_string());
+			}
 			if state.day != held.day {
 				return;
 			}
@@ -334,12 +416,6 @@ impl Quota {
 	#[cfg(test)]
 	pub(crate) fn state(&self) -> State {
 		self.locked(|state| state.clone()).expect("state")
-	}
-
-	/// The limits in force.
-	#[cfg(test)]
-	pub(crate) fn limits(&self) -> Limits {
-		self.limits
 	}
 }
 

@@ -193,18 +193,15 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 	};
 	for day in days {
 		let mut accepted: Vec<u64> = Vec::new();
-		loop {
-			let Err(stop) = walk_and_check(
-				evidence_root,
-				day,
-				today,
-				options,
-				&mut walker,
-				&mut report,
-				&accepted,
-			) else {
-				break;
-			};
+		while let Err(stop) = walk_and_check(
+			evidence_root,
+			day,
+			today,
+			options,
+			&mut walker,
+			&mut report,
+			&accepted,
+		) {
 			let at = stop.at().clone();
 			if accepted.len() >= MAX_ACKNOWLEDGED_PER_DAY
 				|| !super::ack::is_acknowledged(evidence_root, &at)

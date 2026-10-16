@@ -276,7 +276,8 @@ refuses to run at a clock more than 35 days past the newest record.
   cancellation is a fact and is never refused: it is counted to the account
   that sent the message, and an account past its share waits at its next
   acceptance. The counts are in `quota.json` in the evidence directory, shared
-  by the server and the commands, and survive restarts. They keep the
+  by the server and the commands, and survive restarts. If that file cannot be
+  used, each process counts in memory, held to the same limits. They keep the
   verification, which reads every record, from outgrowing its ten minutes; they
   are not a measurement of that time.
 - The service account holds the evidence key and the data. Until a day is

@@ -125,14 +125,104 @@ fn the_counts_survive_a_restart_and_are_shared_between_processes() {
 }
 
 #[test]
-fn a_state_that_cannot_be_read_refuses_acceptances_and_not_facts() {
+fn a_state_that_cannot_be_read_neither_refuses_the_mail_nor_grants_what_nothing_counted() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let quota = quota(dir.path());
 	crate::storage::write_secret(&dir.path().join(FILE), b"not json").expect("corrupt");
-	assert!(
-		reserve(&quota, "a", 1, 1, 0).is_err(),
-		"granted on a state nobody read"
+	// The process counts on its own, held to the same limits.
+	let _ = reserve(&quota, "a", 1, 12, 0).expect("mail still flows");
+	reserve(&quota, "a", 2, 1, 0).expect_err("and the share is still a share");
+	assert_eq!(
+		std::fs::read(dir.path().join(FILE)).expect("read"),
+		b"not json",
+		"the file was written over"
 	);
+}
+
+#[test]
+fn a_link_in_place_of_the_files_is_not_followed() {
+	use std::os::unix::fs::symlink;
+	// The lock linked, the state linked, or both.
+	for (lock, state) in [(true, false), (false, true), (true, true)] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let elsewhere = tempfile::tempdir().expect("elsewhere");
+		let target = elsewhere.path().join("target");
+		// What the link points to says the account has used its whole share:
+		// if it were read, the acceptance below would be refused.
+		let mut full = State {
+			day: TODAY.0,
+			total: 12,
+			within: 12,
+			..State::default()
+		};
+		full.accounts.insert(
+			"a".into(),
+			Held {
+				records: 12,
+				bytes: 0,
+			},
+		);
+		let full = serde_json::to_vec(&full).expect("json");
+		std::fs::write(&target, &full).expect("target");
+		if lock {
+			symlink(&target, dir.path().join(LOCK)).expect("link the lock");
+		}
+		if state {
+			symlink(&target, dir.path().join(FILE)).expect("link the state");
+		}
+		let quota = quota(dir.path());
+		let _ = reserve(&quota, "a", 1, 3, 0).unwrap_or_else(|error| {
+			panic!("lock {lock} state {state}: read through a link ({error})")
+		});
+		assert_eq!(
+			std::fs::read(&target).expect("read"),
+			full,
+			"lock {lock} state {state}: written through the link"
+		);
+	}
+}
+
+#[test]
+fn a_clock_that_goes_back_does_not_clear_the_counts() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = quota(dir.path());
+	let _ = reserve(&quota, "a", 1, 12, 0).expect("a whole share");
+	let yesterday = Day(TODAY.0 - 1);
+	quota
+		.reserve("a", id(2), (1, 0), yesterday)
+		.expect_err("the share is still used");
+	assert_eq!(quota.state().day, TODAY.0);
+	assert_eq!(quota.state().accounts["a"].records, 12);
+}
+
+#[test]
+fn what_is_remembered_of_prepaid_outcomes_is_bounded_per_account_and_in_all() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = Quota::open(
+		dir.path(),
+		Limits {
+			account_records: 1_000_000,
+			account_kept_bytes: u64::MAX,
+			day_records: 4_000_000,
+		},
+	);
+	for n in 0..(MAX_OWED_PER_ACCOUNT as u128 + 50) {
+		let _ = quota
+			.reserve("noisy", id(n), (2, 0), TODAY)
+			.expect("reserved");
+	}
+	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT);
+	// Another tenant is not shut out of the memory by it.
+	let _ = quota
+		.reserve("quiet", id(1 << 40), (2, 0), TODAY)
+		.expect("reserved");
+	assert_eq!(quota.state().owed.len(), MAX_OWED_PER_ACCOUNT + 1);
+	// An outcome nobody remembered is counted, never refused.
+	let before = quota.state().accounts["noisy"].records;
+	quota
+		.fact(Some("noisy"), id(MAX_OWED_PER_ACCOUNT as u128 + 10), TODAY)
+		.expect("a fact");
+	assert_eq!(quota.state().accounts["noisy"].records, before + 1);
 }
 
 #[test]
