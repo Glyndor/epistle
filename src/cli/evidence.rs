@@ -60,11 +60,20 @@ pub enum EvidenceCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Check a bundle offline: no configuration, no server data. Exit code
-	/// 1 when any check fails.
+	/// Check a bundle offline, against a key you anchor.
+	///
+	/// No configuration and no server data are read. Exit code 1 when any
+	/// check fails.
 	Check {
 		/// The bundle directory.
 		bundle: PathBuf,
+		/// The evidence key the operator published: its id (hex SHA-256 of
+		/// the public key) or a file holding the public key as PEM. A bundle
+		/// is accepted only when its days were signed by this key or by one
+		/// that took over from it; repeatable. Required: a bundle cannot
+		/// vouch for the key that signed it.
+		#[arg(long = "key", value_name = "FINGERPRINT|FILE")]
+		keys: Vec<String>,
 		/// Also trust this timestamp key: hex SHA-256 of its
 		/// SubjectPublicKeyInfo. The default authority's is always trusted.
 		#[arg(long = "anchor", value_name = "SHA256")]
@@ -72,6 +81,12 @@ pub enum EvidenceCli {
 		/// Print one JSON object instead of text.
 		#[arg(long)]
 		json: bool,
+	},
+	/// The key that signs the daily seals: show it, or rotate it.
+	Key {
+		/// Key action (`show`, `rotate`).
+		#[command(subcommand)]
+		action: KeyCli,
 	},
 	/// Show or set what evidence is kept, and for how long.
 	Policy {
@@ -93,6 +108,28 @@ pub enum EvidenceCli {
 		/// Why the break is accepted (kept in the evidence).
 		#[arg(long)]
 		reason: String,
+		/// Do not ask; required when there is no terminal.
+		#[arg(long)]
+		yes: bool,
+		/// Print one JSON object instead of text.
+		#[arg(long)]
+		json: bool,
+	},
+}
+
+/// Key actions.
+#[derive(Debug, Subcommand)]
+pub enum KeyCli {
+	/// Show the key's fingerprint, its public half and its predecessors.
+	Show {
+		/// Print one JSON object instead of text.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Make a new key take over from the current one.
+	///
+	/// The old key signs the hand-over, which is recorded in the evidence.
+	Rotate {
 		/// Do not ask; required when there is no terminal.
 		#[arg(long)]
 		yes: bool,
@@ -202,11 +239,12 @@ pub(super) fn run(
 ) -> ExitCode {
 	if let EvidenceCli::Check {
 		bundle,
+		keys,
 		anchors,
 		json,
 	} = action
 	{
-		return super::evidence_bundle::check(&bundle, &anchors, json, out);
+		return super::evidence_bundle::check(&bundle, &keys, &anchors, json, out);
 	}
 	let config = match Config::load(config_path) {
 		Ok(config) => config,
@@ -247,6 +285,7 @@ pub(super) fn run(
 			};
 			super::evidence_bundle::export(&root, &crypto, &selector, &bundle, json, out)
 		}
+		EvidenceCli::Key { action } => super::evidence_key::run(&root, action, now, out),
 		EvidenceCli::Policy { action } => super::evidence_policy::run(&root, action, out),
 		EvidenceCli::Timestamp { action } => super::evidence_timestamp::run(&root, action, out),
 		EvidenceCli::Acknowledge { reason, yes, json } => {
@@ -263,3 +302,6 @@ pub(super) fn json(out: &mut impl Write, value: &serde_json::Value) -> ExitCode 
 #[cfg(test)]
 #[path = "evidence_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "evidence_tests_key.rs"]
+mod tests_key;

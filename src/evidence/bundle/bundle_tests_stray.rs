@@ -9,7 +9,7 @@ use crate::evidence::audit::tests::Fixture;
 const DAY_NAME: &str = "2026-10-15";
 
 fn stray_failures(fixture: &Fixture, bundle: &std::path::Path) -> Vec<String> {
-	failures(&check(bundle, &[fixture.tsa.anchor]).expect("check"))
+	failures(&check(bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"))
 }
 
 #[test]

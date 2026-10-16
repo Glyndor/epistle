@@ -127,10 +127,7 @@ pub fn export(
 		keys.insert(checkpoint.key.clone());
 		done.records += lines.len();
 	}
-	for key in keys {
-		let pem = std::fs::read(crate::evidence::key::public_key_path(evidence_root, &key))?;
-		write_file(&out.join("keys").join(format!("{key}.pem")), &pem)?;
-	}
+	write_keys(evidence_root, out, keys)?;
 	for (id, day, days, digest) in kept {
 		let path = evidence_root
 			.join(crate::evidence::service::MESSAGES_DIR)
@@ -157,6 +154,40 @@ pub fn export(
 	super::readme::write(out, &done)?;
 	super::sums::write(out)?;
 	Ok(done)
+}
+
+/// Write the public keys that signed the exported days and, for each, the
+/// signed hand-overs back to the oldest key they lead to, with the keys they
+/// name: what a reader needs to follow a signer to a key it anchored.
+fn write_keys(
+	evidence_root: &Path,
+	out: &Path,
+	signers: BTreeSet<String>,
+) -> Result<(), BundleError> {
+	use crate::evidence::rotation;
+	let mut keys = signers.clone();
+	let mut statements = BTreeSet::new();
+	for signer in &signers {
+		for rotation in rotation::ancestry(evidence_root, signer) {
+			keys.insert(rotation.old.clone());
+			keys.insert(rotation.new.clone());
+			statements.insert(rotation.new);
+		}
+	}
+	for key in keys {
+		let pem = std::fs::read(crate::evidence::key::public_key_path(evidence_root, &key))?;
+		write_file(&out.join("keys").join(format!("{key}.pem")), &pem)?;
+	}
+	for new in statements {
+		let bytes = std::fs::read(rotation::path(evidence_root, &new))?;
+		write_file(
+			&out.join("keys")
+				.join("rotations")
+				.join(format!("{new}.json")),
+			&bytes,
+		)?;
+	}
+	Ok(())
 }
 
 /// Call `pick` with each record of `day` the selector wants, with its

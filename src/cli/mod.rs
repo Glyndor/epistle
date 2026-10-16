@@ -34,6 +34,7 @@ mod dns_records;
 mod domain;
 mod evidence;
 mod evidence_bundle;
+mod evidence_key;
 mod evidence_policy;
 mod evidence_timestamp;
 mod evidence_verify;

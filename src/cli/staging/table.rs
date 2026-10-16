@@ -165,6 +165,12 @@ pub(crate) const NOT_STAGED: &[(Option<&[&str]>, &str, &str)] = &[
 		 bundle where it is",
 	),
 	(
+		Some(&["evidence", "check"]),
+		"keys",
+		"the check never runs as the service account: whoever runs it reads the \
+		 key file where it is",
+	),
+	(
 		Some(&["evidence", "timestamp", "enable"]),
 		"token_file",
 		"recorded in the timestamp settings for the server to read at run time, and \

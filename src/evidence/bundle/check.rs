@@ -1,9 +1,11 @@
 //! `epistle evidence check <bundle>`: verify a bundle offline.
 //!
 //! Nothing here reads the server's configuration or data: only the bundle,
-//! and the anchors the caller trusts (the built-in default authority's, and
-//! any given with `--anchor`). An anchor carried by the bundle is never
-//! trusted on its own word.
+//! and the anchors the caller trusts: the timestamp authority keys (the
+//! built-in default's, and any given with `--anchor`) and the evidence key
+//! (`--key`). A key carried by the bundle is never trusted on its own word:
+//! a day counts only when its signer is the anchored key, or took over from
+//! it by a chain of hand-overs, each signed by the key before.
 
 use std::collections::BTreeSet;
 use std::io::BufReader;
@@ -16,6 +18,7 @@ use crate::evidence::key;
 use crate::evidence::lines::{Line, Lines};
 use crate::evidence::merkle::{leaf_hash, verify_inclusion};
 use crate::evidence::record::{Entry, Record, hash_from_hex, sha256, to_hex};
+use crate::evidence::rotation::Rotation;
 use crate::evidence::tsa::{Check, Expected, Outcome};
 
 /// One named check and its result.
@@ -66,8 +69,17 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 		.ok_or_else(|| "missing".to_string())
 }
 
-/// Check the bundle in `dir`, trusting the timestamp keys in `anchors`.
-pub fn check(dir: &Path, anchors: &[[u8; 32]]) -> Result<CheckReport, BundleError> {
+/// The most hand-overs followed from a signer to an anchored key.
+const MAX_HOPS: usize = crate::evidence::rotation::MAX_ROTATIONS;
+
+/// Check the bundle in `dir`, trusting the timestamp keys in `anchors` and
+/// the evidence keys whose ids are in `keys`. Without a key the check
+/// fails: a bundle cannot vouch for the key that signed it.
+pub fn check(
+	dir: &Path,
+	anchors: &[[u8; 32]],
+	keys: &[String],
+) -> Result<CheckReport, BundleError> {
 	let mut report = CheckReport::default();
 	report.add(
 		"SHA256SUMS lists every file, and every file matches",
@@ -94,14 +106,25 @@ pub fn check(dir: &Path, anchors: &[[u8; 32]]) -> Result<CheckReport, BundleErro
 			false => Ok(()),
 		},
 	);
+	report.add(
+		"the evidence key is anchored",
+		match keys.is_empty() {
+			true => Err(
+				"no key given: pass --key <fingerprint|file> with the key the operator published"
+					.into(),
+			),
+			false => Ok(()),
+		},
+	);
 	let mut vouched = BTreeSet::new();
 	for day in days {
 		let before = report.findings.len();
-		let files = check_day(dir, day, anchors, &mut report);
+		let files = check_day(dir, day, anchors, keys, &mut report);
 		// Only a day every one of whose checks passed vouches for its files.
-		if report.findings[before..]
-			.iter()
-			.all(|finding| finding.result.is_ok())
+		if !keys.is_empty()
+			&& report.findings[before..]
+				.iter()
+				.all(|finding| finding.result.is_ok())
 		{
 			vouched.extend(files);
 		}
@@ -189,7 +212,13 @@ fn strays(dir: &Path, vouched: &BTreeSet<String>) -> Result<(), String> {
 	}
 }
 
-fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckReport) -> Files {
+fn check_day(
+	dir: &Path,
+	day: Day,
+	anchors: &[[u8; 32]],
+	keys: &[String],
+	report: &mut CheckReport,
+) -> Files {
 	let name = day.name();
 	let base = dir.join("checkpoints").join(&name);
 	let json = match read(&base.with_extension("json")) {
@@ -220,6 +249,15 @@ fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckRepor
 		format!("{name}: signed by the evidence key it names"),
 		signature(dir, &base, &checkpoint, &json),
 	);
+	let mut hand_overs = Vec::new();
+	if !keys.is_empty() {
+		let followed = follow(dir, &checkpoint.key, keys);
+		report.add(
+			format!("{name}: the signing key is the anchored key or took over from it"),
+			followed.as_ref().map(|_| ()).map_err(Clone::clone),
+		);
+		hand_overs = followed.unwrap_or_default();
+	}
 	if checkpoint.timestamp == "enabled" {
 		timestamp(dir, &base, &name, day, &json, anchors, report);
 	} else {
@@ -239,6 +277,7 @@ fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckRepor
 		format!("tsa/{name}-chain.pem"),
 		format!("keys/{}.pem", checkpoint.key),
 	]);
+	files.extend(hand_overs);
 	if let Ok(messages) = &included {
 		files.extend(messages.iter().map(|id| format!("messages/{id}.eml")));
 	}
@@ -247,6 +286,48 @@ fn check_day(dir: &Path, day: Day, anchors: &[[u8; 32]], report: &mut CheckRepor
 		included.map(|_| ()),
 	);
 	files
+}
+
+/// Follow the signed hand-overs from `signer` back to the oldest key the
+/// bundle leads to, checking every one, and require that an anchored key is
+/// on the way (the signer itself counts). Returns the bundle paths read.
+fn follow(dir: &Path, signer: &str, keys: &[String]) -> Result<Vec<String>, String> {
+	let mut files = Vec::new();
+	let mut current = signer.to_string();
+	let mut seen = BTreeSet::new();
+	let mut anchored = false;
+	for _ in 0..=MAX_HOPS {
+		anchored |= keys.iter().any(|anchor| *anchor == current);
+		if hash_from_hex(&current).is_none() || !seen.insert(current.clone()) {
+			break;
+		}
+		let relative = format!("keys/rotations/{current}.json");
+		let Ok(bytes) = read(&dir.join(&relative)) else {
+			break;
+		};
+		let rotation: Rotation =
+			serde_json::from_slice(&bytes).map_err(|_| format!("{relative}: not a hand-over"))?;
+		let old_pem = read(&dir.join("keys").join(format!("{}.pem", rotation.old)))
+			.map_err(|why| format!("keys/{}.pem: {why}", rotation.old))?;
+		let old = std::str::from_utf8(&old_pem)
+			.ok()
+			.and_then(key::parse_public_pem)
+			.ok_or("the previous key's file is not an Ed25519 public key")?;
+		if rotation.new != current || !rotation.verifies(&old) {
+			return Err(format!(
+				"{relative}: not signed by the key it says it took over from"
+			));
+		}
+		files.push(relative);
+		files.push(format!("keys/{}.pem", rotation.old));
+		current = rotation.old;
+	}
+	match anchored {
+		true => Ok(files),
+		false => Err(format!(
+			"signed by key {signer}, which is neither an anchored key nor took over from one by signed hand-overs"
+		)),
+	}
 }
 
 fn signature(dir: &Path, base: &Path, checkpoint: &Checkpoint, json: &[u8]) -> Result<(), String> {

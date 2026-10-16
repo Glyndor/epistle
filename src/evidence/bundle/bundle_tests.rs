@@ -15,6 +15,11 @@ use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
 use crate::storage::MessageCrypto;
 
+/// The id of the evidence key under `root`.
+fn key_of(root: &Path) -> String {
+	EvidenceKey::load_or_create(root).expect("key").id()
+}
+
 pub(super) fn by_id(n: u32) -> Selector {
 	Selector::MessageId(format!("<{n}@example.org>"))
 }
@@ -52,10 +57,11 @@ pub(super) fn resum(bundle: &Path) {
 fn an_exported_message_checks_offline_after_the_server_is_gone() {
 	let fixture = Fixture::new();
 	let anchor = fixture.tsa.anchor;
+	let key = fixture.key.id();
 	let (_out, bundle) = exported(&fixture, &by_id(1));
 	// Nothing of the server is left: only the bundle and the anchor.
 	drop(fixture);
-	let report = check(&bundle, &[anchor]).expect("check");
+	let report = check(&bundle, &[anchor], &[key]).expect("check");
 	assert!(report.passed(), "{:?}", failures(&report));
 	let records =
 		std::fs::read_to_string(bundle.join("records/2026-10-15.jsonl")).expect("records");
@@ -78,7 +84,7 @@ fn a_recipient_export_spans_days_and_takes_only_that_recipient() {
 		to: Day(DAY + 2),
 	};
 	let (_out, bundle) = exported(&fixture, &selector);
-	let report = check(&bundle, &[fixture.tsa.anchor]).expect("check");
+	let report = check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check");
 	assert!(report.passed(), "{:?}", failures(&report));
 	let days: Vec<_> = std::fs::read_dir(bundle.join("records"))
 		.expect("records")
@@ -116,12 +122,12 @@ fn an_edited_record_fails_even_with_fresh_checksums() {
 		.replace("student1", "student9");
 	std::fs::write(&path, edited).expect("write");
 	assert!(
-		!check(&bundle, &[fixture.tsa.anchor])
+		!check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()])
 			.expect("check")
 			.passed()
 	);
 	resum(&bundle);
-	let report = check(&bundle, &[fixture.tsa.anchor]).expect("check");
+	let report = check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check");
 	let failed = failures(&report);
 	assert!(
 		failed
@@ -139,7 +145,8 @@ fn an_edited_record_fails_even_with_fresh_checksums() {
 	}
 	std::fs::write(&proofs, serde_json::to_vec_pretty(&proof).expect("json")).expect("write");
 	resum(&bundle);
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed
 			.iter()
@@ -158,7 +165,8 @@ fn an_edited_checkpoint_fails_its_signature_and_its_token() {
 		.replace("\"records\": 2", "\"records\": 3");
 	std::fs::write(&path, edited).expect("write");
 	resum(&bundle);
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed
 			.iter()
@@ -181,7 +189,8 @@ fn a_substituted_key_is_refused_by_its_id() {
 	let pem = crate::evidence::key::public_pem(&key.public_key());
 	std::fs::write(bundle.join("keys").join(format!("{id}.pem")), pem).expect("write");
 	resum(&bundle);
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed
 			.iter()
@@ -195,7 +204,7 @@ fn a_token_from_an_authority_not_trusted_by_the_reader_fails() {
 	let fixture = Fixture::new();
 	let (_out, bundle) = exported(&fixture, &by_id(1));
 	let stranger = FakeTsa::new(0);
-	let failed = failures(&check(&bundle, &[stranger.anchor]).expect("check"));
+	let failed = failures(&check(&bundle, &[stranger.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed.iter().any(|f| f.contains("(a) the signer chains")),
 		"{failed:?}"
@@ -207,7 +216,8 @@ fn unlisted_files_and_links_are_refused() {
 	let fixture = Fixture::new();
 	let (_out, bundle) = exported(&fixture, &by_id(1));
 	std::fs::write(bundle.join("extra.txt"), "added later").expect("write");
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed.iter().any(|f| f.contains("extra.txt: not listed")),
 		"{failed:?}"
@@ -220,7 +230,8 @@ fn unlisted_files_and_links_are_refused() {
 	let outside = bundle.with_file_name("outside.pem");
 	std::fs::rename(&key, &outside).expect("move key");
 	std::os::unix::fs::symlink(&outside, &key).expect("link key");
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed.iter().any(|f| f.contains("not a regular file")),
 		"{failed:?}"
@@ -231,7 +242,8 @@ fn unlisted_files_and_links_are_refused() {
 	let moved = bundle.join("elsewhere.jsonl");
 	std::fs::rename(&records, &moved).expect("move");
 	std::os::unix::fs::symlink(&moved, &records).expect("link");
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed.iter().any(|f| f.contains("not a regular file")),
 		"{failed:?}"
@@ -246,7 +258,7 @@ fn a_bundle_without_any_checkpoint_does_not_pass() {
 		std::fs::remove_file(entry.expect("entry").path()).expect("remove");
 	}
 	resum(&bundle);
-	let report = check(&bundle, &[fixture.tsa.anchor]).expect("check");
+	let report = check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check");
 	assert!(!report.passed());
 	assert!(
 		failures(&report)
@@ -336,11 +348,13 @@ fn a_kept_message_goes_in_the_bundle_decrypted_and_is_checked() {
 		export(kept.dir.path(), &kept.crypto, &selector, &bundle).expect("export");
 		let message = bundle.join("messages").join(format!("{}.eml", kept.id));
 		assert_eq!(std::fs::read(&message).expect("message"), BODY);
-		let report = check(&bundle, &[kept.tsa.anchor]).expect("check");
+		let report = check(&bundle, &[kept.tsa.anchor], &[key_of(kept.dir.path())]).expect("check");
 		assert!(report.passed(), "{:?}", failures(&report));
 		std::fs::write(&message, b"Subject: notice\r\n\r\nSomething else.\r\n").expect("write");
 		resum(&bundle);
-		let failed = failures(&check(&bundle, &[kept.tsa.anchor]).expect("check"));
+		let failed = failures(
+			&check(&bundle, &[kept.tsa.anchor], &[key_of(kept.dir.path())]).expect("check"),
+		);
 		assert!(
 			failed
 				.iter()
@@ -363,7 +377,7 @@ fn a_day_sealed_without_timestamps_is_reported_as_such() {
 	let bundle = out.path().join("bundle");
 	let selector = Selector::MessageId("<kept@example.org>".into());
 	export(kept.dir.path(), &kept.crypto, &selector, &bundle).expect("export");
-	let report = check(&bundle, &[kept.tsa.anchor]).expect("check");
+	let report = check(&bundle, &[kept.tsa.anchor], &[key_of(kept.dir.path())]).expect("check");
 	let failed = failures(&report);
 	assert!(
 		failed
@@ -504,7 +518,8 @@ fn a_key_id_that_is_a_path_is_refused() {
 		.replace(&id, "../../outside");
 	std::fs::write(&path, edited).expect("write");
 	resum(&bundle);
-	let failed = failures(&check(&bundle, &[fixture.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[fixture.tsa.anchor], &[fixture.key.id()]).expect("check"));
 	assert!(
 		failed.iter().any(|f| f.contains("not a key id")),
 		"{failed:?}"
@@ -519,7 +534,8 @@ fn a_token_dated_before_the_day_ended_fails() {
 	let bundle = out.path().join("bundle");
 	let selector = Selector::MessageId("<kept@example.org>".into());
 	export(kept.dir.path(), &kept.crypto, &selector, &bundle).expect("export");
-	let failed = failures(&check(&bundle, &[kept.tsa.anchor]).expect("check"));
+	let failed =
+		failures(&check(&bundle, &[kept.tsa.anchor], &[key_of(kept.dir.path())]).expect("check"));
 	assert!(
 		failed
 			.iter()

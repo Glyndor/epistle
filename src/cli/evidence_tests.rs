@@ -18,19 +18,19 @@ fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
 	Cli::try_parse_from(argv)
 }
 
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
 	super::super::ban::now_epoch()
 }
 
 /// Three sealed and stamped days, ending two days before today.
-struct Server {
-	dir: tempfile::TempDir,
-	tsa: FakeTsa,
-	first: i64,
+pub(super) struct Server {
+	pub(super) dir: tempfile::TempDir,
+	pub(super) tsa: FakeTsa,
+	pub(super) first: i64,
 }
 
 impl Server {
-	fn new() -> Self {
+	pub(super) fn new() -> Self {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let first = Day::of_epoch(now()).0 - 5;
 		let tsa = FakeTsa::new(at(first + 3, 1));
@@ -57,7 +57,7 @@ impl Server {
 		Server { dir, tsa, first }
 	}
 
-	fn root(&self) -> &Path {
+	pub(super) fn root(&self) -> &Path {
 		self.dir.path()
 	}
 
@@ -77,7 +77,7 @@ impl Server {
 	}
 }
 
-fn text(out: &[u8]) -> String {
+pub(super) fn text(out: &[u8]) -> String {
 	String::from_utf8_lossy(out).to_string()
 }
 
@@ -139,9 +139,13 @@ fn check_runs_without_any_configuration_file() {
 	);
 	assert_eq!(code, ExitCode::SUCCESS, "{}", text(&out));
 	let anchor = crate::evidence::record::to_hex(&server.tsa.anchor);
+	let key = EvidenceKey::load_or_create(server.root())
+		.expect("key")
+		.id();
 	let missing = out_dir.path().join("no-such-config.toml");
 	let action = EvidenceCli::Check {
 		bundle: bundle.clone(),
+		keys: vec![key.clone()],
 		anchors: vec![anchor.clone()],
 		json: true,
 	};
@@ -163,6 +167,7 @@ fn check_runs_without_any_configuration_file() {
 	// Without the anchor, only the default authority is trusted: it fails.
 	let action = EvidenceCli::Check {
 		bundle: bundle.clone(),
+		keys: vec![key],
 		anchors: Vec::new(),
 		json: false,
 	};
@@ -171,6 +176,7 @@ fn check_runs_without_any_configuration_file() {
 	assert!(text(&out).contains("FAIL") && text(&out).contains("does NOT verify"));
 	let action = EvidenceCli::Check {
 		bundle,
+		keys: Vec::new(),
 		anchors: vec!["zz".into()],
 		json: false,
 	};

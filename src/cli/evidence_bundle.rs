@@ -24,13 +24,56 @@ pub(super) fn anchors(extra: &[String]) -> Result<Vec<[u8; 32]>, String> {
 	Ok(anchors)
 }
 
+/// The ids of the evidence keys the operator named: each is a key id, or a
+/// file holding the public key (PEM) or its id.
+pub(super) fn evidence_keys(given: &[String]) -> Result<Vec<String>, String> {
+	given.iter().map(|value| evidence_key(value)).collect()
+}
+
+fn evidence_key(value: &str) -> Result<String, String> {
+	let value = value.trim();
+	if hash_from_hex(value).is_some() {
+		return Ok(value.to_string());
+	}
+	let bytes = crate::evidence::checkpoint::read_bounded(Path::new(value), 64 * 1024)
+		.ok()
+		.flatten()
+		.ok_or_else(|| {
+			format!(
+				"{:?} is neither a key id (64 hex digits) nor a readable file",
+				sanitize(value)
+			)
+		})?;
+	let text = String::from_utf8(bytes).map_err(|_| "the key file is not text".to_string())?;
+	if let Some(public) = crate::evidence::key::parse_public_pem(&text) {
+		return Ok(crate::evidence::key::key_id(&public));
+	}
+	match text.trim() {
+		id if hash_from_hex(id).is_some() => Ok(id.to_string()),
+		_ => Err(format!(
+			"{:?} holds neither a PEM public key nor a key id",
+			sanitize(value)
+		)),
+	}
+}
+
 /// Check the bundle in `dir`.
-pub(super) fn check(dir: &Path, extra: &[String], as_json: bool, out: &mut impl Write) -> ExitCode {
+pub(super) fn check(
+	dir: &Path,
+	keys: &[String],
+	extra: &[String],
+	as_json: bool,
+	out: &mut impl Write,
+) -> ExitCode {
 	let anchors = match anchors(extra) {
 		Ok(anchors) => anchors,
 		Err(why) => return super::exit::refused(why),
 	};
-	let report = match bundle::check(dir, &anchors) {
+	let keys = match evidence_keys(keys) {
+		Ok(keys) => keys,
+		Err(why) => return super::exit::refused(why),
+	};
+	let report = match bundle::check(dir, &anchors, &keys) {
 		Ok(report) => report,
 		Err(error) => return failed(&error),
 	};
