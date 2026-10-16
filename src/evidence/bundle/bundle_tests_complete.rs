@@ -238,3 +238,65 @@ fn a_bundle_for_one_recipient_needs_that_recipients_outcome_and_not_the_others()
 		"{failed:?}"
 	);
 }
+
+#[test]
+fn a_record_with_a_time_no_calendar_holds_fails_the_check_and_does_not_panic() {
+	use crate::evidence::record::Record;
+	let fixture = fixture();
+	let (_out, bundle) = export_of(&fixture, 2);
+	let records = bundle.join(format!("records/{}.jsonl", Day(DAY).name()));
+	let text = std::fs::read_to_string(&records).expect("read");
+	let first = text.lines().next().expect("line");
+	let mut record: Record = serde_json::from_str(first).expect("record");
+	record.time = u64::MAX;
+	let mut lines: Vec<String> = text.lines().map(String::from).collect();
+	lines[0] = String::from_utf8(record.to_line().expect("line")).expect("utf8");
+	std::fs::write(&records, format!("{}\n", lines.join("\n"))).expect("write");
+	resum(&bundle);
+	let failed = checked(&fixture, &bundle);
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("record 1: not of this day")),
+		"{failed:?}"
+	);
+}
+
+#[test]
+fn a_proof_file_larger_than_any_bundle_needs_is_refused_before_it_is_read_into_memory() {
+	let fixture = fixture();
+	let (_out, bundle) = export_of(&fixture, 2);
+	// More entries than a bundle may hold, and a path far longer than a tree is deep.
+	let proofs = bundle.join(format!("proofs/{}.json", Day(DAY).name()));
+	let entry = serde_json::json!({"index": 0, "sha256": "ab".repeat(32), "proof": []});
+	let many = vec![entry; MAX_RECORDS + 1];
+	std::fs::write(
+		&proofs,
+		serde_json::json!({"day": Day(DAY).name(), "tree_size": 1, "merkle_root": "ab".repeat(32), "entries": many})
+			.to_string(),
+	)
+	.expect("write");
+	resum(&bundle);
+	let failed = checked(&fixture, &bundle);
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("the proof file is malformed")),
+		"{failed:?}"
+	);
+	let long = serde_json::json!({"index": 0, "sha256": "ab".repeat(32), "proof": vec!["ab".repeat(32); 65]});
+	std::fs::write(
+		&proofs,
+		serde_json::json!({"day": Day(DAY).name(), "tree_size": 1, "merkle_root": "ab".repeat(32), "entries": [long]})
+			.to_string(),
+	)
+	.expect("write");
+	resum(&bundle);
+	let failed = checked(&fixture, &bundle);
+	assert!(
+		failed
+			.iter()
+			.any(|f| f.contains("the proof file is malformed")),
+		"{failed:?}"
+	);
+}

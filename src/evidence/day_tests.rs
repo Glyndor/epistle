@@ -24,3 +24,12 @@ fn refuses_what_is_not_a_calendar_date() {
 		assert_eq!(Day::parse(bad), None, "{bad}");
 	}
 }
+
+#[test]
+fn a_name_is_made_for_any_day_without_overflowing() {
+	for day in [i64::MIN, i64::MAX, -10_000_000, 10_000_000, 3_000_000] {
+		let name = Day(day).name();
+		assert_eq!(name.len(), 10, "{name}");
+	}
+	assert_eq!(Day::of_epoch(u64::MAX).name().len(), 10);
+}

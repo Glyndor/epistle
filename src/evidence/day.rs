@@ -5,6 +5,10 @@
 //! disk is accepted only when it renders to itself, so `2026-02-30` or
 //! `../x` never names a day.
 
+/// `0000-01-01` and `9999-12-31` as days since 1970-01-01.
+const FIRST_NAMED: i64 = -719_528;
+const LAST_NAMED: i64 = 2_932_896;
+
 /// One UTC day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Day(pub i64);
@@ -26,9 +30,11 @@ impl Day {
 		Day(self.0 - 1)
 	}
 
-	/// `YYYY-MM-DD`.
+	/// `YYYY-MM-DD`. A day outside the years 0000 to 9999, which no clock
+	/// has a reason to name, is shown as the nearest one that exists, so a
+	/// name can always be made.
 	pub fn name(self) -> String {
-		crate::storage::delivery_log::day_name(self.0)
+		crate::storage::delivery_log::day_name(self.0.clamp(FIRST_NAMED, LAST_NAMED))
 	}
 
 	/// The day named `YYYY-MM-DD`, or `None` for anything that is not a

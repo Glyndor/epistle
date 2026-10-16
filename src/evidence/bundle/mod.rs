@@ -72,6 +72,7 @@ pub struct DayProof {
 	/// The day's Merkle root (the checkpoint's).
 	pub merkle_root: String,
 	/// One entry per record in `records/<day>.jsonl`, in the same order.
+	#[serde(deserialize_with = "entries_bounded")]
 	pub entries: Vec<ProofEntry>,
 }
 
@@ -84,7 +85,49 @@ pub struct ProofEntry {
 	/// SHA-256 of its line.
 	pub sha256: String,
 	/// The audit path, bottom-up.
+	#[serde(deserialize_with = "path_bounded")]
 	pub proof: Vec<String>,
+}
+
+/// The longest audit path: a tree of 2^64 leaves is not deeper.
+pub const MAX_PATH: usize = 64;
+/// The largest proof file `check` reads: ten thousand entries of a path as
+/// deep as any day makes.
+pub const MAX_PROOF_FILE: u64 = 24 * 1024 * 1024;
+
+fn entries_bounded<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ProofEntry>, D::Error> {
+	bounded(d, MAX_RECORDS)
+}
+
+fn path_bounded<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+	bounded(d, MAX_PATH)
+}
+
+/// A list of at most `max` items, read item by item: one that is longer is
+/// refused as soon as it is, before the rest is put in memory.
+fn bounded<'de, D, T>(d: D, max: usize) -> Result<Vec<T>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+	T: Deserialize<'de>,
+{
+	struct Bounded<T>(usize, std::marker::PhantomData<T>);
+	impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Bounded<T> {
+		type Value = Vec<T>;
+		fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+			write!(formatter, "a list of at most {} items", self.0)
+		}
+		fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+			let mut out = Vec::new();
+			while let Some(item) = seq.next_element()? {
+				if out.len() >= self.0 {
+					return Err(serde::de::Error::custom("too many items"));
+				}
+				out.push(item);
+			}
+			Ok(out)
+		}
+	}
+	d.deserialize_seq(Bounded(max, std::marker::PhantomData))
 }
 
 /// Write `bytes` to a new file `path`, `0600`, never through a link, in

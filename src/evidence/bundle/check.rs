@@ -60,13 +60,18 @@ impl CheckReport {
 
 /// A regular file of the bundle, never through a link.
 pub(super) fn read(path: &Path) -> Result<Vec<u8>, String> {
+	read_up_to(path, MAX_FILE)
+}
+
+/// [`read`] with a lower ceiling for a file that has no reason to be large.
+fn read_up_to(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 	match std::fs::symlink_metadata(path) {
 		Ok(meta) if !meta.file_type().is_file() => return Err("not a regular file".into()),
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
 		Err(error) => return Err(format!("unreadable ({})", error.kind())),
 		Ok(_) => {}
 	}
-	crate::evidence::checkpoint::read_bounded(path, MAX_FILE)
+	crate::evidence::checkpoint::read_bounded(path, limit)
 		.map_err(|error| format!("unreadable ({})", error.kind()))?
 		.ok_or_else(|| "missing".to_string())
 }
@@ -402,9 +407,11 @@ fn timestamp(
 /// Check every record of the day against the signed root; returns the
 /// spool ids of the acceptances whose kept message is in the bundle.
 fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<Vec<uuid::Uuid>, String> {
-	let proof: DayProof =
-		serde_json::from_slice(&read(&dir.join("proofs").join(format!("{name}.json")))?)
-			.map_err(|_| "the proof file is malformed".to_string())?;
+	let proof: DayProof = serde_json::from_slice(&read_up_to(
+		&dir.join("proofs").join(format!("{name}.json")),
+		super::MAX_PROOF_FILE,
+	)?)
+	.map_err(|_| "the proof file is malformed".to_string())?;
 	if proof.tree_size != checkpoint.records || proof.merkle_root != checkpoint.merkle_root {
 		return Err("the proof file does not match the checkpoint".into());
 	}
@@ -431,7 +438,7 @@ fn inclusion(dir: &Path, name: &str, checkpoint: &Checkpoint) -> Result<Vec<uuid
 		};
 		let record =
 			Record::parse_canonical(bytes).map_err(|why| format!("record {number}: {why}"))?;
-		if Day::of_epoch(record.time).name() != name {
+		if Some(Day::of_epoch(record.time)) != Day::parse(name) {
 			return Err(format!("record {number}: not of this day"));
 		}
 		let entry = entries.next().ok_or(format!("record {number}: no proof"))?;
