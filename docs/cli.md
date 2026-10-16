@@ -688,11 +688,14 @@ configuration and delivers nothing. For every attachment it prints the
 name candidates, the declared types, the real type and the reasons, then
 the verdict (`deliver`, `flag`, `quarantine` or `reject`, with the reasons
 that decided it) and whether a submission of that message would be
-refused. With `mode = "off"` the parts are still judged, and the verdict
+refused (never, when `scan_authenticated` is off). With `mode = "off"` the parts are still judged, and the verdict
 is `deliver`. Names and types come from the sender: the text output shows
 control and formatting characters as `\u{202e}` escapes, and `--json`
 escapes every character outside ASCII. A file over `max_message_size` is
-refused before it is read (exit `2`; an unreadable file exits `1`). The
+refused before it is read (exit `2`; an unreadable file exits `1`). Run
+with `sudo`, the file is copied for the service account up to 25 MiB, the
+default message size, so a larger message has to be checked by running the
+command as the service account. A link is refused, not followed. The
 exit code is `0` whenever the message was judged, whatever the verdict;
 with `--strict` it is `1` when the verdict is `quarantine` or `reject`
 (the code `epistle status` uses for a failing area), so a script can gate

@@ -281,3 +281,20 @@ fn a_line_repeating_the_path_many_times_is_searched_with_a_bound() {
 	);
 	assert!(found.is_empty(), "past the bound nothing is staged");
 }
+
+#[test]
+fn the_message_staged_for_check_is_bounded_by_the_default_message_size() {
+	// docs/cli.md tells the operator a larger `max_message_size` needs the
+	// service account; the copy for root stops at the default.
+	let entry = STAGED
+		.iter()
+		.find(|entry| entry.command == ["attachments", "check"])
+		.expect("check stages its file");
+	assert_eq!(
+		entry.kind,
+		Kind::ReadFile {
+			limit: crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+			secret: false,
+		}
+	);
+}
