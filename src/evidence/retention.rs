@@ -278,6 +278,23 @@ pub fn sweep(
 	Ok(done)
 }
 
+/// A digest of the statement and signature files of `purge` as they are on
+/// disk, empty for a file that is not there: part of what a break about the
+/// statement was judged from.
+pub fn statement_files_digest(evidence_root: &Path, purge: &Purge) -> String {
+	let Some(through) = Day::parse(&purge.through) else {
+		return String::new();
+	};
+	let base = evidence_root.join(PURGES_DIR).join(through.name());
+	let digest = |extension: &str| {
+		checkpoint::read_bounded(&base.with_extension(extension), 1024 * 1024)
+			.ok()
+			.flatten()
+			.map_or_else(String::new, |bytes| to_hex(&sha256(&bytes)))
+	};
+	format!("{}:{}", digest("json"), digest("sig"))
+}
+
 /// Whether the signed statement of `purge` is there, is the one the record
 /// names, was signed by the evidence key in force at `at` (where the purge
 /// record sits), and says what the record says.

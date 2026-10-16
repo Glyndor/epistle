@@ -140,3 +140,59 @@ fn acknowledging_a_purge_anchor_failure_does_not_cover_another_anchor() {
 		.expect("a different anchor is not covered by the earlier acknowledgement");
 	assert_ne!(second.to_string(), first.to_string());
 }
+
+fn anchor(last_hash: &str, checkpoint: &str) -> crate::evidence::anchor::Anchor {
+	crate::evidence::anchor::Anchor {
+		through: "2026-10-14".into(),
+		last_hash: last_hash.into(),
+		last_seq: 4,
+		last_time: 1,
+		checkpoint: checkpoint.into(),
+	}
+}
+
+fn purge(last_hash: &str, checkpoint: &str) -> crate::evidence::record::Purge {
+	crate::evidence::record::Purge {
+		from: "2026-10-12".into(),
+		through: "2026-10-14".into(),
+		records: 3,
+		last_hash: last_hash.into(),
+		checkpoint: checkpoint.into(),
+		statement: "ab".repeat(32),
+	}
+}
+
+#[test]
+fn what_the_anchor_mismatch_names_covers_every_field_the_condition_compares() {
+	let same_prefix = |tail: &str| format!("{}{tail}", "a".repeat(60));
+	let base = super::mismatch_state(
+		&anchor(&same_prefix("0001"), &same_prefix("0002")),
+		&purge(&same_prefix("0003"), &same_prefix("0004")),
+	);
+	// Each field alone, changed in a digit past the first sixteen characters.
+	let variants = [
+		(
+			anchor(&same_prefix("1001"), &same_prefix("0002")),
+			purge(&same_prefix("0003"), &same_prefix("0004")),
+		),
+		(
+			anchor(&same_prefix("0001"), &same_prefix("1002")),
+			purge(&same_prefix("0003"), &same_prefix("0004")),
+		),
+		(
+			anchor(&same_prefix("0001"), &same_prefix("0002")),
+			purge(&same_prefix("1003"), &same_prefix("0004")),
+		),
+		(
+			anchor(&same_prefix("0001"), &same_prefix("0002")),
+			purge(&same_prefix("0003"), &same_prefix("1004")),
+		),
+	];
+	for (index, (anchor, purge)) in variants.iter().enumerate() {
+		assert_ne!(
+			super::mismatch_state(anchor, purge),
+			base,
+			"changing field {index} alone kept the same identity"
+		);
+	}
+}

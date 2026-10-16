@@ -81,9 +81,25 @@ fn broken_in(day: Day, line: u64, why: &str, state: &str) -> Break {
 	}
 }
 
-/// The first bytes of a hash, enough to tell one state from another.
-fn short(hash: &str) -> &str {
-	hash.get(..16).unwrap_or(hash)
+/// A digest of everything a break was judged from, in full: two states
+/// that differ in any byte of it are two breaks, however alike they look.
+fn state_id(parts: &[String]) -> String {
+	let mut all = Vec::new();
+	for part in parts {
+		all.extend_from_slice(&(part.len() as u64).to_be_bytes());
+		all.extend_from_slice(part.as_bytes());
+	}
+	to_hex(&sha256(&all))
+}
+
+fn json_of(value: &impl serde::Serialize) -> String {
+	serde_json::to_string(value).unwrap_or_default()
+}
+
+/// What the purge anchor mismatch names: the whole anchor and the whole
+/// purge record it was compared with.
+fn mismatch_state(anchor: &anchor::Anchor, purge: &super::record::Purge) -> String {
+	format!("state {}", state_id(&[json_of(anchor), json_of(purge)]))
 }
 
 /// What the walk carries from one day to the next. Nothing of it is
@@ -240,7 +256,10 @@ fn final_checks(
 	// hands over, even when the walk stopped before the end of the chain.
 	let mut previous = walker.before.as_deref();
 	for (day, signer, checkpoint) in &walker.signers {
-		let state = format!("checkpoint {}, key {}", short(checkpoint), short(signer));
+		let state = format!(
+			"state {}",
+			state_id(&[day.name(), signer.clone(), checkpoint.clone()])
+		);
 		if let Err(fault) = timeline.check_seal(signer, *day) {
 			found.push(broken_in(*day, 0, &fault.to_string(), &state));
 		} else if let Some(before) = previous
@@ -257,7 +276,7 @@ fn final_checks(
 		previous = Some(signer);
 	}
 	for ((day, line), rotation) in &walker.handovers {
-		let state = format!("hand-over {}", short(&rotation.signature));
+		let state = format!("state {}", state_id(&[json_of(rotation)]));
 		if let Err(why) = super::rotation::check_record(evidence_root, rotation) {
 			found.push(broken_in(*day, *line, why, &state));
 		} else if rotation.day != day.name() {
@@ -277,7 +296,13 @@ fn final_checks(
 				*day,
 				*line,
 				why,
-				&format!("statement {}", short(&purge.statement)),
+				&format!(
+					"state {}",
+					state_id(&[
+						json_of(purge),
+						super::retention::statement_files_digest(evidence_root, purge)
+					])
+				),
 			));
 		}
 	}
@@ -291,13 +316,7 @@ fn final_checks(
 				whole,
 				0,
 				"the purge anchor does not match the last purge record",
-				&format!(
-					"anchor {} {}, record {} {}",
-					anchor.through,
-					short(&anchor.last_hash),
-					purge.through,
-					short(&purge.last_hash)
-				),
+				&mismatch_state(anchor, purge),
 			));
 		}
 		(Some(anchor), None) if from_start && to_end => {
@@ -305,12 +324,7 @@ fn final_checks(
 				whole,
 				0,
 				"days were purged without a purge record",
-				&format!(
-					"anchor {} {} {}",
-					anchor.through,
-					short(&anchor.last_hash),
-					short(&anchor.checkpoint)
-				),
+				&format!("state {}", state_id(&[json_of(anchor)])),
 			));
 		}
 		_ => {}
@@ -318,22 +332,22 @@ fn final_checks(
 	// Where the chain ends: the same words for another end is another break.
 	let ends = walker.end.map_or_else(
 		|| "no day".to_string(),
-		|end| format!("seq {} {}", end.seq, short(&to_hex(&end.hash))),
+		|end| format!("{} {} {}", end.seq, to_hex(&end.hash), end.time),
 	);
 	if to_end && head.is_none() {
 		found.push(broken_in(
 			whole,
 			0,
 			"the head is missing: the evidence may have been restored from an older copy",
-			&format!("the chain ends at {ends}"),
+			&format!("state {}", state_id(&[ends])),
 		));
 	} else if to_end && !walker.head_seen {
-		let named = head.map_or_else(String::new, |head| short(&head.last_hash).to_string());
+		let named = head.map_or_else(String::new, json_of);
 		found.push(broken_in(
 			whole,
 			0,
 			"rollback: the chain ends before its recorded head (a truncated tail or a deleted latest day)",
-			&format!("head {named}, the chain ends at {ends}"),
+			&format!("state {}", state_id(&[named, ends])),
 		));
 	}
 	found.truncate(MAX_FINAL_BREAKS);
