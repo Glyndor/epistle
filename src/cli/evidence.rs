@@ -83,6 +83,12 @@ pub enum EvidenceCli {
 		/// Require the bundle to cover this recipient.
 		#[arg(long)]
 		recipient: Option<String>,
+		/// Require the bundle to cover the days from this one (`YYYY-MM-DD`).
+		#[arg(long, value_parser = parse_day)]
+		from: Option<Day>,
+		/// Require the bundle to cover the days up to this one (`YYYY-MM-DD`).
+		#[arg(long, value_parser = parse_day)]
+		to: Option<Day>,
 		/// Also trust this timestamp key: hex SHA-256 of its
 		/// SubjectPublicKeyInfo. The default authority's is always trusted.
 		#[arg(long = "anchor", value_name = "SHA256")]
@@ -251,6 +257,8 @@ pub(super) fn run(
 		keys,
 		message_id,
 		recipient,
+		from,
+		to,
 		anchors,
 		json,
 	} = action
@@ -258,6 +266,8 @@ pub(super) fn run(
 		let expected = crate::evidence::bundle::Expectation {
 			message_id,
 			recipient,
+			from,
+			to,
 		};
 		return super::evidence_bundle::check(&bundle, &keys, &expected, &anchors, json, out);
 	}

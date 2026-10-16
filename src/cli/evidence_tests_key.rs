@@ -32,6 +32,8 @@ fn check(server: &Server, bundle: &Path, keys: &[String]) -> (ExitCode, serde_js
 		bundle: bundle.to_path_buf(),
 		message_id: None,
 		recipient: None,
+		from: None,
+		to: None,
 		keys: keys.to_vec(),
 		anchors: vec![to_hex(&server.tsa.anchor)],
 		json: true,
@@ -316,6 +318,8 @@ fn check_tells_the_scope_and_refuses_a_bundle_about_something_else() {
 			keys: vec![key.clone()],
 			message_id: message_id.map(String::from),
 			recipient: recipient.map(String::from),
+			from: None,
+			to: None,
 			anchors: vec![to_hex(&server.tsa.anchor)],
 			json: false,
 		};

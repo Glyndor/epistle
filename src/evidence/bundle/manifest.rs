@@ -9,16 +9,17 @@
 //! fails. The manifest names the recipients the bundle covers, since a
 //! bundle of one recipient does not hold the others' outcomes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufReader;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::MAX_RECORDS;
 use super::check::read;
 use super::export::Selector;
-use super::{MAX_FILES, MAX_RECORDS};
+use crate::evidence::day::Day;
 use crate::evidence::lines::{Line, Lines};
 use crate::evidence::record::{Accepted, Entry, Record};
 
@@ -56,6 +57,10 @@ pub struct Expectation {
 	pub message_id: Option<String>,
 	/// A recipient the bundle must cover.
 	pub recipient: Option<String>,
+	/// The first day the bundle must cover.
+	pub from: Option<crate::evidence::day::Day>,
+	/// The last day the bundle must cover.
+	pub to: Option<crate::evidence::day::Day>,
 }
 
 /// Write the manifest of an export made for `selector`.
@@ -78,7 +83,7 @@ pub(super) fn write(out: &Path, selector: &Selector) -> std::io::Result<()> {
 /// What the bundle holds of one message.
 #[derive(Default)]
 struct Held {
-	accepted: Vec<Accepted>,
+	accepted: Vec<(Day, Accepted)>,
 	abandoned: bool,
 	outcomes: Vec<String>,
 }
@@ -93,17 +98,58 @@ impl Scope {
 	}
 }
 
-/// Check that every message in the bundle in `dir` is accounted for, for the
-/// recipients its manifest names, and that the manifest is what `expected`
-/// asks for and what the records are about. Returns what was verified, to
-/// be told to the reader.
-pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, String> {
+/// Whether `text` can be shown on a terminal as it is: no control character
+/// and none of the format characters that reorder or hide text.
+fn plain(text: &str) -> bool {
+	!text.is_empty()
+		&& text.chars().all(|c| {
+			!c.is_control()
+				&& !matches!(
+					c,
+					'\u{200b}'..='\u{200f}'
+						| '\u{2028}'..='\u{202e}'
+						| '\u{2060}'..='\u{2064}'
+						| '\u{2066}'..='\u{206f}'
+						| '\u{feff}'
+				)
+		})
+}
+
+/// The manifest in `dir`, read as the untrusted thing it is: every field
+/// has to be what it says it is before anything of it is used or shown.
+fn load(dir: &Path) -> Result<(Manifest, Option<(Day, Day)>), String> {
 	let manifest: Manifest =
 		serde_json::from_slice(&read(&dir.join(FILE)).map_err(|why| format!("{FILE}: {why}"))?)
 			.map_err(|_| format!("{FILE}: not a manifest"))?;
 	if manifest.v != VERSION {
 		return Err(format!("{FILE}: unknown version"));
 	}
+	let not = || format!("{FILE}: not a manifest");
+	let range = match &manifest.scope {
+		Scope::Message { message_id } if plain(message_id) => None,
+		Scope::Recipient { address, from, to } if plain(address) => {
+			let (from, to) = (
+				Day::parse(from).ok_or_else(not)?,
+				Day::parse(to).ok_or_else(not)?,
+			);
+			Some((from, to))
+		}
+		_ => return Err(not()),
+	};
+	Ok((manifest, range))
+}
+
+/// Check that every message in the bundle in `dir` is accounted for, for the
+/// recipients its manifest names, and that the manifest is what `expected`
+/// asks for and what the records are about. Only the records of `verified`
+/// days count: a day that did not verify proves nothing. Returns what was
+/// verified, to be told to the reader.
+pub(super) fn complete(
+	dir: &Path,
+	expected: &Expectation,
+	verified: &BTreeSet<String>,
+) -> Result<String, String> {
+	let (manifest, range) = load(dir)?;
 	if let Some(wanted) = &expected.message_id {
 		match &manifest.scope {
 			Scope::Message { message_id } if message_id == wanted => {}
@@ -123,15 +169,23 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 			"the bundle was made for recipient {address}, not for recipient {wanted}"
 		));
 	}
+	if let Some((from, to)) = range
+		&& (expected.from.is_some_and(|asked| asked < from)
+			|| expected.to.is_some_and(|asked| asked > to))
+	{
+		return Err(format!(
+			"the manifest ({} to {}) does not cover the days asked",
+			from.name(),
+			to.name()
+		));
+	}
 	let mut held: BTreeMap<Uuid, Held> = BTreeMap::new();
 	let mut total = 0usize;
-	let entries =
-		std::fs::read_dir(dir.join("records")).map_err(|error| error.kind().to_string())?;
-	for (files, entry) in entries.enumerate() {
-		if files >= MAX_FILES {
-			return Err("more record files than a bundle holds".into());
-		}
-		let path = entry.map_err(|error| error.kind().to_string())?.path();
+	for name in verified {
+		let Some(day) = Day::parse(name) else {
+			continue;
+		};
+		let path = dir.join("records").join(format!("{name}.jsonl"));
 		if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file()) {
 			continue;
 		}
@@ -156,7 +210,7 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 					.entry(accepted.spool_id)
 					.or_default()
 					.accepted
-					.push(accepted),
+					.push((day, accepted)),
 				Entry::Abandoned(abandoned) => {
 					held.entry(abandoned.spool_id).or_default().abandoned = true
 				}
@@ -169,8 +223,11 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 			}
 		}
 	}
+	let mut checked = 0usize;
+	let mut asked_found = (false, false);
+	let mut days: Vec<Day> = Vec::new();
 	for (id, message) in &held {
-		let [accepted] = message.accepted.as_slice() else {
+		let [(day, accepted)] = message.accepted.as_slice() else {
 			return Err(match message.accepted.is_empty() {
 				true => format!("{id}: a record of this message is here without its acceptance"),
 				false => format!("{id}: accepted more than once"),
@@ -192,14 +249,42 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 			}
 			_ => {}
 		}
+		if let Some((from, to)) = range
+			&& (*day < from || *day > to)
+		{
+			return Err(format!(
+				"{id}: accepted on {}, outside the days the manifest names ({} to {})",
+				day.name(),
+				from.name(),
+				to.name()
+			));
+		}
+		if expected.from.is_some_and(|asked| *day < asked)
+			|| expected.to.is_some_and(|asked| *day > asked)
+		{
+			return Err(format!(
+				"{id}: accepted on {}, outside the days asked",
+				day.name()
+			));
+		}
 		if let Some(wanted) = &expected.recipient
 			&& !accepted
 				.recipients
 				.iter()
-				.any(|r| r.eq_ignore_ascii_case(wanted))
+				.any(|recipient| recipient.eq_ignore_ascii_case(wanted))
 		{
 			return Err(format!("{id}: was not sent to {wanted}"));
 		}
+		asked_found.0 |= expected
+			.message_id
+			.as_ref()
+			.is_some_and(|wanted| accepted.message_id.as_ref() == Some(wanted));
+		asked_found.1 |= expected.recipient.as_ref().is_some_and(|wanted| {
+			accepted
+				.recipients
+				.iter()
+				.any(|recipient| recipient.eq_ignore_ascii_case(wanted))
+		});
 		let covered: Vec<String> = match &manifest.scope {
 			Scope::Message { .. } => accepted
 				.recipients
@@ -208,6 +293,8 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 				.collect(),
 			Scope::Recipient { address, .. } => vec![address.to_ascii_lowercase()],
 		};
+		checked += 1;
+		days.push(*day);
 		if message.abandoned {
 			if !message.outcomes.is_empty() {
 				return Err(format!("{id}: abandoned, and yet it has outcomes"));
@@ -233,13 +320,40 @@ pub(super) fn complete(dir: &Path, expected: &Expectation) -> Result<String, Str
 			}
 		}
 	}
+	// A story is about something: with nothing accepted that matches it,
+	// nothing was checked.
+	if let Some(wanted) = &expected.message_id
+		&& !asked_found.0
+	{
+		return Err(format!(
+			"the bundle holds no acceptance of message {wanted}"
+		));
+	}
+	if let Some(wanted) = &expected.recipient
+		&& !asked_found.1
+	{
+		return Err(format!(
+			"the bundle holds no acceptance for recipient {wanted}"
+		));
+	}
+	if checked == 0 {
+		return Err(format!(
+			"the bundle holds no acceptance of {}",
+			manifest.scope.describe()
+		));
+	}
+	days.sort();
+	let found = match (days.first(), days.last()) {
+		(Some(first), Some(last)) => format!("acceptances on {} to {}", first.name(), last.name()),
+		_ => String::new(),
+	};
 	Ok(match &manifest.scope {
 		Scope::Message { .. } => format!(
-			"scope: {}: every recipient was checked",
+			"scope: {}: every recipient was checked ({checked} acceptance, {found})",
 			manifest.scope.describe()
 		),
-		Scope::Recipient { from, to, .. } => format!(
-			"scope: {} ({from} to {to}): the outcomes of the other recipients were NOT checked, and the bundle does not say whether they exist",
+		Scope::Recipient { .. } => format!(
+			"scope: {} ({checked} acceptances, {found}): the outcomes of the other recipients were NOT checked, and the bundle does not say whether they exist",
 			manifest.scope.describe()
 		),
 	})

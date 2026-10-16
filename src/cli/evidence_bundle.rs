@@ -104,7 +104,11 @@ pub(super) fn check(
 			.collect();
 		let printed = super::evidence::json(
 			out,
-			&json!({ "passed": passed, "findings": findings, "notes": report.notes }),
+			&json!({
+				"passed": passed,
+				"findings": findings,
+				"notes": report.notes.iter().map(|note| sanitize(note)).collect::<Vec<_>>(),
+			}),
 		);
 		return if printed == ExitCode::SUCCESS {
 			code
@@ -119,7 +123,7 @@ pub(super) fn check(
 		};
 	}
 	for note in &report.notes {
-		let _ = writeln!(out, "note  {note}");
+		let _ = writeln!(out, "note  {}", sanitize(note));
 	}
 	let _ = match passed {
 		true => writeln!(out, "the bundle verifies"),

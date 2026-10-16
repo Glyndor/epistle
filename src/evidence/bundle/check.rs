@@ -134,6 +134,7 @@ pub fn check_expecting(
 	let trusted = trust.is_ok() && handovers.is_ok();
 	let (trust, handovers) = (trust.unwrap_or_default(), handovers.unwrap_or_default());
 	let mut vouched = BTreeSet::new();
+	let mut verified_days = BTreeSet::new();
 	for day in days {
 		let before = report.findings.len();
 		let files = check_day(dir, day, anchors, (&trust, &handovers), &mut report);
@@ -144,9 +145,10 @@ pub fn check_expecting(
 				.all(|finding| finding.result.is_ok())
 		{
 			vouched.extend(files);
+			verified_days.insert(day.name());
 		}
 	}
-	let scope = super::manifest::complete(dir, expected);
+	let scope = super::manifest::complete(dir, expected, &verified_days);
 	if let Ok(words) = &scope {
 		report.notes.push(words.clone());
 	}

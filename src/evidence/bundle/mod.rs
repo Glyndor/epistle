@@ -161,6 +161,9 @@ mod tests_readme;
 #[path = "bundle_tests_retired.rs"]
 mod tests_retired;
 #[cfg(test)]
+#[path = "bundle_tests_scope.rs"]
+mod tests_scope;
+#[cfg(test)]
 #[path = "bundle_tests_stray.rs"]
 mod tests_stray;
 #[cfg(test)]

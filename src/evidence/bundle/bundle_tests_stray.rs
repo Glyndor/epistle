@@ -68,9 +68,6 @@ fn a_file_named_like_a_real_one_but_of_another_day_or_message_fails() {
 	assert_eq!(
 		stray_failures(&fixture, &bundle),
 		vec![
-			// The copied day repeats every record: each message twice.
-			"every message is accounted for: 00000000-0000-0000-0000-000000000001: accepted more than once"
-				.to_string(),
 			"every file belongs to a verified day or an accepted record: messages/00000000-0000-0000-0000-000000000000.eml: not vouched for by any check (and 1 more)"
 				.to_string()
 		]

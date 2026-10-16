@@ -175,8 +175,12 @@ story is about and the check holds the bundle to it:
 
 ```sh
 epistle evidence check --key 3f2a...e91c --message-id '<notice-42@school.example>' notice-42
-epistle evidence check --key 3f2a...e91c --recipient student@example.net student
+epistle evidence check --key 3f2a...e91c --recipient student@example.net --from 2026-10-01 --to 2026-10-31 student
 ```
+
+A bundle with no acceptance of what was asked about checks nothing, and fails.
+The report says what was verified: how many acceptances, on which days, and
+that the other recipients' outcomes were not checked when the bundle is for one.
 
 ## Limits
 
