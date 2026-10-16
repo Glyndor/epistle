@@ -131,6 +131,13 @@ impl EvidenceService {
 		&self.root
 	}
 
+	/// The time reference the log is stamped from, for whatever else must
+	/// act on the time (the sweeper, the queue) without trusting the raw
+	/// wall clock.
+	pub fn time(&self) -> std::sync::Arc<super::timeref::TimeRef> {
+		self.chain.time()
+	}
+
 	/// Read the policy again. On failure the last good policy stays in force
 	/// and the error is kept for `epistle status`.
 	pub fn reload(&self) {
@@ -280,7 +287,7 @@ impl EvidenceService {
 	/// in `messages/<day>/<days>/<id>.eml`, so the sweeper can drop a whole
 	/// directory once its retention has passed.
 	fn keep_message(&self, submitted: &Submitted<'_>, retention: Retention) -> std::io::Result<()> {
-		let day = super::day::Day::of_epoch(crate::storage::delivery_log::now_epoch());
+		let day = super::day::Day::of_epoch(self.chain.time().read().time);
 		let dir = self
 			.root
 			.join(MESSAGES_DIR)

@@ -46,6 +46,9 @@ pub struct Pass {
 	pub stamped: Vec<Day>,
 	/// Days that failed this time.
 	pub failed: Vec<Day>,
+	/// The newest time a verified token said it was, epoch seconds: a time
+	/// somebody other than this machine vouches for.
+	pub latest: Option<u64>,
 }
 
 /// The delay before the attempt after `attempts` failures.
@@ -133,6 +136,7 @@ pub async fn stamp_due(
 				crate::storage::write_secret(&files(evidence_root, day).tsr, &obtained.response)?;
 				state.remove(&day.name());
 				pass.stamped.push(day);
+				pass.latest = pass.latest.max(Some(obtained.stamp.gen_time));
 			}
 			Err(error) => {
 				let entry = state.entry(day.name()).or_insert(Waiting {

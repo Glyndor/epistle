@@ -27,32 +27,36 @@ fn a_record_cannot_be_written_into_a_day_that_is_sealed() {
 }
 
 #[test]
-fn a_clock_far_behind_the_newest_record_is_refused_and_a_small_step_is_not() {
+fn a_clock_behind_the_newest_record_never_refuses_it_and_never_moves_time_back() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("chain");
 	chain
 		.append_at(at(DAY + 3, 10), accepted(1))
 		.expect("first");
-	// An hour and a minute behind: refused, nothing written.
-	let behind = at(DAY + 3, 10) - 3660;
-	let refused = chain
-		.append_at(behind, accepted(2))
-		.expect_err("far behind");
-	assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
-	assert_eq!(
-		refused.to_string(),
-		"the clock is more than an hour behind the newest record"
-	);
-	assert_eq!(tests_lines(&chain, Day(DAY + 3)), 1);
-	// A minute behind is a step of the clock: the record keeps the time of the one before.
+	// A record in the future must not lock the log until the clock reaches
+	// it: outcomes, acknowledgements and the start-up repair all append.
+	let behind = at(DAY + 3, 10) - 5 * 86_400;
+	chain
+		.append_clocked(behind, std::time::Instant::now(), accepted(2))
+		.expect("a clock far behind still records");
 	chain
 		.append_at(at(DAY + 3, 10) - 60, accepted(3))
 		.expect("a small step");
-	assert_eq!(tests_lines(&chain, Day(DAY + 3)), 2);
+	let text = std::fs::read_to_string(chain.day_file(Day(DAY + 3))).expect("read");
+	let times: Vec<u64> = text
+		.lines()
+		.filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+		.filter_map(|record| record["time"].as_u64())
+		.collect();
+	assert_eq!(times.len(), 3);
+	assert!(
+		times.windows(2).all(|pair| pair[0] <= pair[1]),
+		"times went back: {times:?}"
+	);
 }
 
 #[test]
-fn a_clock_that_jumps_forward_writes_nothing_and_recovers_when_it_is_right_again() {
+fn a_clock_that_jumps_forward_dates_nothing_in_the_future_and_recovers_by_itself() {
 	use std::time::{Duration, Instant};
 	let dir = tempfile::tempdir().expect("tempdir");
 	let chain = Chain::open(dir.path()).expect("chain");
@@ -63,11 +67,9 @@ fn a_clock_that_jumps_forward_writes_nothing_and_recovers_when_it_is_right_again
 		.expect("first record");
 	// Ten seconds later by the monotonic clock, a year later by the wall clock.
 	let jumped = today + 365 * 86_400;
-	let refused = chain
+	chain
 		.append_clocked(jumped, start + Duration::from_secs(10), accepted(2))
-		.expect_err("a jump of a year");
-	assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
-	assert!(refused.to_string().contains("jumped forward"), "{refused}");
+		.expect("a jump is not a reason to lose the record");
 	assert!(
 		chain
 			.days()
@@ -88,4 +90,27 @@ fn a_clock_that_jumps_forward_writes_nothing_and_recovers_when_it_is_right_again
 			accepted(4),
 		)
 		.expect("a week of uptime");
+	assert!(
+		chain
+			.days()
+			.expect("days")
+			.contains(&Day::of_epoch(today + 7 * 86_400))
+	);
+}
+
+#[test]
+fn a_record_dated_in_the_future_does_not_lock_the_log_for_a_new_process() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let future = crate::storage::delivery_log::now_epoch() + 400 * 86_400;
+	Chain::open(dir.path())
+		.expect("chain")
+		.append_at(future, accepted(1))
+		.expect("a record from a clock that was wrong");
+	// A new process (the CLI, or the server after a restart) reads the
+	// real clock: it must still be able to write.
+	let reopened = Chain::open(dir.path()).expect("reopened");
+	reopened
+		.append(accepted(2))
+		.expect("the log is not locked until the date arrives");
+	assert_eq!(tests_lines(&reopened, Day::of_epoch(future)), 2);
 }

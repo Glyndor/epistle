@@ -188,14 +188,34 @@ that the other recipients' outcomes were not checked when the bundle is for one.
 
 ## The clock
 
-Every record carries the time of the machine. A clock that jumps forward would
-send the records after it to a day that has not come, and one that goes back
-would send them into a day that is already sealed, so the log refuses both:
-nothing is written (transactional mail is refused with the usual `451` or
-`503`, and the server logs an error) when the clock is more than five minutes
-ahead of the monotonic clock since the last record, more than an hour behind
-the newest record, or would put a record in a sealed day. Put the time right;
-a clock that jumped forward needs the server restarted once it is.
+A clock that is wrong costs more than a wrong date. A record dated in the
+future drags every later one into that day; sealing at a clock that is ahead
+seals the day that is still open; purging at one deletes kept messages before
+their retention; the queue gives up on mail that only waited. So none of
+those read the machine's clock raw. They read one time reference that checks
+it:
+
+- against the monotonic clock: once a reading was believed, a clock more than
+  five minutes ahead of what the monotonic clock says passed, or more than an
+  hour behind, has jumped;
+- at start, against the newest record in the log: a clock before it, or more
+  than 35 days after it, is not believed;
+- against a timestamp authority, when timestamping is on: a token is a time
+  somebody else vouches for, and it settles a clock that cannot be judged
+  otherwise, such as a server that was stopped for two months.
+
+While the clock is not believed, nothing is sealed, purged or expired on it.
+Records are still written, dated by the best estimate (the last believed time
+plus the monotonic clock, never earlier than the newest record), so a wrong
+clock never loses an acceptance and never refuses an outcome, an
+acknowledgement or the repair at start. Mail in the queue ages by the earlier
+of the clock and the estimate. Transactional mail is held, `epistle status`
+and the server log say why, and the kept bytes and the records stay where they
+are. When the clock is right again the tasks go on by themselves. Starting the
+server again is also enough: the new process judges the clock by the log, not
+by what the old one had seen. A clock that is behind a record dated in the
+future (the log keeps its time, and a record cannot be removed) is believed
+again only when the date arrives.
 
 ## Limits
 

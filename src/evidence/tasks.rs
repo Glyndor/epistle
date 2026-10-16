@@ -64,6 +64,10 @@ pub struct Tasks {
 	/// Added to every verification, for tests of the timeout.
 	#[cfg(test)]
 	audit_delay: Duration,
+	/// The first wall time a test ticked at and the monotonic clock then, so
+	/// that time passes by the same amount on both clocks.
+	#[cfg(test)]
+	following: Mutex<Option<(u64, std::time::Instant)>>,
 }
 
 /// Clears the running flag when the verification ends, even by a panic.
@@ -87,6 +91,8 @@ impl Tasks {
 			auditing: Arc::new(AtomicBool::new(false)),
 			#[cfg(test)]
 			audit_delay: Duration::ZERO,
+			#[cfg(test)]
+			following: Mutex::new(None),
 		})
 	}
 
@@ -98,48 +104,72 @@ impl Tasks {
 		self
 	}
 
-	/// Run one tick at `now`.
+	/// Run one tick at the wall-clock time `now`. What the tick acts on is
+	/// not `now` but the time the shared reference believes: sealing,
+	/// stamping and purging happen only when the clock agrees with it.
 	pub async fn tick(&self, now: u64) -> Status {
+		self.tick_at(now, std::time::Instant::now()).await
+	}
+
+	/// [`Tasks::tick`] for a test that moves time: the monotonic clock
+	/// advances as far as the wall time given, so only a test that wants a
+	/// jump gets one (through [`Tasks::tick_at`]).
+	#[cfg(test)]
+	pub(crate) async fn tick_following(&self, wall: u64) -> Status {
+		let mono = {
+			let mut first = self.following.lock().expect("lock");
+			let (start, instant) = *first.get_or_insert((wall, std::time::Instant::now()));
+			instant + Duration::from_secs(wall.saturating_sub(start))
+		};
+		self.tick_at(wall, mono).await
+	}
+
+	/// [`Tasks::tick`] with the monotonic clock given.
+	pub(crate) async fn tick_at(&self, wall: u64, mono: std::time::Instant) -> Status {
+		let time = self.service.time();
+		let mut reading = time.read_at(wall, mono);
 		let mut errors = Vec::new();
-		self.service.reload();
-		if let Some(error) = self.service.policy_error() {
+		let current = self.reload(&mut errors);
+		if !reading.sound && current.enabled {
+			// A clock nobody agrees with: ask the timestamp authority.
+			if let Some(told) = probe(&current).await {
+				time.witness(told, mono);
+				reading = time.read_at(wall, mono);
+			}
+		}
+		let now = reading.time;
+		if !reading.sound {
 			errors.push(format!(
-				"retention policy unreadable, the last good one is in force: {error}"
+				"the clock ({}) does not agree with the evidence log or the monotonic clock: \
+				 nothing is sealed, purged or expired until it does",
+				Day::of_epoch(wall).name()
 			));
 		}
-		let current = match settings::load(self.service.root()) {
-			Ok(loaded) => {
-				if let Ok(mut kept) = self.settings.lock() {
-					*kept = loaded.clone();
-				}
-				loaded
-			}
-			Err(error) => {
-				errors.push(format!(
-					"timestamp settings refused, the last good ones are in force: {error}"
-				));
-				self.settings
-					.lock()
-					.map(|kept| kept.clone())
-					.unwrap_or_default()
-			}
-		};
 		let root = self.service.root().to_path_buf();
 		let enabled = current.enabled;
 		let trusted = anchors(&current);
-		let sealed = tokio::task::spawn_blocking({
-			let root = root.clone();
-			move || seal_and_sweep(&root, enabled, &trusted, now)
-		})
-		.await;
-		match sealed {
-			Ok(Ok(None)) => {}
-			Ok(Ok(Some(refused))) => errors.push(refused),
-			Ok(Err(error)) => errors.push(error),
-			Err(error) => errors.push(format!("seal task failed: {error}")),
+		// Sealing closes a day and purging deletes for good: neither runs on
+		// a clock nobody agrees with.
+		if reading.sound {
+			let sealed = tokio::task::spawn_blocking({
+				let root = root.clone();
+				move || seal_and_sweep(&root, enabled, &trusted, now)
+			})
+			.await;
+			match sealed {
+				Ok(Ok(None)) => {}
+				Ok(Ok(Some(refused))) => errors.push(refused),
+				Ok(Err(error)) => errors.push(error),
+				Err(error) => errors.push(format!("seal task failed: {error}")),
+			}
 		}
-		if let Err(error) = super::tsa::stamp::stamp_due(&root, &current, now).await {
-			errors.push(format!("timestamping: {}", error.kind()));
+		match super::tsa::stamp::stamp_due(&root, &current, now).await {
+			Ok(pass) => {
+				if let Some(told) = pass.latest {
+					time.witness(told, mono);
+				}
+			}
+			Err(error) => errors.push(format!("timestamping: {}", error.kind())),
 		}
 		let anchors = anchors(&current);
 		if self.auditing.swap(true, Ordering::SeqCst) {
@@ -203,7 +233,13 @@ impl Tasks {
 				});
 			}
 		};
-		let (held, pending) = gate(&report, self.service.root(), now);
+		let (mut held, pending) = gate(&report, self.service.root(), now);
+		if !reading.sound && held.is_none() {
+			held = Some(
+				"the clock does not agree with the evidence log: records are dated by an estimate"
+					.into(),
+			);
+		}
 		self.finish(Status {
 			time: now,
 			held,
@@ -214,6 +250,34 @@ impl Tasks {
 			stamped: report.stamped,
 			errors,
 		})
+	}
+
+	/// Read the policy and the timestamp settings again, keeping the last
+	/// good ones (and saying so in `errors`) when they cannot be read.
+	fn reload(&self, errors: &mut Vec<String>) -> Settings {
+		self.service.reload();
+		if let Some(error) = self.service.policy_error() {
+			errors.push(format!(
+				"retention policy unreadable, the last good one is in force: {error}"
+			));
+		}
+		match settings::load(self.service.root()) {
+			Ok(loaded) => {
+				if let Ok(mut kept) = self.settings.lock() {
+					*kept = loaded.clone();
+				}
+				loaded
+			}
+			Err(error) => {
+				errors.push(format!(
+					"timestamp settings refused, the last good ones are in force: {error}"
+				));
+				self.settings
+					.lock()
+					.map(|kept| kept.clone())
+					.unwrap_or_default()
+			}
+		}
 	}
 
 	fn finish(&self, status: Status) -> Status {
@@ -234,6 +298,16 @@ pub fn anchors(settings: &Settings) -> Vec<[u8; 32]> {
 		.collect();
 	anchors.extend(super::record::hash_from_hex(DEFAULT_TSA_ANCHOR));
 	anchors
+}
+
+/// What a timestamp authority says the time is, when one answers: a token
+/// over a fixed digest, verified like any other.
+async fn probe(settings: &Settings) -> Option<u64> {
+	let digest = super::record::sha256(b"epistle clock probe");
+	super::tsa::client::obtain(&settings.authorities, &digest)
+		.await
+		.ok()
+		.map(|obtained| obtained.stamp.gen_time)
 }
 
 fn seal_and_sweep(
@@ -288,3 +362,6 @@ pub fn day_of(status: &Status) -> String {
 #[cfg(test)]
 #[path = "tasks_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tasks_tests_clock.rs"]
+mod tests_clock;

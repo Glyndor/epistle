@@ -19,13 +19,14 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use super::day::Day;
 use super::record::{Entry, FORMAT_VERSION, MAX_LINE, Position, Record, sha256, to_hex};
+use super::timeref::TimeRef;
 
 /// The name of the directory holding the day files, under the evidence root.
 pub const CHAIN_DIR: &str = "chain";
@@ -36,28 +37,31 @@ pub struct Chain {
 	dir: PathBuf,
 	/// Serialises appends inside this process; the `flock` covers others.
 	local: Mutex<()>,
-	/// The wall clock and the monotonic clock as of the last append, to tell
-	/// a clock that jumped from time that passed.
-	clock: Mutex<Option<(u64, std::time::Instant)>>,
+	/// What time it is: the wall clock, cross-checked.
+	time: Arc<TimeRef>,
 }
-
-/// How far the wall clock may run ahead of the monotonic one between two
-/// appends before it is taken to have jumped, in seconds.
-const JUMP_SECS: u64 = 300;
-/// How far behind the newest record the clock may be before a record is
-/// refused rather than given that record's time, in seconds.
-const STEP_BACK_SECS: u64 = 3600;
 
 impl Chain {
 	/// Open the chain under `evidence_root`, creating its directory `0700`.
+	/// The time reference starts from the newest record the head names.
 	pub fn open(evidence_root: &Path) -> std::io::Result<Self> {
 		let dir = evidence_root.join(CHAIN_DIR);
 		create_private_dir(&dir)?;
+		let newest = super::head::load(evidence_root)
+			.ok()
+			.flatten()
+			.map_or(0, |head| head.time);
 		Ok(Chain {
 			dir,
 			local: Mutex::new(()),
-			clock: Mutex::new(None),
+			time: Arc::new(TimeRef::new(newest)),
 		})
+	}
+
+	/// The time reference every record is stamped from, shared with whatever
+	/// else must not trust the wall clock raw.
+	pub fn time(&self) -> Arc<TimeRef> {
+		Arc::clone(&self.time)
 	}
 
 	/// The directory of the day files.
@@ -78,44 +82,13 @@ impl Chain {
 	/// checkpoint is computed under the same lock, so no record can be
 	/// stamped before midnight and land after its day was sealed.
 	///
-	/// The clock is the machine's, checked against the monotonic clock: one
-	/// that has jumped forward since the last append is refused, since a record
-	/// dated in the future would drag every later one into that day.
+	/// The time is [`TimeRef`]'s: the machine's clock when it agrees with
+	/// the monotonic clock and with the newest record, else the best
+	/// estimate. A clock that jumped never dates a record in the future, and
+	/// one that fell behind the newest record never refuses it: the record
+	/// takes the time of the one before.
 	pub fn append(&self, entry: Entry) -> std::io::Result<[u8; 32]> {
-		self.append_with(
-			|| {
-				self.watched(
-					crate::storage::delivery_log::now_epoch(),
-					std::time::Instant::now(),
-				)
-			},
-			entry,
-		)
-	}
-
-	/// `wall` if it follows from the last reading and the time the monotonic
-	/// clock says has passed; an error if it jumped ahead.
-	fn watched(&self, wall: u64, now: std::time::Instant) -> std::io::Result<u64> {
-		let mut last = self
-			.clock
-			.lock()
-			.map_err(|_| std::io::Error::other("evidence clock lock poisoned"))?;
-		if let Some((before, then)) = *last {
-			let expected = before.saturating_add(now.saturating_duration_since(then).as_secs());
-			if wall > expected.saturating_add(JUMP_SECS) {
-				tracing::error!(
-					wall,
-					expected,
-					"the clock jumped forward; evidence is not written"
-				);
-				return Err(std::io::Error::new(
-					std::io::ErrorKind::InvalidInput,
-					"the clock jumped forward since the last record: restart once the time is right",
-				));
-			}
-		}
-		*last = Some((wall, now));
-		Ok(wall)
+		self.append_with(|| Ok(self.time.read().time), entry)
 	}
 
 	/// [`Chain::append`] with the readings of both clocks given, for tests.
@@ -126,7 +99,7 @@ impl Chain {
 		monotonic: std::time::Instant,
 		entry: Entry,
 	) -> std::io::Result<[u8; 32]> {
-		self.append_with(|| self.watched(wall, monotonic), entry)
+		self.append_with(|| Ok(self.time.read_at(wall, monotonic).time), entry)
 	}
 
 	/// [`Chain::append`] at a fixed `time` (never earlier than the last
@@ -160,20 +133,8 @@ impl Chain {
 		lock.lock()?;
 		let now = clock()?;
 		let last = self.last_position_before_append(Day::of_epoch(now))?;
-		// Times never go backwards in the chain. A clock a little behind
-		// the newest record takes its time; one far behind is refused, since
-		// the records would pile up on a day that is not today.
-		if last.time > now.saturating_add(STEP_BACK_SECS) {
-			tracing::error!(
-				now,
-				newest = last.time,
-				"the clock is behind the newest record; evidence is not written"
-			);
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::InvalidInput,
-				"the clock is more than an hour behind the newest record",
-			));
-		}
+		// Times never go backwards in the chain: a clock behind the newest
+		// record takes its time.
 		let time = now.max(last.time);
 		let sealed = Day::of_epoch(time);
 		if let Some(root) = self.dir.parent()
@@ -215,6 +176,7 @@ impl Chain {
 		if let Some(root) = self.dir.parent() {
 			super::head::write(root, time, &hash)?;
 		}
+		self.time.raise_floor(time);
 		Ok(hash)
 	}
 

@@ -353,3 +353,27 @@ fn a_signature_with_a_multibyte_character_is_not_a_signature_and_does_not_panic(
 		.expect("append");
 	assert!(!is_acknowledged(fixture.root(), &first));
 }
+
+#[test]
+fn an_acknowledgement_is_recorded_even_when_a_record_is_dated_in_the_future() {
+	let fixture = Fixture::new();
+	let first = break_on_first_day(&fixture);
+	// A record from a clock that was a year ahead: the log must not stay
+	// closed until that date arrives, or the break could never be accepted.
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(
+			crate::storage::delivery_log::now_epoch() + 400 * 86_400,
+			crate::evidence::test_support::accepted(9),
+		)
+		.expect("a record from the future");
+	crate::evidence::ack::acknowledge(
+		fixture.root(),
+		&fixture.key,
+		&first,
+		"token lost in a disk failure",
+		&operator(),
+	)
+	.expect("the acknowledgement is recorded");
+	assert_eq!(fixture.verify().acknowledged, vec![first]);
+}

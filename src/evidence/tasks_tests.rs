@@ -7,13 +7,13 @@ use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::settings::Authority;
 use crate::storage::MessageCrypto;
 
-const DAY: i64 = 20_740;
+pub(super) const DAY: i64 = 20_740;
 
-fn service(dir: &Path) -> Arc<EvidenceService> {
+pub(super) fn service(dir: &Path) -> Arc<EvidenceService> {
 	Arc::new(EvidenceService::open(dir, Vec::new(), MessageCrypto::disabled()).expect("evidence"))
 }
 
-async fn with_tsa(dir: &Path, gen_time: u64) -> Arc<FakeTsa> {
+pub(super) async fn with_tsa(dir: &Path, gen_time: u64) -> Arc<FakeTsa> {
 	let tsa = Arc::new(FakeTsa::new(gen_time));
 	let url = Arc::clone(&tsa).serve().await;
 	let settings = Settings {
@@ -40,7 +40,7 @@ async fn a_tick_seals_stamps_and_verifies_without_holding_mail() {
 		.append_at(at(DAY, 1), accepted(1))
 		.expect("append");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
-	let status = tasks.tick(at(DAY + 1, 1)).await;
+	let status = tasks.tick_following(at(DAY + 1, 1)).await;
 	assert_eq!(status.held, None, "{:?}", status.errors);
 	assert_eq!((status.days, status.stamped), (1, 1));
 	assert!(
@@ -63,11 +63,11 @@ async fn a_broken_chain_holds_transactional_mail_until_acknowledged() {
 	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
 	chain.append_at(at(DAY, 2), accepted(2)).expect("append");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
-	assert_eq!(tasks.tick(at(DAY + 1, 1)).await.held, None);
+	assert_eq!(tasks.tick_following(at(DAY + 1, 1)).await.held, None);
 	let path = chain.day_file(Day(DAY));
 	let text = std::fs::read_to_string(&path).expect("read");
 	std::fs::write(&path, text.replacen("Notice 1", "Notice X", 1)).expect("tamper");
-	let status = tasks.tick(at(DAY + 1, 2)).await;
+	let status = tasks.tick_following(at(DAY + 1, 2)).await;
 	let reason = status.held.clone().expect("held");
 	assert!(
 		reason.starts_with("2026-10-14 line 2: record does not chain"),
@@ -95,7 +95,7 @@ async fn a_broken_chain_holds_transactional_mail_until_acknowledged() {
 		at(DAY + 1, 3),
 	)
 	.expect("acknowledge");
-	let status = tasks.tick(at(DAY + 1, 4)).await;
+	let status = tasks.tick_following(at(DAY + 1, 4)).await;
 	assert_eq!(status.held, None);
 	assert_eq!(status.acknowledged, 1);
 	assert_eq!(service.held(), None);
@@ -122,11 +122,11 @@ async fn a_token_still_being_requested_is_reported_not_held() {
 	current.authorities[0].url = url;
 	settings::save(service.root(), &current).expect("save");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
-	let status = tasks.tick(at(DAY + 1, 1)).await;
+	let status = tasks.tick_following(at(DAY + 1, 1)).await;
 	assert_eq!(status.held, None);
 	assert!(status.pending.expect("pending").contains("not timestamped"));
 	// Three days later it is no longer pending: it holds.
-	let status = tasks.tick(at(DAY + 5, 0)).await;
+	let status = tasks.tick_following(at(DAY + 5, 0)).await;
 	assert!(status.held.is_some());
 }
 
@@ -142,7 +142,7 @@ async fn settings_that_turn_untrustworthy_keep_the_last_good_ones() {
 		std::fs::Permissions::from_mode(0o600),
 	)
 	.expect("chmod");
-	let status = tasks.tick(at(DAY, 1)).await;
+	let status = tasks.tick_following(at(DAY, 1)).await;
 	assert!(
 		status
 			.errors
@@ -167,11 +167,11 @@ async fn a_check_that_runs_too_long_holds_mail_and_is_not_started_twice() {
 		.expect("tasks")
 		.with_audit_timeout(Duration::from_millis(20), Duration::from_millis(400));
 	service.set_gate(None);
-	let status = tasks.tick(at(DAY, 1)).await;
+	let status = tasks.tick_following(at(DAY, 1)).await;
 	let held = status.held.expect("held");
 	assert!(held.contains("took longer than"), "{held}");
 	assert_eq!(service.held(), Some(held));
-	let again = tasks.tick(at(DAY, 2)).await;
+	let again = tasks.tick_following(at(DAY, 2)).await;
 	assert_eq!(
 		again.held.as_deref(),
 		Some("the previous evidence check is still running")
@@ -192,7 +192,7 @@ async fn a_seal_that_keeps_failing_holds_mail_once_its_grace_passes() {
 	EvidenceKey::load_or_create(service.root()).expect("key");
 	std::fs::write(service.root().join("key.pk8"), b"not a key").expect("corrupt");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
-	let early = tasks.tick(at(DAY + 1, 0)).await;
+	let early = tasks.tick_following(at(DAY + 1, 0)).await;
 	assert!(
 		early
 			.errors
@@ -202,7 +202,7 @@ async fn a_seal_that_keeps_failing_holds_mail_once_its_grace_passes() {
 		early.errors
 	);
 	assert_eq!(early.held, None, "within the seal grace");
-	let late = tasks.tick(at(DAY + 1, 2)).await;
+	let late = tasks.tick_following(at(DAY + 1, 2)).await;
 	assert!(
 		late.held.is_some(),
 		"a day left unsealed past its grace holds mail"
@@ -221,7 +221,7 @@ async fn the_status_file_cannot_open_the_gate() {
 	let text = std::fs::read_to_string(&path).expect("read");
 	std::fs::write(&path, text.replacen("Notice 1", "Notice X", 1)).expect("tamper");
 	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
-	assert!(tasks.tick(at(DAY, 3)).await.held.is_some());
+	assert!(tasks.tick_following(at(DAY, 3)).await.held.is_some());
 	let opened = Status {
 		time: at(DAY, 3),
 		..Status::default()
