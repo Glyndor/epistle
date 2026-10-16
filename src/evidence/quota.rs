@@ -47,6 +47,9 @@ struct Used {
 	day: Option<Day>,
 	records: u64,
 	accounts: BTreeMap<String, (u64, u64)>,
+	/// Outcomes still to come of the acceptances reserved today, by queue id:
+	/// they are paid for, and are not counted again when they arrive.
+	owed: BTreeMap<uuid::Uuid, u64>,
 }
 
 /// Room set aside for one acceptance, to be given back with
@@ -54,6 +57,7 @@ struct Used {
 #[derive(Debug)]
 #[must_use]
 pub struct Reservation {
+	id: uuid::Uuid,
 	account: String,
 	records: u64,
 	kept: u64,
@@ -93,10 +97,12 @@ impl Quota {
 	pub fn reserve(
 		&self,
 		account: &str,
+		id: uuid::Uuid,
 		(records, kept): (u64, u64),
 		today: Day,
 	) -> std::io::Result<Reservation> {
 		let held = Reservation {
+			id,
 			account: account.to_string(),
 			records,
 			kept,
@@ -126,6 +132,7 @@ impl Quota {
 		let entry = used.accounts.entry(account.to_string()).or_default();
 		entry.0 += records;
 		entry.1 += kept;
+		used.owed.insert(id, records.saturating_sub(1));
 		Ok(held)
 	}
 
@@ -137,10 +144,34 @@ impl Quota {
 		if used.day != Some(held.day) {
 			return;
 		}
+		used.owed.remove(&held.id);
 		used.records = used.records.saturating_sub(held.records);
 		if let Some(entry) = used.accounts.get_mut(&held.account) {
 			entry.0 = entry.0.saturating_sub(held.records);
 			entry.1 = entry.1.saturating_sub(held.kept);
+		}
+	}
+
+	/// A record of message `id` was written, an outcome or an abandonment
+	/// (`account` when known). It cannot be refused: it is a fact. If it was
+	/// paid for in the reservation of today it is not counted again; if it
+	/// was not (it came another day, or after a restart that lost the
+	/// reservation) it is counted now, so the next acceptance of the account
+	/// that produces many of them is the one that waits.
+	pub fn settle(&self, id: uuid::Uuid, account: Option<&str>, today: Day) {
+		let Ok(mut used) = self.used.lock() else {
+			return;
+		};
+		let used = self.rolled(&mut used, today);
+		if let Some(owed) = used.owed.get_mut(&id)
+			&& *owed > 0
+		{
+			*owed -= 1;
+			return;
+		}
+		used.records += 1;
+		if let Some(account) = account {
+			used.accounts.entry(account.to_string()).or_default().0 += 1;
 		}
 	}
 

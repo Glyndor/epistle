@@ -11,7 +11,7 @@ fn tight() -> Quota {
 }
 
 fn reserve(quota: &Quota, account: &str, records: u64, kept: u64) -> std::io::Result<Reservation> {
-	quota.reserve(account, (records, kept), TODAY)
+	quota.reserve(account, uuid::Uuid::now_v7(), (records, kept), TODAY)
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn a_new_day_starts_again() {
 	let _ = reserve(&quota, "a", 6, 0).expect("all of it");
 	assert!(reserve(&quota, "a", 1, 0).is_err());
 	let _ = quota
-		.reserve("a", (1, 0), Day(TODAY.0 + 1))
+		.reserve("a", uuid::Uuid::now_v7(), (1, 0), Day(TODAY.0 + 1))
 		.expect("tomorrow");
 }
 
@@ -97,4 +97,54 @@ fn the_status_warns_before_the_limit() {
 			.expect("warning")
 			.contains("near its evidence limits")
 	);
+}
+
+#[test]
+fn outcomes_paid_for_at_the_acceptance_are_not_counted_twice() {
+	let quota = tight();
+	let id = uuid::Uuid::now_v7();
+	let _ = quota
+		.reserve("a", id, (3, 0), TODAY)
+		.expect("an acceptance and two outcomes");
+	quota.settle(id, Some("a"), TODAY);
+	quota.settle(id, Some("a"), TODAY);
+	// Still 3 of the account's 6: both outcomes were already counted.
+	let _ = reserve(&quota, "a", 3, 0).expect("exactly the rest");
+	reserve(&quota, "a", 1, 0).expect_err("and no more");
+}
+
+#[test]
+fn an_outcome_another_day_is_counted_then_and_slows_the_account_that_makes_many() {
+	let quota = tight();
+	let id = uuid::Uuid::now_v7();
+	let _ = quota
+		.reserve("a", id, (2, 0), TODAY)
+		.expect("reserved today");
+	// Tomorrow: the reservation of today is gone with the day.
+	let tomorrow = Day(TODAY.0 + 1);
+	for _ in 0..6 {
+		quota.settle(uuid::Uuid::now_v7(), Some("a"), tomorrow);
+	}
+	// Never refused, and the account has nothing left for new mail.
+	quota
+		.reserve("a", uuid::Uuid::now_v7(), (1, 0), tomorrow)
+		.expect_err("the account's late outcomes used its share");
+	let _ = quota
+		.reserve("b", uuid::Uuid::now_v7(), (1, 0), tomorrow)
+		.expect("another account is not held up");
+}
+
+#[test]
+fn an_outcome_after_a_restart_is_counted_because_the_reservation_is_gone() {
+	let before = tight();
+	let id = uuid::Uuid::now_v7();
+	let _ = before.reserve("a", id, (2, 0), TODAY).expect("reserved");
+	let after = tight();
+	for _ in 0..6 {
+		after.settle(uuid::Uuid::now_v7(), Some("a"), TODAY);
+	}
+	after.settle(id, Some("a"), TODAY);
+	after
+		.reserve("a", uuid::Uuid::now_v7(), (1, 0), TODAY)
+		.expect_err("the restart did not clear the account's debt");
 }

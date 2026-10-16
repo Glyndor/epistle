@@ -72,6 +72,9 @@ pub struct Delivery<'a> {
 	pub mta_sts: Option<&'a str>,
 	/// Days to keep the record.
 	pub retain_days: u32,
+	/// The account that sent the message, when known: the outcome counts
+	/// toward its share of the day if it was not paid for when accepted.
+	pub account: Option<&'a str>,
 }
 
 /// How long one clean verification keeps the gate open: three ticks of
@@ -255,6 +258,7 @@ impl EvidenceService {
 		// the check; it goes back if nothing was written.
 		let reservation = self.quota.reserve(
 			submitted.account,
+			submitted.spool_id,
 			(1 + submitted.recipients.len() as u64, kept_bytes),
 			self.today(),
 		)?;
@@ -311,6 +315,7 @@ impl EvidenceService {
 			reason: bounded(reason),
 			retain_days: super::policy::DEFAULT_DAYS,
 		}))?;
+		self.quota.settle(spool_id, None, self.today());
 		Ok(())
 	}
 
@@ -329,6 +334,8 @@ impl EvidenceService {
 			mta_sts: delivery.mta_sts.map(bounded),
 			retain_days: delivery.retain_days,
 		}))?;
+		self.quota
+			.settle(delivery.spool_id, delivery.account, self.today());
 		Ok(())
 	}
 

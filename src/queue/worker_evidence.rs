@@ -144,6 +144,7 @@ impl Worker {
 			dane: outcome.dane,
 			mta_sts: outcome.mta_sts.as_deref(),
 			retain_days,
+			account: envelope.account.as_deref(),
 		})
 	}
 

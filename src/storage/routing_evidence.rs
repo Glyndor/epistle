@@ -113,7 +113,7 @@ impl SplitDelivery {
 			// message can be shown whole; and an acceptance that was
 			// delivered here is not "abandoned: nothing was sent".
 			if let Some(done) = &local {
-				record_local(&service, queue_id, class, retention.days, done);
+				record_local(&service, queue_id, (class, account), retention.days, done);
 			}
 			if let Err(error) = &routed
 				&& local.is_none()
@@ -171,7 +171,7 @@ impl SplitDelivery {
 fn record_local(
 	service: &EvidenceService,
 	id: uuid::Uuid,
-	class: MailClass,
+	(class, account): (MailClass, &str),
 	retain_days: u32,
 	done: &super::LocalDone,
 ) {
@@ -192,6 +192,7 @@ fn record_local(
 			dane: false,
 			mta_sts: None,
 			retain_days,
+			account: Some(account),
 		});
 		if let Err(error) = outcome {
 			tracing::warn!(%id, %error, "could not record the delivery of a local recipient");
