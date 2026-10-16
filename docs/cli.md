@@ -691,8 +691,9 @@ refused. With `mode = "off"` the parts are still judged, and the verdict
 is `deliver`. Names and types come from the sender: the text output shows
 control and formatting characters as `\u{202e}` escapes, and `--json`
 escapes every character outside ASCII. A file over `max_message_size` is
-refused before it is read. See [attachments.md](attachments.md) for what
-is detected.
+refused before it is read (exit `2`; an unreadable file exits `1`). The
+exit code is `0` whenever the message was judged, whatever the verdict.
+See [attachments.md](attachments.md) for what is detected.
 
 ## Stack (`epistle stack`)
 
