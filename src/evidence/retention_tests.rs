@@ -59,7 +59,7 @@ fn verified(root: &Path, tsa: &FakeTsa, now: u64) -> crate::evidence::audit::Rep
 fn nothing_is_purged_while_any_record_of_the_day_must_be_kept() {
 	let (dir, key, _) = fixture();
 	// delivered() keeps a year: no day is purgeable.
-	let swept = sweep(dir.path(), &key, at(DAY + 30, 0)).expect("sweep");
+	let swept = sweep(dir.path(), &key, &[], at(DAY + 30, 0)).expect("sweep");
 	assert_eq!(swept, Sweep::default());
 	assert_eq!(
 		Chain::open(dir.path())
@@ -85,7 +85,7 @@ fn a_purge_keeps_the_rest_of_the_chain_verifiable() {
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
 	// Two days later the first days' two-day retention has passed.
 	let now = at(DAY + 5, 12);
-	let swept = sweep(dir.path(), &key, now).expect("sweep");
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
 	assert_eq!(
 		swept.days, 3,
 		"every closed day before yesterday whose retention passed"
@@ -180,7 +180,7 @@ fn kept_messages_go_when_their_retention_passes() {
 	std::fs::create_dir_all(&old).expect("mkdir");
 	std::fs::create_dir_all(&young).expect("mkdir");
 	std::fs::write(old.join("a.eml"), b"x").expect("write");
-	let swept = sweep(dir.path(), &key, at(DAY + 3, 0)).expect("sweep");
+	let swept = sweep(dir.path(), &key, &[], at(DAY + 3, 0)).expect("sweep");
 	assert_eq!(swept.message_dirs, 1);
 	assert!(!old.exists());
 	assert!(young.exists());
@@ -196,12 +196,123 @@ fn a_day_sealed_after_every_older_checkpoint_was_purged_names_the_anchor() {
 		.append_at(at(DAY, 1), accepted_for(1, 1))
 		.expect("append");
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 1, 0));
-	let swept = sweep(dir.path(), &key, at(DAY + 3, 0)).expect("sweep");
-	assert_eq!(swept.days, 1);
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 3, 0)).expect("sweep");
+	assert_eq!(swept.days, 1, "{:?}", swept.refused);
 	// The purge record sits on DAY+3; seal it two days later with nothing
 	// older left.
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 1));
 	let report = verified(dir.path(), &tsa, at(DAY + 4, 2));
 	assert_eq!(report.first_break.as_ref().map(ToString::to_string), None);
 	assert_eq!(report.sealed, 1);
+}
+
+/// Days DAY..DAY+3, each kept two days, sealed and stamped.
+fn short_lived() -> (tempfile::TempDir, EvidenceKey, FakeTsa, Chain) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	for offset in 0..4 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
+	(dir, key, tsa, chain)
+}
+
+fn tamper(chain: &Chain, day: Day) {
+	let path = chain.day_file(day);
+	let text = std::fs::read_to_string(&path).expect("read");
+	std::fs::write(&path, text.replacen("student", "studemt", 1)).expect("tamper");
+}
+
+#[test]
+fn nothing_is_purged_while_the_evidence_does_not_verify() {
+	let (dir, key, tsa, chain) = short_lived();
+	// A change to a day that is not even due: the due days stay too.
+	tamper(&chain, Day(DAY + 3));
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 0);
+	let refused = swept.refused.expect("reported");
+	assert!(refused.starts_with("purge refused: the evidence does not verify"), "{refused}");
+	assert_eq!(chain.days().expect("days").len(), 4, "every day stays");
+	assert!(!dir.path().join(PURGES_DIR).exists());
+}
+
+#[test]
+fn a_day_without_a_token_is_never_purged() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	chain
+		.append_at(
+			at(DAY, 0),
+			Entry::Setting(crate::evidence::record::Setting {
+				name: "timestamp".into(),
+				value: "disabled by uid=0".into(),
+			}),
+		)
+		.expect("disable");
+	for offset in 0..3 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	// Sealed with timestamps off: the evidence verifies, nothing vouches.
+	seal_closed_days(dir.path(), &key, false, at(DAY + 3, 0)).expect("seal");
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 0);
+	let refused = swept.refused.expect("reported");
+	assert!(refused.contains("no timestamp token that verifies"), "{refused}");
+	assert_eq!(chain.days().expect("days").len(), 3);
+}
+
+#[test]
+fn an_acknowledged_break_and_what_follows_are_never_purged() {
+	let (dir, key, tsa, chain) = short_lived();
+	tamper(&chain, Day(DAY + 1));
+	let now = at(DAY + 5, 12);
+	let at_break = verified(dir.path(), &tsa, now).first_break.expect("a break");
+	crate::evidence::ack::acknowledge_at(
+		dir.path(),
+		&key,
+		&at_break,
+		"restored from backup",
+		&crate::evidence::ack::Operator::named("uid=0 host=mail"),
+		at(DAY + 5, 1),
+	)
+	.expect("acknowledge");
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
+	assert_eq!(swept.days, 1, "only the day before the break");
+	assert!(swept.refused.expect("reported").contains("acknowledged break is kept"));
+	assert!(chain.days().expect("days").contains(&Day(DAY + 1)));
+}
+
+#[test]
+fn the_statement_names_what_went_and_cannot_be_changed() {
+	let (dir, key, tsa, chain) = short_lived();
+	let now = at(DAY + 5, 12);
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
+	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	let path = dir.path().join(PURGES_DIR).join(format!("{}.json", Day(DAY + 2).name()));
+	let statement: Statement =
+		serde_json::from_slice(&std::fs::read(&path).expect("statement")).expect("parse");
+	assert_eq!((statement.from.as_str(), statement.records), ("2026-10-14", 3));
+	assert_eq!(statement.days.len(), 3);
+	assert!(statement.days.iter().all(|day| day.merkle_root.len() == 64));
+	let record = std::fs::read_to_string(chain.day_file(Day(DAY + 5))).expect("today");
+	assert!(record.contains("\"from\":\"2026-10-14\"") && record.contains("\"records\":3"), "{record}");
+	assert_eq!(verified(dir.path(), &tsa, now).first_break, None);
+	let edited = std::fs::read_to_string(&path).expect("read").replace("\"records\": 3", "\"records\": 2");
+	std::fs::write(&path, edited).expect("write");
+	let report = verified(dir.path(), &tsa, now);
+	assert_eq!(
+		report.first_break.map(|at| at.to_string()).as_deref(),
+		Some("2026-10-19: checkpoint: the purge statement is not the one its record names")
+	);
+	std::fs::remove_file(&path).expect("remove");
+	let report = verified(dir.path(), &tsa, now);
+	assert!(report.first_break.expect("a break").to_string().contains("statement is missing"));
 }

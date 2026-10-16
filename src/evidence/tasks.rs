@@ -90,11 +90,12 @@ impl Tasks {
 		let enabled = current.enabled;
 		let sealed = tokio::task::spawn_blocking({
 			let root = root.clone();
-			move || seal_and_sweep(&root, enabled, now)
+			move || seal_and_sweep(&root, enabled, &trusted, now)
 		})
 		.await;
 		match sealed {
-			Ok(Ok(())) => {}
+			Ok(Ok(None)) => {}
+			Ok(Ok(Some(refused))) => errors.push(refused),
 			Ok(Err(error)) => errors.push(error),
 			Err(error) => errors.push(format!("seal task failed: {error}")),
 		}
@@ -126,6 +127,7 @@ impl Tasks {
 				});
 			}
 			Err(error) => {
+		let trusted = anchors(&current);
 				let reason = format!("the evidence check failed: {error}");
 				return self.finish(Status {
 					time: now,
@@ -158,7 +160,7 @@ impl Tasks {
 }
 
 /// Every trusted timestamp key: the configured authorities' and the default.
-fn anchors(settings: &Settings) -> Vec<[u8; 32]> {
+pub fn anchors(settings: &Settings) -> Vec<[u8; 32]> {
 	let mut anchors: Vec<[u8; 32]> = settings
 		.authorities
 		.iter()
@@ -168,14 +170,19 @@ fn anchors(settings: &Settings) -> Vec<[u8; 32]> {
 	anchors
 }
 
-fn seal_and_sweep(root: &Path, timestamp: bool, now: u64) -> Result<(), String> {
+fn seal_and_sweep(
+	root: &Path,
+	timestamp: bool,
+	anchors: &[[u8; 32]],
+	now: u64,
+) -> Result<Option<String>, String> {
 	let key =
 		EvidenceKey::load_or_create(root).map_err(|error| format!("evidence key: {error}"))?;
 	super::checkpoint::seal_closed_days(root, &key, timestamp, now)
 		.map_err(|error| format!("sealing: {error}"))?;
-	super::retention::sweep(root, &key, now)
+	let swept = super::retention::sweep(root, &key, anchors, now)
 		.map_err(|error| format!("retention sweep: {}", error.kind()))?;
-	Ok(())
+	Ok(swept.refused)
 }
 
 /// Whether the report holds transactional mail, and a pending token. A

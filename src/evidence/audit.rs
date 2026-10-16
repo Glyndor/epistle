@@ -158,20 +158,32 @@ pub fn verify(evidence_root: &Path, options: &Options) -> std::io::Result<Report
 			return Ok(report);
 		}
 	}
-	report.first_break = final_checks(&purged, &walker, from_start, to_end, today, head.is_some());
+	report.first_break = final_checks(
+		evidence_root,
+		&purged,
+		&walker,
+		(from_start, to_end),
+		today,
+		head.is_some(),
+	);
 	Ok(report)
 }
 
 /// What can only be judged once every day was walked: the purge anchor and
 /// the head.
 fn final_checks(
+	evidence_root: &Path,
 	purged: &Option<anchor::Anchor>,
 	walker: &Walker,
-	from_start: bool,
-	to_end: bool,
+	(from_start, to_end): (bool, bool),
 	today: Day,
 	has_head: bool,
 ) -> Option<Break> {
+	if let Some(purge) = &walker.last_purge
+		&& let Err(why) = super::retention::check_statement(evidence_root, purge)
+	{
+		return Some(broken(today, why));
+	}
 	match (purged, &walker.last_purge) {
 		(Some(anchor), Some(purge))
 			if anchor.last_hash != purge.last_hash

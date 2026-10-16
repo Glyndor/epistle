@@ -210,8 +210,12 @@ pub struct Abandoned {
 /// The note a purge leaves in the chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Purge {
+	/// The first purged day (`YYYY-MM-DD`).
+	pub from: String,
 	/// The last purged day (`YYYY-MM-DD`): every day up to it is gone.
 	pub through: String,
+	/// Records purged.
+	pub records: u64,
 	/// Hex SHA-256 of the last record of that day: the `prev` of the first
 	/// record kept.
 	pub last_hash: String,
