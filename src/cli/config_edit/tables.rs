@@ -85,9 +85,8 @@ impl ConfigDocument {
 					edited = true;
 				}
 			}
-			toml_edit::Item::Value(value) => {
-				let cloned_value = value.clone();
-				let Some(array) = value.as_array_mut() else {
+			toml_edit::Item::Value(inline) => {
+				let Some(array) = inline.as_array_mut() else {
 					return Ok(false);
 				};
 				for value_ref in array.iter_mut() {
@@ -98,7 +97,7 @@ impl ConfigDocument {
 					if entry_name != name {
 						continue;
 					}
-					apply_field_inline(table, field, Some(&cloned_value));
+					apply_field_inline(table, field, value.as_ref());
 					edited = true;
 				}
 			}
