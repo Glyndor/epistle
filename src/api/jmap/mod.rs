@@ -50,6 +50,7 @@ pub(crate) mod push_subscription;
 mod sieve_blob;
 mod sieve_capability;
 mod sieve_script;
+mod sieve_script_query;
 mod vacation_response;
 pub mod websocket;
 
@@ -334,6 +335,7 @@ pub fn dispatch_request(
 			"VacationResponse/get" => vacation_response::get(state, principal, &args, &call_id),
 			"VacationResponse/set" => vacation_response::set(state, principal, &args, &call_id),
 			"SieveScript/get" => sieve_script::get(state, principal, &args, &call_id),
+			"SieveScript/query" => sieve_script_query::query(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
 		method_responses.push(response);
@@ -364,7 +366,8 @@ fn required_scope(method: &str) -> Option<Scope> {
 		| "Quota/get"
 		| "PushSubscription/get"
 		| "VacationResponse/get"
-		| "SieveScript/get" => Some(Scope::Read),
+		| "SieveScript/get"
+		| "SieveScript/query" => Some(Scope::Read),
 		_ => None,
 	}
 }
