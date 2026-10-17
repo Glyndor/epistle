@@ -90,37 +90,43 @@ pub(super) fn run(
 			"{id}: it already has an outcome or was abandoned"
 		));
 	}
-	// A message the queue still holds will be settled by the worker.
-	if crate::storage::FsSpool::open(data_dir)
-		.and_then(|spool| spool.load_envelope(id))
-		.is_ok()
-	{
-		return super::exit::refused(format_args!(
-			"{id}: the queue still holds it; its outcome will be recorded when it is delivered or given up"
-		));
-	}
 	let question = format!(
-		"Close the acceptance {id}? It has no outcome and is not in the queue; the record says an \
-		 operator closed it, and why. [y/N] "
+		"Close the acceptance {id}? It has no outcome and is not in the queue; the record says {} \
+		 closed it, and why. [y/N] ",
+		sanitize(operator.as_str())
 	);
 	if let Err(code) = super::prompt::confirm_destructive("closing the acceptance", &question, yes)
 	{
 		return code;
 	}
-	let why = format!("closed by an operator: {}", operator_reason(reason));
-	let closed = Chain::open(&root).and_then(|chain| {
-		chain.append(Entry::Abandoned(Abandoned {
-			spool_id: id,
-			reason: bounded(&why),
-			retain_days: days,
-		}))
+	let why = format!("closed by {}: {}", clean(operator.as_str()), clean(reason));
+	// A message the queue holds is settled by the worker. The check and the
+	// record are one step under the spool's lock; anything but a clean "not
+	// there" leaves the acceptance as it is.
+	let closed = crate::storage::FsSpool::open(data_dir).and_then(|spool| {
+		spool.while_absent(id, || {
+			Chain::open(&root).and_then(|chain| {
+				chain.append(Entry::Abandoned(Abandoned {
+					spool_id: id,
+					reason: bounded(&why),
+					retain_days: days,
+				}))
+			})
+		})
 	});
 	if let Err(error) = closed {
-		super::style::error(format_args!(
-			"closing the acceptance: {}",
-			sanitize(&error.to_string())
-		));
-		return ExitCode::FAILURE;
+		return match error.kind() {
+			std::io::ErrorKind::AlreadyExists => super::exit::refused(format_args!(
+				"{id}: the queue holds it; its outcome will be recorded when it is delivered or given up"
+			)),
+			_ => {
+				super::style::error(format_args!(
+					"{id} was not closed: {}",
+					sanitize(&error.to_string())
+				));
+				ExitCode::FAILURE
+			}
+		};
 	}
 	if as_json {
 		return super::evidence::json(
@@ -132,7 +138,11 @@ pub(super) fn run(
 	ExitCode::SUCCESS
 }
 
-/// The reason without control characters, as the log keeps it.
-fn operator_reason(reason: &str) -> String {
-	reason.chars().filter(|c| !c.is_control()).collect()
+/// `text` as the log keeps it: without control characters or the ones that
+/// reorder or hide text, and not long.
+fn clean(text: &str) -> String {
+	text.chars()
+		.filter(|c| !c.is_control() && !crate::evidence::hidden::is_hidden(*c))
+		.take(256)
+		.collect()
 }

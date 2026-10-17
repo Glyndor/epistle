@@ -508,6 +508,33 @@ impl FsSpool {
 		self.remove_with(id, |_| Ok(())).map(|_| ())
 	}
 
+	/// Run `work` while the queue holds nothing under `id`, with the spool's
+	/// lock kept for as long as it runs, so a retry cannot queue the message
+	/// between the check and the work. Only a file that is not there is an
+	/// entry that is not there: a file that cannot be looked at (a link in its
+	/// place, permissions, a fault) is an entry that may be, and the work is not
+	/// done. Nothing is decoded, so an envelope that cannot be read still counts.
+	pub fn while_absent<T>(
+		&self,
+		id: Uuid,
+		work: impl FnOnce() -> std::io::Result<T>,
+	) -> std::io::Result<T> {
+		let _guard = self.lock()?;
+		for ext in [MessageExt::Json, MessageExt::Eml] {
+			match fs::symlink_metadata(self.entry_file(SpoolDir::New, id, ext)?) {
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+				Err(error) => return Err(error),
+				Ok(_) => {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::AlreadyExists,
+						"the queue holds this entry",
+					));
+				}
+			}
+		}
+		work()
+	}
+
 	/// [`remove`](Self::remove), calling `before` with the envelope as it is
 	/// under the spool's lock, and removing the entry only if it returns `Ok`.
 	/// Reading the envelope, deciding and unlinking are one step: nothing can
@@ -578,6 +605,10 @@ mod tests;
 mod tests_edit;
 
 #[cfg(all(test, unix))]
+#[path = "spool_tests_absent.rs"]
+mod tests_absent;
+
+#[cfg(test)]
 #[path = "spool_tests_perms.rs"]
 mod tests_perms;
 
