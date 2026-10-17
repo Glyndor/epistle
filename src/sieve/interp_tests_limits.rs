@@ -49,11 +49,11 @@ fn a_string_built_from_many_references_stays_near_the_script_text() {
 }
 
 #[test]
-fn a_run_with_too_many_steps_is_abandoned_and_the_message_kept() {
+fn a_run_with_too_many_steps_stops_where_it_is() {
 	let script = format!("discard;\n{}fileinto \"Z\";\n", "keep;\n".repeat(25_000));
 	let outcome = run(&script);
-	assert!(outcome.aborted, "a run over 20000 steps is abandoned");
-	assert!(outcome.keep && !outcome.discarded);
+	assert!(outcome.aborted, "a run over 20000 steps stops");
+	assert!(outcome.discarded, "what it had decided stays decided");
 	assert!(outcome.fileinto.is_empty() && outcome.redirects.is_empty());
 }
 
@@ -81,16 +81,4 @@ fn matching_work_is_budgeted_across_the_run() {
 	assert!(outcome.keep && !outcome.discarded);
 	let outcome = run_with(&test.repeat(5), raw.as_bytes());
 	assert!(!outcome.aborted);
-}
-
-#[test]
-fn an_abandoned_run_drops_what_it_had_asked_for() {
-	let script = format!(
-		"redirect \"a@target.example\";\nfileinto \"X\";\n{}",
-		"keep;\n".repeat(25_000)
-	);
-	let outcome = run(&script);
-	assert!(outcome.aborted);
-	assert!(outcome.redirects.is_empty() && outcome.fileinto.is_empty());
-	assert!(outcome.keep);
 }

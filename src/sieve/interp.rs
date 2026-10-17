@@ -62,7 +62,7 @@ pub use super::message::Message;
 pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut outcome = Outcome::default();
 	let mut cancel_implicit = false;
-	let mut env = Env::default();
+	let mut env = Env::for_message(message.size);
 	run(
 		script,
 		message,
@@ -70,16 +70,11 @@ pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 		&mut cancel_implicit,
 		&mut env,
 	);
-	// A run that overspent is abandoned whole, as RFC 5228 section 2.10.6
-	// has it for a run-time error: nothing it asked for happens, and the
-	// message is kept.
-	if env.exhausted() {
-		return Outcome {
-			keep: true,
-			aborted: true,
-			..Outcome::default()
-		};
-	}
+	// A run that spent more than it may stops where it is, as a `stop` would:
+	// what it had decided stays decided (a `discard` is not undone by the
+	// size of the message that came after it), and what it had not got to is
+	// not run. The delivery says so in the log.
+	outcome.aborted = env.exhausted();
 	// Implicit keep applies unless an action cancelled it.
 	if !cancel_implicit {
 		outcome.keep = true;
