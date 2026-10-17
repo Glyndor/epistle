@@ -404,9 +404,10 @@ pub fn hold_server_lock(evidence_root: &Path) -> std::io::Result<File> {
 	options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
 	let file = options.open(evidence_root.join(SERVER_LOCK))?;
 	file.try_lock().map_err(|error| match error {
-		std::fs::TryLockError::WouldBlock => {
-			std::io::Error::other("another server holds this evidence directory")
-		}
+		std::fs::TryLockError::WouldBlock => std::io::Error::new(
+			std::io::ErrorKind::WouldBlock,
+			"another server holds this evidence directory",
+		),
 		std::fs::TryLockError::Error(error) => error,
 	})?;
 	Ok(file)

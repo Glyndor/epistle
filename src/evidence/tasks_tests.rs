@@ -10,7 +10,9 @@ use crate::storage::MessageCrypto;
 pub(super) const DAY: i64 = 20_740;
 
 pub(super) fn service(dir: &Path) -> Arc<EvidenceService> {
-	Arc::new(EvidenceService::open(dir, Vec::new(), MessageCrypto::disabled()).expect("evidence"))
+	Arc::new(
+		EvidenceService::open_again(dir, Vec::new(), MessageCrypto::disabled()).expect("evidence"),
+	)
 }
 
 pub(super) async fn with_tsa(dir: &Path, gen_time: u64) -> Arc<FakeTsa> {

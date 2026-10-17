@@ -400,3 +400,29 @@ fn the_bytes_an_account_may_keep_are_bounded_and_nothing_is_written_past_it() {
 		"bytes were written past the limit"
 	);
 }
+
+#[test]
+fn a_second_server_on_the_same_evidence_directory_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let first = EvidenceService::open(dir.path(), Vec::new(), MessageCrypto::disabled())
+		.expect("the first server opens");
+	let error = EvidenceService::open(dir.path(), Vec::new(), MessageCrypto::disabled())
+		.expect_err("the second must not open without the lock");
+	assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock, "{error}");
+	// When the first stops, the directory is free again.
+	drop(first);
+	EvidenceService::open(dir.path(), Vec::new(), MessageCrypto::disabled())
+		.expect("opens after the first stopped");
+}
+
+#[test]
+fn a_lock_that_cannot_be_taken_is_an_error_not_a_server_nobody_believes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = root_of(dir.path());
+	std::fs::create_dir_all(&root).expect("root");
+	// A link in the place of the lock file is refused (O_NOFOLLOW).
+	std::os::unix::fs::symlink("elsewhere", root.join("server.lock")).expect("link");
+	let error = EvidenceService::open(dir.path(), Vec::new(), MessageCrypto::disabled())
+		.expect_err("the lock could not be taken");
+	assert_ne!(error.kind(), std::io::ErrorKind::WouldBlock);
+}

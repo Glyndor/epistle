@@ -107,20 +107,68 @@ pub struct EvidenceService {
 	_alive: Option<std::fs::File>,
 }
 
+/// The server lock, tried again for a moment when a command is looking at it
+/// at that very instant (its look takes the lock shared for as long as it
+/// takes), and not when another server really holds it.
+fn take_server_lock(root: &Path) -> std::io::Result<std::fs::File> {
+	let mut tries = 0;
+	loop {
+		match super::chain::hold_server_lock(root) {
+			Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && tries < 20 => {
+				tries += 1;
+				std::thread::sleep(std::time::Duration::from_millis(10));
+			}
+			other => return other,
+		}
+	}
+}
+
 impl EvidenceService {
 	/// Open the service under `data_dir/evidence`. `tenants` are the
 	/// configured tenants (name, domains). A policy that cannot be read
 	/// refuses to open: there is no last good policy yet.
+	///
+	/// A server already running on the same directory, or a lock that cannot
+	/// be taken, refuses to open: without the lock no command would believe
+	/// this server's word about the clock, and a second server would write to
+	/// the same log unnoticed.
 	pub fn open(
 		data_dir: &Path,
 		tenants: Vec<(String, Vec<String>)>,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
+		Self::open_taking(data_dir, tenants, crypto, true)
+	}
+
+	/// [`EvidenceService::open`] for a test that opens the same directory
+	/// again while the first service is alive: a lock already held is not an
+	/// error.
+	#[cfg(test)]
+	pub(crate) fn open_again(
+		data_dir: &Path,
+		tenants: Vec<(String, Vec<String>)>,
+		crypto: MessageCrypto,
+	) -> std::io::Result<Self> {
+		Self::open_taking(data_dir, tenants, crypto, false)
+	}
+
+	fn open_taking(
+		data_dir: &Path,
+		tenants: Vec<(String, Vec<String>)>,
+		crypto: MessageCrypto,
+		strict: bool,
+	) -> std::io::Result<Self> {
 		let root = root_of(data_dir);
 		let chain = Chain::open(&root)?;
 		let policy = super::policy::load(&root)?;
 		let quota = super::quota::Quota::start(&root, super::quota::Limits::default());
-		let root_for_lock = root.clone();
+		// After the log is read, so that this start is judged by the log alone and
+		// not by the word of a server that has just stopped.
+		let alive = match take_server_lock(&root) {
+			Ok(lock) => Some(lock),
+			Err(_) if !strict => None,
+			Err(error) => return Err(error),
+		};
 		Ok(EvidenceService {
 			root,
 			chain,
@@ -133,7 +181,7 @@ impl EvidenceService {
 			}),
 			crypto,
 			quota,
-			_alive: super::chain::hold_server_lock(&root_for_lock).ok(),
+			_alive: alive,
 		})
 	}
 
