@@ -126,3 +126,20 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let listed = provider.list("example.org").await.expect("list");
 	assert_kinds_kept(&listed, &Shape::NAMED);
 }
+
+/// A server that claims a million pages cannot keep a listing going: it
+/// stops at the page cap with an error, not with a shorter zone.
+#[tokio::test]
+async fn a_listing_that_claims_endless_pages_stops_at_the_page_cap() {
+	let (provider, state) = mock(Vec::new()).await;
+	state.lock().unwrap().total_pages = Some(1_000_000);
+	let error = provider.list("example.org").await.expect_err("endless");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+	assert_eq!(state.lock().unwrap().calls.len(), 1000);
+}

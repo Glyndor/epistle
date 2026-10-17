@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -266,6 +267,7 @@ impl SpaceshipProvider {
 		let url = self.records_url()?;
 		let mut out = Vec::new();
 		let mut skip: i64 = 0;
+		let mut pages = 0;
 		loop {
 			let page_url = url
 				.with_query("take", &PAGE_MAX.to_string())
@@ -286,8 +288,15 @@ impl SpaceshipProvider {
 			})?;
 			let count = page.items.len() as i64;
 			out.extend(page.items);
+			if out.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(&self.zone));
+			}
 			if out.len() as i64 >= page.total || count == 0 {
 				break;
+			}
+			pages += 1;
+			if pages >= LIST_MAX_PAGES {
+				return Err(listing_too_long(&self.zone));
 			}
 			skip += count;
 		}

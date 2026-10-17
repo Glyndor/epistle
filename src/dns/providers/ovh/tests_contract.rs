@@ -98,3 +98,28 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let listed = provider.list("example.org").await.expect("list");
 	assert_kinds_kept(&listed, &Shape::NAMED);
 }
+
+/// OVH lists ids and then answers one request per id, so a zone past the
+/// record cap is refused before the first of those requests.
+#[tokio::test]
+async fn a_listing_past_the_record_cap_asks_for_no_record() {
+	let existing: Vec<StoredRecord> = (0..100_001)
+		.map(|id| StoredRecord {
+			id,
+			field_type: "A".into(),
+			sub_domain: "h".into(),
+			target: "192.0.2.1".into(),
+			ttl: 3600,
+		})
+		.collect();
+	let (provider, state) = mock_with(existing).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+	assert_eq!(state.lock().unwrap().reads, 0);
+}

@@ -22,6 +22,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -176,8 +177,14 @@ impl DnsimpleProvider {
 				.map_err(transport)?;
 			let mut batch: ListResponse = decode(response).await?;
 			all.append(&mut batch.data);
+			if all.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(zone));
+			}
 			if page >= batch.pagination.total_pages {
 				break;
+			}
+			if page as usize >= LIST_MAX_PAGES {
+				return Err(listing_too_long(zone));
 			}
 		}
 		Ok(all)

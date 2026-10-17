@@ -141,3 +141,46 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let listed = provider.list("example.org").await.expect("list");
 	assert_kinds_kept(&listed, &Shape::NAMED);
 }
+
+/// A server that links every page to another page cannot keep a listing
+/// going: it stops at the page cap with an error, not with a shorter zone.
+#[tokio::test]
+async fn a_listing_that_never_ends_stops_at_the_page_cap() {
+	let (provider, state) = mock(Vec::new(), true).await;
+	{
+		let mut s = state.lock().unwrap();
+		let own = s
+			.next_url
+			.clone()
+			.expect("next url")
+			.replace("/next", "/v2/domains/example.org/records");
+		s.next_url = Some(own);
+	}
+	let error = provider.list("example.org").await.expect_err("endless");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+	assert_eq!(state.lock().unwrap().calls.len(), 1000);
+}
+
+/// More records than a listing reads is an error too, from a single page.
+#[tokio::test]
+async fn a_listing_past_the_record_cap_is_an_error() {
+	let record = serde_json::json!({
+		"id": 1, "type": "A", "name": "h", "data": "192.0.2.1", "ttl": 3600,
+		"priority": null, "port": null, "weight": null, "flags": null, "tag": null
+	});
+	let (provider, _state) = mock(vec![record; 100_001], false).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+}

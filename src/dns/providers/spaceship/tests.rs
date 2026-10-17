@@ -22,6 +22,8 @@ pub(super) struct MockState {
 	pub(super) api_key: Option<String>,
 	/// X-API-Secret header seen on the last request.
 	pub(super) api_secret: Option<String>,
+	/// What the listing claims for `total`, whatever it holds.
+	pub(super) total: Option<i64>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -71,7 +73,7 @@ async fn list_records(
 	record_call(&state, axum::http::Method::GET, &headers, &zone, &query);
 	let s = state.lock().unwrap();
 	let items: Vec<serde_json::Value> = s.records.values().cloned().collect();
-	let total = items.len() as i64;
+	let total = s.total.unwrap_or(items.len() as i64);
 	axum::Json(serde_json::json!({"items": items, "total": total}))
 }
 

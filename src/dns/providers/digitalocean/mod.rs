@@ -9,6 +9,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -172,6 +173,7 @@ impl DigitaloceanProvider {
 	async fn fetch_pages(&self, first: HttpsUrl) -> Result<Vec<DomainRecord>, ProviderError> {
 		let mut url = first;
 		let mut out = Vec::new();
+		let mut pages = 0;
 		loop {
 			let response = self
 				.client
@@ -188,8 +190,17 @@ impl DigitaloceanProvider {
 			}
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);
+			pages += 1;
+			if out.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(self.secret.zone()));
+			}
 			match page.links.pages.next {
-				Some(next) if !next.is_empty() => url = self.base.follow(&next)?,
+				Some(next) if !next.is_empty() => {
+					if pages >= LIST_MAX_PAGES {
+						return Err(listing_too_long(self.secret.zone()));
+					}
+					url = self.base.follow(&next)?;
+				}
 				_ => break,
 			}
 		}

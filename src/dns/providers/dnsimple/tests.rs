@@ -24,6 +24,8 @@ pub(super) struct MockState {
 	pub(super) bodies: Vec<String>,
 	/// Last `Authorization` header seen (set on every request).
 	auth: Option<String>,
+	/// What the listing claims for `pagination.total_pages`, whatever it holds.
+	pub(super) total_pages: Option<u32>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -86,6 +88,7 @@ async fn list_records(
 	} else {
 		total.div_ceil(per_page)
 	};
+	let total_pages = s.total_pages.unwrap_or(total_pages);
 	let start = ((page - 1) * per_page) as usize;
 	let end = (start + per_page as usize).min(total as usize);
 	let page_data = if start < total as usize {

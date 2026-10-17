@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use crate::dns::providers::{LIST_MAX_RECORDS, listing_too_long};
 use crate::net::{HttpsUrl, HttpsUrlError};
 
 use crate::dns::provider::{
@@ -440,6 +441,10 @@ impl OvhProvider {
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let url = self.zone_url(zone, &["record"])?;
 		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
+		// One request per id follows, so the cap is checked before any.
+		if ids.len() > LIST_MAX_RECORDS {
+			return Err(listing_too_long(zone));
+		}
 		let mut records = Vec::with_capacity(ids.len());
 		for id in ids {
 			if let Some(rec) = self.get_record(zone, id).await? {
