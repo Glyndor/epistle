@@ -187,6 +187,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		stored_at("example.org", "2", "CAA", CAA_VALUE),
 		stored_at("example.org", "3", "HTTPS", HTTPS_VALUE),
 		stored_at("example.org", "4", "SVCB", SVCB_VALUE),
+		serde_json::json!({"id": "7", "type": "MX", "name": "example.org", "content": "mail.example.org", "priority": 10, "ttl": 3600}),
 		stored_at("example.org", "5", "NAPTR", NAPTR_VALUE),
 		stored_at("example.org", "6", hostile, OPAQUE_VALUE),
 	])

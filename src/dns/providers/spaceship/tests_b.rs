@@ -90,7 +90,7 @@ async fn mx_upsert_sends_preference_and_exchange() {
 	let body = put_body(&state);
 	assert!(body.contains("\"type\":\"MX\""), "{body}");
 	assert!(body.contains("\"exchange\":\"mail.example.org\""), "{body}");
-	assert!(body.contains("10"), "{body}");
+	assert!(body.contains("\"preference\":10"), "{body}");
 }
 
 #[tokio::test]

@@ -382,6 +382,8 @@ impl PorkbunProvider {
 					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
+				} else if kind == RecordKind::Mx && r.prio.parse::<u16>().is_ok() {
+					format!("{} {}", r.prio, r.content)
 				} else {
 					unwrap_quotes(&r.content).to_string()
 				};

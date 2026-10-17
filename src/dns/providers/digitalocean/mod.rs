@@ -68,6 +68,11 @@ struct DomainRecord {
 	weight: Option<u16>,
 	#[serde(default)]
 	port: Option<u16>,
+	/// The flags and the tag of a CAA; its `data` is the issuer alone.
+	#[serde(default)]
+	flags: Option<u8>,
+	#[serde(default)]
+	tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -462,6 +467,13 @@ impl DigitaloceanProvider {
 					}
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.data, TXT_FORM)
+				} else if kind == RecordKind::Caa && r.tag.is_some() {
+					format!(
+						"{} {} \"{}\"",
+						r.flags.unwrap_or(0),
+						r.tag.as_deref().unwrap_or_default(),
+						r.data
+					)
 				} else {
 					r.data
 				};

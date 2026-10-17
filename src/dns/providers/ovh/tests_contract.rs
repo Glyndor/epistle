@@ -10,8 +10,8 @@
 use super::tests::{StoredRecord, mock_with, txt};
 use super::*;
 use crate::dns::providers::listing_contract::{
-	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
-	assert_kinds_kept,
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, MX_DOTTED, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE,
+	SVCB_VALUE, Shape, assert_kinds_kept,
 };
 
 fn apex_spf(id: u64, target: &str) -> StoredRecord {
@@ -91,12 +91,19 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		record(2, "", "CAA", CAA_VALUE),
 		record(3, "", "HTTPS", HTTPS_VALUE),
 		record(4, "", "SVCB", SVCB_VALUE),
+		record(7, "", "MX", MX_DOTTED),
 		record(5, "", "NAPTR", NAPTR_VALUE),
 		record(6, "", HOSTILE_TYPE, OPAQUE_VALUE),
 	])
 	.await;
 	let listed = provider.list("example.org").await.expect("list");
-	assert_kinds_kept(&listed, &Shape::NAMED);
+	assert_kinds_kept(
+		&listed,
+		&Shape {
+			mx: MX_DOTTED,
+			..Shape::NAMED
+		},
+	);
 }
 
 /// OVH lists ids and then answers one request per id, so a zone past the

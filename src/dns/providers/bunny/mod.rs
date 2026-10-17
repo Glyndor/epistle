@@ -75,6 +75,14 @@ struct DnsRecordRef {
 	value: Option<String>,
 	#[serde(rename = "Ttl", default)]
 	ttl: i64,
+	/// The preference of an MX.
+	#[serde(rename = "Priority", default)]
+	priority: Option<i64>,
+	/// The flags and the tag of a CAA; its `Value` is the issuer alone.
+	#[serde(rename = "Flags", default)]
+	flags: Option<i64>,
+	#[serde(rename = "Tag", default)]
+	tag: Option<String>,
 }
 
 impl BunnyProvider {
@@ -375,6 +383,14 @@ impl BunnyProvider {
 					format!("0 {weight} {port} {target}")
 				} else if kind == RecordKind::Txt {
 					txt_decode(&value_raw, TXT_FORM)
+				} else if kind == RecordKind::Mx && r.priority.is_some() {
+					format!("{} {value_raw}", r.priority.unwrap_or(0))
+				} else if kind == RecordKind::Caa && r.tag.is_some() {
+					format!(
+						"{} {} \"{value_raw}\"",
+						r.flags.unwrap_or(0),
+						r.tag.as_deref().unwrap_or_default()
+					)
 				} else {
 					value_raw
 				};

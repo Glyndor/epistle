@@ -188,7 +188,7 @@ impl SpaceshipProvider {
 			map.insert("tag".to_string(), tag.into());
 			map.insert("value".to_string(), value.into());
 		} else if record.kind == RecordKind::Mx {
-			// Spaceship stores MX as `priority` (number) + `exchange`
+			// Spaceship stores MX as `preference` (number) + `exchange`
 			// (target) fields.
 			let mut parts = record.value.split_whitespace();
 			let priority: u16 = parts
@@ -200,7 +200,7 @@ impl SpaceshipProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			let map = item.as_object_mut().expect("object");
-			map.insert("priority".to_string(), priority.into());
+			map.insert("preference".to_string(), priority.into());
 			map.insert("exchange".to_string(), target.into());
 		} else {
 			let map = item.as_object_mut().expect("object");
@@ -453,8 +453,11 @@ impl SpaceshipProvider {
 						)
 					}
 					RecordKind::Mx => {
-						let priority =
-							item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let priority = item
+							.get("preference")
+							.or_else(|| item.get("priority"))
+							.and_then(|v| v.as_u64())
+							.unwrap_or(0) as u16;
 						let target = item
 							.get("exchange")
 							.and_then(|v| v.as_str())

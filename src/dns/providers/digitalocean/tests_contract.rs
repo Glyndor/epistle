@@ -12,7 +12,7 @@ use super::tests::mock;
 use super::*;
 use crate::dns::providers::digitalocean::tests::Shared;
 use crate::dns::providers::listing_contract::{
-	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
 	assert_kinds_kept,
 };
 
@@ -129,9 +129,19 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let (provider, _state) = mock(
 		vec![
 			record(1, "sub", "NS", NS_TARGET),
-			record(2, "@", "CAA", CAA_VALUE),
+			{
+				let mut caa = record(2, "@", "CAA", "letsencrypt.org");
+				caa["flags"] = serde_json::json!(0);
+				caa["tag"] = serde_json::json!("issue");
+				caa
+			},
 			record(3, "@", "HTTPS", HTTPS_VALUE),
 			record(4, "@", "SVCB", SVCB_VALUE),
+			{
+				let mut mx = record(7, "@", "MX", "mail.example.org");
+				mx["priority"] = serde_json::json!(10);
+				mx
+			},
 			record(5, "@", "NAPTR", NAPTR_VALUE),
 			record(6, "@", HOSTILE_TYPE, OPAQUE_VALUE),
 		],

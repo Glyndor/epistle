@@ -496,6 +496,8 @@ impl DnsimpleProvider {
 					}
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
+				} else if kind == RecordKind::Mx && r.priority.is_some() {
+					format!("{} {}", r.priority.unwrap_or(0), r.content)
 				} else {
 					r.content
 				};

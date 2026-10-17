@@ -14,6 +14,10 @@ pub(crate) const CAP_MESSAGE: &str =
 
 /// The NS target of the delegated subdomain `sub.example.org`.
 pub(crate) const NS_TARGET: &str = "ns1.delegated.example.";
+/// An MX value in presentation form, with the root dot of a hostname trimmed.
+pub(crate) const MX_VALUE: &str = "10 mail.example.org";
+/// The same MX as a provider that keeps the root dot lists it.
+pub(crate) const MX_DOTTED: &str = "10 mail.example.org.";
 /// A CAA value in presentation form.
 pub(crate) const CAA_VALUE: &str = "0 issue \"letsencrypt.org\"";
 /// An HTTPS value in presentation form.
@@ -54,6 +58,9 @@ pub(crate) struct Shape {
 	/// Whether the zone also holds a record whose type token is
 	/// [`HOSTILE_TYPE`] (a provider that numbers its types cannot).
 	pub(crate) hostile_row: bool,
+	/// The MX as the provider lists it: [`MX_VALUE`], or [`MX_DOTTED`] when it
+	/// keeps the root dot of the exchange.
+	pub(crate) mx: &'static str,
 }
 
 impl Shape {
@@ -62,11 +69,13 @@ impl Shape {
 		trailing_dot: true,
 		unknown_as: "NAPTR",
 		hostile_row: true,
+		mx: MX_VALUE,
 	};
 }
 
 /// Assert that `listed` is exactly the records of the shared zone with
-/// their own kinds: the NS at `sub.example.org`, and at the apex a CAA, an
+/// their own kinds and values: the NS at `sub.example.org`, and at the apex an
+/// MX with its preference, a CAA with its flags and tag, an
 /// HTTPS, an SVCB, a NAPTR and, when `shape` says so, one whose type token
 /// is [`HOSTILE_TYPE`], which must come back as `Other(UNKNOWN)`.
 #[track_caller]
@@ -81,6 +90,7 @@ pub(crate) fn assert_kinds_kept(listed: &[DnsRecord], shape: &Shape) {
 	let mut want = vec![
 		row("sub.example.org", &RecordKind::Ns, &dot(NS_TARGET)),
 		row("example.org", &RecordKind::Caa, CAA_VALUE),
+		row("example.org", &RecordKind::Mx, shape.mx),
 		row("example.org", &RecordKind::Https, HTTPS_VALUE),
 		row("example.org", &RecordKind::Svcb, SVCB_VALUE),
 		row(

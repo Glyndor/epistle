@@ -123,6 +123,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		host(2, "@", "CAA", CAA_VALUE),
 		host(3, "@", "HTTPS", HTTPS_VALUE),
 		host(4, "@", "SVCB", SVCB_VALUE),
+		r#"<host HostId="7" Name="@" Type="MX" Address="mail.example.org" MXPref="10" TTL="3600"/>"#.to_string(),
 		host(5, "@", "NAPTR", NAPTR_VALUE),
 		host(6, "@", "NAPTR X!", OPAQUE_VALUE),
 	]

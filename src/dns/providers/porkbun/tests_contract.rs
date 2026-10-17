@@ -162,11 +162,14 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 			"ttl": "600", "prio": "0", "notes": ""
 		})
 	};
+	let mut mx = record("7", "example.org", "MX", "mail.example.org");
+	mx["prio"] = serde_json::json!("10");
 	let (provider, _state) = mock(serde_json::json!([
 		record("1", "sub.example.org", "NS", NS_TARGET),
 		record("2", "example.org", "CAA", CAA_VALUE),
 		record("3", "example.org", "HTTPS", HTTPS_VALUE),
 		record("4", "example.org", "SVCB", SVCB_VALUE),
+		mx,
 		record("5", "example.org", "NAPTR", NAPTR_VALUE),
 		record("6", "example.org", HOSTILE_TYPE, OPAQUE_VALUE),
 	]))

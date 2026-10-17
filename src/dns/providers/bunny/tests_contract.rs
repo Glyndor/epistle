@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::dns::providers::listing_contract::{
-	CAA_VALUE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, SVCB_VALUE, Shape, assert_kinds_kept,
+	HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, SVCB_VALUE, Shape, assert_kinds_kept,
 };
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 
@@ -145,7 +145,8 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		"Id": 42,
 		"Records": [
 			record(1, 12, "sub", NS_TARGET),
-			record(2, 9, "", CAA_VALUE),
+			serde_json::json!({"Id": 2, "Type": 9, "Name": "", "Value": "letsencrypt.org", "Ttl": 3600, "Flags": 0, "Tag": "issue"}),
+			serde_json::json!({"Id": 7, "Type": 4, "Name": "", "Value": "mail.example.org", "Ttl": 3600, "Priority": 10}),
 			record(3, 14, "", HTTPS_VALUE),
 			record(4, 13, "", SVCB_VALUE),
 			record(5, 99, "", NAPTR_VALUE),

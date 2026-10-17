@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::dns::providers::listing_contract::{
-	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
-	assert_kinds_kept,
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, MX_DOTTED, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE,
+	SVCB_VALUE, Shape, assert_kinds_kept,
 };
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 use crate::dns::txt::txt_presentation;
@@ -99,12 +99,19 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		rrset("", "CAA", CAA_VALUE),
 		rrset("", "HTTPS", HTTPS_VALUE),
 		rrset("", "SVCB", SVCB_VALUE),
+		rrset("", "MX", MX_DOTTED),
 		rrset("", "NAPTR", NAPTR_VALUE),
 		rrset("", HOSTILE_TYPE, OPAQUE_VALUE),
 	]))
 	.await;
 	let listed = provider.list("example.org").await.expect("list");
-	assert_kinds_kept(&listed, &Shape::NAMED);
+	assert_kinds_kept(
+		&listed,
+		&Shape {
+			mx: MX_DOTTED,
+			..Shape::NAMED
+		},
+	);
 }
 
 /// Kinds a listing shows but epistle does not publish are never written

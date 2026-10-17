@@ -119,6 +119,11 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		record(2, "", "CAA", CAA_VALUE),
 		record(3, "", "HTTPS", HTTPS_VALUE),
 		record(4, "", "SVCB", SVCB_VALUE),
+		{
+			let mut mx = record(7, "", "MX", "mail.example.org");
+			mx["priority"] = serde_json::json!(10);
+			mx
+		},
 		record(5, "", "NAPTR", NAPTR_VALUE),
 		record(6, "", HOSTILE_TYPE, OPAQUE_VALUE),
 	])

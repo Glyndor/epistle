@@ -120,6 +120,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 			"type": "SVCB", "name": "@", "svcPriority": 1, "targetName": "svc.example.net.",
 			"svcParams": "port=8443", "ttl": 3600
 		}),
+		serde_json::json!({"type": "MX", "name": "@", "exchange": "mail.example.org", "preference": 10, "ttl": 3600}),
 		serde_json::json!({"type": "NAPTR", "name": "@", "value": NAPTR_VALUE, "ttl": 3600}),
 		serde_json::json!({"type": HOSTILE_TYPE, "name": "@", "value": OPAQUE_VALUE, "ttl": 3600}),
 	])

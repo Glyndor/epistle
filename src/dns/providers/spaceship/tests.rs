@@ -429,7 +429,7 @@ async fn mx_upsert_splits_priority_and_exchange() {
 	// Spaceship upserts as `remove then add`; the PUT body is the last one.
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
 	assert!(body.contains("\"type\":\"MX\""), "{body}");
-	assert!(body.contains("\"priority\":10"), "{body}");
+	assert!(body.contains("\"preference\":10"), "{body}");
 	assert!(body.contains("\"exchange\":\"mail.example.org\""), "{body}");
 }
 
@@ -460,6 +460,6 @@ async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
 	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
-	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"preference\":0"), "{body}");
 	assert!(body.contains("\"exchange\":\".\""), "{body}");
 }

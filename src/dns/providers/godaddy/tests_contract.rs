@@ -93,6 +93,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 			record("@", "CAA", CAA_VALUE),
 			record("@", "HTTPS", HTTPS_VALUE),
 			record("@", "SVCB", SVCB_VALUE),
+			serde_json::json!({"type": "MX", "name": "@", "data": "mail.example.org", "priority": 10, "ttl": 600}),
 			record("@", "NAPTR", NAPTR_VALUE),
 			record("@", HOSTILE_TYPE, OPAQUE_VALUE),
 		]),
