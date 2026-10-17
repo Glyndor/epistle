@@ -326,33 +326,46 @@ impl Rfc2136Provider {
 			ProviderError::Remote("UPDATE message too large for DNS/TCP".to_string())
 		})?;
 
-		let mut stream = TcpStream::connect(&self.endpoint)
-			.await
-			.map_err(|e| ProviderError::Remote(format!("connect {}: {e}", self.endpoint)))?;
-		stream
-			.write_all(&len.to_be_bytes())
-			.await
-			.map_err(|e| ProviderError::Remote(format!("send length: {e}")))?;
-		stream
-			.write_all(&bytes)
-			.await
-			.map_err(|e| ProviderError::Remote(format!("send UPDATE: {e}")))?;
-		stream
-			.flush()
-			.await
-			.map_err(|e| ProviderError::Remote(format!("flush UPDATE: {e}")))?;
+		// The exchange has a bound at each wait: a server that accepts and
+		// never answers cannot hold the call, as it cannot hold an HTTP one.
+		let timed_out =
+			|| ProviderError::Remote(format!("{} did not answer in time", self.endpoint));
+		let mut stream = tokio::time::timeout(
+			crate::dns::providers::connect_timeout(),
+			TcpStream::connect(&self.endpoint),
+		)
+		.await
+		.map_err(|_| timed_out())?
+		.map_err(|e| ProviderError::Remote(format!("connect {}: {e}", self.endpoint)))?;
+		let resp_buf = tokio::time::timeout(crate::dns::providers::request_timeout(), async {
+			stream
+				.write_all(&len.to_be_bytes())
+				.await
+				.map_err(|e| ProviderError::Remote(format!("send length: {e}")))?;
+			stream
+				.write_all(&bytes)
+				.await
+				.map_err(|e| ProviderError::Remote(format!("send UPDATE: {e}")))?;
+			stream
+				.flush()
+				.await
+				.map_err(|e| ProviderError::Remote(format!("flush UPDATE: {e}")))?;
 
-		let mut len_buf = [0u8; 2];
-		stream
-			.read_exact(&mut len_buf)
-			.await
-			.map_err(|e| ProviderError::Remote(format!("read response length: {e}")))?;
-		let resp_len = u16::from_be_bytes(len_buf) as usize;
-		let mut resp_buf = vec![0u8; resp_len];
-		stream
-			.read_exact(&mut resp_buf)
-			.await
-			.map_err(|e| ProviderError::Remote(format!("read response: {e}")))?;
+			let mut len_buf = [0u8; 2];
+			stream
+				.read_exact(&mut len_buf)
+				.await
+				.map_err(|e| ProviderError::Remote(format!("read response length: {e}")))?;
+			let resp_len = u16::from_be_bytes(len_buf) as usize;
+			let mut resp_buf = vec![0u8; resp_len];
+			stream
+				.read_exact(&mut resp_buf)
+				.await
+				.map_err(|e| ProviderError::Remote(format!("read response: {e}")))?;
+			Ok::<_, ProviderError>(resp_buf)
+		})
+		.await
+		.map_err(|_| timed_out())??;
 
 		// Verify TSIG on the response — both authenticates the server and
 		// confirms the response is for our message. A bad MAC is
@@ -374,7 +387,7 @@ impl Rfc2136Provider {
 
 impl DnsProvider for Rfc2136Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			self.authorize(&record)?;
 			let zone = Name::from_ascii(self.secret.zone())
 				.map_err(|e| ProviderError::Remote(format!("invalid zone: {e}")))?;
@@ -399,10 +412,10 @@ impl DnsProvider for Rfc2136Provider {
 				entry.push(txt_logical(&record.value));
 			}
 			Ok(())
-		})
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			self.authorize(&record)?;
 			let zone = Name::from_ascii(self.secret.zone())
 				.map_err(|e| ProviderError::Remote(format!("invalid zone: {e}")))?;
@@ -426,7 +439,7 @@ impl DnsProvider for Rfc2136Provider {
 				}
 			}
 			Ok(())
-		})
+		}))
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		// RFC 2136 only defines UPDATE; the nameserver's record set is

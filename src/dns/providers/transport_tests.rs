@@ -366,3 +366,56 @@ async fn an_operation_has_a_deadline_of_its_own() {
 	}
 	TEST_OPERATION_DEADLINE.with(|t| t.set(None));
 }
+
+/// RFC 2136 is DNS over TCP, not HTTP, and had no bound at all: a server
+/// that accepts and says nothing held `dns publish`, the DKIM rotation and
+/// the ACME challenge for ever. It gives up at the request timeout, and the
+/// operation as a whole at its deadline.
+#[tokio::test]
+async fn an_rfc2136_server_that_never_answers_cannot_hold_a_call() {
+	use crate::dns::providers::rfc2136::Rfc2136Provider;
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(async move {
+		let mut held = Vec::new();
+		while let Ok((stream, _)) = listener.accept().await {
+			held.push(stream);
+		}
+	});
+	let provider = Rfc2136Provider::new(
+		ScopedSecret::new("example.org", "c2VjcmV0"),
+		"key.",
+		None,
+		&addr.to_string(),
+	)
+	.expect("provider");
+	TEST_REQUEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(300))));
+	let started = std::time::Instant::now();
+	for (operation, error) in [
+		("upsert", provider.upsert("example.org", record()).await),
+		("delete", provider.delete("example.org", record()).await),
+	]
+	.map(|(op, result)| (op, result.err()))
+	{
+		assert_eq!(
+			error,
+			Some(ProviderError::Remote(format!(
+				"{addr} did not answer in time"
+			))),
+			"{operation}"
+		);
+	}
+	TEST_REQUEST_TIMEOUT.with(|t| t.set(None));
+	assert!(started.elapsed() < Duration::from_secs(20));
+	TEST_OPERATION_DEADLINE.with(|t| t.set(Some(Duration::from_millis(300))));
+	let error = provider.upsert("example.org", record()).await.err();
+	TEST_OPERATION_DEADLINE.with(|t| t.set(None));
+	assert_eq!(
+		error,
+		Some(ProviderError::Remote(
+			"the provider did not finish within 300ms".to_string()
+		))
+	);
+}
