@@ -1,5 +1,10 @@
 epistle (0.12.1) unstable; urgency=medium
 
+  * Security: Namecheap sent its API key in the query of the `getHosts` GET,
+    and a failed connection or a timeout printed the whole URL, key
+    included, in the error of `dns lockdown`, `dns provider test` and the
+    DKIM daemon. `getHosts` is now a form POST like `setHosts`, and no DNS
+    provider puts the request URL in an error.
   * CLI: every command that prints data takes `--json` and then prints one
     JSON document on stdout, with notes and errors on stderr; the hidden flat
     forms (`accounts`, `account-add`, `app-password-create`, `api-keys` and
@@ -18,21 +23,16 @@ epistle (0.12.1) unstable; urgency=medium
     Unknown names, rejected input and a destructive action without `--yes`
     stay 2. A script that treated any non-zero code other than 1 as a usage
     error needs to read 3 as a refusal.
-  * Security: Namecheap sent its API key in the query of the `getHosts` GET,
-    and a failed connection or a timeout printed the whole URL, key
-    included, in the error of `dns lockdown`, `dns provider test` and the
-    DKIM daemon. `getHosts` is now a form POST like `setHosts`, and no DNS
-    provider puts the request URL in an error.
   * CLI: `epistle domain disable|enable` switches a hosted domain off and on
     without removing it. The new `disabled_domains` setting lists the
     switched-off domains; mail for one is rejected like mail for an unknown
     user and nobody may send as an address in it. Accounts, DNS records and
-    DKIM keys stay. `domain list` and `domain show` report `enabled`. A disabled
-    domain gets no autoconfig/autodiscover document, `GET /api/v1/domains` names
-    it under `disabled`, `masked add` refuses it and `account add`/`alias add`
-    warn about it. `domain disable` says how many queued messages still have a sender in the
-    domain (they are delivered), and the docs state that a login with an address in
-    the disabled domain fails.
+    DKIM keys stay. `domain list` and `domain show` report `enabled`. A
+    disabled domain gets no autoconfig/autodiscover document, `GET
+    /api/v1/domains` names it under `disabled`, `masked add` refuses it and
+    `account add`/`alias add` warn about it. `domain disable` says how many
+    queued messages still have a sender in the domain (they are delivered), and
+    the docs state that a login with an address in the disabled domain fails.
   * CLI: `epistle domain set` writes the storage quota and the submission
     rate of one domain (the overrides `limits set --domain` already wrote),
     and `domain show` prints them.
@@ -40,10 +40,10 @@ epistle (0.12.1) unstable; urgency=medium
     `enabled = false` key stays in the file but takes no samples and never
     fires; `alert list` marks it and its JSON row has `enabled`.
   * CLI: `epistle webhook enable|disable`. `enabled = false` in `[webhook]`
-    keeps the URL and the secret but posts no event, alerts included;
-    `webhook test` still posts. `webhook show` prints `enabled`. `webhook disable`
-    lists the events and alerts that go quiet, needs `--yes` while an alert posts
-    to the webhook, and `config-check` warns about such an alert.
+    keeps the URL and the secret but posts no event, alerts included; `webhook
+    test` still posts. `webhook show` prints `enabled`. `webhook disable` lists
+    the events and alerts that go quiet, needs `--yes` while an alert posts to
+    the webhook, and `config-check` warns about such an alert.
   * CLI: `epistle relay enable|disable`. A relay rule with `enabled = false`
     stays in the file but is never selected, so its mail goes by the next
     matching rule or direct to the MX. Only a relay rule can be switched off;
@@ -51,8 +51,8 @@ epistle (0.12.1) unstable; urgency=medium
     `relay disable` says where the mail will go instead (the next matching
     rule, or directly to the MX from this server's own address) and needs
     `--yes` off a terminal.
-  * Fix: `epistle queue remove` panicked with "there is no reactor running" when
-    a webhook was configured (the command line had no runtime to post the
+  * Fix: `epistle queue remove` panicked with "there is no reactor running"
+    when a webhook was configured (the command line had no runtime to post the
     `canceled` event on); it now posts it before exiting.
   * CLI: `epistle suppression show|export|import`, and `suppression add
     --reason`. `export` writes the list as CSV, `import` loads such a file or
@@ -75,14 +75,12 @@ epistle (0.12.1) unstable; urgency=medium
   * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
     connections from one read-only query in the stack's database container,
     and gives up after 15 seconds, stopping what the query started with it.
-  * DNS providers: a listing keeps every record under its own type. NS,
-    HTTPS, SVCB and CAA were read as TXT by some providers and dropped by
-    others; a type epistle has no use for (NAPTR, the SOA, Namecheap's URL
-    redirects, Bunny's redirect and script records) is kept under its type
-    name. A type name that is not letters, digits and hyphens (at most 32)
-    shows as UNKNOWN. OVH and Porkbun no longer cut the closing quote off a
-    CAA or HTTPS value. A listing past 1000 pages or 100000 records is an
-    error instead of a part of the zone.
+  * DNS providers: a listing keeps every record under its own type. NS, HTTPS,
+    SVCB and CAA were read as TXT by some providers and dropped by others; a
+    type epistle has no use for (NAPTR, the SOA, Namecheap's URL redirects,
+    Bunny's redirect and script records) is kept under its type name. A type
+    name that is not letters, digits and hyphens (at most 32) shows as UNKNOWN.
+    OVH and Porkbun no longer cut the closing quote off a CAA or HTTPS value.
   * DNS providers: every call has a 10 second connect and a 30 second total
     timeout, an operation (a listing with all its pages, a publish with its
     reads) a 120 second deadline, redirects are not followed, and a response
