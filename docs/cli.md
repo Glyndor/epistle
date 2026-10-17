@@ -511,6 +511,9 @@ error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
 
 ```sh
 epistle alert list [--json]
+epistle alert show bounce-storm [--json]
+epistle alert disable bounce-storm [--dry-run]
+epistle alert enable bounce-storm [--dry-run]
 epistle alert add bounce-storm --metric bounced --op '>=' --threshold 50 \
   --window 5m --webhook --email ops@example.org --cooldown 1h
 epistle alert remove bounce-storm
@@ -523,6 +526,12 @@ take `s`, `m`, `h`, `d` or `w`; the cooldown defaults to `1h`. The metric must b
 of the counters in [configuration](configuration.md#alerts); an unknown name lists
 the valid ones. `--webhook` needs a configured webhook, names are unique, and `add`
 never overwrites a rule: remove it first. Supports `--dry-run` and `--config FILE`.
+
+`show` prints one rule (`--json` gives the object `list` gives for it). `disable`
+switches a rule off without removing it: it writes `enabled = false`, and after the
+restart the rule takes no samples and never fires. `enable` takes the key out again.
+Both say `unchanged` when the rule is already that way, and refuse an unknown name
+with exit 2. `list` marks a rule that is off, and every JSON row has `enabled`.
 
 ## Domains (`epistle domain`)
 

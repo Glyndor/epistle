@@ -69,6 +69,27 @@ pub enum AlertCli {
 		/// Name of the rule to remove.
 		name: String,
 	},
+	/// Show one alert rule.
+	Show {
+		/// Name of the rule to show.
+		name: String,
+		/// Print the rule as JSON.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Switch a rule on again. It starts sampling when the server restarts.
+	Enable {
+		/// Name of the rule to switch on.
+		name: String,
+	},
+	/// Switch a rule off without removing it.
+	///
+	/// A rule that is off takes no samples and never fires. It stays in the
+	/// configuration, so `enable` brings it back unchanged.
+	Disable {
+		/// Name of the rule to switch off.
+		name: String,
+	},
 }
 
 #[derive(Serialize)]
@@ -81,6 +102,7 @@ struct Row<'a> {
 	cooldown_secs: u64,
 	webhook: bool,
 	email: &'a [String],
+	enabled: bool,
 }
 
 fn symbol(op: AlertOp) -> &'static str {
@@ -103,7 +125,45 @@ fn row(alert: &Alert) -> Row<'_> {
 		cooldown_secs: alert.cooldown_secs,
 		webhook: alert.webhook,
 		email: &alert.email,
+		enabled: alert.enabled,
 	}
+}
+
+fn show(
+	config: &Config,
+	name: &str,
+	json: bool,
+	out: &mut impl Write,
+) -> Result<(), resource::ResourceError> {
+	let alert = config
+		.alerts
+		.iter()
+		.find(|alert| alert.name == name)
+		.ok_or_else(|| resource::ResourceError::refused(format!("no alert named \"{name}\"")))?;
+	let row = row(alert);
+	if json {
+		return resource::json(out, &row).map_err(resource::ResourceError::Failure);
+	}
+	let yes_no = |value: bool| if value { "yes" } else { "no" };
+	let email = if row.email.is_empty() {
+		"-".to_string()
+	} else {
+		row.email.join(",")
+	};
+	write!(
+		out,
+		"name\t{}\nmetric\t{}\nop\t{}\nthreshold\t{}\nwindow_secs\t{}\n\
+		 cooldown_secs\t{}\nwebhook\t{}\nemail\t{email}\nenabled\t{}\n",
+		row.name,
+		row.metric,
+		row.op,
+		row.threshold,
+		row.window_secs,
+		row.cooldown_secs,
+		yes_no(row.webhook),
+		yes_no(row.enabled),
+	)
+	.map_err(|error| resource::ResourceError::Failure(error.to_string()))
 }
 
 fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
@@ -114,7 +174,7 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	for row in rows {
 		writeln!(
 			out,
-			"{}\t{} {} {}\twindow={}s\tcooldown={}s\twebhook={}\temail={}",
+			"{}\t{} {} {}\twindow={}s\tcooldown={}s\twebhook={}\temail={}{}",
 			row.name,
 			row.metric,
 			row.op,
@@ -127,6 +187,7 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 			} else {
 				row.email.join(",")
 			},
+			if row.enabled { "" } else { "\tdisabled" },
 		)
 		.map_err(|error| error.to_string())?;
 	}
@@ -231,6 +292,24 @@ fn add(
 	document.upsert_element("alerts", "name", &new.name, &fields)
 }
 
+/// The edit behind `alert enable|disable`: a rule that is on carries no
+/// `enabled` key, a rule that is off carries `enabled = false`.
+fn switch(name: &str, enabled: bool) -> resource::Change {
+	let name = name.to_string();
+	Box::new(move |document, config| {
+		if !config.alerts.iter().any(|alert| alert.name == name) {
+			return Err(resource::ResourceError::refused(format!(
+				"no alert named \"{name}\""
+			)));
+		}
+		let value = (!enabled).then(|| Value::from(false));
+		document
+			.edit_array_entry_field(&["alerts"], &name, "name", "enabled", value)
+			.map(|_| ())
+			.map_err(resource::ResourceError::Failure)
+	})
+}
+
 pub(super) fn run(path: &Path, action: AlertCli, dry_run: bool, json: bool) -> ExitCode {
 	resource::exit_resource(execute_with(
 		path,
@@ -281,6 +360,14 @@ fn execute_with(
 			});
 			(change, "add", name)
 		}
+		AlertCli::Show { name, json: leaf } => {
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			show(&config, &name, leaf || json, out)?;
+			return Ok(ExitCode::SUCCESS);
+		}
+		AlertCli::Enable { name } => (switch(&name, true), "enable", name),
+		AlertCli::Disable { name } => (switch(&name, false), "disable", name),
 		AlertCli::Remove { name } => (
 			Box::new({
 				let name = name.clone();
@@ -299,10 +386,14 @@ fn execute_with(
 			name,
 		),
 	};
+	let mut fields = serde_json::json!({ "alert": name });
+	if matches!(verb, "enable" | "disable") {
+		fields["enabled"] = (verb == "enable").into();
+	}
 	let edit = resource::Edit {
 		label: "alert",
 		action: verb,
-		fields: serde_json::json!({ "alert": name }),
+		fields,
 		json,
 	};
 	resource::apply_edit(path, dry_run, edit, out, status, restart, change)

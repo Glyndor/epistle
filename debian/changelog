@@ -26,6 +26,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
   * CLI: `epistle domain set` writes the storage quota and the submission
     rate of one domain (the overrides `limits set --domain` already wrote),
     and `domain show` prints them.
+  * CLI: `epistle alert show|enable|disable`. A rule switched off with the new
+    `enabled = false` key stays in the file but takes no samples and never
+    fires; `alert list` marks it and its JSON row has `enabled`.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

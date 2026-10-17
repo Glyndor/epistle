@@ -58,3 +58,6 @@ mod domain_state;
 
 #[path = "cli_json/domain_set.rs"]
 mod domain_set;
+
+#[path = "cli_json/alert_state.rs"]
+mod alert_state;

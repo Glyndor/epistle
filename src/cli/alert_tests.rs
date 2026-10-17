@@ -115,7 +115,7 @@ fn list_prints_every_rule() {
 	);
 	assert_eq!(
 		super::tests::run(ALERTS, &["list", "--json"]).out,
-		"[{\"name\":\"bounce-storm\",\"metric\":\"bounced\",\"op\":\">=\",\"threshold\":50,\"window_secs\":300,\"cooldown_secs\":900,\"webhook\":true,\"email\":[]}]\n"
+		"[{\"name\":\"bounce-storm\",\"metric\":\"bounced\",\"op\":\">=\",\"threshold\":50,\"window_secs\":300,\"cooldown_secs\":900,\"webhook\":true,\"email\":[],\"enabled\":true}]\n"
 	);
 	assert_eq!(super::tests::run("", &["list"]).out, "");
 	assert_eq!(super::tests::run("", &["list", "--json"]).out, "[]\n");
