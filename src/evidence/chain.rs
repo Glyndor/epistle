@@ -39,7 +39,7 @@ pub const CHAIN_DIR: &str = "chain";
 pub struct Unconfirmed(std::io::Error);
 
 impl Unconfirmed {
-	fn wrap(error: std::io::Error) -> std::io::Error {
+	pub(crate) fn wrap(error: std::io::Error) -> std::io::Error {
 		std::io::Error::new(error.kind(), Unconfirmed(error))
 	}
 

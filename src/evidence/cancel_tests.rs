@@ -129,38 +129,106 @@ fn nothing_is_removed_when_the_cancellation_cannot_be_written() {
 	assert!(spool.load_envelope(id).is_ok(), "the entry went");
 }
 
-#[test]
-fn a_cancellation_cut_short_leaves_the_entry_on_hold_so_nothing_canceled_is_delivered() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let (spool, id) = two_recipients(dir.path());
-	let root = crate::evidence::service::root_of(dir.path());
-	// The first recipient's cancellation is written, the second's is not.
-	FAIL_AFTER.with(|after| after.set(Some(1)));
-	let error = remove(&spool, &root, id).expect_err("cut short");
-	FAIL_AFTER.with(|after| after.set(None));
-	assert!(error.to_string().contains("injected"), "{error}");
-	assert_eq!(
-		canceled(dir.path()).len(),
-		1,
-		"one cancellation was written"
-	);
-	let envelope = spool.load_envelope(id).expect("the entry stays");
-	assert!(
-		envelope.held.is_some(),
-		"the worker would deliver what was recorded as canceled"
-	);
-	// Once the writing works, the removal is finished by the operator.
-	remove(&spool, &root, id).expect("removed");
-	assert!(spool.load_envelope(id).is_err());
+/// Run `remove` with the writing failing at the record `at`.
+fn remove_failing(
+	spool: &FsSpool,
+	dir: &Path,
+	id: uuid::Uuid,
+	at: usize,
+	how: Fail,
+) -> std::io::Error {
+	FAIL_AT.with(|fail| fail.set(Some((at, how))));
+	let error = remove(spool, &crate::evidence::service::root_of(dir), id).expect_err("fails");
+	FAIL_AT.with(|fail| fail.set(None));
+	error
 }
 
 #[test]
-fn a_cancellation_that_wrote_nothing_does_not_hold_the_entry() {
+fn a_cancellation_cut_short_keeps_the_entry_on_hold_and_the_retry_writes_nothing_twice() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (spool, id) = two_recipients(dir.path());
-	let root = crate::evidence::service::root_of(dir.path());
-	FAIL_AFTER.with(|after| after.set(Some(0)));
-	remove(&spool, &root, id).expect_err("nothing written");
-	FAIL_AFTER.with(|after| after.set(None));
+	// The first recipient's cancellation is written, the second's is refused.
+	let error = remove_failing(&spool, dir.path(), id, 1, Fail::Clean);
+	assert!(error.to_string().contains("injected"), "{error}");
+	assert_eq!(canceled(dir.path()), vec!["a@remote.example".to_string()]);
+	assert!(
+		spool
+			.load_envelope(id)
+			.expect("the entry stays")
+			.held
+			.is_some(),
+		"the worker would deliver what was recorded as canceled"
+	);
+	// Once the writing works, the removal is finished, with each recipient
+	// canceled exactly once.
+	remove(&spool, &crate::evidence::service::root_of(dir.path()), id).expect("removed");
+	assert!(spool.load_envelope(id).is_err());
+	assert_eq!(
+		canceled(dir.path()),
+		vec![
+			"a@remote.example".to_string(),
+			"b@remote.example".to_string()
+		]
+	);
+}
+
+#[test]
+fn a_cancellation_that_wrote_nothing_gives_the_entry_back_as_it_was() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (spool, id) = two_recipients(dir.path());
+	remove_failing(&spool, dir.path(), id, 0, Fail::Clean);
 	assert!(spool.load_envelope(id).expect("entry").held.is_none());
+	assert!(canceled(dir.path()).is_empty());
+}
+
+#[test]
+fn an_unconfirmed_record_on_the_first_recipient_keeps_the_entry_on_hold() {
+	for how in [Fail::WrittenUnconfirmed, Fail::UnwrittenUnconfirmed] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (spool, id) = two_recipients(dir.path());
+		let error = remove_failing(&spool, dir.path(), id, 0, how);
+		assert!(crate::evidence::chain::Unconfirmed::is(&error), "{error}");
+		assert!(
+			spool
+				.load_envelope(id)
+				.expect("the entry stays")
+				.held
+				.is_some(),
+			"{how:?}: a record that may exist was left beside a live entry"
+		);
+		remove(&spool, &crate::evidence::service::root_of(dir.path()), id).expect("retried");
+		// Whether or not the first record was there, it is there once.
+		assert_eq!(
+			canceled(dir.path()),
+			vec![
+				"a@remote.example".to_string(),
+				"b@remote.example".to_string()
+			],
+			"{how:?}"
+		);
+		assert!(spool.load_envelope(id).is_err());
+	}
+}
+
+#[test]
+fn an_unconfirmed_record_on_the_second_recipient_keeps_the_entry_on_hold() {
+	for how in [Fail::WrittenUnconfirmed, Fail::UnwrittenUnconfirmed] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (spool, id) = two_recipients(dir.path());
+		let error = remove_failing(&spool, dir.path(), id, 1, how);
+		assert!(crate::evidence::chain::Unconfirmed::is(&error), "{error}");
+		assert!(
+			spool.load_envelope(id).expect("entry").held.is_some(),
+			"{how:?}"
+		);
+		remove(&spool, &crate::evidence::service::root_of(dir.path()), id).expect("retried");
+		assert_eq!(
+			canceled(dir.path()),
+			vec![
+				"a@remote.example".to_string(),
+				"b@remote.example".to_string()
+			],
+			"{how:?}"
+		);
+	}
 }

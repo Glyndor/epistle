@@ -548,10 +548,13 @@ impl FsSpool {
 	/// change the entry between them, so what `before` writes about it is what
 	/// is removed. Returns the envelope that was removed.
 	///
-	/// `before` is also given a flag to raise once it has written something
-	/// that the entry's staying would contradict: if it then fails, the entry
-	/// is put on hold, so the worker does not deliver what was recorded as
-	/// canceled.
+	/// The entry is put on hold before `before` runs, and stays on hold unless
+	/// `before` fails in a way that says it wrote nothing: what `before` records
+	/// about the entry must not be contradicted by a worker delivering it in the
+	/// meantime, and a failure that leaves it unknown whether something was
+	/// written must not release it. `before` gets the envelope as it was read
+	/// (with its own hold, if it had one) and a flag it raises before each write
+	/// and lowers only when a failure says nothing was written.
 	pub fn remove_with(
 		&self,
 		id: Uuid,
@@ -565,13 +568,17 @@ impl FsSpool {
 				"the entry has evidence outcomes waiting to be written: it stays until they are",
 			));
 		}
-		let partial = std::cell::Cell::new(false);
-		if let Err(error) = before(&envelope, &partial) {
-			if partial.get() {
-				let mut held = envelope.clone();
-				held.hold(crate::storage::delivery_log::now_epoch());
-				if let Err(hold) = self.write_envelope_unlocked(id, &held) {
-					tracing::error!(%id, %hold, "an entry half canceled could not be put on hold");
+		let mut held = envelope.clone();
+		held.hold(crate::storage::delivery_log::now_epoch());
+		if held.held != envelope.held {
+			self.write_envelope_unlocked(id, &held)?;
+		}
+		let may_have_written = std::cell::Cell::new(false);
+		if let Err(error) = before(&envelope, &may_have_written) {
+			if !may_have_written.get() && held.held != envelope.held {
+				// Nothing was written: the entry goes back as it was.
+				if let Err(restore) = self.write_envelope_unlocked(id, &envelope) {
+					tracing::error!(%id, %restore, "an entry kept after a refused removal stays on hold");
 				}
 			}
 			return Err(error);
