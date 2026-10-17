@@ -10,13 +10,25 @@
 //!   of text, and [`WORKERS`] workers write to the database, so the memory is
 //!   about 16 MiB and the database never sees more than [`WORKERS`] training
 //!   transactions at once. There is no task per message.
-//! - **A share per source.** A source (the client address, and the sender's
-//!   domain when it is known) may have [`MAX_PENDING_PER_SOURCE`] jobs
-//!   waiting or running and may add [`MAX_PER_WINDOW`] jobs in a
-//!   [`WINDOW`]; the table of sources holds [`MAX_SOURCES`] entries and
-//!   refuses new ones when it is full of live ones. One client, or one
-//!   domain spread over many addresses, cannot take the queue from the rest
-//!   or decide the corpus on its own.
+//! - **A budget per source, per kind.** Ham and spam are counted apart, so
+//!   forged spam cannot use up what a sender may teach as ham. A source is
+//!   the client address, by its own block and by the wider block around it
+//!   (an IPv4 /32 and /24, an IPv6 /64 and /48), so rotating addresses
+//!   inside a block does not buy a new budget; and the sender's domain, but
+//!   only when the server verified it. The envelope sender is written by the
+//!   client: a domain the server did not verify is never a key, or anyone
+//!   could use up the budget of a domain they do not own. Each key allows
+//!   [`FINE_PENDING`]/[`COARSE_PENDING`] jobs waiting or running and
+//!   [`FINE_PER_WINDOW`]/[`COARSE_PER_WINDOW`] per [`WINDOW`], and the whole
+//!   server [`GLOBAL_PER_WINDOW`] per kind and window.
+//! - **A table that cannot be filled.** The keys of addresses and the keys
+//!   of domains live in separate tables of [`TABLE_SIZE`] entries each. A
+//!   full table drops its least recently used entry to make room, so a flood
+//!   of new keys only makes the table forget old ones, never refuses a new
+//!   source; and it cannot push a domain out by rotating addresses. A
+//!   forgotten key starts again from nothing, which costs the attacker
+//!   nothing it did not already have: the wider block and the global count
+//!   it is also counted under remember it.
 //! - **Never blocks.** [`SharedTraining::submit`] does not wait: a job that
 //!   does not fit is dropped and the caller counts it. Learning is advisory;
 //!   the SMTP reply never depends on it.
@@ -26,7 +38,7 @@
 //! corpus per hour is capped, and the server only teaches it ham from
 //! senders it verified (see `Server::train_corpus`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -42,58 +54,75 @@ pub const QUEUE_CAPACITY: usize = 64;
 /// Workers writing to the database; also the most trainings that run at once.
 pub const WORKERS: usize = 2;
 
-/// Jobs of one source that may be waiting or running at once.
-pub const MAX_PENDING_PER_SOURCE: u32 = 4;
+/// Jobs one address block (/32 or /64) or verified domain may have waiting or running.
+pub const FINE_PENDING: u32 = 4;
 
-/// Jobs one source may add in one [`WINDOW`].
-pub const MAX_PER_WINDOW: u32 = 30;
+/// Jobs one such key may add per [`WINDOW`], for each of ham and spam.
+pub const FINE_PER_WINDOW: u32 = 30;
 
-/// The length of the window the per-source budget is counted in.
+/// Jobs a wider address block (/24 or /48) may have waiting or running.
+pub const COARSE_PENDING: u32 = 8;
+
+/// Jobs a wider address block may add per [`WINDOW`], for each of ham and spam.
+pub const COARSE_PER_WINDOW: u32 = 120;
+
+/// Jobs the whole server accepts per [`WINDOW`], for each of ham and spam.
+pub const GLOBAL_PER_WINDOW: u32 = 2000;
+
+/// The length of the window the budgets are counted in.
 pub const WINDOW: Duration = Duration::from_secs(3600);
 
-/// Sources the budget table tracks at once.
-pub const MAX_SOURCES: usize = 8192;
+/// Entries of each table (addresses, domains).
+pub const TABLE_SIZE: usize = 8192;
 
-/// Longest sender domain kept in a source key; a longer one is cut.
+/// Longest domain kept in a key; a longer one is cut.
 const MAX_DOMAIN_LEN: usize = 255;
 
 /// Who a job comes from, as the keys its budget is counted under.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrainSource {
-	keys: Vec<String>,
+	/// The client's own block and the wider block around it.
+	addresses: Option<(String, String)>,
+	/// The sender's domain, only when the server verified it.
+	domain: Option<String>,
 }
 
 impl TrainSource {
-	/// The source of a message: the client address (an IPv6 address by its
-	/// /64, the smallest block one customer holds) and the domain of the
-	/// envelope sender. Either may be missing; with neither the job has no
-	/// source and only the queue bounds it.
-	pub fn new(client: Option<IpAddr>, sender_domain: Option<&str>) -> Self {
-		let mut keys = Vec::new();
-		if let Some(ip) = client {
-			keys.push(match ip {
-				IpAddr::V4(v4) => format!("ip:{v4}"),
-				IpAddr::V6(v6) => {
-					let [a, b, c, d, ..] = v6.segments();
-					format!("ip6:{a:x}:{b:x}:{c:x}:{d:x}")
-				}
-			});
-		}
-		if let Some(domain) = sender_domain.filter(|domain| !domain.is_empty()) {
-			let mut domain = domain.to_ascii_lowercase();
-			if domain.len() > MAX_DOMAIN_LEN {
-				let mut end = MAX_DOMAIN_LEN;
-				while !domain.is_char_boundary(end) {
-					end -= 1;
-				}
-				domain.truncate(end);
+	/// The source of a message: the client address, and the envelope sender's
+	/// domain when (and only when) the server verified it, which the caller
+	/// says by passing `verified_domain`. Either may be missing; with neither
+	/// the job has no source and only the queue and the global count bound it.
+	pub fn new(client: Option<IpAddr>, verified_domain: Option<&str>) -> Self {
+		let addresses = client.map(|ip| match ip {
+			IpAddr::V4(v4) => {
+				let [a, b, c, _] = v4.octets();
+				(format!("{v4}"), format!("{a}.{b}.{c}.0/24"))
 			}
-			keys.push(format!("domain:{domain}"));
-		}
-		TrainSource { keys }
+			IpAddr::V6(v6) => {
+				let [a, b, c, d, ..] = v6.segments();
+				(
+					format!("{a:x}:{b:x}:{c:x}:{d:x}::/64"),
+					format!("{a:x}:{b:x}:{c:x}::/48"),
+				)
+			}
+		});
+		let domain = verified_domain
+			.filter(|domain| !domain.is_empty())
+			.map(|domain| {
+				let mut domain = domain.to_ascii_lowercase();
+				if domain.len() > MAX_DOMAIN_LEN {
+					let mut end = MAX_DOMAIN_LEN;
+					while !domain.is_char_boundary(end) {
+						end -= 1;
+					}
+					domain.truncate(end);
+				}
+				domain
+			});
+		TrainSource { addresses, domain }
 	}
 
-	/// No source: bounded by the queue alone.
+	/// No source: bounded by the queue and the global count alone.
 	pub fn unattributed() -> Self {
 		TrainSource::default()
 	}
@@ -102,86 +131,226 @@ impl TrainSource {
 /// Why a job was not accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-	/// The source used its jobs for this window.
+	/// A key of the source, or the whole server, used its jobs for this window.
 	OverBudget,
-	/// The source already has its share of jobs waiting or running.
+	/// A key of the source already has its share of jobs waiting or running.
 	TooManyPending,
-	/// The table of sources is full of live entries.
-	TableFull,
 	/// The queue is full.
 	QueueFull,
 }
 
+/// One kind (ham or spam) of one key.
 #[derive(Debug, Clone, Copy)]
-struct Entry {
+struct Count {
 	window_start: Instant,
 	admitted: u32,
 	pending: u32,
 }
 
-/// The per-source budget.
-#[derive(Debug, Default)]
+impl Count {
+	fn fresh(now: Instant) -> Self {
+		Count {
+			window_start: now,
+			admitted: 0,
+			pending: 0,
+		}
+	}
+
+	/// This count as of `now`: a window that is over starts again.
+	fn at(mut self, now: Instant) -> Self {
+		if now.saturating_duration_since(self.window_start) >= WINDOW {
+			self.window_start = now;
+			self.admitted = 0;
+		}
+		self
+	}
+
+	fn check(&self, per_window: u32, pending: u32) -> Result<(), Refusal> {
+		if self.admitted >= per_window {
+			Err(Refusal::OverBudget)
+		} else if self.pending >= pending {
+			Err(Refusal::TooManyPending)
+		} else {
+			Ok(())
+		}
+	}
+}
+
+/// The budgets of one key: index 0 is ham, 1 is spam.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+	tick: u64,
+	counts: [Count; 2],
+}
+
+/// A table of keys that forgets the least recently used one when full.
+/// Every operation is a hash lookup and one ordered-map step.
+#[derive(Debug)]
+struct Table {
+	capacity: usize,
+	slots: HashMap<String, Slot>,
+	recency: BTreeMap<u64, String>,
+	tick: u64,
+}
+
+impl Table {
+	fn new(capacity: usize) -> Self {
+		Table {
+			capacity,
+			slots: HashMap::new(),
+			recency: BTreeMap::new(),
+			tick: 0,
+		}
+	}
+
+	/// The count of `key` for `kind` as of `now`, fresh when the key is unknown.
+	fn peek(&self, key: &str, kind: usize, now: Instant) -> Count {
+		self.slots
+			.get(key)
+			.map_or(Count::fresh(now), |slot| slot.counts[kind].at(now))
+	}
+
+	/// Charge one job to `key`, making room for it if the table is full.
+	fn charge(&mut self, key: &str, kind: usize, now: Instant) {
+		self.tick += 1;
+		let tick = self.tick;
+		let slot = match self.slots.get_mut(key) {
+			Some(slot) => {
+				self.recency.remove(&slot.tick);
+				slot.tick = tick;
+				slot
+			}
+			None => {
+				if self.slots.len() >= self.capacity
+					&& let Some((_, oldest)) = self.recency.pop_first()
+				{
+					self.slots.remove(&oldest);
+				}
+				self.slots.entry(key.to_string()).or_insert(Slot {
+					tick,
+					counts: [Count::fresh(now); 2],
+				})
+			}
+		};
+		slot.tick = tick;
+		let count = &mut slot.counts[kind];
+		*count = count.at(now);
+		count.admitted += 1;
+		count.pending += 1;
+		self.recency.insert(tick, key.to_string());
+	}
+
+	fn release(&mut self, key: &str, kind: usize) {
+		if let Some(slot) = self.slots.get_mut(key) {
+			let count = &mut slot.counts[kind];
+			count.pending = count.pending.saturating_sub(1);
+		}
+	}
+}
+
+#[derive(Debug)]
+struct Inner {
+	addresses: Table,
+	domains: Table,
+	global: [Count; 2],
+}
+
+/// The budgets in front of the queue.
+#[derive(Debug)]
 pub struct Budget {
-	entries: Mutex<HashMap<String, Entry>>,
+	inner: Mutex<Inner>,
+}
+
+impl Default for Budget {
+	fn default() -> Self {
+		Budget::with_table_size(TABLE_SIZE)
+	}
+}
+
+fn kind(spam: bool) -> usize {
+	usize::from(spam)
 }
 
 impl Budget {
-	/// Admit one job of `source` at `now`, or say why not. Every key must
-	/// have room; nothing is counted unless all do.
-	pub fn admit(&self, now: Instant, source: &TrainSource) -> Result<(), Refusal> {
-		let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-		let mut fresh = 0;
-		for key in &source.keys {
-			match entries.get(key) {
-				Some(entry) => {
-					let in_window = now.saturating_duration_since(entry.window_start) < WINDOW;
-					if in_window && entry.admitted >= MAX_PER_WINDOW {
-						return Err(Refusal::OverBudget);
-					}
-					if entry.pending >= MAX_PENDING_PER_SOURCE {
-						return Err(Refusal::TooManyPending);
-					}
-				}
-				None => fresh += 1,
-			}
+	/// A budget whose two tables hold `size` keys each.
+	pub fn with_table_size(size: usize) -> Self {
+		Budget {
+			inner: Mutex::new(Inner {
+				addresses: Table::new(size),
+				domains: Table::new(size),
+				global: [Count::fresh(Instant::now()); 2],
+			}),
 		}
-		if fresh > 0 && entries.len() + fresh > MAX_SOURCES {
-			entries.retain(|_, entry| {
-				entry.pending > 0 || now.saturating_duration_since(entry.window_start) < WINDOW
-			});
-			if entries.len() + fresh > MAX_SOURCES {
-				return Err(Refusal::TableFull);
-			}
+	}
+
+	/// Admit one job of `source`, ham or spam, at `now`, or say why not.
+	/// Every key must have room; nothing is counted unless all do.
+	pub fn admit(&self, now: Instant, source: &TrainSource, spam: bool) -> Result<(), Refusal> {
+		let kind = kind(spam);
+		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		inner.global[kind] = inner.global[kind].at(now);
+		inner.global[kind].check(GLOBAL_PER_WINDOW, u32::MAX)?;
+		if let Some((fine, coarse)) = &source.addresses {
+			inner
+				.addresses
+				.peek(fine, kind, now)
+				.check(FINE_PER_WINDOW, FINE_PENDING)?;
+			inner
+				.addresses
+				.peek(coarse, kind, now)
+				.check(COARSE_PER_WINDOW, COARSE_PENDING)?;
 		}
-		for key in &source.keys {
-			let entry = entries.entry(key.clone()).or_insert(Entry {
-				window_start: now,
-				admitted: 0,
-				pending: 0,
-			});
-			if now.saturating_duration_since(entry.window_start) >= WINDOW {
-				entry.window_start = now;
-				entry.admitted = 0;
-			}
-			entry.admitted += 1;
-			entry.pending += 1;
+		if let Some(domain) = &source.domain {
+			inner
+				.domains
+				.peek(domain, kind, now)
+				.check(FINE_PER_WINDOW, FINE_PENDING)?;
+		}
+		inner.global[kind].admitted += 1;
+		if let Some((fine, coarse)) = &source.addresses {
+			inner.addresses.charge(fine, kind, now);
+			inner.addresses.charge(coarse, kind, now);
+		}
+		if let Some(domain) = &source.domain {
+			inner.domains.charge(domain, kind, now);
 		}
 		Ok(())
 	}
 
 	/// A job of `source` has finished, or was never queued.
-	pub fn release(&self, source: &TrainSource) {
-		let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-		for key in &source.keys {
-			if let Some(entry) = entries.get_mut(key) {
-				entry.pending = entry.pending.saturating_sub(1);
-			}
+	pub fn release(&self, source: &TrainSource, spam: bool) {
+		let kind = kind(spam);
+		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		if let Some((fine, coarse)) = &source.addresses {
+			inner.addresses.release(fine, kind);
+			inner.addresses.release(coarse, kind);
+		}
+		if let Some(domain) = &source.domain {
+			inner.domains.release(domain, kind);
 		}
 	}
 
-	/// Sources currently tracked.
-	pub fn tracked(&self) -> usize {
-		self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
+	/// Keys currently tracked: addresses, then domains.
+	pub fn tracked(&self) -> (usize, usize) {
+		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		(inner.addresses.slots.len(), inner.domains.slots.len())
+	}
+
+	/// Jobs of `source` waiting or running for ham or spam, by its most
+	/// loaded key.
+	pub fn pending(&self, source: &TrainSource, spam: bool) -> u32 {
+		let kind = kind(spam);
+		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let mut most = 0;
+		if let Some((fine, coarse)) = &source.addresses {
+			for key in [fine, coarse] {
+				most = most.max(inner.addresses.peek(key, kind, Instant::now()).pending);
+			}
+		}
+		if let Some(domain) = &source.domain {
+			most = most.max(inner.domains.peek(domain, kind, Instant::now()).pending);
+		}
+		most
 	}
 }
 
@@ -245,7 +414,7 @@ impl SharedTraining {
 		data: &[u8],
 		spam: bool,
 	) -> Result<(), Refusal> {
-		self.budget.admit(now, source)?;
+		self.budget.admit(now, source, spam)?;
 		let job = Job {
 			source: source.clone(),
 			scope: scope.to_string(),
@@ -253,7 +422,7 @@ impl SharedTraining {
 			spam,
 		};
 		self.sender.try_send(job).map_err(|_| {
-			self.budget.release(source);
+			self.budget.release(source, spam);
 			Refusal::QueueFull
 		})
 	}
@@ -272,7 +441,7 @@ pub async fn run_worker(
 		if let Err(error) = store.train(&job.scope, &text, job.spam).await {
 			tracing::warn!(%error, "shared bayes training failed");
 		}
-		budget.release(&job.source);
+		budget.release(&job.source, job.spam);
 	}
 }
 

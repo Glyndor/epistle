@@ -606,15 +606,22 @@ ascending order), so they cannot deadlock.
 
 The SMTP server hands each message to a queue of 64 jobs served by 2
 workers, so no more than 2 trainings run at once and the queue holds about
-16 MiB. Each client address (an IPv6 address by its /64) and each sender
-domain may have 4 jobs waiting or running and may add 30 jobs per hour. A
-job over that share, or that finds the queue full, is dropped and counted in
-`mail_bayes_training_dropped_total`; the reply to the client never waits for
-it. That limit is what one anonymous sender can teach the shared corpus per
-hour, so a sender that passes the server's checks cannot decide the corpus
-alone. A great many distinct sources can still move it slowly, which is why
-a corpus below `MIN_TRUSTED_MESSAGES` is only a fallback and an account's
-own corpus scores the mail it alone receives.
+16 MiB. Ham and spam are counted apart. A client address counts under its
+own block and under the wider one around it (IPv4 /32 and /24, IPv6 /64 and
+/48), and a sender domain counts only when the server verified it, because
+the envelope sender is written by the client. A single address or domain
+may have 4 jobs waiting or running and add 30 per hour; a wider block, 8
+waiting and 120 per hour; the whole server, 2000 per hour. The tables of
+keys hold 8192 addresses and 8192 domains each and drop the least recently
+used entry when full, so a flood of new addresses forgets old ones and never
+shuts a new sender out. A job over a limit, or that finds the queue full, is
+dropped and counted in `mail_bayes_training_dropped_total`; the reply to the
+client never waits for it. Those limits are what one anonymous sender can
+teach the shared corpus per hour, so a sender that passes the server's
+checks cannot decide the corpus alone. A great many distinct networks can
+still move it slowly, which is why a corpus below `MIN_TRUSTED_MESSAGES` is
+only a fallback and an account's own corpus scores the mail it alone
+receives.
 
 An account's scope scores a message only when that account is the single
 local recipient and was addressed as itself. A message with two or more

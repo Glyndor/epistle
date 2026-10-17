@@ -2,7 +2,7 @@
 //! Needs a PostgreSQL and only runs when `DATABASE_URL` is set.
 
 use epistle::antispam::corpus::BayesStore;
-use epistle::antispam::shared_training::{MAX_PENDING_PER_SOURCE, TrainSource};
+use epistle::antispam::shared_training::{FINE_PENDING, TrainSource};
 use epistle::config::DatabaseTls;
 use sqlx::PgPool;
 
@@ -89,7 +89,7 @@ async fn one_source_flooding_the_server_gets_only_its_share_trained() {
 	let accepted = (0..500)
 		.filter(|_| store.submit_training(&flooder, &scope, b"buy now", true))
 		.count();
-	assert_eq!(accepted, MAX_PENDING_PER_SOURCE as usize);
+	assert_eq!(accepted, FINE_PENDING as usize);
 	assert!(
 		store.submit_training(&other, &scope, b"meeting notes", false),
 		"another source must still get in"

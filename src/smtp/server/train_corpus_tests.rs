@@ -183,3 +183,29 @@ async fn mail_accepted_from_a_verified_sender_teaches_ham_with_its_source() {
 async fn mail_accepted_from_an_unverified_sender_teaches_nothing() {
 	assert!(accepted_with("v=spf1 ~all").await.is_empty());
 }
+
+/// The envelope sender is written by the client. Spam learned from mail
+/// the server did not verify is counted under the client's address alone,
+/// whatever domain the envelope names, so a forged domain spends nothing
+/// of the real one.
+#[test]
+fn the_domain_of_unverified_mail_is_not_a_key() {
+	let recorder = Recorder::new(true);
+	let server = server_with(&recorder);
+	server.train_corpus(&message(false), peer(), true);
+	let calls = recorder.calls();
+	assert_eq!(calls.len(), 1);
+	assert_eq!(calls[0].0, TrainSource::new(peer(), None));
+}
+
+#[test]
+fn the_domain_of_verified_mail_is_a_key_for_spam_too() {
+	let recorder = Recorder::new(true);
+	let server = server_with(&recorder);
+	server.train_corpus(&message(true), peer(), true);
+	let calls = recorder.calls();
+	assert_eq!(
+		calls[0].0,
+		TrainSource::new(peer(), Some("mail.example.net"))
+	);
+}

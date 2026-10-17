@@ -225,8 +225,9 @@ impl Server {
 	/// quarantines is spam, mail it accepts is ham. The mail comes from
 	/// anyone, so three rules keep one sender from deciding the corpus:
 	/// ham is learned only from a sender the server verified (SPF or DKIM
-	/// passed, `message.sender_verified`); each client address and sender
-	/// domain has a bounded share of the learning, and a job over it, or
+	/// passed, `message.sender_verified`); each client address block, and
+	/// each sender domain the server verified, has a bounded share of the
+	/// learning for ham and for spam apart, and a job over it, or
 	/// that the bounded queue cannot take, is dropped and counted in
 	/// `mail_bayes_training_dropped_total`; and the job never waits, so the
 	/// reply to the client does not depend on it. The no-op default on the
@@ -243,7 +244,14 @@ impl Server {
 		if !spam && !message.sender_verified {
 			return;
 		}
-		let domain = message.reverse_path.rsplit_once('@').map(|(_, d)| d);
+		// The envelope sender is whatever the client wrote. Its domain is a key
+		// of the budget only once the server verified it; otherwise a client
+		// could use up the budget of a domain it does not own.
+		let domain = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, d)| d)
+			.filter(|_| message.sender_verified);
 		let source = crate::antispam::shared_training::TrainSource::new(peer, domain);
 		if !bayes.train_from(&source, &message.data, spam) {
 			self.metrics.bayes_training_dropped();
