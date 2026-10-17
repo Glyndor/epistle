@@ -518,3 +518,7 @@ pub async fn run_worker(
 #[cfg(test)]
 #[path = "shared_training_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shared_training_tests_shares.rs"]
+mod tests_shares;
