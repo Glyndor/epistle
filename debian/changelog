@@ -67,7 +67,7 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     `delivery list --limit` stops at 100000 like `export`.
   * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
     connections from one read-only query in the stack's database container,
-    and gives up after 15 seconds.
+    and gives up after 15 seconds, stopping what the query started with it.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

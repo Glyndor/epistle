@@ -13,6 +13,23 @@ fn program(dir: &std::path::Path, body: &str) -> String {
 }
 
 fn ask(program: &str, limit: Duration) -> Result<String, String> {
+	// A script written a moment ago can still be open for writing in a
+	// sibling test's fork: wait that out.
+	for _ in 0..50 {
+		let answer = ask_once(program, limit);
+		if answer
+			.as_ref()
+			.err()
+			.is_none_or(|e| !e.contains("Text file busy"))
+		{
+			return answer;
+		}
+		std::thread::sleep(Duration::from_millis(40));
+	}
+	ask_once(program, limit)
+}
+
+fn ask_once(program: &str, limit: Duration) -> Result<String, String> {
 	query_within_program(
 		program,
 		std::path::Path::new("/nonexistent/compose.yaml"),
@@ -67,4 +84,51 @@ fn sql_with_a_single_quote_is_refused_before_anything_runs() {
 	)
 	.unwrap_err();
 	assert_eq!(error, "the query contains a single quote");
+}
+
+#[test]
+fn an_answer_after_a_lot_of_noise_is_not_taken_for_a_timeout() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Three megabytes on stderr before the answer: a reader that waits for
+	// the child to exit first would block it on a full pipe and time out.
+	let podup = program(
+		dir.path(),
+		"head -c 3000000 /dev/zero | tr '\\0' x >&2; echo '16.4|1'",
+	);
+	assert_eq!(ask(&podup, Duration::from_secs(20)).unwrap(), "16.4|1");
+}
+
+#[test]
+fn an_answer_that_is_too_large_is_refused_not_kept() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let podup = program(dir.path(), "head -c 3000000 /dev/zero | tr '\\0' y");
+	let error = ask(&podup, Duration::from_secs(20)).unwrap_err();
+	assert_eq!(error, "the answer of the query is larger than 1 MiB");
+}
+
+#[test]
+fn what_the_stopped_query_started_is_stopped_with_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let pidfile = dir.path().join("grandchild.pid");
+	let podup = program(
+		dir.path(),
+		&format!("sleep 60 &\necho $! > {}\nwait", pidfile.display()),
+	);
+	let error = ask(&podup, Duration::from_millis(500)).unwrap_err();
+	assert!(error.contains("did not answer within"), "{error}");
+	let pid = std::fs::read_to_string(&pidfile)
+		.expect("pid")
+		.trim()
+		.to_string();
+	let mut gone = false;
+	for _ in 0..100 {
+		// A killed child may linger as a zombie until its parent reaps it.
+		let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+		if stat.is_empty() || stat.contains(") Z ") {
+			gone = true;
+			break;
+		}
+		std::thread::sleep(Duration::from_millis(50));
+	}
+	assert!(gone, "process {pid} outlived the query");
 }

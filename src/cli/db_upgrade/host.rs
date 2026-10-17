@@ -111,22 +111,53 @@ pub(in crate::cli) fn query_within(
 	query_within_program("podup", compose, sql, limit)
 }
 
+/// The most of a query's output that is kept; the rest is read and dropped so
+/// the child never blocks on a full pipe.
+const KEEP_OUTPUT: usize = 1 << 20;
+
+/// Read `pipe` to its end, keeping the first [`KEEP_OUTPUT`] bytes and one
+/// more, so the caller can tell that there was more.
+fn drain(mut pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+	std::thread::spawn(move || {
+		let mut kept = Vec::new();
+		let mut chunk = [0_u8; 16 * 1024];
+		while let Ok(read) = pipe.read(&mut chunk) {
+			if read == 0 {
+				break;
+			}
+			let room = (KEEP_OUTPUT + 1).saturating_sub(kept.len());
+			kept.extend_from_slice(&chunk[..read.min(room)]);
+		}
+		kept
+	})
+}
+
 fn query_within_program(
 	program: &str,
 	compose: &std::path::Path,
 	sql: &str,
 	limit: Duration,
 ) -> Result<String, String> {
+	use std::os::unix::process::CommandExt;
+	// Its own process group, so stopping the query stops what `podup` started
+	// (`podman exec`, `psql`) and not only `podup`.
 	let mut child = query_command(program, compose, sql)?
+		.process_group(0)
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped())
 		.spawn()
 		.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	let stdout = child.stdout.take().map(drain);
+	let stderr = child.stderr.take().map(drain);
 	let deadline = std::time::Instant::now() + limit;
-	loop {
+	let status = loop {
 		match child.try_wait() {
-			Ok(Some(_)) => break,
+			Ok(Some(status)) => break status,
 			Ok(None) if std::time::Instant::now() >= deadline => {
+				if let Ok(pid) = i32::try_from(child.id()) {
+					// SAFETY: signalling the process group this function created.
+					unsafe { libc::kill(-pid, libc::SIGKILL) };
+				}
 				let _ = child.kill();
 				let _ = child.wait();
 				return Err(format!("the query in db did not answer within {limit:?}"));
@@ -134,11 +165,21 @@ fn query_within_program(
 			Ok(None) => std::thread::sleep(Duration::from_millis(20)),
 			Err(error) => return Err(format!("cannot wait for podup exec: {error}")),
 		}
+	};
+	let take = |handle: Option<std::thread::JoinHandle<Vec<u8>>>| {
+		handle
+			.and_then(|handle| handle.join().ok())
+			.unwrap_or_default()
+	};
+	let (stdout, stderr) = (take(stdout), take(stderr));
+	if status.success() && stdout.len() > KEEP_OUTPUT {
+		return Err("the answer of the query is larger than 1 MiB".to_string());
 	}
-	let output = child
-		.wait_with_output()
-		.map_err(|error| format!("cannot read the answer of podup exec: {error}"))?;
-	query_answer(&output)
+	query_answer(&std::process::Output {
+		status,
+		stdout,
+		stderr,
+	})
 }
 
 #[cfg(test)]
