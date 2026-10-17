@@ -36,7 +36,7 @@ pub struct Outcome {
 	/// (RFC 5230), subject to the caller's suppression and dedup rules.
 	pub vacation: Option<VacationRequest>,
 	/// The run spent more than it may (steps, matching work, memory, see
-	/// [`super::env`]) and was abandoned: the message is only kept.
+	/// the run budget) and was abandoned: the message is only kept.
 	pub aborted: bool,
 	/// How many different `redirect` addresses came after the limit and were
 	/// not forwarded to, for the delivery to log.
