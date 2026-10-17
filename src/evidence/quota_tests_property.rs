@@ -59,6 +59,9 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 		let mut dice = Dice(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
 		let mut next_id = 1u128;
 		let mut known: Vec<(u128, &str)> = Vec::new();
+		// An oracle for invariant 3 that shares nothing with the book: how many
+		// outcomes each accepted message was paid for and has not had yet.
+		let mut paid: std::collections::HashMap<u128, u64> = std::collections::HashMap::new();
 		// Whether the book remembers outcomes prepaid on an earlier day, which a
 		// restart does not: it counts them as facts, never fewer.
 		let mut carried = false;
@@ -92,6 +95,7 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 								log.accepted(account, message, recipients as usize, full);
 								drop(held);
 								known.push((message, account));
+								paid.insert(message, recipients);
 								assert!(
 									quota.state().accounts[account].records
 										<= limits.account_records,
@@ -121,12 +125,40 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 						}
 					};
 					next_id += 1;
-					if dice.next(3) == 0 {
+					let ends = dice.next(3) == 0;
+					if ends {
 						log.abandoned(message);
 						quota.ended(owner, id(message), day);
 					} else {
 						log.outcome(message);
 						quota.fact(owner, id(message), day);
+					}
+					// Invariant 3, from the oracle: a fact the acceptance paid for
+					// adds nothing; any other adds exactly one record, to the
+					// account of its acceptance (or to the unattributed ones).
+					let prepaid = paid.get(&message).is_some_and(|left| *left > 0);
+					let owner = owner.unwrap_or(UNATTRIBUTED);
+					let records =
+						|state: &State| state.accounts.get(owner).map_or(0, |h| h.records);
+					let counted = u64::from(!prepaid);
+					let after = quota.state();
+					assert_eq!(
+						after.total - before.total,
+						counted,
+						"{step}: a fact was counted {} times",
+						after.total - before.total
+					);
+					assert_eq!(
+						records(&after) - records(&before),
+						counted,
+						"{step}: a fact was counted to another account"
+					);
+					match (prepaid, ends) {
+						(true, false) => *paid.entry(message).or_default() -= 1,
+						(_, true) => {
+							paid.remove(&message);
+						}
+						_ => {}
 					}
 				}
 				// The process restarts: the book is rebuilt from the log.
@@ -156,6 +188,7 @@ fn random_sequences_keep_every_invariant_after_every_step() {
 					// What is older than the last two days is not named at a restart.
 					carried = true;
 					known.clear();
+					paid.clear();
 					let message = next_id;
 					next_id += 1;
 					log.outcome(message);
