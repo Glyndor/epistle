@@ -1,6 +1,7 @@
 //! A purge deletes only what a verified purge says, whatever a planted file
 //! says, and a break an operator acknowledged does not stop it.
 
+use super::finish::{Named, recorded};
 use super::tests::{DAY, verified};
 use super::tests_crash::old_days;
 use super::*;
