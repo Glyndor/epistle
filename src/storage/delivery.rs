@@ -351,11 +351,11 @@ impl LocalDelivery {
 			if !io::mailbox_exists(&self.data_dir, account, folder) {
 				// Past the account's limit no folder is made: the message is
 				// kept in INBOX instead, never lost and never filed nowhere.
-				if !io::may_create_mailbox(&self.data_dir, account) {
+				if !io::create_mailbox_within_limit(&self.data_dir, account, folder) {
 					tracing::warn!(
 						account,
 						limit = io::MAX_AUTO_FOLDERS,
-						"a Sieve fileinto would create a folder past the account's limit; the message was kept"
+						"a Sieve fileinto cannot make its folder (past the account's limit, too deep, or no lock); the message was kept"
 					);
 					if !kept {
 						self.deliver_to_account(account, None, data, &outcome.flags)
@@ -364,7 +364,6 @@ impl LocalDelivery {
 					}
 					continue;
 				}
-				io::ensure_mailbox(&self.data_dir, account, folder);
 			}
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;

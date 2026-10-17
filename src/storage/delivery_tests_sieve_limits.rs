@@ -231,3 +231,84 @@ fn two_names_for_inbox_file_one_copy() {
 		.expect("deliver");
 	assert_eq!(inbox(dir.path()), 1);
 }
+
+/// Every folder the account really has, parents of deep ones included.
+fn real_folders(root: &Path) -> usize {
+	crate::imap::mailbox::list(root, "alice").len()
+}
+
+const DEEP_BY_SUBJECT: &str = "require [\"variables\", \"fileinto\"];\n\
+	if header :matches \"subject\" \"*\" { fileinto \"${1}/b/c/d\"; }\n";
+
+#[test]
+fn a_deep_name_counts_every_folder_it_makes() {
+	// `n/b/c/d` is four folders. Sixty of them would be 240 against a limit
+	// of 200 that counted one folder per `fileinto`.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = setup(dir.path(), DEEP_BY_SUBJECT);
+	for n in 0..60 {
+		delivery
+			.deliver_routed(&message(&format!("p{n}")), None)
+			.expect("deliver");
+	}
+	assert!(
+		real_folders(dir.path()) <= io::MAX_AUTO_FOLDERS,
+		"{} folders",
+		real_folders(dir.path())
+	);
+	assert!(
+		real_folders(dir.path()) > 150,
+		"the limit was reached, not stopped short"
+	);
+	assert!(inbox(dir.path()) > 0, "what did not fit is kept");
+}
+
+#[test]
+fn a_folder_made_by_a_filter_is_at_most_four_levels_deep() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = setup(
+		dir.path(),
+		"fileinto \"a/b/c/d\";\nfileinto \"a/b/c/d/e\";\n",
+	);
+	delivery
+		.deliver_routed(&message("hi"), None)
+		.expect("deliver");
+	let names = crate::imap::mailbox::list(dir.path(), "alice");
+	assert!(names.iter().any(|n| n == "a/b/c/d"), "{names:?}");
+	assert!(
+		!names.iter().any(|n| n.starts_with("a/b/c/d/")),
+		"{names:?}"
+	);
+	assert_eq!(inbox(dir.path()), 1, "the five-level name is kept in INBOX");
+}
+
+#[test]
+fn deliveries_at_the_same_moment_do_not_pass_the_limit_together() {
+	for round in 0..20 {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = std::sync::Arc::new(setup(dir.path(), DEEP_BY_SUBJECT));
+		// Room for two more deep names and no more.
+		crate::imap::mailbox::ensure_defaults(dir.path(), "alice").expect("defaults");
+		for n in 0..(io::MAX_AUTO_FOLDERS - 1 - 5 - 8) {
+			crate::imap::mailbox::create(dir.path(), "alice", &format!("pre{n}")).expect("create");
+		}
+		let handles: Vec<_> = (0..8)
+			.map(|t| {
+				let delivery = delivery.clone();
+				std::thread::spawn(move || {
+					delivery
+						.deliver_routed(&message(&format!("t{t}")), None)
+						.expect("deliver");
+				})
+			})
+			.collect();
+		for handle in handles {
+			handle.join().expect("join");
+		}
+		assert!(
+			real_folders(dir.path()) <= io::MAX_AUTO_FOLDERS,
+			"round {round}: {} folders",
+			real_folders(dir.path())
+		);
+	}
+}

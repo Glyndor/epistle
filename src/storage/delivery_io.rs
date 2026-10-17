@@ -77,10 +77,52 @@ fn is_bidi_control(c: char) -> bool {
 	matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
-/// Whether a new folder may be made in the account: it holds fewer than
-/// [`MAX_AUTO_FOLDERS`] (INBOX included).
-pub(super) fn may_create_mailbox(data_dir: &std::path::Path, account: &str) -> bool {
-	crate::imap::mailbox::list(data_dir, account).len() < MAX_AUTO_FOLDERS
+/// The most levels a folder made by a Sieve `fileinto` may have.
+const MAX_AUTO_DEPTH: usize = 4;
+
+/// Make the folder `mailbox` for a Sieve `fileinto`, and its missing
+/// superiors, if the account stays within [`MAX_AUTO_FOLDERS`] folders after
+/// it. The folders it would make are counted, every level of a deep name, and
+/// the check and the creation happen under one lock per account, so two
+/// deliveries at once cannot each find room for the same last folder.
+///
+/// `false` when nothing was made and the folder does not exist: too deep, no
+/// room, or the lock could not be taken. The caller keeps the message.
+pub(super) fn create_mailbox_within_limit(
+	data_dir: &std::path::Path,
+	account: &str,
+	mailbox: &str,
+) -> bool {
+	use crate::util::mailbox_path::DELIMITER;
+	if mailbox_exists(data_dir, account, mailbox) {
+		return true;
+	}
+	let levels: Vec<&str> = mailbox.split(DELIMITER).collect();
+	if levels.len() > MAX_AUTO_DEPTH {
+		return false;
+	}
+	let Some(lock_path) = AccountName::new(account)
+		.ok()
+		.and_then(|name| name.root(data_dir).ok())
+		.and_then(|root| root.file(".folders.lock").ok())
+	else {
+		return false;
+	};
+	let Ok(_lock) = crate::storage::lock::FileLock::acquire(&lock_path) else {
+		return false;
+	};
+	// Under the lock: whatever a delivery just before made is counted.
+	if mailbox_exists(data_dir, account, mailbox) {
+		return true;
+	}
+	let missing = (1..=levels.len())
+		.filter(|upto| !mailbox_exists(data_dir, account, &levels[..*upto].join("/")))
+		.count();
+	if crate::imap::mailbox::list(data_dir, account).len() + missing > MAX_AUTO_FOLDERS {
+		return false;
+	}
+	ensure_mailbox(data_dir, account, mailbox);
+	mailbox_exists(data_dir, account, mailbox)
 }
 
 /// Whether the named mailbox already exists in the account (INBOX is
