@@ -48,16 +48,16 @@ fn control_characters_in_zone_text_never_reach_the_terminal() {
 	let setup = setup(CLOUDFLARE, Zone::with(records));
 	let text = run(&setup, &["--dry-run"]);
 	assert_eq!(text.code, ExitCode::SUCCESS, "{}", text.err);
+	// The name is reported, escaped, and not planned: it is not a name.
 	assert!(
-		text.out
-			.contains("  + evil\\u{1b}[2j.example.org 3600 IN TXT \"v=spf1 -all\"\n"),
+		text.out.contains(
+			"  = evil\\u{1b}[2j.example.org\n      reason: evil\\u{1b}[2j.example.org is not a valid DNS name"
+		),
 		"{}",
 		text.out
 	);
 	assert!(
-		text.out.contains(
-			"  = worse\\u{7}.example.org\n      reason: worse\\u{7}.example.org is delegated"
-		),
+		!text.out.contains("+ evil") && !text.out.contains("worse"),
 		"{}",
 		text.out
 	);

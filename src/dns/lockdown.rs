@@ -212,7 +212,7 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 			skipped.push(SkipEntry {
 				name: cuts::shortened(&name),
 				reason: format!(
-					"{} is not a valid DNS name (at most {MAX_NAME_LEN} characters, {MAX_LABEL_LEN} per label); left as is",
+					"{} is not a valid DNS name (ASCII letters, digits, hyphens and underscores, at most {MAX_NAME_LEN} characters and {MAX_LABEL_LEN} per label); left as is",
 					cuts::shortened(&name)
 				),
 			});
@@ -249,7 +249,13 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 		Some(cut) => WildcardDecision::Skipped {
 			reason: delegated_reason(cut),
 		},
-		None => wildcard_decision(input.domain, input.existing, journal, input.zone_listed),
+		None => wildcard_decision(
+			input.domain,
+			input.existing,
+			journal,
+			input.zone_listed,
+			&cuts,
+		),
 	};
 	if let WildcardDecision::Added { reason } = &wildcard {
 		entries.push(PlanEntry {
@@ -382,6 +388,7 @@ fn wildcard_decision(
 	existing: &[DnsRecord],
 	journal: &Journal,
 	zone_listed: bool,
+	cuts: &cuts::Cuts,
 ) -> WildcardDecision {
 	let wildcard = format!("*.{domain}");
 	if !zone_listed {
@@ -396,6 +403,11 @@ fn wildcard_decision(
 	for record in existing {
 		let name = canonical_name(&record.name);
 		if !(name.starts_with("*.") && in_domain(&name, domain)) {
+			continue;
+		}
+		// A wildcard under a delegation is the other nameservers' own: it
+		// never answers for a name of this zone.
+		if cuts.above(&name).is_some() {
 			continue;
 		}
 		if name == wildcard && record.kind == RecordKind::Txt && journal.owns(record) {

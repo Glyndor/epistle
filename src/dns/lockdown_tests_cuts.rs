@@ -257,7 +257,7 @@ fn a_name_that_cannot_be_a_dns_name_is_reported_cut_down() {
 		assert_eq!(
 			reason,
 			&format!(
-				"{name} is not a valid DNS name (at most 253 characters, 63 per label); left as is"
+				"{name} is not a valid DNS name (ASCII letters, digits, hyphens and underscores, at most 253 characters and 63 per label); left as is"
 			)
 		);
 	}
@@ -335,4 +335,135 @@ fn loops_in_the_zone_are_not_followed() {
 			),
 		]
 	);
+}
+
+/// A record is written back under the name that was read, so a name with an
+/// escape sequence, a NUL or a space is reported and never planned: a
+/// provider that lists one (or an account that created one) cannot make the
+/// lockdown write to it.
+#[test]
+fn a_name_outside_letters_digits_hyphens_and_underscores_is_never_written() {
+	let plan = plan(&[
+		a("ev\u{1b}[2Jil.example.org"),
+		a("nul\0.example.org"),
+		a("sp ace.example.org"),
+		a("b\u{fc}cher.example.org"),
+		a("under_score.example.org"),
+		a("www.example.org"),
+	]);
+	let mut written: Vec<&str> = plan
+		.entries
+		.iter()
+		.map(|e| e.record.name.as_str())
+		.filter(|n| n.contains("www") || n.contains("under") || n.contains("xn--"))
+		.collect();
+	written.sort_unstable();
+	written.dedup();
+	assert_eq!(
+		written,
+		vec![
+			"under_score.example.org",
+			"www.example.org",
+			"xn--bcher-kva.example.org"
+		]
+	);
+	assert!(
+		plan.entries
+			.iter()
+			.all(|e| !e.record.name.contains(['\u{1b}', '\0', ' '])),
+		"{plan:?}"
+	);
+	let reason = "is not a valid DNS name (ASCII letters, digits, hyphens and underscores, at most 253 characters and 63 per label); left as is";
+	let names: Vec<String> = skipped(&plan)
+		.into_iter()
+		.filter(|(_, r)| r.ends_with(reason))
+		.map(|(n, _)| n)
+		.collect();
+	assert_eq!(
+		names,
+		vec![
+			"ev\u{1b}[2jil.example.org".to_string(),
+			"nul\0.example.org".to_string(),
+			"sp ace.example.org".to_string()
+		]
+	);
+}
+
+/// A wildcard under a delegation belongs to the other nameservers: it never
+/// answers for a name of this zone, so it is no reason to skip the
+/// wildcard null SPF of the domain.
+#[test]
+fn a_wildcard_hidden_by_a_delegation_does_not_block_the_null_wildcard() {
+	let plan = plan(&[
+		ns("sub.example.org", "ns1.delegated.example."),
+		txt("*.sub.example.org", "v=spf1 +all"),
+		a("www.example.org"),
+	]);
+	assert!(
+		matches!(plan.wildcard, WildcardDecision::Added { .. }),
+		"{:?}",
+		plan.wildcard
+	);
+	assert_eq!(writes_at(&plan, "*.example.org"), vec!["TXT v=spf1 -all"]);
+}
+
+/// An NS at a wildcard hands nothing over (RFC 4592): it is no delegation,
+/// and no name is left alone because of it.
+#[test]
+fn an_ns_at_a_wildcard_is_not_a_delegation() {
+	let existing = [
+		ns("*.example.org", "ns1.delegated.example."),
+		a("www.example.org"),
+	];
+	let plan = plan(&existing);
+	assert_eq!(
+		writes_at(&plan, "www.example.org"),
+		vec!["TXT v=spf1 -all", "MX 0 ."]
+	);
+	assert!(
+		skipped(&plan).iter().all(|(_, r)| !r.contains("delegated")),
+		"{:?}",
+		skipped(&plan)
+	);
+	let cuts = Cuts::new("example.org", &existing);
+	assert_eq!(cuts.above("host.example.org"), None);
+	assert_eq!(cuts.above("*.example.org"), None);
+}
+
+/// A name delegated after the lockdown wrote a record there is the other
+/// nameservers' now: `--undo` reports the record and does not touch it.
+#[tokio::test]
+async fn undo_leaves_a_record_in_a_name_delegated_since() {
+	let ours = txt("sub.example.org", NULL_SPF);
+	let zone = Zone::with(vec![
+		ns("sub.example.org", "ns1.delegated.example."),
+		ours.clone(),
+		txt("www.example.org", NULL_SPF),
+	]);
+	let journal = Journal {
+		domain: "example.org".into(),
+		entries: vec![
+			JournalEntry {
+				record: txt("www.example.org", NULL_SPF),
+				replaced: None,
+			},
+			JournalEntry {
+				record: ours.clone(),
+				replaced: None,
+			},
+		],
+	};
+	let report = undo_journal(&zone, "example.org", &journal, false)
+		.await
+		.expect("undo");
+	assert_eq!(report.deleted, vec![txt("www.example.org", NULL_SPF)]);
+	assert_eq!(
+		report.changed,
+		vec![UndoChanged {
+			record: ours.clone(),
+			now: vec!["sub.example.org is delegated to other nameservers".to_string()],
+		}]
+	);
+	assert!(zone.snapshot().contains(&ours));
+	assert_eq!(*zone.writes.lock().unwrap(), 1);
 }

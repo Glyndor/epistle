@@ -18,15 +18,25 @@ pub const MAX_NAME_LEN: usize = 253;
 /// The longest label of a DNS name (RFC 1035 section 2.3.4).
 pub const MAX_LABEL_LEN: usize = 63;
 
-/// Whether `name` can be a DNS name: not empty, within the length caps, no
-/// empty label. A provider hands the lockdown whatever the zone holds, so a
-/// name outside these caps is not planned for and is cut down to print.
+/// Whether `name`, in [`canonical_name`] form, is a name the lockdown may
+/// plan a record at: within the length caps, no empty label, and every label
+/// made of ASCII letters, digits, hyphens and underscores, except that the
+/// first label may be `*`. A provider hands the lockdown whatever the zone
+/// holds, and a record is written back under the name that was read, so a
+/// name with an escape sequence, a NUL or a space is reported and left
+/// alone, never written to.
 pub fn is_valid_name(name: &str) -> bool {
-	!name.is_empty()
-		&& name.len() <= MAX_NAME_LEN
-		&& name
-			.split('.')
-			.all(|label| !label.is_empty() && label.len() <= MAX_LABEL_LEN)
+	if name.is_empty() || name.len() > MAX_NAME_LEN {
+		return false;
+	}
+	name.split('.').enumerate().all(|(index, label)| {
+		!label.is_empty()
+			&& label.len() <= MAX_LABEL_LEN
+			&& ((index == 0 && label == "*")
+				|| label
+					.bytes()
+					.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+	})
 }
 
 /// `name` cut to at most [`MAX_NAME_LEN`] bytes (on a character boundary),
@@ -59,6 +69,9 @@ impl Cuts {
 			.filter(|r| r.kind == RecordKind::Ns)
 			.map(|r| canonical_name(&r.name))
 			.filter(|name| name != zone && in_domain(name, zone) && is_valid_name(name))
+			// An NS at a wildcard does not delegate anything (RFC 4592): it is
+			// no zone cut, and no name is left alone because of it.
+			.filter(|name| !name.starts_with("*."))
 			.collect();
 		Cuts {
 			zone: zone.to_string(),
