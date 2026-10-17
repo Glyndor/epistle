@@ -18,8 +18,8 @@
 
 use sqlx::{Postgres, Transaction};
 
+use super::LearnOutcome;
 use super::retry::retrying;
-use super::{LearnOutcome, MAX_LEARN_TOKENS, MAX_LEARNED_PER_ACCOUNT};
 use crate::antispam::bayes;
 use crate::antispam::corpus::{BayesStore, SHARED};
 use crate::antispam::training_queue::MAX_TRAINING_BYTES;
@@ -80,7 +80,7 @@ impl BayesStore {
 		let text = String::from_utf8_lossy(window);
 		let tokens: Vec<String> = bayes::tokenize(&text)
 			.iter()
-			.take(MAX_LEARN_TOKENS)
+			.take(self.limits.tokens_per_lesson)
 			.map(|token| self.hash(token))
 			.collect();
 		let digest = self.message_digest(window);
@@ -95,21 +95,30 @@ impl BayesStore {
 		digest: &str,
 		spam: bool,
 	) -> Result<LearnOutcome, sqlx::Error> {
+		let limits = self.limits;
 		let mut tx = self.pool.begin().await?;
+		// A row that starts here is told how many token rows the account
+		// already holds, so an account that learned before the ledger existed
+		// is counted too.
 		sqlx::query(
-			"INSERT INTO bayes_learning (scope) VALUES ($1) ON CONFLICT (scope) DO NOTHING",
+			"INSERT INTO bayes_learning (scope, token_rows) \
+			 VALUES ($1, (SELECT COUNT(*) FROM bayes_token WHERE scope = $1)) \
+			 ON CONFLICT (scope) DO NOTHING",
 		)
 		.bind(scope)
 		.execute(&mut *tx)
 		.await?;
 		// The row lock serializes every lesson of the account, in this
 		// process and in any other.
-		let Some((enabled, entries)) = sqlx::query_as::<_, (bool, i64)>(
-			"SELECT enabled, entries FROM bayes_learning WHERE scope = $1 FOR UPDATE",
-		)
-		.bind(scope)
-		.fetch_optional(&mut *tx)
-		.await?
+		let Some((enabled, entries, token_rows, spent)) =
+			sqlx::query_as::<_, (bool, i64, i64, i64)>(
+				"SELECT enabled, entries, token_rows, \
+				 CASE WHEN budget_day = CURRENT_DATE THEN budget_tokens ELSE 0 END \
+				 FROM bayes_learning WHERE scope = $1 FOR UPDATE",
+			)
+			.bind(scope)
+			.fetch_optional(&mut *tx)
+			.await?
 		else {
 			// The account was removed between the two statements.
 			tx.rollback().await?;
@@ -134,37 +143,60 @@ impl BayesStore {
 			Some((_, counted)) => {
 				// Only the tokens that were counted are moved back.
 				let counted = usize::try_from(counted).unwrap_or(0).min(tokens.len());
-				let (ham, spam_delta) = if spam { (-1, 1) } else { (1, -1) };
-				adjust(&mut tx, scope, &tokens[..counted], ham, spam_delta).await?;
-				sqlx::query(
-					"UPDATE bayes_learned SET spam = $3, learned_at = now() WHERE scope = $1 AND digest = $2",
-				)
-				.bind(scope)
-				.bind(digest)
-				.bind(spam)
-				.execute(&mut *tx)
-				.await?;
-				bump(&mut tx, scope, Counter::Relearned { spam }).await?;
-				LearnOutcome::Relearned
+				if over_budget(spent, counted, &limits) {
+					bump(&mut tx, scope, Counter::Throttled).await?;
+					LearnOutcome::Throttled
+				} else {
+					let (ham, spam_delta) = if spam { (-1, 1) } else { (1, -1) };
+					adjust(&mut tx, scope, &tokens[..counted], ham, spam_delta).await?;
+					sqlx::query(
+						"UPDATE bayes_learned SET spam = $3, learned_at = now() WHERE scope = $1 AND digest = $2",
+					)
+					.bind(scope)
+					.bind(digest)
+					.bind(spam)
+					.execute(&mut *tx)
+					.await?;
+					spend(&mut tx, scope, 0, counted).await?;
+					bump(&mut tx, scope, Counter::Relearned { spam }).await?;
+					LearnOutcome::Relearned
+				}
 			}
-			None if entries >= MAX_LEARNED_PER_ACCOUNT => {
-				bump(&mut tx, scope, Counter::Refused).await?;
-				LearnOutcome::Refused
+			None if over_budget(spent, tokens.len(), &limits) => {
+				bump(&mut tx, scope, Counter::Throttled).await?;
+				LearnOutcome::Throttled
 			}
 			None => {
-				sqlx::query(
-					"INSERT INTO bayes_learned (scope, digest, spam, tokens) VALUES ($1, $2, $3, $4)",
+				let existing: i64 = sqlx::query_scalar(
+					"SELECT COUNT(*) FROM bayes_token WHERE scope = $1 AND token = ANY($2)",
 				)
 				.bind(scope)
-				.bind(digest)
-				.bind(spam)
-				.bind(i32::try_from(tokens.len()).unwrap_or(i32::MAX))
-				.execute(&mut *tx)
+				.bind(tokens)
+				.fetch_one(&mut *tx)
 				.await?;
-				let (ham, spam_delta) = if spam { (0, 1) } else { (1, 0) };
-				adjust(&mut tx, scope, tokens, ham, spam_delta).await?;
-				bump(&mut tx, scope, Counter::Learned { spam }).await?;
-				LearnOutcome::Learned
+				let new_rows = i64::try_from(tokens.len()).unwrap_or(i64::MAX) - existing;
+				if token_rows.saturating_add(new_rows) > limits.token_rows {
+					bump(&mut tx, scope, Counter::Refused).await?;
+					LearnOutcome::Refused
+				} else {
+					if entries >= limits.ledger_entries {
+						make_room(&mut tx, scope, limits.ledger_entries).await?;
+					}
+					sqlx::query(
+						"INSERT INTO bayes_learned (scope, digest, spam, tokens) VALUES ($1, $2, $3, $4)",
+					)
+					.bind(scope)
+					.bind(digest)
+					.bind(spam)
+					.bind(i32::try_from(tokens.len()).unwrap_or(i32::MAX))
+					.execute(&mut *tx)
+					.await?;
+					let (ham, spam_delta) = if spam { (0, 1) } else { (1, 0) };
+					adjust(&mut tx, scope, tokens, ham, spam_delta).await?;
+					spend(&mut tx, scope, new_rows, tokens.len()).await?;
+					bump(&mut tx, scope, Counter::Learned { spam }).await?;
+					LearnOutcome::Learned
+				}
 			}
 		};
 		tx.commit().await?;
@@ -172,13 +204,65 @@ impl BayesStore {
 	}
 }
 
+/// Whether `cost` more tokens would take the account past its day's budget.
+fn over_budget(spent: i64, cost: usize, limits: &super::LearnLimits) -> bool {
+	spent.saturating_add(i64::try_from(cost).unwrap_or(i64::MAX)) > limits.tokens_per_day
+}
+
+/// Forget the oldest tenth of the account's ledger (at least one message) to
+/// make room for a new one. The corpus keeps what those messages taught.
+async fn make_room(
+	tx: &mut Transaction<'_, Postgres>,
+	scope: &str,
+	ledger_entries: i64,
+) -> Result<(), sqlx::Error> {
+	let batch = (ledger_entries / 10).max(1);
+	let forgotten = sqlx::query(
+		"DELETE FROM bayes_learned WHERE scope = $1 AND digest IN \
+		 (SELECT digest FROM bayes_learned WHERE scope = $1 ORDER BY learned_at LIMIT $2)",
+	)
+	.bind(scope)
+	.bind(batch)
+	.execute(&mut **tx)
+	.await?
+	.rows_affected();
+	sqlx::query("UPDATE bayes_learning SET entries = GREATEST(entries - $2, 0) WHERE scope = $1")
+		.bind(scope)
+		.bind(i64::try_from(forgotten).unwrap_or(i64::MAX))
+		.execute(&mut **tx)
+		.await?;
+	Ok(())
+}
+
+/// Record `new_rows` token rows and `cost` tokens written on today's budget.
+async fn spend(
+	tx: &mut Transaction<'_, Postgres>,
+	scope: &str,
+	new_rows: i64,
+	cost: usize,
+) -> Result<(), sqlx::Error> {
+	sqlx::query(
+		"UPDATE bayes_learning SET token_rows = token_rows + $2, budget_day = CURRENT_DATE, \
+		 budget_tokens = CASE WHEN budget_day = CURRENT_DATE THEN budget_tokens + $3 ELSE $3 END, \
+		 updated_at = now() WHERE scope = $1",
+	)
+	.bind(scope)
+	.bind(new_rows)
+	.bind(i64::try_from(cost).unwrap_or(i64::MAX))
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 /// The counters one lesson moves.
 #[derive(Clone, Copy)]
 enum Counter {
 	/// A decision that repeated what the ledger held.
 	Repeated,
-	/// A decision refused because the ledger was full.
+	/// A decision refused because the account held as many token rows as it may.
 	Refused,
+	/// A decision held back because the account spent its day's tokens.
+	Throttled,
 	/// A message new to the ledger, on the given side.
 	Learned { spam: bool },
 	/// A verdict taken back, and the new one on the given side.
@@ -197,6 +281,9 @@ async fn bump(
 		}
 		Counter::Refused => {
 			"UPDATE bayes_learning SET refused = refused + 1, updated_at = now() WHERE scope = $1"
+		}
+		Counter::Throttled => {
+			"UPDATE bayes_learning SET throttled = throttled + 1, updated_at = now() WHERE scope = $1"
 		}
 		Counter::Learned { spam: true } => {
 			"UPDATE bayes_learning SET spam_learned = spam_learned + 1, entries = entries + 1, \

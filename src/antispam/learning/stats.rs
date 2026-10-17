@@ -23,20 +23,43 @@ pub struct LearningStats {
 	pub unlearned: i64,
 	/// Decisions that repeated what the corpus already held.
 	pub repeated: i64,
-	/// Decisions refused because the ledger of the account was full.
+	/// Decisions refused because the account held as many token rows as it
+	/// may.
 	pub refused: i64,
+	/// Decisions held back because the account spent its day's tokens.
+	pub throttled: i64,
 	/// Messages the ledger of the account holds.
 	pub entries: i64,
+	/// Token rows the account holds.
+	pub token_rows: i64,
+	/// Messages in the corpus that the ledger does not hold: taught before
+	/// the ledger existed or by the server itself. They count again if the
+	/// user moves them, and cannot be taken back.
+	pub unrecorded: i64,
 	/// Spam messages the corpus of the account holds, from any source.
 	pub corpus_spam: i64,
 	/// Ham messages the corpus of the account holds, from any source.
 	pub corpus_ham: i64,
 }
 
-type Row = (String, bool, i64, i64, i64, i64, i64, i64, i64, i64);
+type Row = (
+	String,
+	bool,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+	i64,
+);
 
 impl From<Row> for LearningStats {
 	fn from(row: Row) -> Self {
+		let (corpus_spam, corpus_ham, entries) = (row.10, row.11, row.8);
 		LearningStats {
 			account: row.0,
 			enabled: row.1,
@@ -45,9 +68,15 @@ impl From<Row> for LearningStats {
 			unlearned: row.4,
 			repeated: row.5,
 			refused: row.6,
-			entries: row.7,
-			corpus_spam: row.8,
-			corpus_ham: row.9,
+			throttled: row.7,
+			entries,
+			token_rows: row.9,
+			unrecorded: corpus_spam
+				.saturating_add(corpus_ham)
+				.saturating_sub(entries)
+				.max(0),
+			corpus_spam,
+			corpus_ham,
 		}
 	}
 }
@@ -57,7 +86,7 @@ macro_rules! select {
 	($tail:literal) => {
 		concat!(
 			"SELECT l.scope, l.enabled, l.spam_learned, l.ham_learned, l.unlearned, \
-			 l.repeated, l.refused, l.entries, \
+			 l.repeated, l.refused, l.throttled, l.entries, l.token_rows, \
 			 COALESCE(c.spam_messages, 0), COALESCE(c.ham_messages, 0) \
 			 FROM bayes_learning l LEFT JOIN bayes_corpus c ON c.scope = l.scope ",
 			$tail
@@ -77,6 +106,8 @@ impl BayesStore {
 			return Ok(row.into());
 		}
 		let corpus = self.corpus(account).await?;
+		let corpus_spam = i64::try_from(corpus.spam_messages).unwrap_or(i64::MAX);
+		let corpus_ham = i64::try_from(corpus.ham_messages).unwrap_or(i64::MAX);
 		Ok(LearningStats {
 			account: account.to_string(),
 			enabled: true,
@@ -85,9 +116,12 @@ impl BayesStore {
 			unlearned: 0,
 			repeated: 0,
 			refused: 0,
+			throttled: 0,
 			entries: 0,
-			corpus_spam: i64::try_from(corpus.spam_messages).unwrap_or(i64::MAX),
-			corpus_ham: i64::try_from(corpus.ham_messages).unwrap_or(i64::MAX),
+			token_rows: 0,
+			unrecorded: corpus_spam.saturating_add(corpus_ham),
+			corpus_spam,
+			corpus_ham,
 		})
 	}
 

@@ -51,8 +51,8 @@ fn status_switch_and_reset() {
 		status,
 		json!({
 			"account": name, "enabled": true, "spam_learned": 0, "ham_learned": 0,
-			"unlearned": 0, "repeated": 0, "refused": 0, "entries": 0,
-			"corpus_spam": 0, "corpus_ham": 0,
+			"unlearned": 0, "repeated": 0, "refused": 0, "throttled": 0, "entries": 0,
+			"token_rows": 0, "unrecorded": 0, "corpus_spam": 0, "corpus_ham": 0,
 		}),
 		"an account that never learned reads as on with zero counters"
 	);

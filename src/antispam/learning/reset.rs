@@ -17,7 +17,7 @@ use crate::antispam::corpus::{BayesStore, SHARED};
 /// What [`purge`] leaves of the row of `bayes_learning`.
 #[derive(Clone, Copy)]
 pub(crate) enum Keep {
-	/// Zero the counters and keep `enabled`.
+	/// Zero the counters and keep `enabled` and the day's token budget.
 	Switch,
 	/// Delete the row.
 	Nothing,
@@ -36,7 +36,7 @@ pub(crate) async fn purge(
 		Keep::Nothing => "DELETE FROM bayes_learning WHERE scope = $1",
 		Keep::Switch => {
 			"UPDATE bayes_learning SET spam_learned = 0, ham_learned = 0, unlearned = 0, \
-			 repeated = 0, refused = 0, entries = 0, updated_at = now() WHERE scope = $1"
+			 repeated = 0, refused = 0, throttled = 0, entries = 0, token_rows = 0, updated_at = now() WHERE scope = $1"
 		}
 	};
 	sqlx::query(first).bind(scope).execute(&mut **tx).await?;

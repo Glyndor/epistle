@@ -192,7 +192,7 @@ fn shown(text: &str) -> String {
 /// One account as a text line: tab-separated `key=value` fields.
 fn line(row: &LearningStats) -> String {
 	format!(
-		"{}\tlearning={}\tspam={}\tham={}\tunlearned={}\trepeated={}\trefused={}\tmessages={}\tcorpus-spam={}\tcorpus-ham={}",
+		"{}\tlearning={}\tspam={}\tham={}\tunlearned={}\trepeated={}\trefused={}\tthrottled={}\tmessages={}\ttoken-rows={}\tunrecorded={}\tcorpus-spam={}\tcorpus-ham={}",
 		shown(&row.account),
 		if row.enabled { "on" } else { "off" },
 		row.spam_learned,
@@ -200,7 +200,10 @@ fn line(row: &LearningStats) -> String {
 		row.unlearned,
 		row.repeated,
 		row.refused,
+		row.throttled,
 		row.entries,
+		row.token_rows,
+		row.unrecorded,
 		row.corpus_spam,
 		row.corpus_ham,
 	)

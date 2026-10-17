@@ -110,6 +110,8 @@ pub struct BayesStore {
 	/// The queue and workers that train the shared corpus from SMTP,
 	/// started by the first job. Clones share it.
 	shared: Arc<OnceLock<SharedTraining>>,
+	/// The ceilings of [`BayesStore::learn`].
+	pub(super) limits: super::learning::LearnLimits,
 }
 
 impl BayesStore {
@@ -123,6 +125,7 @@ impl BayesStore {
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
+			limits: super::learning::LearnLimits::default(),
 		})
 	}
 
@@ -136,6 +139,7 @@ impl BayesStore {
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
+			limits: super::learning::LearnLimits::default(),
 		}
 	}
 
@@ -149,7 +153,14 @@ impl BayesStore {
 			tombstones: self.tombstones.clone(),
 			scope_lock: self.scope_lock.clone(),
 			shared: Arc::new(OnceLock::new()),
+			limits: self.limits,
 		}
+	}
+
+	/// This store with other ceilings for [`BayesStore::learn`].
+	pub fn with_learn_limits(mut self, limits: super::learning::LearnLimits) -> Self {
+		self.limits = limits;
+		self
 	}
 
 	/// The shared tombstone set the training worker consults before

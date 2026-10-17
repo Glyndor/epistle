@@ -32,9 +32,46 @@ pub use stats::LearningStats;
 /// of short distinct words costs the same as an ordinary message.
 pub const MAX_LEARN_TOKENS: usize = 5_000;
 
-/// Messages one account may hold in its ledger. At the limit the account
-/// keeps its corpus and learns nothing new until the operator resets it.
+/// Messages one account may hold in its ledger. At the limit the oldest
+/// tenth is forgotten to make room: the corpus keeps what they taught, and
+/// only the ability to take those lessons back is lost.
 pub const MAX_LEARNED_PER_ACCOUNT: i64 = 100_000;
+
+/// Token rows one account may hold in `bayes_token`, about 100 MB with their
+/// index. A lesson that would add rows past it is refused, so what an account
+/// can grow is bounded however many messages it sends.
+pub const MAX_TOKEN_ROWS_PER_ACCOUNT: i64 = 250_000;
+
+/// Tokens the lessons of one account may write in a day (the rows they touch,
+/// new or not). A message of ordinary size is a few hundred tokens, so this
+/// leaves thousands of lessons a day while a hostile one at the per-lesson
+/// cap spends it in 200.
+pub const MAX_TOKENS_PER_DAY: i64 = 1_000_000;
+
+/// The ceilings [`BayesStore::learn`](crate::antispam::corpus::BayesStore::learn)
+/// enforces. The defaults are the constants above; tests lower them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LearnLimits {
+	/// Unique tokens kept from one message.
+	pub tokens_per_lesson: usize,
+	/// Messages kept in the ledger of one account.
+	pub ledger_entries: i64,
+	/// Token rows one account may hold.
+	pub token_rows: i64,
+	/// Tokens one account may write in a day.
+	pub tokens_per_day: i64,
+}
+
+impl Default for LearnLimits {
+	fn default() -> Self {
+		LearnLimits {
+			tokens_per_lesson: MAX_LEARN_TOKENS,
+			ledger_entries: MAX_LEARNED_PER_ACCOUNT,
+			token_rows: MAX_TOKEN_ROWS_PER_ACCOUNT,
+			tokens_per_day: MAX_TOKENS_PER_DAY,
+		}
+	}
+}
 
 /// What [`BayesStore::learn`] did with one verdict.
 ///
@@ -50,8 +87,10 @@ pub enum LearnOutcome {
 	Repeated,
 	/// Learning is switched off for the account; nothing moved.
 	Disabled,
-	/// The ledger of the account is full; nothing moved.
+	/// The account holds as many token rows as it may; nothing moved.
 	Refused,
+	/// The account spent its day's tokens; nothing moved.
+	Throttled,
 	/// The scope cannot learn from a user (the shared one, or one being
 	/// removed); nothing moved.
 	Skipped,

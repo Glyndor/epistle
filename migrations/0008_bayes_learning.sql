@@ -35,9 +35,16 @@ CREATE TABLE bayes_learning (
 	unlearned     BIGINT NOT NULL DEFAULT 0,
 	-- Decisions that repeated what the corpus already held.
 	repeated      BIGINT NOT NULL DEFAULT 0,
-	-- Decisions refused because the account's table of learned messages is full.
+	-- Decisions refused because the account holds as many token rows as it may.
 	refused       BIGINT NOT NULL DEFAULT 0,
+	-- Decisions held back because the account spent its day's tokens.
+	throttled     BIGINT NOT NULL DEFAULT 0,
 	-- Rows this account holds in bayes_learned.
 	entries       BIGINT NOT NULL DEFAULT 0,
+	-- Rows this account holds in bayes_token.
+	token_rows    BIGINT NOT NULL DEFAULT 0,
+	-- Tokens the account's lessons have written on budget_day.
+	budget_day    DATE NOT NULL DEFAULT CURRENT_DATE,
+	budget_tokens BIGINT NOT NULL DEFAULT 0,
 	updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
