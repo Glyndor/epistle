@@ -173,6 +173,14 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     list applies to all of them. A refused SCRAM exchange ends as an ordinary
     wrong password. If you rely on SCRAM for an account with two-factor
     authentication, that account now uses PLAIN or LOGIN.
+  * Security: SCIM now honours the domains of the API key. A key created with
+    `--domain` and the `scim` scope used to list, read, change the password of,
+    deactivate, create and delete accounts of every tenant. It now reaches only
+    the accounts that sit entirely inside its domains (the others answer 404),
+    and a user created or replaced with an address outside them is refused
+    with 400. `POST /scim/v2/Users` also stops at the tenant's `max_accounts`
+    with 409, which SCIM used to skip. This was present in 0.12.0 and 0.12.1:
+    if you issued `scim` keys with `--domain`, rotate them.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000
 

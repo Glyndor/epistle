@@ -335,6 +335,14 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+SCIM obeys the same confinement. A key with `scim` and `domains` lists, reads,
+creates, replaces, patches (including `active` and `password`) and deletes only
+the accounts that sit entirely inside its domains. An account outside them
+answers `404` on every `/scim/v2/Users` route, and a `POST` or `PUT` that names
+an address outside them is refused with `400`. Before 0.12.2 SCIM ignored
+`domains`, so a key meant for one tenant reached all of them: if you issued
+`scim` keys with `--domain`, rotate them and review the accounts they changed.
+
 ### What each key scope reaches
 
 Scopes are independent: holding one does not grant another.
@@ -531,6 +539,11 @@ not supported — the account name is the directory primary key).
 `PATCH` accepts only `replace` of `active` and `password`. Every
 response carries `Content-Type: application/scim+json`; errors follow
 RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
+
+A key confined to domains (`api-key create --domain`) sees and changes only
+the accounts inside them (see [Domain-confined API keys](#domain-confined-api-keys-multi-tenancy)),
+and `POST /Users` honours a tenant's `max_accounts` cap with `409`, as
+`POST /api/v1/accounts` does.
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes). The server

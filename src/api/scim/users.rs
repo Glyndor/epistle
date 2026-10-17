@@ -11,16 +11,17 @@
 //! renaming a primary key would orphan every dependent record (mailbox,
 //! quota, scram credentials).
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
 use crate::api::audit::{self, AuditEvent};
-use crate::api::state::ApiState;
+use crate::api::domain_scope::DomainScope;
+use crate::api::state::{ApiState, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{DynamicAccount, StoreError};
 
@@ -73,6 +74,36 @@ fn lookup(state: &ApiState, name: &str) -> Result<DynamicAccount, ScimError> {
 		.store()
 		.dynamic(name)
 		.ok_or_else(|| ScimError::not_found(format!("no such user \"{name}\"")))
+}
+
+/// Look up a dynamic account the calling key may act on. A key confined to
+/// some domains (`--domain` on `api-key add`) provisions the accounts that sit
+/// entirely inside them and nobody else's. An account outside the scope is
+/// reported exactly like one that does not exist, so the key cannot learn
+/// another tenant's account names from the status code.
+fn lookup_in_scope(
+	state: &ApiState,
+	scope: &DomainScope,
+	name: &str,
+) -> Result<DynamicAccount, ScimError> {
+	let account = lookup(state, name)?;
+	if scope.admits_account(account.addresses.iter().map(String::as_str)) {
+		Ok(account)
+	} else {
+		Err(ScimError::not_found(format!("no such user \"{name}\"")))
+	}
+}
+
+/// Refuse addresses the calling key may not give out: a confined key cannot
+/// create or move an account into a domain it was not given.
+fn require_addresses_in_scope(scope: &DomainScope, addresses: &[String]) -> Result<(), ScimError> {
+	if scope.admits_account(addresses.iter().map(String::as_str)) {
+		Ok(())
+	} else {
+		Err(ScimError::invalid(
+			"address outside the domains this key may act on",
+		))
+	}
 }
 
 /// Map `StoreError` from a write path into the right SCIM error. `409` for
@@ -215,12 +246,19 @@ fn parse_user_name_eq(filter: &str) -> Result<String, ScimError> {
 
 pub async fn list_users(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Query(query): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let start_index = query.start_index.unwrap_or(1).max(1);
 	let count = query.count.unwrap_or(100).clamp(1, 200);
 
-	let users: Vec<DynamicAccount> = state.store().dynamic_accounts();
+	let scope = state.domain_scope(&auth);
+	let users: Vec<DynamicAccount> = state
+		.store()
+		.dynamic_accounts()
+		.into_iter()
+		.filter(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+		.collect();
 
 	let matched: Vec<DynamicAccount> = if let Some(filter) = query.filter.as_deref() {
 		let needle = parse_user_name_eq(filter)?;
@@ -246,12 +284,22 @@ pub async fn list_users(
 /// resource on success.
 pub async fn create_user(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let name = crate::directory_store::account_name(&body.user_name);
 	if name.is_empty() {
 		return Err(ScimError::invalid("userName must not be empty"));
 	}
+	// The domains and the tenant's account cap are checked before the
+	// password, so a caller cannot use the password rejection to probe which
+	// addresses another tenant already has.
+	let addresses = resolve_addresses(&body.emails, &[])?;
+	require_addresses_in_scope(&state.domain_scope(&auth), &addresses)?;
+	state
+		.tenant_limits()
+		.check_account_creation(state.store(), &addresses)
+		.map_err(ScimError::conflict)?;
 
 	let (password_hash, scram) = if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
@@ -266,7 +314,6 @@ pub async fn create_user(
 		(String::new(), None)
 	};
 
-	let addresses = resolve_addresses(&body.emails, &[])?;
 	let active = body.active;
 	let account = DynamicAccount {
 		name: name.clone(),
@@ -288,9 +335,10 @@ pub async fn create_user(
 /// `GET /Users/{id}`.
 pub async fn get_user(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let account = lookup(&state, &id)?;
+	let account = lookup_in_scope(&state, &state.domain_scope(&auth), &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&account)))
 }
 
@@ -302,8 +350,10 @@ pub async fn get_user(
 /// an operator-initiated one.
 pub async fn delete_user(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
+	lookup_in_scope(&state, &state.domain_scope(&auth), &id)?;
 	let data_dir = state.data_dir().to_path_buf();
 	let counts = crate::directory_store::removal::remove_account(
 		state.store(),
@@ -326,16 +376,22 @@ pub async fn delete_user(
 /// with the rendered resource.
 pub async fn put_user(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let existing = lookup(&state, &id)?;
+	let scope = state.domain_scope(&auth);
+	let existing = lookup_in_scope(&state, &scope, &id)?;
 	if crate::directory_store::account_name(&body.user_name) != id {
 		return Err(ScimError::invalid(
 			"userName cannot be changed via PUT; use DELETE then POST",
 		));
 	}
 
+	// The new addresses are checked before anything is written, so a refused
+	// replace leaves the password as it was.
+	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
+	require_addresses_in_scope(&scope, &addresses)?;
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
 		let hash = hash_password(plain, state.store())?;
@@ -345,8 +401,6 @@ pub async fn put_user(
 			.set_password_hash(&id, hash, scram)
 			.map_err(store_to_scim)?;
 	}
-
-	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
 	state
 		.store()
 		.replace_account(
@@ -381,14 +435,16 @@ pub async fn put_user(
 /// `PUT` with the new full list.
 pub async fn patch_user(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 	Json(body): Json<PatchRequest>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let _existing = lookup(&state, &id)?;
+	let scope = state.domain_scope(&auth);
+	lookup_in_scope(&state, &scope, &id)?;
 	for op in &body.operations {
 		apply_operation(&state, &id, op)?;
 	}
-	let stored = lookup(&state, &id)?;
+	let stored = lookup_in_scope(&state, &scope, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 
