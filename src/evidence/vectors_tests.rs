@@ -73,6 +73,7 @@ fn samples() -> Vec<(&'static str, String)> {
 		spool_id: id(),
 		reason: "the server stopped before the message was queued".into(),
 		retain_days: 365,
+		recipients: Vec::new(),
 	});
 	let purge = Entry::Purge(Purge {
 		from: "2026-10-12".into(),

@@ -210,8 +210,10 @@ impl Chain {
 
 	/// [`Chain::append`] at a fixed `time` (never earlier than the last
 	/// record): for the sweeper, which runs in the same task as the sealing,
-	/// and for tests.
-	pub(crate) fn append_at(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
+	/// and for tests, including the ones of the binary that live outside the
+	/// crate and need a record from the past. Not part of the interface.
+	#[doc(hidden)]
+	pub fn append_at(&self, time: u64, entry: Entry) -> std::io::Result<[u8; 32]> {
 		self.append_with(|| Ok(time), entry)
 	}
 

@@ -86,6 +86,8 @@ pub(super) fn write(out: &Path, selector: &Selector) -> std::io::Result<()> {
 struct Held {
 	accepted: Vec<(Day, Accepted)>,
 	abandoned: bool,
+	/// Recipients an operator closed one by one (lowercase).
+	closed: Vec<String>,
 	outcomes: Vec<(String, OutcomeKind)>,
 }
 
@@ -282,7 +284,16 @@ pub(super) fn complete(
 					.accepted
 					.push((day, accepted)),
 				Entry::Abandoned(abandoned) => {
-					held.entry(abandoned.spool_id).or_default().abandoned = true
+					let message = held.entry(abandoned.spool_id).or_default();
+					match abandoned.recipients.is_empty() {
+						true => message.abandoned = true,
+						false => message.closed.extend(
+							abandoned
+								.recipients
+								.iter()
+								.map(|recipient| recipient.to_ascii_lowercase()),
+						),
+					}
 				}
 				Entry::Outcome(outcome) => held
 					.entry(outcome.spool_id)
@@ -373,6 +384,22 @@ pub(super) fn complete(
 			delivery.abandoned += covered.len();
 			continue;
 		}
+		for named in &message.closed {
+			let known = accepted
+				.recipients
+				.iter()
+				.any(|recipient| recipient.eq_ignore_ascii_case(named));
+			if !known {
+				return Err(format!(
+					"{id}: closed for a recipient it was not accepted for"
+				));
+			}
+			if message.outcomes.iter().any(|(outcome, _)| outcome == named) {
+				return Err(format!(
+					"{id}: closed for {named}, and yet it has an outcome for it"
+				));
+			}
+		}
 		for (outcome, _) in &message.outcomes {
 			let known = accepted
 				.recipients
@@ -385,6 +412,10 @@ pub(super) fn complete(
 			}
 		}
 		for recipient in &covered {
+			if message.closed.contains(recipient) {
+				delivery.abandoned += 1;
+				continue;
+			}
 			let mut results = message
 				.outcomes
 				.iter()

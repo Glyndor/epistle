@@ -389,7 +389,12 @@ pub(super) fn run(
 			reason,
 			yes,
 			json,
-		} => super::evidence_abandon::run(&config.data_dir, spool_id, &reason, yes, json, out),
+		} => super::evidence_abandon::run(
+			&config.data_dir,
+			(spool_id, &reason),
+			(yes, json, now),
+			out,
+		),
 		EvidenceCli::Acknowledge { reason, yes, json } => {
 			super::evidence_verify::acknowledge(&root, &reason, yes, now, json, out)
 		}

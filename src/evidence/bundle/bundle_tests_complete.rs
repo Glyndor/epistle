@@ -31,6 +31,7 @@ pub(super) fn fixture() -> Fixture {
 				spool_id: Uuid::from_u128(1),
 				reason: "the server stopped before the message was queued".into(),
 				retain_days: 365,
+				recipients: Vec::new(),
 			}),
 		)
 		.expect("abandoned");

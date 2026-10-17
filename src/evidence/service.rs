@@ -330,6 +330,7 @@ impl EvidenceService {
 			spool_id,
 			reason: bounded(reason),
 			retain_days: super::policy::DEFAULT_DAYS,
+			recipients: Vec::new(),
 		}))?;
 		self.quota.ended(account, spool_id, self.today());
 		Ok(())

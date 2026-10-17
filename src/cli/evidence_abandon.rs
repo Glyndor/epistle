@@ -3,9 +3,10 @@
 //!
 //! A submission that is retried leaves behind the acceptance of the attempt
 //! that never reached the queue (a stop between the record and the queue, an
-//! error that was not clear). It has no outcome and no abandonment, and every
-//! bundle of the same message or recipient fails on it. This closes it, with
-//! the operator's reason, in the chain.
+//! error that was not clear), or the recipients of a message that were left
+//! without an outcome while the others were settled. They have no outcome and
+//! no abandonment, and every bundle of the same message or recipient fails on
+//! them. This closes them, with the operator and the reason, in the chain.
 
 use std::io::Write;
 use std::path::Path;
@@ -19,45 +20,164 @@ use crate::evidence::ack::Operator;
 use crate::evidence::chain::Chain;
 use crate::evidence::record::{Abandoned, Entry, bounded};
 
+/// The youngest an acceptance can be to be closed: a submission writes its
+/// acceptance before the entry is in the queue, and a message still on its way
+/// there is not an orphan.
+const MIN_AGE_SECS: u64 = 600;
+
 /// What the chain says of one message.
 #[derive(Default)]
 struct Told {
-	accepted: Option<u32>,
-	closed: bool,
+	/// Retention days, the time and the recipients of its acceptance.
+	accepted: Option<(u32, u64, Vec<String>)>,
+	/// Recipients with an outcome or closed one by one (lowercase).
+	ended: Vec<String>,
+	/// The whole message was abandoned.
+	abandoned: bool,
+}
+
+impl Told {
+	/// The recipients nothing has ended.
+	fn pending(&self) -> Vec<String> {
+		let Some((_, _, recipients)) = &self.accepted else {
+			return Vec::new();
+		};
+		match self.abandoned {
+			true => Vec::new(),
+			false => recipients
+				.iter()
+				.filter(|recipient| !self.ended.contains(&recipient.to_ascii_lowercase()))
+				.cloned()
+				.collect(),
+		}
+	}
 }
 
 fn told(root: &Path, id: Uuid) -> std::io::Result<Told> {
 	let mut told = Told::default();
 	let chain = Chain::open(root)?;
 	for day in chain.days()? {
-		crate::evidence::verify::walk_day(root, day, None, |_, record, _| match &record.entry {
-			Entry::Accepted(accepted) if accepted.spool_id == id => {
-				told.accepted = Some(accepted.retention.days);
+		// Past the breaks an operator acknowledged, as the verification is: a
+		// break nobody did is an error and nothing is closed on it. A day is
+		// read again after each break gone past, so this only ever sets.
+		crate::evidence::ack::walk_day_acknowledged(root, day, |_, record, _| {
+			match &record.entry {
+				Entry::Accepted(accepted) if accepted.spool_id == id => {
+					told.accepted = Some((
+						accepted.retention.days,
+						record.time,
+						accepted.recipients.clone(),
+					));
+				}
+				Entry::Outcome(outcome) if outcome.spool_id == id => {
+					let recipient = outcome.recipient.to_ascii_lowercase();
+					if !told.ended.contains(&recipient) {
+						told.ended.push(recipient);
+					}
+				}
+				Entry::Abandoned(abandoned) if abandoned.spool_id == id => {
+					match abandoned.recipients.is_empty() {
+						true => told.abandoned = true,
+						false => {
+							for recipient in &abandoned.recipients {
+								let recipient = recipient.to_ascii_lowercase();
+								if !told.ended.contains(&recipient) {
+									told.ended.push(recipient);
+								}
+							}
+						}
+					}
+				}
+				_ => {}
 			}
-			Entry::Outcome(outcome) if outcome.spool_id == id => told.closed = true,
-			Entry::Abandoned(abandoned) if abandoned.spool_id == id => told.closed = true,
-			_ => {}
 		})
 		.map_err(|at| std::io::Error::new(std::io::ErrorKind::InvalidData, at.to_string()))?;
 	}
 	Ok(told)
 }
 
+/// Why a message is left as it is.
+enum Refusal {
+	NoAcceptance,
+	NothingPending,
+	TooRecent,
+}
+
+impl Refusal {
+	fn say(&self, id: Uuid) -> String {
+		match self {
+			Self::NoAcceptance => format!("{id}: no acceptance of this message in the log"),
+			Self::NothingPending => {
+				format!("{id}: every recipient already has an outcome or was closed")
+			}
+			Self::TooRecent => format!(
+				"{id}: accepted less than {} minutes ago; it may still be on its way to the queue",
+				MIN_AGE_SECS / 60
+			),
+		}
+	}
+}
+
+/// What to close for `id` on what the chain says now: the recipients that
+/// have no ending (none named when it is all of them), or why not.
+fn to_close(told: &Told, now: u64) -> Result<(u32, Vec<String>), Refusal> {
+	let Some((days, time, recipients)) = &told.accepted else {
+		return Err(Refusal::NoAcceptance);
+	};
+	let pending = told.pending();
+	if pending.is_empty() {
+		return Err(Refusal::NothingPending);
+	}
+	if now.saturating_sub(*time) < MIN_AGE_SECS {
+		return Err(Refusal::TooRecent);
+	}
+	let all = pending.len() == recipients.len();
+	Ok((*days, if all { Vec::new() } else { pending }))
+}
+
+/// Write the closing of `id`, if there is still something to close. A message
+/// the queue holds is settled by the worker. What the chain says is read
+/// again, and the record written, under the spool's lock and with the queue
+/// seen empty: a worker that delivered meanwhile wrote its outcome before it
+/// let go of the entry, so it is seen here. Anything but a clean "not there"
+/// leaves the acceptance as it is.
+fn close(
+	data_dir: &Path,
+	(root, id): (&Path, Uuid),
+	why: &str,
+	now: u64,
+) -> std::io::Result<Result<(), Refusal>> {
+	crate::storage::FsSpool::open(data_dir).and_then(|spool| {
+		spool.while_absent(id, || {
+			let fresh = told(root, id)?;
+			let (days, recipients) = match to_close(&fresh, now) {
+				Ok(close) => close,
+				Err(refusal) => return Ok(Err(refusal)),
+			};
+			Chain::open(root)?.append(Entry::Abandoned(Abandoned {
+				spool_id: id,
+				reason: bounded(why),
+				retain_days: days,
+				recipients,
+			}))?;
+			Ok(Ok(()))
+		})
+	})
+}
+
 /// Close the acceptance of `id` under `data_dir`.
 pub(super) fn run(
 	data_dir: &Path,
-	id: Uuid,
-	reason: &str,
-	yes: bool,
-	as_json: bool,
+	(id, reason): (Uuid, &str),
+	(yes, as_json, now): (bool, bool, u64),
 	out: &mut impl Write,
 ) -> ExitCode {
 	let root = crate::evidence::service::root_of(data_dir);
 	if !root.is_dir() {
 		return super::exit::refused("there is no evidence log yet");
 	}
-	let reason = reason.trim();
-	if reason.is_empty() {
+	let reason = clean(reason);
+	if reason.trim().is_empty() {
 		return super::exit::refused("--reason must say why the acceptance is closed");
 	}
 	let operator = match Operator::current(&root) {
@@ -70,7 +190,7 @@ pub(super) fn run(
 			return ExitCode::FAILURE;
 		}
 	};
-	let told = match told(&root, id) {
+	let seen = match told(&root, id) {
 		Ok(told) => told,
 		Err(error) => {
 			super::style::error(format_args!(
@@ -80,53 +200,36 @@ pub(super) fn run(
 			return ExitCode::FAILURE;
 		}
 	};
-	let Some(days) = told.accepted else {
-		return super::exit::refused(format_args!(
-			"{id}: no acceptance of this message in the log"
-		));
-	};
-	if told.closed {
-		return super::exit::refused(format_args!(
-			"{id}: it already has an outcome or was abandoned"
-		));
+	if let Err(refusal) = to_close(&seen, now) {
+		return super::exit::refused(refusal.say(id));
 	}
 	let question = format!(
-		"Close the acceptance {id}? It has no outcome and is not in the queue; the record says {} \
-		 closed it, and why. [y/N] ",
+		"Close the acceptance {id} for {}? It has no outcome and is not in the queue; the record \
+		 says {} closed it, and why. [y/N] ",
+		sanitize(&seen.pending().join(", ")),
 		sanitize(operator.as_str())
 	);
 	if let Err(code) = super::prompt::confirm_destructive("closing the acceptance", &question, yes)
 	{
 		return code;
 	}
-	let why = format!("closed by {}: {}", clean(operator.as_str()), clean(reason));
-	// A message the queue holds is settled by the worker. The check and the
-	// record are one step under the spool's lock; anything but a clean "not
-	// there" leaves the acceptance as it is.
-	let closed = crate::storage::FsSpool::open(data_dir).and_then(|spool| {
-		spool.while_absent(id, || {
-			Chain::open(&root).and_then(|chain| {
-				chain.append(Entry::Abandoned(Abandoned {
-					spool_id: id,
-					reason: bounded(&why),
-					retain_days: days,
-				}))
-			})
-		})
-	});
-	if let Err(error) = closed {
-		return match error.kind() {
-			std::io::ErrorKind::AlreadyExists => super::exit::refused(format_args!(
+	let why = format!("closed by {}: {reason}", clean(operator.as_str()));
+	let closed = close(data_dir, (&root, id), &why, now);
+	match closed {
+		Ok(Ok(())) => {}
+		Ok(Err(refusal)) => return super::exit::refused(refusal.say(id)),
+		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+			return super::exit::refused(format_args!(
 				"{id}: the queue holds it; its outcome will be recorded when it is delivered or given up"
-			)),
-			_ => {
-				super::style::error(format_args!(
-					"{id} was not closed: {}",
-					sanitize(&error.to_string())
-				));
-				ExitCode::FAILURE
-			}
-		};
+			));
+		}
+		Err(error) => {
+			super::style::error(format_args!(
+				"{id} was not closed: {}",
+				sanitize(&error.to_string())
+			));
+			return ExitCode::FAILURE;
+		}
 	}
 	if as_json {
 		return super::evidence::json(
@@ -146,3 +249,7 @@ fn clean(text: &str) -> String {
 		.take(256)
 		.collect()
 }
+
+#[cfg(test)]
+#[path = "evidence_abandon_tests.rs"]
+mod tests;

@@ -273,3 +273,113 @@ fn a_bundle_that_does_not_verify_tells_nothing_of_delivery() {
 		report.notes
 	);
 }
+
+/// Message 8 to two recipients: the first delivered, the second closed by an
+/// operator (or given another record by `second`).
+fn one_delivered_one_closed(second: impl FnOnce(&Chain)) -> Fixture {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let tsa = FakeTsa::new(at(DAY + 1, 1));
+	let fixture = Fixture { dir, key, tsa };
+	let chain = Chain::open(fixture.root()).expect("chain");
+	let Entry::Accepted(mut two) = accepted(8) else {
+		unreachable!()
+	};
+	two.recipients = vec!["first8@example.net".into(), "second8@example.net".into()];
+	chain
+		.append_at(at(DAY, 1), Entry::Accepted(two))
+		.expect("accepted");
+	let Entry::Outcome(mut first) = delivered(8) else {
+		unreachable!()
+	};
+	first.recipient = "first8@example.net".into();
+	chain
+		.append_at(at(DAY, 2), Entry::Outcome(first))
+		.expect("delivered");
+	second(&chain);
+	seal_closed_days(fixture.root(), &fixture.key, true, at(DAY + 1, 0)).expect("seal");
+	let paths = files(fixture.root(), Day(DAY));
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		fixture
+			.tsa
+			.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
+	fixture
+}
+
+fn closing(recipients: &[&str]) -> Entry {
+	Entry::Abandoned(crate::evidence::record::Abandoned {
+		spool_id: uuid::Uuid::from_u128(8),
+		reason: "closed by an operator".into(),
+		retain_days: 365,
+		recipients: recipients.iter().map(|r| (*r).to_string()).collect(),
+	})
+}
+
+#[test]
+fn a_recipient_closed_by_an_operator_is_counted_and_the_bundle_verifies() {
+	let fixture = one_delivered_one_closed(|chain| {
+		chain
+			.append_at(at(DAY, 3), closing(&["second8@example.net"]))
+			.expect("closing");
+	});
+	let delivery = delivery_of(&fixture, 8);
+	assert_eq!((delivery.delivered, delivery.abandoned), (1, 1));
+	assert!(!delivery.all_delivered());
+}
+
+#[test]
+fn a_recipient_closed_and_also_given_an_outcome_is_contradictory() {
+	let fixture = one_delivered_one_closed(|chain| {
+		chain
+			.append_at(at(DAY, 3), closing(&["first8@example.net"]))
+			.expect("closing");
+	});
+	let (_out, bundle) = export_of(&fixture, 8);
+	let report = checked(&fixture, &bundle);
+	assert!(
+		failures(&report)
+			.iter()
+			.any(|why| why.contains("closed for first8@example.net, and yet it has an outcome")),
+		"{:?}",
+		failures(&report)
+	);
+}
+
+#[test]
+fn a_closing_for_a_stranger_is_refused() {
+	let fixture = one_delivered_one_closed(|chain| {
+		chain
+			.append_at(
+				at(DAY, 3),
+				closing(&["second8@example.net", "nobody@example.net"]),
+			)
+			.expect("closing");
+	});
+	let (_out, bundle) = export_of(&fixture, 8);
+	let report = checked(&fixture, &bundle);
+	assert!(
+		failures(&report)
+			.iter()
+			.any(|why| why.contains("closed for a recipient it was not accepted for")),
+		"{:?}",
+		failures(&report)
+	);
+}
+
+#[test]
+fn a_recipient_left_without_an_ending_still_fails_the_bundle() {
+	let fixture = one_delivered_one_closed(|_| {});
+	let (_out, bundle) = export_of(&fixture, 8);
+	let report = checked(&fixture, &bundle);
+	assert!(
+		failures(&report)
+			.iter()
+			.any(|why| why.contains("no outcome for second8@example.net")),
+		"{:?}",
+		failures(&report)
+	);
+}

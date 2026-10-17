@@ -210,6 +210,11 @@ pub struct Abandoned {
 	pub reason: String,
 	/// Days this record must be retained.
 	pub retain_days: u32,
+	/// The recipients this closes, when it closes only some of them (an
+	/// operator closing what a cut-short submission left without an outcome,
+	/// while others of the same message were settled). Empty: every recipient.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub recipients: Vec<String>,
 }
 
 /// The note a purge leaves in the chain.

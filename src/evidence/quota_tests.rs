@@ -91,6 +91,7 @@ impl Log {
 			spool_id: id(n),
 			reason: "test".into(),
 			retain_days: 365,
+			recipients: Vec::new(),
 		}));
 	}
 }
