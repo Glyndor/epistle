@@ -309,7 +309,7 @@ impl LocalDelivery {
 		let mut redirects = if message.reverse_path.is_empty() {
 			Vec::new()
 		} else {
-			outcome.redirects
+			trace::deliverable(outcome.redirects)
 		};
 		redirects.extend(forwards);
 		if let Some(looped) = trace::forwarding_loop(message, delivered_to, &redirects) {
@@ -578,3 +578,7 @@ mod containment;
 #[cfg(test)]
 #[path = "delivery_tests_sieve_names.rs"]
 mod sieve_names;
+
+#[cfg(test)]
+#[path = "delivery_tests_redirects.rs"]
+mod redirect_tests;

@@ -33,4 +33,7 @@ mod interp_tests;
 #[path = "interp_tests_mailbox.rs"]
 mod interp_tests_mailbox;
 #[cfg(test)]
+#[path = "interp_tests_redirects.rs"]
+mod interp_tests_redirects;
+#[cfg(test)]
 mod parser_tests;

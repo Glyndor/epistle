@@ -6,6 +6,9 @@ use std::collections::BTreeSet;
 
 use super::ast::{Argument, Command};
 
+/// The most forwards one run of a script may ask for (`maxNumberRedirects`).
+pub const MAX_REDIRECTS: usize = 4;
+
 /// The delivery decision a script produces.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Outcome {
@@ -120,7 +123,19 @@ fn run(
 				}
 				"redirect" => {
 					if let Some(target) = first_str(args) {
-						outcome.redirects.push(expand(&target, vars));
+						// One run forwards to at most MAX_REDIRECTS addresses, and to
+						// an address once (RFC 5228 section 4.2 allows both limits).
+						// The action still counts as done, so the implicit keep is
+						// cancelled either way.
+						let target = expand(&target, vars);
+						if outcome.redirects.len() < MAX_REDIRECTS
+							&& !outcome
+								.redirects
+								.iter()
+								.any(|t| t.eq_ignore_ascii_case(&target))
+						{
+							outcome.redirects.push(target);
+						}
 						if !has_tag(args, "copy") {
 							*cancel_implicit = true;
 						}

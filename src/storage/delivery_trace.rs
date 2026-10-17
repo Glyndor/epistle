@@ -63,6 +63,22 @@ fn one_line(text: &str) -> String {
 	text.chars().filter(|c| !matches!(c, '\r' | '\n')).collect()
 }
 
+/// The addresses among `targets` that the outbound queue may be given as
+/// envelope recipients, each in its canonical form. A target comes from a
+/// Sieve script, which is text the account's user wrote; it is written into
+/// an `RCPT TO:<...>` line, so anything that is not one plain address is
+/// dropped here, where it would otherwise become a second SMTP command.
+pub(super) fn deliverable(targets: Vec<String>) -> Vec<String> {
+	targets
+		.into_iter()
+		.filter_map(|target| {
+			crate::smtp::address::Address::parse(&target)
+				.ok()
+				.map(|address| address.to_string())
+		})
+		.collect()
+}
+
 /// `targets` as the redirects of the delivery to `delivered_to`.
 pub(super) fn redirects(targets: Vec<String>, delivered_to: &str) -> Vec<Redirect> {
 	targets
