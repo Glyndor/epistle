@@ -110,6 +110,9 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("reports", &[], Done),
 	("suppression list", &[], Done),
 	("suppression add", &["gone@example.net"], Done),
+	("suppression show", &["gone@example.net"], Done),
+	("suppression export", &[], Done),
+	("suppression import", &["@TMP/sweep-suppression.txt"], Done),
 	("suppression remove", &["gone@example.net"], Done),
 	("account list", &[], Done),
 	(
@@ -355,6 +358,13 @@ fn every_leaf_honours_json() {
 		// with it present a configuration edit would try to restart the stack.
 		if path.starts_with("stack resources") {
 			write_compose(&env);
+		}
+		if *path == "suppression import" {
+			std::fs::write(
+				env.dir.path().join("sweep-suppression.txt"),
+				"imported@example.net\n",
+			)
+			.expect("write sweep-suppression.txt");
 		}
 		if *path == "attachments check" {
 			std::fs::write(

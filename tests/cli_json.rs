@@ -67,3 +67,6 @@ mod webhook_state;
 
 #[path = "cli_json/relay_state.rs"]
 mod relay_state;
+
+#[path = "cli_json/suppression_b.rs"]
+mod suppression_b;

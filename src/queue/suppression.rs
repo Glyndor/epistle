@@ -65,6 +65,25 @@ impl SuppressionList {
 		let _ = fs::write(self.path(address), marker(address, reason, now));
 	}
 
+	/// [`SuppressionList::suppress_because`] that reports a marker it could
+	/// not write, for a caller that must not claim an entry it did not record.
+	pub fn try_suppress_because(
+		&self,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<()> {
+		fs::write(self.path(address), marker(address, reason, now))
+	}
+
+	/// The global entry for `address`, if it is suppressed.
+	pub fn entry(&self, address: &str) -> Option<Suppressed> {
+		fs::read_to_string(self.path(address))
+			.ok()
+			.as_deref()
+			.and_then(parse_marker)
+	}
+
 	/// Every globally suppressed address with its date and reason, sorted.
 	pub fn entries(&self) -> Vec<Suppressed> {
 		read_entries(&self.dir)
@@ -102,6 +121,28 @@ impl SuppressionList {
 		if fs::create_dir_all(&dir).is_ok() {
 			let _ = fs::write(dir.join(digest_name(address)), marker(address, reason, now));
 		}
+	}
+
+	/// [`SuppressionList::suppress_for_because`] that reports what it could
+	/// not write.
+	pub fn try_suppress_for_because(
+		&self,
+		account: &str,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<()> {
+		let dir = self.account_dir(account);
+		fs::create_dir_all(&dir)?;
+		fs::write(dir.join(digest_name(address)), marker(address, reason, now))
+	}
+
+	/// The entry for `address` in `account`'s list, if it is suppressed there.
+	pub fn entry_for(&self, account: &str, address: &str) -> Option<Suppressed> {
+		fs::read_to_string(self.account_dir(account).join(digest_name(address)))
+			.ok()
+			.as_deref()
+			.and_then(parse_marker)
 	}
 
 	/// Every address suppressed for `account` with its date and reason, sorted.

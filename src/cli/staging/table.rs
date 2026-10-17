@@ -116,6 +116,14 @@ pub(crate) const STAGED: &[Staged] = &[
 		kind: Kind::WriteDir,
 	},
 	Staged {
+		command: &["suppression", "import"],
+		arg: "file",
+		kind: Kind::ReadFile {
+			limit: FILE_LIMIT,
+			secret: false,
+		},
+	},
+	Staged {
 		command: &["attachments", "check"],
 		arg: "file",
 		kind: Kind::ReadFile {

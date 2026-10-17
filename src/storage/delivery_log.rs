@@ -499,7 +499,7 @@ fn parse_duration_secs(
 /// codebase is `time::unix_now` only). The output is always UTC: an
 /// explicit `+HH:MM` offset is subtracted from the wall-clock fields, so
 /// a value like `2024-01-02T03:04:05+02:00` becomes `01:04:05 UTC`.
-fn parse_rfc3339(value: &str) -> Result<u64, String> {
+pub(crate) fn parse_rfc3339(value: &str) -> Result<u64, String> {
 	let (date, rest) = value
 		.split_once('T')
 		.ok_or_else(|| format!("since {value:?} is not RFC 3339 (no T separator)"))?;

@@ -317,3 +317,27 @@ fn the_path_of_check_is_found_among_the_global_flags() {
 		[message_found(4, "/tmp/m.eml")]
 	);
 }
+
+#[test]
+fn the_file_of_a_suppression_import_is_staged_as_a_read() {
+	let found = find(
+		&args(&[
+			"suppression",
+			"import",
+			"--account",
+			"bob",
+			"/root/list.csv",
+			"--dry-run",
+		]),
+		STAGED,
+	);
+	assert_eq!(found.len(), 1, "{found:?}");
+	assert_eq!(found[0].value, std::path::PathBuf::from("/root/list.csv"));
+	assert_eq!(
+		found[0].kind,
+		Kind::ReadFile {
+			limit: FILE_LIMIT,
+			secret: false
+		}
+	);
+}
