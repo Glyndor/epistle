@@ -150,6 +150,7 @@ fn compiled_rule_rejects_unknown_metric() {
 		threshold: 1,
 		window_secs: 60,
 		cooldown_secs: 60,
+		enabled: true,
 		webhook: true,
 		email: Vec::new(),
 	};

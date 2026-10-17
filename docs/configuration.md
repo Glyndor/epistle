@@ -813,6 +813,7 @@ window.
 | `webhook` | When `true`, fire a `metric_alert` webhook event. Requires `[webhook]`. |
 | `email` | One email per entry. The alert is queued as an outbound message for each address (delivered through the queue worker like any other mail). |
 | `cooldown_secs` | Minimum seconds between consecutive fires. Must be `> 0`. |
+| `enabled` | Default `true`. With `false` the rule stays in the file but takes no samples and never fires. `epistle alert disable\|enable` edits it. |
 
 Example: a 50-bounce-storm alarm, paging on webhook and email, with a 15-min
 cooldown to keep the noise down once it has fired.
