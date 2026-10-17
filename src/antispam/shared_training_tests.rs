@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::antispam::training_queue::MAX_TRAINING_BYTES;
 
 pub(super) fn v4(c: u8, d: u8) -> Option<IpAddr> {
 	Some(IpAddr::V4(Ipv4Addr::new(192, 0, c, d)))
@@ -319,10 +320,14 @@ fn without_a_source_only_the_queue_bounds_the_job() {
 #[tokio::test]
 async fn a_job_keeps_only_the_window_of_a_huge_message() {
 	let (queue, mut receiver, _budget) = SharedTraining::bounded(4);
-	let huge = vec![b'a'; 3 * MAX_TRAINING_BYTES];
+	let mut huge = vec![b'a'; 3 * MAX_TRAINING_BYTES];
+	huge[..5].copy_from_slice(b"start");
+	let end = huge.len();
+	huge[end - 3..].copy_from_slice(b"end");
 	assert!(queue.submit(&alone(1), "scope", &huge, true));
 	let job = receiver.recv().await.expect("queued job");
 	assert_eq!(job.text.len(), MAX_TRAINING_BYTES);
+	assert!(job.text.starts_with(b"start") && job.text.ends_with(b"end"));
 	assert_eq!(job.scope, "scope");
 	assert!(job.spam);
 }

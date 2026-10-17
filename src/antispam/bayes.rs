@@ -5,7 +5,7 @@
 //! only turn counts into a spam probability for a message. Keeping it pure
 //! makes the classifier fully unit-testable without a database.
 
-use std::collections::HashSet;
+use std::collections::{BinaryHeap, HashSet};
 
 /// Minimum and maximum token length kept during tokenization.
 const MIN_TOKEN_LEN: usize = 2;
@@ -62,6 +62,54 @@ pub fn tokenize_bounded(text: &str, max_tokens: usize) -> Vec<String> {
 		}
 	}
 	tokens
+}
+
+/// A keyed fingerprint of a token, by which [`sample_tokens`] ranks them.
+pub type TokenTag = [u8; 32];
+
+/// The `cap` distinct tokens of `text` with the smallest `tag_of`, smallest
+/// first.
+///
+/// This is how a message with more distinct tokens than the cap is cut down.
+/// Taking the first ones would let whoever writes the message choose what is
+/// looked at by putting filler in front; ranking by a keyed hash of the token
+/// leaves no position to exploit, and the selection depends on the set of
+/// tokens, not on their order or how often they repeat. The scan keeps `cap`
+/// entries at most, however long the text is.
+pub fn sample_tokens<F>(text: &str, cap: usize, tag_of: F) -> Vec<String>
+where
+	F: Fn(&str) -> TokenTag,
+{
+	if cap == 0 {
+		return Vec::new();
+	}
+	// A max-heap on the tag: the root is the worst token kept so far.
+	let mut kept: BinaryHeap<(TokenTag, String)> = BinaryHeap::with_capacity(cap + 1);
+	let mut tags: HashSet<TokenTag> = HashSet::with_capacity(cap + 1);
+	for raw in text.split(|c: char| !c.is_alphanumeric()) {
+		if !(MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
+			continue;
+		}
+		let token = raw.to_ascii_lowercase();
+		let tag = tag_of(&token);
+		if tags.contains(&tag) {
+			continue;
+		}
+		if kept.len() < cap {
+			tags.insert(tag);
+			kept.push((tag, token));
+		} else if kept.peek().is_some_and(|(worst, _)| tag < *worst) {
+			if let Some((evicted, _)) = kept.pop() {
+				tags.remove(&evicted);
+			}
+			tags.insert(tag);
+			kept.push((tag, token));
+		}
+	}
+	kept.into_sorted_vec()
+		.into_iter()
+		.map(|(_, token)| token)
+		.collect()
 }
 
 /// The probability a message is spam given a single token's corpus counts
@@ -135,6 +183,47 @@ mod tests {
 			tokenize_bounded("alpha beta", usize::MAX),
 			tokenize("alpha beta")
 		);
+	}
+
+	/// A stand-in for the keyed hash: stable, and unrelated to the order.
+	fn tag(token: &str) -> TokenTag {
+		let mut tag = [0u8; 32];
+		let mut state = 0xcbf2_9ce4_8422_2325u64;
+		for byte in token.bytes() {
+			state = (state ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+		}
+		for chunk in tag.chunks_mut(8) {
+			state = state.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(23);
+			chunk.copy_from_slice(&state.to_be_bytes());
+		}
+		tag
+	}
+
+	#[test]
+	fn sample_tokens_keeps_the_cap_and_the_smallest_tags() {
+		let text: String = (0..500).map(|n| format!("tok{n:04} ")).collect();
+		let sample = sample_tokens(&text, 40, tag);
+		assert_eq!(sample.len(), 40);
+		let mut every: Vec<String> = tokenize(&text);
+		every.sort_by_key(|token| tag(token));
+		every.truncate(40);
+		assert_eq!(sample, every);
+		assert!(sample_tokens(&text, 0, tag).is_empty());
+		assert_eq!(sample_tokens("alpha beta", 40, tag).len(), 2);
+	}
+
+	/// What is looked at cannot be steered by where the words are put, how
+	/// often they repeat, or what comes in front of them.
+	#[test]
+	fn sample_tokens_depends_on_the_set_of_tokens_only() {
+		let words: Vec<String> = (0..300).map(|n| format!("tok{n:04}")).collect();
+		let forward = words.join(" ");
+		let backward = words.iter().rev().cloned().collect::<Vec<_>>().join(" ");
+		let repeated = format!("{forward} {forward} {}", words[..50].join(" "));
+		let first = sample_tokens(&forward, 25, tag);
+		assert_eq!(first, sample_tokens(&backward, 25, tag));
+		assert_eq!(first, sample_tokens(&repeated, 25, tag));
+		assert_eq!(first, sample_tokens(&forward.to_uppercase(), 25, tag));
 	}
 
 	#[test]

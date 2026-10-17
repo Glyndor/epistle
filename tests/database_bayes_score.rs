@@ -97,17 +97,75 @@ async fn a_short_message_scores_what_the_classifier_gives_for_all_its_tokens() {
 	cleanup(&pool, &scope).await;
 }
 
+const SPAM: &str = "cheap pills offer discount prize";
+
+/// Filler in front of the spam does not hide it: a message of one repeated
+/// word and then the spam scores as the spam alone does.
 #[tokio::test]
-async fn a_message_past_the_window_is_scored_on_its_window() {
+async fn spam_after_a_long_filler_still_scores_as_spam() {
+	// Enough of both kinds for the corpus to be sure of its words.
+	let trained: Vec<(&str, bool)> = TRAINED.iter().cycle().take(60).copied().collect();
+	let Some((store, pool, scope)) = trained_store(&trained).await else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let filler = "zzfiller ".repeat(300 * 1024 / 9);
+	let long = format!("{filler}{SPAM}");
+	let got = store.score(&scope, &long).await.expect("score");
+	cleanup(&pool, &scope).await;
+	assert_eq!(got, reference(&trained, &format!("zzfiller {SPAM}")));
+	assert!(got > 0.9, "the spam scored {got}");
+}
+
+/// What is in the middle of a long message is not read; the start and the end are.
+#[tokio::test]
+async fn a_long_message_is_scored_on_its_start_and_its_end() {
 	let Some((store, pool, scope)) = trained_store(&TRAINED).await else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
 	let head = "agenda budget review ";
-	let filler = "x ".repeat(300 * 1024 / 2);
-	// The spammy words come only after 256 KiB.
-	let long = format!("{head}{filler}cheap pills offer discount prize");
+	let tail = " lunch design team friday";
+	let filler = "x ".repeat(150 * 1024);
+	let long = format!("{head}{filler}{SPAM}{filler}{tail}");
 	let got = store.score(&scope, &long).await.expect("score");
 	cleanup(&pool, &scope).await;
-	assert_eq!(got, reference(&TRAINED, head));
+	assert_eq!(got, reference(&TRAINED, &format!("{head}{tail}")));
+}
+
+/// More distinct words than the cap: the message is scored on a sample no
+/// one can steer, and a clean-looking start does not make it clean.
+#[tokio::test]
+async fn a_message_with_a_pile_of_distinct_filler_is_never_scored_as_clean() {
+	let Some((store, pool, scope)) = trained_store(&TRAINED).await else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let filler: String = (0..20_000).map(|n| format!("wd{n:07x} ")).collect();
+	let long = format!("agenda budget review lunch design team {filler}");
+	let got = store.score(&scope, &long).await.expect("score");
+	let again = store.score(&scope, &long).await.expect("score again");
+	cleanup(&pool, &scope).await;
+	assert!(got >= 0.5, "a capped message scored {got}");
+	assert_eq!(got, again, "the sample must be the same every time");
+}
+
+/// The words the sample keeps do not depend on where the sender put them:
+/// the spam words first or last in a pile of filler give the same score.
+#[tokio::test]
+async fn the_sample_does_not_depend_on_the_order_of_the_words() {
+	let trained: Vec<(&str, bool)> = TRAINED.iter().cycle().take(60).copied().collect();
+	let Some((store, pool, scope)) = trained_store(&trained).await else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let mut words: Vec<String> = (0..12_000).map(|n| format!("wd{n:07x}")).collect();
+	words.extend(SPAM.split(' ').map(String::from));
+	let spam_last = words.join(" ");
+	words.reverse();
+	let spam_first = words.join(" ");
+	let a = store.score(&scope, &spam_last).await.expect("score");
+	let b = store.score(&scope, &spam_first).await.expect("score");
+	cleanup(&pool, &scope).await;
+	assert_eq!(a, b);
 }

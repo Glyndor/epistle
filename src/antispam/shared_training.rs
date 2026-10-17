@@ -6,7 +6,7 @@
 //! amount however many messages arrive and whatever they hold:
 //!
 //! - **A bounded queue, a fixed set of workers.** At most
-//!   [`QUEUE_CAPACITY`] jobs wait, each holding at most [`MAX_TRAINING_BYTES`]
+//!   [`QUEUE_CAPACITY`] jobs wait, each holding at most [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES)
 //!   of text, and [`WORKERS`] workers write to the database, so the memory is
 //!   about 16 MiB and the database never sees more than [`WORKERS`] training
 //!   transactions at once. There is no task per message.
@@ -60,7 +60,7 @@
 //!    table, which takes [`TABLE_SIZE`] other networks pushing it out).
 //! 3. Memory is bounded: each table holds at most [`TABLE_SIZE`] keys, a key
 //!    is at most a few hundred bytes, and the queue holds
-//!    [`QUEUE_CAPACITY`] jobs of at most [`MAX_TRAINING_BYTES`].
+//!    [`QUEUE_CAPACITY`] jobs of at most [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES).
 //! 4. Refusing is cheap and leaves no state: a refused job costs a few hash
 //!    lookups and changes nothing, not a count, not the order of use, not a
 //!    window. Admitting costs a few hash lookups and ordered-map steps.
@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::corpus::BayesStore;
-use super::training_queue::MAX_TRAINING_BYTES;
+use super::training_queue::training_window;
 
 /// Jobs the queue holds before [`SharedTraining::submit`] starts dropping.
 pub const QUEUE_CAPACITY: usize = 64;
@@ -468,7 +468,7 @@ impl SharedTraining {
 		queue
 	}
 
-	/// Queue `data` (at most [`MAX_TRAINING_BYTES`] of it is kept) for
+	/// Queue `data` (its [`training_window`], at most [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES), is kept) for
 	/// `scope` without waiting. Returns whether it was queued.
 	pub fn submit(&self, source: &TrainSource, scope: &str, data: &[u8], spam: bool) -> bool {
 		self.try_submit(Instant::now(), source, scope, data, spam)
@@ -488,7 +488,7 @@ impl SharedTraining {
 		let job = Job {
 			source: source.clone(),
 			scope: scope.to_string(),
-			text: data[..data.len().min(MAX_TRAINING_BYTES)].to_vec(),
+			text: training_window(data).into_owned(),
 			spam,
 		};
 		self.sender.try_send(job).map_err(|_| {

@@ -9,7 +9,7 @@
 //!
 //! A job names the message file instead of carrying its bytes. The
 //! worker reads and decodes the file when it gets to it, and tokenises
-//! at most [`MAX_TRAINING_BYTES`]. A message expunged in between is
+//! at most [`MAX_TRAINING_BYTES`] of it (see [`training_window`]). A message expunged in between is
 //! skipped.
 //!
 //! Training is advisory. [`TrainingQueue::submit`] never waits: when the
@@ -29,11 +29,58 @@ use crate::storage::MessageCrypto;
 /// Jobs the queue holds before [`TrainingQueue::submit`] starts dropping.
 pub const TRAINING_QUEUE_CAPACITY: usize = 256;
 
-/// Leading bytes of a message the trainer tokenises, the same window the
-/// SMTP path scans for URLs ([`super::urls::MAX_SCAN_BYTES`]). The
-/// headers and the opening of the body carry the signal; the bound keeps
-/// one large attachment from becoming tens of thousands of token rows.
+/// Bytes of a message the trainer and the scorer tokenise, the size of the
+/// window the SMTP path scans for URLs ([`super::urls::MAX_SCAN_BYTES`]). The
+/// headers and the opening of the body carry the signal, and the end of the
+/// message too; the bound keeps one large attachment from becoming tens of
+/// thousands of token rows.
 pub const MAX_TRAINING_BYTES: usize = super::urls::MAX_SCAN_BYTES;
+
+/// The part of a message that is trained or scored on: all of it when it fits
+/// in [`MAX_TRAINING_BYTES`], else its first and its last half, joined by a
+/// newline. Only the start would let whoever writes the message hide what
+/// matters behind filler, so the end counts as much as the start.
+pub fn training_window(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+	if bytes.len() <= MAX_TRAINING_BYTES {
+		return std::borrow::Cow::Borrowed(bytes);
+	}
+	let head_end = seam_before(bytes, MAX_TRAINING_BYTES / 2);
+	let tail_start = seam_after(
+		bytes,
+		bytes.len() - (MAX_TRAINING_BYTES - MAX_TRAINING_BYTES / 2 - 1),
+	);
+	let mut window = Vec::with_capacity(MAX_TRAINING_BYTES);
+	window.extend_from_slice(&bytes[..head_end]);
+	window.push(b'\n');
+	window.extend_from_slice(&bytes[tail_start..]);
+	std::borrow::Cow::Owned(window)
+}
+
+/// Whether a byte can be part of a token: an ASCII letter or digit, or a byte
+/// of a multi-byte character.
+fn in_token(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric() || byte >= 0x80
+}
+
+/// The furthest back from `at` (at most) that does not cut a token in two: a
+/// token is at most 30 bytes, so a run longer than that is no token and is
+/// left as it is.
+pub(crate) fn seam_before(bytes: &[u8], at: usize) -> usize {
+	let mut cut = at;
+	while at - cut <= 31 && cut > 0 && in_token(bytes[cut - 1]) && in_token(bytes[cut]) {
+		cut -= 1;
+	}
+	if at - cut > 31 { at } else { cut }
+}
+
+/// The nearest point from `at` on (at most) that does not cut a token in two.
+pub(crate) fn seam_after(bytes: &[u8], at: usize) -> usize {
+	let mut cut = at;
+	while cut - at <= 31 && cut < bytes.len() && in_token(bytes[cut - 1]) && in_token(bytes[cut]) {
+		cut += 1;
+	}
+	if cut - at > 31 { at } else { cut }
+}
 
 /// One message to train on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,9 +168,8 @@ pub async fn run_worker(
 /// Read and decode the message at `path`, keeping the training window.
 fn read_window(path: &std::path::Path, crypto: &MessageCrypto) -> std::io::Result<Vec<u8>> {
 	let stored = std::fs::read(path)?;
-	let mut text = crypto.decode(&stored)?;
-	text.truncate(MAX_TRAINING_BYTES);
-	Ok(text)
+	let text = crypto.decode(&stored)?;
+	Ok(training_window(&text).into_owned())
 }
 
 #[cfg(test)]

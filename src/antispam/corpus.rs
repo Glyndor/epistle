@@ -39,6 +39,7 @@ use sqlx::PgPool;
 use super::bayes::{self, Corpus, TokenCounts};
 use super::shared_training::{SharedTraining, TrainSource};
 use super::trainer::{BayesTrainer, TrainerFuture};
+use super::training_queue::training_window;
 use crate::storage::load_or_create_key_file;
 
 /// The shared corpus scope (the server's own accept/reject learning).
@@ -58,6 +59,13 @@ pub const MAX_TRAIN_TOKENS: usize = 5000;
 /// runs inline in the session of an unauthenticated sender, so a larger one
 /// cannot cost more.
 pub const MAX_SCORE_TOKENS: usize = 5000;
+
+/// The lowest score a message gets when it holds more distinct tokens than
+/// [`MAX_SCORE_TOKENS`]: neither clean nor spam. Such a message is scored on a
+/// sample of its words, which is what someone who wants to hide spam in a
+/// pile of filler hopes for, so it never counts as a message the corpus is
+/// sure is ham, and falls in the band where a second opinion is asked.
+pub const CAPPED_SCORE_FLOOR: f64 = 0.5;
 
 /// The set of scope names whose removal is in flight or whose purge has
 /// just committed. The training worker consults the set before any
@@ -150,6 +158,11 @@ impl BayesStore {
 		hash_token(&self.key, token)
 	}
 
+	/// The keyed fingerprint of a token, the raw bytes of [`BayesStore::hash`].
+	fn tag(&self, token: &str) -> bayes::TokenTag {
+		token_tag(&self.key, token)
+	}
+
 	/// Queue one message for the shared corpus and return whether it was
 	/// accepted. Never waits and never fails the caller: a source over its
 	/// share, a full queue or an untracked source (see
@@ -217,12 +230,16 @@ impl BayesStore {
 			.collect())
 	}
 
-	/// Score `text` as spam in `[0, 1]` using the `scope` corpus, from the first
-	/// 256 KiB of it and at most [`MAX_SCORE_TOKENS`] distinct tokens, in one query.
+	/// Score `text` as spam in `[0, 1]` using the `scope` corpus, from the
+	/// first and last 128 KiB of it and at most [`MAX_SCORE_TOKENS`] distinct
+	/// tokens, in one query. A message with more distinct tokens than that
+	/// is scored on a keyed sample of them and never below
+	/// [`CAPPED_SCORE_FLOOR`]. A message under both bounds scores on all of it.
 	pub async fn score(&self, scope: &str, text: &str) -> Result<f64, sqlx::Error> {
 		// A window of the text and a cap on distinct tokens, applied before
 		// anything is hashed or looked up (see [`MAX_SCORE_TOKENS`]).
-		let plain = bayes::tokenize_bounded(train::training_window(text), MAX_SCORE_TOKENS);
+		let tokens = self.window_tokens(text, MAX_SCORE_TOKENS);
+		let plain = tokens.plain;
 		let hashed: Vec<String> = plain.iter().map(|t| self.hash(t)).collect();
 		let corpus = self.corpus(scope).await?;
 		let counts = self.counts_for(scope, &hashed).await?;
@@ -232,7 +249,7 @@ impl BayesStore {
 			.zip(hashed.iter())
 			.map(|(p, h)| (p.as_str(), h.as_str()))
 			.collect();
-		Ok(bayes::classify(
+		let score = bayes::classify(
 			&plain,
 			|token| {
 				by_hash
@@ -242,7 +259,12 @@ impl BayesStore {
 					.unwrap_or_default()
 			},
 			corpus,
-		))
+		);
+		Ok(if tokens.capped {
+			score.max(CAPPED_SCORE_FLOOR)
+		} else {
+			score
+		})
 	}
 
 	/// Whether `scope` holds enough ham and spam to be scored on its own
@@ -320,7 +342,8 @@ impl BayesTrainer for BayesStore {
 			if account == SHARED {
 				return;
 			}
-			let text = String::from_utf8_lossy(&text);
+			let window = training_window(&text);
+			let text = String::from_utf8_lossy(&window);
 			if let Err(error) = BayesStore::train(self, account, &text, spam).await {
 				tracing::warn!(
 					account = %crate::log_id::account(account),
@@ -349,7 +372,10 @@ impl BayesTrainer for BayesStore {
 				}
 			};
 			let scope = scoring_scope(trained, account);
-			let text = String::from_utf8_lossy(text);
+			// The window first: decoding the whole message would copy up to
+			// 25 MiB when it is not valid UTF-8.
+			let window = training_window(text);
+			let text = String::from_utf8_lossy(&window);
 			match self.score(scope, &text).await {
 				Ok(score) => Some(score),
 				Err(error) => {
@@ -379,13 +405,22 @@ pub fn scoring_scope(trained: bool, account: &str) -> &str {
 /// (so lookups work) but irreversible without the key (so a database leak does
 /// not reveal the words).
 fn hash_token(key: &[u8], token: &str) -> String {
+	token_tag(key, token)
+		.iter()
+		.fold(String::new(), |mut acc, byte| {
+			use std::fmt::Write;
+			let _ = write!(acc, "{byte:02x}");
+			acc
+		})
+}
+
+/// The keyed HMAC-SHA256 of a token.
+fn token_tag(key: &[u8], token: &str) -> bayes::TokenTag {
 	let mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
 	let tag = ring::hmac::sign(&mac, token.as_bytes());
-	tag.as_ref().iter().fold(String::new(), |mut acc, byte| {
-		use std::fmt::Write;
-		let _ = write!(acc, "{byte:02x}");
-		acc
-	})
+	let mut out = [0u8; 32];
+	out.copy_from_slice(tag.as_ref());
+	out
 }
 
 /// A pluggable scoring source for the uncertain band. The production

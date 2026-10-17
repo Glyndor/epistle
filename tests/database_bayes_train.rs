@@ -97,7 +97,7 @@ async fn a_large_message_adds_at_most_the_token_cap() {
 }
 
 #[tokio::test]
-async fn text_beyond_the_window_is_not_tokenized() {
+async fn the_start_and_the_end_of_a_long_text_are_trained_on() {
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
@@ -106,13 +106,61 @@ async fn text_beyond_the_window_is_not_tokenized() {
 	let store = BayesStore::with_key(pool.clone(), fixture_key());
 	let scope = fresh_scope();
 
-	// 300 KiB of one repeated word, then a word only the tail carries.
-	let text = format!("{}tailmarker", "filler ".repeat(300 * 1024 / 7));
+	// A marker at each end of 300 KiB of one repeated word: filler in front
+	// must not hide what comes after it.
+	let text = format!(
+		"headmarker {}tailmarkera tailmarkerb tailmarkerc",
+		"filler ".repeat(300 * 1024 / 7)
+	);
 	store.train(&scope, &text, false).await.expect("train");
 
 	let stored = rows(&pool, &scope).await;
 	cleanup(&pool, &scope).await;
-	assert_eq!(stored, 1, "only the word inside the window may be stored");
+	assert_eq!(
+		stored, 5,
+		"the start, the filler and the three words of the end must be stored"
+	);
+}
+
+/// A message with more words than the cap is cut down to the same words
+/// whatever order the sender wrote them in: where they are put buys nothing.
+#[tokio::test]
+async fn which_words_are_kept_does_not_depend_on_their_order() {
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = pool(&url).await;
+	let store = BayesStore::with_key(pool.clone(), fixture_key());
+	let (forward, backward) = (fresh_scope(), fresh_scope());
+
+	store
+		.train(&forward, &words(20_000, false), true)
+		.await
+		.expect("train");
+	store
+		.train(&backward, &words(20_000, true), true)
+		.await
+		.expect("train");
+
+	let kept = |scope: String| {
+		let pool = pool.clone();
+		async move {
+			let tokens: Vec<String> = sqlx::query_scalar(
+				r#"SELECT token FROM bayes_token WHERE scope = $1 ORDER BY token COLLATE "C""#,
+			)
+			.bind(scope)
+			.fetch_all(&pool)
+			.await
+			.expect("tokens");
+			tokens
+		}
+	};
+	let (first, second) = (kept(forward.clone()).await, kept(backward.clone()).await);
+	cleanup(&pool, &forward).await;
+	cleanup(&pool, &backward).await;
+	assert_eq!(first.len(), TOKEN_CAP as usize);
+	assert!(first == second, "the words kept depend on their order");
 }
 
 #[tokio::test]

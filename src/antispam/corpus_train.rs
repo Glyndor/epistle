@@ -2,29 +2,78 @@
 //!
 //! A child module of `corpus`, so it reaches the store's private fields.
 
+use std::borrow::Cow;
+
 use super::{BayesStore, MAX_TRAIN_TOKENS};
 use crate::antispam::bayes;
-use crate::antispam::training_queue::MAX_TRAINING_BYTES;
+use crate::antispam::training_queue::{MAX_TRAINING_BYTES, seam_after, seam_before};
 
-/// The leading window of `text` a message is trained on or scored on: at most
-/// [`MAX_TRAINING_BYTES`], cut on a character boundary.
-pub(super) fn training_window(text: &str) -> &str {
-	let mut end = text.len().min(MAX_TRAINING_BYTES);
-	while !text.is_char_boundary(end) {
-		end -= 1;
+/// The window of `text` a message is trained on or scored on: all of it when
+/// it fits in [`MAX_TRAINING_BYTES`], else its first and its last half joined
+/// by a newline, each cut on a character boundary (see
+/// [`crate::antispam::training_queue::training_window`] for the bytes).
+pub(super) fn training_window(text: &str) -> Cow<'_, str> {
+	if text.len() <= MAX_TRAINING_BYTES {
+		return Cow::Borrowed(text);
 	}
-	&text[..end]
+	let bytes = text.as_bytes();
+	let mut head = seam_before(bytes, MAX_TRAINING_BYTES / 2);
+	while !text.is_char_boundary(head) {
+		head -= 1;
+	}
+	let mut tail = seam_after(
+		bytes,
+		bytes.len() - (MAX_TRAINING_BYTES - MAX_TRAINING_BYTES / 2 - 1),
+	);
+	while !text.is_char_boundary(tail) {
+		tail += 1;
+	}
+	let mut window = String::with_capacity(MAX_TRAINING_BYTES);
+	window.push_str(&text[..head]);
+	window.push('\n');
+	window.push_str(&text[tail..]);
+	Cow::Owned(window)
+}
+
+/// The tokens a message is trained or scored on.
+pub(super) struct WindowTokens {
+	/// The distinct tokens, lowercased.
+	pub(super) plain: Vec<String>,
+	/// The window held more distinct tokens than the cap, so these are a
+	/// keyed sample of them and the message is not an ordinary one.
+	pub(super) capped: bool,
 }
 
 impl BayesStore {
-	/// The hashed tokens one message adds: the distinct tokens of its
-	/// window, at most [`MAX_TRAIN_TOKENS`], sorted. The scan stops at the
-	/// cap, so the work and the memory do not grow with the message. The
-	/// order is the one the rows are written in, the same for every
-	/// transaction, so concurrent trainings cannot lock rows crosswise.
-	fn training_tokens(&self, text: &str) -> Vec<String> {
+	/// The distinct tokens of the window of `text`, at most `cap`. A message
+	/// that fits keeps all of its tokens in order of appearance, as it always
+	/// did. One with more is cut down to the `cap` tokens whose keyed hash is
+	/// smallest, so the sender, who does not hold the key, cannot choose which
+	/// of its words are looked at by where it puts them. The scan keeps `cap`
+	/// entries at most.
+	pub(super) fn window_tokens(&self, text: &str, cap: usize) -> WindowTokens {
 		let window = training_window(text);
-		let mut hashed: Vec<String> = bayes::tokenize_bounded(window, MAX_TRAIN_TOKENS)
+		let plain = bayes::tokenize_bounded(&window, cap + 1);
+		if plain.len() <= cap {
+			return WindowTokens {
+				plain,
+				capped: false,
+			};
+		}
+		WindowTokens {
+			plain: bayes::sample_tokens(&window, cap, |token| self.tag(token)),
+			capped: true,
+		}
+	}
+
+	/// The hashed tokens one message adds: [`BayesStore::window_tokens`]
+	/// hashed and sorted. The order is the one the rows are written in, the
+	/// same for every transaction, so concurrent trainings cannot lock rows
+	/// crosswise.
+	fn training_tokens(&self, text: &str) -> Vec<String> {
+		let mut hashed: Vec<String> = self
+			.window_tokens(text, MAX_TRAIN_TOKENS)
+			.plain
 			.iter()
 			.map(|token| self.hash(token))
 			.collect();
@@ -108,19 +157,38 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn the_window_never_cuts_a_character_in_half() {
-		// A 4-byte character straddling the limit.
-		let mut text = "a".repeat(MAX_TRAINING_BYTES - 2);
+	fn the_window_keeps_the_start_and_the_end_and_never_cuts_a_character() {
+		let mut text = "a".repeat(MAX_TRAINING_BYTES / 2 - 2);
+		text.push('\u{1F600}');
+		text.push_str(&"b ".repeat(MAX_TRAINING_BYTES));
 		text.push('\u{1F600}');
 		text.push_str("tail");
 		let window = training_window(&text);
-		assert_eq!(window.len(), MAX_TRAINING_BYTES - 2);
-		assert!(!window.contains("tail"));
+		assert!(window.len() <= MAX_TRAINING_BYTES);
+		assert!(window.starts_with('a') && window.ends_with("tail"));
+		assert!(window.contains('\n'));
+	}
+
+	#[test]
+	fn the_middle_of_a_long_text_is_left_out() {
+		let text = format!(
+			"head {} middle {} tail",
+			"x ".repeat(MAX_TRAINING_BYTES / 2),
+			"y ".repeat(MAX_TRAINING_BYTES / 2)
+		);
+		let window = training_window(&text);
+		assert!(window.starts_with("head") && window.ends_with("tail"));
+		assert!(!window.contains("middle"));
 	}
 
 	#[test]
 	fn a_short_text_is_kept_whole() {
-		assert_eq!(training_window("short text"), "short text");
+		assert!(matches!(
+			training_window("short text"),
+			Cow::Borrowed("short text")
+		));
 		assert_eq!(training_window(""), "");
+		let exact = "a".repeat(MAX_TRAINING_BYTES);
+		assert_eq!(training_window(&exact).len(), MAX_TRAINING_BYTES);
 	}
 }
