@@ -216,27 +216,57 @@ impl ScriptStore {
 	/// The script must parse. If it is the active script, the live copy is
 	/// refreshed too.
 	pub fn put(&self, name: &str, content: &str) -> Result<(), StoreError> {
-		let path = self.script_path(name)?;
 		Self::validate(content)?;
 		let mut txn = self.write_txn()?;
-		if !txn.index.scripts.contains_key(name) && txn.index.scripts.len() >= MAX_SCRIPTS {
+		let outcome = self.write_in(&mut txn, name, content, false);
+		txn.finish(outcome)
+	}
+
+	/// Delete a script. Refuses to delete the active script (RFC 5804 §2.10).
+	pub fn delete(&self, name: &str) -> Result<(), StoreError> {
+		let mut txn = self.write_txn()?;
+		let outcome = self.remove_in(&mut txn, name);
+		txn.finish(outcome)
+	}
+
+	/// Rename `old` to `new`. `new` must not already exist; if `old` was
+	/// active, the active marker follows the rename. The script keeps its id.
+	pub fn rename(&self, old: &str, new: &str) -> Result<(), StoreError> {
+		let mut txn = self.write_txn()?;
+		let outcome = self.rename_in(&mut txn, old, new);
+		txn.finish(outcome)
+	}
+
+	/// Write `content` as the script `name` inside `txn`. With `exclusive`, a
+	/// script of that name already there is an error. A new name needs a free
+	/// slot; a rewrite does not.
+	fn write_in(
+		&self,
+		txn: &mut Txn,
+		name: &str,
+		content: &str,
+		exclusive: bool,
+	) -> Result<(), StoreError> {
+		let path = self.script_path(name)?;
+		let exists = txn.index.scripts.contains_key(name);
+		if exists && exclusive {
+			return Err(StoreError::AlreadyExists);
+		}
+		if !exists && txn.index.scripts.len() >= MAX_SCRIPTS {
 			return Err(StoreError::TooManyScripts);
 		}
 		crate::storage::write_secret(&path, content.as_bytes()).map_err(|_| StoreError::Io)?;
 		txn.index.wrote(name);
 		txn.changed = true;
-		let live = if self.active_name().as_deref() == Some(name) {
-			self.write_live(content)
-		} else {
-			Ok(())
-		};
-		txn.finish(live)
+		if self.active_name().as_deref() == Some(name) {
+			self.write_live(content)?;
+		}
+		Ok(())
 	}
 
-	/// Delete a script. Refuses to delete the active script (RFC 5804 §2.10).
-	pub fn delete(&self, name: &str) -> Result<(), StoreError> {
+	/// Remove the script `name` inside `txn`, unless it is the active one.
+	fn remove_in(&self, txn: &mut Txn, name: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
-		let mut txn = self.write_txn()?;
 		if self.active_name().as_deref() == Some(name) {
 			return Err(StoreError::ActiveScript);
 		}
@@ -249,15 +279,13 @@ impl ScriptStore {
 		}
 		txn.index.scripts.remove(name);
 		txn.changed = true;
-		txn.finish(Ok(()))
+		Ok(())
 	}
 
-	/// Rename `old` to `new`. `new` must not already exist; if `old` was
-	/// active, the active marker follows the rename. The script keeps its id.
-	pub fn rename(&self, old: &str, new: &str) -> Result<(), StoreError> {
+	/// Rename `old` to `new` inside `txn`, the active marker following.
+	fn rename_in(&self, txn: &mut Txn, old: &str, new: &str) -> Result<(), StoreError> {
 		let old_path = self.script_path(old)?;
 		let new_path = self.script_path(new)?;
-		let mut txn = self.write_txn()?;
 		if !old_path.exists() {
 			return Err(StoreError::NoSuchScript);
 		}
@@ -267,12 +295,10 @@ impl ScriptStore {
 		fs::rename(&old_path, &new_path).map_err(|_| StoreError::Io)?;
 		txn.index.renamed(old, new);
 		txn.changed = true;
-		let marker = if self.active_name().as_deref() == Some(old) {
-			self.set_active_marker(Some(new))
-		} else {
-			Ok(())
-		};
-		txn.finish(marker)
+		if self.active_name().as_deref() == Some(old) {
+			self.set_active_marker(Some(new))?;
+		}
+		Ok(())
 	}
 
 	/// Make `name` the active script, or deactivate all when `None`
@@ -396,6 +422,9 @@ impl Txn {
 	}
 }
 
+#[path = "store_by_id.rs"]
+mod by_id;
+
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
@@ -411,3 +440,7 @@ mod check_tests;
 #[cfg(test)]
 #[path = "store_tests_index.rs"]
 mod index_tests;
+
+#[cfg(test)]
+#[path = "store_tests_by_id.rs"]
+mod by_id_tests;
