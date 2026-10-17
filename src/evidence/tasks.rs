@@ -146,7 +146,10 @@ impl Tasks {
 		let mut reading = time.read_at(wall, mono);
 		let mut errors = Vec::new();
 		let current = self.reload(&mut errors);
-		if !reading.sound && super::clock_accept::take(self.service.root(), wall) {
+		// The request is read at every tick, believed clock or not, so that one
+		// nobody needed does not wait for a clock that jumps later.
+		let asked = super::clock_accept::take(self.service.root(), wall);
+		if !reading.sound && asked {
 			// The operator looked at the date and said it is right.
 			time.witness(wall, mono);
 			reading = time.read_at(wall, mono);

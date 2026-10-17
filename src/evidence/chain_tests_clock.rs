@@ -244,3 +244,34 @@ fn a_live_server_does_not_vouch_for_a_log_that_could_not_be_read() {
 		"a server's word cleared a log nobody could read"
 	);
 }
+
+#[test]
+fn a_live_server_that_does_not_believe_the_clock_does_not_confirm_it_to_a_command() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let newest = at(DAY + 3, 10);
+	Chain::open(dir.path())
+		.expect("chain")
+		.append_at(newest, accepted(1))
+		.expect("record");
+	let wall = newest + 2 * 86_400;
+	let _server = hold_server_lock(dir.path()).expect("lock");
+	// The server wrote a status for this very time, and says it is doubtful.
+	let status = crate::evidence::tasks::Status {
+		time: wall,
+		clock_sound: false,
+		..crate::evidence::tasks::Status::default()
+	};
+	crate::storage::write_secret(
+		&dir.path().join("status.json"),
+		&serde_json::to_vec(&status).expect("json"),
+	)
+	.expect("status");
+	let command = Chain::open_at(dir.path(), wall).expect("command");
+	assert!(
+		!command
+			.time()
+			.read_at(wall, std::time::Instant::now())
+			.sound,
+		"a command believed a clock the running server does not"
+	);
+}

@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 
 /// How old a request may be when the server reads it, in seconds: it names
 /// the clock at the time it was made, and a clock that has moved since is
-/// not the one the operator looked at.
-pub const FRESH_SECS: u64 = 3600;
+/// not the one the operator looked at. A tick is five minutes apart, and every
+/// tick takes the request whether or not it needs it.
+pub const FRESH_SECS: u64 = 300;
 
 const FILE: &str = "clock-accepted.json";
 

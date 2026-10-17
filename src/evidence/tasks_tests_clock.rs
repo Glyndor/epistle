@@ -354,3 +354,89 @@ async fn a_start_hours_ahead_of_the_newest_record_does_not_seal_the_open_day() {
 		.abandon(uuid::Uuid::from_u128(9), "test")
 		.expect("the day was not sealed");
 }
+
+#[tokio::test]
+async fn a_request_nobody_needed_is_dropped_and_cannot_vouch_for_a_later_jump() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	settings::save(
+		&root,
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
+	let late = at(DAY, 23) + 50 * 60;
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY, 23) + 45 * 60, accepted_for(1, 365))
+		.expect("record");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let start = Instant::now();
+	let first = tasks.tick_at(late, start).await;
+	assert!(first.clock_sound, "{:?}", first.errors);
+	// An operator asked for a date nobody was doubting.
+	crate::evidence::clock_accept::request(&root, late).expect("request");
+	tasks
+		.tick_at(late + 60, start + Duration::from_secs(60))
+		.await;
+	assert!(
+		!root.join("clock-accepted.json").exists(),
+		"a request nobody needed was kept"
+	);
+	// Fifty-five minutes of wall clock in two minutes: nothing vouches for it.
+	let jumped = tasks
+		.tick_at(late + 3300, start + Duration::from_secs(120))
+		.await;
+	assert!(
+		crate::evidence::checkpoint::load(service.root(), Day(DAY))
+			.expect("load")
+			.is_none(),
+		"a day that has not ended was sealed: {:?}",
+		jumped.errors
+	);
+}
+
+#[tokio::test]
+async fn the_status_says_the_clock_was_not_believed_when_it_was_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	settings::save(
+		&root,
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY, 1), accepted_for(1, 365))
+		.expect("record");
+	let tasks = Tasks::new(service(dir.path())).expect("tasks");
+	// Three days after the newest record, nothing to confirm the date.
+	let doubtful = tasks.tick_at(at(DAY + 3, 1), Instant::now()).await;
+	assert!(!doubtful.clock_sound);
+	assert!(
+		!last_status(&root)
+			.expect("read")
+			.expect("written")
+			.clock_sound
+	);
+	// Right after a record, the clock is believed.
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), accepted_for(2, 365))
+		.expect("record");
+	let tasks = Tasks::new(service(dir.path())).expect("tasks");
+	let sure = tasks.tick_at(at(DAY + 3, 1) + 60, Instant::now()).await;
+	assert!(sure.clock_sound, "{:?}", sure.errors);
+	assert!(
+		last_status(&root)
+			.expect("read")
+			.expect("written")
+			.clock_sound
+	);
+}
