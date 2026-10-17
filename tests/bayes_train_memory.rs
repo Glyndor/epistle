@@ -1,11 +1,12 @@
-//! The memory one remote message can make the shared-corpus trainer hold.
+//! The memory one remote message can make the corpus hold, to be trained on
+//! or to be scored.
 //!
 //! The largest message the SMTP server accepts is 25 MiB by default. The
 //! trainer used to split all of it into tokens before writing a row, so a
 //! message of distinct words held a few hundred MiB; it must now work on a
 //! window of the text and a capped number of tokens. This file holds a single
-//! test with a counting allocator so nothing else in the process moves the
-//! peak. It needs no database: the pool points at a closed port and the
+//! test at a time (they take a lock) with a counting allocator so nothing else
+//! in the process moves the peak. It needs no database: the pool points at a closed port and the
 //! training stops at the first statement, after the tokens exist.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -67,8 +68,12 @@ fn largest_message() -> String {
 	text
 }
 
+/// One measurement at a time: the counters are the whole process's.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn the_largest_message_does_not_make_the_trainer_hold_its_tokens() {
+	let _serial = SERIAL.lock().await;
 	let text = largest_message();
 	let pool = sqlx::postgres::PgPoolOptions::new()
 		.acquire_timeout(std::time::Duration::from_millis(500))
@@ -85,6 +90,31 @@ async fn the_largest_message_does_not_make_the_trainer_hold_its_tokens() {
 	assert!(
 		growth <= 8 * 1024 * 1024,
 		"training a 25 MiB message grew the heap by {} MiB",
+		growth / (1024 * 1024)
+	);
+}
+
+/// Scoring runs inline in the SMTP session of an unauthenticated sender, so
+/// the same message must not make it tokenize, hash and look up all of it.
+#[tokio::test]
+async fn the_largest_message_does_not_make_the_scorer_hold_its_tokens() {
+	let _serial = SERIAL.lock().await;
+	let text = largest_message();
+	let pool = sqlx::postgres::PgPoolOptions::new()
+		.acquire_timeout(std::time::Duration::from_millis(500))
+		.connect_lazy("postgres://nobody@127.0.0.1:1/none")
+		.expect("lazy pool");
+	let store = BayesStore::with_key(pool, [7u8; 32]);
+
+	let before = CURRENT.load(Ordering::Relaxed);
+	PEAK.store(before, Ordering::Relaxed);
+	let outcome = store.score("memory-probe", &text).await;
+	let growth = PEAK.load(Ordering::Relaxed).saturating_sub(before);
+
+	assert!(outcome.is_err(), "the closed port must stop the scoring");
+	assert!(
+		growth <= 8 * 1024 * 1024,
+		"scoring a 25 MiB message grew the heap by {} MiB",
 		growth / (1024 * 1024)
 	);
 }

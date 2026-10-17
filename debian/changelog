@@ -312,6 +312,12 @@ epistle (0.12.1) unstable; urgency=medium
     statement. The transactions of a training and of `epistle account
     remove` now take their locks in one order, which ends the deadlocks
     between them.
+  * Security: scoring a message with the Bayesian corpus is bounded the same
+    way as training. It tokenized, hashed and looked up every word of a
+    message of up to 25 MiB inside the session of an unauthenticated sender
+    (338 MiB of heap for one message). It now reads the first 256 KiB and at
+    most 5000 distinct words, in one query; a message under both scores as
+    before.
   * Security: the shared Bayesian corpus no longer starts a task per message,
     and a sender cannot decide it alone. The server queues what it learns
     (64 jobs, 2 workers) instead of spawning a task for each message. Ham and

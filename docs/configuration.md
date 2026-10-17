@@ -600,7 +600,9 @@ user gets the server's general training rather than a coin-flip.
 
 Learning from one message costs a fixed amount, whatever its size: the
 first 256 KiB of the message, at most 5000 distinct words from it, written
-in one statement. The transactions of a training and of an account removal
+in one statement. Scoring a message reads the same window and the same cap
+and asks the database for its words in one query; a message under both is
+scored exactly as before. The transactions of a training and of an account removal
 take their locks in the same order (the totals row, then the token rows in
 ascending order), so they cannot deadlock.
 

@@ -52,6 +52,13 @@ const KEY_FILE: &str = "bayes-corpus.key";
 /// this has told the corpus all it will learn from the words it opens with.
 pub const MAX_TRAIN_TOKENS: usize = 5000;
 
+/// The most distinct tokens one message is scored on, from the same window of
+/// its text as training. The classifier keeps the few most telling tokens, so
+/// a message under this and the window scores exactly as it always did; scoring
+/// runs inline in the session of an unauthenticated sender, so a larger one
+/// cannot cost more.
+pub const MAX_SCORE_TOKENS: usize = 5000;
+
 /// The set of scope names whose removal is in flight or whose purge has
 /// just committed. The training worker consults the set before any
 /// `INSERT` so a job that drained between a removal's start and its
@@ -210,9 +217,12 @@ impl BayesStore {
 			.collect())
 	}
 
-	/// Score `text` as spam in `[0, 1]` using the `scope` corpus.
+	/// Score `text` as spam in `[0, 1]` using the `scope` corpus, from the first
+	/// 256 KiB of it and at most [`MAX_SCORE_TOKENS`] distinct tokens, in one query.
 	pub async fn score(&self, scope: &str, text: &str) -> Result<f64, sqlx::Error> {
-		let plain = bayes::tokenize(text);
+		// A window of the text and a cap on distinct tokens, applied before
+		// anything is hashed or looked up (see [`MAX_SCORE_TOKENS`]).
+		let plain = bayes::tokenize_bounded(train::training_window(text), MAX_SCORE_TOKENS);
 		let hashed: Vec<String> = plain.iter().map(|t| self.hash(t)).collect();
 		let corpus = self.corpus(scope).await?;
 		let counts = self.counts_for(scope, &hashed).await?;

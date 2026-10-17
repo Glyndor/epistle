@@ -6,9 +6,9 @@ use super::{BayesStore, MAX_TRAIN_TOKENS};
 use crate::antispam::bayes;
 use crate::antispam::training_queue::MAX_TRAINING_BYTES;
 
-/// The leading window of `text` a message is trained on: at most
+/// The leading window of `text` a message is trained on or scored on: at most
 /// [`MAX_TRAINING_BYTES`], cut on a character boundary.
-fn training_window(text: &str) -> &str {
+pub(super) fn training_window(text: &str) -> &str {
 	let mut end = text.len().min(MAX_TRAINING_BYTES);
 	while !text.is_char_boundary(end) {
 		end -= 1;
