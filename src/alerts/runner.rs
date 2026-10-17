@@ -144,7 +144,7 @@ fn dispatch(
 		let Some(poster) = ctx.webhook.as_ref() else {
 			tracing::warn!(
 				rule = %rule.name,
-				"alert webhook requested but no [webhook] section is configured"
+				"alert webhook requested but no webhook is active (the [webhook] section is missing or has enabled = false)"
 			);
 			return Ok(());
 		};

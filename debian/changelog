@@ -31,7 +31,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     fires; `alert list` marks it and its JSON row has `enabled`.
   * CLI: `epistle webhook enable|disable`. `enabled = false` in `[webhook]`
     keeps the URL and the secret but posts no event, alerts included;
-    `webhook test` still posts. `webhook show` prints `enabled`.
+    `webhook test` still posts. `webhook show` prints `enabled`. `webhook disable`
+    lists the events and alerts that go quiet, needs `--yes` while an alert posts
+    to the webhook, and `config-check` warns about such an alert.
   * CLI: `epistle relay enable|disable`. A relay rule with `enabled = false`
     stays in the file but is never selected, so its mail goes by the next
     matching rule or direct to the MX. Only a relay rule can be switched off;

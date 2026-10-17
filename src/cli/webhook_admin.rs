@@ -49,10 +49,41 @@ pub enum WebhookCli {
 	/// Switch the webhook off without removing it.
 	///
 	/// The `[webhook]` section stays, with its URL and secret, but no event
-	/// is posted, alerts included. `enable` brings it back.
-	Disable,
+	/// is posted, alerts included. `enable` brings it back. While an alert
+	/// posts to the webhook this asks first, and off a terminal it needs
+	/// `--yes`.
+	Disable {
+		/// Go ahead although alerts post to the webhook. A non-interactive
+		/// run without `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
 	/// Post one `test` event and report the endpoint's answer.
 	Test,
+}
+
+/// The events a webhook carries, by the name they have in the payload.
+const EVENTS: &str = "message_received, delivery_failed, metric_alert, dkim_rotation_failed, \
+	outbound_virus and the warm-up reports";
+
+/// The alerts that post to the webhook, as `alert "name"`.
+fn alert_users(config: &Config) -> Vec<String> {
+	config
+		.alerts
+		.iter()
+		.filter(|alert| alert.webhook)
+		.map(|alert| format!("alert \"{}\"", alert.name))
+		.collect()
+}
+
+/// What stops when the webhook is switched off.
+fn stops(users: &[String]) -> String {
+	let alerts = if users.is_empty() {
+		String::new()
+	} else {
+		format!("; {} posts to it and will go quiet", users.join(", "))
+	};
+	format!("no event will be posted while the webhook is off: {EVENTS}{alerts}")
 }
 
 fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
@@ -80,7 +111,35 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	.map_err(|error| error.to_string())
 }
 
+/// Before `webhook disable` edits anything: say which alarms go quiet, and
+/// while an alert posts to the webhook ask first (off a terminal, `--yes`).
+/// Runs before the status stream is opened, because the question uses it.
+fn confirm_disable(path: &Path, yes: bool, dry_run: bool) -> Result<(), ExitCode> {
+	let Ok(config) = Config::load(path) else {
+		return Ok(());
+	};
+	if config.webhook.is_none() {
+		return Ok(());
+	}
+	let users = alert_users(&config);
+	super::style::warn(stops(&users));
+	if users.is_empty() || dry_run {
+		return Ok(());
+	}
+	let question = format!(
+		"Switch the webhook off? {} no longer post{}. [y/N]",
+		users.join(", "),
+		if users.len() == 1 { "s" } else { "" }
+	);
+	super::prompt::confirm_destructive("webhook disable", &question, yes)
+}
+
 pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool, json: bool) -> ExitCode {
+	if let WebhookCli::Disable { yes } = action
+		&& let Err(code) = confirm_disable(path, yes, dry_run)
+	{
+		return code;
+	}
 	resource::exit_resource(execute_with(
 		path,
 		action,
@@ -146,7 +205,7 @@ fn execute_with(
 			});
 			(change, "set", shown)
 		}
-		WebhookCli::Enable | WebhookCli::Disable => {
+		WebhookCli::Enable | WebhookCli::Disable { .. } => {
 			let enabled = matches!(action, WebhookCli::Enable);
 			let change: resource::Change = Box::new(move |document, config| {
 				if config.webhook.is_none() {

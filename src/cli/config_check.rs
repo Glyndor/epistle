@@ -54,6 +54,20 @@ fn warnings(config: &Config) -> Vec<String> {
 			"{entry} is not lowercase in the configuration file"
 		));
 	}
+	// An alert that posts to a webhook that is switched off never reaches
+	// anybody; say so where the operator looks after an edit.
+	if config
+		.webhook
+		.as_ref()
+		.is_some_and(|webhook| !webhook.enabled)
+	{
+		for alert in config.alerts.iter().filter(|alert| alert.webhook) {
+			warnings.push(format!(
+				"alert \"{}\" posts to the webhook, which has enabled = false; the alert goes nowhere (`epistle webhook enable`)",
+				alert.name
+			));
+		}
+	}
 	for domain in super::role_addresses::missing_postmaster(config) {
 		warnings.push(format!(
 			"{domain} has no postmaster@ address, alias or catch-all; RFC 5321 requires one (`epistle alias add postmaster@{domain} <member>`)"

@@ -112,3 +112,101 @@ fn without_a_webhook_there_is_nothing_to_switch() {
 		"an empty section was created"
 	);
 }
+
+const WITH_ALERT: &str = "[webhook]
+url = \"https://hooks.example.net/in\"
+secret = \"s3cr3t-value-for-the-webhook\"
+
+[[alerts]]
+name = \"spool\"
+metric = \"accepted\"
+op = \">\"
+threshold = 100
+window_secs = 300
+webhook = true
+cooldown_secs = 3600
+";
+
+fn disable(env: &Env, extra: &[&str]) -> (Option<i32>, String, String) {
+	let mut full = vec!["webhook", "--config", &env.config, "disable"];
+	full.extend_from_slice(extra);
+	let output = epistle(&full, b"");
+	(
+		output.status.code(),
+		String::from_utf8_lossy(&output.stdout).into_owned(),
+		String::from_utf8_lossy(&output.stderr).into_owned(),
+	)
+}
+
+#[test]
+fn disabling_a_webhook_an_alert_posts_to_is_refused_without_yes() {
+	let env = env(WITH_ALERT);
+	let before = text(&env);
+	for extra in [vec![], vec!["--json"]] {
+		let (code, stdout, stderr) = disable(&env, &extra);
+		assert_eq!((code, stdout.as_str()), (Some(2), ""), "{extra:?}");
+		assert!(
+			stderr.contains("alert \"spool\" posts to it"),
+			"{stderr}"
+		);
+		assert!(stderr.contains("--yes"), "{stderr}");
+	}
+	assert!(text(&env) == before, "a refused disable wrote the file");
+}
+
+#[test]
+fn disabling_says_which_alarms_stop() {
+	let env = env(WITH_ALERT);
+	let (code, stdout, stderr) = disable(&env, &["--yes", "--json"]);
+	assert_eq!(code, Some(0), "{stderr}");
+	assert_eq!(stdout.lines().count(), 1);
+	assert!(stderr.contains("alert \"spool\""), "{stderr}");
+	for event in ["outbound_virus", "dkim_rotation_failed", "delivery_failed"] {
+		assert!(stderr.contains(event), "{event} missing from: {stderr}");
+	}
+	assert!(text(&env).contains("enabled = false"));
+}
+
+#[test]
+fn disabling_with_no_alert_still_says_what_stops_but_needs_no_yes() {
+	let env = env(SECTION);
+	let (code, _, stderr) = disable(&env, &["--json"]);
+	assert_eq!(code, Some(0), "{stderr}");
+	assert!(stderr.contains("outbound_virus"), "{stderr}");
+	assert!(!stderr.contains("alert \""), "{stderr}");
+}
+
+#[test]
+fn a_dry_run_asks_for_nothing() {
+	let env = env(WITH_ALERT);
+	let (code, _, _) = disable(&env, &["--dry-run", "--json"]);
+	assert_eq!(code, Some(0));
+}
+
+#[test]
+fn config_check_warns_about_an_alert_that_cannot_post() {
+	let env = env(WITH_ALERT);
+	let check = |env: &Env| {
+		let output = epistle(&["config-check", "--config", &env.config, "--json"], b"");
+		assert_eq!(output.status.code(), Some(0));
+		let (_, value) = json(&output);
+		value["warnings"]
+			.as_array()
+			.expect("warnings")
+			.iter()
+			.map(|w| w.as_str().expect("text").to_string())
+			.collect::<Vec<_>>()
+	};
+	assert!(
+		!check(&env).iter().any(|w| w.contains("webhook")),
+		"no warning while the webhook is on"
+	);
+	assert_eq!(disable(&env, &["--yes"]).0, Some(0));
+	let warnings = check(&env);
+	assert!(
+		warnings
+			.iter()
+			.any(|w| w.contains("alert \"spool\"") && w.contains("enabled = false")),
+		"{warnings:?}"
+	);
+}
