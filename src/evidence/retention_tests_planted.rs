@@ -61,7 +61,7 @@ fn a_planted_statement_cannot_name_a_path_to_delete() {
 fn an_anchor_that_parses_is_not_a_purge() {
 	let (dir, key, tsa, now) = old_days();
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
-	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
 	let chain = Chain::open(dir.path()).expect("chain");
 	let before = chain.days().expect("days");
 	// An anchor naming a later day: a flipped digit, a hand edit.
@@ -168,7 +168,7 @@ fn a_purge_cut_short_is_finished_though_a_break_was_acknowledged() {
 	.expect_err("cut before the record");
 	acknowledged_break(dir.path(), &key, &tsa, now);
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], now + 300).expect("not stuck");
-	assert!(swept.refused.is_none(), "{:?}", swept.refused);
+	assert!(swept.refused.is_none(), "the sweep got stuck");
 	let again = sweep(dir.path(), &key, &[tsa.anchor], now + 600).expect("and again");
 	assert_eq!(again.days, 0);
 	assert_eq!(super::tests_crash::purge_records(dir.path()), 1);

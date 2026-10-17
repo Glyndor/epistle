@@ -200,7 +200,7 @@ fn a_day_sealed_after_every_older_checkpoint_was_purged_names_the_anchor() {
 		.expect("append");
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 1, 0));
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 3, 0)).expect("sweep");
-	assert_eq!(swept.days, 1, "{:?}", swept.refused);
+	assert_eq!(swept.days, 1, "the sweep did not take the old day");
 	// The purge record sits on DAY+3; seal it two days later with nothing
 	// older left.
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 1));
@@ -240,7 +240,7 @@ fn nothing_is_purged_while_the_evidence_does_not_verify() {
 	let refused = swept.refused.expect("reported");
 	assert!(
 		refused.starts_with("purge refused: the evidence does not verify"),
-		"{refused}"
+		"the refusal is not the verification one"
 	);
 	assert_eq!(chain.days().expect("days").len(), 4, "every day stays");
 	assert!(!dir.path().join(PURGES_DIR).exists());
@@ -273,7 +273,7 @@ fn a_day_without_a_token_is_never_purged() {
 	let refused = swept.refused.expect("reported");
 	assert!(
 		refused.contains("no timestamp token that verifies"),
-		"{refused}"
+		"the refusal is not the missing token one"
 	);
 	assert_eq!(chain.days().expect("days").len(), 3);
 }
@@ -314,7 +314,7 @@ fn the_statement_names_what_went_and_cannot_be_changed() {
 	let (dir, key, tsa, chain) = short_lived();
 	let now = at(DAY + 5, 12);
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
-	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
 	let path = dir
 		.path()
 		.join(PURGES_DIR)
@@ -417,7 +417,7 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 		.expect("append");
 	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 5, 0));
 	let first = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
-	assert_eq!(first.days, 3, "{:?}", first.refused);
+	assert_eq!(first.days, 3, "the first sweep did not take the old days");
 	chain
 		.append_at(at(DAY + 6, 1), accepted_for(9, 2))
 		.expect("append");
@@ -456,7 +456,7 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 fn a_purge_statement_signed_before_a_rotation_still_verifies() {
 	let (dir, key, tsa, _chain) = short_lived();
 	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
-	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
 	assert_eq!(
 		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
 		None
