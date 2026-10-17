@@ -104,20 +104,14 @@ impl Env {
 	}
 
 	/// `input` with its `${name}` references replaced (see
-	/// [`super::vars::expand`]). The result is at most as long as the larger
+	/// [`super::vars::expand`]). The result is built no longer than the larger
 	/// of the input and [`MAX_VAR_BYTES`]: what a script writes literally is
-	/// never cut, what its variables add is bounded. Its length is charged to
-	/// the run.
+	/// never cut, what its variables add is bounded, and nothing past the limit
+	/// is ever allocated. The octets read and written are charged to the run.
 	pub(super) fn expand(&mut self, input: &str) -> String {
-		let mut out = super::vars::expand(input, &self.vars);
+		self.charge(input.len() as u64);
 		let limit = input.len().max(MAX_VAR_BYTES);
-		if out.len() > limit {
-			let mut end = limit;
-			while !out.is_char_boundary(end) {
-				end -= 1;
-			}
-			out.truncate(end);
-		}
+		let out = super::vars::expand(input, &self.vars, limit);
 		self.charge(out.len() as u64);
 		out
 	}

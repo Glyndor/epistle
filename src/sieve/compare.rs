@@ -71,30 +71,74 @@ impl Collation {
 	fn order(self, a: &str, b: &str) -> Ordering {
 		match self {
 			Collation::Octet => a.cmp(b),
-			Collation::AsciiCasemap => a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()),
+			Collation::AsciiCasemap => a
+				.bytes()
+				.map(|c| c.to_ascii_lowercase())
+				.cmp(b.bytes().map(|c| c.to_ascii_lowercase())),
 			Collation::AsciiNumeric => numeric_key(a).cmp(&numeric_key(b)),
 		}
 	}
 
 	fn contains(self, value: &str, key: &str) -> bool {
 		match self {
-			Collation::AsciiCasemap => value
-				.to_ascii_lowercase()
-				.contains(&key.to_ascii_lowercase()),
+			Collation::AsciiCasemap => contains_ignoring_case(value, key),
 			_ => value.contains(key),
 		}
 	}
 }
 
-/// The `i;ascii-numeric` sort key: the leading run of ASCII digits as a number.
-/// A value not starting with a digit is positive infinity (RFC 4790 §9.1.1), so
-/// it sorts after every number; all such values are equal to each other.
-fn numeric_key(value: &str) -> (u8, u64) {
-	let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
-	match digits.parse::<u64>() {
-		Ok(number) => (0, number),
-		Err(_) => (1, 0),
+/// Whether `value` holds `key`, ignoring ASCII case, in time linear in the two
+/// and without copying `value` (it can be a whole message body). Knuth,
+/// Morris and Pratt: the table is as long as the key, which the script wrote.
+fn contains_ignoring_case(value: &str, key: &str) -> bool {
+	let key: Vec<u8> = key.bytes().map(|c| c.to_ascii_lowercase()).collect();
+	if key.is_empty() {
+		return true;
 	}
+	let mut fail = vec![0usize; key.len()];
+	let mut k = 0;
+	for i in 1..key.len() {
+		while k > 0 && key[i] != key[k] {
+			k = fail[k - 1];
+		}
+		if key[i] == key[k] {
+			k += 1;
+		}
+		fail[i] = k;
+	}
+	let mut matched = 0;
+	for byte in value.bytes().map(|c| c.to_ascii_lowercase()) {
+		while matched > 0 && byte != key[matched] {
+			matched = fail[matched - 1];
+		}
+		if byte == key[matched] {
+			matched += 1;
+			if matched == key.len() {
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// The `i;ascii-numeric` sort key: the leading run of ASCII digits as a number.
+/// A value not starting with a digit, or whose digits do not fit a number, is
+/// positive infinity (RFC 4790 §9.1.1), so it sorts after every number; all
+/// such values are equal to each other.
+fn numeric_key(value: &str) -> (u8, u64) {
+	let mut number: u64 = 0;
+	let mut digits = 0;
+	for digit in value.bytes().take_while(u8::is_ascii_digit) {
+		digits += 1;
+		match number
+			.checked_mul(10)
+			.and_then(|n| n.checked_add(u64::from(digit - b'0')))
+		{
+			Some(next) => number = next,
+			None => return (1, 0),
+		}
+	}
+	if digits == 0 { (1, 0) } else { (0, number) }
 }
 
 /// A parsed match type plus collation.
@@ -151,20 +195,27 @@ impl MatchSpec {
 	/// Compare `value` against `key`. On a successful `:matches`, the wildcard
 	/// captures are stored as `${0..}` (RFC 5229 §6).
 	pub(super) fn test(&self, value: &str, key: &str, env: &mut Env) -> bool {
+		// Every comparison costs the octets it reads, and a minimum, before
+		// anything is allocated or compared: a run past its budget compares
+		// nothing more.
+		if !env.charge(value.len() as u64 + key.len() as u64 + COMPARISON_COST) {
+			return false;
+		}
 		match self.match_type {
 			MatchType::Matches => {
-				let (key, value_lower) = (key.to_ascii_lowercase(), value.to_ascii_lowercase());
 				let mut steps = 0;
-				let outcome = glob(&key, &value_lower, &mut steps, env.remaining_work());
-				if !env.charge(steps.max(value.len() as u64)) {
+				let outcome = glob(key, value, &mut steps, env.remaining_work());
+				if !env.charge(steps) {
 					return false;
 				}
 				match outcome {
 					Glob::Match(spans) => {
-						let chars: Vec<char> = value_lower.chars().collect();
 						env.set("0", value);
 						for (index, (from, to)) in spans.into_iter().enumerate() {
-							let capture: String = chars[from..to].iter().collect();
+							// Captures are lower case, as they always were, and
+							// at most as long as a variable can be.
+							let capture =
+								lowercase_prefix(&value[from..to], super::env::MAX_VAR_BYTES);
 							env.set(&(index + 1).to_string(), &capture);
 						}
 						true
@@ -186,12 +237,23 @@ impl MatchSpec {
 			MatchType::Is => self.collation.order(value, key) == Ordering::Equal,
 			MatchType::Contains => self.collation.contains(value, key),
 			MatchType::Value(rel) => rel.test(self.collation.order(value, key)),
-			MatchType::Matches => {
-				glob_match(&key.to_ascii_lowercase(), &value.to_ascii_lowercase())
-			}
+			MatchType::Matches => glob_match(key, value),
 			MatchType::Count(_) => false,
 		}
 	}
+}
+
+/// What one comparison costs a run at least, whatever the lengths.
+const COMPARISON_COST: u64 = 64;
+
+/// The first `limit` octets of `text` (cut at a character boundary), in
+/// ASCII lower case: the copy is never longer than that.
+fn lowercase_prefix(text: &str, limit: usize) -> String {
+	let mut end = text.len().min(limit);
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+	text[..end].to_ascii_lowercase()
 }
 
 /// The string argument following tag `name` (e.g. `:comparator "i;octet"`).
@@ -253,8 +315,8 @@ pub(crate) const MAX_WILDCARDS: usize = 32;
 
 /// What matching a text against a pattern came to.
 enum Glob {
-	/// The pattern matches; each wildcard's captured range of the text, in
-	/// the order the wildcards appear.
+	/// The pattern matches; each wildcard's captured range of the text, as
+	/// byte offsets, in the order the wildcards appear.
 	Match(Vec<(usize, usize)>),
 	NoMatch,
 	/// The pattern is over the limits, or the work ran past `budget`: the
@@ -262,84 +324,98 @@ enum Glob {
 	Refused,
 }
 
-/// Match `text` against `pattern` (`*` any run, `?` one character), counting
-/// the character comparisons made into `steps` and giving up past `budget`.
+/// The character at byte offset `at` of `text`, which is a boundary.
+fn char_at(text: &str, at: usize) -> Option<char> {
+	text[at..].chars().next()
+}
+
+/// Match `text` against `pattern` (`*` any run, `?` one character, ASCII case
+/// ignored), counting the character comparisons made into `steps` and giving
+/// up past `budget`.
 ///
 /// The pattern is cut at its `*` into segments. The first is anchored to the
 /// start of the text, the last to its end, and each one between goes at the
 /// leftmost place after the one before. That finds a match whenever there is
 /// one, and each `*` ends up as short as the rest allows: the assignment RFC
 /// 5229 asks for, and the one a search over all splits would give. There is no
-/// recursion and no table: the text is only walked, and a match costs at most
-/// the pattern's length times the text's, usually the text's.
+/// recursion and no table, and the text is read in place by byte offset: it is
+/// never copied, whatever its length.
 fn glob(pattern: &str, text: &str, steps: &mut u64, budget: u64) -> Glob {
-	let p: Vec<char> = pattern.chars().take(MAX_PATTERN_CHARS + 1).collect();
+	let p: Vec<char> = pattern
+		.chars()
+		.take(MAX_PATTERN_CHARS + 1)
+		.map(|c| c.to_ascii_lowercase())
+		.collect();
 	let wildcards = p.iter().filter(|c| matches!(c, '*' | '?')).count();
 	if p.len() > MAX_PATTERN_CHARS || wildcards > MAX_WILDCARDS {
 		return Glob::Refused;
 	}
-	let t: Vec<char> = text.chars().collect();
 	let segments: Vec<&[char]> = p.split(|c| *c == '*').collect();
 	let (first, last) = (segments[0], segments[segments.len() - 1]);
-	let mut spans = Vec::new();
-	// A segment at `at`: its `?`s capture one character each.
-	let place =
-		|segment: &[char], at: usize, steps: &mut u64, spans: &mut Vec<(usize, usize)>| -> bool {
-			for (offset, &c) in segment.iter().enumerate() {
-				*steps += 1;
-				if c != '?' && t[at + offset] != c {
-					return false;
-				}
+	// The segment at byte offset `at`: where it ends, or `None`. Its `?`s
+	// capture one character each.
+	let place = |segment: &[char],
+	             at: usize,
+	             steps: &mut u64,
+	             spans: &mut Vec<(usize, usize)>|
+	 -> Option<usize> {
+		let mut pos = at;
+		for &c in segment {
+			*steps += 1;
+			let found = char_at(text, pos)?;
+			if c == '?' {
+				spans.push((pos, pos + found.len_utf8()));
+			} else if c != found.to_ascii_lowercase() {
+				return None;
 			}
-			spans.extend(
-				segment
-					.iter()
-					.enumerate()
-					.filter(|(_, c)| **c == '?')
-					.map(|(offset, _)| (at + offset, at + offset + 1)),
-			);
-			true
-		};
-	if segments.len() == 1 {
-		if t.len() != first.len() || !place(first, 0, steps, &mut spans) {
-			return Glob::NoMatch;
+			pos += found.len_utf8();
 		}
-		return Glob::Match(spans);
+		Some(pos)
+	};
+	let mut spans = Vec::new();
+	if segments.len() == 1 {
+		return match place(first, 0, steps, &mut spans) {
+			Some(end) if end == text.len() => Glob::Match(spans),
+			_ => Glob::NoMatch,
+		};
 	}
-	if t.len() < first.len() + last.len() {
+	// Where the last segment starts: as many characters from the end as it has.
+	let mut tail = text.len();
+	for _ in 0..last.len() {
+		let Some((start, _)) = text[..tail].char_indices().next_back() else {
+			return Glob::NoMatch;
+		};
+		tail = start;
+	}
+	let Some(mut pos) = place(first, 0, steps, &mut spans) else {
+		return Glob::NoMatch;
+	};
+	if pos > tail {
 		return Glob::NoMatch;
 	}
-	let tail = t.len() - last.len();
-	if !place(first, 0, steps, &mut spans) {
-		return Glob::NoMatch;
-	}
-	let mut pos = first.len();
 	for segment in &segments[1..segments.len() - 1] {
-		let mut found = None;
 		let mut at = pos;
-		while at + segment.len() <= tail {
+		let (start, end, trial) = loop {
 			let mut trial = Vec::new();
-			if place(segment, at, steps, &mut trial) {
-				found = Some((at, trial));
-				break;
+			if let Some(end) = place(segment, at, steps, &mut trial)
+				&& end <= tail
+			{
+				break (at, end, trial);
 			}
 			if *steps > budget {
 				return Glob::Refused;
 			}
-			at += 1;
-		}
-		let Some((at, trial)) = found else {
-			return Glob::NoMatch;
+			match char_at(text, at) {
+				Some(c) if at < tail => at += c.len_utf8(),
+				_ => return Glob::NoMatch,
+			}
 		};
-		spans.push((pos, at));
+		spans.push((pos, start));
 		spans.extend(trial);
-		pos = at + segment.len();
-	}
-	if pos > tail {
-		return Glob::NoMatch;
+		pos = end;
 	}
 	spans.push((pos, tail));
-	if !place(last, tail, steps, &mut spans) {
+	if place(last, tail, steps, &mut spans).is_none() {
 		return Glob::NoMatch;
 	}
 	if *steps > budget {

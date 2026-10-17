@@ -129,11 +129,14 @@ fn address_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		return false;
 	};
 	let part = address_part(&test.args);
-	let extracted: Vec<String> = names
-		.iter()
-		.flat_map(|name| message.header_values(name))
-		.filter_map(|value| part.of(&addr_spec(value)))
-		.collect();
+	let mut extracted: Vec<String> = Vec::new();
+	for value in names.iter().flat_map(|name| message.header_values(name)) {
+		// What is copied out of the message is paid for first.
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
+		extracted.extend(part.of(&addr_spec(value)));
+	}
 	match_values(&spec, &extracted, &keys, vars)
 }
 

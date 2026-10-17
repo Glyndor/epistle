@@ -16,6 +16,8 @@ pub fn extensions() -> impl Iterator<Item = &'static str> {
 	EXTENSIONS.split_whitespace()
 }
 
+#[cfg(test)]
+mod alloc_probe;
 pub mod analysis;
 pub mod ast;
 mod compare;
@@ -43,5 +45,7 @@ mod interp_tests_mailbox;
 #[cfg(test)]
 #[path = "interp_tests_redirects.rs"]
 mod interp_tests_redirects;
+#[cfg(test)]
+mod memory_tests;
 #[cfg(test)]
 mod parser_tests;
