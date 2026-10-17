@@ -572,8 +572,11 @@ fn a_network_under_its_first_jobs_always_trains_whatever_others_send() {
 		let budget = Budget::default();
 		let now = Instant::now();
 		let mut victim_used = [0u32; 2];
-		for _ in 0..6000 {
-			if rng.next(8) == 0 {
+		for step in 0..30_000 {
+			// The network under test speaks only once the others have spent
+			// what they can, which is when a first come, first served budget
+			// would have nothing left for it.
+			if step >= 15_000 && rng.next(8) == 0 {
 				let spam = rng.next(2) == 0;
 				if victim_used[usize::from(spam)] < FIRST_JOBS {
 					let from = in_network(200, rng.next(256) as u8);
@@ -583,13 +586,14 @@ fn a_network_under_its_first_jobs_always_trains_whatever_others_send() {
 						"the network was held back after {} jobs",
 						victim_used[usize::from(spam)]
 					);
+					budget.release(&from, spam);
 					victim_used[usize::from(spam)] += 1;
 				}
 			} else {
 				// The attackers: fifteen networks, any host, any kind.
 				let from = in_network(rng.next(15) as u8, rng.next(256) as u8);
 				let spam = rng.next(2) == 0;
-				if budget.admit(now, &from, spam).is_ok() && rng.next(2) == 0 {
+				if budget.admit(now, &from, spam).is_ok() {
 					budget.release(&from, spam);
 				}
 			}
