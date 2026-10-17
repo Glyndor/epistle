@@ -37,16 +37,26 @@ pub const MAX_NAME_BYTES: usize = 200;
 /// characters and [`MAX_NAME_BYTES`] octets, none of them a control
 /// character, a path separator, or U+2028 / U+2029 (RFC 9661 section 2.1
 /// lists the controls U+0000-U+001F, U+007F-U+009F, U+2028 and U+2029), and
-/// not `.` or `..`.
+/// not `.` or `..`. A name does not start or end with white space and has
+/// no bidirectional formatting character, since either makes it look like
+/// another name, and it is in Unicode normal form C, the form Net-Unicode
+/// (RFC 5198) names a client sends are in, so two spellings of one name are
+/// not two scripts.
 pub fn is_valid_name(name: &str) -> bool {
+	use unicode_normalization::UnicodeNormalization;
 	!name.is_empty()
 		&& name.len() <= MAX_NAME_BYTES
 		&& name.chars().count() <= MAX_NAME_CHARS
 		&& name != "."
 		&& name != ".."
-		&& !name
-			.chars()
-			.any(|c| c.is_control() || matches!(c, '/' | '\\' | '\u{2028}' | '\u{2029}'))
+		&& !name.starts_with(char::is_whitespace)
+		&& !name.ends_with(char::is_whitespace)
+		&& !name.chars().any(|c| {
+			c.is_control()
+				|| matches!(c, '/' | '\\' | '\u{2028}' | '\u{2029}')
+				|| matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+		})
+		&& (name.is_ascii() || name.nfc().eq(name.chars()))
 }
 
 /// A ManageSieve operation that failed in a way the protocol must report.
@@ -86,6 +96,7 @@ pub struct ScriptInfo {
 
 /// Storage for one account's named Sieve scripts.
 pub struct ScriptStore {
+	account: String,
 	dirs: Option<Dirs>,
 }
 
@@ -116,6 +127,7 @@ impl ScriptStore {
 	/// [`StoreError::Io`].
 	pub fn new(accounts_root: &Path, account: &str) -> Self {
 		Self {
+			account: account.to_string(),
 			dirs: Dirs::open(accounts_root, account).ok(),
 		}
 	}
@@ -163,7 +175,6 @@ impl ScriptStore {
 		let marker = contained_child(&self.dirs.as_ref()?.sieve_dir, ".active").ok()?;
 		fs::read_to_string(marker)
 			.ok()
-			.map(|name| name.trim().to_string())
 			.filter(|name| !name.is_empty())
 	}
 
@@ -361,6 +372,7 @@ impl ScriptStore {
 		let dirs = self.dirs()?;
 		fs::create_dir_all(&dirs.sieve_dir).map_err(|_| StoreError::Io)?;
 		let lock = contained_child(&dirs.sieve_dir, ".lock").map_err(|_| StoreError::Io)?;
+		create_private(&lock).map_err(|_| StoreError::Io)?;
 		let lock = FileLock::acquire(&lock).map_err(|_| StoreError::Io)?;
 		let path = contained_child(&dirs.sieve_dir, ".index.json").map_err(|_| StoreError::Io)?;
 		let mut index = Index::read(&path);
@@ -378,16 +390,75 @@ impl ScriptStore {
 	fn names_on_disk(&self) -> Result<BTreeSet<String>, StoreError> {
 		let entries =
 			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
-		Ok(entries
-			.flatten()
-			.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-			.filter_map(|entry| {
-				let file = entry.file_name().into_string().ok()?;
-				let name = file.strip_suffix(".sieve")?;
-				is_valid_name(name).then(|| name.to_string())
-			})
-			.collect())
+		let mut names = BTreeSet::new();
+		let mut left_out = 0usize;
+		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
+			let Ok(file) = entry.file_name().into_string() else {
+				continue;
+			};
+			let Some(name) = file.strip_suffix(".sieve") else {
+				continue;
+			};
+			if is_valid_name(name) {
+				names.insert(name.to_string());
+			} else {
+				left_out += 1;
+			}
+		}
+		if left_out > 0 {
+			self.warn_once("names", || {
+				tracing::warn!(
+					account = %self.account,
+					left_out,
+					"scripts whose names are not valid since a stricter name check are not listed; \
+					 rename the files, or delete them"
+				);
+			});
+		}
+		if names.len() > MAX_SCRIPTS {
+			self.warn_once("count", || {
+				tracing::warn!(
+					account = %self.account,
+					scripts = names.len(),
+					limit = MAX_SCRIPTS,
+					"the account holds more scripts than the limit; none can be added until some are deleted"
+				);
+			});
+		}
+		Ok(names)
 	}
+
+	/// Run `warn` the first time this process sees `kind` for this account's
+	/// scripts: the store is read on every call, and a log line is for a
+	/// change, not for each look.
+	fn warn_once(&self, kind: &str, warn: impl FnOnce()) {
+		static SEEN: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+		let Ok(dirs) = self.dirs() else { return };
+		let key = format!("{kind}:{}", dirs.sieve_dir.display());
+		let first = SEEN
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.insert(key);
+		if first {
+			warn();
+		}
+	}
+}
+
+/// Create `path` empty and readable by its owner alone, if it is not there:
+/// the lock file is not a place for anything but the lock.
+fn create_private(path: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::OpenOptionsExt;
+	fs::OpenOptions::new()
+		.create(true)
+		.truncate(false)
+		.write(true)
+		.mode(0o600)
+		.open(path)
+		.map(drop)
 }
 
 /// An operation in progress on an account's scripts: the account's lock,
@@ -449,3 +520,7 @@ mod index_tests;
 #[cfg(test)]
 #[path = "store_tests_by_id.rs"]
 mod by_id_tests;
+
+#[cfg(test)]
+#[path = "store_tests_names.rs"]
+mod names_tests;
