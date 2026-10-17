@@ -179,6 +179,10 @@ async fn a_check_that_runs_too_long_holds_mail_and_is_not_started_twice() {
 	let status = tasks.tick_following(at(DAY, 1)).await;
 	let held = status.held.expect("held");
 	assert!(held.contains("took longer than"), "{held}");
+	assert_eq!(
+		status.audit_millis, 20,
+		"the time it was given is the time it took"
+	);
 	assert_eq!(service.held(), Some(held));
 	let again = tasks.tick_following(at(DAY, 2)).await;
 	assert_eq!(
@@ -243,5 +247,23 @@ async fn the_status_file_cannot_open_the_gate() {
 	assert!(
 		service.held().is_some(),
 		"the gate is in memory, not in the report"
+	);
+}
+
+#[tokio::test]
+async fn the_time_a_verification_took_is_in_the_status() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let tasks = Tasks::new(Arc::clone(&service))
+		.expect("tasks")
+		.with_audit_timeout(Duration::from_secs(30), Duration::from_millis(150));
+	let status = tasks.tick_following(at(DAY, 1)).await;
+	assert!(status.audit_millis >= 150, "{}", status.audit_millis);
+	assert!(status.audit_millis < 30_000, "{}", status.audit_millis);
+	assert_eq!(
+		last_status(service.root())
+			.expect("read")
+			.map(|read| read.audit_millis),
+		Some(status.audit_millis)
 	);
 }

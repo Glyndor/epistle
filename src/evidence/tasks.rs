@@ -60,6 +60,11 @@ pub struct Status {
 	/// right, so that it does not date a record by one nobody has checked.
 	#[serde(default)]
 	pub clock_sound: bool,
+	/// How long the last verification took, in milliseconds (zero for a tick
+	/// that did not complete one). `epistle status` warns when it passes half
+	/// of [`AUDIT_TIMEOUT`], since past it the gate closes.
+	#[serde(default)]
+	pub audit_millis: u64,
 }
 
 /// The evidence tasks.
@@ -205,6 +210,7 @@ impl Tasks {
 		let delay = self.audit_delay;
 		let audit = tokio::task::spawn_blocking(move || {
 			let _running = running;
+			let started = std::time::Instant::now();
 			#[cfg(test)]
 			std::thread::sleep(delay);
 			verify(
@@ -216,6 +222,7 @@ impl Tasks {
 					now,
 				},
 			)
+			.map(|report| (report, started.elapsed()))
 		});
 		let audited = match tokio::time::timeout(self.audit_timeout, audit).await {
 			Ok(audited) => audited,
@@ -228,12 +235,13 @@ impl Tasks {
 					time: now,
 					held: Some(reason),
 					errors,
+					audit_millis: u64::try_from(self.audit_timeout.as_millis()).unwrap_or(u64::MAX),
 					..Status::default()
 				});
 			}
 		};
-		let report = match audited {
-			Ok(Ok(report)) => report,
+		let (report, took) = match audited {
+			Ok(Ok(done)) => done,
 			Ok(Err(error)) => {
 				let reason = format!("the evidence could not be read: {}", error.kind());
 				return self.finish(Status {
@@ -272,6 +280,7 @@ impl Tasks {
 			stamped: report.stamped,
 			errors,
 			clock_sound: false,
+			audit_millis: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
 		})
 	}
 

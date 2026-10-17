@@ -280,12 +280,15 @@ believed again when the date arrives.
 
 - The server verifies the whole kept log every five minutes, from the oldest
   day. That reads every record again, by design: a changed day is found on the
-  next tick. In a debug build it took about 47 seconds for 400 000 records, in
-  flat memory; a release build was not measured. If a verification takes more
-  than ten minutes the server holds transactional mail until it does not, so a
-  log kept for a year has to stay below the number of records that fits.
-  There is no incremental verification: caching a verified day would trust the
-  files not to have changed, which is what the verification is for.
+  next tick. A release build verified about 350 000 records a second in flat
+  memory, so the ten minutes the server gives a verification fit about 210
+  million records; keep the records a day times the days kept below roughly
+  100 million, which leaves room for a slower disk. If a verification takes
+  more than ten minutes the server holds transactional mail until it does not.
+  `epistle status` shows how long the last one took and warns from five
+  minutes, half of what it is given. There is no incremental verification:
+  caching a verified day would trust the files not to have changed, which is
+  what the verification is for.
 - One account may add 500 000 records a day (an acceptance and the outcome it
   owes each recipient, counted when it is accepted) and keep 4 GiB in full, and
   the whole log takes 5 000 000 records a day, so no account, whatever its
@@ -309,9 +312,12 @@ believed again when the date arrives.
   share (the average over the accounts that have entries, and never less than
   64) are refused, with a warning in the status; the others go on up to a
   ceiling an eighth above the full mark. Nothing is ever forgotten to make
-  room. Mail whose evidence is not mandatory is sent all the same. The counts keep the verification,
-  which reads every record, from outgrowing its ten minutes; they are not a
-  measurement of that time.
+  room. Mail whose evidence is not mandatory is sent all the same.
+  What this means for one account: with 8 192 of its messages waiting for their
+  outcomes, every send it makes is answered with the retry-later code (451),
+  even to destinations that are healthy, until some of those messages are
+  settled. The outcomes owed by messages an operator removes from the queue are
+  forgotten only after 14 days.
 - The service account holds the evidence key and the data. Until a day is
   stamped, whoever controls that account can rewrite it and sign it again.
   The guarantee to a third party starts at the timestamp token: after it,

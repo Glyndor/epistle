@@ -12,6 +12,9 @@ use crate::evidence::tasks::{Status, last_status};
 
 /// The last verification is stale past this, in seconds.
 const STALE_SECS: u64 = 3600;
+/// Past this share of the time a verification is given, the status warns: the
+/// gate closes at the whole of it.
+const SLOW_PERCENT: u128 = 50;
 
 /// Check the evidence.
 pub(super) async fn check(ctx: &Ctx) -> AreaReport {
@@ -86,6 +89,19 @@ pub(super) fn evaluate(root: &Path, now: u64) -> AreaReport {
 	for error in status.errors.iter().take(10) {
 		items.push(Item::new("evidence task", Level::Warn, sanitize(error)));
 	}
+	let limit = crate::evidence::tasks::AUDIT_TIMEOUT.as_millis();
+	if u128::from(status.audit_millis) * 100 >= limit * SLOW_PERCENT {
+		items.push(Item::new(
+			"verification time",
+			Level::Warn,
+			format!(
+				"the last verification took {} s of the {} s it is given; past that, transactional mail is held. \
+				 Fewer records kept (a shorter retention, or fewer messages a day) bring it back",
+				status.audit_millis / 1000,
+				limit / 1000
+			),
+		));
+	}
 	if now.saturating_sub(status.time) > STALE_SECS {
 		items.push(Item::new(
 			"last verification",
@@ -100,9 +116,10 @@ fn summary(status: &Status) -> String {
 	match &status.held {
 		Some(_) => "the evidence does not verify: transactional mail is held".to_string(),
 		None => format!(
-			"{} days, {} records verified; {} days timestamped{}",
+			"{} days, {} records verified in {} s; {} days timestamped{}",
 			status.days,
 			status.records,
+			status.audit_millis / 1000,
 			status.stamped,
 			match status.acknowledged {
 				0 => String::new(),
