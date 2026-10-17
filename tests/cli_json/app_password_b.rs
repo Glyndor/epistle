@@ -86,7 +86,7 @@ fn rotate_replaces_the_secret_and_keeps_everything_else() {
 		.as_str()
 		.expect("the new secret is printed once")
 		.to_string();
-	assert_ne!(new, old);
+	assert!(new != old, "the secret did not change");
 	assert_eq!(new.len(), old.len());
 	assert_eq!(
 		rotated,

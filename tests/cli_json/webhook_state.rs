@@ -33,6 +33,7 @@ fn show_says_whether_the_webhook_is_on() {
 	);
 	let output = epistle(&["webhook", "--config", &env.config, "show"], b"");
 	let stdout = String::from_utf8_lossy(&output.stdout);
+	assert!(!stdout.contains("s3cr3t"), "the secret reached stdout");
 	assert_eq!(
 		stdout,
 		"url\thttps://hooks.example.net/in\nsecret\tset\nenabled\tyes\n"
@@ -74,6 +75,10 @@ fn a_dry_run_changes_nothing() {
 	let env = env(SECTION);
 	let before = text(&env);
 	let (code, value) = run(&env, &["disable", "--dry-run"]);
+	assert!(
+		!value.to_string().contains("s3cr3t"),
+		"the secret reached the diff"
+	);
 	assert_eq!((code, value["result"].as_str()), (0, Some("dry-run")));
 	assert!(
 		value["diff"]
@@ -86,7 +91,7 @@ fn a_dry_run_changes_nothing() {
 		!value.to_string().contains("s3cr3t"),
 		"the secret reached the diff"
 	);
-	assert_eq!(text(&env), before);
+	assert!(text(&env) == before, "a dry run wrote the file");
 }
 
 #[test]

@@ -125,6 +125,10 @@ fn a_dry_run_changes_nothing_and_hides_the_password() {
 	let env = env(RULES);
 	let before = text(&env);
 	let (code, value) = run(&env, &["disable", "--dry-run"]);
+	assert!(
+		!value.to_string().contains("relay-password-value"),
+		"the password reached the diff"
+	);
 	assert_eq!((code, value["result"].as_str()), (0, Some("dry-run")));
 	assert!(
 		value["diff"]
@@ -134,7 +138,7 @@ fn a_dry_run_changes_nothing_and_hides_the_password() {
 		value["diff"]
 	);
 	assert!(!value.to_string().contains("relay-password-value"));
-	assert_eq!(text(&env), before);
+	assert!(text(&env) == before, "a dry run wrote the file");
 }
 
 #[test]
