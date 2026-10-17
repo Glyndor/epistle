@@ -49,11 +49,43 @@ pub enum LexError {
 
 /// Tokenize a Sieve script.
 pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
-	let chars: Vec<char> = input.chars().collect();
-	let mut pos = 0;
-	let mut tokens = Vec::new();
+	tokenize_located(input)
+		.map(|located| located.tokens)
+		.map_err(|(error, _)| error)
+}
 
+/// The tokens of a script and where each one starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+	/// The tokens, as [`tokenize`] returns them.
+	pub tokens: Vec<Token>,
+	/// For each token, the offset in characters (not octets) at which it
+	/// starts in the script. Same length as `tokens`.
+	pub starts: Vec<usize>,
+}
+
+/// [`tokenize`], keeping where each token starts, and on failure where the
+/// offending token starts (an offset in characters).
+pub fn tokenize_located(input: &str) -> Result<Located, (LexError, usize)> {
+	let chars: Vec<char> = input.chars().collect();
+	let mut located = Located {
+		tokens: Vec::new(),
+		starts: Vec::new(),
+	};
+	let mut start = 0;
+	lex_all(&chars, &mut located, &mut start).map_err(|error| (error, start))?;
+	Ok(located)
+}
+
+/// The 1-based line that the character offset `at` falls on.
+pub fn line_of(input: &str, at: usize) -> usize {
+	1 + input.chars().take(at).filter(|c| *c == '\n').count()
+}
+
+fn lex_all(chars: &[char], located: &mut Located, start: &mut usize) -> Result<(), LexError> {
+	let mut pos = 0;
 	while pos < chars.len() {
+		*start = pos;
 		let c = chars[pos];
 		match c {
 			' ' | '\t' | '\r' | '\n' => pos += 1,
@@ -76,31 +108,35 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
 					pos += 1;
 				}
 			}
-			'[' => push(&mut tokens, Token::BracketOpen, &mut pos),
-			']' => push(&mut tokens, Token::BracketClose, &mut pos),
-			'(' => push(&mut tokens, Token::ParenOpen, &mut pos),
-			')' => push(&mut tokens, Token::ParenClose, &mut pos),
-			'{' => push(&mut tokens, Token::BraceOpen, &mut pos),
-			'}' => push(&mut tokens, Token::BraceClose, &mut pos),
-			',' => push(&mut tokens, Token::Comma, &mut pos),
-			';' => push(&mut tokens, Token::Semicolon, &mut pos),
-			'"' => tokens.push(lex_quoted(&chars, &mut pos)?),
-			':' => tokens.push(lex_tag(&chars, &mut pos)),
-			c if c.is_ascii_digit() => tokens.push(lex_number(&chars, &mut pos)?),
+			'[' => push(&mut located.tokens, Token::BracketOpen, &mut pos),
+			']' => push(&mut located.tokens, Token::BracketClose, &mut pos),
+			'(' => push(&mut located.tokens, Token::ParenOpen, &mut pos),
+			')' => push(&mut located.tokens, Token::ParenClose, &mut pos),
+			'{' => push(&mut located.tokens, Token::BraceOpen, &mut pos),
+			'}' => push(&mut located.tokens, Token::BraceClose, &mut pos),
+			',' => push(&mut located.tokens, Token::Comma, &mut pos),
+			';' => push(&mut located.tokens, Token::Semicolon, &mut pos),
+			'"' => located.tokens.push(lex_quoted(chars, &mut pos)?),
+			':' => located.tokens.push(lex_tag(chars, &mut pos)),
+			c if c.is_ascii_digit() => located.tokens.push(lex_number(chars, &mut pos)?),
 			c if is_identifier_start(c) => {
-				let ident = lex_identifier(&chars, &mut pos);
+				let ident = lex_identifier(chars, &mut pos);
 				// `text:` introduces a multi-line string.
 				if ident == "text" && chars.get(pos) == Some(&':') {
 					pos += 1;
-					tokens.push(lex_multiline(&chars, &mut pos)?);
+					located.tokens.push(lex_multiline(chars, &mut pos)?);
 				} else {
-					tokens.push(Token::Identifier(ident));
+					located.tokens.push(Token::Identifier(ident));
 				}
 			}
-			other => return Err(LexError::Unexpected(other)),
+			_ => return Err(LexError::Unexpected(c)),
+		}
+		// Whatever the arm pushed starts where the arm began.
+		while located.starts.len() < located.tokens.len() {
+			located.starts.push(*start);
 		}
 	}
-	Ok(tokens)
+	Ok(())
 }
 
 fn push(tokens: &mut Vec<Token>, token: Token, pos: &mut usize) {

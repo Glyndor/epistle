@@ -8,15 +8,10 @@
 use super::command::Command;
 use super::store::{ScriptStore, StoreError};
 
-/// The Sieve extensions advertised in the `SIEVE` capability — only those the
+/// The Sieve extensions advertised in the `SIEVE` capability: only those the
 /// interpreter actually honors at delivery time. A client checks this list
-/// before `require`-ing an extension, so it must match the interpreter:
-/// fileinto/envelope (RFC 5228), vacation (RFC 5230), imap4flags (RFC 5232),
-/// relational (RFC 5231), variables (RFC 5229), reject/ereject (RFC 5429),
-/// copy (RFC 3894), body (RFC 5173), date (RFC 5260), mailbox (RFC 5490)
-/// and the `i;ascii-numeric` comparator (RFC 4790).
-pub const SIEVE_EXTENSIONS: &str = "fileinto envelope vacation imap4flags relational \
-variables reject ereject copy body date mailbox comparator-i;ascii-numeric";
+/// before `require`-ing an extension, so it must match the interpreter.
+pub const SIEVE_EXTENSIONS: &str = crate::sieve::EXTENSIONS;
 
 /// Storage and authentication backing a session.
 pub trait Backend {
