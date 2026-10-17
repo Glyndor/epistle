@@ -176,11 +176,20 @@ pub(super) fn run(
 
 fn list(log: &DeliveryLog, args: &ListArgs, now: u64, out: &mut impl Write) -> ExitCode {
 	let json = args.json;
+	if !(1..=records::MAX_EXPORT).contains(&args.limit) {
+		style::error(format_args!(
+			"--limit must be between 1 and {}",
+			records::MAX_EXPORT
+		));
+		return ExitCode::from(2);
+	}
 	let selection = match select::Selection::new(&args.filters, now) {
 		Ok(selection) => selection,
 		Err(code) => return code,
 	};
-	let records = match log.list(Some(args.limit), |record| selection.matches(record)) {
+	let records = match log.list_between(Some(args.limit), selection.window(), |record| {
+		selection.matches(record)
+	}) {
 		Ok(records) => records,
 		Err(error) => {
 			style::error(format_args!("reading delivery log: {error}"));

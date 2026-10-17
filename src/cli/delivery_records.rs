@@ -111,7 +111,9 @@ pub(super) fn export(
 		Ok(selection) => selection,
 		Err(code) => return code,
 	};
-	let records = match log.list(Some(args.limit), |record| selection.matches(record)) {
+	let records = match log.list_between(Some(args.limit), selection.window(), |record| {
+		selection.matches(record)
+	}) {
 		Ok(records) => records,
 		Err(error) => return failed(error),
 	};

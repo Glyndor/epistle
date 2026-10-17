@@ -76,6 +76,11 @@ impl Selection {
 		})
 	}
 
+	/// The time window the filters name, so the log can skip days outside it.
+	pub(super) fn window(&self) -> (Option<u64>, Option<u64>) {
+		(self.since, self.until)
+	}
+
 	/// Whether `record` passes every filter that was given.
 	pub(super) fn matches(&self, record: &DeliveryRecord) -> bool {
 		self.recipient

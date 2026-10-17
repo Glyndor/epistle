@@ -51,7 +51,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
   * CLI: `epistle delivery show ID` prints every record of one message and
     `delivery export` writes the filtered records as CSV (or JSON), at most
     100000. `delivery list` takes `--until`, and `--status` as another name
-    of `--outcome`.
+    of `--outcome`. The delivery log is now read a line at a time (a line over
+    1 MiB is skipped), days outside `--since`/`--until` are not opened, and
+    `delivery list --limit` stops at 100000 like `export`.
   * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
     connections from one read-only query in the stack's database container,
     and gives up after 15 seconds.

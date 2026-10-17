@@ -261,9 +261,21 @@ impl DeliveryLog {
 	/// then the next day". A caller that needs a strict per-record
 	/// `time` order can sort the result itself; the on-disk encoding
 	/// already has the timestamp.
-	pub fn list<F>(
+	pub fn list<F>(&self, limit: Option<usize>, filter: F) -> std::io::Result<Vec<DeliveryRecord>>
+	where
+		F: FnMut(&DeliveryRecord) -> bool,
+	{
+		self.list_between(limit, (None, None), filter)
+	}
+
+	/// [`DeliveryLog::list`] for records whose time lies in `(since, until)`
+	/// (epoch seconds, either end open). A file whose day is outside the
+	/// window is not opened. `filter` still sees every record of the files
+	/// that are, so it decides on the exact second.
+	pub fn list_between<F>(
 		&self,
 		limit: Option<usize>,
+		(since, until): (Option<u64>, Option<u64>),
 		mut filter: F,
 	) -> std::io::Result<Vec<DeliveryRecord>>
 	where
@@ -273,6 +285,8 @@ impl DeliveryLog {
 		if !self.root.is_dir() {
 			return Ok(out);
 		}
+		let first = since.map(|epoch| date_for_epoch(epoch).to_string());
+		let last = until.map(|epoch| date_for_epoch(epoch).to_string());
 		// Newest day first. We list the directory and sort the file
 		// names descending; the file name is `YYYY-MM-DD.jsonl`, so a
 		// plain string sort gives the right order without parsing.
@@ -283,24 +297,37 @@ impl DeliveryLog {
 				Ok(name) => name,
 				Err(_) => continue,
 			};
-			if name.ends_with(".jsonl") {
+			if name.ends_with(".jsonl") && day_in_window(&name, first.as_deref(), last.as_deref()) {
 				files.push(entry.path());
 			}
 		}
 		files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+		let mut line = Vec::new();
 		'outer: for file in files {
-			let text = match fs::read_to_string(&file) {
-				Ok(text) => text,
+			let mut reader = match fs::File::open(&file) {
+				Ok(handle) => std::io::BufReader::with_capacity(64 * 1024, handle),
 				Err(error) => {
 					tracing::warn!(file = %file.display(), %error, "delivery log file could not be read");
 					continue;
 				}
 			};
-			for line in text.lines() {
+			loop {
+				match read_capped_line(&mut reader, &mut line, MAX_LINE_BYTES) {
+					Ok(Line::End) => break,
+					Ok(Line::TooLong) => {
+						tracing::warn!(file = %file.display(), "delivery log line over the size limit skipped");
+						continue;
+					}
+					Ok(Line::Read) => {}
+					Err(error) => {
+						tracing::warn!(file = %file.display(), %error, "delivery log file could not be read");
+						break;
+					}
+				}
 				if line.is_empty() {
 					continue;
 				}
-				let record: DeliveryRecord = match serde_json::from_str(line) {
+				let record: DeliveryRecord = match serde_json::from_slice(&line) {
 					Ok(record) => record,
 					Err(error) => {
 						tracing::warn!(file = %file.display(), %error, "delivery log line did not parse");
@@ -613,6 +640,10 @@ fn parse_offset(offset: &str) -> Result<i64, String> {
 	};
 	Ok(hours * 3600 + minutes * 60)
 }
+
+#[path = "delivery_log_lines.rs"]
+mod lines;
+use lines::{Line, MAX_LINE_BYTES, day_in_window, read_capped_line};
 
 #[path = "delivery_log_day.rs"]
 mod day;

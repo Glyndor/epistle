@@ -305,3 +305,79 @@ fn a_filter_that_is_empty_is_a_usage_error_not_no_filter() {
 		}
 	}
 }
+
+/// Run `epistle` with at most 200 MB of address space, as `sh -c ulimit`
+/// does, so a command that reads a whole file into memory cannot finish.
+fn capped(env: &Env, args: &[&str]) -> (Option<i32>, String) {
+	let binary =
+		std::env::var_os("CLI_JSON_BIN").unwrap_or_else(|| env!("CARGO_BIN_EXE_epistle").into());
+	let mut full = vec!["delivery", "--config", &env.config];
+	full.extend_from_slice(args);
+	let output = std::process::Command::new("sh")
+		.args(["-c", "ulimit -v 200000; exec \"$@\"", "sh"])
+		.arg(binary)
+		.args(full)
+		.env("NO_COLOR", "1")
+		.stdin(std::process::Stdio::null())
+		.output()
+		.expect("run sh");
+	(
+		output.status.code(),
+		String::from_utf8_lossy(&output.stdout).into_owned(),
+	)
+}
+
+#[test]
+fn a_huge_log_file_costs_a_bounded_amount_of_memory() {
+	let env = four();
+	// A day file that opens with one record and goes on as 400 MB with no
+	// line ending at all. Read whole it would need 400 MB, which the cap does
+	// not allow: the record at its start would be lost with the rest.
+	let third = Uuid::from_u128(0x0123_4567_89ab_7cde_8f01_2345_6789_abcf);
+	let mut line = serde_json::to_vec(&record(
+		0,
+		third,
+		"early@remote.example",
+		DeliveryOutcome::Delivered,
+	))
+	.expect("serialise");
+	line.push(b'\n');
+	let older = env.data_dir().join("deliverylog/2023-11-13.jsonl");
+	std::fs::write(&older, &line).expect("write");
+	let file = std::fs::OpenOptions::new()
+		.append(true)
+		.open(&older)
+		.expect("open");
+	file.set_len(400 * 1024 * 1024).expect("sparse file");
+	let id = third.to_string();
+	for args in [
+		vec!["list", "--json"],
+		vec!["export"],
+		vec!["export", "--recipient", "early@remote.example"],
+		vec!["show", id.as_str()],
+	] {
+		let (code, stdout) = capped(&env, &args);
+		assert_eq!(code, Some(0), "{args:?}");
+		assert!(
+			stdout.contains("early@remote.example"),
+			"{args:?}: {stdout}"
+		);
+	}
+}
+
+#[test]
+fn list_is_bounded_like_export() {
+	let env = four();
+	for limit in ["0", "100001", "18446744073709551615"] {
+		let (code, stdout, stderr) = plain(&env, &["list", "--limit", limit, "--json"]);
+		assert_eq!((code, stdout.as_str()), (Some(2), ""), "{limit}");
+		assert!(
+			stderr.contains("--limit must be between 1 and 100000"),
+			"{limit}: {stderr}"
+		);
+	}
+	assert_eq!(
+		plain(&env, &["list", "--limit", "100000", "--json"]).0,
+		Some(0)
+	);
+}
