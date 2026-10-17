@@ -158,10 +158,7 @@ async fn sandbox_url_flows_through() {
 	let captured = state.lock().unwrap();
 	assert!(!captured.urls.is_empty());
 	let first = &captured.urls[0];
-	assert!(
-		first.contains("/xml.response?ApiUser="),
-		"base url not honoured: {first}"
-	);
+	assert_eq!(first, "/xml.response", "base url not honoured");
 }
 
 #[tokio::test]
@@ -171,16 +168,23 @@ async fn auth_params_include_username_and_key() {
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await
 		.expect("upsert");
-	let url = state.lock().unwrap().urls[0].clone();
-	assert!(
-		url.contains("ApiUser=user") && url.contains("UserName=user"),
-		"missing username params: {url}"
-	);
-	assert!(url.contains("ApiKey=key"), "missing api key param: {url}");
-	assert!(
-		url.contains("SLD=example") && url.contains("TLD=org"),
-		"{url}"
-	);
+	let s = state.lock().unwrap();
+	for call in s
+		.get_hosts_calls
+		.iter()
+		.chain(s.set_hosts_calls.iter().map(|c| &c.params))
+	{
+		for (key, value) in [
+			("ApiUser", "user"),
+			("UserName", "user"),
+			("ApiKey", "key"),
+			("SLD", "example"),
+			("TLD", "org"),
+		] {
+			assert_eq!(call.get(key).map(String::as_str), Some(value), "{key}");
+		}
+	}
+	assert_eq!((s.get_hosts_calls.len(), s.set_hosts_calls.len()), (1, 1));
 }
 
 #[tokio::test]

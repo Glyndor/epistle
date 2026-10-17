@@ -1,12 +1,12 @@
-//! Namecheap takes its credentials in the query string, so the key must be
-//! encoded as one value and the request must never be able to carry it in
-//! the clear.
+//! Namecheap takes its credentials as form parameters in the body of a POST:
+//! the request line carries none of them, so neither a log nor an error that
+//! quotes the URL can show the key.
 
 use super::*;
 use crate::dns::uri_probe::probe;
 
 #[tokio::test]
-async fn credentials_are_encoded_query_values() {
+async fn credentials_stay_out_of_the_request_line() {
 	let (base, seen) = probe(&["<ApiResponse Status=\"OK\"/>"]).await;
 	let secret = ScopedSecret::new("example.org", "us&er=1:k/ey?x#f");
 	let provider = NamecheapProvider::new(secret)
@@ -16,12 +16,7 @@ async fn credentials_are_encoded_query_values() {
 		);
 	// The probe's reply carries no hosts; only the request line matters here.
 	let _ = provider.list("example.org").await;
-	assert_eq!(
-		*seen.lock().unwrap(),
-		[
-			"GET /xml.response?ApiUser=us%26er%3D1&ApiKey=k%2Fey%3Fx%23f&UserName=us%26er%3D1&Command=namecheap.domains.dns.getHosts&SLD=example&TLD=org"
-		]
-	);
+	assert_eq!(*seen.lock().unwrap(), ["POST /xml.response"]);
 }
 
 #[test]

@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use super::MAX_BODY;
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
+use crate::dns::providers::transport;
 
 /// One record as Namecheap returns it from `getHosts` (and as we re-emit it
 /// to `setHosts`). `address` carries the kind-specific payload verbatim; for
@@ -77,11 +78,7 @@ const AUTH_ERROR_NUMBERS: &[&str] = &["1012801", "1012802", "2011169"];
 /// Read a response body in chunks with a hard cap.
 pub(crate) async fn read_bounded(mut response: reqwest::Response) -> Result<String, ProviderError> {
 	let mut body = Vec::new();
-	while let Some(chunk) = response
-		.chunk()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?
-	{
+	while let Some(chunk) = response.chunk().await.map_err(transport)? {
 		if body.len() + chunk.len() > MAX_BODY {
 			return Err(ProviderError::Remote("namecheap response too large".into()));
 		}

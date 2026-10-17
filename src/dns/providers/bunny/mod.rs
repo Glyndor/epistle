@@ -19,6 +19,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How Bunny takes a TXT `Value` and lists it back; see `record_body`.
@@ -184,7 +185,7 @@ impl BunnyProvider {
 			.header("AccessKey", self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode(response).await
 	}
 
@@ -202,7 +203,7 @@ impl BunnyProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+			.map_err(transport)
 	}
 
 	/// Build the create/update body for one record. SRV carries the
@@ -325,7 +326,7 @@ impl BunnyProvider {
 			.header("AccessKey", self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::NOT_FOUND {
 			return Ok(()); // idempotent: gone between find and delete.
@@ -416,10 +417,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response
-		.text()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let text = response.text().await.map_err(transport)?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

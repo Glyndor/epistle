@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, same_txt_purpose};
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How Route 53 wants a TXT value written and returns it; see `change`.
@@ -115,7 +116,7 @@ impl Route53Provider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
 			return Err(ProviderError::Auth);
@@ -212,7 +213,7 @@ impl Route53Provider {
 			.header(reqwest::header::AUTHORIZATION, auth)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
 			return Err(ProviderError::Auth);
@@ -220,10 +221,7 @@ impl Route53Provider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+		response.text().await.map_err(transport)
 	}
 
 	/// UPSERT one rrset carrying the given values verbatim. Used by
@@ -274,7 +272,7 @@ impl Route53Provider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
 			return Err(ProviderError::Auth);

@@ -18,6 +18,11 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     Unknown names, rejected input and a destructive action without `--yes`
     stay 2. A script that treated any non-zero code other than 1 as a usage
     error needs to read 3 as a refusal.
+  * Security: Namecheap sent its API key in the query of the `getHosts` GET,
+    and a failed connection or a timeout printed the whole URL, key
+    included, in the error of `dns lockdown`, `dns provider test` and the
+    DKIM daemon. `getHosts` is now a form POST like `setHosts`, and no DNS
+    provider puts the request URL in an error.
   * CLI: `epistle domain disable|enable` switches a hosted domain off and on
     without removing it. The new `disabled_domains` setting lists the
     switched-off domains; mail for one is rejected like mail for an unknown

@@ -15,6 +15,7 @@ use crate::net::{HttpsUrl, HttpsUrlError};
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How OVH takes a TXT `target` (logical) and lists it back (quoted and
@@ -187,12 +188,9 @@ impl OvhProvider {
 			.body(body.to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check_status(&response)?;
-		response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+		response.text().await.map_err(transport)
 	}
 
 	/// Variant that ignores the response body (PUT, DELETE, /refresh).
@@ -218,7 +216,7 @@ impl OvhProvider {
 			.body(body.to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check_status(&response)?;
 		Ok(())
 	}
@@ -303,7 +301,7 @@ impl OvhProvider {
 			.header("X-Ovh-Signature", sig)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -314,10 +312,7 @@ impl OvhProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let text = response.text().await.map_err(transport)?;
 		let rec: OvhRecord =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		Ok(Some(rec))

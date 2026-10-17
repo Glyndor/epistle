@@ -17,6 +17,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_encode};
 use tags as cloudflare_tags;
 
@@ -306,7 +307,7 @@ impl CloudflareProvider {
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode(response).await
 	}
 
@@ -453,7 +454,7 @@ impl CloudflareProvider {
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode_ok(response).await
 	}
 
@@ -482,7 +483,7 @@ impl CloudflareProvider {
 			.body(body.to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+			.map_err(transport)
 	}
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -560,10 +561,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response
-		.text()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let text = response.text().await.map_err(transport)?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

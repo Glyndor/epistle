@@ -6,6 +6,7 @@
 
 use super::{GcloudProvider, ListRrsetsResp, Rrset};
 use crate::dns::provider::ProviderError;
+use crate::dns::providers::transport;
 
 /// The most pages one listing reads, so a server that keeps handing out
 /// page tokens cannot keep the listing going for ever.
@@ -30,7 +31,7 @@ impl GcloudProvider {
 				.bearer_auth(&token)
 				.send()
 				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				.map_err(transport)?;
 			Self::classify(&response, false)?;
 			let text = self.read_body(response).await?;
 			let parsed: ListRrsetsResp =

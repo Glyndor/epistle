@@ -3,6 +3,13 @@
 //! `DnsProvider` trait, record types, matching rules) is in
 //! [`crate::dns::provider`].
 
+/// A transport failure as a provider error. The request URL is left out of the
+/// message: some providers carry a credential in it (Namecheap's `ApiKey`), and
+/// the message reaches a terminal, a log and a support screenshot.
+pub(crate) fn transport(error: reqwest::Error) -> crate::dns::provider::ProviderError {
+	crate::dns::provider::ProviderError::Remote(error.without_url().to_string())
+}
+
 pub mod bunny;
 pub mod cloudflare;
 pub mod desec;
@@ -16,3 +23,6 @@ pub mod porkbun;
 pub mod rfc2136;
 pub mod route53;
 pub mod spaceship;
+
+#[cfg(test)]
+mod transport_tests;

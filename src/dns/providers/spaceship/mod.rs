@@ -15,6 +15,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How Spaceship takes a TXT `value` and lists it back; see `wire_value`.
@@ -206,7 +207,7 @@ impl SpaceshipProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -246,7 +247,7 @@ impl SpaceshipProvider {
 			.body(serde_json::json!([item]).to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -265,20 +266,16 @@ impl SpaceshipProvider {
 				.request(reqwest::Method::GET, page_url)
 				.send()
 				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				.map_err(transport)?;
 			let status = response.status();
 			if status == reqwest::StatusCode::UNAUTHORIZED
 				|| status == reqwest::StatusCode::FORBIDDEN
 			{
 				return Err(ProviderError::Auth);
 			}
-			let page: ListResponse = response
-				.text()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))
-				.and_then(|text| {
-					serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
-				})?;
+			let page: ListResponse = response.text().await.map_err(transport).and_then(|text| {
+				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
+			})?;
 			let count = page.items.len() as i64;
 			out.extend(page.items);
 			if out.len() as i64 >= page.total || count == 0 {
