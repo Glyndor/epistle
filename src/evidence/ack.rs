@@ -232,6 +232,36 @@ pub fn is_acknowledged(evidence_root: &Path, at: &Break) -> bool {
 	false
 }
 
+/// The most breaks of one day [`walk_day_acknowledged`] goes past.
+const MAX_PAST_PER_DAY: usize = 64;
+
+/// [`super::verify::walk_day`], going on past the breaks an operator
+/// acknowledged, as the verification does, so a reader of the chain sees the
+/// records after one. Any other break is returned: a reader that decides
+/// something from what it saw must not take a day it could not read for one
+/// that holds nothing. `visit` is called again from the start of the day
+/// after each break gone past, so it must not count.
+pub fn walk_day_acknowledged(
+	evidence_root: &Path,
+	day: super::day::Day,
+	mut visit: impl FnMut(u64, &Record, &[u8; 32]),
+) -> Result<super::verify::DayWalk, Break> {
+	let mut accepted: Vec<u64> = Vec::new();
+	loop {
+		match super::verify::walk_day_accepting(evidence_root, day, None, &accepted, &mut visit) {
+			Err(at)
+				if at.line > 0
+					&& accepted.len() < MAX_PAST_PER_DAY
+					&& !accepted.contains(&at.line)
+					&& is_acknowledged(evidence_root, &at) =>
+			{
+				accepted.push(at.line);
+			}
+			walked => return walked,
+		}
+	}
+}
+
 /// Whether the state `record` names is the one the day is in now: every
 /// line before the acknowledgement (all of them when it sits in a later day)
 /// and the checkpoint files. A break that names its own state carries none.

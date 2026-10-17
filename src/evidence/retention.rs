@@ -180,7 +180,7 @@ pub fn sweep(
 }
 
 /// The statement of a purge the anchor has not caught up with, with its bytes.
-fn unfinished(evidence_root: &Path) -> std::io::Result<Option<(Statement, Vec<u8>)>> {
+fn unfinished(evidence_root: &Path) -> std::io::Result<Option<(Day, Statement, Vec<u8>)>> {
 	let reached = super::anchor::load(&evidence_root.join(CHAIN_DIR))?
 		.and_then(|anchor| Day::parse(&anchor.through));
 	let entries = match std::fs::read_dir(evidence_root.join(PURGES_DIR)) {
@@ -211,7 +211,7 @@ fn unfinished(evidence_root: &Path) -> std::io::Result<Option<(Statement, Vec<u8
 	};
 	let statement = serde_json::from_slice(&bytes)
 		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-	Ok(Some((statement, bytes)))
+	Ok(Some((through, statement, bytes)))
 }
 
 /// Whether the chain names the statement `digest` in a `purge` record. A day
@@ -227,7 +227,7 @@ fn recorded(evidence_root: &Path, chain: &Chain, digest: &str) -> std::io::Resul
 	let mut found = false;
 	let mut unreadable = false;
 	for day in chain.days()? {
-		let walked = super::verify::walk_day(evidence_root, day, None, |_, record, _| {
+		let walked = super::ack::walk_day_acknowledged(evidence_root, day, |_, record, _| {
 			found |= matches!(&record.entry, Entry::Purge(purge) if purge.statement == digest);
 		});
 		unreadable |= walked.is_err();
@@ -250,7 +250,7 @@ fn resume(
 	anchors: &[[u8; 32]],
 	now: u64,
 ) -> std::io::Result<()> {
-	let Some((statement, bytes)) = unfinished(evidence_root)? else {
+	let Some((named, statement, bytes)) = unfinished(evidence_root)? else {
 		return Ok(());
 	};
 	let kept = |why: &str| {
@@ -271,7 +271,12 @@ fn resume(
 	if report.first_break.is_some() {
 		return Err(kept("the evidence does not verify"));
 	}
-	let base = evidence_root.join(PURGES_DIR).join(&statement.through);
+	// The path is made from the day the file is named for, never from what the
+	// file says: a statement that names another day is not one of ours.
+	if statement.through != named.name() {
+		return Err(kept("the statement names another day than its file"));
+	}
+	let base = evidence_root.join(PURGES_DIR).join(named.name());
 	match recorded(evidence_root, chain, &to_hex(&sha256(&bytes)))? {
 		Named::Unknown => return Err(kept("a day of the chain cannot be read")),
 		Named::No => {
@@ -297,7 +302,7 @@ fn resume(
 		&position,
 		&checkpoint_hash,
 	)?;
-	finish_deleting(evidence_root, chain)
+	finish_deleting(evidence_root, chain, (anchors, now))
 }
 
 /// [`sweep`], stopping with an error after the steps `stop` names.
@@ -321,7 +326,7 @@ pub(crate) fn sweep_steps(
 	};
 	let chain = Chain::open(evidence_root)?;
 	resume(evidence_root, &chain, anchors, now)?;
-	finish_deleting(evidence_root, &chain)?;
+	finish_deleting(evidence_root, &chain, (anchors, now))?;
 	let expired = expired_days(evidence_root, &chain, today)?;
 	if expired.is_empty() {
 		return Ok(done);
@@ -428,7 +433,7 @@ pub(crate) fn sweep_steps(
 		&checkpoint_hash,
 	)?;
 	cut(Step::Anchored)?;
-	finish_deleting(evidence_root, &chain)?;
+	finish_deleting(evidence_root, &chain, (anchors, now))?;
 	done.days = purgeable.len();
 	Ok(done)
 }
@@ -507,15 +512,85 @@ pub fn check_statement(
 	Ok(())
 }
 
-/// Delete the day files and checkpoints the anchor says were purged.
-fn finish_deleting(evidence_root: &Path, chain: &Chain) -> std::io::Result<()> {
+/// Delete the day files and checkpoints the anchor says were purged, once
+/// the anchor is shown to be a purge's and not just a file that parses: the
+/// whole evidence verifies, a signed statement for the anchor's day says the
+/// same as the anchor, and every day to go is named by that statement with the
+/// checkpoint it has now and has outlived its retention. Anything else, and
+/// nothing is deleted.
+fn finish_deleting(
+	evidence_root: &Path,
+	chain: &Chain,
+	(anchors, now): (&[[u8; 32]], u64),
+) -> std::io::Result<()> {
 	let Some(anchor) = super::anchor::load(&evidence_root.join(CHAIN_DIR))? else {
 		return Ok(());
 	};
 	let Some(through) = Day::parse(&anchor.through) else {
 		return Ok(());
 	};
-	for day in chain.days()?.into_iter().filter(|day| *day <= through) {
+	let going: Vec<Day> = chain
+		.days()?
+		.into_iter()
+		.filter(|day| *day <= through)
+		.collect();
+	if going.is_empty() {
+		return Ok(());
+	}
+	let kept = |why: &str| {
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			format!("the days the purge anchor covers are kept: {why}"),
+		)
+	};
+	let report = super::audit::verify(
+		evidence_root,
+		&super::audit::Options {
+			from: None,
+			to: None,
+			anchors: anchors.to_vec(),
+			now,
+		},
+	)?;
+	if report.first_break.is_some() {
+		return Err(kept("the evidence does not verify"));
+	}
+	let base = evidence_root.join(PURGES_DIR).join(through.name());
+	let read = |path: &Path| checkpoint::read_bounded(path, 1024 * 1024);
+	let (Some(bytes), Some(_)) = (
+		read(&base.with_extension("json"))?,
+		read(&base.with_extension("sig"))?,
+	) else {
+		return Err(kept("there is no signed statement for the anchor"));
+	};
+	let statement: Statement = serde_json::from_slice(&bytes)
+		.map_err(|_| kept("the statement for the anchor is malformed"))?;
+	if statement.through != anchor.through
+		|| statement.last_hash != anchor.last_hash
+		|| statement.checkpoint != anchor.checkpoint
+	{
+		return Err(kept(
+			"the statement for the anchor does not say what it says",
+		));
+	}
+	for day in &going {
+		let paths = files(evidence_root, *day);
+		let named = statement.days.iter().find(|named| named.day == day.name());
+		let sealed = read(&paths.json)?;
+		let (Some(named), Some(sealed)) = (named, sealed) else {
+			return Err(kept(&format!("{day} is not a purged day of the statement")));
+		};
+		let outlived = serde_json::from_slice::<Checkpoint>(&sealed)
+			.ok()
+			.and_then(|cp| Day::parse(&cp.retain_until))
+			.is_some_and(|until| until < Day::of_epoch(now));
+		if named.checkpoint != to_hex(&sha256(&sealed)) || !outlived {
+			return Err(kept(&format!(
+				"{day} is not the day the statement purged, or its retention has not passed"
+			)));
+		}
+	}
+	for day in going {
 		let paths = files(evidence_root, day);
 		for path in [chain.day_file(day), paths.json, paths.sig, paths.tsr] {
 			match std::fs::remove_file(&path) {
@@ -576,3 +651,6 @@ mod tests_crash;
 #[cfg(test)]
 #[path = "retention_tests_keys.rs"]
 mod tests_keys;
+#[cfg(test)]
+#[path = "retention_tests_planted.rs"]
+mod tests_planted;

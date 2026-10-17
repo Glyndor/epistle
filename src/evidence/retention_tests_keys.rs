@@ -10,9 +10,16 @@ fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
 	crate::evidence::rotation::rotate_at(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
 	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
 	assert_ne!(new.id(), old.id());
-	// The same purge, statement signed by the key that handed over.
-	let swept = sweep(dir.path(), &old, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
-	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	// The same purge, statement signed by the key that handed over: the
+	// sweep goes as far as the anchor, and does not delete on a statement
+	// that does not verify.
+	let error = sweep(dir.path(), &old, &[tsa.anchor], at(DAY + 5, 12)).expect_err("kept");
+	assert!(error.to_string().contains("does not verify"), "{error}");
+	let chain = Chain::open(dir.path()).expect("chain");
+	assert!(
+		chain.days().expect("days").contains(&Day(DAY)),
+		"a day went"
+	);
 	let report = verified(dir.path(), &tsa, at(DAY + 5, 13));
 	assert_eq!(
 		report

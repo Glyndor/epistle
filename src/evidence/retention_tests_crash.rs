@@ -6,7 +6,7 @@ use crate::evidence::test_support::{accepted_for, at};
 use crate::evidence::tsa::fake::FakeTsa;
 
 /// Four days kept two, sealed and stamped, and the time the first three can go.
-fn old_days() -> (tempfile::TempDir, EvidenceKey, FakeTsa, u64) {
+pub(super) fn old_days() -> (tempfile::TempDir, EvidenceKey, FakeTsa, u64) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
 	let mut tsa = FakeTsa::new(at(DAY + 30, 0));
@@ -20,15 +20,17 @@ fn old_days() -> (tempfile::TempDir, EvidenceKey, FakeTsa, u64) {
 	(dir, key, tsa, at(DAY + 5, 12))
 }
 
-fn purge_records(root: &Path) -> usize {
-	let mut found = 0;
+pub(super) fn purge_records(root: &Path) -> usize {
+	let mut found = std::collections::HashSet::new();
 	for day in Chain::open(root).expect("chain").days().expect("days") {
-		crate::evidence::verify::walk_day(root, day, None, |_, record, _| {
-			found += usize::from(matches!(record.entry, Entry::Purge(_)));
+		crate::evidence::ack::walk_day_acknowledged(root, day, |line, record, _| {
+			if matches!(record.entry, Entry::Purge(_)) {
+				found.insert((day, line));
+			}
 		})
 		.expect("walk");
 	}
-	found
+	found.len()
 }
 
 #[test]
