@@ -56,6 +56,9 @@ mod interp_tests_redirects;
 #[path = "interp_tests_sender.rs"]
 mod interp_tests_sender;
 #[cfg(test)]
+#[path = "interp_tests_window.rs"]
+mod interp_tests_window;
+#[cfg(test)]
 mod memory_tests;
 #[cfg(test)]
 mod parser_tests;

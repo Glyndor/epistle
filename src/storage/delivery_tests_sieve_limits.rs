@@ -314,7 +314,7 @@ fn deliveries_at_the_same_moment_do_not_pass_the_limit_together() {
 }
 
 #[test]
-fn an_overspent_run_keeps_the_discard_and_sends_nothing() {
+fn an_overspent_run_that_asked_to_forward_sends_nothing_and_keeps_the_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let script = format!(
 		"discard;\nredirect \"someone@target.example\";\n{}",
@@ -331,8 +331,8 @@ fn an_overspent_run_keeps_the_discard_and_sends_nothing() {
 	});
 	assert_eq!(
 		inbox(dir.path()),
-		0,
-		"the discard decided before the run stopped stands"
+		1,
+		"the forward was lost, so the message is kept and not discarded"
 	);
 	assert_eq!(redirects, 0, "an incomplete run never forwards");
 	let said = events
@@ -347,4 +347,68 @@ fn an_overspent_run_keeps_the_discard_and_sends_nothing() {
 		said.fields.get("redirects_dropped").map(String::as_str),
 		Some("1")
 	);
+}
+
+#[test]
+fn an_overspent_run_that_only_discarded_still_discards() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let script = format!("discard;\n{}", "noop;\n".repeat(25_000));
+	let delivery = setup(dir.path(), &script);
+	delivery
+		.deliver_routed(&message("hi"), None)
+		.expect("deliver");
+	assert_eq!(inbox(dir.path()), 0, "nothing outward was lost");
+}
+
+#[test]
+fn the_overspending_warning_is_said_once_an_hour_for_an_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let script = format!("discard;\n{}", "noop;\n".repeat(25_000));
+	let delivery = setup(dir.path(), &script);
+	let events = run_with_capture(|| {
+		for _ in 0..5 {
+			delivery
+				.deliver_routed(&message("hi"), None)
+				.expect("deliver");
+		}
+	});
+	let said = events
+		.iter()
+		.filter(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("stopped where it was"))
+		})
+		.count();
+	assert_eq!(said, 1, "five messages, one line");
+}
+
+#[test]
+fn a_body_past_the_window_is_counted_and_said_once() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let script = "require \"body\";\nif body :contains \"spamword\" { discard; }\n";
+	let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+	let delivery = setup(dir.path(), script).with_metrics(metrics.clone());
+	let mut big = message("hi");
+	big.data.extend(std::iter::repeat_n(b'x', (1 << 20) + 10));
+	big.data.extend_from_slice(b" spamword\r\n");
+	let events = run_with_capture(|| {
+		for _ in 0..3 {
+			delivery.deliver_routed(&big, None).expect("deliver");
+		}
+	});
+	assert_eq!(inbox(dir.path()), 3, "the word is past what the test reads");
+	assert_eq!(
+		metrics.snapshot().get("sieve_inspection_truncated"),
+		Some(&3)
+	);
+	let said = events
+		.iter()
+		.filter(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("looked at part of a message only"))
+		})
+		.count();
+	assert_eq!(said, 1);
 }

@@ -27,7 +27,7 @@ pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool 
 		"anyof" => test.children.iter().any(|c| eval_test(c, message, vars)),
 		"exists" => strings(&test.args)
 			.iter()
-			.all(|name| vars.charge(lookup_cost(name)) && message.header_count(name) > 0),
+			.all(|name| vars.charge(lookup_cost(name)) && message.has_header(name)),
 		"header" => header_test(test, message, vars),
 		"address" => address_test(test, message, vars),
 		"envelope" => envelope_test(test, message, vars),
@@ -78,7 +78,11 @@ fn date_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	if !vars.charge(lookup_cost(header)) {
 		return false;
 	}
-	for value in message.header_values(header) {
+	let seen = message.visible_headers(std::slice::from_ref(header));
+	if seen.truncated {
+		vars.mark_truncated();
+	}
+	for value in seen.values {
 		// The value is read to find its date part, and every key is
 		// compared with it: all of that is paid for.
 		if !vars.charge(value.len() as u64) {
@@ -125,13 +129,22 @@ fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	if !names.iter().all(|name| vars.charge(lookup_cost(name))) {
 		return false;
 	}
-	if let Some(rel) = spec.count_rel() {
-		let count: usize = names.iter().map(|name| message.header_count(name)).sum();
-		return keys.iter().any(|key| spec.count_matches(rel, count, key));
+	let seen = message.visible_headers(&names);
+	if seen.truncated {
+		vars.mark_truncated();
 	}
-	for value in names.iter().flat_map(|name| message.header_values(name)) {
+	if let Some(rel) = spec.count_rel() {
+		return keys
+			.iter()
+			.any(|key| spec.count_matches(rel, seen.values.len(), key));
+	}
+	// Each value is paid for once, however many keys it is compared with.
+	for value in &seen.values {
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
 		for key in &keys {
-			if spec.test(value, key, vars) {
+			if spec.test_read(value, key, vars) {
 				return true;
 			}
 		}
@@ -150,7 +163,11 @@ fn address_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		return false;
 	}
 	let mut extracted: Vec<String> = Vec::new();
-	for value in names.iter().flat_map(|name| message.header_values(name)) {
+	let seen = message.visible_headers(&names);
+	if seen.truncated {
+		vars.mark_truncated();
+	}
+	for value in seen.values {
 		// What is copied out of the message is paid for first.
 		if !vars.charge(value.len() as u64) {
 			return false;
@@ -177,10 +194,14 @@ fn envelope_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		})
 		.filter_map(|address| part.of(&addr_spec(&address)))
 		.collect();
+	if !vars.charge(extracted.iter().map(|value| value.len() as u64).sum()) {
+		return false;
+	}
 	match_values(&spec, &extracted, &keys, vars)
 }
 
-/// Test extracted values against keys, honoring `:count`.
+/// Test extracted values against keys, honoring `:count`. The caller has
+/// paid for the octets of the values.
 fn match_values(spec: &MatchSpec, values: &[String], keys: &[String], vars: &mut Env) -> bool {
 	if let Some(rel) = spec.count_rel() {
 		return keys
@@ -189,7 +210,7 @@ fn match_values(spec: &MatchSpec, values: &[String], keys: &[String], vars: &mut
 	}
 	for value in values {
 		for key in keys {
-			if spec.test(value, key, vars) {
+			if spec.test_read(value, key, vars) {
 				return true;
 			}
 		}
@@ -259,12 +280,20 @@ fn addr_spec(value: &str) -> String {
 	value.trim().to_string()
 }
 
-/// `body [match-type] [comparator] [:raw|:text] <key-list>` (RFC 5173).
+/// `body [match-type] [comparator] [:raw|:text] <key-list>` (RFC 5173). The
+/// test reads the first mebibyte of the body.
 fn body_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
+	let (body, truncated) = message.body_window();
+	if truncated {
+		vars.mark_truncated();
+	}
+	if !vars.charge(body.len() as u64) {
+		return false;
+	}
 	compare::positional_strings(&test.args)
 		.iter()
-		.any(|key| spec.test(message.body_window(), key, vars))
+		.any(|key| spec.test_read(body, key, vars))
 }
 
 /// `size :over|:under <number>`.

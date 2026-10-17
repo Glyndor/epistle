@@ -66,16 +66,41 @@ impl LocalDelivery {
 			.with_envelope(message.reverse_path.clone(), message.recipients.clone())
 			.with_mailboxes(&mut mailboxes);
 		let outcome = crate::sieve::interp::evaluate(&commands, &parsed);
-		if outcome.aborted {
+		if outcome.aborted
+			&& crate::util::warn_limited::allow(&format!(
+				"sieve-aborted:{}:{account}",
+				self.data_dir.display()
+			)) {
 			tracing::warn!(
 				account,
 				redirects_dropped = outcome.dropped.redirects,
 				reject_dropped = outcome.dropped.reject,
 				vacation_dropped = outcome.dropped.vacation,
-				"the account's Sieve filter used more steps or work than a run may; the run stopped where it was: what it had decided about where the message goes stands, redirects, rejects and vacation replies it had asked for were dropped, and the rest of the script did not run"
+				kept = outcome.keep,
+				discarded = outcome.discarded,
+				fileinto = outcome.fileinto.len(),
+				"the account's Sieve filter used more steps or work than a run may; the run stopped where it was: what it had decided about where the message goes stands, redirects, rejects and vacation replies it had asked for were dropped (and the message kept if any was), and the rest of the script did not run"
 			);
 		}
-		if outcome.redirects_over_limit > 0 {
+		if outcome.inspection_truncated {
+			if let Some(metrics) = &self.metrics {
+				metrics.sieve_inspection_truncated();
+			}
+			if crate::util::warn_limited::allow(&format!(
+				"sieve-truncated:{}:{account}",
+				self.data_dir.display()
+			)) {
+				tracing::warn!(
+					account,
+					"a Sieve test of the account's filter looked at part of a message only (the first mebibyte of the body, or the first mebibyte or thousand values of the headers of a lookup); a rule that matches text past that did not see it"
+				);
+			}
+		}
+		if outcome.redirects_over_limit > 0
+			&& crate::util::warn_limited::allow(&format!(
+				"sieve-redirects:{}:{account}",
+				self.data_dir.display()
+			)) {
 			tracing::warn!(
 				account,
 				ignored = outcome.redirects_over_limit,

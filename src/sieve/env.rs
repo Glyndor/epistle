@@ -33,8 +33,12 @@ pub(super) const MAX_WORK: u64 = 256 * 1024 * 1024;
 pub(super) const BODY_WINDOW: usize = 1024 * 1024;
 /// How much of one header value a test reads.
 pub(super) const HEADER_VALUE_WINDOW: usize = 64 * 1024;
-/// How many headers of one name a lookup visits.
+/// How many headers one lookup (one `header`, `address` or `date` test, all
+/// the names it lists together) visits.
 pub(super) const HEADER_VALUES_PER_LOOKUP: usize = 1000;
+/// How much header text one lookup reads in all, whatever the number of
+/// values: the first mebibyte. A lookup costs at most what a body test does.
+pub(super) const HEADER_LOOKUP_WINDOW: usize = 1024 * 1024;
 
 /// Variables and counters of one run.
 pub(crate) struct Env {
@@ -47,6 +51,9 @@ pub(crate) struct Env {
 	steps: u32,
 	work: u64,
 	exhausted: bool,
+	/// A test did not look at the whole of what it was asked about: a body
+	/// past its window, more headers than a lookup visits.
+	truncated: bool,
 }
 
 impl Default for Env {
@@ -58,6 +65,7 @@ impl Default for Env {
 			steps: 0,
 			work: 0,
 			exhausted: false,
+			truncated: false,
 		}
 	}
 }
@@ -66,6 +74,16 @@ impl Env {
 	/// Whether the run spent more than it may: it stops where it is.
 	pub(super) fn exhausted(&self) -> bool {
 		self.exhausted
+	}
+
+	/// Note that a test looked at less than the whole message.
+	pub(super) fn mark_truncated(&mut self) {
+		self.truncated = true;
+	}
+
+	/// Whether any test looked at less than the whole message.
+	pub(super) fn truncated(&self) -> bool {
+		self.truncated
 	}
 
 	/// Count one command or test; `false` once the run is out of steps.

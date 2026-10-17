@@ -162,3 +162,28 @@ fn the_search_stops_as_soon_as_the_budget_is_spent() {
 		"{steps} comparisons for a budget of 1000"
 	);
 }
+
+#[test]
+fn a_value_read_once_is_paid_once_but_each_pass_over_it_is_not_free() {
+	let value = "x".repeat(1 << 20);
+	let contains = match_spec(&[Argument::Tag("contains".to_string())]);
+	// A hundred keys over a mebibyte already paid for are well inside a run.
+	let mut env = Env::default();
+	for _ in 0..100 {
+		assert!(!contains.test_read(&value, "needle", &mut env));
+	}
+	assert!(!env.exhausted());
+	// Five thousand passes are not: the run is out of work.
+	let mut env = Env::default();
+	for _ in 0..5000 {
+		contains.test_read(&value, "needle", &mut env);
+	}
+	assert!(env.exhausted());
+	// `:is` makes no pass over the value, and its keys cost their own length.
+	let is = match_spec(&[Argument::Tag("is".to_string())]);
+	let mut env = Env::default();
+	for _ in 0..5000 {
+		is.test_read(&value, "needle", &mut env);
+	}
+	assert!(!env.exhausted());
+}

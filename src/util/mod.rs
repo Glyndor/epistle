@@ -11,5 +11,6 @@ pub mod mailbox_path;
 pub mod mutf7;
 pub mod path_component;
 pub mod path_containment;
+pub mod warn_limited;
 
 pub(crate) mod fs_walk;

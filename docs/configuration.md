@@ -927,7 +927,7 @@ The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
 are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
-`relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
+`relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
 
@@ -1703,16 +1703,40 @@ same rules as in the section above.
 run against mail anyone can send, so a run is bounded by the server and not
 by the script:
 
-- 20000 commands and tests, and 50 million units of matching work. A run that
-  passes either is abandoned as a whole (RFC 5228 section 2.10.6): nothing it
-  asked for happens, the message is kept in INBOX and the log says so.
+- 20000 commands and tests, and 256 MiB of work (octets read and compared).
+  The ceiling is fixed: it does not grow with the size of the message, which
+  is the sender's choice. A run that passes either stops where it is, as a
+  `stop` would, and the log says what happened (once an hour per account).
+  What it had decided about where the message goes (`discard`, `fileinto`,
+  `keep`, flags) stands, so a big message cannot undo a `discard`. What it had
+  asked to send outward (`redirect`, `reject`, `ereject`, `vacation`) is
+  dropped, because a run that did not finish never originates mail; and if
+  anything outward was dropped, no `discard` stands and the message is kept,
+  since a run cannot both lose the forward and suppress the delivery. A
+  message nothing local was decided about is kept in INBOX. A string that
+  could not be built within the budget does not give its action: the action
+  does not happen.
+- **What a filter sees of a big message.** A test reads a window, not the
+  whole message: the first 1 MiB of the body (the `body` test), and for a
+  `header`, `address` or `date` lookup the first 1000 values and the first
+  1 MiB of header text in all, at most 64 KiB of each value. `:count` counts
+  the values of the same window. Text a sender puts past the window is not
+  seen by the test, so a rule that must catch something should not depend on
+  where in a huge message it is. The run goes on with what it saw, never
+  with "no match" presented as certainty without a trace: the log says so
+  once an hour per account, and the counter
+  `mail_sieve_inspection_truncated_total` (alert metric
+  `sieve_inspection_truncated`) counts the messages for which a test did not
+  see everything. Each value is paid for once per lookup, and a key that
+  makes a pass over it (`:contains`, `:matches`) costs a quarter of its length
+  more. 200 ordinary rules never reach the ceiling on a 25 MiB message.
 - A variable is cut to 4096 octets, a run holds 64 KiB in at most 128 of them,
   and a string built with `${...}` is at most as long as the larger of what
   the script wrote and 4096 octets.
 - `:matches` never looks at the length of the text it is given (a sender can
   make a Subject as long as the message allows, and the filter still sees
   it); its cost is counted in the run's budget. A key over 256 characters or
-  32 wildcards is refused, which abandons the run like any overspending, and
+  32 wildcards is refused, which stops the run like any overspending, and
   the same upload check refuses a script that holds one.
 - `fileinto` files into a folder once however often the script names it, and
   into at most 8 different folders. A folder the filter would make is made

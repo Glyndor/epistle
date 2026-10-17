@@ -207,6 +207,26 @@ impl MatchSpec {
 		if !env.charge(value.len() as u64 + key.len() as u64 + COMPARISON_COST) {
 			return false;
 		}
+		self.compare(value, key, env)
+	}
+
+	/// The same for a `value` the caller has paid for already, once however
+	/// many keys it is compared with. A key costs its own length and a
+	/// minimum, and, when it makes a pass over the value (`:contains`,
+	/// `:matches`), a quarter of the value again: that is what the pass costs
+	/// over text already read.
+	pub(super) fn test_read(&self, value: &str, key: &str, env: &mut Env) -> bool {
+		let pass = match self.match_type {
+			MatchType::Contains | MatchType::Matches => value.len() as u64 / 4,
+			_ => 0,
+		};
+		if !env.charge(pass + key.len() as u64 + COMPARISON_COST) {
+			return false;
+		}
+		self.compare(value, key, env)
+	}
+
+	fn compare(&self, value: &str, key: &str, env: &mut Env) -> bool {
 		match self.match_type {
 			MatchType::Matches => {
 				let mut steps = 0;

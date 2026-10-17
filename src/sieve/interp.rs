@@ -38,6 +38,10 @@ pub struct Outcome {
 	/// The run spent more than it may (steps, matching work, memory, see
 	/// the run budget) and was abandoned: the message is only kept.
 	pub aborted: bool,
+	/// A test looked at less than the whole message: a body past the first
+	/// mebibyte, or more headers than a lookup visits. The run went on with
+	/// what it saw.
+	pub inspection_truncated: bool,
 	/// What an aborted run had decided to send and the server dropped: an
 	/// incomplete run never originates mail.
 	pub dropped: Dropped,
@@ -55,6 +59,13 @@ pub struct Dropped {
 	pub reject: bool,
 	/// A `vacation`.
 	pub vacation: bool,
+}
+
+impl Dropped {
+	/// Whether anything outward was dropped.
+	pub fn any(&self) -> bool {
+		self.redirects > 0 || self.reject || self.vacation
+	}
 }
 
 /// Which actions cancelled the implicit keep: a decision about where the
@@ -84,11 +95,13 @@ pub use super::message::Message;
 /// Run a parsed script against a message and return the delivery outcome.
 ///
 /// A run that spends more than it may (see [`super::env`]) stops where it is,
-/// as a `stop` would, with this rule: what it had decided about where the
+/// as a `stop` would, with this rule. What it had decided about where the
 /// message goes (`discard`, `fileinto`, `keep`, flags) stays decided, so that
-/// the size of a message cannot undo a user's `discard`; what it had asked to
+/// the size of a message cannot undo a user's `discard`. What it had asked to
 /// send outward (`redirect`, `reject`, `vacation`) is dropped, since an
-/// incomplete run never originates mail; and a message nothing local was
+/// incomplete run never originates mail; and when anything outward was lost,
+/// no `discard` stands and the message is kept, because a run cannot both
+/// lose the forward and suppress the delivery. A message nothing local was
 /// decided about is kept. `aborted` and `dropped` say so, for the log.
 pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut outcome = Outcome::default();
@@ -96,16 +109,24 @@ pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut env = Env::default();
 	run(script, message, &mut outcome, &mut cancel, &mut env);
 	outcome.aborted = env.exhausted();
+	outcome.inspection_truncated = env.truncated();
 	if outcome.aborted {
 		outcome.dropped = Dropped {
 			redirects: outcome.redirects.len(),
 			reject: outcome.reject.is_some(),
 			vacation: outcome.vacation.is_some(),
 		};
-		outcome.redirects.clear();
-		outcome.reject = None;
-		outcome.vacation = None;
-		cancel.external = false;
+		if outcome.dropped.any() {
+			// An incomplete run never sends, and it cannot both let the
+			// forward go and suppress the delivery: with something outward
+			// lost, no `discard` stands, and the message is kept.
+			outcome.redirects.clear();
+			outcome.reject = None;
+			outcome.vacation = None;
+			outcome.discarded = false;
+			outcome.keep = true;
+			return outcome;
+		}
 	}
 	// Implicit keep applies unless an action cancelled it.
 	if !(cancel.local || cancel.external) {

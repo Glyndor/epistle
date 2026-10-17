@@ -73,6 +73,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("rejected_rate_limit", "rejected_rate_limit"),
 	("abuse_dropped", "abuse_dropped"),
 	("sieve_rejected", "sieve_rejected"),
+	("sieve_inspection_truncated", "sieve_inspection_truncated"),
 	("vacation_sent", "vacation_sent"),
 	("forwarded", "forwarded"),
 	("relayed", "relayed"),
@@ -135,6 +136,7 @@ pub struct Metrics {
 	rejected_rate_limit: AtomicU64,
 	abuse_dropped: AtomicU64,
 	sieve_rejected: AtomicU64,
+	sieve_inspection_truncated: AtomicU64,
 	vacation_sent: AtomicU64,
 	forwarded: AtomicU64,
 	relayed: AtomicU64,
@@ -211,6 +213,13 @@ impl Metrics {
 	/// Count a message refused by a Sieve `reject`/`ereject`.
 	pub fn sieve_rejected(&self) {
 		self.sieve_rejected.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message a Sieve test could not look at whole (a body past its
+	/// window, more headers of a name than a lookup visits).
+	pub fn sieve_inspection_truncated(&self) {
+		self.sieve_inspection_truncated
+			.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a Sieve `vacation` autoresponse sent.
@@ -425,6 +434,7 @@ impl Metrics {
 			"rejected_rate_limit" => &self.rejected_rate_limit,
 			"abuse_dropped" => &self.abuse_dropped,
 			"sieve_rejected" => &self.sieve_rejected,
+			"sieve_inspection_truncated" => &self.sieve_inspection_truncated,
 			"vacation_sent" => &self.vacation_sent,
 			"forwarded" => &self.forwarded,
 			"relayed" => &self.relayed,

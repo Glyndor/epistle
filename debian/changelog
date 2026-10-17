@@ -392,7 +392,8 @@ epistle (0.12.1) unstable; urgency=medium
     wildcards (a 100 KB script aborted the server), and a text of any length
     still matches; `set "a" "${a}${a}"` repeated no longer builds gigabytes
     (variables are cut to 4096 octets, 64 KiB per run); a run is abandoned and
-    the message kept past 20000 steps or a matching budget; `fileinto` files
+    stopped past 20000 steps or 256 MiB of work (what it decided about where the
+    message goes stands, what it would have sent is dropped); `fileinto` files
     into a folder once and into at most 8 folders; no chain of `not` nests past
     64 levels (about 200000 of them overflowed the stack). A filter that files
     by a header (`fileinto "${1}"`) makes no folder past 200 in the account,
@@ -415,6 +416,18 @@ epistle (0.12.1) unstable; urgency=medium
     rename the files in `<data_dir>/accounts/<account>/sieve/`); an account
     with more than 50 scripts keeps them all and cannot add one until it is
     under the limit. The active marker is no longer trimmed.
+  * Sieve: what a test reads of a message is a fixed window: the first 1 MiB
+    of the body, and per header lookup the first 1000 values and 1 MiB of
+    header text (64 KiB of each value). A message bigger than that no longer
+    makes a script run out of work, and a rule that matches text past the
+    window does not see it: the log says so once an hour per account and the
+    new counter `mail_sieve_inspection_truncated_total` (alert metric
+    `sieve_inspection_truncated`) counts the messages. A run that does run
+    out keeps its `discard`, `fileinto` and flags, drops its `redirect`,
+    `reject` and `vacation`, and keeps the message if anything outward was
+    dropped. A `set` that does not fit now stops the run instead of being
+    ignored, and the numbered match variables no longer share the 64 KiB of
+    the script's own variables. See docs/configuration.md.
   * JMAP: storing or activating a Sieve script that redirects, replies or
     rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
     step under the account lock (`ifInState` is exact, the active script changes

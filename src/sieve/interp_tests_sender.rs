@@ -78,26 +78,27 @@ fn several_body_rules_still_run_on_a_big_message() {
 fn a_run_that_runs_out_keeps_where_the_message_goes_and_drops_what_would_send() {
 	let message = b"Subject: hi\r\n\r\nx\r\n";
 	let filler = "noop;\n".repeat(25_000);
-	// A `discard` decided before stays decided; the `redirect` is dropped, and
-	// so is what comes after the stop.
-	let outcome = run(
-		&format!("discard;\nredirect \"a@target.example\";\n{filler}fileinto \"Z\";\n"),
-		message,
-	);
-	assert!(outcome.aborted);
-	assert!(outcome.discarded && !outcome.keep, "{outcome:?}");
+	// A `discard` decided before stays decided when nothing outward was lost.
+	let outcome = run(&format!("discard;\n{filler}fileinto \"Z\";\n"), message);
 	assert!(
-		outcome.redirects.is_empty() && outcome.fileinto.is_empty(),
+		outcome.aborted && outcome.discarded && !outcome.keep,
 		"{outcome:?}"
 	);
-	assert_eq!(outcome.dropped.redirects, 1);
-	// A `fileinto` decided before stays decided.
-	let outcome = run(&format!("fileinto \"A\";\n{filler}"), message);
+	assert!(
+		outcome.fileinto.is_empty(),
+		"the rule after the stop did not run"
+	);
+	// A `fileinto` decided before stays decided, the redirect is dropped, and
+	// since something outward was lost the message is kept too.
+	let outcome = run(
+		&format!("fileinto \"A\";\nredirect \"a@target.example\";\n{filler}"),
+		message,
+	);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
-	assert!(outcome.aborted && !outcome.keep);
-	// Nothing decided about where it goes, only a `redirect`: the redirect is
-	// dropped and the message is kept, not lost behind a redirect that never
-	// went out.
+	assert!(outcome.redirects.is_empty() && outcome.keep, "{outcome:?}");
+	assert_eq!(outcome.dropped.redirects, 1);
+	// Only a `redirect`: dropped, and the message kept, not lost behind a
+	// redirect that never went out.
 	let outcome = run(
 		&format!("redirect \"a@target.example\";\n{filler}"),
 		message,
@@ -115,6 +116,25 @@ fn a_run_that_runs_out_keeps_where_the_message_goes_and_drops_what_would_send() 
 		"{outcome:?}"
 	);
 	assert!(outcome.dropped.reject && outcome.dropped.vacation);
+}
+
+#[test]
+fn a_run_cannot_both_lose_the_forward_and_suppress_the_delivery() {
+	// `redirect` then `discard`, the run stopping after the redirect: it
+	// would have forwarded and dropped the local copy. Stopped, it does
+	// neither, and the message stays in INBOX.
+	let message = b"Subject: hi\r\n\r\nx\r\n";
+	let filler = "noop;\n".repeat(25_000);
+	for script in [
+		format!("redirect \"a@target.example\";\n{filler}discard;\n"),
+		format!("redirect \"a@target.example\";\ndiscard;\n{filler}"),
+		format!("discard;\nredirect \"a@target.example\";\n{filler}"),
+	] {
+		let outcome = run(&script, message);
+		assert!(outcome.aborted);
+		assert!(outcome.redirects.is_empty(), "{outcome:?}");
+		assert!(outcome.keep && !outcome.discarded, "kept: {outcome:?}");
+	}
 }
 
 #[test]

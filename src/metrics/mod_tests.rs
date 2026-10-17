@@ -133,6 +133,7 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"rejected_rate_limit",
 		"abuse_dropped",
 		"sieve_rejected",
+		"sieve_inspection_truncated",
 		"vacation_sent",
 		"forwarded",
 		"relayed",

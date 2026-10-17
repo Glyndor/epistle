@@ -1,7 +1,9 @@
 //! The message view the Sieve interpreter evaluates: parsed headers, total
 //! size, body text, and the SMTP envelope.
 
-use super::env::{BODY_WINDOW, HEADER_VALUE_WINDOW, HEADER_VALUES_PER_LOOKUP};
+use super::env::{
+	BODY_WINDOW, HEADER_LOOKUP_WINDOW, HEADER_VALUE_WINDOW, HEADER_VALUES_PER_LOOKUP,
+};
 
 /// A message as the interpreter sees it: parsed headers, total size, and the
 /// SMTP envelope (for the `envelope` test).
@@ -104,31 +106,41 @@ impl Message {
 		self
 	}
 
-	/// How many headers are called `name` (ignoring case).
-	pub(super) fn header_count(&self, name: &str) -> usize {
-		self.positions(name).len()
+	/// Whether a header is called `name` (ignoring case).
+	pub(super) fn has_header(&self, name: &str) -> bool {
+		!self.positions(name).is_empty()
 	}
 
-	/// The values of the headers called `name` (ignoring case), in order: the
-	/// first [`HEADER_VALUES_PER_LOOKUP`] of them, each cut to
-	/// [`HEADER_VALUE_WINDOW`] octets. What a test reads is a fixed window
-	/// whatever the message holds.
-	pub(super) fn header_values<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> {
-		self.positions(name)
-			.iter()
-			.take(HEADER_VALUES_PER_LOOKUP)
-			.map(|position| {
-				window(
-					self.headers[*position as usize].1.as_str(),
-					HEADER_VALUE_WINDOW,
-				)
-			})
+	/// The headers called any of `names` (ignoring case) that a test can see,
+	/// in order. What a lookup reads is a fixed window whatever the message
+	/// holds, and the same one for the values and for their count: at most
+	/// [`HEADER_VALUES_PER_LOOKUP`] values, [`HEADER_LOOKUP_WINDOW`] octets in
+	/// all, and [`HEADER_VALUE_WINDOW`] of each. `truncated` says the window
+	/// cut something.
+	pub(super) fn visible_headers<S: AsRef<str>>(&self, names: &[S]) -> Visible<'_> {
+		let mut seen = Visible::default();
+		let mut room = HEADER_LOOKUP_WINDOW;
+		'names: for name in names {
+			for position in self.positions(name.as_ref()) {
+				if seen.values.len() >= HEADER_VALUES_PER_LOOKUP || room == 0 {
+					seen.truncated = true;
+					break 'names;
+				}
+				let value = self.headers[*position as usize].1.as_str();
+				let shown = window(value, HEADER_VALUE_WINDOW.min(room));
+				seen.truncated |= shown.len() < value.len();
+				room -= shown.len();
+				seen.values.push(shown);
+			}
+		}
+		seen
 	}
 
 	/// The part of the body the `body` test reads: the first [`BODY_WINDOW`]
-	/// octets.
-	pub(super) fn body_window(&self) -> &str {
-		window(&self.body, BODY_WINDOW)
+	/// octets, and whether that is not all of it.
+	pub(super) fn body_window(&self) -> (&str, bool) {
+		let shown = window(&self.body, BODY_WINDOW);
+		(shown, shown.len() < self.body.len())
 	}
 
 	fn positions(&self, name: &str) -> &[u32] {
@@ -139,6 +151,13 @@ impl Message {
 		};
 		found.map_or(&[], Vec::as_slice)
 	}
+}
+
+/// What a lookup of headers can see.
+#[derive(Default)]
+pub(super) struct Visible<'a> {
+	pub(super) values: Vec<&'a str>,
+	pub(super) truncated: bool,
 }
 
 /// The first `limit` octets of `text`, cut at a character boundary.
