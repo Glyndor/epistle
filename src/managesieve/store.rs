@@ -169,35 +169,33 @@ impl ScriptStore {
 
 	/// List every stored script with its active flag, id and revision.
 	pub fn list(&self) -> Result<Vec<ScriptInfo>, StoreError> {
-		let Some(txn) = self.read_txn()? else {
-			return Ok(Vec::new());
-		};
-		let active = self.active_name();
-		let scripts = txn
-			.index
-			.scripts
-			.iter()
-			.map(|(name, entry)| ScriptInfo {
-				name: name.clone(),
-				active: active.as_deref() == Some(name.as_str()),
-				id: entry.id.clone(),
-				rev: entry.rev,
-			})
-			.collect();
-		txn.commit()?;
-		Ok(scripts)
+		self.snapshot().map(|(_, scripts)| scripts)
 	}
 
 	/// The store's change counter: it moves whenever the set of scripts,
 	/// their content, their names or the active one changes, by whichever
 	/// protocol, and at no other time.
 	pub fn state(&self) -> Result<u64, StoreError> {
-		let Some(txn) = self.read_txn()? else {
-			return Ok(0);
+		self.snapshot().map(|(state, _)| state)
+	}
+
+	/// The change counter and the scripts it counts, read together: the
+	/// listing is exactly what the counter says it is.
+	pub fn snapshot(&self) -> Result<(u64, Vec<ScriptInfo>), StoreError> {
+		let Some(mut txn) = self.read_txn()? else {
+			return Ok((0, Vec::new()));
 		};
-		let state = txn.index.state + u64::from(txn.changed);
-		txn.commit()?;
-		Ok(state)
+		let active = self.active_name();
+		let scripts = txn
+			.index
+			.scripts
+			.keys()
+			.filter_map(|name| txn.info(name, active.as_deref()))
+			.collect();
+		// A reconcile that changed the index is a change, and is counted
+		// before the listing is reported.
+		txn.commit_in_place()?;
+		Ok((txn.index.state, scripts))
 	}
 
 	/// Read a script's contents.
@@ -414,8 +412,15 @@ impl Txn {
 
 	/// Write the index, with the counter moved when something changed.
 	fn commit(mut self) -> Result<(), StoreError> {
+		self.commit_in_place()
+	}
+
+	/// As [`Self::commit`], keeping the transaction (and its lock) so the
+	/// caller can read the counter it wrote.
+	fn commit_in_place(&mut self) -> Result<(), StoreError> {
 		if self.changed {
 			self.index.state += 1;
+			self.changed = false;
 			self.index.save(&self.path).map_err(|_| StoreError::Io)?;
 		}
 		Ok(())

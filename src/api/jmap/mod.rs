@@ -47,7 +47,9 @@ mod methods;
 mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
+mod sieve_blob;
 mod sieve_capability;
+mod sieve_script;
 mod vacation_response;
 pub mod websocket;
 
@@ -331,6 +333,7 @@ pub fn dispatch_request(
 			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			"VacationResponse/get" => vacation_response::get(state, principal, &args, &call_id),
 			"VacationResponse/set" => vacation_response::set(state, principal, &args, &call_id),
+			"SieveScript/get" => sieve_script::get(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
 		method_responses.push(response);
@@ -360,7 +363,8 @@ fn required_scope(method: &str) -> Option<Scope> {
 		| "Identity/get"
 		| "Quota/get"
 		| "PushSubscription/get"
-		| "VacationResponse/get" => Some(Scope::Read),
+		| "VacationResponse/get"
+		| "SieveScript/get" => Some(Scope::Read),
 		_ => None,
 	}
 }

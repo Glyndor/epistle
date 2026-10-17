@@ -371,6 +371,14 @@ mod jmap_tests_vacation_b;
 mod jmap_tests_sieve_capability;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_support.rs"]
+mod jmap_tests_sieve_support;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_get.rs"]
+mod jmap_tests_sieve_get;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 

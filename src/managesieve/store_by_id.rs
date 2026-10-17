@@ -8,7 +8,7 @@ use super::{ScriptInfo, ScriptStore, StoreError, Txn};
 
 impl Txn {
 	/// The name of the script with this id.
-	fn name_of(&self, id: &str) -> Option<String> {
+	pub(super) fn name_of(&self, id: &str) -> Option<String> {
 		self.index
 			.scripts
 			.iter()
@@ -17,7 +17,7 @@ impl Txn {
 	}
 
 	/// The script called `name`, as listed.
-	fn info(&self, name: &str, active: Option<&str>) -> Option<ScriptInfo> {
+	pub(super) fn info(&self, name: &str, active: Option<&str>) -> Option<ScriptInfo> {
 		self.index.scripts.get(name).map(|entry| ScriptInfo {
 			name: name.to_string(),
 			active: active == Some(name),
@@ -80,5 +80,26 @@ impl ScriptStore {
 			None => Err(StoreError::NoSuchScript),
 		};
 		txn.finish(outcome)
+	}
+}
+
+impl ScriptStore {
+	/// The content of version `rev` of the script `id`, read under the lock
+	/// so it is exactly that version: a script rewritten since is gone as
+	/// that version, not served as the new one.
+	pub fn version_content(&self, id: &str, rev: u64) -> Result<String, StoreError> {
+		let Some(txn) = self.read_txn()? else {
+			return Err(StoreError::NoSuchScript);
+		};
+		let name = txn
+			.index
+			.scripts
+			.iter()
+			.find(|(_, entry)| entry.id == id && entry.rev == rev)
+			.map(|(name, _)| name.clone())
+			.ok_or(StoreError::NoSuchScript)?;
+		let content = self.get(&name);
+		txn.commit()?;
+		content
 	}
 }
