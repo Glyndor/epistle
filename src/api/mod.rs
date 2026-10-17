@@ -407,6 +407,10 @@ mod jmap_tests_sieve_vacation;
 mod jmap_tests_sieve_atomic;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_scope.rs"]
+mod jmap_tests_sieve_scope;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 

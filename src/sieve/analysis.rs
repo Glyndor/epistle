@@ -77,3 +77,26 @@ pub fn pattern_problem(commands: &[Command]) -> Option<String> {
 	);
 	problem
 }
+
+/// Whether running the script can make the server send mail: a `redirect`
+/// forwards the message, `vacation` answers it, `reject` and `ereject`
+/// bounce it. A script that does none of these only files, flags or drops
+/// what it is given. Text that is not a script sends nothing (the upload
+/// check refuses it).
+pub fn sends_mail(script: &str) -> bool {
+	let Ok(tokens) = super::lexer::tokenize(script) else {
+		return false;
+	};
+	let Ok(commands) = super::parser::parse(&tokens) else {
+		return false;
+	};
+	let mut sends = false;
+	walk(
+		&commands,
+		|name, _| {
+			sends |= matches!(name, "redirect" | "vacation" | "reject" | "ereject");
+		},
+		|_| {},
+	);
+	sends
+}

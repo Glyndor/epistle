@@ -20,6 +20,8 @@ const NAME_ATTEMPTS: usize = 5;
 /// What one `/set` call works on.
 pub(super) struct Edit<'a> {
 	pub(super) account: &'a str,
+	/// Whether the credential has the `send` scope.
+	pub(super) can_send: bool,
 	pub(super) uploads: &'a Uploads,
 }
 
@@ -37,7 +39,25 @@ fn created_object(script: &ScriptInfo) -> Value {
 	})
 }
 
+/// The SetError for a script that sends mail, from a credential that may not.
+fn needs_send() -> Value {
+	json!({
+		"type": "forbidden",
+		"description": "a script that redirects, replies or rejects needs the send scope",
+	})
+}
+
 impl Edit<'_> {
+	/// `Err` when the script sends mail and the credential has no `send`
+	/// scope: `write` stores a filter, and does not originate mail.
+	fn allowed(&self, text: &str) -> Result<(), Value> {
+		if self.can_send || !crate::sieve::analysis::sends_mail(text) {
+			Ok(())
+		} else {
+			Err(needs_send())
+		}
+	}
+
 	/// The `alreadyExists` SetError for `name`, with the id of the script
 	/// that has it (RFC 9661 section 2.4).
 	fn already_exists(tx: &Tx<'_>, name: &str) -> Value {
@@ -93,6 +113,7 @@ impl Edit<'_> {
 			self.name(object)?
 		};
 		let text = self.content(object.get("blobId").unwrap_or(&Value::Null))?;
+		self.allowed(&text)?;
 		let created = match name {
 			Some(name) => tx.create(name, &text),
 			None => Self::create_unnamed(tx, &text),
@@ -138,6 +159,9 @@ impl Edit<'_> {
 			.get("blobId")
 			.map(|value| self.content(value))
 			.transpose()?;
+		if let Some(text) = &text {
+			self.allowed(text)?;
+		}
 		let script = tx
 			.update(id, name, text.as_deref())
 			.map_err(|error| Self::refusal(tx, &error, name))?;

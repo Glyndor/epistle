@@ -18,6 +18,7 @@ use super::sieve_content::set_error;
 use super::sieve_script::{method_error, state_string, store_failure};
 use super::sieve_script_edit::Edit;
 use super::uploads::Uploads;
+use crate::api::api_keys::Scope;
 use crate::managesieve::store::{StoreError, Tx};
 
 /// The parts of the response, as they are filled in.
@@ -145,8 +146,12 @@ fn run(
 		Some(_) => return Err(method_error("invalidArguments", call_id)),
 	};
 
+	let can_send = state
+		.require_scope_for_principal(principal, Scope::Send)
+		.is_ok();
 	let edit = Edit {
 		account: &account,
+		can_send,
 		uploads,
 	};
 	// The whole call is one step under the account's lock: the state it
@@ -154,6 +159,17 @@ fn run(
 	// protocol and not another call, moves between its parts.
 	let done = store.transact(expected, |tx| {
 		let old_state = tx.state();
+		// Activating a script that already sends mail takes the `send` scope
+		// too, and is refused before the call changes anything.
+		if !can_send
+			&& let Some(id) = activate.filter(|id| !id.starts_with('#'))
+			&& let Some(script) = tx.scripts().into_iter().find(|script| script.id == id)
+			&& tx
+				.content(&script.name)
+				.is_ok_and(|text| crate::sieve::analysis::sends_mail(&text))
+		{
+			return Err(());
+		}
 		let mut out = Outcome::default();
 		for (cid, spec) in create.into_iter().flatten() {
 			match edit.create(tx, spec) {
@@ -193,10 +209,11 @@ fn run(
 		} else {
 			Ok(())
 		};
-		(old_state, tx.state(), out, activated)
+		Ok((old_state, tx.state(), out, activated))
 	});
 	let (old_state, new_state, out, activated) = match done {
-		Ok(done) => done,
+		Ok(Ok(done)) => done,
+		Ok(Err(())) => return Err(method_error("forbidden", call_id)),
 		Err(StoreError::StateMismatch) => return Err(method_error("stateMismatch", call_id)),
 		Err(error) => return Err(store_failure(&error, call_id)),
 	};
