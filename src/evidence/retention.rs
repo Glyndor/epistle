@@ -214,31 +214,72 @@ fn unfinished(evidence_root: &Path) -> std::io::Result<Option<(Statement, Vec<u8
 	Ok(Some((statement, bytes)))
 }
 
-/// Whether the chain holds a `purge` record naming the statement `digest`.
-fn recorded(evidence_root: &Path, chain: &Chain, digest: &str) -> std::io::Result<bool> {
+/// Whether the chain names the statement `digest` in a `purge` record. A day
+/// that cannot be read leaves it unknown, which is not the same as no.
+#[derive(Debug, PartialEq, Eq)]
+enum Named {
+	Yes,
+	No,
+	Unknown,
+}
+
+fn recorded(evidence_root: &Path, chain: &Chain, digest: &str) -> std::io::Result<Named> {
 	let mut found = false;
+	let mut unreadable = false;
 	for day in chain.days()? {
 		let walked = super::verify::walk_day(evidence_root, day, None, |_, record, _| {
 			found |= matches!(&record.entry, Entry::Purge(purge) if purge.statement == digest);
 		});
-		// A day that does not walk is the verification's to report.
-		let _ = walked;
+		unreadable |= walked.is_err();
 	}
-	Ok(found)
+	Ok(match (found, unreadable) {
+		(true, _) => Named::Yes,
+		(false, false) => Named::No,
+		(false, true) => Named::Unknown,
+	})
 }
 
-/// Finish a purge that was cut short. A statement the chain never named is
-/// dropped (nothing was decided); one it names gets its anchor, and the days
-/// the anchor covers are deleted.
-fn resume(evidence_root: &Path, chain: &Chain) -> std::io::Result<()> {
+/// Finish a purge that was cut short. The whole evidence has to verify first.
+/// A statement the chain never named, with every day read cleanly, is dropped
+/// (nothing was decided); one it names gets its anchor, and the days the
+/// anchor covers are deleted. When it cannot be told, nothing is touched and
+/// the sweep says so.
+fn resume(
+	evidence_root: &Path,
+	chain: &Chain,
+	anchors: &[[u8; 32]],
+	now: u64,
+) -> std::io::Result<()> {
 	let Some((statement, bytes)) = unfinished(evidence_root)? else {
 		return Ok(());
 	};
+	let kept = |why: &str| {
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			format!("a purge was cut short and is kept as it is: {why}"),
+		)
+	};
+	let report = super::audit::verify(
+		evidence_root,
+		&super::audit::Options {
+			from: None,
+			to: None,
+			anchors: anchors.to_vec(),
+			now,
+		},
+	)?;
+	if report.first_break.is_some() {
+		return Err(kept("the evidence does not verify"));
+	}
 	let base = evidence_root.join(PURGES_DIR).join(&statement.through);
-	if !recorded(evidence_root, chain, &to_hex(&sha256(&bytes)))? {
-		let _ = std::fs::remove_file(base.with_extension("json"));
-		let _ = std::fs::remove_file(base.with_extension("sig"));
-		return Ok(());
+	match recorded(evidence_root, chain, &to_hex(&sha256(&bytes)))? {
+		Named::Unknown => return Err(kept("a day of the chain cannot be read")),
+		Named::No => {
+			let _ = std::fs::remove_file(base.with_extension("json"));
+			let _ = std::fs::remove_file(base.with_extension("sig"));
+			return Ok(());
+		}
+		Named::Yes => {}
 	}
 	let invalid =
 		|what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
@@ -279,7 +320,7 @@ pub(crate) fn sweep_steps(
 		..Sweep::default()
 	};
 	let chain = Chain::open(evidence_root)?;
-	resume(evidence_root, &chain)?;
+	resume(evidence_root, &chain, anchors, now)?;
 	finish_deleting(evidence_root, &chain)?;
 	let expired = expired_days(evidence_root, &chain, today)?;
 	if expired.is_empty() {
