@@ -55,12 +55,20 @@ pub fn record_description() -> String {
 	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// A DNS record kind epistle publishes, or any other type the provider
-/// happens to know about. NS, HTTPS and SVCB are split out because they
-/// have specific meaning (`NS` marks a delegation, `HTTPS`/`SVCB` are
-/// alias forms the operator may add at the apex), and everything else
-/// keeps the type token the provider returned so a round-trip through
-/// `upsert`/`delete` cannot quietly swap it for a TXT.
+/// The longest type token [`RecordKind::from_token`] keeps.
+pub const MAX_OTHER_KIND_LEN: usize = 32;
+
+/// The token of an [`RecordKind::Other`] whose type a provider returned in
+/// a shape no record type has (empty, too long, or with other characters
+/// than letters, digits and hyphens).
+pub const UNKNOWN_KIND: &str = "UNKNOWN";
+
+/// A DNS record kind. The first eight are what epistle publishes. `Ns`,
+/// `Https` and `Svcb` are read back from a zone so a listing keeps them as
+/// what they are: an `NS` rrset at a name below the apex is a delegation,
+/// and the lockdown must not write anything under it. Every other type a
+/// provider returns is kept as [`RecordKind::Other`] with its type token,
+/// so a listing never turns a record it does not know into a TXT.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecordKind {
 	/// IPv4 address record.
@@ -101,15 +109,51 @@ pub enum RecordKind {
 	/// Service binding record (RFC 9460).
 	#[serde(rename = "SVCB")]
 	Svcb,
-	/// Any other record type the provider returned, preserved with the
-	/// original type token so nothing is collapsed into TXT. The string
-	/// is the wire-format type name in upper case (`NAPTR`, `SSHFP`,
-	/// `LOC`, ...); the caller never sees it as a TXT record.
+	/// Any other record type a provider listed (`NAPTR`, `SSHFP`, `LOC`,
+	/// ...), with its type token. Build it with [`RecordKind::from_token`], which
+	/// bounds the token. Providers refuse to publish or delete it.
 	#[serde(rename = "OTHER")]
 	Other(String),
 }
 
 impl RecordKind {
+	/// The kind for a record type token a provider API returned, in any
+	/// letter case. Every provider reads its listing through this, so a
+	/// type epistle does not publish keeps what it is instead of turning
+	/// into a TXT: `NS` is [`RecordKind::Ns`] (a delegation), and a type
+	/// with no variant is [`RecordKind::Other`].
+	///
+	/// The token comes from a remote API, so an `Other` keeps it only when
+	/// it can be a record type (ASCII letters, digits and hyphens, at most
+	/// [`MAX_OTHER_KIND_LEN`] characters, upper-cased). Anything else
+	/// becomes [`UNKNOWN_KIND`], so a hostile token never reaches a
+	/// terminal, a log line or a JSON document.
+	pub fn from_token(token: &str) -> RecordKind {
+		let shaped = !token.is_empty()
+			&& token.len() <= MAX_OTHER_KIND_LEN
+			&& token
+				.bytes()
+				.all(|b| b.is_ascii_alphanumeric() || b == b'-');
+		if !shaped {
+			return RecordKind::Other(UNKNOWN_KIND.to_string());
+		}
+		let upper = token.to_ascii_uppercase();
+		match upper.as_str() {
+			"A" => RecordKind::A,
+			"AAAA" => RecordKind::Aaaa,
+			"TXT" => RecordKind::Txt,
+			"MX" => RecordKind::Mx,
+			"CNAME" => RecordKind::Cname,
+			"TLSA" => RecordKind::Tlsa,
+			"SRV" => RecordKind::Srv,
+			"CAA" => RecordKind::Caa,
+			"NS" => RecordKind::Ns,
+			"HTTPS" => RecordKind::Https,
+			"SVCB" => RecordKind::Svcb,
+			_ => RecordKind::Other(upper),
+		}
+	}
+
 	/// The record type token used in zone files and provider APIs.
 	pub fn as_str(&self) -> &str {
 		match self {
@@ -127,16 +171,17 @@ impl RecordKind {
 			RecordKind::Other(name) => name.as_str(),
 		}
 	}
+}
 
-	/// Whether this is a kind TXT-only logic should ignore: NS (a
-	/// delegation, not a TXT value), HTTPS/SVCB (alias forms with
-	/// specific semantics), or `Other` (the provider's own native type,
-	/// never collapsed into TXT). `same_txt_purpose`, the
-	/// duplicate-detection loops, and the drift checks use this so a
-	/// delegation's NS rrset is never treated as a TXT.
-	pub fn is_txt_kind(&self) -> bool {
-		matches!(self, RecordKind::Txt)
-	}
+/// `value` without one pair of double quotes that wrap all of it, as a
+/// provider that lists every target quoted returns it. A quote that does
+/// not wrap the whole value is data (a CAA target is `0 issue "ca.example"`,
+/// an HTTPS parameter is `alpn="h2"`) and stays.
+pub fn unwrap_quotes(value: &str) -> &str {
+	value
+		.strip_prefix('"')
+		.and_then(|rest| rest.strip_suffix('"'))
+		.unwrap_or(value)
 }
 
 /// The four parts of an SRV record, split out from the presentation form
