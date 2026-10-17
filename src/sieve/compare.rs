@@ -7,9 +7,9 @@
 //! header names or keys.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use super::ast::Argument;
+use super::env::Env;
 use super::interp::has_tag;
 
 /// The relational operator of `:value`/`:count` (RFC 5231).
@@ -150,18 +150,30 @@ impl MatchSpec {
 
 	/// Compare `value` against `key`. On a successful `:matches`, the wildcard
 	/// captures are stored as `${0..}` (RFC 5229 §6).
-	pub(super) fn test(&self, value: &str, key: &str, vars: &mut HashMap<String, String>) -> bool {
+	pub(super) fn test(&self, value: &str, key: &str, env: &mut Env) -> bool {
 		match self.match_type {
 			MatchType::Matches => {
-				match glob_captures(&key.to_ascii_lowercase(), &value.to_ascii_lowercase()) {
-					Some(captures) => {
-						vars.insert("0".to_string(), value.to_string());
-						for (index, capture) in captures.into_iter().enumerate() {
-							vars.insert((index + 1).to_string(), capture);
+				let (key, value_lower) = (key.to_ascii_lowercase(), value.to_ascii_lowercase());
+				let mut steps = 0;
+				let outcome = glob(&key, &value_lower, &mut steps, env.remaining_work());
+				if !env.charge(steps.max(value.len() as u64)) {
+					return false;
+				}
+				match outcome {
+					Glob::Match(spans) => {
+						let chars: Vec<char> = value_lower.chars().collect();
+						env.set("0", value);
+						for (index, (from, to)) in spans.into_iter().enumerate() {
+							let capture: String = chars[from..to].iter().collect();
+							env.set(&(index + 1).to_string(), &capture);
 						}
 						true
 					}
-					None => false,
+					Glob::NoMatch => false,
+					Glob::Refused => {
+						env.abandon();
+						false
+					}
 				}
 			}
 			_ => self.test_simple(value, key),
@@ -234,93 +246,115 @@ pub(super) fn positional_strings(args: &[Argument]) -> Vec<String> {
 	positional_groups(args).into_iter().flatten().collect()
 }
 
-/// The longest `:matches` key, in characters. A longer one matches nothing.
+/// The longest `:matches` key, in characters. A longer one is refused.
 pub(crate) const MAX_PATTERN_CHARS: usize = 256;
 /// The most wildcards (`*` and `?`) a `:matches` key may hold.
 pub(crate) const MAX_WILDCARDS: usize = 32;
-/// The longest text `:matches` looks at, in characters. The table the
-/// captures are read from has one cell per pattern character and text
-/// character, so this and the pattern limit bound its size (about 2 MiB).
-pub(crate) const MAX_TEXT_CHARS: usize = 8192;
 
-/// A key and a text `:matches` is willing to compare, as characters.
-fn bounded(pattern: &str, text: &str) -> Option<(Vec<char>, Vec<char>)> {
+/// What matching a text against a pattern came to.
+enum Glob {
+	/// The pattern matches; each wildcard's captured range of the text, in
+	/// the order the wildcards appear.
+	Match(Vec<(usize, usize)>),
+	NoMatch,
+	/// The pattern is over the limits, or the work ran past `budget`: the
+	/// answer is not "no match" and the caller has to say so.
+	Refused,
+}
+
+/// Match `text` against `pattern` (`*` any run, `?` one character), counting
+/// the character comparisons made into `steps` and giving up past `budget`.
+///
+/// The pattern is cut at its `*` into segments. The first is anchored to the
+/// start of the text, the last to its end, and each one between goes at the
+/// leftmost place after the one before. That finds a match whenever there is
+/// one, and each `*` ends up as short as the rest allows: the assignment RFC
+/// 5229 asks for, and the one a search over all splits would give. There is no
+/// recursion and no table: the text is only walked, and a match costs at most
+/// the pattern's length times the text's, usually the text's.
+fn glob(pattern: &str, text: &str, steps: &mut u64, budget: u64) -> Glob {
 	let p: Vec<char> = pattern.chars().take(MAX_PATTERN_CHARS + 1).collect();
 	let wildcards = p.iter().filter(|c| matches!(c, '*' | '?')).count();
 	if p.len() > MAX_PATTERN_CHARS || wildcards > MAX_WILDCARDS {
-		return None;
+		return Glob::Refused;
 	}
-	let t: Vec<char> = text.chars().take(MAX_TEXT_CHARS + 1).collect();
-	(t.len() <= MAX_TEXT_CHARS).then_some((p, t))
+	let t: Vec<char> = text.chars().collect();
+	let segments: Vec<&[char]> = p.split(|c| *c == '*').collect();
+	let (first, last) = (segments[0], segments[segments.len() - 1]);
+	let mut spans = Vec::new();
+	// A segment at `at`: its `?`s capture one character each.
+	let place =
+		|segment: &[char], at: usize, steps: &mut u64, spans: &mut Vec<(usize, usize)>| -> bool {
+			for (offset, &c) in segment.iter().enumerate() {
+				*steps += 1;
+				if c != '?' && t[at + offset] != c {
+					return false;
+				}
+			}
+			spans.extend(
+				segment
+					.iter()
+					.enumerate()
+					.filter(|(_, c)| **c == '?')
+					.map(|(offset, _)| (at + offset, at + offset + 1)),
+			);
+			true
+		};
+	if segments.len() == 1 {
+		if t.len() != first.len() || !place(first, 0, steps, &mut spans) {
+			return Glob::NoMatch;
+		}
+		return Glob::Match(spans);
+	}
+	if t.len() < first.len() + last.len() {
+		return Glob::NoMatch;
+	}
+	let tail = t.len() - last.len();
+	if !place(first, 0, steps, &mut spans) {
+		return Glob::NoMatch;
+	}
+	let mut pos = first.len();
+	for segment in &segments[1..segments.len() - 1] {
+		let mut found = None;
+		let mut at = pos;
+		while at + segment.len() <= tail {
+			let mut trial = Vec::new();
+			if place(segment, at, steps, &mut trial) {
+				found = Some((at, trial));
+				break;
+			}
+			if *steps > budget {
+				return Glob::Refused;
+			}
+			at += 1;
+		}
+		let Some((at, trial)) = found else {
+			return Glob::NoMatch;
+		};
+		spans.push((pos, at));
+		spans.extend(trial);
+		pos = at + segment.len();
+	}
+	if pos > tail {
+		return Glob::NoMatch;
+	}
+	spans.push((pos, tail));
+	if !place(last, tail, steps, &mut spans) {
+		return Glob::NoMatch;
+	}
+	if *steps > budget {
+		return Glob::Refused;
+	}
+	Glob::Match(spans)
 }
 
-/// Glob match supporting `*` (any run) and `?` (one char), per Sieve `:matches`.
+/// Whether `pattern` matches `text`, for a test that has no run to charge.
 fn glob_match(pattern: &str, text: &str) -> bool {
-	let Some((p, t)) = bounded(pattern, text) else {
-		return false;
-	};
-	let mut dp = vec![false; t.len() + 1];
-	dp[0] = true;
-	for &pc in &p {
-		let mut prev = dp[0];
-		dp[0] = dp[0] && pc == '*';
-		for j in 0..t.len() {
-			let here = dp[j + 1];
-			dp[j + 1] = if pc == '*' {
-				dp[j] || dp[j + 1]
-			} else if pc == '?' || pc == t[j] {
-				prev
-			} else {
-				false
-			};
-			prev = here;
-		}
-	}
-	dp[t.len()]
-}
-
-/// Glob match returning each `*`/`?` capture in order, or `None` if no match.
-/// `*` is non-greedy (shortest run), giving RFC 5229 leftmost assignment.
-///
-/// Whether a suffix of the pattern matches a suffix of the text is worked out
-/// once for every pair, so the cost is the product of the two lengths and
-/// nothing recurses. The captures are then read off that table, taking at
-/// each `*` the shortest run that still lets the rest match.
-fn glob_captures(pattern: &str, text: &str) -> Option<Vec<String>> {
-	let (p, t) = bounded(pattern, text)?;
-	let width = t.len() + 1;
-	// fits[j * width + i]: p[j..] matches t[i..].
-	let mut fits = vec![false; (p.len() + 1) * width];
-	fits[p.len() * width + t.len()] = true;
-	for j in (0..p.len()).rev() {
-		for i in (0..=t.len()).rev() {
-			fits[j * width + i] = match p[j] {
-				'*' => fits[(j + 1) * width + i] || (i < t.len() && fits[j * width + i + 1]),
-				'?' => i < t.len() && fits[(j + 1) * width + i + 1],
-				c => i < t.len() && t[i] == c && fits[(j + 1) * width + i + 1],
-			};
-		}
-	}
-	if !fits[0] {
-		return None;
-	}
-	let mut captures = Vec::new();
-	let mut i = 0;
-	for (j, &c) in p.iter().enumerate() {
-		match c {
-			'*' => {
-				let run = (0..=t.len() - i).find(|run| fits[(j + 1) * width + i + run])?;
-				captures.push(t[i..i + run].iter().collect());
-				i += run;
-			}
-			'?' => {
-				captures.push(t[i].to_string());
-				i += 1;
-			}
-			_ => i += 1,
-		}
-	}
-	Some(captures)
+	let mut steps = 0;
+	matches!(
+		glob(pattern, text, &mut steps, super::env::MAX_WORK),
+		Glob::Match(_)
+	)
 }
 
 #[cfg(test)]

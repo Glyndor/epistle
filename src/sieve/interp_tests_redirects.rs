@@ -14,10 +14,10 @@ fn run(script: &str) -> Outcome {
 
 #[test]
 fn a_script_cannot_ask_for_more_forwards_than_the_limit() {
-	// A script of 30 000 distinct redirects is a few hundred kilobytes, well
+	// A script of 15 000 distinct redirects is a few hundred kilobytes, well
 	// inside what a user may upload. One inbound message would otherwise fan
 	// out into 30 000 outbound ones.
-	let script: String = (0..30_000)
+	let script: String = (0..15_000)
 		.map(|n| format!("redirect \"user{n}@target.example\";\n"))
 		.collect();
 	let outcome = run(&script);

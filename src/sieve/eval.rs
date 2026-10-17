@@ -1,18 +1,16 @@
 //! Sieve test evaluation: `eval_test` and the per-test predicates (header,
 //! address, envelope, body, size, date), the comparator, and glob matching.
 
-use std::collections::HashMap;
-
 use super::ast::{Argument, Test};
 use super::compare::{self, MatchSpec};
+use super::env::Env;
 use super::interp::{has_tag, strings};
 use super::message::Message;
 
-pub(super) fn eval_test(
-	test: &Test,
-	message: &Message,
-	vars: &mut HashMap<String, String>,
-) -> bool {
+pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
+	if !vars.step() {
+		return false;
+	}
 	match test.name.as_str() {
 		"true" => true,
 		"false" => false,
@@ -104,7 +102,7 @@ fn currentdate_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `header [match-type] [comparator] <header-names> <key-list>`.
-fn header_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args) else {
 		return false;
@@ -125,7 +123,7 @@ fn header_test(test: &Test, message: &Message, vars: &mut HashMap<String, String
 }
 
 /// `address [match-type] [comparator] [part] <header-names> <key-list>`.
-fn address_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn address_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args) else {
 		return false;
@@ -141,7 +139,7 @@ fn address_test(test: &Test, message: &Message, vars: &mut HashMap<String, Strin
 
 /// `envelope [match-type] [comparator] [part] <envelope-part-list> <key-list>`
 /// (RFC 5228 §5.4): `from` matches MAIL FROM, `to` matches RCPT TO.
-fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn envelope_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((parts, keys)) = split_names_keys(&test.args) else {
 		return false;
@@ -160,12 +158,7 @@ fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, Stri
 }
 
 /// Test extracted values against keys, honoring `:count`.
-fn match_values(
-	spec: &MatchSpec,
-	values: &[String],
-	keys: &[String],
-	vars: &mut HashMap<String, String>,
-) -> bool {
+fn match_values(spec: &MatchSpec, values: &[String], keys: &[String], vars: &mut Env) -> bool {
 	if let Some(rel) = spec.count_rel() {
 		return keys
 			.iter()
@@ -244,7 +237,7 @@ fn addr_spec(value: &str) -> String {
 }
 
 /// `body [match-type] [comparator] [:raw|:text] <key-list>` (RFC 5173).
-fn body_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn body_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	compare::positional_strings(&test.args)
 		.iter()

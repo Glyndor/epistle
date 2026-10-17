@@ -20,6 +20,7 @@ pub mod analysis;
 pub mod ast;
 mod compare;
 mod date;
+mod env;
 mod eval;
 pub mod interp;
 pub mod lexer;
@@ -30,6 +31,9 @@ mod vars;
 
 #[cfg(test)]
 mod interp_tests;
+#[cfg(test)]
+#[path = "interp_tests_limits.rs"]
+mod interp_tests_limits;
 #[cfg(test)]
 #[path = "interp_tests_mailbox.rs"]
 mod interp_tests_mailbox;

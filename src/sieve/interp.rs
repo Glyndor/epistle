@@ -32,6 +32,9 @@ pub struct Outcome {
 	/// A `vacation` autoresponse to send in addition to normal delivery
 	/// (RFC 5230), subject to the caller's suppression and dedup rules.
 	pub vacation: Option<VacationRequest>,
+	/// The run spent more than it may (steps, matching work, memory, see
+	/// [`super::env`]) and was abandoned: the message is only kept.
+	pub aborted: bool,
 }
 
 /// A parsed `vacation` action (RFC 5230). The caller decides whether to send.
@@ -53,14 +56,24 @@ pub use super::message::Message;
 pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut outcome = Outcome::default();
 	let mut cancel_implicit = false;
-	let mut vars = std::collections::HashMap::new();
+	let mut env = Env::default();
 	run(
 		script,
 		message,
 		&mut outcome,
 		&mut cancel_implicit,
-		&mut vars,
+		&mut env,
 	);
+	// A run that overspent is abandoned whole, as RFC 5228 section 2.10.6
+	// has it for a run-time error: nothing it asked for happens, and the
+	// message is kept.
+	if env.exhausted() {
+		return Outcome {
+			keep: true,
+			aborted: true,
+			..Outcome::default()
+		};
+	}
 	// Implicit keep applies unless an action cancelled it.
 	if !cancel_implicit {
 		outcome.keep = true;
@@ -68,7 +81,7 @@ pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	outcome
 }
 
-use super::vars::expand;
+use super::env::Env;
 
 /// Returns true if a `stop` was executed (halts further commands).
 fn run(
@@ -76,9 +89,12 @@ fn run(
 	message: &Message,
 	outcome: &mut Outcome,
 	cancel_implicit: &mut bool,
-	vars: &mut std::collections::HashMap<String, String>,
+	vars: &mut Env,
 ) -> bool {
 	for command in commands {
+		if !vars.step() {
+			return true;
+		}
 		match command {
 			Command::Action { name, args } => match name.as_str() {
 				"keep" => outcome.keep = true,
@@ -89,7 +105,7 @@ fn run(
 				// reject / ereject (RFC 5429): refuse + bounce; cancels keep.
 				"reject" | "ereject" => {
 					if let Some(reason) = first_str(args) {
-						outcome.reject = Some(expand(&reason, vars));
+						outcome.reject = Some(vars.expand(&reason));
 						*cancel_implicit = true;
 					}
 				}
@@ -97,8 +113,8 @@ fn run(
 				"set" => {
 					let strings = strings(args);
 					if let [name, value, ..] = strings.as_slice() {
-						let value = expand(value, vars);
-						vars.insert(name.clone(), value);
+						let value = vars.expand(value);
+						vars.set(name, &value);
 					}
 				}
 				// vacation (RFC 5230): autoresponse alongside normal delivery
@@ -106,7 +122,7 @@ fn run(
 				"vacation" => outcome.vacation = parse_vacation(args),
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
-						let folder = expand(&target, vars);
+						let folder = vars.expand(&target);
 						outcome.fileinto.push(folder.clone());
 						// `:create` (RFC 5490): the delivery side creates the
 						// folder if it does not exist before filing. Without
@@ -127,7 +143,7 @@ fn run(
 						// an address once (RFC 5228 section 4.2 allows both limits).
 						// The action still counts as done, so the implicit keep is
 						// cancelled either way.
-						let target = expand(&target, vars);
+						let target = vars.expand(&target);
 						if outcome.redirects.len() < MAX_REDIRECTS
 							&& !outcome
 								.redirects
