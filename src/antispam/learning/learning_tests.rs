@@ -250,3 +250,127 @@ fn a_job_that_was_not_queued_does_not_keep_its_place() {
 	let queued = (0..5).filter(|_| queue.submit(job("alice"))).count();
 	assert_eq!((queued, queue.pending_for("alice")), (2, 2));
 }
+
+/// A reader that counts the bytes taken from it and never ends.
+struct Endless(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl std::io::Read for Endless {
+	fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+		buf.fill(b'a');
+		self.0
+			.fetch_add(buf.len() as u64, std::sync::atomic::Ordering::SeqCst);
+		Ok(buf.len())
+	}
+}
+
+#[test]
+fn the_worker_reads_only_the_window_of_a_message_that_is_not_encrypted() {
+	use crate::antispam::training_queue::{MAX_TRAINING_BYTES, read_window_from};
+	use std::io::Read;
+	let taken = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+	let window = read_window_from(
+		Endless(std::sync::Arc::clone(&taken)).take(25 << 20),
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("window");
+	assert_eq!(window.len(), MAX_TRAINING_BYTES);
+	let read = taken.load(std::sync::atomic::Ordering::SeqCst);
+	assert!(
+		read <= (MAX_TRAINING_BYTES as u64) + 64 * 1024,
+		"{read} bytes were read of a 25 MiB message"
+	);
+}
+
+#[test]
+fn an_encrypted_message_is_decrypted_and_trimmed_to_the_window() {
+	use crate::antispam::training_queue::{MAX_TRAINING_BYTES, read_window_from};
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	let crypto = crate::storage::MessageCrypto::for_test(&key);
+	let plain = vec![b'x'; MAX_TRAINING_BYTES + 5_000];
+	let sealed = crypto.encode(&plain).expect("seal");
+	assert!(sealed.starts_with(crate::storage::MAGIC));
+	let window = read_window_from(std::io::Cursor::new(sealed), &crypto).expect("window");
+	assert_eq!(window, plain[..MAX_TRAINING_BYTES]);
+}
+
+#[tokio::test]
+async fn what_the_worker_cannot_teach_is_counted_by_reason() {
+	use crate::antispam::learning::LearnOutcome;
+	/// A trainer that always answers `outcome`.
+	struct Fixed(LearnOutcome);
+	impl crate::antispam::trainer::BayesTrainer for Fixed {
+		fn train<'a>(
+			&'a self,
+			_a: &'a str,
+			_t: Vec<u8>,
+			_s: bool,
+		) -> crate::antispam::trainer::TrainerFuture<'a, ()> {
+			Box::pin(async {})
+		}
+		fn learn<'a>(
+			&'a self,
+			_a: &'a str,
+			_t: Vec<u8>,
+			_s: bool,
+		) -> crate::antispam::trainer::TrainerFuture<'a, LearnOutcome> {
+			let outcome = self.0;
+			Box::pin(async move { outcome })
+		}
+		fn score_for_account<'a>(
+			&'a self,
+			_a: &'a str,
+			_t: &'a [u8],
+		) -> crate::antispam::trainer::TrainerFuture<'a, Option<f64>> {
+			Box::pin(async { None })
+		}
+	}
+	let dir = tempfile::tempdir().expect("tempdir");
+	let message = dir.path().join("m.eml");
+	std::fs::write(&message, b"Subject: hi\r\n\r\nbody\r\n").expect("write");
+	let gone = dir.path().join("gone.eml");
+	for (label, outcome, path, metric) in [
+		(
+			"the file is gone",
+			LearnOutcome::Learned,
+			&gone,
+			"bayes_learning_unreadable",
+		),
+		(
+			"the database refused",
+			LearnOutcome::Failed,
+			&message,
+			"bayes_learning_failed",
+		),
+		(
+			"a ceiling",
+			LearnOutcome::Refused,
+			&message,
+			"bayes_learning_refused",
+		),
+		(
+			"the day's budget",
+			LearnOutcome::Throttled,
+			&message,
+			"bayes_learning_refused",
+		),
+	] {
+		let metrics = Arc::new(Metrics::new());
+		let queue = TrainingQueue::start(
+			Arc::new(Fixed(outcome)),
+			crate::storage::MessageCrypto::disabled(),
+			Arc::clone(&metrics),
+		);
+		assert!(queue.submit(message_job(path, "alice")), "{label}");
+		let mut counted = None;
+		for _ in 0..100 {
+			counted = metrics.snapshot().get(metric).copied();
+			if counted == Some(1) {
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+		assert_eq!(counted, Some(1), "{label}: {metric}");
+	}
+}

@@ -148,7 +148,14 @@ impl Session {
 				super::super::junk_moves::move_signal(&source_mailbox, target, remove_source)
 			&& let Some(dir) = mailbox::mailbox_dir(&data_dir, &account, target)
 		{
-			super::super::junk_moves::enqueue_move(queue, &account, signal, &dir, &dest_ids);
+			super::super::junk_moves::enqueue_move(
+				queue,
+				&account,
+				signal,
+				&dir,
+				&dest_ids,
+				&mut queue.command_budget(),
+			);
 		}
 		// A copy into the selected mailbox, or a change another session
 		// made meanwhile, reaches the client before the tagged reply.

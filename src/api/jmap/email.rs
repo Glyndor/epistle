@@ -135,9 +135,14 @@ pub(super) fn email_set(
 	}
 	let mut updated = serde_json::Map::new();
 	let mut not_updated = serde_json::Map::new();
+	// One Email/set teaches at most one command's worth of lessons.
+	let mut lessons = state
+		.training()
+		.map(crate::antispam::training_queue::TrainingQueue::command_budget)
+		.unwrap_or_default();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in update {
-			match apply_email_update(state, account, id, patch) {
+			match apply_email_update(state, account, id, patch, &mut lessons) {
 				Ok(()) => {
 					updated.insert(id.clone(), Value::Null);
 				}
@@ -237,6 +242,7 @@ fn apply_email_update(
 	account: &str,
 	id: &str,
 	patch: &Value,
+	lessons: &mut crate::antispam::training_queue::LessonBudget,
 ) -> Result<(), &'static str> {
 	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
@@ -318,7 +324,14 @@ fn apply_email_update(
 				if let Some(signal) = moved.or(keyword)
 					&& let Some(dir) = mailbox::mailbox_dir(data_dir, account, target)
 				{
-					crate::imap::junk_moves::enqueue_move(queue, account, signal, &dir, &[new_id]);
+					crate::imap::junk_moves::enqueue_move(
+						queue,
+						account,
+						signal,
+						&dir,
+						&[new_id],
+						lessons,
+					);
 				}
 			}
 			return result;
@@ -331,12 +344,13 @@ fn apply_email_update(
 			// change. The queue never waits, so the reply does not depend
 			// on it.
 			if let Some(queue) = state.training() {
-				crate::imap::junk_trainer::enqueue_junk_transition(
+				crate::imap::junk_trainer::enqueue_junk_transition_within(
 					queue,
 					account,
 					&current_flags,
 					updated,
 					message_path,
+					lessons,
 				);
 			}
 			return Ok(());

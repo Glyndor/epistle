@@ -4,13 +4,24 @@
 //! test reads the lessons the command queued and nothing else.
 
 use super::*;
-use crate::antispam::training_queue::{MAX_JOBS_PER_COMMAND, TrainingJob, TrainingQueue};
+use crate::antispam::training_queue::{
+	MAX_JOBS_PER_COMMAND, MAX_PENDING_PER_ACCOUNT, TrainingJob, TrainingQueue,
+};
 use crate::metrics::Metrics;
 use tokio::sync::mpsc::Receiver;
 
 fn learning_session(dir: &std::path::Path) -> (Session, Receiver<TrainingJob>, Arc<Metrics>) {
+	learning_session_with(dir, MAX_JOBS_PER_COMMAND)
+}
+
+/// A session whose commands may teach `lessons` messages each.
+fn learning_session_with(
+	dir: &std::path::Path,
+	lessons: usize,
+) -> (Session, Receiver<TrainingJob>, Arc<Metrics>) {
 	let metrics = Arc::new(Metrics::new());
 	let (queue, receiver) = TrainingQueue::bounded(512, Arc::clone(&metrics));
+	let queue = queue.with_command_lessons(lessons);
 	let mut session = Session::new("mail.example.org", dir.to_path_buf(), directory());
 	session = session.with_training(queue);
 	let output = session.command_line(&format!("a1 LOGIN alice {}", fixtures::password()));
@@ -159,17 +170,57 @@ fn a_move_of_a_whole_junk_folder_queues_a_bounded_batch() {
 	assert!(response.contains("a3 OK"), "{response}");
 	assert_eq!(
 		lessons(&mut receiver).len(),
-		MAX_JOBS_PER_COMMAND,
-		"the lessons of one command are capped"
+		MAX_PENDING_PER_ACCOUNT,
+		"one account has at most its share of the queue waiting"
 	);
+	let dropped = u64::try_from(total - MAX_PENDING_PER_ACCOUNT).expect("fits");
 	assert_eq!(
 		metrics.snapshot().get("bayes_training_dropped").copied(),
-		Some(50),
-		"the messages past the cap are counted as dropped"
+		Some(dropped),
+		"every message that did not get a place is counted as dropped"
 	);
 	let moved = text(&session.command_line("a4 SELECT INBOX"));
 	assert!(
 		moved.contains(&format!("* {total} EXISTS")),
 		"every message still moved: {moved}"
+	);
+}
+
+#[test]
+fn a_copy_into_junk_teaches_at_most_its_commands_budget() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	for n in 0..10 {
+		deliver(
+			dir.path(),
+			format!("Subject: {n}\r\n\r\nbody\r\n").as_bytes(),
+		);
+	}
+	let (mut session, mut receiver, metrics) = learning_session_with(dir.path(), 3);
+	session.command_line("a2 CREATE Junk");
+	session.command_line("a3 SELECT INBOX");
+	assert!(text(&session.command_line("a4 COPY 1:* Junk")).contains("a4 OK"));
+	assert_eq!(lessons(&mut receiver).len(), 3, "the command's budget");
+	assert_eq!(
+		metrics.snapshot().get("bayes_training_dropped").copied(),
+		Some(7)
+	);
+}
+
+#[test]
+fn a_store_of_junk_on_many_messages_teaches_at_most_its_commands_budget() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	for n in 0..10 {
+		deliver(
+			dir.path(),
+			format!("Subject: {n}\r\n\r\nbody\r\n").as_bytes(),
+		);
+	}
+	let (mut session, mut receiver, metrics) = learning_session_with(dir.path(), 3);
+	session.command_line("a2 SELECT INBOX");
+	assert!(text(&session.command_line("a3 STORE 1:* +FLAGS ($Junk)")).contains("a3 OK"));
+	assert_eq!(lessons(&mut receiver).len(), 3, "the command's budget");
+	assert_eq!(
+		metrics.snapshot().get("bayes_training_dropped").copied(),
+		Some(7)
 	);
 }

@@ -33,6 +33,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
+use super::learning::LearnOutcome;
 use super::learning::limiter::LearnLimiter;
 use super::trainer::BayesTrainerHandle;
 use crate::metrics::Metrics;
@@ -77,6 +78,39 @@ pub(crate) fn seam_after(bytes: &[u8], at: usize) -> usize {
 /// from the first of them and drops the rest, counted; the account's own
 /// corpus is the only thing that misses the lesson.
 pub const MAX_JOBS_PER_COMMAND: usize = 100;
+
+/// What one command may still queue. Every protocol command that can teach
+/// (an IMAP COPY, MOVE or STORE, a JMAP `Email/set`) starts with
+/// [`MAX_JOBS_PER_COMMAND`] and spends it as it queues lessons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LessonBudget {
+	left: usize,
+}
+
+impl Default for LessonBudget {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl LessonBudget {
+	/// The budget of one command.
+	pub fn new() -> Self {
+		Self::with_limit(MAX_JOBS_PER_COMMAND)
+	}
+
+	/// A budget of `lessons` (tests).
+	pub fn with_limit(lessons: usize) -> Self {
+		LessonBudget { left: lessons }
+	}
+
+	/// Spend up to `wanted` lessons and return how many the budget gave.
+	pub fn take(&mut self, wanted: usize) -> usize {
+		let granted = wanted.min(self.left);
+		self.left -= granted;
+		granted
+	}
+}
 
 /// Jobs of one account that may wait in the queue at once.
 pub const MAX_PENDING_PER_ACCOUNT: usize = 32;
@@ -142,6 +176,7 @@ pub struct TrainingQueue {
 	sender: mpsc::Sender<TrainingJob>,
 	metrics: Arc<Metrics>,
 	fairness: Arc<Fairness>,
+	command_lessons: usize,
 }
 
 impl TrainingQueue {
@@ -156,9 +191,21 @@ impl TrainingQueue {
 				sender,
 				metrics,
 				fairness,
+				command_lessons: MAX_JOBS_PER_COMMAND,
 			},
 			receiver,
 		)
+	}
+
+	/// This queue with another number of lessons per command (tests).
+	pub fn with_command_lessons(mut self, lessons: usize) -> Self {
+		self.command_lessons = lessons;
+		self
+	}
+
+	/// The budget a protocol command starts with.
+	pub fn command_budget(&self) -> LessonBudget {
+		LessonBudget::with_limit(self.command_lessons)
 	}
 
 	/// This queue with `limiter` in place of the default per-account limits.
@@ -193,7 +240,10 @@ impl TrainingQueue {
 		let (queue, receiver) = Self::bounded(TRAINING_QUEUE_CAPACITY, metrics);
 		let queue = queue.with_limiter(limiter);
 		let fairness = Arc::clone(&queue.fairness);
-		tokio::spawn(run_worker_with(receiver, trainer, crypto, fairness));
+		let metrics = Arc::clone(&queue.metrics);
+		tokio::spawn(run_worker_with(
+			receiver, trainer, crypto, fairness, metrics,
+		));
 		queue
 	}
 
@@ -227,6 +277,16 @@ impl TrainingQueue {
 }
 
 impl TrainingQueue {
+	/// [`TrainingQueue::submit`] spending one lesson of `budget`; a job over
+	/// the budget is dropped and counted.
+	pub fn submit_within(&self, job: TrainingJob, budget: &mut LessonBudget) -> bool {
+		if budget.take(1) == 0 {
+			self.note_dropped(1);
+			return false;
+		}
+		self.submit(job)
+	}
+
 	/// Jobs of `account` waiting in the queue (tests).
 	#[cfg(test)]
 	pub(crate) fn pending_for(&self, account: &str) -> usize {
@@ -255,7 +315,8 @@ pub async fn run_worker(
 	trainer: BayesTrainerHandle,
 	crypto: MessageCrypto,
 ) {
-	run_worker_with(receiver, trainer, crypto, Arc::new(Fairness::default())).await;
+	let (fairness, metrics) = (Arc::new(Fairness::default()), Arc::new(Metrics::new()));
+	run_worker_with(receiver, trainer, crypto, fairness, metrics).await;
 }
 
 async fn run_worker_with(
@@ -263,6 +324,7 @@ async fn run_worker_with(
 	trainer: BayesTrainerHandle,
 	crypto: MessageCrypto,
 	fairness: Arc<Fairness>,
+	metrics: Arc<Metrics>,
 ) {
 	while let Some(job) = receiver.recv().await {
 		let started = std::time::Instant::now();
@@ -270,10 +332,13 @@ async fn run_worker_with(
 		let path = job.path.clone();
 		let window = tokio::task::spawn_blocking(move || read_window(&path, &crypto)).await;
 		match window {
-			Ok(Ok(text)) => {
-				trainer.learn(&job.account, text, job.spam).await;
-			}
+			Ok(Ok(text)) => match trainer.learn(&job.account, text, job.spam).await {
+				LearnOutcome::Failed => metrics.bayes_learning_failed(),
+				LearnOutcome::Refused | LearnOutcome::Throttled => metrics.bayes_learning_refused(),
+				_ => {}
+			},
 			Ok(Err(error)) => {
+				metrics.bayes_learning_unreadable();
 				tracing::debug!(
 					account = %crate::log_id::account(&job.account),
 					%error,

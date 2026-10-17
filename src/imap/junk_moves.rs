@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::junk_trainer::JunkSignal;
 use super::special_use::{is_junk, is_trash};
-use crate::antispam::training_queue::{MAX_JOBS_PER_COMMAND, TrainingJob, TrainingQueue};
+use crate::antispam::training_queue::{LessonBudget, TrainingJob, TrainingQueue};
 use crate::util::path_component::{MessageExt, message_file};
 
 /// What a message that goes from `source` to `target` teaches.
@@ -38,7 +38,8 @@ pub fn move_signal(source: &str, target: &str, removes_source: bool) -> Option<J
 
 /// Queue the lessons for the messages a command stored in the mailbox whose
 /// directory is `dir`, under the ids `stored`, and return how many were
-/// queued. At most [`MAX_JOBS_PER_COMMAND`] are looked at; the rest are
+/// queued. The command's `budget` caps how many are looked at, whatever the
+/// protocol and however many messages the command touched; the rest are
 /// counted as dropped, so a move of thousands of messages costs a bounded
 /// amount and never waits for the worker.
 pub fn enqueue_move(
@@ -47,9 +48,12 @@ pub fn enqueue_move(
 	signal: JunkSignal,
 	dir: &Path,
 	stored: &[Uuid],
+	budget: &mut LessonBudget,
 ) -> usize {
+	let granted = budget.take(stored.len());
+	queue.note_dropped(stored.len() - granted);
 	let mut queued = 0;
-	for id in stored.iter().take(MAX_JOBS_PER_COMMAND) {
+	for id in &stored[..granted] {
 		let Ok(path) = message_file(dir, *id, MessageExt::Eml) else {
 			continue;
 		};
@@ -62,7 +66,6 @@ pub fn enqueue_move(
 			queued += 1;
 		}
 	}
-	queue.note_dropped(stored.len().saturating_sub(MAX_JOBS_PER_COMMAND));
 	queued
 }
 

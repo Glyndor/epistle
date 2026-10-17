@@ -642,24 +642,49 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
   earlier lesson is taken back token by token and the new verdict added, so a
   message that goes back and forth leaves the corpus where the last move put
   it. The row, the token counts and the message totals change in one
-  transaction: when the record cannot be written nothing is trained.
+  transaction: when the record cannot be written nothing is trained, and a
+  transaction PostgreSQL abandons (a deadlock) is run again up to four times.
+  The locks are always taken in the same order, so the server and
+  `epistle learning reset` can run at the same time. What an account taught
+  before the ledger existed (through `$Junk`, or by the server's own
+  decisions) is in the corpus but not in the ledger: it counts again if the
+  user moves it and cannot be taken back. `epistle learning status` shows
+  that number as `unrecorded`.
 
-  Learning is bounded so a client cannot turn it against the server or
-  against its own account:
-  - one command queues at most 100 lessons (a MOVE of ten thousand
-    messages teaches from the first hundred and counts the rest in
-    `mail_bayes_training_dropped_total`), and the queue to the worker holds
-    256;
-  - one account may teach 200 lessons a minute and 5000 a day, and
-    lessons beyond that are dropped and counted the same way, so one account
-    cannot fill the queue and starve the others;
-  - one lesson touches at most 5000 distinct tokens, and an account keeps at
-    most 100000 learned messages, after which new messages are refused
-    (counted as `refused`) until `epistle learning reset`;
-  - the shared scope is never taught by a user, and an account only ever
+  Learning is bounded, per command, per account and in the worker:
+  - Each IMAP COPY or MOVE, each IMAP STORE and each JMAP `Email/set` call
+    queues at most 100 lessons; the rest are dropped and counted in
+    `mail_bayes_training_dropped_total`. The queue to the worker holds 256,
+    and one account may have 32 of those places at a time, so one account (or
+    any seven) cannot take them all. Past seven accounts at their share the
+    queue can be full and another account's lesson is dropped, counted.
+  - One account may teach 200 lessons a minute and 5000 a day, and may keep
+    the single worker busy for 10 seconds in a minute, measured from what the
+    worker actually spent. Lessons over a limit are dropped and counted.
+  - One lesson touches at most 5000 distinct tokens of the first 256 KiB of
+    the message, written with two statements whatever their number. The worker
+    reads only that window of an unencrypted message; an encrypted one is read
+    whole, because it is sealed as one piece.
+  - One account holds at most 250000 token rows (about 100 MB with the index)
+    and spends at most 1000000 tokens a day. A lesson past either is refused
+    or held back, and counted per account as `refused` and `throttled`. A
+    lesson that only reuses words the account already has pays for the rows it
+    adds. Taking a lesson back writes the same rows and spends the same.
+  - The ledger keeps at most 100000 messages; at the limit the oldest tenth is
+    forgotten, so those can no longer be taken back and count again if moved.
+  - Lessons lost for another reason are counted in the server's metrics:
+    `mail_bayes_learning_unreadable_total` (the file was gone when the worker
+    came to it, which is normal after emptying Junk),
+    `mail_bayes_learning_failed_total` (the database refused the lesson) and
+    `mail_bayes_learning_refused_total` (a ceiling or the day's budget). They
+    are warnings, not a guarantee that every move taught something.
+  - The shared scope is never taught by a user, and an account only ever
     teaches its own scope. The message is named by the file the server wrote
     and the mailbox by the server's own special-use table: a header or a
     flag a client invents decides nothing.
+  - A message with several local recipients is scored with the corpus of the
+    first of them. That is the existing behaviour of the SMTP path and is not
+    changed here.
 
   Training never sends mail. `epistle learning` shows the counters per
   account and switches learning off or on; see `docs/cli.md`. Without
