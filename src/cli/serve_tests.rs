@@ -207,11 +207,7 @@ async fn serve_applies_max_message_size_to_the_api() {
 	// The configured cap must reach the REST send body limit, not only the
 	// SMTP listeners: an 8 KiB body under a 4 KiB cap is refused with 413
 	// before it is parsed.
-	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-		.await
-		.expect("probe bind");
-	let port = probe.local_addr().expect("addr").port();
-	drop(probe);
+	let port = crate::test_fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener =
 		toml::from_str(&format!("kind = \"api\"\nport = {port}")).expect("listener config");
@@ -240,11 +236,7 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 	// the kernel, so a reply still in flight could find the server timed
 	// out. One second of real time, and a minute of margin before the
 	// built-in grace would be the one that cut.
-	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-		.await
-		.expect("probe bind");
-	let port = probe.local_addr().expect("addr").port();
-	drop(probe);
+	let port = crate::test_fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener = toml::from_str(&format!(
 		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
@@ -291,11 +283,7 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 async fn serve_applies_the_junk_command_limit_to_smtp() {
 	// With the limit at 10 the listener `serve` builds cuts the 11th NOOP,
 	// not the 101st.
-	let probe = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-		.await
-		.expect("probe bind");
-	let port = probe.local_addr().expect("addr").port();
-	drop(probe);
+	let port = crate::test_fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener = toml::from_str(&format!(
 		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
