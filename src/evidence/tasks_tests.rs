@@ -15,6 +15,18 @@ pub(super) fn service(dir: &Path) -> Arc<EvidenceService> {
 	)
 }
 
+/// Settings with no authority to ask: a tick does not go to the network.
+pub(super) fn no_authority(dir: &Path) {
+	settings::save(
+		&crate::evidence::service::root_of(dir),
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
+}
+
 pub(super) async fn with_tsa(dir: &Path, gen_time: u64) -> Arc<FakeTsa> {
 	let tsa = Arc::new(FakeTsa::new(gen_time));
 	let url = Arc::clone(&tsa).serve().await;
@@ -173,6 +185,15 @@ async fn settings_that_turn_untrustworthy_keep_the_last_good_ones() {
 #[tokio::test]
 async fn a_check_that_runs_too_long_holds_mail_and_is_not_started_twice() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	// No authority to ask: the tick would go to the network for the time.
+	settings::save(
+		&crate::evidence::service::root_of(dir.path()),
+		&Settings {
+			enabled: false,
+			authorities: Vec::new(),
+		},
+	)
+	.expect("settings");
 	let service = service(dir.path());
 	let tasks = Tasks::new(Arc::clone(&service))
 		.expect("tasks")
@@ -228,6 +249,7 @@ async fn a_seal_that_keeps_failing_holds_mail_once_its_grace_passes() {
 #[tokio::test]
 async fn the_status_file_cannot_open_the_gate() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	no_authority(dir.path());
 	let service = service(dir.path());
 	let chain = Chain::open(service.root()).expect("chain");
 	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
@@ -255,6 +277,7 @@ async fn the_status_file_cannot_open_the_gate() {
 #[tokio::test]
 async fn the_time_a_verification_took_is_in_the_status() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	no_authority(dir.path());
 	let service = service(dir.path());
 	let tasks = Tasks::new(Arc::clone(&service))
 		.expect("tasks")

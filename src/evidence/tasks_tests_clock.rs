@@ -440,3 +440,56 @@ async fn the_status_says_the_clock_was_not_believed_when_it_was_not() {
 			.clock_sound
 	);
 }
+
+#[tokio::test]
+async fn a_believed_clock_the_authority_finds_ahead_stops_being_believed_at_the_first_tick() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	let newest = at(DAY + 3, 10);
+	// Restarts walked the log's newest record ahead of the true time, and
+	// this start is within the margin of it: the log alone believes it.
+	let true_time = newest - 1000;
+	let _tsa = with_tsa(dir.path(), true_time).await;
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(newest, accepted_for(1, 365))
+		.expect("record");
+	let tasks = Tasks::new(service(dir.path())).expect("tasks");
+	let status = tasks.tick_at(newest + 500, Instant::now()).await;
+	assert!(
+		!status.clock_sound,
+		"a clock the authority puts 25 minutes behind was believed: {:?}",
+		status.errors
+	);
+	assert!(status.held.is_some());
+}
+
+#[tokio::test]
+async fn the_authority_is_asked_again_every_hour_and_not_at_every_tick() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	let newest = at(DAY + 3, 10);
+	let tsa = with_tsa(dir.path(), newest).await;
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(newest, accepted_for(1, 365))
+		.expect("record");
+	let tasks = Tasks::new(service(dir.path())).expect("tasks");
+	let start = Instant::now();
+	assert!(tasks.tick_at(newest + 5, start).await.clock_sound);
+	let requests = || tsa.received.lock().expect("lock").len();
+	let asked = requests();
+	for tick in 1..13u64 {
+		tasks
+			.tick_at(
+				newest + 5 + tick * 300,
+				start + Duration::from_secs(tick * 300),
+			)
+			.await;
+	}
+	assert_eq!(requests(), asked, "asked at ordinary ticks");
+	tasks
+		.tick_at(newest + 5 + 14 * 300, start + Duration::from_secs(14 * 300))
+		.await;
+	assert!(requests() > asked, "never asked again");
+}

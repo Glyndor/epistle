@@ -33,6 +33,11 @@ pub const TICK: Duration = Duration::from_secs(300);
 /// Why mail is held while the clock is not believed.
 const CLOCK_NOT_BELIEVED: &str =
 	"the clock does not agree with the evidence log (see `epistle evidence clock accept`)";
+/// A believed clock is checked with the timestamp authority at the first tick
+/// and then every this many ticks (an hour), so a clock that restarts have
+/// walked ahead of the true time cannot go on for ever: the authority is the
+/// one time source the process does not set itself.
+const PROBE_EVERY_TICKS: u32 = 12;
 /// The longest one verification may run before the gate closes.
 pub const AUDIT_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -83,6 +88,8 @@ pub struct Tasks {
 	following: Mutex<Option<(u64, std::time::Instant)>>,
 	/// Whether the clock was believed at the tick that is running.
 	sound: AtomicBool,
+	/// Ticks since the authority was last asked what time it is.
+	since_probe: std::sync::atomic::AtomicU32,
 }
 
 /// Clears the running flag when the verification ends, even by a panic.
@@ -109,6 +116,8 @@ impl Tasks {
 			#[cfg(test)]
 			following: Mutex::new(None),
 			sound: AtomicBool::new(false),
+			// The first tick asks.
+			since_probe: std::sync::atomic::AtomicU32::new(PROBE_EVERY_TICKS),
 		})
 	}
 
@@ -154,8 +163,11 @@ impl Tasks {
 			time.witness(wall, mono);
 			reading = time.read_at(wall, mono);
 		}
-		if !reading.sound && current.enabled {
-			// A clock nobody agrees with: ask the timestamp authority.
+		// A clock nobody agrees with, or one nobody has asked the authority
+		// about for an hour (or since the start): ask the timestamp authority.
+		let due = self.since_probe.fetch_add(1, Ordering::SeqCst) >= PROBE_EVERY_TICKS;
+		if (!reading.sound || due) && current.enabled {
+			self.since_probe.store(0, Ordering::SeqCst);
 			if let Some(told) = probe(&current).await {
 				time.witness(told, mono);
 				reading = time.read_at(wall, mono);
