@@ -83,6 +83,7 @@ fn record(time: u64) -> crate::storage::DeliveryRecord {
 		reply: None,
 		attempt: 1,
 		extra: Default::default(),
+		class: crate::evidence::MailClass::default(),
 	}
 }
 
