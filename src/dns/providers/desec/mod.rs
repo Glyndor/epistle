@@ -204,7 +204,7 @@ impl DesecProvider {
 
 impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			let mut content = Self::record_content(&record.kind, &record.value);
 			// The bulk PUT replaces the whole rrset. The upsert contract
 			// in `src/dns/provider.rs` replaces only the TXT of the same
@@ -221,11 +221,11 @@ impl DnsProvider for DesecProvider {
 				}
 			}
 			self.put_rrset(&record, content).await
-		})
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let record_value = record.value.clone();
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			self.authorize(&record)?;
 			let kind = Self::rrset_kind(&record.kind)?;
 			// The TXT matching rule from `src/dns/provider.rs` is
@@ -256,10 +256,10 @@ impl DnsProvider for DesecProvider {
 			} else {
 				self.put_rrset(&record, Vec::new()).await
 			}
-		})
+		}))
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			let url = self.rrsets_url()?;
 			let response = self
 				.client
@@ -306,7 +306,7 @@ impl DnsProvider for DesecProvider {
 					})
 				})
 				.collect())
-		})
+		}))
 	}
 }
 

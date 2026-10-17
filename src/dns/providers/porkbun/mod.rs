@@ -399,13 +399,19 @@ impl PorkbunProvider {
 
 impl DnsProvider for PorkbunProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.upsert_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(record).await
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.delete_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(record).await
+		}))
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move { self.list_inner().await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.list_inner().await
+		}))
 	}
 }
 

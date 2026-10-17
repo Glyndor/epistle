@@ -398,7 +398,7 @@ fn canonical_query(url: &reqwest::Url) -> String {
 
 impl DnsProvider for Route53Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			// An UPSERT replaces the whole rrset. The upsert contract in
 			// `src/dns/provider.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
@@ -416,10 +416,10 @@ impl DnsProvider for Route53Provider {
 					.await;
 			}
 			self.change("UPSERT", &record).await
-		})
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			// The TXT matching rule from `src/dns/provider.rs` is
 			// the contract: a value-bearing delete drops only the
 			// rdata whose value matches (a sibling ACME challenge
@@ -461,7 +461,7 @@ impl DnsProvider for Route53Provider {
 			} else {
 				self.change("DELETE", &record).await
 			}
-		})
+		}))
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		// Route 53 lists records as XML, which this provider does not parse.

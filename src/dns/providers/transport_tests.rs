@@ -18,10 +18,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
 use crate::dns::providers::{
-	MAX_BODY, TEST_REQUEST_TIMEOUT, bunny::BunnyProvider, cloudflare::CloudflareProvider,
-	desec::DesecProvider, digitalocean::DigitaloceanProvider, dnsimple::DnsimpleProvider,
-	godaddy::GodaddyProvider, namecheap::NamecheapProvider, ovh::OvhProvider,
-	porkbun::PorkbunProvider, route53::Route53Provider, spaceship::SpaceshipProvider,
+	MAX_BODY, TEST_OPERATION_DEADLINE, TEST_REQUEST_TIMEOUT, bunny::BunnyProvider,
+	cloudflare::CloudflareProvider, desec::DesecProvider, digitalocean::DigitaloceanProvider,
+	dnsimple::DnsimpleProvider, godaddy::GodaddyProvider, namecheap::NamecheapProvider,
+	ovh::OvhProvider, porkbun::PorkbunProvider, route53::Route53Provider,
+	spaceship::SpaceshipProvider,
 };
 use crate::net::HttpsUrl;
 
@@ -294,4 +295,74 @@ async fn a_redirect_is_not_followed_to_another_host() {
 		0,
 		"a provider followed a redirect to another host"
 	);
+}
+
+/// A provider that sends the body a byte at a time is held no longer than one
+/// that sends nothing: the request timeout covers the body too.
+#[tokio::test]
+async fn a_body_that_drips_cannot_hold_a_call() {
+	let base = serve(|mut stream| async move {
+		let head =
+			b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\n\r\n";
+		if stream.write_all(head).await.is_err() {
+			return;
+		}
+		loop {
+			tokio::time::sleep(Duration::from_millis(40)).await;
+			if stream.write_all(b" ").await.is_err() {
+				return;
+			}
+		}
+	})
+	.await;
+	TEST_REQUEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(300))));
+	let named = providers(&base);
+	TEST_REQUEST_TIMEOUT.with(|t| t.set(None));
+	for (name, client) in named {
+		let started = std::time::Instant::now();
+		let error = if name == "route53" {
+			client.upsert("example.org", record()).await.err()
+		} else {
+			client.list("example.org").await.err()
+		};
+		assert!(
+			matches!(error, Some(ProviderError::Remote(_))),
+			"{name}: {error:?}"
+		);
+		assert!(
+			started.elapsed() < Duration::from_secs(20),
+			"{name} took {:?}",
+			started.elapsed()
+		);
+	}
+}
+
+/// Each request has its own timeout; the whole operation has a deadline on
+/// top, because a listing is up to 1000 requests. With a request timeout
+/// that would not fire for half a minute, the deadline ends every operation
+/// of every provider.
+#[tokio::test]
+async fn an_operation_has_a_deadline_of_its_own() {
+	let base = serve(|stream| async move {
+		let _held = stream;
+		tokio::time::sleep(Duration::from_secs(3600)).await;
+	})
+	.await;
+	let named = providers(&base);
+	TEST_OPERATION_DEADLINE.with(|t| t.set(Some(Duration::from_millis(300))));
+	for (name, client) in named {
+		for (operation, error) in outcomes(client.as_ref()).await {
+			if operation == "list" && error == Some(ProviderError::Unsupported) {
+				continue;
+			}
+			let Some(ProviderError::Remote(message)) = error else {
+				panic!("{name} {operation}: {error:?}");
+			};
+			assert_eq!(
+				message, "the provider did not finish within 300ms",
+				"{name} {operation}"
+			);
+		}
+	}
+	TEST_OPERATION_DEADLINE.with(|t| t.set(None));
 }

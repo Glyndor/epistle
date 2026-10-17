@@ -42,6 +42,40 @@ thread_local! {
 		const { std::cell::Cell::new(None) };
 }
 
+/// How long one whole operation may take: a listing across all its pages, a
+/// publish with the reads it makes first, an undo step. The request timeout
+/// bounds each call; this bounds the sum, so 1000 pages of 30 seconds are not
+/// a day.
+const OPERATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(test)]
+thread_local! {
+	/// Like [`TEST_REQUEST_TIMEOUT`], for the deadline of a whole operation;
+	/// read when the operation starts.
+	pub(crate) static TEST_OPERATION_DEADLINE: std::cell::Cell<Option<std::time::Duration>> =
+		const { std::cell::Cell::new(None) };
+}
+
+/// Run one provider operation under [`OPERATION_DEADLINE`]. Every `list`,
+/// `upsert` and `delete` of the HTTP providers goes through it.
+pub(crate) async fn within<T>(
+	operation: impl std::future::Future<Output = Result<T, crate::dns::provider::ProviderError>>,
+) -> Result<T, crate::dns::provider::ProviderError> {
+	#[cfg(test)]
+	let limit = TEST_OPERATION_DEADLINE
+		.with(|t| t.get())
+		.unwrap_or(OPERATION_DEADLINE);
+	#[cfg(not(test))]
+	let limit = OPERATION_DEADLINE;
+	tokio::time::timeout(limit, operation)
+		.await
+		.unwrap_or_else(|_| {
+			Err(crate::dns::provider::ProviderError::Remote(format!(
+				"the provider did not finish within {limit:?}"
+			)))
+		})
+}
+
 /// The HTTP client every provider uses: a connect timeout, a total timeout,
 /// and no redirects, so a provider (or whoever sits in front of it) cannot
 /// send the credential to another host or keep a command waiting.
