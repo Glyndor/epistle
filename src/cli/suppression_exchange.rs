@@ -14,6 +14,7 @@ use std::process::ExitCode;
 
 use serde_json::json;
 
+use super::super::csv::field;
 use super::super::resource::{self, ResourceError};
 use super::super::term::sanitize;
 use crate::config::Config;
@@ -114,26 +115,6 @@ pub(super) fn show(
 	)
 	.map_err(failure)?;
 	Ok(ExitCode::SUCCESS)
-}
-
-/// A CSV field: quoted when it holds a comma, a quote or a leading or
-/// trailing space, and prefixed with an apostrophe when a spreadsheet would
-/// read it as a formula. `import` removes that apostrophe.
-fn field(text: &str) -> String {
-	let flat: String = text
-		.chars()
-		.map(|c| if c.is_control() { ' ' } else { c })
-		.collect();
-	let flat = if flat.starts_with(['=', '+', '-', '@']) {
-		format!("'{flat}")
-	} else {
-		flat
-	};
-	if flat.contains([',', '"']) || flat != flat.trim() {
-		format!("\"{}\"", flat.replace('"', "\"\""))
-	} else {
-		flat
-	}
 }
 
 /// `suppression export`: CSV on stdout, or with `--json` the same entries
