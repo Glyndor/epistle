@@ -52,9 +52,9 @@ fn a_long_list_of_names_is_a_lookup_each() {
 
 #[test]
 fn visiting_the_values_of_a_header_is_paid_for() {
-	// A million values of `x`, and a test that visits them all, again and
-	// again: the run stops when it has spent what it may, instead of
-	// visiting 5000 million.
+	// A million values of `x`. A lookup visits the first thousand of them, and
+	// a test that does so again and again stops the run when it has spent what
+	// it may.
 	let script = "if header :contains \"x\" \"zzz\" { discard; }\n".repeat(5000);
 	let (outcome, took) = run(&script, &crowded(1_000_000));
 	assert!(outcome.aborted, "the run was not stopped");
@@ -79,4 +79,44 @@ fn the_headers_are_still_found_whatever_their_case() {
 		raw,
 	);
 	assert!(outcome.discarded);
+}
+
+#[test]
+fn a_lookup_visits_the_first_thousand_values_and_each_value_in_a_window() {
+	let mut raw = Vec::new();
+	for n in 0..3000 {
+		let value = if n == 2500 { "needle" } else { "y" };
+		raw.extend_from_slice(format!("x: {value}\r\n").as_bytes());
+	}
+	raw.extend_from_slice(b"\r\nb\r\n");
+	let script = "if header :contains \"x\" \"needle\" { discard; }";
+	assert!(
+		!run(script, &raw).0.discarded,
+		"the 2501st value is past the window"
+	);
+	let mut early = raw.clone();
+	early.splice(0..0, b"x: needle\r\n".iter().copied());
+	assert!(
+		run(script, &early).0.discarded,
+		"the first thousand are read"
+	);
+	// A value is read up to 64 KiB.
+	let long = format!("Subject: {}needle\r\n\r\nb\r\n", "y".repeat(70_000));
+	assert!(
+		!run(
+			"if header :contains \"subject\" \"needle\" { discard; }",
+			long.as_bytes()
+		)
+		.0
+		.discarded
+	);
+	let near = format!("Subject: {}needle\r\n\r\nb\r\n", "y".repeat(60_000));
+	assert!(
+		run(
+			"if header :contains \"subject\" \"needle\" { discard; }",
+			near.as_bytes()
+		)
+		.0
+		.discarded
+	);
 }

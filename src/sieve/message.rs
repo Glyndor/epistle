@@ -1,6 +1,8 @@
 //! The message view the Sieve interpreter evaluates: parsed headers, total
 //! size, body text, and the SMTP envelope.
 
+use super::env::{BODY_WINDOW, HEADER_VALUE_WINDOW, HEADER_VALUES_PER_LOOKUP};
+
 /// A message as the interpreter sees it: parsed headers, total size, and the
 /// SMTP envelope (for the `envelope` test).
 pub struct Message {
@@ -107,11 +109,26 @@ impl Message {
 		self.positions(name).len()
 	}
 
-	/// The values of the headers called `name` (ignoring case), in order.
+	/// The values of the headers called `name` (ignoring case), in order: the
+	/// first [`HEADER_VALUES_PER_LOOKUP`] of them, each cut to
+	/// [`HEADER_VALUE_WINDOW`] octets. What a test reads is a fixed window
+	/// whatever the message holds.
 	pub(super) fn header_values<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> {
 		self.positions(name)
 			.iter()
-			.map(|position| self.headers[*position as usize].1.as_str())
+			.take(HEADER_VALUES_PER_LOOKUP)
+			.map(|position| {
+				window(
+					self.headers[*position as usize].1.as_str(),
+					HEADER_VALUE_WINDOW,
+				)
+			})
+	}
+
+	/// The part of the body the `body` test reads: the first [`BODY_WINDOW`]
+	/// octets.
+	pub(super) fn body_window(&self) -> &str {
+		window(&self.body, BODY_WINDOW)
 	}
 
 	fn positions(&self, name: &str) -> &[u32] {
@@ -122,6 +139,15 @@ impl Message {
 		};
 		found.map_or(&[], Vec::as_slice)
 	}
+}
+
+/// The first `limit` octets of `text`, cut at a character boundary.
+fn window(text: &str, limit: usize) -> &str {
+	let mut end = text.len().min(limit);
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+	&text[..end]
 }
 
 fn push_header(headers: &mut Vec<(String, String)>, line: &str) {

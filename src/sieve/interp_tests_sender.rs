@@ -28,6 +28,15 @@ fn big(mib: usize, tail: &str) -> Vec<u8> {
 	raw
 }
 
+/// The same, with `head` at the start of the body (inside the window the
+/// `body` test reads).
+fn big_with_head(mib: usize, head: &str) -> Vec<u8> {
+	let mut raw = b"From: ext@elsewhere.example\r\nSubject: hi\r\n\r\n".to_vec();
+	raw.extend_from_slice(head.as_bytes());
+	raw.extend(std::iter::repeat_n(b'x', mib * MIB));
+	raw
+}
+
 const TEN_KEYS: &str = "require [\"body\"];\n\
 	if body :contains [\"k1\",\"k2\",\"k3\",\"k4\",\"k5\",\"k6\",\"k7\",\"k8\",\"k9\",\"spamword\"] { discard; stop; }\n";
 
@@ -36,7 +45,7 @@ fn a_big_message_does_not_get_past_a_body_discard() {
 	// Ten keys over a 6 MiB body used to cost more than a run may, the run was
 	// abandoned and the message kept.
 	for mib in [1, 6] {
-		let outcome = run(TEN_KEYS, &big(mib, " spamword"));
+		let outcome = run(TEN_KEYS, &big_with_head(mib, "spamword "));
 		assert!(outcome.discarded, "{mib} MiB: {outcome:?}");
 		assert!(!outcome.aborted, "{mib} MiB");
 	}
@@ -66,34 +75,89 @@ fn several_body_rules_still_run_on_a_big_message() {
 }
 
 #[test]
-fn a_run_that_runs_out_stops_where_it_is_and_keeps_what_it_decided() {
-	// Not "throw everything away": a `discard` already decided stays decided.
-	let script = format!("discard;\n{}fileinto \"Z\";\n", "noop;\n".repeat(25_000));
-	let outcome = run(&script, b"Subject: hi\r\n\r\nx\r\n");
+fn a_run_that_runs_out_keeps_where_the_message_goes_and_drops_what_would_send() {
+	let message = b"Subject: hi\r\n\r\nx\r\n";
+	let filler = "noop;\n".repeat(25_000);
+	// A `discard` decided before stays decided; the `redirect` is dropped, and
+	// so is what comes after the stop.
+	let outcome = run(
+		&format!("discard;\nredirect \"a@target.example\";\n{filler}fileinto \"Z\";\n"),
+		message,
+	);
 	assert!(outcome.aborted);
 	assert!(outcome.discarded && !outcome.keep, "{outcome:?}");
 	assert!(
-		outcome.fileinto.is_empty(),
-		"the rule after the stop did not run"
+		outcome.redirects.is_empty() && outcome.fileinto.is_empty(),
+		"{outcome:?}"
 	);
-	let script = format!(
-		"fileinto \"A\";\nredirect \"a@target.example\";\n{}",
-		"noop;\n".repeat(25_000)
-	);
-	let outcome = run(&script, b"Subject: hi\r\n\r\nx\r\n");
+	assert_eq!(outcome.dropped.redirects, 1);
+	// A `fileinto` decided before stays decided.
+	let outcome = run(&format!("fileinto \"A\";\n{filler}"), message);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
-	assert_eq!(outcome.redirects, vec!["a@target.example".to_string()]);
+	assert!(outcome.aborted && !outcome.keep);
+	// Nothing decided about where it goes, only a `redirect`: the redirect is
+	// dropped and the message is kept, not lost behind a redirect that never
+	// went out.
+	let outcome = run(
+		&format!("redirect \"a@target.example\";\n{filler}"),
+		message,
+	);
+	assert!(outcome.redirects.is_empty() && outcome.keep, "{outcome:?}");
+	// `reject` and `vacation` are dropped too.
+	let outcome = run(
+		&format!(
+			"require [\"reject\", \"vacation\"];\nvacation \"away\";\nreject \"no\";\n{filler}"
+		),
+		message,
+	);
+	assert!(
+		outcome.reject.is_none() && outcome.vacation.is_none() && outcome.keep,
+		"{outcome:?}"
+	);
+	assert!(outcome.dropped.reject && outcome.dropped.vacation);
 }
 
 #[test]
-fn a_script_that_scans_the_body_too_many_times_runs_out_whatever_the_size() {
-	// Past the allowance, and the same for a small and a large message: the
-	// sender does not decide it. 100 passes over the body cost 100 times its
-	// size; a run may afford 64 times it plus a fixed amount.
+fn a_run_inside_its_allowance_sends_what_it_asked_to() {
+	let outcome = run(
+		"redirect \"a@target.example\";\n",
+		b"Subject: hi\r\n\r\nx\r\n",
+	);
+	assert_eq!(outcome.redirects, vec!["a@target.example".to_string()]);
+	assert!(!outcome.aborted && !outcome.keep);
+}
+
+#[test]
+fn a_big_message_neither_loses_a_discard_nor_fires_a_later_redirect() {
+	let script = "require [\"body\"];\ndiscard;\nif body :contains \"nothere\" { stop; }\nredirect \"a@target.example\";\n";
+	let outcome = run(script, &big(24, ""));
+	assert!(outcome.discarded && !outcome.aborted, "{outcome:?}");
+	assert_eq!(
+		outcome.redirects,
+		vec!["a@target.example".to_string()],
+		"no budget was spent beyond the allowance"
+	);
+}
+
+#[test]
+fn a_script_that_reads_the_body_too_many_times_runs_out_whatever_the_size() {
+	// The body test reads a fixed window of 1 MiB. 300 passes over it are 300
+	// MiB of reading, more than a run may: for a 2 MiB message and for a 24 MiB
+	// one alike. The sender cannot move the line by choosing the size.
 	let rule = "if body :contains \"nothere\" { discard; }\n";
-	let script = format!("require [\"body\"];\n{}", rule.repeat(100));
-	let outcome = run(&script, &big(4, ""));
-	assert!(outcome.aborted, "100 passes over 4 MiB");
-	let outcome = run(&script, &big(0, ""));
-	assert!(!outcome.aborted, "100 passes over nothing");
+	let script = format!("require [\"body\"];\n{}", rule.repeat(300));
+	for mib in [2, 24] {
+		assert!(run(&script, &big(mib, "")).aborted, "{mib} MiB");
+	}
+	assert!(!run(&script, &big(0, "")).aborted, "a message of nothing");
+}
+
+#[test]
+fn only_the_first_mebibyte_of_the_body_is_read() {
+	let script = "require [\"body\"];\nif body :contains \"spamword\" { discard; }\n";
+	assert!(run(script, &big(0, "spamword")).discarded);
+	assert!(
+		!run(script, &big(2, "spamword")).discarded,
+		"past the window"
+	);
 }

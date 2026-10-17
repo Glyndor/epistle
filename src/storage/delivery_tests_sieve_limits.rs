@@ -189,12 +189,12 @@ fn a_run_that_overspends_keeps_the_message_and_says_so() {
 			.deliver_routed(&message("hi"), None)
 			.expect("deliver");
 	});
-	assert_eq!(inbox(dir.path()), 1, "abandoned, not discarded");
+	assert_eq!(inbox(dir.path()), 1, "the script's own keep stands");
 	assert!(
 		events.iter().any(|e| e
 			.fields
 			.get("message")
-			.is_some_and(|m| m.contains("abandoned"))),
+			.is_some_and(|m| m.contains("stopped where it was"))),
 		"{events:?}"
 	);
 }
@@ -311,4 +311,40 @@ fn deliveries_at_the_same_moment_do_not_pass_the_limit_together() {
 			real_folders(dir.path())
 		);
 	}
+}
+
+#[test]
+fn an_overspent_run_keeps_the_discard_and_sends_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let script = format!(
+		"discard;\nredirect \"someone@target.example\";\n{}",
+		"noop;\n".repeat(25_000)
+	);
+	let delivery = setup(dir.path(), &script);
+	let mut redirects = 1;
+	let events = run_with_capture(|| {
+		redirects = delivery
+			.deliver_routed(&message("hi"), None)
+			.expect("deliver")
+			.redirects
+			.len();
+	});
+	assert_eq!(
+		inbox(dir.path()),
+		0,
+		"the discard decided before the run stopped stands"
+	);
+	assert_eq!(redirects, 0, "an incomplete run never forwards");
+	let said = events
+		.iter()
+		.find(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("stopped where it was"))
+		})
+		.expect("said");
+	assert_eq!(
+		said.fields.get("redirects_dropped").map(String::as_str),
+		Some("1")
+	);
 }

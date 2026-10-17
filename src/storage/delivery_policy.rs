@@ -69,7 +69,10 @@ impl LocalDelivery {
 		if outcome.aborted {
 			tracing::warn!(
 				account,
-				"the account's Sieve filter used more steps or matching work than a run may; the run was abandoned and the message kept"
+				redirects_dropped = outcome.dropped.redirects,
+				reject_dropped = outcome.dropped.reject,
+				vacation_dropped = outcome.dropped.vacation,
+				"the account's Sieve filter used more steps or work than a run may; the run stopped where it was: what it had decided about where the message goes stands, redirects, rejects and vacation replies it had asked for were dropped, and the rest of the script did not run"
 			);
 		}
 		if outcome.redirects_over_limit > 0 {

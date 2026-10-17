@@ -264,7 +264,7 @@ fn body_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	compare::positional_strings(&test.args)
 		.iter()
-		.any(|key| spec.test(&message.body, key, vars))
+		.any(|key| spec.test(message.body_window(), key, vars))
 }
 
 /// `size :over|:under <number>`.

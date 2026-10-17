@@ -21,21 +21,23 @@ pub(super) const MAX_VARS: usize = 128;
 pub(super) const MAX_VAR_NAME: usize = 64;
 /// The most commands executed and tests evaluated in one run.
 pub(super) const MAX_STEPS: u32 = 20_000;
-/// The matching work (octets compared, characters copied or built) one run
-/// may ask for, whatever the message: 50 million units.
-pub(super) const MAX_WORK: u64 = 50_000_000;
-/// What a run may spend for each octet of the message, on top of
-/// [`MAX_WORK`]. Reading the body or a header costs its length, and the
-/// sender chooses how long they are, so a fixed allowance would be crossed by
-/// a sender's choice of a big message (and a `discard` later in the script
-/// never reached). With this, a script runs out of work for a big message
-/// exactly when it would for a small one: when it reads the message more than
-/// this many times over.
-pub(super) const WORK_PER_OCTET: u64 = 64;
+/// The work (octets compared, characters copied or built) one run may ask
+/// for: 256 MiB worth, a hard ceiling that does not move with the message.
+/// What a test reads of the body or of a header is a fixed window
+/// ([`BODY_WINDOW`], [`HEADER_VALUE_WINDOW`], [`HEADER_VALUES_PER_LOOKUP`]), so
+/// the sender's choice of a bigger message does not make a test cost more,
+/// and a script runs out of work for a big message exactly when it would for a
+/// small one: when it asks for more than this many octets of reading.
+pub(super) const MAX_WORK: u64 = 256 * 1024 * 1024;
+/// How much of the body the `body` test reads: the first mebibyte.
+pub(super) const BODY_WINDOW: usize = 1024 * 1024;
+/// How much of one header value a test reads.
+pub(super) const HEADER_VALUE_WINDOW: usize = 64 * 1024;
+/// How many headers of one name a lookup visits.
+pub(super) const HEADER_VALUES_PER_LOOKUP: usize = 1000;
 
 /// Variables and counters of one run.
 pub(crate) struct Env {
-	work_limit: u64,
 	vars: HashMap<String, String>,
 	var_bytes: usize,
 	steps: u32,
@@ -45,15 +47,7 @@ pub(crate) struct Env {
 
 impl Default for Env {
 	fn default() -> Self {
-		Self::for_message(0)
-	}
-}
-
-impl Env {
-	/// The state of a run against a message of `size` octets.
-	pub(super) fn for_message(size: usize) -> Self {
 		Self {
-			work_limit: MAX_WORK.saturating_add(WORK_PER_OCTET.saturating_mul(size as u64)),
 			vars: HashMap::new(),
 			var_bytes: 0,
 			steps: 0,
@@ -61,7 +55,9 @@ impl Env {
 			exhausted: false,
 		}
 	}
+}
 
+impl Env {
 	/// Whether the run spent more than it may: it stops where it is.
 	pub(super) fn exhausted(&self) -> bool {
 		self.exhausted
@@ -84,13 +80,13 @@ impl Env {
 
 	/// The work the run may still spend.
 	pub(super) fn remaining_work(&self) -> u64 {
-		self.work_limit.saturating_sub(self.work)
+		MAX_WORK.saturating_sub(self.work)
 	}
 
 	/// Spend `units` of work; `false` once the run is out of it.
 	pub(super) fn charge(&mut self, units: u64) -> bool {
 		self.work = self.work.saturating_add(units);
-		if self.work > self.work_limit {
+		if self.work > MAX_WORK {
 			self.exhausted = true;
 		}
 		!self.exhausted

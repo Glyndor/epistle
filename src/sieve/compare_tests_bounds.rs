@@ -96,12 +96,14 @@ fn a_long_text_still_matches() {
 
 #[test]
 fn work_that_runs_past_the_budget_abandons_the_run() {
-	// Every position of two million characters tried against a hundred:
-	// two hundred million comparisons, past what a run may spend.
-	let pattern = format!("*{}b*", "a".repeat(100));
-	let answer = run(pattern, "a".repeat(2_000_000)).expect("answered");
-	assert!(!answer.matched);
-	assert!(answer.env.exhausted());
+	// A run that has nearly spent its work, and a search that would take two
+	// hundred million comparisons: it stops after the few it can pay for.
+	let mut env = Env::default();
+	assert!(env.charge(super::super::env::MAX_WORK - 5_000_000));
+	let pattern = format!("*{}b*", "a".repeat(200));
+	let matched = matches_spec().test(&"a".repeat(1_000_000), &pattern, &mut env);
+	assert!(!matched);
+	assert!(env.exhausted());
 }
 
 #[test]

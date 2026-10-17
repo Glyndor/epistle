@@ -45,6 +45,8 @@ fn matching_a_long_text_copies_none_of_it() {
 fn a_text_past_the_budget_is_refused_before_it_is_touched() {
 	let text = "a".repeat(64 * MIB);
 	let mut env = Env::default();
+	// A run that has all but spent its work.
+	assert!(env.charge(super::env::MAX_WORK - 1000));
 	let (matched, peak) = peak_bytes(|| spec("matches").test(&text, "*a*", &mut env));
 	assert!(!matched);
 	assert!(env.exhausted(), "the run is abandoned, not told 'no match'");

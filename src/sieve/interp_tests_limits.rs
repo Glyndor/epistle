@@ -68,15 +68,15 @@ fn a_run_inside_its_steps_is_not_abandoned() {
 #[test]
 fn matching_work_is_budgeted_across_the_run() {
 	// Each of these tests tries a 200-character segment at every position of
-	// an 8000-character subject: about 1.6 million comparisons. Forty of
-	// them are past the budget of a run.
+	// an 8000-character subject: about 1.6 million comparisons. Two hundred
+	// and fifty of them are past the budget of a run.
 	let key = format!("*{}b*", "a".repeat(200));
 	let test = format!("if header :matches \"subject\" \"{key}\" {{ discard; }}\n");
 	let raw = format!("Subject: {}\r\n\r\nx\r\n", "a".repeat(8000));
-	let outcome = run_with(&test.repeat(40), raw.as_bytes());
+	let outcome = run_with(&test.repeat(250), raw.as_bytes());
 	assert!(
 		outcome.aborted,
-		"forty large matches are more than a run may ask for"
+		"250 large matches are more than a run may ask for"
 	);
 	assert!(outcome.keep && !outcome.discarded);
 	let outcome = run_with(&test.repeat(5), raw.as_bytes());

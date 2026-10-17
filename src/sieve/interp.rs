@@ -38,9 +38,32 @@ pub struct Outcome {
 	/// The run spent more than it may (steps, matching work, memory, see
 	/// the run budget) and was abandoned: the message is only kept.
 	pub aborted: bool,
+	/// What an aborted run had decided to send and the server dropped: an
+	/// incomplete run never originates mail.
+	pub dropped: Dropped,
 	/// How many different `redirect` addresses came after the limit and were
 	/// not forwarded to, for the delivery to log.
 	pub redirects_over_limit: usize,
+}
+
+/// The external effects an aborted run had asked for and did not get.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Dropped {
+	/// `redirect` addresses.
+	pub redirects: usize,
+	/// A `reject` or `ereject`.
+	pub reject: bool,
+	/// A `vacation`.
+	pub vacation: bool,
+}
+
+/// Which actions cancelled the implicit keep: a decision about where the
+/// message goes (`discard`, `fileinto`), or an effect outward (`redirect`,
+/// `reject`). A run that stops early keeps only the first kind.
+#[derive(Default)]
+struct Cancel {
+	local: bool,
+	external: bool,
 }
 
 /// A parsed `vacation` action (RFC 5230). The caller decides whether to send.
@@ -59,24 +82,33 @@ pub struct VacationRequest {
 pub use super::message::Message;
 
 /// Run a parsed script against a message and return the delivery outcome.
+///
+/// A run that spends more than it may (see [`super::env`]) stops where it is,
+/// as a `stop` would, with this rule: what it had decided about where the
+/// message goes (`discard`, `fileinto`, `keep`, flags) stays decided, so that
+/// the size of a message cannot undo a user's `discard`; what it had asked to
+/// send outward (`redirect`, `reject`, `vacation`) is dropped, since an
+/// incomplete run never originates mail; and a message nothing local was
+/// decided about is kept. `aborted` and `dropped` say so, for the log.
 pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut outcome = Outcome::default();
-	let mut cancel_implicit = false;
-	let mut env = Env::for_message(message.size);
-	run(
-		script,
-		message,
-		&mut outcome,
-		&mut cancel_implicit,
-		&mut env,
-	);
-	// A run that spent more than it may stops where it is, as a `stop` would:
-	// what it had decided stays decided (a `discard` is not undone by the
-	// size of the message that came after it), and what it had not got to is
-	// not run. The delivery says so in the log.
+	let mut cancel = Cancel::default();
+	let mut env = Env::default();
+	run(script, message, &mut outcome, &mut cancel, &mut env);
 	outcome.aborted = env.exhausted();
+	if outcome.aborted {
+		outcome.dropped = Dropped {
+			redirects: outcome.redirects.len(),
+			reject: outcome.reject.is_some(),
+			vacation: outcome.vacation.is_some(),
+		};
+		outcome.redirects.clear();
+		outcome.reject = None;
+		outcome.vacation = None;
+		cancel.external = false;
+	}
 	// Implicit keep applies unless an action cancelled it.
-	if !cancel_implicit {
+	if !(cancel.local || cancel.external) {
 		outcome.keep = true;
 	}
 	outcome
@@ -89,7 +121,7 @@ fn run(
 	commands: &[Command],
 	message: &Message,
 	outcome: &mut Outcome,
-	cancel_implicit: &mut bool,
+	cancel: &mut Cancel,
 	vars: &mut Env,
 ) -> bool {
 	for command in commands {
@@ -101,13 +133,17 @@ fn run(
 				"keep" => outcome.keep = true,
 				"discard" => {
 					outcome.discarded = true;
-					*cancel_implicit = true;
+					cancel.local = true;
 				}
 				// reject / ereject (RFC 5429): refuse + bounce; cancels keep.
 				"reject" | "ereject" => {
 					if let Some(reason) = first_str(args) {
-						outcome.reject = Some(vars.expand(&reason));
-						*cancel_implicit = true;
+						let reason = vars.expand(&reason);
+						if vars.exhausted() {
+							return true;
+						}
+						outcome.reject = Some(reason);
+						cancel.external = true;
 					}
 				}
 				// set (RFC 5229): store a variable for later `${name}` expansion.
@@ -115,6 +151,9 @@ fn run(
 					let strings = strings(args);
 					if let [name, value, ..] = strings.as_slice() {
 						let value = vars.expand(value);
+						if vars.exhausted() {
+							return true;
+						}
 						vars.set(name, &value);
 					}
 				}
@@ -124,6 +163,9 @@ fn run(
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
 						let folder = vars.expand(&target);
+						if vars.exhausted() {
+							return true;
+						}
 						// A folder is filed into once however often the script
 						// names it (RFC 5228 section 4.1 allows that), and into
 						// at most MAX_FILEINTO different ones. Every other
@@ -141,7 +183,7 @@ fn run(
 						}
 						// `:copy` (RFC 3894) leaves the implicit keep in place.
 						if !has_tag(args, "copy") {
-							*cancel_implicit = true;
+							cancel.local = true;
 						}
 					}
 				}
@@ -152,6 +194,9 @@ fn run(
 						// The action still counts as done, so the implicit keep is
 						// cancelled either way.
 						let target = vars.expand(&target);
+						if vars.exhausted() {
+							return true;
+						}
 						if !outcome
 							.redirects
 							.iter()
@@ -164,7 +209,7 @@ fn run(
 							}
 						}
 						if !has_tag(args, "copy") {
-							*cancel_implicit = true;
+							cancel.external = true;
 						}
 					}
 				}
@@ -189,7 +234,7 @@ fn run(
 				let mut taken = false;
 				for branch in &conditional.branches {
 					if super::eval::eval_test(&branch.test, message, vars) {
-						if run(&branch.body, message, outcome, cancel_implicit, vars) {
+						if run(&branch.body, message, outcome, cancel, vars) {
 							return true;
 						}
 						taken = true;
@@ -198,7 +243,7 @@ fn run(
 				}
 				if !taken
 					&& let Some(body) = &conditional.otherwise
-					&& run(body, message, outcome, cancel_implicit, vars)
+					&& run(body, message, outcome, cancel, vars)
 				{
 					return true;
 				}
