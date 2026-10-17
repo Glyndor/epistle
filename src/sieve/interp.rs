@@ -42,6 +42,9 @@ pub struct Outcome {
 	/// mebibyte, or more headers than a lookup visits. The run went on with
 	/// what it saw.
 	pub inspection_truncated: bool,
+	/// A `:matches` key was over the length or wildcard caps, and its test
+	/// was taken as false.
+	pub pattern_over_caps: bool,
 	/// What an aborted run had decided to send and the server dropped: an
 	/// incomplete run never originates mail.
 	pub dropped: Dropped,
@@ -110,6 +113,7 @@ pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	run(script, message, &mut outcome, &mut cancel, &mut env);
 	outcome.aborted = env.exhausted();
 	outcome.inspection_truncated = env.truncated();
+	outcome.pattern_over_caps = env.pattern_over_caps();
 	if outcome.aborted {
 		outcome.dropped = Dropped {
 			redirects: outcome.redirects.len(),

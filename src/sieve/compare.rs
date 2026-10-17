@@ -246,7 +246,11 @@ impl MatchSpec {
 						true
 					}
 					Glob::NoMatch => false,
-					Glob::Refused => {
+					Glob::OverCaps => {
+						env.note_pattern_over_caps();
+						false
+					}
+					Glob::OutOfBudget => {
 						env.abandon();
 						false
 					}
@@ -344,9 +348,13 @@ enum Glob {
 	/// byte offsets, in the order the wildcards appear.
 	Match(Vec<(usize, usize)>),
 	NoMatch,
-	/// The pattern is over the limits, or the work ran past `budget`: the
-	/// answer is not "no match" and the caller has to say so.
-	Refused,
+	/// The pattern is over the caps of length and wildcards. The test is
+	/// false and the run goes on, with a note for the log: a key written
+	/// before the caps existed must not stop every run it is part of.
+	OverCaps,
+	/// The work ran past `budget`: the answer is not "no match", and the run
+	/// stops.
+	OutOfBudget,
 }
 
 /// The character at byte offset `at` of `text`, which is a boundary.
@@ -373,7 +381,7 @@ fn glob(pattern: &str, text: &str, steps: &mut u64, budget: u64) -> Glob {
 		.collect();
 	let wildcards = p.iter().filter(|c| matches!(c, '*' | '?')).count();
 	if p.len() > MAX_PATTERN_CHARS || wildcards > MAX_WILDCARDS {
-		return Glob::Refused;
+		return Glob::OverCaps;
 	}
 	let segments: Vec<&[char]> = p.split(|c| *c == '*').collect();
 	let (first, last) = (segments[0], segments[segments.len() - 1]);
@@ -428,7 +436,7 @@ fn glob(pattern: &str, text: &str, steps: &mut u64, budget: u64) -> Glob {
 				break (at, end, trial);
 			}
 			if *steps > budget {
-				return Glob::Refused;
+				return Glob::OutOfBudget;
 			}
 			match char_at(text, at) {
 				Some(c) if at < tail => at += c.len_utf8(),
@@ -444,7 +452,7 @@ fn glob(pattern: &str, text: &str, steps: &mut u64, budget: u64) -> Glob {
 		return Glob::NoMatch;
 	}
 	if *steps > budget {
-		return Glob::Refused;
+		return Glob::OutOfBudget;
 	}
 	Glob::Match(spans)
 }

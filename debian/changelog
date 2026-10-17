@@ -417,8 +417,11 @@ epistle (0.12.1) unstable; urgency=medium
     with more than 50 scripts keeps them all and cannot add one until it is
     under the limit. The active marker is no longer trimmed.
   * Sieve: what a test reads of a message is a fixed window: the first 1 MiB
-    of the body, and per header lookup the first 1000 values and 1 MiB of
-    header text (64 KiB of each value). A message bigger than that no longer
+    of the body, and per header name of a lookup the first 1000 values and
+    64 KiB (16 names at most), so no header hides the others listed with it.
+    Upgrading: a stored script with a `:matches` key over 256 characters or 32
+    wildcards no longer matches (the test is false, the rest of the script
+    runs, and the log names the account once an hour); it used to match. A message bigger than that no longer
     makes a script run out of work, and a rule that matches text past the
     window does not see it: the log says so once an hour per account and the
     new counter `mail_sieve_inspection_truncated_total` (alert metric

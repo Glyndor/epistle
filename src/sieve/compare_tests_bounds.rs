@@ -47,8 +47,8 @@ fn a_pattern_of_a_hundred_thousand_wildcards_is_refused_at_once() {
 	let answer = run(pattern, "aaaa".to_string()).expect("no answer within ten seconds");
 	assert!(!answer.matched);
 	assert!(
-		answer.env.exhausted(),
-		"the run is abandoned, not told 'no match'"
+		!answer.env.exhausted() && answer.env.pattern_over_caps(),
+		"a key over the caps is false and noted; the run goes on"
 	);
 }
 
@@ -63,15 +63,17 @@ fn a_pattern_that_made_the_search_exponential_is_answered_at_once() {
 }
 
 #[test]
-fn a_pattern_over_the_limits_is_refused_not_unmatched() {
+fn a_pattern_over_the_limits_is_false_and_noted_but_the_run_goes_on() {
 	assert!(matched(&"*".repeat(MAX_WILDCARDS), "abc"));
 	let over = run("*".repeat(MAX_WILDCARDS + 1), "abc".to_string()).expect("answered");
-	assert!(!over.matched && over.env.exhausted());
+	assert!(!over.matched && !over.env.exhausted() && over.env.pattern_over_caps());
 	let long = "a".repeat(MAX_PATTERN_CHARS + 1);
 	let refused = run(long.clone(), long).expect("answered");
-	assert!(!refused.matched && refused.env.exhausted());
+	assert!(!refused.matched && !refused.env.exhausted() && refused.env.pattern_over_caps());
 	let longest = "a".repeat(MAX_PATTERN_CHARS);
 	assert!(matched(&longest, &longest));
+	let ok = run(longest.clone(), longest).expect("answered");
+	assert!(!ok.env.pattern_over_caps());
 }
 
 #[test]
@@ -156,7 +158,7 @@ fn the_search_stops_as_soon_as_the_budget_is_spent() {
 	let pattern = format!("*{}b*", "a".repeat(100));
 	let mut steps = 0;
 	let outcome = glob(&pattern, &text, &mut steps, 1000);
-	assert!(matches!(outcome, Glob::Refused));
+	assert!(matches!(outcome, Glob::OutOfBudget));
 	assert!(
 		steps <= 1000 + MAX_PATTERN_CHARS as u64,
 		"{steps} comparisons for a budget of 1000"

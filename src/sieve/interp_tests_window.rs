@@ -15,21 +15,20 @@ fn run(script: &str, raw: &[u8]) -> Outcome {
 }
 
 #[test]
-fn a_lookup_reads_a_megabyte_of_values_in_all() {
-	// 100 values of 60 KiB: the first 17 or so fill the megabyte, and the
-	// needle is in the 50th.
+fn a_name_reads_its_first_64_kib_and_no_more() {
+	// 100 values of 1 KiB: the first 64 fill the quota, the needle is the 80th.
 	let mut raw = Vec::new();
 	for n in 0..100 {
-		let value = if n == 50 {
-			format!("{}needle", "y".repeat(60_000))
+		let value = if n == 80 {
+			"needle".to_string()
 		} else {
-			"y".repeat(60_000)
+			"y".repeat(1000)
 		};
 		raw.extend_from_slice(format!("x: {value}\r\n").as_bytes());
 	}
 	raw.extend_from_slice(b"\r\nb\r\n");
 	let outcome = run("if header :contains \"x\" \"needle\" { discard; }", &raw);
-	assert!(!outcome.discarded, "the 51st value is past the megabyte");
+	assert!(!outcome.discarded, "past the quota of the name");
 	assert!(
 		outcome.inspection_truncated,
 		"and the test says it did not see everything"
@@ -37,15 +36,51 @@ fn a_lookup_reads_a_megabyte_of_values_in_all() {
 }
 
 #[test]
-fn a_count_sees_the_same_window_as_the_values() {
-	let raw = "x: y\r\n".repeat(3000) + "\r\nb\r\n";
-	let script = "require \"relational\";\nif header :count \"eq\" :comparator \"i;ascii-numeric\" \"x\" \"1000\" { discard; }";
-	let outcome = run(script, raw.as_bytes());
-	assert!(
-		outcome.discarded,
-		"the count is of the values a test can see"
+fn a_huge_header_does_not_hide_the_others_listed_with_it() {
+	let raw = format!(
+		"X-Big: {}\r\nSubject: win the needle\r\n\r\nb\r\n",
+		"y".repeat(5 * MIB)
 	);
-	assert!(outcome.inspection_truncated);
+	let script = "if header :contains [\"x-big\", \"subject\"] \"needle\" { discard; }";
+	let outcome = run(script, raw.as_bytes());
+	assert!(outcome.discarded, "{outcome:?}");
+	assert!(
+		outcome.inspection_truncated,
+		"the big one was cut, and that is noted"
+	);
+}
+
+#[test]
+fn a_thousand_received_do_not_hide_from() {
+	let mut raw = "Received: from a by b\r\n".repeat(5000);
+	raw.push_str("From: spammer@elsewhere.example\r\n\r\nb\r\n");
+	let script =
+		"if address :is [\"received\", \"from\"] \"spammer@elsewhere.example\" { discard; }";
+	assert!(run(script, raw.as_bytes()).discarded);
+	let script = "if header :contains [\"received\", \"from\"] \"spammer\" { discard; }";
+	assert!(run(script, raw.as_bytes()).discarded);
+}
+
+#[test]
+fn only_so_many_names_are_read_by_one_lookup() {
+	let names: Vec<String> = (0..20).map(|n| format!("\"x{n}\"")).collect();
+	let script = format!(
+		"if header :contains [{}] \"needle\" {{ discard; }}",
+		names.join(",")
+	);
+	let in_the_sixteenth = run(&script, b"x15: needle\r\n\r\nb\r\n");
+	assert!(in_the_sixteenth.discarded && !in_the_sixteenth.inspection_truncated);
+	let in_the_seventeenth = run(&script, b"x16: needle\r\n\r\nb\r\n");
+	assert!(!in_the_seventeenth.discarded && in_the_seventeenth.inspection_truncated);
+}
+
+#[test]
+fn a_count_is_of_every_header_and_does_not_count_as_truncation() {
+	let raw = "x: y\r\n".repeat(5000) + "\r\nb\r\n";
+	let script = "require \"relational\";\nif header :count \"eq\" :comparator \"i;ascii-numeric\" \"x\" \"5000\" { discard; }";
+	let outcome = run(script, raw.as_bytes());
+	assert!(outcome.discarded, "{outcome:?}");
+	assert!(!outcome.inspection_truncated);
 }
 
 #[test]

@@ -82,7 +82,7 @@ fn the_headers_are_still_found_whatever_their_case() {
 }
 
 #[test]
-fn a_lookup_visits_the_first_thousand_values_and_each_value_in_a_window() {
+fn a_name_visits_its_first_thousand_values() {
 	let mut raw = Vec::new();
 	for n in 0..3000 {
 		let value = if n == 2500 { "needle" } else { "y" };
@@ -92,7 +92,7 @@ fn a_lookup_visits_the_first_thousand_values_and_each_value_in_a_window() {
 	let script = "if header :contains \"x\" \"needle\" { discard; }";
 	assert!(
 		!run(script, &raw).0.discarded,
-		"the 2501st value is past the window"
+		"the 2501st value is past the quota"
 	);
 	let mut early = raw.clone();
 	early.splice(0..0, b"x: needle\r\n".iter().copied());

@@ -96,6 +96,18 @@ impl LocalDelivery {
 				);
 			}
 		}
+		if outcome.pattern_over_caps
+			&& crate::util::warn_limited::allow(&format!(
+				"sieve-pattern:{}:{account}",
+				self.data_dir.display()
+			)) {
+			tracing::warn!(
+				account,
+				max_chars = crate::sieve::MAX_PATTERN_CHARS,
+				max_wildcards = crate::sieve::MAX_WILDCARDS,
+				"the account's Sieve filter has a :matches key over the length or wildcard limit; its test is false and the rest of the script ran. Shorten the key"
+			);
+		}
 		if outcome.redirects_over_limit > 0
 			&& crate::util::warn_limited::allow(&format!(
 				"sieve-redirects:{}:{account}",

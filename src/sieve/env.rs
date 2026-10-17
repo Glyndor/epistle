@@ -24,21 +24,24 @@ pub(super) const MAX_STEPS: u32 = 20_000;
 /// The work (octets compared, characters copied or built) one run may ask
 /// for: 256 MiB worth, a hard ceiling that does not move with the message.
 /// What a test reads of the body or of a header is a fixed window
-/// ([`BODY_WINDOW`], [`HEADER_VALUE_WINDOW`], [`HEADER_VALUES_PER_LOOKUP`]), so
+/// ([`BODY_WINDOW`], [`HEADER_NAME_VALUES`], [`HEADER_NAME_WINDOW`]), so
 /// the sender's choice of a bigger message does not make a test cost more,
 /// and a script runs out of work for a big message exactly when it would for a
 /// small one: when it asks for more than this many octets of reading.
 pub(super) const MAX_WORK: u64 = 256 * 1024 * 1024;
 /// How much of the body the `body` test reads: the first mebibyte.
 pub(super) const BODY_WINDOW: usize = 1024 * 1024;
-/// How much of one header value a test reads.
-pub(super) const HEADER_VALUE_WINDOW: usize = 64 * 1024;
-/// How many headers one lookup (one `header`, `address` or `date` test, all
-/// the names it lists together) visits.
-pub(super) const HEADER_VALUES_PER_LOOKUP: usize = 1000;
-/// How much header text one lookup reads in all, whatever the number of
-/// values: the first mebibyte. A lookup costs at most what a body test does.
-pub(super) const HEADER_LOOKUP_WINDOW: usize = 1024 * 1024;
+/// What a lookup reads of the headers called one name: the first 1000 values,
+/// and the first 64 KiB of them in all (a value is cut at that too). Every
+/// name a test lists has a quota of its own, so that a name with a thousand
+/// values or one huge value cannot use up what another is allowed to show.
+pub(super) const HEADER_NAME_VALUES: usize = 1000;
+/// See [`HEADER_NAME_VALUES`]: the octets a lookup reads of one name.
+pub(super) const HEADER_NAME_WINDOW: usize = 64 * 1024;
+/// How many names one lookup reads (the rest of a longer list are not looked
+/// at). With the quotas above, a lookup reads at most 1 MiB, as much as a
+/// `body` test does.
+pub(super) const HEADER_NAMES_PER_LOOKUP: usize = 16;
 
 /// Variables and counters of one run.
 pub(crate) struct Env {
@@ -54,6 +57,8 @@ pub(crate) struct Env {
 	/// A test did not look at the whole of what it was asked about: a body
 	/// past its window, more headers than a lookup visits.
 	truncated: bool,
+	/// A `:matches` key was over the length or wildcard caps.
+	pattern_over_caps: bool,
 }
 
 impl Default for Env {
@@ -66,6 +71,7 @@ impl Default for Env {
 			work: 0,
 			exhausted: false,
 			truncated: false,
+			pattern_over_caps: false,
 		}
 	}
 }
@@ -79,6 +85,16 @@ impl Env {
 	/// Note that a test looked at less than the whole message.
 	pub(super) fn mark_truncated(&mut self) {
 		self.truncated = true;
+	}
+
+	/// Note that a `:matches` key is over the caps and was taken as false.
+	pub(super) fn note_pattern_over_caps(&mut self) {
+		self.pattern_over_caps = true;
+	}
+
+	/// Whether a `:matches` key was over the caps in this run.
+	pub(super) fn pattern_over_caps(&self) -> bool {
+		self.pattern_over_caps
 	}
 
 	/// Whether any test looked at less than the whole message.

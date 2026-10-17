@@ -131,3 +131,20 @@ fn numbered_captures_are_those_of_the_last_match() {
 	let outcome = run_with(script, b"Subject: abc\r\n\r\nx\r\n");
 	assert_eq!(outcome.reject.as_deref(), Some("abc"));
 }
+
+#[test]
+fn a_key_over_the_caps_is_a_false_test_and_the_rest_of_the_script_runs() {
+	// Keys written before the caps may be longer than 256 characters. The
+	// test is false (and noted for the log); the run is not stopped, so the
+	// rules after it still apply and the `discard` before it is not lost.
+	let long = "a".repeat(300);
+	let script = format!(
+		"require \"fileinto\";\n\
+		if header :matches \"subject\" \"{long}\" {{ discard; }}\n\
+		fileinto \"After\";\n"
+	);
+	let outcome = run(&script);
+	assert!(!outcome.aborted && outcome.pattern_over_caps, "{outcome:?}");
+	assert!(!outcome.discarded);
+	assert_eq!(outcome.fileinto, vec!["After".to_string()]);
+}

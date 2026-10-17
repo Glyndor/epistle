@@ -1717,14 +1717,16 @@ by the script:
   could not be built within the budget does not give its action: the action
   does not happen.
 - **What a filter sees of a big message.** A test reads a window, not the
-  whole message: the first 1 MiB of the body (the `body` test), and for a
-  `header`, `address` or `date` lookup the first 1000 values and the first
-  1 MiB of header text in all, at most 64 KiB of each value. `:count` counts
-  the values of the same window. Text a sender puts past the window is not
-  seen by the test, so a rule that must catch something should not depend on
-  where in a huge message it is. The run goes on with what it saw, never
-  with "no match" presented as certainty without a trace: the log says so
-  once an hour per account, and the counter
+  whole message: the first 1 MiB of the body (the `body` test), and, for a
+  `header`, `address` or `date` lookup, the first 1000 values and 64 KiB of
+  the headers called each name it lists (a longer value is cut), for at most
+  16 names. Every name has its own quota, so a thousand `Received` headers or
+  a huge `X-` header cannot hide the `From` or `Subject` listed with them.
+  `:count` counts every header of the names, whatever the window. Text a sender
+  puts past a window is not seen by the test, so a rule that must catch
+  something should not depend on where in a huge message it is. The run goes
+  on with what it saw, and a window that cut something is never silent: the
+  log says so once an hour per account, and the counter
   `mail_sieve_inspection_truncated_total` (alert metric
   `sieve_inspection_truncated`) counts the messages for which a test did not
   see everything. Each value is paid for once per lookup, and a key that
@@ -1736,8 +1738,10 @@ by the script:
 - `:matches` never looks at the length of the text it is given (a sender can
   make a Subject as long as the message allows, and the filter still sees
   it); its cost is counted in the run's budget. A key over 256 characters or
-  32 wildcards is refused, which stops the run like any overspending, and
-  the same upload check refuses a script that holds one.
+  32 wildcards is never run: saving a script that holds one is refused, and a
+  script stored earlier that does treats that test as false and goes on (the
+  log says so once an hour per account; shorten the key). Upgrading: a
+  `:matches` key longer than that, which used to match, now never does.
 - `fileinto` files into a folder once however often the script names it, and
   into at most 8 different folders. A folder the filter would make is made
   only while the account stays within 200 folders (INBOX included, every level

@@ -412,3 +412,34 @@ fn a_body_past_the_window_is_counted_and_said_once() {
 		.count();
 	assert_eq!(said, 1);
 }
+
+#[test]
+fn an_old_long_key_is_a_false_test_and_a_line_in_the_log_once_an_hour() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let long = "a".repeat(300);
+	let script = format!(
+		"require \"fileinto\";\nif header :matches \"subject\" \"{long}\" {{ discard; }}\nfileinto \"After\";\n"
+	);
+	let delivery = setup(dir.path(), &script);
+	let events = run_with_capture(|| {
+		for _ in 0..3 {
+			delivery
+				.deliver_routed(&message("hi"), None)
+				.expect("deliver");
+		}
+	});
+	assert_eq!(
+		count(&dir.path().join("accounts/alice/folders/After/new")),
+		3,
+		"the rest of the script ran every time"
+	);
+	let said = events
+		.iter()
+		.filter(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("over the length or wildcard limit"))
+		})
+		.count();
+	assert_eq!(said, 1);
+}

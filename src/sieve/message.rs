@@ -1,9 +1,7 @@
 //! The message view the Sieve interpreter evaluates: parsed headers, total
 //! size, body text, and the SMTP envelope.
 
-use super::env::{
-	BODY_WINDOW, HEADER_LOOKUP_WINDOW, HEADER_VALUE_WINDOW, HEADER_VALUES_PER_LOOKUP,
-};
+use super::env::{BODY_WINDOW, HEADER_NAME_VALUES, HEADER_NAME_WINDOW, HEADER_NAMES_PER_LOOKUP};
 
 /// A message as the interpreter sees it: parsed headers, total size, and the
 /// SMTP envelope (for the `envelope` test).
@@ -113,21 +111,28 @@ impl Message {
 
 	/// The headers called any of `names` (ignoring case) that a test can see,
 	/// in order. What a lookup reads is a fixed window whatever the message
-	/// holds, and the same one for the values and for their count: at most
-	/// [`HEADER_VALUES_PER_LOOKUP`] values, [`HEADER_LOOKUP_WINDOW`] octets in
-	/// all, and [`HEADER_VALUE_WINDOW`] of each. `truncated` says the window
-	/// cut something.
+	/// holds, and every name has a quota of its own: at most
+	/// [`HEADER_NAME_VALUES`] values and [`HEADER_NAME_WINDOW`] octets of
+	/// them, and no more than [`HEADER_NAMES_PER_LOOKUP`] names. `truncated`
+	/// says the window cut something. `count` is the number of headers there
+	/// are, all of them: positions are known without reading a value.
 	pub(super) fn visible_headers<S: AsRef<str>>(&self, names: &[S]) -> Visible<'_> {
 		let mut seen = Visible::default();
-		let mut room = HEADER_LOOKUP_WINDOW;
-		'names: for name in names {
-			for position in self.positions(name.as_ref()) {
-				if seen.values.len() >= HEADER_VALUES_PER_LOOKUP || room == 0 {
+		for (n, name) in names.iter().enumerate() {
+			let positions = self.positions(name.as_ref());
+			seen.count += positions.len();
+			if n >= HEADER_NAMES_PER_LOOKUP {
+				seen.truncated |= !positions.is_empty();
+				continue;
+			}
+			let mut room = HEADER_NAME_WINDOW;
+			for (taken, position) in positions.iter().enumerate() {
+				if taken >= HEADER_NAME_VALUES || room == 0 {
 					seen.truncated = true;
-					break 'names;
+					break;
 				}
 				let value = self.headers[*position as usize].1.as_str();
-				let shown = window(value, HEADER_VALUE_WINDOW.min(room));
+				let shown = window(value, room);
 				seen.truncated |= shown.len() < value.len();
 				room -= shown.len();
 				seen.values.push(shown);
@@ -157,6 +162,8 @@ impl Message {
 #[derive(Default)]
 pub(super) struct Visible<'a> {
 	pub(super) values: Vec<&'a str>,
+	/// How many headers there are of those names, whatever the window.
+	pub(super) count: usize,
 	pub(super) truncated: bool,
 }
 

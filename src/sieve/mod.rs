@@ -23,6 +23,7 @@ mod alloc_probe;
 pub mod analysis;
 pub mod ast;
 mod compare;
+pub(crate) use compare::{MAX_PATTERN_CHARS, MAX_WILDCARDS};
 mod date;
 mod env;
 mod eval;
