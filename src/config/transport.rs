@@ -53,6 +53,15 @@ pub struct Transport {
 	/// `host:port` of a SOCKS5 proxy to reach the smarthost through.
 	#[serde(default)]
 	pub socks_proxy: Option<String>,
+	/// With `false` the rule stays in the file but is never selected, so mail
+	/// goes by the next rule that matches, or direct. Only a `relay` rule may
+	/// be switched off: `fail` is a refusal that must not lapse quietly.
+	#[serde(default = "default_enabled")]
+	pub enabled: bool,
+}
+
+const fn default_enabled() -> bool {
+	true
 }
 
 impl std::fmt::Debug for Transport {
@@ -71,6 +80,7 @@ impl std::fmt::Debug for Transport {
 			.field("username", &self.username)
 			.field("password", &self.password.as_ref().map(|_| "***"))
 			.field("socks_proxy", &self.socks_proxy)
+			.field("enabled", &self.enabled)
 			.finish()
 	}
 }
@@ -112,6 +122,13 @@ impl Transport {
 	/// over STARTTLS (credentials never cross plaintext). Other kinds ignore the
 	/// relay fields.
 	pub fn validate(&self) -> Result<(), String> {
+		if !self.enabled && self.kind != TransportKind::Relay {
+			return Err(
+				"only a relay transport can be switched off with enabled = false; \
+				 remove a fail or direct rule instead"
+					.into(),
+			);
+		}
 		if self.kind == TransportKind::Relay {
 			if self.host.is_none() || self.port.is_none() {
 				return Err("relay transport needs host and port".into());
@@ -133,6 +150,7 @@ pub fn select<'a>(
 ) -> Option<&'a Transport> {
 	rules
 		.iter()
+		.filter(|rule| rule.enabled)
 		.filter_map(|rule| {
 			rule.specificity(sender_account, recipient_domain)
 				.map(|spec| (spec, rule))
@@ -144,3 +162,7 @@ pub fn select<'a>(
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transport_tests_enabled.rs"]
+mod tests_enabled;

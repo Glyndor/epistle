@@ -1412,6 +1412,7 @@ Outbound routing rules. Each rule matches by sender `account` (the envelope send
 | `starttls` | Upgrade to TLS before AUTH/mail on a relay. Required when AUTH is set. |
 | `username`, `password` | SMTP AUTH for the relay (submission). Sent only over TLS — never in plaintext (fail closed). |
 | `socks_proxy` | `host:port` of a SOCKS5 proxy to reach the smarthost through. |
+| `enabled` | Default `true`. With `false` the rule stays in the file but is never selected: its mail goes by the next rule that matches, or direct to the recipient's MX when none does. Only a `relay` rule may be switched off; a `fail` rule is a refusal and is removed, not paused. `epistle relay disable\|enable` edits it. |
 
 ### `[queue]`
 Outbound queue settings. Absent keeps the secure defaults.

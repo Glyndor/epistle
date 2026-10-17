@@ -13,6 +13,7 @@ fn rule(account: Option<&str>, domain: Option<&str>, kind: TransportKind) -> Tra
 		username: None,
 		password: None,
 		socks_proxy: None,
+		enabled: true,
 	}
 }
 

@@ -505,6 +505,7 @@ fn fail_rule(domain: &str) -> crate::config::Transport {
 		username: None,
 		password: None,
 		socks_proxy: None,
+		enabled: true,
 	}
 }
 
