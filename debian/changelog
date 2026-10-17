@@ -75,6 +75,21 @@ epistle (0.12.1) UNRELEASED; urgency=medium
   * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
     connections from one read-only query in the stack's database container,
     and gives up after 15 seconds, stopping what the query started with it.
+  * DNS providers: a listing keeps every record under its own type. NS,
+    HTTPS, SVCB and CAA were read as TXT by some providers and dropped by
+    others; a type epistle has no use for (NAPTR, the SOA, Namecheap's URL
+    redirects, Bunny's redirect and script records) is kept under its type
+    name. A type name that is not letters, digits and hyphens (at most 32)
+    shows as UNKNOWN. OVH and Porkbun no longer cut the closing quote off a
+    CAA or HTTPS value. A listing past 1000 pages or 100000 records is an
+    error instead of a part of the zone.
+  * `epistle dns lockdown` leaves delegations alone: a name below the zone
+    apex with NS records, and every name under it, gets no record and is
+    listed once as delegated to other nameservers. A domain that is itself
+    delegated gets no DMARC rewrite and no wildcard. The plan is built in one
+    pass over the zone, a name that cannot be a DNS name is reported cut down,
+    and control characters from the zone are escaped in the output. See
+    docs/dns.md.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

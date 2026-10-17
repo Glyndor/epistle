@@ -169,6 +169,17 @@ JSON), asks, and publishes:
 - `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
   covers names that do not exist; a wildcard never applies to a name
   with records of its own.
+- Delegations are left alone. A name below the zone apex that has NS
+  records belongs to other nameservers, and so does everything under it:
+  records written there would be hidden by the delegation or refused by
+  the provider. The plan skips the name and every name under it, and
+  lists it once as `sub.example.org is delegated to other nameservers;
+  left as is`. A domain that is itself delegated (or sits inside a
+  delegation) gets no DMARC rewrite, no names and no wildcard. The NS
+  records at the zone apex name the servers of the zone itself and are
+  not a delegation. The lockdown reads the whole zone first: a provider
+  that cannot list it (`route53`, `rfc2136`) makes the command stop
+  before it writes anything.
 
 Before a step up, the plan lists the senders that failed DMARC in the
 aggregate reports epistle received for the domain in the last 30 days
@@ -245,6 +256,21 @@ operator).
 RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
+
+### What a listing returns
+
+`epistle dns lockdown`, `epistle dns provider test` and the DKIM clean-up
+list the zone through the provider. Every provider returns each record with
+its own type: NS, HTTPS, SVCB and CAA are kept as such, and a type epistle
+has no use for (NAPTR, SSHFP, the SOA, Namecheap's URL redirects, Bunny's
+redirect and script records) is kept under its type name. None of them is
+read as a TXT, so a TXT check never sees an NS target, and none of them is
+ever written or deleted by epistle. A type name that is not made of letters,
+digits and hyphens (at most 32) is shown as `UNKNOWN`. A listing that would
+need more than 1000 pages or 100000 records fails instead of returning part
+of the zone: a delegation that fell off the end of a listing would be
+written over. `route53` and `rfc2136` cannot list a zone at all, so a
+command that has to read it stops with the provider's error.
 
 ### Record descriptions
 
