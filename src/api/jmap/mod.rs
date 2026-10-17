@@ -19,6 +19,7 @@ use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
 use caller_slots::{CallerSlot, Work};
+use sieve_capability::SIEVE_CAPABILITY;
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -46,6 +47,7 @@ mod methods;
 mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
+mod sieve_capability;
 mod vacation_response;
 pub mod websocket;
 
@@ -96,6 +98,7 @@ pub async fn session(
 						CORE_CAPABILITY: {}, MAIL_CAPABILITY: {},
 						SUBMISSION_CAPABILITY: {}, QUOTA_CAPABILITY: {},
 						VACATION_CAPABILITY: {},
+						SIEVE_CAPABILITY: sieve_capability::account_value(),
 					},
 				}),
 			)
@@ -104,8 +107,11 @@ pub async fn session(
 	let primary: serde_json::Map<String, Value> = accounts
 		.keys()
 		.next()
-		.map(|id| (CORE_CAPABILITY.to_string(), Value::String(id.clone())))
 		.into_iter()
+		.flat_map(|id| {
+			[CORE_CAPABILITY, SIEVE_CAPABILITY]
+				.map(|capability| (capability.to_string(), Value::String(id.clone())))
+		})
 		.collect();
 
 	// The Session resource advertises the configured cap, not a hard-coded
@@ -150,6 +156,7 @@ pub async fn session(
 				"supportsPush": true,
 			},
 			VACATION_CAPABILITY: {},
+			SIEVE_CAPABILITY: sieve_capability::session_value(),
 		},
 		"accounts": accounts,
 		"primaryAccounts": primary,
