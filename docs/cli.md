@@ -521,7 +521,7 @@ to the webhook.
 `disable` writes `enabled = false` into the section and keeps the URL and the
 secret: after the restart no event is posted, alerts with `--webhook` included, and the warning on stderr lists which ones (`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, the warm-up reports) and the alerts that go quiet. While an alert posts to the webhook, `disable` asks first and off a terminal needs `--yes` (exit 2 without it), like `webhook unset` refusing. `config-check` warns about an alert whose webhook is off.
 `enable` takes the key out again. Both say `unchanged` when the webhook is
-already that way and refuse with exit 2 when no webhook is configured. `set`
+already that way and refuse with exit 3 when no webhook is configured (a setting the command needs is missing; so is `unset` while an alert posts to the webhook, exit 3). `set`
 keeps a disabled webhook disabled. `show` prints `enabled`.
 
 `test` posts one `test` event (see [configuration](configuration.md)), signed like
@@ -586,7 +586,7 @@ Accounts, mailboxes, aliases, DNS records and DKIM keys stay, and the
 mailboxes stay on disk. `masked add` refuses a disabled domain (exit 2), and `account add` and `alias add` create an address there with a warning on stderr that it receives and sends nothing until the domain is enabled. It asks first (see
 [Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
 exit 2, and refuses to switch off the last enabled domain of a server that
-has listeners. `enable` takes the name out of `disabled_domains` again. Both
+has listeners (exit 3, a rule of the server). `enable` takes the name out of `disabled_domains` again. Both
 report `result` `unchanged` when the domain is already in that state, and the
 JSON result carries `domain` and `enabled`.
 

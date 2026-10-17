@@ -165,7 +165,7 @@ fn the_last_enabled_domain_cannot_be_disabled_while_the_server_listens() {
 		],
 		b"",
 	);
-	assert_eq!(output.status.code(), Some(2));
+	assert_eq!(output.status.code(), Some(3));
 	assert!(output.stdout.is_empty());
 	assert!(
 		String::from_utf8_lossy(&output.stderr).contains("keep one domain enabled"),

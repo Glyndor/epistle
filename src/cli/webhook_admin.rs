@@ -134,7 +134,32 @@ fn confirm_disable(path: &Path, yes: bool, dry_run: bool) -> Result<(), ExitCode
 	super::prompt::confirm_destructive("webhook disable", &question, yes)
 }
 
+/// The refusals that are about the configuration and not about the command
+/// line (exit code 3): no webhook to switch, a webhook an alert depends on.
+fn policy_refusal(path: &Path, action: &WebhookCli) -> Option<ExitCode> {
+	let config = Config::load(path).ok()?;
+	match action {
+		WebhookCli::Enable | WebhookCli::Disable { .. } if config.webhook.is_none() => {
+			Some(super::exit::policy(NO_WEBHOOK))
+		}
+		WebhookCli::Unset => {
+			let alert = config.alerts.iter().find(|alert| alert.webhook)?;
+			Some(super::exit::policy(unset_message(&alert.name)))
+		}
+		_ => None,
+	}
+}
+
+const NO_WEBHOOK: &str = "no webhook is configured; run `epistle webhook set` first";
+
+fn unset_message(alert: &str) -> String {
+	format!("alert \"{alert}\" posts to the webhook; remove it or turn its webhook off first")
+}
+
 pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool, json: bool) -> ExitCode {
+	if let Some(code) = policy_refusal(path, &action) {
+		return code;
+	}
 	if let WebhookCli::Disable { yes } = action
 		&& let Err(code) = confirm_disable(path, yes, dry_run)
 	{
@@ -209,9 +234,7 @@ fn execute_with(
 			let enabled = matches!(action, WebhookCli::Enable);
 			let change: resource::Change = Box::new(move |document, config| {
 				if config.webhook.is_none() {
-					return Err(resource::ResourceError::refused(
-						"no webhook is configured; run `epistle webhook set` first",
-					));
+					return Err(resource::ResourceError::refused(NO_WEBHOOK));
 				}
 				let value = (!enabled).then(|| TomlValue::from(false));
 				document
@@ -224,11 +247,7 @@ fn execute_with(
 		WebhookCli::Unset => (
 			Box::new(|document, config| {
 				if let Some(alert) = config.alerts.iter().find(|alert| alert.webhook) {
-					return Err(format!(
-						"alert \"{}\" posts to the webhook; remove it or turn its webhook off first",
-						alert.name
-					)
-					.into());
+					return Err(unset_message(&alert.name).into());
 				}
 				document
 					.remove_table(&["webhook"])

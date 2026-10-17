@@ -90,7 +90,8 @@ fn switch(
 		Err(error) => return Outcome::Error(error),
 	};
 	if let Err(error) = state::set_enabled(config, &mut document, domain, enabled) {
-		return refused(error);
+		// A rule of the server, not a mistake in the command: exit code 3.
+		return Outcome::Code(super::super::exit::policy(error));
 	}
 	let already = state::is_enabled(config, domain) == enabled;
 	if !dry_run

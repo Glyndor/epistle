@@ -99,7 +99,7 @@ fn without_a_webhook_there_is_nothing_to_switch() {
 	let env = env("");
 	for action in ["enable", "disable"] {
 		let output = epistle(&["webhook", "--config", &env.config, action, "--json"], b"");
-		assert_eq!(output.status.code(), Some(2), "{action}");
+		assert_eq!(output.status.code(), Some(3), "{action}");
 		assert!(output.stdout.is_empty(), "{action}");
 		assert_eq!(
 			String::from_utf8_lossy(&output.stderr).trim_end(),
@@ -206,4 +206,22 @@ fn config_check_warns_about_an_alert_that_cannot_post() {
 			.any(|w| w.contains("alert \"spool\"") && w.contains("enabled = false")),
 		"{warnings:?}"
 	);
+}
+
+#[test]
+fn unsetting_a_webhook_an_alert_posts_to_is_refused_by_policy() {
+	let env = env(WITH_ALERT);
+	let before = text(&env);
+	let output = epistle(
+		&["webhook", "--config", &env.config, "unset", "--json"],
+		b"",
+	);
+	assert_eq!(output.status.code(), Some(3));
+	assert!(output.stdout.is_empty());
+	assert!(
+		String::from_utf8_lossy(&output.stderr).contains("alert \"spool\" posts to the webhook"),
+		"{}",
+		String::from_utf8_lossy(&output.stderr)
+	);
+	assert!(text(&env) == before, "a refused unset wrote the file");
 }
