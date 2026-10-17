@@ -82,3 +82,52 @@ fn matching_work_is_budgeted_across_the_run() {
 	let outcome = run_with(&test.repeat(5), raw.as_bytes());
 	assert!(!outcome.aborted);
 }
+
+#[test]
+fn what_the_sender_captures_does_not_use_up_the_scripts_variables() {
+	// 17 wildcards over a 69 KB Subject capture 17 x 4096 octets, which used
+	// to fill the 64 KiB the script's own variables share, so the `set` after
+	// it was ignored and `fileinto "${dest}"` filed nowhere.
+	let script = "require [\"variables\", \"fileinto\"];\n\
+		if header :matches \"subject\" \"*,*,*,*,*,*,*,*,*,*,*,*,*,*,*,*,*\" { }\n\
+		set \"dest\" \"topic1\";\n\
+		fileinto \"${dest}\";\n";
+	let subject = vec!["y".repeat(4096); 17].join(",");
+	let raw = format!("Subject: {subject}\r\n\r\nx\r\n");
+	let outcome = run_with(script, raw.as_bytes());
+	assert_eq!(outcome.fileinto, vec!["topic1".to_string()]);
+	assert!(!outcome.aborted);
+}
+
+#[test]
+fn a_set_that_does_not_fit_stops_the_run_instead_of_being_ignored() {
+	let mut script =
+		String::from("require [\"variables\", \"fileinto\", \"reject\"];\nset \"big\" \"");
+	script.push_str(&"y".repeat(4000));
+	script.push_str("\";\n");
+	for n in 0..20 {
+		script.push_str(&format!("set \"v{n}\" \"${{big}}${{big}}\";\n"));
+	}
+	script.push_str("discard;\n");
+	let outcome = run(&script);
+	assert!(
+		outcome.aborted,
+		"twenty variables of 4000 octets do not fit 64 KiB"
+	);
+	assert!(!outcome.discarded, "and the run stopped there");
+	// A name that is too long is not silence either.
+	let outcome = run(&format!(
+		"require \"variables\";\nset \"{}\" \"x\";\ndiscard;\n",
+		"n".repeat(100)
+	));
+	assert!(outcome.aborted && !outcome.discarded);
+}
+
+#[test]
+fn numbered_captures_are_those_of_the_last_match() {
+	let script = "require [\"variables\", \"reject\"];\n\
+		if header :matches \"subject\" \"a*c\" { }\n\
+		if header :matches \"subject\" \"?*\" { reject \"${1}${2}\"; }\n";
+	let outcome = run_with(script, b"Subject: abc\r\n\r\nx\r\n");
+	assert_eq!(outcome.reject.as_deref(), Some("abc"));
+}

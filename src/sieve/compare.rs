@@ -216,14 +216,13 @@ impl MatchSpec {
 				}
 				match outcome {
 					Glob::Match(spans) => {
-						env.set("0", value);
-						for (index, (from, to)) in spans.into_iter().enumerate() {
-							// Captures are lower case, as they always were, and
-							// at most as long as a variable can be.
-							let capture =
-								lowercase_prefix(&value[from..to], super::env::MAX_VAR_BYTES);
-							env.set(&(index + 1).to_string(), &capture);
-						}
+						let parts = spans
+							.into_iter()
+							.map(|(from, to)| {
+								lowercase_prefix(&value[from..to], super::env::MAX_VAR_BYTES)
+							})
+							.collect();
+						env.set_captures(value, parts);
 						true
 					}
 					Glob::NoMatch => false,

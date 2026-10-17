@@ -39,6 +39,10 @@ pub(super) const HEADER_VALUES_PER_LOOKUP: usize = 1000;
 /// Variables and counters of one run.
 pub(crate) struct Env {
 	vars: HashMap<String, String>,
+	/// `${0}` to `${32}`: what the last successful `:matches` captured. They
+	/// are the sender's text, and have a store of their own, so that what a
+	/// sender makes them hold cannot use up the script's variables.
+	captures: Vec<String>,
 	var_bytes: usize,
 	steps: u32,
 	work: u64,
@@ -49,6 +53,7 @@ impl Default for Env {
 	fn default() -> Self {
 		Self {
 			vars: HashMap::new(),
+			captures: Vec::new(),
 			var_bytes: 0,
 			steps: 0,
 			work: 0,
@@ -92,28 +97,50 @@ impl Env {
 		!self.exhausted
 	}
 
-	/// The value of the variable `name`, if set.
-	#[cfg(test)]
+	/// The value of the variable `name`, if set. A name made of digits is a
+	/// match variable.
 	pub(super) fn get(&self, name: &str) -> Option<&str> {
-		self.vars.get(name).map(String::as_str)
+		match capture_index(name) {
+			Some(index) => self.captures.get(index).map(String::as_str),
+			None => self.vars.get(name).map(String::as_str),
+		}
+	}
+
+	/// Replace the match variables with those of a `:matches` that succeeded:
+	/// `${0}` is the whole value and `${1}` on the wildcards. Each is cut to
+	/// [`MAX_VAR_BYTES`], and there are at most 33.
+	pub(super) fn set_captures(&mut self, whole: &str, parts: Vec<String>) {
+		self.captures.clear();
+		self.captures.push(cut(whole, MAX_VAR_BYTES).to_string());
+		for part in parts.into_iter().take(super::compare::MAX_WILDCARDS) {
+			self.captures.push(cut(&part, MAX_VAR_BYTES).to_string());
+		}
 	}
 
 	/// Set a variable. The value is cut to [`MAX_VAR_BYTES`] at a character
-	/// boundary; a `set` that would pass the total, the number of variables
-	/// or the name length is ignored.
+	/// boundary. A `set` that does not fit (the total, the number of variables,
+	/// the length of the name) is not carried out and stops the run: silence
+	/// would let what a message makes the store hold decide whether the rest of
+	/// the script does what it says.
 	pub(super) fn set(&mut self, name: &str, value: &str) {
-		let mut end = value.len().min(MAX_VAR_BYTES);
-		while !value.is_char_boundary(end) {
-			end -= 1;
+		let value = cut(value, MAX_VAR_BYTES);
+		if let Some(index) = capture_index(name) {
+			if index > super::compare::MAX_WILDCARDS {
+				return self.abandon();
+			}
+			if self.captures.len() <= index {
+				self.captures.resize(index + 1, String::new());
+			}
+			self.captures[index] = value.to_string();
+			return;
 		}
-		let value = &value[..end];
 		let old = self.vars.get(name).map_or(0, String::len);
 		let is_new = !self.vars.contains_key(name);
 		if name.len() > MAX_VAR_NAME
 			|| (is_new && self.vars.len() >= MAX_VARS)
 			|| self.var_bytes - old + value.len() > MAX_VARS_TOTAL_BYTES
 		{
-			return;
+			return self.abandon();
 		}
 		self.var_bytes = self.var_bytes - old + value.len();
 		self.vars.insert(name.to_string(), value.to_string());
@@ -133,10 +160,26 @@ impl Env {
 	pub(super) fn expand(&mut self, input: &str) -> String {
 		self.charge(input.len() as u64);
 		let limit = input.len().max(MAX_VAR_BYTES);
-		let out = super::vars::expand(input, &self.vars, limit);
+		let out = super::vars::expand(input, |name| self.get(name), limit);
 		self.charge(out.len() as u64);
 		out
 	}
+}
+
+/// The match variable a name stands for: `0` to a few digits.
+fn capture_index(name: &str) -> Option<usize> {
+	(!name.is_empty() && name.len() <= 3 && name.bytes().all(|b| b.is_ascii_digit()))
+		.then(|| name.parse().ok())
+		.flatten()
+}
+
+/// `text` cut to `limit` octets at a character boundary.
+fn cut(text: &str, limit: usize) -> &str {
+	let mut end = text.len().min(limit);
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+	&text[..end]
 }
 
 #[cfg(test)]
