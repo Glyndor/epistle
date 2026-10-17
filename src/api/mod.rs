@@ -395,6 +395,10 @@ mod jmap_tests_sieve_set;
 mod jmap_tests_sieve_activate;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_authz.rs"]
+mod jmap_tests_sieve_authz;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 
