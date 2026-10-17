@@ -70,3 +70,6 @@ mod relay_state;
 
 #[path = "cli_json/suppression_b.rs"]
 mod suppression_b;
+
+#[path = "cli_json/app_password_b.rs"]
+mod app_password_b;

@@ -42,6 +42,12 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     before anything is written). `suppression add` no longer says it
     suppressed an address whose marker it could not write, and `suppression
     list` escapes control characters in what it prints.
+  * CLI: `epistle app-password rotate|rename`. `rotate` replaces the secret
+    and prints the new one once, keeping the label, expiry, address range and
+    `save-sent` setting; the old secret stops working at once. `rename` keeps
+    the secret. App password labels are now 1 to 64 characters without
+    control characters when created or renamed, and `app-password list`
+    escapes control characters.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 
