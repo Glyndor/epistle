@@ -70,22 +70,21 @@ impl DesecProvider {
 	/// The record type token for a kind we can publish (deSEC handles each as
 	/// an rrset; MX needs the priority split out into a separate field which
 	/// epistle does not build yet).
-fn rrset_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
-}
+	fn rrset_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
+	}
 
 	/// The subname (label relative to the zone): the name with the trailing
 	/// `.zone` removed; the apex is the empty string.
@@ -290,7 +289,7 @@ impl DnsProvider for DesecProvider {
 					} else {
 						format!("{}.{}", r.subname, zone)
 					};
-					let kind = parse_kind(&r.kind);
+					let kind = RecordKind::from_token(&r.kind);
 					r.records.into_iter().map(move |value| {
 						let kind_for_value = &kind;
 						DnsRecord {
@@ -310,25 +309,6 @@ impl DnsProvider for DesecProvider {
 		})
 	}
 }
-
-/// Map a deSEC type token to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(kind.to_string()),
-	}
-}
-
 
 /// Map a write response to success or a typed error.
 fn check(response: reqwest::Response) -> Result<(), ProviderError> {

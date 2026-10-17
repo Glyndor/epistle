@@ -135,24 +135,11 @@ pub(crate) async fn parse_response(
 	Ok(api)
 }
 
-/// Convert a [`Host`] back into the abstract [`DnsRecord`] form. Returns
-/// `None` for kinds we do not model (e.g. URLFRAME, ALIAS — Namecheap has a
-/// few aliases we never publish).
+/// Convert a [`Host`] back into the abstract [`DnsRecord`] form. A type
+/// epistle does not publish (ALIAS, URL, URL301, FRAME, MXE) keeps its own
+/// kind; `None` is only a record whose MX or SRV parts are missing.
 pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
-	let kind = match host.kind.as_str() {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => return None,
-	};
+	let kind = RecordKind::from_token(&host.kind);
 	let value = match kind {
 		// getHosts does not document the TXT form either; a value this
 		// provider wrote comes back as written, and one written quoted

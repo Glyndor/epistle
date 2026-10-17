@@ -85,9 +85,8 @@ fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		RecordKind::Srv => Ok("SRV"),
 		RecordKind::Tlsa => Ok("TLSA"),
 		RecordKind::Caa => Ok("CAA"),
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+		RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+			Err(ProviderError::Unsupported)
+		}
 	}
 }

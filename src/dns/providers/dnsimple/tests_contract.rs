@@ -10,6 +10,10 @@
 use super::tests::mock;
 use super::*;
 use crate::dns::providers::dnsimple::tests::Shared;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 
 fn txt(name: &str, value: &str) -> DnsRecord {
 	DnsRecord {
@@ -95,4 +99,30 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 			.any(|w| w.ends_with("/records/3") && w.starts_with("DELETE ")),
 		"the unrelated TXT was deleted: {writes:?}"
 	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |id: u64, name: &str, kind: &str, content: &str| {
+		serde_json::json!({
+			"id": id, "zone_id": "example.org", "parent_id": null, "name": name,
+			"content": content, "ttl": 3600, "priority": null, "type": kind,
+			"regions": ["global"], "system_record": false,
+		})
+	};
+	let (provider, _state) = mock(vec![
+		record(1, "sub", "NS", NS_TARGET),
+		record(2, "", "CAA", CAA_VALUE),
+		record(3, "", "HTTPS", HTTPS_VALUE),
+		record(4, "", "SVCB", SVCB_VALUE),
+		record(5, "", "NAPTR", NAPTR_VALUE),
+		record(6, "", HOSTILE_TYPE, OPAQUE_VALUE),
+	])
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
 }

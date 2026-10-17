@@ -106,22 +106,21 @@ impl NamecheapProvider {
 	/// Whether `kind` can be published through Namecheap. setHosts takes A,
 	/// AAAA, ALIAS, CAA, CNAME, MX, MXE, NS, TXT, URL, URL301 and FRAME, so
 	/// SRV and TLSA are not.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-	match kind {
-		RecordKind::A => Ok("A"),
-		RecordKind::Aaaa => Ok("AAAA"),
-		RecordKind::Txt => Ok("TXT"),
-		RecordKind::Cname => Ok("CNAME"),
-		RecordKind::Mx => Ok("MX"),
-		RecordKind::Caa => Ok("CAA"),
-		// setHosts documents no SRV and no TLSA record type.
-		RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
+			// setHosts documents no SRV and no TLSA record type.
+			RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
 	}
-}
 
 	/// Reject a record the token is not scoped for, before any network call.
 	fn authorize(&self, record: &DnsRecord) -> Result<(), ProviderError> {

@@ -3,7 +3,7 @@
 //! of epistle uses (TXT as its logical value, MX as `priority target`, the
 //! orange-cloud `proxied` flag on the kinds Cloudflare can proxy).
 
-use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM, parse_kind};
+use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM};
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
 use crate::dns::txt::txt_decode;
 
@@ -45,7 +45,7 @@ impl CloudflareProvider {
 		Ok(listed
 			.into_iter()
 			.map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				// The read form is not documented. A record written by
 				// the API comes back quoted (possibly re-split), one an
 				// older release wrote unquoted comes back as it was;

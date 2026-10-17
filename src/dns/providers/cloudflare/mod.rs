@@ -133,10 +133,9 @@ impl CloudflareProvider {
 			// Cloudflare accepts HTTPS and SVCB; publishing NS, HTTPS
 			// or SVCB is the operator's call, not epistle's. Any
 			// other (custom) type is also out of scope.
-			RecordKind::Ns
-			| RecordKind::Https
-			| RecordKind::Svcb
-			| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -536,24 +535,6 @@ impl DnsProvider for CloudflareProvider {
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
 		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a Cloudflare type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

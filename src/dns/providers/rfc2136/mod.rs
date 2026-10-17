@@ -171,22 +171,21 @@ impl Rfc2136Provider {
 	/// The record kinds this provider can publish. SRV maps directly from the
 	/// presentation form to the wire format; MX needs the priority split out
 	/// (epistle still packs it into the value).
-fn supported_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
-}
+	fn supported_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
+	}
 
 	/// Build the update section for a TXT upsert. The section
 	/// contains a `class NONE` delete for every cached value with the
@@ -578,10 +577,9 @@ fn record_rdata(kind: &RecordKind, value: &str) -> Result<RData, ProviderError> 
 			.map_err(|e| ProviderError::Remote(format!("bad MX exchange: {e}")))?;
 			Ok(RData::MX(MX::new(preference, exchange)))
 		}
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+		RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+			Err(ProviderError::Unsupported)
+		}
 	}
 }
 

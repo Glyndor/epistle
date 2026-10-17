@@ -25,4 +25,7 @@ pub mod route53;
 pub mod spaceship;
 
 #[cfg(test)]
+pub(crate) mod listing_contract;
+
+#[cfg(test)]
 mod transport_tests;

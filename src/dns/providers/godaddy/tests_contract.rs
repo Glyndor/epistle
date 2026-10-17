@@ -9,6 +9,10 @@
 
 use super::tests::{mock_with_per_name, txt};
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 use axum::http::Method;
 
 #[tokio::test]
@@ -74,4 +78,27 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		data.contains(&UNRELATED),
 		"the unrelated TXT was lost: {data:?}"
 	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |name: &str, kind: &str, data: &str| serde_json::json!({"type": kind, "name": name, "data": data, "ttl": 600});
+	let (provider, _state) = mock_with_per_name(
+		serde_json::json!([
+			record("sub", "NS", NS_TARGET),
+			record("@", "CAA", CAA_VALUE),
+			record("@", "HTTPS", HTTPS_VALUE),
+			record("@", "SVCB", SVCB_VALUE),
+			record("@", "NAPTR", NAPTR_VALUE),
+			record("@", HOSTILE_TYPE, OPAQUE_VALUE),
+		]),
+		Default::default(),
+	)
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
 }

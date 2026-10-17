@@ -154,22 +154,21 @@ impl GcloudProvider {
 
 	/// The Google API type token for a kind we can publish; MX/SRV need
 	/// priority/weight handling we do not emit yet.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
-}
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
+	}
 
 	/// Whether `record` sits inside `self.zone` (case-insensitive). Reject
 	/// before any network call.
@@ -462,7 +461,7 @@ RecordKind::Ns
 				n == zone_name || n.ends_with(&format!(".{zone_name}"))
 			})
 			.flat_map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				let name = r.name.trim_end_matches('.').to_string();
 				r.rrdatas.into_iter().map(move |value| {
 					let kind_for_value = &kind;
@@ -513,24 +512,6 @@ fn same_rdatas(record: &DnsRecord, old: &Rrset, new: &Rrset) -> bool {
 		values
 	};
 	logical(&old.rrdatas) == logical(&new.rrdatas)
-}
-
-/// Map a Google type token to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(kind.to_string()),
-	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

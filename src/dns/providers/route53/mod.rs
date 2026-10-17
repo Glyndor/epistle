@@ -473,20 +473,19 @@ impl DnsProvider for Route53Provider {
 /// all use the same presentation form we emit (the value goes verbatim
 /// into `<Value>`), which Route 53 accepts.
 fn record_type(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
+	match kind {
+		RecordKind::A => Ok("A"),
+		RecordKind::Aaaa => Ok("AAAA"),
+		RecordKind::Txt => Ok("TXT"),
+		RecordKind::Cname => Ok("CNAME"),
+		RecordKind::Mx => Ok("MX"),
+		RecordKind::Srv => Ok("SRV"),
+		RecordKind::Tlsa => Ok("TLSA"),
+		RecordKind::Caa => Ok("CAA"),
+		RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+			Err(ProviderError::Unsupported)
+		}
+	}
 }
 
 /// The logical value of one rdata as `parse_txt_rrset` returns it: Route

@@ -23,7 +23,7 @@ use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
-	same_txt_purpose,
+	same_txt_purpose, unwrap_quotes,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
@@ -120,22 +120,21 @@ impl PorkbunProvider {
 	/// `prio` field as a plain preference and is not yet supported because
 	/// the rest of epistle still builds MX with the priority embedded in the
 	/// value string.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
-}
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
+	}
 
 	/// Validate that `record.value` is a well-formed SRV. Returns the priority
 	/// so the upsert path can populate the `prio` field (Porkbun treats it
@@ -369,7 +368,7 @@ RecordKind::Ns
 			.await?
 			.into_iter()
 			.filter_map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				// SRV records Porkbun returns without a usable `prio` are
 				// malformed: drop them so the rest of the list does not
 				// carry a misleading empty value.
@@ -384,7 +383,7 @@ RecordKind::Ns
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
 				} else {
-					r.content.trim_matches('"').to_string()
+					unwrap_quotes(&r.content).to_string()
 				};
 				Some(DnsRecord {
 					name: r.name.trim_end_matches('.').to_string(),
@@ -407,24 +406,6 @@ impl DnsProvider for PorkbunProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async move { self.list_inner().await })
-	}
-}
-
-/// Map a Porkbun type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

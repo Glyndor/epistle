@@ -402,22 +402,32 @@ impl DnsProvider for BunnyProvider {
 	}
 }
 
-/// Map Bunny's numeric record type back to a [`RecordKind`].
+/// Map Bunny's numeric record type back to a [`RecordKind`]. The numbers
+/// are Bunny's `DnsRecordTypes` enum (<https://bunny.net/docs/reference/dnszonepublic_add>,
+/// read 2026-10-16). The ones epistle does not publish keep their own kind
+/// (NS at 12 is a delegation), and a number the enum does not list is
+/// `TYPE<n>`, never a TXT.
 fn parse_kind(rtype: i64) -> RecordKind {
-	match rtype {
-		0 => RecordKind::A,
-		1 => RecordKind::Aaaa,
-		2 => RecordKind::Cname,
-		3 => RecordKind::Txt,
-		4 => RecordKind::Mx,
-		8 => RecordKind::Srv,
-		15 => RecordKind::Tlsa,
-		// Bunny's API only ever returns a known numeric code, but the
-		// contract that follows everywhere else is preserved: an
-		// unknown kind is preserved with the type token the provider
-		// gave us, never silently collapsed into TXT.
-		_ => RecordKind::Other(format!("TYPE{rtype}")),
-	}
+	let token = match rtype {
+		0 => "A",
+		1 => "AAAA",
+		2 => "CNAME",
+		3 => "TXT",
+		4 => "MX",
+		5 => "REDIRECT",
+		6 => "FLATTEN",
+		7 => "PULLZONE",
+		8 => "SRV",
+		9 => "CAA",
+		10 => "PTR",
+		11 => "SCRIPT",
+		12 => "NS",
+		13 => "SVCB",
+		14 => "HTTPS",
+		15 => "TLSA",
+		other => return RecordKind::from_token(&format!("TYPE{other}")),
+	};
+	RecordKind::from_token(token)
 }
 
 /// Decode a JSON body, mapping 401/403 to an auth error.

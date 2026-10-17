@@ -229,12 +229,17 @@ async fn api_response_without_command_response_still_extracts_empty_hosts() {
 }
 
 #[tokio::test]
-async fn unknown_kind_in_list_is_skipped() {
+async fn unknown_kind_in_list_keeps_its_own_kind() {
 	let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="a" Name="@" Type="A" Address="1.2.3.4" TTL="3600"/><host HostId="b" Name="@" Type="URLFRAME" Address="https://x.example/" TTL="300"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 	let (provider, _state) = mock(xml, None).await;
 	let records = provider.list("example.org").await.expect("list");
-	assert_eq!(records.len(), 1, "URLFRAME should be skipped: {records:?}");
-	assert_eq!(records[0].kind, RecordKind::A);
+	let kinds: Vec<RecordKind> = records.iter().map(|r| r.kind.clone()).collect();
+	assert_eq!(
+		kinds,
+		vec![RecordKind::A, RecordKind::Other("URLFRAME".to_string())],
+		"URLFRAME is not a record epistle publishes, and it is not a TXT either"
+	);
+	assert_eq!(records[1].value, "https://x.example/");
 }
 
 #[tokio::test]

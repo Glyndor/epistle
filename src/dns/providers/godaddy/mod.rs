@@ -162,23 +162,22 @@ impl GodaddyProvider {
 	/// (https://developer.godaddy.com/en/docs/references/rest/domains/v1/record-replace-type-name),
 	/// so a TLSA publish would round-trip a 4xx instead of a clean
 	/// "this provider does not support TLSA" verdict.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-	match kind {
-		RecordKind::A => Ok("A"),
-		RecordKind::Aaaa => Ok("AAAA"),
-		RecordKind::Txt => Ok("TXT"),
-		RecordKind::Cname => Ok("CNAME"),
-		RecordKind::Mx => Ok("MX"),
-		RecordKind::Srv => Ok("SRV"),
-		RecordKind::Caa => Ok("CAA"),
-		// TLSA has no structured field on GoDaddy.
-		RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
+			// TLSA has no structured field on GoDaddy.
+			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
 	}
-}
 
 	/// Reject a record outside the configured zone before any network call.
 	fn authorize(&self, record: &DnsRecord) -> Result<(), ProviderError> {
@@ -479,15 +478,10 @@ fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 				} else {
 					format!("{name}.{}", self.zone)
 				};
-				// Skip kinds the provider does not publish (apex
-				// NS, SOA, and any vendor-specific record the API
-				// happens to know about). A previous version mapped
-				// unknown types to TXT, which made the list
-				// indistinguishable from a TXT record at the same
-				// owner; round-tripping that through upsert/delete
-				// would operate on the apex TXT set, not the
-				// original record type.
-				let kind = parse_kind(&r.kind)?;
+				// Every type the zone holds is listed, the apex NS and a
+				// delegation's NS included; a type epistle does not publish
+				// keeps its own kind (`RecordKind::from_token`), never TXT.
+				let kind = RecordKind::from_token(&r.kind);
 				let value = if kind == RecordKind::Mx {
 					let priority = r.priority?;
 					format!("{} {}", priority, r.data.trim_end_matches('.'))
@@ -523,29 +517,6 @@ impl DnsProvider for GodaddyProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async move { self.list_inner().await })
-	}
-}
-
-/// Map a GoDaddy type token back to a [`RecordKind`], or `None` when
-/// the type is not one the provider publishes. Unknown kinds
-/// (apex NS, SOA, ...) must be skipped by the caller rather than
-/// collapsed into TXT, otherwise a caller round-tripping the list
-/// through `upsert`/`delete` would operate on the wrong record
-/// type.
-fn parse_kind(kind: &str) -> Option<RecordKind> {
-	match kind {
-		"A" => Some(RecordKind::A),
-		"AAAA" => Some(RecordKind::Aaaa),
-		"CAA" => Some(RecordKind::Caa),
-		"CNAME" => Some(RecordKind::Cname),
-		"HTTPS" => Some(RecordKind::Https),
-		"MX" => Some(RecordKind::Mx),
-		"NS" => Some(RecordKind::Ns),
-		"SRV" => Some(RecordKind::Srv),
-		"SVCB" => Some(RecordKind::Svcb),
-		"TLSA" => Some(RecordKind::Tlsa),
-		"TXT" => Some(RecordKind::Txt),
-		_ => None,
 	}
 }
 

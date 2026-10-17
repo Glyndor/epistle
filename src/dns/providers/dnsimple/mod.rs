@@ -120,23 +120,22 @@ impl DnsimpleProvider {
 	/// and SRV (after splitting priority/weight/port/target) go through `content`
 	/// plus dedicated fields; TLSA has no structured field on DNSimple, and MX
 	/// needs the priority split out, so both stay Unsupported.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-	match kind {
-		RecordKind::A => Ok("A"),
-		RecordKind::Aaaa => Ok("AAAA"),
-		RecordKind::Txt => Ok("TXT"),
-		RecordKind::Cname => Ok("CNAME"),
-		RecordKind::Mx => Ok("MX"),
-		RecordKind::Srv => Ok("SRV"),
-		RecordKind::Caa => Ok("CAA"),
-		// TLSA has no structured field on DNSimple.
-		RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
+			// TLSA has no structured field on DNSimple.
+			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
 	}
-}
 
 	/// The relative name (label left of the zone); the apex is the empty
 	/// string — DNSimple expects that, not `@` or the zone itself.
@@ -470,7 +469,7 @@ fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 				} else {
 					format!("{}.{}", r.name, zone_label)
 				};
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				let value = if kind == RecordKind::Srv {
 					match (r.priority, r.weight, r.port) {
 						(Some(p), Some(w), Some(port)) => {
@@ -507,24 +506,6 @@ impl DnsProvider for DnsimpleProvider {
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
 		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a DNSimple type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TLSA" => RecordKind::Tlsa,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(kind.to_string()),
 	}
 }
 

@@ -14,6 +14,7 @@ use crate::net::{HttpsUrl, HttpsUrlError};
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+	unwrap_quotes,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
@@ -118,22 +119,21 @@ impl OvhProvider {
 	}
 
 	/// The OVH fieldType token for a kind we publish.
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-	match kind {
-		RecordKind::A => Ok("A"),
-		RecordKind::Aaaa => Ok("AAAA"),
-		RecordKind::Txt => Ok("TXT"),
-		RecordKind::Cname => Ok("CNAME"),
-		RecordKind::Mx => Ok("MX"),
-		RecordKind::Srv => Ok("SRV"),
-		RecordKind::Caa => Ok("CAA"),
-		RecordKind::Tlsa => Err(ProviderError::Unsupported),
-		RecordKind::Ns
-		| RecordKind::Https
-		| RecordKind::Svcb
-		| RecordKind::Other(_) => Err(ProviderError::Unsupported),
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
 	}
-}
 
 	/// The relative subDomain OVH expects: apex → `""`, otherwise the name
 	/// with `.zone` stripped.
@@ -465,24 +465,6 @@ impl DnsProvider for OvhProvider {
 	}
 }
 
-/// Map an OVH fieldType back to a [`RecordKind`]; anything we do not
-/// recognise (incl. the unsupported TLSA shape) comes back as TXT.
-fn parse_kind(field_type: &str) -> RecordKind {
-	match field_type {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"HTTPS" => RecordKind::Https,
-		"MX" => RecordKind::Mx,
-		"NS" => RecordKind::Ns,
-		"SRV" => RecordKind::Srv,
-		"SVCB" => RecordKind::Svcb,
-		"TXT" => RecordKind::Txt,
-		_ => RecordKind::Other(field_type.to_string()),
-	}
-}
-
 /// Convert an OVH record to a [`DnsRecord`], reconstructing the FQDN and
 /// reading a TXT target, which OVH lists quoted and split, back to its
 /// logical value.
@@ -492,7 +474,7 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 	} else {
 		format!("{}.{}", rec.sub_domain, zone)
 	};
-	let kind = parse_kind(&rec.field_type);
+	let kind = RecordKind::from_token(&rec.field_type);
 	let is_txt = kind == RecordKind::Txt;
 	DnsRecord {
 		name,
@@ -500,7 +482,7 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 		value: if is_txt {
 			txt_decode(&rec.target, TXT_FORM)
 		} else {
-			rec.target.trim_matches('"').to_string()
+			unwrap_quotes(&rec.target).to_string()
 		},
 		ttl: rec.ttl,
 		proxied: None,

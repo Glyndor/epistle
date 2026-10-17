@@ -2,6 +2,9 @@
 //! record of the same purpose and leaves every other TXT at the name alone.
 
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, SVCB_VALUE, Shape, assert_kinds_kept,
+};
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 
 const NAME: &str = "sel._domainkey.example.org";
@@ -129,4 +132,30 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		!writes.iter().any(|w| w == "DELETE /dnszone/42/records/3"),
 		"the unrelated TXT was deleted: {writes:?}"
 	);
+}
+
+/// Bunny numbers its record types (`DnsRecordTypes`): 12 is an NS, 9 a CAA,
+/// 14 an HTTPS, 13 an SVCB, 10 a PTR, and a number the enum does not list
+/// is `TYPE<n>`. None of them is a TXT.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let (provider, state) = mock().await;
+	let record = |id: u32, kind: u32, name: &str, value: &str| serde_json::json!({ "Id": id, "Type": kind, "Name": name, "Value": value, "Ttl": 3600 });
+	state.lock().unwrap().zone_detail = serde_json::json!({
+		"Id": 42,
+		"Records": [
+			record(1, 12, "sub", NS_TARGET),
+			record(2, 9, "", CAA_VALUE),
+			record(3, 14, "", HTTPS_VALUE),
+			record(4, 13, "", SVCB_VALUE),
+			record(5, 99, "", NAPTR_VALUE),
+		]
+	});
+	let listed = provider.list("example.org").await.expect("list");
+	let shape = Shape {
+		unknown_as: "TYPE99",
+		hostile_row: false,
+		..Shape::NAMED
+	};
+	assert_kinds_kept(&listed, &shape);
 }

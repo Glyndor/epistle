@@ -67,22 +67,21 @@ impl SpaceshipProvider {
 	/// The Spaceship type token for a kind we can publish; SRV splits the
 	/// presentation form into `priority`/`weight`/`port`/`target` fields, MX
 	/// needs the priority split out (epistle still packs it into the value).
-fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-match kind {
-RecordKind::A => Ok("A"),
-RecordKind::Aaaa => Ok("AAAA"),
-RecordKind::Txt => Ok("TXT"),
-RecordKind::Cname => Ok("CNAME"),
-RecordKind::Mx => Ok("MX"),
-RecordKind::Srv => Ok("SRV"),
-RecordKind::Tlsa => Ok("TLSA"),
-RecordKind::Caa => Ok("CAA"),
-RecordKind::Ns
-| RecordKind::Https
-| RecordKind::Svcb
-| RecordKind::Other(_) => Err(ProviderError::Unsupported),
-}
-}
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
+		}
+	}
 
 	/// The Spaceship-relative name: `name` minus the zone suffix, or `@` for
 	/// the apex (the literal Spaceship uses for the zone itself).
@@ -126,10 +125,7 @@ RecordKind::Ns
 			// `Other` type is something we cannot translate to one
 			// of Spaceship's value fields. The caller must never
 			// reach this point: `api_kind` rejects the kinds.
-			RecordKind::Ns
-			| RecordKind::Https
-			| RecordKind::Svcb
-			| RecordKind::Other(_) => "",
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => "",
 		}
 	}
 
@@ -325,24 +321,34 @@ RecordKind::Ns
 		None
 	}
 
-	/// Map a Spaceship list item back to a [`RecordKind`], defaulting to TXT
-	/// so an unknown kind we did not emit still surfaces instead of being
-	/// silently dropped.
-	fn parse_kind(kind: &str) -> RecordKind {
-		match kind {
-			"A" => RecordKind::A,
-			"AAAA" => RecordKind::Aaaa,
-			"CAA" => RecordKind::Caa,
-			"CNAME" => RecordKind::Cname,
-			"HTTPS" => RecordKind::Https,
-			"MX" => RecordKind::Mx,
-			"NS" => RecordKind::Ns,
-			"SRV" => RecordKind::Srv,
-			"SVCB" => RecordKind::Svcb,
-			"TLSA" => RecordKind::Tlsa,
-			"TXT" => RecordKind::Txt,
-			_ => RecordKind::Other(kind.to_string()),
+	/// The value of a listed record of a kind epistle does not publish.
+	/// Spaceship names the field after the type: `nameserver` for an NS,
+	/// `svcPriority`, `targetName` and `svcParams` for an HTTPS or SVCB
+	/// (<https://docs.spaceship.dev/>, the NS and HTTPS resource record
+	/// schemas, read 2026-10-16), `aliasName` and `pointer` for the types
+	/// that follow the same pattern. An item with none of them lists with an
+	/// empty value.
+	fn foreign_value(kind: &RecordKind, item: &serde_json::Value) -> String {
+		let text = |key: &str| item.get(key).and_then(|v| v.as_str());
+		if matches!(kind, RecordKind::Https | RecordKind::Svcb) {
+			let priority = item
+				.get("svcPriority")
+				.and_then(|v| v.as_u64())
+				.unwrap_or(0);
+			return format!(
+				"{priority} {} {}",
+				text("targetName").unwrap_or("."),
+				text("svcParams").unwrap_or("")
+			)
+			.trim_end()
+			.to_string();
 		}
+		for key in ["nameserver", "aliasName", "pointer"] {
+			if let Some(v) = text(key) {
+				return v.to_string();
+			}
+		}
+		Self::extract_value(item).unwrap_or_default()
 	}
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
@@ -409,32 +415,50 @@ RecordKind::Ns
 				} else {
 					format!("{name}.{zone}")
 				};
-				let value = if matches!(Self::parse_kind(kind), RecordKind::Srv) {
-					let priority =
-						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let weight = item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let target = item.get("target").and_then(|v| v.as_str())?;
-					format!(
-						"{priority} {weight} {port} {}",
-						target.trim_end_matches('.')
-					)
-				} else if matches!(Self::parse_kind(kind), RecordKind::Mx) {
-					let priority =
-						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let target = item
-						.get("exchange")
-						.and_then(|v| v.as_str())
-						.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
-					format!("{priority} {}", target.trim_end_matches('.'))
-				} else if matches!(Self::parse_kind(kind), RecordKind::Txt) {
-					txt_decode(&Self::extract_value(&item)?, TXT_FORM)
-				} else {
-					Self::extract_value(&item)?
+				let kind = RecordKind::from_token(kind);
+				let value = match &kind {
+					RecordKind::Srv => {
+						let priority =
+							item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let weight =
+							item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let target = item.get("target").and_then(|v| v.as_str())?;
+						format!(
+							"{priority} {weight} {port} {}",
+							target.trim_end_matches('.')
+						)
+					}
+					RecordKind::Mx => {
+						let priority =
+							item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let target = item
+							.get("exchange")
+							.and_then(|v| v.as_str())
+							.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
+						format!("{priority} {}", target.trim_end_matches('.'))
+					}
+					RecordKind::Txt => txt_decode(&Self::extract_value(&item)?, TXT_FORM),
+					// A CAA is three fields (`flag`, `tag`, `value`): the
+					// presentation form is `0 issue "ca.example"`.
+					RecordKind::Caa if item.get("tag").is_some() => {
+						let flag = item.get("flag").and_then(|v| v.as_u64()).unwrap_or(0);
+						let tag = item.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+						let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("");
+						format!("{flag} {tag} \"{value}\"")
+					}
+					// A kind epistle does not publish is listed even when its
+					// value cannot be read: a delegation's NS that vanished
+					// from the listing would let the lockdown write under it.
+					RecordKind::Ns
+					| RecordKind::Https
+					| RecordKind::Svcb
+					| RecordKind::Other(_) => Self::foreign_value(&kind, &item),
+					_ => Self::extract_value(&item)?,
 				};
 				Some(DnsRecord {
 					name: fqdn,
-					kind: Self::parse_kind(kind),
+					kind,
 					value,
 					ttl,
 					proxied: None,

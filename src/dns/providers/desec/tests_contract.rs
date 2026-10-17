@@ -4,6 +4,10 @@
 //! siblings it read.
 
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 use crate::dns::txt::txt_presentation;
 
@@ -81,4 +85,24 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		let old = txt_presentation(v);
 		assert!(!put.contains(&old), "old SPF value {v:?} re-published");
 	}
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let rrset = |subname: &str, kind: &str, value: &str| serde_json::json!({"subname": subname, "type": kind, "ttl": 3600, "records": [value]});
+	let (provider, _state) = mock(serde_json::json!([
+		rrset("sub", "NS", NS_TARGET),
+		rrset("", "CAA", CAA_VALUE),
+		rrset("", "HTTPS", HTTPS_VALUE),
+		rrset("", "SVCB", SVCB_VALUE),
+		rrset("", "NAPTR", NAPTR_VALUE),
+		rrset("", HOSTILE_TYPE, OPAQUE_VALUE),
+	]))
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
 }

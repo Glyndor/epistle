@@ -5,6 +5,9 @@
 
 use super::tests::mock;
 use super::*;
+use crate::dns::providers::listing_contract::{
+	HOSTILE_TYPE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, Shape, assert_kinds_kept,
+};
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 
 fn txt(value: &str) -> DnsRecord {
@@ -91,4 +94,36 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		!deleted.contains(&UNRELATED.to_string()),
 		"the unrelated TXT was deleted: {deleted:?}"
 	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+/// Spaceship names the value field after the type: an NS carries
+/// `nameserver`, an HTTPS or SVCB `svcPriority`, `targetName` and
+/// `svcParams`, a CAA `flag`, `tag` and `value`. A listing that looks for a
+/// `value` only drops them all.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let (provider, _state) = mock(vec![
+		serde_json::json!({"type": "NS", "name": "sub", "nameserver": NS_TARGET, "ttl": 3600}),
+		serde_json::json!({
+			"type": "CAA", "name": "@", "flag": 0, "tag": "issue",
+			"value": "letsencrypt.org", "ttl": 3600
+		}),
+		serde_json::json!({
+			"type": "HTTPS", "name": "@", "svcPriority": 1, "targetName": ".",
+			"svcParams": "alpn=\"h2\"", "ttl": 3600
+		}),
+		serde_json::json!({
+			"type": "SVCB", "name": "@", "svcPriority": 1, "targetName": "svc.example.net.",
+			"svcParams": "port=8443", "ttl": 3600
+		}),
+		serde_json::json!({"type": "NAPTR", "name": "@", "value": NAPTR_VALUE, "ttl": 3600}),
+		serde_json::json!({"type": HOSTILE_TYPE, "name": "@", "value": OPAQUE_VALUE, "ttl": 3600}),
+	])
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
 }

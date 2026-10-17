@@ -446,32 +446,24 @@ async fn list_never_guesses_whether_a_returned_name_is_absolute() {
 	);
 }
 
-/// Apex NS, SOA, and other kinds the provider does not publish
-/// appear in the zone. The previous code mapped every unknown
-/// type to TXT, so a list call would return an apex TXT-shaped
-/// record for the NS or SOA entries; round-tripping that record
-/// through `upsert` or `delete` would then operate on the apex
-/// TXT set, not on the original record type.
+/// The SOA and a type GoDaddy publishes but epistle does not list as
+/// itself keep their own kind. The old code turned every unknown type into
+/// a TXT, so a round trip through `upsert` or `delete` would have acted on
+/// the TXT set at the owner instead of the record the zone holds.
 #[tokio::test]
-async fn list_skips_records_of_unsupported_kinds() {
-	// SOA is the only kind we know GoDaddy exposes but we cannot
-	// publish: apex NS and HTTPS are real record kinds epistle
-	// reads and preserves. The list skips SOA so a caller that
-	// round-trips it through `upsert`/`delete` does not operate on
-	// the wrong record type.
+async fn list_keeps_records_of_unpublished_kinds_as_themselves() {
 	let zone_records = serde_json::json!([
 		serde_json::json!({"type": "SOA", "name": "@", "data": "ns1.example.org. admin.example.org. 1 7200 3600 1209600 3600", "ttl": 600}),
 		serde_json::json!({"type": "TXT", "name": "_dmarc", "data": "v=DMARC1", "ttl": 600}),
 	]);
 	let (provider, _state) = mock_with(zone_records).await;
 	let listed = provider.list("example.org").await.expect("list");
+	let kinds: Vec<RecordKind> = listed.iter().map(|r| r.kind.clone()).collect();
 	assert_eq!(
-		listed.len(),
-		1,
-		"only the TXT record is published by this provider"
+		kinds,
+		vec![RecordKind::Other("SOA".to_string()), RecordKind::Txt]
 	);
-	assert_eq!(listed[0].kind, RecordKind::Txt);
-	assert_eq!(listed[0].value, "v=DMARC1");
+	assert_eq!(listed[1].value, "v=DMARC1");
 }
 
 /// `delete` reads the current set first, then either PUTs the remainder
