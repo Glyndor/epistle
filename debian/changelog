@@ -628,6 +628,26 @@ epistle (0.12.1) unstable; urgency=medium
     alone and never written to, a wildcard hidden by a delegation does not
     block the domain's wildcard, and `--undo` leaves a record in a name
     delegated since. See docs/dns.md.
+  * Antispam: an account's corpus learns from where its user puts mail. A
+    message copied or moved into Junk (`Junk`, `Spam` or `Rejects`) trains
+    spam; a message moved out of Junk to any mailbox but Trash trains ham.
+    IMAP COPY and MOVE and the mailbox change of JMAP `Email/set` take the
+    decision; `$Junk` and `$NotJunk` keep working and agree with it. Each
+    message counts once whatever route it took (the server keeps a keyed hash
+    of what each account learned, in the new `bayes_learned` table), and a
+    message the user moves back takes the earlier lesson back before the new
+    one is added. Learning is bounded: 100 lessons per command, 200 a minute
+    and 5000 a day per account, 5000 tokens per lesson and 100000 learned
+    messages per account; lessons over a limit are dropped and counted in
+    `mail_bayes_training_dropped_total`. The ledger and the counts change in
+    one transaction, so a lesson that cannot be recorded is not trained.
+    Migration 0008 adds two tables and no destructive statement.
+  * CLI: `epistle learning status|enable|disable|reset`. `status` prints what
+    each account's corpus learned (spam, ham, taken back, repeated, refused,
+    messages recorded, corpus size); `disable` and `enable` switch learning
+    per account without a restart; `reset` drops an account's corpus and its
+    record, and needs `--yes` off a terminal. It needs `[database]` and exits
+    3 without it.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 

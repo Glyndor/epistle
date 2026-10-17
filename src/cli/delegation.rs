@@ -59,6 +59,7 @@ impl Command {
 			| Command::Warmup { .. }
 			| Command::Delivery { .. }
 			| Command::Ban { .. }
+			| Command::Learning { .. }
 			| Command::Evidence { .. }
 			| Command::Masked { .. }
 			| Command::AppPassword { .. }

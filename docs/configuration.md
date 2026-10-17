@@ -622,6 +622,49 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
   train (the equality skip in `Snapshot::store_flags` keeps the
   no-op out of the trainer).
 
+  Moving mail teaches the same corpus. A message copied or moved into the
+  account's Junk mailbox (`Junk`, `Spam` or `Rejects`, the name the server
+  lists with the `\Junk` special use) trains spam. A message moved out of
+  Junk into any mailbox but Trash trains ham: Junk to Trash is the user
+  throwing spam away, and a copy out of Junk leaves the message in Junk, so
+  neither says the message is not junk. A folder that only ends in `Junk`
+  (`Archive/Junk`) has no role. IMAP COPY and MOVE and the mailbox change of
+  JMAP `Email/set` all take this decision, and when an update also sets
+  `$Junk` or `$NotJunk` the move is the last word. IMAP APPEND into Junk
+  does not train, because a migration tool appends whole folders.
+
+  The server records what each account has learned, one row per message in
+  `bayes_learned`, keyed by a keyed hash of the first 256 KiB of the message
+  (the same window and the same key file as the token hashes). That makes the
+  lessons idempotent however many ways a message reaches the same verdict:
+  moved into Junk, then marked `$Junk`, then copied again counts once. When
+  the user decides the other way (a message goes back to the inbox), the
+  earlier lesson is taken back token by token and the new verdict added, so a
+  message that goes back and forth leaves the corpus where the last move put
+  it. The row, the token counts and the message totals change in one
+  transaction: when the record cannot be written nothing is trained.
+
+  Learning is bounded so a client cannot turn it against the server or
+  against its own account:
+  - one command queues at most 100 lessons (a MOVE of ten thousand
+    messages teaches from the first hundred and counts the rest in
+    `mail_bayes_training_dropped_total`), and the queue to the worker holds
+    256;
+  - one account may teach 200 lessons a minute and 5000 a day, and
+    lessons beyond that are dropped and counted the same way, so one account
+    cannot fill the queue and starve the others;
+  - one lesson touches at most 5000 distinct tokens, and an account keeps at
+    most 100000 learned messages, after which new messages are refused
+    (counted as `refused`) until `epistle learning reset`;
+  - the shared scope is never taught by a user, and an account only ever
+    teaches its own scope. The message is named by the file the server wrote
+    and the mailbox by the server's own special-use table: a header or a
+    flag a client invents decides nothing.
+
+  Training never sends mail. `epistle learning` shows the counters per
+  account and switches learning off or on; see `docs/cli.md`. Without
+  `[database]` there is no corpus and nothing is learned.
+
 The LLM-assisted uncertain band uses `BayesStore::score_for_account`,
 which falls back to the shared scope for any account whose own scope
 has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
