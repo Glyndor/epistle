@@ -161,6 +161,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("warmup reset", &["gmail", "--yes"], Done),
 	("warmup disable", &["--yes"], Done),
 	("delivery list", &[], Done),
+	("delivery show", &[ID], Refused(2)),
+	("delivery export", &[], Done),
 	("masked list", &["bob"], Done),
 	("masked add", &["bob", "--label", "shop"], Done),
 	("masked remove", &["bob", "nobody@example.org"], Refused(2)),

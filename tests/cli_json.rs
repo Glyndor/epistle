@@ -73,3 +73,6 @@ mod suppression_b;
 
 #[path = "cli_json/app_password_b.rs"]
 mod app_password_b;
+
+#[path = "cli_json/delivery_b.rs"]
+mod delivery_b;
