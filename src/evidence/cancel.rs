@@ -60,8 +60,8 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 /// [`record`], raising `partial` before each write and lowering it only when
 /// a failure says nothing was written, so that a failure after something may
 /// have been written can be told from one before it. A recipient the chain
-/// already shows as canceled since the entry was put on hold (an earlier try
-/// that was cut short) is not written again.
+/// already shows as canceled since the removal began (an earlier try that was
+/// cut short) is not written again.
 fn record_partly(
 	evidence_root: &Path,
 	envelope: &Envelope,
@@ -71,7 +71,7 @@ fn record_partly(
 		return Ok(0);
 	}
 	let chain = Chain::open(evidence_root)?;
-	let done = match envelope.held {
+	let done = match envelope.cancelling {
 		Some(since) => already(evidence_root, &chain, envelope.id, since)?,
 		None => HashSet::new(),
 	};
@@ -139,10 +139,11 @@ fn already(
 	id: uuid::Uuid,
 	since: u64,
 ) -> std::io::Result<HashSet<String>> {
-	let first = super::day::Day::of_epoch(since);
+	// A day before the one it began on, for a clock that went back meanwhile.
+	let first = super::day::Day(super::day::Day::of_epoch(since).0 - 1);
 	let mut done = HashSet::new();
 	for day in chain.days()?.into_iter().filter(|day| *day >= first) {
-		super::verify::walk_day(evidence_root, day, None, |_, record, _| {
+		super::ack::walk_day_acknowledged(evidence_root, day, |_, record, _| {
 			if let Entry::Outcome(outcome) = &record.entry
 				&& outcome.spool_id == id
 				&& outcome.result == OutcomeKind::Canceled

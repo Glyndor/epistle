@@ -84,6 +84,12 @@ pub struct Envelope {
 	/// until each is written, and is not sent again meanwhile.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub outcomes_pending: Vec<PendingOutcome>,
+	/// Epoch seconds at which an operator's removal of the entry began and did
+	/// not finish: the entry is on hold, and the removal records only the
+	/// cancellations the evidence log does not already hold from that day on.
+	/// Not the hold of the operator, which can be as old as they like.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cancelling: Option<u64>,
 }
 
 /// An outcome the evidence log has not taken yet.

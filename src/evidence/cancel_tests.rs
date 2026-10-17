@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use super::*;
 use crate::evidence::MailClass;
 use crate::evidence::record::{Entry, OutcomeKind};
-use crate::evidence::verify::walk_day;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::{FsSpool, RecipientState, StoreOptions};
 
@@ -39,17 +38,19 @@ fn two_recipients(dir: &Path) -> (FsSpool, uuid::Uuid) {
 
 fn canceled(dir: &Path) -> Vec<String> {
 	let root = crate::evidence::service::root_of(dir);
-	let mut found = Vec::new();
+	// By place in the chain: a day is read again after each break gone past.
+	let mut found = std::collections::BTreeMap::new();
 	for day in Chain::open(&root).expect("chain").days().expect("days") {
-		walk_day(&root, day, None, |_, record, _| {
+		crate::evidence::ack::walk_day_acknowledged(&root, day, |line, record, _| {
 			if let Entry::Outcome(outcome) = &record.entry
 				&& outcome.result == OutcomeKind::Canceled
 			{
-				found.push(outcome.recipient.clone());
+				found.insert((day, line), outcome.recipient.clone());
 			}
 		})
 		.expect("walk");
 	}
+	let mut found: Vec<String> = found.into_values().collect();
 	found.sort();
 	found
 }
@@ -231,4 +232,78 @@ fn an_unconfirmed_record_on_the_second_recipient_keeps_the_entry_on_hold() {
 			"{how:?}"
 		);
 	}
+}
+
+#[test]
+fn an_entry_an_operator_held_long_ago_is_removed_without_reading_the_chain_from_then() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (spool, id) = two_recipients(dir.path());
+	let long_ago = crate::storage::delivery_log::now_epoch() - 30 * 86_400;
+	spool
+		.update_envelope(id, |envelope| envelope.hold(long_ago))
+		.expect("held by hand");
+	// A day since then that cannot be read: the removal does not go there.
+	let root = crate::evidence::service::root_of(dir.path());
+	let old = crate::evidence::day::Day::of_epoch(long_ago + 86_400);
+	Chain::open(&root)
+		.expect("chain")
+		.append(crate::evidence::test_support::accepted(50))
+		.expect("a record of today");
+	std::fs::write(
+		root.join("chain").join(format!("{}.jsonl", old.name())),
+		b"not a record\n",
+	)
+	.expect("unreadable day");
+	remove(&spool, &root, id).expect("removed");
+	assert!(spool.load_envelope(id).is_err());
+}
+
+#[test]
+fn a_removal_cut_short_goes_on_though_a_break_in_the_chain_was_acknowledged() {
+	use crate::evidence::ack::{Operator, acknowledge_at};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = crate::evidence::service::root_of(dir.path());
+	let now = crate::storage::delivery_log::now_epoch();
+	let chain = Chain::open(&root).expect("chain");
+	for n in 0..3 {
+		chain
+			.append(crate::evidence::test_support::accepted(40 + n))
+			.expect("record");
+	}
+	let file = chain.day_file(crate::evidence::day::Day::of_epoch(now));
+	let text = std::fs::read_to_string(&file).expect("day");
+	let lines: Vec<&str> = text.lines().collect();
+	std::fs::write(&file, format!("{}\n{}\n", lines[0], lines[2])).expect("cut a line");
+	let first = crate::evidence::audit::verify(
+		&root,
+		&crate::evidence::audit::Options {
+			from: None,
+			to: None,
+			anchors: Vec::new(),
+			now,
+		},
+	)
+	.expect("verify")
+	.first_break
+	.expect("a break");
+	let key = crate::evidence::key::EvidenceKey::load_or_create(&root).expect("key");
+	acknowledge_at(
+		&root,
+		&key,
+		&first,
+		"test",
+		&Operator::named("uid=0 sudo_user=a host=h"),
+		now,
+	)
+	.expect("ack");
+	let (spool, id) = two_recipients(dir.path());
+	remove_failing(&spool, dir.path(), id, 1, Fail::Clean);
+	remove(&spool, &root, id).expect("the retry goes past the acknowledged break");
+	assert_eq!(
+		canceled(dir.path()),
+		vec![
+			"a@remote.example".to_string(),
+			"b@remote.example".to_string()
+		]
+	);
 }

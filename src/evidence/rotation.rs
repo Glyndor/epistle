@@ -360,8 +360,9 @@ pub(crate) enum Step {
 fn recorded(evidence_root: &Path, rotation: &Rotation) -> std::io::Result<bool> {
 	let mut found = false;
 	for day in Chain::open(evidence_root)?.days()? {
-		// A day is read as far as it goes: a break elsewhere does not hide it.
-		let _ = super::verify::walk_day(evidence_root, day, None, |_, record, _| {
+		// A day is read past the breaks an operator acknowledged, and as far as
+		// it goes past any other: a break elsewhere does not hide the record.
+		let _ = super::ack::walk_day_acknowledged(evidence_root, day, |_, record, _| {
 			found |= matches!(&record.entry, Entry::KeyRotated(seen) if seen == rotation);
 		});
 	}

@@ -281,6 +281,7 @@ impl FsSpool {
 			evidence: options.evidence.is_some(),
 			retain_days: options.retain_days,
 			outcomes_pending: Vec::new(),
+			cancelling: None,
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;
@@ -569,13 +570,15 @@ impl FsSpool {
 			));
 		}
 		let mut held = envelope.clone();
-		held.hold(crate::storage::delivery_log::now_epoch());
-		if held.held != envelope.held {
+		let now = crate::storage::delivery_log::now_epoch();
+		held.hold(now);
+		held.cancelling.get_or_insert(now);
+		if held.held != envelope.held || held.cancelling != envelope.cancelling {
 			self.write_envelope_unlocked(id, &held)?;
 		}
 		let may_have_written = std::cell::Cell::new(false);
 		if let Err(error) = before(&envelope, &may_have_written) {
-			if !may_have_written.get() && held.held != envelope.held {
+			if !may_have_written.get() && held != envelope {
 				// Nothing was written: the entry goes back as it was.
 				if let Err(restore) = self.write_envelope_unlocked(id, &envelope) {
 					tracing::error!(%id, %restore, "an entry kept after a refused removal stays on hold");

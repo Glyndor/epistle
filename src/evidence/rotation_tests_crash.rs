@@ -190,3 +190,54 @@ fn a_rotation_in_the_first_half_hour_of_a_day_waits_for_the_day_before_to_be_sea
 	rotate_at(fixture.root(), true, at(DAY + 4, 0) + 1900).expect("rotate");
 	assert!(files(fixture.root(), Day(DAY + 3)).json.exists());
 }
+
+#[test]
+fn a_rotation_recorded_after_an_acknowledged_break_is_still_found_and_finished() {
+	use crate::evidence::ack::{Operator, acknowledge_at};
+	let fixture = Fixture::new();
+	let root = fixture.root().to_path_buf();
+	let chain = Chain::open(&root).expect("chain");
+	for hour in 1..=3 {
+		chain
+			.append_at(at(DAY + 3, hour), accepted(20 + hour as u32))
+			.expect("append");
+	}
+	rotate_steps(&root, true, at(DAY + 3, 5), |step| step == Step::Recorded).expect_err("cut");
+	// A line before the hand-over is cut out of the day, and an operator
+	// acknowledges the break.
+	let file = chain.day_file(Day(DAY + 3));
+	let text = std::fs::read_to_string(&file).expect("day");
+	let lines: Vec<&str> = text.lines().collect();
+	let kept: Vec<&str> = lines
+		.iter()
+		.enumerate()
+		.filter(|(index, _)| *index != 1)
+		.map(|(_, line)| *line)
+		.collect();
+	std::fs::write(&file, format!("{}\n", kept.join("\n"))).expect("cut a line");
+	let report = verify(
+		&root,
+		&Options {
+			from: None,
+			to: None,
+			anchors: vec![fixture.tsa.anchor],
+			now: at(DAY + 3, 6),
+		},
+	)
+	.expect("verify");
+	let first = report.first_break.expect("a break");
+	let key = EvidenceKey::load_or_create(&root).expect("key");
+	acknowledge_at(
+		&root,
+		&key,
+		&first,
+		"test",
+		&Operator::named("uid=0 sudo_user=a host=h"),
+		at(DAY + 3, 6),
+	)
+	.expect("ack");
+	assert!(
+		resume(&root).expect("resume").is_some(),
+		"the hand-over after the acknowledged break was not found"
+	);
+}
