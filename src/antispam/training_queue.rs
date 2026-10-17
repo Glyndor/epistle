@@ -16,11 +16,20 @@
 //! queue is full, or the account has already taught as much as
 //! [`LearnLimiter`] allows, the job is dropped and counted in
 //! `mail_bayes_training_dropped_total`, and the caller's reply is not
-//! delayed or failed. The limit is per account, so one account cannot fill
-//! the queue and starve the others.
+//! delayed or failed.
+//!
+//! The limits are per account, and each one is what keeps the accounts
+//! apart. An account may have [`MAX_PENDING_PER_ACCOUNT`] jobs waiting out of
+//! [`TRAINING_QUEUE_CAPACITY`], so one account, or any seven, cannot take all
+//! the places; beyond seven accounts at their share the queue can be full and
+//! a further account's job is dropped like any other, counted. An account
+//! also has a count of lessons a minute and a day, and a bound on the time it
+//! may keep the worker busy in a minute, charged from what the worker spent
+//! ([`LearnLimiter`]).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
@@ -69,6 +78,9 @@ pub(crate) fn seam_after(bytes: &[u8], at: usize) -> usize {
 /// corpus is the only thing that misses the lesson.
 pub const MAX_JOBS_PER_COMMAND: usize = 100;
 
+/// Jobs of one account that may wait in the queue at once.
+pub const MAX_PENDING_PER_ACCOUNT: usize = 32;
+
 /// One message to train on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrainingJob {
@@ -80,12 +92,56 @@ pub struct TrainingJob {
 	pub spam: bool,
 }
 
+/// What the sending half and the worker share: the per-account limits and the
+/// count of jobs each account has waiting.
+#[derive(Debug, Default)]
+pub struct Fairness {
+	limiter: LearnLimiter,
+	pending: Mutex<HashMap<String, usize>>,
+}
+
+impl Fairness {
+	/// Take a place in the queue for `account`, unless it already has
+	/// [`MAX_PENDING_PER_ACCOUNT`] jobs waiting.
+	fn reserve(&self, account: &str) -> bool {
+		let mut pending = self
+			.pending
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		match pending.get_mut(account) {
+			Some(waiting) if *waiting >= MAX_PENDING_PER_ACCOUNT => false,
+			Some(waiting) => {
+				*waiting += 1;
+				true
+			}
+			None => {
+				pending.insert(account.to_string(), 1);
+				true
+			}
+		}
+	}
+
+	/// Give back a place taken by [`Fairness::reserve`].
+	fn release(&self, account: &str) {
+		let mut pending = self
+			.pending
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		if let Some(waiting) = pending.get_mut(account) {
+			*waiting -= 1;
+			if *waiting == 0 {
+				pending.remove(account);
+			}
+		}
+	}
+}
+
 /// The sending half, cloned into every IMAP session and the API state.
 #[derive(Clone)]
 pub struct TrainingQueue {
 	sender: mpsc::Sender<TrainingJob>,
 	metrics: Arc<Metrics>,
-	limiter: Arc<LearnLimiter>,
+	fairness: Arc<Fairness>,
 }
 
 impl TrainingQueue {
@@ -94,20 +150,26 @@ impl TrainingQueue {
 	/// production choice.
 	pub fn bounded(capacity: usize, metrics: Arc<Metrics>) -> (Self, mpsc::Receiver<TrainingJob>) {
 		let (sender, receiver) = mpsc::channel(capacity);
-		let limiter = Arc::new(LearnLimiter::default());
+		let fairness = Arc::new(Fairness::default());
 		(
 			TrainingQueue {
 				sender,
 				metrics,
-				limiter,
+				fairness,
 			},
 			receiver,
 		)
 	}
 
 	/// This queue with `limiter` in place of the default per-account limits.
+	/// It starts a new count of what each account has waiting, so call it
+	/// before a worker is started on the queue, as [`TrainingQueue::start_with`]
+	/// does.
 	pub fn with_limiter(mut self, limiter: LearnLimiter) -> Self {
-		self.limiter = Arc::new(limiter);
+		self.fairness = Arc::new(Fairness {
+			limiter,
+			pending: Mutex::new(HashMap::new()),
+		});
 		self
 	}
 
@@ -118,8 +180,20 @@ impl TrainingQueue {
 		crypto: MessageCrypto,
 		metrics: Arc<Metrics>,
 	) -> Self {
+		Self::start_with(trainer, crypto, metrics, LearnLimiter::default())
+	}
+
+	/// [`TrainingQueue::start`] with other per-account limits.
+	pub fn start_with(
+		trainer: BayesTrainerHandle,
+		crypto: MessageCrypto,
+		metrics: Arc<Metrics>,
+		limiter: LearnLimiter,
+	) -> Self {
 		let (queue, receiver) = Self::bounded(TRAINING_QUEUE_CAPACITY, metrics);
-		tokio::spawn(run_worker(receiver, trainer, crypto));
+		let queue = queue.with_limiter(limiter);
+		let fairness = Arc::clone(&queue.fairness);
+		tokio::spawn(run_worker_with(receiver, trainer, crypto, fairness));
 		queue
 	}
 
@@ -127,13 +201,24 @@ impl TrainingQueue {
 	/// queue, a worker that has gone away, or an account over its limits
 	/// drops the job and counts it.
 	pub fn submit(&self, job: TrainingJob) -> bool {
-		if !self.limiter.allow(&job.account, std::time::Instant::now()) {
+		if !self.fairness.reserve(&job.account) {
 			self.metrics.bayes_training_dropped();
 			return false;
 		}
+		if !self
+			.fairness
+			.limiter
+			.allow(&job.account, std::time::Instant::now())
+		{
+			self.fairness.release(&job.account);
+			self.metrics.bayes_training_dropped();
+			return false;
+		}
+		let account = job.account.clone();
 		match self.sender.try_send(job) {
 			Ok(()) => true,
 			Err(_) => {
+				self.fairness.release(&account);
 				self.metrics.bayes_training_dropped();
 				false
 			}
@@ -142,6 +227,17 @@ impl TrainingQueue {
 }
 
 impl TrainingQueue {
+	/// Jobs of `account` waiting in the queue (tests).
+	#[cfg(test)]
+	pub(crate) fn pending_for(&self, account: &str) -> usize {
+		let pending = self
+			.fairness
+			.pending
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		pending.get(account).copied().unwrap_or(0)
+	}
+
 	/// Count `jobs` lessons that a command did not queue because it went
 	/// over [`MAX_JOBS_PER_COMMAND`].
 	pub fn note_dropped(&self, jobs: usize) {
@@ -151,13 +247,25 @@ impl TrainingQueue {
 }
 
 /// Drain `receiver` until every [`TrainingQueue`] clone is gone, training
-/// one message at a time.
+/// one message at a time. The limits of a queue made by
+/// [`TrainingQueue::bounded`] are not shared with this worker; use
+/// [`TrainingQueue::start`] for that.
 pub async fn run_worker(
-	mut receiver: mpsc::Receiver<TrainingJob>,
+	receiver: mpsc::Receiver<TrainingJob>,
 	trainer: BayesTrainerHandle,
 	crypto: MessageCrypto,
 ) {
+	run_worker_with(receiver, trainer, crypto, Arc::new(Fairness::default())).await;
+}
+
+async fn run_worker_with(
+	mut receiver: mpsc::Receiver<TrainingJob>,
+	trainer: BayesTrainerHandle,
+	crypto: MessageCrypto,
+	fairness: Arc<Fairness>,
+) {
 	while let Some(job) = receiver.recv().await {
+		let started = std::time::Instant::now();
 		let crypto = crypto.clone();
 		let path = job.path.clone();
 		let window = tokio::task::spawn_blocking(move || read_window(&path, &crypto)).await;
@@ -180,6 +288,10 @@ pub async fn run_worker(
 				);
 			}
 		}
+		fairness
+			.limiter
+			.record_busy(&job.account, started.elapsed(), std::time::Instant::now());
+		fairness.release(&job.account);
 	}
 }
 
