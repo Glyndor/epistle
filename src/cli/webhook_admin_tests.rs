@@ -81,11 +81,14 @@ fn webhook_accepts_config_before_or_after_the_action_and_defaults_it() {
 #[test]
 fn show_masks_the_secret_and_reports_an_absent_webhook() {
 	let run = run(HOOK, &["show"]);
-	assert_eq!(run.out, "url\thttps://hooks.example/mail\nsecret\tset\n");
+	assert_eq!(
+		run.out,
+		"url\thttps://hooks.example/mail\nsecret\tset\nenabled\tyes\n"
+	);
 	assert!(!run.out.contains("hook-secret"));
 	assert_eq!(
 		super::tests::run(HOOK, &["show", "--json"]).out,
-		"{\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}\n"
+		"{\"enabled\":true,\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}\n"
 	);
 	assert_eq!(super::tests::run("", &["show"]).out, "url\tunset\n");
 	assert_eq!(super::tests::run("", &["show", "--json"]).out, "null\n");

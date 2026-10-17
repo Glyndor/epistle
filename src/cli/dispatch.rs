@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};

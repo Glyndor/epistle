@@ -61,3 +61,6 @@ mod domain_set;
 
 #[path = "cli_json/alert_state.rs"]
 mod alert_state;
+
+#[path = "cli_json/webhook_state.rs"]
+mod webhook_state;

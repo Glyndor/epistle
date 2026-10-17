@@ -29,6 +29,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
   * CLI: `epistle alert show|enable|disable`. A rule switched off with the new
     `enabled = false` key stays in the file but takes no samples and never
     fires; `alert list` marks it and its JSON row has `enabled`.
+  * CLI: `epistle webhook enable|disable`. `enabled = false` in `[webhook]`
+    keeps the URL and the secret but posts no event, alerts included;
+    `webhook test` still posts. `webhook show` prints `enabled`.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

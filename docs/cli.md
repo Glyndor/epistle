@@ -493,6 +493,8 @@ never refused. Supports `--dry-run` and `--config FILE`.
 epistle webhook show [--json]
 epistle webhook set https://hooks.example/mail --secret-stdin < secret.txt
 epistle webhook unset
+epistle webhook disable [--dry-run]
+epistle webhook enable [--dry-run]
 epistle webhook test
 ```
 
@@ -502,6 +504,12 @@ secret arrives on stdin as one line and is stored inline in the 0600 configurati
 file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps a
 secret that is already configured. `unset` is refused while an alert still posts
 to the webhook.
+
+`disable` writes `enabled = false` into the section and keeps the URL and the
+secret: after the restart no event is posted, alerts with `--webhook` included.
+`enable` takes the key out again. Both say `unchanged` when the webhook is
+already that way and refuse with exit 2 when no webhook is configured. `set`
+keeps a disabled webhook disabled. `show` prints `enabled`.
 
 `test` posts one `test` event (see [configuration](configuration.md)), signed like
 any other, and reports the HTTP status. It fails on a non-2xx answer, a connection

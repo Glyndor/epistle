@@ -44,6 +44,13 @@ pub enum WebhookCli {
 	},
 	/// Stop sending webhook events.
 	Unset,
+	/// Switch the webhook on again.
+	Enable,
+	/// Switch the webhook off without removing it.
+	///
+	/// The `[webhook]` section stays, with its URL and secret, but no event
+	/// is posted, alerts included. `enable` brings it back.
+	Disable,
 	/// Post one `test` event and report the endpoint's answer.
 	Test,
 }
@@ -61,9 +68,16 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 		"unset"
 	};
 	if json {
-		return resource::json(out, &json!({ "url": webhook.url, "secret": secret }));
+		let shown = json!({ "url": webhook.url, "secret": secret, "enabled": webhook.enabled });
+		return resource::json(out, &shown);
 	}
-	writeln!(out, "url\t{}\nsecret\t{secret}", webhook.url).map_err(|error| error.to_string())
+	writeln!(
+		out,
+		"url\t{}\nsecret\t{secret}\nenabled\t{}",
+		webhook.url,
+		if webhook.enabled { "yes" } else { "no" }
+	)
+	.map_err(|error| error.to_string())
 }
 
 pub(super) fn run(path: &Path, action: WebhookCli, dry_run: bool, json: bool) -> ExitCode {
@@ -131,6 +145,22 @@ fn execute_with(
 					.map_err(resource::ResourceError::Failure)
 			});
 			(change, "set", shown)
+		}
+		WebhookCli::Enable | WebhookCli::Disable => {
+			let enabled = matches!(action, WebhookCli::Enable);
+			let change: resource::Change = Box::new(move |document, config| {
+				if config.webhook.is_none() {
+					return Err(resource::ResourceError::refused(
+						"no webhook is configured; run `epistle webhook set` first",
+					));
+				}
+				let value = (!enabled).then(|| TomlValue::from(false));
+				document
+					.set_table_fields(&["webhook"], &[("enabled", value)])
+					.map_err(resource::ResourceError::Failure)
+			});
+			let verb = if enabled { "enable" } else { "disable" };
+			(change, verb, json!({ "enabled": enabled }))
 		}
 		WebhookCli::Unset => (
 			Box::new(|document, config| {

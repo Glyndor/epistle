@@ -204,6 +204,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("webhook set", &["https://hooks.example.net/in"], Done),
 	("alert list", &[], Done),
 	("alert add", &["spool", "--metric", "accepted", "--op", ">", "--threshold", "100", "--window", "5m", "--webhook"], Done),
+	("webhook disable", &[], Done),
+	("webhook enable", &[], Done),
 	("alert show", &["spool"], Done),
 	("alert disable", &["spool"], Done),
 	("alert enable", &["spool"], Done),
