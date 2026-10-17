@@ -145,7 +145,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 		"Id": 42,
 		"Records": [
 			record(1, 12, "sub", NS_TARGET),
-			serde_json::json!({"Id": 2, "Type": 9, "Name": "", "Value": "letsencrypt.org", "Ttl": 3600, "Flags": 0, "Tag": "issue"}),
+			serde_json::json!({"Id": 2, "Type": 9, "Name": "", "Value": "letsencrypt.org", "Ttl": 3600, "Flags": 128, "Tag": "issuewild"}),
 			serde_json::json!({"Id": 7, "Type": 4, "Name": "", "Value": "mail.example.org", "Ttl": 3600, "Priority": 10}),
 			record(3, 14, "", HTTPS_VALUE),
 			record(4, 13, "", SVCB_VALUE),
@@ -183,4 +183,40 @@ async fn a_zone_past_the_record_cap_is_an_error() {
 		error,
 		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
 	);
+}
+
+/// What epistle writes for an MX comes back as the same MX, whichever way
+/// Bunny stores it: `<preference> <exchange>` kept whole in `Value` (what the
+/// write sends) or split into `Priority` and `Value`. A null MX that came
+/// back as `0 0 .` would not be the null MX the lockdown wrote, and `--undo`
+/// would not remove it.
+#[tokio::test]
+async fn an_mx_written_comes_back_as_the_same_mx() {
+	for written in ["0 .", "10 mail.example.org"] {
+		let (provider, state) = mock().await;
+		provider
+			.upsert(
+				"example.org",
+				DnsRecord::new("example.org", RecordKind::Mx, written, 3600),
+			)
+			.await
+			.expect("upsert");
+		let body: serde_json::Value =
+			serde_json::from_str(state.lock().unwrap().bodies.last().expect("a write"))
+				.expect("json");
+		let sent = body["Value"].as_str().expect("value").to_string();
+		let (preference, exchange) = written.split_once(' ').expect("two parts");
+		for (priority, value) in [
+			(0, sent.as_str()),
+			(preference.parse::<i64>().expect("number"), exchange),
+		] {
+			state.lock().unwrap().zone_detail = serde_json::json!({
+				"Id": 42,
+				"Records": [{"Id": 1, "Type": 4, "Name": "", "Value": value, "Ttl": 3600, "Priority": priority}]
+			});
+			let listed = provider.list("example.org").await.expect("list");
+			assert_eq!(listed.len(), 1);
+			assert_eq!(listed[0].value, written, "stored as {priority} / {value}");
+		}
+	}
 }

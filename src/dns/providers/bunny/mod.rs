@@ -383,7 +383,12 @@ impl BunnyProvider {
 					format!("0 {weight} {port} {target}")
 				} else if kind == RecordKind::Txt {
 					txt_decode(&value_raw, TXT_FORM)
-				} else if kind == RecordKind::Mx && r.priority.is_some() {
+				} else if kind == RecordKind::Mx
+					&& r.priority.is_some()
+					&& !starts_with_preference(&value_raw)
+				{
+					// `Priority` and `Value` are separate fields; a record written
+					// as `<preference> <exchange>` in `Value` already has it.
 					format!("{} {value_raw}", r.priority.unwrap_or(0))
 				} else if kind == RecordKind::Caa && r.tag.is_some() {
 					format!(
@@ -423,6 +428,16 @@ impl DnsProvider for BunnyProvider {
 			self.list_inner().await
 		}))
 	}
+}
+
+/// Whether an MX `Value` already begins with its preference: a number and
+/// something after it (`10 mail.example.org`, `0 .`).
+fn starts_with_preference(value: &str) -> bool {
+	let mut parts = value.split_whitespace();
+	parts
+		.next()
+		.is_some_and(|first| first.parse::<u16>().is_ok())
+		&& parts.next().is_some()
 }
 
 /// Map Bunny's numeric record type back to a [`RecordKind`]. The numbers
