@@ -370,3 +370,52 @@ async fn a_desec_link_that_names_a_next_page_nobody_can_read_is_an_error() {
 		assert_ne!(result, Ok(1), "{link}: the next page was not followed");
 	}
 }
+
+/// A `Link` that names another origin (another port, another host name,
+/// another scheme) is refused: the token that travels with the follow-up
+/// request goes to the host that was configured and to no other.
+#[tokio::test]
+async fn a_desec_link_to_another_origin_is_never_followed() {
+	let (other, other_hits) = serve_by(|_, _, _| ("[]".to_string(), None)).await;
+	for (label, link) in [
+		(
+			"another port",
+			format!("<{other}/domains/example.org/rrsets/?cursor=n>; rel=\"next\""),
+		),
+		(
+			"another host name",
+			"<http://localhost:{port}/domains/example.org/rrsets/?cursor=n>; rel=\"next\""
+				.to_string(),
+		),
+		(
+			"another scheme",
+			"<https://127.0.0.1:{port}/domains/example.org/rrsets/?cursor=n>; rel=\"next\""
+				.to_string(),
+		),
+		(
+			"a bare host",
+			"<//elsewhere.example/domains/example.org/rrsets/?cursor=n>; rel=\"next\"".to_string(),
+		),
+	] {
+		let own_link = link.clone();
+		let (base, hits) = serve_by(move |base, _, _| {
+			let port = base.rsplit(':').next().expect("port");
+			(
+				"[{\"subname\":\"\",\"type\":\"A\",\"ttl\":60,\"records\":[\"192.0.2.1\"]}]"
+					.to_string(),
+				Some(own_link.replace("{port}", port)),
+			)
+		})
+		.await;
+		let result = crate::dns::providers::desec::DesecProvider::new(secret())
+			.with_base(url(&base))
+			.list("example.org")
+			.await;
+		assert!(
+			matches!(&result, Err(ProviderError::Remote(m)) if m.contains("invalid request URL")),
+			"{label}: {result:?}"
+		);
+		assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "{label}");
+	}
+	assert_eq!(other_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

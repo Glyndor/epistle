@@ -131,8 +131,8 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 			record(1, "sub", "NS", NS_TARGET),
 			{
 				let mut caa = record(2, "@", "CAA", "letsencrypt.org");
-				caa["flags"] = serde_json::json!(0);
-				caa["tag"] = serde_json::json!("issue");
+				caa["flags"] = serde_json::json!(128);
+				caa["tag"] = serde_json::json!("issuewild");
 				caa
 			},
 			record(3, "@", "HTTPS", HTTPS_VALUE),

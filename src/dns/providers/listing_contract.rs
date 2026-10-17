@@ -19,7 +19,7 @@ pub(crate) const MX_VALUE: &str = "10 mail.example.org";
 /// The same MX as a provider that keeps the root dot lists it.
 pub(crate) const MX_DOTTED: &str = "10 mail.example.org.";
 /// A CAA value in presentation form.
-pub(crate) const CAA_VALUE: &str = "0 issue \"letsencrypt.org\"";
+pub(crate) const CAA_VALUE: &str = "128 issuewild \"letsencrypt.org\"";
 /// An HTTPS value in presentation form.
 pub(crate) const HTTPS_VALUE: &str = "1 . alpn=\"h2\"";
 /// An SVCB value in presentation form.

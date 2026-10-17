@@ -109,7 +109,7 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let (provider, _state) = mock(vec![
 		serde_json::json!({"type": "NS", "name": "sub", "nameserver": NS_TARGET, "ttl": 3600}),
 		serde_json::json!({
-			"type": "CAA", "name": "@", "flag": 0, "tag": "issue",
+			"type": "CAA", "name": "@", "flag": 128, "tag": "issuewild",
 			"value": "letsencrypt.org", "ttl": 3600
 		}),
 		serde_json::json!({
