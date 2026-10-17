@@ -168,3 +168,25 @@ fn a_rotation_after_a_quiet_week_needs_the_running_servers_word() {
 	crate::evidence::test_support::running_server(fixture.root(), now);
 	rotate(fixture.root(), true, now).expect("the server's word");
 }
+
+#[test]
+fn a_rotation_in_the_first_half_hour_of_a_day_waits_for_the_day_before_to_be_sealed() {
+	let fixture = Fixture::new();
+	Chain::open(fixture.root())
+		.expect("chain")
+		.append_at(at(DAY + 3, 1), accepted(7))
+		.expect("record");
+	let early = at(DAY + 4, 0) + 30;
+	let refused = rotate_at(fixture.root(), true, early).expect_err("too soon");
+	assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+	assert!(
+		refused.to_string().contains("too soon after midnight"),
+		"{refused}"
+	);
+	assert!(!fixture.root().join("rotations").exists());
+	assert!(!files(fixture.root(), Day(DAY + 3)).json.exists());
+	// Half an hour in, the day before is sealed by the old key and the
+	// hand-over names the day it sits in.
+	rotate_at(fixture.root(), true, at(DAY + 4, 0) + 1900).expect("rotate");
+	assert!(files(fixture.root(), Day(DAY + 3)).json.exists());
+}

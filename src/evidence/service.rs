@@ -102,6 +102,9 @@ pub struct EvidenceService {
 	gate: RwLock<Gate>,
 	crypto: MessageCrypto,
 	quota: super::quota::Quota,
+	/// Held while this service lives: it is what tells a command that a
+	/// server is running, and so that its last word about the clock is live.
+	_alive: Option<std::fs::File>,
 }
 
 impl EvidenceService {
@@ -117,6 +120,7 @@ impl EvidenceService {
 		let chain = Chain::open(&root)?;
 		let policy = super::policy::load(&root)?;
 		let quota = super::quota::Quota::start(&root, super::quota::Limits::default());
+		let root_for_lock = root.clone();
 		Ok(EvidenceService {
 			root,
 			chain,
@@ -129,6 +133,7 @@ impl EvidenceService {
 			}),
 			crypto,
 			quota,
+			_alive: super::chain::hold_server_lock(&root_for_lock).ok(),
 		})
 	}
 

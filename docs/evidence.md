@@ -233,8 +233,10 @@ it:
   record on disk): a clock before it, or more than ten minutes after it (the
   margin of a restart, not of a stop), is not believed. Every command is a
   start of its own, so this holds for them too; a command run while the server
-  is up is believed if the clock agrees, within a quarter of an hour, with the
-  time the server's last check believed (`status.json`). A log that cannot be
+  is up (it holds `server.lock`) is believed if the clock agrees, within a
+  quarter of an hour, with the time the server's last check believed
+  (`status.json`); a status file with no server running says nothing, and the
+  server's word never makes a log that could not be read readable. A log that cannot be
   read at start is not an empty log: nothing is believed;
 - against a timestamp authority, when timestamping is on: a token is a time
   somebody else vouches for, and the server asks for one by itself when it
@@ -256,7 +258,7 @@ while the server is stopped for more than ten minutes, or at a clock the
 server did not believe, writes a record dated by the estimate, which may fall
 in a day already sealed and be refused; start the server (it asks the timestamp
 authority) or run `epistle evidence clock accept` first. A key rotation refuses
-to run at a clock that is not believed. A day is sealed half an hour after
+to run at a clock that is not believed, and in the first half hour of a day. A day is sealed half an hour after
 midnight, more than a believed clock can be ahead of the true time, and a
 token the authority gives for a day that had not ended by its own clock is not
 kept: it is asked for again. Mail in the queue ages by the earlier of the clock

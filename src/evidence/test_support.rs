@@ -55,8 +55,18 @@ pub(crate) fn at(day: i64, hour: u64) -> u64 {
 }
 
 /// Say the way a running server does that the clock read `wall` is right, so
-/// that a command run at that time dates its records by it.
+/// that a command run at that time dates its records by it: its lock is held
+/// (for as long as the test process lives) and its last tick says so.
 pub(crate) fn running_server(evidence_root: &std::path::Path, wall: u64) {
+	// (Already held, when an earlier call in the test took it.)
+	if let Ok(lock) = super::chain::hold_server_lock(evidence_root) {
+		std::mem::forget(lock);
+	}
+	says_the_clock_is_right(evidence_root, wall);
+}
+
+/// Only the status a server leaves, with no server behind it.
+pub(crate) fn says_the_clock_is_right(evidence_root: &std::path::Path, wall: u64) {
 	let status = super::tasks::Status {
 		time: wall,
 		clock_sound: true,

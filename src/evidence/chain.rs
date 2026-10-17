@@ -94,18 +94,22 @@ impl Chain {
 		Ok(chain)
 	}
 
-	/// A process with no history of its own (every command, and a server that
-	/// has just started) believes the machine's clock only within a margin of
-	/// the newest record. Past it, the running server's word will do: its last
-	/// tick says what time it believed, and a clock within a quarter of an hour
-	/// of that is the one it believed.
+	/// A process with no history of its own (every command) believes the
+	/// machine's clock only within a margin of the newest record. Past it, the
+	/// word of a server that is running will do: its lock is held, and its
+	/// last tick says what time it believed. A status file with no live
+	/// server behind it, however recent, says nothing. The server's own start
+	/// takes the lock after this, so it never believes itself.
 	fn confirm_from_running_server(&self, evidence_root: &Path, wall: u64) {
 		const AGREE_SECS: u64 = 900;
+		if !server_alive(evidence_root) {
+			return;
+		}
 		let Ok(Some(status)) = super::tasks::last_status(evidence_root) else {
 			return;
 		};
 		if status.clock_sound && status.time.abs_diff(wall) <= AGREE_SECS {
-			self.time.witness(wall, std::time::Instant::now());
+			self.time.vouch(wall, std::time::Instant::now());
 		}
 	}
 
@@ -327,6 +331,42 @@ impl Chain {
 		options.mode(0o600);
 		options.open(self.dir.join(".lock"))
 	}
+}
+
+/// The name of the file a running server holds locked.
+pub const SERVER_LOCK: &str = "server.lock";
+
+/// Take the lock that says a server is running on `evidence_root`, held for as
+/// long as the returned file is kept.
+pub fn hold_server_lock(evidence_root: &Path) -> std::io::Result<File> {
+	create_private_dir(evidence_root)?;
+	let mut options = OpenOptions::new();
+	options.create(true).truncate(false).write(true);
+	#[cfg(unix)]
+	options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+	let file = options.open(evidence_root.join(SERVER_LOCK))?;
+	file.try_lock().map_err(|error| match error {
+		std::fs::TryLockError::WouldBlock => {
+			std::io::Error::other("another server holds this evidence directory")
+		}
+		std::fs::TryLockError::Error(error) => error,
+	})?;
+	Ok(file)
+}
+
+/// Whether some process holds the server lock of `evidence_root` right now.
+pub fn server_alive(evidence_root: &Path) -> bool {
+	let mut options = OpenOptions::new();
+	options.read(true);
+	#[cfg(unix)]
+	options.custom_flags(libc::O_NOFOLLOW);
+	let Ok(file) = options.open(evidence_root.join(SERVER_LOCK)) else {
+		return false;
+	};
+	matches!(
+		file.try_lock_shared(),
+		Err(std::fs::TryLockError::WouldBlock)
+	)
 }
 
 /// The file of `day` under the chain directory `dir`.

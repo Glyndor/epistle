@@ -105,6 +105,10 @@ struct State {
 	anchor: Option<(u64, Instant)>,
 	/// Where the estimate starts until a reading is believed.
 	fallback: Option<(u64, Instant)>,
+	/// The running server's word that the wall clock read this was right, with
+	/// the monotonic clock then. It makes a reading believed; it is not a
+	/// reference (it moves no anchor or floor), and it never clears `unknown`.
+	vouched: Option<(u64, Instant)>,
 	/// Whether the last reading was refused, to say so once.
 	refused: bool,
 }
@@ -193,7 +197,15 @@ impl TimeRef {
 				wall <= expected.saturating_add(SLACK_SECS).saturating_add(drift)
 					&& wall.saturating_add(BEHIND_SECS) >= expected
 			}
-			None => near_floor(&state),
+			None => {
+				near_floor(&state)
+					|| (!state.unknown
+						&& state.vouched.is_some_and(|(wall_then, then)| {
+							let expected = wall_then.saturating_add(elapsed(then, mono));
+							wall <= expected.saturating_add(SLACK_SECS)
+								&& wall.saturating_add(BEHIND_SECS) >= expected
+						}))
+			}
 		};
 		if believed {
 			match state.anchor {
@@ -250,6 +262,15 @@ impl TimeRef {
 	pub fn raise_floor(&self, time: u64) {
 		if let Ok(mut state) = self.state.lock() {
 			state.floor = state.floor.max(time);
+		}
+	}
+
+	/// The running server said the clock reading `wall` is right. Only the
+	/// readings that follow from it are believed; a log that could not be read
+	/// is still not believed on this word.
+	pub fn vouch(&self, wall: u64, mono: Instant) {
+		if let Ok(mut state) = self.state.lock() {
+			state.vouched = Some((wall, mono));
 		}
 	}
 

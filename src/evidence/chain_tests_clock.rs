@@ -183,3 +183,64 @@ fn a_command_with_the_clock_a_month_ahead_cannot_date_the_servers_records_in_the
 		"a record went to another day: {days:?}"
 	);
 }
+
+#[test]
+fn a_status_with_no_server_behind_it_confirms_nothing_and_a_live_server_does() {
+	use crate::evidence::test_support::says_the_clock_is_right;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let newest = at(DAY + 3, 10);
+	Chain::open(dir.path())
+		.expect("chain")
+		.append_at(newest, accepted(1))
+		.expect("record");
+	// Two days on: past the margin of a restart.
+	let wall = newest + 2 * 86_400;
+	let start = std::time::Instant::now();
+	says_the_clock_is_right(dir.path(), wall);
+	let stale = Chain::open_at(dir.path(), wall).expect("command");
+	assert!(
+		!stale.time().read_at(wall, start).sound,
+		"a status file nobody stands behind confirmed a clock"
+	);
+	// A server holds its lock: its word counts, for the readings that follow.
+	let _server = hold_server_lock(dir.path()).expect("lock");
+	let live = Chain::open_at(dir.path(), wall).expect("command");
+	assert!(live.time().read_at(wall, start).sound);
+	// Its word is about this clock, not any: a month on is not confirmed.
+	let month = Chain::open_at(dir.path(), wall + 30 * 86_400).expect("command");
+	assert!(!month.time().read_at(wall + 30 * 86_400, start).sound);
+	// The server does not believe itself: its own start, before it takes the
+	// lock, is judged by the log alone.
+	drop(_server);
+	let own_start = Chain::open_at(dir.path(), wall).expect("start");
+	assert!(!own_start.time().read_at(wall, start).sound);
+}
+
+#[test]
+fn a_live_server_does_not_vouch_for_a_log_that_could_not_be_read() {
+	use crate::evidence::test_support::running_server;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let newest = at(DAY + 3, 10);
+	Chain::open(dir.path())
+		.expect("chain")
+		.append_at(newest, accepted(1))
+		.expect("record");
+	std::fs::remove_file(crate::evidence::head::path(dir.path())).expect("head");
+	std::fs::write(
+		Chain::open(dir.path())
+			.expect("chain")
+			.day_file(Day(DAY + 3)),
+		b"not a record\n",
+	)
+	.expect("corrupt");
+	let wall = newest + 60;
+	running_server(dir.path(), wall);
+	let command = Chain::open_at(dir.path(), wall).expect("command");
+	assert!(
+		!command
+			.time()
+			.read_at(wall, std::time::Instant::now())
+			.sound,
+		"a server's word cleared a log nobody could read"
+	);
+}

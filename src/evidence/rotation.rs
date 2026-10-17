@@ -442,6 +442,16 @@ pub(crate) fn rotate_steps(
 	if let Some(done) = resume(evidence_root)? {
 		return Ok(done);
 	}
+	// The hand-over names today, and the days before it are sealed by the old
+	// key up to the margin after midnight: in the first minutes of a day the
+	// two would not be the same day.
+	if Day::of_epoch(now.saturating_sub(super::timeref::SEAL_MARGIN_SECS)) != Day::of_epoch(now) {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"too soon after midnight: the day before cannot be sealed by the old key yet; \
+			 rotate half an hour into the day",
+		));
+	}
 	let old = EvidenceKey::load_or_create(evidence_root)?;
 	super::checkpoint::seal_closed_days(
 		evidence_root,
