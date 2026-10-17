@@ -5,6 +5,71 @@ epistle (0.12.1) unstable; urgency=medium
     included, in the error of `dns lockdown`, `dns provider test` and the
     DKIM daemon. `getHosts` is now a form POST like `setHosts`, and no DNS
     provider puts the request URL in an error.
+  * Security: the payload of an IMAP APPEND refused over its size limit, and
+    the bytes of an SMTP BDAT chunk refused for memory or sent outside a
+    transaction, were run as commands. They are now read and discarded.
+  * Security: rustls 0.23.46 fixes RUSTSEC-2026-0346 (secrets in the Debug
+    output of client session values), 0347 (application data sent to the outer
+    server after an ECH rejection), 0348 (Brotli certificate decompression that
+    could allocate 1 GiB before authentication) and 0349 (a ServerHello that
+    could downgrade later connections to classical key exchange). serde_json
+    1.0.154 and opentelemetry-otlp 0.33.1 are updated too.
+  * Security: with `encrypt_at_rest`, the outbound spool envelopes (sender,
+    recipients, account, retry state) are sealed with the storage key and bound
+    to their id. Envelopes written by 0.12.0 are still delivered and are sealed
+    the next time they are read or edited. Spool files are created 0600 and
+    directories 0700 whatever the umask, and the server audits and tightens
+    them at start-up through no-follow descriptors; if it cannot, it refuses to
+    start. `epistle queue`, `status` and `account remove --queue discard` open
+    the spool with the configured key, and `status` reports spool encryption
+    and loose permissions.
+  * Security: inbound SMTP memory is bounded. `[server] message_memory_budget`
+    is shared by every DATA and BDAT transaction, a client (an IPv4 address or
+    an IPv6 /64) may hold at most a quarter of it, and a refused transaction
+    gets `452 4.3.1`. Unset, it is a fifth of the memory of the `mail`
+    container (its cgroup limit, else `mem_limit` in compose.yaml, else 1 GiB
+    assumed), between `max_message_size` and 1 GiB; a value set by hand is
+    kept, with a warning when it would take over 70% of the container.
+    `max_connections_per_ip` (default 20, counted per IPv6 /64) is new: with
+    rootless bridge networking every client arrives as one address, so all of
+    them share the 20. `max_message_size` now also reaches the REST send route,
+    which never received it in production.
+  * Security: a client that sends a message too slowly no longer holds its
+    memory. After `data_rate_grace` (120 s) the average rate of a DATA or BDAT
+    transaction must stay at `min_data_rate` (10240 B/s) or the client gets
+    `421 4.4.2 transfer too slow`. A session gets `421 4.7.0` after
+    `junk_command_limit` (100) commands without progress (NOOP, RSET, unknown
+    commands, refused MAIL or RCPT, and so on) and `421 4.4.2` after
+    `max_session_time` (1800 s), never in the middle of a message body. `0`
+    turns each off. All of them are set with `epistle limits set|unset|show`,
+    as is `message_memory_budget`.
+  * Fix: the per-account and per-domain submission rate limits never reached
+    the server. One limiter per account now covers SMTP, REST and JMAP, each
+    accepted recipient costs one unit, a charge is given back when the message
+    is refused later or the send fails, and the refusal reads `sending rate
+    limit exceeded; retry later` everywhere. An account in several limited
+    domains gets the strictest limit. `epistle limits set submission-rate 0` is
+    refused; use `unset`. A JMAP send without an envelope goes to the
+    deduplicated To, Cc and Bcc only (RFC 8621), no longer to Resent-*
+    addresses of an earlier copy.
+  * Fix: inbound `rsa-sha256` DKIM signatures never verified. The verifier gave
+    the crypto library the whole key record, a SubjectPublicKeyInfo as senders
+    publish it, where it expects the bare RSA key. Mail from senders that sign
+    only with RSA had no passing DKIM, so DMARC could align only through SPF.
+    The verifier now unwraps the record and refuses malformed DER.
+  * Upgrading from 0.12.0 needs no SQL migration. Without changing any setting,
+    `epistle status` now fails on a mail name (MX target, SMTP host,
+    autoconfig, autodiscover, mta-sts) behind the Cloudflare proxy, on a DNSSEC
+    TLSA record that does not match the certificate in use, and on a duplicate
+    SPF, DMARC, MTA-STS, TLS-RPT or DKIM record, and it warns when the
+    container limits add up to over 85% of the host's memory. The default of
+    `clamd_max_bytes` is 26279936 (it was 26214400). A configuration without
+    `clamd_on_error` keeps `accept`, without `[attachments]` keeps `flag`, and
+    the warm-up stays off; on a new install `epistle init` writes `defer` and
+    `quarantine` and offers the warm-up. The `enable` and `disable` actions of
+    `domain`, `alert`, `webhook` and `relay`, and `attachments policy
+    set|unset`, write mail.toml and restart the `mail` container when the stack
+    is installed, and otherwise say that the server must be restarted.
   * CLI: every command that prints data takes `--json` and then prints one
     JSON document on stdout, with notes and errors on stderr; the hidden flat
     forms (`accounts`, `account-add`, `app-password-create`, `api-keys` and
@@ -23,6 +88,118 @@ epistle (0.12.1) unstable; urgency=medium
     Unknown names, rejected input and a destructive action without `--yes`
     stay 2. A script that treated any non-zero code other than 1 as a usage
     error needs to read 3 as a refusal.
+  * Mail classes: a credential has a class, `personal` (the default),
+    `marketing` or `transactional`, set with `app-password create --class`,
+    `api-key create --class` and `account set NAME --default-class`. The class
+    is a floor: the `class` field of an API request or a JMAP submission may
+    ask for a stricter one, never a looser one, and an `Epistle-Class` header
+    changes nothing and is removed. `marketing` needs a one-click unsubscribe
+    and never goes to a suppressed address. `transactional` is not copied to
+    Sent, and is refused (SMTP `451 4.3.0`, API `503`, JMAP
+    `serverUnavailable`) when its evidence cannot be written; the server takes
+    none until it has verified the log once after a start.
+  * Evidence of sending: acceptances, outcomes (delivered, bounced, expired,
+    suppressed, abandoned, canceled) and key changes go into a hash-chained,
+    append-only log with Merkle inclusion proofs, a signed checkpoint for each
+    closed day and an RFC 3161 timestamp on it (Sectigo's public service by
+    default); without a policy, `transactional` keeps metadata for 365 days.
+    `epistle evidence
+    verify|export|check|key|policy|timestamp|clock|acknowledge|abandon`.
+    `evidence check` verifies a bundle offline and fails without `--key`: the
+    reader brings the signing key (a fingerprint or a PEM file; an earlier key
+    as `KEY@YYYY-MM-DD`), because a bundle cannot vouch for the key that signed
+    it. `--require-delivered` makes it exit 1 unless every recipient was
+    delivered. It is not certified email and does not prove that anyone read a
+    message. See docs/evidence.md.
+  * Antispam: `[attachments]` judges each attachment by its bytes, not its
+    name: the real type against the name and the declared type, double and
+    always-dangerous extensions (exe, scr, js, vbs, bat, lnk, iso and others,
+    which `allow_extensions` cannot allow), zip entry names read without
+    extracting, Office macros, encrypted and nested archives, SVG, and
+    executables and zips hidden in images. What cannot be read to the end is
+    never clean. `mode = off|flag|quarantine|reject` (`flag` adds a codes-only
+    `X-Epistle-Attachment-Warning` header, which is stripped from inbound mail;
+    `reject` is a 550 during DATA), plus `macros` and `encrypted_archives`.
+    `epistle attachments policy show|set|unset` edits it and `epistle
+    attachments check FILE.eml` judges a local message; with `--strict` it
+    exits 3 on a quarantine or reject. See docs/attachments.md.
+  * Antispam: `clamd_on_error = accept|defer`. With `defer`, a message clamd
+    cannot scan gets `451 4.7.1` and never reaches a mailbox unscanned, and one
+    clamd can never take (over `clamd_max_bytes`) is refused for good: `552
+    5.3.4` on SMTP, `413 scan_too_large` on the API, `forbiddenToSend` on JMAP.
+    `defer` requires `clamd_max_bytes` of at least `max_message_size` + 64 KiB,
+    and the configuration is refused otherwise.
+  * Queue: IP warm-up per receiver group (gmail, outlook, yahoo, icloud and
+    other, read from the MX that answers). Each group has a daily cap that
+    starts at 50 and is paced through the UTC day; recipients over it wait in
+    the spool, which is not an attempt and does not count toward expiry. Each
+    day is judged from the delivery log by reply codes: a good day raises the
+    cap by half when at least half of it was used, a very bad one (over 10%
+    deferrals, or a 5.7.x reply) lowers it, never under 50. `epistle warmup
+    status|plan|start|enable|disable|pause|resume|set|reset`, all with
+    `--json`; `status`, `queue list` and `queue destinations` show it. See
+    docs/warmup.md.
+  * Queue: delivery is concurrent and bounded. Every step of an attempt has a
+    timeout and a whole attempt ends after 1 hour, but never once the final dot
+    is sent. There is a global cap (8 by default), a cap per destination domain
+    and per exchanger, and a sender takes at most 3/4 of the slots. A 421 or
+    4.7.x reply puts the destination on hold for one backoff step, kept across
+    restarts. `epistle limits set|unset|show
+    queue-concurrency|queue-per-domain-concurrency|queue-backoff`, `epistle
+    queue destinations` and `epistle queue release-destination
+    DOMAIN|HOST|--all`. A broken spool entry no longer stops the scan.
+  * Stack: `epistle stack resources [set SERVICE --memory SIZE --pids N]
+    [--json]` lists and changes the container limits in compose.yaml (`mail` is
+    refused less than five messages of `max_message_size` plus 256 MiB), and
+    `epistle status` has a `resources` area. On a new install `epistle init`
+    sizes the containers from the host memory (ClamAV is left out under 4 GiB);
+    an existing install is not changed, and `status` suggests the commands.
+  * DKIM: `[[dkim.domain]]` (`name`, `selector`, `key_file`, optional RSA
+    selector and key) gives a domain its own signing key; `[dkim]` stays the
+    default for the others. A domain that is not hosted, or listed twice, or
+    with a missing or invalid key stops the start. `dns-records`, `verify-dns`,
+    `status` and `dkim show` show each domain's own selector. Overridden
+    domains are not rotated, and `dkim rotate --domain` refuses them. `epistle
+    migrate mox` imports each domain's key as such an override.
+  * DKIM and TLS: the automatic rotation now renews the RSA key too (2048 bits,
+    selector `rsa<day>`) in the same journal entry as the ed25519 key: both
+    switch together or neither does. With your own certificate (no ACME) the
+    mail listeners check the files every 60 s and swap in a new pair only when
+    the whole chain parses and the key matches; a bad pair is logged once and
+    the old one stays. The TLSA record is republished through the DNS provider,
+    or a warning gives the value to publish by hand. `epistle status` warns
+    when such a certificate expires within 14 days and nothing renews it.
+  * JMAP: `VacationResponse` (RFC 8621 section 8). JMAP and Sieve share one
+    auto-reply path: an enabled JMAP vacation wins, otherwise a Sieve
+    `vacation` answers. A reply goes out only if the sender is not a robot or a
+    list (`List-*`, `Precedence: bulk|list|junk`, `Auto-Submitted`,
+    `MAILER-DAEMON`), an address of the account is in To or Cc, the server's
+    own SPF or DKIM check passed for the envelope sender's domain, and none
+    went to that sender in the period (1 to 365 days). It goes to the envelope
+    sender, carries `Auto-Submitted: auto-replied` and is DKIM signed.
+  * IMAP: `THREAD=REFERENCES` (RFC 5256), the threading most clients use,
+    computed without recursion so a hostile mailbox cannot overflow the stack,
+    and `APPENDLIMIT=26214400` (RFC 7889): an APPEND over it gets `NO [TOOBIG]`
+    and the connection stays open, where it used to close with BYE.
+  * DNS: `epistle status` and `verify-dns` count the records with each tag at a
+    name and fail when there is more than one SPF, DMARC, MTA-STS or TLS-RPT
+    record, or the same DKIM selector twice (two SPF records make every
+    receiver return `permerror`). Publishing now edits the first record of the
+    purpose and deletes the other TXT records with that tag at that name, for
+    every provider; TXT records of another purpose are left alone. `epistle
+    status` also fails when a mail name is proxied by Cloudflare (orange
+    cloud), and publishing sends `proxied: false` for them. A null MX no longer
+    goes out with an empty host on GoDaddy, Spaceship, Porkbun and Namecheap,
+    and Google Cloud DNS reads every page of a zone.
+  * CLI: `epistle alias`, `domain`, `relay` and `alert` naming an unknown
+    target exit 2, as other unknown names do, where they exited 1. `account
+    add`, `remove`, `password`, `enable` and `disable` wait up to 5 s until the
+    running server has loaded the change, so a script that adds an account and
+    logs in at once no longer trips the brute-force ban; on timeout they note
+    it and exit 0. `account show` shows forwards, catch-all and two-factor for
+    accounts defined in mail.toml too, `account add` validates the names before
+    asking for the password, and creating or removing an app password keeps
+    what another process wrote meanwhile.
   * CLI: `epistle domain disable|enable` switches a hosted domain off and on
     without removing it. The new `disabled_domains` setting lists the
     switched-off domains; mail for one is rejected like mail for an unknown
@@ -96,6 +273,16 @@ epistle (0.12.1) unstable; urgency=medium
     the flags and tag of a CAA, and Spaceship sends and reads the MX field as
     `preference`; those field layouts come from the providers' API references
     and are not checked against the real services.
+  * DNS: `epistle dns lockdown [DOMAIN] [--dry-run] [--yes] [--json] [--undo]
+    [--dmarc reject]` stops anyone from sending mail as the domain from names
+    that do not send mail. It reads the zone through the DNS provider and plans
+    a null SPF (`v=spf1 -all`) and a null MX (`0 .`) on every name with an
+    address that does not send mail (skipping the names epistle serves and
+    those with their own MX, SPF or CNAME), a wildcard null SPF when the zone
+    has no wildcard, and DMARC one step per run (none, quarantine, reject;
+    `--dmarc reject` jumps to reject). Nothing is written without confirmation.
+    A journal lets `--undo` remove only the records that still match what was
+    written; a record the operator changed since is left alone.
   * `epistle dns lockdown` leaves delegations alone: a name below the zone
     apex with NS records, and every name under it, gets no record and is
     listed once as delegated to other nameservers. A domain that is itself
