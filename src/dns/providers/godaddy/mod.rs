@@ -141,7 +141,7 @@ impl GodaddyProvider {
 	/// authors `zone = "example.org"`.
 	pub fn new(api_key: String, api_secret: String, zone: String) -> Self {
 		GodaddyProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			api_key,
 			api_secret,
 			zone: zone.trim_end_matches('.').to_string(),
@@ -264,7 +264,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		// The body is not echoed into the error: an HTTP 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we
@@ -447,7 +447,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		// The body is not echoed into the error: a 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we

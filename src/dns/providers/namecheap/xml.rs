@@ -6,7 +6,6 @@ use serde::Deserialize;
 
 use super::MAX_BODY;
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
-use crate::dns::providers::transport;
 
 /// One record as Namecheap returns it from `getHosts` (and as we re-emit it
 /// to `setHosts`). `address` carries the kind-specific payload verbatim; for
@@ -75,18 +74,6 @@ pub(crate) struct HostsResult {
 /// numbers surface as [`ProviderError::Remote`] with the provider's text.
 const AUTH_ERROR_NUMBERS: &[&str] = &["1012801", "1012802", "2011169"];
 
-/// Read a response body in chunks with a hard cap.
-pub(crate) async fn read_bounded(mut response: reqwest::Response) -> Result<String, ProviderError> {
-	let mut body = Vec::new();
-	while let Some(chunk) = response.chunk().await.map_err(transport)? {
-		if body.len() + chunk.len() > MAX_BODY {
-			return Err(ProviderError::Remote("namecheap response too large".into()));
-		}
-		body.extend_from_slice(&chunk);
-	}
-	String::from_utf8(body).map_err(|e| ProviderError::Remote(e.to_string()))
-}
-
 /// Pull the hosts list out of an [`ApiResponse`]. Returns an empty `Vec`
 /// when the response has no `CommandResponse` or hosts block.
 pub(crate) fn extract_hosts(api: ApiResponse) -> Vec<Host> {
@@ -113,7 +100,7 @@ pub(crate) async fn parse_response(
 	if !status.is_success() {
 		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
-	let body = read_bounded(response).await?;
+	let body = crate::dns::providers::read_bounded(response, MAX_BODY).await?;
 	let api: ApiResponse = from_str(&body).map_err(|e| ProviderError::Remote(e.to_string()))?;
 	if api.status.eq_ignore_ascii_case("ERROR") {
 		let first = api

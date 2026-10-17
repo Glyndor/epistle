@@ -130,7 +130,7 @@ impl GcloudProvider {
 	/// bearer, so the [`ScopedSecret`] is only a zone handle here.
 	pub fn new(secret: ScopedSecret, account: ServiceAccount) -> Self {
 		GcloudProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			account,
 			zone: secret.zone().to_string(),
 			cached: Arc::new(Mutex::new(None)),
@@ -295,7 +295,7 @@ impl GcloudProvider {
 	}
 
 	async fn read_body(&self, response: reqwest::Response) -> Result<String, ProviderError> {
-		response.text().await.map_err(transport)
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// Return a valid bearer access token, refreshing the cache when needed.

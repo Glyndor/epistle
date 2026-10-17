@@ -100,7 +100,7 @@ impl PorkbunProvider {
 	/// key (`secretapikey`); `api_key` is the API key (`apikey`) it pairs with.
 	pub fn new(secret: ScopedSecret, api_key: impl Into<String>) -> Self {
 		PorkbunProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			api_key: api_key.into(),
 			base: HttpsUrl::from_static(DEFAULT_BASE),
@@ -418,7 +418,7 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 	if http == reqwest::StatusCode::UNAUTHORIZED || http == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	let reply: Reply =
 		serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 	if reply.status.eq_ignore_ascii_case("SUCCESS") {

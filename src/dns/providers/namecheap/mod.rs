@@ -74,7 +74,7 @@ impl NamecheapProvider {
 			return Err(ProviderError::Auth);
 		}
 		Ok(NamecheapProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			api_user: api_user.to_string(),
 			api_key: api_key.to_string(),

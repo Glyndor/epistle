@@ -37,7 +37,7 @@ impl Route53Provider {
 	/// Build a provider for `hosted_zone_id` with static credentials.
 	pub fn new(access_key: String, secret_key: String, hosted_zone_id: String) -> Self {
 		Route53Provider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			access_key,
 			secret_key,
 			hosted_zone_id,
@@ -221,7 +221,7 @@ impl Route53Provider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		response.text().await.map_err(transport)
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// UPSERT one rrset carrying the given values verbatim. Used by

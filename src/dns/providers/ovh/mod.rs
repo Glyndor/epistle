@@ -68,7 +68,7 @@ impl OvhProvider {
 		consumer_secret: ScopedSecret,
 	) -> Self {
 		OvhProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			application_key,
 			application_secret,
 			consumer_secret,
@@ -195,7 +195,7 @@ impl OvhProvider {
 			.await
 			.map_err(transport)?;
 		check_status(&response)?;
-		response.text().await.map_err(transport)
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// Variant that ignores the response body (PUT, DELETE, /refresh).
@@ -317,7 +317,7 @@ impl OvhProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		let rec: OvhRecord =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		Ok(Some(rec))

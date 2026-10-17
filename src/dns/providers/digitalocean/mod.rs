@@ -79,7 +79,7 @@ impl DigitaloceanProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		DigitaloceanProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
@@ -500,7 +500,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

@@ -90,7 +90,7 @@ impl DnsimpleProvider {
 	/// that case at the config layer.
 	pub fn new(secret: ScopedSecret, account_id: impl Into<String>) -> Self {
 		DnsimpleProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			account_id: account_id.into(),
 			base: HttpsUrl::from_static(DEFAULT_BASE),
@@ -524,7 +524,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

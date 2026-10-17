@@ -48,7 +48,7 @@ impl DesecProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		DesecProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
@@ -181,7 +181,7 @@ impl DesecProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		let rrsets: Vec<Rrset> =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		let sub = self.subname(name);
@@ -277,7 +277,7 @@ impl DnsProvider for DesecProvider {
 			{
 				return Err(ProviderError::Auth);
 			}
-			let text = response.text().await.map_err(transport)?;
+			let text = crate::dns::providers::read_body(response).await?;
 			let rrsets: Vec<Rrset> =
 				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 			Ok(rrsets

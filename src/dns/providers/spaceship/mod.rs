@@ -51,7 +51,7 @@ impl SpaceshipProvider {
 	/// Build a provider for `zone` with the two credential halves.
 	pub fn new(api_key: String, api_secret: String, zone: String) -> Self {
 		SpaceshipProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			api_key,
 			api_secret,
 			zone,
@@ -283,9 +283,13 @@ impl SpaceshipProvider {
 			{
 				return Err(ProviderError::Auth);
 			}
-			let page: ListResponse = response.text().await.map_err(transport).and_then(|text| {
-				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
-			})?;
+			let page: ListResponse =
+				crate::dns::providers::read_body(response)
+					.await
+					.and_then(|text| {
+						serde_json::from_str(&text)
+							.map_err(|e| ProviderError::Remote(e.to_string()))
+					})?;
 			let count = page.items.len() as i64;
 			out.extend(page.items);
 			if out.len() > LIST_MAX_RECORDS {
