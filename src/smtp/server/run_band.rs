@@ -273,7 +273,7 @@ impl Server {
 					crate::antispam::hook::HookVerdict::Quarantine,
 				) => {
 					self.metrics.llm_quarantined();
-					self.train_corpus(&message, peer, true);
+					self.train_corpus(message, peer, true);
 					message.mailbox = Some("Rejects".to_string());
 					return Ok(BandOutcome::Continue);
 				}
@@ -330,7 +330,7 @@ impl Server {
 				crate::antispam::hook::HookVerdict::Quarantine,
 			) => {
 				self.metrics.llm_quarantined();
-				self.train_corpus(&message, peer, true);
+				self.train_corpus(message, peer, true);
 				message.mailbox = Some("Rejects".to_string());
 			}
 			crate::antispam::llm::ConsultOutcome::Verdict(_) => {}
