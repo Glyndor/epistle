@@ -40,6 +40,7 @@ pub(crate) fn plan_with(
 ) -> Plan {
 	let served = served(existing);
 	build_plan(&PlanInput {
+		zone: "example.org",
 		domain: "example.org",
 		served: &served,
 		existing,

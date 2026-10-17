@@ -103,3 +103,11 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		panic!("add record is not TXT: {:?}", adds[0].data);
 	}
 }
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let provider = super::tests::provider_with_endpoint("127.0.0.1:9".to_string());
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}

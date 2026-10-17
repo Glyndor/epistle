@@ -19,6 +19,8 @@ use crate::dns::provider::{DnsRecord, RecordKind, txt_purpose};
 
 #[path = "lockdown_apply.rs"]
 mod apply;
+#[path = "lockdown_cuts.rs"]
+mod cuts;
 #[path = "lockdown_dmarc.rs"]
 mod dmarc;
 #[path = "lockdown_names.rs"]
@@ -27,6 +29,7 @@ mod names;
 mod reports;
 
 pub use apply::{PublishFailure, UndoChanged, UndoFailure, UndoReport, publish_plan, undo_journal};
+pub use cuts::{MAX_LABEL_LEN, MAX_NAME_LEN, is_valid_name};
 pub use dmarc::{
 	DmarcAction, DmarcInputs, DmarcPlan, DmarcStep, FailingSource, parse_dmarc, plan_dmarc,
 	rewrite_dmarc,
@@ -156,6 +159,10 @@ impl Journal {
 
 /// Everything [`build_plan`] reads.
 pub struct PlanInput<'a> {
+	/// The zone the provider manages, in [`canonical_name`] form: the
+	/// domain itself, or a name above it. Its NS records name its own
+	/// servers; an NS below it is a delegation.
+	pub zone: &'a str,
 	/// The domain to lock down, in [`canonical_name`] form.
 	pub domain: &'a str,
 	/// The names epistle serves; never touched.
@@ -176,16 +183,44 @@ pub struct PlanInput<'a> {
 pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	let empty = Journal::new(input.domain);
 	let journal = input.journal.unwrap_or(&empty);
-	let (dmarc, dmarc_entry) = plan_dmarc(input.domain, input.existing, journal, input.dmarc);
+	let cuts = cuts::Cuts::new(input.zone, input.existing);
+	let (mut dmarc, mut dmarc_entry) =
+		plan_dmarc(input.domain, input.existing, journal, input.dmarc);
+	// A domain inside a delegation is served by other nameservers: nothing
+	// the lockdown writes into this zone for it would ever be answered.
+	let domain_cut = cuts.above(input.domain);
+	if let Some(cut) = domain_cut.or_else(|| cuts.above(&dmarc.name)) {
+		dmarc.action = DmarcAction::LeftAlone {
+			reason: delegated_reason(cut),
+		};
+		dmarc_entry = None;
+	}
+	// Each delegation is reported once, and everything under it is left
+	// out of the plan without a line of its own.
+	let mut skipped: Vec<SkipEntry> = cuts
+		.relevant_to(input.domain)
+		.into_iter()
+		.map(|cut| SkipEntry {
+			name: cut.to_string(),
+			reason: delegated_reason(cut),
+		})
+		.collect();
 	let mut entries: Vec<PlanEntry> = dmarc_entry.into_iter().collect();
-	let mut skipped = Vec::new();
 	let exchanges = mx_owners(input.existing);
-	for name in address_names(input.domain, input.existing) {
-		let records: Vec<&DnsRecord> = input
-			.existing
-			.iter()
-			.filter(|r| canonical_name(&r.name) == name)
-			.collect();
+	for (name, records) in address_names(input.domain, input.existing) {
+		if !is_valid_name(&name) {
+			skipped.push(SkipEntry {
+				name: cuts::shortened(&name),
+				reason: format!(
+					"{} is not a valid DNS name (ASCII letters, digits, hyphens and underscores, at most {MAX_NAME_LEN} characters and {MAX_LABEL_LEN} per label); left as is",
+					cuts::shortened(&name)
+				),
+			});
+			continue;
+		}
+		if cuts.above(&name).is_some() {
+			continue;
+		}
 		match classify(&name, &records, input.served, &exchanges, journal) {
 			Verdict::Skip(reason) => skipped.push(SkipEntry { name, reason }),
 			Verdict::Add { spf, mx } => {
@@ -210,7 +245,18 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 			}
 		}
 	}
-	let wildcard = wildcard_decision(input.domain, input.existing, journal, input.zone_listed);
+	let wildcard = match domain_cut {
+		Some(cut) => WildcardDecision::Skipped {
+			reason: delegated_reason(cut),
+		},
+		None => wildcard_decision(
+			input.domain,
+			input.existing,
+			journal,
+			input.zone_listed,
+			&cuts,
+		),
+	};
 	if let WildcardDecision::Added { reason } = &wildcard {
 		entries.push(PlanEntry {
 			record: DnsRecord::new(
@@ -232,18 +278,32 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	}
 }
 
-/// The names at or under `domain` that carry an A, AAAA or CNAME, sorted,
-/// without wildcards (the wildcard has its own decision).
-fn address_names(domain: &str, existing: &[DnsRecord]) -> Vec<String> {
-	let mut names: Vec<String> = existing
-		.iter()
-		.filter(|r| matches!(r.kind, RecordKind::A | RecordKind::Aaaa | RecordKind::Cname))
-		.map(|r| canonical_name(&r.name))
-		.filter(|name| in_domain(name, domain) && !name.starts_with("*."))
-		.collect();
-	names.sort();
-	names.dedup();
+/// The names at or under `domain` that carry an A, AAAA or CNAME, with
+/// every record each one holds, sorted, without wildcards (the wildcard has
+/// its own decision). One pass over the zone: the cost does not depend on
+/// how many names there are.
+fn address_names<'a>(
+	domain: &str,
+	existing: &'a [DnsRecord],
+) -> BTreeMap<String, Vec<&'a DnsRecord>> {
+	let mut names: BTreeMap<String, Vec<&DnsRecord>> = BTreeMap::new();
+	for record in existing {
+		let name = canonical_name(&record.name);
+		if in_domain(&name, domain) && !name.starts_with("*.") {
+			names.entry(name).or_default().push(record);
+		}
+	}
+	names.retain(|_, records| {
+		records
+			.iter()
+			.any(|r| matches!(r.kind, RecordKind::A | RecordKind::Aaaa | RecordKind::Cname))
+	});
 	names
+}
+
+/// Why a name inside a delegation is left alone.
+fn delegated_reason(cut: &str) -> String {
+	format!("{cut} is delegated to other nameservers; left as is")
 }
 
 /// Every MX target in the zone, with the first name that points at it.
@@ -328,6 +388,7 @@ fn wildcard_decision(
 	existing: &[DnsRecord],
 	journal: &Journal,
 	zone_listed: bool,
+	cuts: &cuts::Cuts,
 ) -> WildcardDecision {
 	let wildcard = format!("*.{domain}");
 	if !zone_listed {
@@ -342,6 +403,11 @@ fn wildcard_decision(
 	for record in existing {
 		let name = canonical_name(&record.name);
 		if !(name.starts_with("*.") && in_domain(&name, domain)) {
+			continue;
+		}
+		// A wildcard under a delegation is the other nameservers' own: it
+		// never answers for a name of this zone.
+		if cuts.above(&name).is_some() {
 			continue;
 		}
 		if name == wildcard && record.kind == RecordKind::Txt && journal.owns(record) {
@@ -375,6 +441,9 @@ fn wildcard_decision(
 #[cfg(test)]
 #[path = "lockdown_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "lockdown_tests_cuts.rs"]
+mod tests_cuts;
 #[cfg(test)]
 #[path = "lockdown_tests_dmarc.rs"]
 mod tests_dmarc;

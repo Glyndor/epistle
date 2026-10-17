@@ -9,6 +9,10 @@
 
 use super::tests::{mock_with_per_name, txt};
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 use axum::http::Method;
 
 #[tokio::test]
@@ -73,5 +77,51 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 	assert!(
 		data.contains(&UNRELATED),
 		"the unrelated TXT was lost: {data:?}"
+	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |name: &str, kind: &str, data: &str| serde_json::json!({"type": kind, "name": name, "data": data, "ttl": 600});
+	let (provider, _state) = mock_with_per_name(
+		serde_json::json!([
+			record("sub", "NS", NS_TARGET),
+			record("@", "CAA", CAA_VALUE),
+			record("@", "HTTPS", HTTPS_VALUE),
+			record("@", "SVCB", SVCB_VALUE),
+			serde_json::json!({"type": "MX", "name": "@", "data": "mail.example.org", "priority": 10, "ttl": 600}),
+			record("@", "NAPTR", NAPTR_VALUE),
+			record("@", HOSTILE_TYPE, OPAQUE_VALUE),
+		]),
+		Default::default(),
+	)
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = super::tests::mock().await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let record = serde_json::json!({"type": "A", "name": "h", "data": "192.0.2.1", "ttl": 600});
+	let (provider, _state) =
+		mock_with_per_name(serde_json::json!(vec![record; 100_001]), Default::default()).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
 	);
 }

@@ -175,6 +175,7 @@ fn a_hosted_subdomain_is_served_like_the_apex() {
 		&existing,
 	);
 	let plan = build_plan(&PlanInput {
+		zone: "example.org",
 		domain: "example.org",
 		served: &served,
 		existing: &existing,
@@ -213,6 +214,7 @@ fn names_outside_the_domain_are_not_planned() {
 	let served = served(&[]);
 	let existing = vec![a("www.example.org"), a("www.shop.example.org")];
 	let plan = build_plan(&PlanInput {
+		zone: "example.org",
 		domain: "shop.example.org",
 		served: &served,
 		existing: &existing,
@@ -258,6 +260,7 @@ fn any_wildcard_of_the_zone_keeps_the_null_wildcard_out() {
 fn without_a_zone_listing_the_wildcard_reason_says_to_check() {
 	let served = served(&[]);
 	let plan = build_plan(&PlanInput {
+		zone: "example.org",
 		domain: "example.org",
 		served: &served,
 		existing: &[],

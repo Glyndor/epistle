@@ -74,7 +74,7 @@ impl NamecheapProvider {
 			return Err(ProviderError::Auth);
 		}
 		Ok(NamecheapProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			api_user: api_user.to_string(),
 			api_key: api_key.to_string(),
@@ -106,16 +106,19 @@ impl NamecheapProvider {
 	/// Whether `kind` can be published through Namecheap. setHosts takes A,
 	/// AAAA, ALIAS, CAA, CNAME, MX, MXE, NS, TXT, URL, URL301 and FRAME, so
 	/// SRV and TLSA are not.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
 			// setHosts documents no SRV and no TLSA record type.
 			RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -194,7 +197,7 @@ impl NamecheapProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let mut hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
@@ -214,7 +217,7 @@ impl NamecheapProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
@@ -258,15 +261,22 @@ impl NamecheapProvider {
 impl DnsProvider for NamecheapProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 

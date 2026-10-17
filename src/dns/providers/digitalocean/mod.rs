@@ -9,6 +9,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -38,6 +41,15 @@ struct ListResponse {
 	domain_records: Vec<DomainRecord>,
 	#[serde(default)]
 	links: Links,
+	#[serde(default)]
+	meta: Meta,
+}
+
+#[derive(Deserialize, Default)]
+struct Meta {
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -67,6 +79,11 @@ struct DomainRecord {
 	weight: Option<u16>,
 	#[serde(default)]
 	port: Option<u16>,
+	/// The flags and the tag of a CAA; its `data` is the issuer alone.
+	#[serde(default)]
+	flags: Option<u8>,
+	#[serde(default)]
+	tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,7 +95,7 @@ impl DigitaloceanProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		DigitaloceanProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
@@ -93,16 +110,19 @@ impl DigitaloceanProvider {
 	/// The DigitalOcean type token for a kind we can publish; SRV uses
 	/// dedicated `priority`/`weight`/`port`/`data` fields, MX needs the
 	/// priority split out (epistle still packs it into the value).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -169,6 +189,7 @@ impl DigitaloceanProvider {
 	async fn fetch_pages(&self, first: HttpsUrl) -> Result<Vec<DomainRecord>, ProviderError> {
 		let mut url = first;
 		let mut out = Vec::new();
+		let mut pages = 0;
 		loop {
 			let response = self
 				.client
@@ -185,9 +206,28 @@ impl DigitaloceanProvider {
 			}
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);
+			pages += 1;
+			if out.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(self.secret.zone()));
+			}
+			// What the listing says about itself must add up, page by page.
+			let total = page.meta.total;
+			if total.is_some_and(|total| out.len() > total) {
+				return Err(inconsistent_pages(self.secret.zone()));
+			}
 			match page.links.pages.next {
-				Some(next) if !next.is_empty() => url = self.base.follow(&next)?,
-				_ => break,
+				Some(next) if !next.is_empty() => {
+					if pages >= LIST_MAX_PAGES {
+						return Err(listing_too_long(self.secret.zone()));
+					}
+					url = self.base.follow(&next)?;
+				}
+				_ => {
+					if total.is_some_and(|total| out.len() != total) {
+						return Err(inconsistent_pages(self.secret.zone()));
+					}
+					break;
+				}
 			}
 		}
 		Ok(out)
@@ -345,7 +385,7 @@ impl DigitaloceanProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		let body = Self::record_body(kind, &rel, &record)?;
@@ -396,7 +436,7 @@ impl DigitaloceanProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
@@ -433,7 +473,7 @@ impl DigitaloceanProvider {
 				} else {
 					format!("{}.{}", r.name, zone)
 				};
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				let value = if kind == RecordKind::Srv {
 					match (r.priority, r.weight, r.port) {
 						(Some(p), Some(w), Some(port)) => {
@@ -448,6 +488,13 @@ impl DigitaloceanProvider {
 					}
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.data, TXT_FORM)
+				} else if kind == RecordKind::Caa && r.tag.is_some() {
+					format!(
+						"{} {} \"{}\"",
+						r.flags.unwrap_or(0),
+						r.tag.as_deref().unwrap_or_default(),
+						r.data
+					)
 				} else {
 					r.data
 				};
@@ -466,29 +513,22 @@ impl DigitaloceanProvider {
 impl DnsProvider for DigitaloceanProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a DigitalOcean type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -500,7 +540,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

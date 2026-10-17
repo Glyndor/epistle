@@ -169,6 +169,21 @@ JSON), asks, and publishes:
 - `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
   covers names that do not exist; a wildcard never applies to a name
   with records of its own.
+- A name is planned only when each of its labels is made of ASCII letters,
+  digits, hyphens and underscores (the first may be `*`) and the name has at
+  most 253 characters, 63 per label: a record is written back under the name
+  that was read. Any other name is listed as left as is, with the reason.
+- Delegations are left alone. A name below the zone apex that has NS
+  records belongs to other nameservers, and so does everything under it:
+  records written there would be hidden by the delegation or refused by
+  the provider. The plan skips the name and every name under it, and
+  lists it once as `sub.example.org is delegated to other nameservers;
+  left as is`. A domain that is itself delegated (or sits inside a
+  delegation) gets no DMARC rewrite, no names and no wildcard. The NS
+  records at the zone apex name the servers of the zone itself and are
+  not a delegation. The lockdown reads the whole zone first: a provider
+  that cannot list it (`route53`, `rfc2136`) makes the command stop
+  before it writes anything.
 
 Before a step up, the plan lists the senders that failed DMARC in the
 aggregate reports epistle received for the domain in the last 30 days
@@ -245,6 +260,50 @@ operator).
 RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
+
+### What a listing returns
+
+`epistle dns lockdown`, `epistle dns provider test` and the DKIM clean-up
+list the zone through the provider. Every provider returns each record with
+its own type: NS, HTTPS, SVCB and CAA are kept as such, and a type epistle
+has no use for (NAPTR, SSHFP, the SOA, Namecheap's URL redirects, Bunny's
+redirect and script records) is kept under its type name. None of them is
+read as a TXT, so a TXT check never sees an NS target, and none of them is
+ever written or deleted by epistle. A type name that is not made of letters,
+digits and hyphens (at most 32) is shown as `UNKNOWN`.
+
+The value is kept with the type: an MX is `<preference> <exchange>` and a
+CAA is `<flags> <tag> "<value>"`, even where the provider's API keeps those
+parts in fields of their own (Bunny, DigitalOcean, DNSimple, Porkbun,
+Spaceship). The field layouts come from the providers' published API
+references, not from captures of the real services. Bunny's MX is read from
+`Priority` and `Value` together, and `Priority` is joined to `Value` only when
+`Value` does not already start with the preference.
+
+A listing is never a part of the zone presented as the whole. It fails
+instead when it would need more than 1000 pages or return more than 100000
+records; when its pages do not add up to the total it gives (an empty page
+before the total, a total below what was read, a total that changes or more
+pages than it allows: Spaceship, Cloudflare, DNSimple, DigitalOcean, and OVH
+when an id it listed has no record); when a full page does not say whether
+more follow (Cloudflare, DNSimple, Spaceship); when a response body is larger
+than 16 MiB (256 KiB for Namecheap, whose answer is the whole zone); and when
+the bodies of the operation add up to more than 64 MiB. An rrset with no
+record counts as one record. A delegation that fell off the end of a listing
+would be written over. deSEC lists past 500 rrsets page by page, through the
+`Link` header it sends; a `Link` that names a next page nobody can read is an
+error.
+
+Every call to a provider times out at 30 seconds (10 to connect), body
+included, and a whole operation (a listing across its pages, a publish with
+the reads it makes first) at 120 seconds. That holds for RFC 2136 too: 10
+seconds to connect, 30 for the exchange. A provider is never followed to
+another host: a redirect is an error. The error of a failed call carries no
+URL, and what the provider answered is shown with control characters
+escaped.
+
+`route53` and `rfc2136` cannot list a zone at all, so a command that has to
+read it stops with an error before it writes anything.
 
 ### Record descriptions
 

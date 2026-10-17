@@ -3,7 +3,7 @@
 //! whole zone in numbered parameters.
 
 use super::tests::{SentHost, mock, txt};
-use crate::dns::provider::DnsProvider;
+use crate::dns::provider::{DnsProvider, RecordKind};
 
 const ZONE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org" IsUsingOurDNS="true"><host HostId="1" Name="@" Type="A" Address="192.0.2.1" MXPref="10" TTL="1800"/><host HostId="2" Name="@" Type="MX" Address="mail.example.org" MXPref="10" TTL="1800"/><host HostId="3" Name="www" Type="URL" Address="https://example.org/" MXPref="10" TTL="1800"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 
@@ -91,5 +91,14 @@ async fn get_hosts_reads_either_spelling_of_the_host_element() {
 	let documented = ZONE.replace("<host ", "<Host ");
 	let (provider, _state) = mock(&documented, None).await;
 	let records = provider.list("example.org").await.expect("list");
-	assert_eq!(records.len(), 2, "{records:?}");
+	let kinds: Vec<RecordKind> = records.iter().map(|r| r.kind.clone()).collect();
+	assert_eq!(
+		kinds,
+		vec![
+			RecordKind::A,
+			RecordKind::Mx,
+			RecordKind::Other("URL".to_string())
+		],
+		"{records:?}"
+	);
 }

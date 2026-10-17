@@ -23,7 +23,7 @@ use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
-	same_txt_purpose,
+	same_txt_purpose, unwrap_quotes,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
@@ -100,7 +100,7 @@ impl PorkbunProvider {
 	/// key (`secretapikey`); `api_key` is the API key (`apikey`) it pairs with.
 	pub fn new(secret: ScopedSecret, api_key: impl Into<String>) -> Self {
 		PorkbunProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			api_key: api_key.into(),
 			base: HttpsUrl::from_static(DEFAULT_BASE),
@@ -120,16 +120,19 @@ impl PorkbunProvider {
 	/// `prio` field as a plain preference and is not yet supported because
 	/// the rest of epistle still builds MX with the priority embedded in the
 	/// value string.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -234,7 +237,7 @@ impl PorkbunProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		// The API documents `content` only as "The record value", with
 		// no word on quoting, length or escaping for TXT
 		// (<https://porkbun.com/api/json/v3/spec>, read 2026-10-12). The
@@ -330,7 +333,7 @@ impl PorkbunProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		// Porkbun addresses every record by numeric id, so a delete is
 		// a read-then-delete loop. The TXT matching rule from
 		// `src/dns/provider.rs` is the contract: a value-bearing delete
@@ -365,7 +368,7 @@ impl PorkbunProvider {
 			.await?
 			.into_iter()
 			.filter_map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				// SRV records Porkbun returns without a usable `prio` are
 				// malformed: drop them so the rest of the list does not
 				// carry a misleading empty value.
@@ -379,8 +382,10 @@ impl PorkbunProvider {
 					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
+				} else if kind == RecordKind::Mx && r.prio.parse::<u16>().is_ok() {
+					format!("{} {}", r.prio, r.content)
 				} else {
-					r.content.trim_matches('"').to_string()
+					unwrap_quotes(&r.content).to_string()
 				};
 				Some(DnsRecord {
 					name: r.name.trim_end_matches('.').to_string(),
@@ -396,27 +401,20 @@ impl PorkbunProvider {
 
 impl DnsProvider for PorkbunProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.upsert_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(record).await
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.delete_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(record).await
+		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move { self.list_inner().await })
-	}
-}
-
-/// Map a Porkbun type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner().await
+		}))
 	}
 }
 
@@ -429,7 +427,7 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 	if http == reqwest::StatusCode::UNAUTHORIZED || http == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	let reply: Reply =
 		serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 	if reply.status.eq_ignore_ascii_case("SUCCESS") {

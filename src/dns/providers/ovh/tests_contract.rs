@@ -9,6 +9,10 @@
 
 use super::tests::{StoredRecord, mock_with, txt};
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, MX_DOTTED, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE,
+	SVCB_VALUE, Shape, assert_kinds_kept,
+};
 
 fn apex_spf(id: u64, target: &str) -> StoredRecord {
 	StoredRecord {
@@ -67,4 +71,70 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 		values.contains(&UNRELATED),
 		"the unrelated TXT was lost: {values:?}"
 	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |id: u64, sub: &str, kind: &str, target: &str| StoredRecord {
+		id,
+		field_type: kind.into(),
+		sub_domain: sub.into(),
+		target: target.into(),
+		ttl: 3600,
+	};
+	let (provider, _state) = mock_with(vec![
+		record(1, "sub", "NS", NS_TARGET),
+		record(2, "", "CAA", CAA_VALUE),
+		record(3, "", "HTTPS", HTTPS_VALUE),
+		record(4, "", "SVCB", SVCB_VALUE),
+		record(7, "", "MX", MX_DOTTED),
+		record(5, "", "NAPTR", NAPTR_VALUE),
+		record(6, "", HOSTILE_TYPE, OPAQUE_VALUE),
+	])
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(
+		&listed,
+		&Shape {
+			mx: MX_DOTTED,
+			..Shape::NAMED
+		},
+	);
+}
+
+/// OVH lists ids and then answers one request per id, so a zone past the
+/// record cap is refused before the first of those requests.
+#[tokio::test]
+async fn a_listing_past_the_record_cap_asks_for_no_record() {
+	let existing: Vec<StoredRecord> = (0..100_001)
+		.map(|id| StoredRecord {
+			id,
+			field_type: "A".into(),
+			sub_domain: "h".into(),
+			target: "192.0.2.1".into(),
+			ttl: 3600,
+		})
+		.collect();
+	let (provider, state) = mock_with(existing).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+	assert_eq!(state.lock().unwrap().reads, 0);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = mock_with(Vec::new()).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }

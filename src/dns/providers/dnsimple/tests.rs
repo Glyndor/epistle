@@ -24,6 +24,10 @@ pub(super) struct MockState {
 	pub(super) bodies: Vec<String>,
 	/// Last `Authorization` header seen (set on every request).
 	auth: Option<String>,
+	/// What the listing claims for `pagination.total_pages`, whatever it holds.
+	pub(super) total_pages: Option<u32>,
+	/// Leave `pagination.total_pages` out of the answer, as a degraded one does.
+	pub(super) omit_total_pages: bool,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -33,7 +37,13 @@ const ZONE: &str = "example.org";
 const PATH_BASE: &str = "/v2/{account}/zones/{zone}/records";
 const PATH_ITEM: &str = "/v2/{account}/zones/{zone}/records/{id}";
 
-fn record(id: u64, name: &str, kind: &str, content: &str, ttl: u32) -> serde_json::Value {
+pub(super) fn record(
+	id: u64,
+	name: &str,
+	kind: &str,
+	content: &str,
+	ttl: u32,
+) -> serde_json::Value {
 	serde_json::json!({
 		"id": id,
 		"zone_id": ZONE,
@@ -86,6 +96,7 @@ async fn list_records(
 	} else {
 		total.div_ceil(per_page)
 	};
+	let total_pages = s.total_pages.unwrap_or(total_pages);
 	let start = ((page - 1) * per_page) as usize;
 	let end = (start + per_page as usize).min(total as usize);
 	let page_data = if start < total as usize {
@@ -93,18 +104,21 @@ async fn list_records(
 	} else {
 		Vec::new()
 	};
+	let mut pagination = serde_json::json!({
+		"current_page": page,
+		"per_page": per_page,
+		"total_entries": total,
+		"total_pages": total_pages,
+	});
+	if s.omit_total_pages {
+		pagination
+			.as_object_mut()
+			.expect("object")
+			.remove("total_pages");
+	}
 	json_response(
 		200,
-		&serde_json::json!({
-			"data": page_data,
-			"pagination": {
-				"current_page": page,
-				"per_page": per_page,
-				"total_entries": total,
-				"total_pages": total_pages,
-			}
-		})
-		.to_string(),
+		&serde_json::json!({ "data": page_data, "pagination": pagination }).to_string(),
 	)
 }
 

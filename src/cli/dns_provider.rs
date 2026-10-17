@@ -23,6 +23,9 @@ mod show;
 #[path = "dns_lockdown_tests.rs"]
 mod lockdown_tests;
 #[cfg(test)]
+#[path = "dns_lockdown_tests_cuts.rs"]
+mod lockdown_tests_cuts;
+#[cfg(test)]
 #[path = "dns_provider_tests.rs"]
 mod tests;
 #[cfg(test)]

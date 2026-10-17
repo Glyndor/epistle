@@ -89,7 +89,7 @@ mod storage_blobs;
 mod style;
 mod subid;
 mod suppression;
-mod term;
+pub(crate) mod term;
 mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;

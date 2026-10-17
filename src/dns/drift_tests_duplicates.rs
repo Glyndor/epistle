@@ -342,3 +342,29 @@ async fn three_spf_records_reports_the_exact_count() {
 	let d = detail(&checks, "SPF");
 	assert!(d.contains("3 SPF records"), "detail: {d:?}");
 }
+
+/// A name that carries an apex NS rrset ("the registrar delegation
+/// pointing at us") plus a single SPF record is not a duplicate SPF.
+/// Before NS records reached the TXT check (parse_kind fell through
+/// to TXT), the NS value `ns1.example.com.` did not match any
+/// `v=` tag and was correctly skipped; the contract still holds
+/// after the kind split, because the drift check looks up
+/// `v=spf1` by purpose, not by record kind.
+#[tokio::test]
+async fn apex_ns_records_do_not_count_as_spf() {
+	let mut dns = FakeDns::default();
+	dns.mx
+		.insert("example.org".into(), vec!["mail.example.org".into()]);
+	// Two records at the apex: the registrar NS and the legitimate
+	// SPF. The TXT resolver returns the lot as one bag.
+	dns.txt.insert(
+		"example.org".into(),
+		vec!["ns1.example.com.".into(), "v=spf1 -all".into()],
+	);
+	let checks = check_domain("example.org", "mail.example.org", &[], &dns).await;
+	assert_eq!(
+		status(&checks, "SPF"),
+		Status::Ok,
+		"the NS rrdata does not look like a v=spf1 tag, the check must pass"
+	);
+}

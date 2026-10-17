@@ -65,6 +65,9 @@ struct ListRecords {
 struct ResultInfo {
 	#[serde(default)]
 	total_pages: Option<u32>,
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total_count: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +96,7 @@ impl CloudflareProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		CloudflareProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 			host_tag: None,
@@ -120,16 +123,22 @@ impl CloudflareProvider {
 	/// structured `data` object — each carries its kind-specific shape
 	/// (`usage selector matching cert` / `priority weight port target` /
 	/// `priority host` / `flags tag value`).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
+			// Cloudflare accepts HTTPS and SVCB; publishing NS, HTTPS
+			// or SVCB is the operator's call, not epistle's. Any
+			// other (custom) type is also out of scope.
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -375,7 +384,7 @@ impl CloudflareProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
 		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
@@ -488,7 +497,7 @@ impl CloudflareProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -520,29 +529,22 @@ impl CloudflareProvider {
 impl DnsProvider for CloudflareProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a Cloudflare type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -561,7 +563,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

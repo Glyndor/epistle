@@ -2,6 +2,10 @@
 //! record of the same purpose and leaves every other TXT at the name alone.
 
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 
 const NAME: &str = "sel._domainkey.example.org";
@@ -143,5 +147,57 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 			.iter()
 			.any(|w| w == "/dns/delete/example.org/3" || w == "/dns/edit/example.org/3"),
 		"the unrelated TXT was deleted: {writes:?}"
+	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |id: &str, name: &str, kind: &str, content: &str| {
+		serde_json::json!({
+			"id": id, "name": name, "type": kind, "content": content,
+			"ttl": "600", "prio": "0", "notes": ""
+		})
+	};
+	let mut mx = record("7", "example.org", "MX", "mail.example.org");
+	mx["prio"] = serde_json::json!("10");
+	let (provider, _state) = mock(serde_json::json!([
+		record("1", "sub.example.org", "NS", NS_TARGET),
+		record("2", "example.org", "CAA", CAA_VALUE),
+		record("3", "example.org", "HTTPS", HTTPS_VALUE),
+		record("4", "example.org", "SVCB", SVCB_VALUE),
+		mx,
+		record("5", "example.org", "NAPTR", NAPTR_VALUE),
+		record("6", "example.org", HOSTILE_TYPE, OPAQUE_VALUE),
+	]))
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = mock(serde_json::json!([])).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let record = serde_json::json!({
+		"id": "1", "name": "h.example.org", "type": "A", "content": "192.0.2.1",
+		"ttl": "600", "prio": "0", "notes": ""
+	});
+	let (provider, _state) = mock(serde_json::json!(vec![record; 100_001])).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
 	);
 }

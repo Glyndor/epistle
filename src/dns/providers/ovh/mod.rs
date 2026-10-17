@@ -10,10 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use crate::dns::providers::{LIST_MAX_RECORDS, inconsistent_pages, listing_too_long};
 use crate::net::{HttpsUrl, HttpsUrlError};
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+	unwrap_quotes,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
@@ -66,7 +68,7 @@ impl OvhProvider {
 		consumer_secret: ScopedSecret,
 	) -> Self {
 		OvhProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			application_key,
 			application_secret,
 			consumer_secret,
@@ -118,16 +120,19 @@ impl OvhProvider {
 	}
 
 	/// The OVH fieldType token for a kind we publish.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Mx
-			| RecordKind::Srv
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
 			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -190,7 +195,7 @@ impl OvhProvider {
 			.await
 			.map_err(transport)?;
 		check_status(&response)?;
-		response.text().await.map_err(transport)
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// Variant that ignores the response body (PUT, DELETE, /refresh).
@@ -312,7 +317,7 @@ impl OvhProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		let rec: OvhRecord =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		Ok(Some(rec))
@@ -327,7 +332,7 @@ impl OvhProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
 		// The API schema gives `target` only as "Target of the record"
 		// (<https://eu.api.ovh.com/v1/domain.json>, read 2026-10-12), and
@@ -395,7 +400,7 @@ impl OvhProvider {
 	/// (no zone mutation happened).
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -436,11 +441,18 @@ impl OvhProvider {
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let url = self.zone_url(zone, &["record"])?;
 		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
+		// One request per id follows, so the cap is checked before any.
+		if ids.len() > LIST_MAX_RECORDS {
+			return Err(listing_too_long(zone));
+		}
 		let mut records = Vec::with_capacity(ids.len());
 		for id in ids {
-			if let Some(rec) = self.get_record(zone, id).await? {
-				records.push(record_from_ovh(&rec, zone));
-			}
+			// A record the list names and the detail denies is a listing that
+			// does not add up, not a shorter zone.
+			let Some(rec) = self.get_record(zone, id).await? else {
+				return Err(inconsistent_pages(zone));
+			};
+			records.push(record_from_ovh(&rec, zone));
 		}
 		Ok(records)
 	}
@@ -449,29 +461,22 @@ impl OvhProvider {
 impl DnsProvider for OvhProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map an OVH fieldType back to a [`RecordKind`]; anything we do not
-/// recognise (incl. the unsupported TLSA shape) comes back as TXT.
-fn parse_kind(field_type: &str) -> RecordKind {
-	match field_type {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"CAA" => RecordKind::Caa,
-		_ => RecordKind::Txt,
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -484,14 +489,15 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 	} else {
 		format!("{}.{}", rec.sub_domain, zone)
 	};
-	let kind = parse_kind(&rec.field_type);
+	let kind = RecordKind::from_token(&rec.field_type);
+	let is_txt = kind == RecordKind::Txt;
 	DnsRecord {
 		name,
 		kind,
-		value: if kind == RecordKind::Txt {
+		value: if is_txt {
 			txt_decode(&rec.target, TXT_FORM)
 		} else {
-			rec.target.trim_matches('"').to_string()
+			unwrap_quotes(&rec.target).to_string()
 		},
 		ttl: rec.ttl,
 		proxied: None,

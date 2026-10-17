@@ -155,8 +155,18 @@ pub async fn undo_journal(
 			}));
 		}
 	};
+	let cuts = super::cuts::Cuts::new(&canonical_name(zone), &existing);
 	for (index, entry) in journal.entries.iter().enumerate().rev() {
 		let ours = &entry.record;
+		// A name delegated since the lockdown wrote it is the other
+		// nameservers' now: the record is not touched, it is reported.
+		if let Some(cut) = cuts.above(&canonical_name(&ours.name)) {
+			report.changed.push(UndoChanged {
+				record: ours.clone(),
+				now: vec![format!("{cut} is delegated to other nameservers")],
+			});
+			continue;
+		}
 		let siblings: Vec<&DnsRecord> = existing.iter().filter(|r| same_slot(r, ours)).collect();
 		let listed = match siblings.as_slice() {
 			[] => {

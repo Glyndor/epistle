@@ -22,6 +22,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, missing_page_count,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -60,8 +63,12 @@ struct ListResponse {
 
 #[derive(Deserialize)]
 struct Pagination {
+	/// Absent when the answer does not say how many pages there are.
 	#[serde(default)]
-	total_pages: u32,
+	total_pages: Option<u32>,
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total_entries: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -89,7 +96,7 @@ impl DnsimpleProvider {
 	/// that case at the config layer.
 	pub fn new(secret: ScopedSecret, account_id: impl Into<String>) -> Self {
 		DnsimpleProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			account_id: account_id.into(),
 			base: HttpsUrl::from_static(DEFAULT_BASE),
@@ -120,16 +127,20 @@ impl DnsimpleProvider {
 	/// and SRV (after splitting priority/weight/port/target) go through `content`
 	/// plus dedicated fields; TLSA has no structured field on DNSimple, and MX
 	/// needs the priority split out, so both stay Unsupported.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
+			// TLSA has no structured field on DNSimple.
 			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -158,6 +169,7 @@ impl DnsimpleProvider {
 	/// Walk all pages of the list endpoint and concatenate the records.
 	async fn list_page(&self, zone: &str) -> Result<Vec<Record>, ProviderError> {
 		let mut all = Vec::new();
+		let mut expected: Option<u32> = None;
 		for page in 1.. {
 			let url = self
 				.records_url(zone, None)?
@@ -171,9 +183,37 @@ impl DnsimpleProvider {
 				.await
 				.map_err(transport)?;
 			let mut batch: ListResponse = decode(response).await?;
+			let count = batch.data.len();
 			all.append(&mut batch.data);
-			if page >= batch.pagination.total_pages {
-				break;
+			if all.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(zone));
+			}
+			// What the listing says about itself must add up, page by page.
+			let total_pages = batch.pagination.total_pages;
+			let total_entries = batch.pagination.total_entries;
+			if total_entries.is_some_and(|total| all.len() > total)
+				|| (total_pages.is_some() && expected.is_some() && expected != total_pages)
+			{
+				return Err(inconsistent_pages(zone));
+			}
+			expected = total_pages.or(expected);
+			match total_pages {
+				Some(total) if page >= total => {
+					if total_entries.is_some_and(|entries| all.len() != entries) {
+						return Err(inconsistent_pages(zone));
+					}
+					break;
+				}
+				Some(_) if count == 0 => return Err(inconsistent_pages(zone)),
+				Some(_) => {}
+				// No page count: a short page is the last one, a full
+				// page may not be, and a zone is never read as finished
+				// on that guess.
+				None if count < PER_PAGE as usize => break,
+				None => return Err(missing_page_count(zone)),
+			}
+			if page as usize >= LIST_MAX_PAGES {
+				return Err(listing_too_long(zone));
 			}
 		}
 		Ok(all)
@@ -232,7 +272,7 @@ impl DnsimpleProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: an upsert replaces the TXT with the same
@@ -267,7 +307,7 @@ impl DnsimpleProvider {
 	}
 
 	async fn create_record(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
 		let body = self.record_body(kind, &relative, &record)?;
 		self.write_body(zone, None, body).await
@@ -279,7 +319,7 @@ impl DnsimpleProvider {
 		id: u64,
 		record: DnsRecord,
 	) -> Result<(), ProviderError> {
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
 		let body = self.record_body(kind, &relative, &record)?;
 		self.write_body(zone, Some(id), body).await
@@ -398,7 +438,7 @@ impl DnsimpleProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -465,7 +505,7 @@ impl DnsimpleProvider {
 				} else {
 					format!("{}.{}", r.name, zone_label)
 				};
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				let value = if kind == RecordKind::Srv {
 					match (r.priority, r.weight, r.port) {
 						(Some(p), Some(w), Some(port)) => {
@@ -475,6 +515,8 @@ impl DnsimpleProvider {
 					}
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
+				} else if kind == RecordKind::Mx && r.priority.is_some() {
+					format!("{} {}", r.priority.unwrap_or(0), r.content)
 				} else {
 					r.content
 				};
@@ -493,29 +535,22 @@ impl DnsimpleProvider {
 impl DnsProvider for DnsimpleProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a DNSimple type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -527,7 +562,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 

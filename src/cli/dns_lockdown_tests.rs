@@ -16,25 +16,25 @@ use crate::dns::lockdown::{Journal, Plan};
 use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
 use crate::spf::DnsLookup;
 
-const CLOUDFLARE: &str = "\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n";
+pub(super) const CLOUDFLARE: &str = "\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n";
 
 /// 2026-10-14 12:00 UTC.
 const NOW: u64 = 1_791_979_200;
 
-struct Setup {
+pub(super) struct Setup {
 	_dir: tempfile::TempDir,
 	file: tempfile::NamedTempFile,
 	data_dir: PathBuf,
-	zone: Arc<Zone>,
+	pub(super) zone: Arc<Zone>,
 }
 
-struct Run {
-	code: ExitCode,
-	out: String,
-	err: String,
+pub(super) struct Run {
+	pub(super) code: ExitCode,
+	pub(super) out: String,
+	pub(super) err: String,
 }
 
-fn zone_records() -> Vec<DnsRecord> {
+pub(super) fn zone_records() -> Vec<DnsRecord> {
 	vec![
 		a("example.org"),
 		mx("example.org", "10 mail.example.org"),
@@ -49,7 +49,7 @@ fn zone_records() -> Vec<DnsRecord> {
 	]
 }
 
-fn setup(extra: &str, zone: Zone) -> Setup {
+pub(super) fn setup(extra: &str, zone: Zone) -> Setup {
 	let (dir, file) = crate::cli::resource::test_config(extra);
 	let data_dir = dir.path().canonicalize().expect("data dir");
 	Setup {
@@ -77,7 +77,7 @@ fn parse(args: &[&str]) -> (LockdownArgs, bool) {
 	(args, dry_run)
 }
 
-fn run_with(
+pub(super) fn run_with(
 	setup: &Setup,
 	args: &[&str],
 	provider: Option<Arc<dyn DnsProvider>>,
@@ -103,12 +103,12 @@ fn run_with(
 	}
 }
 
-fn run(setup: &Setup, args: &[&str]) -> Run {
+pub(super) fn run(setup: &Setup, args: &[&str]) -> Run {
 	let provider: Arc<dyn DnsProvider> = setup.zone.clone();
 	run_with(setup, args, Some(provider), FakeDns::default())
 }
 
-fn journal_path(setup: &Setup) -> PathBuf {
+pub(super) fn journal_path(setup: &Setup) -> PathBuf {
 	setup.data_dir.join("dns-lockdown").join("example.org.json")
 }
 

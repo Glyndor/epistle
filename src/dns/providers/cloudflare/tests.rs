@@ -22,6 +22,8 @@ struct MockState {
 	bodies: Vec<String>,
 	/// Answer 400 to a write whose body carries `tags` (a Free plan zone).
 	reject_tags: bool,
+	/// What a listing says in `result_info.total_pages`; nothing when `None`.
+	total_pages: Option<u32>,
 }
 
 type Shared = Arc<Mutex<MockState>>;
@@ -48,10 +50,11 @@ async fn records_collection(
 	let ok = axum::http::StatusCode::OK;
 	if method == axum::http::Method::GET {
 		let result = s.records.clone();
-		(
-			ok,
-			axum::Json(serde_json::json!({ "result": result, "success": true })),
-		)
+		let mut body = serde_json::json!({ "result": result, "success": true });
+		if let Some(total_pages) = s.total_pages {
+			body["result_info"] = serde_json::json!({ "total_pages": total_pages });
+		}
+		(ok, axum::Json(body))
 	} else {
 		(ok, axum::Json(serde_json::json!({ "success": true })))
 	}
@@ -398,7 +401,7 @@ fn every_record_kind_body_carries_the_comment() {
 		(RecordKind::Caa, "0 issue \"letsencrypt.org\""),
 	];
 	for (kind, value) in cases {
-		let r = rec(kind, value);
+		let r = rec(kind.clone(), value);
 		let body = CloudflareProvider::record_body(kind.as_str(), &r).unwrap();
 		let v: serde_json::Value = serde_json::from_str(&body).unwrap();
 		assert_eq!(v["comment"], expected_description(), "{}", kind.as_str());

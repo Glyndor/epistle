@@ -82,6 +82,66 @@ fn record_kind_tokens() {
 	assert_eq!(RecordKind::Tlsa.as_str(), "TLSA");
 }
 
+/// A type token is read in any letter case, and a type with no variant
+/// keeps its name. A provider that returned `ns` and was read as an
+/// `Other` would hide a delegation from the lockdown.
+#[test]
+fn a_type_token_is_read_in_any_letter_case() {
+	assert_eq!(RecordKind::from_token("NS"), RecordKind::Ns);
+	assert_eq!(RecordKind::from_token("ns"), RecordKind::Ns);
+	assert_eq!(RecordKind::from_token("Https"), RecordKind::Https);
+	assert_eq!(RecordKind::from_token("svcb"), RecordKind::Svcb);
+	assert_eq!(RecordKind::from_token("txt"), RecordKind::Txt);
+	assert_eq!(
+		RecordKind::from_token("naptr"),
+		RecordKind::Other("NAPTR".to_string())
+	);
+	assert_eq!(
+		RecordKind::from_token("TYPE65280"),
+		RecordKind::Other("TYPE65280".to_string())
+	);
+}
+
+/// A token that cannot be a record type becomes `UNKNOWN`: a terminal
+/// escape, a line break, an empty string, a token past the length cap and
+/// a token of the cap's length plus one all fail the shape test, and the
+/// cap's own length passes.
+#[test]
+fn a_type_token_that_is_not_a_record_type_becomes_unknown() {
+	let unknown = RecordKind::Other(UNKNOWN_KIND.to_string());
+	for hostile in ["", "NAPTR\u{1b}[2J", "A\r\nB", "NA PTR", "\u{e9}", "A;B"] {
+		assert_eq!(RecordKind::from_token(hostile), unknown, "{hostile:?}");
+	}
+	let longest = "X".repeat(MAX_OTHER_KIND_LEN);
+	assert_eq!(
+		RecordKind::from_token(&longest),
+		RecordKind::Other(longest.clone())
+	);
+	let too_long = "X".repeat(MAX_OTHER_KIND_LEN + 1);
+	assert_eq!(RecordKind::from_token(&too_long), unknown);
+	let enormous = "X".repeat(10 * 1024 * 1024);
+	assert_eq!(RecordKind::from_token(&enormous), unknown);
+}
+
+/// One pair of quotes that wraps the whole value goes; a quote that is part
+/// of the data stays, so a CAA or HTTPS target is not cut.
+#[test]
+fn unwrap_quotes_only_removes_a_pair_around_the_whole_value() {
+	assert_eq!(unwrap_quotes("\"v=spf1 -all\""), "v=spf1 -all");
+	assert_eq!(
+		unwrap_quotes("0 issue \"ca.example\""),
+		"0 issue \"ca.example\""
+	);
+	assert_eq!(unwrap_quotes("1 . alpn=\"h2\""), "1 . alpn=\"h2\"");
+	assert_eq!(unwrap_quotes("\""), "\"");
+	assert_eq!(unwrap_quotes("\"\""), "");
+	// Two strings are not one: the quotes between them are data.
+	assert_eq!(unwrap_quotes("\"a\" \"b\""), "\"a\" \"b\"");
+	assert_eq!(unwrap_quotes("\"a\\\"b\""), "a\\\"b");
+	assert_eq!(unwrap_quotes("\"a\\\\\""), "a\\\\");
+	assert_eq!(unwrap_quotes(""), "");
+}
+
 #[test]
 fn scoped_secret_authorizes_only_its_zone() {
 	let secret = ScopedSecret::new("example.org", "tok");
@@ -300,4 +360,15 @@ fn an_mx_target_loses_its_root_dot_except_the_null_mx() {
 	assert_eq!(mx_target_for_api("mail.example.org."), "mail.example.org");
 	assert_eq!(mx_target_for_api("mail.example.org"), "mail.example.org");
 	assert_eq!(mx_target_for_api("."), ".");
+}
+
+/// What a provider answered is escaped where an error is shown: a control
+/// character or a right-to-left override in it reaches no terminal.
+#[test]
+fn a_provider_answer_in_an_error_is_shown_escaped() {
+	let error = ProviderError::Remote("bad \u{1b}[2J\u{202e}gro".to_string());
+	assert_eq!(
+		error.to_string(),
+		"provider error: bad \\u{1b}[2J\\u{202e}gro"
+	);
 }

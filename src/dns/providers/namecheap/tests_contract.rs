@@ -5,6 +5,10 @@
 
 use super::tests::{mock, txt};
 use crate::dns::provider::DnsProvider;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
 
 const NAME: &str = "sel._domainkey.example.org";
@@ -97,4 +101,50 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 			"old SPF value {old:?} re-published"
 		);
 	}
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+/// Namecheap's `getHosts` answers XML, so the escape-laden type token of the
+/// shared zone is written with characters XML allows, and the provider
+/// trims the root dot of a hostname value.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let host = |id: u32, name: &str, kind: &str, address: &str| {
+		format!(
+			r#"<host HostId="{id}" Name="{name}" Type="{kind}" Address="{}" TTL="3600"/>"#,
+			address.replace('"', "&quot;")
+		)
+	};
+	let hosts = [
+		host(1, "sub", "NS", NS_TARGET),
+		host(2, "@", "CAA", CAA_VALUE),
+		host(3, "@", "HTTPS", HTTPS_VALUE),
+		host(4, "@", "SVCB", SVCB_VALUE),
+		r#"<host HostId="7" Name="@" Type="MX" Address="mail.example.org" MXPref="10" TTL="3600"/>"#.to_string(),
+		host(5, "@", "NAPTR", NAPTR_VALUE),
+		host(6, "@", "NAPTR X!", OPAQUE_VALUE),
+	]
+	.concat();
+	let xml = format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org">{hosts}</DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#
+	);
+	let (provider, _state) = mock(&xml, None).await;
+	let listed = provider.list("example.org").await.expect("list");
+	let shape = Shape {
+		trailing_dot: false,
+		..Shape::NAMED
+	};
+	assert_kinds_kept(&listed, &shape);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"/></CommandResponse></ApiResponse>"#;
+	let (provider, _state) = mock(xml, None).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }

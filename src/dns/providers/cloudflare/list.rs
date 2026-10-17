@@ -3,8 +3,9 @@
 //! of epistle uses (TXT as its logical value, MX as `priority target`, the
 //! orange-cloud `proxied` flag on the kinds Cloudflare can proxy).
 
-use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM, parse_kind};
+use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM};
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
+use crate::dns::providers::{inconsistent_pages, missing_page_count};
 use crate::dns::txt::txt_decode;
 
 /// Records asked for per page of a zone listing: Cloudflare's default,
@@ -21,19 +22,39 @@ impl CloudflareProvider {
 		let zone_id = self.zone_id(zone).await?;
 		let mut listed: Vec<RecordRef> = Vec::new();
 		let mut page = 1;
+		let mut expected: Option<u32> = None;
 		loop {
 			let url = self
 				.records_url(&zone_id, None)?
 				.with_query("per_page", &LIST_PAGE_SIZE.to_string())
 				.with_query("page", &page.to_string());
 			let records: ListRecords = self.get_json(url).await?;
+			let count = records.result.len();
 			listed.extend(records.result);
-			let total = records
+			let (total_pages, total_count) = records
 				.result_info
-				.and_then(|info| info.total_pages)
-				.unwrap_or(1);
-			if page >= total {
-				break;
+				.map_or((None, None), |info| (info.total_pages, info.total_count));
+			// What the listing says about itself must add up, page by page.
+			if total_count.is_some_and(|total| listed.len() > total)
+				|| (total_pages.is_some() && expected.is_some() && expected != total_pages)
+			{
+				return Err(inconsistent_pages(zone));
+			}
+			expected = total_pages.or(expected);
+			match total_pages {
+				Some(total) if page >= total => {
+					if total_count.is_some_and(|count| listed.len() != count) {
+						return Err(inconsistent_pages(zone));
+					}
+					break;
+				}
+				Some(_) if count == 0 => return Err(inconsistent_pages(zone)),
+				Some(_) => {}
+				// No page count: a short page is the last one, a full page
+				// may not be, and a zone is never read as finished on that
+				// guess.
+				None if count < LIST_PAGE_SIZE as usize => break,
+				None => return Err(missing_page_count(zone)),
 			}
 			if page >= LIST_MAX_PAGES {
 				return Err(ProviderError::Remote(format!(
@@ -45,12 +66,12 @@ impl CloudflareProvider {
 		Ok(listed
 			.into_iter()
 			.map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				// The read form is not documented. A record written by
 				// the API comes back quoted (possibly re-split), one an
 				// older release wrote unquoted comes back as it was;
 				// `txt_decode` reads both as the logical value.
-				let value = match (kind, r.priority) {
+				let value = match (&kind, r.priority) {
 					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
 					// `priority target`, the shape every MX value has.
 					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
@@ -59,7 +80,7 @@ impl CloudflareProvider {
 				// Cloudflare only returns `proxied` for the kinds it can
 				// proxy (A, AAAA, CNAME). Other kinds leave it `None`,
 				// which the rest of epistle treats as "not applicable".
-				let proxied = match kind {
+				let proxied = match &kind {
 					RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
 					_ => None,
 				};

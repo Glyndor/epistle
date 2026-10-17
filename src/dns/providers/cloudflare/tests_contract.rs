@@ -4,6 +4,10 @@
 //! instead of adding a second one.
 
 use super::*;
+use crate::dns::providers::listing_contract::{
+	CAA_VALUE, HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 
 fn address(kind: RecordKind, value: &str) -> DnsRecord {
 	DnsRecord {
@@ -168,5 +172,73 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 			.iter()
 			.any(|w| w == "DELETE /zones/zone123/dns_records/rec3"),
 		"the unrelated TXT was deleted: {writes:?}"
+	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let hostile = HOSTILE_TYPE;
+	let (provider, _state) = mock(vec![
+		stored_at("sub.example.org", "1", "NS", NS_TARGET),
+		stored_at("example.org", "2", "CAA", CAA_VALUE),
+		stored_at("example.org", "3", "HTTPS", HTTPS_VALUE),
+		stored_at("example.org", "4", "SVCB", SVCB_VALUE),
+		serde_json::json!({"id": "7", "type": "MX", "name": "example.org", "content": "mail.example.org", "priority": 10, "ttl": 3600}),
+		stored_at("example.org", "5", "NAPTR", NAPTR_VALUE),
+		stored_at("example.org", "6", hostile, OPAQUE_VALUE),
+	])
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = mock(Vec::new()).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let record = stored_at("h.example.org", "1", "A", "192.0.2.1");
+	let (provider, state) = mock(vec![record; 100_001]).await;
+	state.lock().unwrap().total_pages = Some(1);
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
+	);
+}
+
+/// An answer without its page count is not the last page: a full page may be
+/// followed by more, and reading it as the whole zone would hide the rest.
+/// A short page is the last one, count or no count.
+#[tokio::test]
+async fn a_full_page_without_a_page_count_is_an_error() {
+	let record = stored_at("h.example.org", "1", "A", "192.0.2.1");
+	let (provider, _state) = mock(vec![record.clone(); 100]).await;
+	let error = provider.list("example.org").await.expect_err("full page");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org listing does not say how many pages there are".to_string()
+		)
+	);
+	let (provider, _state) = mock(vec![record; 99]).await;
+	assert_eq!(
+		provider
+			.list("example.org")
+			.await
+			.expect("short page")
+			.len(),
+		99
 	);
 }

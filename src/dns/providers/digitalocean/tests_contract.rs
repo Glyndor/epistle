@@ -11,6 +11,10 @@
 use super::tests::mock;
 use super::*;
 use crate::dns::providers::digitalocean::tests::Shared;
+use crate::dns::providers::listing_contract::{
+	HOSTILE_TYPE, HTTPS_VALUE, NAPTR_VALUE, NS_TARGET, OPAQUE_VALUE, SVCB_VALUE, Shape,
+	assert_kinds_kept,
+};
 
 fn txt(name: &str, value: &str) -> DnsRecord {
 	DnsRecord {
@@ -108,4 +112,93 @@ async fn txt_upsert_collapses_duplicates_of_the_same_purpose() {
 			.any(|w| w == "DELETE /v2/domains/example.org/records/3"),
 		"the unrelated TXT was deleted: {writes:?}"
 	);
+}
+
+/// A zone with a delegated subdomain and records of types epistle does not
+/// publish lists every one of them with its own kind: nothing is turned into
+/// a TXT, and a type token that is not a record type comes back as
+/// `UNKNOWN`.
+#[tokio::test]
+async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
+	let record = |id: u64, name: &str, kind: &str, data: &str| {
+		serde_json::json!({
+			"id": id, "type": kind, "name": name, "data": data, "ttl": 3600,
+			"priority": null, "port": null, "weight": null, "flags": null, "tag": null
+		})
+	};
+	let (provider, _state) = mock(
+		vec![
+			record(1, "sub", "NS", NS_TARGET),
+			{
+				let mut caa = record(2, "@", "CAA", "letsencrypt.org");
+				caa["flags"] = serde_json::json!(128);
+				caa["tag"] = serde_json::json!("issuewild");
+				caa
+			},
+			record(3, "@", "HTTPS", HTTPS_VALUE),
+			record(4, "@", "SVCB", SVCB_VALUE),
+			{
+				let mut mx = record(7, "@", "MX", "mail.example.org");
+				mx["priority"] = serde_json::json!(10);
+				mx
+			},
+			record(5, "@", "NAPTR", NAPTR_VALUE),
+			record(6, "@", HOSTILE_TYPE, OPAQUE_VALUE),
+		],
+		false,
+	)
+	.await;
+	let listed = provider.list("example.org").await.expect("list");
+	assert_kinds_kept(&listed, &Shape::NAMED);
+}
+
+/// A server that links every page to another page cannot keep a listing
+/// going: it stops at the page cap with an error, not with a shorter zone.
+#[tokio::test]
+async fn a_listing_that_never_ends_stops_at_the_page_cap() {
+	let (provider, state) = mock(Vec::new(), true).await;
+	{
+		let mut s = state.lock().unwrap();
+		let own = s
+			.next_url
+			.clone()
+			.expect("next url")
+			.replace("/next", "/v2/domains/example.org/records");
+		s.next_url = Some(own);
+	}
+	let error = provider.list("example.org").await.expect_err("endless");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+	assert_eq!(state.lock().unwrap().calls.len(), 1000);
+}
+
+/// More records than a listing reads is an error too, from a single page.
+#[tokio::test]
+async fn a_listing_past_the_record_cap_is_an_error() {
+	let record = serde_json::json!({
+		"id": 1, "type": "A", "name": "h", "data": "192.0.2.1", "ttl": 3600,
+		"priority": null, "port": null, "weight": null, "flags": null, "tag": null
+	});
+	let (provider, _state) = mock(vec![record; 100_001], false).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
+				.to_string()
+		)
+	);
+}
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = mock(Vec::new(), false).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }

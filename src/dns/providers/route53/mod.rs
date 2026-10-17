@@ -37,7 +37,7 @@ impl Route53Provider {
 	/// Build a provider for `hosted_zone_id` with static credentials.
 	pub fn new(access_key: String, secret_key: String, hosted_zone_id: String) -> Self {
 		Route53Provider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			access_key,
 			secret_key,
 			hosted_zone_id,
@@ -65,7 +65,7 @@ impl Route53Provider {
 
 	/// Submit a ChangeResourceRecordSets request with the given action.
 	async fn change(&self, action: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let kind = record_type(record.kind)?;
+		let kind = record_type(&record.kind)?;
 		// Route 53 wants a TXT value quoted and split by the caller: "break
 		// the value into strings of 255 characters or fewer, and enclose
 		// each string in double quotation marks" and "For the API, include
@@ -221,7 +221,7 @@ impl Route53Provider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		response.text().await.map_err(transport)
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// UPSERT one rrset carrying the given values verbatim. Used by
@@ -398,7 +398,7 @@ fn canonical_query(url: &reqwest::Url) -> String {
 
 impl DnsProvider for Route53Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			// An UPSERT replaces the whole rrset. The upsert contract in
 			// `src/dns/provider.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
@@ -416,10 +416,10 @@ impl DnsProvider for Route53Provider {
 					.await;
 			}
 			self.change("UPSERT", &record).await
-		})
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			// The TXT matching rule from `src/dns/provider.rs` is
 			// the contract: a value-bearing delete drops only the
 			// rdata whose value matches (a sibling ACME challenge
@@ -461,7 +461,7 @@ impl DnsProvider for Route53Provider {
 			} else {
 				self.change("DELETE", &record).await
 			}
-		})
+		}))
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		// Route 53 lists records as XML, which this provider does not parse.
@@ -472,16 +472,19 @@ impl DnsProvider for Route53Provider {
 /// The Route 53 record type for a kind we can publish. SRV, MX, and CAA
 /// all use the same presentation form we emit (the value goes verbatim
 /// into `<Value>`), which Route 53 accepts.
-fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
+fn record_type(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 	match kind {
-		RecordKind::A
-		| RecordKind::Aaaa
-		| RecordKind::Txt
-		| RecordKind::Cname
-		| RecordKind::Tlsa
-		| RecordKind::Srv
-		| RecordKind::Mx
-		| RecordKind::Caa => Ok(kind.as_str()),
+		RecordKind::A => Ok("A"),
+		RecordKind::Aaaa => Ok("AAAA"),
+		RecordKind::Txt => Ok("TXT"),
+		RecordKind::Cname => Ok("CNAME"),
+		RecordKind::Mx => Ok("MX"),
+		RecordKind::Srv => Ok("SRV"),
+		RecordKind::Tlsa => Ok("TLSA"),
+		RecordKind::Caa => Ok("CAA"),
+		RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+			Err(ProviderError::Unsupported)
+		}
 	}
 }
 

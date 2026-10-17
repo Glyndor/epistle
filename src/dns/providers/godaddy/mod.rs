@@ -141,7 +141,7 @@ impl GodaddyProvider {
 	/// authors `zone = "example.org"`.
 	pub fn new(api_key: String, api_secret: String, zone: String) -> Self {
 		GodaddyProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			api_key,
 			api_secret,
 			zone: zone.trim_end_matches('.').to_string(),
@@ -162,16 +162,20 @@ impl GodaddyProvider {
 	/// (https://developer.godaddy.com/en/docs/references/rest/domains/v1/record-replace-type-name),
 	/// so a TLSA publish would round-trip a 4xx instead of a clean
 	/// "this provider does not support TLSA" verdict.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Caa => Ok("CAA"),
+			// TLSA has no structured field on GoDaddy.
 			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -260,7 +264,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		// The body is not echoed into the error: an HTTP 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we
@@ -358,7 +362,7 @@ impl GodaddyProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = fqdn_to_relative(&record.name, &self.zone);
 		let new_element = self.record_element(&record)?;
 		// GoDaddy's PUT replaces the whole record set at (type, name).
@@ -391,7 +395,7 @@ impl GodaddyProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = fqdn_to_relative(&record.name, &self.zone);
 		// A TXT delete with an empty value retires the whole TXT set
 		// at the owner (the DKIM rotator retires a selector this way).
@@ -443,7 +447,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response.text().await.map_err(transport)?;
+		let text = crate::dns::providers::read_body(response).await?;
 		// The body is not echoed into the error: a 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we
@@ -474,15 +478,10 @@ impl GodaddyProvider {
 				} else {
 					format!("{name}.{}", self.zone)
 				};
-				// Skip kinds the provider does not publish (apex
-				// NS, SOA, and any vendor-specific record the API
-				// happens to know about). A previous version mapped
-				// unknown types to TXT, which made the list
-				// indistinguishable from a TXT record at the same
-				// owner; round-tripping that through upsert/delete
-				// would operate on the apex TXT set, not the
-				// original record type.
-				let kind = parse_kind(&r.kind)?;
+				// Every type the zone holds is listed, the apex NS and a
+				// delegation's NS included; a type epistle does not publish
+				// keeps its own kind (`RecordKind::from_token`), never TXT.
+				let kind = RecordKind::from_token(&r.kind);
 				let value = if kind == RecordKind::Mx {
 					let priority = r.priority?;
 					format!("{} {}", priority, r.data.trim_end_matches('.'))
@@ -511,33 +510,20 @@ impl GodaddyProvider {
 
 impl DnsProvider for GodaddyProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.upsert_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(record).await
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.delete_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(record).await
+		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move { self.list_inner().await })
-	}
-}
-
-/// Map a GoDaddy type token back to a [`RecordKind`], or `None` when
-/// the type is not one the provider publishes. Unknown kinds
-/// (apex NS, SOA, ...) must be skipped by the caller rather than
-/// collapsed into TXT, otherwise a caller round-tripping the list
-/// through `upsert`/`delete` would operate on the wrong record
-/// type.
-fn parse_kind(kind: &str) -> Option<RecordKind> {
-	match kind {
-		"A" => Some(RecordKind::A),
-		"AAAA" => Some(RecordKind::Aaaa),
-		"CAA" => Some(RecordKind::Caa),
-		"CNAME" => Some(RecordKind::Cname),
-		"MX" => Some(RecordKind::Mx),
-		"SRV" => Some(RecordKind::Srv),
-		"TLSA" => Some(RecordKind::Tlsa),
-		"TXT" => Some(RecordKind::Txt),
-		_ => None,
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner().await
+		}))
 	}
 }
 

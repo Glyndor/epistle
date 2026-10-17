@@ -75,13 +75,21 @@ struct DnsRecordRef {
 	value: Option<String>,
 	#[serde(rename = "Ttl", default)]
 	ttl: i64,
+	/// The preference of an MX.
+	#[serde(rename = "Priority", default)]
+	priority: Option<i64>,
+	/// The flags and the tag of a CAA; its `Value` is the issuer alone.
+	#[serde(rename = "Flags", default)]
+	flags: Option<i64>,
+	#[serde(rename = "Tag", default)]
+	tag: Option<String>,
 }
 
 impl BunnyProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		BunnyProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 			zone_id: Mutex::new(None),
@@ -112,7 +120,7 @@ impl BunnyProvider {
 	/// returns [`ProviderError::Unsupported`]. SRV (type 8) carries the
 	/// four-tuple in the `Value` field as `weight port target` (priority is
 	/// not editable through Bunny's API for SRV — it is always 0).
-	fn api_type(kind: RecordKind) -> Result<i64, ProviderError> {
+	fn api_type(kind: &RecordKind) -> Result<i64, ProviderError> {
 		match kind {
 			RecordKind::A => Ok(0),
 			RecordKind::Aaaa => Ok(1),
@@ -120,7 +128,12 @@ impl BunnyProvider {
 			RecordKind::Txt => Ok(3),
 			RecordKind::Mx => Ok(4),
 			RecordKind::Srv => Ok(8),
-			RecordKind::Tlsa | RecordKind::Caa => Err(ProviderError::Unsupported),
+			RecordKind::Tlsa
+			| RecordKind::Caa
+			| RecordKind::Ns
+			| RecordKind::Https
+			| RecordKind::Svcb
+			| RecordKind::Other(_) => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -242,7 +255,7 @@ impl BunnyProvider {
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record.name)?;
-		let rtype = Self::api_type(record.kind)?;
+		let rtype = Self::api_type(&record.kind)?;
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
@@ -255,10 +268,11 @@ impl BunnyProvider {
 		// ignored): the upsert collapses them by editing the first
 		// match and deleting every other. Other kinds take the first
 		// record at (type, name), so duplicates do not arise.
-		let mut matching = detail.records.into_iter().filter(|r| {
+		let kind_for_match = record.kind.clone();
+		let mut matching = detail.records.into_iter().filter(move |r| {
 			r.rtype == rtype
 				&& r.name.as_deref() == Some(name.as_str())
-				&& (record.kind != RecordKind::Txt
+				&& (kind_for_match != RecordKind::Txt
 					|| same_txt_purpose(r.value.as_deref().unwrap_or(""), &record.value))
 		});
 		if let Some(primary) = matching.next() {
@@ -277,7 +291,7 @@ impl BunnyProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record.name)?;
-		let rtype = Self::api_type(record.kind)?;
+		let rtype = Self::api_type(&record.kind)?;
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
@@ -369,6 +383,19 @@ impl BunnyProvider {
 					format!("0 {weight} {port} {target}")
 				} else if kind == RecordKind::Txt {
 					txt_decode(&value_raw, TXT_FORM)
+				} else if kind == RecordKind::Mx
+					&& r.priority.is_some()
+					&& !starts_with_preference(&value_raw)
+				{
+					// `Priority` and `Value` are separate fields; a record written
+					// as `<preference> <exchange>` in `Value` already has it.
+					format!("{} {value_raw}", r.priority.unwrap_or(0))
+				} else if kind == RecordKind::Caa && r.tag.is_some() {
+					format!(
+						"{} {} \"{value_raw}\"",
+						r.flags.unwrap_or(0),
+						r.tag.as_deref().unwrap_or_default()
+					)
 				} else {
 					value_raw
 				};
@@ -386,27 +413,59 @@ impl BunnyProvider {
 
 impl DnsProvider for BunnyProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.upsert_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(record).await
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.delete_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(record).await
+		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move { self.list_inner().await })
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner().await
+		}))
 	}
 }
 
-/// Map Bunny's numeric record type back to a [`RecordKind`].
+/// Whether an MX `Value` already begins with its preference: a number and
+/// something after it (`10 mail.example.org`, `0 .`).
+fn starts_with_preference(value: &str) -> bool {
+	let mut parts = value.split_whitespace();
+	parts
+		.next()
+		.is_some_and(|first| first.parse::<u16>().is_ok())
+		&& parts.next().is_some()
+}
+
+/// Map Bunny's numeric record type back to a [`RecordKind`]. The numbers
+/// are Bunny's `DnsRecordTypes` enum (<https://bunny.net/docs/reference/dnszonepublic_add>,
+/// read 2026-10-16). The ones epistle does not publish keep their own kind
+/// (NS at 12 is a delegation), and a number the enum does not list is
+/// `TYPE<n>`, never a TXT.
 fn parse_kind(rtype: i64) -> RecordKind {
-	match rtype {
-		0 => RecordKind::A,
-		1 => RecordKind::Aaaa,
-		2 => RecordKind::Cname,
-		4 => RecordKind::Mx,
-		8 => RecordKind::Srv,
-		15 => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
-	}
+	let token = match rtype {
+		0 => "A",
+		1 => "AAAA",
+		2 => "CNAME",
+		3 => "TXT",
+		4 => "MX",
+		5 => "REDIRECT",
+		6 => "FLATTEN",
+		7 => "PULLZONE",
+		8 => "SRV",
+		9 => "CAA",
+		10 => "PTR",
+		11 => "SCRIPT",
+		12 => "NS",
+		13 => "SVCB",
+		14 => "HTTPS",
+		15 => "TLSA",
+		other => return RecordKind::from_token(&format!("TYPE{other}")),
+	};
+	RecordKind::from_token(token)
 }
 
 /// Decode a JSON body, mapping 401/403 to an auth error.
@@ -417,7 +476,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response.text().await.map_err(transport)?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 
