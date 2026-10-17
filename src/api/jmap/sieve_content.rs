@@ -43,12 +43,11 @@ pub(super) fn script_text(found: Found<'_>) -> Result<String, Unusable> {
 	if upload.data.len() > MAX_SCRIPT_BYTES {
 		return Err(Unusable::Error(json!({"type": "tooLarge"})));
 	}
-	// RFC 9661 section 2.2: a script is UTF-8 and at least one character.
+	// RFC 9661 section 2.2: a script is UTF-8. It also asks for at least one
+	// character, and an empty script is accepted all the same: ManageSieve
+	// stores one, and the two protocols have one check.
 	let text = std::str::from_utf8(&upload.data)
 		.map_err(|_| invalid_sieve("script is not valid UTF-8"))?;
-	if text.is_empty() {
-		return Err(invalid_sieve("script is empty"));
-	}
 	Ok(text.to_string())
 }
 

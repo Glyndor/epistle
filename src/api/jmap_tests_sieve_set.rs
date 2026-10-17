@@ -139,10 +139,6 @@ async fn a_script_the_store_refuses_is_not_created() {
 			json!({"type": "invalidSieve", "description": "extension \"enotify\" is not supported"}),
 		),
 		(
-			b"".to_vec(),
-			json!({"type": "invalidSieve", "description": "script is empty"}),
-		),
-		(
 			vec![0xff, 0xfe],
 			json!({"type": "invalidSieve", "description": "script is not valid UTF-8"}),
 		),
@@ -414,4 +410,18 @@ async fn a_script_keeps_its_id_when_managesieve_renames_it() {
 		store(dir.path(), "alice").get("renamed").expect("get"),
 		"discard;\r\n"
 	);
+}
+
+#[tokio::test]
+async fn an_empty_script_can_be_created_as_it_can_over_managesieve() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = app(dir.path());
+	let blob = blob(&app, b"").await;
+	let response = set(
+		&app,
+		json!({"create": {"a": {"name": "empty", "blobId": blob}}}),
+	)
+	.await;
+	assert!(response[1]["created"]["a"]["id"].is_string(), "{response}");
+	assert_eq!(store(dir.path(), "alice").get("empty").expect("get"), "");
 }

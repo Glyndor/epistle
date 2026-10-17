@@ -63,11 +63,8 @@ async fn an_unsupported_extension_is_invalid_sieve() {
 }
 
 #[tokio::test]
-async fn an_empty_script_a_binary_one_and_an_oversized_one_are_refused() {
+async fn a_binary_script_and_an_oversized_one_are_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let empty = validate(dir.path(), b"").await;
-	assert_eq!(empty[1]["error"]["type"], "invalidSieve");
-	assert_eq!(empty[1]["error"]["description"], "script is empty");
 	let binary = validate(dir.path(), &[b'k', b'e', 0xff, 0xfe, b';']).await;
 	assert_eq!(binary[1]["error"]["type"], "invalidSieve");
 	assert_eq!(
@@ -202,4 +199,16 @@ async fn validate_needs_the_read_scope_and_no_more() {
 	)
 	.await;
 	assert_eq!(denied[1]["type"], "forbidden");
+}
+
+#[tokio::test]
+async fn an_empty_script_is_as_valid_over_jmap_as_over_managesieve() {
+	// One check for both protocols. ManageSieve takes a script of nothing
+	// (a client that has no rules left may send one), so JMAP does too; RFC
+	// 9661 asks for at least one character, and this is the one place the
+	// server is more lenient than the RFC.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let response = validate(dir.path(), b"").await;
+	assert_valid(&response, "an empty script");
+	assert_eq!(crate::managesieve::store::ScriptStore::validate(""), Ok(()));
 }
