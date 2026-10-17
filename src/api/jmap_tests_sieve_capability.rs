@@ -54,11 +54,36 @@ async fn the_extensions_are_the_ones_managesieve_advertises() {
 			.iter()
 			.map(|name| name.as_str().expect("a string"))
 			.collect();
-	let managesieve: Vec<&str> = crate::managesieve::session::SIEVE_EXTENSIONS
-		.split_whitespace()
-		.collect();
-	assert!(!advertised.is_empty());
-	assert_eq!(advertised, managesieve);
+	// Written out, not read back from the constant the answer is built from:
+	// adding or removing an extension is a change to what scripts may use,
+	// and has to be made here on purpose (extensions_tests.rs runs a script
+	// for each).
+	let expected = [
+		"fileinto",
+		"envelope",
+		"vacation",
+		"imap4flags",
+		"relational",
+		"variables",
+		"reject",
+		"ereject",
+		"copy",
+		"body",
+		"date",
+		"mailbox",
+		"subaddress",
+		"comparator-i;octet",
+		"comparator-i;ascii-casemap",
+		"comparator-i;ascii-numeric",
+	];
+	assert_eq!(advertised, expected);
+	// And ManageSieve says the same list in its SIEVE capability.
+	assert_eq!(
+		crate::managesieve::session::SIEVE_EXTENSIONS
+			.split_whitespace()
+			.collect::<Vec<_>>(),
+		expected
+	);
 }
 
 #[tokio::test]

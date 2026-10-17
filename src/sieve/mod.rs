@@ -63,3 +63,6 @@ mod interp_tests_window;
 mod memory_tests;
 #[cfg(test)]
 mod parser_tests;
+#[cfg(test)]
+#[path = "random_run_tests.rs"]
+mod random_run_tests;
