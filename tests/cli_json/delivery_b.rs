@@ -196,7 +196,7 @@ fn show_of_an_unknown_or_malformed_id_is_refused() {
 #[test]
 fn show_escapes_what_a_remote_server_said() {
 	let mut hostile = record(0, FIRST, "a@remote.example", DeliveryOutcome::Failed);
-	hostile.reply = Some("550 gone\u{1b}[2J\u{7}away".into());
+	hostile.reply = Some("550 gone\u{1b}[2J\u{7}away \u{202e}txt".into());
 	hostile.remote = Some("mx\u{1b}[31m.remote.example".into());
 	let env = seeded(&[hostile]);
 	let (_, text, _) = plain(&env, &["show", &FIRST.to_string()]);
@@ -204,7 +204,11 @@ fn show_escapes_what_a_remote_server_said() {
 		!text.contains('\u{1b}') && !text.contains('\u{7}'),
 		"{text:?}"
 	);
-	assert!(text.contains("550 gone\\u{1b}[2J\\u{7}away"), "{text:?}");
+	assert!(
+		text.contains("550 gone\\u{1b}[2J\\u{7}away \\u{202e}txt"),
+		"{text:?}"
+	);
+	assert!(!text.contains('\u{202e}'), "{text:?}");
 }
 
 #[test]

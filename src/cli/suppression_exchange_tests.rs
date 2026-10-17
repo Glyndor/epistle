@@ -125,3 +125,12 @@ fn a_repeated_address_with_other_case_is_one_entry() {
 	let rows = parse("A@Example.net\na@example.NET\n", NOW).unwrap();
 	assert_eq!(rows[0].address, rows[1].address);
 }
+
+#[test]
+fn a_bidirectional_override_cannot_hide_in_a_reason() {
+	assert_eq!(
+		reason_problem("fine \u{202e}evil").unwrap(),
+		"the reason must not contain invisible formatting characters (such as a right-to-left override)"
+	);
+	assert_eq!(reason_problem("plain \u{e9}"), None);
+}

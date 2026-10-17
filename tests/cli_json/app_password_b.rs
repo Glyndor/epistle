@@ -128,15 +128,24 @@ fn rotate_and_rename_refuse_a_credential_that_is_not_there() {
 	let env = env("");
 	phone(&env);
 	for (args, shown) in [
-		(vec!["rotate", "bob", "tablet", "--yes"], "bob/tablet"),
-		(vec!["rotate", "nobody", "phone", "--yes"], "nobody/phone"),
-		(vec!["rename", "bob", "tablet", "laptop"], "bob/tablet"),
+		(
+			vec!["rotate", "bob", "tablet", "--yes"],
+			"error: bob has no app password \"tablet\"",
+		),
+		(
+			vec!["rotate", "nobody", "phone", "--yes"],
+			"error: nobody has no app password \"phone\"",
+		),
+		(
+			vec!["rename", "bob", "tablet", "laptop"],
+			"error: bob has no app password \"tablet\"",
+		),
 	] {
 		let mut full = args.clone();
 		full.push("--json");
 		let (code, stdout, stderr) = plain(&env, &full);
 		assert_eq!((code, stdout.as_str()), (Some(2), ""), "{args:?}");
-		assert!(stderr.contains(shown), "{args:?}: {stderr}");
+		assert_eq!(stderr.trim_end(), shown, "{args:?}");
 	}
 }
 
@@ -178,7 +187,10 @@ fn rename_refuses_a_label_that_is_taken() {
 	assert_eq!(run(&env, &["create", "bob", "tablet"]).0, 0);
 	let (code, stdout, stderr) = plain(&env, &["rename", "bob", "phone", "tablet", "--json"]);
 	assert_eq!((code, stdout.as_str()), (Some(2), ""), "{stderr}");
-	assert!(stderr.contains("tablet"), "{stderr}");
+	assert_eq!(
+		stderr.trim_end(),
+		"error: bob already has an app password \"tablet\""
+	);
 	let labels: Vec<String> = listed(&env)
 		.as_array()
 		.expect("array")
@@ -195,6 +207,11 @@ fn labels_are_bounded_and_printable() {
 	let too_long = "x".repeat(65);
 	for (label, needle) in [
 		("", "must not be empty"),
+		("   ", "must not be empty"),
+		(" padded", "must not start or end with a space"),
+		("padded ", "must not start or end with a space"),
+		("b\u{202e}idi", "invisible formatting characters"),
+		("zero\u{200b}width", "invisible formatting characters"),
 		("tab\there", "control characters"),
 		("esc\u{1b}[2J", "control characters"),
 		(too_long.as_str(), "at most 64 characters"),

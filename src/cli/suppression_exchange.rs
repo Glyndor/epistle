@@ -45,6 +45,12 @@ pub(super) fn reason_problem(reason: &str) -> Option<String> {
 	if reason.chars().any(char::is_control) {
 		return Some("the reason must not contain control characters".into());
 	}
+	if reason.chars().any(super::super::term::is_invisible_format) {
+		return Some(
+			"the reason must not contain invisible formatting characters (such as a right-to-left override)"
+				.into(),
+		);
+	}
 	if reason.chars().count() > MAX_REASON {
 		return Some(format!(
 			"the reason must be at most {MAX_REASON} characters"

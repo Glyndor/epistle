@@ -64,6 +64,10 @@ fn add_refuses_a_reason_that_cannot_be_stored_as_given() {
 	for (reason, needle) in [
 		("line one\nline two".to_string(), "control characters"),
 		("\u{1b}[2Jgone".to_string(), "control characters"),
+		(
+			"bidi \u{202e}evil".to_string(),
+			"invisible formatting characters",
+		),
 		("x".repeat(513), "at most 512 characters"),
 	] {
 		let (code, stdout, stderr) = plain(

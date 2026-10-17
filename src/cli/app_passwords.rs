@@ -105,11 +105,20 @@ const MAX_LABEL: usize = 64;
 /// Why `label` cannot name an app password, or `None` when it can. A label
 /// is printed by `list` and typed to revoke, so it stays short and plain.
 fn label_problem(label: &str) -> Option<String> {
-	if label.is_empty() {
+	if label.trim().is_empty() {
 		return Some("the label must not be empty".into());
 	}
 	if label.chars().any(char::is_control) {
 		return Some("the label must not contain control characters".into());
+	}
+	if label.chars().any(super::term::is_invisible_format) {
+		return Some(
+			"the label must not contain invisible formatting characters (such as a right-to-left override)"
+				.into(),
+		);
+	}
+	if label != label.trim() {
+		return Some("the label must not start or end with a space".into());
 	}
 	if label.chars().count() > MAX_LABEL {
 		return Some(format!("the label must be at most {MAX_LABEL} characters"));
@@ -366,12 +375,11 @@ fn open_known(config: &Config, account: &str, label: &str) -> Result<AppPassword
 	if known {
 		return Ok(store);
 	}
-	Err(super::exit::refused(
-		crate::directory_store::StoreError::NotFound(format!(
-			"{}/{label}",
-			account.to_ascii_lowercase()
-		)),
-	))
+	Err(super::exit::refused(format!(
+		"{} has no app password \"{}\"",
+		account.to_ascii_lowercase(),
+		super::term::sanitize(label)
+	)))
 }
 
 /// Replace the secret of `account`'s app password `label`: a new random
@@ -458,8 +466,8 @@ fn rename(
 		.any(|app| app.label == new_label);
 	let unchanged = label == new_label;
 	if taken && !unchanged {
-		return super::exit::refused(crate::directory_store::StoreError::Duplicate(
-			new_label.to_string(),
+		return super::exit::refused(format!(
+			"{account} already has an app password \"{new_label}\""
 		));
 	}
 	let fields = serde_json::json!({
