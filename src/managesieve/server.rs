@@ -31,7 +31,7 @@ const TIMEOUT: Duration = Duration::from_secs(1800);
 const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default maximum script literal size (1 MiB). Configurable per server
 /// so the test suite can drive a small bound.
-const DEFAULT_MAX_LITERAL: usize = 1 << 20;
+const DEFAULT_MAX_LITERAL: usize = super::store::MAX_SCRIPT_BYTES;
 /// Default max concurrent connections for a ManageSieve listener.
 const MAX_CONNECTIONS: usize = 100;
 

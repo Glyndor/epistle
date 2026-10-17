@@ -245,7 +245,7 @@ impl<B: Backend> Session<B> {
 			}
 			Command::DeleteScript(name) => result(store.delete(&name)),
 			Command::RenameScript { from, to } => result(store.rename(&from, &to)),
-			Command::HaveSpace { .. } => Response::Ok(None),
+			Command::HaveSpace { name, size } => result(store.have_space(&name, size)),
 			_ => Response::No(Some("Unsupported command.".to_string())),
 		}
 	}
@@ -328,6 +328,12 @@ fn store_error(error: StoreError) -> Response {
 		StoreError::InvalidScript(reason) => {
 			Response::No(Some(format!("Script does not parse: {reason}")))
 		}
+		StoreError::TooLarge => {
+			Response::NoCode("QUOTA/MAXSIZE", "Script is too large.".to_string())
+		}
+		StoreError::TooManyScripts => {
+			Response::NoCode("QUOTA/MAXSCRIPTS", "Too many scripts.".to_string())
+		}
 		StoreError::Io => Response::No(Some("Storage error.".to_string())),
 	}
 }
@@ -353,3 +359,7 @@ mod tests;
 #[cfg(test)]
 #[path = "session_tests_continuation.rs"]
 mod continuation_tests;
+
+#[cfg(test)]
+#[path = "session_tests_limits.rs"]
+mod limits_tests;

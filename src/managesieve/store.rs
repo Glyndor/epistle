@@ -11,6 +11,40 @@ use std::path::{Path, PathBuf};
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::{contained, contained_child, contained_subdir};
 
+/// The most octets one script may hold. It is the same number the ManageSieve
+/// listener allows for a literal, and the one JMAP advertises as
+/// `maxSizeScript`, so a script one protocol accepts the other accepts too.
+pub const MAX_SCRIPT_BYTES: usize = 1 << 20;
+
+/// The most scripts one account may store (`maxNumberScripts`). Every script
+/// is a file, and `list` reads them all, so the count is bounded.
+pub const MAX_SCRIPTS: usize = 50;
+
+/// The longest script name, in Unicode scalar values (RFC 5804 section 1.6).
+pub const MAX_NAME_CHARS: usize = 128;
+
+/// The longest script name, in octets. The name is the file name, and the
+/// atomic write stages a `.<name>.sieve.<uuid>.tmp` file next to it, which
+/// must stay under the 255 octets a file name may have on common
+/// filesystems. 200 leaves room for that staging name.
+pub const MAX_NAME_BYTES: usize = 200;
+
+/// Whether `name` is an acceptable script name: 1 to [`MAX_NAME_CHARS`]
+/// characters and [`MAX_NAME_BYTES`] octets, none of them a control
+/// character, a path separator, or U+2028 / U+2029 (RFC 9661 section 2.1
+/// lists the controls U+0000-U+001F, U+007F-U+009F, U+2028 and U+2029), and
+/// not `.` or `..`.
+pub fn is_valid_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name.len() <= MAX_NAME_BYTES
+		&& name.chars().count() <= MAX_NAME_CHARS
+		&& name != "."
+		&& name != ".."
+		&& !name
+			.chars()
+			.any(|c| c.is_control() || matches!(c, '/' | '\\' | '\u{2028}' | '\u{2029}'))
+}
+
 /// A ManageSieve operation that failed in a way the protocol must report.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
@@ -24,6 +58,10 @@ pub enum StoreError {
 	ActiveScript,
 	/// The script text does not parse as Sieve. Carries a human reason.
 	InvalidScript(String),
+	/// The script is over [`MAX_SCRIPT_BYTES`].
+	TooLarge,
+	/// The account already holds [`MAX_SCRIPTS`] scripts.
+	TooManyScripts,
 	/// An underlying filesystem error.
 	Io,
 }
@@ -80,14 +118,7 @@ impl ScriptStore {
 	/// over-long, control-character and path-separator names so a name can
 	/// never escape the script directory (RFC 5804 §1.6, plus path safety).
 	fn script_path(&self, name: &str) -> Result<PathBuf, StoreError> {
-		if name.is_empty()
-			|| name.len() > 128
-			|| name == "."
-			|| name == ".."
-			|| name
-				.chars()
-				.any(|c| c.is_control() || c == '/' || c == '\\')
-		{
+		if !is_valid_name(name) {
 			return Err(StoreError::InvalidName);
 		}
 		contained_child(&self.dirs()?.sieve_dir, &format!("{name}.sieve"))
@@ -96,12 +127,35 @@ impl ScriptStore {
 
 	/// Parse `script` as Sieve, returning a human-readable reason on failure.
 	pub fn validate(script: &str) -> Result<(), StoreError> {
+		if script.len() > MAX_SCRIPT_BYTES {
+			return Err(StoreError::TooLarge);
+		}
 		let tokens = crate::sieve::lexer::tokenize(script)
 			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
 		let commands = crate::sieve::parser::parse(&tokens)
 			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
 		enforce_mailbox_require(&commands)?;
 		Ok(())
+	}
+
+	/// Whether a script called `name` of `size` octets could be stored now
+	/// (RFC 5804 section 2.5, HAVESPACE).
+	pub fn have_space(&self, name: &str, size: u64) -> Result<(), StoreError> {
+		let path = self.script_path(name)?;
+		if size > MAX_SCRIPT_BYTES as u64 {
+			return Err(StoreError::TooLarge);
+		}
+		self.room_for(&path)
+	}
+
+	/// A script that is not yet stored needs a free slot; rewriting one that
+	/// is needs none.
+	fn room_for(&self, path: &Path) -> Result<(), StoreError> {
+		if path.exists() || self.list()?.len() < MAX_SCRIPTS {
+			Ok(())
+		} else {
+			Err(StoreError::TooManyScripts)
+		}
 	}
 
 	/// The active script's name, if any.
@@ -157,6 +211,7 @@ impl ScriptStore {
 	pub fn put(&self, name: &str, content: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
 		Self::validate(content)?;
+		self.room_for(&path)?;
 		fs::create_dir_all(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
 		fs::write(&path, content).map_err(|_| StoreError::Io)?;
 		if self.active_name().as_deref() == Some(name) {
@@ -325,3 +380,7 @@ fn declares_mailbox_require(commands: &[crate::sieve::ast::Command]) -> bool {
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "store_tests_limits.rs"]
+mod limits_tests;
