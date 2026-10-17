@@ -240,17 +240,22 @@ fn run(
 				}
 				"stop" => return true,
 				// imap4flags (RFC 5232): set/add/remove IMAP flags for delivery.
-				"setflag" => outcome.flags = flag_list(args),
-				"addflag" => {
-					for flag in flag_list(args) {
-						if !outcome.flags.contains(&flag) {
-							outcome.flags.push(flag);
-						}
+				"setflag" | "addflag" | "removeflag" => {
+					let tokens = flag_list(args);
+					// The octets of the list are read, and paid for.
+					if !vars.charge(tokens.iter().map(|t| t.len() as u64 + 8).sum()) {
+						return true;
 					}
-				}
-				"removeflag" => {
-					let remove = flag_list(args);
-					outcome.flags.retain(|flag| !remove.contains(flag));
+					match name.as_str() {
+						"setflag" => {
+							outcome.flags.clear();
+							add_flags(&mut outcome.flags, tokens);
+						}
+						"addflag" => add_flags(&mut outcome.flags, tokens),
+						_ => outcome
+							.flags
+							.retain(|flag| !tokens.iter().any(|t| t.eq_ignore_ascii_case(flag))),
+					}
 				}
 				// `require` and any unsupported action: no-op.
 				_ => {}
@@ -315,6 +320,24 @@ fn parse_vacation(args: &[Argument]) -> Option<VacationRequest> {
 		}
 	}
 	reason.map(|reason| VacationRequest { reason, ..request })
+}
+
+/// The most different IMAP flags a run puts on a message.
+pub const MAX_FLAGS: usize = 32;
+/// The longest a flag may be, in octets (the IMAP keyword limit).
+const MAX_FLAG_BYTES: usize = 64;
+
+/// Add `tokens` to `flags`: a flag once however it is cased, none over
+/// [`MAX_FLAG_BYTES`], and at most [`MAX_FLAGS`] in all (the first ones win).
+fn add_flags(flags: &mut Vec<String>, tokens: Vec<String>) {
+	for token in tokens {
+		if flags.len() >= MAX_FLAGS {
+			break;
+		}
+		if token.len() <= MAX_FLAG_BYTES && !flags.iter().any(|f| f.eq_ignore_ascii_case(&token)) {
+			flags.push(token);
+		}
+	}
 }
 
 /// Flag tokens from a flag-list argument (each string may hold several flags).

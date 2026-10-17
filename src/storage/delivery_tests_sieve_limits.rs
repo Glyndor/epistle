@@ -443,3 +443,20 @@ fn an_old_long_key_is_a_false_test_and_a_line_in_the_log_once_an_hour() {
 		.count();
 	assert_eq!(said, 1);
 }
+
+#[test]
+fn the_flags_sidecar_holds_no_more_than_the_limit() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = Uuid::new_v4();
+	let tokens: Vec<String> = (0..500).map(|n| format!("k{n}")).collect();
+	io::write_flag_sidecar(dir.path(), id, &tokens);
+	let path = crate::util::path_component::message_file(
+		dir.path(),
+		id,
+		crate::util::path_component::MessageExt::Flags,
+	)
+	.expect("path");
+	let written: Vec<serde_json::Value> =
+		serde_json::from_slice(&fs::read(path).expect("read")).expect("json");
+	assert_eq!(written.len(), crate::sieve::interp::MAX_FLAGS);
+}

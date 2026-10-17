@@ -14,6 +14,7 @@ pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_token
 	use crate::util::path_component::{MessageExt, message_file};
 	let flags: Vec<crate::imap::mailbox::Flag> = flag_tokens
 		.iter()
+		.take(crate::sieve::interp::MAX_FLAGS)
 		.filter_map(|token| crate::imap::mailbox::Flag::parse(token))
 		.collect();
 	if flags.is_empty() {

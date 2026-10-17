@@ -148,3 +148,58 @@ fn a_key_over_the_caps_is_a_false_test_and_the_rest_of_the_script_runs() {
 	assert!(!outcome.discarded);
 	assert_eq!(outcome.fileinto, vec!["After".to_string()]);
 }
+
+fn flags_script(count: usize) -> String {
+	let flags: Vec<String> = (0..count).map(|n| format!("\"k{n}\"")).collect();
+	format!("require \"imap4flags\";\naddflag [{}];\n", flags.join(","))
+}
+
+#[test]
+fn a_run_holds_at_most_32_different_flags() {
+	let outcome = run(&flags_script(500));
+	assert_eq!(
+		outcome.flags.len(),
+		super::interp::MAX_FLAGS,
+		"{:?}",
+		outcome.flags
+	);
+	assert_eq!(outcome.flags[0], "k0", "the first ones are the ones kept");
+	// `setflag` is capped the same way.
+	let set = flags_script(500).replace("addflag", "setflag");
+	assert_eq!(run(&set).flags.len(), super::interp::MAX_FLAGS);
+}
+
+#[test]
+fn a_flag_is_kept_once_whatever_its_case_and_never_over_64_octets() {
+	let long = "f".repeat(65);
+	let script = format!(
+		"require \"imap4flags\";\naddflag [\"\\\\Seen\", \"\\\\SEEN\", \"\\\\seen\", \"{long}\", \"ok\"];\n"
+	);
+	let outcome = run(&script);
+	assert_eq!(outcome.flags, vec!["\\Seen".to_string(), "ok".to_string()]);
+}
+
+#[test]
+fn removing_a_flag_ignores_its_case_and_leaves_room_for_another() {
+	let script = format!(
+		"require \"imap4flags\";\naddflag [{}];\nremoveflag \"K0\";\naddflag \"late\";\n",
+		(0..32)
+			.map(|n| format!("\"k{n}\""))
+			.collect::<Vec<_>>()
+			.join(",")
+	);
+	let outcome = run(&script);
+	assert_eq!(outcome.flags.len(), super::interp::MAX_FLAGS);
+	assert!(outcome.flags.contains(&"late".to_string()));
+	assert!(!outcome.flags.contains(&"k0".to_string()));
+}
+
+#[test]
+fn many_flag_actions_are_steps_and_work_of_the_run() {
+	// 30 000 `addflag` of a 1 KiB list each run out of steps, not of memory.
+	let script = format!(
+		"require \"imap4flags\";\n{}",
+		"addflag \"a\";\n".repeat(30_000)
+	);
+	assert!(run(&script).aborted);
+}
