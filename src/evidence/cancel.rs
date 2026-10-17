@@ -12,6 +12,12 @@ use super::chain::Chain;
 use super::record::{Entry, Outcome, OutcomeKind};
 use crate::storage::{Envelope, RecipientStatus};
 
+/// Make the writing fail after this many records, for tests.
+#[cfg(test)]
+thread_local! {
+	pub(super) static FAIL_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
 /// What the outcome says happened to the message.
 pub const REASON: &str = "removed from the queue before it was delivered";
 
@@ -26,13 +32,25 @@ pub fn remove(
 	evidence_root: &Path,
 	id: uuid::Uuid,
 ) -> std::io::Result<Envelope> {
-	spool.remove_with(id, |fresh| record(evidence_root, fresh).map(|_| ()))
+	spool.remove_with(id, |fresh, partial| {
+		record_partly(evidence_root, fresh, partial).map(|_| ())
+	})
 }
 
 /// Record a `canceled` outcome for every recipient of `envelope` still
 /// waiting, when the entry keeps evidence. Returns how many were written.
 /// The entry must not be removed unless this returned `Ok`.
 pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usize> {
+	record_partly(evidence_root, envelope, &std::cell::Cell::new(false))
+}
+
+/// [`record`], raising `partial` as soon as one cancellation is written, so
+/// that a failure after it can be told from one before it.
+fn record_partly(
+	evidence_root: &Path,
+	envelope: &Envelope,
+	partial: &std::cell::Cell<bool>,
+) -> std::io::Result<usize> {
 	if !envelope.evidence {
 		return Ok(0);
 	}
@@ -42,6 +60,12 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 		let state = envelope.recipient_state(recipient);
 		if state.status != RecipientStatus::Pending {
 			continue;
+		}
+		#[cfg(test)]
+		if FAIL_AFTER.with(|after| after.get()) == Some(written) {
+			return Err(std::io::Error::other(
+				"injected: the next record cannot be written",
+			));
 		}
 		chain.append(Entry::Outcome(Outcome {
 			spool_id: envelope.id,
@@ -60,6 +84,7 @@ pub fn record(evidence_root: &Path, envelope: &Envelope) -> std::io::Result<usiz
 			},
 		}))?;
 		written += 1;
+		partial.set(true);
 	}
 	Ok(written)
 }

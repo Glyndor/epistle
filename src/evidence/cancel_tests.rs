@@ -128,3 +128,39 @@ fn nothing_is_removed_when_the_cancellation_cannot_be_written() {
 		.expect_err("the record is refused");
 	assert!(spool.load_envelope(id).is_ok(), "the entry went");
 }
+
+#[test]
+fn a_cancellation_cut_short_leaves_the_entry_on_hold_so_nothing_canceled_is_delivered() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (spool, id) = two_recipients(dir.path());
+	let root = crate::evidence::service::root_of(dir.path());
+	// The first recipient's cancellation is written, the second's is not.
+	FAIL_AFTER.with(|after| after.set(Some(1)));
+	let error = remove(&spool, &root, id).expect_err("cut short");
+	FAIL_AFTER.with(|after| after.set(None));
+	assert!(error.to_string().contains("injected"), "{error}");
+	assert_eq!(
+		canceled(dir.path()).len(),
+		1,
+		"one cancellation was written"
+	);
+	let envelope = spool.load_envelope(id).expect("the entry stays");
+	assert!(
+		envelope.held.is_some(),
+		"the worker would deliver what was recorded as canceled"
+	);
+	// Once the writing works, the removal is finished by the operator.
+	remove(&spool, &root, id).expect("removed");
+	assert!(spool.load_envelope(id).is_err());
+}
+
+#[test]
+fn a_cancellation_that_wrote_nothing_does_not_hold_the_entry() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (spool, id) = two_recipients(dir.path());
+	let root = crate::evidence::service::root_of(dir.path());
+	FAIL_AFTER.with(|after| after.set(Some(0)));
+	remove(&spool, &root, id).expect_err("nothing written");
+	FAIL_AFTER.with(|after| after.set(None));
+	assert!(spool.load_envelope(id).expect("entry").held.is_none());
+}

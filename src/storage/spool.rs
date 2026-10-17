@@ -378,10 +378,17 @@ impl FsSpool {
 		let _guard = self.lock()?;
 		let mut envelope = self.read_envelope_unlocked(id)?;
 		edit(&mut envelope);
+		self.write_envelope_unlocked(id, &envelope)?;
+		Ok(envelope)
+	}
+
+	/// Replace the envelope file of `id` with `envelope`, crash-safely. The
+	/// caller holds the spool lock.
+	fn write_envelope_unlocked(&self, id: Uuid, envelope: &Envelope) -> std::io::Result<()> {
 		let tmp = self.path_in(
 			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
 		)?;
-		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
+		let bytes = serde_json::to_vec(envelope).map_err(std::io::Error::other)?;
 		let sealed = self.crypto.encode_with_aad(&bytes, id.as_bytes())?;
 		let written = write_sync(&tmp, &sealed)
 			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
@@ -389,7 +396,7 @@ impl FsSpool {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);
 		}
-		Ok(envelope)
+		Ok(())
 	}
 
 	/// Read an envelope file's bytes and decode it. The returned flag tells
@@ -505,7 +512,7 @@ impl FsSpool {
 	/// An entry whose outcomes the evidence log has not taken yet is not
 	/// removed: that would erase the only trace of a delivery that was made.
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
-		self.remove_with(id, |_| Ok(())).map(|_| ())
+		self.remove_with(id, |_, _| Ok(())).map(|_| ())
 	}
 
 	/// Run `work` while the queue holds nothing under `id`, with the spool's
@@ -540,10 +547,15 @@ impl FsSpool {
 	/// Reading the envelope, deciding and unlinking are one step: nothing can
 	/// change the entry between them, so what `before` writes about it is what
 	/// is removed. Returns the envelope that was removed.
+	///
+	/// `before` is also given a flag to raise once it has written something
+	/// that the entry's staying would contradict: if it then fails, the entry
+	/// is put on hold, so the worker does not deliver what was recorded as
+	/// canceled.
 	pub fn remove_with(
 		&self,
 		id: Uuid,
-		before: impl FnOnce(&Envelope) -> std::io::Result<()>,
+		before: impl FnOnce(&Envelope, &std::cell::Cell<bool>) -> std::io::Result<()>,
 	) -> std::io::Result<Envelope> {
 		let _guard = self.lock()?;
 		let envelope = self.read_envelope_unlocked(id)?;
@@ -553,7 +565,17 @@ impl FsSpool {
 				"the entry has evidence outcomes waiting to be written: it stays until they are",
 			));
 		}
-		before(&envelope)?;
+		let partial = std::cell::Cell::new(false);
+		if let Err(error) = before(&envelope, &partial) {
+			if partial.get() {
+				let mut held = envelope.clone();
+				held.hold(crate::storage::delivery_log::now_epoch());
+				if let Err(hold) = self.write_envelope_unlocked(id, &held) {
+					tracing::error!(%id, %hold, "an entry half canceled could not be put on hold");
+				}
+			}
+			return Err(error);
+		}
 		// Envelope first: a message file without an envelope is invisible.
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Eml)?)?;
