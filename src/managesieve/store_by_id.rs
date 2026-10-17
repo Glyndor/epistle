@@ -54,6 +54,15 @@ impl Tx<'_> {
 			.collect()
 	}
 
+	/// Whether the account has an active script that is not among
+	/// [`Tx::scripts`]: one whose name no longer passes the name check, which
+	/// keeps running although nothing lists it.
+	pub fn has_unlisted_active(&self) -> bool {
+		self.store
+			.active_name()
+			.is_some_and(|name| !self.txn.index.scripts.contains_key(&name))
+	}
+
 	/// The content of the script called `name`.
 	pub fn content(&self, name: &str) -> Result<String, StoreError> {
 		self.store.get(name)

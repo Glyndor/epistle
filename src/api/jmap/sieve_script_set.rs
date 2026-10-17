@@ -259,7 +259,10 @@ fn switch_active(
 		(None, true) => None,
 		(None, false) => current,
 	};
-	if after.map(|script| &script.id) == current.map(|script| &script.id) {
+	// An active script nothing lists (its name no longer passes the name
+	// check) is still the filter: asking to deactivate switches it off.
+	let unlisted = deactivate && current.is_none() && after.is_none() && tx.has_unlisted_active();
+	if after.map(|script| &script.id) == current.map(|script| &script.id) && !unlisted {
 		return Ok(());
 	}
 	tx.set_active(after.map(|script| script.id.as_str()))?;

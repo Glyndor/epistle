@@ -402,7 +402,9 @@ impl ScriptStore {
 		let entries =
 			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
 		let mut names = BTreeSet::new();
+		let active = self.active_name();
 		let mut left_out = 0usize;
+		let mut active_left_out = false;
 		for entry in entries.flatten() {
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
@@ -417,6 +419,7 @@ impl ScriptStore {
 				names.insert(name.to_string());
 			} else {
 				left_out += 1;
+				active_left_out |= active.as_deref() == Some(name);
 			}
 		}
 		if left_out > 0 {
@@ -424,8 +427,11 @@ impl ScriptStore {
 				tracing::warn!(
 					account = %self.account,
 					left_out,
+					active_left_out,
 					"scripts whose names are not valid since a stricter name check are not listed; \
-					 rename the files, or delete them"
+					 rename the files, or delete them. If the active script is one of them \
+					 (active_left_out), it keeps running and can be switched off or replaced \
+					 by activating another"
 				);
 			});
 		}

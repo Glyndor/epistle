@@ -248,3 +248,84 @@ async fn managesieve_activation_is_what_jmap_reports() {
 	s.set_active(Some("b")).expect("switch");
 	assert_eq!(active(&app).await, vec![b.id]);
 }
+
+/// An installation from before the stricter name check: the active script is
+/// `quarantine ` (a trailing space), which the store no longer lists.
+fn legacy_active(dir: &std::path::Path) {
+	let sieve = dir.join("accounts/alice/sieve");
+	std::fs::create_dir_all(&sieve).expect("mkdir");
+	std::fs::write(sieve.join("quarantine .sieve"), "discard;\r\n").expect("script");
+	std::fs::write(sieve.join(".active"), "quarantine ").expect("marker");
+	std::fs::write(dir.join("accounts/alice/filter.sieve"), "discard;\r\n").expect("live");
+}
+
+#[tokio::test]
+async fn deactivating_switches_off_an_active_script_whose_name_is_no_longer_valid() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	legacy_active(dir.path());
+	let app = app(dir.path());
+	let response = set(&app, json!({"onSuccessDeactivateScript": true})).await;
+	assert_eq!(response[0], "SieveScript/set", "{response}");
+	assert!(
+		live(dir.path()).is_none(),
+		"the hidden filter is still running"
+	);
+	assert!(
+		!dir.path().join("accounts/alice/sieve/.active").exists()
+			|| std::fs::read_to_string(dir.path().join("accounts/alice/sieve/.active"))
+				.expect("marker")
+				.is_empty()
+	);
+	assert_ne!(
+		response[1]["oldState"], response[1]["newState"],
+		"it was a change"
+	);
+}
+
+#[tokio::test]
+async fn activating_another_script_replaces_a_hidden_active_one() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	legacy_active(dir.path());
+	let app = app(dir.path());
+	let blob = blob(&app, b"keep;\r\n").await;
+	let response = set(
+		&app,
+		json!({"create": {"A": {"name": "new", "blobId": blob}}, "onSuccessActivateScript": "#A"}),
+	)
+	.await;
+	assert_eq!(response[1]["notCreated"], json!({}), "{response}");
+	assert_eq!(live(dir.path()).as_deref(), Some("keep;\r\n"));
+	assert_eq!(active(&app).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_log_says_when_the_active_script_is_one_left_out() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	legacy_active(dir.path());
+	let s = store(dir.path(), "alice");
+	let events = crate::cli::tracing_capture::run_with_capture(|| {
+		s.list().expect("list");
+	});
+	let said = events
+		.iter()
+		.find(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("are not listed"))
+		})
+		.expect("said");
+	assert_eq!(
+		said.fields.get("active_left_out").map(String::as_str),
+		Some("true"),
+		"{said:?}"
+	);
+}
+
+#[tokio::test]
+async fn an_unknown_activation_id_leaves_a_hidden_active_script_alone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	legacy_active(dir.path());
+	let app = app(dir.path());
+	set(&app, json!({"onSuccessActivateScript": "no-such-id"})).await;
+	assert_eq!(live(dir.path()).as_deref(), Some("discard;\r\n"));
+}
