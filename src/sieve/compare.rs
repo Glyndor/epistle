@@ -48,6 +48,12 @@ impl Rel {
 	}
 }
 
+/// The comparators `:comparator` accepts (RFC 4790). `i;ascii-casemap` is the
+/// default, and any other name falls back to it. Each is a Sieve extension,
+/// `comparator-<name>` (RFC 5228 section 2.7.3), which [`super::EXTENSIONS`]
+/// lists.
+pub(crate) const COMPARATORS: [&str; 3] = ["i;octet", "i;ascii-casemap", "i;ascii-numeric"];
+
 /// The collation a comparison uses (the `:comparator` argument).
 #[derive(Clone, Copy)]
 enum Collation {
