@@ -200,3 +200,76 @@ fn a_canceled_recipient_is_counted_and_is_not_a_delivery() {
 			.contains("canceled (an operator removed it")
 	);
 }
+
+/// One message to two recipients: the first was delivered, the second bounced.
+fn one_delivered_one_bounced() -> Fixture {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let tsa = FakeTsa::new(at(DAY + 1, 1));
+	let fixture = Fixture { dir, key, tsa };
+	let chain = Chain::open(fixture.root()).expect("chain");
+	let Entry::Accepted(mut two) = accepted(8) else {
+		unreachable!()
+	};
+	two.recipients = vec!["first8@example.net".into(), "second8@example.net".into()];
+	chain
+		.append_at(at(DAY, 1), Entry::Accepted(two))
+		.expect("accepted");
+	for (recipient, result, hour) in [
+		("first8@example.net", OutcomeKind::Delivered, 2),
+		("second8@example.net", OutcomeKind::Bounced, 3),
+	] {
+		let Entry::Outcome(mut outcome) = delivered(8) else {
+			unreachable!()
+		};
+		outcome.recipient = recipient.into();
+		outcome.result = result;
+		chain
+			.append_at(at(DAY, hour), Entry::Outcome(outcome))
+			.expect("outcome");
+	}
+	seal_closed_days(fixture.root(), &fixture.key, true, at(DAY + 1, 0)).expect("seal");
+	let paths = files(fixture.root(), Day(DAY));
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		fixture
+			.tsa
+			.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
+	fixture
+}
+
+#[test]
+fn a_message_with_one_recipient_delivered_and_one_bounced_is_not_all_delivered() {
+	let fixture = one_delivered_one_bounced();
+	let delivery = delivery_of(&fixture, 8);
+	assert_eq!((delivery.delivered, delivery.bounced), (1, 1));
+	assert_eq!(delivery.total(), 2);
+	assert!(
+		!delivery.all_delivered(),
+		"half the recipients were delivered, and that was called all"
+	);
+}
+
+#[test]
+fn a_bundle_that_does_not_verify_tells_nothing_of_delivery() {
+	let fixture = one_delivered_one_bounced();
+	let (_out, bundle) = export_of(&fixture, 8);
+	assert!(checked(&fixture, &bundle).passed());
+	// A file nothing vouches for: the check fails, and what it counted
+	// before failing is not a finding to read.
+	std::fs::write(bundle.join("records/stray.txt"), b"x").expect("stray");
+	let report = checked(&fixture, &bundle);
+	assert!(!report.passed());
+	assert!(report.delivery.is_none(), "{:?}", report.delivery);
+	assert!(
+		report
+			.notes
+			.iter()
+			.all(|note| !note.starts_with("delivery:") && !note.contains("every record")),
+		"{:?}",
+		report.notes
+	);
+}

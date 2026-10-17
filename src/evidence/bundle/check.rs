@@ -177,6 +177,17 @@ pub fn check_expecting(
 		"every file belongs to a verified day or an accepted record",
 		strays(dir, &vouched),
 	);
+	// What became of the recipients is told only of a bundle that verifies: a
+	// reader who takes `delivery` from a bundle that does not would read the
+	// records of something that was not shown to be what it says.
+	if !report.passed() {
+		report.delivery = None;
+		report.notes.retain(|note| {
+			!note.starts_with("delivery:")
+				&& !note.starts_with("the bundle holds every record")
+				&& !note.starts_with("the records are a selection")
+		});
+	}
 	report.notes.push(REVOCATION_NOTE.into());
 	Ok(report)
 }

@@ -486,3 +486,31 @@ fn the_text_of_a_check_does_not_call_a_bounce_a_delivery() {
 		"{said}"
 	);
 }
+
+#[test]
+fn a_bundle_that_fails_reports_nothing_of_delivery_in_json() {
+	let mut server = Server::new();
+	let key = key_of(&server);
+	let (_dir, delivered) = export(&server, 1);
+	let _ = &mut server;
+	// A file nothing vouches for.
+	std::fs::write(delivered.join("records/stray.txt"), b"x").expect("stray");
+	let action = EvidenceCli::Check {
+		bundle: delivered,
+		keys: vec![key],
+		message_id: None,
+		recipient: None,
+		from: None,
+		to: None,
+		anchors: vec![to_hex(&server.tsa.anchor)],
+		require_delivered: false,
+		json: true,
+	};
+	let mut out = Vec::new();
+	let code = run(Path::new("/nonexistent.toml"), action, now(), &mut out);
+	let report: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert_eq!(code, ExitCode::FAILURE, "{report}");
+	assert_eq!(report["passed"], false);
+	assert_eq!(report["all_delivered"], false);
+	assert!(report["delivery"].is_null(), "{report}");
+}
