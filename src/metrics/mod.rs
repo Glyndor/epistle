@@ -319,6 +319,12 @@ impl Metrics {
 		self.bayes_training_dropped.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count `jobs` lessons dropped at once.
+	pub fn bayes_training_dropped_by(&self, jobs: u64) {
+		self.bayes_training_dropped
+			.fetch_add(jobs, Ordering::Relaxed);
+	}
+
 	/// Count one ingested DMARC aggregate or TLS-RPT report.
 	pub fn report_ingested(&self, kind: crate::reports::Kind) {
 		let counter = match kind {

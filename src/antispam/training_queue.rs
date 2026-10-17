@@ -13,15 +13,18 @@
 //! skipped.
 //!
 //! Training is advisory. [`TrainingQueue::submit`] never waits: when the
-//! queue is full the job is dropped and counted in
+//! queue is full, or the account has already taught as much as
+//! [`LearnLimiter`] allows, the job is dropped and counted in
 //! `mail_bayes_training_dropped_total`, and the caller's reply is not
-//! delayed or failed.
+//! delayed or failed. The limit is per account, so one account cannot fill
+//! the queue and starve the others.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use super::learning::limiter::LearnLimiter;
 use super::trainer::BayesTrainerHandle;
 use crate::metrics::Metrics;
 use crate::storage::MessageCrypto;
@@ -61,6 +64,10 @@ pub(crate) fn seam_after(bytes: &[u8], at: usize) -> usize {
 	}
 	if cut - at > 31 { at } else { cut }
 }
+/// Jobs one command may queue. A MOVE of ten thousand messages teaches
+/// from the first of them and drops the rest, counted; the account's own
+/// corpus is the only thing that misses the lesson.
+pub const MAX_JOBS_PER_COMMAND: usize = 100;
 
 /// One message to train on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +85,7 @@ pub struct TrainingJob {
 pub struct TrainingQueue {
 	sender: mpsc::Sender<TrainingJob>,
 	metrics: Arc<Metrics>,
+	limiter: Arc<LearnLimiter>,
 }
 
 impl TrainingQueue {
@@ -86,7 +94,21 @@ impl TrainingQueue {
 	/// production choice.
 	pub fn bounded(capacity: usize, metrics: Arc<Metrics>) -> (Self, mpsc::Receiver<TrainingJob>) {
 		let (sender, receiver) = mpsc::channel(capacity);
-		(TrainingQueue { sender, metrics }, receiver)
+		let limiter = Arc::new(LearnLimiter::default());
+		(
+			TrainingQueue {
+				sender,
+				metrics,
+				limiter,
+			},
+			receiver,
+		)
+	}
+
+	/// This queue with `limiter` in place of the default per-account limits.
+	pub fn with_limiter(mut self, limiter: LearnLimiter) -> Self {
+		self.limiter = Arc::new(limiter);
+		self
 	}
 
 	/// Start the one worker of this process and return the queue that
@@ -102,8 +124,13 @@ impl TrainingQueue {
 	}
 
 	/// Queue `job` without waiting. Returns whether it was queued. A full
-	/// queue, or a worker that has gone away, drops the job and counts it.
+	/// queue, a worker that has gone away, or an account over its limits
+	/// drops the job and counts it.
 	pub fn submit(&self, job: TrainingJob) -> bool {
+		if !self.limiter.allow(&job.account, std::time::Instant::now()) {
+			self.metrics.bayes_training_dropped();
+			return false;
+		}
 		match self.sender.try_send(job) {
 			Ok(()) => true,
 			Err(_) => {
@@ -111,6 +138,15 @@ impl TrainingQueue {
 				false
 			}
 		}
+	}
+}
+
+impl TrainingQueue {
+	/// Count `jobs` lessons that a command did not queue because it went
+	/// over [`MAX_JOBS_PER_COMMAND`].
+	pub fn note_dropped(&self, jobs: usize) {
+		self.metrics
+			.bayes_training_dropped_by(u64::try_from(jobs).unwrap_or(u64::MAX));
 	}
 }
 
@@ -126,7 +162,9 @@ pub async fn run_worker(
 		let path = job.path.clone();
 		let window = tokio::task::spawn_blocking(move || read_window(&path, &crypto)).await;
 		match window {
-			Ok(Ok(text)) => trainer.train(&job.account, text, job.spam).await,
+			Ok(Ok(text)) => {
+				trainer.learn(&job.account, text, job.spam).await;
+			}
 			Ok(Err(error)) => {
 				tracing::debug!(
 					account = %crate::log_id::account(&job.account),
