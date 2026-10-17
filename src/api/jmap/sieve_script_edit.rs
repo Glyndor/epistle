@@ -1,16 +1,17 @@
 //! The per-object half of `SieveScript/set` (RFC 9661 section 2.4): what one
 //! `create` and one `update` entry mean, and the SetError each refusal is.
 //!
-//! The store applies every change under the account's lock; here only the
-//! shape of the request is checked, and the blob a script's content comes
-//! from is read from what the request uploaded.
+//! Every change is made through the [`Tx`] the whole call runs in, under the
+//! account's lock; here only the shape of the request is checked, and the
+//! blob a script's content comes from is read from what the request
+//! uploaded.
 
 use serde_json::{Map, Value, json};
 
 use super::sieve_blob;
 use super::sieve_content::{self, set_error};
 use super::uploads::Uploads;
-use crate::managesieve::store::{ScriptInfo, ScriptStore, StoreError, is_valid_name};
+use crate::managesieve::store::{ScriptInfo, StoreError, Tx, is_valid_name};
 
 /// How many generated names are tried before giving up: a name is eight hex
 /// digits, so a clash is rare, and so is a second one.
@@ -18,7 +19,6 @@ const NAME_ATTEMPTS: usize = 5;
 
 /// What one `/set` call works on.
 pub(super) struct Edit<'a> {
-	pub(super) store: &'a ScriptStore,
 	pub(super) account: &'a str,
 	pub(super) uploads: &'a Uploads,
 }
@@ -40,21 +40,17 @@ fn created_object(script: &ScriptInfo) -> Value {
 impl Edit<'_> {
 	/// The `alreadyExists` SetError for `name`, with the id of the script
 	/// that has it (RFC 9661 section 2.4).
-	fn already_exists(&self, name: &str) -> Value {
-		let existing = self
-			.store
-			.list()
-			.ok()
-			.and_then(|scripts| scripts.into_iter().find(|s| s.name == name));
+	fn already_exists(tx: &Tx<'_>, name: &str) -> Value {
+		let existing = tx.scripts().into_iter().find(|s| s.name == name);
 		match existing {
 			Some(script) => json!({"type": "alreadyExists", "existingId": script.id}),
 			None => json!({"type": "alreadyExists"}),
 		}
 	}
 
-	fn refusal(&self, error: &StoreError, name: Option<&str>) -> Value {
+	fn refusal(tx: &Tx<'_>, error: &StoreError, name: Option<&str>) -> Value {
 		match (error, name) {
-			(StoreError::AlreadyExists, Some(name)) => self.already_exists(name),
+			(StoreError::AlreadyExists, Some(name)) => Self::already_exists(tx, name),
 			_ => set_error(error),
 		}
 	}
@@ -79,7 +75,7 @@ impl Edit<'_> {
 
 	/// One `create` entry: a name (or none, and the server picks one) and
 	/// the blob with the content. `id` and `isActive` are the server's.
-	pub(super) fn create(&self, spec: &Value) -> Result<Value, Value> {
+	pub(super) fn create(&self, tx: &mut Tx<'_>, spec: &Value) -> Result<Value, Value> {
 		let Some(object) = spec.as_object() else {
 			return Err(json!({"type": "invalidProperties"}));
 		};
@@ -98,23 +94,20 @@ impl Edit<'_> {
 		};
 		let text = self.content(object.get("blobId").unwrap_or(&Value::Null))?;
 		let created = match name {
-			Some(name) => self.store.create(name, &text),
-			None => self.create_unnamed(&text),
+			Some(name) => tx.create(name, &text),
+			None => Self::create_unnamed(tx, &text),
 		};
 		created
 			.map(|script| created_object(&script))
-			.map_err(|error| self.refusal(&error, name))
+			.map_err(|error| Self::refusal(tx, &error, name))
 	}
 
 	/// Create a script under a name of the server's choosing.
-	fn create_unnamed(&self, text: &str) -> Result<ScriptInfo, StoreError> {
+	fn create_unnamed(tx: &mut Tx<'_>, text: &str) -> Result<ScriptInfo, StoreError> {
 		let mut last = StoreError::AlreadyExists;
 		for _ in 0..NAME_ATTEMPTS {
 			let unique = uuid::Uuid::now_v7().simple().to_string();
-			match self
-				.store
-				.create(&format!("script-{}", &unique[24..]), text)
-			{
+			match tx.create(&format!("script-{}", &unique[24..]), text) {
 				Err(StoreError::AlreadyExists) => last = StoreError::AlreadyExists,
 				outcome => return outcome,
 			}
@@ -125,7 +118,7 @@ impl Edit<'_> {
 	/// One `update` entry: a new `name`, a new `blobId`, or both. What the
 	/// server changed beyond the request is the result: a new content has a
 	/// new blob id.
-	pub(super) fn update(&self, id: &str, patch: &Value) -> Result<Value, Value> {
+	pub(super) fn update(&self, tx: &mut Tx<'_>, id: &str, patch: &Value) -> Result<Value, Value> {
 		let Some(object) = patch.as_object() else {
 			return Err(json!({"type": "invalidPatch"}));
 		};
@@ -145,10 +138,9 @@ impl Edit<'_> {
 			.get("blobId")
 			.map(|value| self.content(value))
 			.transpose()?;
-		let script = self
-			.store
+		let script = tx
 			.update(id, name, text.as_deref())
-			.map_err(|error| self.refusal(&error, name))?;
+			.map_err(|error| Self::refusal(tx, &error, name))?;
 		Ok(match text {
 			Some(_) => json!({"blobId": sieve_blob::blob_id(&script.id, script.rev)}),
 			None => Value::Null,

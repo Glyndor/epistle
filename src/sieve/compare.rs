@@ -68,8 +68,8 @@ enum Collation {
 impl Collation {
 	fn from_name(name: &str) -> Collation {
 		match name {
-			"i;octet" => Collation::Octet,
-			"i;ascii-numeric" => Collation::AsciiNumeric,
+			n if n == COMPARATORS[0] => Collation::Octet,
+			n if n == COMPARATORS[2] => Collation::AsciiNumeric,
 			_ => Collation::AsciiCasemap,
 		}
 	}

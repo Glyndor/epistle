@@ -213,7 +213,22 @@ async fn a_name_cannot_leave_the_script_directory() {
 		);
 	}
 	let after = tree(dir.path());
-	assert_eq!(before, after, "nothing was written anywhere");
+	// Only the account's own script directory and its lock appeared.
+	let new: Vec<&String> = after.iter().filter(|path| !before.contains(path)).collect();
+	let allowed = [
+		"accounts",
+		"accounts/ann",
+		"accounts/ann/sieve",
+		"accounts/ann/sieve/.lock",
+	];
+	assert!(
+		new.iter().all(|path| allowed.contains(&path.as_str())),
+		"something was written outside the script directory: {new:?}"
+	);
+	assert!(
+		before.iter().all(|path| after.contains(path)),
+		"nothing was removed"
+	);
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ use super::sieve_content::set_error;
 use super::sieve_script::{method_error, state_string, store_failure};
 use super::sieve_script_edit::Edit;
 use super::uploads::Uploads;
-use crate::managesieve::store::{ScriptStore, StoreError};
+use crate::managesieve::store::{StoreError, Tx};
 
 /// The parts of the response, as they are filled in.
 #[derive(Default)]
@@ -34,6 +34,19 @@ struct Outcome {
 }
 
 impl Outcome {
+	/// The id a request names: `#cid` is the script this call created under
+	/// that creation id, anything else is an id as it stands.
+	fn resolve(&self, key: &str) -> String {
+		match key.strip_prefix('#') {
+			Some(cid) => self
+				.creation_ids
+				.get(cid)
+				.cloned()
+				.unwrap_or_else(|| key.to_string()),
+			None => key.to_string(),
+		}
+	}
+
 	fn all_succeeded(&self) -> bool {
 		self.not_created.is_empty() && self.not_updated.is_empty() && self.not_destroyed.is_empty()
 	}
@@ -100,12 +113,16 @@ fn run(
 ) -> Result<Value, Value> {
 	let account = super::state::admitted_account(state, principal, args, call_id)?;
 	let store = sieve_blob::store(state.data_dir(), &account);
-	let old_state = state_string(store.state().map_err(|e| store_failure(&e, call_id))?);
-	if let Some(expected) = args.get("ifInState").filter(|value| !value.is_null())
-		&& expected.as_str() != Some(old_state.as_str())
-	{
-		return Err(method_error("stateMismatch", call_id));
-	}
+	// The state the caller expects, as the counter it names. A string that
+	// is no state this server minted is a state that is not the current one.
+	let expected = match args.get("ifInState") {
+		None | Some(Value::Null) => None,
+		Some(Value::String(text)) => Some(
+			text.parse::<u64>()
+				.map_err(|_| method_error("stateMismatch", call_id))?,
+		),
+		Some(_) => return Err(method_error("invalidArguments", call_id)),
+	};
 	let create = object_argument(args, "create", call_id)?;
 	let update = object_argument(args, "update", call_id)?;
 	let destroy: Vec<&str> = match args.get("destroy") {
@@ -129,53 +146,67 @@ fn run(
 	};
 
 	let edit = Edit {
-		store: &store,
 		account: &account,
 		uploads,
 	};
-	let mut out = Outcome::default();
-	for (cid, spec) in create.into_iter().flatten() {
-		match edit.create(spec) {
-			Ok(object) => {
-				if let Some(id) = object["id"].as_str() {
-					out.creation_ids.insert(cid.clone(), id.to_string());
+	// The whole call is one step under the account's lock: the state it
+	// expects is checked where it changes things, and nothing, not another
+	// protocol and not another call, moves between its parts.
+	let done = store.transact(expected, |tx| {
+		let old_state = tx.state();
+		let mut out = Outcome::default();
+		for (cid, spec) in create.into_iter().flatten() {
+			match edit.create(tx, spec) {
+				Ok(object) => {
+					if let Some(id) = object["id"].as_str() {
+						out.creation_ids.insert(cid.clone(), id.to_string());
+					}
+					out.created.insert(cid.clone(), object);
 				}
-				out.created.insert(cid.clone(), object);
-			}
-			Err(error) => {
-				out.not_created.insert(cid.clone(), error);
-			}
-		}
-	}
-	for (id, patch) in update.into_iter().flatten() {
-		match edit.update(id, patch) {
-			Ok(result) => {
-				out.updated.insert(id.clone(), result);
-			}
-			Err(error) => {
-				out.not_updated.insert(id.clone(), error);
+				Err(error) => {
+					out.not_created.insert(cid.clone(), error);
+				}
 			}
 		}
-	}
-	for id in destroy {
-		match store.destroy(id) {
-			Ok(()) => out.destroyed.push(json!(id)),
-			Err(error) => {
-				out.not_destroyed.insert(id.to_string(), set_error(&error));
+		for (key, patch) in update.into_iter().flatten() {
+			let id = out.resolve(key);
+			match edit.update(tx, &id, patch) {
+				Ok(result) => {
+					out.updated.insert(id, result);
+				}
+				Err(error) => {
+					out.not_updated.insert(key.clone(), error);
+				}
 			}
 		}
-	}
-	if out.all_succeeded() {
-		switch_active(&store, activate, deactivate, &mut out)
-			.map_err(|error| store_failure(&error, call_id))?;
-	}
-	let new_state = state_string(store.state().map_err(|e| store_failure(&e, call_id))?);
+		for key in destroy {
+			let id = out.resolve(key);
+			match tx.destroy(&id) {
+				Ok(()) => out.destroyed.push(json!(id)),
+				Err(error) => {
+					out.not_destroyed.insert(key.to_string(), set_error(&error));
+				}
+			}
+		}
+		let activated = if out.all_succeeded() {
+			switch_active(tx, activate, deactivate, &mut out)
+		} else {
+			Ok(())
+		};
+		(old_state, tx.state(), out, activated)
+	});
+	let (old_state, new_state, out, activated) = match done {
+		Ok(done) => done,
+		Err(StoreError::StateMismatch) => return Err(method_error("stateMismatch", call_id)),
+		Err(error) => return Err(store_failure(&error, call_id)),
+	};
+	activated.map_err(|error| store_failure(&error, call_id))?;
 	Ok(json!([
 		"SieveScript/set",
 		{
 			"accountId": account,
-			"oldState": old_state,
-			"newState": new_state,
+			"oldState": state_string(old_state),
+			"newState": state_string(new_state),
 			"created": out.created,
 			"notCreated": out.not_created,
 			"updated": out.updated,
@@ -187,10 +218,13 @@ fn run(
 	]))
 }
 
-/// `onSuccessDeactivateScript`, then `onSuccessActivateScript`. An id that
-/// names no script is ignored and the active script stays as it is.
+/// `onSuccessDeactivateScript`, then `onSuccessActivateScript`, as one change:
+/// the script that ends up active is the one named, else none when asked to
+/// deactivate, else the one that was. An id that names no script is ignored.
+/// The change is made once, so delivery never sees a moment with no filter
+/// between the one script and the other.
 fn switch_active(
-	store: &ScriptStore,
+	tx: &mut Tx<'_>,
 	activate: Option<&str>,
 	deactivate: bool,
 	out: &mut Outcome,
@@ -198,31 +232,25 @@ fn switch_active(
 	if activate.is_none() && !deactivate {
 		return Ok(());
 	}
-	let scripts = store.list()?;
-	let mut active = scripts.iter().find(|script| script.active);
-	if deactivate && let Some(current) = active.take() {
-		store.set_active(None)?;
-		out.report_active(&current.id, false);
-	}
-	let target = activate.and_then(|id| match id.strip_prefix('#') {
-		Some(cid) => out.creation_ids.get(cid).cloned(),
-		None => Some(id.to_string()),
-	});
-	let Some(target) = target.and_then(|id| scripts.iter().find(|script| script.id == id)) else {
-		return Ok(());
+	let scripts = tx.scripts();
+	let current = scripts.iter().find(|script| script.active);
+	let target = activate
+		.map(|id| out.resolve(id))
+		.and_then(|id| scripts.iter().find(|script| script.id == id));
+	let after = match (target, deactivate) {
+		(Some(target), _) => Some(target),
+		(None, true) => None,
+		(None, false) => current,
 	};
-	if active.is_some_and(|current| current.id == target.id) {
+	if after.map(|script| &script.id) == current.map(|script| &script.id) {
 		return Ok(());
 	}
-	match store.set_active(Some(&target.name)) {
-		Ok(()) => {}
-		// Renamed or deleted since it was listed: it is no script, so ignored.
-		Err(StoreError::NoSuchScript) => return Ok(()),
-		Err(error) => return Err(error),
-	}
-	if let Some(previous) = active {
+	tx.set_active(after.map(|script| script.id.as_str()))?;
+	if let Some(previous) = current {
 		out.report_active(&previous.id, false);
 	}
-	out.report_active(&target.id, true);
+	if let Some(now) = after {
+		out.report_active(&now.id, true);
+	}
 	Ok(())
 }

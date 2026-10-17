@@ -76,6 +76,8 @@ pub enum StoreError {
 	TooLarge,
 	/// The account already holds [`MAX_SCRIPTS`] scripts.
 	TooManyScripts,
+	/// The store is not at the state the caller expected: it changed since.
+	StateMismatch,
 	/// An underlying filesystem error.
 	Io,
 }
@@ -314,6 +316,14 @@ impl ScriptStore {
 	/// (RFC 5804 §2.8: SETACTIVE with the empty string).
 	pub fn set_active(&self, name: Option<&str>) -> Result<(), StoreError> {
 		let mut txn = self.write_txn()?;
+		let outcome = self.set_active_in(&mut txn, name);
+		txn.finish(outcome)
+	}
+
+	/// Make `name` the active script inside `txn`, or deactivate all. Moving
+	/// from one script to another writes the new live filter over the old one
+	/// and then the marker: delivery finds a filter at every moment.
+	fn set_active_in(&self, txn: &mut Txn, name: Option<&str>) -> Result<(), StoreError> {
 		let was = self.active_name();
 		let outcome = match name {
 			Some(name) => self.get(name).and_then(|content| {
@@ -328,7 +338,7 @@ impl ScriptStore {
 			}
 		};
 		txn.changed |= outcome.is_ok() && was.as_deref() != name;
-		txn.finish(outcome)
+		outcome
 	}
 
 	/// Write the active script's content to the live `filter.sieve` path.
@@ -500,6 +510,7 @@ impl Txn {
 
 #[path = "store_by_id.rs"]
 mod by_id;
+pub use by_id::Tx;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]
@@ -524,3 +535,7 @@ mod by_id_tests;
 #[cfg(test)]
 #[path = "store_tests_names.rs"]
 mod names_tests;
+
+#[cfg(test)]
+#[path = "store_tests_tx.rs"]
+mod tx_tests;

@@ -329,7 +329,9 @@ fn store_error(error: StoreError) -> Response {
 		StoreError::TooManyScripts => {
 			Response::NoCode("QUOTA/MAXSCRIPTS", "Too many scripts.".to_string())
 		}
-		StoreError::Io => Response::No(Some("Storage error.".to_string())),
+		StoreError::Io | StoreError::StateMismatch => {
+			Response::No(Some("Storage error.".to_string()))
+		}
 	}
 }
 

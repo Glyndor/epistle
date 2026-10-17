@@ -64,6 +64,7 @@ pub(super) fn set_error(error: &StoreError) -> Value {
 		}
 		StoreError::TooLarge => json!({"type": "tooLarge"}),
 		StoreError::TooManyScripts => json!({"type": "overQuota"}),
+		StoreError::StateMismatch => json!({"type": "stateMismatch"}),
 		StoreError::Io => json!({"type": "serverFail"}),
 	}
 }

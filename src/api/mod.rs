@@ -403,6 +403,10 @@ mod jmap_tests_sieve_authz;
 mod jmap_tests_sieve_vacation;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_atomic.rs"]
+mod jmap_tests_sieve_atomic;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 
