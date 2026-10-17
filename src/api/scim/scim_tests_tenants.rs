@@ -15,16 +15,16 @@ use crate::smtp::auth::tests::hash;
 use crate::test_fixtures as fixtures;
 
 /// Reach of the key issued to tenant A (`--domain a.test`).
-fn tenant_key() -> &'static str {
+pub(super) fn tenant_key() -> &'static str {
 	fixtures::api_key()
 }
 
 /// A SCIM key with no domains: sees every tenant.
-fn unconfined_key() -> &'static str {
+pub(super) fn unconfined_key() -> &'static str {
 	fixtures::second_password()
 }
 
-fn account(name: &str, addresses: &[&str]) -> DynamicAccount {
+pub(super) fn account(name: &str, addresses: &[&str]) -> DynamicAccount {
 	DynamicAccount {
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
@@ -34,7 +34,7 @@ fn account(name: &str, addresses: &[&str]) -> DynamicAccount {
 }
 
 /// `a.test` is capped at three accounts, `b.test` is not.
-fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
+pub(super) fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let domains = vec!["a.test".to_string(), "b.test".to_string()];
 	let store = Arc::new(
@@ -93,7 +93,7 @@ fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 	(dir, state, store)
 }
 
-async fn call(
+pub(super) async fn call(
 	app: &Router,
 	method: &str,
 	path: &str,
@@ -103,7 +103,7 @@ async fn call(
 	send(app, method, path, Some(key), body).await
 }
 
-fn user_names(list: &serde_json::Value) -> Vec<String> {
+pub(super) fn user_names(list: &serde_json::Value) -> Vec<String> {
 	let mut names: Vec<String> = list["Resources"]
 		.as_array()
 		.expect("resources")

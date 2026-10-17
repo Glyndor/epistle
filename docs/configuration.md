@@ -339,7 +339,7 @@ SCIM obeys the same confinement. A key with `scim` and `domains` lists, reads,
 creates, replaces, patches (including `active` and `password`) and deletes only
 the accounts that sit entirely inside its domains. An account outside them
 answers `404` on every `/scim/v2/Users` route, and a `POST` or `PUT` that names
-an address outside them is refused with `400`. Before 0.12.2 SCIM ignored
+an address outside them is refused with `400`. A `userName` that is malformed or already held by an account outside the key's domains answers the same `400` (`userName is not available`), so a tenant cannot probe the other tenants' names; a name held inside its own domains still answers `409`. Moving an account to a domain of another tenant at its `max_accounts` cap answers `409`. Before 0.12.2 SCIM ignored
 `domains`, so a key meant for one tenant reached all of them: if you issued
 `scim` keys with `--domain`, rotate them and review the accounts they changed.
 

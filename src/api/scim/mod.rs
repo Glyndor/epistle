@@ -80,3 +80,7 @@ mod tests_display_name;
 #[cfg(test)]
 #[path = "scim_tests_tenants.rs"]
 mod tests_tenants;
+
+#[cfg(test)]
+#[path = "scim_tests_tenants_b.rs"]
+mod tests_tenants_b;

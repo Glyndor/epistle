@@ -179,7 +179,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     the accounts that sit entirely inside its domains (the others answer 404),
     and a user created or replaced with an address outside them is refused
     with 400. `POST /scim/v2/Users` also stops at the tenant's `max_accounts`
-    with 409, which SCIM used to skip. This was present in 0.12.0 and 0.12.1:
+    with 409, which SCIM used to skip, and so does a `PUT` that moves an
+    account into a tenant at its cap. A `userName` already held by another
+    tenant answers like an unusable one. The `startIndex` query parameter
+    is honoured now (only `start_index` was). This was present in 0.12.0 and 0.12.1:
     if you issued `scim` keys with `--domain`, rotate them.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000

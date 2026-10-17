@@ -106,6 +106,29 @@ fn require_addresses_in_scope(scope: &DomainScope, addresses: &[String]) -> Resu
 	}
 }
 
+/// For a confined key, a `userName` that cannot be used answers one way
+/// whether it is malformed or already held by an account outside the key's
+/// domains. Account names are one namespace for the whole server, so without
+/// this the "already exists" answer would let a tenant probe which names
+/// the others use. A name held inside the scope still answers `409`, which the
+/// key may know. An unconfined key keeps the precise errors.
+fn require_name_available(
+	state: &ApiState,
+	scope: &DomainScope,
+	name: &str,
+) -> Result<(), ScimError> {
+	if matches!(scope, DomainScope::All) {
+		return Ok(());
+	}
+	let held_outside = state.accounts().iter().any(|account| {
+		account.name == name && !scope.admits_account(account.addresses.iter().map(String::as_str))
+	});
+	if held_outside || crate::directory_store::validate_name(name).is_err() {
+		return Err(ScimError::invalid("userName is not available"));
+	}
+	Ok(())
+}
+
 /// Map `StoreError` from a write path into the right SCIM error. `409` for
 /// duplicates (the SCIM spec's "userName exists already" case), `404` for
 /// unknown targets, `400` for invalid input, `500` for everything else.
@@ -197,7 +220,7 @@ pub struct ListQuery {
 	#[serde(default)]
 	filter: Option<String>,
 	/// 1-based index of the first result (default 1).
-	#[serde(default)]
+	#[serde(default, alias = "startIndex")]
 	start_index: Option<u64>,
 	/// Maximum number of results to return (default 100, capped at 200
 	/// to match the ServiceProviderConfig declaration).
@@ -295,7 +318,9 @@ pub async fn create_user(
 	// password, so a caller cannot use the password rejection to probe which
 	// addresses another tenant already has.
 	let addresses = resolve_addresses(&body.emails, &[])?;
-	require_addresses_in_scope(&state.domain_scope(&auth), &addresses)?;
+	let scope = state.domain_scope(&auth);
+	require_addresses_in_scope(&scope, &addresses)?;
+	require_name_available(&state, &scope, &name)?;
 	state
 		.tenant_limits()
 		.check_account_creation(state.store(), &addresses)
@@ -392,6 +417,10 @@ pub async fn put_user(
 	// replace leaves the password as it was.
 	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
 	require_addresses_in_scope(&scope, &addresses)?;
+	state
+		.tenant_limits()
+		.check_account_move(state.store(), &existing.addresses, &addresses)
+		.map_err(ScimError::conflict)?;
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
 		let hash = hash_password(plain, state.store())?;
