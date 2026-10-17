@@ -581,14 +581,23 @@ it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
 `disable` switches a domain off without removing it: the name goes into
 `disabled_domains`, and after the restart mail for it is rejected at RCPT
 exactly like mail for an unknown user (a permanent 550, so senders get a
-bounce, not a retry), and no account may send as an address in it.
-Accounts, mailboxes, aliases, DNS records and DKIM keys stay, and the
-mailboxes stay on disk. `masked add` refuses a disabled domain (exit 2), and `account add` and `alias add` create an address there with a warning on stderr that it receives and sends nothing until the domain is enabled. It asks first (see
+bounce, not a retry), and no account may send as an address in it (SMTP
+submission, the API and JMAP all refuse). Accounts, mailboxes, aliases, DNS
+records and DKIM keys stay. A mailbox is still reachable by the account's own
+name over IMAP and POP3, but logging in with an address in the disabled domain
+fails, because that address no longer resolves. Mail already in the outbound
+queue with a sender in the domain is accepted mail and is still delivered; the
+command says how many messages that is, and `queue remove` drops one.
+Autoconfig and autodiscover stop answering for the domain, and
+`GET /api/v1/domains` names it under `disabled`. `masked add` refuses a
+disabled domain (exit 2), and `account add` and `alias add` create an address
+there with a warning on stderr that it receives and sends nothing until the
+domain is enabled. `disable` asks first (see
 [Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
 exit 2, and refuses to switch off the last enabled domain of a server that
-has listeners (exit 3, a rule of the server). `enable` takes the name out of `disabled_domains` again. Both
-report `result` `unchanged` when the domain is already in that state, and the
-JSON result carries `domain` and `enabled`.
+has listeners (exit 3, a rule of the server). `enable` takes the name out of
+`disabled_domains` again. Both report `result` `unchanged` when the domain is
+already in that state, and the JSON result carries `domain` and `enabled`.
 
 `set` writes the per-domain default storage quota (`domain_quotas`) and the
 per-domain submission rate in messages per minute

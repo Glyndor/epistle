@@ -25,7 +25,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     DKIM keys stay. `domain list` and `domain show` report `enabled`. A disabled
     domain gets no autoconfig/autodiscover document, `GET /api/v1/domains` names
     it under `disabled`, `masked add` refuses it and `account add`/`alias add`
-    warn about it.
+    warn about it. `domain disable` says how many queued messages still have a sender in the
+    domain (they are delivered), and the docs state that a login with an address in
+    the disabled domain fails.
   * CLI: `epistle domain set` writes the storage quota and the submission
     rate of one domain (the overrides `limits set --domain` already wrote),
     and `domain show` prints them.

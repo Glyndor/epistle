@@ -109,7 +109,30 @@ fn switch(
 		&mut out,
 		&mut err,
 	) {
-		Ok(code) => Outcome::Code(code),
+		Ok(code) => {
+			// Mail already accepted for sending is not dropped by switching
+			// the domain off; say how much of it there is.
+			if !enabled && !dry_run && !already {
+				match state::queued_from(config, domain) {
+					Some(0) | None => {}
+					Some(1) => super::style::warn_to(
+						&mut err,
+						format_args!(
+							"1 queued message has a sender in {domain} and is still delivered; \
+							 `epistle queue remove` drops one"
+						),
+					),
+					Some(count) => super::style::warn_to(
+						&mut err,
+						format_args!(
+							"{count} queued messages have a sender in {domain} and are still \
+							 delivered; `epistle queue remove` drops one"
+						),
+					),
+				}
+			}
+			Outcome::Code(code)
+		}
 		Err(ResourceError::Refusal(message)) => Outcome::Refusal(message),
 		Err(ResourceError::Failure(message)) => Outcome::Error(message),
 	}

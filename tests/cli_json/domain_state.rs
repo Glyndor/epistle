@@ -214,3 +214,61 @@ fn the_text_list_marks_a_disabled_domain() {
 		.expect("row");
 	assert!(!other.contains("disabled"), "{text}");
 }
+
+fn queue_from(env: &Env, sender: &str) {
+	epistle::storage::FsSpool::open(&env.data_dir())
+		.expect("spool")
+		.store(
+			&epistle::smtp::session::AcceptedMessage {
+				reverse_path: sender.into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				..Default::default()
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
+		.expect("store");
+}
+
+#[test]
+fn disabling_says_how_much_queued_mail_still_goes_out_from_the_domain() {
+	let env = with_second_domain();
+	queue_from(&env, "alice@example.net");
+	queue_from(&env, "Carol@Example.NET");
+	queue_from(&env, "dave@example.org");
+	let output = epistle(
+		&[
+			"domain",
+			"--config",
+			&env.config,
+			"disable",
+			"example.net",
+			"--yes",
+			"--json",
+		],
+		b"",
+	);
+	assert_eq!(output.status.code(), Some(0));
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("2 queued messages have a sender in example.net and are still delivered"),
+		"{stderr}"
+	);
+	// Nothing to say when nothing is queued from the domain.
+	let quiet = with_second_domain();
+	queue_from(&quiet, "dave@example.org");
+	let output = epistle(
+		&[
+			"domain",
+			"--config",
+			&quiet.config,
+			"disable",
+			"example.net",
+			"--yes",
+			"--json",
+		],
+		b"",
+	);
+	assert!(!String::from_utf8_lossy(&output.stderr).contains("queued"));
+}
