@@ -10,11 +10,11 @@ use crate::cli::resource::ResourceError;
 use crate::config::Config;
 
 use super::domain_writers::{add_commit, alias_commit, commit, remove_commit};
-use super::state;
 use super::{
 	DomainAliasSubcommand, DomainCli, add_alias_map, add_domain, list, open, remove_alias_map,
 	remove_domain, show,
 };
+use super::{set, state};
 
 /// The discriminated result of [`execute`]. Returning a structured
 /// outcome (rather than `Result<ExitCode, String>`) lets the refusal
@@ -182,6 +182,45 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 					ResourceError::Refusal(message) => Outcome::Refusal(message),
 					ResourceError::Failure(message) => Outcome::Error(message),
 				},
+			}
+		}
+		DomainCli::Set {
+			domain,
+			quota,
+			no_quota,
+			submission_rate,
+			no_submission_rate,
+		} => {
+			if !known_domain(&config, &domain) {
+				return refused(format!("domain {domain} is not configured"));
+			}
+			let change = match set::Change::parse(
+				(quota.as_deref(), no_quota),
+				(submission_rate.as_deref(), no_submission_rate),
+			) {
+				Ok(change) => change,
+				Err(error) => return refused(error),
+			};
+			let domain = domain.trim().to_ascii_lowercase();
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = change.apply(&mut document, &domain) {
+				return Outcome::Error(error);
+			}
+			let mut out = std::io::stdout().lock();
+			let mut err = super::style::stderr();
+			match commit(
+				document,
+				set::commit(&domain, &change),
+				(dry_run, json),
+				&mut out,
+				&mut err,
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(ResourceError::Refusal(message)) => Outcome::Refusal(message),
+				Err(ResourceError::Failure(message)) => Outcome::Error(message),
 			}
 		}
 		DomainCli::Disable { domain, yes } => {

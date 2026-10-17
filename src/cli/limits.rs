@@ -16,6 +16,23 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
+/// The configuration map that holds the per-domain override of `key`, if
+/// the key can be overridden per domain.
+pub(super) fn domain_map(key: Key) -> Option<&'static str> {
+	match key {
+		Key::Quota => Some("domain_quotas"),
+		Key::SubmissionRate => Some("domain_submission_limits"),
+		_ => None,
+	}
+}
+
+/// Parse the value of a per-domain override of `key` the way `limits set`
+/// does, naming the limit in the error.
+pub(super) fn parse_override(key: Key, input: &str) -> Result<u64, String> {
+	values::parse_value(input, key.unit(), key.max())
+		.map_err(|error| format!("{}: {error}", key.name()))
+}
+
 fn edit_document(
 	path: &Path,
 	key: Key,
@@ -57,11 +74,9 @@ fn edit_document(
 		(_, Some(_), _) => {
 			return Err("--tenant requires submission-rate".into());
 		}
-		(Some(_), None, Key::Quota) => Some("domain_quotas"),
-		(Some(_), None, Key::SubmissionRate) => Some("domain_submission_limits"),
-		(Some(_), None, _) => {
-			return Err("--domain is supported only for quota and submission-rate".into());
-		}
+		(Some(_), None, _) => Some(
+			domain_map(key).ok_or("--domain is supported only for quota and submission-rate")?,
+		),
 		(None, None, _) => None,
 	};
 	let mut document = super::config_edit::ConfigDocument::open(path)?;

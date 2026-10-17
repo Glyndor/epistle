@@ -39,7 +39,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `add`, `remove` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
-| `domain` | `list`, `show`, `add`, `remove`, `disable`, `enable`, `alias add\|remove` | |
+| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
@@ -536,6 +536,7 @@ epistle domain add new.example.org --dry-run
 epistle domain remove old.example.org [--yes|-y]
 epistle domain disable example.net [--yes|-y] [--dry-run]
 epistle domain enable example.net [--dry-run]
+epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -558,6 +559,17 @@ exit 2, and refuses to switch off the last enabled domain of a server that
 has listeners. `enable` takes the name out of `disabled_domains` again. Both
 report `result` `unchanged` when the domain is already in that state, and the
 JSON result carries `domain` and `enabled`.
+
+`set` writes the per-domain default storage quota (`domain_quotas`) and the
+per-domain submission rate in messages per minute
+(`domain_submission_limits`), the same overrides `limits set quota --domain`
+and `limits set submission-rate --domain` write and `limits show` lists. Name
+at least one of `--quota`, `--no-quota`, `--submission-rate`,
+`--no-submission-rate`; a flag left out keeps its value, and `--no-…` removes
+the override. A zero rate is refused (it would lift the limit; use
+`--no-submission-rate`), and so is an unknown domain. The JSON result carries
+`domain` and the overrides it touched (`quota`, `submission_rate`; `null`
+once removed). `show` prints both overrides.
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator

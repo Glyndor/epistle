@@ -85,8 +85,10 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 				let _ = commit_remove_full(document, &domain, &mut out, &mut err_buf);
 			}
 		}
-		DomainCli::Disable { .. } | DomainCli::Enable { .. } => {
-			unreachable!("the switch is covered end to end in tests/cli_json/domain_state.rs")
+		DomainCli::Set { .. } | DomainCli::Disable { .. } | DomainCli::Enable { .. } => {
+			unreachable!(
+				"these are covered end to end in tests/cli_json/domain_state.rs and domain_set.rs"
+			)
 		}
 		DomainCli::Alias(args) => match args.action {
 			DomainAliasSubcommand::Add { alias, target } => {

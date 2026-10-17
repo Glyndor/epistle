@@ -23,6 +23,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     switched-off domains; mail for one is rejected like mail for an unknown
     user and nobody may send as an address in it. Accounts, DNS records and
     DKIM keys stay. `domain list` and `domain show` report `enabled`.
+  * CLI: `epistle domain set` writes the storage quota and the submission
+    rate of one domain (the overrides `limits set --domain` already wrote),
+    and `domain show` prints them.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

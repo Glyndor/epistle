@@ -174,3 +174,20 @@ fn the_last_enabled_domain_cannot_be_disabled_while_the_server_listens() {
 	);
 	assert_eq!(text(&env), before);
 }
+
+#[test]
+fn removing_a_disabled_domain_drops_it_from_the_list_too() {
+	let env = with_second_domain();
+	assert_eq!(run(&env.config, &["disable", "example.net", "--yes"]).0, 0);
+	let (code, value) = run(&env.config, &["remove", "example.net", "--yes"]);
+	assert_eq!(
+		(code, value["result"].as_str()),
+		(0, Some("saved")),
+		"{value}"
+	);
+	assert!(
+		!text(&env).contains("example.net"),
+		"example.net is still in the file:\n{}",
+		text(&env)
+	);
+}
