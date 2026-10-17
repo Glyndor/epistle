@@ -1601,6 +1601,88 @@ action is ignored, including outside the JMAP date window, when no reply
 is sent at all. With the JMAP setting disabled, the Sieve action answers
 as before.
 
+## JMAP Sieve scripts
+
+The JMAP session advertises `urn:ietf:params:jmap:sieve` (RFC 9661). Its
+session value names the implementation and version. Each account's value
+carries the limits below and the extension list, and the Sieve account is a
+primary account. The methods are `SieveScript/get`, `SieveScript/query`,
+`SieveScript/set` and `SieveScript/validate`. `/get`, `/query` and
+`/validate` need the `read` scope and `/set` the `write` scope; the account
+check is the one every JMAP method uses. There is no `SieveScript/changes`
+(the RFC defines none): a client re-reads with `/get`, which an account can
+always answer in full because it holds at most 50 scripts.
+
+**One store, two protocols.** JMAP and ManageSieve (RFC 5804) read and write
+the same scripts under `<data_dir>/accounts/<account>/sieve/`, with the same
+checks, so a script written by either is listed, valid and active in the
+other. Each script has an id of 32 hex digits that survives a rewrite and a
+rename through either protocol. `state` (and `queryState`) is a counter that
+moves on every change by either protocol and at no other time, so it can be
+used as `ifInState`. Every operation runs under a lock per account.
+
+| Limit | Value | Advertised as |
+|---|---|---|
+| Script size | 1 MiB (1048576 octets), also the ManageSieve literal limit | `maxSizeScript` |
+| Scripts per account | 50 | `maxNumberScripts` |
+| Script name | 128 characters and 200 octets, no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\` | `maxSizeScriptName` (200) |
+| `redirect` actions per run of a script | 4, each address once | `maxNumberRedirects` |
+| `sieveExtensions` | `fileinto envelope vacation imap4flags relational variables reject ereject copy body date mailbox comparator-i;ascii-numeric`, the list ManageSieve puts in `SIEVE` | `sieveExtensions` |
+
+`notificationMethods` and `externalLists` are `null`: `enotify` and
+`extlists` are not run. `maxSizeScriptName` is 200 and not the 512 octets
+RFC 9661 asks for, because a script name is a file name and 200 octets is
+what fits next to the staging file of an atomic write.
+
+**Content is a blob.** A client uploads the script (`POST
+/jmap/upload/{accountId}`) and names the blob in `blobId` on `create` or
+`update`. A script's own `blobId` is `sieve-<id>-<revision>` and the
+download URL serves that version as `application/sieve`. A script rewritten
+since is a new blob id and the old one is a 404. `Blob/upload` and
+`Blob/get` (RFC 9404) are not implemented.
+
+**Checks, the same for `/set`, `/validate`, PUTSCRIPT and CHECKSCRIPT.**
+UTF-8, not empty, at most 1 MiB, valid Sieve (at most 64 levels of blocks,
+test lists and `not` chains), and `require` only of the extensions listed
+above. A refusal is `invalidSieve` with a description that names the line
+and the kind of mistake (`line 3: expected '{'`, `extension "enotify" is not
+supported`) and never repeats the script. `/validate` answers `error: null`
+or that SetError, `tooLarge` or a `blobNotFound` method error, and stores
+nothing.
+
+**`/set`.** `create` takes `name` (or none, and the server picks
+`script-<8 hex>`) and `blobId`; `id` and `isActive` are the server's and
+are `invalidProperties` if sent. `update` takes `name`, `blobId` or both and
+changes nothing if either is refused. SetErrors: `alreadyExists` with the
+`existingId` (a name is never overwritten), `tooLarge`, `overQuota` (the
+script count), `invalidSieve`, `blobNotFound`, `invalidProperties` with the
+property names, `invalidPatch`, `notFound`, and `sieveIsActive` for the
+active script. `ifInState` mismatch is `stateMismatch`.
+
+Exactly one script is active. `onSuccessActivateScript` (an id, or `#cid`
+for a script the same call creates) and `onSuccessDeactivateScript` run last
+and only if every create, update and destroy succeeded; deactivation goes
+first, activating deactivates the script that was active, and both are
+reported as `isActive` in `created` or `updated`. An id that names no
+script is ignored. Activating copies the script to
+`<data_dir>/accounts/<account>/filter.sieve`, which delivery reads, and
+deactivating removes it. The active script cannot be destroyed: deactivate
+it in a call of its own first.
+
+**Vacation.** The JMAP `VacationResponse` is not a Sieve script (it lives
+in `.vacation.json`), so a script cannot be confused with it. Both can
+exist: while the `VacationResponse` is enabled it is the account's vacation
+and the `vacation` action of the active script is ignored, including outside
+its date window; with it disabled the script's `vacation` answers, under the
+same rules as in the section above.
+
+**Hostile scripts.** A script is text its owner wrote and is treated as such.
+The parser is bounded in depth and the check is linear in the script. A
+`redirect` is forwarded at most 4 times per message, to an address once, and
+only if the strict address parser accepts the target (a target is written
+into an `RCPT TO` line of the outbound client, so a line break in it would
+have been an SMTP command). Auto-replies keep the rules of the section above.
+
 ## Example
 
 ```toml

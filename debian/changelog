@@ -375,6 +375,24 @@ epistle (0.12.1) unstable; urgency=medium
     alone and never written to, a wildcard hidden by a delegation does not
     block the domain's wildcard, and `--undo` leaves a record in a name
     delegated since. See docs/dns.md.
+  * JMAP: Sieve scripts (RFC 9661). The session advertises
+    `urn:ietf:params:jmap:sieve`, and `SieveScript/get`, `/query`, `/set` and
+    `/validate` manage the same scripts ManageSieve does: a script written
+    over either is listed, valid and active in the other, with an id that
+    survives a rename. Exactly one script is active, switched with
+    `onSuccessActivateScript` and `onSuccessDeactivateScript`. The limits
+    apply to both protocols: 1 MiB per script, 50 scripts, names of 128
+    characters and 200 octets, and a `require` of an extension the
+    interpreter does not run is refused (ManageSieve answers
+    `NO (QUOTA/MAXSIZE)` and `NO (QUOTA/MAXSCRIPTS)`, and HAVESPACE checks
+    them). A refusal names the line and never repeats the script. See
+    docs/configuration.md.
+  * Sieve: a script no longer nests past 64 levels with `not`
+    (a chain of about 200000 overflowed the stack and aborted the server),
+    forwards a message to more than 4 addresses, or to one address twice, and
+    a `redirect` target must be a single valid address (a line break in it
+    was written into the outbound `RCPT TO` command). Scripts run by delivery
+    that relied on more than 4 redirects forward to the first 4.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 
