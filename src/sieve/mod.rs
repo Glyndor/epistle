@@ -41,6 +41,9 @@ mod interp_tests;
 #[path = "interp_tests_fileinto.rs"]
 mod interp_tests_fileinto;
 #[cfg(test)]
+#[path = "interp_tests_headers.rs"]
+mod interp_tests_headers;
+#[cfg(test)]
 #[path = "interp_tests_limits.rs"]
 mod interp_tests_limits;
 #[cfg(test)]

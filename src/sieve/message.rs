@@ -5,6 +5,10 @@
 /// SMTP envelope (for the `envelope` test).
 pub struct Message {
 	headers: Vec<(String, String)>,
+	/// Where each header name (lower case) occurs in `headers`, in order,
+	/// built once so that a lookup costs what it finds and not a pass over
+	/// every header: a message may carry millions of them.
+	index: std::collections::HashMap<String, Vec<u32>>,
 	pub(super) size: usize,
 	pub(super) body: String,
 	pub(super) envelope_from: Option<String>,
@@ -54,8 +58,17 @@ impl Message {
 		if let Some(buffer) = current.take() {
 			push_header(&mut headers, &buffer);
 		}
+		let mut index: std::collections::HashMap<String, Vec<u32>> =
+			std::collections::HashMap::new();
+		for (position, (name, _)) in headers.iter().enumerate() {
+			index
+				.entry(name.to_ascii_lowercase())
+				.or_default()
+				.push(u32::try_from(position).unwrap_or(u32::MAX));
+		}
 		Message {
 			headers,
+			index,
 			size: raw.len(),
 			body,
 			envelope_from: None,
@@ -89,12 +102,25 @@ impl Message {
 		self
 	}
 
-	pub(super) fn header_values(&self, name: &str) -> Vec<&str> {
-		self.headers
+	/// How many headers are called `name` (ignoring case).
+	pub(super) fn header_count(&self, name: &str) -> usize {
+		self.positions(name).len()
+	}
+
+	/// The values of the headers called `name` (ignoring case), in order.
+	pub(super) fn header_values<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> {
+		self.positions(name)
 			.iter()
-			.filter(|(header, _)| header.eq_ignore_ascii_case(name))
-			.map(|(_, value)| value.as_str())
-			.collect()
+			.map(|position| self.headers[*position as usize].1.as_str())
+	}
+
+	fn positions(&self, name: &str) -> &[u32] {
+		let found = if name.bytes().any(|b| b.is_ascii_uppercase()) {
+			self.index.get(name.to_ascii_lowercase().as_str())
+		} else {
+			self.index.get(name)
+		};
+		found.map_or(&[], Vec::as_slice)
 	}
 }
 

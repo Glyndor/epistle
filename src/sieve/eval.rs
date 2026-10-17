@@ -7,6 +7,11 @@ use super::env::Env;
 use super::interp::{has_tag, strings};
 use super::message::Message;
 
+/// What looking up a header by name costs a run: the name, and a minimum.
+fn lookup_cost(name: &str) -> u64 {
+	64 + name.len() as u64
+}
+
 pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	if !vars.step() {
 		return false;
@@ -22,14 +27,14 @@ pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool 
 		"anyof" => test.children.iter().any(|c| eval_test(c, message, vars)),
 		"exists" => strings(&test.args)
 			.iter()
-			.all(|name| !message.header_values(name).is_empty()),
+			.all(|name| vars.charge(lookup_cost(name)) && message.header_count(name) > 0),
 		"header" => header_test(test, message, vars),
 		"address" => address_test(test, message, vars),
 		"envelope" => envelope_test(test, message, vars),
 		"body" => body_test(test, message, vars),
 		"size" => size_test(test, message),
-		"date" => date_test(test, message),
-		"currentdate" => currentdate_test(test, message),
+		"date" => date_test(test, message, vars),
+		"currentdate" => currentdate_test(test, message, vars),
 		"mailboxexists" => mailboxexists_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
@@ -63,16 +68,24 @@ fn mailbox_exists(name: &str, mailboxes: &[String]) -> bool {
 
 /// `date [match-type] [comparator] <header-name> <date-part> <key-list>`
 /// (RFC 5260).
-fn date_test(test: &Test, message: &Message) -> bool {
+fn date_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let strings = compare::positional_strings(&test.args);
 	if strings.len() < 3 {
 		return false;
 	}
 	let (header, part, keys) = (&strings[0], &strings[1], &strings[2..]);
+	if !vars.charge(lookup_cost(header)) {
+		return false;
+	}
 	for value in message.header_values(header) {
+		// The value is read to find its date part, and every key is
+		// compared with it: all of that is paid for.
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
 		if let Some(extracted) = super::date::extract_part(value, part)
-			&& keys.iter().any(|key| spec.test_simple(&extracted, key))
+			&& keys.iter().any(|key| spec.test(&extracted, key, vars))
 		{
 			return true;
 		}
@@ -81,7 +94,7 @@ fn date_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `currentdate [match-type] [comparator] <date-part> <key-list>` (RFC 5260).
-fn currentdate_test(test: &Test, message: &Message) -> bool {
+fn currentdate_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let strings = compare::positional_strings(&test.args);
 	if strings.len() < 2 {
@@ -98,7 +111,7 @@ fn currentdate_test(test: &Test, message: &Message) -> bool {
 	};
 	strings[1..]
 		.iter()
-		.any(|key| spec.test_simple(&extracted, key))
+		.any(|key| spec.test(&extracted, key, vars))
 }
 
 /// `header [match-type] [comparator] <header-names> <key-list>`.
@@ -107,12 +120,16 @@ fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let Some((names, keys)) = split_names_keys(&test.args) else {
 		return false;
 	};
-	let values = || names.iter().flat_map(|name| message.header_values(name));
+	// Looking a name up costs the name; what is found is paid for as it is
+	// visited, in `spec.test`.
+	if !names.iter().all(|name| vars.charge(lookup_cost(name))) {
+		return false;
+	}
 	if let Some(rel) = spec.count_rel() {
-		let count = values().count();
+		let count: usize = names.iter().map(|name| message.header_count(name)).sum();
 		return keys.iter().any(|key| spec.count_matches(rel, count, key));
 	}
-	for value in values() {
+	for value in names.iter().flat_map(|name| message.header_values(name)) {
 		for key in &keys {
 			if spec.test(value, key, vars) {
 				return true;
@@ -129,6 +146,9 @@ fn address_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		return false;
 	};
 	let part = address_part(&test.args);
+	if !names.iter().all(|name| vars.charge(lookup_cost(name))) {
+		return false;
+	}
 	let mut extracted: Vec<String> = Vec::new();
 	for value in names.iter().flat_map(|name| message.header_values(name)) {
 		// What is copied out of the message is paid for first.
