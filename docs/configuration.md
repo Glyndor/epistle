@@ -595,6 +595,14 @@ has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
 the threshold the per-account classifier is not trustworthy, so the
 user gets the server's general training rather than a coin-flip.
 
+An account's scope scores a message only when that account is the single
+local recipient and was addressed as itself. A message with two or more
+local recipients, or one addressed to an alias or a list, is scored by the
+shared scope: the verdict (Junk, or a `550` at DATA) applies to every
+recipient, and what one user taught their own corpus must not decide what
+another user receives. The envelope order does not matter, and an alias with
+a single member counts as an alias.
+
 Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
 on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
 drop every per-scope row. Without this, a recreated account would

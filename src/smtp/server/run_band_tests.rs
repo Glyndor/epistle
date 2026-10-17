@@ -13,7 +13,7 @@ use crate::smtp::directory::{AliasSpec, Directory};
 
 /// Build the test directory: account `alice` owns `alice@example.org`,
 /// account `bob` owns `bob@example.org`, a multi-target alias
-/// `sales@example.org` fans out to `bob` (its first target), and
+/// `sales@example.org` fans out to `bob` and `alice`, and
 /// `example.net` is a domain alias for `example.org`.
 fn directory() -> Directory {
 	let aliases = [(
@@ -54,10 +54,46 @@ fn recipient_case_does_not_change_the_account() {
 }
 
 #[test]
-fn multi_target_alias_picks_the_first_target() {
+fn a_multi_target_alias_has_no_scoring_account() {
 	let dir = directory();
 	let recipients = vec!["sales@example.org".to_string()];
-	assert_eq!(scoring_account(&dir, &recipients).as_deref(), Some("bob"));
+	assert_eq!(scoring_account(&dir, &recipients), None);
+}
+
+#[test]
+fn two_local_accounts_have_no_scoring_account() {
+	let dir = directory();
+	let recipients = vec![
+		"alice@example.org".to_string(),
+		"bob@example.org".to_string(),
+	];
+	assert_eq!(scoring_account(&dir, &recipients), None);
+	let reversed = vec![
+		"bob@example.org".to_string(),
+		"alice@example.org".to_string(),
+	];
+	assert_eq!(scoring_account(&dir, &reversed), None);
+}
+
+#[test]
+fn an_account_addressed_twice_is_still_one_account() {
+	let dir = directory();
+	let recipients = vec![
+		"alice@example.org".to_string(),
+		"alice@example.net".to_string(),
+		"ALICE@example.org".to_string(),
+	];
+	assert_eq!(scoring_account(&dir, &recipients).as_deref(), Some("alice"));
+}
+
+#[test]
+fn an_alias_next_to_an_account_has_no_scoring_account() {
+	let dir = directory();
+	let recipients = vec![
+		"alice@example.org".to_string(),
+		"sales@example.org".to_string(),
+	];
+	assert_eq!(scoring_account(&dir, &recipients), None);
 }
 
 #[test]

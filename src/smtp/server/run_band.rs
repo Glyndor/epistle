@@ -103,10 +103,11 @@ impl Server {
 			return Ok(BayesOutcome::Continue);
 		}
 
-		// Same scope the uncertain band picks: the first local account
-		// in envelope order, or the shared scope when there is none. The
-		// trusted-or-not check looks at that scope's totals so the
-		// minimum-training guard is the one the band already validated.
+		// Same scope the uncertain band picks: the only local account of
+		// the envelope, or the shared scope for anything else (see
+		// `scoring_account`). The trusted-or-not check looks at that
+		// scope's totals so the minimum-training guard is the one the
+		// band already validated.
 		let account = scoring_account(&self.directory.current(), &message.recipients);
 		let scope = account
 			.as_deref()
@@ -208,14 +209,12 @@ impl Server {
 			return Ok(BandOutcome::Continue);
 		}
 
-		// Per-account scope: the first recipient that resolves to a local
-		// account wins, in envelope order. A scope with no own training
-		// falls back to the shared corpus inside `score_for_account`, so
-		// an account that has never marked a message still gets the
-		// server's general training. With no resolvable recipient the
-		// band consults the shared corpus directly: nothing the
-		// per-account scope would have answered could change the
-		// outcome.
+		// Per-account scope only when one account is the whole local
+		// audience of the message (see `scoring_account`). A scope with no
+		// own training falls back to the shared corpus inside
+		// `score_for_account`, so an account that has never marked a
+		// message still gets the server's general training. Otherwise the
+		// band consults the shared corpus directly.
 		let account = scoring_account(&self.directory.current(), &message.recipients);
 		let scope = account
 			.as_deref()
@@ -339,44 +338,45 @@ impl Server {
 	}
 }
 
-/// Pick the account name the uncertain-band scorer should ask the corpus
-/// to score `text` against.
+/// Pick the account whose own corpus may score a message, or `None` when
+/// only the shared corpus may.
 ///
-/// The governing account is the first recipient in envelope order that
-/// resolves to a local account:
-/// - `Resolution::Account(name)` contributes `name`;
-/// - `Resolution::Alias(targets)` contributes the first target (the
-///   multi-target alias is local by construction, so its members are
-///   themselves accounts);
-/// - `Resolution::NotLocal`, `Resolution::UnknownUser`, and an address
-///   that fails `Address::parse` are skipped, as a remote recipient is
-///   not an account this server trains for, and an unknown local user
-///   has no account name to key on.
+/// A message is scored once and the verdict (Junk, a `550` at DATA, the
+/// destination mailbox) applies to every recipient of the transaction. An
+/// account's corpus is whatever its owner taught it, so using it for mail
+/// that other accounts receive would let one user decide what the others
+/// see: an account that teaches its own corpus a spammer's text as ham
+/// would let that spam through to anyone addressed alongside it. The rule:
+/// - exactly one local account among the recipients, and it was addressed
+///   as itself (`Resolution::Account`): that account;
+/// - two or more distinct local accounts, or any recipient that is an
+///   alias or a list (`Resolution::Alias`, which fans the verdict out to
+///   its members): `None`, the shared corpus scores it;
+/// - `Resolution::NotLocal`, `Resolution::UnknownUser`, an address that
+///   fails `Address::parse` and an alias with no member are skipped: they
+///   are not an account the verdict can reach.
 ///
-/// The first hit wins so two recipients in the same message never
-/// disagree about which scope is consulted: the envelope order is the
-/// order RCPT TO delivered them. For a multi-target alias only its first
-/// target is ever consulted.
-///
-/// Returning `None` means "no local recipient at all", so the caller
-/// scores against the shared corpus directly (see
-/// [`crate::antispam::corpus::SHARED`]).
+/// The same account addressed twice (two of its addresses, a domain alias)
+/// is still one account. The envelope order never matters. `None` also
+/// covers "no local recipient at all", and the caller scores against the
+/// shared corpus (see [`crate::antispam::corpus::SHARED`]).
 fn scoring_account(directory: &Directory, recipients: &[String]) -> Option<String> {
+	let mut account: Option<String> = None;
 	for recipient in recipients {
 		let Ok(address) = Address::parse(recipient) else {
 			continue;
 		};
 		match directory.resolve(&address) {
-			Resolution::Account(name) => return Some(name),
-			Resolution::Alias(targets) => {
-				if let Some(first) = targets.into_iter().next() {
-					return Some(first);
-				}
-			}
-			Resolution::NotLocal | Resolution::UnknownUser => {}
+			Resolution::Account(name) => match &account {
+				Some(first) if *first != name => return None,
+				Some(_) => {}
+				None => account = Some(name),
+			},
+			Resolution::Alias(targets) if !targets.is_empty() => return None,
+			Resolution::Alias(_) | Resolution::NotLocal | Resolution::UnknownUser => {}
 		}
 	}
-	None
+	account
 }
 
 /// Today's day stamp as `unix_seconds / 86400`. SubjectPass binds its HMAC

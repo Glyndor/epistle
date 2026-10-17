@@ -74,13 +74,27 @@ fn bayes_server(
 	junk_at: f64,
 	reject_at: Option<f64>,
 ) -> Server {
-	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
-		["example.org".to_string()],
-		[
-			("alice@example.org".to_string(), "alice".to_string()),
-			("bob@example.org".to_string(), "bob".to_string()),
-		],
-	));
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[
+				("alice@example.org".to_string(), "alice".to_string()),
+				("bob@example.org".to_string(), "bob".to_string()),
+			],
+		)
+		.with_aliases([(
+			"team@example.org".to_string(),
+			crate::smtp::directory::AliasSpec {
+				members: vec![
+					"alice@example.org".to_string(),
+					"bob@example.org".to_string(),
+				],
+				senders: Vec::new(),
+				hidden: false,
+				list_id: None,
+			},
+		)]),
+	);
 	Server::new("mail.example.org", sink)
 		.with_directory(directory)
 		.with_bayes(scorer)
@@ -233,4 +247,97 @@ async fn a_bounce_is_never_junked() {
 		message.mailbox.is_none(),
 		"bounces must keep the default mailbox hint"
 	);
+}
+
+/// A scorer whose answer depends on the scope it is asked about, so a
+/// test can tell whose corpus decided a message. `own` is what every
+/// per-account scope answers, `shared` what the shared scope does.
+struct ScopedScorer {
+	own: f64,
+	shared: f64,
+}
+
+impl crate::antispam::corpus::BayesScorer for ScopedScorer {
+	fn score<'a>(
+		&'a self,
+		_scope: &'a str,
+		_text: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>
+	{
+		let score = self.shared;
+		Box::pin(async move { Ok(score) })
+	}
+	fn score_for_account<'a>(
+		&'a self,
+		scope: &'a str,
+		_text: &'a [u8],
+	) -> crate::antispam::trainer::TrainerFuture<'a, Option<f64>> {
+		let score = if scope == crate::antispam::corpus::SHARED {
+			self.shared
+		} else {
+			self.own
+		};
+		Box::pin(async move { Some(score) })
+	}
+}
+
+/// Run the threshold pass for `recipients` against a scorer whose
+/// per-account corpora say `own` and whose shared corpus says `shared`.
+async fn outcome_for(recipients: &[&str], own: f64, shared: f64) -> BayesOutcome {
+	let scorer = Arc::new(ScopedScorer { own, shared });
+	let mut message = sample_message("sender@remote.test", b"From: a@b\r\n\r\nbody\r\n");
+	message.recipients = recipients.iter().map(|r| r.to_string()).collect();
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, None);
+	let mut sink = Vec::<u8>::new();
+	server
+		.handle_bayes_thresholds(&mut message, false, &mut sink)
+		.await
+		.expect("call")
+}
+
+/// An account that taught its own corpus the spam as ham must not decide
+/// the fate of a message another account also receives: the verdict
+/// applies to every recipient of the transaction.
+#[tokio::test]
+async fn a_poisoned_account_corpus_does_not_decide_for_a_second_recipient() {
+	let outcome = outcome_for(&["alice@example.org", "bob@example.org"], 0.0, 1.0).await;
+	assert_eq!(
+		outcome,
+		BayesOutcome::SendToJunk,
+		"two local recipients must be scored by the shared corpus"
+	);
+}
+
+/// The order of the recipients on the envelope cannot choose whose
+/// corpus scores the message.
+#[tokio::test]
+async fn the_recipient_order_does_not_pick_the_corpus() {
+	let outcome = outcome_for(&["bob@example.org", "alice@example.org"], 0.0, 1.0).await;
+	assert_eq!(outcome, BayesOutcome::SendToJunk);
+}
+
+/// A list or alias fans the verdict out to its members, so it is scored
+/// by the shared corpus too, even when one member would score it clean.
+#[tokio::test]
+async fn an_alias_is_scored_by_the_shared_corpus() {
+	let outcome = outcome_for(&["team@example.org"], 0.0, 1.0).await;
+	assert_eq!(outcome, BayesOutcome::SendToJunk);
+}
+
+/// A message whose only local recipient is one account keeps being
+/// scored by that account's own corpus, the point of training it.
+#[tokio::test]
+async fn a_single_recipient_is_still_scored_by_its_own_corpus() {
+	let outcome = outcome_for(&["bob@example.org"], 1.0, 0.0).await;
+	assert_eq!(outcome, BayesOutcome::SendToJunk);
+	let outcome = outcome_for(&["bob@example.org"], 0.0, 1.0).await;
+	assert_eq!(outcome, BayesOutcome::Continue);
+}
+
+/// A remote recipient next to the local one is not an account: the local
+/// recipient is still the only one the verdict can affect.
+#[tokio::test]
+async fn a_remote_recipient_does_not_dilute_a_single_local_one() {
+	let outcome = outcome_for(&["someone@remote.test", "bob@example.org"], 1.0, 0.0).await;
+	assert_eq!(outcome, BayesOutcome::SendToJunk);
 }

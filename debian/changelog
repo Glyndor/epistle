@@ -293,6 +293,16 @@ epistle (0.12.1) unstable; urgency=medium
     alone and never written to, a wildcard hidden by a delegation does not
     block the domain's wildcard, and `--undo` leaves a record in a name
     delegated since. See docs/dns.md.
+  * Security: an inbound message with more than one local recipient, or one
+    addressed to an alias or a list, is now scored by the shared Bayesian
+    corpus only. It used to be scored by the corpus of the first local account
+    of the envelope (the first member of an alias), and that verdict (Junk, or
+    a `550` at DATA) applied to every recipient, so an account that taught its
+    own corpus a spammer's text as ham could let that spam through to anyone
+    addressed alongside it. An account's own corpus now scores a message only
+    when that account is the single local recipient and was addressed as
+    itself. Mail to an alias, even one with a single member, uses the shared
+    corpus.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 
