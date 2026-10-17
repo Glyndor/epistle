@@ -387,12 +387,39 @@ epistle (0.12.1) unstable; urgency=medium
     `NO (QUOTA/MAXSIZE)` and `NO (QUOTA/MAXSCRIPTS)`, and HAVESPACE checks
     them). A refusal names the line and never repeats the script. See
     docs/configuration.md.
-  * Sieve: a script no longer nests past 64 levels with `not`
-    (a chain of about 200000 overflowed the stack and aborted the server),
-    forwards a message to more than 4 addresses, or to one address twice, and
-    a `redirect` target must be a single valid address (a line break in it
-    was written into the outbound `RCPT TO` command). Scripts run by delivery
-    that relied on more than 4 redirects forward to the first 4.
+  * Sieve: a script is now bounded in what one run may spend. `:matches` no
+    longer overflows the stack or takes exponential time on a pattern of many
+    wildcards (a 100 KB script aborted the server), and a text of any length
+    still matches; `set "a" "${a}${a}"` repeated no longer builds gigabytes
+    (variables are cut to 4096 octets, 64 KiB per run); a run is abandoned and
+    the message kept past 20000 steps or a matching budget; `fileinto` files
+    into a folder once and into at most 8 folders; no chain of `not` nests past
+    64 levels (about 200000 of them overflowed the stack). A filter that files
+    by a header (`fileinto "${1}"`) makes no folder past 200 in the account,
+    counting every level, and keeps the message in INBOX instead.
+  * Sieve `redirect`: at most 4 addresses per message and an address once, and
+    the target must be a valid address (a line break in it was written into
+    the outbound `RCPT TO` command). A redirect to something that is not an
+    address keeps the message instead of dropping it behind a redirect that
+    never happened. Upgrading: an active script that redirects to more than 4
+    different addresses now forwards to the first 4 and the log says how many
+    it ignored; a script that relied on `redirect` of a malformed address now
+    leaves the message in INBOX.
+  * Sieve scripts (ManageSieve and JMAP, one check): a `require` of an extension
+    the interpreter does not run is refused when saving, and the list now
+    includes `subaddress`, `comparator-i;octet` and `comparator-i;ascii-casemap`.
+    Upgrading: a stored script that requires an unsupported extension keeps
+    running but cannot be saved again until it is fixed; names with U+2028 or
+    U+2029, with white space at either end, with a bidirectional control or not
+    in normal form C are no longer listed (the log names the account once;
+    rename the files in `<data_dir>/accounts/<account>/sieve/`); an account
+    with more than 50 scripts keeps them all and cannot add one until it is
+    under the limit. The active marker is no longer trimmed.
+  * JMAP: storing or activating a Sieve script that redirects, replies or
+    rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
+    step under the account lock (`ifInState` is exact, the active script changes
+    without a moment of no filter), and waiting for that lock no longer holds a
+    runtime worker.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 
