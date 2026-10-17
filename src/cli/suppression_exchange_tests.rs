@@ -141,3 +141,17 @@ fn a_time_that_is_not_on_the_calendar_is_refused_not_normalised() {
 	assert!(parse_row("a@example.net,2026-01-01T00:00:00+99:99", NOW).is_err());
 	assert!(parse_row("a@example.net,2026-02-28T00:00:00Z", NOW).is_ok());
 }
+
+#[test]
+fn a_value_that_starts_with_an_apostrophe_and_a_formula_character_survives_a_round_trip() {
+	for text in [
+		"=1", "'=1", "''=1", "'-neg", "+x", "'@y", "'plain", "plain", "'",
+	] {
+		let exported = field(text);
+		assert_eq!(
+			unquote_formula(&exported),
+			text,
+			"{text:?} exported as {exported:?}"
+		);
+	}
+}

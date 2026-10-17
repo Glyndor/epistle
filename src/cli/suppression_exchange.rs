@@ -199,10 +199,12 @@ fn split(line: &str) -> Result<Vec<String>, &'static str> {
 	}
 }
 
-/// `'=…` back to `=…`: the apostrophe `export` put before a formula.
+/// `'=…` back to `=…`: the apostrophe `export` put before a formula, one
+/// for every field that starts with a formula character once its own
+/// leading apostrophes are ignored.
 fn unquote_formula(text: &str) -> &str {
 	match text.strip_prefix('\'') {
-		Some(rest) if rest.starts_with(['=', '+', '-', '@']) => rest,
+		Some(rest) if crate::cli::csv::starts_formula(rest) => rest,
 		_ => text,
 	}
 }
@@ -398,7 +400,7 @@ pub(super) fn import(
 	let plan = plan(&list, request.account, rows);
 	let added = plan.add.len();
 	if !request.dry_run {
-		for row in &plan.add {
+		for (written, row) in plan.add.iter().enumerate() {
 			let reason = row.reason.as_deref().unwrap_or(default_reason);
 			let since = row.since.unwrap_or(now);
 			match request.account {
@@ -408,7 +410,11 @@ pub(super) fn import(
 				None => list.try_suppress_because(&row.address, reason, since),
 			}
 			.map_err(|error| {
-				ResourceError::Failure(format!("cannot suppress {}: {error}", row.address))
+				ResourceError::Failure(format!(
+					"cannot suppress {}: {error} ({written} of {added} written; running the import \
+					 again skips what is already there)",
+					row.address
+				))
 			})?;
 		}
 	}

@@ -418,3 +418,29 @@ fn a_named_pipe_is_refused_instead_of_waited_for() {
 		.expect("read");
 	assert!(stderr.contains("is not a regular file"), "{stderr}");
 }
+
+#[test]
+fn a_write_that_fails_part_way_says_how_far_it_got() {
+	let env = env("");
+	// An address whose marker is a link into a directory that is not there
+	// cannot be written, and does not count as already suppressed.
+	let digest = ring::digest::digest(&ring::digest::SHA256, b"b@example.net");
+	let name: String = digest
+		.as_ref()
+		.iter()
+		.map(|byte| format!("{byte:02x}"))
+		.collect();
+	let dir = env.data_dir().join("suppression");
+	std::fs::create_dir_all(&dir).expect("dir");
+	std::os::unix::fs::symlink("/nonexistent-epistle-dir/marker", dir.join(name)).expect("link");
+	let file = write(
+		&env,
+		"in.txt",
+		b"a@example.net\nb@example.net\nc@example.net\n",
+	);
+	let (code, stdout, stderr) = plain(&env, &["import", &file, "--json"]);
+	assert_eq!((code, stdout.as_str()), (Some(1), ""));
+	assert!(stderr.contains("cannot suppress b@example.net"), "{stderr}");
+	assert!(stderr.contains("(1 of 3 written;"), "{stderr}");
+	assert_eq!(addresses(&env, None), vec!["a@example.net"]);
+}
