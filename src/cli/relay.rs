@@ -127,6 +127,10 @@ pub enum RelayCli {
 		/// The rule to switch off.
 		#[command(flatten)]
 		target: Target,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Connect, EHLO, STARTTLS and AUTH as configured, then QUIT. Sends no mail.
 	Test {
@@ -241,7 +245,38 @@ fn show(
 	Ok(())
 }
 
+/// Before `relay disable` edits anything: say where the mail will go
+/// instead and ask. Runs before the status stream is opened, because the
+/// question uses it.
+fn confirm_disable(path: &Path, target: &Target, yes: bool, dry_run: bool) -> Result<(), ExitCode> {
+	let Ok(config) = Config::load(path) else {
+		return Ok(());
+	};
+	let Ok(rule) = find(&config, target) else {
+		return Ok(());
+	};
+	if !rule.enabled {
+		return Ok(());
+	}
+	let place = target.describe();
+	let host = rule.host.as_deref().unwrap_or("-");
+	super::style::warn(format_args!(
+		"the relay for {place} (smarthost {host}) will be off: its mail goes by the next \
+		 rule that matches, or directly to the recipient's MX from this server's own address"
+	));
+	if dry_run {
+		return Ok(());
+	}
+	let question = format!("Switch off the relay for {place}? [y/N]");
+	super::prompt::confirm_destructive("relay disable", &question, yes)
+}
+
 pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool, json: bool) -> ExitCode {
+	if let RelayCli::Disable { target, yes } = &action
+		&& let Err(code) = confirm_disable(path, target, *yes, dry_run)
+	{
+		return code;
+	}
 	resource::exit_resource(execute_with(
 		path,
 		action,
@@ -341,7 +376,7 @@ fn execute_with(
 			(change, "add", fields)
 		}
 		RelayCli::Enable { target } => switch(target, true),
-		RelayCli::Disable { target } => switch(target, false),
+		RelayCli::Disable { target, .. } => switch(target, false),
 		RelayCli::Remove { target } => {
 			let fields = serde_json::json!({ "account": target.account, "domain": target.domain });
 			let change: resource::Change =

@@ -38,6 +38,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     stays in the file but is never selected, so its mail goes by the next
     matching rule or direct to the MX. Only a relay rule can be switched off;
     the loader refuses `enabled = false` on a `fail` or `direct` rule.
+    `relay disable` says where the mail will go instead (the next matching
+    rule, or directly to the MX from this server's own address) and needs
+    `--yes` off a terminal.
   * CLI: `epistle suppression show|export|import`, and `suppression add
     --reason`. `export` writes the list as CSV, `import` loads such a file or
     a plain list of addresses (16 MiB and 100000 entries at most, checked whole

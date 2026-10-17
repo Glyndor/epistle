@@ -38,11 +38,11 @@ fn disable_then_enable_the_default_route() {
 		"result": "saved", "action": "disable", "account": null, "domain": null,
 		"enabled": false, "reload": "restart-needed",
 	});
-	assert_eq!(run(&env, &["disable"]), (0, disabled));
+	assert_eq!(run(&env, &["disable", "--yes"]), (0, disabled));
 	assert!(text(&env).contains("enabled = false"), "{}", text(&env));
 	assert!(text(&env).contains("# keep me"));
 	assert_eq!(text(&env).matches("enabled = false").count(), 1);
-	assert_eq!(run(&env, &["disable"]).1["result"], "unchanged");
+	assert_eq!(run(&env, &["disable", "--yes"]).1["result"], "unchanged");
 
 	let (_, shown) = run(&env, &["show"]);
 	assert_eq!(shown["enabled"], false);
@@ -63,7 +63,7 @@ fn disable_then_enable_the_default_route() {
 #[test]
 fn a_rule_is_switched_by_its_selector() {
 	let env = env(RULES);
-	let (code, value) = run(&env, &["disable", "--domain", "example.com"]);
+	let (code, value) = run(&env, &["disable", "--domain", "example.com", "--yes"]);
 	assert_eq!((code, value["domain"].as_str()), (0, Some("example.com")));
 	assert_eq!(
 		run(&env, &["show", "--domain", "example.com"]).1["enabled"],
@@ -101,7 +101,10 @@ fn a_rule_is_switched_by_its_selector() {
 #[test]
 fn updating_a_disabled_relay_leaves_it_disabled() {
 	let env = env(RULES);
-	assert_eq!(run(&env, &["disable", "--domain", "example.com"]).0, 0);
+	assert_eq!(
+		run(&env, &["disable", "--domain", "example.com", "--yes"]).0,
+		0
+	);
 	let (code, _) = run(
 		&env,
 		&[
@@ -165,4 +168,56 @@ fn a_selector_without_a_relay_is_refused() {
 			"{action}"
 		);
 	}
+}
+
+fn disable_plain(env: &Env, extra: &[&str]) -> (Option<i32>, String, String) {
+	let mut full = vec!["relay", "--config", &env.config, "disable"];
+	full.extend_from_slice(extra);
+	let output = epistle(&full, b"");
+	(
+		output.status.code(),
+		String::from_utf8_lossy(&output.stdout).into_owned(),
+		String::from_utf8_lossy(&output.stderr).into_owned(),
+	)
+}
+
+#[test]
+fn disabling_a_relay_without_yes_off_a_terminal_is_refused() {
+	let env = env(RULES);
+	let before = text(&env);
+	for extra in [vec![], vec!["--json"], vec!["--domain", "example.com"]] {
+		let (code, stdout, stderr) = disable_plain(&env, &extra);
+		assert_eq!((code, stdout.as_str()), (Some(2), ""), "{extra:?}");
+		assert!(stderr.contains("--yes"), "{stderr}");
+		assert!(
+			stderr.contains("directly") && stderr.contains("this server's own address"),
+			"the warning must say the mail leaves directly: {stderr}"
+		);
+	}
+	assert!(text(&env) == before, "a refused disable wrote the file");
+}
+
+#[test]
+fn the_warning_names_the_rule_and_a_dry_run_asks_nothing() {
+	let env = env(RULES);
+	let (code, _, stderr) =
+		disable_plain(&env, &["--domain", "example.com", "--dry-run", "--json"]);
+	assert_eq!(code, Some(0), "{stderr}");
+	assert!(stderr.contains("domain example.com"), "{stderr}");
+	let (code, _, stderr) = disable_plain(&env, &["--domain", "example.com", "--yes", "--json"]);
+	assert_eq!(code, Some(0), "{stderr}");
+	assert!(
+		stderr.contains("domain example.com") && stderr.contains("directly"),
+		"{stderr}"
+	);
+}
+
+#[test]
+fn a_relay_that_is_already_off_is_not_asked_about_again() {
+	let env = env(RULES);
+	assert_eq!(run(&env, &["disable", "--yes"]).0, 0);
+	let (code, stdout, stderr) = disable_plain(&env, &["--json"]);
+	assert_eq!(code, Some(0), "{stderr}");
+	assert!(stdout.contains("\"unchanged\""), "{stdout}");
+	assert!(!stderr.contains("directly"), "{stderr}");
 }

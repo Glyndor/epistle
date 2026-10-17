@@ -145,10 +145,7 @@ fn disabling_a_webhook_an_alert_posts_to_is_refused_without_yes() {
 	for extra in [vec![], vec!["--json"]] {
 		let (code, stdout, stderr) = disable(&env, &extra);
 		assert_eq!((code, stdout.as_str()), (Some(2), ""), "{extra:?}");
-		assert!(
-			stderr.contains("alert \"spool\" posts to it"),
-			"{stderr}"
-		);
+		assert!(stderr.contains("alert \"spool\" posts to it"), "{stderr}");
 		assert!(stderr.contains("--yes"), "{stderr}");
 	}
 	assert!(text(&env) == before, "a refused disable wrote the file");

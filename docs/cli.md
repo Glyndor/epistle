@@ -137,7 +137,7 @@ a static one with the hint to edit the config file. `relay add
 a terminal. Echo comes back when the read ends, Ctrl-C included.
 
 **Destructive commands.** `account remove`, `account 2fa disable`,
-`app-password revoke`, `app-password rotate`, `api-key revoke`, `archive purge`, `domain remove`, `domain disable`, `domain alias remove`,
+`app-password revoke`, `app-password rotate`, `relay disable`, `api-key revoke`, `archive purge`, `domain remove`, `domain disable`, `domain alias remove`,
 `alias remove`, `masked remove`, `queue remove` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -402,7 +402,7 @@ epistle relay show [--account NAME | --domain DOMAIN] [--json]
 epistle relay add --host smtp.example.net --starttls --username mailer --password-stdin < pass.txt
 epistle relay add --domain example.net --host relay.example.net --port 2525
 epistle relay remove [--account NAME | --domain DOMAIN]
-epistle relay disable [--account NAME | --domain DOMAIN] [--dry-run]
+epistle relay disable [--account NAME | --domain DOMAIN] [--yes|-y] [--dry-run]
 epistle relay enable [--account NAME | --domain DOMAIN] [--dry-run]
 epistle relay test [--account NAME | --domain DOMAIN]
 ```
@@ -417,7 +417,8 @@ keeps the stored password when the user is unchanged. A domain or account that
 already has a `fail` or `direct` rule is refused.
 
 `disable` writes `enabled = false` on the rule and keeps everything else, the
-password included. After the restart the rule is never selected: its mail goes
+password included. It warns on stderr where the mail will go and asks first; off a
+terminal it needs `--yes` (exit 2 without it). After the restart the rule is never selected: its mail goes
 by the next rule that matches, or direct to the recipient's MX when none does,
 so it leaves from this server's own address, and a rule switched off no longer
 counts as a warm-up relay. `enable` takes the key out again. Both say `unchanged`
