@@ -40,6 +40,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
+| `db` | `upgrade`, `status` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
@@ -882,6 +883,22 @@ whole stack starts on the new major; on any failure the old image and its
 untouched cluster come back and `mail` starts again. The old cluster stays
 in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
 after mail is verified.
+
+### Looking at the database
+
+```sh
+epistle db status [--json]
+```
+
+Prints the PostgreSQL version, the size of the database in bytes, the number of
+user tables, the connections to it and the connection limit. It runs one
+`SELECT` over the server's own catalogues in the `db` container (`podup exec`),
+changes nothing, reads no table, and gives up after 15 seconds. The JSON result
+is `database`, `version`, `size_bytes`, `tables`, `connections` and
+`max_connections`. With no `[database]` in the configuration, or no stack to ask,
+it exits `3`; a query that fails or answers with something else exits `1` and
+prints nothing on stdout. Maintenance that rewrites data, a manual `VACUUM` or a
+second backup command next to `epistle backup`, is not offered here.
 
 ## Backup and restore
 

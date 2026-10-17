@@ -22,6 +22,7 @@ pub mod config_edit;
 mod container_db;
 mod csv;
 mod db_harden;
+mod db_status;
 mod db_upgrade;
 mod delivery;
 mod dkim_cli;

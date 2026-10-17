@@ -276,6 +276,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("api-key rotate", &["ci"], Done),
 	("api-key revoke", &["ci", "--yes"], Done),
 	("account remove", &["alice", "--queue", "drain", "--yes"], Done),
+	("db status", &[], Refused(3)),
 	("stack resources", &[], Done),
 	("stack resources set", &["clamav", "--memory", "2g"], Done),
 ];

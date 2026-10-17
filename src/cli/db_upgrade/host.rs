@@ -51,10 +51,14 @@ impl Podup {
 	}
 }
 
-/// Run one SQL statement in the stack's `db` container and return its
-/// unaligned, tuples-only output. `sql` must not contain a single quote: it
+/// The `podup exec` that runs one SQL statement in the stack's `db`
+/// container through `program`. `sql` must not contain a single quote: it
 /// is single-quoted whole inside the shell script.
-pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<String, String> {
+fn query_command(
+	program: &str,
+	compose: &std::path::Path,
+	sql: &str,
+) -> Result<std::process::Command, String> {
 	if sql.contains('\'') {
 		return Err("the query contains a single quote".to_string());
 	}
@@ -64,14 +68,17 @@ pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<Stri
 		crate::cli::init::DATABASE_USER,
 		crate::cli::init::DATABASE_NAME,
 	);
-	let output = super::super::stack::build_command(
-		"podup",
+	let mut command = super::super::stack::build_command(
+		program,
 		compose,
 		&["exec", "-T", "db", "sh", "-c", &script],
-	)
-	.stdin(Stdio::null())
-	.output()
-	.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	);
+	command.stdin(Stdio::null());
+	Ok(command)
+}
+
+/// What a finished query printed, or why it failed.
+fn query_answer(output: &std::process::Output) -> Result<String, String> {
 	if !output.status.success() {
 		return Err(format!(
 			"the query in db failed ({}): {}",
@@ -81,6 +88,62 @@ pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<Stri
 	}
 	Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
+
+/// Run one SQL statement in the stack's `db` container and return its
+/// unaligned, tuples-only output, waiting as long as it takes. `sql` must
+/// not contain a single quote: it is single-quoted whole inside the shell
+/// script.
+pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<String, String> {
+	let output = query_command("podup", compose, sql)?
+		.output()
+		.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	query_answer(&output)
+}
+
+/// [`query`] that gives up after `limit`: the child is killed and the
+/// query is reported as not answered. For a command that only looks, so a
+/// stuck container cannot hold the terminal.
+pub(in crate::cli) fn query_within(
+	compose: &std::path::Path,
+	sql: &str,
+	limit: Duration,
+) -> Result<String, String> {
+	query_within_program("podup", compose, sql, limit)
+}
+
+fn query_within_program(
+	program: &str,
+	compose: &std::path::Path,
+	sql: &str,
+	limit: Duration,
+) -> Result<String, String> {
+	let mut child = query_command(program, compose, sql)?
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	let deadline = std::time::Instant::now() + limit;
+	loop {
+		match child.try_wait() {
+			Ok(Some(_)) => break,
+			Ok(None) if std::time::Instant::now() >= deadline => {
+				let _ = child.kill();
+				let _ = child.wait();
+				return Err(format!("the query in db did not answer within {limit:?}"));
+			}
+			Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+			Err(error) => return Err(format!("cannot wait for podup exec: {error}")),
+		}
+	}
+	let output = child
+		.wait_with_output()
+		.map_err(|error| format!("cannot read the answer of podup exec: {error}"))?;
+	query_answer(&output)
+}
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;
 
 impl Stack for Podup {
 	fn compose(&mut self) -> Result<String, String> {

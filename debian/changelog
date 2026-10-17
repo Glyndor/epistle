@@ -52,6 +52,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     `delivery export` writes the filtered records as CSV (or JSON), at most
     100000. `delivery list` takes `--until`, and `--status` as another name
     of `--outcome`.
+  * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
+    connections from one read-only query in the stack's database container,
+    and gives up after 15 seconds.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

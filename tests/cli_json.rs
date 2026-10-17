@@ -76,3 +76,6 @@ mod app_password_b;
 
 #[path = "cli_json/delivery_b.rs"]
 mod delivery_b;
+
+#[path = "cli_json/db_status.rs"]
+mod db_status;
