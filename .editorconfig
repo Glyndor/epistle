@@ -24,3 +24,11 @@ trim_trailing_whitespace = false
 # Mail fixtures keep their bytes: trailing spaces in a body are part of the test.
 [tests/fixtures/*.mbox]
 trim_trailing_whitespace = false
+
+# DER timestamp replies kept as test data are binary: no line endings, no
+# final newline, no charset.
+[*.tsr]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
