@@ -3,6 +3,7 @@
 
 use base64::Engine;
 
+use super::super::directory::Proof;
 use super::{Action, Reply, Session};
 
 impl Session {
@@ -73,10 +74,11 @@ impl Session {
 			return self.auth_fail();
 		}
 		// Resolve the certificate's email identity to a local account, then
-		// enforce the per-account `allowed_protocols` against this session's
-		// listener kind. EXTERNAL reaches the directory through resolve() —
-		// not authenticate_with_ip — so the check has to be issued here too,
-		// with the same outcome as a missing or untrusted certificate.
+		// apply the account rules (disabled, protocol allowlist) for this
+		// session's listener kind. EXTERNAL reaches the directory through
+		// resolve(), not authenticate_with_ip, so the rules have to be asked
+		// for here, with the same outcome as a missing or untrusted
+		// certificate.
 		let account = match crate::smtp::address::Address::parse(&identity) {
 			Ok(address) => match self.directory.resolve(&address) {
 				crate::smtp::directory::Resolution::Account(account) => account,
@@ -86,7 +88,7 @@ impl Session {
 		};
 		if !self
 			.directory
-			.is_protocol_allowed(&account, self.auth_protocol)
+			.admit_login(&account, self.auth_protocol, Proof::Federated)
 		{
 			return self.auth_fail();
 		}

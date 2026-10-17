@@ -78,6 +78,8 @@ mod encoded_search;
 mod esearch_sets;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
+#[path = "session_tests_login_gate.rs"]
+mod login_gate;
 #[path = "session_tests_metadata.rs"]
 mod metadata;
 #[path = "session_tests_misc.rs"]

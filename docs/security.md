@@ -78,6 +78,21 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths. The
   secret is encrypted at rest only when at-rest encryption is on (see "Data at
   rest").
+- **One set of account rules for every way in.** PLAIN, LOGIN, SCRAM, OAUTHBEARER,
+  XOAUTH2, SASL EXTERNAL, app passwords, POP3, ManageSieve, WebDAV and the API
+  credential check all end in the same decision (`Directory::admit_login`): a
+  disabled account never signs in, the account's `allowed_protocols` list must
+  include the protocol, and a login by an address in a switched-off domain
+  fails because the address no longer resolves. The account name still works in
+  a switched-off domain, as `domain disable` documents. SCRAM is refused for an
+  account with a TOTP secret, because the SCRAM proof is derived from the
+  password alone and cannot carry the code; such an account uses PLAIN or LOGIN
+  with the code appended. A refused exchange runs on decoy credentials and ends
+  at the final step as a wrong password, so nothing tells a refusal from a bad
+  proof. Bearer tokens and client certificates are not asked for a TOTP code
+  (the issuer or the certificate is the factor) but are asked for everything
+  else. Before 0.12.2 SCRAM skipped the TOTP code and the disabled flag, and a
+  bearer token or client certificate skipped the disabled flag.
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
   password, and repeated failures close the connection.
 

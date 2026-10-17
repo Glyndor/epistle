@@ -138,13 +138,11 @@ impl Directory {
 					.map(|account| (account, None))
 			})
 			.and_then(|(account, label)| {
-				// The protocol allowlist is enforced after the local/LDAP
-				// credential check resolves an account. A restriction that
-				// denies this protocol returns None exactly like the disabled
-				// path, so the wire response is identical for "wrong password",
-				// "disabled", and "wrong protocol"; none reveals that the
-				// account exists at all.
-				self.is_protocol_allowed(&account, protocol)
+				// The account rules run after the local/LDAP credential
+				// check resolves an account, on whichever one answered: an
+				// account the rules refuse returns None exactly like a wrong
+				// password, so the wire response says nothing about why.
+				self.admit_login(&account, protocol, Proof::Password)
 					.then_some((account, label))
 			});
 		let verified_account = verified.as_ref().map(|(account, _)| account.as_str());

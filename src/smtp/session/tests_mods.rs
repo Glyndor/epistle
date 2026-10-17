@@ -39,6 +39,9 @@ mod tests_junk;
 #[path = "../session_tests_junk_progress.rs"]
 mod tests_junk_progress;
 #[cfg(test)]
+#[path = "../session_tests_login_gate.rs"]
+mod tests_login_gate;
+#[cfg(test)]
 #[path = "../session_tests_memory_budget.rs"]
 mod tests_memory_budget;
 #[cfg(test)]

@@ -163,8 +163,8 @@ impl Session {
 				server,
 				credentials,
 				account,
-				ban_refusal,
-			}) => self.scram_client_final(line, *server, *credentials, &account, ban_refusal),
+				refusal,
+			}) => self.scram_client_final(line, *server, *credentials, &account, refusal),
 			None => self.verify_plain(line),
 		}
 	}

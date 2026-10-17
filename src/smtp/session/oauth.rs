@@ -7,7 +7,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::super::address::Address;
-use super::super::directory::Resolution;
+use super::super::directory::{Proof, Resolution};
 use super::super::reply::Reply;
 use super::{Action, Session};
 
@@ -48,14 +48,13 @@ impl Session {
 			.and_then(|token| verifier.verify(&token, unix_now()))
 			.and_then(|email| self.resolve_account(&email))
 			.and_then(|account| {
-				// The per-account `allowed_protocols` check still applies
-				// for SASL mechanisms that bypass `authenticate_with_ip`
-				// (the password is the OAuth token, not a TOTP-armored
-				// directory secret). The check rejects here exactly like a
-				// wrong token, so the wire response does not reveal that
-				// the account exists.
+				// The account rules (disabled, protocol allowlist) apply to a
+				// bearer token as to a password: the token proves who the
+				// caller is, not that the account may sign in. A refusal
+				// answers like a wrong token, so the wire response does not
+				// reveal that the account exists.
 				self.directory
-					.is_protocol_allowed(&account, self.auth_protocol)
+					.admit_login(&account, self.auth_protocol, Proof::Federated)
 					.then_some(account)
 			});
 		match outcome {
