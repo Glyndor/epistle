@@ -352,7 +352,19 @@ pub fn anchors(settings: &Settings) -> Vec<[u8; 32]> {
 /// over a fixed digest, verified like any other.
 async fn probe(settings: &Settings) -> Option<u64> {
 	let digest = super::record::sha256(b"epistle clock probe");
-	super::tsa::client::obtain(&settings.authorities, &digest)
+	// A test never asks an authority out on the internet: the probe runs at
+	// every first tick, and `serve` starts it in tests that are about
+	// something else. Only the local test authorities answer there.
+	#[cfg(test)]
+	let authorities: Vec<_> = settings
+		.authorities
+		.iter()
+		.filter(|authority| authority.local_test)
+		.cloned()
+		.collect();
+	#[cfg(not(test))]
+	let authorities = settings.authorities.clone();
+	super::tsa::client::obtain(&authorities, &digest)
 		.await
 		.ok()
 		.map(|obtained| obtained.stamp.gen_time)

@@ -292,3 +292,17 @@ async fn the_time_a_verification_took_is_in_the_status() {
 		Some(status.audit_millis)
 	);
 }
+
+#[tokio::test]
+async fn a_probe_in_a_test_does_not_leave_the_machine() {
+	// The default settings name an authority on the internet; the probe a
+	// test runs must not go there (it would make every test that starts a
+	// server depend on the network, and wait for its timeouts).
+	let started = std::time::Instant::now();
+	assert_eq!(super::probe(&Settings::default()).await, None);
+	assert!(
+		started.elapsed() < Duration::from_secs(2),
+		"the probe waited for the network: {:?}",
+		started.elapsed()
+	);
+}
