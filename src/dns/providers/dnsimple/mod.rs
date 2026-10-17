@@ -23,7 +23,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 
 use crate::dns::providers::{
-	LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, missing_page_count,
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, missing_page_count,
 };
 use crate::net::HttpsUrl;
 
@@ -66,6 +66,9 @@ struct Pagination {
 	/// Absent when the answer does not say how many pages there are.
 	#[serde(default)]
 	total_pages: Option<u32>,
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total_entries: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +169,7 @@ impl DnsimpleProvider {
 	/// Walk all pages of the list endpoint and concatenate the records.
 	async fn list_page(&self, zone: &str) -> Result<Vec<Record>, ProviderError> {
 		let mut all = Vec::new();
+		let mut expected: Option<u32> = None;
 		for page in 1.. {
 			let url = self
 				.records_url(zone, None)?
@@ -184,8 +188,23 @@ impl DnsimpleProvider {
 			if all.len() > LIST_MAX_RECORDS {
 				return Err(listing_too_long(zone));
 			}
-			match batch.pagination.total_pages {
-				Some(total) if page >= total => break,
+			// What the listing says about itself must add up, page by page.
+			let total_pages = batch.pagination.total_pages;
+			let total_entries = batch.pagination.total_entries;
+			if total_entries.is_some_and(|total| all.len() > total)
+				|| (total_pages.is_some() && expected.is_some() && expected != total_pages)
+			{
+				return Err(inconsistent_pages(zone));
+			}
+			expected = total_pages.or(expected);
+			match total_pages {
+				Some(total) if page >= total => {
+					if total_entries.is_some_and(|entries| all.len() != entries) {
+						return Err(inconsistent_pages(zone));
+					}
+					break;
+				}
+				Some(_) if count == 0 => return Err(inconsistent_pages(zone)),
 				Some(_) => {}
 				// No page count: a short page is the last one, a full
 				// page may not be, and a zone is never read as finished

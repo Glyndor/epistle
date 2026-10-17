@@ -11,7 +11,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 
 use crate::dns::providers::{
-	LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, missing_page_count,
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, missing_page_count,
 };
 use crate::net::HttpsUrl;
 
@@ -271,6 +271,7 @@ impl SpaceshipProvider {
 		let mut out = Vec::new();
 		let mut skip: i64 = 0;
 		let mut pages = 0;
+		let mut expected: Option<i64> = None;
 		loop {
 			let page_url = url
 				.with_query("take", &PAGE_MAX.to_string())
@@ -299,9 +300,23 @@ impl SpaceshipProvider {
 				return Err(listing_too_long(&self.zone));
 			}
 			match page.total {
-				Some(total) if out.len() as i64 >= total => break,
-				Some(_) if count == 0 => break,
-				Some(_) => {}
+				Some(total) => {
+					// The total is a promise: what was read must add up to
+					// it, page by page, and it must not move.
+					if total < 0
+						|| expected.is_some_and(|seen| seen != total)
+						|| out.len() as i64 > total
+					{
+						return Err(inconsistent_pages(&self.zone));
+					}
+					expected = Some(total);
+					if out.len() as i64 == total {
+						break;
+					}
+					if count == 0 {
+						return Err(inconsistent_pages(&self.zone));
+					}
+				}
 				// No total: a short page is the last one, a full page
 				// may not be, and a zone is never read as finished on
 				// that guess.

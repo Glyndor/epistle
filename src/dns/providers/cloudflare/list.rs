@@ -5,7 +5,7 @@
 
 use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM};
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
-use crate::dns::providers::missing_page_count;
+use crate::dns::providers::{inconsistent_pages, missing_page_count};
 use crate::dns::txt::txt_decode;
 
 /// Records asked for per page of a zone listing: Cloudflare's default,
@@ -22,6 +22,7 @@ impl CloudflareProvider {
 		let zone_id = self.zone_id(zone).await?;
 		let mut listed: Vec<RecordRef> = Vec::new();
 		let mut page = 1;
+		let mut expected: Option<u32> = None;
 		loop {
 			let url = self
 				.records_url(&zone_id, None)?
@@ -30,8 +31,24 @@ impl CloudflareProvider {
 			let records: ListRecords = self.get_json(url).await?;
 			let count = records.result.len();
 			listed.extend(records.result);
-			match records.result_info.and_then(|info| info.total_pages) {
-				Some(total) if page >= total => break,
+			let (total_pages, total_count) = records
+				.result_info
+				.map_or((None, None), |info| (info.total_pages, info.total_count));
+			// What the listing says about itself must add up, page by page.
+			if total_count.is_some_and(|total| listed.len() > total)
+				|| (total_pages.is_some() && expected.is_some() && expected != total_pages)
+			{
+				return Err(inconsistent_pages(zone));
+			}
+			expected = total_pages.or(expected);
+			match total_pages {
+				Some(total) if page >= total => {
+					if total_count.is_some_and(|count| listed.len() != count) {
+						return Err(inconsistent_pages(zone));
+					}
+					break;
+				}
+				Some(_) if count == 0 => return Err(inconsistent_pages(zone)),
 				Some(_) => {}
 				// No page count: a short page is the last one, a full page
 				// may not be, and a zone is never read as finished on that

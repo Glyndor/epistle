@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use crate::dns::providers::{LIST_MAX_RECORDS, listing_too_long};
+use crate::dns::providers::{LIST_MAX_RECORDS, inconsistent_pages, listing_too_long};
 use crate::net::{HttpsUrl, HttpsUrlError};
 
 use crate::dns::provider::{
@@ -447,9 +447,12 @@ impl OvhProvider {
 		}
 		let mut records = Vec::with_capacity(ids.len());
 		for id in ids {
-			if let Some(rec) = self.get_record(zone, id).await? {
-				records.push(record_from_ovh(&rec, zone));
-			}
+			// A record the list names and the detail denies is a listing that
+			// does not add up, not a shorter zone.
+			let Some(rec) = self.get_record(zone, id).await? else {
+				return Err(inconsistent_pages(zone));
+			};
+			records.push(record_from_ovh(&rec, zone));
 		}
 		Ok(records)
 	}

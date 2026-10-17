@@ -9,7 +9,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -39,6 +41,15 @@ struct ListResponse {
 	domain_records: Vec<DomainRecord>,
 	#[serde(default)]
 	links: Links,
+	#[serde(default)]
+	meta: Meta,
+}
+
+#[derive(Deserialize, Default)]
+struct Meta {
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -199,6 +210,11 @@ impl DigitaloceanProvider {
 			if out.len() > LIST_MAX_RECORDS {
 				return Err(listing_too_long(self.secret.zone()));
 			}
+			// What the listing says about itself must add up, page by page.
+			let total = page.meta.total;
+			if total.is_some_and(|total| out.len() > total) {
+				return Err(inconsistent_pages(self.secret.zone()));
+			}
 			match page.links.pages.next {
 				Some(next) if !next.is_empty() => {
 					if pages >= LIST_MAX_PAGES {
@@ -206,7 +222,12 @@ impl DigitaloceanProvider {
 					}
 					url = self.base.follow(&next)?;
 				}
-				_ => break,
+				_ => {
+					if total.is_some_and(|total| out.len() != total) {
+						return Err(inconsistent_pages(self.secret.zone()));
+					}
+					break;
+				}
 			}
 		}
 		Ok(out)

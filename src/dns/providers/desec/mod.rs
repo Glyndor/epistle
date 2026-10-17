@@ -12,7 +12,9 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
-use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, transport};
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, transport,
+};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How deSEC wants a TXT value written and lists it back; see
@@ -288,12 +290,22 @@ impl DnsProvider for DesecProvider {
 				if !status.is_success() {
 					return Err(ProviderError::Remote(format!("HTTP {status}")));
 				}
-				let next = response
+				let links: Vec<&str> = response
 					.headers()
 					.get_all(reqwest::header::LINK)
 					.iter()
 					.filter_map(|value| value.to_str().ok())
-					.find_map(next_link);
+					.collect();
+				let next = links.iter().find_map(|value| next_link(value));
+				// A Link that mentions a next page nobody could read is a
+				// listing cut short, not a listing that ended.
+				if next.is_none()
+					&& links
+						.iter()
+						.any(|value| value.to_ascii_lowercase().contains("next"))
+				{
+					return Err(inconsistent_pages(self.secret.zone()));
+				}
 				let text = crate::dns::providers::read_body(response).await?;
 				let page: Vec<Rrset> = serde_json::from_str(&text)
 					.map_err(|e| ProviderError::Remote(e.to_string()))?;
@@ -340,16 +352,34 @@ impl DnsProvider for DesecProvider {
 }
 
 /// The target of the `rel="next"` entry of a `Link` header value
-/// (`<url>; rel="next", <url>; rel="first"`), if it has one.
+/// (`<url>; rel="next", <url>; rel="first"`), if it has one. Entries start at
+/// each `<`, so a comma inside a URL does not split it, and `rel` may list
+/// several relations (`rel="prev next"`).
 fn next_link(header: &str) -> Option<String> {
-	header.split(',').find_map(|entry| {
-		let (target, params) = entry.split_once(';')?;
-		let is_next = params
-			.split(';')
-			.any(|p| p.trim().replace('"', "").eq_ignore_ascii_case("rel=next"));
-		let target = target.trim().strip_prefix('<')?.strip_suffix('>')?;
-		is_next.then(|| target.to_string())
-	})
+	let mut rest = header;
+	while let Some(start) = rest.find('<') {
+		let after = &rest[start + 1..];
+		let end = after.find('>')?;
+		let target = &after[..end];
+		let tail = &after[end + 1..];
+		let params = &tail[..tail.find('<').unwrap_or(tail.len())];
+		let is_next = params.split(';').any(|param| {
+			let param = param.trim().trim_end_matches(',').trim();
+			param.split_once('=').is_some_and(|(key, value)| {
+				key.trim().eq_ignore_ascii_case("rel")
+					&& value
+						.trim()
+						.trim_matches('"')
+						.split_whitespace()
+						.any(|relation| relation.eq_ignore_ascii_case("next"))
+			})
+		});
+		if is_next {
+			return Some(target.to_string());
+		}
+		rest = tail;
+	}
+	None
 }
 
 /// Map a write response to success or a typed error.

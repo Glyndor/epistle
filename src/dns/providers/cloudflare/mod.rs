@@ -65,6 +65,9 @@ struct ListRecords {
 struct ResultInfo {
 	#[serde(default)]
 	total_pages: Option<u32>,
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total_count: Option<usize>,
 }
 
 #[derive(Deserialize)]

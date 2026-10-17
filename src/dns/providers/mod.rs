@@ -83,6 +83,16 @@ pub(crate) fn missing_page_count(zone: &str) -> crate::dns::provider::ProviderEr
 	))
 }
 
+/// The error for pages that do not add up: a page empty before the total,
+/// a total smaller than what was read, a total that changes from page to
+/// page, more pages than the total allows. A listing whose pages disagree
+/// with what it says about itself is never returned as the zone.
+pub(crate) fn inconsistent_pages(zone: &str) -> crate::dns::provider::ProviderError {
+	crate::dns::provider::ProviderError::Remote(format!(
+		"the {zone} listing is inconsistent: its pages do not add up to the total it gives"
+	))
+}
+
 /// [`within`] for a listing: the same deadline, and a zone of more than
 /// [`LIST_MAX_RECORDS`] records is an error, whatever the provider's paging
 /// did, not a zone cut short.
@@ -173,6 +183,12 @@ pub mod spaceship;
 
 #[cfg(test)]
 pub(crate) mod listing_contract;
+
+#[cfg(test)]
+mod pagination_tests;
+
+#[cfg(test)]
+pub(crate) mod test_pages;
 
 #[cfg(test)]
 mod transport_tests;
