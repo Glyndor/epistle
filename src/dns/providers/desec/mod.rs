@@ -309,7 +309,8 @@ impl DnsProvider for DesecProvider {
 				let text = crate::dns::providers::read_body(response).await?;
 				let page: Vec<Rrset> = serde_json::from_str(&text)
 					.map_err(|e| ProviderError::Remote(e.to_string()))?;
-				records += page.iter().map(|r| r.records.len()).sum::<usize>();
+				// An rrset with no records still costs memory: it counts as one.
+				records += page.iter().map(|r| r.records.len().max(1)).sum::<usize>();
 				rrsets.extend(page);
 				if records > LIST_MAX_RECORDS {
 					return Err(listing_too_long(self.secret.zone()));

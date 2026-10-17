@@ -56,8 +56,38 @@ thread_local! {
 		const { std::cell::Cell::new(None) };
 }
 
-/// Run one provider operation under [`OPERATION_DEADLINE`]. Every `list`,
-/// `upsert` and `delete` of the HTTP providers goes through it.
+/// The most bytes all the response bodies of one operation may add up to. A
+/// listing is up to 1000 pages and each page may be [`MAX_BODY`], so the cap
+/// per body alone lets a provider (or a zone) fill the memory of the process
+/// one page at a time, in the server's DKIM daemon as much as in the CLI.
+const MAX_OPERATION_BYTES: usize = 64 * 1024 * 1024;
+
+tokio::task_local! {
+	/// What is left of [`MAX_OPERATION_BYTES`] for the operation running on
+	/// this task; [`read_bounded`] takes from it.
+	static BYTES_LEFT: std::cell::Cell<usize>;
+}
+
+/// How long to wait for a connection: [`CONNECT_TIMEOUT`], or less when a
+/// test asks for it.
+pub(crate) fn connect_timeout() -> std::time::Duration {
+	request_timeout().min(CONNECT_TIMEOUT)
+}
+
+/// How long one request may take: [`REQUEST_TIMEOUT`], or what a test set.
+/// The HTTP client and the RFC 2136 exchange both use it.
+pub(crate) fn request_timeout() -> std::time::Duration {
+	#[cfg(test)]
+	return TEST_REQUEST_TIMEOUT
+		.with(|t| t.get())
+		.unwrap_or(REQUEST_TIMEOUT);
+	#[cfg(not(test))]
+	REQUEST_TIMEOUT
+}
+
+/// Run one provider operation under [`OPERATION_DEADLINE`] and a budget of
+/// [`MAX_OPERATION_BYTES`] for everything it reads. Every `list`, `upsert` and
+/// `delete` of the providers goes through it.
 pub(crate) async fn within<T>(
 	operation: impl std::future::Future<Output = Result<T, crate::dns::provider::ProviderError>>,
 ) -> Result<T, crate::dns::provider::ProviderError> {
@@ -67,13 +97,16 @@ pub(crate) async fn within<T>(
 		.unwrap_or(OPERATION_DEADLINE);
 	#[cfg(not(test))]
 	let limit = OPERATION_DEADLINE;
-	tokio::time::timeout(limit, operation)
-		.await
-		.unwrap_or_else(|_| {
-			Err(crate::dns::provider::ProviderError::Remote(format!(
-				"the provider did not finish within {limit:?}"
-			)))
-		})
+	tokio::time::timeout(
+		limit,
+		BYTES_LEFT.scope(std::cell::Cell::new(MAX_OPERATION_BYTES), operation),
+	)
+	.await
+	.unwrap_or_else(|_| {
+		Err(crate::dns::provider::ProviderError::Remote(format!(
+			"the provider did not finish within {limit:?}"
+		)))
+	})
 }
 
 /// The error for a full page that does not say whether more follow.
@@ -113,15 +146,9 @@ pub(crate) async fn listing(
 /// and no redirects, so a provider (or whoever sits in front of it) cannot
 /// send the credential to another host or keep a command waiting.
 pub(crate) fn http_client() -> reqwest::Client {
-	#[cfg(test)]
-	let total = TEST_REQUEST_TIMEOUT
-		.with(|t| t.get())
-		.unwrap_or(REQUEST_TIMEOUT);
-	#[cfg(not(test))]
-	let total = REQUEST_TIMEOUT;
 	reqwest::Client::builder()
-		.connect_timeout(CONNECT_TIMEOUT)
-		.timeout(total)
+		.connect_timeout(connect_timeout())
+		.timeout(request_timeout())
 		.redirect(reqwest::redirect::Policy::none())
 		.build()
 		.expect("an HTTP client with a timeout builds like the default one")
@@ -149,6 +176,17 @@ pub(crate) async fn read_bounded(
 	mut response: reqwest::Response,
 	limit: usize,
 ) -> Result<String, crate::dns::provider::ProviderError> {
+	// Inside an operation the body also draws on what is left of its budget,
+	// and a budget that is spent refuses the next body outright. Outside one
+	// (no operation, so no budget) the cap of the single body is all there
+	// is, never "no cap".
+	let left = BYTES_LEFT.try_with(|left| left.get()).ok();
+	if left == Some(0) {
+		return Err(crate::dns::provider::ProviderError::Remote(
+			"the operation read more than its budget".to_string(),
+		));
+	}
+	let limit = left.map_or(limit, |left| limit.min(left));
 	let too_large = || {
 		crate::dns::provider::ProviderError::Remote(format!(
 			"the response is larger than {limit} bytes"
@@ -164,6 +202,7 @@ pub(crate) async fn read_bounded(
 		}
 		body.extend_from_slice(&chunk);
 	}
+	let _ = BYTES_LEFT.try_with(|left| left.set(left.get().saturating_sub(body.len())));
 	Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
@@ -183,6 +222,9 @@ pub mod spaceship;
 
 #[cfg(test)]
 pub(crate) mod listing_contract;
+
+#[cfg(test)]
+mod budget_tests;
 
 #[cfg(test)]
 mod pagination_tests;

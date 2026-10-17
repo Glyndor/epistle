@@ -132,21 +132,31 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	assert_kinds_kept(&listed, &Shape::NAMED);
 }
 
-/// A server that claims a million pages cannot keep a listing going: it
-/// stops at the page cap with an error, not with a shorter zone.
+/// A server that claims a million pages, each with records, cannot keep a
+/// listing going: it stops at the page cap with an error, not with a shorter
+/// zone. (Pages that come empty before the last are an error of their own,
+/// see `pagination_tests`.)
 #[tokio::test]
 async fn a_listing_that_claims_endless_pages_stops_at_the_page_cap() {
-	let (provider, state) = mock(Vec::new()).await;
-	state.lock().unwrap().total_pages = Some(1_000_000);
+	let records = (0..100)
+		.map(|i| {
+			format!(
+				"{{\"id\":{i},\"name\":\"h{i}\",\"type\":\"A\",\"content\":\"192.0.2.1\",\"ttl\":60}}"
+			)
+		})
+		.collect::<Vec<_>>()
+		.join(",");
+	let body = format!("{{\"data\":[{records}],\"pagination\":{{\"total_pages\":1000000}}}}");
+	let (base, hits) =
+		crate::dns::providers::test_pages::serve_by(move |_, _, _| (body.clone(), None)).await;
+	let provider = DnsimpleProvider::new(ScopedSecret::new("example.org", "tok"), "1")
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("{base}/v2")).unwrap());
 	let error = provider.list("example.org").await.expect_err("endless");
 	assert_eq!(
 		error,
-		ProviderError::Remote(
-			"the example.org zone is larger than a listing reads (1000 pages, 100000 records)"
-				.to_string()
-		)
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
 	);
-	assert_eq!(state.lock().unwrap().calls.len(), 1000);
+	assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1000);
 }
 
 /// Kinds a listing shows but epistle does not publish are never written
