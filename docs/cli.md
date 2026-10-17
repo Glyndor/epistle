@@ -41,7 +41,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `db` | `upgrade`, `status` | |
-| `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `acknowledge` | |
+| `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages

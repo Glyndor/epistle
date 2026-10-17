@@ -190,8 +190,13 @@ A client that retries a submission can leave the acceptance of the attempt
 that never reached the queue, with no outcome, and every bundle of the same
 message (or of the same recipient on that day) then fails on it. Close it with
 `epistle evidence abandon <spool-id> --reason "..."`: the record names the
-operator and the reason. Only an acceptance that has no ending and is not in
-the queue can be closed; `check` reads it as abandoned.
+operator and the reason. Only recipients that have no ending, of an acceptance that is not in the queue
+and is more than ten minutes old, can be closed: when some recipients of the
+message were settled and others were left without an outcome, the record names
+the ones it closes, and `check` counts those as abandoned and the rest as what
+became of them. A message with an outcome for every recipient is not closed.
+It reads the chain past breaks an operator already acknowledged, and refuses
+on any other.
 
 The manifest is part of the bundle and is not signed, so a bundle for one
 recipient could be made to look like the whole story of a message. `check`
@@ -237,8 +242,8 @@ it:
   than an hour behind has jumped, and a clock that gains a little on every reading does not get
   believed by small steps: it drifts away until it is not;
 - at start, against the newest record in the log (the head, else the newest
-  record on disk): a clock before it, or more than ten minutes after it (the
-  margin of a restart, not of a stop), is not believed. Every command is a
+  record on disk): a clock more than an hour before it, or more than ten
+  minutes after it (the margin of a restart, not of a stop), is not believed. Every command is a
   start of its own, so this holds for them too; a command run while the server
   is up (it holds `server.lock`) is believed if the clock agrees, within a
   quarter of an hour, with the time the server's last check believed
@@ -250,8 +255,10 @@ it:
   does not believe the clock;
 - against you: `epistle evidence clock accept` says the date this machine
   reads is the real one (for a server stopped for days, with no authority to
-  ask). The running server takes it at its next check if it is less than an
-  hour old.
+  ask). Only a running server reads the request, at its next check, and only
+  if it is less than five minutes old; it drops the request at every check
+  whether it needed it or not. With the server stopped it changes nothing for
+  the command you run next: start the server first.
 
 While the clock is not believed, nothing is sealed, purged or expired on it,
 the kept bytes and the records stay where they are, transactional mail is held,
@@ -266,7 +273,8 @@ server did not believe, writes a record dated by the estimate, which may fall
 in a day already sealed and be refused; start the server (it asks the timestamp
 authority) or run `epistle evidence clock accept` first. A key rotation refuses
 to run at a clock that is not believed, and in the first half hour of a day. A day is sealed half an hour after
-midnight, more than a believed clock can be ahead of the true time, and a
+midnight, more than a believed clock can be ahead of the true time within one
+process, and a
 token the authority gives for a day that had not ended by its own clock is not
 kept: it is asked for again. Mail in the queue ages by the earlier of the clock
 and the estimate (a log that could not be read leaves the queue nothing to
@@ -275,6 +283,18 @@ on by themselves; starting the server again is also enough, because the new
 process judges the clock by the log, not by what the old one had seen. A clock
 that is behind a record dated in the future (a record cannot be removed) is
 believed again when the date arrives.
+
+A restart starts from the newest record, which was dated by a clock believed
+at the time and may have been some minutes ahead of the true time, and
+believes a clock up to ten minutes after it. A machine whose clock moves and
+whose server is restarted over and over could therefore walk the believed time
+ahead, ten minutes at a time, past the margin a day is sealed with. What stops
+that is a source of time the machine does not set: with a timestamp authority
+the server asks it at its first check after a start and every hour, even when
+it believes the clock, and a clock it finds ahead is not believed, which holds
+sealing and purging. Without an authority nothing outside the machine checks;
+`epistle evidence clock accept` and a look at `epistle status` after a series
+of restarts are what is left.
 
 ## Limits
 
@@ -289,6 +309,12 @@ believed again when the date arrives.
   minutes, half of what it is given. There is no incremental verification:
   caching a verified day would trust the files not to have changed, which is
   what the verification is for.
+- The daily limits are per account, not per tenant: a tenant with ten
+  accounts may use ten times an account's share, and its administrator, who
+  creates the accounts, can fill the day's 5 000 000 records for everybody
+  else. "No account uses more than a tenth of what the others need" is true of
+  one account and false of a tenant. Where tenants do not trust one another,
+  limit the number of accounts they may create.
 - One account may add 500 000 records a day (an acceptance and the outcome it
   owes each recipient, counted when it is accepted) and keep 4 GiB in full, and
   the whole log takes 5 000 000 records a day, so no account, whatever its

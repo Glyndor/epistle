@@ -156,19 +156,23 @@ pub fn check_expecting(
 		}
 	}
 	let scope = super::manifest::complete(dir, expected, &verified_days);
-	if let Ok(complete) = &scope {
-		report.notes.push(complete.scope.clone());
-		report
-			.notes
-			.push(format!("delivery: {}", complete.delivery.words()));
-		report.notes.push(match complete.delivery.records_left_out {
-			0 => "the bundle holds every record of the days it covers".to_string(),
-			left => format!(
-				"the records are a selection of the log ({left} records of the days it covers are not here): an outcome after the ones shown cannot be ruled out"
-			),
-		});
-		report.delivery = Some(complete.delivery);
-	}
+	// What became of the recipients is told only of a bundle that verifies: a
+	// reader who takes it from a bundle that does not would read the records
+	// of something that was not shown to be what it says. So the notes are
+	// made after the verdict, not made and taken back.
+	let told = scope.as_ref().ok().map(|complete| {
+		let notes = vec![
+			complete.scope.clone(),
+			format!("delivery: {}", complete.delivery.words()),
+			match complete.delivery.records_left_out {
+				0 => "the bundle holds every record of the days it covers".to_string(),
+				left => format!(
+					"the records are a selection of the log ({left} records of the days it covers are not here): an outcome after the ones shown cannot be ruled out"
+				),
+			},
+		];
+		(notes, complete.delivery)
+	});
 	report.add(
 		"every message in the bundle has an outcome for each recipient it covers",
 		scope.map(|_| ()),
@@ -177,16 +181,11 @@ pub fn check_expecting(
 		"every file belongs to a verified day or an accepted record",
 		strays(dir, &vouched),
 	);
-	// What became of the recipients is told only of a bundle that verifies: a
-	// reader who takes `delivery` from a bundle that does not would read the
-	// records of something that was not shown to be what it says.
-	if !report.passed() {
-		report.delivery = None;
-		report.notes.retain(|note| {
-			!note.starts_with("delivery:")
-				&& !note.starts_with("the bundle holds every record")
-				&& !note.starts_with("the records are a selection")
-		});
+	if report.passed()
+		&& let Some((notes, delivery)) = told
+	{
+		report.notes.extend(notes);
+		report.delivery = Some(delivery);
 	}
 	report.notes.push(REVOCATION_NOTE.into());
 	Ok(report)
