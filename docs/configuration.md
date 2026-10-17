@@ -595,6 +595,12 @@ has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
 the threshold the per-account classifier is not trustworthy, so the
 user gets the server's general training rather than a coin-flip.
 
+Learning from one message costs a fixed amount, whatever its size: the
+first 256 KiB of the message, at most 5000 distinct words from it, written
+in one statement. The transactions of a training and of an account removal
+take their locks in the same order (the totals row, then the token rows in
+ascending order), so they cannot deadlock.
+
 An account's scope scores a message only when that account is the single
 local recipient and was addressed as itself. A message with two or more
 local recipients, or one addressed to an alias or a list, is scored by the

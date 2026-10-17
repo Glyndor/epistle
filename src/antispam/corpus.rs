@@ -14,6 +14,21 @@
 //! the words users received nor what they marked as spam, only opaque,
 //! per-instance hashes. The hash is deterministic, so lookups still work, and
 //! token identity (all the classifier needs) is preserved.
+//!
+//! **Bounded work.** Training is fed by mail any remote sender can send, so one
+//! message costs a fixed amount whatever its size: [`BayesStore::train`] reads
+//! a window of the first
+//! [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES) bytes of
+//! the text, keeps at most [`MAX_TRAIN_TOKENS`] distinct tokens and writes them
+//! in one statement.
+//!
+//! **Lock order.** Every transaction that takes more than one of these locks
+//! takes them in this order, so two of them cannot wait for each other (a
+//! process-local `scope_lock` first, then rows in the database):
+//! `scope_lock`, then `bayes_corpus`, then `bayes_token`. Whatever must be
+//! locked before the totals (a per-account ledger of lessons, for instance)
+//! comes before `bayes_corpus`. Inside `bayes_token` the rows are written in
+//! ascending token order. [`BayesStore::forget_scope`] follows the same order.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -30,6 +45,11 @@ pub const SHARED: &str = "";
 
 /// The corpus key filename under the data directory.
 const KEY_FILE: &str = "bayes-corpus.key";
+
+/// The most distinct tokens one message adds to a corpus. Also the cap a
+/// user's junk lesson is held to; a message with more distinct words than
+/// this has told the corpus all it will learn from the words it opens with.
+pub const MAX_TRAIN_TOKENS: usize = 5000;
 
 /// The set of scope names whose removal is in flight or whose purge has
 /// just committed. The training worker consults the set before any
@@ -102,70 +122,6 @@ impl BayesStore {
 	/// The stored (hashed) form of a token.
 	fn hash(&self, token: &str) -> String {
 		hash_token(&self.key, token)
-	}
-
-	/// Train the `scope` corpus on one message: bump the message total and each
-	/// token's ham or spam count, atomically.
-	pub async fn train(&self, scope: &str, text: &str, spam: bool) -> Result<(), sqlx::Error> {
-		// Hold the per-store lock for the duration of every train call so a
-		// worker that just passed the tombstone check cannot race the DELETE a
-		// concurrent `forget_scope` is committing. Training is infrequent, so
-		// holding the lock across the SQL is fine; the lock is per-instance
-		// and does not span processes.
-		let _scope_guard = self.scope_lock.lock().await;
-		// A scope whose removal is in flight (or has just committed and
-		// the tombstone has not yet been cleared) is on its way out:
-		// training now would recreate rows the purge is dropping. Drop
-		// the job silently so the worker's caller never sees an error
-		// for a message that no longer belongs to a live account. The
-		// lock is taken with `unwrap_or_else(|e| e.into_inner())` so a
-		// panic inside another train call does not poison every later
-		// spam-learning job through the worker.
-		if self
-			.tombstones
-			.lock()
-			.unwrap_or_else(|error| error.into_inner())
-			.contains(scope)
-		{
-			return Ok(());
-		}
-		let tokens: Vec<String> = bayes::tokenize(text).iter().map(|t| self.hash(t)).collect();
-		let ham_inc: i64 = if spam { 0 } else { 1 };
-		let spam_inc: i64 = if spam { 1 } else { 0 };
-		let mut tx = self.pool.begin().await?;
-
-		sqlx::query!(
-			"INSERT INTO bayes_corpus (scope, ham_messages, spam_messages) \
-			 VALUES ($1, $2, $3) \
-			 ON CONFLICT (scope) DO UPDATE SET \
-			     ham_messages = bayes_corpus.ham_messages + $2, \
-			     spam_messages = bayes_corpus.spam_messages + $3, \
-			     updated_at = now()",
-			scope,
-			ham_inc,
-			spam_inc,
-		)
-		.execute(&mut *tx)
-		.await?;
-
-		for token in tokens {
-			sqlx::query!(
-				"INSERT INTO bayes_token (id, scope, token, ham_count, spam_count) \
-				 VALUES ($1, $2, $3, $4, $5) \
-				 ON CONFLICT (scope, token) DO UPDATE SET \
-				     ham_count = bayes_token.ham_count + $4, \
-				     spam_count = bayes_token.spam_count + $5, \
-				     updated_at = now()",
-				uuid::Uuid::now_v7(),
-				scope,
-				token,
-				ham_inc,
-				spam_inc,
-			)
-			.execute(&mut *tx)
-			.await?;
-		}
-		tx.commit().await
 	}
 
 	/// Train in the background, logging on failure. Used on the delivery path so
@@ -300,13 +256,14 @@ impl BayesStore {
 
 	async fn forget_scope_inner(&self, scope: &str) -> Result<u64, sqlx::Error> {
 		let mut tx = self.pool.begin().await?;
+		// The totals first, then the tokens: the order `train` takes them in.
+		sqlx::query!("DELETE FROM bayes_corpus WHERE scope = $1", scope,)
+			.execute(&mut *tx)
+			.await?;
 		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
 			.execute(&mut *tx)
 			.await?
 			.rows_affected();
-		sqlx::query!("DELETE FROM bayes_corpus WHERE scope = $1", scope,)
-			.execute(&mut *tx)
-			.await?;
 		tx.commit().await?;
 		Ok(tokens)
 	}
@@ -474,6 +431,9 @@ impl BayesScorer for BayesStore {
 		self.train_in_background(scope.to_string(), text.to_string(), spam);
 	}
 }
+
+#[path = "corpus_train.rs"]
+mod train;
 
 #[cfg(test)]
 #[path = "corpus_tests.rs"]

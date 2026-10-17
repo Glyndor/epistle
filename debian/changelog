@@ -303,6 +303,15 @@ epistle (0.12.1) unstable; urgency=medium
     when that account is the single local recipient and was addressed as
     itself. Mail to an alias, even one with a single member, uses the shared
     corpus.
+  * Security: training the Bayesian corpus on a message is bounded. The shared
+    corpus learns from every message the server accepts or rejects, whoever
+    sent it, and it tokenized the whole message (up to 25 MiB, a few million
+    words) and wrote one row per word, one statement each, holding a lock
+    that the lessons of the accounts waited for. A message now teaches the
+    corpus from its first 256 KiB, at most 5000 distinct words, in one
+    statement. The transactions of a training and of `epistle account
+    remove` now take their locks in one order, which ends the deadlocks
+    between them.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 

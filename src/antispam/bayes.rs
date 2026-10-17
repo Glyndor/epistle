@@ -40,9 +40,20 @@ pub struct Corpus {
 /// runs within a length band; counting a token once per message matches
 /// Graham's training model.
 pub fn tokenize(text: &str) -> Vec<String> {
+	tokenize_bounded(text, usize::MAX)
+}
+
+/// [`tokenize`] that stops after `max_tokens` distinct tokens, in order of
+/// appearance. The scan ends there too, so the work and the memory are
+/// bounded by `max_tokens` however much text there is, which a trainer fed
+/// by remote senders needs.
+pub fn tokenize_bounded(text: &str, max_tokens: usize) -> Vec<String> {
 	let mut seen = HashSet::new();
 	let mut tokens = Vec::new();
 	for raw in text.split(|c: char| !c.is_alphanumeric()) {
+		if tokens.len() >= max_tokens {
+			break;
+		}
 		if (MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
 			let token = raw.to_ascii_lowercase();
 			if seen.insert(token.clone()) {
@@ -113,6 +124,17 @@ mod tests {
 		// "a" is below the minimum length; the >30 char run is dropped.
 		assert!(!tokens.contains(&"a".to_string()));
 		assert!(tokens.iter().all(|t| t.len() <= MAX_TOKEN_LEN));
+	}
+
+	#[test]
+	fn tokenize_bounded_stops_at_the_cap_and_keeps_the_first_tokens() {
+		let tokens = tokenize_bounded("alpha beta alpha gamma delta epsilon", 3);
+		assert_eq!(tokens, ["alpha", "beta", "gamma"]);
+		assert!(tokenize_bounded("alpha beta", 0).is_empty());
+		assert_eq!(
+			tokenize_bounded("alpha beta", usize::MAX),
+			tokenize("alpha beta")
+		);
 	}
 
 	#[test]
