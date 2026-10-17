@@ -292,14 +292,31 @@ fn parse(text: &str, now: u64) -> Result<Vec<Row>, Vec<String>> {
 /// The text of an import file, read within [`MAX_BYTES`].
 fn read_input(path: &Path) -> Result<String, ResourceError> {
 	let shown = sanitize(&path.display().to_string());
-	let mut file = std::fs::File::open(path).map_err(|error| {
+	let unreadable = |error: std::io::Error| {
 		let message = format!("cannot read {shown}: {error}");
 		if error.kind() == std::io::ErrorKind::NotFound {
 			ResourceError::refused(message)
 		} else {
 			ResourceError::Failure(message)
 		}
-	})?;
+	};
+	// Look before opening: opening a named pipe waits for a writer that may
+	// never come, and a device is not a file of addresses.
+	let metadata = std::fs::metadata(path).map_err(unreadable)?;
+	if !metadata.is_file() {
+		return Err(ResourceError::refused(format!(
+			"{shown} is not a regular file"
+		)));
+	}
+	let mut file = {
+		use std::os::unix::fs::OpenOptionsExt;
+		std::fs::OpenOptions::new()
+			.read(true)
+			.custom_flags(libc::O_NONBLOCK)
+			.open(path)
+			.map_err(unreadable)?
+	};
+	// The path may have been swapped between the look and the open.
 	let metadata = file.metadata().map_err(failure)?;
 	if !metadata.is_file() {
 		return Err(ResourceError::refused(format!(

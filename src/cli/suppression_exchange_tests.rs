@@ -134,3 +134,10 @@ fn a_bidirectional_override_cannot_hide_in_a_reason() {
 	);
 	assert_eq!(reason_problem("plain \u{e9}"), None);
 }
+
+#[test]
+fn a_time_that_is_not_on_the_calendar_is_refused_not_normalised() {
+	assert!(parse_row("a@example.net,2026-02-30T00:00:00Z", NOW).is_err());
+	assert!(parse_row("a@example.net,2026-01-01T00:00:00+99:99", NOW).is_err());
+	assert!(parse_row("a@example.net,2026-02-28T00:00:00Z", NOW).is_ok());
+}

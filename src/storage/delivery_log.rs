@@ -555,8 +555,8 @@ pub(crate) fn parse_rfc3339(value: &str) -> Result<u64, String> {
 	if !(1..=12).contains(&month) {
 		return Err(format!("since {value:?} has a month out of range"));
 	}
-	if !(1..=31).contains(&day) {
-		return Err(format!("since {value:?} has a day-of-month out of range"));
+	if !day::is_calendar_day(year, month, day) {
+		return Err(format!("since {value:?} is not a day of the calendar"));
 	}
 	let (time, offset_seconds) = if let Some(time) = rest.strip_suffix('Z') {
 		(time, 0i64)
@@ -638,7 +638,11 @@ fn parse_offset(offset: &str) -> Result<i64, String> {
 			.map_err(|_| format!("since ... {offset:?} has a non-numeric minute"))?,
 		None => 0,
 	};
-	Ok(hours * 3600 + minutes * 60)
+	let seconds = hours * 3600 + minutes * 60;
+	if !(0..60).contains(&minutes) || !day::is_clock_offset(seconds) {
+		return Err(format!("since ... {offset:?} is not a UTC offset"));
+	}
+	Ok(seconds)
 }
 
 #[path = "delivery_log_lines.rs"]

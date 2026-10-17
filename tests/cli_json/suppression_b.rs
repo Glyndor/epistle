@@ -378,3 +378,43 @@ fn a_file_that_is_not_a_readable_text_file_is_refused() {
 		assert!(stderr.contains(needle), "{needle} missing from: {stderr}");
 	}
 }
+
+#[test]
+fn a_named_pipe_is_refused_instead_of_waited_for() {
+	let env = env("");
+	let fifo = env.dir.path().join("pipe");
+	assert!(
+		std::process::Command::new("mkfifo")
+			.arg(&fifo)
+			.status()
+			.expect("mkfifo")
+			.success()
+	);
+	let binary =
+		std::env::var_os("CLI_JSON_BIN").unwrap_or_else(|| env!("CARGO_BIN_EXE_epistle").into());
+	let mut child = std::process::Command::new(binary)
+		.args(["suppression", "--config", &env.config, "import"])
+		.arg(&fifo)
+		.args(["--dry-run", "--json"])
+		.stdin(std::process::Stdio::null())
+		.stdout(std::process::Stdio::piped())
+		.stderr(std::process::Stdio::piped())
+		.spawn()
+		.expect("spawn");
+	let began = std::time::Instant::now();
+	let status = loop {
+		if let Some(status) = child.try_wait().expect("wait") {
+			break status;
+		}
+		if began.elapsed() > std::time::Duration::from_secs(10) {
+			let _ = child.kill();
+			panic!("import waited for a writer on a named pipe");
+		}
+		std::thread::sleep(std::time::Duration::from_millis(20));
+	};
+	assert_eq!(status.code(), Some(2));
+	let mut stderr = String::new();
+	std::io::Read::read_to_string(&mut child.stderr.take().expect("stderr"), &mut stderr)
+		.expect("read");
+	assert!(stderr.contains("is not a regular file"), "{stderr}");
+}
