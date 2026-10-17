@@ -18,6 +18,11 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     Unknown names, rejected input and a destructive action without `--yes`
     stay 2. A script that treated any non-zero code other than 1 as a usage
     error needs to read 3 as a refusal.
+  * CLI: `epistle domain disable|enable` switches a hosted domain off and on
+    without removing it. The new `disabled_domains` setting lists the
+    switched-off domains; mail for one is rejected like mail for an unknown
+    user and nobody may send as an address in it. Accounts, DNS records and
+    DKIM keys stay. `domain list` and `domain show` report `enabled`.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

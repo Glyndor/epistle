@@ -52,3 +52,6 @@ mod init;
 
 #[path = "cli_json/sweep.rs"]
 mod sweep;
+
+#[path = "cli_json/domain_state.rs"]
+mod domain_state;

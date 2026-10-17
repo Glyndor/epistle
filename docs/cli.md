@@ -39,7 +39,8 @@ forward). Policy refusals exited `2` before they had their own code.
 | `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `add`, `remove` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
-| `masked`, `ban`, `queue`, `domain`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
+| `domain` | `list`, `show`, `add`, `remove`, `disable`, `enable`, `alias add\|remove` | |
+| `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
 
@@ -135,7 +136,7 @@ a static one with the hint to edit the config file. `relay add
 a terminal. Echo comes back when the read ends, Ctrl-C included.
 
 **Destructive commands.** `account remove`, `account 2fa disable`,
-`app-password revoke`, `api-key revoke`, `archive purge`, `domain remove`, `domain alias remove`,
+`app-password revoke`, `api-key revoke`, `archive purge`, `domain remove`, `domain disable`, `domain alias remove`,
 `alias remove`, `masked remove`, `queue remove` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -533,6 +534,8 @@ epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
 epistle domain remove old.example.org [--yes|-y]
+epistle domain disable example.net [--yes|-y] [--dry-run]
+epistle domain enable example.net [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -541,8 +544,20 @@ epistle domain alias remove alias.example.org [--yes|-y]
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
 the alias edges plus the accounts and aliases that route mail through
 the domain, so the operator can see what depends on it before removing
-it. JSON records contain `domain`, `aliases_to`, `aliases_from`,
+it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
 `accounts` and `aliases`.
+
+`disable` switches a domain off without removing it: the name goes into
+`disabled_domains`, and after the restart mail for it is rejected at RCPT
+exactly like mail for an unknown user (a permanent 550, so senders get a
+bounce, not a retry), and no account may send as an address in it.
+Accounts, mailboxes, aliases, DNS records and DKIM keys stay, and the
+mailboxes remain readable over IMAP. It asks first (see
+[Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
+exit 2, and refuses to switch off the last enabled domain of a server that
+has listeners. `enable` takes the name out of `disabled_domains` again. Both
+report `result` `unchanged` when the domain is already in that state, and the
+JSON result carries `domain` and `enabled`.
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator

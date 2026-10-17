@@ -172,6 +172,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("domain list", &[], Done),
 	("domain show", &["example.org"], Done),
 	("domain add", &["example.net"], Done),
+	("domain disable", &["example.net", "--yes"], Done),
+	("domain enable", &["example.net"], Done),
 	(
 		"domain alias add",
 		&["alias.example.net", "example.net"],

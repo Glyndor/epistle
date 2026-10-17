@@ -24,6 +24,9 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
+#[path = "domain_state.rs"]
+mod state;
+
 #[path = "domain_dispatch.rs"]
 mod dispatch;
 use dispatch::{Outcome, execute};
@@ -74,6 +77,27 @@ pub enum DomainCli {
 	},
 	/// Edit the `domain_aliases` map.
 	Alias(DomainAliasArgs),
+	/// Switch a domain off without removing it.
+	///
+	/// Mail for the domain is rejected like mail for an unknown user and
+	/// nobody may send as an address in it. Accounts, mailboxes, DNS
+	/// records and DKIM keys stay. Undo it with `domain enable`.
+	Disable {
+		/// Domain to switch off.
+		#[arg(value_name = "DOMAIN")]
+		domain: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+	/// Switch a disabled domain back on.
+	Enable {
+		/// Domain to switch on.
+		#[arg(value_name = "DOMAIN")]
+		domain: String,
+	},
 }
 
 /// Sub-action on `epistle domain alias`.
@@ -130,6 +154,7 @@ fn open(path: &Path) -> Result<ConfigDocument, String> {
 #[derive(Serialize)]
 struct DomainRow {
 	domain: String,
+	enabled: bool,
 	aliases_to: Vec<String>,
 	aliases_from: Vec<String>,
 }
@@ -152,6 +177,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 			.collect();
 		rows.push(DomainRow {
 			domain: domain.clone(),
+			enabled: state::is_enabled(config, domain),
 			aliases_to,
 			aliases_from,
 		});
@@ -203,6 +229,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 #[derive(Serialize)]
 struct DomainView {
 	domain: String,
+	enabled: bool,
 	aliases_to: Vec<String>,
 	aliases_from: Vec<String>,
 	accounts: Vec<String>,
@@ -256,6 +283,7 @@ fn show(config: &Config, domain: &str, json: bool, out: &mut impl Write) -> std:
 		.collect();
 	let view = DomainView {
 		domain: domain.to_string(),
+		enabled: state::is_enabled(config, domain),
 		aliases_to,
 		aliases_from,
 		accounts,
@@ -267,6 +295,7 @@ fn show(config: &Config, domain: &str, json: bool, out: &mut impl Write) -> std:
 		return Ok(());
 	}
 	writeln!(out, "domain\t{}", view.domain)?;
+	writeln!(out, "enabled\t{}", if view.enabled { "yes" } else { "no" })?;
 	writeln!(
 		out,
 		"aliases_to\t{}",
