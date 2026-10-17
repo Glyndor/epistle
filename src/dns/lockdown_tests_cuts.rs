@@ -307,3 +307,32 @@ fn a_huge_zone_with_many_delegations_is_planned_in_one_pass() {
 		existing.len()
 	);
 }
+
+/// Nothing is followed: a CNAME that points back at itself through another
+/// name, and an NS whose target sits under the very name it delegates,
+/// are two records each, read once.
+#[test]
+fn loops_in_the_zone_are_not_followed() {
+	let plan = plan(&[
+		rec("a.example.org", RecordKind::Cname, "b.example.org."),
+		rec("b.example.org", RecordKind::Cname, "a.example.org."),
+		ns("loop.example.org", "ns1.loop.example.org."),
+		a("ns1.loop.example.org"),
+		ns("self.example.org", "self.example.org."),
+	]);
+	assert_eq!(
+		skipped(&plan),
+		vec![
+			delegated("loop.example.org"),
+			delegated("self.example.org"),
+			(
+				"a.example.org".to_string(),
+				"a.example.org is a CNAME, and no other record may sit next to a CNAME (RFC 1034 section 3.6.2); a null SPF and null MX belong at the name it points to; left as is".to_string()
+			),
+			(
+				"b.example.org".to_string(),
+				"b.example.org is a CNAME, and no other record may sit next to a CNAME (RFC 1034 section 3.6.2); a null SPF and null MX belong at the name it points to; left as is".to_string()
+			),
+		]
+	);
+}
