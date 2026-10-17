@@ -25,7 +25,7 @@ pub(super) enum Fail {
 	UnwrittenUnconfirmed,
 }
 
-/// Make the writing fail at the record with this index, for tests.
+// Make the writing fail at the record with this index, for tests.
 #[cfg(test)]
 thread_local! {
 	pub(super) static FAIL_AT: std::cell::Cell<Option<(usize, Fail)>> = const { std::cell::Cell::new(None) };
