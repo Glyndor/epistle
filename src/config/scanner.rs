@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::{Config, ConfigError};
-use crate::antispam::clamd::{DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_SECS};
+use crate::antispam::clamd::{DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_SECS, HEADROOM_BYTES};
 use crate::antispam::hook::HookVerdict;
 
 /// Action to apply when clamd reports a signature.
@@ -29,6 +29,20 @@ impl From<ClamdOnFound> for HookVerdict {
 	}
 }
 
+/// What happens to a message when clamd cannot scan it: the socket is
+/// missing, the exchange times out, or the reply is broken.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClamdOnError {
+	/// Accept the message unscanned. The default for a configuration that
+	/// does not name the key, so an upgrade keeps how mail flowed.
+	#[default]
+	Accept,
+	/// Answer with a temporary failure (`451 4.7.1`), so the sender retries
+	/// and nothing passes unscanned while clamd is down.
+	Defer,
+}
+
 /// Score above which unauthenticated inbound mail is delivered to the
 /// recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in
 /// `X-Spam-Score`. The default (`0.95`) is high enough that a corpus only
@@ -45,6 +59,8 @@ pub struct Antispam {
 	pub clamd_socket: Option<PathBuf>,
 	/// Verdict on detection, defaulting to quarantine.
 	pub clamd_on_found: ClamdOnFound,
+	/// What a failed scan does: accept unscanned (default) or defer.
+	pub clamd_on_error: ClamdOnError,
 	/// Deadline for the entire exchange, in seconds (default 30).
 	pub clamd_timeout_secs: u64,
 	/// Maximum message size to send, in bytes (default 25 MiB).
@@ -77,6 +93,7 @@ impl Default for Antispam {
 		Self {
 			clamd_socket: None,
 			clamd_on_found: ClamdOnFound::Quarantine,
+			clamd_on_error: ClamdOnError::Accept,
 			clamd_timeout_secs: DEFAULT_TIMEOUT_SECS,
 			clamd_max_bytes: DEFAULT_MAX_BYTES,
 			scan_authenticated: true,
@@ -113,7 +130,27 @@ impl Config {
 				)));
 			}
 		}
-		Ok(())
+		// Defer promises that nothing passes unscanned. A message over
+		// `clamd_max_bytes` is never sent to clamd, so every message the
+		// server accepts has to fit under it once the server has added its
+		// own headers.
+		let largest = match self.max_message_size.unwrap_or(0) {
+			0 => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+			size => size,
+		};
+		if self.antispam.clamd_socket.is_some()
+			&& self.antispam.clamd_on_error == ClamdOnError::Defer
+			&& largest + HEADROOM_BYTES as u64 > self.antispam.clamd_max_bytes as u64
+		{
+			return Err(ConfigError::Invalid(format!(
+				"[antispam] clamd_on_error = \"defer\" needs clamd_max_bytes ({}) of at least \
+				 max_message_size ({largest}) plus {HEADROOM_BYTES} for the headers the server adds: \
+				 a larger message would not be scanned",
+				self.antispam.clamd_max_bytes
+			)));
+		}
+		// The attachment policy is the other content screen.
+		self.validate_attachments()
 	}
 }
 

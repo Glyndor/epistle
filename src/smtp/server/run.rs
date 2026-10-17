@@ -7,12 +7,17 @@ use tokio::io::AsyncReadExt;
 use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
+use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, ensure_submission_headers, line_error_reply, received_header,
-	received_hop_count,
+	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
 };
 
-use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
+use super::data_rate::{Cut, RateWindow, send_within};
+use super::session_time::{SessionClock, end_session};
+use super::{
+	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, end_cut, read_chunk,
+	send,
+};
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
 /// akin to Postfix's `smtpd_hard_error_limit`).
@@ -36,6 +41,13 @@ impl Server {
 		let mut buffer = [0u8; READ_BUFFER];
 		// Consecutive error replies; too many means an abusive client.
 		let mut error_streak = 0u32;
+		// The rate window of the message being received: started at the
+		// 354 or at the first BDAT chunk, and kept until the transaction
+		// ends, so the time between chunks and the commands sent in it
+		// count against the same clock.
+		let mut body_window: Option<RateWindow> = None;
+		// The lifetime of the session, checked at every command boundary.
+		let mut clock = SessionClock::start(self.max_session_time);
 
 		loop {
 			let line = match decoder.next_line() {
@@ -44,7 +56,11 @@ impl Server {
 					// A drain waits for an open transaction, DATA or AUTH to end.
 					let idle = mode == Mode::Commands && !session.in_transaction();
 					let drain = self.drain.as_deref().filter(|_| idle);
-					let reading = stream.read(&mut buffer);
+					// A message being received is held to the rate floor.
+					let off = RateWindow::off();
+					let window = body_window.as_ref().unwrap_or(&off);
+					let reading = window.guard(stream.read(&mut buffer));
+					let reading = clock.guard(body_window.is_none(), reading);
 					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
 					{
@@ -52,8 +68,12 @@ impl Server {
 							send(&mut stream, &Reply::single(421, "4.3.2 shutting down")).await?;
 							return Ok(());
 						}
-						Some(Ok(Ok(n))) => n,
-						Some(Ok(Err(e))) => return Err(e),
+						Some(Ok(Some(Some(Ok(n))))) => n,
+						Some(Ok(Some(Some(Err(e))))) => return Err(e),
+						Some(Ok(Some(None))) => {
+							return end_cut(&mut stream, Cut::TooSlow, session).await;
+						}
+						Some(Ok(None)) => return end_session(&mut stream, session).await,
 						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
@@ -61,6 +81,11 @@ impl Server {
 					};
 					if read == 0 {
 						return Ok(());
+					}
+					if mode == Mode::Data
+						&& let Some(window) = body_window.as_mut()
+					{
+						window.record(read);
 					}
 					decoder.feed(&buffer[..read]);
 					continue;
@@ -71,14 +96,26 @@ impl Server {
 				}
 			};
 
+			// A command or AUTH line past the session's lifetime is not run
+			// (QUIT still is: the client is leaving); a message body being
+			// received is left to finish.
+			if mode != Mode::Data
+				&& body_window.is_none()
+				&& clock.expired()
+				&& !line.eq_ignore_ascii_case(b"QUIT")
+			{
+				return end_session(&mut stream, session).await;
+			}
 			// In Data mode, pass raw bytes to support 8BITMIME (RFC 6152).
-			let action = if mode == Mode::Data {
-				session.data_line(&line)
-			} else {
+			let action = 'line: {
+				if mode == Mode::Data {
+					break 'line session.data_line(&line);
+				}
 				let Ok(line_str) = String::from_utf8(line) else {
+					// A command that is not UTF-8 is refused and counted like
+					// any syntax error.
 					if mode == Mode::Commands {
-						send(&mut stream, &Reply::syntax_error()).await?;
-						continue;
+						break 'line Some(session.unreadable_command());
 					}
 					// Auth responses must be ASCII; abort.
 					send(
@@ -103,13 +140,36 @@ impl Server {
 			// Resolve BDAT chunk reads (RFC 3030) into a terminal action that the
 			// dispatch below already handles (Continue for a non-final chunk,
 			// Deliver for the LAST chunk — so the full delivery path still runs).
-			while let Action::CollectChunk { size, last } = action {
-				let chunk = match read_chunk(&mut stream, &mut decoder, size).await {
-					Ok(Some(chunk)) => chunk,
-					Ok(None) => return Ok(()), // client closed mid-chunk
-					Err(error) => return Err(error),
+			let action = loop {
+				action = match action {
+					// The first chunk starts the window of the transaction.
+					Action::CollectChunk { size, last } => {
+						let window = body_window.get_or_insert_with(|| self.message_window());
+						let read = (size, last);
+						match read_chunk(&mut stream, &mut decoder, read, window, &mut session)
+							.await?
+						{
+							Ok(action) => action,
+							Err(cut) => return end_cut(&mut stream, cut, session).await,
+						}
+					}
+					// A refused chunk is consumed without being kept.
+					Action::DiscardChunk { size, reply } => {
+						let window = body_window.get_or_insert_with(|| self.message_window());
+						if let Err(cut) =
+							discard_chunk(&mut stream, &mut decoder, size, window).await?
+						{
+							return end_cut(&mut stream, cut, session).await;
+						}
+						Action::Continue(reply)
+					}
+					resolved => break resolved,
 				};
-				action = session.bdat_chunk(&chunk, last);
+			};
+			// The window ends with the transaction: the dot, the LAST
+			// chunk, RSET, or any refusal that resets it.
+			if !session.in_transaction() && body_window.take().is_some() {
+				clock.body_ended();
 			}
 			match action {
 				Action::Continue(reply) => {
@@ -128,22 +188,35 @@ impl Server {
 					} else {
 						error_streak = 0;
 					}
-					send(&mut stream, &reply).await?;
+					// Inside a transaction an unread reply counts as idle time.
+					if !send_within(&mut stream, &reply, body_window.as_ref()).await? {
+						return Ok(());
+					}
 				}
 				Action::CollectData(reply) => {
 					mode = Mode::Data;
 					send(&mut stream, &reply).await?;
+					body_window = Some(self.message_window());
 				}
 				// BDAT chunk reads are resolved into a terminal action above.
-				Action::CollectChunk { .. } => unreachable!("BDAT chunk resolved before dispatch"),
+				Action::CollectChunk { .. } | Action::DiscardChunk { .. } => {
+					unreachable!("BDAT chunk resolved before dispatch")
+				}
 				Action::CollectAuthResponse(reply) => {
 					mode = Mode::Auth;
 					send(&mut stream, &reply).await?;
 				}
 				Action::Deliver(reply, mut message) => {
+					// The body stays on the memory budget until this arm is
+					// over: it is still in memory while it is checked,
+					// stamped and handed to the sink.
+					let _held_body = session.take_delivery_reservation();
 					// DSNs for recipients this message did not fit for; sent
 					// only if the message itself is delivered.
 					let quota_reports = session.take_quota_reports();
+					// The submission-limit charge, refunded on drop by every
+					// refusal below and kept only once the message is handed on.
+					let mut charge = PendingCharge::new(session.take_submission_charge());
 					// Loop guard: reject mail that has already traversed too many
 					// hops before adding our own Received header (RFC 5321 §6.3).
 					if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
@@ -214,14 +287,17 @@ impl Server {
 					}
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
-					let auth_headers =
+					let (auth_headers, sender_passed) =
 						match self.authenticate_inbound(&message, &session, peer).await {
-							Ok(headers) => headers,
+							Ok(outcome) => outcome,
 							Err(reply) => {
 								send(&mut stream, &reply).await?;
 								continue;
 							}
 						};
+					// Who the server itself verified: a logged-in session, or
+					// this hop's SPF or DKIM pass. Never read from the headers.
+					message.sender_verified = session.authenticated().is_some() || sender_passed;
 					if let Some(dns) = &self.spf
 						&& message.recipients.iter().any(|recipient| {
 							recipient
@@ -245,22 +321,29 @@ impl Server {
 					// reverse-path's domain (the authenticated account's own
 					// domain), with the server hostname as a last resort.
 					// Done before the Received block so the trace header
-					// stays the outermost line.
+					// stays the outermost line. The stamp and the Bcc
+					// strip work inside the body's own buffer, so the only
+					// new body-sized allocation is the stamped one below.
 					if session.authenticated().is_some() {
 						let stamp_domain = message
 							.reverse_path
 							.rsplit_once('@')
 							.map(|(_, d)| d.to_ascii_lowercase())
 							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
-						message.data = ensure_submission_headers(
-							&message.data,
+						crate::smtp::trace::ensure_submission_headers_in_place(
+							&mut message.data,
 							&stamp_domain,
 							std::time::SystemTime::now(),
 						);
 						// The MSA drops Bcc: those recipients are on the envelope.
-						message.data = crate::smtp::trace::strip_bcc(&message.data);
+						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
 					}
-					let mut stamped = header.into_bytes();
+					// Build the final stamped buffer in one allocation of
+					// the exact trace + auth + body length: the body is
+					// copied once and its old buffer freed.
+					let mut stamped =
+						Vec::with_capacity(header.len() + auth_headers.len() + message.data.len());
+					stamped.extend_from_slice(header.as_bytes());
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);
 					message.data = stamped;
@@ -320,8 +403,35 @@ impl Server {
 								self.train_corpus(&message.data, true);
 								message.mailbox = Some("Rejects".to_string());
 							}
+							crate::antispam::hook::HookVerdict::Defer => {
+								send(
+									&mut stream,
+									&Reply::single(
+										451,
+										"4.7.1 content scan unavailable, try again later",
+									),
+								)
+								.await?;
+								continue;
+							}
+							crate::antispam::hook::HookVerdict::Refuse => {
+								send(
+									&mut stream,
+									&crate::smtp::sink::SinkError::ScanTooLarge.smtp_reply(),
+								)
+								.await?;
+								continue;
+							}
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
+					}
+					// The attachment policy decides where the scanner does.
+					if session.authenticated().is_none()
+						&& self
+							.screen_attachments(&mut message, &mut stream, peer)
+							.await?
+					{
+						continue;
 					}
 					// Bayesian thresholds that decide on their own: a score at or above
 					// `bayes_junk_at` routes to Junk with the spam-marking
@@ -371,8 +481,34 @@ impl Server {
 					// Mail an account submits goes through the submission
 					// path, which applies what holds for our own senders
 					// (the antivirus on outbound mail among them).
+					let mut dropped = 0usize;
 					let handed = match session.authenticated() {
 						Some(account) => {
+							// The class: from the credential and the
+							// account, never from the message, and with
+							// the marketing rules applied.
+							let prepared =
+								match self.prepare_submission(&session, account, &mut message) {
+									Ok(prepared) => prepared,
+									Err(refused) => {
+										send(&mut stream, &refused).await?;
+										continue;
+									}
+								};
+							// Marketing mail to suppressed addresses only has
+							// nowhere to go: say so, as the API does.
+							if message.recipients.is_empty() {
+								send(
+									&mut stream,
+									&Reply::single(
+										550,
+										"5.7.1 every recipient is on the suppression list",
+									),
+								)
+								.await?;
+								continue;
+							}
+							dropped = prepared.suppressed.len();
 							// Per-account settings may disable the save
 							// (`save_sent: false` on the account, on the
 							// app password that authenticated this
@@ -381,21 +517,31 @@ impl Server {
 							// account when it sets a value. The copy is
 							// taken from `message.data` after the Bcc
 							// strip, so it never names a blind-carbon
-							// copy recipient (RFC 5322 §3.6.3).
-							if self.save_sent_enabled_for(&session) {
-								self.save_sent_copy(&session, account, &message.data);
-							}
-							self.sink.submit(
+							// copy recipient (RFC 5322 §3.6.3). It is stored
+							// only once the sink accepted the message: one the
+							// scan or the attachment policy refused, or asked
+							// to retry, was never sent. Transactional mail is
+							// never copied to Sent.
+							let sent_copy = (prepared.class.allows_sent_copy()
+								&& self.save_sent_enabled_for(&session))
+							.then(|| message.data.clone());
+							let submitted = self.sink.submit(
 								message,
 								uuid::Uuid::now_v7(),
 								account,
-								&std::collections::BTreeMap::new(),
-							)
+								&crate::smtp::sink::Submission::of_class(prepared.class),
+							);
+							if let (Ok(()), Some(copy)) = (&submitted, sent_copy) {
+								self.save_sent_copy(&session, account, &copy);
+							}
+							submitted
 						}
 						None => self.sink.deliver(message),
 					};
 					let reply = match handed {
 						Ok(()) => {
+							charge.accept();
+							session.message_delivered();
 							self.metrics.accepted();
 							for report in quota_reports {
 								if let Err(error) = self.sink.deliver(report) {
@@ -412,7 +558,16 @@ impl Server {
 									false,
 								);
 							}
-							reply
+							match dropped {
+								0 => reply,
+								n => Reply::single(
+									250,
+									&format!(
+										"2.0.0 queued; {n} suppressed recipient{} dropped",
+										if n == 1 { "" } else { "s" }
+									),
+								),
+							}
 						}
 						Err(error) => {
 							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
@@ -457,111 +612,5 @@ impl Server {
 				}
 			}
 		}
-	}
-}
-
-impl Server {
-	/// Whether a copy of the message this session is about to submit
-	/// should be stored into the account's `Sent` folder. The
-	/// precedence: the app password
-	/// that authenticated the session overrides the account-wide
-	/// setting when it carries an explicit value, otherwise the
-	/// account-wide setting decides (default "on" when absent).
-	pub(super) fn save_sent_enabled_for(&self, session: &crate::smtp::session::Session) -> bool {
-		let Some(account) = session.authenticated() else {
-			return false;
-		};
-		let directory = self.directory.current();
-		// App password override first: an explicit `Some(false)` here
-		// disables the save even if the account has it on.
-		if let Some(label) = session.auth_app_password_label()
-			&& let Some(value) = directory.app_password_save_sent(account, Some(label))
-		{
-			return value;
-		}
-		directory.save_sent_for(account).unwrap_or(true)
-	}
-
-	/// Store one copy of `data` into the account's `Sent` folder. The
-	/// copy carries the `\Seen` flag and never includes a `Bcc:`
-	/// header (the SMTP path strips Bcc before this is called). A
-	/// quota-exhausted mailbox or any other filesystem error is
-	/// logged and ignored: the message the client sent must still
-	/// leave the server. The duplicate-guard call uses the
-	/// `Message-ID:` the server stamped on the message when the
-	/// client omitted one.
-	pub(super) fn save_sent_copy(
-		&self,
-		session: &crate::smtp::session::Session,
-		account: &str,
-		data: &[u8],
-	) {
-		let Some(data_dir) = self.data_dir.as_ref() else {
-			tracing::warn!(
-				account = %crate::log_id::account(account),
-				"save_sent: no data directory on this listener; skipping copy"
-			);
-			return;
-		};
-		let message_id = match crate::storage::save_sent::first_message_id(data) {
-			Some(id) => id,
-			None => {
-				tracing::warn!(
-					account = %crate::log_id::account(account),
-					"save_sent: message has no Message-ID after stamping; skipping copy"
-				);
-				return;
-			}
-		};
-		// Reverse dedup: if the client appended first, a message with
-		// this Message-ID already lives in Sent; the guard does not
-		// know about it yet, but the on-disk scan does. Skip the save
-		// so we do not produce a duplicate copy. The IMAP APPEND
-		// fast path uses the same guard and skips its own copy when
-		// the guard says the server already saved.
-		if let Ok(Some(_existing)) =
-			crate::storage::save_sent::lookup_sent_uid(data_dir, account, &message_id)
-		{
-			tracing::debug!(
-				account = %crate::log_id::account(account),
-				"save_sent: Message-ID already in Sent; skipping server-side copy"
-			);
-			return;
-		}
-		let crypto = self
-			.crypto
-			.as_deref()
-			.cloned()
-			.unwrap_or_else(crate::storage::MessageCrypto::disabled);
-		let quota = self
-			.quota
-			.as_ref()
-			.and_then(|quota| quota.limit(&self.directory.current(), account));
-		match crate::storage::save_sent::store_copy(
-			data_dir,
-			account,
-			data,
-			&message_id,
-			&crypto,
-			quota,
-		) {
-			Ok(_uid) => {
-				tracing::debug!(
-					account = %crate::log_id::account(account),
-					"save_sent: stored a copy in Sent"
-				);
-			}
-			Err(error) => {
-				tracing::warn!(
-					account = %crate::log_id::account(account),
-					%error,
-					"save_sent: could not store the copy; the message is still sent"
-				);
-			}
-		}
-		// The session is unused now (the message ID was already extracted)
-		// but keep the parameter so the call site documents who owns
-		// the audit log line.
-		let _ = session;
 	}
 }

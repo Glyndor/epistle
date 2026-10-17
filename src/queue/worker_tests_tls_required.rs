@@ -17,6 +17,7 @@ fn message(headers: &str, require_tls: bool) -> AcceptedMessage {
 		require_tls,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	}
 }

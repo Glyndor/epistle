@@ -1,9 +1,9 @@
-//! The request shape against the mock of the documented API: getHosts as
-//! a GET with every global parameter, setHosts as a form POST carrying the
+//! The request shape against the mock of the documented API: getHosts and
+//! setHosts as form POSTs with every global parameter, setHosts carrying the
 //! whole zone in numbered parameters.
 
 use super::tests::{SentHost, mock, txt};
-use crate::dns::provider::DnsProvider;
+use crate::dns::provider::{DnsProvider, RecordKind};
 
 const ZONE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org" IsUsingOurDNS="true"><host HostId="1" Name="@" Type="A" Address="192.0.2.1" MXPref="10" TTL="1800"/><host HostId="2" Name="@" Type="MX" Address="mail.example.org" MXPref="10" TTL="1800"/><host HostId="3" Name="www" Type="URL" Address="https://example.org/" MXPref="10" TTL="1800"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 
@@ -29,9 +29,10 @@ async fn set_hosts_is_a_form_post_carrying_the_whole_zone() {
 		.expect("upsert");
 	let s = state.lock().unwrap();
 	assert_eq!(s.set_hosts_calls.len(), 1, "setHosts not accepted");
+	// getHosts for the read, then setHosts, both as forms.
 	assert_eq!(
 		s.post_content_types,
-		vec!["application/x-www-form-urlencoded".to_string()]
+		vec!["application/x-www-form-urlencoded".to_string(); 2]
 	);
 	let call = &s.set_hosts_calls[0];
 	for (key, value) in [
@@ -57,16 +58,30 @@ async fn set_hosts_is_a_form_post_carrying_the_whole_zone() {
 	);
 }
 
+/// getHosts is a form POST like setHosts: the key travels in the body, and
+/// the URL the request goes to carries no parameter at all.
 #[tokio::test]
-async fn get_hosts_carries_the_client_ip() {
+async fn get_hosts_is_a_form_post_and_the_url_carries_nothing() {
 	let (provider, state) = mock(ZONE, None).await;
 	provider.list("example.org").await.expect("list");
-	let url = state.lock().unwrap().urls[0].clone();
-	assert!(
-		url.contains("Command=namecheap.domains.dns.getHosts"),
-		"{url}"
+	let s = state.lock().unwrap();
+	assert_eq!(s.urls, vec!["/xml.response".to_string()]);
+	assert_eq!(
+		s.post_content_types,
+		vec!["application/x-www-form-urlencoded".to_string()]
 	);
-	assert!(url.contains("ClientIp=192.0.2.10"), "{url}");
+	let call = &s.get_hosts_calls[0];
+	for (key, value) in [
+		("Command", "namecheap.domains.dns.getHosts"),
+		("ApiUser", "user"),
+		("UserName", "user"),
+		("ApiKey", "key"),
+		("ClientIp", "192.0.2.10"),
+		("SLD", "example"),
+		("TLD", "org"),
+	] {
+		assert_eq!(call.get(key).map(String::as_str), Some(value), "{key}");
+	}
 }
 
 /// The getHosts example in the documentation spells the element `Host`;
@@ -76,5 +91,14 @@ async fn get_hosts_reads_either_spelling_of_the_host_element() {
 	let documented = ZONE.replace("<host ", "<Host ");
 	let (provider, _state) = mock(&documented, None).await;
 	let records = provider.list("example.org").await.expect("list");
-	assert_eq!(records.len(), 2, "{records:?}");
+	let kinds: Vec<RecordKind> = records.iter().map(|r| r.kind.clone()).collect();
+	assert_eq!(
+		kinds,
+		vec![
+			RecordKind::A,
+			RecordKind::Mx,
+			RecordKind::Other("URL".to_string())
+		],
+		"{records:?}"
+	);
 }

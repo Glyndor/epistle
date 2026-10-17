@@ -62,6 +62,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -528,6 +529,7 @@ async fn mx_upsert_passes_value_through_verbatim() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().puts[0].clone();
@@ -547,6 +549,7 @@ async fn srv_upsert_puts_unquoted_value_with_correct_subname() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().puts[0].clone();
@@ -567,6 +570,7 @@ async fn caa_upsert_passes_value_through_verbatim() {
 		kind: RecordKind::Caa,
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", caa).await.expect("upsert");
 	let body = state.lock().unwrap().puts[0].clone();

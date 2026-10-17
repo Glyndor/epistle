@@ -3,8 +3,13 @@
 
 use std::process::ExitCode;
 
-pub(super) fn token_hash() -> ExitCode {
-	token_hash_from(std::io::stdin().lock())
+pub(super) fn token_hash(json: bool) -> ExitCode {
+	token_hash_from(std::io::stdin().lock(), json)
+}
+
+/// Print `value` as the `--json` result on stdout.
+fn print_json(value: &serde_json::Value) -> ExitCode {
+	super::json_out::print(&mut std::io::stdout().lock(), value)
 }
 
 /// Generate a strong random credential secret: 32 bytes from the system CSPRNG,
@@ -68,7 +73,7 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 	Ok(value)
 }
 
-pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
+pub(super) fn token_hash_from(reader: impl std::io::BufRead, json: bool) -> ExitCode {
 	// let-else for the same reason as the caller in `accounts.rs`: a returning
 	// match arm still counts as an arm of the expression that binds `token`.
 	let Ok(token) = read_line(reader) else {
@@ -83,6 +88,9 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
 			write!(s, "{b:02x}").ok();
 			s
 		});
+	if json {
+		return print_json(&serde_json::json!({ "token_hash": format!("sha256:{hex}") }));
+	}
 	println!("sha256:{hex}");
 	ExitCode::SUCCESS
 }
@@ -101,8 +109,9 @@ pub(super) fn message_crypto(
 /// `epistle storage-keygen`: print a fresh base64 32-byte at-rest encryption key
 /// to stdout for the operator to place in an env var or key file (off the data
 /// disk). Mirrors `dkim-keygen`; never writes into `data_dir`.
-pub(super) fn storage_keygen() -> ExitCode {
+pub(super) fn storage_keygen(json: bool) -> ExitCode {
 	match crate::storage::generate_key_base64() {
+		Some(key) if json => print_json(&serde_json::json!({ "key": key })),
 		Some(key) => {
 			println!("{key}");
 			ExitCode::SUCCESS
@@ -121,7 +130,7 @@ pub(super) fn storage_keygen() -> ExitCode {
 /// with the configured verifier). The private key is never printed, so it does
 /// not land in a terminal scrollback, a shell pipe or a CI log. An existing
 /// file is refused, like `dkim-keygen`.
-pub(super) fn oauth_keygen(out: &std::path::Path) -> ExitCode {
+pub(super) fn oauth_keygen(out: &std::path::Path, json: bool) -> ExitCode {
 	if out.exists() {
 		super::style::error(format_args!(
 			"{} already exists, refusing to overwrite",
@@ -139,6 +148,12 @@ pub(super) fn oauth_keygen(out: &std::path::Path) -> ExitCode {
 	if let Err(error) = crate::storage::write_secret(out, text.as_bytes()) {
 		super::style::error(format_args!("writing {}: {error}", out.display()));
 		return ExitCode::FAILURE;
+	}
+	if json {
+		return print_json(&serde_json::json!({
+			"result": "saved", "action": "oauth-keygen", "out": out.display().to_string(),
+			"public_key": public_b64, "algorithm": "ES256",
+		}));
 	}
 	println!("wrote the OAuth key pair to {} (mode 0600)", out.display());
 	ExitCode::SUCCESS
@@ -179,7 +194,7 @@ pub(super) fn derive_oauth_public_from_private(private_b64: &str) -> Option<Stri
 	Some(b64.encode(pair.public_key().as_ref()))
 }
 
-pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
+pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32, json: bool) -> ExitCode {
 	if out.exists() {
 		super::style::error(format_args!(
 			"{} already exists, refusing to overwrite",
@@ -212,71 +227,19 @@ pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCo
 		super::style::error(format_args!("cannot write {}: {error}", out.display()));
 		return ExitCode::FAILURE;
 	}
+	if json {
+		return print_json(&serde_json::json!({
+			"result": "saved", "action": "dkim-keygen", "out": out.display().to_string(),
+			"algorithm": if rsa { "rsa" } else { "ed25519" }, "record": record,
+		}));
+	}
 	println!("private key written to {}", out.display());
 	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");
 	println!("{record}");
 	ExitCode::SUCCESS
 }
 
-/// Generate an RSA DKIM key by asking `openssl genpkey` to produce a
-/// PKCS#8 PEM, returning the PEM and the matching DKIM DNS record value
-/// (`v=DKIM1; k=rsa; p=<base64 SPKI>`). The PEM is validated through
-/// `ring`'s PKCS#8 loader before it is written to disk or printed, so a
-/// process that depends on the loader (outbound signing, the publish
-/// record, the verifier) cannot trip on an `openssl` build we never
-/// actually parsed.
-///
-/// `openssl` must be on `PATH`; the message names the package to install
-/// when it is not.
-pub(super) fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
-	use base64::Engine;
-	use base64::engine::general_purpose::STANDARD as BASE64;
-	use ring::signature::{KeyPair, RsaKeyPair};
-	use std::io::Read;
-	use std::process::{Command, Stdio};
-
-	let mut child = Command::new("openssl")
-		.args([
-			"genpkey",
-			"-algorithm",
-			"RSA",
-			"-pkeyopt",
-			&format!("rsa_keygen_bits:{bits}"),
-			"-outform",
-			"PEM",
-		])
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped())
-		.spawn()
-		.map_err(|error| match error.kind() {
-			std::io::ErrorKind::NotFound => KeygenError::OpenSslMissing,
-			_ => KeygenError::OpenSslRead(error),
-		})?;
-
-	let mut pem = String::new();
-	if let Some(mut stdout) = child.stdout.take() {
-		let mut limited = (&mut stdout).take(64 * 1024);
-		limited
-			.read_to_string(&mut pem)
-			.map_err(KeygenError::OpenSslRead)?;
-	}
-	let output = child.wait_with_output().map_err(KeygenError::OpenSslRead)?;
-	if !output.status.success() {
-		let stderr = String::from_utf8_lossy(&output.stderr);
-		return Err(KeygenError::OpenFailed(stderr.into_owned()));
-	}
-
-	// Validate through ring before we trust the bytes: the rendered record
-	// has to come from a key we can actually sign with.
-	let der = pem_body(&pem).ok_or(KeygenError::InvalidKey)?;
-	let pair = RsaKeyPair::from_pkcs8(&der).map_err(|_| KeygenError::InvalidKey)?;
-	let pkcs1 = pair.public_key().as_ref();
-	// Touch the parsed key through the verifier's algorithm so an opaque
-	// invalid one fails the same path the verifier will follow.
-	let spki = crate::dkim::spki_for_rsa(pkcs1);
-	Ok((pem, format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))))
-}
+pub(super) use crate::dkim::generate_rsa_key;
 
 /// Write the generated PEM to `path` with mode 0600 on Unix (or the
 /// closest equivalent on other platforms). Shared between the ed25519 and
@@ -296,56 +259,6 @@ pub(super) fn write_key_pem(path: &std::path::Path, pem: &str) -> std::io::Resul
 	options
 		.open(path)
 		.and_then(|mut file| file.write_all(pem.as_bytes()))
-}
-
-/// Errors from the RSA keygen path. Each variant owns its own message so
-/// the CLI can `eprintln!` without an intermediate formatting step (and
-/// without a taint analyser reading a constant string into a key sink).
-pub(super) enum KeygenError {
-	OpenSslMissing,
-	OpenSslRead(std::io::Error),
-	OpenFailed(String),
-	InvalidKey,
-}
-
-impl std::fmt::Display for KeygenError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			KeygenError::OpenSslMissing => f.write_str(
-				"`openssl` was not found on PATH; install it (Debian/Ubuntu: `apt install openssl`)",
-			),
-			KeygenError::OpenSslRead(error) => write!(f, "cannot read `openssl` output: {error}"),
-			KeygenError::OpenFailed(stderr) => write!(f, "`openssl genpkey` failed: {stderr}"),
-			KeygenError::InvalidKey => {
-				f.write_str("the key `openssl` produced is not a valid PKCS#8 RSA key")
-			}
-		}
-	}
-}
-
-/// Extract the DER body of a single-block PEM file. Duplicated here from
-/// `crate::dkim::sign::pem_body` because that one is `fn` (not `pub`).
-fn pem_body(pem: &str) -> Option<Vec<u8>> {
-	use base64::Engine;
-	use base64::engine::general_purpose::STANDARD as BASE64;
-	let mut body = String::new();
-	let mut inside = false;
-	for line in pem.lines() {
-		if line.starts_with("-----BEGIN ") {
-			inside = true;
-			continue;
-		}
-		if line.starts_with("-----END ") {
-			break;
-		}
-		if inside {
-			body.push_str(line.trim());
-		}
-	}
-	if body.is_empty() {
-		return None;
-	}
-	BASE64.decode(body).ok()
 }
 
 #[cfg(test)]

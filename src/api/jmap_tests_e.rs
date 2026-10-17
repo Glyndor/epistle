@@ -220,10 +220,12 @@ async fn jmap_upload_then_download_round_trips() {
 
 #[tokio::test]
 async fn jmap_upload_over_max_size_is_rejected() {
-	use super::jmap::MAX_UPLOAD_SIZE;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let payload = vec![0u8; MAX_UPLOAD_SIZE + 1];
+	// Configured `[server] max_message_size` defaults to the SMTP
+	// `MAX_MESSAGE_SIZE` (25 MiB). One byte over is enough to trip the
+	// upload route's body limit.
+	let payload = vec![0u8; crate::smtp::session::MAX_MESSAGE_SIZE + 1];
 
 	let (status, body) = post_raw_ct(
 		&app,

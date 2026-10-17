@@ -21,6 +21,26 @@ fn message_id_of(entry: &SpoolEntry) -> Option<String> {
 	value.into_iter().next()
 }
 
+/// The number of the attempt a conversation just made for `recipient`,
+/// counting from one: those recorded before it, plus this one.
+pub(super) fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
+	entry
+		.envelope
+		.recipient_state(recipient)
+		.attempts
+		.saturating_add(1)
+}
+
+/// Whether a deferral for `reason` of a recipient now in `state` writes a
+/// `deferred` record: when the reply differs from the one before, and the
+/// recipient has fewer than [`crate::queue::limits::MAX_DEFERRALS_LOGGED`] already.
+/// A destination down for days repeating one reply adds nothing after the
+/// first, and one that words every reply differently adds a bounded few.
+pub(super) fn logs_deferral(state: &crate::storage::RecipientState, reason: &str) -> bool {
+	state.last_error.as_deref() != Some(reason)
+		&& state.deferrals_logged < crate::queue::limits::MAX_DEFERRALS_LOGGED
+}
+
 impl Worker {
 	/// Write one per-recipient outcome to the delivery log, when the log
 	/// is enabled. A best-effort writer: a failed `append` is logged and
@@ -53,6 +73,7 @@ impl Worker {
 			reply: reply.map(str::to_string),
 			attempt,
 			extra: envelope.extra.clone(),
+			class: envelope.class,
 		};
 		if let Err(error) = log.append(&record) {
 			tracing::warn!(id = %envelope.id, %error, "delivery log write failed");
@@ -73,20 +94,19 @@ impl Worker {
 		out
 	}
 
-	/// The recipients of `entry` due at `now`, minus those on a suppression
+	/// The `due` recipients of an entry, minus those on a suppression
 	/// list (globally or for the sending account). Those hard-bounced before:
 	/// they are recorded as failed with no second report, and never contacted.
 	pub(super) fn skip_suppressed(
 		&self,
 		id: uuid::Uuid,
-		entry: &SpoolEntry,
-		now: u64,
+		envelope: &crate::storage::Envelope,
+		due: Vec<String>,
 	) -> std::io::Result<Vec<String>> {
-		let due = entry.envelope.due(now);
 		let Some(suppression) = &self.suppression else {
 			return Ok(due);
 		};
-		let account = &entry.envelope.reverse_path;
+		let account = &envelope.reverse_path;
 		let (skipped, due): (Vec<String>, Vec<String>) = due.into_iter().partition(|recipient| {
 			suppression.is_suppressed(recipient)
 				|| suppression.is_suppressed_for(account, recipient)
@@ -100,19 +120,41 @@ impl Worker {
 					state.reported = true;
 					state.last_error = Some("recipient is on the suppression list".into());
 					envelope.set_recipient_state(recipient, state);
+					super::evidence::intend(
+						envelope,
+						&super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Suppressed,
+							attempt: 0,
+							remote: None,
+							reply: Some("recipient is on the suppression list"),
+							facts: None,
+						},
+					);
 				}
 				envelope.settle();
 			})?;
 			for recipient in &skipped {
+				self.record_outcome(
+					envelope,
+					super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Suppressed,
+						attempt: 0,
+						remote: None,
+						reply: Some("recipient is on the suppression list"),
+						facts: None,
+					},
+				);
 				self.log_outcome(
-					&entry.envelope,
+					envelope,
 					recipient,
 					DeliveryOutcome::Suppressed,
 					None,
 					Some("recipient is on the suppression list"),
 					0,
 				);
-				self.notify_suppressed(id, recipient, &entry.envelope.extra);
+				self.notify_suppressed(id, recipient, &envelope.extra);
 			}
 		}
 		Ok(due)
@@ -126,19 +168,45 @@ impl Worker {
 		entry: &SpoolEntry,
 		conversation: &Conversation,
 	) {
+		if conversation.held_until.is_some() {
+			// Nothing was attempted: the recipients only wait for a hold.
+			return;
+		}
 		let remote = conversation.remote.as_deref().unwrap_or("-");
 		let message_id = message_id_of(entry);
+		let retry_now = conversation.retry_now();
 		for (recipient, result) in &conversation.results {
+			if conversation.capped_for(recipient).is_some() {
+				// Over the warm-up cap: not attempted, nothing to report.
+				continue;
+			}
+			if retry_now.contains(recipient) {
+				tracing::debug!(%id, %recipient, remote, "left for another transaction");
+				continue;
+			}
 			match result {
 				Ok(()) => {
 					tracing::debug!(%id, %recipient, remote, "delivered");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Delivered,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: None,
+							facts: Some(&conversation.facts),
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Delivered,
 						Some(remote),
-						Some("250 OK"),
-						0,
+						Some(&Self::bounded_reply(
+							conversation.facts.reply.as_deref().unwrap_or("250 OK"),
+						)),
+						attempt_of(entry, recipient),
 					);
 					self.notify_delivered(
 						id,
@@ -150,16 +218,19 @@ impl Worker {
 				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
-					let attempts = entry.envelope.recipient_state(recipient).attempts;
+					let before = entry.envelope.recipient_state(recipient);
+					let attempts = before.attempts;
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
-					self.log_outcome(
-						&entry.envelope,
-						recipient,
-						DeliveryOutcome::Deferred,
-						Some(remote),
-						Some(&Self::bounded_reply(reason)),
-						attempts,
-					);
+					if logs_deferral(&before, reason) {
+						self.log_outcome(
+							&entry.envelope,
+							recipient,
+							DeliveryOutcome::Deferred,
+							Some(remote),
+							Some(&Self::bounded_reply(reason)),
+							attempts.saturating_add(1),
+						);
+					}
 					self.notify_delayed(
 						id,
 						recipient,
@@ -173,13 +244,24 @@ impl Worker {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Bounced,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: Some(reason),
+							facts: None,
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Failed,
 						Some(remote),
 						Some(&Self::bounded_reply(reason)),
-						entry.envelope.recipient_state(recipient).attempts,
+						attempt_of(entry, recipient),
 					);
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
@@ -334,7 +416,20 @@ impl Worker {
 				if state.last_error.is_none() {
 					state.last_error = Some("message expired in the queue".into());
 				}
+				let reason = state.last_error.clone().unwrap_or_default();
+				let (attempts, remote) = (state.attempts, state.remote.clone());
 				envelope.set_recipient_state(recipient, state);
+				super::evidence::intend(
+					envelope,
+					&super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Expired,
+						attempt: attempts,
+						remote: remote.as_deref(),
+						reply: Some(&reason),
+						facts: None,
+					},
+				);
 			}
 			envelope.settle();
 		})?;
@@ -344,6 +439,17 @@ impl Worker {
 			let class = classify_reason(reason, false).class.label();
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
+			self.record_outcome(
+				&envelope,
+				super::evidence::Recorded {
+					recipient,
+					result: crate::evidence::record::OutcomeKind::Expired,
+					attempt: state.attempts,
+					remote: state.remote.as_deref(),
+					reply: Some(reason),
+					facts: None,
+				},
+			);
 			self.log_outcome(
 				&envelope,
 				recipient,

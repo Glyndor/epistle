@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use super::domain_blockers::address_domain_matches;
+use super::domain_writers::{commit_add, commit_remove};
 use super::*;
 use crate::config::Config;
 

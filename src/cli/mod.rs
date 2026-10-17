@@ -1,8 +1,10 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod account;
+mod account_class;
 mod account_json;
 mod account_name;
+mod account_reload;
 mod accounts;
 mod alert;
 mod alias;
@@ -10,6 +12,7 @@ mod antispam;
 mod api_keys;
 mod app_passwords;
 mod archive;
+mod attachments;
 mod autoconfig;
 mod autodiscover;
 mod backup;
@@ -18,14 +21,25 @@ mod completions;
 mod config_check;
 pub mod config_edit;
 mod container_db;
+mod csv;
 mod db_harden;
+mod db_status;
 mod db_upgrade;
 mod delivery;
+mod disabled_domain;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;
 mod dns_records;
 mod domain;
+mod evidence;
+mod evidence_abandon;
+mod evidence_bundle;
+mod evidence_clock;
+mod evidence_key;
+mod evidence_policy;
+mod evidence_timestamp;
+mod evidence_verify;
 mod exit;
 mod export;
 mod import;
@@ -49,9 +63,12 @@ mod resource;
 mod role_addresses;
 mod serve;
 mod serve_dkim;
+mod serve_evidence;
+mod serve_listeners;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;
+mod serve_store;
 mod serve_tasks;
 mod serve_tasks_delivery;
 mod serve_tls;
@@ -61,6 +78,7 @@ mod srv;
 mod stack;
 mod stack_dumps;
 mod stack_health;
+mod stack_resources;
 mod stack_rollback;
 mod stack_socket;
 mod stack_started;
@@ -71,7 +89,7 @@ mod storage_blobs;
 mod style;
 mod subid;
 mod suppression;
-mod term;
+pub(crate) mod term;
 mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
@@ -79,6 +97,7 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+mod warmup;
 mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
@@ -156,6 +175,10 @@ mod cli_account_subcommand_tests;
 mod cli_account_subcommand_tests_b;
 
 #[cfg(test)]
+#[path = "cli_account_show_tests.rs"]
+mod cli_account_show_tests;
+
+#[cfg(test)]
 #[path = "cli_confirmation_flow_tests.rs"]
 mod cli_confirmation_flow_tests;
 
@@ -210,6 +233,10 @@ mod cli_consistency_tests;
 #[cfg(test)]
 #[path = "cli_json_shape_tests.rs"]
 mod cli_json_shape_tests;
+
+#[cfg(test)]
+#[path = "cli_json_everywhere_tests.rs"]
+mod cli_json_everywhere_tests;
 
 #[cfg(test)]
 #[path = "cli_suppression_resource_tests.rs"]

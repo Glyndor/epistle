@@ -30,6 +30,7 @@ async fn unsupported_kind_is_rejected() {
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", tlsa).await,
@@ -72,6 +73,7 @@ async fn upsert_creates_caa_with_its_own_field_type() {
 				kind: RecordKind::Caa,
 				value: "0 issue \"letsencrypt.org\"".into(),
 				ttl: 3600,
+				proxied: None,
 			},
 		)
 		.await

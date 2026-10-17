@@ -14,11 +14,16 @@ use crate::storage::MessageCrypto;
 pub(super) fn run(
 	data_dir: &Path,
 	crypto: &MessageCrypto,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let _warnings = crate::util::fs_walk::warning_scope();
 	let accounts_dir = data_dir.join("accounts");
 	let Ok(entries) = crate::util::fs_walk::read_dir(&accounts_dir) else {
+		if json {
+			let result = serde_json::json!({ "accounts": 0, "messages": 0, "problems": [] });
+			return super::json_out::print(out, &result);
+		}
 		let _ = writeln!(out, "no accounts directory at {}", accounts_dir.display());
 		return ExitCode::SUCCESS;
 	};
@@ -52,14 +57,22 @@ pub(super) fn run(
 		}
 	}
 
-	for problem in &problems {
-		let _ = writeln!(out, "problem: {problem}");
+	if json {
+		let result =
+			serde_json::json!({ "accounts": accounts, "messages": messages, "problems": problems });
+		if super::json_out::print(out, &result) != ExitCode::SUCCESS {
+			return ExitCode::FAILURE;
+		}
+	} else {
+		for problem in &problems {
+			let _ = writeln!(out, "problem: {problem}");
+		}
+		let _ = writeln!(
+			out,
+			"checked {accounts} accounts, {messages} messages: {} problems",
+			problems.len()
+		);
 	}
-	let _ = writeln!(
-		out,
-		"checked {accounts} accounts, {messages} messages: {} problems",
-		problems.len()
-	);
 	if problems.is_empty() {
 		ExitCode::SUCCESS
 	} else {
@@ -157,7 +170,7 @@ mod tests {
 		.expect("append");
 		let mut out = Vec::new();
 		assert_eq!(
-			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			run(dir.path(), &MessageCrypto::disabled(), false, &mut out),
 			ExitCode::SUCCESS
 		);
 		let report = String::from_utf8(out).expect("utf8");
@@ -180,7 +193,7 @@ mod tests {
 
 		let mut out = Vec::new();
 		assert_eq!(
-			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			run(dir.path(), &MessageCrypto::disabled(), false, &mut out),
 			ExitCode::FAILURE
 		);
 		let report = String::from_utf8(out).expect("utf8");
@@ -194,7 +207,7 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let mut out = Vec::new();
 		assert_eq!(
-			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			run(dir.path(), &MessageCrypto::disabled(), false, &mut out),
 			ExitCode::SUCCESS
 		);
 	}

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::config::{Config, ListenerKind};
 use crate::directory_store::FileWatcher;
 use crate::smtp::server::{Server, TlsMode};
-use crate::smtp::sink::MessageSink;
 
 use super::serve_dkim::SplitCompanions;
 use super::serve_ratelimit::RateLimiters;
@@ -66,16 +65,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Built before the account store, which seals TOTP secrets with it.
 	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
 		.map_err(std::io::Error::other)?;
-	let mut store = crate::directory_store::AccountStore::open(
-		&config.data_dir,
-		config.domains.clone(),
-		config.domain_aliases.clone(),
-		config.accounts.clone(),
-	)
-	.map_err(|error| std::io::Error::other(error.to_string()))?
-	.with_domain_quotas(config.domain_quotas.clone())
-	.with_aliases(config.alias.clone())
-	.with_masked_max(config.masked_addresses_max);
+	let mut store = super::serve_store::open_account_store(&config)?;
 	// Two owners of one address are never merged: the first keeps it and
 	// both are named here (and in `epistle status`) until someone fixes it.
 	for collision in store.address_collisions() {
@@ -129,6 +119,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		dkim_signer,
 		webhook,
 		arc_sealer,
+		mut evidence,
 	} = super::serve_dkim::build_split_with_companions(
 		&config,
 		&metrics,
@@ -173,16 +164,23 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		daily_new_recipients,
 		disk_guard,
 		max_conn,
+		max_connections_per_ip,
+		max_message_size,
+		memory_budget,
+		data_rate,
+		session_limits,
 		scanner_hook,
 		clamd,
 		llm_hook,
+		attachment_policy,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
 	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
 	// sink through `submit`; the antivirus scan wraps it there.
-	let sink: Arc<dyn MessageSink> = crate::antispam::submission_scan::ScanningSink::wrap(
+	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
 		config.antispam.scan_authenticated,
 		Arc::new(split),
 		clamd,
+		attachment_policy.clone(),
 		Some(metrics.clone()),
 		webhook.clone(),
 	)?;
@@ -222,11 +220,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the polling interval sits well inside the 5 s deadline the
 	// operators see on the CLI. The same loop watches `api_keys.toml`
 	// and feeds the API-key reloader below.
-	let _watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
+	let warmup = super::serve_queue::open_warmup(&config, &metrics, webhook.as_ref());
+	let watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
 		.with_api_keys(Arc::clone(&api_keys_set)
 			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
-		.spawn(std::time::Duration::from_secs(2));
+		.with_warmup(
+			Arc::clone(&warmup) as Arc<dyn crate::directory_store::file_watcher::WarmupReloader>
+		)
+		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 
+	super::serve_evidence::spawn(evidence.tasks.take());
 	// The queue worker drains the outbound spool in the background.
 	super::serve_queue::spawn_queue_worker(
 		&config,
@@ -235,6 +238,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		Arc::clone(&spf_dns),
 		&metrics,
 		webhook.as_ref(),
+		warmup,
+		Arc::clone(&evidence.service),
 	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.
@@ -313,6 +318,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_delivery_log_days(config.delivery_log_days())
+				.with_disabled_domains(config.disabled_domains.clone())
+				.with_max_message_size(max_message_size)
 				.with_quota(
 					config
 						.quota_bytes
@@ -323,10 +330,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)
-				.with_tenant_limits(Arc::clone(&tenant_limits))
 				.with_correspondents((*correspondents).clone())
+				.with_class_bindings(Arc::clone(&evidence.bindings))
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
+				state = super::serve_ratelimit::wire_api_submission_limits(
+					state,
+					&config,
+					&send_limiter,
+					&tenant_limits,
+				);
 				if let Some((store, queue)) = &bayes {
 					state = state
 						.with_training(queue.clone())
@@ -411,22 +424,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
-				let Some(acceptor) = &tls_acceptor else {
-					return Err(std::io::Error::other(
-						"POP3S listener without TLS configured",
-					));
-				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let server = Arc::new(
-					crate::pop3::server::Server::new(
-						config.data_dir.clone(),
-						directory.clone(),
-						acceptor.clone(),
-					)
-					.with_crypto(crypto.clone())
-					.with_max_connections(max_conn),
-				);
-				tasks.push(tokio::spawn(server.serve(listener)));
+				let data_dir = config.data_dir.clone();
+				let acceptor = tls_acceptor.as_ref();
+				tasks.push(super::serve_listeners::pop3s(
+					listener,
+					data_dir,
+					directory.clone(),
+					acceptor,
+					crypto.clone(),
+					max_conn,
+				)?);
 			}
 			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
 				// `autoconfigs` presents the shared, renewing certificate.
@@ -440,8 +448,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					}
 				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router =
-					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
+				let router = crate::autodiscovery::router_for(&config);
 				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
 				tasks.push(tokio::spawn(serve));
 			}
@@ -451,21 +458,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(super::serve_tasks::serve_http(listener, router));
 			}
 			ListenerKind::ManageSieve => {
-				let Some(acceptor) = &tls_acceptor else {
-					return Err(std::io::Error::other(
-						"ManageSieve listener without TLS configured",
-					));
-				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let server = Arc::new(
-					crate::managesieve::server::Server::new(
-						config.data_dir.clone(),
-						directory.clone(),
-						acceptor.clone(),
-					)
-					.with_max_connections(max_conn),
-				);
-				tasks.push(tokio::spawn(server.serve(listener)));
+				let data_dir = config.data_dir.clone();
+				let acceptor = tls_acceptor.as_ref();
+				tasks.push(super::serve_listeners::managesieve(
+					listener,
+					data_dir,
+					directory.clone(),
+					acceptor,
+					max_conn,
+				)?);
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -483,6 +485,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_max_connections(max_conn)
+					.with_max_connections_per_ip(max_connections_per_ip)
+					.with_max_message_size(max_message_size)
+					.with_data_rate(data_rate)
+					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
 					// The Sent copy of a submission is written into the account's
 					// mailboxes, encrypted at rest like any other stored message.
@@ -499,6 +505,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(hook) = &scanner_hook {
 					server = server.with_hook(Arc::clone(hook));
 				}
+				server = server.with_attachment_policy(attachment_policy.clone());
 				// LLM hook only fires when the Bayesian corpus is also wired
 				// in: without it the uncertain-band check has nothing to read.
 				if let (Some(llm_hook), Some(_)) = (&llm_hook, &reputation_pool) {
@@ -537,9 +544,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					config.antispam.bayes_junk_at,
 					config.antispam.bayes_reject_at,
 				);
-				if let Some(limiter) = &send_limiter {
-					server = server.with_send_limiter(Arc::clone(limiter));
-				}
 				if let Some(limit) = &inbound_ip_limit {
 					server = server.with_inbound_ip_limit(crate::smtp::ratelimit::InboundLimit {
 						limiter: Arc::clone(&limit.limiter),
@@ -553,9 +557,21 @@ async fn serve(config: Config) -> std::io::Result<()> {
 							per_min: limit.per_min,
 						});
 				}
-				if !tenant_limits.is_empty() {
-					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
-				}
+				// The per-account, per-domain and per-tenant submission
+				// limits are wired through `wire_smtp_submission_limits`,
+				// which is the same helper the regression test in
+				// `serve_tests_ratelimit` uses; the production wiring
+				// has exactly one source of truth.
+				server = super::serve_ratelimit::wire_smtp_submission_limits(
+					server,
+					&config,
+					&send_limiter,
+					if tenant_limits.is_empty() {
+						None
+					} else {
+						Some(&tenant_limits)
+					},
+				);
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
 				// Same measure and default as IMAP QUOTA.
 				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
@@ -569,7 +585,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				// The shared `Arc<CorrespondentStore>` is the one already
 				// opened above; the cap itself comes from the static
 				// config so it is the same number across every listener.
-				server = server.with_correspondents(Arc::clone(&correspondents));
+				server = server
+					.with_correspondents(Arc::clone(&correspondents))
+					.with_class_bindings(Arc::clone(&evidence.bindings));
 				if daily_new_recipients.is_some() {
 					server = server.with_daily_new_recipients(daily_new_recipients);
 				}
@@ -584,6 +602,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				server = server.with_scram_enabled(config.auth.scram);
 				server = server.with_drain(Arc::clone(&drain));
+				if let Some(budget) = memory_budget.as_ref() {
+					server = server.with_memory_budget(Arc::clone(budget));
+				}
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}
@@ -596,7 +617,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Run until the first listener fails or a stop signal is received, then
 	// let open SMTP and IMAP connections finish.
-	wait::until_stopped(tasks, &drain).await
+	let stopped = wait::until_stopped(tasks, &drain).await;
+	// Stop the watcher before removing its status file, so a poll cannot
+	// write it back; a status left behind would make the CLI wait on a
+	// server that is gone.
+	watcher.abort();
+	let _ = watcher.await;
+	crate::directory_store::remove_reload_status(&config.data_dir);
+	stopped
 }
 
 #[path = "serve_wait.rs"]
@@ -609,3 +637,19 @@ mod tests;
 #[cfg(test)]
 #[path = "serve_tests_mta_sts.rs"]
 mod tests_mta_sts;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit.rs"]
+mod tests_ratelimit;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_per_recipient.rs"]
+mod tests_ratelimit_per_recipient;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_cross_protocol.rs"]
+mod tests_ratelimit_cross_protocol;
+
+#[cfg(test)]
+#[path = "serve_tests_ratelimit_charge.rs"]
+mod tests_ratelimit_charge;

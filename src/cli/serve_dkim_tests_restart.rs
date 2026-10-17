@@ -73,6 +73,7 @@ fn startup_with_a_torn_state_signs_with_the_last_good_state() {
 		rotated_at: 1,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		root.join(crate::dkim::rotate::STATE_BACKUP_FILE),
@@ -120,8 +121,10 @@ async fn restart_signs_with_current_rotation_key() {
 					selector: "original".into(),
 					key_file: root.join("original.key"),
 					retire_at,
+					rsa: None,
 				}),
 				pending: None,
+				rsa: None,
 			};
 			std::fs::write(
 				root.join("dkim-rotation.json"),
@@ -130,9 +133,13 @@ async fn restart_signs_with_current_rotation_key() {
 			.expect("write state");
 			let config = config(&root);
 			let raw = b"From: alice@example.org\r\nSubject: restart\r\n\r\nHello\r\n";
-			let companions = build(&config).expect("startup");
-			let handle = companions.dkim_signer.expect("signer configured");
-			let header = handle.current().sign("example.org", raw).expect("sign");
+			// The first start ends before the second: a server holds its evidence
+			// directory for as long as it lives, and two cannot.
+			let header = {
+				let companions = build(&config).expect("startup");
+				let handle = companions.dkim_signer.expect("signer configured");
+				handle.current().sign("example.org", raw).expect("sign")
+			};
 			assert_eq!(
 				signature_fields(header.as_bytes()),
 				vec![(

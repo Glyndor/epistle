@@ -9,6 +9,7 @@ fn no_lookups(detector: &dyn super::detect::Detector) -> Probes<'_> {
 	Probes {
 		detector,
 		resolver: &|| None,
+		meminfo: std::path::Path::new("/nonexistent/meminfo"),
 	}
 }
 
@@ -34,6 +35,7 @@ pub(super) fn dry_run_args(dir: &std::path::Path, extra: &str) -> Args {
 		answers: Some(answers_file),
 		dry_run: true,
 		print_answers: false,
+		json: false,
 	}
 }
 
@@ -87,7 +89,10 @@ fn answers_saying_none_never_call_the_detector() {
 	assert_eq!(code, ExitCode::from(EXIT_OK));
 	let text = String::from_utf8(out).expect("utf-8");
 	assert_eq!(
-		text, "dry-run: nothing was written\n",
-		"no notice, no hint and no PTR block without an address"
+		text,
+		"cannot read MemTotal from /nonexistent/meminfo; the containers keep the fixed limits \
+		 (mail 1g, db 1g, clamav 3g, freshclam 2g)\n\
+		 dry-run: nothing was written\n",
+		"no address notice, no hint and no PTR block without an address"
 	);
 }

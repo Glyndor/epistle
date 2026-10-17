@@ -51,10 +51,14 @@ impl Podup {
 	}
 }
 
-/// Run one SQL statement in the stack's `db` container and return its
-/// unaligned, tuples-only output. `sql` must not contain a single quote: it
+/// The `podup exec` that runs one SQL statement in the stack's `db`
+/// container through `program`. `sql` must not contain a single quote: it
 /// is single-quoted whole inside the shell script.
-pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<String, String> {
+fn query_command(
+	program: &str,
+	compose: &std::path::Path,
+	sql: &str,
+) -> Result<std::process::Command, String> {
 	if sql.contains('\'') {
 		return Err("the query contains a single quote".to_string());
 	}
@@ -64,14 +68,17 @@ pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<Stri
 		crate::cli::init::DATABASE_USER,
 		crate::cli::init::DATABASE_NAME,
 	);
-	let output = super::super::stack::build_command(
-		"podup",
+	let mut command = super::super::stack::build_command(
+		program,
 		compose,
 		&["exec", "-T", "db", "sh", "-c", &script],
-	)
-	.stdin(Stdio::null())
-	.output()
-	.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	);
+	command.stdin(Stdio::null());
+	Ok(command)
+}
+
+/// What a finished query printed, or why it failed.
+fn query_answer(output: &std::process::Output) -> Result<String, String> {
 	if !output.status.success() {
 		return Err(format!(
 			"the query in db failed ({}): {}",
@@ -81,6 +88,103 @@ pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<Stri
 	}
 	Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
+
+/// Run one SQL statement in the stack's `db` container and return its
+/// unaligned, tuples-only output, waiting as long as it takes. `sql` must
+/// not contain a single quote: it is single-quoted whole inside the shell
+/// script.
+pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<String, String> {
+	let output = query_command("podup", compose, sql)?
+		.output()
+		.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	query_answer(&output)
+}
+
+/// [`query`] that gives up after `limit`: the child is killed and the
+/// query is reported as not answered. For a command that only looks, so a
+/// stuck container cannot hold the terminal.
+pub(in crate::cli) fn query_within(
+	compose: &std::path::Path,
+	sql: &str,
+	limit: Duration,
+) -> Result<String, String> {
+	query_within_program("podup", compose, sql, limit)
+}
+
+/// The most of a query's output that is kept; the rest is read and dropped so
+/// the child never blocks on a full pipe.
+const KEEP_OUTPUT: usize = 1 << 20;
+
+/// Read `pipe` to its end, keeping the first [`KEEP_OUTPUT`] bytes and one
+/// more, so the caller can tell that there was more.
+fn drain(mut pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+	std::thread::spawn(move || {
+		let mut kept = Vec::new();
+		let mut chunk = [0_u8; 16 * 1024];
+		while let Ok(read) = pipe.read(&mut chunk) {
+			if read == 0 {
+				break;
+			}
+			let room = (KEEP_OUTPUT + 1).saturating_sub(kept.len());
+			kept.extend_from_slice(&chunk[..read.min(room)]);
+		}
+		kept
+	})
+}
+
+fn query_within_program(
+	program: &str,
+	compose: &std::path::Path,
+	sql: &str,
+	limit: Duration,
+) -> Result<String, String> {
+	use std::os::unix::process::CommandExt;
+	// Its own process group, so stopping the query stops what `podup` started
+	// (`podman exec`, `psql`) and not only `podup`.
+	let mut child = query_command(program, compose, sql)?
+		.process_group(0)
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	let stdout = child.stdout.take().map(drain);
+	let stderr = child.stderr.take().map(drain);
+	let deadline = std::time::Instant::now() + limit;
+	let status = loop {
+		match child.try_wait() {
+			Ok(Some(status)) => break status,
+			Ok(None) if std::time::Instant::now() >= deadline => {
+				if let Ok(pid) = i32::try_from(child.id()) {
+					// SAFETY: signalling the process group this function created.
+					unsafe { libc::kill(-pid, libc::SIGKILL) };
+				}
+				let _ = child.kill();
+				let _ = child.wait();
+				return Err(format!("the query in db did not answer within {limit:?}"));
+			}
+			Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+			Err(error) => return Err(format!("cannot wait for podup exec: {error}")),
+		}
+	};
+	let take = |handle: Option<std::thread::JoinHandle<Vec<u8>>>| {
+		handle
+			.and_then(|handle| handle.join().ok())
+			.unwrap_or_default()
+	};
+	let (stdout, stderr) = (take(stdout), take(stderr));
+	if status.success() && stdout.len() > KEEP_OUTPUT {
+		return Err("the answer of the query is larger than 1 MiB".to_string());
+	}
+	query_answer(&std::process::Output {
+		status,
+		stdout,
+		stderr,
+	})
+}
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;
 
 impl Stack for Podup {
 	fn compose(&mut self) -> Result<String, String> {
@@ -97,6 +201,7 @@ impl Stack for Podup {
 		let status = self
 			.command(args)
 			.stdin(Stdio::null())
+			.stdout(crate::cli::json_out::child_stdout())
 			.status()
 			.map_err(|error| format!("cannot run podup: {error}"))?;
 		if status.success() {

@@ -28,7 +28,8 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
 use crate::dns::providers::namecheap::render::{host_from_record, host_label, split_sld_tld};
-use crate::dns::providers::namecheap::xml::{Host, extract_hosts, parse_response};
+use crate::dns::providers::namecheap::xml::{ApiResponse, Host, extract_hosts, parse_response};
+use crate::dns::providers::transport;
 use crate::net::HttpsUrl;
 
 /// Namecheap's production API endpoint; overridable via
@@ -73,7 +74,7 @@ impl NamecheapProvider {
 			return Err(ProviderError::Auth);
 		}
 		Ok(NamecheapProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			api_user: api_user.to_string(),
 			api_key: api_key.to_string(),
@@ -105,16 +106,19 @@ impl NamecheapProvider {
 	/// Whether `kind` can be published through Namecheap. setHosts takes A,
 	/// AAAA, ALIAS, CAA, CNAME, MX, MXE, NS, TXT, URL, URL301 and FRAME, so
 	/// SRV and TLSA are not.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
 			// setHosts documents no SRV and no TLSA record type.
 			RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -145,54 +149,12 @@ impl NamecheapProvider {
 		params
 	}
 
-	/// Build a GET request URL with the global parameters plus any
-	/// command-specific extras (`SLD`/`TLD`). The URL is an [`HttpsUrl`]:
-	/// the key cannot be put on a cleartext request, and every value is
-	/// percent-encoded as a query pair.
-	fn build_url(&self, command: &str, extra: &[(&str, &str)]) -> HttpsUrl {
-		let mut url = self.base.clone();
-		for (key, value) in self.global_params(command) {
-			url = url.with_query(&key, &value);
-		}
-		for (key, value) in extra {
-			url = url.with_query(key, value);
-		}
-		url
-	}
-
-	/// `getHosts` against Namecheap. Returns the parsed list of [`Host`]s
-	/// currently published at the zone (an empty list if the zone has none).
-	async fn get_hosts(&self, zone: &str) -> Result<Vec<Host>, ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
-		let url = self.build_url(
-			"namecheap.domains.dns.getHosts",
-			&[("SLD", &sld), ("TLD", &tld)],
-		);
-		let response = self
-			.client
-			.get(url.into_url())
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		let api = parse_response(response).await?;
-		Ok(extract_hosts(api))
-	}
-
-	/// `setHosts` against Namecheap: "All host records that are not
-	/// included into the API call will be deleted", so `hosts` is the whole
-	/// zone. The hosts go as numbered parameters, and the documentation
-	/// recommends a POST past ten of them
-	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
-	/// read 2026-10-12); every call is a form POST, global parameters
-	/// included, so the key stays out of the URL.
-	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
-		let mut params = self.global_params("namecheap.domains.dns.setHosts");
-		params.push(("SLD".into(), sld));
-		params.push(("TLD".into(), tld));
-		params.extend(set_hosts_params(hosts));
+	/// One API call: a form POST to the API URL carrying `params`. Every
+	/// call is a POST, global parameters included, so the key stays out of
+	/// the URL and out of every error message that quotes a URL.
+	async fn call(&self, params: &[(String, String)]) -> Result<ApiResponse, ProviderError> {
 		let body = url::form_urlencoded::Serializer::new(String::new())
-			.extend_pairs(&params)
+			.extend_pairs(params)
 			.finish();
 		let response = self
 			.client
@@ -204,14 +166,38 @@ impl NamecheapProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		let _ = parse_response(response).await?;
-		Ok(())
+			.map_err(transport)?;
+		parse_response(response).await
+	}
+
+	/// `getHosts` against Namecheap. Returns the parsed list of [`Host`]s
+	/// currently published at the zone (an empty list if the zone has none).
+	async fn get_hosts(&self, zone: &str) -> Result<Vec<Host>, ProviderError> {
+		let (sld, tld) = split_sld_tld(zone);
+		let mut params = self.global_params("namecheap.domains.dns.getHosts");
+		params.push(("SLD".into(), sld));
+		params.push(("TLD".into(), tld));
+		Ok(extract_hosts(self.call(&params).await?))
+	}
+
+	/// `setHosts` against Namecheap: "All host records that are not
+	/// included into the API call will be deleted", so `hosts` is the whole
+	/// zone. The hosts go as numbered parameters, and the documentation
+	/// recommends a POST past ten of them
+	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
+	/// read 2026-10-12).
+	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
+		let (sld, tld) = split_sld_tld(zone);
+		let mut params = self.global_params("namecheap.domains.dns.setHosts");
+		params.push(("SLD".into(), sld));
+		params.push(("TLD".into(), tld));
+		params.extend(set_hosts_params(hosts));
+		self.call(&params).await.map(|_| ())
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let mut hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
@@ -231,7 +217,7 @@ impl NamecheapProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
@@ -275,15 +261,22 @@ impl NamecheapProvider {
 impl DnsProvider for NamecheapProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 

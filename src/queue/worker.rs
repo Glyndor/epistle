@@ -1,10 +1,8 @@
 //! The queue worker: drains the outbound spool.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::smtp::address::Address;
 use crate::smtp::sink::MessageSink;
 use crate::storage::{FsSpool, RecipientStatus, SpoolEntry};
 
@@ -12,10 +10,22 @@ use super::client::DeliveryError;
 use super::resolver::Connector;
 use conversation::Conversation;
 
+#[path = "worker_attempt.rs"]
+mod attempt;
+#[path = "worker_claims.rs"]
+mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
+#[path = "worker_evidence.rs"]
+mod evidence;
 #[path = "worker_reports.rs"]
 mod reports;
+#[path = "worker_scheduler.rs"]
+mod scheduler;
+#[path = "worker_waiting.rs"]
+mod waiting;
+#[path = "worker_warmup.rs"]
+mod warmup;
 
 /// Default give-up window: a message older than this is bounced (RFC 5321
 /// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
@@ -64,6 +74,27 @@ pub struct Worker {
 	/// (`[storage] delivery_log_days = 0`); the writer is then a no-op
 	/// and no records are produced.
 	delivery_log: Option<crate::storage::DeliveryLog>,
+	/// Records the outcomes of messages that keep evidence.
+	evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
+	/// How many conversations run at once, overall and per domain.
+	limits: super::limits::Limits,
+	/// Recipients in conversation, and the slots in use.
+	claims: claims::Claims,
+	/// Held while an entry is settled, so two passes never send the same
+	/// failure report twice.
+	settling: std::sync::Mutex<()>,
+	/// How long a destination that asks to slow down is held off, by the
+	/// number of times in a row it did (seconds).
+	backoff_steps: Vec<u64>,
+	/// The longest one delivery attempt to one domain may take.
+	attempt_limit: Duration,
+	/// The destinations on hold, as the spool shows them: rebuilt from the
+	/// spool at every scan and kept in step with what this worker writes
+	/// there, so it never allows what the spool would defer.
+	holds: std::sync::Mutex<super::backoff::Holds>,
+	/// The IP warm-up, when one applies: recipients over the daily cap of
+	/// their receiver group wait for it.
+	warmup: Option<Arc<super::warmup::Warmup>>,
 }
 
 impl Worker {
@@ -87,7 +118,32 @@ impl Worker {
 			schedule: super::RetrySchedule::default(),
 			jitter: super::schedule::random_factor,
 			delivery_log: None,
+			evidence: None,
+			limits: super::limits::Limits::default(),
+			claims: claims::Claims::default(),
+			settling: std::sync::Mutex::new(()),
+			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
+			attempt_limit: super::timeouts::ATTEMPT,
+			holds: Default::default(),
+			warmup: None,
 		}
+	}
+
+	/// Hold off a destination that asks to slow down for these waits
+	/// (seconds), one per deferral in a row, the last repeating. Empty keeps
+	/// the default.
+	pub fn with_backoff(mut self, steps: Vec<u64>) -> Self {
+		if !steps.is_empty() {
+			self.backoff_steps = steps;
+		}
+		self
+	}
+
+	/// Run up to `total` conversations at once, and up to `per_domain` of
+	/// them with any one recipient domain. Zero keeps the default.
+	pub fn with_concurrency(mut self, total: usize, per_domain: usize) -> Self {
+		self.limits = super::limits::Limits::new(total, per_domain);
+		self
 	}
 
 	/// Enable the per-recipient delivery log. A `0`-retention `log` is
@@ -201,6 +257,11 @@ impl Worker {
 	}
 
 	#[cfg(test)]
+	fn set_attempt_limit(&mut self, limit: Duration) {
+		self.attempt_limit = limit;
+	}
+
+	#[cfg(test)]
 	fn set_now(&self, epoch: u64) {
 		self.clock
 			.store(epoch, std::sync::atomic::Ordering::Relaxed);
@@ -210,6 +271,11 @@ impl Worker {
 		let test_clock = self.clock.load(std::sync::atomic::Ordering::Relaxed);
 		if test_clock != 0 {
 			return test_clock;
+		}
+		// A message ages by the cross-checked time: a clock that jumped
+		// ahead must not expire mail that only waited.
+		if let Some(evidence) = &self.evidence {
+			return evidence.time().read().cautious();
 		}
 		SystemTime::now()
 			.duration_since(UNIX_EPOCH)
@@ -238,86 +304,53 @@ impl Worker {
 		now.saturating_sub(created)
 	}
 
-	/// Run forever, scanning the spool periodically.
+	/// Run forever: scan the spool every `interval`, and start waiting
+	/// conversations as soon as running ones end, so a slow destination
+	/// never holds up the next scan.
 	pub async fn run(self: Arc<Self>, interval: Duration) {
+		let worker: &Worker = &self;
+		let mut ticks = tokio::time::interval(interval);
+		ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+		let mut schedule = scheduler::Schedule::default();
 		loop {
-			if let Err(error) = self.pass().await {
-				tracing::warn!(%error, "queue pass failed");
-			}
-			tokio::time::sleep(interval).await;
-		}
-	}
-
-	/// One pass over the spool. Returns the number of entries that had at
-	/// least one recipient delivered in this pass.
-	pub async fn pass(&self) -> std::io::Result<usize> {
-		let now = self.now_epoch();
-		let mut delivered = 0;
-		for id in self.spool.list()? {
-			// The CLI edits entries on disk while this runs, so `held` and
-			// `next_attempt` are read from the file on every pass, never kept in
-			// memory. Skip held entries and entries still backing off.
-			match self.spool.load_envelope(id) {
-				Ok(envelope) if envelope.held.is_some() || envelope.next_attempt > now => continue,
-				Ok(_) => {}
-				Err(error) => {
-					tracing::warn!(%id, %error, "cannot read spool entry");
-					continue;
+			let done = tokio::select! {
+				_ = ticks.tick() => None,
+				done = scheduler::next_done(schedule.running_mut()), if !schedule.is_idle() => done,
+			};
+			match done {
+				Some(done) => worker.complete(&mut schedule, done),
+				None => {
+					if let Err(error) = worker.scan(&mut schedule) {
+						tracing::warn!(%error, "queue scan failed");
+					}
 				}
 			}
-			if self.process(id, now).await? {
-				delivered += 1;
+			worker.fill(&mut schedule);
+			if let Some(error) = schedule.error.take() {
+				tracing::warn!(%error, "queue pass failed");
 			}
 		}
-		Ok(delivered)
 	}
 
-	/// Attempt the due recipients of one entry, one conversation per domain,
-	/// then settle what is final. Returns whether any recipient was delivered.
-	///
-	/// Each conversation's outcome is written to the envelope (atomically,
-	/// under the spool lock) as soon as it ends, before the next domain is
-	/// tried. The only window for a duplicate is between the remote's reply
-	/// to DATA and that write: a crash there leaves the recipients of that one
-	/// conversation pending, and the restarted worker sends them the message
-	/// once more. Recipients of earlier conversations are already recorded and
-	/// are not sent again.
-	async fn process(&self, id: uuid::Uuid, now: u64) -> std::io::Result<bool> {
-		let entry = match self.spool.load(id) {
-			Ok(entry) => entry,
-			Err(error) => {
-				tracing::warn!(%id, %error, "cannot read spool entry");
-				return Ok(false);
-			}
-		};
-		let due = self.skip_suppressed(id, &entry, now)?;
-		let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-		let mut unparseable = Vec::new();
-		for recipient in due {
-			match Address::parse(&recipient) {
-				Ok(address) => by_domain
-					.entry(address.domain().to_string())
-					.or_default()
-					.push(recipient),
-				Err(_) => unparseable.push(recipient),
-			}
+	/// One pass over the spool: every due recipient is attempted, in
+	/// conversations that run side by side within the caps, and the pass
+	/// returns once they have all ended. Returns the number of entries that
+	/// had at least one recipient delivered in this pass.
+	pub async fn pass(&self) -> std::io::Result<usize> {
+		let mut schedule = scheduler::Schedule::default();
+		self.scan(&mut schedule)?;
+		self.drain(&mut schedule).await;
+		match schedule.error.take() {
+			Some(error) => Err(error),
+			None => Ok(schedule.delivered),
 		}
-		let mut delivered = false;
-		if !unparseable.is_empty() {
-			let reason = DeliveryError::Permanent("unparseable recipient address".into());
-			let conversation = Conversation::all(&unparseable, None, reason);
-			self.record(id, &entry, &conversation, now)?;
-		}
-		for (domain, recipients) in by_domain {
-			let conversation = self.converse(&entry, &domain, &recipients).await;
-			self.record(id, &entry, &conversation, now)?;
-			delivered |= conversation
-				.results
-				.iter()
-				.any(|(_, result)| result.is_ok());
-		}
-		self.finish(id, now, delivered)?;
-		Ok(delivered)
+	}
+
+	/// The destinations on hold.
+	fn holds(&self) -> std::sync::MutexGuard<'_, super::backoff::Holds> {
+		self.holds
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
 	}
 
 	/// Write one conversation's outcome to the envelope, then act on it.
@@ -328,17 +361,57 @@ impl Worker {
 		conversation: &Conversation,
 		now: u64,
 	) -> std::io::Result<()> {
-		self.spool.update_envelope(id, |envelope| {
+		let retry_now = conversation.retry_now();
+		let slow = self.slow_down(entry, conversation, now);
+		let apply = |envelope: &mut crate::storage::Envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
+				if let Some(capped) = conversation.capped_for(recipient) {
+					// Over the warm-up cap: not attempted, so nothing of
+					// the attempt is written.
+					state.wait_for_cap(capped.group.label(), capped.until, now);
+					envelope.set_recipient_state(recipient, state);
+					continue;
+				}
+				state.end_cap_wait(now);
 				state.remote = conversation.remote.clone();
 				match result {
+					// Left for another transaction: due again now, and not
+					// an attempt that failed.
+					Err(_) if retry_now.contains(recipient) => state.next_attempt = now,
+					// Every exchanger reached was on hold: nothing was
+					// attempted, and the recipient waits for the hold.
+					Err(DeliveryError::Transient(reason)) if conversation.held_until.is_some() => {
+						state.next_attempt = conversation.held_until.unwrap_or(now);
+						state.last_error = Some(reason.clone());
+					}
 					Ok(()) => state.status = RecipientStatus::Delivered,
 					Err(DeliveryError::Transient(reason)) => {
+						if reports::logs_deferral(&state, reason) {
+							// Counted here, where the state is written; the
+							// record itself is written once the outcome is.
+							state.deferrals_logged += 1;
+						}
 						state.attempts += 1;
 						state.next_attempt = self.retry_at(now, state.attempts);
 						state.last_error = Some(reason.clone());
-						envelope.last_error = Some(reason.chars().take(512).collect());
+						state.throttled = 0;
+						if let Some(slow) = &slow {
+							// The destination asked to slow down: wait for
+							// the next step of the backoff, and no longer.
+							// The recipient's wait is the hold of the whole
+							// destination, so a recipient far into its own
+							// retry schedule must not hold every other
+							// message to it for that long.
+							state.next_attempt = slow.until;
+							state.throttled = slow.deferrals;
+							state.last_error = Some(slow.reason.clone());
+							state.remote = slow.host.clone().or(state.remote);
+						}
+						envelope.last_error = state
+							.last_error
+							.as_ref()
+							.map(|reason| reason.chars().take(512).collect());
 					}
 					Err(DeliveryError::Permanent(reason)) => {
 						state.status = RecipientStatus::Failed;
@@ -346,9 +419,63 @@ impl Worker {
 					}
 				}
 				envelope.set_recipient_state(recipient, state);
+				// What this delivery owes the evidence log is saved with it.
+				let kind = match result {
+					Ok(()) => Some(crate::evidence::record::OutcomeKind::Delivered),
+					Err(DeliveryError::Permanent(_)) => {
+						Some(crate::evidence::record::OutcomeKind::Bounced)
+					}
+					Err(_) => None,
+				};
+				if let Some(kind) = kind
+					&& !retry_now.contains(recipient)
+				{
+					let reason = match result {
+						Err(DeliveryError::Permanent(reason)) => Some(reason.as_str()),
+						_ => None,
+					};
+					evidence::intend(
+						envelope,
+						&evidence::Recorded {
+							recipient,
+							result: kind,
+							attempt: reports::attempt_of(entry, recipient),
+							remote: Some(conversation.remote.as_deref().unwrap_or("-")),
+							reply: reason,
+							facts: (kind == crate::evidence::record::OutcomeKind::Delivered)
+								.then_some(&conversation.facts),
+						},
+					);
+				}
 			}
 			envelope.settle();
-		})?;
+		};
+		match self.spool.update_envelope(id, apply) {
+			Ok(_) => {}
+			// An operator took the entry out while it was in conversation. The
+			// delivery was made all the same: what it owes the evidence log is
+			// written now, from the entry as it was, so the log does not say
+			// the message was never delivered.
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+				let mut gone = entry.envelope.clone();
+				apply(&mut gone);
+				self.write_owed(&gone);
+				return Err(error);
+			}
+			Err(error) => return Err(error),
+		}
+		if let Some(slow) = slow {
+			let mut holds = self.holds();
+			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
+			if let Some(host) = &slow.host {
+				holds.note(
+					super::destination::Destination::exchanger(host),
+					slow.until,
+					slow.deferrals,
+					&slow.reason,
+				);
+			}
+		}
 		self.after_conversation(id, entry, conversation);
 		Ok(())
 	}
@@ -356,13 +483,29 @@ impl Worker {
 	/// Settle an entry after its conversations: expire it when too old, send
 	/// the failure report for recipients that failed, warn about a long
 	/// delay, and remove it once no recipient is pending.
+	///
+	/// Recipients another conversation holds right now are left alone: they
+	/// are neither expired nor reported until that conversation ends.
 	fn finish(&self, id: uuid::Uuid, now: u64, delivered: bool) -> std::io::Result<()> {
+		let _settling = self
+			.settling
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
 		let envelope = self.spool.load_envelope(id)?;
-		let age = self.message_age(id, now).saturating_sub(envelope.held_secs);
-		if !envelope.pending().is_empty() && age >= self.max_age_secs {
-			// Give up by message age, not attempt count: a recipient down for
-			// hours must not lose mail (RFC 5321 §4.5.4.1).
-			self.expire(id, &envelope.pending())?;
+		// Give up by message age, not attempt count: a recipient down for
+		// hours must not lose mail (RFC 5321 §4.5.4.1). The time an operator
+		// held the message and the time a recipient waited for the warm-up
+		// cap are not part of that age.
+		let expired: Vec<String> = envelope
+			.pending()
+			.into_iter()
+			.filter(|recipient| !self.claims.holds(id, recipient))
+			.filter(|recipient| {
+				self.window_used(id, &envelope, recipient, now) >= self.max_age_secs
+			})
+			.collect();
+		if !expired.is_empty() {
+			self.expire(id, &expired)?;
 		}
 		if delivered {
 			self.metric(|m| m.relayed());
@@ -371,14 +514,31 @@ impl Worker {
 			self.metric(|m| m.bounced());
 		}
 		let envelope = self.spool.load_envelope(id)?;
-		if envelope.pending().is_empty() {
-			return self.spool.remove(id);
+		let pending = envelope.pending();
+		if pending.is_empty() {
+			// An outcome the log has not taken keeps the entry: it is
+			// removed when the outcome is written.
+			return match envelope.outcomes_pending.is_empty() {
+				true => self.spool.remove(id),
+				false => Ok(()),
+			};
 		}
+		let age = pending
+			.iter()
+			.map(|recipient| self.window_used(id, &envelope, recipient, now))
+			.max()
+			.unwrap_or(0);
 		if age >= self.schedule.delay_warning {
 			self.warn_delayed(id);
 		}
-		tracing::debug!(%id, age, "delivery deferred");
-		self.metric(|m| m.deferred());
+		let capped = pending
+			.iter()
+			.all(|recipient| envelope.recipient_state(recipient).warmup.is_some());
+		if !capped {
+			// Waiting for the warm-up cap is not a deferral.
+			tracing::debug!(%id, age, "delivery deferred");
+			self.metric(|m| m.deferred());
+		}
 		Ok(())
 	}
 }
@@ -424,5 +584,41 @@ mod tests_webhook;
 mod tests_schedule;
 
 #[cfg(test)]
+#[path = "worker_tests_evidence.rs"]
+mod tests_evidence;
+
+#[cfg(test)]
 #[path = "worker_tests_delivery_log.rs"]
 mod tests_delivery_log;
+
+#[cfg(test)]
+#[path = "worker_tests_parallel.rs"]
+mod tests_parallel;
+
+#[cfg(test)]
+#[path = "worker_tests_backoff.rs"]
+mod tests_backoff;
+
+#[cfg(test)]
+#[path = "worker_tests_next_mx.rs"]
+mod tests_next_mx;
+
+#[cfg(test)]
+#[path = "worker_tests_provider.rs"]
+mod tests_provider;
+
+#[cfg(test)]
+#[path = "worker_tests_recipient_kinds.rs"]
+mod tests_recipient_kinds;
+
+#[cfg(test)]
+#[path = "worker_tests_fairness.rs"]
+mod tests_fairness;
+
+#[cfg(test)]
+#[path = "worker_tests_spool_holds.rs"]
+mod tests_spool_holds;
+
+#[cfg(test)]
+#[path = "worker_tests_scan.rs"]
+mod tests_scan;

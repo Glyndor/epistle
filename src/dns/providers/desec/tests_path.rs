@@ -49,5 +49,9 @@ async fn zone_with_slash_and_query_characters_stays_one_path_segment() {
 		seen[0].1, "/domains/evil%2F..%2Fx%3Fadmin=1%23f/rrsets/",
 		"the raw request path keeps the zone escaped"
 	);
-	assert_eq!(seen[0].2, None, "no query string was smuggled in");
+	assert_eq!(
+		seen[0].2.as_deref(),
+		Some("cursor="),
+		"the query string is the page request and nothing smuggled in"
+	);
 }

@@ -35,9 +35,13 @@ use tower_http::cors::CorsLayer;
 
 /// Build the API router with authentication applied to every route.
 pub fn router(state: ApiState) -> Router {
+	// The configured per-instance message-size cap, applied consistently
+	// to SMTP, the JMAP upload body limit, the JMAP `Email/set` build,
+	// and the REST `POST /api/v1/send` builder.
+	let max_message_size = state.max_message_size();
 	// Authenticated surface: every route requires the bearer token.
 	let authenticated = Router::new()
-		.nest("/api/v1", v1::router())
+		.nest("/api/v1", v1::router(max_message_size))
 		// SCIM 2.0 provisioning (RFC 7644). The dedicated `Scope::Scim`
 		// gates every route, set in `acceptable_scopes_for` for any path
 		// starting with `/scim/v2`. A `read`/`write`-only key cannot
@@ -62,12 +66,14 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
-		// The upload route's body limit is maxSizeUpload; the handler answers
-		// a larger body with the spec's limit error. Other routes keep the
+		// The upload route's body limit is `maxSizeUpload`: the
+		// operator-configured `[server] max_message_size`, the same value
+		// the SMTP path applies at end-of-DATA. The handler answers a
+		// larger body with the spec's limit error. Other routes keep the
 		// default cap.
 		.route(
 			"/jmap/upload/{account_id}",
-			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE)),
+			post(jmap::upload).layer(DefaultBodyLimit::max(max_message_size)),
 		)
 		// Runs after the bearer check below (layers wrap outward), so the
 		// matched credentials are already in the request.
@@ -215,6 +221,17 @@ mod send_tests_outbound;
 mod send_tests_save_sent;
 
 #[cfg(test)]
+#[path = "send_tests_class.rs"]
+mod send_tests_class;
+#[cfg(test)]
+#[path = "send_tests_class_key.rs"]
+mod send_tests_class_key;
+
+#[cfg(test)]
+#[path = "send_tests_class_paths.rs"]
+mod send_tests_class_paths;
+
+#[cfg(test)]
 #[path = "send_tests_rich.rs"]
 mod send_tests_rich;
 
@@ -235,8 +252,19 @@ mod jmap_tests_email_create;
 mod send_tests_bcc;
 
 #[cfg(test)]
+#[path = "send_tests_toolarge.rs"]
+mod send_tests_toolarge;
+#[cfg(test)]
 #[path = "send_tests_virus.rs"]
 mod send_tests_virus;
+
+#[cfg(test)]
+#[path = "send_tests_attachments.rs"]
+mod send_tests_attachments;
+
+#[cfg(test)]
+#[path = "send_tests_ratelimit.rs"]
+mod send_tests_ratelimit;
 
 #[cfg(test)]
 #[path = "send_tests_trace.rs"]
@@ -245,6 +273,10 @@ mod send_tests_trace;
 #[cfg(test)]
 #[path = "jmap_tests_attachment_limit.rs"]
 mod jmap_tests_attachment_limit;
+
+#[cfg(test)]
+#[path = "jmap_tests_message_size.rs"]
+mod jmap_tests_message_size;
 
 #[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
@@ -325,6 +357,14 @@ mod jmap_tests_push_get;
 #[cfg(test)]
 #[path = "jmap_tests_eventsource.rs"]
 mod jmap_tests_eventsource;
+
+#[cfg(test)]
+#[path = "jmap_tests_vacation.rs"]
+mod jmap_tests_vacation;
+
+#[cfg(test)]
+#[path = "jmap_tests_vacation_b.rs"]
+mod jmap_tests_vacation_b;
 
 #[cfg(test)]
 #[path = "api_tests_addresses.rs"]

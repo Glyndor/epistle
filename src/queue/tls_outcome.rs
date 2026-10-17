@@ -29,7 +29,9 @@ pub const STS_POLICY_INVALID: &str = "sts-policy-invalid";
 const CERTIFICATE_EXPIRED: &str = "certificate-expired";
 const CERTIFICATE_HOST_MISMATCH: &str = "certificate-host-mismatch";
 const CERTIFICATE_NOT_TRUSTED: &str = "certificate-not-trusted";
-const VALIDATION_FAILURE: &str = "validation-failure";
+/// The handshake failed for a reason that is not about the certificate,
+/// such as a server that stopped answering mid-handshake.
+pub const VALIDATION_FAILURE: &str = "validation-failure";
 
 /// Classify a failed STARTTLS handshake. The certificate checks rustls ran
 /// map onto their RFC 8460 names; anything else in the handshake is the

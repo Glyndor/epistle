@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -16,6 +15,7 @@ fn message(body: &str) -> AcceptedMessage {
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	}
 }
@@ -45,7 +45,7 @@ fn submit(sink: &Arc<dyn MessageSink>, body: &str) -> Result<(), SinkError> {
 		message(body),
 		uuid::Uuid::now_v7(),
 		"alice",
-		&BTreeMap::new(),
+		&crate::smtp::sink::Submission::default(),
 	)
 }
 
@@ -55,8 +55,17 @@ async fn a_submission_carrying_a_virus_is_refused_with_its_signature() {
 	let (sink, inner, metrics) = sink(true, &clamd.socket, None);
 	match submit(&sink, &eicar()) {
 		Err(SinkError::VirusDetected(signature)) => assert_eq!(signature, SIGNATURE),
-		Err(SinkError::Unavailable(_)) => {
+		Err(SinkError::Unavailable(_) | SinkError::EvidenceUnavailable(_)) => {
 			panic!("expected a virus refusal, got a storage-unavailable refusal")
+		}
+		Err(SinkError::AttachmentRefused(_)) => {
+			panic!("expected a virus refusal, got an attachment refusal")
+		}
+		Err(SinkError::ScanUnavailable) => {
+			panic!("expected a virus refusal, got a busy scanner")
+		}
+		Err(SinkError::ScanTooLarge) => {
+			panic!("expected a virus refusal, got a message too large to scan")
 		}
 		Ok(()) => panic!("expected a virus refusal, the submission was accepted"),
 	}
@@ -205,8 +214,13 @@ fn a_long_signature_is_cut_for_the_reply() {
 fn concrete(socket: &std::path::Path) -> ScanningSink {
 	ScanningSink {
 		inner: Arc::new(MemorySink::new()),
-		scanner: worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
-			.expect("scanner"),
+		scanner: Some(
+			worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
+				.expect("scanner"),
+		),
+		defer_unscanned: false,
+		attachments: None,
+		gate: gate::Gate::new(4, 1),
 		metrics: None,
 		webhook: None,
 		workers: Default::default(),
@@ -222,7 +236,7 @@ async fn sequential_scans_share_one_worker() {
 			message("hello"),
 			uuid::Uuid::now_v7(),
 			"alice",
-			&BTreeMap::new(),
+			&crate::smtp::sink::Submission::default(),
 		)
 		.expect("clean");
 	}
@@ -252,7 +266,7 @@ async fn two_hundred_small_scans_timing() {
 			message("hello"),
 			uuid::Uuid::now_v7(),
 			"alice",
-			&BTreeMap::new(),
+			&crate::smtp::sink::Submission::default(),
 		)
 		.expect("clean");
 	}

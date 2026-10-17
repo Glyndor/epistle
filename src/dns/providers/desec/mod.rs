@@ -12,6 +12,9 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, transport,
+};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How deSEC wants a TXT value written and lists it back; see
@@ -47,7 +50,7 @@ impl DesecProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		DesecProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
@@ -69,16 +72,19 @@ impl DesecProvider {
 	/// The record type token for a kind we can publish (deSEC handles each as
 	/// an rrset; MX needs the priority split out into a separate field which
 	/// epistle does not build yet).
-	fn rrset_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn rrset_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -105,8 +111,8 @@ impl DesecProvider {
 	/// no DKIM verifier stitches back together. deSEC lists the canonical
 	/// form, the same quoted strings, and reads `\DDD` as decimal (RFC 1035
 	/// §5.1), which is [`TXT_FORM`]. Other kinds go verbatim.
-	fn record_content(kind: RecordKind, value: &str) -> Vec<String> {
-		if kind == RecordKind::Txt {
+	fn record_content(kind: &RecordKind, value: &str) -> Vec<String> {
+		if kind == &RecordKind::Txt {
 			vec![txt_encode(value, TXT_FORM)]
 		} else {
 			vec![value.to_string()]
@@ -129,7 +135,7 @@ impl DesecProvider {
 		records: Vec<String>,
 	) -> Result<(), ProviderError> {
 		self.authorize(record)?;
-		let kind = Self::rrset_kind(record.kind)?;
+		let kind = Self::rrset_kind(&record.kind)?;
 		let body = serde_json::json!([{
 			"subname": self.subname(&record.name),
 			"type": kind,
@@ -149,7 +155,7 @@ impl DesecProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -169,7 +175,7 @@ impl DesecProvider {
 			)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -177,10 +183,7 @@ impl DesecProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let text = crate::dns::providers::read_body(response).await?;
 		let rrsets: Vec<Rrset> =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		let sub = self.subname(name);
@@ -203,14 +206,14 @@ impl DesecProvider {
 
 impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move {
-			let mut content = Self::record_content(record.kind, &record.value);
+		Box::pin(crate::dns::providers::within(async move {
+			let mut content = Self::record_content(&record.kind, &record.value);
 			// The bulk PUT replaces the whole rrset. The upsert contract
 			// in `src/dns/provider.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
 			if record.kind == RecordKind::Txt {
 				self.authorize(&record)?;
-				let kind = Self::rrset_kind(record.kind)?;
+				let kind = Self::rrset_kind(&record.kind)?;
 				if let Some(rrset) = self.fetch_rrset(&record.name, kind).await? {
 					let siblings = rrset
 						.records
@@ -220,13 +223,13 @@ impl DnsProvider for DesecProvider {
 				}
 			}
 			self.put_rrset(&record, content).await
-		})
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let record_value = record.value.clone();
-		Box::pin(async move {
+		Box::pin(crate::dns::providers::within(async move {
 			self.authorize(&record)?;
-			let kind = Self::rrset_kind(record.kind)?;
+			let kind = Self::rrset_kind(&record.kind)?;
 			// The TXT matching rule from `src/dns/provider.rs` is
 			// the contract: a value-bearing delete drops only the
 			// record whose content matches the value (a sibling ACME
@@ -255,33 +258,70 @@ impl DnsProvider for DesecProvider {
 			} else {
 				self.put_rrset(&record, Vec::new()).await
 			}
-		})
+		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move {
-			let url = self.rrsets_url()?;
-			let response = self
-				.client
-				.get(url.into_url())
-				.header(
-					reqwest::header::AUTHORIZATION,
-					format!("Token {}", self.secret.token()),
-				)
-				.send()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
-			let status = response.status();
-			if status == reqwest::StatusCode::UNAUTHORIZED
-				|| status == reqwest::StatusCode::FORBIDDEN
-			{
-				return Err(ProviderError::Auth);
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			// deSEC answers 400 to a list past 500 rrsets unless the request
+			// asks for a page; an empty `cursor` asks for the first, and the
+			// `Link` header of each page names the next one.
+			let mut url = self.rrsets_url()?.with_query("cursor", "");
+			let mut rrsets: Vec<Rrset> = Vec::new();
+			let mut pages = 0;
+			let mut records = 0;
+			loop {
+				let response = self
+					.client
+					.get(url.clone().into_url())
+					.header(
+						reqwest::header::AUTHORIZATION,
+						format!("Token {}", self.secret.token()),
+					)
+					.send()
+					.await
+					.map_err(transport)?;
+				let status = response.status();
+				if status == reqwest::StatusCode::UNAUTHORIZED
+					|| status == reqwest::StatusCode::FORBIDDEN
+				{
+					return Err(ProviderError::Auth);
+				}
+				if !status.is_success() {
+					return Err(ProviderError::Remote(format!("HTTP {status}")));
+				}
+				let links: Vec<&str> = response
+					.headers()
+					.get_all(reqwest::header::LINK)
+					.iter()
+					.filter_map(|value| value.to_str().ok())
+					.collect();
+				let next = links.iter().find_map(|value| next_link(value));
+				// A Link that mentions a next page nobody could read is a
+				// listing cut short, not a listing that ended.
+				if next.is_none()
+					&& links
+						.iter()
+						.any(|value| value.to_ascii_lowercase().contains("next"))
+				{
+					return Err(inconsistent_pages(self.secret.zone()));
+				}
+				let text = crate::dns::providers::read_body(response).await?;
+				let page: Vec<Rrset> = serde_json::from_str(&text)
+					.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				// An rrset with no records still costs memory: it counts as one.
+				records += page.iter().map(|r| r.records.len().max(1)).sum::<usize>();
+				rrsets.extend(page);
+				if records > LIST_MAX_RECORDS {
+					return Err(listing_too_long(self.secret.zone()));
+				}
+				let Some(next) = next else { break };
+				pages += 1;
+				if pages >= LIST_MAX_PAGES {
+					return Err(listing_too_long(self.secret.zone()));
+				}
+				url = self.base.follow(&next)?;
 			}
-			let text = response
-				.text()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
-			let rrsets: Vec<Rrset> =
-				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 			Ok(rrsets
 				.into_iter()
 				.flat_map(|r| {
@@ -291,35 +331,56 @@ impl DnsProvider for DesecProvider {
 					} else {
 						format!("{}.{}", r.subname, zone)
 					};
-					let kind = parse_kind(&r.kind);
-					r.records.into_iter().map(move |value| DnsRecord {
-						name: name.clone(),
-						kind,
-						value: if kind == RecordKind::Txt {
-							txt_decode(&value, TXT_FORM)
-						} else {
-							value
-						},
-						ttl: r.ttl,
+					let kind = RecordKind::from_token(&r.kind);
+					r.records.into_iter().map(move |value| {
+						let kind_for_value = &kind;
+						DnsRecord {
+							name: name.clone(),
+							kind: kind.clone(),
+							value: if kind_for_value == &RecordKind::Txt {
+								txt_decode(&value, TXT_FORM)
+							} else {
+								value
+							},
+							ttl: r.ttl,
+							proxied: None,
+						}
 					})
 				})
 				.collect())
-		})
+		}))
 	}
 }
 
-/// Map a deSEC type token to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+/// The target of the `rel="next"` entry of a `Link` header value
+/// (`<url>; rel="next", <url>; rel="first"`), if it has one. Entries start at
+/// each `<`, so a comma inside a URL does not split it, and `rel` may list
+/// several relations (`rel="prev next"`).
+fn next_link(header: &str) -> Option<String> {
+	let mut rest = header;
+	while let Some(start) = rest.find('<') {
+		let after = &rest[start + 1..];
+		let end = after.find('>')?;
+		let target = &after[..end];
+		let tail = &after[end + 1..];
+		let params = &tail[..tail.find('<').unwrap_or(tail.len())];
+		let is_next = params.split(';').any(|param| {
+			let param = param.trim().trim_end_matches(',').trim();
+			param.split_once('=').is_some_and(|(key, value)| {
+				key.trim().eq_ignore_ascii_case("rel")
+					&& value
+						.trim()
+						.trim_matches('"')
+						.split_whitespace()
+						.any(|relation| relation.eq_ignore_ascii_case("next"))
+			})
+		});
+		if is_next {
+			return Some(target.to_string());
+		}
+		rest = tail;
 	}
+	None
 }
 
 /// Map a write response to success or a typed error.

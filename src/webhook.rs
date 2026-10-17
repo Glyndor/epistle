@@ -137,6 +137,17 @@ pub enum WebhookEvent {
 		/// The signature the antivirus reported.
 		signature: String,
 	},
+	/// An IP warm-up day went well for a receiver group: its cap grew, a
+	/// raise was kept, or the day was too light to grow on.
+	#[serde(rename = "warmup.ok")]
+	WarmupOk(crate::queue::warmup::WarmupReport),
+	/// An IP warm-up day went badly for a receiver group: its cap held.
+	#[serde(rename = "warmup.held")]
+	WarmupHeld(crate::queue::warmup::WarmupReport),
+	/// An IP warm-up day went very badly for a receiver group, or an
+	/// operator raise did not hold: its cap went back one step.
+	#[serde(rename = "warmup.backoff")]
+	WarmupBackoff(crate::queue::warmup::WarmupReport),
 	/// Sent only by `epistle webhook test` to check that the endpoint is
 	/// reachable and verifies signatures. Receivers should acknowledge it and
 	/// otherwise ignore it.

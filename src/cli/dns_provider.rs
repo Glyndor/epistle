@@ -10,6 +10,8 @@ use super::resource;
 use super::stack::StackAction;
 use crate::config::Config;
 
+#[path = "dns_lockdown.rs"]
+mod lockdown_handler;
 #[path = "dns_provider_probe.rs"]
 mod probe;
 #[path = "dns_provider_set.rs"]
@@ -17,6 +19,12 @@ mod set;
 #[path = "dns_provider_show.rs"]
 mod show;
 
+#[cfg(test)]
+#[path = "dns_lockdown_tests.rs"]
+mod lockdown_tests;
+#[cfg(test)]
+#[path = "dns_lockdown_tests_cuts.rs"]
+mod lockdown_tests_cuts;
 #[cfg(test)]
 #[path = "dns_provider_tests.rs"]
 mod tests;
@@ -35,6 +43,8 @@ pub enum DnsCli {
 		#[command(subcommand)]
 		action: ProviderCli,
 	},
+	/// Lock the zone against mail spoofing.
+	Lockdown(lockdown_handler::LockdownArgs),
 }
 
 /// Provider actions.
@@ -60,40 +70,83 @@ pub enum ProviderCli {
 	Test,
 }
 
-pub(super) fn run(path: &Path, action: DnsCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
-		path,
-		action,
-		dry_run,
-		&mut std::io::stdout().lock(),
-		&mut super::style::stderr(),
-		super::stack::run,
-	))
+pub(super) fn run(path: &Path, action: DnsCli, dry_run: bool, json: bool) -> ExitCode {
+	match action {
+		DnsCli::Lockdown(args) => lockdown_handler::run(path, args, dry_run),
+		action => resource::exit_resource(execute_with(
+			path,
+			action,
+			dry_run,
+			json,
+			&mut std::io::stdout().lock(),
+			&mut super::style::stderr(),
+			super::stack::run,
+		)),
+	}
 }
 
 fn execute_with(
 	path: &Path,
 	action: DnsCli,
 	dry_run: bool,
+	json: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
-	let DnsCli::Provider { action } = action;
-	let change: resource::Change = match action {
-		ProviderCli::Show { json } => {
-			show::run(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+) -> Result<ExitCode, resource::ResourceError> {
+	let DnsCli::Provider { action } = action else {
+		return Err("dns lockdown runs through its own path; this should not be reached".into());
+	};
+	let (change, verb, fields): (resource::Change, _, _) = match action {
+		ProviderCli::Show { json: leaf } => {
+			show::run(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				leaf || json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		ProviderCli::Test => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			if json {
+				let mut printed = Vec::new();
+				let code = probe::run(&config, &mut printed, status)?;
+				super::json_out::passed(out, "provider test", &printed)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+				return Ok(code);
+			}
 			return probe::run(&config, out, status);
 		}
 		ProviderCli::Set { provider, args } => {
 			let fields = set::fields(&provider, &args)?;
-			Box::new(move |document, _| document.set_table_fields(&["dns"], &fields))
+			let change: resource::Change = Box::new(move |document, _| {
+				document
+					.set_table_fields(&["dns"], &fields)
+					.map_err(resource::ResourceError::Failure)
+			});
+			(
+				change,
+				"provider set",
+				serde_json::json!({ "provider": provider }),
+			)
 		}
-		ProviderCli::Unset => Box::new(|document, _| document.remove_table(&["dns"]).map(|_| ())),
+		ProviderCli::Unset => {
+			let change: resource::Change = Box::new(|document, _| {
+				document
+					.remove_table(&["dns"])
+					.map(|_| ())
+					.map_err(resource::ResourceError::Failure)
+			});
+			(change, "provider unset", serde_json::json!({}))
+		}
 	};
-	resource::apply_edit(path, dry_run, "dns provider", out, status, restart, change)
+	let edit = resource::Edit {
+		label: "dns provider",
+		action: verb,
+		fields,
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }

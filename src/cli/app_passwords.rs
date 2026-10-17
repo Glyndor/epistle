@@ -45,6 +45,48 @@ pub enum AppPasswordCli {
 		/// `off` opts it out (a relay, a read-only phone).
 		#[arg(long, value_name = "STATE")]
 		save_sent: Option<String>,
+		/// The class granted to mail sent with this credential
+		/// (`transactional`, `marketing`, `personal`).
+		#[arg(long, value_name = "CLASS", value_parser = crate::evidence::class::parse_arg)]
+		class: Option<crate::evidence::MailClass>,
+	},
+	/// Replace an app password's secret and print the new one once.
+	///
+	/// The label, expiry, address range and `save-sent` setting stay. The old
+	/// secret stops working at once, so every client that uses it has to be
+	/// given the new one.
+	Rotate {
+		/// The account the app password belongs to.
+		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: String,
+		/// The label of the app password to rotate.
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
+		/// Check that the app password exists and change nothing.
+		#[arg(long)]
+		dry_run: bool,
+	},
+	/// Give an app password a new label.
+	///
+	/// The secret and every setting stay, so clients keep working; only the
+	/// name it is listed and revoked under changes.
+	Rename {
+		/// The account the app password belongs to.
+		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: String,
+		/// The current label.
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// The new label (1 to 64 characters, no control characters).
+		#[arg(value_name = "NEW_LABEL")]
+		new_label: String,
+		/// Check the rename and change nothing.
+		#[arg(long)]
+		dry_run: bool,
 	},
 	/// Revoke an existing app password by label.
 	Revoke {
@@ -61,6 +103,33 @@ pub enum AppPasswordCli {
 	},
 }
 
+/// The longest label, in characters.
+const MAX_LABEL: usize = 64;
+
+/// Why `label` cannot name an app password, or `None` when it can. A label
+/// is printed by `list` and typed to revoke, so it stays short and plain.
+fn label_problem(label: &str) -> Option<String> {
+	if label.trim().is_empty() {
+		return Some("the label must not be empty".into());
+	}
+	if label.chars().any(char::is_control) {
+		return Some("the label must not contain control characters".into());
+	}
+	if label.chars().any(super::term::is_invisible_format) {
+		return Some(
+			"the label must not contain invisible formatting characters (such as a right-to-left override)"
+				.into(),
+		);
+	}
+	if label != label.trim() {
+		return Some("the label must not start or end with a space".into());
+	}
+	if label.chars().count() > MAX_LABEL {
+		return Some(format!("the label must be at most {MAX_LABEL} characters"));
+	}
+	None
+}
+
 /// Generate a strong random secret, hash it (argon2id) and store it for
 /// `account` under `label`. The plaintext secret is printed once and never
 /// stored. `expires_at` is epoch seconds; `ip_cidr` a single CIDR allowlist.
@@ -71,6 +140,7 @@ pub enum AppPasswordCli {
 /// mutable `AppPasswordStore`. The check opens the account store
 /// (the same kind of check `epistle masked` performs) so the failure
 /// surfaces before any persistence happens.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create(
 	config: &Config,
 	account: &str,
@@ -78,8 +148,13 @@ pub(super) fn create(
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
 	save_sent: Option<String>,
+	class: Option<crate::evidence::MailClass>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	if let Some(problem) = label_problem(label) {
+		return super::exit::refused(problem);
+	}
 	if let Err(code) = ensure_known_dynamic_account(config, account) {
 		return code;
 	}
@@ -119,6 +194,21 @@ pub(super) fn create(
 			return ExitCode::FAILURE;
 		}
 	};
+	let fields = serde_json::json!({
+		"account": account, "label": label, "secret": secret,
+		"expires_at": expires_at, "ip_cidr": ip_cidr, "save_sent": save_sent,
+	});
+	// Bound before the credential exists: a binding to a hash nobody holds
+	// is inert, a credential without its binding would send as personal.
+	if let Some(class) = class {
+		let key = crate::evidence::bindings::app_password_key(&hash);
+		if let Err(error) = crate::evidence::bindings::update(&config.data_dir, |bindings| {
+			bindings.credentials.insert(key, class);
+		}) {
+			super::style::error(format_args!("binding the class: {error}"));
+			return ExitCode::FAILURE;
+		}
+	}
 	let app = AppPassword {
 		label: label.to_string(),
 		hash,
@@ -128,9 +218,12 @@ pub(super) fn create(
 	};
 	match store.add(account, app) {
 		Ok(()) => {
-			let _ = writeln!(out, "created app password \"{label}\" for {account}");
-			let _ = writeln!(out, "secret (shown once): {secret}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
+				"created app password \"{label}\" for {account}"
+			));
+			report.line(format_args!("secret (shown once): {secret}"));
+			report.change("create", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);
@@ -159,7 +252,7 @@ fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), Ex
 		ExitCode::FAILURE
 	})?;
 	if store.is_static(account) {
-		return Err(super::exit::refused(format_args!(
+		return Err(super::exit::policy(format_args!(
 			"account {account} is a static account; edit mail.toml to manage its credentials"
 		)));
 	}
@@ -225,6 +318,10 @@ pub(super) fn list(
 			Some(false) => "save_sent=off",
 			None => "save_sent=default",
 		};
+		let (account, label) = (
+			super::term::sanitize(&account),
+			super::term::sanitize(&label),
+		);
 		if writeln!(
 			out,
 			"{account}\t{label}\texpires={expiry}\tip={cidr}\t{save_sent}"
@@ -243,25 +340,174 @@ pub(super) fn list(
 pub(super) fn run(
 	config: &Config,
 	action: AppPasswordCli,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	match action {
-		AppPasswordCli::List { account, json } => list(config, account.as_deref(), json, out),
+		AppPasswordCli::List {
+			account,
+			json: leaf,
+		} => list(config, account.as_deref(), leaf || json, out),
 		AppPasswordCli::Create {
 			account,
 			label,
 			expires_at,
 			ip_cidr,
 			save_sent,
+			class,
 		} => create(
-			config, &account, &label, expires_at, ip_cidr, save_sent, out,
+			config, &account, &label, expires_at, ip_cidr, save_sent, class, json, out,
 		),
+		AppPasswordCli::Rotate {
+			account,
+			label,
+			yes,
+			dry_run,
+		} => rotate(config, (&account, &label), (yes, dry_run), json, out),
+		AppPasswordCli::Rename {
+			account,
+			label,
+			new_label,
+			dry_run,
+		} => rename(config, (&account, &label), &new_label, dry_run, json, out),
 		AppPasswordCli::Revoke {
 			account,
 			label,
 			yes,
-		} => revoke(config, &account, &label, yes, out),
+		} => revoke(config, &account, &label, yes, json, out),
 	}
+}
+
+/// Open the store and check that `account` has an app password `label`
+/// (exit code 2 when it has not).
+fn open_known(config: &Config, account: &str, label: &str) -> Result<AppPasswordStore, ExitCode> {
+	let store = AppPasswordStore::open(&config.data_dir).map_err(|error| {
+		super::style::error(format_args!("opening app-password store: {error}"));
+		ExitCode::FAILURE
+	})?;
+	let known = store
+		.list()
+		.iter()
+		.any(|(owner, name, _, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
+	if known {
+		return Ok(store);
+	}
+	Err(super::exit::refused(format!(
+		"{} has no app password \"{}\"",
+		account.to_ascii_lowercase(),
+		super::term::sanitize(label)
+	)))
+}
+
+/// Replace the secret of `account`'s app password `label`: a new random
+/// secret, hashed with argon2id, written over the old hash in one locked
+/// edit. The new secret is printed once and never stored. Asks first,
+/// because every client using the old secret stops working; `--dry-run`
+/// checks that the app password exists and prints no secret.
+fn rotate(
+	config: &Config,
+	(account, label): (&str, &str),
+	(yes, dry_run): (bool, bool),
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let mut store = match open_known(config, account, label) {
+		Ok(store) => store,
+		Err(code) => return code,
+	};
+	let mut report = super::json_out::Report::new(out, json);
+	let fields = serde_json::json!({ "account": account, "label": label });
+	if dry_run {
+		report.line(format_args!(
+			"would replace the secret of app password \"{label}\" for {account}"
+		));
+		let mut object = super::json_out::change_object("rotate", false, fields, None);
+		object["result"] = "dry-run".into();
+		return report.object(object);
+	}
+	let question = format!(
+		"Replace the secret of app password \"{label}\" for \"{account}\"? \
+		 The old secret stops working at once. [y/N]"
+	);
+	if let Err(code) = super::prompt::confirm_destructive("app-password rotate", &question, yes) {
+		return code;
+	}
+	let Some(secret) = super::generate_secret() else {
+		super::style::error("cannot gather randomness for the secret");
+		return ExitCode::FAILURE;
+	};
+	let hash = match crate::smtp::auth::hash_password(&secret) {
+		Ok(hash) => hash,
+		Err(error) => {
+			super::style::error(format_args!("cannot hash secret: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	if let Err(error) = store.rotate(account, label, hash) {
+		let code = super::exit::for_store_error(&error);
+		super::style::error(error);
+		return code;
+	}
+	let waited = super::account_reload::wait(
+		&config.data_dir.join("app_passwords.toml"),
+		&mut super::style::stderr(),
+	);
+	report.line(format_args!(
+		"replaced the secret of app password \"{label}\" for {account}"
+	));
+	report.line(format_args!("secret (shown once): {secret}"));
+	let mut fields = fields;
+	fields["secret"] = secret.into();
+	report.change("rotate", true, fields, Some(waited.into()))
+}
+
+/// Give `account`'s app password `label` the name `new_label`.
+fn rename(
+	config: &Config,
+	(account, label): (&str, &str),
+	new_label: &str,
+	dry_run: bool,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	if let Some(problem) = label_problem(new_label) {
+		return super::exit::refused(problem);
+	}
+	let mut store = match open_known(config, account, label) {
+		Ok(store) => store,
+		Err(code) => return code,
+	};
+	let taken = store
+		.for_account(account)
+		.iter()
+		.any(|app| app.label == new_label);
+	let unchanged = label == new_label;
+	if taken && !unchanged {
+		return super::exit::refused(format!(
+			"{account} already has an app password \"{new_label}\""
+		));
+	}
+	let fields = serde_json::json!({
+		"account": account, "label": new_label, "previous_label": label,
+	});
+	let mut report = super::json_out::Report::new(out, json);
+	if dry_run {
+		report.line(format_args!(
+			"would rename app password \"{label}\" of {account} to \"{new_label}\""
+		));
+		let mut object = super::json_out::change_object("rename", false, fields, None);
+		object["result"] = "dry-run".into();
+		return report.object(object);
+	}
+	if !unchanged && let Err(error) = store.rename(account, label, new_label) {
+		let code = super::exit::for_store_error(&error);
+		super::style::error(error);
+		return code;
+	}
+	report.line(format_args!(
+		"renamed app password \"{label}\" of {account} to \"{new_label}\""
+	));
+	report.change("rename", !unchanged, fields, None)
 }
 
 /// Revoke an account's app password by label. Asks
@@ -274,6 +520,7 @@ pub(super) fn revoke(
 	account: &str,
 	label: &str,
 	yes: bool,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let mut store = match AppPasswordStore::open(&config.data_dir) {
@@ -299,8 +546,12 @@ pub(super) fn revoke(
 	}
 	match store.remove(account, label) {
 		Ok(()) => {
-			let _ = writeln!(out, "revoked app password \"{label}\" for {account}");
-			ExitCode::SUCCESS
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
+				"revoked app password \"{label}\" for {account}"
+			));
+			let fields = serde_json::json!({ "account": account, "label": label });
+			report.change("revoke", true, fields, None)
 		}
 		Err(error) => {
 			let code = super::exit::for_store_error(&error);

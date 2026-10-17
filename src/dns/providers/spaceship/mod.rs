@@ -10,11 +10,15 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, inconsistent_pages, listing_too_long, missing_page_count,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How Spaceship takes a TXT `value` and lists it back; see `wire_value`.
@@ -41,15 +45,16 @@ pub struct SpaceshipProvider {
 #[derive(Deserialize)]
 struct ListResponse {
 	items: Vec<serde_json::Value>,
+	/// Absent when the answer does not say how many records there are.
 	#[serde(default)]
-	total: i64,
+	total: Option<i64>,
 }
 
 impl SpaceshipProvider {
 	/// Build a provider for `zone` with the two credential halves.
 	pub fn new(api_key: String, api_secret: String, zone: String) -> Self {
 		SpaceshipProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			api_key,
 			api_secret,
 			zone,
@@ -66,16 +71,19 @@ impl SpaceshipProvider {
 	/// The Spaceship type token for a kind we can publish; SRV splits the
 	/// presentation form into `priority`/`weight`/`port`/`target` fields, MX
 	/// needs the priority split out (epistle still packs it into the value).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -108,7 +116,7 @@ impl SpaceshipProvider {
 	/// `value` for TXT, `address` for A/AAAA, `cname` for CNAME,
 	/// `associationData` for TLSA, `target` for SRV (priority/weight/port
 	/// travel in their own dedicated fields).
-	fn value_field(kind: RecordKind) -> &'static str {
+	fn value_field(kind: &RecordKind) -> &'static str {
 		match kind {
 			RecordKind::Txt => "value",
 			RecordKind::A | RecordKind::Aaaa => "address",
@@ -117,6 +125,11 @@ impl SpaceshipProvider {
 			RecordKind::Srv => "target",
 			RecordKind::Caa => "value",
 			RecordKind::Mx => "exchange",
+			// Spaceship's API does not model NS / HTTPS / SVCB; an
+			// `Other` type is something we cannot translate to one
+			// of Spaceship's value fields. The caller must never
+			// reach this point: `api_kind` rejects the kinds.
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => "",
 		}
 	}
 
@@ -175,7 +188,7 @@ impl SpaceshipProvider {
 			map.insert("tag".to_string(), tag.into());
 			map.insert("value".to_string(), value.into());
 		} else if record.kind == RecordKind::Mx {
-			// Spaceship stores MX as `priority` (number) + `exchange`
+			// Spaceship stores MX as `preference` (number) + `exchange`
 			// (target) fields.
 			let mut parts = record.value.split_whitespace();
 			let priority: u16 = parts
@@ -184,16 +197,15 @@ impl SpaceshipProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			let map = item.as_object_mut().expect("object");
-			map.insert("priority".to_string(), priority.into());
+			map.insert("preference".to_string(), priority.into());
 			map.insert("exchange".to_string(), target.into());
 		} else {
 			let map = item.as_object_mut().expect("object");
 			map.insert(
-				Self::value_field(record.kind).to_string(),
+				Self::value_field(&record.kind).to_string(),
 				Self::wire_value(record).into(),
 			);
 		}
@@ -207,7 +219,7 @@ impl SpaceshipProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -247,7 +259,7 @@ impl SpaceshipProvider {
 			.body(serde_json::json!([item]).to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -258,6 +270,8 @@ impl SpaceshipProvider {
 		let url = self.records_url()?;
 		let mut out = Vec::new();
 		let mut skip: i64 = 0;
+		let mut pages = 0;
+		let mut expected: Option<i64> = None;
 		loop {
 			let page_url = url
 				.with_query("take", &PAGE_MAX.to_string())
@@ -266,24 +280,52 @@ impl SpaceshipProvider {
 				.request(reqwest::Method::GET, page_url)
 				.send()
 				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				.map_err(transport)?;
 			let status = response.status();
 			if status == reqwest::StatusCode::UNAUTHORIZED
 				|| status == reqwest::StatusCode::FORBIDDEN
 			{
 				return Err(ProviderError::Auth);
 			}
-			let page: ListResponse = response
-				.text()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))
-				.and_then(|text| {
-					serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
-				})?;
+			let page: ListResponse =
+				crate::dns::providers::read_body(response)
+					.await
+					.and_then(|text| {
+						serde_json::from_str(&text)
+							.map_err(|e| ProviderError::Remote(e.to_string()))
+					})?;
 			let count = page.items.len() as i64;
 			out.extend(page.items);
-			if out.len() as i64 >= page.total || count == 0 {
-				break;
+			if out.len() > LIST_MAX_RECORDS {
+				return Err(listing_too_long(&self.zone));
+			}
+			match page.total {
+				Some(total) => {
+					// The total is a promise: what was read must add up to
+					// it, page by page, and it must not move.
+					if total < 0
+						|| expected.is_some_and(|seen| seen != total)
+						|| out.len() as i64 > total
+					{
+						return Err(inconsistent_pages(&self.zone));
+					}
+					expected = Some(total);
+					if out.len() as i64 == total {
+						break;
+					}
+					if count == 0 {
+						return Err(inconsistent_pages(&self.zone));
+					}
+				}
+				// No total: a short page is the last one, a full page
+				// may not be, and a zone is never read as finished on
+				// that guess.
+				None if count < PAGE_MAX => break,
+				None => return Err(missing_page_count(&self.zone)),
+			}
+			pages += 1;
+			if pages >= LIST_MAX_PAGES {
+				return Err(listing_too_long(&self.zone));
 			}
 			skip += count;
 		}
@@ -317,24 +359,39 @@ impl SpaceshipProvider {
 		None
 	}
 
-	/// Map a Spaceship list item back to a [`RecordKind`], defaulting to TXT
-	/// so an unknown kind we did not emit still surfaces instead of being
-	/// silently dropped.
-	fn parse_kind(kind: &str) -> RecordKind {
-		match kind {
-			"A" => RecordKind::A,
-			"AAAA" => RecordKind::Aaaa,
-			"CNAME" => RecordKind::Cname,
-			"MX" => RecordKind::Mx,
-			"SRV" => RecordKind::Srv,
-			"TLSA" => RecordKind::Tlsa,
-			_ => RecordKind::Txt,
+	/// The value of a listed record of a kind epistle does not publish.
+	/// Spaceship names the field after the type: `nameserver` for an NS,
+	/// `svcPriority`, `targetName` and `svcParams` for an HTTPS or SVCB
+	/// (<https://docs.spaceship.dev/>, the NS and HTTPS resource record
+	/// schemas, read 2026-10-16), `aliasName` and `pointer` for the types
+	/// that follow the same pattern. An item with none of them lists with an
+	/// empty value.
+	fn foreign_value(kind: &RecordKind, item: &serde_json::Value) -> String {
+		let text = |key: &str| item.get(key).and_then(|v| v.as_str());
+		if matches!(kind, RecordKind::Https | RecordKind::Svcb) {
+			let priority = item
+				.get("svcPriority")
+				.and_then(|v| v.as_u64())
+				.unwrap_or(0);
+			return format!(
+				"{priority} {} {}",
+				text("targetName").unwrap_or("."),
+				text("svcParams").unwrap_or("")
+			)
+			.trim_end()
+			.to_string();
 		}
+		for key in ["nameserver", "aliasName", "pointer"] {
+			if let Some(v) = text(key) {
+				return v.to_string();
+			}
+		}
+		Self::extract_value(item).unwrap_or_default()
 	}
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		// Spaceship has no in-place update: remove the existing matching
 		// record first, then add the new one. remove() is a 204 either way,
@@ -377,7 +434,7 @@ impl SpaceshipProvider {
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		self.remove(kind, &rel, &record).await
 	}
@@ -396,34 +453,56 @@ impl SpaceshipProvider {
 				} else {
 					format!("{name}.{zone}")
 				};
-				let value = if matches!(Self::parse_kind(kind), RecordKind::Srv) {
-					let priority =
-						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let weight = item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let target = item.get("target").and_then(|v| v.as_str())?;
-					format!(
-						"{priority} {weight} {port} {}",
-						target.trim_end_matches('.')
-					)
-				} else if matches!(Self::parse_kind(kind), RecordKind::Mx) {
-					let priority =
-						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-					let target = item
-						.get("exchange")
-						.and_then(|v| v.as_str())
-						.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
-					format!("{priority} {}", target.trim_end_matches('.'))
-				} else if matches!(Self::parse_kind(kind), RecordKind::Txt) {
-					txt_decode(&Self::extract_value(&item)?, TXT_FORM)
-				} else {
-					Self::extract_value(&item)?
+				let kind = RecordKind::from_token(kind);
+				let value = match &kind {
+					RecordKind::Srv => {
+						let priority =
+							item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let weight =
+							item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+						let target = item.get("target").and_then(|v| v.as_str())?;
+						format!(
+							"{priority} {weight} {port} {}",
+							target.trim_end_matches('.')
+						)
+					}
+					RecordKind::Mx => {
+						let priority = item
+							.get("preference")
+							.or_else(|| item.get("priority"))
+							.and_then(|v| v.as_u64())
+							.unwrap_or(0) as u16;
+						let target = item
+							.get("exchange")
+							.and_then(|v| v.as_str())
+							.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
+						format!("{priority} {}", target.trim_end_matches('.'))
+					}
+					RecordKind::Txt => txt_decode(&Self::extract_value(&item)?, TXT_FORM),
+					// A CAA is three fields (`flag`, `tag`, `value`): the
+					// presentation form is `0 issue "ca.example"`.
+					RecordKind::Caa if item.get("tag").is_some() => {
+						let flag = item.get("flag").and_then(|v| v.as_u64()).unwrap_or(0);
+						let tag = item.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+						let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("");
+						format!("{flag} {tag} \"{value}\"")
+					}
+					// A kind epistle does not publish is listed even when its
+					// value cannot be read: a delegation's NS that vanished
+					// from the listing would let the lockdown write under it.
+					RecordKind::Ns
+					| RecordKind::Https
+					| RecordKind::Svcb
+					| RecordKind::Other(_) => Self::foreign_value(&kind, &item),
+					_ => Self::extract_value(&item)?,
 				};
 				Some(DnsRecord {
 					name: fqdn,
-					kind: Self::parse_kind(kind),
+					kind,
 					value,
 					ttl,
+					proxied: None,
 				})
 			})
 			.collect())
@@ -432,13 +511,20 @@ impl SpaceshipProvider {
 
 impl DnsProvider for SpaceshipProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.upsert_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(record).await
+		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.delete_inner(record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(record).await
+		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async move { self.list_inner().await })
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner().await
+		}))
 	}
 }
 

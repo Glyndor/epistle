@@ -139,7 +139,11 @@ fn status_covers_every_area_in_a_stable_order() {
 			"antispam",
 			"queue",
 			"disk",
-			"subid"
+			"spool",
+			"subid",
+			"warmup",
+			"resources",
+			"evidence"
 		]
 	);
 }

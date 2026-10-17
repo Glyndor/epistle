@@ -16,14 +16,19 @@ mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
 pub(crate) mod dns_fake;
+mod evidence_area;
 mod in_stack;
 mod ports;
 mod queue_area;
 mod report;
+mod resources_area;
+mod spool_area;
 mod subid_area;
 #[cfg(test)]
 mod test_support;
 mod tls_area;
+mod tls_tlsa;
+mod warmup_area;
 
 pub(crate) use dns_area::TimeoutDns;
 
@@ -66,8 +71,17 @@ pub enum CheckArea {
 	Queue,
 	/// The data filesystem has room.
 	Disk,
+	/// The spool filesystem: at-rest encryption is on, every file is owner-only.
+	Spool,
 	/// The service account's subordinate id ranges overlap no other account's.
 	Subid,
+	/// The IP warm-up: each receiver group's cap, use, health and verdict.
+	Warmup,
+	/// The containers' memory limits fit the host, and the message memory
+	/// budget fits the mail container's.
+	Resources,
+	/// The evidence verifies; transactional mail is not held.
+	Evidence,
 }
 
 impl CheckArea {
@@ -82,7 +96,11 @@ impl CheckArea {
 		CheckArea::Antispam,
 		CheckArea::Queue,
 		CheckArea::Disk,
+		CheckArea::Spool,
 		CheckArea::Subid,
+		CheckArea::Warmup,
+		CheckArea::Resources,
+		CheckArea::Evidence,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -97,7 +115,11 @@ impl CheckArea {
 			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
+			CheckArea::Spool => "spool",
 			CheckArea::Subid => "subid",
+			CheckArea::Warmup => "warmup",
+			CheckArea::Resources => "resources",
+			CheckArea::Evidence => "evidence",
 		}
 	}
 }
@@ -110,6 +132,8 @@ pub(super) struct Ctx {
 	pub(super) now: SystemTime,
 	/// The `podup` program that reports the stack's container state.
 	pub(super) podup: String,
+	/// The host's `/proc/meminfo`, which `resources` reads `MemTotal` from.
+	pub(super) meminfo: PathBuf,
 }
 
 impl Ctx {
@@ -127,6 +151,7 @@ impl Ctx {
 			config: Config::load(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
+			meminfo: PathBuf::from("/proc/meminfo"),
 		}
 	}
 }
@@ -236,7 +261,11 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
+		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
+		CheckArea::Warmup => warmup_area::check(ctx).await,
+		CheckArea::Resources => resources_area::check(ctx).await,
+		CheckArea::Evidence => evidence_area::check(ctx).await,
 	}
 }
 

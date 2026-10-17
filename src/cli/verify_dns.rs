@@ -12,8 +12,8 @@ use crate::dns::{self, Status};
 use crate::spf::{DnsLookup, SystemDns};
 
 /// Run the DNS check against the system resolver.
-pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
-	run_with_writers(config, out, &mut super::style::stderr())
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
+	run_with_writers(config, json, out, &mut super::style::stderr())
 }
 
 /// Same as [`run`], but writes the startup warnings (and any errors
@@ -22,6 +22,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 /// the process.
 pub(super) fn run_with_writers(
 	config: &Config,
+	json: bool,
 	out: &mut impl std::io::Write,
 	err: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -40,22 +41,27 @@ pub(super) fn run_with_writers(
 			return ExitCode::FAILURE;
 		}
 	};
-	let selectors = match dkim_selectors(config) {
-		Ok(selectors) => selectors,
+	// Resolve the configured selectors once so a broken rotation state
+	// surfaces here (the per-domain loop would have to fail mid-run
+	// otherwise). The selectors are also re-derived per domain inside
+	// `report` so a `[dkim.domain]` override replaces the default for
+	// the domain it names.
+	match dkim_default_selectors(config) {
+		Ok(_) => {}
 		Err(error) => {
 			super::style::error(format_args!("{error}"));
 			return ExitCode::FAILURE;
 		}
-	};
+	}
 	let progress = crate::cli::style::Progress::start("checking");
 	runtime.block_on(report(
 		&config.domains,
 		&config.hostname,
 		config.public_ipv4,
 		config.public_ipv6,
-		&selectors,
 		&dns,
-		out,
+		config,
+		(json, out),
 		progress,
 	))
 }
@@ -71,42 +77,73 @@ pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std:
 	}
 }
 
-/// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
-/// RSA selector), used to locate the `_domainkey` records. The Ed25519
-/// selector is the one the rotator currently has in service when the
-/// rotation state file exists, falling back to the configured selector at
-/// startup before the first tick has run. The RSA selector is always the
-/// one in the config (RSA key material is rotated manually with
-/// `epistle dkim-keygen --rsa`).
-pub(super) fn dkim_selectors(
+/// The default DKIM selectors epistle publishes (the Ed25519 selector
+/// plus an optional RSA selector), used to locate the `_domainkey`
+/// records when a domain has no `[dkim.domain]` override. The
+/// Ed25519 selector is the one the rotator currently has in service
+/// when the rotation state file exists, falling back to the configured
+/// selector at startup before the first tick has run. The RSA
+/// selector follows the same rule through
+/// [`crate::dkim::rotate::active_rsa`].
+pub(super) fn dkim_default_selectors(
 	config: &Config,
 ) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
 	};
 	let mut selectors = vec![crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)?.selector];
-	if let Some(rsa) = &dkim.rsa_selector {
-		selectors.push(rsa.clone());
+	if let Some(rsa) = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)? {
+		selectors.push(rsa.selector);
 	}
 	Ok(selectors)
+}
+
+/// One domain's DKIM selectors, ed25519 plus an optional RSA. The
+/// selectors come from `[dkim.domain]` when the configuration has an
+/// entry for the domain, otherwise from the default `[dkim]` block.
+pub(super) fn dkim_selectors_for(
+	config: &Config,
+	domain: &str,
+) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
+	let Some(dkim) = &config.dkim else {
+		return Ok(Vec::new());
+	};
+	if let Some(entry) = dkim.override_for(domain) {
+		return Ok(std::iter::once(entry.selector.clone())
+			.chain(entry.rsa_selector.clone())
+			.collect());
+	}
+	dkim_default_selectors(config)
 }
 
 /// Check the hostname's addresses and their reverse DNS first, then every
 /// domain. The exit code is failure if any expected record is missing (lookup
 /// errors are inconclusive, not failures). Each check rewrites the progress
 /// line on stderr so a long run does not look stuck.
+///
+/// The selector list for each domain is looked up through `config`:
+/// `[dkim.domain]` overrides replace the default, every other hosted
+/// domain uses the configured `[dkim]` selectors.
 #[allow(clippy::too_many_arguments)]
 async fn report(
 	domains: &[String],
 	hostname: &str,
 	public_ipv4: Option<std::net::Ipv4Addr>,
 	public_ipv6: Option<std::net::Ipv6Addr>,
-	selectors: &[String],
 	dns: &dyn DnsLookup,
-	out: &mut impl std::io::Write,
+	config: &Config,
+	(json, out): (bool, &mut impl std::io::Write),
 	mut progress: crate::cli::style::Progress,
 ) -> ExitCode {
-	let decor = crate::cli::term::stdout(false);
+	let decor = crate::cli::term::stdout(json);
+	let mut groups: Vec<serde_json::Value> = Vec::new();
+	let mut print_group = |out: &mut _, name: &str, checks: &[dns::Check], separator, decor| {
+		if json {
+			groups.push(group_json(name, checks));
+		} else {
+			print_group(out, name, checks, separator, decor);
+		}
+	};
 	let labels: Vec<&str> = std::iter::once(hostname)
 		.chain(domains.iter().map(String::as_str))
 		.collect();
@@ -125,7 +162,18 @@ async fn report(
 	}
 	for domain in domains {
 		steps.begin(domain);
-		let checks = dns::check_domain(domain, hostname, selectors, dns).await;
+		// A per-domain override replaces the default for the domain it
+		// names; the operator's published TXT must match the key the
+		// server signs with, so a domain in `[dkim.domain]` cannot be
+		// verified against the default selectors.
+		let selectors = match dkim_selectors_for(config, domain) {
+			Ok(s) => s,
+			Err(error) => {
+				super::style::error(format_args!("{error}"));
+				return ExitCode::FAILURE;
+			}
+		};
+		let checks = dns::check_domain(domain, hostname, &selectors, dns).await;
 		steps.clear();
 		print_group(out, domain, &checks, " \u{2014}", decor);
 		for _ in &checks {
@@ -146,11 +194,36 @@ async fn report(
 	} else {
 		progress.finish(&summary);
 	}
-	if all_ok {
+	let code = if all_ok {
 		ExitCode::SUCCESS
 	} else {
 		ExitCode::FAILURE
+	};
+	if json {
+		let result = serde_json::json!({ "ok": all_ok, "groups": groups });
+		if super::json_out::print(out, &result) != ExitCode::SUCCESS {
+			return ExitCode::FAILURE;
+		}
 	}
+	code
+}
+
+/// One group of checks as the `--json` result lists it.
+fn group_json(name: &str, checks: &[dns::Check]) -> serde_json::Value {
+	let checks: Vec<serde_json::Value> = checks
+		.iter()
+		.map(|check| {
+			let status = match check.status {
+				Status::Ok => "ok",
+				Status::Missing => "missing",
+				Status::LookupError => "error",
+			};
+			serde_json::json!({
+				"kind": check.kind, "name": check.name, "status": status, "detail": check.detail,
+			})
+		})
+		.collect();
+	serde_json::json!({ "name": name, "checks": checks })
 }
 
 /// Write one group (`name:` and a line per record) in one go, with any
@@ -222,3 +295,7 @@ fn symbol(status: &Status) -> &'static str {
 #[cfg(test)]
 #[path = "verify_dns_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "verify_dns_tests_per_domain.rs"]
+mod tests_per_domain;

@@ -6,35 +6,37 @@ use std::path::Path;
 fn config_path(command: &Command) -> Option<&Path> {
 	match command {
 		Command::Serve { config }
-		| Command::ConfigCheck { config }
+		| Command::ConfigCheck { config, .. }
 		| Command::Probe { config, .. }
 		| Command::Export { config, .. }
 		| Command::Import { config, .. }
 		| Command::Backup { config }
 		| Command::Restore { config, .. }
-		| Command::Verify { config }
-		| Command::VerifyDns { config }
-		| Command::DnsRecords { config }
+		| Command::Verify { config, .. }
+		| Command::VerifyDns { config, .. }
+		| Command::DnsRecords { config, .. }
 		| Command::Mobileconfig { config, .. }
-		| Command::SrvRecords { config }
+		| Command::SrvRecords { config, .. }
 		| Command::Autoconfig { config, .. }
 		| Command::Autodiscover { config, .. }
 		| Command::Suppression { config, .. }
 		| Command::ReportAbuse { config }
-		| Command::Legacy(crate::cli::legacy::Legacy::Accounts { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::Accounts { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountAdd { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { config, .. })
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
-		| Command::Ban { config, .. } => Some(config),
+		| Command::Warmup { config, .. }
+		| Command::Ban { config, .. }
+		| Command::Evidence { config, .. } => Some(config),
 		Command::Delivery(args) => Some(&args.config),
 		Command::Masked { config, .. }
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordCreate { config, .. })
-		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordRevoke { config, .. })
 		| Command::AppPassword { config, .. }
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyCreate { config, .. })
-		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config, .. })
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
 		Command::MoveSubids(args) => Some(&args.config),
@@ -50,22 +52,23 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }
+		| Command::Attachments { config, .. }
 		| Command::Alias { config, .. }
 		| Command::Domain { config, .. }
 		| Command::Dkim { config, .. }
 		| Command::Tls { config, .. }
 		| Command::ApiKey { config, .. }
 		| Command::Db { config, .. } => Some(config),
-		Command::Archive { action } => match action {
+		Command::Archive { action, .. } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
 			| archive::Subcommand::Purge { config, .. } => Some(config),
 		},
 		Command::MtaStsServe { .. }
 		| Command::DkimKeygen { .. }
-		| Command::StorageKeygen
+		| Command::StorageKeygen { .. }
 		| Command::OauthKeygen { .. }
-		| Command::TokenHash
+		| Command::TokenHash { .. }
 		| Command::Local { .. }
 		| Command::Completions { .. }
 		| Command::Manpages { .. }

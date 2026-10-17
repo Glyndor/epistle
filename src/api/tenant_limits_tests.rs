@@ -151,12 +151,36 @@ fn aggregate_rate_blocks_after_limit() {
 	let limits = TenantLimits::from_config(&tenants);
 	let addresses = vec!["alice@acme.example".to_string()];
 	limits
-		.check_aggregate_rate(&addresses, 1_000)
+		.check_aggregate_rate(&addresses, 1, 1_000)
 		.expect("first send ok");
-	let err = limits
-		.check_aggregate_rate(&addresses, 1_001)
+	limits
+		.check_aggregate_rate(&addresses, 1, 1_001)
 		.expect_err("second send blocked");
-	assert!(err.contains("rate limit"), "{err}");
+}
+
+/// An account in two tenants is charged by both or by neither: a
+/// submission the second tenant refuses takes nothing from the first.
+#[test]
+fn aggregate_rate_charges_every_owning_tenant_or_none() {
+	let tenant = |name: &str, per_min| Tenant {
+		name: Some(name.to_string()),
+		domains: vec![format!("{name}.example")],
+		quota_bytes: None,
+		max_accounts: None,
+		max_domains: None,
+		submission_rate_limit_per_min: Some(per_min),
+	};
+	let limits = TenantLimits::from_config(&[tenant("a", 5), tenant("b", 1)]);
+	let both = vec!["x@a.example".to_string(), "x@b.example".to_string()];
+	limits
+		.check_aggregate_rate(&both, 1, 1_000)
+		.expect("both tenants have room");
+	limits
+		.check_aggregate_rate(&both, 1, 1_000)
+		.expect_err("tenant b is at its cap");
+	limits
+		.check_aggregate_rate(&["y@a.example".to_string()], 4, 1_000)
+		.expect("the refused submission took nothing from tenant a");
 }
 
 #[test]

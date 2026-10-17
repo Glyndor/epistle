@@ -8,17 +8,28 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
-use super::directory::Directory;
-use super::diskspace::DiskGuard;
-use super::reply::Reply;
-use super::session::Session;
-use super::sink::MessageSink;
-use crate::directory_store::DirectoryHandle;
+pub use super::directory::Directory;
+pub use super::diskspace::DiskGuard;
+pub use super::memory_budget::MemoryBudget;
+pub use super::ratelimit::SendLimiter;
+pub use super::reply::Reply;
+use super::session::Action;
+pub use super::session::{AcceptedMessage, Session};
+pub use super::sink::MessageSink;
+pub use crate::directory_store::DirectoryHandle;
+pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
+pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 
+mod builder;
+mod data_rate;
 mod dnsbl_check;
 mod run;
+mod run_attachments;
 mod run_auth;
 mod run_band;
+mod run_class;
+mod run_sent;
+mod session_time;
 
 /// Read buffer size per connection.
 const READ_BUFFER: usize = 4096;
@@ -26,6 +37,15 @@ const READ_BUFFER: usize = 4096;
 /// Maximum concurrent connections per listener. Excess connections are dropped
 /// immediately (TCP RST) to prevent file-descriptor exhaustion.
 const MAX_CONNECTIONS: usize = 1000;
+
+/// Maximum concurrent connections per client IP per listener. Excess
+/// connections are answered `421 4.7.0 too many connections from your
+/// address` and closed (RFC 5321 §4.5.3.2). The cap keeps a single
+/// client from monopolising one listener; the per-listener connection
+/// cap (1000 unless `max_connections_per_listener` says otherwise) still
+/// bounds the total.
+pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 20;
+const MAX_CONNECTIONS_PER_IP: usize = DEFAULT_MAX_CONNECTIONS_PER_IP;
 
 /// Per-read idle timeout. RFC 5321 §4.5.3.2 mandates at least 5 minutes between
 /// command-phase reads; we match that minimum to kill Slowloris connections.
@@ -78,6 +98,8 @@ pub struct Server {
 	bayes: Option<std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
+	/// The `[attachments]` policy for unauthenticated mail; `None` when off.
+	attachments: Option<Arc<crate::antispam::attachments::policy::Policy>>,
 	/// Optional LLM hook consulted for unauthenticated mail whose Bayesian
 	/// score sits inside the configured uncertain band. Outside the band the
 	/// classifier is not consulted at all, so a non-`None` value is cheap.
@@ -113,7 +135,7 @@ pub struct Server {
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
-	cbind_data: Option<Vec<u8>>,
+	cbind_data: Option<crate::tls::EndPoint>,
 	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
 	/// listener (the `[auth] scram` knob). `true` keeps the historical
 	/// behaviour; `false` hides both mechanisms on the wire and refuses an
@@ -149,11 +171,45 @@ pub struct Server {
 	/// cap (the default) so the pre-feature behaviour survives in
 	/// tests and in production builds that never enable the cap.
 	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Default classes bound to accounts and credentials; `None` grants
+	/// every submission `personal`.
+	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
 	/// Rolling 24h cap on first-time recipients per account. Pairs with
 	/// `correspondents`; either absent disables the cap.
 	daily_new_recipients: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// Shared byte budget every DATA / BDAT reservation draws from.
+	/// `None` (the default) leaves the historical unbounded behaviour
+	/// in place; the listener is constructed with `Some` when the
+	/// operator configured `[server] message_memory_budget`.
+	memory_budget: Option<std::sync::Arc<MemoryBudget>>,
+	/// Per-client-IP concurrent connection cap for this listener. A
+	/// peer over the cap is answered `421 4.7.0` and closed. The cap
+	/// is per-listener: two SMTP listeners each have their own count
+	/// for the same IP, so a peer can saturate one listener and still
+	/// reach the other. A peer on a [`Server::with_trusted_networks`]
+	/// CIDR is exempt; `serve` lists none, so in production no peer is.
+	max_connections_per_ip: usize,
+	/// CIDR blocks exempt from the per-IP connection cap. The set is
+	/// per-listener (a `smtp` listener can admit the office while a
+	/// `submissions` listener still caps the open internet). Matched
+	/// against the client peer; an empty set is the identity.
+	trusted_networks: Vec<crate::cidr::Cidr>,
+	/// Per-instance message-size cap applied to every session opened
+	/// on this listener. The default is
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; raise or lower
+	/// with [`Server::with_max_message_size`].
+	max_message_size: usize,
+	/// The minimum average rate of one DATA body or one BDAT chunk once
+	/// its grace period is over (see [`DataRate`]).
+	data_rate: DataRate,
+	/// Commands without progress a session may send before it is closed;
+	/// `0` turns the limit off.
+	junk_command_limit: u32,
+	/// How long one session may last before it is closed at the next
+	/// command boundary; zero turns the limit off.
+	max_session_time: Duration,
 	/// The authentication protocol this listener serves. Sessions tag every
 	/// password attempt through this server with it, so a per-account
 	/// `allowed_protocols` set that does not include the listener's kind
@@ -164,263 +220,6 @@ pub struct Server {
 }
 
 impl Server {
-	/// Create a plaintext server (STARTTLS unavailable). Without
-	/// `with_directory` every recipient is rejected (fail closed).
-	pub fn new(hostname: &str, sink: Arc<dyn MessageSink>) -> Self {
-		Server {
-			hostname: hostname.to_string(),
-			sink,
-			tls: None,
-			tls_mode: TlsMode::Opportunistic,
-			directory: DirectoryHandle::new(Directory::default()),
-			data_dir: None,
-			crypto: None,
-			spf: None,
-			dnsbl: crate::dnsbl::Dnsbl::default(),
-			reputation: None,
-			bayes: None,
-			hook: None,
-			llm: None,
-			subjectpass: None,
-			metrics: Arc::new(crate::metrics::Metrics::new()),
-			first_time_delay: std::time::Duration::ZERO,
-			report_dir: None,
-			arc_sealer: None,
-			greylist: None,
-			bayes_junk_at: 0.95,
-			bayes_reject_at: None,
-			oauth: None,
-			cbind_data: None,
-			send_limiter: None,
-			global_submission_rate_limit_per_min: None,
-			inbound_ip_limit: None,
-			inbound_sender_limit: None,
-			tenant_limits: None,
-			disk_guard: None,
-			drain: None,
-			quota: None,
-			correspondents: None,
-			daily_new_recipients: None,
-			max_connections: MAX_CONNECTIONS,
-			auth_protocol: crate::config::Protocol::Submission,
-			scram_enabled: true,
-		}
-	}
-
-	/// Tag every password authentication attempt through this server with
-	/// `protocol` so the directory's per-account `allowed_protocols` set
-	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
-	/// listener kind (`Protocol::Submissions` for the implicit-TLS port,
-	/// `Protocol::Submission` for STARTTLS submission, `Protocol::Smtp`
-	/// for the receiving port — though the latter does not advertise AUTH
-	/// so the choice has no practical effect).
-	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
-		self.auth_protocol = protocol;
-		self
-	}
-
-	/// Attach a shared per-account submission rate limiter.
-	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
-		self.send_limiter = Some(limiter);
-		self
-	}
-
-	/// Set the server-wide default submission rate limit (messages/min).
-	/// The per-domain limit on the active directory (configured via
-	/// [`crate::smtp::directory::Directory::with_domain_submission_limits`])
-	/// takes precedence at check time; this is the fallback. `None`
-	/// together with no per-domain entry disables submission rate limiting.
-	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
-		self.global_submission_rate_limit_per_min = limit;
-		self
-	}
-
-	/// Attach a shared per-client-IP inbound rate limiter (msgs/min).
-	/// Consumed at `MAIL FROM` for sessions that never authenticated; a
-	/// peer IP missing from the listener is skipped, the limit still
-	/// applied to the peers that are known.
-	pub fn with_inbound_ip_limit(mut self, limit: crate::smtp::ratelimit::InboundLimit) -> Self {
-		self.inbound_ip_limit = Some(limit);
-		self
-	}
-
-	/// Attach a shared per-envelope-sender inbound rate limiter (msgs/min).
-	/// Consumed at `MAIL FROM` for sessions that never authenticated; the
-	/// null sender (`<>`) used by bounces is always skipped.
-	pub fn with_inbound_sender_limit(
-		mut self,
-		limit: crate::smtp::ratelimit::InboundLimit,
-	) -> Self {
-		self.inbound_sender_limit = Some(limit);
-		self
-	}
-
-	/// Attach per-tenant aggregate limits. On top of the per-account
-	/// limiter; the SMTP path checks both before accepting MAIL FROM.
-	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
-		self.tenant_limits = Some(limits);
-		self
-	}
-
-	/// Follow `drain`: stop accepting when it starts, let an open
-	/// transaction finish, then close with `421`.
-	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
-		self.drain = Some(drain);
-		self
-	}
-
-	/// Attach a shared disk-space guard for `data_dir`. The SMTP path
-	/// consults it at `MAIL FROM` and rejects with `452` when the
-	/// filesystem cannot hold another message, so the remote retries
-	/// instead of receiving `250` for a payload the spool cannot write.
-	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
-		self.disk_guard = Some(guard);
-		self
-	}
-
-	/// Check local recipients against their mailbox quota: a full mailbox
-	/// is refused at `RCPT TO`, one this message would overfill at the end
-	/// of DATA (see [`crate::smtp::quota`]).
-	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
-		self.quota = Some(quota);
-		self
-	}
-
-	/// Attach the per-account correspondent store. The end-of-DATA
-	/// check consults it for the rolling 24h new-recipient cap. The
-	/// store is shared across listeners by way of `Arc`, so a single
-	/// `CorrespondentStore::open(data_dir)` is enough.
-	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
-		self.correspondents = Some(store);
-		self
-	}
-
-	/// Set the rolling 24h cap on first-time recipients per account
-	/// (`Config::new_recipients_per_day`). `None` disables the cap.
-	/// The cap only fires when a correspondent store has also been
-	/// attached; either field alone is a no-op.
-	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
-		self.daily_new_recipients = limit;
-		self
-	}
-
-	/// Cap concurrent connections for this listener (0 keeps the default).
-	pub fn with_max_connections(mut self, max: usize) -> Self {
-		if max > 0 {
-			self.max_connections = max;
-		}
-		self
-	}
-
-	/// Provide the `tls-server-end-point` certificate hash, enabling
-	/// SCRAM-SHA-256-PLUS once a session is inside TLS.
-	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
-		self.cbind_data = Some(cert_hash);
-		self
-	}
-
-	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
-	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
-		self.oauth = Some(verifier);
-		self
-	}
-
-	/// Toggle the `[auth] scram` knob for this listener. `false` hides
-	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS on the wire and refuses an
-	/// explicit `AUTH` against them; PLAIN and LOGIN stay in.
-	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
-		self.scram_enabled = enabled;
-		self
-	}
-
-	/// Seal inbound unauthenticated mail into its ARC chain (RFC 8617).
-	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
-		self.arc_sealer = Some(sealer);
-		self
-	}
-
-	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
-	/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
-	/// they implement the same trait.
-	pub fn with_greylist(
-		mut self,
-		store: Arc<dyn crate::antispam::greylist::GreylistStore>,
-		delay_secs: u64,
-	) -> Self {
-		self.greylist = Some((store, delay_secs));
-		self
-	}
-
-	/// Set the Bayesian thresholds that decide on their own before the
-	/// uncertain band: any unauthenticated message whose score lands at or
-	/// above `junk_at` is delivered to the recipient's Junk mailbox;
-	/// any whose score lands at or above `reject_at` is refused with
-	/// `550 5.7.1`. `reject_at` must be at least `junk_at` so the rejected
-	/// band is a subset of the junked one. Authenticated sessions ignore
-	/// both; an under-trained corpus ignores both.
-	pub fn with_bayes_thresholds(mut self, junk_at: f64, reject_at: Option<f64>) -> Self {
-		self.bayes_junk_at = junk_at;
-		self.bayes_reject_at = reject_at;
-		self
-	}
-
-	/// Share a metrics registry across listeners and the metrics endpoint.
-	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
-		self.metrics = metrics;
-		self
-	}
-
-	/// Consult an external scanner hook for unauthenticated inbound mail.
-	pub fn with_hook(mut self, hook: Arc<dyn crate::antispam::hook::MailHook>) -> Self {
-		self.hook = Some(hook);
-		self
-	}
-
-	/// Consult the LLM hook for unauthenticated mail whose Bayesian score
-	/// lands in the configured uncertain band. Outside the band the hook is
-	/// not called at all.
-	pub fn with_llm(mut self, llm: crate::antispam::llm::LlmHook) -> Self {
-		self.llm = Some(llm);
-		self
-	}
-
-	/// Record sender reputation for accepted unauthenticated mail.
-	pub fn with_reputation_pool(mut self, pool: sqlx::PgPool) -> Self {
-		self.reputation = Some(pool);
-		self
-	}
-
-	/// Train the (encrypted-at-rest) Bayesian corpus on accept/reject decisions.
-	pub fn with_bayes(
-		mut self,
-		store: std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>,
-	) -> Self {
-		self.bayes = Some(store);
-		self
-	}
-
-	/// Enable SubjectPass: messages in the uncertain Bayesian band that lack a
-	/// valid token and cannot be resolved by an LLM hook are refused with a
-	/// freshly minted token the sender can put in the subject. The validator
-	/// refuses to enable it without a `[database]` section.
-	pub fn with_subjectpass(mut self, pass: crate::antispam::subjectpass::SubjectPass) -> Self {
-		self.subjectpass = Some(pass);
-		self
-	}
-
-	/// Delay first-time unauthenticated senders by `secs` seconds. Zero (the
-	/// default) disables the slowdown.
-	pub fn with_first_time_delay(mut self, secs: u64) -> Self {
-		self.first_time_delay = std::time::Duration::from_secs(secs);
-		self
-	}
-
-	/// Enable SPF verification of unauthenticated inbound mail.
-	pub fn with_spf(mut self, dns: Arc<dyn crate::spf::DnsLookup>) -> Self {
-		self.spf = Some(dns);
-		self
-	}
-
 	/// Train the Bayesian corpus on a message in the background, when a
 	/// reputation/corpus database is configured. Accepted mail trains ham,
 	/// rejected mail trains spam, so the classifier learns from the server's
@@ -537,12 +336,17 @@ impl Server {
 			.with_directory(self.directory.current())
 			.with_auth_protocol(self.auth_protocol)
 			.with_metrics(Arc::clone(&self.metrics))
-			.with_scram_enabled(self.scram_enabled);
+			.with_scram_enabled(self.scram_enabled)
+			.with_max_message_size(self.max_message_size)
+			.with_junk_command_limit(self.junk_command_limit);
+		if let Some(budget) = &self.memory_budget {
+			session = session.with_memory_budget(Arc::clone(budget));
+		}
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
 		if let Some(cbind) = &self.cbind_data {
-			session = session.with_channel_binding(cbind.clone());
+			session = session.with_channel_binding(cbind.current());
 		}
 		if let Some(limiter) = &self.send_limiter {
 			session = session.with_send_limiter(Arc::clone(limiter));
@@ -562,6 +366,9 @@ impl Server {
 		}
 		if let Some(quota) = &self.quota {
 			session = session.with_quota(Arc::clone(quota));
+		}
+		if let Some(limits) = &self.tenant_limits {
+			session = session.with_tenant_limits(Arc::clone(limits));
 		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;
@@ -590,6 +397,9 @@ impl Server {
 		listener: A,
 	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let per_ip = Arc::new(crate::smtp::per_ip::PerIpCounter::new(
+			self.max_connections_per_ip,
+		));
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = match &self.drain {
@@ -609,15 +419,50 @@ impl Server {
 				tracing::warn!(%peer, "SMTP connection limit reached, dropping");
 				continue;
 			};
+			// Per-IP cap. A peer in a trusted CIDR bypasses the cap;
+			// the global per-listener semaphore still bounds the
+			// total. The accepted branch hands ownership of the
+			// counter slot to the connection task: when the task
+			// ends, the guard drops, the count decrements, and the
+			// next connection from the same IP is admitted.
+			let Some(per_ip_slot) = per_ip.try_acquire(peer.ip(), &self.trusted_networks) else {
+				tracing::warn!(%peer, "SMTP per-IP connection limit reached, refusing");
+				// Best-effort: write the 421 to the wire, then close.
+				// The semaphore permit is dropped immediately because
+				// the refused connection never reached a task. We do
+				// not drain the read side: a peer that does not write
+				// anything (the common case) would block the spawn
+				// forever; the write of the 421 happens unconditionally.
+				drop(permit);
+				let refusal = crate::smtp::reply::Reply::single(
+					421,
+					"4.7.0 too many connections from your address",
+				);
+				let mut stream = stream;
+				tokio::spawn(async move {
+					use tokio::io::AsyncWriteExt;
+					let _ = stream.write_all(refusal.to_string().as_bytes()).await;
+					let _ = stream.flush().await;
+					let _ = stream.shutdown().await;
+				});
+				continue;
+			};
 			let server = Arc::clone(&self);
 			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
+			let slot_for_task = Arc::clone(&per_ip);
 			tokio::spawn(async move {
 				let _permit = permit;
 				let _tracked = tracked;
+				let _slot = per_ip_slot;
 				tracing::debug!(%peer, "connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "connection ended with error");
 				}
+				// Releasing the slot explicitly is redundant (the
+				// guard drops at scope end) but documents the contract
+				// for future readers.
+				drop(_slot);
+				drop(slot_for_task);
 			});
 		}
 	}
@@ -656,95 +501,148 @@ impl Server {
 	}
 }
 
+/// Write one reply. A client that stops reading must not keep the
+/// connection, nor whatever its session holds on the memory budget, in a
+/// write that never ends: the write gives up after the same idle timeout
+/// as a read.
 async fn send<W>(writer: &mut W, reply: &Reply) -> std::io::Result<()>
 where
 	W: AsyncWrite + Unpin + ?Sized,
 {
-	writer.write_all(reply.to_string().as_bytes()).await?;
-	writer.flush().await
+	let writing = async {
+		writer.write_all(reply.to_string().as_bytes()).await?;
+		writer.flush().await
+	};
+	tokio::time::timeout(COMMAND_TIMEOUT, writing)
+		.await
+		.unwrap_or_else(|_| {
+			Err(std::io::Error::new(
+				std::io::ErrorKind::TimedOut,
+				"SMTP reply write timed out",
+			))
+		})
 }
 
-/// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
-/// already buffered in the decoder, then read from the stream, feeding any
-/// overshoot (the next pipelined command) back into the decoder. Returns
-/// `Ok(None)` if the peer closes or times out before `size` bytes arrive.
+/// Read exactly `size` bytes for a BDAT chunk (RFC 3030) and hand them to
+/// the session: first the bytes already buffered in the decoder, then the
+/// stream, feeding any overshoot (the next pipelined command) back into the
+/// decoder. Every read is charged to the memory budget before it is kept,
+/// so the chunk holds only what has arrived; when the budget has no room
+/// the transaction is refused, the rest of the chunk is read away through
+/// [`discard_chunk`] and the client gets the 452. `window` is the rate
+/// window of the whole transaction. Ends with a [`data_rate::Cut`] if the
+/// peer closes or times out, or falls below the rate floor, before `size`
+/// bytes arrive.
 async fn read_chunk(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut crate::smtp::line::LineDecoder,
-	size: usize,
-) -> std::io::Result<Option<Vec<u8>>> {
+	chunk_of: (usize, bool),
+	window: &mut data_rate::RateWindow,
+	session: &mut Session,
+) -> std::io::Result<Result<Action, data_rate::Cut>> {
 	use tokio::io::AsyncReadExt;
+	let (size, last) = chunk_of;
 	let mut chunk = decoder.take_buffered(size);
+	window.record(chunk.len());
+	if !session.reserve_chunk(chunk.len()) {
+		let left = size - chunk.len();
+		drop(chunk);
+		return refuse_chunk(stream, decoder, left, window, session).await;
+	}
 	let mut buffer = [0u8; READ_BUFFER];
 	while chunk.len() < size {
-		let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer)).await {
-			Ok(Ok(0)) | Err(_) => return Ok(None),
-			Ok(Ok(n)) => n,
-			Ok(Err(error)) => return Err(error),
+		let reading = tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer));
+		let read = match window.guard(reading).await {
+			None => return Ok(Err(data_rate::Cut::TooSlow)),
+			Some(Ok(Ok(0)) | Err(_)) => return Ok(Err(data_rate::Cut::Closed)),
+			Some(Ok(Ok(n))) => n,
+			Some(Ok(Err(error))) => return Err(error),
 		};
 		let need = size - chunk.len();
-		if read <= need {
-			chunk.extend_from_slice(&buffer[..read]);
-		} else {
-			chunk.extend_from_slice(&buffer[..need]);
+		let kept = read.min(need);
+		window.record(kept);
+		if read > need {
 			decoder.feed(&buffer[need..read]);
 		}
+		if !session.reserve_chunk(kept) {
+			// The octets just read are part of the chunk too.
+			let left = size - chunk.len() - kept;
+			drop(chunk);
+			return refuse_chunk(stream, decoder, left, window, session).await;
+		}
+		chunk.extend_from_slice(&buffer[..kept]);
 	}
-	Ok(Some(chunk))
+	Ok(Ok(session.bdat_chunk(&chunk, last)))
+}
+
+/// A chunk the memory budget has no room for: the session drops the
+/// transaction (and what it held) first, then the `left` octets still on
+/// the wire are read away, so they are never parsed as commands.
+async fn refuse_chunk(
+	stream: &mut Box<dyn Connection>,
+	decoder: &mut crate::smtp::line::LineDecoder,
+	left: usize,
+	window: &mut data_rate::RateWindow,
+	session: &mut Session,
+) -> std::io::Result<Result<Action, data_rate::Cut>> {
+	let refusal = session.refuse_chunk();
+	Ok(discard_chunk(stream, decoder, left, window)
+		.await?
+		.map(|()| refusal))
+}
+
+/// Read `size` bytes of a refused BDAT chunk and throw them away, without
+/// holding them: first the bytes already buffered in the decoder, then the
+/// stream through a fixed buffer, feeding any overshoot (the next pipelined
+/// command) back into the decoder. The rate floor applies as to a kept
+/// chunk: a dripped chunk still holds a connection and a per-IP slot.
+async fn discard_chunk(
+	stream: &mut Box<dyn Connection>,
+	decoder: &mut crate::smtp::line::LineDecoder,
+	size: usize,
+	window: &mut data_rate::RateWindow,
+) -> std::io::Result<Result<(), data_rate::Cut>> {
+	use tokio::io::AsyncReadExt;
+	let buffered = decoder.discard_buffered(size);
+	window.record(buffered);
+	let mut left = size - buffered;
+	let mut buffer = [0u8; READ_BUFFER];
+	while left > 0 {
+		let reading = tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer));
+		let read = match window.guard(reading).await {
+			None => return Ok(Err(data_rate::Cut::TooSlow)),
+			Some(Ok(Ok(0)) | Err(_)) => return Ok(Err(data_rate::Cut::Closed)),
+			Some(Ok(Ok(n))) => n,
+			Some(Ok(Err(error))) => return Err(error),
+		};
+		window.record(read.min(left));
+		if read <= left {
+			left -= read;
+		} else {
+			decoder.feed(&buffer[left..read]);
+			left = 0;
+		}
+	}
+	Ok(Ok(()))
+}
+
+/// End a connection whose read was cut: a client below the rate floor is
+/// told why first. The session goes before the 421 is written, so a client
+/// that does not read it gives its reservation back at the cut, not when
+/// the write gives up.
+async fn end_cut(
+	stream: &mut Box<dyn Connection>,
+	cut: data_rate::Cut,
+	session: Session,
+) -> std::io::Result<()> {
+	drop(session);
+	if cut == data_rate::Cut::TooSlow {
+		tracing::info!("closing a client below the DATA/BDAT rate floor");
+		send(stream, &data_rate::too_slow()).await?;
+	}
+	Ok(())
 }
 
 #[cfg(test)]
-#[path = "server_tests_drain.rs"]
-mod tests_drain;
-
-#[cfg(test)]
-#[path = "server_tests_quota.rs"]
-mod tests_quota;
-
-#[cfg(test)]
-#[path = "server_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "server_tests_auth.rs"]
-mod tests_auth;
-
-#[cfg(test)]
-#[path = "server_tests_bcc.rs"]
-mod tests_bcc;
-
-#[cfg(test)]
-#[path = "server_tests_virus.rs"]
-mod tests_virus;
-
-#[cfg(test)]
-#[path = "server_tests_trace.rs"]
-mod tests_trace;
-
-#[cfg(test)]
-#[path = "server_tests_urlbl.rs"]
-mod tests_urlbl;
-
-#[cfg(test)]
-#[path = "server_tests_save_sent.rs"]
-mod tests_save_sent;
-
-#[cfg(test)]
-#[path = "server_tests_correspondents.rs"]
-mod tests_correspondents;
-
-#[cfg(test)]
-#[path = "server_tests_subjectpass.rs"]
-mod tests_subjectpass;
-
-#[cfg(test)]
-#[path = "server_tests_dual_stack.rs"]
-mod tests_dual_stack;
-
-#[cfg(test)]
-#[path = "server_tests_starttls.rs"]
-mod tests_starttls;
-
-#[cfg(test)]
-#[path = "server_tests_author.rs"]
-mod tests_author;
+#[path = "tests_mods.rs"]
+mod tests_mods;

@@ -145,6 +145,7 @@ fn queue_list_marks_a_held_message() {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -155,7 +156,7 @@ fn queue_list_marks_a_held_message() {
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))
 		.expect("hold");
 	let lines = on_terminal(120, |out| {
-		assert_eq!(super::queue::list(dir.path(), out), ExitCode::SUCCESS);
+		assert_eq!(super::queue::list(dir.path(), None, out), ExitCode::SUCCESS);
 	});
 	assert!(lines[0].starts_with("\x1b[1mID"), "{lines:#?}");
 	assert!(lines[1].contains("\x1b[33m⚠ held"), "{lines:#?}");
@@ -179,6 +180,7 @@ fn masked_list_marks_enabled_addresses() {
 			label: "shop".into(),
 			domain: None,
 		},
+		false,
 		1_700_000_000,
 		&mut out,
 		&mut err,
@@ -197,6 +199,7 @@ fn masked_list_marks_enabled_addresses() {
 				account: "alice".into(),
 				json: false,
 			},
+			false,
 			1_700_000_000,
 			out,
 			&mut err,

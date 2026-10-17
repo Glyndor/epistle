@@ -12,11 +12,22 @@ use crate::config::Config;
 const INSTALLED: &str = "/usr/bin/epistle";
 
 /// `sudo epistle stack rollback [--to VERSION]`.
-pub(in crate::cli) fn run_as_root(config_path: &Path, to: Option<&str>, yes: bool) -> ExitCode {
+pub(in crate::cli) fn run_as_root(
+	config_path: &Path,
+	to: Option<&str>,
+	yes: bool,
+	json: bool,
+) -> ExitCode {
 	match as_root(config_path, to, yes) {
 		Ok(summary) => {
 			eprintln!("epistle: {summary}");
-			ExitCode::SUCCESS
+			if !json {
+				return ExitCode::SUCCESS;
+			}
+			let result = serde_json::json!({
+				"result": "done", "action": "rollback", "summary": summary,
+			});
+			crate::cli::json_out::print(&mut std::io::stdout().lock(), &result)
 		}
 		Err(Stop::Declined(code)) => code,
 		Err(Stop::Failed(error)) => {
@@ -124,6 +135,7 @@ fn start_mail(user: &crate::cli::rootless::ServiceUser, compose: &Path) -> Resul
 	let podup = crate::cli::stack::build_command("podup", compose, &["start", "mail"]);
 	let status = crate::cli::rootless::account_command(user, "podup")
 		.args(podup.get_args())
+		.stdout(crate::cli::json_out::child_stdout())
 		.status()
 		.map_err(|error| format!("cannot start mail: {error}"))?;
 	if status.success() {

@@ -160,3 +160,82 @@ fn remove_account_drops_only_the_targets() {
 	// Idempotent: a missing account returns zero without rewriting the file.
 	assert_eq!(store.remove_account("ghost").expect("ghost"), 0);
 }
+
+fn two_labels(dir: &std::path::Path) -> AppPasswordStore {
+	let mut store = AppPasswordStore::open(dir).expect("open");
+	store
+		.add("alice", app_password("phone", fixtures::password()))
+		.expect("add phone");
+	store
+		.add("alice", app_password("tablet", fixtures::second_password()))
+		.expect("add tablet");
+	store
+}
+
+#[test]
+fn rename_refuses_a_label_the_account_already_has() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	let error = store.rename("alice", "phone", "tablet").unwrap_err();
+	assert!(
+		matches!(error, StoreError::Duplicate(ref label) if label == "tablet"),
+		"{error}"
+	);
+	let labels: Vec<&str> = store
+		.for_account("alice")
+		.iter()
+		.map(|app| app.label.as_str())
+		.collect();
+	assert_eq!(
+		labels,
+		["phone", "tablet"],
+		"a refused rename changed a label"
+	);
+	let on_disk = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(on_disk.for_account("alice").len(), 2);
+}
+
+#[test]
+fn rename_takes_a_label_another_account_has() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	store
+		.add("bob", app_password("laptop", fixtures::password()))
+		.expect("add");
+	store
+		.rename("alice", "phone", "laptop")
+		.expect("another account's label is free");
+	assert_eq!(store.for_account("bob")[0].label, "laptop");
+}
+
+#[test]
+fn rename_and_rotate_of_a_label_that_is_not_there_are_not_found() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	assert!(matches!(
+		store.rename("alice", "watch", "x"),
+		Err(StoreError::NotFound(_))
+	));
+	assert!(matches!(
+		store.rename("carol", "phone", "x"),
+		Err(StoreError::NotFound(_))
+	));
+	assert!(matches!(
+		store.rotate("alice", "watch", "h".into()),
+		Err(StoreError::NotFound(_))
+	));
+}
+
+#[test]
+fn rotate_replaces_only_the_hash_of_that_label() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	let before = store.for_account("alice")[1].hash.clone();
+	let new_hash = crate::smtp::auth::tests::hash(fixtures::wrong_password());
+	store
+		.rotate("alice", "phone", new_hash.clone())
+		.expect("rotate");
+	let apps = store.for_account("alice");
+	assert_eq!(apps[0].hash, new_hash);
+	assert_eq!(apps[1].hash, before, "the other credential changed");
+}

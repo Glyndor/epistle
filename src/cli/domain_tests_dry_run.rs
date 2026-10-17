@@ -43,6 +43,7 @@ fn parsed_domain_action(argv: &[&str]) -> (std::path::PathBuf, bool, DomainCli) 
 			config,
 			dry_run,
 			action,
+			..
 		} => (config, dry_run, action),
 		other => panic!("expected Domain variant, got {other:?}"),
 	}
@@ -84,6 +85,11 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 				let _ = commit_remove_full(document, &domain, &mut out, &mut err_buf);
 			}
 		}
+		DomainCli::Set { .. } | DomainCli::Disable { .. } | DomainCli::Enable { .. } => {
+			unreachable!(
+				"these are covered end to end in tests/cli_json/domain_state.rs and domain_set.rs"
+			)
+		}
 		DomainCli::Alias(args) => match args.action {
 			DomainAliasSubcommand::Add { alias, target } => {
 				let config = Config::load(path).expect("config loads");
@@ -120,7 +126,7 @@ fn commit_add_full(
 	domain: &str,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::super::resource::ResourceError> {
 	// Non-dry-run path: route through the production `commit_add` with
 	// a stub `restart` callback. A panic here fails the test loudly.
 	domain_writers::commit_add(config, document, domain, false, out, status)?;
@@ -147,7 +153,7 @@ fn commit_remove_full(
 	domain: &str,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::super::resource::ResourceError> {
 	domain_writers::commit_remove(document, domain, false, out, status)?;
 	Ok(ExitCode::SUCCESS)
 }
@@ -170,7 +176,7 @@ fn commit_alias_full(
 	verb: &str,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::super::resource::ResourceError> {
 	domain_writers::commit_alias(document, alias, verb, false, out, status)?;
 	Ok(ExitCode::SUCCESS)
 }

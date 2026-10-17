@@ -86,6 +86,7 @@ fn fixture() -> Fixture {
 		rotated_at: 0,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		root.join("dkim-rotation.json"),
@@ -122,52 +123,22 @@ async fn verify(signer: &ReloadableSigner, dns: &RecordingDns) {
 		crate::dkim::DkimOutcome::Pass,
 		"ed25519 signature must verify with the published public key"
 	);
-	verify_rsa(lines[1], &dns.0["rsa-configured._domainkey.example.org"][0]);
+	let rsa_selector = &signature_fields(header.as_bytes())[1].0;
+	verify_rsa(
+		lines[1],
+		&dns.0[&format!("{rsa_selector}._domainkey.example.org")][0],
+	);
 }
 
 fn verify_rsa(line: &str, record: &str) {
-	use x509_parser::prelude::{FromDer, SubjectPublicKeyInfo};
-
-	let value = line.strip_prefix("DKIM-Signature:").expect("RSA header");
-	let signature = super::super::signature::parse(value).expect("parse RSA signature");
-	let spki = super::super::parse_key(record).expect("decode RSA public key");
-	let (_, public) = SubjectPublicKeyInfo::from_der(&spki).expect("RSA SPKI");
-	let raw = std::str::from_utf8(RAW).expect("UTF-8 message");
-	let (headers, body) = raw.split_once("\r\n\r\n").expect("message sections");
-	let body = super::super::canon::body(signature.body_canon, body.as_bytes());
 	assert!(
-		signature.body_hash == ring::digest::digest(&ring::digest::SHA256, &body).as_ref(),
-		"RSA body hash must cover the message body"
-	);
-	let mut input = String::new();
-	for name in signature.signed_headers {
-		let (name, value) = headers
-			.lines()
-			.filter_map(|line| line.split_once(':'))
-			.find(|(field, _)| field.eq_ignore_ascii_case(&name))
-			.expect("signed header");
-		input.push_str(&super::super::canon::header(
-			signature.header_canon,
-			name,
-			value,
-		));
-	}
-	let unsigned = format!("{}b=", value.rsplit_once("b=").expect("signature value").0);
-	let canonical =
-		super::super::canon::header(signature.header_canon, "DKIM-Signature", &unsigned);
-	input.push_str(canonical.strip_suffix("\r\n").expect("canonical CRLF"));
-	let key = ring::signature::UnparsedPublicKey::new(
-		&ring::signature::RSA_PKCS1_2048_8192_SHA256,
-		public.subject_public_key.data.as_ref(),
-	);
-	assert!(
-		key.verify(input.as_bytes(), &signature.signature).is_ok(),
-		"RSA signature must verify with the configured public key"
+		crate::dkim::test_support::rsa_verifies(line, record, RAW),
+		"RSA signature must verify with the published public key"
 	);
 }
 
 #[tokio::test]
-async fn rotation_preserves_configured_rsa_signature() {
+async fn rotation_replaces_the_configured_rsa_key_too() {
 	let f = fixture();
 	verify(&f.signer, &f.dns).await;
 	assert_eq!(
@@ -179,13 +150,9 @@ async fn rotation_preserves_configured_rsa_signature() {
 		signature_fields(header.as_bytes()),
 		vec![
 			("ed31".into(), "example.org".into(), "ed25519-sha256".into()),
-			(
-				"rsa-configured".into(),
-				"example.org".into(),
-				"rsa-sha256".into()
-			),
+			("rsa31".into(), "example.org".into(), "rsa-sha256".into()),
 		],
-		"rotation must keep the configured RSA signature alongside the new ed25519 selector"
+		"a dual-signing rotation puts a new RSA key in service with the new ed25519 one"
 	);
 	verify(&f.signer, &f.dns).await;
 }

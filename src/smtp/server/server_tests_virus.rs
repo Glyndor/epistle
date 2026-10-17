@@ -29,13 +29,20 @@ fn message(body: &str) -> String {
 /// Submit `data` as alice over STARTTLS and AUTH LOGIN; the reply to the
 /// end of DATA.
 pub(super) async fn submit(sink: Arc<dyn MessageSink>, data: &str) -> String {
+	submit_to(
+		Server::new("mail.example.org", sink).with_directory(directory_with_password()),
+		data,
+	)
+	.await
+}
+
+/// [`submit`] through `server`, which gets the TLS acceptor here.
+pub(super) async fn submit_to(server: Server, data: &str) -> String {
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
-	let server = Server::new("mail.example.org", sink)
-		.with_directory(directory_with_password())
-		.with_tls(
-			crate::tls::ReloadableAcceptor::new(acceptor),
-			TlsMode::Opportunistic,
-		);
+	let server = server.with_tls(
+		crate::tls::ReloadableAcceptor::new(acceptor),
+		TlsMode::Opportunistic,
+	);
 	let (mut client, server_stream) = tokio::io::duplex(64 * 1024);
 	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 	assert!(reply(&mut client).await.starts_with("220 "));

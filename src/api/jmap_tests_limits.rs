@@ -3,7 +3,7 @@
 
 use super::Principal;
 use super::jmap::websocket::{PushState, handle_ws_message};
-use super::jmap::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE};
+use super::jmap::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
 use super::router;
 use super::tests::{TOKEN, request, request_with_body, test_state};
 use axum::Router;
@@ -133,7 +133,10 @@ async fn a_body_at_the_advertised_size_is_accepted_and_one_more_octet_is_not() {
 async fn an_upload_far_over_max_size_upload_gets_the_limit_problem() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let body = vec![0u8; MAX_UPLOAD_SIZE + 2 * 1_048_576];
+	// The configured `[server] max_message_size` drives the upload route's
+	// body limit. One MiB over is enough to trip it without building a
+	// 50 MiB+ buffer in a unit test.
+	let body = vec![0u8; crate::smtp::session::MAX_MESSAGE_SIZE + 1024 * 1024];
 
 	let (status, body) = post_to(&app, "/jmap/upload/alice", body).await;
 	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);

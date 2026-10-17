@@ -31,6 +31,7 @@ fn init(file: std::path::PathBuf, dry_run: bool) -> (ExitCode, String) {
 	let probes = Probes {
 		detector: &detector,
 		resolver: &resolver,
+		meminfo: std::path::Path::new(""),
 	};
 	let mut out = Vec::new();
 	let code = run_with(
@@ -38,6 +39,7 @@ fn init(file: std::path::PathBuf, dry_run: bool) -> (ExitCode, String) {
 			answers: Some(file),
 			dry_run,
 			print_answers: false,
+			json: false,
 		},
 		&probes,
 		&mut out,
@@ -58,8 +60,12 @@ fn store(dir: &Path) -> crate::directory_store::AccountStore {
 
 fn config_check(dir: &Path) -> String {
 	let (mut out, mut err) = (Vec::new(), Vec::new());
-	let code =
-		crate::cli::config_check::run(&dir.join("etc").join("mail.toml"), &mut out, &mut err);
+	let code = crate::cli::config_check::run(
+		&dir.join("etc").join("mail.toml"),
+		false,
+		&mut out,
+		&mut err,
+	);
 	assert_eq!(code, ExitCode::SUCCESS, "{}", String::from_utf8_lossy(&err));
 	String::from_utf8(err).expect("utf-8")
 }

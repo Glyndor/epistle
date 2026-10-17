@@ -32,6 +32,7 @@ pub(super) fn run_with(extra: &str, args: &[&str], stdin: &str, dry_run: bool) -
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut std::io::BufReader::new(stdin.as_bytes()),
 		&mut out,
 		&mut status,
@@ -80,11 +81,14 @@ fn webhook_accepts_config_before_or_after_the_action_and_defaults_it() {
 #[test]
 fn show_masks_the_secret_and_reports_an_absent_webhook() {
 	let run = run(HOOK, &["show"]);
-	assert_eq!(run.out, "url\thttps://hooks.example/mail\nsecret\tset\n");
+	assert_eq!(
+		run.out,
+		"url\thttps://hooks.example/mail\nsecret\tset\nenabled\tyes\n"
+	);
 	assert!(!run.out.contains("hook-secret"));
 	assert_eq!(
 		super::tests::run(HOOK, &["show", "--json"]).out,
-		"{\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}\n"
+		"{\"enabled\":true,\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}\n"
 	);
 	assert_eq!(super::tests::run("", &["show"]).out, "url\tunset\n");
 	assert_eq!(super::tests::run("", &["show", "--json"]).out, "null\n");
@@ -185,7 +189,10 @@ fn test_fails_on_an_error_status_an_unreachable_endpoint_and_silence() {
 		&mut Vec::new(),
 	)
 	.unwrap_err();
-	assert!(error.starts_with("webhook test failed: "), "{error}");
+	assert!(
+		error.as_ref().starts_with("webhook test failed: "),
+		"{error}"
+	);
 	let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
 	let (_dir, _file, config) =
 		config_for(&format!("http://{}/hook", listener.local_addr().unwrap()));

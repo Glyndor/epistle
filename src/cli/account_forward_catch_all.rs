@@ -13,7 +13,12 @@
 //! dynamic entry has the same effect at delivery time as an equivalent
 //! static one.
 
+use std::io::Write;
 use std::process::ExitCode;
+
+use serde_json::json;
+
+use crate::cli::json_out::Report;
 
 use crate::directory_store::{AccountStore, StoreError};
 
@@ -42,11 +47,19 @@ pub(crate) fn forward_list(
 /// a self-loop onto the account's own addresses, and a duplicate
 /// target all keep their typed `StoreError` so the operator sees the
 /// exact reason instead of a generic refusal.
-pub(crate) fn forward_add_with_store(store: &AccountStore, name: &str, target: &str) -> ExitCode {
+pub(crate) fn forward_add_with_store(
+	store: &AccountStore,
+	name: &str,
+	target: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
 	match store.add_forward(name, target) {
 		Ok(()) => {
-			println!("forward added");
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line("forward added");
+			let fields = json!({ "account": name, "address": target });
+			report.change("forward add", true, fields, None)
 		}
 		Err(error) => forward_catch_all_error(name, "forward", error),
 	}
@@ -57,11 +70,15 @@ pub(crate) fn forward_remove_with_store(
 	store: &AccountStore,
 	name: &str,
 	target: &str,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	match store.remove_forward(name, target) {
 		Ok(()) => {
-			println!("forward removed");
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line("forward removed");
+			let fields = json!({ "account": name, "address": target });
+			report.change("forward remove", true, fields, None)
 		}
 		Err(error) => forward_catch_all_error(name, "forward", error),
 	}
@@ -84,11 +101,19 @@ pub(crate) fn catch_all_list(
 /// Add `domain` to the dynamic account's catch-all list. Validated as
 /// a configured domain or alias before the lock is taken, so a typo
 /// never touches disk.
-pub(crate) fn catch_all_add_with_store(store: &AccountStore, name: &str, domain: &str) -> ExitCode {
+pub(crate) fn catch_all_add_with_store(
+	store: &AccountStore,
+	name: &str,
+	domain: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
 	match store.add_catch_all(name, domain) {
 		Ok(()) => {
-			println!("catch-all added");
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line("catch-all added");
+			let fields = json!({ "account": name, "domain": domain });
+			report.change("catch-all add", true, fields, None)
 		}
 		Err(error) => forward_catch_all_error(name, "catch-all", error),
 	}
@@ -99,11 +124,15 @@ pub(crate) fn catch_all_remove_with_store(
 	store: &AccountStore,
 	name: &str,
 	domain: &str,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	match store.remove_catch_all(name, domain) {
 		Ok(()) => {
-			println!("catch-all removed");
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line("catch-all removed");
+			let fields = json!({ "account": name, "domain": domain });
+			report.change("catch-all remove", true, fields, None)
 		}
 		Err(error) => forward_catch_all_error(name, "catch-all", error),
 	}

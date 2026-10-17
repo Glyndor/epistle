@@ -220,12 +220,7 @@ pub(super) async fn mock_with_per_name_raw(
 }
 
 pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
-	DnsRecord {
-		name: name.to_string(),
-		kind: RecordKind::Txt,
-		value: value.to_string(),
-		ttl: 3600,
-	}
+	DnsRecord::new(name.to_string(), RecordKind::Txt, value.to_string(), 3600)
 }
 
 /// The `Authorization` header MUST be `sso-key <api_key>:<api_secret>`, in
@@ -280,12 +275,7 @@ async fn upsert_txt_sends_one_element_array_with_data_and_ttl() {
 #[tokio::test]
 async fn upsert_mx_splits_priority_and_target() {
 	let (provider, state) = mock().await;
-	let mx = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Mx,
-		value: "10 mail.example.org".into(),
-		ttl: 3600,
-	};
+	let mx = DnsRecord::new("example.org", RecordKind::Mx, "10 mail.example.org", 3600);
 	provider.upsert("example.org", mx).await.expect("mx upsert");
 	let body: serde_json::Value =
 		serde_json::from_str(&state.lock().unwrap().calls[1].body).expect("parse");
@@ -306,12 +296,12 @@ async fn upsert_mx_splits_priority_and_target() {
 #[tokio::test]
 async fn upsert_srv_uses_string_data_with_service_and_protocol_from_owner() {
 	let (provider, state) = mock().await;
-	let srv = DnsRecord {
-		name: "_submissions._tcp.example.org".into(),
-		kind: RecordKind::Srv,
-		value: "0 1 465 mail.example.org".into(),
-		ttl: 3600,
-	};
+	let srv = DnsRecord::new(
+		"_submissions._tcp.example.org",
+		RecordKind::Srv,
+		"0 1 465 mail.example.org",
+		3600,
+	);
 	provider
 		.upsert("example.org", srv)
 		.await
@@ -343,12 +333,7 @@ async fn low_ttl_is_raised_to_the_minimum() {
 	provider
 		.upsert(
 			"example.org",
-			DnsRecord {
-				name: "example.org".into(),
-				kind: RecordKind::Txt,
-				value: "v=spf1 mx -all".into(),
-				ttl: 300,
-			},
+			DnsRecord::new("example.org", RecordKind::Txt, "v=spf1 mx -all", 300),
 		)
 		.await
 		.expect("upsert");
@@ -364,12 +349,7 @@ async fn upsert_at_apex_uses_at_for_relative_name() {
 	provider
 		.upsert(
 			"example.org",
-			DnsRecord {
-				name: "example.org".into(),
-				kind: RecordKind::A,
-				value: "203.0.113.10".into(),
-				ttl: 600,
-			},
+			DnsRecord::new("example.org", RecordKind::A, "203.0.113.10", 600),
 		)
 		.await
 		.expect("apex upsert");
@@ -390,12 +370,7 @@ async fn fqdn_to_relative_is_case_insensitive_on_the_zone_suffix() {
 	provider
 		.upsert(
 			"example.org",
-			DnsRecord {
-				name: "EXAMPLE.ORG".into(),
-				kind: RecordKind::A,
-				value: "203.0.113.10".into(),
-				ttl: 600,
-			},
+			DnsRecord::new("EXAMPLE.ORG", RecordKind::A, "203.0.113.10", 600),
 		)
 		.await
 		.expect("apex upsert");
@@ -471,28 +446,24 @@ async fn list_never_guesses_whether_a_returned_name_is_absolute() {
 	);
 }
 
-/// Apex NS, SOA, and other kinds the provider does not publish
-/// appear in the zone. The previous code mapped every unknown
-/// type to TXT, so a list call would return an apex TXT-shaped
-/// record for the NS or SOA entries; round-tripping that record
-/// through `upsert` or `delete` would then operate on the apex
-/// TXT set, not on the original record type.
+/// The SOA and a type GoDaddy publishes but epistle does not list as
+/// itself keep their own kind. The old code turned every unknown type into
+/// a TXT, so a round trip through `upsert` or `delete` would have acted on
+/// the TXT set at the owner instead of the record the zone holds.
 #[tokio::test]
-async fn list_skips_records_of_unsupported_kinds() {
+async fn list_keeps_records_of_unpublished_kinds_as_themselves() {
 	let zone_records = serde_json::json!([
-		serde_json::json!({"type": "NS", "name": "@", "data": "ns1.example.org.", "ttl": 600}),
 		serde_json::json!({"type": "SOA", "name": "@", "data": "ns1.example.org. admin.example.org. 1 7200 3600 1209600 3600", "ttl": 600}),
 		serde_json::json!({"type": "TXT", "name": "_dmarc", "data": "v=DMARC1", "ttl": 600}),
 	]);
 	let (provider, _state) = mock_with(zone_records).await;
 	let listed = provider.list("example.org").await.expect("list");
+	let kinds: Vec<RecordKind> = listed.iter().map(|r| r.kind.clone()).collect();
 	assert_eq!(
-		listed.len(),
-		1,
-		"only the TXT record is published by this provider"
+		kinds,
+		vec![RecordKind::Other("SOA".to_string()), RecordKind::Txt]
 	);
-	assert_eq!(listed[0].kind, RecordKind::Txt);
-	assert_eq!(listed[0].value, "v=DMARC1");
+	assert_eq!(listed[1].value, "v=DMARC1");
 }
 
 /// `delete` reads the current set first, then either PUTs the remainder

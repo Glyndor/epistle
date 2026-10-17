@@ -39,7 +39,10 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+mod list;
 
 /// How Cloud DNS wants a TXT value written and lists it back; see
 /// `GcloudProvider::rrdatas`.
@@ -106,6 +109,9 @@ pub(crate) struct Rrset {
 struct ListRrsetsResp {
 	#[serde(default)]
 	rrsets: Vec<Rrset>,
+	/// Set when more rrsets follow on another page.
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
 }
 
 /// A Google Cloud DNS-backed DNS provider for one managed zone.
@@ -124,7 +130,7 @@ impl GcloudProvider {
 	/// bearer, so the [`ScopedSecret`] is only a zone handle here.
 	pub fn new(secret: ScopedSecret, account: ServiceAccount) -> Self {
 		GcloudProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			account,
 			zone: secret.zone().to_string(),
 			cached: Arc::new(Mutex::new(None)),
@@ -148,16 +154,19 @@ impl GcloudProvider {
 
 	/// The Google API type token for a kind we can publish; MX/SRV need
 	/// priority/weight handling we do not emit yet.
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Caa => Ok("CAA"),
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -247,7 +256,7 @@ impl GcloudProvider {
 			.bearer_auth(&token)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, true)?;
 		let text = self.read_body(response).await?;
 		let parsed: ListZonesResp =
@@ -258,23 +267,6 @@ impl GcloudProvider {
 			.find(|z| z.dnsName.trim_end_matches('.') == zone.trim_end_matches('.'))
 			.map(|z| z.name)
 			.ok_or_else(|| ProviderError::Remote(format!("zone not found: {zone}")))
-	}
-
-	async fn list_rrsets(&self, managed_zone: &str) -> Result<Vec<Rrset>, ProviderError> {
-		let token = self.ensure_token().await?;
-		let url = self.managed_zones_url(&[managed_zone, "rrsets"])?;
-		let response = self
-			.client
-			.get(url.into_url())
-			.bearer_auth(&token)
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		Self::classify(&response, false)?;
-		let text = self.read_body(response).await?;
-		let parsed: ListRrsetsResp =
-			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
-		Ok(parsed.rrsets)
 	}
 
 	async fn post_change(
@@ -298,15 +290,12 @@ impl GcloudProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, false)
 	}
 
 	async fn read_body(&self, response: reqwest::Response) -> Result<String, ProviderError> {
-		response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+		crate::dns::providers::read_body(response).await
 	}
 
 	/// Return a valid bearer access token, refreshing the cache when needed.
@@ -341,7 +330,7 @@ impl GcloudProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, true)?;
 		let text = self.read_body(response).await?;
 		let parsed: Value =
@@ -366,7 +355,7 @@ impl GcloudProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let managed_zone = self.find_managed_zone(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
@@ -405,7 +394,7 @@ impl GcloudProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		Self::api_kind(record.kind)?;
+		Self::api_kind(&record.kind)?;
 		let managed_zone = self.find_managed_zone(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
@@ -472,17 +461,21 @@ impl GcloudProvider {
 				n == zone_name || n.ends_with(&format!(".{zone_name}"))
 			})
 			.flat_map(|r| {
-				let kind = parse_kind(&r.kind);
+				let kind = RecordKind::from_token(&r.kind);
 				let name = r.name.trim_end_matches('.').to_string();
-				r.rrdatas.into_iter().map(move |value| DnsRecord {
-					name: name.clone(),
-					kind,
-					value: if kind == RecordKind::Txt {
-						txt_decode(&value, TXT_FORM)
-					} else {
-						value
-					},
-					ttl: r.ttl,
+				r.rrdatas.into_iter().map(move |value| {
+					let kind_for_value = &kind;
+					DnsRecord {
+						name: name.clone(),
+						kind: kind.clone(),
+						value: if kind_for_value == &RecordKind::Txt {
+							txt_decode(&value, TXT_FORM)
+						} else {
+							value
+						},
+						ttl: r.ttl,
+						proxied: None,
+					}
 				})
 			})
 			.collect())
@@ -492,15 +485,22 @@ impl GcloudProvider {
 impl DnsProvider for GcloudProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -519,20 +519,6 @@ fn same_rdatas(record: &DnsRecord, old: &Rrset, new: &Rrset) -> bool {
 		values
 	};
 	logical(&old.rrdatas) == logical(&new.rrdatas)
-}
-
-/// Map a Google type token to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
-	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,7 +576,7 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 #[path = "test_support.rs"]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

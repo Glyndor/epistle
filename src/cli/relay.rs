@@ -25,6 +25,9 @@ mod tests_edit;
 #[cfg(test)]
 #[path = "relay_tests_probe.rs"]
 mod tests_probe;
+#[cfg(test)]
+#[path = "relay_tests_unknown.rs"]
+mod tests_unknown;
 
 /// Which relay rule a command addresses. With neither flag it is the default
 /// route, the rule that carries mail no account or domain rule claims.
@@ -110,6 +113,25 @@ pub enum RelayCli {
 		#[command(flatten)]
 		target: Target,
 	},
+	/// Switch a relay rule on again.
+	Enable {
+		/// The rule to switch on.
+		#[command(flatten)]
+		target: Target,
+	},
+	/// Switch a relay rule off without removing it.
+	///
+	/// Mail the rule would carry goes by the next rule that matches, or
+	/// direct to the recipient's MX when none does. `enable` brings it back.
+	Disable {
+		/// The rule to switch off.
+		#[command(flatten)]
+		target: Target,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
 	/// Connect, EHLO, STARTTLS and AUTH as configured, then QUIT. Sends no mail.
 	Test {
 		/// The rule to test.
@@ -129,6 +151,7 @@ struct Row {
 	username: Option<String>,
 	password: &'static str,
 	socks_proxy: Option<String>,
+	enabled: bool,
 }
 
 fn row(rule: &Transport) -> Row {
@@ -151,6 +174,7 @@ fn row(rule: &Transport) -> Row {
 			"unset"
 		},
 		socks_proxy: rule.socks_proxy.clone(),
+		enabled: rule.enabled,
 	}
 }
 
@@ -169,12 +193,13 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	for row in rows {
 		writeln!(
 			out,
-			"{}\t{}:{}\tstarttls={}\tauth={}",
+			"{}\t{}:{}\tstarttls={}\tauth={}{}",
 			row.target,
 			row.host,
 			row.port,
 			if row.starttls { "yes" } else { "no" },
 			if row.username.is_some() { "yes" } else { "no" },
+			if row.enabled { "" } else { "\tdisabled" },
 		)
 		.map_err(|error| error.to_string())?;
 	}
@@ -187,10 +212,15 @@ pub(super) fn find<'a>(config: &'a Config, target: &Target) -> Result<&'a Transp
 		.ok_or_else(|| format!("no relay is configured for {}", target.describe()))
 }
 
-fn show(config: &Config, target: &Target, json: bool, out: &mut impl Write) -> Result<(), String> {
-	let row = row(find(config, target)?);
+fn show(
+	config: &Config,
+	target: &Target,
+	json: bool,
+	out: &mut impl Write,
+) -> Result<(), resource::ResourceError> {
+	let row = row(find(config, target).map_err(resource::ResourceError::refused)?);
 	if json {
-		return resource::json(out, &row);
+		return resource::json(out, &row).map_err(Into::into);
 	}
 	let none = "-".to_string();
 	for (key, value) in [
@@ -204,17 +234,54 @@ fn show(config: &Config, target: &Target, json: bool, out: &mut impl Write) -> R
 		),
 		("password", row.password.to_string()),
 		("socks_proxy", row.socks_proxy.clone().unwrap_or(none)),
+		(
+			"enabled",
+			if row.enabled { "yes" } else { "no" }.to_string(),
+		),
 	] {
-		writeln!(out, "{key}\t{value}").map_err(|error| error.to_string())?;
+		writeln!(out, "{key}\t{value}")
+			.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 	}
 	Ok(())
 }
 
-pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+/// Before `relay disable` edits anything: say where the mail will go
+/// instead and ask. Runs before the status stream is opened, because the
+/// question uses it.
+fn confirm_disable(path: &Path, target: &Target, yes: bool, dry_run: bool) -> Result<(), ExitCode> {
+	let Ok(config) = Config::load(path) else {
+		return Ok(());
+	};
+	let Ok(rule) = find(&config, target) else {
+		return Ok(());
+	};
+	if !rule.enabled {
+		return Ok(());
+	}
+	let place = target.describe();
+	let host = rule.host.as_deref().unwrap_or("-");
+	super::style::warn(format_args!(
+		"the relay for {place} (smarthost {host}) will be off: its mail goes by the next \
+		 rule that matches, or directly to the recipient's MX from this server's own address"
+	));
+	if dry_run {
+		return Ok(());
+	}
+	let question = format!("Switch off the relay for {place}? [y/N]");
+	super::prompt::confirm_destructive("relay disable", &question, yes)
+}
+
+pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool, json: bool) -> ExitCode {
+	if let RelayCli::Disable { target, yes } = &action
+		&& let Err(code) = confirm_disable(path, target, *yes, dry_run)
+	{
+		return code;
+	}
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdin().lock(),
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
@@ -222,31 +289,58 @@ pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool) -> ExitCode {
 	))
 }
 
+/// The edit behind `relay enable|disable`: a rule that is on carries no
+/// `enabled` key, a rule that is off carries `enabled = false`.
+fn switch(target: Target, enabled: bool) -> (resource::Change, &'static str, serde_json::Value) {
+	let fields = serde_json::json!({
+		"account": target.account, "domain": target.domain, "enabled": enabled,
+	});
+	let change: resource::Change =
+		Box::new(move |document, config| edit::switch(document, config, &target, enabled));
+	(change, if enabled { "enable" } else { "disable" }, fields)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn execute_with(
 	path: &Path,
 	action: RelayCli,
 	dry_run: bool,
+	json: bool,
 	input: &mut dyn BufRead,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
-	let change: resource::Change = match action {
-		RelayCli::List { json } => {
-			list(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+) -> Result<ExitCode, resource::ResourceError> {
+	let (change, verb, fields): (resource::Change, _, _) = match action {
+		RelayCli::List { json: leaf } => {
+			list(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				leaf || json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
-		RelayCli::Show { json, target } => {
+		RelayCli::Show { json: leaf, target } => {
 			show(
-				&Config::load(path).map_err(|e| e.to_string())?,
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
 				&target,
-				json,
+				leaf || json,
 				out,
 			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		RelayCli::Test { target } => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			if json {
+				let mut printed = Vec::new();
+				let code = probe::run(&config, &target, &mut printed, status)?;
+				super::json_out::passed(out, "test", &printed)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+				return Ok(code);
+			}
 			return probe::run(&config, &target, out, status);
 		}
 		RelayCli::Add {
@@ -263,6 +357,9 @@ fn execute_with(
 			} else {
 				None
 			};
+			let fields = serde_json::json!({
+				"account": target.account, "domain": target.domain, "host": host,
+			});
 			let request = edit::Request {
 				target,
 				host,
@@ -273,11 +370,25 @@ fn execute_with(
 				socks_proxy,
 				password_stdin,
 			};
-			Box::new(move |document, config| edit::add(document, config, request))
+			let change: resource::Change = Box::new(move |document, config| {
+				edit::add(document, config, request).map_err(resource::ResourceError::Failure)
+			});
+			(change, "add", fields)
 		}
+		RelayCli::Enable { target } => switch(target, true),
+		RelayCli::Disable { target, .. } => switch(target, false),
 		RelayCli::Remove { target } => {
-			Box::new(move |document, config| edit::remove(document, config, &target))
+			let fields = serde_json::json!({ "account": target.account, "domain": target.domain });
+			let change: resource::Change =
+				Box::new(move |document, config| edit::remove(document, config, &target));
+			(change, "remove", fields)
 		}
 	};
-	resource::apply_edit(path, dry_run, "relay", out, status, restart, change)
+	let edit = resource::Edit {
+		label: "relay",
+		action: verb,
+		fields,
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }

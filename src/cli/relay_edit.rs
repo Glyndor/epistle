@@ -4,6 +4,7 @@ use toml_edit::Value;
 
 use super::{Target, find};
 use crate::cli::config_edit::ConfigDocument;
+use crate::cli::resource::ResourceError;
 use crate::config::{Config, TransportKind};
 
 /// Everything `relay add` was asked to write.
@@ -135,16 +136,35 @@ pub(super) fn add(
 	)
 }
 
+/// An unknown target is a refusal (exit code 2); the rest are failures.
 pub(super) fn remove(
 	document: &mut ConfigDocument,
 	config: &Config,
 	target: &Target,
-) -> Result<(), String> {
+) -> Result<(), ResourceError> {
 	let target = check_target(target)?;
-	find(config, &target)?;
+	find(config, &target).map_err(ResourceError::refused)?;
 	document.remove_where("transport", &|table| {
 		target.matches_table(table) && is_relay(table)
 	})?;
+	Ok(())
+}
+
+/// Switch the relay rule of `target` on or off.
+pub(super) fn switch(
+	document: &mut ConfigDocument,
+	config: &Config,
+	target: &Target,
+	enabled: bool,
+) -> Result<(), ResourceError> {
+	let target = check_target(target)?;
+	find(config, &target).map_err(ResourceError::refused)?;
+	let value = (!enabled).then(|| Value::from(false));
+	document.upsert_where(
+		"transport",
+		&|table| target.matches_table(table) && is_relay(table),
+		&[("enabled", value)],
+	)?;
 	Ok(())
 }
 

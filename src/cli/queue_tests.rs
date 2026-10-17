@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 const BODY: &str = "Subject: hi\r\n\r\ntop secret body text\r\n";
 
-fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
+pub(super) fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let ids = (0..count)
@@ -23,6 +23,7 @@ fn spool_with(count: usize) -> (tempfile::TempDir, FsSpool, Vec<Uuid>) {
 						require_tls: false,
 						mailbox: None,
 						tlsrpt_verified: false,
+						sender_verified: false,
 						no_dsn: Vec::new(),
 					},
 					None,
@@ -48,7 +49,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, 0, action, now, None, &mut out);
+	let code = run(dir, None, 0, action, false, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -300,8 +301,10 @@ fn remove_writes_a_canceled_record_for_each_pending_recipient() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -342,8 +345,10 @@ fn remove_with_log_disabled_does_not_write_records() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		0,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		None,
 		&mut out,
@@ -384,8 +389,10 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),
+		None,
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
+		false,
 		1_700_000_000,
 		Some(&webhook),
 		&mut out,
@@ -405,4 +412,114 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 	let event: serde_json::Value = serde_json::from_str(body).expect("json");
 	assert_eq!(event["spool_id"], id.to_string());
 	assert_eq!(event["recipient"], "bob0@remote.example");
+}
+
+/// With `encrypt_at_rest` on every envelope is sealed, so the operator
+/// commands must open the spool with the configured key. A listing that
+/// cannot read an envelope prints no row for it, and `show` fails outright.
+#[test]
+fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key_file = dir.path().join("mail.key");
+	std::fs::write(
+		&key_file,
+		crate::storage::generate_key_base64().expect("keygen"),
+	)
+	.expect("key file");
+	let storage = crate::config::Storage {
+		encrypt_at_rest: true,
+		encryption_key_env: None,
+		encryption_key_file: Some(key_file),
+		deleted_retention_days: 0,
+		delivery_log_days: 0,
+		blobs: None,
+	};
+	let crypto = crate::storage::MessageCrypto::from_config(Some(&storage)).expect("crypto");
+	let id = FsSpool::open_with_crypto(dir.path(), crypto)
+		.expect("spool")
+		.store(
+			&AcceptedMessage {
+				reverse_path: "sealed@example.org".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: BODY.as_bytes().to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
+		.expect("store");
+
+	let mut out = Vec::new();
+	assert_eq!(
+		list(dir.path(), Some(&storage), &mut out),
+		ExitCode::SUCCESS
+	);
+	let listed = String::from_utf8(out).expect("utf8");
+	assert!(
+		listed.contains(&id.to_string()) && listed.contains("sealed@example.org"),
+		"the sealed entry must be listed: {listed}"
+	);
+
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		Some(&storage),
+		0,
+		Some(QueueCli::Show { id, json: false }),
+		false,
+		1_700_000_000,
+		None,
+		&mut out,
+	);
+	assert_eq!(
+		code,
+		ExitCode::SUCCESS,
+		"show must read the sealed envelope"
+	);
+}
+
+/// `run_args` with `--json`: the exit code and the one object printed.
+fn run_json(dir: &Path, args: &[&str], now: u64) -> (ExitCode, serde_json::Value) {
+	let mut argv = vec!["epistle", "queue"];
+	argv.extend(args);
+	let cli = Cli::try_parse_from(argv).expect("parse");
+	let Command::Queue { action, .. } = cli.command else {
+		panic!("not a queue command");
+	};
+	let mut out = Vec::new();
+	let code = run(dir, None, 0, action, true, now, None, &mut out);
+	let text = String::from_utf8(out).expect("utf8");
+	assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
+	(code, serde_json::from_str(&text).expect("json"))
+}
+
+#[test]
+fn hold_retry_and_release_by_id_print_the_entry_and_whether_it_is_held() {
+	let (dir, _spool, ids) = spool_with(2);
+	let id = ids[0].to_string();
+	let object = |action: &str, held: bool| serde_json::json!({"result": "saved", "action": action, "id": id, "held": held});
+	assert_eq!(
+		run_json(dir.path(), &["hold", &id], 1_000),
+		(ExitCode::SUCCESS, object("hold", true))
+	);
+	assert_eq!(
+		run_json(dir.path(), &["retry", &id], 1_100),
+		(ExitCode::SUCCESS, object("retry", true)),
+		"a retry does not lift a hold"
+	);
+	assert_eq!(
+		run_json(dir.path(), &["release", &id], 1_200),
+		(ExitCode::SUCCESS, object("release", false))
+	);
+	assert_eq!(
+		run_json(dir.path(), &["hold", "--all"], 2_000),
+		(
+			ExitCode::SUCCESS,
+			serde_json::json!({"result": "saved", "action": "hold", "entries": 2})
+		)
+	);
 }

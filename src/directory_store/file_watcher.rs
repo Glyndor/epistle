@@ -32,6 +32,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::directory_store::AccountStore;
 use crate::directory_store::StoreError;
+use crate::directory_store::reload_status::{self, ReloadStatus};
 
 /// The cheap file identity used to short-circuit no-change polls and
 /// to dedupe the "still bad" warning. None of the three fields alone is
@@ -39,23 +40,23 @@ use crate::directory_store::StoreError;
 /// rename replaces the inode without moving mtime forward by the wall
 /// clock the polling task can see, and a `chmod`/`chown` touches
 /// `ctime` (not captured) while leaving every captured field alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Fingerprint {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Fingerprint {
 	/// Modification time as reported by the filesystem, truncated to whole
 	/// seconds: the poll loop can outrun nanosecond resolution on some
 	/// filesystems, and the triple still changes whenever the file
 	/// content does.
-	mtime_secs: u64,
+	pub mtime_secs: u64,
 	/// Byte length, distinguishes a write that left the size alone (so
 	/// the file is logically unchanged for our purposes) from one that
 	/// did not.
-	len: u64,
+	pub len: u64,
 	/// The inode number. An atomic `rename(2)` over the watched path
 	/// replaces the inode even when mtime and length would compare
 	/// equal, so this is the field that catches a CLI edit in the same
 	/// polling interval the writer committed it.
 	#[cfg(unix)]
-	ino: u64,
+	pub ino: u64,
 }
 
 /// Hot-reload target for `api_keys.toml`. The file watcher holds one
@@ -73,6 +74,24 @@ pub trait ApiKeyReloader: Send + Sync {
 	fn reload_api_keys_from(&self, text: &str) -> std::io::Result<()>;
 }
 
+/// Hot-reload target for `warmup.json`, the operator's IP warm-up
+/// settings (see [`crate::queue::warmup`]). Held as a trait object for
+/// the same reason as [`ApiKeyReloader`].
+pub trait WarmupReloader: Send + Sync {
+	/// Read the settings file again and apply its new orders. The
+	/// implementor reads the file itself, so it can refuse one that is not
+	/// a private file of the server's user; a refusal leaves the running
+	/// settings untouched.
+	fn reload_warmup(&self) -> std::io::Result<()>;
+}
+
+/// The reloaders the watcher feeds besides the account store.
+#[derive(Clone, Copy, Default)]
+struct Targets<'a> {
+	api_keys: Option<&'a dyn ApiKeyReloader>,
+	warmup: Option<&'a dyn WarmupReloader>,
+}
+
 /// The watched path and the reload step it triggers. One entry per
 /// dynamic-store file. Adding a new on-disk sidecar that the runtime
 /// directory depends on means adding one entry here and one
@@ -84,6 +103,7 @@ enum ReloadKind {
 	Masked,
 	Aliases,
 	ApiKeys,
+	Warmup,
 }
 
 impl ReloadKind {
@@ -94,6 +114,7 @@ impl ReloadKind {
 			ReloadKind::Masked => "masked.json",
 			ReloadKind::Aliases => "aliases.json",
 			ReloadKind::ApiKeys => "api_keys.toml",
+			ReloadKind::Warmup => crate::queue::warmup::settings::SETTINGS_FILE,
 		}
 	}
 
@@ -104,7 +125,7 @@ impl ReloadKind {
 	fn apply(
 		self,
 		store: &AccountStore,
-		api_keys: Option<&dyn ApiKeyReloader>,
+		targets: Targets<'_>,
 		text: &str,
 	) -> Result<(), StoreError> {
 		match self {
@@ -112,7 +133,13 @@ impl ReloadKind {
 			ReloadKind::AppPasswords => store.reload_app_passwords_from(text),
 			ReloadKind::Masked => store.reload_masked_from(text),
 			ReloadKind::Aliases => store.reload_aliases_from(text),
-			ReloadKind::ApiKeys => match api_keys {
+			ReloadKind::Warmup => match targets.warmup {
+				Some(reloader) => reloader
+					.reload_warmup()
+					.map_err(|error| StoreError::Invalid(error.to_string())),
+				None => Ok(()),
+			},
+			ReloadKind::ApiKeys => match targets.api_keys {
 				Some(reloader) => reloader
 					.reload_api_keys_from(text)
 					.map_err(|error| StoreError::Invalid(error.to_string())),
@@ -134,16 +161,16 @@ impl ReloadKind {
 	fn apply_from_disk(
 		self,
 		store: &AccountStore,
-		api_keys: Option<&dyn ApiKeyReloader>,
+		targets: Targets<'_>,
 		path: &Path,
 	) -> Result<bool, StoreError> {
 		match std::fs::read_to_string(path) {
 			Ok(text) => {
-				self.apply(store, api_keys, &text)?;
+				self.apply(store, targets, &text)?;
 				Ok(true)
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				self.apply(store, api_keys, "")?;
+				self.apply(store, targets, "")?;
 				Ok(true)
 			}
 			Err(error) => Err(StoreError::Io(error)),
@@ -175,6 +202,11 @@ pub struct FileWatcher {
 	/// invoked. The watcher always polls the file either way, so a
 	/// later `with_api_keys` upgrade keeps the same fingerprint cache.
 	api_keys: Option<Arc<dyn ApiKeyReloader>>,
+	/// Optional hot-reload target for `warmup.json`.
+	warmup: Option<Arc<dyn WarmupReloader>>,
+	/// The data dir the watcher polls under; cached so the reload
+	/// status file is written back to the same root.
+	data_dir: PathBuf,
 }
 
 /// What one `poll` did, for the integration tests' assertions. The
@@ -223,6 +255,8 @@ pub enum PollTarget {
 	Aliases,
 	/// The `api_keys.toml` sidecar.
 	ApiKeys,
+	/// The `warmup.json` warm-up settings.
+	Warmup,
 }
 
 impl From<ReloadKind> for PollTarget {
@@ -233,6 +267,7 @@ impl From<ReloadKind> for PollTarget {
 			ReloadKind::Masked => PollTarget::Masked,
 			ReloadKind::Aliases => PollTarget::Aliases,
 			ReloadKind::ApiKeys => PollTarget::ApiKeys,
+			ReloadKind::Warmup => PollTarget::Warmup,
 		}
 	}
 }
@@ -264,6 +299,10 @@ impl FileWatcher {
 				path: data_dir.join("api_keys.toml"),
 				kind: ReloadKind::ApiKeys,
 			},
+			Watch {
+				path: data_dir.join(ReloadKind::Warmup.label()),
+				kind: ReloadKind::Warmup,
+			},
 		];
 		let mut last = HashMap::with_capacity(watches.len());
 		let mut last_warned = HashMap::with_capacity(watches.len());
@@ -278,6 +317,8 @@ impl FileWatcher {
 			last_warned,
 			store,
 			api_keys: None,
+			warmup: None,
+			data_dir,
 		}
 	}
 
@@ -292,6 +333,20 @@ impl FileWatcher {
 		self
 	}
 
+	/// Attach the reloader for `warmup.json`, before [`spawn`](Self::spawn).
+	pub fn with_warmup(mut self, reloader: Arc<dyn WarmupReloader>) -> Self {
+		self.warmup = Some(reloader);
+		self
+	}
+
+	/// The reloaders to feed.
+	fn targets(&self) -> Targets<'_> {
+		Targets {
+			api_keys: self.api_keys.as_deref(),
+			warmup: self.warmup.as_deref(),
+		}
+	}
+
 	/// Run one poll cycle. Cheap when nothing changed. Returns the
 	/// per-file events the cycle produced; the server spawns this in a
 	/// loop and ignores the return value.
@@ -301,6 +356,18 @@ impl FileWatcher {
 		for watch in &watches {
 			let event = self.poll_one(watch);
 			report.events.push(event);
+		}
+		// One status write per poll that loaded something, and a bare
+		// mtime update on every other poll, so the CLI sees both what
+		// is loaded and that the server is still polling.
+		if report
+			.events
+			.iter()
+			.any(|event| matches!(event, PollEvent::Loaded(_)))
+		{
+			self.write_status();
+		} else {
+			self.refresh_status();
 		}
 		report
 	}
@@ -336,10 +403,7 @@ impl FileWatcher {
 						return PollEvent::BadParse(target);
 					}
 				};
-				match watch
-					.kind
-					.apply(&self.store, self.api_keys.as_deref(), &text)
-				{
+				match watch.kind.apply(&self.store, self.targets(), &text) {
 					Ok(()) => {
 						self.last.insert(watch.path.clone(), Some(now));
 						self.last_warned.insert(watch.path.clone(), None);
@@ -382,7 +446,7 @@ impl FileWatcher {
 				}
 				match watch
 					.kind
-					.apply_from_disk(&self.store, self.api_keys.as_deref(), &watch.path)
+					.apply_from_disk(&self.store, self.targets(), &watch.path)
 				{
 					Ok(_) => {
 						self.last.insert(watch.path.clone(), None);
@@ -413,6 +477,10 @@ impl FileWatcher {
 	/// `JoinHandle` for callers that want to await the loop on
 	/// graceful shutdown.
 	pub fn spawn(mut self, interval: Duration) -> tokio::task::JoinHandle<()> {
+		// Publish what the server loaded at startup before the first
+		// poll, so a CLI write in the first interval has a status to
+		// wait on instead of reading the server as absent.
+		self.write_status();
 		tokio::spawn(async move {
 			let mut ticker = tokio::time::interval(interval);
 			ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -455,6 +523,56 @@ fn fingerprint(path: &Path) -> Option<Fingerprint> {
 	})
 }
 
+/// The fingerprint of `path` as the file watcher computes it, for the
+/// CLI to compare against the server's reload status.
+pub fn reload_fingerprint(path: &Path) -> Option<Fingerprint> {
+	fingerprint(path)
+}
+
+impl FileWatcher {
+	/// Where the reload status is written, under the data dir the
+	/// watcher was built with.
+	pub fn status_path(&self) -> PathBuf {
+		reload_status::status_path(&self.data_dir)
+	}
+
+	/// Publish the fingerprints the server has loaded, so a CLI that
+	/// just wrote one of the files can tell when the change is live.
+	fn write_status(&self) {
+		let mut status = ReloadStatus::default();
+		for watch in &self.watches {
+			let loaded = self.last.get(&watch.path).copied().flatten();
+			status.files.insert(watch.kind.label().to_string(), loaded);
+		}
+		let path = self.status_path();
+		if let Err(error) = reload_status::write(&path, &status) {
+			tracing::warn!(
+				target: "epistle::directory_store::file_watcher",
+				%error,
+				"cannot write the reload status; the CLI will not wait for this server's reloads",
+			);
+		}
+	}
+
+	/// Move the status file's mtime forward so the CLI can tell this
+	/// server is still polling. Falls back to a full write when the
+	/// cheap update fails: the file was removed, or it belongs to
+	/// another user because it was written before a privilege drop.
+	fn refresh_status(&self) {
+		if reload_status::touch(&self.status_path()).is_err() {
+			self.write_status();
+		}
+	}
+}
+
 #[cfg(test)]
 #[path = "file_watcher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_watcher_status_tests.rs"]
+mod status_tests;
+
+#[cfg(test)]
+#[path = "file_watcher_tests_warmup.rs"]
+mod warmup_tests;

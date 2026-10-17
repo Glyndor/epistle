@@ -10,7 +10,7 @@ use crate::config::Config;
 mod flow;
 mod host;
 
-pub(super) use host::query;
+pub(super) use host::{query, query_within};
 
 /// The `epistle db` actions.
 #[derive(Debug, Subcommand)]
@@ -21,11 +21,20 @@ pub enum DbCli {
 	/// restores into it and compares the row count of every table. Any
 	/// failure puts the old major back. The old cluster stays in the volume.
 	Upgrade,
+	/// Show the version, size and connections of the stack's PostgreSQL.
+	///
+	/// Runs one read-only query in the database container and changes
+	/// nothing. Exits 3 when the configuration has no `[database]` or there
+	/// is no stack to ask.
+	Status,
 }
 
 /// Run an `epistle db` action.
-pub(super) fn run(config: &Config, action: DbCli) -> ExitCode {
+/// Run the database action. With `json` the steps stay on stderr and a
+/// success prints `{"result": "done", "action": "upgrade", "postgres"}`.
+pub(super) fn run(config: &Config, action: DbCli, json: bool) -> ExitCode {
 	match action {
+		DbCli::Status => super::db_status::run(config, json),
 		DbCli::Upgrade => {
 			let mut stack = match host::Podup::new(config) {
 				Ok(stack) => stack,
@@ -34,7 +43,14 @@ pub(super) fn run(config: &Config, action: DbCli) -> ExitCode {
 					return ExitCode::FAILURE;
 				}
 			};
-			match flow::upgrade(&mut stack, crate::cli::init::images::postgres()) {
+			let target = crate::cli::init::images::postgres();
+			match flow::upgrade(&mut stack, target) {
+				Ok(()) if json => {
+					let result = serde_json::json!({
+						"result": "done", "action": "upgrade", "postgres": target,
+					});
+					super::json_out::print(&mut std::io::stdout().lock(), &result)
+				}
 				Ok(()) => ExitCode::SUCCESS,
 				Err(error) => {
 					super::style::error(format_args!("database upgrade failed: {error}"));

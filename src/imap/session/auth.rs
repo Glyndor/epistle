@@ -92,10 +92,16 @@ impl Session {
 	/// The advertised IMAP capabilities, including SASL mechanisms and the
 	/// STARTTLS/LOGINDISABLED state.
 	pub(super) fn capabilities(&self) -> String {
-		let mut capabilities = String::from(
+		// APPENDLIMIT (RFC 7889 §3) carries the number because the limit is
+		// the same for every mailbox: it is the literal cap the parser and
+		// the network layer enforce.
+		let append_limit = crate::imap::command::MAX_APPEND_SIZE;
+		let mut capabilities = format!(
 			"IMAP4rev1 IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH MULTISEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA CHILDREN WITHIN SEARCHRES COMPRESS=DEFLATE",
+THREAD=ORDEREDSUBJECT THREAD=REFERENCES APPENDLIMIT={append_limit} UNSELECT ENABLE ESEARCH \
+MULTISEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED LIST-STATUS BINARY \
+QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA CHILDREN WITHIN SEARCHRES \
+COMPRESS=DEFLATE",
 		);
 		// NOTIFY (RFC 5465) is only usable once authenticated; advertise it in the
 		// post-authentication capability set, like other selected-state features.

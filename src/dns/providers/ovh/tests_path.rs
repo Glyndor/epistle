@@ -47,6 +47,7 @@ async fn record_filters_are_encoded_query_pairs() {
 				kind: RecordKind::A,
 				value: String::new(),
 				ttl: 300,
+				proxied: None,
 			},
 		)
 		.await

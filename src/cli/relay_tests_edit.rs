@@ -3,7 +3,7 @@ use super::*;
 use crate::cli::resource::test_config;
 
 struct Run {
-	result: Result<ExitCode, String>,
+	result: Result<ExitCode, super::super::resource::ResourceError>,
 	out: String,
 	status: String,
 	after: String,
@@ -19,6 +19,7 @@ fn run(args: &[&str], stdin: &str, dry_run: bool) -> Run {
 		file.path(),
 		parse(args),
 		dry_run,
+		false,
 		&mut std::io::BufReader::new(stdin.as_bytes()),
 		&mut out,
 		&mut status,
@@ -240,6 +241,7 @@ fn remove_leaves_a_non_relay_rule_with_the_same_selector_alone() {
 	execute_with(
 		file.path(),
 		parse(&["remove", "--domain", "example.net"]),
+		false,
 		false,
 		&mut std::io::BufReader::new(std::io::empty()),
 		&mut Vec::new(),

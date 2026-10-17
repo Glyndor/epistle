@@ -129,6 +129,7 @@ fn fixture(view: View) -> Fixture {
 		rotated_at: 0,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		root.join(STATE_FILE),

@@ -83,7 +83,7 @@ fn add_suppresses_globally_and_per_account() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		add(&config, "Bob@Example.NET", None, &mut out),
+		add(&config, "Bob@Example.NET", None, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -100,6 +100,8 @@ fn add_suppresses_globally_and_per_account() {
 			&config,
 			"carol@example.net",
 			Some("alice@example.org"),
+			None,
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -119,7 +121,7 @@ fn add_refuses_something_that_is_not_an_address() {
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
-		add(&config, "not an address", None, &mut out),
+		add(&config, "not an address", None, None, false, &mut out),
 		ExitCode::from(2)
 	);
 	assert!(out.is_empty());
@@ -144,7 +146,10 @@ fn parses_add_and_keeps_the_flat_form() {
 	else {
 		panic!("not a suppression command");
 	};
-	let Some(SuppressionCli::Add { address, account }) = action else {
+	let Some(SuppressionCli::Add {
+		address, account, ..
+	}) = action
+	else {
 		panic!("add did not parse");
 	};
 	assert_eq!(address, "bob@example.net");
@@ -203,6 +208,7 @@ async fn deliver_once(data_dir: &std::path::Path) -> (usize, usize) {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -232,7 +238,14 @@ async fn delivery_skips_an_address_added_from_the_cli() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	assert_eq!(
-		add(&config, "bob@example.net", None, &mut Vec::new()),
+		add(
+			&config,
+			"bob@example.net",
+			None,
+			None,
+			false,
+			&mut Vec::new()
+		),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -250,6 +263,8 @@ async fn delivery_skips_per_account_only_for_that_account() {
 		&config_mine,
 		"bob@example.net",
 		Some("alice@example.org"),
+		None,
+		false,
 		&mut Vec::new(),
 	);
 	assert_eq!(deliver_once(mine.path()).await, (0, 0));
@@ -260,6 +275,8 @@ async fn delivery_skips_per_account_only_for_that_account() {
 		&config_other,
 		"bob@example.net",
 		Some("someone@example.org"),
+		None,
+		false,
 		&mut Vec::new(),
 	);
 	assert_eq!(deliver_once(other.path()).await, (1, 1));

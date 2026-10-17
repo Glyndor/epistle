@@ -195,6 +195,7 @@ fn cli_remove_error_lines_do_not_pollute_stdout() {
 		Some(&bayes),
 		&mut out,
 		&mut err_stream,
+		false,
 	);
 	assert_eq!(
 		exit,

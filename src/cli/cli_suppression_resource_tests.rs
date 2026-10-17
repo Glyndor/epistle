@@ -37,7 +37,9 @@ fn suppression_add_resource_parses() {
 		.expect("add parses");
 	match cli.command {
 		Command::Suppression { action, .. } => match action {
-			Some(crate::cli::suppression::SuppressionCli::Add { address, account }) => {
+			Some(crate::cli::suppression::SuppressionCli::Add {
+				address, account, ..
+			}) => {
 				assert_eq!(address, "bob@example.net");
 				assert!(account.is_none());
 			}
@@ -60,7 +62,9 @@ fn suppression_remove_resource_parses_with_account() {
 	.expect("remove parses");
 	match cli.command {
 		Command::Suppression { action, .. } => match action {
-			Some(crate::cli::suppression::SuppressionCli::Remove { address, account }) => {
+			Some(crate::cli::suppression::SuppressionCli::Remove {
+				address, account, ..
+			}) => {
 				assert_eq!(address, "bob@example.net");
 				assert_eq!(account.as_deref(), Some("alice@example.org"));
 			}

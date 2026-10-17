@@ -22,7 +22,7 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 				.replace("=  12 # rate", "=  50 # rate"),
 		),
 	] {
-		let doc = edit_document(file.path(), key, Some("example.org"), Some(input)).unwrap();
+		let doc = edit_document(file.path(), key, Some("example.org"), None, Some(input)).unwrap();
 		assert_eq!(
 			doc.commit().unwrap(),
 			super::super::config_edit::Outcome::Changed
@@ -39,17 +39,23 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let modified = std::fs::metadata(file.path()).unwrap().modified().unwrap();
 	assert_eq!(
-		edit_document(file.path(), Key::Quota, Some("example.org"), Some("10G"))
-			.unwrap()
-			.commit()
-			.unwrap(),
+		edit_document(
+			file.path(),
+			Key::Quota,
+			Some("example.org"),
+			None,
+			Some("10G")
+		)
+		.unwrap()
+		.commit()
+		.unwrap(),
 		super::super::config_edit::Outcome::Unchanged
 	);
 	assert_eq!(
 		std::fs::metadata(file.path()).unwrap().modified().unwrap(),
 		modified
 	);
-	edit_document(file.path(), Key::Quota, Some("example.org"), None)
+	edit_document(file.path(), Key::Quota, Some("example.org"), None, None)
 		.unwrap()
 		.commit()
 		.unwrap();
@@ -74,7 +80,9 @@ fn limits_dry_run_returns_diff_without_writing_or_restarting() {
 		Action::Set {
 			key: Key::Quota,
 			domain: None,
+			tenant: None,
 			value: "10G".into(),
+			json: false,
 		},
 		true,
 		&mut out,
@@ -84,7 +92,7 @@ fn limits_dry_run_returns_diff_without_writing_or_restarting() {
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert_eq!(
 		String::from_utf8(out).unwrap(),
-		edit_document(file.path(), Key::Quota, None, Some("10G"))
+		edit_document(file.path(), Key::Quota, None, None, Some("10G"))
 			.unwrap()
 			.dry_run()
 			.unwrap(),
@@ -106,6 +114,7 @@ fn unsupported_domain_key_reports_exact_error_without_writing() {
 			file.path(),
 			Key::QueueGiveUp,
 			Some("example.org"),
+			None,
 			Some("5d")
 		)
 		.err()

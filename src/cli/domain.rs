@@ -24,6 +24,15 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
+#[path = "domain_set.rs"]
+mod set;
+#[path = "domain_state.rs"]
+mod state;
+
+#[path = "domain_dispatch.rs"]
+mod dispatch;
+use dispatch::{Outcome, execute};
+
 /// Domain administration actions.
 #[derive(Debug, Subcommand)]
 pub enum DomainCli {
@@ -70,6 +79,56 @@ pub enum DomainCli {
 	},
 	/// Edit the `domain_aliases` map.
 	Alias(DomainAliasArgs),
+	/// Set the storage quota or submission rate of one domain.
+	///
+	/// The same per-domain overrides `limits set --domain` writes. A flag
+	/// that is left out keeps its value; `--no-quota` and
+	/// `--no-submission-rate` remove the override.
+	#[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
+		.args(["quota", "no_quota", "submission_rate", "no_submission_rate"])))]
+	Set {
+		/// Domain to change.
+		#[arg(value_name = "DOMAIN")]
+		domain: String,
+		/// Default storage quota of the accounts in the domain (for example 10G).
+		#[arg(long, value_name = "SIZE", conflicts_with = "no_quota")]
+		quota: Option<String>,
+		/// Remove the domain's quota override.
+		#[arg(long)]
+		no_quota: bool,
+		/// Messages per minute an authenticated sender in the domain may submit.
+		#[arg(
+			long,
+			value_name = "N",
+			conflicts_with = "no_submission_rate",
+			allow_hyphen_values = true
+		)]
+		submission_rate: Option<String>,
+		/// Remove the domain's submission rate override.
+		#[arg(long)]
+		no_submission_rate: bool,
+	},
+	/// Switch a domain off without removing it.
+	///
+	/// Mail for the domain is rejected like mail for an unknown user and
+	/// nobody may send as an address in it. Accounts, mailboxes, DNS
+	/// records and DKIM keys stay. Undo it with `domain enable`.
+	Disable {
+		/// Domain to switch off.
+		#[arg(value_name = "DOMAIN")]
+		domain: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+	/// Switch a disabled domain back on.
+	Enable {
+		/// Domain to switch on.
+		#[arg(value_name = "DOMAIN")]
+		domain: String,
+	},
 }
 
 /// Sub-action on `epistle domain alias`.
@@ -105,142 +164,17 @@ pub enum DomainAliasSubcommand {
 }
 
 /// Run the chosen domain action.
-pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool) -> ExitCode {
-	match execute(path, action, dry_run) {
+pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool, json: bool) -> ExitCode {
+	match execute(path, action, dry_run, json) {
 		Outcome::Code(code) => code,
 		Outcome::Error(error) => {
 			style::error(error);
 			ExitCode::FAILURE
 		}
-	}
-}
-
-/// The discriminated result of [`execute`]. Returning a structured
-/// outcome (rather than `Result<ExitCode, String>`) lets the refusal
-/// path surface exit code 2 instead of being squashed into the
-/// generic failure exit code.
-enum Outcome {
-	Code(ExitCode),
-	Error(String),
-}
-
-impl From<String> for Outcome {
-	fn from(value: String) -> Self {
-		Outcome::Error(value)
-	}
-}
-
-impl From<&str> for Outcome {
-	fn from(value: &str) -> Self {
-		Outcome::Error(value.to_string())
-	}
-}
-
-impl From<ExitCode> for Outcome {
-	fn from(value: ExitCode) -> Self {
-		Outcome::Code(value)
-	}
-}
-
-fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome {
-	let mut out = std::io::stdout().lock();
-	let mut err = style::stderr();
-	let config = match Config::load(path) {
-		Ok(config) => config,
-		Err(error) => return Outcome::Error(error.to_string()),
-	};
-	match action {
-		DomainCli::List { json } => {
-			if let Err(error) = list(&config, json, &mut out) {
-				return Outcome::Error(error.to_string());
-			}
-			Outcome::Code(ExitCode::SUCCESS)
+		Outcome::Refusal(error) => {
+			style::error(error);
+			ExitCode::from(super::exit::REFUSED)
 		}
-		DomainCli::Show { domain, json } => {
-			if let Err(error) = show(&config, &domain, json, &mut out) {
-				return Outcome::Error(error.to_string());
-			}
-			Outcome::Code(ExitCode::SUCCESS)
-		}
-		DomainCli::Add { domain } => {
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			if let Err(error) = add_domain(&config, &mut document, &domain) {
-				return Outcome::Error(error);
-			}
-			match commit_add(&config, document, &domain, dry_run, &mut out, &mut err) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
-			}
-		}
-		DomainCli::Remove { domain, yes } => {
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			if let Err(error) = remove_domain(&config, &mut document, &domain) {
-				return Outcome::Error(error);
-			}
-			// Asked after the edit is validated, so a refused removal is
-			// reported before anyone is asked; a dry run destroys nothing.
-			let question = format!("Remove domain \"{domain}\" from the configuration? [y/N]");
-			if !dry_run
-				&& let Err(code) =
-					super::prompt::confirm_destructive("domain remove", &question, yes)
-			{
-				return code.into();
-			}
-			match commit_remove(document, &domain, dry_run, &mut out, &mut err) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => Outcome::Error(error),
-			}
-		}
-		DomainCli::Alias(args) => match args.action {
-			DomainAliasSubcommand::Add { alias, target } => {
-				let mut document = match open(path) {
-					Ok(document) => document,
-					Err(error) => return Outcome::Error(error),
-				};
-				let owned_alias = alias.clone();
-				if let Err(error) = add_alias_map(&config, &mut document, &alias, &target) {
-					return Outcome::Error(error);
-				}
-				match commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err) {
-					Ok(code) => Outcome::Code(code),
-					Err(error) => Outcome::Error(error),
-				}
-			}
-			DomainAliasSubcommand::Remove { alias, yes } => {
-				let mut document = match open(path) {
-					Ok(document) => document,
-					Err(error) => return Outcome::Error(error),
-				};
-				let owned_alias = alias.clone();
-				if let Err(error) = remove_alias_map(&config, &mut document, &alias) {
-					return Outcome::Error(error);
-				}
-				let question = format!("Remove domain alias \"{alias}\"? [y/N]");
-				if !dry_run
-					&& let Err(code) =
-						super::prompt::confirm_destructive("domain alias remove", &question, yes)
-				{
-					return code.into();
-				}
-				match commit_alias(
-					document,
-					&owned_alias,
-					"removed",
-					dry_run,
-					&mut out,
-					&mut err,
-				) {
-					Ok(code) => Outcome::Code(code),
-					Err(error) => Outcome::Error(error),
-				}
-			}
-		},
 	}
 }
 
@@ -251,6 +185,7 @@ fn open(path: &Path) -> Result<ConfigDocument, String> {
 #[derive(Serialize)]
 struct DomainRow {
 	domain: String,
+	enabled: bool,
 	aliases_to: Vec<String>,
 	aliases_from: Vec<String>,
 }
@@ -273,6 +208,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 			.collect();
 		rows.push(DomainRow {
 			domain: domain.clone(),
+			enabled: state::is_enabled(config, domain),
 			aliases_to,
 			aliases_from,
 		});
@@ -282,6 +218,14 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 		writeln!(out)?;
 		return Ok(());
 	}
+	// A switched-off domain is named as such in the text forms.
+	let shown = |row: &DomainRow| {
+		if row.enabled {
+			row.domain.clone()
+		} else {
+			format!("{} (disabled)", row.domain)
+		}
+	};
 	if let Some(decor) = super::term::stdout(json) {
 		let mut table = Table::new(&["DOMAIN", "ALIASES TO", "ALIASES FROM"]);
 		for row in &rows {
@@ -293,7 +237,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 				}
 			};
 			table.push(vec![
-				row.domain.clone(),
+				shown(row),
 				joined(&row.aliases_to),
 				joined(&row.aliases_from),
 			]);
@@ -305,7 +249,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 		writeln!(
 			out,
 			"{:<30} {:<12} {}",
-			row.domain,
+			shown(row),
 			if row.aliases_to.is_empty() {
 				"-".into()
 			} else {
@@ -324,6 +268,9 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 #[derive(Serialize)]
 struct DomainView {
 	domain: String,
+	enabled: bool,
+	quota: Option<u64>,
+	submission_rate: Option<u32>,
 	aliases_to: Vec<String>,
 	aliases_from: Vec<String>,
 	accounts: Vec<String>,
@@ -377,6 +324,15 @@ fn show(config: &Config, domain: &str, json: bool, out: &mut impl Write) -> std:
 		.collect();
 	let view = DomainView {
 		domain: domain.to_string(),
+		enabled: state::is_enabled(config, domain),
+		quota: config
+			.domain_quotas
+			.get(&domain.to_ascii_lowercase())
+			.copied(),
+		submission_rate: config
+			.domain_submission_limits
+			.get(&domain.to_ascii_lowercase())
+			.copied(),
 		aliases_to,
 		aliases_from,
 		accounts,
@@ -388,6 +344,14 @@ fn show(config: &Config, domain: &str, json: bool, out: &mut impl Write) -> std:
 		return Ok(());
 	}
 	writeln!(out, "domain\t{}", view.domain)?;
+	writeln!(out, "enabled\t{}", if view.enabled { "yes" } else { "no" })?;
+	let number = |value: Option<String>| value.unwrap_or_else(|| "-".into());
+	writeln!(out, "quota\t{}", number(view.quota.map(|v| v.to_string())))?;
+	writeln!(
+		out,
+		"submission_rate\t{}",
+		number(view.submission_rate.map(|v| v.to_string()))
+	)?;
 	writeln!(
 		out,
 		"aliases_to\t{}",
@@ -494,6 +458,16 @@ fn remove_domain(
 		new_array.push(toml_edit::Value::from(existing.clone()));
 	}
 	document.replace_top_array("domains", new_array)?;
+	// Whatever was set for the domain goes with it, so nothing in the file
+	// names a domain the server no longer hosts.
+	if !state::is_enabled(config, domain) {
+		state::set_enabled(config, document, domain, true)?;
+	}
+	for map in ["domain_quotas", "domain_submission_limits"] {
+		if let Some(key) = document.map_key(map, |key| key.eq_ignore_ascii_case(domain.trim())) {
+			document.remove_map_entry(map, &key)?;
+		}
+	}
 	Ok(())
 }
 
@@ -569,6 +543,9 @@ mod tests_dry_run;
 #[cfg(test)]
 #[path = "domain_tests_removal.rs"]
 mod tests_removal;
+#[cfg(test)]
+#[path = "domain_tests_unknown.rs"]
+mod tests_unknown;
 
 #[path = "domain_blockers.rs"]
 pub mod domain_blockers;
@@ -576,4 +553,3 @@ pub(super) use domain_blockers::removal_blockers;
 
 #[path = "domain_writers.rs"]
 pub mod domain_writers;
-pub(super) use domain_writers::{commit_add, commit_alias, commit_remove};

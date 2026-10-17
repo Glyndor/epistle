@@ -22,7 +22,7 @@ pub struct SplitDelivery {
 	directory: DirectoryHandle,
 	local: LocalDelivery,
 	outbound: FsSpool,
-	signer: Option<crate::dkim::ReloadableSigner>,
+	signer: Option<crate::dkim::PerDomainSigner>,
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
 	srs: Option<(crate::queue::srs::Srs, String)>,
@@ -34,6 +34,8 @@ pub struct SplitDelivery {
 	pub(super) metrics: Option<Arc<crate::metrics::Metrics>>,
 	/// Outbound webhook for delivery events (fire-and-forget, advisory).
 	webhook: Option<Arc<crate::webhook::Webhook>>,
+	/// Records submissions that keep evidence; `None` keeps none.
+	pub(super) evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
 }
 
 impl SplitDelivery {
@@ -50,9 +52,10 @@ impl SplitDelivery {
 		directory: DirectoryHandle,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
+		let outbound = FsSpool::open_audited(data_dir, crypto.clone())?;
 		Ok(SplitDelivery {
 			local: LocalDelivery::new_with_crypto(data_dir, directory.clone(), crypto.clone())?,
-			outbound: FsSpool::open_with_crypto(data_dir, crypto)?,
+			outbound,
 			directory,
 			signer: None,
 			rules: Vec::new(),
@@ -60,6 +63,7 @@ impl SplitDelivery {
 			arc: None,
 			metrics: None,
 			webhook: None,
+			evidence: None,
 		})
 	}
 
@@ -90,8 +94,9 @@ impl SplitDelivery {
 		self
 	}
 
-	/// Sign outbound messages with this (hot-swappable) DKIM signer.
-	pub fn with_signer(mut self, signer: crate::dkim::ReloadableSigner) -> Self {
+	/// Sign outbound messages with this DKIM signer. Per-domain
+	/// overrides are picked at sign time from the same handle.
+	pub fn with_signer(mut self, signer: crate::dkim::PerDomainSigner) -> Self {
 		self.signer = Some(signer);
 		self
 	}
@@ -209,22 +214,57 @@ impl SplitDelivery {
 	}
 }
 
+/// What happened to the recipients delivered on this server.
+#[derive(Debug, Clone)]
+pub(super) struct LocalDone {
+	/// The recipients that resolved to an account or an alias.
+	pub recipients: Vec<String>,
+	/// Why a rule of theirs rejected the message, when one did.
+	pub reject: Option<String>,
+}
+
 impl MessageSink for SplitDelivery {
 	/// Mail from elsewhere: whatever `TLS-Required` it carries is not ours
 	/// to honour, so it never reaches a copy we store or forward.
 	fn deliver(&self, mut message: AcceptedMessage) -> Result<(), SinkError> {
 		message.data = crate::queue::tls_required::strip(message.data);
-		self.route(message, uuid::Uuid::now_v7(), None, &BTreeMap::new())
+		self.route_classed(
+			message,
+			uuid::Uuid::now_v7(),
+			None,
+			&BTreeMap::new(),
+			(crate::evidence::MailClass::Personal, None),
+			None,
+		)
 	}
 
+	/// Mail one of our accounts sends: only the server's own inspection may
+	/// speak in the attachment warning header, so whatever the sender wrote
+	/// there is dropped before any copy is stored, queued or signed.
 	fn submit(
 		&self,
-		message: AcceptedMessage,
+		mut message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
-		extra: &BTreeMap<String, String>,
+		submission: &crate::smtp::sink::Submission,
 	) -> Result<(), SinkError> {
-		self.route(message, queue_id, Some(account), extra)
+		crate::smtp::trace::strip_headers_in_place(
+			&mut message.data,
+			&[crate::antispam::attachments::policy::WARNING_HEADER],
+		);
+		match self.evidence_for(account, &message, submission.class)? {
+			Some(retention) => {
+				self.route_with_evidence(message, queue_id, account, submission, retention)
+			}
+			None => self.route_classed(
+				message,
+				queue_id,
+				Some(account),
+				&submission.extra,
+				(submission.class, None),
+				None,
+			),
+		}
 	}
 }
 
@@ -233,12 +273,36 @@ impl SplitDelivery {
 	/// outbound spool under `queue_id`, DKIM-signed when a signer is set.
 	/// `account` is the local account that submitted, when known; `extra` is
 	/// the caller-supplied correlation map (the API may attach one).
-	fn route(
+	/// `presigned` is the exact outbound copy when the caller recorded
+	/// evidence over it.
+	pub(super) fn route_classed(
 		&self,
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
+		class: (crate::evidence::MailClass, Option<u32>),
+		presigned: Option<Vec<u8>>,
+	) -> Result<(), SinkError> {
+		self.route_reporting(
+			message,
+			(queue_id, account, extra),
+			class,
+			presigned,
+			&mut None,
+		)
+	}
+
+	/// [`route_classed`](Self::route_classed), telling `done` which
+	/// recipients were delivered locally and whether a rule rejected them,
+	/// as soon as that is so: a later failure does not undo it.
+	pub(super) fn route_reporting(
+		&self,
+		message: AcceptedMessage,
+		(queue_id, account, extra): (uuid::Uuid, Option<&str>, &BTreeMap<String, String>),
+		(class, evidence): (crate::evidence::MailClass, Option<u32>),
+		presigned: Option<Vec<u8>>,
+		done: &mut Option<LocalDone>,
 	) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
@@ -280,6 +344,10 @@ impl SplitDelivery {
 			let delivered = self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
+			*done = Some(LocalDone {
+				recipients: local_message.recipients.clone(),
+				reject: delivered.reject.clone(),
+			});
 			// Notify the webhook for messages that actually landed (not rejected).
 			if delivered.reject.is_none()
 				&& let Some(webhook) = &self.webhook
@@ -327,7 +395,8 @@ impl SplitDelivery {
 			}
 			self.queue_redirects(&message, delivered.redirects)?;
 			self.bounce_loops(&message, &delivered.looped)?;
-			for reply in delivered.replies {
+			for mut reply in delivered.replies {
+				self.sign_reply(&mut reply);
 				self.outbound
 					.store(&reply, account, extra)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -345,6 +414,7 @@ impl SplitDelivery {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			};
 			self.outbound
@@ -356,17 +426,24 @@ impl SplitDelivery {
 				recipients: remote,
 				..message
 			};
-			// Sign relayed mail so receivers can verify our domain.
-			if let Some(signer) = &self.signer
-				&& let Some(domain) = self.signing_domain(&outbound_message)
-				&& let Some(header) = signer.current().sign(&domain, &outbound_message.data)
-			{
-				let mut signed = header.into_bytes();
-				signed.extend_from_slice(&outbound_message.data);
-				outbound_message.data = signed;
+			// With evidence the acceptance was recorded over the signed bytes
+			// already: queue exactly those, never a second signature.
+			match presigned {
+				Some(signed) => outbound_message.data = signed,
+				None => self.sign_outbound(&mut outbound_message),
 			}
+			// The acceptance was recorded before routing: the queue entry
+			// only has to say so, so its outcomes are recorded too.
+			let recorded = |_: &[u8]| Ok(());
+			let options = super::spool::StoreOptions {
+				account,
+				extra,
+				class,
+				evidence: evidence.map(|_| &recorded as &dyn Fn(&[u8]) -> std::io::Result<()>),
+				retain_days: evidence.unwrap_or(0),
+			};
 			self.outbound
-				.store_as(&outbound_message, queue_id, account, extra)
+				.store_with(&outbound_message, queue_id, &options)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())
@@ -378,6 +455,40 @@ impl SplitDelivery {
 			.store(message, None, &BTreeMap::new())
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
+	}
+
+	/// DKIM-sign relayed mail so receivers can verify our domain. The signer
+	/// returns the DKIM-Signature header line; it is prepended to the body
+	/// in a single allocation, so the body is moved, not copied.
+	pub(super) fn sign_outbound(&self, message: &mut AcceptedMessage) {
+		if let Some(signer) = &self.signer
+			&& let Some(domain) = self.signing_domain(message)
+			&& let Some(header) = signer.sign(&domain, &message.data)
+		{
+			let header_bytes = header.as_bytes();
+			let mut signed = Vec::with_capacity(header_bytes.len() + message.data.len());
+			signed.extend_from_slice(header_bytes);
+			signed.append(&mut message.data);
+			message.data = signed;
+		}
+	}
+
+	/// DKIM-sign an auto-reply the server writes itself: it has a null
+	/// reverse-path, so `d=` is the domain of its From, the account's own.
+	/// The signer returns only the DKIM-Signature header line; we prepend
+	/// it to the body in a single allocation sized to the combined length
+	/// so the body is moved, not copied.
+	fn sign_reply(&self, reply: &mut AcceptedMessage) {
+		if let Some(signer) = &self.signer
+			&& let Some(domain) = self.signing_domain(reply)
+			&& let Some(header) = signer.sign(&domain, &reply.data)
+		{
+			let header_bytes = header.as_bytes();
+			let mut signed = Vec::with_capacity(header_bytes.len() + reply.data.len());
+			signed.extend_from_slice(header_bytes);
+			signed.append(&mut reply.data);
+			reply.data = signed;
+		}
 	}
 
 	/// The `d=` for an outbound message: the domain of its single From
@@ -423,6 +534,9 @@ fn header_of(data: &[u8], field: &str) -> Option<String> {
 	None
 }
 
+#[path = "routing_evidence.rs"]
+mod evidence;
+
 #[cfg(test)]
 #[path = "routing_tests.rs"]
 mod tests;
@@ -436,5 +550,17 @@ mod tests_dkim_rotation;
 mod tests_dkim_domain;
 
 #[cfg(test)]
+#[path = "routing_tests_dkim_per_domain.rs"]
+mod tests_dkim_per_domain;
+
+#[cfg(test)]
 #[path = "routing_tests_forward.rs"]
 mod tests_forward;
+
+#[cfg(test)]
+#[path = "routing_tests_vacation.rs"]
+mod tests_vacation;
+
+#[cfg(test)]
+#[path = "routing_tests_warning.rs"]
+mod tests_warning;

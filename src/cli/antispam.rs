@@ -41,6 +41,8 @@ pub enum Key {
 	ClamdSocket,
 	/// Action on clamd detection (`[antispam] clamd_on_found`).
 	ClamdOnFound,
+	/// What a scan clamd could not run does (`[antispam] clamd_on_error`).
+	ClamdOnError,
 	/// clamd exchange timeout, in seconds (`[antispam] clamd_timeout_secs`).
 	ClamdTimeout,
 	/// clamd maximum message size, in bytes (`[antispam] clamd_max_bytes`).
@@ -71,6 +73,7 @@ impl Key {
 			Self::FirstTimeSenderDelay => "first-time-sender-delay",
 			Self::ClamdSocket => "clamd-socket",
 			Self::ClamdOnFound => "clamd-on-found",
+			Self::ClamdOnError => "clamd-on-error",
 			Self::ClamdTimeout => "clamd-timeout",
 			Self::ClamdMaxSize => "clamd-max-size",
 			Self::ScanAuthenticated => "scan-authenticated",
@@ -142,8 +145,8 @@ pub enum AntispamCli {
 }
 
 /// Run the chosen antispam action.
-pub(super) fn run(path: &Path, action: AntispamCli, dry_run: bool) -> ExitCode {
-	match execute(path, action, dry_run) {
+pub(super) fn run(path: &Path, action: AntispamCli, dry_run: bool, json: bool) -> ExitCode {
+	match execute(path, action, dry_run, json) {
 		Ok(code) => code,
 		Err(error) => {
 			style::error(error);
@@ -152,40 +155,54 @@ pub(super) fn run(path: &Path, action: AntispamCli, dry_run: bool) -> ExitCode {
 	}
 }
 
-fn execute(path: &Path, action: AntispamCli, dry_run: bool) -> Result<ExitCode, String> {
+fn execute(
+	path: &Path,
+	action: AntispamCli,
+	dry_run: bool,
+	json: bool,
+) -> Result<ExitCode, super::resource::ResourceError> {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
 	match action {
-		AntispamCli::Show { json } => {
-			let config = Config::load(path).map_err(|e| e.to_string())?;
-			if json {
+		AntispamCli::Show { json: leaf } => {
+			let config = Config::load(path)
+				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
+			if leaf || json {
 				return Ok(super::json_out::print(
 					&mut out,
 					&antispam_show::show_json(&config),
 				));
 			}
-			show_keys(&config, &mut out).map_err(|e| e.to_string())?;
+			show_keys(&config, &mut out)
+				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 			Ok(ExitCode::SUCCESS)
 		}
 		AntispamCli::Set { key, value } => {
 			let mut document = open(path)?;
 			apply_set(&mut document, key, &value)?;
-			commit_and_restart(document, key, "set", dry_run, &mut out, &mut err)
+			commit_reporting(document, key, "set", (dry_run, json), &mut out, &mut err)
 		}
 		AntispamCli::Unset { key } => {
 			let mut document = open(path)?;
 			apply_unset(&mut document, key)?;
-			commit_and_restart(document, key, "unset", dry_run, &mut out, &mut err)
+			commit_reporting(document, key, "unset", (dry_run, json), &mut out, &mut err)
 		}
 		AntispamCli::Add { key, value } => {
 			let mut document = open(path)?;
 			apply_add(&mut document, key, &value)?;
-			commit_and_restart(document, key, "added", dry_run, &mut out, &mut err)
+			commit_reporting(document, key, "added", (dry_run, json), &mut out, &mut err)
 		}
 		AntispamCli::Remove { key, value } => {
 			let mut document = open(path)?;
 			apply_list_remove(&mut document, key, &value)?;
-			commit_and_restart(document, key, "removed", dry_run, &mut out, &mut err)
+			commit_reporting(
+				document,
+				key,
+				"removed",
+				(dry_run, json),
+				&mut out,
+				&mut err,
+			)
 		}
 	}
 }
@@ -342,6 +359,19 @@ fn set_scalar_field(document: &mut ConfigDocument, key: Key, raw: &str) -> Resul
 			};
 			document.set_table_key(&["antispam"], "clamd_on_found", value)?;
 		}
+		Key::ClamdOnError => {
+			let lowered = raw.trim().to_ascii_lowercase();
+			let value = match lowered.as_str() {
+				"accept" => "accept",
+				"defer" => "defer",
+				other => {
+					return Err(format!(
+						"clamd-on-error expected accept or defer (got {other:?})"
+					));
+				}
+			};
+			document.set_table_key(&["antispam"], "clamd_on_error", value)?;
+		}
 		Key::ClamdTimeout => {
 			let value = parse_u64(raw).map_err(|e| format!("clamd-timeout: {e}"))?;
 			document.set_table_key(&["antispam"], "clamd_timeout_secs", value as i64)?;
@@ -398,6 +428,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 		Key::FirstTimeSenderDelay => document.remove_scalar("first_time_sender_delay_secs"),
 		Key::ClamdSocket => document.remove_table_key(&["antispam"], "clamd_socket")?,
 		Key::ClamdOnFound => document.remove_table_key(&["antispam"], "clamd_on_found")?,
+		Key::ClamdOnError => document.remove_table_key(&["antispam"], "clamd_on_error")?,
 		Key::ClamdTimeout => document.remove_table_key(&["antispam"], "clamd_timeout_secs")?,
 		Key::ClamdMaxSize => document.remove_table_key(&["antispam"], "clamd_max_bytes")?,
 		Key::ScanAuthenticated => document.remove_table_key(&["antispam"], "scan_authenticated")?,
@@ -412,6 +443,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 	Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn commit_and_restart(
 	document: ConfigDocument,
 	key: Key,
@@ -419,24 +451,64 @@ pub(super) fn commit_and_restart(
 	dry_run: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, super::resource::ResourceError> {
+	commit_reporting(document, key, verb, (dry_run, false), out, status)
+}
+
+/// Write the edit, or with `dry_run` show it, then restart mail. `mode` is
+/// `(dry_run, json)`; with `json` the result is one object on `out`.
+fn commit_reporting(
+	document: ConfigDocument,
+	key: Key,
+	verb: &str,
+	(dry_run, json): (bool, bool),
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> Result<ExitCode, super::resource::ResourceError> {
+	let failure = |e: std::io::Error| super::resource::ResourceError::Failure(e.to_string());
+	let action = match verb {
+		"added" => "add",
+		"removed" => "remove",
+		other => other,
+	};
+	let fields = serde_json::json!({ "key": key.name() });
 	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
+		let diff = document.dry_run()?;
+		if json {
+			let object = super::json_out::dry_run_object(action, fields, diff);
+			return writeln!(out, "{object}")
+				.map(|()| ExitCode::SUCCESS)
+				.map_err(failure);
+		}
+		write!(out, "{diff}").map_err(failure)?;
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
 	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
+	let (code, reload) = if outcome == Outcome::Unchanged {
 		writeln!(
 			status,
 			"antispam {} already set; nothing changed.",
 			key.name()
 		)
-		.map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
+		.map_err(failure)?;
+		(ExitCode::SUCCESS, super::json_out::Reload::None)
+	} else {
+		writeln!(status, "antispam {} {verb}.", key.name()).map_err(failure)?;
+		super::config_edit::after_change_reporting(
+			&config,
+			outcome,
+			true,
+			status,
+			super::stack::run,
+		)?
+	};
+	if json {
+		let changed = outcome == Outcome::Changed;
+		let object = super::json_out::change_object(action, changed, fields, Some(reload));
+		writeln!(out, "{object}").map_err(failure)?;
 	}
-	writeln!(status, "antispam {} {verb}.", key.name()).map_err(|e| e.to_string())?;
-	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
+	Ok(code)
 }
 
 /// Cover the LLM secret policy: the endpoint, model and API-key env name are
@@ -478,6 +550,9 @@ mod tests_dry_run;
 #[cfg(test)]
 #[path = "antispam_tests_lists.rs"]
 mod tests_lists;
+#[cfg(test)]
+#[path = "antispam_tests_on_error.rs"]
+mod tests_on_error;
 #[cfg(test)]
 #[path = "antispam_tests_secrets.rs"]
 mod tests_secrets;

@@ -51,7 +51,7 @@ fn setup() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 fn run(config: &tempfile::NamedTempFile, action: Subcommand) -> Value {
 	let mut out = Vec::new();
 	assert_eq!(
-		account::run(config.path(), action, &mut out),
+		account::run(config.path(), action, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -173,7 +173,7 @@ fn app_password_list_json() {
 		json: true,
 	};
 	assert_eq!(
-		crate::cli::app_passwords::run(&config, action, &mut out),
+		crate::cli::app_passwords::run(&config, action, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let value: Value = serde_json::from_slice(&out).expect("valid JSON");

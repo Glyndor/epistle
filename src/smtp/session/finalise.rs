@@ -11,36 +11,38 @@
 //! records the recipients so a later submission sees them as known.
 
 use super::types::{AcceptedMessage, State};
-use super::{Action, MAX_MESSAGE_SIZE, Reply, Session, cap};
+use super::{Action, Reply, Session, cap};
+use crate::smtp::memory_budget::Reservation;
 
 /// Build an `AcceptedMessage` from the in-flight `ReceivingData`
 /// state, run the post-DATA checks, and emit the terminal `Action`.
 /// Resets `session.state` to `Greeted` before returning so the next
 /// command starts a fresh transaction. `running_size` is the
-/// per-line data-size counter (which can exceed `MAX_MESSAGE_SIZE`
+/// per-line data-size counter (which can exceed the per-instance cap
 /// without truncating the body, because the accumulation path stops
 /// extending past the ceiling; the original check used `*size`,
 /// not `body.len()`).
 pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: usize) -> Action {
-	session.state = State::Greeted;
-	if running_size > MAX_MESSAGE_SIZE {
-		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
-	}
-	if let Some(reply) = super::author::check(session, &message.data) {
-		return Action::Continue(reply);
-	}
-	if let Some(reply) = cap::check_or_reply(
-		session.authenticated.as_deref(),
-		&message,
-		&session.cap,
-		session.peer_ip,
-	) {
-		return Action::Continue(reply);
-	}
-	match split_over_quota(session, message, running_size as u64) {
-		Some(message) => Action::Deliver(Reply::ok(), message),
-		None => Action::Continue(Reply::single(552, "5.2.2 mailbox full")),
-	}
+	// The BDAT LAST path calls us with `session.state` still
+	// `ReceivingData`; the DATA-dot path goes through
+	// `finalise_from_state` which transitions first. Take the budget
+	// fields out before the state goes, so the post-DATA checks see them.
+	let (budget_exhausted, reserved) = match std::mem::replace(&mut session.state, State::Greeted) {
+		State::ReceivingData {
+			budget_exhausted,
+			reserved,
+			..
+		} => (budget_exhausted, reserved),
+		_ => (false, Reservation::none()),
+	};
+	inner_finalise(session, message, running_size, budget_exhausted, reserved)
+}
+
+/// The reply to a submission over one of its rate limits, at `MAIL FROM`
+/// or at the end of DATA.
+pub(super) fn rate_limited() -> Reply {
+	let text = format!("4.7.1 {}", crate::smtp::submission_budget::RATE_LIMITED);
+	Reply::single(450, &text)
 }
 
 /// Take out of `message` the local recipients it would put over quota.
@@ -96,6 +98,8 @@ pub fn finalise_from_state(session: &mut Session) -> Action {
 		size,
 		body,
 		require_tls,
+		reserved,
+		budget_exhausted,
 		..
 	} = std::mem::replace(&mut session.state, State::Greeted)
 	else {
@@ -109,6 +113,73 @@ pub fn finalise_from_state(session: &mut Session) -> Action {
 		require_tls,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 	};
-	finalise(session, message, size)
+	inner_finalise(session, message, size, budget_exhausted, reserved)
+}
+
+/// The shared tail of [`finalise`]: the post-DATA checks. `reserved` is
+/// the body's claim on the memory budget: a refusal drops it, which hands
+/// the octets back, and an accepted body leaves it with the session so
+/// the connection loop holds it until the delivery is over.
+fn inner_finalise(
+	session: &mut Session,
+	message: AcceptedMessage,
+	running_size: usize,
+	budget_exhausted: bool,
+	reserved: Reservation,
+) -> Action {
+	if budget_exhausted {
+		return Action::Continue(Reply::single(
+			452,
+			"4.3.1 insufficient system resources; try again later",
+		));
+	}
+	if running_size > session.max_message_size() {
+		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
+	}
+	if let Some(reply) = super::author::check(session, &message.data) {
+		return Action::Continue(reply);
+	}
+	if let Some(reply) = cap::check_or_reply(
+		session.authenticated.as_deref(),
+		&message,
+		&session.cap,
+		session.peer_ip,
+	) {
+		return Action::Continue(reply);
+	}
+	// Submission rate limits, charged once per accepted message at one
+	// unit per recipient (`RCPT TO` already refused the others), and only
+	// after every check above passed. All limits or none: an over-limit
+	// message costs nothing. A message refused whole for a full mailbox
+	// gets its units back, and the server refunds the held charge when a
+	// later check or the spool refuses the message.
+	let charge = match session.authenticated.as_deref() {
+		Some(account) => {
+			let recipients = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+			match session
+				.policy
+				.submission_budget(account, &session.directory)
+				.charge(recipients, super::time::unix_now())
+			{
+				Ok(charge) => Some(charge),
+				Err(_) => return Action::Continue(rate_limited()),
+			}
+		}
+		None => None,
+	};
+	match split_over_quota(session, message, running_size as u64) {
+		Some(message) => {
+			session.policy.hold_charge(charge);
+			session.delivery_reservation = reserved;
+			Action::Deliver(Reply::ok(), message)
+		}
+		None => {
+			if let Some(charge) = charge {
+				charge.refund();
+			}
+			Action::Continue(Reply::single(552, "5.2.2 mailbox full"))
+		}
+	}
 }

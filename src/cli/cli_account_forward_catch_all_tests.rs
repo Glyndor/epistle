@@ -275,6 +275,6 @@ fn account_run_refuses_static_account_for_forward() {
 	])
 	.expect("parses");
 	// The umbrella refuses a static account with the config-file hint
-	// before the forward mutator runs: a refusal, exit code 2.
-	assert_eq!(cli.run(), ExitCode::from(2));
+	// before the forward mutator runs: a refusal by policy, exit code 3.
+	assert_eq!(cli.run(), ExitCode::from(3));
 }

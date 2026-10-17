@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::Ctx;
 use super::clock::epoch;
 use super::report::{AreaReport, Item, Level};
+use crate::config::Storage;
 use crate::storage::FsSpool;
 
 /// The oldest message older than this: warn.
@@ -23,19 +24,22 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Err(report) => return report,
 	};
 	let data_dir = config.data_dir.clone();
+	let storage = config.storage.clone();
 	let now = epoch(ctx.now);
-	tokio::task::spawn_blocking(move || evaluate(&data_dir, now))
+	tokio::task::spawn_blocking(move || evaluate(&data_dir, storage.as_ref(), now))
 		.await
 		.unwrap_or_else(|error| AreaReport::fail(format!("spool scan failed: {error}")))
 }
 
-/// Read the spool under `data_dir` as of `now` (epoch seconds). Reading never
-/// creates the spool directories and never touches message bodies.
-fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
+/// Read the spool under `data_dir` as of `now` (epoch seconds), with the key
+/// `storage` configures so sealed envelopes are read rather than counted as
+/// unreadable. Reading never creates the spool directories and never touches
+/// message bodies.
+fn evaluate(data_dir: &Path, storage: Option<&Storage>, now: i64) -> AreaReport {
 	if !data_dir.join("spool").join("new").is_dir() {
 		return AreaReport::ok("0 messages queued (no spool yet)");
 	}
-	let spool = match FsSpool::open(data_dir) {
+	let spool = match FsSpool::open_configured(data_dir, storage) {
 		Ok(spool) => spool,
 		Err(error) => return AreaReport::fail(format!("cannot open the spool: {error}")),
 	};
@@ -48,10 +52,14 @@ fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
 	// An operator hold (`epistle queue hold`) is deliberate: held entries are
 	// counted on their own and never make the queue look stuck.
 	let mut held = 0usize;
+	// Mail waiting only for the IP warm-up cap goes out as the cap allows:
+	// counted on its own, it never makes the queue look stuck either.
+	let mut capped = 0usize;
 	let mut waiting = Vec::with_capacity(ids.len());
 	for id in &ids {
 		match spool.load_envelope(*id) {
 			Ok(envelope) if envelope.held.is_some() => held += 1,
+			Ok(envelope) if only_capped(&envelope) => capped += 1,
 			Ok(envelope) => {
 				if envelope.attempts > 0 || envelope.next_attempt as i64 > now {
 					deferred += 1;
@@ -66,11 +74,14 @@ fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
 	}
 	// Ids are UUID v7, so the first one carries the oldest enqueue time.
 	let oldest = waiting.iter().find_map(|id| enqueued_at(*id));
-	let held = if held > 0 {
+	let mut held = if held > 0 {
 		format!(", {held} held")
 	} else {
 		String::new()
 	};
+	if capped > 0 {
+		held.push_str(&format!(", {capped} waiting for the warm-up cap"));
+	}
 	let mut items = vec![Item::new(
 		"messages",
 		Level::Ok,
@@ -96,6 +107,15 @@ fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
 		None => format!("{} queued, {deferred} deferred{held}", ids.len()),
 	};
 	AreaReport::from_items(items, summary)
+}
+
+/// Whether every pending recipient of `envelope` waits for the warm-up cap.
+fn only_capped(envelope: &crate::storage::Envelope) -> bool {
+	let pending = envelope.pending();
+	!pending.is_empty()
+		&& pending
+			.iter()
+			.all(|recipient| envelope.recipient_state(recipient).warmup.is_some())
 }
 
 fn age_item(age: i64) -> Item {

@@ -33,6 +33,7 @@ async fn hosted_zone_id_is_one_escaped_path_segment() {
 				kind: RecordKind::A,
 				value: "192.0.2.1".to_string(),
 				ttl: 300,
+				proxied: None,
 			},
 		)
 		.await

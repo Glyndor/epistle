@@ -31,7 +31,9 @@ fn create_list_revoke_roundtrip() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -49,7 +51,10 @@ fn create_list_revoke_roundtrip() {
 	assert!(!listed.contains("key"));
 
 	let mut out = Vec::new();
-	assert_eq!(revoke(&config, "ci", true, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		revoke(&config, "ci", true, false, &mut out),
+		ExitCode::SUCCESS
+	);
 	assert_eq!(ApiKeyStore::open(dir.path()).expect("open").keys().len(), 0);
 }
 
@@ -68,7 +73,9 @@ fn create_with_expiry_and_cidr_is_stored() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -96,7 +103,9 @@ fn create_without_scope_is_rejected() {
 				scopes: Vec::new(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
+			false,
 			&mut out
 		),
 		ExitCode::from(2),
@@ -119,7 +128,9 @@ fn create_rejects_bad_cidr() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
+			false,
 			&mut out
 		),
 		ExitCode::from(2)
@@ -140,5 +151,8 @@ fn revoke_missing_label_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	assert_eq!(revoke(&config, "absent", true, &mut out), ExitCode::from(2));
+	assert_eq!(
+		revoke(&config, "absent", true, false, &mut out),
+		ExitCode::from(2)
+	);
 }

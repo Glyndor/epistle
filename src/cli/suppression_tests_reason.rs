@@ -26,6 +26,7 @@ async fn refused_with(data_dir: &std::path::Path, reply: &str) {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -98,7 +99,14 @@ fn an_address_without_a_recorded_reason_lists_alone() {
 fn an_address_added_by_hand_says_so() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
-	add(&config, "bob@example.net", None, &mut Vec::new());
+	add(
+		&config,
+		"bob@example.net",
+		None,
+		None,
+		false,
+		&mut Vec::new(),
+	);
 
 	let mut out = Vec::new();
 	list(&config, None, false, &mut out);

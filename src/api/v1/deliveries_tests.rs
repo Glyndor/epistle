@@ -24,6 +24,7 @@ fn record(
 		reply: Some("250 OK".into()),
 		attempt: 1,
 		extra: BTreeMap::new(),
+		class: Default::default(),
 	}
 }
 

@@ -103,6 +103,11 @@ pub struct Services {
 	/// names `services.database` so the operator has to make the
 	/// choice explicitly.
 	pub database: bool,
+	/// The stack's clamav and freshclam containers, and the config's
+	/// `clamd_socket`. Absent lets `init` decide from the host's memory
+	/// (left out below 4 GiB) or keep what an existing stack runs.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub antivirus: Option<bool>,
 }
 
 const fn default_true() -> bool {
@@ -119,6 +124,7 @@ impl Default for Services {
 		// about the database. Tests that do care pass `database`
 		// explicitly.
 		Self {
+			antivirus: None,
 			imap: true,
 			submission: true,
 			pop3: false,
@@ -473,7 +479,7 @@ impl Answers {
 		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
 		 config_path = \"/etc/epistle/mail.toml\"\n\
 		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\
-		 # resources.clamav = { memory = \"4g\", pids = 256 }  # optional, also mail, db, freshclam; defaults: mail 1g/1024, db 1g/256, clamav 3g/128, freshclam 2g/32\n\n\
+		 # resources.clamav = { memory = \"4g\", pids = 256 }  # optional, also mail, db, freshclam; memory left out follows the host's (mail 2g, db 1g, clamav 2g, freshclam 1g up to 8 GiB); pids: mail 1024, db 256, clamav 128, freshclam 32\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
@@ -488,7 +494,8 @@ impl Answers {
 		 # managesieve = false\n\
 		 # webdav = false\n\
 		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n\
-		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\n\
+		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\
+		 # antivirus = true                 # clamav and freshclam; left out, off below 4 GiB of memory\n\n\
 		 # [first_account]                  # optional first mailbox; with password_file = \"-\" the password comes from stdin\n\
 		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\
 		 # display_name = \"Alice Liddell\"  # optional\n\

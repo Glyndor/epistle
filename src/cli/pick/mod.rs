@@ -87,6 +87,7 @@ fn parse(args: &[OsString], colour: anstream::ColorChoice) -> Result<Cli, clap::
 	};
 	let mut command = Cli::command().color(colour);
 	let matches = command.try_get_matches_from_mut(args)?;
+	super::json_out::reserve_stdout_if_json(&matches);
 	Cli::from_arg_matches(&matches).map_err(|error| error.format(&mut command))
 }
 

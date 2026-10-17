@@ -5,12 +5,16 @@
 //! alike. Mail from elsewhere passes through untouched: it has its own
 //! screening in the SMTP connection loop.
 //!
-//! Only the antivirus runs here: an account's own mail is not subjected to
-//! the Bayesian filter, reputation, DNSBL or greylisting.
+//! Only the antivirus and the attachment policy run here: an account's own
+//! mail is not subjected to the Bayesian filter, reputation, DNSBL or
+//! greylisting.
 
 use std::sync::Arc;
 
+use super::attachments::gate;
+use super::attachments::policy::{Action, Policy};
 use super::clamd::{ClamdHook, Inspection};
+use crate::config::ClamdOnError;
 use crate::metrics::Metrics;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
@@ -23,7 +27,13 @@ const MAX_SIGNATURE_CHARS: usize = 120;
 /// A sink that scans submissions before handing them on.
 pub struct ScanningSink {
 	inner: Arc<dyn MessageSink>,
-	scanner: worker::Scanner,
+	scanner: Option<worker::Scanner>,
+	/// Whether a scan that could not run refuses the submission for now
+	/// (`clamd_on_error = "defer"`) instead of letting it through.
+	defer_unscanned: bool,
+	attachments: Option<Arc<Policy>>,
+	/// Caps on concurrent attachment inspections, total and per account.
+	gate: Arc<gate::Gate>,
 	metrics: Option<Arc<Metrics>>,
 	webhook: Option<Arc<Webhook>>,
 	/// The threads scans ran on, so a test can tell how many there were.
@@ -43,17 +53,40 @@ impl ScanningSink {
 		metrics: Option<Arc<Metrics>>,
 		webhook: Option<Arc<Webhook>>,
 	) -> std::io::Result<Arc<dyn MessageSink>> {
-		Ok(match clamd {
-			Some(clamd) if scan_authenticated => Arc::new(ScanningSink {
-				inner,
-				scanner: worker::Scanner::start(clamd)?,
-				metrics,
-				webhook,
-				#[cfg(test)]
-				workers: Default::default(),
-			}),
-			_ => inner,
-		})
+		Self::wrap_with_attachments(scan_authenticated, inner, clamd, None, metrics, webhook)
+	}
+
+	/// [`ScanningSink::wrap`], with the attachment policy applied to
+	/// submissions too. A submission the policy would quarantine or reject
+	/// is refused: there is no quarantine for outbound mail. A policy that
+	/// cannot refuse anything (`mode = "flag"`) is not applied: nothing is
+	/// stamped on outgoing mail, so the inspection would only cost time.
+	pub fn wrap_with_attachments(
+		scan_authenticated: bool,
+		inner: Arc<dyn MessageSink>,
+		clamd: Option<Arc<ClamdHook>>,
+		attachments: Option<Arc<Policy>>,
+		metrics: Option<Arc<Metrics>>,
+		webhook: Option<Arc<Webhook>>,
+	) -> std::io::Result<Arc<dyn MessageSink>> {
+		let attachments = attachments.filter(|policy| policy.can_refuse());
+		if !scan_authenticated || (clamd.is_none() && attachments.is_none()) {
+			return Ok(inner);
+		}
+		let defer_unscanned = clamd
+			.as_ref()
+			.is_some_and(|clamd| clamd.on_error() == ClamdOnError::Defer);
+		Ok(Arc::new(ScanningSink {
+			inner,
+			defer_unscanned,
+			scanner: clamd.map(worker::Scanner::start).transpose()?,
+			attachments,
+			gate: gate::Gate::with_defaults(),
+			metrics,
+			webhook,
+			#[cfg(test)]
+			workers: Default::default(),
+		}))
 	}
 }
 
@@ -67,12 +100,32 @@ impl MessageSink for ScanningSink {
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
-		extra: &std::collections::BTreeMap<String, String>,
+		submission: &crate::smtp::sink::Submission,
 	) -> Result<(), SinkError> {
-		// Fail open like the inbound scan: an unreachable clamd is counted
-		// and recorded for `epistle status` inside the hook, and the mail
-		// goes on unscanned.
-		if let Inspection::Infected(signature) = self.scan(&message.data) {
+		if let Some(policy) = &self.attachments {
+			self.check_attachments(policy, &message.data, account)?;
+		}
+		// An unreachable clamd is counted and recorded for `epistle status`
+		// inside the hook; the mail then goes on unscanned or waits for a
+		// retry, as `clamd_on_error` says, like inbound mail.
+		let inspection = self.scan(&message.data)?;
+		if inspection == Inspection::Unscanned && self.defer_unscanned {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"clamd could not scan a submission; asking the client to retry"
+			);
+			return Err(SinkError::ScanUnavailable);
+		}
+		// Too large for clamd, and a retry would be just as large: with defer
+		// nothing passes unscanned, so the submission is refused for good.
+		if inspection == Inspection::Skipped && self.defer_unscanned {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"a submission is too large for clamd; refusing it"
+			);
+			return Err(SinkError::ScanTooLarge);
+		}
+		if let Inspection::Infected(signature) = inspection {
 			let signature = bounded(&signature);
 			tracing::warn!(
 				account = %crate::log_id::account(account),
@@ -85,19 +138,79 @@ impl MessageSink for ScanningSink {
 			self.notify(account, &signature);
 			return Err(SinkError::VirusDetected(signature));
 		}
-		self.inner.submit(message, queue_id, account, extra)
+		self.inner.submit(message, queue_id, account, submission)
 	}
 }
 
 impl ScanningSink {
-	/// Scan `raw` and say what clamd found.
-	fn scan(&self, raw: &[u8]) -> Inspection {
-		let (inspection, _worker) = self.scanner.scan(raw);
+	/// Apply the attachment policy to a submission. A quarantine or a
+	/// reject refuses it, permanently: the same message would be refused
+	/// again, so nothing retries it forever.
+	fn check_attachments(
+		&self,
+		policy: &Policy,
+		raw: &[u8],
+		account: &str,
+	) -> Result<(), SinkError> {
+		let Some(_permit) = self.gate.try_enter(account) else {
+			tracing::warn!(
+				account = %crate::log_id::account(account),
+				"attachment inspection busy; asking the client to retry"
+			);
+			return Err(SinkError::ScanUnavailable);
+		};
+		// A panic in the inspection is a temporary failure for this
+		// submission, never one that takes the session or the request with
+		// it. The inspection holds no shared state a panic could leave
+		// half-changed.
+		let decision = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			off_the_runtime(|| policy.check(raw).1)
+		}))
+		.map_err(|_| {
+			tracing::error!(
+				account = %crate::log_id::account(account),
+				"attachment inspection failed; asking the client to retry"
+			);
+			SinkError::ScanUnavailable
+		})?;
+		let codes: Vec<&str> = decision
+			.reasons
+			.iter()
+			.map(|reason| reason.code())
+			.collect();
+		match decision.action {
+			Action::Reject | Action::Quarantine => {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					reasons = %codes.join(","),
+					"attachment policy refused a submission"
+				);
+				Err(SinkError::AttachmentRefused(codes.join(",")))
+			}
+			Action::Flag => {
+				tracing::info!(
+					account = %crate::log_id::account(account),
+					reasons = %codes.join(","),
+					"attachment policy flagged a submission"
+				);
+				Ok(())
+			}
+			Action::Deliver => Ok(()),
+		}
+	}
+
+	/// Scan `raw` and say what clamd found; a full scan queue asks the
+	/// client to retry.
+	fn scan(&self, raw: &[u8]) -> Result<Inspection, SinkError> {
+		let Some(scanner) = &self.scanner else {
+			return Ok(Inspection::Clean);
+		};
+		let (inspection, _worker) = scanner.scan(raw).ok_or(SinkError::ScanUnavailable)?;
 		#[cfg(test)]
 		if let (Some(worker), Ok(mut workers)) = (_worker, self.workers.lock()) {
 			workers.insert(worker);
 		}
-		inspection
+		Ok(inspection)
 	}
 
 	/// Fire the `outbound_virus` webhook in the background. It is
@@ -116,6 +229,16 @@ impl ScanningSink {
 	}
 }
 
+/// Run CPU-bound `work` so it does not hold an async worker: on a
+/// multi-threaded runtime the worker hands its other tasks on first. Other
+/// callers (a current-thread runtime, plain threads) run it in place.
+fn off_the_runtime<T>(work: impl FnOnce() -> T) -> T {
+	match tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()) {
+		Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(work),
+		_ => work(),
+	}
+}
+
 /// `signature`, cut to [`MAX_SIGNATURE_CHARS`] characters.
 fn bounded(signature: &str) -> String {
 	signature.chars().take(MAX_SIGNATURE_CHARS).collect()
@@ -127,3 +250,19 @@ mod worker;
 #[cfg(test)]
 #[path = "submission_scan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_attachments.rs"]
+mod tests_attachments;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_dos.rs"]
+mod tests_dos;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_runtime.rs"]
+mod tests_runtime;
+
+#[cfg(test)]
+#[path = "submission_scan_tests_on_error.rs"]
+mod tests_on_error;

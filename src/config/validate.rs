@@ -10,6 +10,9 @@ mod validate_tenants;
 #[path = "validate_database.rs"]
 mod validate_database;
 
+#[path = "validate_disabled_domains.rs"]
+mod validate_disabled_domains;
+
 #[path = "validate_addresses.rs"]
 pub(crate) mod validate_addresses;
 
@@ -21,6 +24,7 @@ impl Config {
 		self.validate_addresses()?;
 		self.validate_data_dir()?;
 		self.validate_domains()?;
+		self.validate_disabled_domains()?;
 		self.validate_dns()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
@@ -40,24 +44,13 @@ impl Config {
 		self.validate_database()?;
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
-		Ok(())
+		self.validate_message_limits()
 	}
 
 	fn validate_dkim(&self) -> Result<(), ConfigError> {
-		let Some(dkim) = &self.dkim else {
-			return Ok(());
-		};
-		// The RSA selector and key file are a pair: the configured selector
-		// points at a `_domainkey` TXT published for the key, so leaving one
-		// side unset means the published record is unreachable (or, if the
-		// key file is set without the selector, the key has no TXT at all).
-		// Treat the half-configured state as a load-time error so it cannot
-		// ship.
-		match (&dkim.rsa_selector, &dkim.rsa_key_file) {
-			(Some(_), Some(_)) | (None, None) => Ok(()),
-			_ => Err(ConfigError::Invalid(
-				"rsa_selector and rsa_key_file must be set together".into(),
-			)),
+		match &self.dkim {
+			Some(dkim) => dkim.validate(&self.domains, &self.domain_aliases),
+			None => Ok(()),
 		}
 	}
 

@@ -22,6 +22,10 @@ pub(super) struct MockState {
 	pub(super) api_key: Option<String>,
 	/// X-API-Secret header seen on the last request.
 	pub(super) api_secret: Option<String>,
+	/// What the listing claims for `total`, whatever it holds.
+	pub(super) total: Option<i64>,
+	/// Leave `total` out of the answer, as a degraded one does.
+	pub(super) omit_total: bool,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -71,7 +75,10 @@ async fn list_records(
 	record_call(&state, axum::http::Method::GET, &headers, &zone, &query);
 	let s = state.lock().unwrap();
 	let items: Vec<serde_json::Value> = s.records.values().cloned().collect();
-	let total = items.len() as i64;
+	let total = s.total.unwrap_or(items.len() as i64);
+	if s.omit_total {
+		return axum::Json(serde_json::json!({"items": items}));
+	}
 	axum::Json(serde_json::json!({"items": items, "total": total}))
 }
 
@@ -184,6 +191,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -415,12 +423,13 @@ async fn mx_upsert_splits_priority_and_exchange() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	// Spaceship upserts as `remove then add`; the PUT body is the last one.
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
 	assert!(body.contains("\"type\":\"MX\""), "{body}");
-	assert!(body.contains("\"priority\":10"), "{body}");
+	assert!(body.contains("\"preference\":10"), "{body}");
 	assert!(body.contains("\"exchange\":\"mail.example.org\""), "{body}");
 }
 
@@ -432,6 +441,7 @@ async fn srv_upsert_splits_into_priority_weight_port_target() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	// Spaceship upserts as `remove then add`; the PUT body is the last one.
@@ -441,4 +451,15 @@ async fn srv_upsert_splits_into_priority_weight_port_target() {
 	assert!(body.contains("\"weight\":1"), "{body}");
 	assert!(body.contains("\"port\":465"), "{body}");
 	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
+}
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"preference\":0"), "{body}");
+	assert!(body.contains("\"exchange\":\".\""), "{body}");
 }

@@ -105,6 +105,7 @@ async fn tlsa_returns_unsupported_without_network() {
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	let result = provider.upsert("example.org", tlsa).await;
 	assert_eq!(result, Err(ProviderError::Unsupported));
@@ -121,6 +122,7 @@ async fn mx_is_supported_and_srv_refused() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("mx upsert");
 	let srv = crate::dns::provider::DnsRecord {
@@ -128,6 +130,7 @@ async fn mx_is_supported_and_srv_refused() {
 		kind: RecordKind::Srv,
 		value: "10 5 5060 sip.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", srv).await,
@@ -155,10 +158,7 @@ async fn sandbox_url_flows_through() {
 	let captured = state.lock().unwrap();
 	assert!(!captured.urls.is_empty());
 	let first = &captured.urls[0];
-	assert!(
-		first.contains("/xml.response?ApiUser="),
-		"base url not honoured: {first}"
-	);
+	assert_eq!(first, "/xml.response", "base url not honoured");
 }
 
 #[tokio::test]
@@ -168,16 +168,23 @@ async fn auth_params_include_username_and_key() {
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await
 		.expect("upsert");
-	let url = state.lock().unwrap().urls[0].clone();
-	assert!(
-		url.contains("ApiUser=user") && url.contains("UserName=user"),
-		"missing username params: {url}"
-	);
-	assert!(url.contains("ApiKey=key"), "missing api key param: {url}");
-	assert!(
-		url.contains("SLD=example") && url.contains("TLD=org"),
-		"{url}"
-	);
+	let s = state.lock().unwrap();
+	for call in s
+		.get_hosts_calls
+		.iter()
+		.chain(s.set_hosts_calls.iter().map(|c| &c.params))
+	{
+		for (key, value) in [
+			("ApiUser", "user"),
+			("UserName", "user"),
+			("ApiKey", "key"),
+			("SLD", "example"),
+			("TLD", "org"),
+		] {
+			assert_eq!(call.get(key).map(String::as_str), Some(value), "{key}");
+		}
+	}
+	assert_eq!((s.get_hosts_calls.len(), s.set_hosts_calls.len()), (1, 1));
 }
 
 #[tokio::test]
@@ -222,12 +229,17 @@ async fn api_response_without_command_response_still_extracts_empty_hosts() {
 }
 
 #[tokio::test]
-async fn unknown_kind_in_list_is_skipped() {
+async fn unknown_kind_in_list_keeps_its_own_kind() {
 	let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="a" Name="@" Type="A" Address="1.2.3.4" TTL="3600"/><host HostId="b" Name="@" Type="URLFRAME" Address="https://x.example/" TTL="300"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 	let (provider, _state) = mock(xml, None).await;
 	let records = provider.list("example.org").await.expect("list");
-	assert_eq!(records.len(), 1, "URLFRAME should be skipped: {records:?}");
-	assert_eq!(records[0].kind, RecordKind::A);
+	let kinds: Vec<RecordKind> = records.iter().map(|r| r.kind.clone()).collect();
+	assert_eq!(
+		kinds,
+		vec![RecordKind::A, RecordKind::Other("URLFRAME".to_string())],
+		"URLFRAME is not a record epistle publishes, and it is not a TXT either"
+	);
+	assert_eq!(records[1].value, "https://x.example/");
 }
 
 #[tokio::test]

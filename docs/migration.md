@@ -73,12 +73,15 @@ admin live in its database in every version and are not imported.
   new file (mode 0600); with `--password-reset` nobody knows it and you set one
   with `epistle account password NAME`. Then `epistle account enable NAME`.
 - **DKIM keys** are saved under `data_dir/dkim-migrated/<domain>/` (mode 0600)
-  and never printed. epistle signs every domain with one ed25519 key and one
-  RSA key, so `[dkim]` is pointed at the imported keys when one key covers every
-  configured domain under one selector. When each domain had its own key (the
-  usual case with several domains on Mox), the keys are kept but `[dkim]` stays
-  as it is: publish epistle's records (`epistle dns-records`) for those domains
-  before the cutover.
+  and never printed. Every imported domain keeps signing with the key it had,
+  under the same selector, so its published records stay valid. Without a
+  `[dkim]` block the first imported domain's keys become the default, which
+  also signs any domain added later; every other domain with different keys
+  gets a `[[dkim.domain]]` entry (see the configuration reference). An existing
+  `[dkim]` default is kept, and each imported domain gets its own entry. A
+  domain that had only an RSA key signs with the default, and the import says
+  so: publish the default's record (`epistle dns-records`) for it before the
+  cutover.
 - Names the account store cannot hold (an account called `Mail Admin`, say) are
   reported and skipped, never renamed.
 

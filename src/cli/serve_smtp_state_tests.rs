@@ -4,6 +4,147 @@ use crate::antispam::hook::HookVerdict;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
+/// Build an [`ApiState`]-free [`Config`] without going through the
+/// `mail.toml` validator: the tests in this file only touch the new
+/// `[server] max_message_size`, `max_connections_per_ip`, and
+/// `message_memory_budget` keys, which `Config::load` itself parses
+/// through `#[serde(default)]`. The validator still wants the same
+/// fields as the rest of the config (hostname, data_dir), so the
+/// helper above is not enough on its own for everything below.
+fn build_config(dir: &std::path::Path, settings: &str) -> Config {
+	config(dir, settings)
+}
+
+/// The shared state for a mail container held to the former 1 GiB default,
+/// so no test reads the host's cgroup.
+fn build_smtp_shared_state(
+	config: &Config,
+	metrics: &Arc<Metrics>,
+) -> std::io::Result<SmtpSharedState> {
+	build_smtp_shared_state_with(config, metrics, memory_fit::ContainerLimit::fallback())
+}
+
+#[test]
+fn an_unset_budget_follows_the_container_limit_and_a_set_one_does_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let two_gib = memory_fit::ContainerLimit {
+		bytes: 2 * 1024 * 1024 * 1024,
+		source: memory_fit::LimitSource::Cgroup,
+	};
+	let budget = |settings: &str| {
+		let state =
+			build_smtp_shared_state_with(&build_config(dir.path(), settings), &metrics, two_gib)
+				.expect("state");
+		let budget = state.memory_budget.expect("budget present");
+		(budget.cap(), budget.client_share())
+	};
+	assert_eq!(
+		budget(""),
+		(409 * 1024 * 1024, 409 * 1024 * 1024 / 4),
+		"a fifth of 2 GiB in whole MiB, and a quarter of that for one client"
+	);
+	assert_eq!(
+		budget("message_memory_budget = 134217728"),
+		(128 * 1024 * 1024, 32 * 1024 * 1024),
+		"a configured budget is kept"
+	);
+}
+
+#[test]
+fn max_message_size_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// Absent on the config: SmtpSharedState keeps the SMTP session's
+	// `0` sentinel, which the server builder turns into
+	// `MAX_MESSAGE_SIZE`.
+	let default = build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
+	assert_eq!(default.max_message_size, 0);
+	// A positive operator value is forwarded byte-for-byte to the
+	// listener's `with_max_message_size` setter.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "max_message_size = 5242880"),
+		&metrics,
+	)
+	.expect("state");
+	assert_eq!(set.max_message_size, 5 * 1024 * 1024);
+}
+
+#[test]
+fn max_connections_per_ip_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// Absent on the config: the helper promotes the operator's `0` to
+	// the SMTP listener's built-in default so a configured zero (or no
+	// entry at all) means "use the protocol default", never "0
+	// concurrent connections per peer".
+	let default = build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
+	assert_eq!(
+		default.max_connections_per_ip,
+		crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP,
+		"absent falls back to the listener's built-in default"
+	);
+	// A positive operator value is forwarded byte-for-byte.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "max_connections_per_ip = 7"),
+		&metrics,
+	)
+	.expect("state");
+	assert_eq!(set.max_connections_per_ip, 7);
+}
+
+#[test]
+fn message_memory_budget_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	// `Some(0)` keeps the historical unbounded behaviour: the budget
+	// slot stays `None`, no reservation can ever fail.
+	let zero = build_smtp_shared_state(
+		&build_config(dir.path(), "message_memory_budget = 0"),
+		&metrics,
+	)
+	.expect("state");
+	assert!(
+		zero.memory_budget.is_none(),
+		"message_memory_budget = 0 must disable the budget"
+	);
+	// Any other value produces a budget with the matching cap. The
+	// shared `Arc<MemoryBudget>` is the same handle every SMTP listener
+	// will receive.
+	let set = build_smtp_shared_state(
+		&build_config(dir.path(), "message_memory_budget = 134217728"),
+		&metrics,
+	)
+	.expect("state");
+	let budget = set.memory_budget.as_ref().expect("budget present");
+	assert_eq!(budget.cap(), 128 * 1024 * 1024);
+}
+
+#[test]
+fn one_client_gets_a_quarter_of_the_budget_and_never_less_than_one_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let share = |settings: &str| {
+		let state =
+			build_smtp_shared_state(&build_config(dir.path(), settings), &metrics).expect("state");
+		state.memory_budget.expect("budget present").client_share()
+	};
+	assert_eq!(
+		share(""),
+		51 * 1024 * 1024,
+		"a quarter of the 204 MiB derived from the 1 GiB assumed without a limit"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432"),
+		crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+		"a quarter of 32 MiB is below one 25 MiB message, so one message it is"
+	);
+	assert_eq!(
+		share("message_memory_budget = 33554432\nmax_message_size = 1048576"),
+		8 * 1024 * 1024
+	);
+}
+
 fn config(dir: &std::path::Path, settings: &str) -> Config {
 	toml::from_str(&format!(
 		"hostname = 'mail.example.org'\ndata_dir = '{}'\n{settings}",
@@ -65,6 +206,38 @@ async fn clamd_startup_applies_action_size_and_shared_metrics() {
 }
 
 #[tokio::test]
+async fn clamd_startup_applies_on_error_to_inbound_and_submission() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let socket = dir.path().join("clamd.sock");
+	for (setting, expected) in [
+		("", HookVerdict::Accept),
+		("clamd_on_error = 'accept'", HookVerdict::Accept),
+		("clamd_on_error = 'defer'", HookVerdict::Defer),
+	] {
+		let config = config(
+			dir.path(),
+			&format!(
+				"[antispam]\nclamd_socket = '{}'\n{setting}",
+				socket.display()
+			),
+		);
+		let metrics = Arc::new(Metrics::new());
+		let state = build_smtp_shared_state(&config, &metrics).expect("state");
+		let hook = state.scanner_hook.expect("clamd enabled");
+		let verdict = tokio::time::timeout(Duration::from_secs(2), hook.scan(b"msg"))
+			.await
+			.expect("deadline");
+		assert_eq!(verdict, expected, "inbound with {setting:?}");
+		let submission = state.clamd.expect("clamd for submissions");
+		assert_eq!(
+			submission.on_error(),
+			config.antispam.clamd_on_error,
+			"submission with {setting:?}"
+		);
+	}
+}
+
+#[tokio::test]
 async fn clamd_startup_applies_configured_timeout() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let socket = dir.path().join("clamd.sock");
@@ -99,4 +272,66 @@ async fn clamd_startup_applies_configured_timeout() {
 	);
 	assert_eq!(metrics.snapshot().get("scanner_clamd_failed"), Some(&1));
 	assert!(task.await.expect("peer").starts_with(b"zINSTREAM\0"));
+}
+
+#[test]
+fn the_rate_floor_config_threads_through_smtp_shared_state() {
+	use crate::smtp::server::DataRate;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let rate = |settings: &str| {
+		build_smtp_shared_state(&build_config(dir.path(), settings), &metrics)
+			.expect("state")
+			.data_rate
+	};
+	assert_eq!(
+		rate(""),
+		DataRate::new(10_240, Duration::from_secs(120)),
+		"absent: 10 KiB/s after 120 s"
+	);
+	assert_eq!(
+		rate("min_data_rate = 0"),
+		DataRate::new(0, Duration::from_secs(120)),
+		"0 is forwarded and turns the floor off"
+	);
+	assert_eq!(
+		rate("min_data_rate = 20480\ndata_rate_grace = 60"),
+		DataRate::new(20_480, Duration::from_secs(60))
+	);
+}
+
+#[test]
+fn the_session_limits_config_threads_through_smtp_shared_state() {
+	use crate::smtp::server::SessionLimits;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let limits = |settings: &str| {
+		build_smtp_shared_state(&build_config(dir.path(), settings), &metrics)
+			.expect("state")
+			.session_limits
+	};
+	assert_eq!(
+		limits(""),
+		SessionLimits {
+			junk_commands: 100,
+			max_session_time: Duration::from_secs(1800),
+		},
+		"absent: 100 commands, 1800 s"
+	);
+	assert_eq!(
+		limits("junk_command_limit = 25\nmax_session_time = 600"),
+		SessionLimits {
+			junk_commands: 25,
+			max_session_time: Duration::from_secs(600),
+		},
+		"configured values reach every listener"
+	);
+	assert_eq!(
+		limits("junk_command_limit = 0\nmax_session_time = 0"),
+		SessionLimits {
+			junk_commands: 0,
+			max_session_time: Duration::ZERO,
+		},
+		"0 is forwarded as is and turns each limit off"
+	);
 }

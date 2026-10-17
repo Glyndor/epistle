@@ -273,6 +273,7 @@ pub(super) async fn attempt_with(
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	};
 	attempt_message(dns, fetcher, mx, mode, mx_dns, &message).await
@@ -352,6 +353,7 @@ pub(super) async fn attempt_with_tlsrpt(
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,

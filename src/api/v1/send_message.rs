@@ -15,9 +15,13 @@ pub(super) struct Envelope<'a> {
 	pub(super) message_id: &'a str,
 }
 
-/// The full message for `request`, refused when it would not fit
-/// [`crate::smtp::session::MAX_MESSAGE_SIZE`] once built.
-pub(super) fn build(request: &SendRequest, envelope: &Envelope<'_>) -> Result<Vec<u8>, ApiError> {
+/// The full message for `request`, refused when it would not fit the
+/// configured `[server] max_message_size` once built.
+pub(super) fn build(
+	request: &SendRequest,
+	envelope: &Envelope<'_>,
+	max_message_size: usize,
+) -> Result<Vec<u8>, ApiError> {
 	let mut headers = vec![format!("From: {}\r\n", envelope.from)];
 	if let Some(sender) = &request.sender {
 		headers.push(line(compose::address_list(
@@ -67,10 +71,8 @@ pub(super) fn build(request: &SendRequest, envelope: &Envelope<'_>) -> Result<Ve
 		bodies.inline.push(leaf(part, Disposition::Inline)?);
 	}
 	let data = line(compose::write(&headers, &bodies.assemble()))?;
-	if data.len() > crate::smtp::session::MAX_MESSAGE_SIZE {
-		return Err(ApiError::message_too_large(
-			crate::smtp::session::MAX_MESSAGE_SIZE,
-		));
+	if data.len() > max_message_size {
+		return Err(ApiError::message_too_large(max_message_size));
 	}
 	Ok(data)
 }

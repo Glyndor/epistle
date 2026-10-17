@@ -41,6 +41,24 @@ pub(super) struct DesiredConfig {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) acme: Option<DesiredAcme>,
 	pub(super) antispam: DesiredAntispam,
+	/// The attachment policy for a new install. Never merged into an
+	/// existing configuration: see [`NEW_INSTALL_ONLY`].
+	pub(super) attachments: DesiredAttachments,
+}
+
+/// Sections and keys `init` writes only into a configuration it creates.
+/// On an existing file they are left as the operator has them, so an
+/// upgrade that re-runs `init` keeps today's behaviour.
+pub(super) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] =
+	&[("attachments", None), ("antispam", Some("clamd_on_error"))];
+
+/// The `[attachments]` section for a new install: quarantine disguised
+/// files and macros, flag encrypted archives.
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAttachments {
+	mode: &'static str,
+	macros: &'static str,
+	encrypted_archives: &'static str,
 }
 
 /// The `[acme]` section `init` writes when the answers (or the
@@ -61,7 +79,12 @@ pub(super) struct DesiredAcme {
 
 #[derive(Debug, Serialize)]
 pub(super) struct DesiredAntispam {
-	clamd_socket: String,
+	/// The stack's clamd; absent when the stack runs no clamav.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	clamd_socket: Option<String>,
+	/// What a scan clamd cannot run does; absent without clamd.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	clamd_on_error: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -322,7 +345,14 @@ pub(super) fn build_config(
 		database,
 		acme: acme_block,
 		antispam: DesiredAntispam {
-			clamd_socket: "/run/clamav/clamd.sock".to_string(),
+			clamd_socket: (answers.services.antivirus != Some(false))
+				.then(|| "/run/clamav/clamd.sock".to_string()),
+			clamd_on_error: (answers.services.antivirus != Some(false)).then_some("defer"),
+		},
+		attachments: DesiredAttachments {
+			mode: "quarantine",
+			macros: "quarantine",
+			encrypted_archives: "flag",
 		},
 	})
 }
@@ -489,6 +519,13 @@ pub(super) use super::apply_config_merge::{
 #[cfg(test)]
 #[path = "apply_config_tests_clamav.rs"]
 mod tests_clamav;
+
+#[cfg(test)]
+#[path = "apply_config_tests_attachments.rs"]
+mod tests_attachments;
+#[cfg(test)]
+#[path = "apply_config_tests_clamd_on_error.rs"]
+mod tests_clamd_on_error;
 
 #[cfg(test)]
 #[path = "apply_config_tests_database_off.rs"]

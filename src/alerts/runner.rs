@@ -53,12 +53,16 @@ impl EngineHandle {
 /// cannot starve one another and a slow webhook delivery on one rule does not
 /// delay another rule's next sample.
 ///
+/// A rule with `enabled = false` is left out: it has no task, so it samples
+/// nothing and cannot fire.
+///
 /// A rule that fails its compile-time validation is dropped at startup with a
 /// warning: the same validation ran at config-load time, so this only happens
 /// when rules are added programmatically in tests.
 pub fn run(rules: Vec<Alert>, metrics: Arc<Metrics>, ctx: DispatchContext) -> Option<EngineHandle> {
 	let compiled: Vec<CompiledRule> = rules
 		.iter()
+		.filter(|rule| rule.enabled)
 		.filter_map(|rule| match CompiledRule::from_alert(rule) {
 			Ok(c) => Some(c),
 			Err(error) => {
@@ -140,7 +144,7 @@ fn dispatch(
 		let Some(poster) = ctx.webhook.as_ref() else {
 			tracing::warn!(
 				rule = %rule.name,
-				"alert webhook requested but no [webhook] section is configured"
+				"alert webhook requested but no webhook is active (the [webhook] section is missing or has enabled = false)"
 			);
 			return Ok(());
 		};
@@ -225,6 +229,7 @@ fn build_email(
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	})
 }

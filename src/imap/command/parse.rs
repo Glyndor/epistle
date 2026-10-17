@@ -312,6 +312,7 @@ pub(super) fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
 			"DELETED" => StatusItem::Deleted,
 			"MAILBOXID" => StatusItem::MailboxId,
 			"HIGHESTMODSEQ" => StatusItem::HighestModseq,
+			"APPENDLIMIT" => StatusItem::AppendLimit,
 			_ => return None,
 		});
 	}

@@ -17,35 +17,80 @@ pub(super) struct SigningKey {
 	pub(super) file: PathBuf,
 }
 
+/// A signing key with the domain it signs for: `None` for the `[dkim]`
+/// default, which signs every domain without a `[[dkim.domain]]` override,
+/// and the lowercase domain for an override, which signs only that domain.
+pub(super) struct PerDomainSigningKey {
+	pub(super) key: SigningKey,
+	pub(super) domain: Option<String>,
+}
+
 /// The keys in use: the active Ed25519 key as the server resolves it
 /// ([`crate::dkim::rotate::active_ed25519`]: an unreadable rotation state
 /// is an error unless its last good copy stands in, see [`state_item`]),
-/// plus the RSA key when configured. Empty without a `[dkim]` section.
-pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
+/// plus the RSA key in service ([`crate::dkim::rotate::active_rsa`]) when
+/// the server dual-signs, then each override's keys. Empty without a
+/// `[dkim]` section.
+pub(super) fn signing_keys(config: &Config) -> Result<Vec<PerDomainSigningKey>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
 	};
+	let mut out = Vec::new();
 	let active = crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
 		.map_err(|error| error.to_string())?;
-	let (selector, file) = (active.selector, active.key_file);
-	let mut signer = Signer::load(&selector, &file).map_err(|error| error.to_string())?;
-	let mut keys = vec![SigningKey {
-		selector,
-		public: public_value(&signer.dns_record_value()),
-		file,
-	}];
-	if let (Some(selector), Some(file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
-		signer = signer
-			.with_rsa(selector, file)
-			.map_err(|error| error.to_string())?;
-		let record = signer.rsa_dns_record_value().unwrap_or_default();
-		keys.push(SigningKey {
-			selector: selector.clone(),
-			public: public_value(&record),
-			file: file.clone(),
+	let (selector, file) = (active.selector.clone(), active.key_file.clone());
+	let signer = Signer::load(&selector, &file).map_err(|error| error.to_string())?;
+	out.push(PerDomainSigningKey {
+		key: SigningKey {
+			selector,
+			public: public_value(&signer.dns_record_value()),
+			file,
+		},
+		domain: None,
+	});
+	let rsa = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)
+		.map_err(|error| error.to_string())?;
+	if let Some(rsa) = rsa {
+		let record =
+			crate::dkim::rsa_record_value(&rsa.key_file).map_err(|error| error.to_string())?;
+		out.push(PerDomainSigningKey {
+			key: SigningKey {
+				selector: rsa.selector,
+				public: public_value(&record),
+				file: rsa.key_file,
+			},
+			domain: None,
 		});
 	}
-	Ok(keys)
+	// Per-domain overrides are checked alongside the default so a
+	// single key_list drives every domain's check; the lookup then
+	// skips the default for a domain that has its own override.
+	for entry in &dkim.domain {
+		let signer =
+			Signer::load(&entry.selector, &entry.key_file).map_err(|error| error.to_string())?;
+		out.push(PerDomainSigningKey {
+			key: SigningKey {
+				selector: entry.selector.clone(),
+				public: public_value(&signer.dns_record_value()),
+				file: entry.key_file.clone(),
+			},
+			domain: Some(entry.name.to_ascii_lowercase()),
+		});
+		if let (Some(rsa_selector), Some(rsa_key_file)) = (&entry.rsa_selector, &entry.rsa_key_file)
+		{
+			let record =
+				crate::dkim::rsa_record_value(rsa_key_file).map_err(|error| error.to_string())?;
+			out.push(PerDomainSigningKey {
+				key: SigningKey {
+					selector: rsa_selector.clone(),
+					public: public_value(&record),
+					file: rsa_key_file.clone(),
+				},
+				domain: Some(entry.name.to_ascii_lowercase()),
+			});
+		}
+	}
+	Ok(out)
 }
 
 /// The `p=` value of a DKIM TXT record, whitespace removed (long values are
@@ -101,3 +146,11 @@ pub(super) fn state_item(config: &Config) -> Option<Item> {
 		),
 	))
 }
+
+#[cfg(test)]
+#[path = "dns_dkim_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "dns_dkim_tests_per_domain.rs"]
+mod tests_per_domain;

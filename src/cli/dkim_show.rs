@@ -16,6 +16,22 @@ use crate::spf::DnsLookup;
 pub(super) struct PreviousView {
 	selector: String,
 	retire_at: u64,
+	/// The RSA selector retired with it, when the rotation replaced one.
+	rsa_selector: Option<String>,
+}
+
+/// A per-domain override as `dkim show` reports it: the domain and its
+/// ed25519 selector (and optional RSA selector). The path to the key
+/// file is the one the operator wrote, so a sanity-check from the
+/// command line can find it.
+#[derive(Debug, Serialize)]
+pub(super) struct DomainView {
+	domain: String,
+	selector: String,
+	key_file: PathBuf,
+	/// RSA dual-signing selector and key file, when configured.
+	rsa_selector: Option<String>,
+	rsa_key_file: Option<PathBuf>,
 }
 
 /// A rotation the server began and has not committed or withdrawn yet.
@@ -25,6 +41,8 @@ pub(super) struct InProgressView {
 	started_at: u64,
 	/// Why the rotation is being taken back, once it is.
 	withdrawing: Option<String>,
+	/// The RSA selector rotated in the same step, when the server dual-signs.
+	rsa_selector: Option<String>,
 }
 
 /// One published record compared with what the key in service implies.
@@ -35,6 +53,9 @@ pub(super) struct RecordView {
 	name: String,
 	/// `ok`, `differs`, `missing` or `lookup-error`.
 	status: &'static str,
+	/// Whether the selector came from the configured `[dkim]` block or
+	/// from a per-domain override; empty when the lookup did not run.
+	source: &'static str,
 }
 
 /// Everything `dkim show` prints.
@@ -54,9 +75,16 @@ pub(super) struct DkimView {
 	previous: Option<PreviousView>,
 	/// A rotation in progress; the selector above signs until it commits.
 	in_progress: Option<InProgressView>,
+	/// The RSA dual-signing key in service; `None` without dual signing.
 	rsa_selector: Option<String>,
+	rsa_key_file: Option<PathBuf>,
+	/// `state` when a rotation put the RSA key in service, `config` before.
+	rsa_source: Option<&'static str>,
 	rotation_requested_at: Option<u64>,
 	last_request_error: Option<String>,
+	/// Per-domain overrides as the configuration names them: every
+	/// domain in this list signs with its own key, not the default.
+	overrides: Vec<DomainView>,
 	records: Vec<RecordView>,
 }
 
@@ -104,14 +132,13 @@ pub(super) async fn build(
 	let active = rotate::active_ed25519(dkim, &config.data_dir).map_err(|e| e.to_string())?;
 	let state = rotate::read_state(&config.data_dir).map_err(|e| e.to_string())?;
 	let signer = Signer::load(&active.selector, &active.key_file).map_err(|e| e.to_string())?;
+	let rsa = rotate::active_rsa(dkim, &config.data_dir).map_err(|e| e.to_string())?;
 	let mut expected: Vec<(String, Option<String>)> =
 		vec![(active.selector.clone(), Some(signer.dns_record_value()))];
-	if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
-		let value = signer
-			.with_rsa(selector, key_file)
-			.map_err(|e| e.to_string())?
-			.rsa_dns_record_value();
-		expected.push((selector.clone(), value));
+	// An RSA key that does not load is still looked up, by presence only.
+	if let Some(rsa) = &rsa {
+		let value = crate::dkim::rsa_record_value(&rsa.key_file).ok();
+		expected.push((rsa.selector.clone(), value));
 	}
 	let previous = state.as_ref().and_then(|s| s.previous.as_ref());
 	if let Some(previous) = previous {
@@ -119,19 +146,59 @@ pub(super) async fn build(
 			.ok()
 			.map(|s| s.dns_record_value());
 		expected.push((previous.selector.clone(), value));
+		if let Some(old) = &previous.rsa {
+			let value = crate::dkim::rsa_record_value(&config.data_dir.join(&old.key_file)).ok();
+			expected.push((old.selector.clone(), value));
+		}
 	}
 	let mut records = Vec::new();
 	if let Some(dns) = dns {
 		for domain in signing_domains(config) {
-			for (selector, value) in &expected {
-				let name = format!("{selector}._domainkey.{domain}");
-				let status = compare(dns, &name, value.as_deref()).await;
-				records.push(RecordView {
-					domain: domain.clone(),
-					selector: selector.clone(),
-					name,
-					status,
-				});
+			// A per-domain override replaces the default for the domain
+			// it names. The configured selectors are only checked for
+			// domains without an override.
+			if let Some(override_) = dkim.override_for(&domain) {
+				let mut override_expected: Vec<(String, Option<String>)> = Vec::new();
+				match Signer::load(&override_.selector, &override_.key_file) {
+					Ok(signer) => {
+						override_expected
+							.push((override_.selector.clone(), Some(signer.dns_record_value())));
+					}
+					Err(error) => {
+						super::style::warn(format_args!(
+							"cannot load DKIM key for {domain}: {error}"
+						));
+					}
+				}
+				if let (Some(rsa_selector), Some(rsa_key_file)) =
+					(&override_.rsa_selector, &override_.rsa_key_file)
+				{
+					let value = crate::dkim::rsa_record_value(rsa_key_file).ok();
+					override_expected.push((rsa_selector.clone(), value));
+				}
+				for (selector, value) in &override_expected {
+					let name = format!("{selector}._domainkey.{domain}");
+					let status = compare(dns, &name, value.as_deref()).await;
+					records.push(RecordView {
+						domain: domain.clone(),
+						selector: selector.clone(),
+						name,
+						status,
+						source: "dkim.domain",
+					});
+				}
+			} else {
+				for (selector, value) in &expected {
+					let name = format!("{selector}._domainkey.{domain}");
+					let status = compare(dns, &name, value.as_deref()).await;
+					records.push(RecordView {
+						domain: domain.clone(),
+						selector: selector.clone(),
+						name,
+						status,
+						source: "dkim",
+					});
+				}
 			}
 		}
 	}
@@ -150,6 +217,7 @@ pub(super) async fn build(
 		previous: previous.map(|p| PreviousView {
 			selector: p.selector.clone(),
 			retire_at: p.retire_at,
+			rsa_selector: p.rsa.as_ref().map(|rsa| rsa.selector.clone()),
 		}),
 		in_progress: state
 			.as_ref()
@@ -158,10 +226,30 @@ pub(super) async fn build(
 				selector: p.selector.clone(),
 				started_at: p.started_at,
 				withdrawing: p.withdrawing.clone(),
+				rsa_selector: p.rsa.as_ref().map(|rsa| rsa.selector.clone()),
 			}),
-		rsa_selector: dkim.rsa_selector.clone(),
+		rsa_source: rsa.as_ref().map(|_| {
+			if state.as_ref().is_some_and(|s| s.rsa.is_some()) {
+				"state"
+			} else {
+				"config"
+			}
+		}),
+		rsa_key_file: rsa.as_ref().map(|rsa| rsa.key_file.clone()),
+		rsa_selector: rsa.map(|rsa| rsa.selector),
 		rotation_requested_at: rotate::pending_request(&config.data_dir).map(|r| r.requested_at),
 		last_request_error: rotate::last_error(&config.data_dir),
+		overrides: dkim
+			.domain
+			.iter()
+			.map(|entry| DomainView {
+				domain: entry.name.clone(),
+				selector: entry.selector.clone(),
+				key_file: entry.key_file.clone(),
+				rsa_selector: entry.rsa_selector.clone(),
+				rsa_key_file: entry.rsa_key_file.clone(),
+			})
+			.collect(),
 		records,
 	})
 }
@@ -179,6 +267,14 @@ pub(super) fn render(view: &DkimView, json: bool, out: &mut impl std::io::Write)
 		ExitCode::SUCCESS
 	} else {
 		ExitCode::FAILURE
+	}
+}
+
+/// `ed` alone, or `ed and rsa` when an RSA selector goes with it.
+fn pair(ed: &str, rsa: Option<&str>) -> String {
+	match rsa {
+		Some(rsa) => format!("{ed} and {rsa}"),
+		None => ed.to_string(),
 	}
 }
 
@@ -202,35 +298,58 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 	} else {
 		writeln!(out, "next rotation: {}", when(view.next_rotation_due))?;
 	}
+	if let Some(rsa) = &view.rsa_selector {
+		writeln!(
+			out,
+			"rsa selector: {rsa} (from {})",
+			view.rsa_source.unwrap_or("config")
+		)?;
+	}
 	if let Some(previous) = &view.previous {
 		writeln!(
 			out,
 			"previous: {} (retires at {})",
-			previous.selector, previous.retire_at
+			pair(&previous.selector, previous.rsa_selector.as_deref()),
+			previous.retire_at
 		)?;
 	}
 	if let Some(next) = &view.in_progress {
+		let to = pair(&next.selector, next.rsa_selector.as_deref());
 		match &next.withdrawing {
-			Some(reason) => writeln!(
+			Some(reason) => writeln!(out, "rotation to {to} is being withdrawn: {reason}")?,
+			None if next.rsa_selector.is_some() => writeln!(
 				out,
-				"rotation to {} is being withdrawn: {reason}",
-				next.selector
+				"rotation to {to} in progress since {}; {} sign until DNS shows the new keys",
+				next.started_at,
+				pair(&view.selector, view.rsa_selector.as_deref())
 			)?,
 			None => writeln!(
 				out,
-				"rotation to {} in progress since {}; {} signs until DNS shows the new key",
-				next.selector, next.started_at, view.selector
+				"rotation to {to} in progress since {}; {} signs until DNS shows the new key",
+				next.started_at, view.selector
 			)?,
 		}
-	}
-	if let Some(rsa) = &view.rsa_selector {
-		writeln!(out, "rsa selector: {rsa}")?;
 	}
 	if let Some(at) = view.rotation_requested_at {
 		writeln!(out, "rotation requested at {at}, waiting for the server")?;
 	}
 	if let Some(error) = &view.last_request_error {
 		writeln!(out, "last rotation error: {error}")?;
+	}
+	for entry in &view.overrides {
+		let rsa = entry
+			.rsa_selector
+			.as_deref()
+			.map(|rsa| format!(" and rsa {rsa}"))
+			.unwrap_or_default();
+		writeln!(
+			out,
+			"override {}: {}{} ({})",
+			entry.domain,
+			entry.selector,
+			rsa,
+			entry.key_file.display()
+		)?;
 	}
 	for record in &view.records {
 		writeln!(out, "{} {}", record.status, record.name)?;
@@ -241,3 +360,11 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 #[cfg(test)]
 #[path = "dkim_show_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dkim_show_tests_rsa.rs"]
+mod tests_rsa;
+
+#[cfg(test)]
+#[path = "dkim_show_tests_per_domain.rs"]
+mod tests_per_domain;

@@ -212,7 +212,8 @@ pub(super) fn scram_challenge_text(action: &Action) -> String {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.to_string(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.to_string(),
 		Action::Deliver(r, _) => r.to_string(),
 		Action::CollectChunk { .. } => String::new(),
 	}

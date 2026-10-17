@@ -28,6 +28,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 	},
 	/// (Compatibility) Create an account: use `account add` instead.
 	#[command(hide = true)]
@@ -35,6 +38,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// The account name.
 		#[arg(long, value_name = "NAME")]
 		name: String,
@@ -48,6 +54,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// The account name.
 		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
@@ -68,6 +77,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// The account the app password belongs to.
 		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		account: String,
@@ -93,6 +105,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 	},
 	/// (Compatibility) Revoke an app password: use `app-password revoke`
 	/// instead.
@@ -101,6 +116,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// The account the app password belongs to.
 		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		account: String,
@@ -119,6 +137,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(long, value_name = "LABEL")]
 		label: String,
@@ -156,6 +177,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 	},
 	/// (Compatibility) Revoke an API key: use `api-key revoke` instead.
 	#[command(hide = true)]
@@ -163,6 +187,9 @@ pub enum Legacy {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the result as JSON on stdout, as the resource form does.
+		#[arg(long)]
+		json: bool,
 		/// The label of the API key to revoke.
 		#[arg(long, value_name = "LABEL")]
 		label: String,
@@ -186,16 +213,32 @@ pub(super) enum Resource {
 }
 
 impl Legacy {
+	/// Whether the command line asked for `--json`.
+	fn json(&self) -> bool {
+		match self {
+			Legacy::Accounts { json, .. }
+			| Legacy::AccountAdd { json, .. }
+			| Legacy::AccountRemove { json, .. }
+			| Legacy::AppPasswordCreate { json, .. }
+			| Legacy::AppPasswords { json, .. }
+			| Legacy::AppPasswordRevoke { json, .. }
+			| Legacy::ApiKeyCreate { json, .. }
+			| Legacy::ApiKeys { json, .. }
+			| Legacy::ApiKeyRevoke { json, .. } => *json,
+		}
+	}
+
 	/// The config path and the resource action this flat command is an
 	/// alias of. Running that action is all the flat command does.
 	pub(super) fn into_resource(self) -> (PathBuf, Resource) {
 		match self {
-			Legacy::Accounts { config } => (
+			Legacy::Accounts { config, json } => (
 				config,
-				Resource::Account(account::Subcommand::List { json: false }),
+				Resource::Account(account::Subcommand::List { json }),
 			),
 			Legacy::AccountAdd {
 				config,
+				json: _,
 				name,
 				addresses,
 			} => (
@@ -208,6 +251,7 @@ impl Legacy {
 			),
 			Legacy::AccountRemove {
 				config,
+				json: _,
 				name,
 				queue,
 				yes,
@@ -217,6 +261,7 @@ impl Legacy {
 			),
 			Legacy::AppPasswordCreate {
 				config,
+				json: _,
 				account,
 				label,
 				expires_at,
@@ -230,17 +275,19 @@ impl Legacy {
 					expires_at,
 					ip_cidr,
 					save_sent,
+					class: None,
 				}),
 			),
-			Legacy::AppPasswords { config } => (
+			Legacy::AppPasswords { config, json } => (
 				config,
 				Resource::AppPassword(AppPasswordCli::List {
 					account: None,
-					json: false,
+					json,
 				}),
 			),
 			Legacy::AppPasswordRevoke {
 				config,
+				json: _,
 				account,
 				label,
 				yes,
@@ -254,6 +301,7 @@ impl Legacy {
 			),
 			Legacy::ApiKeyCreate {
 				config,
+				json: _,
 				label,
 				expires_at,
 				ip_cidr,
@@ -269,32 +317,37 @@ impl Legacy {
 					scopes,
 					domains,
 					account,
+					class: None,
 				}),
 			),
-			Legacy::ApiKeys { config } => {
-				(config, Resource::ApiKey(ApiKeyCli::List { json: false }))
+			Legacy::ApiKeys { config, json } => {
+				(config, Resource::ApiKey(ApiKeyCli::List { json }))
 			}
-			Legacy::ApiKeyRevoke { config, label, yes } => {
-				(config, Resource::ApiKey(ApiKeyCli::Revoke { label, yes }))
-			}
+			Legacy::ApiKeyRevoke {
+				config,
+				json: _,
+				label,
+				yes,
+			} => (config, Resource::ApiKey(ApiKeyCli::Revoke { label, yes })),
 		}
 	}
 }
 
 /// Run a flat command through the handler its resource form uses.
 pub(super) fn run(command: Legacy) -> ExitCode {
+	let json = command.json();
 	let (config, resource) = command.into_resource();
 	let mut out = std::io::stdout().lock();
 	match resource {
 		Resource::Account(action) => {
-			with_config(&config, |_| account::run(&config, action, &mut out))
+			with_config(&config, |_| account::run(&config, action, json, &mut out))
 		}
 		Resource::AppPassword(action) => with_config(&config, |config| {
-			app_passwords::run(config, action, &mut out)
+			app_passwords::run(config, action, json, &mut out)
 		}),
-		Resource::ApiKey(action) => {
-			with_config(&config, |config| api_keys::run(config, action, &mut out))
-		}
+		Resource::ApiKey(action) => with_config(&config, |config| {
+			api_keys::run(config, action, json, &mut out)
+		}),
 	}
 }
 

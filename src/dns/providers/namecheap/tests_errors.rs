@@ -132,6 +132,7 @@ async fn mx_with_unparseable_priority_returns_unsupported() {
 		kind: RecordKind::Mx,
 		value: "ten mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", bad).await,
@@ -147,6 +148,7 @@ async fn srv_with_wrong_field_count_returns_unsupported() {
 		kind: RecordKind::Srv,
 		value: "10 5 sip.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", bad).await,
@@ -162,6 +164,7 @@ async fn mx_with_missing_whitespace_returns_unsupported() {
 		kind: RecordKind::Mx,
 		value: "10mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert("example.org", bad).await,

@@ -115,11 +115,12 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	Ok(())
 }
 
-pub(super) fn run(path: &Path, action: StorageCli, dry_run: bool) -> ExitCode {
-	resource::exit(execute_with(
+pub(super) fn run(path: &Path, action: StorageCli, dry_run: bool, json: bool) -> ExitCode {
+	resource::exit_resource(execute_with(
 		path,
 		action,
 		dry_run,
+		json,
 		&mut std::io::stdout().lock(),
 		&mut super::style::stderr(),
 		super::stack::run,
@@ -130,29 +131,49 @@ fn execute_with(
 	path: &Path,
 	action: StorageCli,
 	dry_run: bool,
+	json: bool,
 	out: &mut impl Write,
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
-) -> Result<ExitCode, String> {
+) -> Result<ExitCode, resource::ResourceError> {
 	let StorageCli::Blobs { action } = action;
 	let backend = match action {
-		BlobsCli::Show { json } => {
-			show(&Config::load(path).map_err(|e| e.to_string())?, json, out)?;
+		BlobsCli::Show { json: leaf } => {
+			show(
+				&Config::load(path)
+					.map_err(|error| resource::ResourceError::Failure(error.to_string()))?,
+				leaf || json,
+				out,
+			)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		BlobsCli::Set { backend } => backend,
 	};
-	let current = Config::load(path).map_err(|e| e.to_string())?;
+	let current =
+		Config::load(path).map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 	let plan = set::plan(&current, &backend)?;
+	let backend_name = match backend {
+		Backend::Fs => "fs",
+		Backend::S3(_) => "s3",
+	};
 	if plan.leaves_blobs_behind {
 		writeln!(
 			status,
 			"Existing blobs are not migrated: those stored in the previous backend stay there and stop being served."
 		)
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
 	}
 	let fields = plan.fields;
-	let change: resource::Change =
-		Box::new(move |document, _| document.set_table_fields(&["storage", "blobs"], &fields));
-	resource::apply_edit(path, dry_run, "blob storage", out, status, restart, change)
+	let change: resource::Change = Box::new(move |document, _| {
+		document
+			.set_table_fields(&["storage", "blobs"], &fields)
+			.map_err(resource::ResourceError::Failure)
+	});
+	let edit = resource::Edit {
+		label: "blob storage",
+		action: "blobs set",
+		fields: json!({ "backend": backend_name }),
+		json,
+	};
+	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }

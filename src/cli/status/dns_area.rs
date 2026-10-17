@@ -3,11 +3,13 @@
 //! server actually signs with.
 
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use super::dns_dkim::{SigningKey, compare, signing_keys, state_item};
 use super::report::{AreaReport, Item, Level};
 use super::{Ctx, NET_TIMEOUT};
 use crate::config::Config;
+use crate::dns::provider::DnsProvider;
 use crate::dns::{self, Check, Status};
 use crate::spf::{DnsFailure, DnsLookup, SystemDns};
 
@@ -40,10 +42,13 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// When the signing key cannot be resolved the failure is already
 	// reported; the DNS records are still checked with whatever selectors
 	// can be named, and with none if the rotation state itself is broken.
-	let selectors: Vec<String> = if signing_key_failed {
-		crate::cli::verify_dns::dkim_selectors(config).unwrap_or_default()
+	let default_selectors: Vec<String> = if signing_key_failed {
+		crate::cli::verify_dns::dkim_default_selectors(config).unwrap_or_default()
 	} else {
-		keys.iter().map(|key| key.selector.clone()).collect()
+		keys.iter()
+			.filter(|k| k.domain.is_none())
+			.map(|k| k.key.selector.clone())
+			.collect()
 	};
 
 	let mut records = dns::check_host(
@@ -54,8 +59,17 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	)
 	.await;
 	for domain in &config.domains {
+		// Each domain is checked against its own selectors: a per-domain
+		// override replaces the default, otherwise the default applies.
+		let selectors = crate::cli::verify_dns::dkim_selectors_for(config, domain)
+			.unwrap_or_else(|_| default_selectors.clone());
 		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
 	}
+	// Cloudflare's orange cloud breaks delivery to every mail name:
+	// SMTP / IMAP / POP3 / submission all need direct traffic, and the
+	// proxy only forwards HTTP(S). The check lives behind the configured
+	// provider so other providers keep their existing surface.
+	findings.extend(proxied_items(config, proxy_provider(config)).await);
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
 	let ok = count(&records, &Status::Ok);
 	let missing = count(&records, &Status::Missing);
@@ -63,8 +77,15 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 
 	let mut mismatches = 0;
 	for domain in &config.domains {
-		for key in &keys {
-			if let Some(item) = key_item(key, domain, dns).await {
+		// A domain with a `[[dkim.domain]]` override is checked against the
+		// override's keys only, the default's against every other domain.
+		let own = config
+			.dkim
+			.as_ref()
+			.and_then(|dkim| dkim.override_for(domain))
+			.map(|entry| entry.name.to_ascii_lowercase());
+		for key in keys.iter().filter(|key| key.domain == own) {
+			if let Some(item) = key_item(&key.key, domain, dns).await {
 				mismatches += usize::from(item.status == Level::Fail);
 				findings.push(item);
 			}
@@ -117,6 +138,73 @@ async fn key_item(key: &SigningKey, domain: &str, dns: &dyn DnsLookup) -> Option
 	compare(key, domain, &published)
 }
 
+/// The provider the orange-cloud check reads: Cloudflare only. `Err`
+/// when Cloudflare is configured but its credentials cannot be read.
+fn proxy_provider(config: &Config) -> Result<Option<Arc<dyn DnsProvider>>, ()> {
+	if !dns::proxied_check::proxy_aware_provider(config) {
+		return Ok(None);
+	}
+	config
+		.dns
+		.as_ref()
+		.and_then(|dns| dns.build_for_host(&config.hostname))
+		.map(Some)
+		.ok_or(())
+}
+
+/// The Cloudflare orange-cloud check: one `Fail` per proxied mail name, so
+/// `epistle status` exits 1 until the operator sets them to DNS only. The
+/// zone is the one `[dns]` names; a list that fails or times out is a
+/// warning, because the proxy state is then unknown.
+pub(super) async fn proxied_items(
+	config: &Config,
+	provider: Result<Option<Arc<dyn DnsProvider>>, ()>,
+) -> Vec<Item> {
+	const LABEL: &str = "Cloudflare proxy";
+	let provider = match provider {
+		Ok(Some(provider)) => provider,
+		Ok(None) => return Vec::new(),
+		Err(()) => {
+			return vec![Item::new(
+				LABEL,
+				Level::Warn,
+				"the Cloudflare credentials in [dns] could not be read; the proxy state was not checked",
+			)];
+		}
+	};
+	let Some(zone) = config.dns.as_ref().map(|dns| dns.zone.as_str()) else {
+		return Vec::new();
+	};
+	let check = dns::proxied_check::proxied_check(
+		provider.as_ref(),
+		zone,
+		&config.domains,
+		&config.hostname,
+	);
+	match tokio::time::timeout(NET_TIMEOUT, check).await {
+		Ok(Ok(names)) => names
+			.iter()
+			.map(|name| {
+				Item::new(
+					format!("{LABEL} {name}"),
+					Level::Fail,
+					dns::proxied_check::proxied_message(name),
+				)
+			})
+			.collect(),
+		Ok(Err(error)) => vec![Item::new(
+			LABEL,
+			Level::Warn,
+			format!("listing the {zone} zone failed, so the proxy state was not checked: {error}"),
+		)],
+		Err(_) => vec![Item::new(
+			LABEL,
+			Level::Warn,
+			format!("listing the {zone} zone timed out, so the proxy state was not checked"),
+		)],
+	}
+}
+
 /// Wraps a resolver so no single query outlives [`NET_TIMEOUT`]. `init`
 /// uses it for its reverse-DNS block too.
 pub(crate) struct TimeoutDns<D>(pub(crate) D);
@@ -138,6 +226,10 @@ impl<D: DnsLookup> DnsLookup for TimeoutDns<D> {
 		let query = self.0.ptr(ip);
 		Box::pin(async move { bounded(query).await })
 	}
+	fn tlsa(&self, name: &str) -> Lookup<'_, crate::dane::rrset::TlsaRrset> {
+		let query = self.0.tlsa(name);
+		Box::pin(async move { bounded(query).await })
+	}
 }
 
 async fn bounded<T>(query: Lookup<'_, T>) -> Result<T, DnsFailure> {
@@ -149,3 +241,7 @@ async fn bounded<T>(query: Lookup<'_, T>) -> Result<T, DnsFailure> {
 #[cfg(test)]
 #[path = "dns_area_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dns_area_tests_per_domain.rs"]
+mod tests_per_domain;

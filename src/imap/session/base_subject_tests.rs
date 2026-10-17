@@ -86,3 +86,24 @@ fn hostile_subjects_take_linear_time() {
 		}
 	}
 }
+
+#[test]
+fn reply_and_forward_markers_are_reported() {
+	use super::base_subject_and_reply;
+	for (raw, base, reply) in [
+		("foo", "FOO", false),
+		("Re: foo", "FOO", true),
+		("[list] Fwd: foo", "FOO", true),
+		("foo (fwd)", "FOO", true),
+		("[fwd: foo]", "FOO", true),
+		("[list] foo", "FOO", false),
+		("Ref: foo", "REF: FOO", false),
+		("re:", "", true),
+	] {
+		assert_eq!(
+			base_subject_and_reply(raw),
+			(base.to_string(), reply),
+			"{raw:?}"
+		);
+	}
+}

@@ -6,22 +6,27 @@
 
 use std::sync::Arc;
 
-use super::address::Address;
-use super::directory::{Directory, Resolution};
-use super::diskspace::DiskGuard;
-use super::reply::Reply;
+pub use super::address::Address;
+pub use super::directory::{Directory, Resolution};
+pub use super::diskspace::DiskGuard;
+pub use super::memory_budget::{MemoryBudget, Reservation};
+pub use super::reply::Reply;
 
 mod author;
 mod bdat;
 pub mod cap;
 mod finalise;
+mod junk;
 mod login;
 mod oauth;
 mod scram;
 mod time;
 use time::unix_now;
 
-/// Maximum accepted message size in bytes until quotas exist.
+/// Maximum accepted message size in bytes. The historical default and
+/// the upper bound for the configurable `[server] max_message_size`;
+/// raise it on operators who know what they are doing, lower it on
+/// operators who want to be conservative.
 pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 
 /// Maximum number of accepted recipients per transaction (RFC 5321 minimum).
@@ -31,6 +36,7 @@ mod auth_dispatch;
 mod transaction_policy;
 #[path = "types.rs"]
 mod types;
+pub use junk::DEFAULT_JUNK_COMMAND_LIMIT;
 use transaction_policy::TransactionPolicy;
 use types::State;
 pub use types::{AcceptedMessage, Action};
@@ -39,6 +45,11 @@ pub use types::{AcceptedMessage, Action};
 #[derive(Debug)]
 pub struct Session {
 	hostname: String,
+	/// Per-instance message-size cap, read by `mail_from` (SIZE parameter),
+	/// `data_line` (running size) and the EHLO advertisement. Default is
+	/// [`MAX_MESSAGE_SIZE`]; raised or lowered by
+	/// [`Session::with_max_message_size`].
+	max_message_size: usize,
 	state: State,
 	/// Whether STARTTLS can be offered (configured, not yet active).
 	tls_available: bool,
@@ -107,6 +118,23 @@ pub struct Session {
 	/// advertised regardless, so a SCRAM-less listener still accepts the
 	/// password.
 	scram_enabled: bool,
+	/// Shared byte budget every DATA / BDAT reservation draws from. When
+	/// set, a reservation that would push the in-flight total past the
+	/// cap is rejected with `452 4.3.1` (DATA: at end-of-DATA; BDAT: on
+	/// the offending chunk) and the in-flight bytes are released on
+	/// every path that drops the body. `None` (the default) leaves the
+	/// historical unbounded behaviour in place.
+	memory_budget: Option<Arc<MemoryBudget>>,
+	/// The octets of the BDAT chunk being read, charged as they arrive. They
+	/// join the body in `bdat_chunk`, or go back with the session if the
+	/// client never sends the rest of the chunk.
+	chunk_reservation: Reservation,
+	/// The claim for the body last accepted, held while the connection
+	/// loop delivers it: the body is still in memory until then.
+	delivery_reservation: Reservation,
+	/// Commands without progress and refusals sent so far, and how many
+	/// are allowed; see the `junk` module.
+	junk: junk::JunkCount,
 }
 
 impl Session {
@@ -114,6 +142,7 @@ impl Session {
 	pub fn new(hostname: &str) -> Self {
 		Session {
 			hostname: hostname.to_string(),
+			max_message_size: MAX_MESSAGE_SIZE,
 			state: State::Connected,
 			tls_available: false,
 			tls_active: false,
@@ -137,7 +166,43 @@ impl Session {
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
 			scram_enabled: true,
+			memory_budget: None,
+			chunk_reservation: Reservation::none(),
+			delivery_reservation: Reservation::none(),
+			junk: junk::JunkCount::default(),
 		}
+	}
+
+	/// Set the per-instance message-size cap. The same value is used by
+	/// the `SIZE` extension in EHLO, the running total checked in
+	/// `data_line`, the final size check on end-of-DATA, the per-chunk
+	/// cap on BDAT, and the `MAIL FROM` SIZE parameter check. The
+	/// default is [`MAX_MESSAGE_SIZE`] when this builder is not used.
+	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
+		self.max_message_size = bytes;
+		self
+	}
+
+	/// The per-instance message-size cap. Useful for tests and for
+	/// reflecting the value back on EHLO.
+	pub fn max_message_size(&self) -> usize {
+		self.max_message_size
+	}
+
+	/// Attach the shared byte budget. `None` (the default) keeps the
+	/// historical unbounded behaviour. With a budget set, every DATA
+	/// line and every BDAT chunk tries to reserve its bytes; the
+	/// reservation is released on every path that drops the in-flight
+	/// body (success, error, RSET, disconnect, panic).
+	pub fn with_memory_budget(mut self, budget: Arc<MemoryBudget>) -> Self {
+		self.memory_budget = Some(budget);
+		self
+	}
+
+	/// Whether this session has a memory budget wired in. Useful for
+	/// tests and for assertions.
+	pub fn has_memory_budget(&self) -> bool {
+		self.memory_budget.is_some()
 	}
 
 	/// Tag every password authentication attempt through this session with
@@ -229,6 +294,7 @@ impl Session {
 	/// before accepting MAIL FROM. `None` (the default) is the identity and
 	/// short-circuits every check.
 	pub fn with_tenant_limits(mut self, limits: std::sync::Arc<crate::api::TenantLimits>) -> Self {
+		self.policy = self.policy.with_tenant_limits(limits.clone());
 		self.tenant_limits = Some(limits);
 		self
 	}
@@ -255,6 +321,13 @@ impl Session {
 	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
 		self.policy = self.policy.with_quota(quota);
 		self
+	}
+
+	/// The submission-limit charge of the message last handed to the
+	/// server (`Action::Deliver`). The server keeps it once the message is
+	/// accepted and refunds it on any later refusal.
+	pub fn take_submission_charge(&mut self) -> Option<crate::smtp::submission_budget::Charge> {
+		self.policy.take_charge()
 	}
 
 	/// The DSNs for recipients the last accepted message did not fit for;
@@ -374,6 +447,7 @@ impl Session {
 		if !esmtp {
 			return Action::Continue(Reply::single(250, &self.hostname));
 		}
+		let size = self.max_message_size;
 		let mut lines = vec![
 			self.hostname.clone(),
 			"PIPELINING".to_string(),
@@ -383,7 +457,7 @@ impl Session {
 			"CHUNKING".to_string(), // RFC 3030: BDAT length-prefixed message data.
 			// RFC 3461: we parse RET/ENVID and NOTIFY/ORCPT parameters.
 			"DSN".to_string(),
-			format!("SIZE {MAX_MESSAGE_SIZE}"),
+			format!("SIZE {size}"),
 			// RFC 9422: advertise the per-message recipient ceiling we enforce.
 			format!("LIMITS RCPTMAX={MAX_RECIPIENTS}"),
 		];
@@ -444,21 +518,20 @@ impl Session {
 					}
 					_ => {}
 				}
-				// Per-account submission rate limit for authenticated senders.
-				// Resolution: per-domain override for the account's own
-				// domain (looked up by walking the account's addresses, the
-				// same way `Directory::quota_for` does), falling back to the
-				// server-wide default, falling back to no limit at all.
-				if let Some(account) = self.authenticated.clone()
-					&& !self.policy.check_authenticated_submission(
-						&account,
-						&self.directory,
-						unix_now(),
-					) {
-					return Action::Continue(Reply::single(
-						450,
-						"4.7.1 sending rate limit exceeded; retry later",
-					));
+				// Submission rate limits for authenticated senders: the
+				// per-account limit (its domain's override, else the
+				// server-wide default) and the tenant aggregate. Nothing is
+				// charged here: a sender with no room left is refused before
+				// it sends the message, and the message is charged one unit
+				// per recipient once it is accepted (`finalise`), so a
+				// transaction that ends in RSET or a refusal costs nothing.
+				if let Some(account) = self.authenticated.as_deref()
+					&& !self
+						.policy
+						.submission_budget(account, &self.directory)
+						.has_room(unix_now())
+				{
+					return Action::Continue(finalise::rate_limited());
 				}
 				// Per-IP and per-sender rate limits for unauthenticated sessions.
 				// Authenticated sessions are charged against the per-account limiter
@@ -475,7 +548,7 @@ impl Session {
 					return Action::Continue(reply);
 				}
 				// SIZE is declared up front: reject oversize without DATA.
-				if size.is_some_and(|s| s > MAX_MESSAGE_SIZE as u64) {
+				if size.is_some_and(|s| s > self.max_message_size as u64) {
 					return Action::Continue(Reply::single(
 						552,
 						"5.3.4 message exceeds maximum size",
@@ -484,7 +557,7 @@ impl Session {
 				// Filesystem holding `data_dir` is too full to accept another
 				// message. Reject before `DATA` so the remote retries instead
 				// of receiving `250 OK` for a payload the spool cannot hold.
-				if !self.policy.spool_has_room(MAX_MESSAGE_SIZE as u64) {
+				if !self.policy.spool_has_room(self.max_message_size as u64) {
 					return Action::Continue(Reply::single(
 						452,
 						"4.3.1 insufficient system storage; retry later",
@@ -565,6 +638,8 @@ impl Session {
 					body: Vec::new(),
 					require_tls,
 					chunking: false,
+					reserved: Reservation::none(),
+					budget_exhausted: false,
 				};
 				Action::Continue(Reply::ok())
 			}
@@ -608,67 +683,60 @@ impl Session {
 			return Some(finalise::finalise_from_state(self));
 		}
 		// Dot-unstuffing (RFC 5321 section 4.5.2).
-		let State::ReceivingData { size, body, .. } = &mut self.state else {
+		let State::ReceivingData {
+			size,
+			body,
+			reserved,
+			budget_exhausted,
+			..
+		} = &mut self.state
+		else {
 			self.reset();
 			return Some(Action::Continue(Reply::bad_sequence()));
 		};
 		let content = line.strip_prefix(b".").unwrap_or(line);
-		*size += content.len() + 2;
-		if *size <= MAX_MESSAGE_SIZE {
-			body.extend_from_slice(content);
-			body.extend_from_slice(b"\r\n");
+		let delta = content.len() + 2;
+		*size += delta;
+		if *size > self.max_message_size {
+			// Keep the size counter for the final 552 reply, but don't
+			// extend the body past the cap.
+			return None;
 		}
+		// Memory-budget reservation: claim the line's bytes, or stop
+		// growing the body and flag the message as over-budget. The claim
+		// lives in the state and goes back when the state is dropped; the
+		// body and the counter stay consistent because we never extend
+		// past a failed reservation.
+		if let Some(budget) = &self.memory_budget
+			&& reserved
+				.try_grow(budget, self.peer_ip, delta as u64)
+				.is_err()
+		{
+			*budget_exhausted = true;
+			return None;
+		}
+		body.extend_from_slice(content);
+		body.extend_from_slice(b"\r\n");
 		None
 	}
 
-	/// Drop any in-progress transaction, keeping the greeting.
+	/// Drop any in-progress transaction, keeping the greeting. The body
+	/// and any announced chunk are dropped with it, and so is their claim
+	/// on the memory budget.
 	fn reset(&mut self) {
+		self.chunk_reservation = Reservation::none();
 		if self.state != State::Connected {
 			self.state = State::Greeted;
 		}
 	}
+
+	/// The budget claim of the body accepted last, for the connection loop
+	/// to hold until that body's delivery is over.
+	pub fn take_delivery_reservation(&mut self) -> Reservation {
+		std::mem::take(&mut self.delivery_reservation)
+	}
 }
 
 #[cfg(test)]
-#[path = "../session_tests_basic.rs"]
-mod tests_basic;
-
-#[cfg(test)]
-#[path = "../session_tests_enhanced.rs"]
-mod tests_enhanced;
-
-#[cfg(test)]
-#[path = "../session_tests_quota.rs"]
-mod tests_quota;
-
-#[cfg(test)]
-#[path = "../session_tests_auth.rs"]
-mod tests_auth;
-
-#[cfg(test)]
-#[path = "../session_tests_author.rs"]
-mod tests_author;
-#[cfg(test)]
-#[path = "../session_tests_diskspace.rs"]
-mod tests_diskspace;
-#[cfg(test)]
-#[path = "../session_tests_newrecipients.rs"]
-mod tests_newrecipients;
-#[cfg(test)]
-#[path = "../session_tests_oauth.rs"]
-mod tests_oauth;
-#[cfg(test)]
-#[path = "../session_tests_ratelimit.rs"]
-mod tests_ratelimit;
-#[cfg(test)]
-#[path = "../session_tests_scram.rs"]
-mod tests_scram;
-#[cfg(test)]
-#[path = "../session_tests_scram_ban_lifecycle.rs"]
-mod tests_scram_ban_lifecycle;
-#[cfg(test)]
-#[path = "../session_tests_scram_bans.rs"]
-mod tests_scram_bans;
-#[cfg(test)]
-#[path = "../session_tests_scram_off.rs"]
-mod tests_scram_off;
+#[path = "tests_mods.rs"]
+mod tests_mods;

@@ -56,6 +56,7 @@ impl Connector for FakeMx {
 				local_ip: Some(LOCAL),
 				peer_ip: Some(PEER),
 				mx: crate::queue::resolver::MxSecurity::Secure,
+				opened: true,
 			})
 		})
 	}
@@ -106,6 +107,7 @@ async fn journal_after_one_pass(remote: Remote) -> Vec<serde_json::Value> {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,

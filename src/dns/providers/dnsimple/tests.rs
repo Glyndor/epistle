@@ -12,28 +12,38 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 
 #[derive(Default)]
-struct MockState {
+pub(super) struct MockState {
 	/// Records the `GET` endpoint returns. Mutated by `POST`/`PATCH`/`DELETE`
 	/// so subsequent `GET`s reflect changes.
-	records: Vec<serde_json::Value>,
+	pub(super) records: Vec<serde_json::Value>,
 	/// Next id the mock assigns to a created record.
 	next_id: u64,
 	/// Captured "METHOD /path" of every request, in order.
-	calls: Vec<String>,
+	pub(super) calls: Vec<String>,
 	/// Captured `POST`/`PATCH` bodies, in order.
-	bodies: Vec<String>,
+	pub(super) bodies: Vec<String>,
 	/// Last `Authorization` header seen (set on every request).
 	auth: Option<String>,
+	/// What the listing claims for `pagination.total_pages`, whatever it holds.
+	pub(super) total_pages: Option<u32>,
+	/// Leave `pagination.total_pages` out of the answer, as a degraded one does.
+	pub(super) omit_total_pages: bool,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 const ACCOUNT: &str = "1";
 const ZONE: &str = "example.org";
 const PATH_BASE: &str = "/v2/{account}/zones/{zone}/records";
 const PATH_ITEM: &str = "/v2/{account}/zones/{zone}/records/{id}";
 
-fn record(id: u64, name: &str, kind: &str, content: &str, ttl: u32) -> serde_json::Value {
+pub(super) fn record(
+	id: u64,
+	name: &str,
+	kind: &str,
+	content: &str,
+	ttl: u32,
+) -> serde_json::Value {
 	serde_json::json!({
 		"id": id,
 		"zone_id": ZONE,
@@ -86,6 +96,7 @@ async fn list_records(
 	} else {
 		total.div_ceil(per_page)
 	};
+	let total_pages = s.total_pages.unwrap_or(total_pages);
 	let start = ((page - 1) * per_page) as usize;
 	let end = (start + per_page as usize).min(total as usize);
 	let page_data = if start < total as usize {
@@ -93,18 +104,21 @@ async fn list_records(
 	} else {
 		Vec::new()
 	};
+	let mut pagination = serde_json::json!({
+		"current_page": page,
+		"per_page": per_page,
+		"total_entries": total,
+		"total_pages": total_pages,
+	});
+	if s.omit_total_pages {
+		pagination
+			.as_object_mut()
+			.expect("object")
+			.remove("total_pages");
+	}
 	json_response(
 		200,
-		&serde_json::json!({
-			"data": page_data,
-			"pagination": {
-				"current_page": page,
-				"per_page": per_page,
-				"total_entries": total,
-				"total_pages": total_pages,
-			}
-		})
-		.to_string(),
+		&serde_json::json!({ "data": page_data, "pagination": pagination }).to_string(),
 	)
 }
 
@@ -169,7 +183,7 @@ async fn delete_record(
 		.expect("build response")
 }
 
-async fn mock(initial: Vec<serde_json::Value>) -> (DnsimpleProvider, Shared) {
+pub(super) async fn mock(initial: Vec<serde_json::Value>) -> (DnsimpleProvider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState {
 		records: initial,
 		next_id: 0,
@@ -201,6 +215,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -373,6 +388,7 @@ async fn unsupported_kind_is_rejected() {
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	assert_eq!(
 		provider.upsert(ZONE, tlsa).await,
@@ -389,6 +405,7 @@ async fn mx_upsert_splits_priority_target_into_fields() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, mx).await.expect("mx upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -405,6 +422,7 @@ async fn srv_upsert_splits_priority_weight_port_target_into_fields() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, srv).await.expect("srv upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -423,6 +441,7 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 		kind: RecordKind::Caa,
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert(ZONE, caa).await.expect("caa upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
@@ -434,3 +453,14 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"content\":\".\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+}

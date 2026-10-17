@@ -1,6 +1,8 @@
 //! Leftovers of rotations that ran before rotations were journaled: key
 //! files `dkim-ed<day>.key` and TXT records `ed<day>._domainkey.<domain>`
-//! that neither the active, the previous nor a pending rotation names.
+//! that neither the active, the previous nor a pending rotation names, and
+//! the same for the RSA keys a dual-signing rotation makes
+//! (`dkim-rsa<day>.key`, `rsa<day>._domainkey.<domain>`).
 //!
 //! They are logged when the rotation task starts and never removed on the
 //! server's own initiative: a key file or record the state does not name
@@ -36,35 +38,36 @@ impl Orphans {
 	}
 }
 
-/// Whether `selector` has the shape the rotator gives its selectors.
+/// Whether `selector` has the shape the rotator gives its selectors:
+/// `ed<day>`, or `rsa<day>` for the RSA key of a dual-signing rotation.
 fn rotated_selector(selector: &str) -> bool {
 	selector
 		.strip_prefix("ed")
+		.or_else(|| selector.strip_prefix("rsa"))
 		.is_some_and(|day| !day.is_empty() && day.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// The selectors the state names (active, previous, pending) plus `keep`.
+/// The selectors the state names (active, previous, pending, each with
+/// its RSA key) plus `keep`.
 fn named_selectors(state: Option<&RotationState>, keep: &[String]) -> BTreeSet<String> {
-	let mut named: BTreeSet<String> = keep.iter().map(|s| s.to_ascii_lowercase()).collect();
+	let mut named: BTreeSet<&str> = keep.iter().map(String::as_str).collect();
 	if let Some(state) = state {
-		named.insert(state.selector.to_ascii_lowercase());
-		named.extend(
-			state
-				.previous
-				.iter()
-				.map(|p| p.selector.to_ascii_lowercase()),
-		);
-		named.extend(
-			state
-				.pending
-				.iter()
-				.map(|p| p.selector.to_ascii_lowercase()),
-		);
+		named.insert(&state.selector);
+		named.extend(state.rsa.iter().map(|r| r.selector.as_str()));
+		if let Some(previous) = &state.previous {
+			named.insert(&previous.selector);
+			named.extend(previous.rsa.iter().map(|r| r.selector.as_str()));
+		}
+		if let Some(pending) = &state.pending {
+			named.insert(&pending.selector);
+			named.extend(pending.rsa.iter().map(|r| r.selector.as_str()));
+		}
 	}
-	named
+	named.into_iter().map(str::to_ascii_lowercase).collect()
 }
 
-/// `dkim-ed<day>.key` files in `data_dir` that no named selector owns.
+/// `dkim-ed<day>.key` and `dkim-rsa<day>.key` files in `data_dir` that no
+/// named selector owns.
 pub fn orphan_key_files(
 	data_dir: &Path,
 	state: Option<&RotationState>,
@@ -90,8 +93,8 @@ pub fn orphan_key_files(
 	found
 }
 
-/// TXT records `ed<day>._domainkey.<domain>` for a signing domain whose
-/// selector nothing names.
+/// TXT records `ed<day>._domainkey.<domain>` and `rsa<day>._domainkey.<domain>`
+/// for a signing domain whose selector nothing names.
 pub fn orphan_records(
 	records: &[DnsRecord],
 	domains: &[String],
@@ -151,7 +154,8 @@ pub fn request_cleanup(data_dir: &Path) -> std::io::Result<()> {
 
 impl Rotator {
 	/// Selectors outside the state that must never count as orphans: the
-	/// configured ed25519 and RSA selectors.
+	/// configured ed25519 and RSA selectors and every `[[dkim.domain]]` one
+	/// ([`crate::config::Dkim::kept_selectors`]).
 	pub fn keeping(mut self, selectors: Vec<String>) -> Self {
 		self.keep = selectors;
 		self

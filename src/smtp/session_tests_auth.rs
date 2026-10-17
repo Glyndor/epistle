@@ -8,7 +8,8 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.code(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.code(),
 		Action::Deliver(r, _) => r.code(),
 		Action::CollectChunk { .. } => 0,
 	}
@@ -20,7 +21,8 @@ pub(super) fn reply_text(action: &Action) -> String {
 		| Action::CollectData(r)
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
-		| Action::Close(r) => r.to_string(),
+		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. } => r.to_string(),
 		Action::Deliver(r, _) => r.to_string(),
 		Action::CollectChunk { .. } => String::new(),
 	}
@@ -536,11 +538,14 @@ pub(super) fn submission_rate_limit_defers_over_the_limit() {
 	assert_eq!(session.authenticated(), Some("alice"));
 
 	// First authenticated submission is within the limit.
-	let first = session.command_line("MAIL FROM:<alice@example.org>");
-	assert_eq!(reply_code(&first), 250);
-	session.command_line("RSET");
+	assert_eq!(
+		super::tests_ratelimit::send_one(&mut session, "alice@example.org"),
+		250
+	);
 
 	// The second within the window exceeds the per-account limit -> 4xx defer.
-	let second = session.command_line("MAIL FROM:<alice@example.org>");
-	assert_eq!(reply_code(&second), 450);
+	assert_eq!(
+		super::tests_ratelimit::send_one(&mut session, "alice@example.org"),
+		450
+	);
 }

@@ -161,3 +161,183 @@ fn a_command_line_missing_a_required_argument_is_still_searched() {
 	assert_eq!(found.len(), 1);
 	assert_eq!(found[0].value, PathBuf::from("/tmp/pw"));
 }
+
+const MESSAGE: Kind = Kind::ReadFile {
+	limit: MESSAGE_LIMIT,
+	secret: false,
+};
+
+fn message_found(token: usize, value: &str) -> Found {
+	Found {
+		token,
+		prefix: None,
+		value: value.into(),
+		kind: MESSAGE,
+	}
+}
+
+#[test]
+fn a_positional_path_is_found_by_its_place_on_the_line() {
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "/tmp/m.eml", "--json"]),
+			STAGED
+		),
+		[message_found(2, "/tmp/m.eml")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "--json", "/tmp/m.eml"]),
+			STAGED
+		),
+		[message_found(3, "/tmp/m.eml")]
+	);
+}
+
+#[test]
+fn a_positional_path_after_the_terminator_is_still_a_path() {
+	// A file called `--json` can only be named after `--`.
+	assert_eq!(
+		find(&args(&["attachments", "check", "--", "--json"]), STAGED),
+		[message_found(3, "--json")]
+	);
+	// And a file called like the subcommand is the last token, not the command.
+	assert_eq!(
+		find(&args(&["attachments", "check", "check"]), STAGED),
+		[message_found(2, "check")]
+	);
+}
+
+#[test]
+fn only_check_stages_a_path_in_attachments() {
+	assert!(find(&args(&["attachments", "policy", "show"]), STAGED).is_empty());
+	assert!(find(&args(&["attachments", "check"]), STAGED).is_empty());
+}
+
+#[test]
+fn a_positional_path_is_found_by_its_place_not_by_its_value() {
+	// The same text is also the value of another flag: the file is the
+	// token clap read as the positional.
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "foo", "--config", "foo"]),
+			STAGED
+		),
+		[message_found(2, "foo")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "check", "--config", "foo", "foo"]),
+			STAGED
+		),
+		[message_found(4, "foo")]
+	);
+	assert_eq!(
+		find(
+			&args(&["attachments", "--config", "m.eml", "check", "m.eml"]),
+			STAGED
+		),
+		[message_found(4, "m.eml")]
+	);
+}
+
+#[test]
+fn a_line_repeating_the_path_many_times_is_searched_with_a_bound() {
+	// A synthetic command whose option can repeat, so that 5000 tokens
+	// read `foo` as an option value before the positional `foo`.
+	let root = clap::Command::new("epistle").subcommand(
+		clap::Command::new("c")
+			.arg(
+				clap::Arg::new("opt")
+					.long("opt")
+					.action(clap::ArgAction::Append),
+			)
+			.arg(clap::Arg::new("file")),
+	);
+	let mut line = args(&["c"]);
+	for _ in 0..5_000 {
+		line.extend(args(&["--opt", "foo"]));
+	}
+	line.push("foo".into());
+	let argv = std::iter::once(OsString::from("epistle")).chain(line.iter().cloned());
+	let matches = root.clone().try_get_matches_from(argv).unwrap();
+	let entry = Staged {
+		command: &["c"],
+		arg: "file",
+		kind: MESSAGE,
+	};
+	let mut found = Vec::new();
+	let started = std::time::Instant::now();
+	positional(
+		&line,
+		&root,
+		matches.subcommand_matches("c").unwrap(),
+		&entry,
+		&mut found,
+	);
+	assert!(
+		started.elapsed() < std::time::Duration::from_secs(5),
+		"the number of probes is bounded"
+	);
+	assert!(found.is_empty(), "past the bound nothing is staged");
+}
+
+#[test]
+fn the_message_staged_for_check_is_bounded_by_the_default_message_size() {
+	// docs/cli.md tells the operator a larger `max_message_size` needs the
+	// service account; the copy for root stops at the default.
+	let entry = STAGED
+		.iter()
+		.find(|entry| entry.command == ["attachments", "check"])
+		.expect("check stages its file");
+	assert_eq!(
+		entry.kind,
+		Kind::ReadFile {
+			limit: crate::smtp::session::MAX_MESSAGE_SIZE as u64,
+			secret: false,
+		}
+	);
+}
+
+#[test]
+fn the_path_of_check_is_found_among_the_global_flags() {
+	assert_eq!(
+		find(
+			&args(&[
+				"attachments",
+				"--config",
+				"/etc/mail.toml",
+				"check",
+				"/tmp/m.eml",
+				"--strict",
+				"--json"
+			]),
+			STAGED
+		),
+		[message_found(4, "/tmp/m.eml")]
+	);
+}
+
+#[test]
+fn the_file_of_a_suppression_import_is_staged_as_a_read() {
+	let found = find(
+		&args(&[
+			"suppression",
+			"import",
+			"--account",
+			"bob",
+			"/root/list.csv",
+			"--dry-run",
+		]),
+		STAGED,
+	);
+	assert_eq!(found.len(), 1, "{found:?}");
+	assert_eq!(found[0].value, std::path::PathBuf::from("/root/list.csv"));
+	assert_eq!(
+		found[0].kind,
+		Kind::ReadFile {
+			limit: FILE_LIMIT,
+			secret: false
+		}
+	);
+}

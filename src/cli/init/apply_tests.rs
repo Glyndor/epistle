@@ -157,6 +157,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 	// apply still validates; the test's job is to confirm keys survive
 	// every answer change, not to test service-specific config branches.
 	answers.services = Services {
+		antivirus: None,
 		imap: false,
 		submission: true,
 		pop3: false,

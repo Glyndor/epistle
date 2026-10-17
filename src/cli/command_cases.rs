@@ -86,6 +86,16 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	),
 	(&["account", "show", "alice"], true),
 	(&["queue"], true),
+	(&["warmup", "status"], true),
+	(&["warmup", "status", "--json"], true),
+	(&["warmup", "enable", "--yes"], true),
+	(&["warmup", "set", "gmail", "--cap", "200", "--yes"], true),
+	(&["warmup", "reset", "outlook", "--yes"], true),
+	(
+		&["warmup", "plan", "--ip-age", "3w", "--daily-volume", "1000"],
+		true,
+	),
+	(&["warmup", "start", "--ip-age", "6m", "--yes"], true),
 	(&["queue", "list", "--json"], true),
 	(
 		&["queue", "show", "00000000-0000-0000-0000-000000000000"],
@@ -102,6 +112,25 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["delivery", "list", "--json"], true),
 	(
 		&["delivery", "list", "--outcome", "failed", "--since", "1d"],
+		true,
+	),
+	(&["evidence", "check", "/tmp/bundle"], false),
+	(&["evidence", "verify", "--json"], true),
+	(
+		&[
+			"evidence",
+			"export",
+			"--message-id",
+			"<1@example.org>",
+			"--out",
+			"/tmp/b",
+		],
+		true,
+	),
+	(&["evidence", "policy", "show"], true),
+	(&["evidence", "timestamp", "disable", "--yes"], true),
+	(
+		&["evidence", "acknowledge", "--reason", "restored", "--yes"],
 		true,
 	),
 	(&["ban", "list", "--json"], true),
@@ -273,6 +302,13 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		&["antispam", "remove", "dnsbl-zones", "zen.spamhaus.org"],
 		true,
 	),
+	(&["attachments", "policy", "show"], true),
+	(
+		&["attachments", "policy", "set", "mode", "quarantine"],
+		true,
+	),
+	(&["attachments", "policy", "unset", "mode"], true),
+	(&["attachments", "check", "message.eml"], true),
 	(&["alias", "list"], true),
 	(&["alias", "show", "team@example.org"], true),
 	(

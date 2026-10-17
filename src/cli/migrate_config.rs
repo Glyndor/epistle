@@ -47,7 +47,7 @@ pub(super) fn run(config: &Path, plan: Result<Plan, String>, args: &ImportArgs) 
 		return code;
 	}
 	let restarted = crate::config::Config::load(config)
-		.map_err(|error| error.to_string())
+		.map_err(|error| crate::cli::resource::ResourceError::Failure(error.to_string()))
 		.and_then(|config| {
 			crate::cli::config_edit::after_change_with(
 				&config,
@@ -60,7 +60,7 @@ pub(super) fn run(config: &Path, plan: Result<Plan, String>, args: &ImportArgs) 
 	match restarted {
 		Ok(_) => code,
 		Err(error) => {
-			crate::cli::style::error(error);
+			crate::cli::style::error(error.to_string());
 			ExitCode::FAILURE
 		}
 	}

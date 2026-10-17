@@ -260,12 +260,28 @@ pub(crate) fn pad(text: &str, width: usize) -> String {
 	format!("{fitted}{}", " ".repeat(fill))
 }
 
-/// Control characters escaped so a value read from a file cannot move the
-/// cursor or repaint the terminal it is printed on.
+/// Whether `c` is an invisible formatting character that can make text read
+/// differently from what it is: zero-width marks, the bidirectional
+/// overrides and isolates (U+202E turns the text after it around), the
+/// invisible operators and the byte order mark.
+pub(crate) fn is_invisible_format(c: char) -> bool {
+	matches!(
+		c,
+		'\u{200B}'..='\u{200F}'
+			| '\u{202A}'..='\u{202E}'
+			| '\u{2060}'..='\u{2064}'
+			| '\u{2066}'..='\u{2069}'
+			| '\u{FEFF}'
+	)
+}
+
+/// Control and invisible formatting characters escaped so a value read from
+/// a file cannot move the cursor, repaint the terminal it is printed on or
+/// reorder the text around it.
 pub(crate) fn sanitize(text: &str) -> String {
 	text.chars()
 		.flat_map(|c| {
-			if c.is_control() {
+			if c.is_control() || crate::evidence::hidden::is_hidden(c) {
 				c.escape_default().collect::<Vec<_>>()
 			} else {
 				vec![c]

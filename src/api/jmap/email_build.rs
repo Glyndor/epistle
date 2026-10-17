@@ -27,11 +27,15 @@ pub(super) struct Sources<'a> {
 }
 
 /// The message for `spec`, or the SetError to answer with.
-pub(super) fn build(spec: &Value, sources: &Sources<'_>) -> Result<Vec<u8>, Value> {
+pub(super) fn build(
+	spec: &Value,
+	sources: &Sources<'_>,
+	max_message_size: usize,
+) -> Result<Vec<u8>, Value> {
 	refuse_content_headers(spec)?;
 	let root = parts::body(spec, sources)?;
 	let raw = compose::write(&headers(spec)?, &root).map_err(|_| invalid(&["bodyStructure"]))?;
-	if raw.len() > crate::smtp::session::MAX_MESSAGE_SIZE {
+	if raw.len() > max_message_size {
 		return Err(json!({"type": "tooLarge"}));
 	}
 	let stamp_domain = spec

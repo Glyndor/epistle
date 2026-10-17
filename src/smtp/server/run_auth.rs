@@ -15,15 +15,17 @@ use super::Server;
 impl Server {
 	/// Authenticate `message` from `peer` when the session did not log in
 	/// and a resolver is configured. Returns the trace headers to prepend
-	/// (empty when nothing ran), or the reply that refuses the message: SPF
+	/// (empty when nothing ran) and whether the sender passed SPF or DKIM
+	/// (see [`sender_passed`]), or the reply that refuses the message: SPF
 	/// or DMARC failed, or either could not be evaluated right now.
 	pub(super) async fn authenticate_inbound(
 		&self,
 		message: &AcceptedMessage,
 		session: &Session,
 		peer: Option<IpAddr>,
-	) -> Result<String, Reply> {
+	) -> Result<(String, bool), Reply> {
 		let mut auth_headers = String::new();
+		let mut passed = false;
 		if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated()) {
 			let domain = spf_domain(&message.reverse_path, session.helo_domain());
 			let outcome = match &domain {
@@ -58,6 +60,11 @@ impl Server {
 						crate::dmarc::author::AuthorDomain::One(domain) => Some(domain.clone()),
 						_ => None,
 					};
+					let envelope = message
+						.reverse_path
+						.rsplit_once('@')
+						.map(|(_, domain)| domain.to_ascii_lowercase());
+					passed = sender_passed(outcome, envelope.as_deref(), &dkim_results);
 					let dmarc = match &author {
 						crate::dmarc::author::AuthorDomain::One(from) => {
 							crate::dmarc::evaluate(
@@ -172,6 +179,36 @@ impl Server {
 				}
 			}
 		}
-		Ok(auth_headers)
+		Ok((auth_headers, passed))
 	}
+}
+
+/// Whether this hop authenticated the envelope sender, the address an
+/// auto-reply goes to: SPF passed for its domain, or a DKIM signature
+/// passed for a domain that shares its organizational domain (relaxed
+/// alignment, RFC 7489 section 3.1). A signature by the From domain counts
+/// only through that alignment: anyone can sign mail From a domain of
+/// their own while putting someone else's address in MAIL FROM, and a
+/// pass for the From would then aim the reply at that someone. Everything
+/// here comes from this message's own checks, never from its headers.
+pub(super) fn sender_passed(
+	spf: crate::spf::SpfOutcome,
+	envelope: Option<&str>,
+	dkim: &[crate::dkim::DkimResult],
+) -> bool {
+	use crate::dmarc::organizational_domain as org;
+	let Some(envelope) = envelope else {
+		return false;
+	};
+	if spf == crate::spf::SpfOutcome::Pass {
+		return true;
+	}
+	let owner = org(envelope);
+	dkim.iter().any(|result| {
+		result.outcome == crate::dkim::DkimOutcome::Pass
+			&& result
+				.domain
+				.as_deref()
+				.is_some_and(|domain| org(&domain.to_ascii_lowercase()) == owner)
+	})
 }

@@ -251,6 +251,7 @@ async fn mx_upsert_passes_value_through_in_rrdatas() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().changes.last().cloned().unwrap();
@@ -273,6 +274,7 @@ async fn srv_upsert_passes_value_through_in_rrdatas() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org.".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().changes.last().cloned().unwrap();
@@ -335,4 +337,39 @@ fn rs256_sign_then_verify() {
 	)
 	.verify(format!("{h}.{p}").as_bytes(), &sig2)
 	.expect("verify");
+}
+
+/// Cloud DNS decides how many rrsets one answer holds and hands out a
+/// `nextPageToken` for the rest. A listing that stops at the first page
+/// misses records, and a name whose MX sits on a later page looks like a
+/// name without one.
+#[tokio::test]
+async fn list_follows_every_page() {
+	let rrset = |name: &str, kind: &str, data: &str| Rrset {
+		name: name.into(),
+		kind: kind.into(),
+		ttl: 300,
+		rrdatas: vec![data.into()],
+	};
+	let initial = vec![
+		rrset("www.example.org.", "A", "203.0.113.10"),
+		rrset("lists.example.org.", "A", "203.0.113.11"),
+		rrset("lists.example.org.", "MX", "10 mx.example.net."),
+	];
+	let (base, state) = start_mock(initial).await;
+	state.lock().unwrap().page_size = Some(1);
+	let provider = provider_for(&base);
+	let records = provider.list("example.org").await.expect("list");
+	let listed: Vec<String> = records
+		.iter()
+		.map(|r| format!("{} {} {}", r.name, r.kind.as_str(), r.value))
+		.collect();
+	assert_eq!(
+		listed,
+		vec![
+			"www.example.org A 203.0.113.10",
+			"lists.example.org A 203.0.113.11",
+			"lists.example.org MX 10 mx.example.net.",
+		]
+	);
 }

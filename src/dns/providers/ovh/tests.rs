@@ -50,6 +50,8 @@ pub(super) struct MockState {
 	pub(super) write_path: String,
 	pub(super) refresh_called: bool,
 	pub(super) addr: String,
+	/// How many `GET /record/{id}` the mock answered.
+	pub(super) reads: usize,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -114,6 +116,7 @@ async fn read_record(
 ) -> axum::Json<serde_json::Value> {
 	let mut s = state.lock().unwrap();
 	s.last_headers = headers;
+	s.reads += 1;
 	let rec = s.records.iter().find(|r| r.id == id).cloned();
 	match rec {
 		Some(r) => axum::Json(r.to_json()),
@@ -211,6 +214,7 @@ pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 

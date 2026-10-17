@@ -74,22 +74,6 @@ pub(crate) struct HostsResult {
 /// numbers surface as [`ProviderError::Remote`] with the provider's text.
 const AUTH_ERROR_NUMBERS: &[&str] = &["1012801", "1012802", "2011169"];
 
-/// Read a response body in chunks with a hard cap.
-pub(crate) async fn read_bounded(mut response: reqwest::Response) -> Result<String, ProviderError> {
-	let mut body = Vec::new();
-	while let Some(chunk) = response
-		.chunk()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?
-	{
-		if body.len() + chunk.len() > MAX_BODY {
-			return Err(ProviderError::Remote("namecheap response too large".into()));
-		}
-		body.extend_from_slice(&chunk);
-	}
-	String::from_utf8(body).map_err(|e| ProviderError::Remote(e.to_string()))
-}
-
 /// Pull the hosts list out of an [`ApiResponse`]. Returns an empty `Vec`
 /// when the response has no `CommandResponse` or hosts block.
 pub(crate) fn extract_hosts(api: ApiResponse) -> Vec<Host> {
@@ -116,7 +100,7 @@ pub(crate) async fn parse_response(
 	if !status.is_success() {
 		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
-	let body = read_bounded(response).await?;
+	let body = crate::dns::providers::read_bounded(response, MAX_BODY).await?;
 	let api: ApiResponse = from_str(&body).map_err(|e| ProviderError::Remote(e.to_string()))?;
 	if api.status.eq_ignore_ascii_case("ERROR") {
 		let first = api
@@ -138,19 +122,11 @@ pub(crate) async fn parse_response(
 	Ok(api)
 }
 
-/// Convert a [`Host`] back into the abstract [`DnsRecord`] form. Returns
-/// `None` for kinds we do not model (e.g. URLFRAME, ALIAS — Namecheap has a
-/// few aliases we never publish).
+/// Convert a [`Host`] back into the abstract [`DnsRecord`] form. A type
+/// epistle does not publish (ALIAS, URL, URL301, FRAME, MXE) keeps its own
+/// kind; `None` is only a record whose MX or SRV parts are missing.
 pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
-	let kind = match host.kind.as_str() {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CNAME" => RecordKind::Cname,
-		"TXT" => RecordKind::Txt,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		_ => return None,
-	};
+	let kind = RecordKind::from_token(&host.kind);
 	let value = match kind {
 		// getHosts does not document the TXT form either; a value this
 		// provider wrote comes back as written, and one written quoted
@@ -184,5 +160,6 @@ pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
 		kind,
 		value,
 		ttl: host.ttl,
+		proxied: None,
 	})
 }

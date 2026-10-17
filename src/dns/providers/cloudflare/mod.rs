@@ -11,12 +11,14 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
+mod list;
 mod tags;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
-use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+use crate::dns::providers::transport;
+use crate::dns::txt::{TxtForm, txt_encode};
 use tags as cloudflare_tags;
 
 /// How Cloudflare wants a TXT `content` written and lists it back; see
@@ -54,6 +56,18 @@ struct ZoneRef {
 #[derive(Deserialize)]
 struct ListRecords {
 	result: Vec<RecordRef>,
+	/// Paging: `total_pages` says how many pages the list has.
+	#[serde(default)]
+	result_info: Option<ResultInfo>,
+}
+
+#[derive(Deserialize)]
+struct ResultInfo {
+	#[serde(default)]
+	total_pages: Option<u32>,
+	/// How many records the whole listing holds.
+	#[serde(default)]
+	total_count: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -68,13 +82,21 @@ struct RecordRef {
 	/// Tags already on the record, kept (but for epistle's own) on update.
 	#[serde(default)]
 	tags: Vec<String>,
+	/// Whether the record is proxied through Cloudflare's orange cloud. Only
+	/// present for the record kinds Cloudflare can proxy (A, AAAA, CNAME); other
+	/// kinds do not return the field and `None` means "not applicable".
+	#[serde(default)]
+	proxied: Option<bool>,
+	/// The MX preference; Cloudflare lists it apart from the target.
+	#[serde(default)]
+	priority: Option<u16>,
 }
 
 impl CloudflareProvider {
 	/// Build a provider for the token's zone.
 	pub fn new(secret: ScopedSecret) -> Self {
 		CloudflareProvider {
-			client: reqwest::Client::new(),
+			client: crate::dns::providers::http_client(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
 			host_tag: None,
@@ -101,16 +123,22 @@ impl CloudflareProvider {
 	/// structured `data` object — each carries its kind-specific shape
 	/// (`usage selector matching cert` / `priority weight port target` /
 	/// `priority host` / `flags tag value`).
-	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A
-			| RecordKind::Aaaa
-			| RecordKind::Txt
-			| RecordKind::Cname
-			| RecordKind::Tlsa
-			| RecordKind::Srv
-			| RecordKind::Mx
-			| RecordKind::Caa => Ok(kind.as_str()),
+			RecordKind::A => Ok("A"),
+			RecordKind::Aaaa => Ok("AAAA"),
+			RecordKind::Txt => Ok("TXT"),
+			RecordKind::Cname => Ok("CNAME"),
+			RecordKind::Tlsa => Ok("TLSA"),
+			RecordKind::Srv => Ok("SRV"),
+			RecordKind::Mx => Ok("MX"),
+			RecordKind::Caa => Ok("CAA"),
+			// Cloudflare accepts HTTPS and SVCB; publishing NS, HTTPS
+			// or SVCB is the operator's call, not epistle's. Any
+			// other (custom) type is also out of scope.
+			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
+				Err(ProviderError::Unsupported)
+			}
 		}
 	}
 
@@ -193,9 +221,8 @@ impl CloudflareProvider {
 				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
 			let target = parts
 				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
-				.trim_end_matches('.')
-				.to_string();
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = crate::dns::provider::mx_target_for_api(target).to_string();
 			serde_json::json!({
 				"type": kind,
 				"name": record.name,
@@ -220,12 +247,25 @@ impl CloudflareProvider {
 			} else {
 				record.value.clone()
 			};
-			serde_json::json!({
+			let mut body = serde_json::json!({
 				"type": kind,
 				"name": record.name,
 				"content": content,
 				"ttl": record.ttl,
-			})
+			});
+			// Cloudflare only accepts `proxied` on the kinds it can
+			// actually proxy (A, AAAA, CNAME). Pin those to DNS-only:
+			// the proxy only speaks HTTP(S), so a mail hostname, an
+			// `autoconfig`, an `autodiscover`, or an `mta-sts` A/AAAA/CNAME
+			// the proxy took over would never deliver mail. Other kinds
+			// do not take the field.
+			if matches!(
+				record.kind,
+				RecordKind::A | RecordKind::Aaaa | RecordKind::Cname
+			) {
+				body["proxied"] = serde_json::Value::from(false);
+			}
+			body
 		};
 		value["comment"] = serde_json::Value::from(record_description());
 		Ok(value)
@@ -276,7 +316,7 @@ impl CloudflareProvider {
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode(response).await
 	}
 
@@ -344,20 +384,31 @@ impl CloudflareProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
 		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
-		// only the record of the same purpose; every other kind owns its
-		// name, so the write replaces the whole set. The first record is
-		// updated in place (an A with a new address is the same record,
-		// not a second one) and any others at the name are removed.
+		// the record of the same purpose and leaves every other TXT
+		// at the name alone (an ACME challenge, a verification
+		// token). Two records of the same purpose at the same name
+		// are a configuration mistake (SPF returns permerror, DMARC
+		// is ignored): the upsert collapses them by editing the
+		// first match and deleting every other. Every other kind
+		// owns its name, so the write replaces the whole set: the
+		// first record is updated in place and any others at the
+		// name are removed.
 		let found = self.find_records(&zone_id, &record.name, kind).await?;
 		let (existing, extra) = if record.kind == RecordKind::Txt {
-			let existing = found
+			// Filter to records of the same purpose only: an
+			// untagged TXT at the same owner (an ACME challenge,
+			// a site-verification token) is not a duplicate of
+			// epistle's record and the upsert must leave it alone.
+			let mut found = found
 				.into_iter()
-				.find(|r| same_txt_purpose(&r.content, &record.value));
-			(existing, Vec::new())
+				.filter(|r| same_txt_purpose(&r.content, &record.value));
+			let primary = found.next();
+			let rest: Vec<RecordRef> = found.collect();
+			(primary, rest)
 		} else {
 			let mut found = found.into_iter();
 			(found.next(), found.collect::<Vec<_>>())
@@ -412,7 +463,7 @@ impl CloudflareProvider {
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode_ok(response).await
 	}
 
@@ -441,12 +492,12 @@ impl CloudflareProvider {
 			.body(body.to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+			.map_err(transport)
 	}
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::api_kind(record.kind)?;
+		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
@@ -473,62 +524,27 @@ impl CloudflareProvider {
 		};
 		self.delete_id(&zone_id, &found.id).await
 	}
-
-	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
-		let zone_id = self.zone_id(zone).await?;
-		let url = self.records_url(&zone_id, None)?;
-		let records: ListRecords = self.get_json(url).await?;
-		Ok(records
-			.result
-			.into_iter()
-			.map(|r| {
-				let kind = parse_kind(&r.kind);
-				// The read form is not documented. A record written by
-				// the API comes back quoted (possibly re-split), one an
-				// older release wrote unquoted comes back as it was;
-				// `txt_decode` reads both as the logical value.
-				let value = if kind == RecordKind::Txt {
-					txt_decode(&r.content, TXT_FORM)
-				} else {
-					r.content
-				};
-				DnsRecord {
-					name: r.name,
-					kind,
-					value,
-					ttl: r.ttl,
-				}
-			})
-			.collect())
-	}
 }
 
 impl DnsProvider for CloudflareProvider {
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.upsert_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.upsert_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.delete_inner(&zone, record).await })
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_inner(&zone, record).await
+		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(async move { self.list_inner(&zone).await })
-	}
-}
-
-/// Map a Cloudflare type token back to a [`RecordKind`], defaulting to TXT.
-fn parse_kind(kind: &str) -> RecordKind {
-	match kind {
-		"A" => RecordKind::A,
-		"AAAA" => RecordKind::Aaaa,
-		"CAA" => RecordKind::Caa,
-		"CNAME" => RecordKind::Cname,
-		"MX" => RecordKind::Mx,
-		"SRV" => RecordKind::Srv,
-		"TLSA" => RecordKind::Tlsa,
-		_ => RecordKind::Txt,
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
+			self.list_inner(&zone).await
+		}))
 	}
 }
 
@@ -547,10 +563,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response
-		.text()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 
@@ -574,3 +587,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_path.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "tests_proxied.rs"]
+mod proxied_tests;

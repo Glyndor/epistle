@@ -26,7 +26,7 @@ pub(super) fn no_restart(_: &Config, _: StackAction) -> ExitCode {
 }
 
 pub(super) struct Run {
-	pub result: Result<ExitCode, String>,
+	pub result: Result<ExitCode, super::super::resource::ResourceError>,
 	pub out: String,
 	pub status: String,
 	pub before: String,
@@ -48,6 +48,7 @@ pub(super) fn run(extra: &str, args: &[&str], dry_run: bool) -> Run {
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut out,
 		&mut status,
 		no_restart,
@@ -170,7 +171,14 @@ impl DnsProvider for Fake {
 	}
 }
 
-fn probe(provider: &Fake, limit: Duration) -> (Result<ExitCode, String>, String, String) {
+fn probe(
+	provider: &Fake,
+	limit: Duration,
+) -> (
+	Result<ExitCode, super::super::resource::ResourceError>,
+	String,
+	String,
+) {
 	let (mut out, mut status) = (Vec::new(), Vec::new());
 	let result = probe::run_with("example.org", provider, limit, &mut out, &mut status);
 	(
@@ -187,6 +195,7 @@ fn test_reports_the_record_count_and_writes_nothing() {
 		kind: RecordKind::A,
 		value: "192.0.2.1".into(),
 		ttl: 300,
+		proxied: None,
 	};
 	let (result, out, status) = probe(&Fake(Ok(vec![record]), false), Duration::from_secs(1));
 	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
@@ -201,7 +210,7 @@ fn test_reports_provider_failures_and_timeouts() {
 		Duration::from_secs(1),
 	);
 	assert_eq!(
-		result.unwrap_err(),
+		result.unwrap_err().as_ref(),
 		"dns provider test failed for example.org: provider authentication failed"
 	);
 	let started = std::time::Instant::now();
@@ -211,7 +220,7 @@ fn test_reports_provider_failures_and_timeouts() {
 		"the limit must cut a provider that never answers"
 	);
 	assert_eq!(
-		result.unwrap_err(),
+		result.unwrap_err().as_ref(),
 		"dns provider test failed for example.org: no answer within 0.2 s"
 	);
 }
@@ -233,7 +242,7 @@ fn test_refuses_missing_manual_and_unresolvable_providers() {
 		),
 	] {
 		let run = run(extra, &["test"], false);
-		assert_eq!(run.result.unwrap_err(), message);
+		assert_eq!(run.result.unwrap_err().as_ref(), message);
 		assert_eq!(run.after, run.before);
 	}
 }

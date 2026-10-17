@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
 use crate::config::Listener;
-use crate::smtp::sink::MemorySink;
+use crate::smtp::sink::{MemorySink, MessageSink};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -168,5 +168,163 @@ rsa_key_file = \"/etc/mail/rsa.pem\"
 	assert!(
 		events.iter().all(|e| !e.fields.contains_key("remedy")),
 		"both RSA fields set: serve must not log the single-signature warning, got {events:?}"
+	);
+}
+
+/// POST `body` to `path` on the API at `port` with the fixture token and
+/// return the HTTP status code. Retries the connect while `serve` binds.
+async fn api_post_status(port: u16, path: &str, body: &[u8]) -> u16 {
+	let mut stream = None;
+	for _ in 0..100 {
+		match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+			Ok(connected) => {
+				stream = Some(connected);
+				break;
+			}
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+		}
+	}
+	let mut stream = stream.expect("the API listener comes up");
+	let head = format!(
+		"POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n\
+Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+		crate::test_fixtures::api_token(),
+		body.len()
+	);
+	stream.write_all(head.as_bytes()).await.expect("head");
+	let _ = stream.write_all(body).await;
+	let mut response = Vec::new();
+	let _ = stream.read_to_end(&mut response).await;
+	let status = String::from_utf8_lossy(&response[..response.len().min(12)]).into_owned();
+	status
+		.strip_prefix("HTTP/1.1 ")
+		.and_then(|code| code.parse().ok())
+		.expect("an HTTP status line")
+}
+
+#[tokio::test]
+async fn serve_applies_max_message_size_to_the_api() {
+	// The configured cap must reach the REST send body limit, not only the
+	// SMTP listeners: an 8 KiB body under a 4 KiB cap is refused with 413
+	// before it is parsed.
+	let port = crate::test_fixtures::free_port();
+	let dir = tempfile::tempdir().expect("tempdir");
+	let listener: Listener =
+		toml::from_str(&format!("kind = \"api\"\nport = {port}")).expect("listener config");
+	let mut config = test_config(dir.path(), vec![listener]);
+	config.max_message_size = Some(4096);
+	config.api = Some(
+		toml::from_str(&format!(
+			"token_hash = \"{}\"",
+			crate::smtp::auth::tests::hash(crate::test_fixtures::api_token())
+		))
+		.expect("api config"),
+	);
+	let server = tokio::spawn(serve(config));
+	let body = format!("{{\"pad\":\"{}\"}}", "x".repeat(8 * 1024));
+	let status = api_post_status(port, "/api/v1/send", body.as_bytes()).await;
+	server.abort();
+	assert_eq!(status, 413, "the API body limit follows max_message_size");
+}
+
+#[tokio::test]
+async fn serve_applies_the_rate_floor_to_smtp() {
+	// A floor no client can meet after a one-second grace: the listener
+	// `serve` builds cuts a dripped BDAT chunk then, not after the
+	// built-in 120 s. The clock is the real one: with real sockets a
+	// paused clock jumps to the next timer whenever the runtime waits on
+	// the kernel, so a reply still in flight could find the server timed
+	// out. One second of real time, and a minute of margin before the
+	// built-in grace would be the one that cut.
+	let port = crate::test_fixtures::free_port();
+	let dir = tempfile::tempdir().expect("tempdir");
+	let listener: Listener = toml::from_str(&format!(
+		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
+	))
+	.expect("listener config");
+	let mut config = test_config(dir.path(), vec![listener]);
+	config.min_data_rate = Some(1024 * 1024 * 1024);
+	config.data_rate_grace = Some(1);
+	let server = tokio::spawn(serve(config));
+	let mut stream = None;
+	for _ in 0..100 {
+		match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+			Ok(connected) => {
+				stream = Some(connected);
+				break;
+			}
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+		}
+	}
+	let mut stream = stream.expect("the SMTP listener comes up");
+	stream
+		.write_all(b"EHLO client.example.org\r\nBDAT 4096\r\n")
+		.await
+		.expect("write");
+	let mut output = Vec::new();
+	let read = tokio::time::timeout(
+		std::time::Duration::from_secs(60),
+		stream.read_to_end(&mut output),
+	)
+	.await;
+	server.abort();
+	let output = String::from_utf8_lossy(&output);
+	assert!(
+		read.is_ok(),
+		"the configured grace cuts within a minute, not the built-in 120 s: {output}"
+	);
+	assert!(
+		output.ends_with("421 4.4.2 transfer too slow, closing connection\r\n"),
+		"the configured floor cuts the chunk: {output}"
+	);
+}
+
+#[tokio::test]
+async fn serve_applies_the_junk_command_limit_to_smtp() {
+	// With the limit at 10 the listener `serve` builds cuts the 11th NOOP,
+	// not the 101st.
+	let port = crate::test_fixtures::free_port();
+	let dir = tempfile::tempdir().expect("tempdir");
+	let listener: Listener = toml::from_str(&format!(
+		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
+	))
+	.expect("listener config");
+	let mut config = test_config(dir.path(), vec![listener]);
+	config.junk_command_limit = Some(10);
+	let server = tokio::spawn(serve(config));
+	let mut stream = None;
+	for _ in 0..100 {
+		match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+			Ok(connected) => {
+				stream = Some(connected);
+				break;
+			}
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+		}
+	}
+	let mut stream = stream.expect("the SMTP listener comes up");
+	let mut script = b"EHLO client.example.org\r\n".to_vec();
+	script.extend_from_slice(&b"NOOP\r\n".repeat(20));
+	stream.write_all(&script).await.expect("write");
+	let mut output = Vec::new();
+	let read = tokio::time::timeout(
+		std::time::Duration::from_secs(60),
+		stream.read_to_end(&mut output),
+	)
+	.await;
+	server.abort();
+	let output = String::from_utf8_lossy(&output);
+	assert!(read.is_ok(), "the connection is closed: {output}");
+	assert!(
+		output.ends_with("421 4.7.0 too many commands without progress, closing connection\r\n"),
+		"the configured limit cuts: {output}"
+	);
+	assert_eq!(
+		output
+			.lines()
+			.filter(|line| line.starts_with("250 "))
+			.count(),
+		11,
+		"the EHLO and ten NOOPs are answered, the eleventh NOOP is cut: {output}"
 	);
 }

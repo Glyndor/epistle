@@ -27,6 +27,7 @@ fn sample_message() -> AcceptedMessage {
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	}
 }

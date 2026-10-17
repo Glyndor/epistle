@@ -63,6 +63,7 @@ fn fixture(with_previous: bool) -> Fixture {
 			selector: "ed-old".into(),
 			key_file: old,
 			retire_at: 99 * DAY,
+			rsa: None,
 		}
 	});
 	let state = RotationState {
@@ -71,6 +72,7 @@ fn fixture(with_previous: bool) -> Fixture {
 		rotated_at: 0,
 		previous,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(data.join(STATE_FILE), serde_json::to_vec(&state).unwrap()).expect("state");
 	let signer = ReloadableSigner::new(Arc::new(Signer::load("ed0", &active).expect("signer")));

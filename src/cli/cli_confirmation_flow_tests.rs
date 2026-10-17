@@ -136,15 +136,72 @@ fn account_remove_asks_with_what_it_destroys() {
 	);
 }
 
+/// With `encrypt_at_rest` on, `account remove --queue discard` reads the
+/// sealed spool with the configured key and discards the account's queued
+/// mail. A spool opened without the key could read no entry and kept it all.
+#[test]
+fn account_remove_discards_sealed_queued_mail() {
+	let keys = tempfile::tempdir().expect("key dir");
+	let key_file = keys.path().join("mail.key");
+	std::fs::write(
+		&key_file,
+		crate::storage::generate_key_base64().expect("keygen"),
+	)
+	.expect("key file");
+	let (dir, cfg) = fixture(&format!(
+		"[storage]\nencrypt_at_rest = true\nencryption_key_file = {:?}\n",
+		key_file.display().to_string()
+	));
+	let config = load(cfg.path());
+	store(&config)
+		.add(DynamicAccount {
+			name: NAME.to_string(),
+			addresses: vec![format!("{NAME}@example.org")],
+			password_hash: hash(fixture_password()),
+			..DynamicAccount::default()
+		})
+		.expect("add alice");
+	let crypto =
+		crate::storage::MessageCrypto::from_config(config.storage.as_ref()).expect("crypto");
+	let id = FsSpool::open_with_crypto(dir.path(), crypto)
+		.expect("spool")
+		.store(
+			&AcceptedMessage {
+				reverse_path: format!("{NAME}@example.org"),
+				recipients: vec!["bob@remote.example".to_string()],
+				data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
+		.expect("store");
+
+	let code = accounts::remove(&config, NAME, QueuePolicy::Discard, true, &mut Vec::new());
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		!dir.path()
+			.join("spool/new")
+			.join(format!("{id}.json"))
+			.exists(),
+		"the sealed queued message must be discarded"
+	);
+}
+
 #[test]
 fn account_remove_refuses_an_unknown_or_static_name_without_asking() {
 	let (_dir, cfg) = fixture("[[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n");
 	let config = load(cfg.path());
-	for name in ["ghost", "bob"] {
+	// Unknown is a usage error (2), static a refusal by policy (3).
+	for (name, code) in [("ghost", 2), ("bob", 3)] {
 		let run = scripted(true, None, "y\n", || {
 			accounts::remove(&config, name, QueuePolicy::Drain, false, &mut Vec::new())
 		});
-		assert_eq!(run.value, ExitCode::from(2), "{name}");
+		assert_eq!(run.value, ExitCode::from(code), "{name}");
 		assert_eq!(run.stderr, "", "{name}: nothing is asked");
 		assert_eq!(run.unread, 2, "{name}: no answer is read");
 	}
@@ -162,6 +219,7 @@ fn spooled() -> (tempfile::TempDir, uuid::Uuid) {
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
+				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
 			None,
@@ -185,8 +243,10 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 		|(dir, id), yes| {
 			queue::run(
 				dir.path(),
+				None,
 				0,
 				Some(QueueCli::Remove { id: *id, yes }),
+				false,
 				queue::now_epoch(),
 				None,
 				&mut Vec::new(),
@@ -231,6 +291,7 @@ fn purge(cfg: &Path, older_than_days: Option<u64>, yes: bool) -> ExitCode {
 			older_than_days,
 			yes,
 		},
+		false,
 		&mut Vec::new(),
 	)
 }
@@ -279,11 +340,11 @@ fn api_key_revoke_asks_with_the_key_scopes() {
 				scopes: vec!["read".to_string()],
 				..api_keys::NewKey::default()
 			};
-			let created = api_keys::create(&load(cfg.path()), key, &mut Vec::new());
+			let created = api_keys::create(&load(cfg.path()), key, false, &mut Vec::new());
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},
-		|(_, cfg), yes| api_keys::revoke(&load(cfg.path()), "ci", yes, &mut Vec::new()),
+		|(_, cfg), yes| api_keys::revoke(&load(cfg.path()), "ci", yes, false, &mut Vec::new()),
 		|(dir, _)| {
 			crate::api::ApiKeyStore::open(dir.path())
 				.expect("open")
@@ -307,13 +368,22 @@ fn app_password_revoke_asks_naming_label_and_account() {
 				None,
 				None,
 				None,
+				None,
+				false,
 				&mut Vec::new(),
 			);
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},
 		|(_, cfg), yes| {
-			app_passwords::revoke(&load(cfg.path()), NAME, "phone", yes, &mut Vec::new())
+			app_passwords::revoke(
+				&load(cfg.path()),
+				NAME,
+				"phone",
+				yes,
+				false,
+				&mut Vec::new(),
+			)
 		},
 		|(dir, _)| {
 			AppPasswordStore::open(dir.path())
@@ -331,8 +401,13 @@ fn restore_refuses_a_piped_run_or_a_no_before_reading_the_archive() {
 		"Restore the archive on stdin into {}, replacing what is there? [y/N]",
 		dir.path().canonicalize().expect("canonical").display()
 	);
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, false);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, false),
+			false,
+		)
+	};
 	let piped = scripted(false, None, "y\n", restore);
 	assert_eq!(piped.value, ExitCode::from(2));
 	assert_eq!(piped.stderr, error(&refused_message("restore")));
@@ -355,8 +430,13 @@ fn restore_yes_or_a_y_answer_never_stands_in_for_force() {
 		b"Subject: hi\r\n\r\nbody".to_vec(),
 	)])
 	.expect("archive");
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, true);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, true),
+			false,
+		)
+	};
 	let flag = scripted(false, None, &archive, restore);
 	assert_eq!(
 		flag.value,
@@ -366,8 +446,13 @@ fn restore_yes_or_a_y_answer_never_stands_in_for_force() {
 	assert_eq!(flag.unread, 0, "the archive was read");
 	let mut typed = b"y\n".to_vec();
 	typed.extend_from_slice(&archive);
-	let restore =
-		|| crate::cli::dispatch::dispatch_restore(cfg.path().to_path_buf(), false, false, false);
+	let restore = || {
+		crate::cli::dispatch::dispatch_restore(
+			cfg.path().to_path_buf(),
+			(false, false, false),
+			false,
+		)
+	};
 	let answered = scripted(true, None, &typed, restore);
 	assert_eq!(
 		answered.value,

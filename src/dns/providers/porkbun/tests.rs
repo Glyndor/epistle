@@ -24,9 +24,13 @@ struct MockState {
 	/// When set, every endpoint answers this instead (with `200 OK`).
 	fail: Option<serde_json::Value>,
 	/// Every request seen, in order.
-	calls: Vec<Call>,
+	pub(super) calls: Vec<Call>,
 	/// Header names seen on the last request, lowercased.
 	headers: Vec<String>,
+	/// Body of every write request, in order. Mirrors `calls` for
+	/// the contract tests that need to assert on the wire payload
+	/// of multiple writes.
+	pub(super) bodies: Vec<String>,
 }
 
 impl MockState {
@@ -58,9 +62,12 @@ async fn hit(
 		.keys()
 		.map(|k| k.as_str().to_ascii_lowercase())
 		.collect();
+	s.bodies.push(body.clone());
+	let parsed: serde_json::Value =
+		serde_json::from_str(s.bodies.last().unwrap()).unwrap_or(serde_json::Value::Null);
 	s.calls.push(Call {
 		path: path.clone(),
-		body: serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+		body: parsed,
 	});
 	if let Some(fail) = s.fail.clone() {
 		return axum::Json(fail);
@@ -107,6 +114,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 
@@ -359,6 +367,7 @@ async fn mx_upsert_splits_priority_and_target() {
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", mx).await.expect("upsert");
 	let body = state.lock().unwrap().body("/dns/create/example.org");
@@ -375,6 +384,7 @@ async fn srv_upsert_passes_value_through_and_sets_prio_to_priority() {
 		kind: RecordKind::Srv,
 		value: "0 1 465 mail.example.org".into(),
 		ttl: 3600,
+		proxied: None,
 	};
 	provider.upsert("example.org", srv).await.expect("upsert");
 	let body = state.lock().unwrap().body("/dns/create/example.org");
@@ -471,3 +481,14 @@ mod txt_forms;
 
 #[path = "tests_contract.rs"]
 mod contract;
+
+/// The null MX (RFC 7505) keeps its root target instead of an empty one.
+#[tokio::test]
+async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let mx = DnsRecord::new("www.example.org", RecordKind::Mx, "0 .", 3600);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["content"], ".");
+	assert_eq!(body["prio"], serde_json::json!(0));
+}

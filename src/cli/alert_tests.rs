@@ -39,6 +39,7 @@ pub(super) fn run_with(extra: &str, args: &[&str], dry_run: bool) -> Run {
 		file.path(),
 		action,
 		dry_run,
+		false,
 		&mut out,
 		&mut status,
 		no_restart,
@@ -114,7 +115,7 @@ fn list_prints_every_rule() {
 	);
 	assert_eq!(
 		super::tests::run(ALERTS, &["list", "--json"]).out,
-		"[{\"name\":\"bounce-storm\",\"metric\":\"bounced\",\"op\":\">=\",\"threshold\":50,\"window_secs\":300,\"cooldown_secs\":900,\"webhook\":true,\"email\":[]}]\n"
+		"[{\"name\":\"bounce-storm\",\"metric\":\"bounced\",\"op\":\">=\",\"threshold\":50,\"window_secs\":300,\"cooldown_secs\":900,\"webhook\":true,\"email\":[],\"enabled\":true}]\n"
 	);
 	assert_eq!(super::tests::run("", &["list"]).out, "");
 	assert_eq!(super::tests::run("", &["list", "--json"]).out, "[]\n");
@@ -137,7 +138,7 @@ fn remove_deletes_the_rule_and_keeps_its_comments() {
 #[test]
 fn remove_reports_an_unknown_rule_and_dry_run_writes_nothing() {
 	let run = run(ALERTS, &["remove", "nope"]);
-	assert_eq!(run.result.unwrap_err(), "no alert named \"nope\"");
+	assert_eq!(run.result.unwrap_err().as_ref(), "no alert named \"nope\"");
 	assert!(run.after == run.before);
 	let dry = run_with(ALERTS, &["remove", "bounce-storm"], true);
 	assert!(dry.out.contains("-name = 'bounce-storm'"), "{}", dry.out);

@@ -54,14 +54,18 @@ impl DnsLookup for FakeDns {
 async fn report_fails_and_prints_on_missing_records() {
 	let dns = FakeDns::default();
 	let mut out = Vec::new();
+	let config: Config = toml::from_str(
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n",
+	)
+	.expect("config");
 	let code = report(
 		&["example.org".to_string()],
 		"mail.example.org",
 		None,
 		None,
-		&[],
 		&dns,
-		&mut out,
+		&config,
+		(false, &mut out),
 		crate::cli::style::Progress::start("checking"),
 	)
 	.await;
@@ -94,14 +98,18 @@ async fn report_succeeds_when_records_present() {
 		vec!["mail.example.org".into()],
 	);
 	let mut out = Vec::new();
+	let config: Config = toml::from_str(
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n",
+	)
+	.expect("config");
 	let code = report(
 		&["example.org".to_string()],
 		"mail.example.org",
 		None,
 		None,
-		&[],
 		&dns,
-		&mut out,
+		&config,
+		(false, &mut out),
 		crate::cli::style::Progress::start("checking"),
 	)
 	.await;
@@ -219,7 +227,7 @@ key_file = "/etc/mail/dkim.pem"
 	.expect("config");
 	let mut out = Vec::new();
 	let mut err = Vec::new();
-	let _ = run_with_writers(&config, &mut out, &mut err);
+	let _ = run_with_writers(&config, false, &mut out, &mut err);
 	let err_text = String::from_utf8_lossy(&err);
 	assert!(
 		err_text.contains("warning:"),
@@ -251,7 +259,7 @@ rsa_key_file = "/etc/mail/rsa.pem"
 	.expect("config");
 	let mut out = Vec::new();
 	let mut err = Vec::new();
-	let _ = run_with_writers(&config, &mut out, &mut err);
+	let _ = run_with_writers(&config, false, &mut out, &mut err);
 	let err_text = String::from_utf8_lossy(&err);
 	assert!(
 		!err_text.contains("signs with one key only"),
@@ -273,6 +281,7 @@ fn dkim_selectors_prefer_rotation_state_selector_over_configured() {
 		rotated_at: 31 * 86_400,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		dir.path().join("dkim-rotation.json"),
@@ -294,7 +303,7 @@ rsa_key_file = "/etc/mail/rsa.pem"
 		dir.path().display(),
 	))
 	.expect("config");
-	let selectors = dkim_selectors(&config).expect("selectors");
+	let selectors = dkim_default_selectors(&config).expect("selectors");
 	assert_eq!(
 		selectors,
 		vec!["ed-rotated".to_string(), "rsa-stable".to_string()],
@@ -320,7 +329,7 @@ key_file = "/etc/mail/dkim.pem"
 		dir.path().display(),
 	))
 	.expect("config");
-	let selectors = dkim_selectors(&config).expect("selectors");
+	let selectors = dkim_default_selectors(&config).expect("selectors");
 	assert_eq!(
 		selectors,
 		vec!["ed-original".to_string()],
@@ -337,7 +346,7 @@ fn dkim_selectors_fail_on_invalid_rotation_state() {
 		dir.path().display(),
 	))
 	.expect("config");
-	let error = dkim_selectors(&config).expect_err("invalid state must be an error");
+	let error = dkim_default_selectors(&config).expect_err("invalid state must be an error");
 	assert!(
 		error.to_string().contains("dkim-rotation.json"),
 		"error must name the state file, got: {error}"
@@ -350,6 +359,10 @@ fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
 	use crate::cli::term::{Decor, fake};
 	let dns = FakeDns::default();
 	let mut out = Vec::new();
+	let config: Config = toml::from_str(
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n",
+	)
+	.expect("config");
 	let runtime = tokio::runtime::Runtime::new().expect("runtime");
 	fake::with_stdout(Decor::coloured(40), || {
 		runtime.block_on(report(
@@ -357,9 +370,9 @@ fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
 			"mail.example.org",
 			None,
 			None,
-			&[],
 			&dns,
-			&mut out,
+			&config,
+			(false, &mut out),
 			crate::cli::style::Progress::start("checking"),
 		))
 	});

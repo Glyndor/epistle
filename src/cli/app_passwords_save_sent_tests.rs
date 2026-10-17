@@ -60,6 +60,8 @@ fn create_with_save_sent_off_persists_the_override() {
 			None,
 			None,
 			Some("off".into()),
+			None,
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -84,6 +86,8 @@ fn create_with_save_sent_on_persists_the_override() {
 			None,
 			None,
 			Some("on".into()),
+			None,
+			false,
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -101,7 +105,9 @@ fn create_without_save_sent_leaves_the_field_unset() {
 	let cfg = Config::load(cfg_file.path()).expect("load");
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&cfg, "alice", "phone", None, None, None, &mut out),
+		create(
+			&cfg, "alice", "phone", None, None, None, None, false, &mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let store = AppPasswordStore::open(dir.path()).expect("open");
@@ -124,6 +130,8 @@ fn create_with_a_garbled_save_sent_value_is_refused() {
 			None,
 			None,
 			Some("maybe".into()),
+			None,
+			false,
 			&mut out,
 		),
 		ExitCode::FAILURE,

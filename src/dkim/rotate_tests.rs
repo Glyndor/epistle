@@ -11,6 +11,7 @@ fn state(selector: &str, rotated_at: u64, previous: Option<Previous>) -> Rotatio
 		rotated_at,
 		previous,
 		pending: None,
+		rsa: None,
 	}
 }
 
@@ -40,6 +41,7 @@ fn retires_previous_after_overlap_takes_precedence() {
 		selector: "ed-old".into(),
 		key_file: PathBuf::default(),
 		retire_at: 2_000,
+		rsa: None,
 	};
 	let s = state("ed-new", 0, Some(previous));
 	// Overlap not elapsed: still idle (interval not reached either).
@@ -52,6 +54,7 @@ fn retires_previous_after_overlap_takes_precedence() {
 			selector: "ed-old".into(),
 			key_file: PathBuf::default(),
 			retire_at: 2_000,
+			rsa: None,
 		}),
 	);
 	assert_eq!(
@@ -201,8 +204,10 @@ mod tick_tests {
 					selector: "ed-old".into(),
 					key_file: retired_path.clone(),
 					retire_at: 100,
+					rsa: None,
 				}),
 				pending: None,
+				rsa: None,
 			},
 		);
 		(dir, active_path, retired_path, rotator, provider)
@@ -288,6 +293,7 @@ mod tick_tests {
 				rotated_at: 0,
 				previous: None,
 				pending: None,
+				rsa: None,
 			},
 		);
 

@@ -53,6 +53,7 @@ struct Inner {
 	/// this; tests can swap it out via [`ApiState::with_correspondents`]
 	/// so the same test tempdir is reused across handlers.
 	correspondents: Option<crate::storage::CorrespondentStore>,
+	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
 	/// Cap on first-time recipients per account in any rolling 24h window.
 	/// `None` disables the cap (the default). Lives on `ApiState` so
 	/// the REST and JMAP submission paths share a single source of
@@ -101,6 +102,9 @@ struct Inner {
 	/// Empty when no `[[tenant]]` is configured; the empty state is the
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
+	/// The per-account submission limiter the SMTP listeners share, and
+	/// the server-wide per-account cap; see `state_submission.rs`.
+	submission_limit: Option<(Arc<crate::smtp::ratelimit::SendLimiter>, Option<u32>)>,
 	/// Per-account Bayesian wiring: the training queue and the
 	/// store, both `None` without a database. Builders and accessors
 	/// live in `state_bayes.rs`.
@@ -113,6 +117,16 @@ struct Inner {
 	/// the deliveries handler turns that into a `404` so the caller is
 	/// not silently handed an empty page.
 	delivery_log_days: u64,
+	/// Hosted domains switched off (`disabled_domains`).
+	disabled_domains: Vec<String>,
+	/// Per-instance message-size cap, applied consistently to SMTP
+	/// (`SIZE` extension, per-line running check, end-of-DATA check,
+	/// per-chunk BDAT cap), the JMAP `Email/set` build, the JMAP
+	/// `EmailSubmission/set` builder, the JMAP `upload` body limit,
+	/// and the REST `POST /api/v1/send` body limit. The default is
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
+	/// lower it with the `[server] max_message_size` config key.
+	max_message_size: usize,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -233,6 +247,7 @@ impl ApiState {
 					std::time::Instant::now(),
 				)),
 				correspondents: None,
+				class_bindings: None,
 				new_recipients_per_day: None,
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(
@@ -247,9 +262,12 @@ impl ApiState {
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
+				submission_limit: None,
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
 				delivery_log_days: 0,
+				disabled_domains: Vec::new(),
+				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			}),
 		}
 	}
@@ -268,6 +286,40 @@ impl ApiState {
 	pub fn with_delivery_log_days(mut self, days: u64) -> Self {
 		if let Some(inner) = Arc::get_mut(&mut self.inner) {
 			inner.delivery_log_days = days;
+		}
+		self
+	}
+
+	/// Name the hosted domains that are switched off. Must be set before the
+	/// state is shared.
+	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.disabled_domains = domains;
+		}
+		self
+	}
+
+	/// The hosted domains that are switched off: they stay in
+	/// [`ApiState::domains`] but take no mail.
+	pub fn disabled_domains(&self) -> &[String] {
+		&self.inner.disabled_domains
+	}
+
+	/// The per-instance message-size cap. Defaults to
+	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
+	/// lower it with the `[server] max_message_size` config key.
+	pub fn max_message_size(&self) -> usize {
+		self.inner.max_message_size
+	}
+
+	/// Override the per-instance message-size cap. Used by `serve` to
+	/// apply the operator's `[server] max_message_size`. Must be set
+	/// before the state is shared. `0` keeps the default.
+	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner)
+			&& bytes > 0
+		{
+			inner.max_message_size = bytes;
 		}
 		self
 	}
@@ -751,6 +803,12 @@ mod bayes;
 
 #[path = "state_outbound.rs"]
 mod outbound;
+
+#[path = "state_submission.rs"]
+mod submission;
+
+#[path = "state_classes.rs"]
+mod classes;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

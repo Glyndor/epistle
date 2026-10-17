@@ -111,9 +111,7 @@ fn run_with_capture<F: Future<Output = ()>>(future: F) -> Vec<CapturedEvent> {
 			tokio::runtime::Handle::current().block_on(future);
 		});
 	});
-	Arc::try_unwrap(events)
-		.map(|m| m.into_inner().unwrap())
-		.unwrap_or_default()
+	std::mem::take(&mut *events.lock().unwrap())
 }
 
 /// Filter the capture to events emitted on the audit target.

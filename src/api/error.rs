@@ -133,6 +133,58 @@ impl ApiError {
 		}
 	}
 
+	/// `422` for a message the attachment policy refused; `reasons` are
+	/// the comma-separated reason codes, never text from the message.
+	pub fn attachment_refused(reasons: &str) -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "attachment_refused",
+			message: format!("The message was rejected: attachment type not accepted ({reasons})."),
+		}
+	}
+
+	/// `503` when the content scan cannot run now: retrying later works,
+	/// and nothing was sent.
+	pub fn scan_unavailable() -> Self {
+		ApiError {
+			status: StatusCode::SERVICE_UNAVAILABLE,
+			code: "scan_unavailable",
+			message: "The content scan is unavailable. Try again later.".to_string(),
+		}
+	}
+
+	/// `413` for a message too large for the content scan while the server
+	/// lets nothing pass unscanned: retrying cannot help, nothing was sent.
+	pub fn scan_too_large() -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "scan_too_large",
+			message: "The message is too large for the content scan and was not sent.".to_string(),
+		}
+	}
+
+	/// `422` for marketing mail without the one-click unsubscribe RFC 8058
+	/// requires: sending it again unchanged is refused again.
+	pub fn marketing_refused(message: &str) -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "marketing_refused",
+			message: format!("The message was refused: {message}."),
+		}
+	}
+
+	/// `503` for transactional mail whose evidence cannot be recorded right
+	/// now (or is held until an operator acknowledges a break): nothing was
+	/// sent, and the request may be retried later.
+	pub fn evidence_unavailable() -> Self {
+		ApiError {
+			status: StatusCode::SERVICE_UNAVAILABLE,
+			code: "evidence_unavailable",
+			message: "Transactional mail cannot be recorded as evidence right now; retry later."
+				.into(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

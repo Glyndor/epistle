@@ -18,6 +18,11 @@ use crate::util::address_reason;
 #[derive(Serialize)]
 pub struct Queued {
 	queued: String,
+	/// The class the server granted.
+	class: crate::evidence::MailClass,
+	/// Recipients dropped because they are on a suppression list.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	suppressed: Vec<String>,
 }
 
 /// The message the cap should be enforced against ("too many new
@@ -30,6 +35,7 @@ pub async fn send(
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<SendRequest>,
 ) -> Result<Json<Queued>, ApiError> {
+	let explicit_class = request.class()?;
 	let recipients = request.recipients();
 	if recipients.is_empty() {
 		return Err(ApiError::invalid_input(
@@ -84,18 +90,18 @@ pub async fn send(
 			.map_err(|_| ApiError::forbidden_from())?;
 	}
 
-	// Per-tenant aggregate submission rate limit. Sits on top of the
-	// existing per-account limiter (which the SMTP session enforces); the
-	// empty `tenant_limits` is the identity and short-circuits.
+	// Submission rate limits: the per-account limit and every tenant of
+	// the account, shared with SMTP and JMAP. Asked here so a sender with
+	// no room left is refused before anything is recorded; charged one
+	// unit per recipient just before the message is handed on, and given
+	// back when it is refused there.
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	if let Err(message) = state
-		.tenant_limits()
-		.check_aggregate_rate(std::slice::from_ref(&request.from), now)
-	{
-		return Err(ApiError::rate_limited_with_message(message));
+	let budget = state.submission_budget(&account, std::slice::from_ref(&request.from));
+	if !budget.has_room(now) {
+		return Err(rate_limited());
 	}
 
 	// Reserve correspondents under the same account lock as SMTP and JMAP.
@@ -148,18 +154,13 @@ pub async fn send(
 			date: &date,
 			message_id: &message_id,
 		},
+		state.max_message_size(),
 	)?;
 
 	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}
 	let save_sent = request.save_sent();
-	// Clone the bytes so the Sent copy can be written after the
-	// routing sink takes ownership of the original. The clone is
-	// bounded by the message body, which is small in practice; a
-	// copy at the routing boundary would tie the saver to the
-	// sink's lifetime.
-	let sent_copy = data.clone();
 	// The same outbound path as SMTP submission: DKIM for remote mail,
 	// local recipients straight to their mailboxes. The `extra` correlation
 	// map is already validated and bounded in the request body, and the
@@ -172,21 +173,65 @@ pub async fn send(
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		// The account logged in and owns the sender address.
+		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
-	let id = state
-		.submit(&account, message, &extra)
-		.map_err(|error| match error {
-			SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
-			SinkError::Unavailable(_) => ApiError::internal(),
-		})?;
+	let mut message = message;
+	let sources = state.class_sources(Some(&auth), &account, explicit_class);
+	let prepared =
+		crate::evidence::submission::prepare(&mut message, sources, Some(state.data_dir()))
+			.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
+	if message.recipients.is_empty() {
+		return Err(ApiError::marketing_refused(
+			"every recipient is on the suppression list",
+		));
+	}
+	// Clone the bytes so the Sent copy can be written after the routing
+	// sink takes ownership of the original.
+	let sent_copy = prepared
+		.class
+		.allows_sent_copy()
+		.then(|| message.data.clone());
+	let recipient_count = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+	let charge = budget
+		.charge(recipient_count, now)
+		.map_err(|_| rate_limited())?;
+	let submission = crate::smtp::sink::Submission {
+		extra,
+		class: prepared.class,
+	};
+	let id = match state.submit(&account, message, &submission) {
+		Ok(id) => id,
+		Err(error) => {
+			charge.refund();
+			return Err(match error {
+				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
+				SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
+				SinkError::ScanUnavailable => ApiError::scan_unavailable(),
+				SinkError::ScanTooLarge => ApiError::scan_too_large(),
+				SinkError::Unavailable(_) => ApiError::internal(),
+				SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
+			});
+		}
+	};
 	// Save a copy of what the account sent into its `Sent` folder
 	// when the per-request and account-wide settings admit it. The
 	// default is "on"; the request may opt out.
-	state.save_sent_copy(&account, &sent_copy, save_sent);
+	// Transactional mail is never copied to Sent.
+	if let Some(sent_copy) = sent_copy {
+		state.save_sent_copy(&account, &sent_copy, save_sent);
+	}
 	Ok(Json(Queued {
 		queued: id.to_string(),
+		class: prepared.class,
+		suppressed: prepared.suppressed,
 	}))
+}
+
+/// `429 rate_limited` for a send over one of its submission rate limits.
+fn rate_limited() -> ApiError {
+	ApiError::rate_limited_with_message(crate::smtp::submission_budget::RATE_LIMITED)
 }
 
 /// The account a send request acts for. An account-bound credential acts

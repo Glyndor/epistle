@@ -62,6 +62,15 @@ different things and point at three different fixes:
 Authorizes your IP to send for the domain. `v=spf1 mx -all` authorizes whatever
 the MX points at; or pin the IP: `v=spf1 ip4:203.0.113.10 -all`. `-all` (hard
 fail) is recommended once you are sure every sender is listed.
+
+Exactly one SPF record at the apex. Two `v=spf1` TXT records at the same
+name are a `permerror` for every receiver (RFC 7208 §4.5), so a
+migrated domain whose old provider left a record behind stops
+delivering until the duplicate is removed. `epistle status` and
+`epistle verify-dns` flag duplicates by name, count, and the
+`keep one` instruction; the upsert through a configured provider
+collapses them.
+
 ### DKIM
 
 Sign outbound mail. Generate the key and record:
@@ -87,6 +96,12 @@ configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
 a startup warning is logged before that whenever the pair is missing).
 A single message is then signed with both keys (RFC 8463); receivers
 that understand Ed25519 use that signature, the rest fall back to RSA.
+
+Multiple selectors at different names are normal (the Ed25519 + RSA
+pair), but two at the same selector name is the same configuration
+mistake the SPF, DMARC, and MTA-STS lanes flag and collapse; a
+DKIM rotator's old and new keys sit at different selector names,
+never at the same one.
 
 #### Long TXT values split at 255 octets
 
@@ -117,12 +132,73 @@ Ties SPF and DKIM together and tells receivers what to do on failure. Start at
 v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s
 ```
 
+Exactly one DMARC record at `_dmarc.<domain>`. Two of them make
+receivers ignore the policy (RFC 7489 §6.6.3); the same duplicate
+detection and collapse the SPF lane gets.
+
 The server produces aggregate (RUA) reports for domains you host. Inbound
 DMARC aggregate reports from receivers are ingested automatically: the
 deliverer recognises `postmaster@<domain>` as a report target, the JSONL
 store under `data_dir/reports/dmarc/YYYYMMDD/` keeps one parsed report per
 line, the alert engine can watch `dmarc_report_rows_failing`, and
 `epistle reports --config F [--days N]` summarises what receivers saw.
+
+### Locking the zone against spoofing
+
+`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject]`
+(and the `dns` flag `--dry-run`) makes sure nobody can send mail as the
+domain or a name under it from somewhere else. It reads the zone through
+the `[dns]` provider, prints the plan (`--json` prints the same plan as
+JSON), asks, and publishes:
+
+- DMARC at `_dmarc.<domain>`, one step stricter per run: `none`, then
+  `quarantine`, then `reject`. `sp=` follows `p=` (a stricter `sp=`
+  already there stays), `np=reject`
+  (DMARCbis, names that do not exist) is set at once, `pct` is dropped,
+  and every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`) stays as
+  written. `--dmarc reject` goes straight to `reject`. A DMARC record
+  that cannot be read, a second one, or a CNAME at `_dmarc` is left alone
+  and reported.
+- `v=spf1 -all` (sends no mail) and `MX 0 .` (RFC 7505, accepts no mail)
+  at every name with an A, AAAA or CNAME, except: names epistle serves
+  (each hosted domain, the mail hostname, `autoconfig`, `autodiscover`,
+  `mta-sts`), service names (`_dmarc`, `_domainkey` and DKIM selectors,
+  `_mta-sts`, `_smtp._tls`), MX targets, CNAMEs (no record may sit next
+  to a CNAME, RFC 1034 section 3.6.2), and names with an SPF or MX of
+  their own. Each is listed as left as is, with the reason.
+- `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
+  covers names that do not exist; a wildcard never applies to a name
+  with records of its own.
+- A name is planned only when each of its labels is made of ASCII letters,
+  digits, hyphens and underscores (the first may be `*`) and the name has at
+  most 253 characters, 63 per label: a record is written back under the name
+  that was read. Any other name is listed as left as is, with the reason.
+- Delegations are left alone. A name below the zone apex that has NS
+  records belongs to other nameservers, and so does everything under it:
+  records written there would be hidden by the delegation or refused by
+  the provider. The plan skips the name and every name under it, and
+  lists it once as `sub.example.org is delegated to other nameservers;
+  left as is`. A domain that is itself delegated (or sits inside a
+  delegation) gets no DMARC rewrite, no names and no wildcard. The NS
+  records at the zone apex name the servers of the zone itself and are
+  not a delegation. The lockdown reads the whole zone first: a provider
+  that cannot list it (`route53`, `rfc2136`) makes the command stop
+  before it writes anything.
+
+Before a step up, the plan lists the senders that failed DMARC in the
+aggregate reports epistle received for the domain in the last 30 days
+(`data_dir/reports/dmarc/`), or says there are none. Authorise the ones
+that are yours first.
+
+Every record published goes into `<data_dir>/dns-lockdown/<domain>.json`
+as soon as the provider accepts it, so a failure halfway leaves the
+journal with exactly what went out. A second run with nothing to do
+prints `nothing to change`. `--undo` removes only journal records that
+are still in the zone as published, puts back the DMARC record the
+lockdown replaced (your last version of it, if you edited it between
+runs), and reports anything changed since; nothing outside the
+journal is touched. Without a provider, the command prints the DMARC
+and wildcard records to add by hand.
 
 ### MTA-STS
 Requires inbound senders to use verified TLS. Two parts:
@@ -139,9 +215,15 @@ Requires inbound senders to use verified TLS. Two parts:
    max_age: 604800
    ```
 
+One MTA-STS discovery TXT at `_mta-sts.<domain>`; the policy file
+itself lives over HTTPS, but two discovery records break the lookup
+(RFC 8461 §3.1).
+
 ### TLS-RPT
 Receives reports about TLS delivery problems: TXT at `_smtp._tls.example.org`
-with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. The server ingests inbound
+with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. One TLS-RPT TXT per
+domain; a duplicate is the same configuration mistake the SPF and
+DMARC lanes flag and collapse. The server ingests inbound
 TLS-RPT reports the same way it ingests DMARC: `tlsrpt@<domain>` is the
 envelope target, the JSONL store lives at
 `data_dir/reports/tlsrpt/YYYYMMDD/`, the alert engine can watch
@@ -179,6 +261,50 @@ RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
 
+### What a listing returns
+
+`epistle dns lockdown`, `epistle dns provider test` and the DKIM clean-up
+list the zone through the provider. Every provider returns each record with
+its own type: NS, HTTPS, SVCB and CAA are kept as such, and a type epistle
+has no use for (NAPTR, SSHFP, the SOA, Namecheap's URL redirects, Bunny's
+redirect and script records) is kept under its type name. None of them is
+read as a TXT, so a TXT check never sees an NS target, and none of them is
+ever written or deleted by epistle. A type name that is not made of letters,
+digits and hyphens (at most 32) is shown as `UNKNOWN`.
+
+The value is kept with the type: an MX is `<preference> <exchange>` and a
+CAA is `<flags> <tag> "<value>"`, even where the provider's API keeps those
+parts in fields of their own (Bunny, DigitalOcean, DNSimple, Porkbun,
+Spaceship). The field layouts come from the providers' published API
+references, not from captures of the real services. Bunny's MX is read from
+`Priority` and `Value` together, and `Priority` is joined to `Value` only when
+`Value` does not already start with the preference.
+
+A listing is never a part of the zone presented as the whole. It fails
+instead when it would need more than 1000 pages or return more than 100000
+records; when its pages do not add up to the total it gives (an empty page
+before the total, a total below what was read, a total that changes or more
+pages than it allows: Spaceship, Cloudflare, DNSimple, DigitalOcean, and OVH
+when an id it listed has no record); when a full page does not say whether
+more follow (Cloudflare, DNSimple, Spaceship); when a response body is larger
+than 16 MiB (256 KiB for Namecheap, whose answer is the whole zone); and when
+the bodies of the operation add up to more than 64 MiB. An rrset with no
+record counts as one record. A delegation that fell off the end of a listing
+would be written over. deSEC lists past 500 rrsets page by page, through the
+`Link` header it sends; a `Link` that names a next page nobody can read is an
+error.
+
+Every call to a provider times out at 30 seconds (10 to connect), body
+included, and a whole operation (a listing across its pages, a publish with
+the reads it makes first) at 120 seconds. That holds for RFC 2136 too: 10
+seconds to connect, 30 for the exchange. A provider is never followed to
+another host: a redirect is an error. The error of a failed call carries no
+URL, and what the provider answered is shown with control characters
+escaped.
+
+`route53` and `rfc2136` cannot list a zone at all, so a command that has to
+read it stops with an error before it writes anything.
+
 ### Record descriptions
 
 Where a provider's record API has a free-text description, epistle sets it to
@@ -202,6 +328,19 @@ record. Tags need a paid Cloudflare plan: if a write is refused on a Free zone,
 epistle retries it once without tags, stops sending them until the next
 restart, and logs a single warning. The record `id` is assigned by Cloudflare
 and cannot be set.
+
+Cloudflare's proxy (the orange cloud) forwards only HTTP(S), so a mail
+name behind it is unreachable on ports 25, 465, 587 and 993. With the
+Cloudflare provider, `epistle status` fails for each proxied A, AAAA or
+CNAME at the mail hostname, an MX target of a hosted domain, or a
+domain's `autoconfig`, `autodiscover` and `mta-sts` host:
+
+```
+mail.example.org is proxied by Cloudflare (orange cloud): mail clients and other servers cannot reach port 25/465/587/993 through the proxy; set it to DNS only
+```
+
+Every A, AAAA and CNAME epistle publishes through Cloudflare is sent
+with `proxied: false`. Other providers have no proxy and no such check.
 
 ### TXT values
 

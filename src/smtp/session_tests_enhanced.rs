@@ -12,6 +12,7 @@ fn reply_text(action: &Action) -> String {
 		| Action::UpgradeTls(r)
 		| Action::CollectAuthResponse(r)
 		| Action::Close(r)
+		| Action::DiscardChunk { reply: r, .. }
 		| Action::Deliver(r, _) => r.to_string(),
 		Action::CollectChunk { .. } => String::new(),
 	}
@@ -52,8 +53,14 @@ fn has_enhanced(class: char, text: &str) -> bool {
 }
 
 /// Constructions whose text is not a literal here, checked elsewhere: the
-/// DNSBL details are literals starting with 5.7.1 in that file.
-const NOT_LITERAL_ALLOWED: &[&str] = &["src/smtp/server/dnsbl_check.rs"];
+/// DNSBL details are literals starting with 5.7.1 in that file; the
+/// tenant aggregate reply text is composed at runtime from the
+/// configured tenant label.
+const NOT_LITERAL_ALLOWED: &[&str] = &[
+	"src/smtp/server/dnsbl_check.rs",
+	"src/smtp/session/mod.rs",
+	"src/smtp/session/finalise.rs",
+];
 
 /// Every 4xx/5xx `Reply::single`/`Reply::new` in `source`, and in SMTP code
 /// every string literal that is a raw reply line, without an enhanced code.

@@ -60,6 +60,7 @@ impl DnsProvider for Zone {
 					kind: crate::dns::provider::RecordKind::Txt,
 					value: value.clone(),
 					ttl: 300,
+					proxied: None,
 				})
 			})
 			.collect();
@@ -69,10 +70,10 @@ impl DnsProvider for Zone {
 
 /// A resolver over the zone that answers nothing for its first `hidden`
 /// queries, or never when `hidden` is `usize::MAX`.
-struct Resolver {
-	zone: Arc<Zone>,
-	hidden: usize,
-	queries: AtomicUsize,
+pub(super) struct Resolver {
+	pub(super) zone: Arc<Zone>,
+	pub(super) hidden: usize,
+	pub(super) queries: AtomicUsize,
 }
 
 type Lookup<'a, T> = Pin<Box<dyn Future<Output = Result<T, DnsFailure>> + Send + 'a>>;
@@ -144,6 +145,7 @@ impl Lab {
 				rotated_at: 0,
 				previous: None,
 				pending: None,
+				rsa: None,
 			},
 			Start::RetireDue => RotationState {
 				selector: "ed100".into(),
@@ -153,8 +155,10 @@ impl Lab {
 					selector: "ed0".into(),
 					key_file: ed0,
 					retire_at: NOW - 1,
+					rsa: None,
 				}),
 				pending: None,
+				rsa: None,
 			},
 		};
 		std::fs::write(
@@ -295,7 +299,7 @@ impl Lab {
 
 /// Only the `[dkim]` section matters to `active_ed25519`, and the state
 /// file always exists in these tests.
-fn unused_config() -> crate::config::Dkim {
+pub(super) fn unused_config() -> crate::config::Dkim {
 	toml::from_str("selector = \"configured\"\nkey_file = \"/nonexistent.key\"\n").expect("dkim")
 }
 

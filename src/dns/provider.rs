@@ -55,31 +55,107 @@ pub fn record_description() -> String {
 	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// A DNS record kind epistle publishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The longest type token [`RecordKind::from_token`] keeps.
+pub const MAX_OTHER_KIND_LEN: usize = 32;
+
+/// The token of an [`RecordKind::Other`] whose type a provider returned in
+/// a shape no record type has (empty, too long, or with other characters
+/// than letters, digits and hyphens).
+pub const UNKNOWN_KIND: &str = "UNKNOWN";
+
+/// A DNS record kind. The first eight are what epistle publishes. `Ns`,
+/// `Https` and `Svcb` are read back from a zone so a listing keeps them as
+/// what they are: an `NS` rrset at a name below the apex is a delegation,
+/// and the lockdown must not write anything under it. Every other type a
+/// provider returns is kept as [`RecordKind::Other`] with its type token,
+/// so a listing never turns a record it does not know into a TXT.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecordKind {
 	/// IPv4 address record.
+	#[serde(rename = "A")]
 	A,
 	/// IPv6 address record.
+	#[serde(rename = "AAAA")]
 	Aaaa,
 	/// Text record. Used for SPF, DMARC, DKIM keys, MTA-STS, TLSRPT, and
 	/// ACME DNS-01 challenges.
+	#[serde(rename = "TXT")]
 	Txt,
 	/// Mail exchange record.
+	#[serde(rename = "MX")]
 	Mx,
 	/// Canonical name (alias) record.
+	#[serde(rename = "CNAME")]
 	Cname,
 	/// TLSA association record (RFC 6698) for DANE.
+	#[serde(rename = "TLSA")]
 	Tlsa,
 	/// Service locator record (RFC 2782).
+	#[serde(rename = "SRV")]
 	Srv,
 	/// Certification Authority Authorization (RFC 8659).
+	#[serde(rename = "CAA")]
 	Caa,
+	/// Name server record. Marks a delegation: any name (other than the
+	/// zone apex) that carries NS records is delegated to other
+	/// nameservers, and `epistle dns lockdown` must not try to publish
+	/// anything under it.
+	#[serde(rename = "NS")]
+	Ns,
+	/// HTTPS RR (RFC 9460): alias for `SVCB` plus a `svcparams` hint,
+	/// used at the apex or a service name.
+	#[serde(rename = "HTTPS")]
+	Https,
+	/// Service binding record (RFC 9460).
+	#[serde(rename = "SVCB")]
+	Svcb,
+	/// Any other record type a provider listed (`NAPTR`, `SSHFP`, `LOC`,
+	/// ...), with its type token. Build it with [`RecordKind::from_token`], which
+	/// bounds the token. Providers refuse to publish or delete it.
+	#[serde(rename = "OTHER")]
+	Other(String),
 }
 
 impl RecordKind {
+	/// The kind for a record type token a provider API returned, in any
+	/// letter case. Every provider reads its listing through this, so a
+	/// type epistle does not publish keeps what it is instead of turning
+	/// into a TXT: `NS` is [`RecordKind::Ns`] (a delegation), and a type
+	/// with no variant is [`RecordKind::Other`].
+	///
+	/// The token comes from a remote API, so an `Other` keeps it only when
+	/// it can be a record type (ASCII letters, digits and hyphens, at most
+	/// [`MAX_OTHER_KIND_LEN`] characters, upper-cased). Anything else
+	/// becomes [`UNKNOWN_KIND`], so a hostile token never reaches a
+	/// terminal, a log line or a JSON document.
+	pub fn from_token(token: &str) -> RecordKind {
+		let shaped = !token.is_empty()
+			&& token.len() <= MAX_OTHER_KIND_LEN
+			&& token
+				.bytes()
+				.all(|b| b.is_ascii_alphanumeric() || b == b'-');
+		if !shaped {
+			return RecordKind::Other(UNKNOWN_KIND.to_string());
+		}
+		let upper = token.to_ascii_uppercase();
+		match upper.as_str() {
+			"A" => RecordKind::A,
+			"AAAA" => RecordKind::Aaaa,
+			"TXT" => RecordKind::Txt,
+			"MX" => RecordKind::Mx,
+			"CNAME" => RecordKind::Cname,
+			"TLSA" => RecordKind::Tlsa,
+			"SRV" => RecordKind::Srv,
+			"CAA" => RecordKind::Caa,
+			"NS" => RecordKind::Ns,
+			"HTTPS" => RecordKind::Https,
+			"SVCB" => RecordKind::Svcb,
+			_ => RecordKind::Other(upper),
+		}
+	}
+
 	/// The record type token used in zone files and provider APIs.
-	pub fn as_str(self) -> &'static str {
+	pub fn as_str(&self) -> &str {
 		match self {
 			RecordKind::A => "A",
 			RecordKind::Aaaa => "AAAA",
@@ -89,8 +165,35 @@ impl RecordKind {
 			RecordKind::Tlsa => "TLSA",
 			RecordKind::Srv => "SRV",
 			RecordKind::Caa => "CAA",
+			RecordKind::Ns => "NS",
+			RecordKind::Https => "HTTPS",
+			RecordKind::Svcb => "SVCB",
+			RecordKind::Other(name) => name.as_str(),
 		}
 	}
+}
+
+/// `value` without one pair of double quotes that wrap all of it, as a
+/// provider that lists every target quoted returns it. A quote that does
+/// not wrap the whole value is data (a CAA target is `0 issue "ca.example"`,
+/// an HTTPS parameter is `alpn="h2"`) and stays.
+pub fn unwrap_quotes(value: &str) -> &str {
+	let Some(inner) = value
+		.strip_prefix('"')
+		.and_then(|rest| rest.strip_suffix('"'))
+	else {
+		return value;
+	};
+	// `"a" "b"` starts and ends with a quote and is two strings, not one.
+	let mut escaped = false;
+	for c in inner.chars() {
+		match c {
+			'\\' if !escaped => escaped = true,
+			'"' if !escaped => return value,
+			_ => escaped = false,
+		}
+	}
+	inner
 }
 
 /// The four parts of an SRV record, split out from the presentation form
@@ -111,7 +214,7 @@ pub fn parse_srv(value: &str) -> Option<(u16, u16, u16, String)> {
 }
 
 /// A DNS record to publish or remove.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DnsRecord {
 	/// Fully-qualified record name (e.g. `_dmarc.example.org`).
 	pub name: String,
@@ -126,6 +229,15 @@ pub struct DnsRecord {
 	pub value: String,
 	/// Time-to-live in seconds. Providers translate to their own semantics.
 	pub ttl: u32,
+	/// Whether the record is proxied through the provider's edge (Cloudflare's
+	/// "orange cloud"). Providers that do not proxy (every other one
+	/// epistle publishes through) ignore it on write and leave it `None`
+	/// on read. Cloudflare populates it from the API's `proxied` field on
+	/// `list` and always writes `proxied: false` for mail-related names,
+	/// because traffic for SMTP / IMAP / POP3 / submission cannot reach
+	/// epistle through the proxy.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub proxied: Option<bool>,
 }
 
 /// A provider operation failure. Its message never contains the secret token.
@@ -144,7 +256,12 @@ impl std::fmt::Display for ProviderError {
 		match self {
 			ProviderError::Unsupported => f.write_str("provider does not support writes"),
 			ProviderError::Auth => f.write_str("provider authentication failed"),
-			ProviderError::Remote(detail) => write!(f, "provider error: {detail}"),
+			// What a provider answered is text from outside: control characters
+			// and bidirectional marks in it are escaped before they can reach a
+			// terminal, a log or a message.
+			ProviderError::Remote(detail) => {
+				write!(f, "provider error: {}", crate::cli::term::sanitize(detail))
+			}
 		}
 	}
 }
@@ -248,6 +365,38 @@ impl DnsProvider for ManualProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+/// An MX target as a provider API takes it: without the trailing root dot,
+/// except the null MX target (RFC 7505), which is the root `.` itself and
+/// would otherwise become an empty host.
+pub fn mx_target_for_api(target: &str) -> &str {
+	if target == "." {
+		target
+	} else {
+		target.trim_end_matches('.')
+	}
+}
+
+impl DnsRecord {
+	/// A record with `proxied: None` (the default for every non-Cloudflare
+	/// provider). The convenience constructor exists so call sites that
+	/// build a record by hand do not have to spell the field out; tests
+	/// already build `DnsRecord` literally.
+	pub fn new(
+		name: impl Into<String>,
+		kind: RecordKind,
+		value: impl Into<String>,
+		ttl: u32,
+	) -> Self {
+		Self {
+			name: name.into(),
+			kind,
+			value: value.into(),
+			ttl,
+			proxied: None,
+		}
 	}
 }
 

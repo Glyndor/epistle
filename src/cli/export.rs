@@ -250,7 +250,8 @@ mod tests {
 				dest.path(),
 				"bob",
 				&MessageCrypto::disabled(),
-				out.path()
+				out.path(),
+				false
 			),
 			ExitCode::SUCCESS
 		);

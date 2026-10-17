@@ -209,9 +209,7 @@ mod tests {
 	/// port than the IPv4 bind.
 	#[tokio::test]
 	async fn v6_any_and_v4_any_listeners_on_the_same_port_coexist() {
-		let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("free-port probe");
-		let port = probe.local_addr().expect("probe addr").port();
-		drop(probe);
+		let port = crate::test_fixtures::free_port();
 
 		// The IPv4 listener: build the production `Listener` shape
 		// (with kind = Smtp so `bind_listener` takes the same path

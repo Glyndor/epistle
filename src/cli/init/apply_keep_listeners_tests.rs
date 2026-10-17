@@ -92,6 +92,7 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 	// array and does not write any of the listeners `init` would
 	// normally add.
 	answers.services = Services {
+		antivirus: None,
 		imap: true,
 		submission: true,
 		pop3: false,
@@ -189,6 +190,7 @@ fn plan_renders_kept_listeners_when_existing_config_has_them() {
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
 	answers.services = Services {
+		antivirus: None,
 		imap: true,
 		submission: true,
 		pop3: false,

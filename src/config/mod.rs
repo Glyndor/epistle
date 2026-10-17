@@ -11,6 +11,7 @@ mod alias;
 mod antispam;
 mod api;
 mod arc;
+mod attachments;
 mod auth;
 mod database;
 mod dkim;
@@ -28,6 +29,7 @@ mod tenant;
 mod tls;
 mod transport;
 mod validate;
+mod validate_limits;
 pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
@@ -39,9 +41,13 @@ pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
+pub use attachments::{
+	AttachmentMode, Attachments, ContentAction, MAX_EXTENSION_LEN, MAX_EXTENSIONS,
+	normalise_extension, valid_extension,
+};
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
-pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
+pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
 pub use dns::Dns;
 pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
 pub use ldap::Ldap;
@@ -51,7 +57,7 @@ pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
-pub use scanner::{Antispam, ClamdOnFound};
+pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;
@@ -167,6 +173,12 @@ pub struct Config {
 	/// is delivered as `user@target`.
 	#[serde(default)]
 	pub domain_aliases: std::collections::HashMap<String, String>,
+	/// Entries of `domains` that are switched off: the domain stays
+	/// configured (DNS records, DKIM, accounts and mailboxes are kept), but
+	/// mail for it is rejected like mail for an unknown user and no account
+	/// may send as an address in it. Each entry must also be in `domains`.
+	#[serde(default)]
+	pub disabled_domains: Vec<String>,
 	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]
@@ -216,6 +228,10 @@ pub struct Config {
 	/// Unix socket scanner configuration. Absent disables clamd.
 	#[serde(default)]
 	pub antispam: Antispam,
+	/// What to do with attachments that are not what they claim. Absent
+	/// flags them.
+	#[serde(default)]
+	pub attachments: Attachments,
 	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
 	/// lands in an uncertain band. Absent disables the hook.
 	pub antispam_llm: Option<Llm>,
@@ -306,6 +322,45 @@ pub struct Config {
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
 	pub max_connections_per_listener: Option<usize>,
+	/// Max concurrent connections per client IP per SMTP listener. A peer
+	/// over the cap is answered `421 4.7.0 too many connections from your
+	/// address` and closed. Absent (or `0`) uses the built-in default of
+	/// 20. An IPv6 client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_connections_per_ip: Option<usize>,
+	/// Shared byte budget every SMTP `DATA` / `BDAT` reservation draws
+	/// from. When a reservation would push the in-flight total past the
+	/// cap the message is refused with `452 4.3.1 insufficient system
+	/// resources; try again later`, so a busy server cannot grow without
+	/// bound. `0` disables the cap (every reservation succeeds, the
+	/// historical behaviour). Absent derives it from the memory the `mail`
+	/// container may use (see [`crate::smtp::memory_fit`]): a fifth of
+	/// the limit, at least `max_message_size`, at most 1 GiB.
+	#[serde(default)]
+	pub message_memory_budget: Option<u64>,
+	/// Minimum average transfer rate of one message transaction, in
+	/// bytes per second, once `data_rate_grace` is over. A client below it
+	/// is answered `421 4.4.2 transfer too slow, closing connection` and
+	/// closed. Absent uses 10240; `0` turns the check off.
+	#[serde(default)]
+	pub min_data_rate: Option<u64>,
+	/// Seconds from the start of a message transaction (the 354 of DATA,
+	/// or the first BDAT chunk) before `min_data_rate` applies. Absent
+	/// uses 120; from 1 to 3600.
+	#[serde(default)]
+	pub data_rate_grace: Option<u64>,
+	/// Commands that bring an SMTP session no closer to a delivered
+	/// message (NOOP, RSET, VRFY, AUTH response lines, refused commands)
+	/// one session may send before it is answered `421 4.7.0` and closed.
+	/// Absent uses 100; `0` turns the limit off, else from 10 to 10000.
+	#[serde(default)]
+	pub junk_command_limit: Option<u64>,
+	/// Seconds an SMTP session may last before it is answered `421 4.4.2`
+	/// and closed at the next command boundary (never while a message body
+	/// is being received). Absent uses 1800; `0` turns the limit off, else
+	/// from 60 to 86400.
+	#[serde(default)]
+	pub max_session_time: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -331,8 +386,20 @@ pub struct Config {
 	/// Requests` answers requests above the limit.
 	#[serde(default = "default_masked_addresses_max")]
 	pub masked_addresses_max: usize,
-	/// Outbound event webhooks. Present enables notifications.
+	/// Outbound event webhooks. Present enables notifications, unless it
+	/// says `enabled = false`; read it through [`Config::active_webhook`].
 	pub webhook: Option<Webhook>,
+	/// Per-instance message-size cap in bytes. `None` keeps the
+	/// historical default of 25 MiB (the same value the SMTP
+	/// `SIZE` extension, the JMAP `maxSizeRequest` / upload cap and
+	/// the REST `POST /api/v1/send` builder enforce). Applied
+	/// consistently: the SMTP `MAIL FROM` SIZE check, the per-line
+	/// running size, the end-of-DATA check, the per-chunk BDAT cap,
+	/// the JMAP `Email/set` / `EmailSubmission/set` builder, the JMAP
+	/// `upload` body limit, and the REST `send` body limit all use
+	/// the same value.
+	#[serde(default)]
+	pub max_message_size: Option<u64>,
 	/// Tenant definitions: named groups of domains with optional aggregate
 	/// caps on accounts, domains, storage and submission rate. Absent or
 	/// empty means no tenancy is in effect and the server behaves exactly as
@@ -387,6 +454,7 @@ impl std::fmt::Debug for Config {
 			.field("data_dir", &self.data_dir)
 			.field("domains", &self.domains)
 			.field("domain_aliases", &self.domain_aliases)
+			.field("disabled_domains", &self.disabled_domains)
 			.field("dnsbl_zones", &self.dnsbl_zones)
 			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
 			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
@@ -404,6 +472,7 @@ impl std::fmt::Debug for Config {
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
 			.field("antispam", &self.antispam)
+			.field("attachments", &self.attachments)
 			.field("antispam_llm", &self.antispam_llm)
 			.field("subjectpass", &self.subjectpass)
 			.field("listeners", &self.listeners)
@@ -435,6 +504,12 @@ impl std::fmt::Debug for Config {
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,
 			)
+			.field("max_connections_per_ip", &self.max_connections_per_ip)
+			.field("message_memory_budget", &self.message_memory_budget)
+			.field("min_data_rate", &self.min_data_rate)
+			.field("data_rate_grace", &self.data_rate_grace)
+			.field("junk_command_limit", &self.junk_command_limit)
+			.field("max_session_time", &self.max_session_time)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)
@@ -470,6 +545,28 @@ impl Config {
 			kind: "config file",
 		})?;
 		Self::parse_text(&raw, path)
+	}
+
+	/// The `[webhook]` section when it is there and switched on. Whatever
+	/// posts an event reads the section through this, so a webhook with
+	/// `enabled = false` posts nothing.
+	pub fn active_webhook(&self) -> Option<&Webhook> {
+		self.webhook.as_ref().filter(|webhook| webhook.enabled)
+	}
+
+	/// The hosted domains that are switched on: `domains` without
+	/// `disabled_domains`.
+	pub fn enabled_domains(&self) -> Vec<String> {
+		self.domains
+			.iter()
+			.filter(|domain| {
+				!self
+					.disabled_domains
+					.iter()
+					.any(|disabled| disabled.eq_ignore_ascii_case(domain))
+			})
+			.cloned()
+			.collect()
 	}
 
 	/// The loopback address listeners bind to unless explicitly configured.
@@ -548,195 +645,8 @@ mod redaction_tests;
 mod hold_outbound_tests;
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn write_temp(content: &str) -> tempfile::NamedTempFile {
-		use std::io::Write;
-		let mut file = tempfile::NamedTempFile::new().expect("create temp file");
-		file.write_all(content.as_bytes()).expect("write temp file");
-		file
-	}
-
-	#[test]
-	fn loads_minimal_valid_config() {
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		let config = Config::load(file.path()).expect("valid config loads");
-		assert_eq!(config.hostname, "mail.example.org");
-		assert!(config.listeners.is_empty());
-	}
-
-	#[test]
-	fn expands_environment_variables() {
-		// SAFETY: the variable name is unique to this test, so no other test
-		// reads or writes it concurrently.
-		unsafe { std::env::set_var("EPISTLE_TEST_HOSTNAME", "mail.expanded.example") };
-		let file = write_temp(
-			r#"
-hostname = "${EPISTLE_TEST_HOSTNAME}"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		let config = Config::load(file.path()).expect("config loads");
-		assert_eq!(config.hostname, "mail.expanded.example");
-		// SAFETY: same uniquely-named variable as set above.
-		unsafe { std::env::remove_var("EPISTLE_TEST_HOSTNAME") };
-	}
-
-	#[test]
-	fn rejects_undefined_environment_variable() {
-		let file = write_temp(
-			r#"
-hostname = "${EPISTLE_DEFINITELY_UNSET_VAR_XYZ}"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::MissingEnv(_))
-		));
-	}
-
-	#[cfg(unix)]
-	#[test]
-	fn rejects_group_or_world_accessible_config() {
-		use std::os::unix::fs::PermissionsExt;
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
-			.expect("chmod");
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::InsecurePermissions { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_unknown_keys() {
-		let file = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-surprise = true
-"#,
-		);
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_missing_file() {
-		let missing = Path::new("/nonexistent/mail.toml");
-		assert!(matches!(
-			Config::load(missing),
-			Err(ConfigError::Read { .. })
-		));
-	}
-
-	#[test]
-	fn rejects_invalid_toml() {
-		let file = write_temp("hostname = ");
-		assert!(matches!(
-			Config::load(file.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn outbound_tls_defaults_strict_and_parses() {
-		// Absent [queue] section: strict (fail closed, back-compatible).
-		let default = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert_eq!(
-			Config::load(default.path())
-				.expect("loads")
-				.queue
-				.outbound_tls,
-			OutboundTls::Strict
-		);
-
-		// Explicit opportunistic parses.
-		let opportunistic = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-[queue]
-outbound_tls = "opportunistic"
-"#,
-		);
-		assert_eq!(
-			Config::load(opportunistic.path())
-				.expect("loads")
-				.queue
-				.outbound_tls,
-			OutboundTls::Opportunistic
-		);
-
-		// An unknown key inside [queue] is rejected (deny_unknown_fields).
-		let bad = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-[queue]
-surprise = true
-"#,
-		);
-		assert!(matches!(
-			Config::load(bad.path()),
-			Err(ConfigError::Parse { .. })
-		));
-	}
-
-	#[test]
-	fn default_bind_is_loopback() {
-		assert!(Config::default_bind_addr().is_loopback());
-	}
-
-	#[test]
-	fn max_connections_per_listener_parses_and_defaults_none() {
-		let default = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert_eq!(
-			Config::load(default.path())
-				.expect("loads")
-				.max_connections_per_listener,
-			None
-		);
-
-		let set = write_temp(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-max_connections_per_listener = 2048
-"#,
-		);
-		assert_eq!(
-			Config::load(set.path())
-				.expect("loads")
-				.max_connections_per_listener,
-			Some(2048)
-		);
-	}
-}
+#[path = "config_tests.rs"]
+mod tests;
 
 mod parse;
 

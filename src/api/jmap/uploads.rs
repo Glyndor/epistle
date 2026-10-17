@@ -15,10 +15,6 @@ use crate::api::Principal;
 use crate::api::api_keys::Scope;
 use crate::api::state::ApiState;
 
-/// Most bytes read ahead for one request: no message over the size limit
-/// can be built anyway, so more would only be held in memory to be refused.
-const BUDGET: usize = crate::smtp::session::MAX_MESSAGE_SIZE;
-
 /// Most blob ids read ahead for one request.
 const MAX_BLOBS: usize = 256;
 
@@ -56,7 +52,12 @@ impl Uploads {
 		{
 			return uploads;
 		}
-		let mut budget = BUDGET;
+		// Most bytes read ahead for one request: no message over the size
+		// limit can be built anyway, so more would only be held in memory
+		// to be refused. The cap is the operator-configured
+		// `[server] max_message_size`, same value the SMTP path and the
+		// REST `POST /api/v1/send` builder use.
+		let mut budget = state.max_message_size();
 		let mut seen = 0usize;
 		for MethodCall(name, args, _) in &request.method_calls {
 			if name != "Email/set" {

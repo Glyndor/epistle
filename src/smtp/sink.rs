@@ -18,20 +18,45 @@ pub trait MessageSink: Send + Sync {
 	/// to name and delivers as usual; a sink that queues, or that treats
 	/// submissions differently, overrides this.
 	///
-	/// `extra` is the caller-supplied correlation map the API may attach to
-	/// a submission (see `POST /api/v1/send`); the spool stores it on the
-	/// envelope so the delivery log and webhooks can copy it onto every
-	/// record they emit, but it is never written into the message itself.
-	/// The SMTP submission path passes an empty map.
+	/// `submission` carries what the server decided about it: the class it
+	/// granted and the caller-supplied correlation map the API may attach
+	/// (see `POST /api/v1/send`). The spool stores both on the envelope; the
+	/// map is never written into the message itself.
 	fn submit(
 		&self,
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
-		extra: &std::collections::BTreeMap<String, String>,
+		submission: &Submission,
 	) -> Result<(), SinkError> {
-		let _ = (queue_id, account, extra);
+		let _ = (queue_id, account);
+		// A sink that does not keep evidence must not take mail whose
+		// evidence is mandatory: it would be sent, with nothing to show.
+		if submission.class.evidence_mandatory() {
+			return Err(SinkError::EvidenceUnavailable(
+				"this sink keeps no evidence".into(),
+			));
+		}
 		self.deliver(message)
+	}
+}
+
+/// What the server decided about a submission, besides the message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Submission {
+	/// The caller-supplied correlation map (API only; empty for SMTP).
+	pub extra: std::collections::BTreeMap<String, String>,
+	/// The class the server granted.
+	pub class: crate::evidence::MailClass,
+}
+
+impl Submission {
+	/// A submission of `class` with no correlation map.
+	pub fn of_class(class: crate::evidence::MailClass) -> Self {
+		Submission {
+			extra: std::collections::BTreeMap::new(),
+			class,
+		}
 	}
 }
 
@@ -47,6 +72,24 @@ pub enum SinkError {
 	/// the same message is refused again however often it is retried.
 	#[error("virus detected ({0})")]
 	VirusDetected(String),
+	/// The attachment policy refused a submitted message; the reason codes,
+	/// comma separated. Permanent like a virus.
+	#[error("attachment type not accepted ({0})")]
+	AttachmentRefused(String),
+	/// The content scan could not run now (busy, or clamd failing with
+	/// `clamd_on_error = "defer"`). Temporary: the client retries and
+	/// nothing passes unscanned.
+	#[error("content scan unavailable")]
+	ScanUnavailable,
+	/// The message is over what clamd can take, and `clamd_on_error =
+	/// "defer"` lets nothing pass unscanned. Permanent: a retry is just as
+	/// large.
+	#[error("message too large for the content scan")]
+	ScanTooLarge,
+	/// Transactional mail whose evidence cannot be recorded, or that is held
+	/// while the evidence does not verify. Transient: the client retries.
+	#[error("evidence unavailable: {0}")]
+	EvidenceUnavailable(String),
 }
 
 impl SinkError {
@@ -57,10 +100,23 @@ impl SinkError {
 			SinkError::Unavailable(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}
+			SinkError::EvidenceUnavailable(_) => Reply::single(
+				451,
+				"4.3.0 transactional mail cannot be recorded as evidence right now, try again later",
+			),
 			SinkError::VirusDetected(signature) => Reply::single(
 				554,
 				&format!("5.7.1 message rejected: virus detected ({signature})"),
 			),
+			SinkError::AttachmentRefused(_) => {
+				Reply::single(550, "5.7.1 attachment type not accepted")
+			}
+			SinkError::ScanUnavailable => {
+				Reply::single(451, "4.7.1 content scan unavailable, try again later")
+			}
+			SinkError::ScanTooLarge => {
+				Reply::single(552, "5.3.4 message too large for the content scan")
+			}
 		}
 	}
 }
@@ -107,9 +163,36 @@ mod tests {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		};
 		sink.deliver(message.clone()).expect("delivery succeeds");
 		assert_eq!(sink.messages(), vec![message]);
+	}
+
+	#[test]
+	fn a_sink_that_keeps_no_evidence_refuses_transactional_mail() {
+		let sink = MemorySink::new();
+		let message = AcceptedMessage {
+			reverse_path: "a@example.org".into(),
+			recipients: vec!["b@example.org".into()],
+			data: b"hello\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			sender_verified: false,
+			no_dsn: Vec::new(),
+		};
+		let refused = sink.submit(
+			message.clone(),
+			uuid::Uuid::now_v7(),
+			"a",
+			&Submission::of_class(crate::evidence::MailClass::Transactional),
+		);
+		assert!(matches!(refused, Err(SinkError::EvidenceUnavailable(_))));
+		assert!(sink.messages().is_empty(), "the message was taken anyway");
+		sink.submit(message, uuid::Uuid::now_v7(), "a", &Submission::default())
+			.expect("personal mail is taken");
+		assert_eq!(sink.messages().len(), 1);
 	}
 }

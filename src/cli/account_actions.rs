@@ -6,8 +6,12 @@
 //! real epistle server; the dispatcher in `account::run` opens the
 //! store once per call and hands it down here.
 
+use std::io::Write;
 use std::process::ExitCode;
 
+use serde_json::json;
+
+use crate::cli::json_out::{Reload, Report};
 use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
 
@@ -43,6 +47,29 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
+	let _ = writeln!(out, "forwards: {}", render_targets(&account.forward));
+	let _ = writeln!(out, "catch_all: {}", render_targets(&account.catch_all));
+	let _ = writeln!(
+		out,
+		"two_factor: {}",
+		if account.totp_secret.is_some() {
+			"yes"
+		} else {
+			"no"
+		}
+	);
+}
+
+/// Render a one-per-line list with `(none)` for the empty case. The
+/// form mirrors the rest of `account show` so a script that greps for
+/// `forwards: outside@example.com` keeps matching regardless of
+/// whether the account is static or dynamic.
+fn render_targets(targets: &[String]) -> String {
+	if targets.is_empty() {
+		"(none)".to_string()
+	} else {
+		targets.join(",")
+	}
 }
 
 /// A display name for `account show`, or `unset`.
@@ -51,18 +78,37 @@ fn shown(display_name: Option<&str>) -> &str {
 }
 
 /// `account set-name`: set or (with an empty name) clear the display name.
-pub(crate) fn set_name_with_store(store: &AccountStore, name: &str, raw: &str) -> ExitCode {
+pub(crate) fn set_name_with_store(
+	store: &AccountStore,
+	name: &str,
+	raw: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
+	let mut report = Report::new(out, json);
 	match store.set_display_name(name, raw) {
-		Ok(Some(stored)) => {
-			println!("display name of {name} set to \"{stored}\"");
-			ExitCode::SUCCESS
-		}
-		Ok(None) => {
-			println!("display name of {name} cleared");
-			ExitCode::SUCCESS
+		Ok(stored) => {
+			match &stored {
+				Some(stored) => {
+					report.line(format_args!("display name of {name} set to \"{stored}\""))
+				}
+				None => report.line(format_args!("display name of {name} cleared")),
+			}
+			let fields = json!({ "account": name, "display_name": stored });
+			report.change("set-name", true, fields, None)
 		}
 		Err(error) => handle_error(name, error),
 	}
+}
+
+/// Wait for the running server to load the accounts file the store
+/// just wrote; see [`crate::cli::account_reload::wait_after_write`].
+/// The store holds no lock once its mutator has returned.
+fn wait_after_write(store: &AccountStore) -> Reload {
+	Reload::from(crate::cli::account_reload::wait(
+		store.store_path(),
+		&mut style::stderr(),
+	))
 }
 
 /// Render the protocol allowlist. `None` is the pre-restriction
@@ -94,6 +140,8 @@ pub(crate) fn password_with_store(
 	store: &AccountStore,
 	name: &str,
 	mut reader: impl std::io::BufRead,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	// let-else for the same reason as `accounts::add`: no value may flow
 	// from a diverging arm into the binding the hash reads.
@@ -139,49 +187,66 @@ pub(crate) fn password_with_store(
 	};
 	match store.set_password_hash(name, hash, scram) {
 		Ok(()) => {
-			println!("password updated");
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line("password updated");
+			let reload = wait_after_write(store);
+			report.change("password", true, json!({ "account": name }), Some(reload))
 		}
 		Err(error) => handle_error(name, error),
 	}
 }
 
-pub(crate) fn disable_with_store(store: &AccountStore, name: &str) -> ExitCode {
-	match store.set_disabled(name, true) {
+pub(crate) fn disable_with_store(
+	store: &AccountStore,
+	name: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
+	set_disabled(store, name, true, Report::new(out, json))
+}
+
+pub(crate) fn enable_with_store(
+	store: &AccountStore,
+	name: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
+	set_disabled(store, name, false, Report::new(out, json))
+}
+
+/// `account disable` and `account enable`: the store returns the previous
+/// state, so a second run reports `unchanged`.
+fn set_disabled(store: &AccountStore, name: &str, disabled: bool, mut report: Report) -> ExitCode {
+	match store.set_disabled(name, disabled) {
 		Ok(previous) => {
-			let state = if previous {
-				"account already disabled"
+			let (action, done) = if disabled {
+				("disable", "disabled")
 			} else {
-				"account disabled"
+				("enable", "enabled")
 			};
-			println!("{state}");
-			ExitCode::SUCCESS
+			let changed = previous != disabled;
+			if changed {
+				report.line(format_args!("account {done}"));
+			} else {
+				report.line(format_args!("account already {done}"));
+			}
+			let reload = wait_after_write(store);
+			let fields = json!({ "account": name, "disabled": disabled });
+			report.change(action, changed, fields, Some(reload))
 		}
 		Err(error) => handle_error(name, error),
 	}
 }
 
-pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
-	match store.set_disabled(name, false) {
-		Ok(previous) => {
-			let state = if previous {
-				"account enabled"
-			} else {
-				"account already enabled"
-			};
-			println!("{state}");
-			ExitCode::SUCCESS
-		}
-		Err(error) => handle_error(name, error),
-	}
-}
-
-pub(crate) fn address_add_with_store(store: &AccountStore, name: &str, address: &str) -> ExitCode {
+pub(crate) fn address_add_with_store(
+	store: &AccountStore,
+	name: &str,
+	address: &str,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
 	match store.add_address(name, address) {
-		Ok(()) => {
-			println!("address added");
-			ExitCode::SUCCESS
-		}
+		Ok(()) => address_changed(Report::new(out, json), "add", name, address),
 		Err(error) => handle_error(name, error),
 	}
 }
@@ -190,14 +255,23 @@ pub(crate) fn address_remove_with_store(
 	store: &AccountStore,
 	name: &str,
 	address: &str,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	match store.remove_address(name, address) {
-		Ok(()) => {
-			println!("address removed");
-			ExitCode::SUCCESS
-		}
+		Ok(()) => address_changed(Report::new(out, json), "remove", name, address),
 		Err(error) => handle_error(name, error),
 	}
+}
+
+/// The result of `account address add|remove`.
+fn address_changed(mut report: Report, verb: &str, name: &str, address: &str) -> ExitCode {
+	report.line(format_args!(
+		"address {verb}{}",
+		if verb == "add" { "ed" } else { "d" }
+	));
+	let fields = json!({ "account": name, "address": address });
+	report.change(&format!("address {verb}"), true, fields, None)
 }
 
 /// The confirmation after a quota change.
@@ -213,11 +287,19 @@ pub(crate) fn protocols_changed(new: Option<&Vec<Protocol>>) -> String {
 	format!("protocols set to {}", render_protocols(new))
 }
 
-pub(crate) fn quota_with_store(store: &AccountStore, name: &str, size: Option<u64>) -> ExitCode {
+pub(crate) fn quota_with_store(
+	store: &AccountStore,
+	name: &str,
+	size: Option<u64>,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
 	match store.set_quota_bytes(name, size) {
 		Ok(_) => {
-			println!("{}", quota_changed(size));
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line(quota_changed(size));
+			let fields = json!({ "account": name, "quota_bytes": size });
+			report.change("quota", true, fields, None)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -227,11 +309,16 @@ pub(crate) fn protocols_with_store(
 	store: &AccountStore,
 	name: &str,
 	allowed: Option<Vec<Protocol>>,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	match store.set_allowed_protocols(name, allowed.clone()) {
 		Ok(_) => {
-			println!("{}", protocols_changed(allowed.as_ref()));
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line(protocols_changed(allowed.as_ref()));
+			let names = crate::cli::account_json::protocols(allowed.as_ref());
+			let fields = json!({ "account": name, "protocols": names });
+			report.change("protocols", true, fields, None)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -245,11 +332,19 @@ pub(crate) fn save_sent_changed(value: bool) -> String {
 /// Toggle the account-wide `save_sent` preference. Static accounts
 /// carry no field; the CLI refuses them with the same hint as the
 /// other mutators.
-pub(crate) fn save_sent_with_store(store: &AccountStore, name: &str, value: bool) -> ExitCode {
+pub(crate) fn save_sent_with_store(
+	store: &AccountStore,
+	name: &str,
+	value: bool,
+	out: &mut dyn Write,
+	json: bool,
+) -> ExitCode {
 	match store.set_save_sent(name, value) {
 		Ok(_) => {
-			println!("{}", save_sent_changed(value));
-			ExitCode::SUCCESS
+			let mut report = Report::new(out, json);
+			report.line(save_sent_changed(value));
+			let fields = json!({ "account": name, "save_sent": value });
+			report.change("save-sent", true, fields, None)
 		}
 		Err(error) => handle_error(name, error),
 	}
@@ -262,26 +357,30 @@ pub(crate) fn save_sent_with_store(store: &AccountStore, name: &str, value: bool
 pub(crate) fn find_log_id_with_store(
 	store: &AccountStore,
 	id: &str,
-	out: &mut impl std::io::Write,
+	out: &mut dyn Write,
+	json: bool,
 ) -> ExitCode {
 	let id = id.trim().to_ascii_lowercase();
 	let mut views = store.account_views();
 	views.sort_by(|a, b| a.0.cmp(&b.0));
-	let mut found = false;
-	for (name, addresses, _) in &views {
-		let matches = crate::log_id::account(name) == id
-			|| addresses
-				.iter()
-				.any(|address| crate::log_id::account(address) == id);
-		if matches {
-			found = true;
-			let _ = writeln!(out, "{name}");
-		}
-	}
-	if !found {
+	let found: Vec<&String> = views
+		.iter()
+		.filter(|(name, addresses, _)| {
+			crate::log_id::account(name) == id
+				|| addresses
+					.iter()
+					.any(|address| crate::log_id::account(address) == id)
+		})
+		.map(|(name, _, _)| name)
+		.collect();
+	if found.is_empty() {
 		return crate::cli::exit::refused("no account matches that log id on this server");
 	}
-	ExitCode::SUCCESS
+	let mut report = Report::new(out, json);
+	for name in &found {
+		report.line(name);
+	}
+	report.object(json!({ "log_id": id, "accounts": found }))
 }
 
 pub(crate) fn show_with_store(
@@ -300,9 +399,11 @@ pub(crate) fn show_with_store(
 	crate::cli::exit::refused(format_args!("no such account: {name}"))
 }
 
-/// Public view of a static `[accounts]` row. Static accounts do not
-/// carry a `disabled` flag or SCRAM/TOTP material, so the renderer
-/// reports the loader-controlled fields only. The password hash is
+/// Public view of a static `[accounts]` row. The shape mirrors the
+/// dynamic view so an operator can grep a single set of fields
+/// regardless of where the account lives; a static account is
+/// `disabled: no` by definition (the loader never sets it) and
+/// `two_factor: no` (TOTP is dynamic-only). The password hash is
 /// never printed (matches the dynamic viewer's contract).
 fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write) {
 	let _ = writeln!(out, "name: {}", account.name);
@@ -314,6 +415,7 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 		shown(account.display_name.as_deref())
 	);
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
+	let _ = writeln!(out, "disabled: no");
 	let quota = match account.quota_bytes {
 		Some(bytes) => bytes.to_string(),
 		None => "server default".to_string(),
@@ -324,6 +426,9 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
+	let _ = writeln!(out, "forwards: {}", render_targets(&account.forward));
+	let _ = writeln!(out, "catch_all: {}", render_targets(&account.catch_all));
+	let _ = writeln!(out, "two_factor: no");
 }
 
 /// Convert a store error into the exit code plus the message the
@@ -407,3 +512,6 @@ pub(crate) fn parse_protocol_list_inner(raw: &str) -> Result<Option<Vec<Protocol
 #[cfg(test)]
 #[path = "cli_account_save_sent_tests.rs"]
 mod save_sent_tests;
+#[cfg(test)]
+#[path = "account_actions_show_fields_tests.rs"]
+mod show_fields_tests;

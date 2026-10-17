@@ -45,41 +45,82 @@ const TOP_N: usize = 20;
 
 /// One CLI summary kind: pick between DMARC and TLS-RPT and walk the
 /// matching bucket under `data_dir/reports/`.
-pub(super) fn run(config: &Config, days: u32, out: &mut impl std::io::Write) -> ExitCode {
+///
+/// With `json` the summary is one object keyed by kind (`dmarc`,
+/// `tlsrpt`), each with `ingested` and a `domains` array.
+pub(super) fn run(
+	config: &Config,
+	days: u32,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let _warnings = crate::util::fs_walk::warning_scope();
 	let today = today_unix_days();
 	let mut errors = 0;
+	let mut sections = serde_json::Map::new();
 	for kind in [Kind::Dmarc, Kind::TlsRpt] {
-		if let Err(error) = summarise(&config.data_dir, kind, today, days, out) {
+		let written =
+			summarise(&config.data_dir, kind, today, days).and_then(|(total, aggregates)| {
+				if json {
+					sections.insert(dir_name(kind).into(), section_json(total, &aggregates));
+					return Ok(());
+				}
+				write_section_header(out, kind, total)?;
+				for agg in &aggregates {
+					write_aggregate(out, kind, agg)?;
+				}
+				if aggregates.is_empty() {
+					let _ = writeln!(out, "  (no reports yet)");
+				}
+				Ok(())
+			});
+		if let Err(error) = written {
 			errors += 1;
 			super::style::error(format_args!("{} summary failed: {error}", label(kind)));
 		}
 	}
 	if errors > 0 {
-		ExitCode::FAILURE
-	} else {
-		ExitCode::SUCCESS
+		return ExitCode::FAILURE;
 	}
+	if json {
+		return super::json_out::print(out, &serde_json::Value::Object(sections));
+	}
+	ExitCode::SUCCESS
 }
 
+/// One kind's section of the `--json` summary.
+fn section_json(total: usize, aggregates: &[Aggregate]) -> serde_json::Value {
+	let domains: Vec<serde_json::Value> = aggregates
+		.iter()
+		.map(|agg| {
+			let ranked = |counts: &HashMap<String, u64>| -> Vec<serde_json::Value> {
+				top_n(counts)
+					.into_iter()
+					.map(|(key, count)| serde_json::json!({ "key": key, "count": count }))
+					.collect()
+			};
+			serde_json::json!({
+				"domain": agg.domain, "reporters": agg.reporters, "total_rows": agg.total_rows,
+				"failing_by_ip": ranked(&agg.failing_by_ip),
+				"failing_by_result": ranked(&agg.failing_by_result),
+			})
+		})
+		.collect();
+	serde_json::json!({ "ingested": total, "domains": domains })
+}
+
+/// The lines ingested in the window and the per-domain aggregates, sorted
+/// by domain. A missing bucket means no reports yet, not an error.
 fn summarise(
 	data_dir: &Path,
 	kind: Kind,
 	today: u32,
 	days: u32,
-	out: &mut impl std::io::Write,
-) -> std::io::Result<()> {
+) -> std::io::Result<(usize, Vec<Aggregate>)> {
 	let bucket = data_dir.join("reports").join(dir_name(kind));
 	let entries = match crate::util::fs_walk::read_dir(&bucket) {
 		Ok(entries) => entries,
-		// Missing bucket = no reports yet; the section header still
-		// prints so the operator knows nothing was found, not that
-		// something is broken.
-		Err(_) => {
-			write_section_header(out, kind, 0)?;
-			let _ = writeln!(out, "  (no reports yet)");
-			return Ok(());
-		}
+		Err(_) => return Ok((0, Vec::new())),
 	};
 	let mut total_lines = 0usize;
 	for entry in entries.flatten() {
@@ -111,16 +152,9 @@ fn summarise(
 				.unwrap_or(0);
 		}
 	}
-	write_section_header(out, kind, total_lines)?;
 	let mut domain_aggregates = read_aggregates(&bucket, today, days)?;
 	domain_aggregates.sort_by(|a, b| a.domain.cmp(&b.domain));
-	for agg in &domain_aggregates {
-		write_aggregate(out, kind, agg)?;
-	}
-	if domain_aggregates.is_empty() {
-		let _ = writeln!(out, "  (no reports yet)");
-	}
-	Ok(())
+	Ok((total_lines, domain_aggregates))
 }
 
 fn write_section_header(

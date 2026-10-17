@@ -12,7 +12,7 @@ use clap::Subcommand;
 
 use super::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
-use crate::dkim::rotate::{self, selector_for};
+use crate::dkim::rotate::{self, rsa_selector_for, selector_for};
 
 /// Actions of `epistle dkim`.
 #[derive(Debug, Subcommand)]
@@ -29,17 +29,24 @@ pub enum DkimCli {
 	/// Rotate the signing key now.
 	///
 	/// Rotate the signing key now, publishing the new TXT record for every
-	/// signing domain before the server switches to it.
+	/// signing domain before the server switches to it. With RSA dual
+	/// signing the RSA key rotates in the same step, under `rsa<day>`.
 	Rotate {
 		/// Check the preconditions and print what would happen; change nothing.
 		#[arg(long)]
 		dry_run: bool,
+		/// Always refused: a `[[dkim.domain]]` key does not rotate. The
+		/// refusal says how to replace it, or that the domain signs with
+		/// the default key, which `dkim rotate` without `--domain` rotates.
+		#[arg(long)]
+		domain: Option<String>,
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
-	/// List the `dkim-ed<day>.key` files and `ed<day>._domainkey` TXT
-	/// records that neither the active, the previous nor a pending rotation
-	/// names, then ask the running server to remove them.
+	/// List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and the
+	/// `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records that
+	/// neither the active, the previous nor a pending rotation names, then
+	/// ask the running server to remove them.
 	Cleanup {
 		/// List what would be removed; change nothing.
 		#[arg(long)]
@@ -58,11 +65,18 @@ pub(super) fn now_epoch() -> u64 {
 }
 
 /// Run one `dkim` action.
-pub(super) fn run(config: &Config, action: DkimCli, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn run(
+	config: &Config,
+	action: DkimCli,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	match action {
-		DkimCli::Show { json } => show(config, json, out),
-		DkimCli::Rotate { dry_run } => rotate_now(config, dry_run, now_epoch(), out),
-		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, out),
+		DkimCli::Show { json: leaf } => show(config, leaf || json, out),
+		DkimCli::Rotate { dry_run, domain } => {
+			rotate_now(config, dry_run, now_epoch(), domain, json, out)
+		}
+		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, json, out),
 	}
 }
 
@@ -104,6 +118,8 @@ pub(super) fn show_with(
 pub(super) struct Plan {
 	active: String,
 	next: String,
+	/// The RSA selector in service and the one it rotates to.
+	rsa: Option<(String, String)>,
 	names: Vec<String>,
 	retires: Option<String>,
 }
@@ -146,17 +162,29 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 			"selector {next} is already active; a second rotation on the same UTC day would reuse its name"
 		));
 	}
+	let rsa = rotate::active_rsa(dkim, &config.data_dir)
+		.map_err(|e| e.to_string())?
+		.map(|rsa| (rsa.selector, rsa_selector_for(now)));
 	let retires = rotate::read_state(&config.data_dir)
 		.map_err(|e| e.to_string())?
 		.and_then(|state| state.previous)
-		.map(|previous| previous.selector);
+		.map(|previous| match previous.rsa {
+			Some(rsa) => format!("{} and {}", previous.selector, rsa.selector),
+			None => previous.selector,
+		});
+	let selectors = std::iter::once(next.as_str()).chain(rsa.as_ref().map(|(_, n)| n.as_str()));
+	let names = selectors
+		.flat_map(|selector| {
+			signing_domains
+				.iter()
+				.map(move |domain| format!("{selector}._domainkey.{domain}"))
+		})
+		.collect();
 	Ok(Plan {
-		names: signing_domains
-			.iter()
-			.map(|domain| format!("{next}._domainkey.{domain}"))
-			.collect(),
+		names,
 		active: active.selector,
 		next,
+		rsa,
 		retires,
 	})
 }
@@ -165,38 +193,96 @@ pub(super) fn rotate_now(
 	config: &Config,
 	dry_run: bool,
 	now: u64,
+	domain: Option<String>,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	rotate_now_with(
+		config,
+		dry_run,
+		now,
+		domain,
+		json,
+		&mut super::style::stderr(),
+		out,
+	)
+}
+
+/// The real `rotate_now`, with a caller-supplied error writer. Lives
+/// separately so a test can assert on the exact refusal text without
+/// going through the process boundary.
+pub(super) fn rotate_now_with(
+	config: &Config,
+	dry_run: bool,
+	now: u64,
+	domain: Option<String>,
+	json: bool,
+	err: &mut impl std::io::Write,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	if let Some(name) = domain.as_deref() {
+		// A `[[dkim.domain]]` key is not rotated (the rotation journal
+		// covers the default key only), so refuse instead of rotating the
+		// default under a name the operator did not mean.
+		let has_override = config
+			.dkim
+			.as_ref()
+			.is_some_and(|dkim| dkim.override_for(name).is_some());
+		let reason = if has_override {
+			format!(
+				"per-domain keys do not rotate; replace the key of [[dkim.domain]] {name} in the \
+				 configuration file, publish its record (epistle dns-records) and restart the server"
+			)
+		} else {
+			format!(
+				"{name} has no [[dkim.domain]] key and signs with the [dkim] default; \
+				 rotate that with `epistle dkim rotate`"
+			)
+		};
+		super::style::error_to(err, format_args!("dkim rotate --domain {name}: {reason}"));
+		return ExitCode::FAILURE;
+	}
 	let plan = match preflight(config, now) {
 		Ok(plan) => plan,
 		Err(reason) => {
-			super::style::error(format_args!("dkim rotate refused: {reason}"));
+			super::style::error_to(err, format_args!("dkim rotate refused: {reason}"));
 			return ExitCode::FAILURE;
 		}
 	};
-	let _ = writeln!(out, "rotate {} -> {}", plan.active, plan.next);
+	let mut report = super::json_out::Report::new(out, json);
+	report.line(format_args!("rotate {} -> {}", plan.active, plan.next));
+	if let Some((active, next)) = &plan.rsa {
+		report.line(format_args!("rotate {active} -> {next}"));
+	}
 	for name in &plan.names {
-		let _ = writeln!(out, "publish TXT {name}");
+		report.line(format_args!("publish TXT {name}"));
 	}
 	if let Some(previous) = &plan.retires {
-		let _ = writeln!(
-			out,
+		report.line(format_args!(
 			"retire {previous} now (older than the selector being replaced)"
-		);
+		));
 	}
+	let mut result = serde_json::json!({
+		"result": "queued", "action": "rotate", "active": plan.active, "next": plan.next,
+		"rsa": plan.rsa.as_ref().map(|(active, next)| serde_json::json!({ "active": active, "next": next })),
+		"publish": plan.names, "retires": plan.retires,
+	});
 	if dry_run {
-		let _ = writeln!(out, "dry run: nothing changed");
-		return ExitCode::SUCCESS;
+		report.line("dry run: nothing changed");
+		result["result"] = "dry-run".into();
+		return report.object(result);
 	}
 	if let Err(error) = rotate::request_rotation(&config.data_dir, now) {
-		super::style::error(format_args!("cannot write the rotation request: {error}"));
+		super::style::error_to(
+			err,
+			format_args!("cannot write the rotation request: {error}"),
+		);
 		return ExitCode::FAILURE;
 	}
-	let _ = writeln!(
-		out,
-		"queued: the running server rotates within a minute (at its next start if it is stopped); follow it with `epistle dkim show`"
+	report.line(
+		"queued: the running server rotates within a minute (at its next start if it is stopped); follow it with `epistle dkim show`",
 	);
-	ExitCode::SUCCESS
+	report.object(result)
 }
 
 #[path = "dkim_cli_cleanup.rs"]

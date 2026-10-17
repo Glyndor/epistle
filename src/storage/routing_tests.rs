@@ -18,6 +18,7 @@ fn message(recipients: &[&str]) -> AcceptedMessage {
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	}
 }
@@ -136,6 +137,9 @@ fn sieve_vacation_replies_once_and_keeps() {
 
 	let mut msg = message(&["alice@example.org"]);
 	msg.reverse_path = "bob@example.net".into();
+	msg.data = b"To: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();
+	msg.sender_verified = true;
+	let again = msg.clone();
 	sink.deliver(msg).expect("deliver");
 	// Kept in INBOX, one null-sender autoresponse queued to the sender.
 	assert_eq!(inbox_count(dir.path(), "alice"), 1);
@@ -150,8 +154,6 @@ fn sieve_vacation_replies_once_and_keeps() {
 	);
 
 	// A second message from the same sender is deduped: no new reply.
-	let mut again = message(&["alice@example.org"]);
-	again.reverse_path = "bob@example.net".into();
 	sink.deliver(again).expect("deliver");
 	assert_eq!(spool.list().expect("list").len(), 1);
 }
@@ -235,6 +237,7 @@ fn srs_return_address_forwards_to_original_sender() {
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
+		sender_verified: false,
 		no_dsn: Vec::new(),
 	};
 	sink.deliver(bounce).expect("deliver");
@@ -310,7 +313,10 @@ fn relayed_mail_is_dkim_signed() {
 
 	let sink = SplitDelivery::new(dir.path(), directory())
 		.expect("sink")
-		.with_signer(crate::dkim::ReloadableSigner::new(signer));
+		.with_signer(crate::dkim::PerDomainSigner::new(
+			crate::dkim::ReloadableSigner::new(signer),
+			Vec::new(),
+		));
 	// DKIM refuses to sign without a From header, so include one.
 	let mut msg = message(&["bob@elsewhere.example"]);
 	msg.data = b"From: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();

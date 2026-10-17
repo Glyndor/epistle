@@ -155,6 +155,50 @@ async fn a_message_over_the_size_limit_once_built_is_refused() {
 	assert!(spool.list().expect("list").is_empty(), "nothing queued");
 }
 
+/// The configured `[server] max_message_size` is the cap on the `POST
+/// /api/v1/send` body too: the request body's `text` plus the headers
+/// the endpoint writes itself grows past the cap, and the layer rejects
+/// the body before any handler runs. axum's `DefaultBodyLimit` answers
+/// a plain-text `413`, not a JSON envelope, so the assertion reads the
+/// status alone and skips the body parse.
+#[tokio::test]
+async fn v1_send_body_over_the_configured_cap_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let small = 4 * 1024;
+	let app = router(test_state(dir.path(), 0).with_max_message_size(small));
+	let text = "x".repeat(small);
+	let request = json!({
+		"from": "alice@example.org",
+		"to": ["bob@elsewhere.example"],
+		"text": text,
+	});
+	// Inline the request so the body-limit 413 (a plain-text response,
+	// not JSON) does not crash the assertion helper's `from_slice` call.
+	use tower::ServiceExt;
+	let axum_request = axum::http::Request::builder()
+		.method("POST")
+		.uri("/api/v1/send")
+		.header(
+			axum::http::header::AUTHORIZATION,
+			format!("Bearer {}", TOKEN.as_str()),
+		)
+		.header(axum::http::header::CONTENT_TYPE, "application/json")
+		.body(axum::body::Body::from(request.to_string()))
+		.expect("request");
+	let response = app.oneshot(axum_request).await.expect("response");
+	let status = response.status();
+	assert_eq!(
+		status,
+		StatusCode::PAYLOAD_TOO_LARGE,
+		"a body whose built message exceeds [server] max_message_size must be refused",
+	);
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	assert!(
+		spool.list().expect("list").is_empty(),
+		"nothing may be queued when the body cap is exceeded"
+	);
+}
+
 #[tokio::test]
 async fn bcc_is_on_the_envelope_and_nowhere_in_the_headers() {
 	let dir = tempfile::tempdir().expect("tempdir");

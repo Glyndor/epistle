@@ -22,6 +22,7 @@ async fn subjectpass_token_does_not_authorize_added_recipients() {
 		mailbox: None,
 		no_dsn: Vec::new(),
 		tlsrpt_verified: false,
+		sender_verified: false,
 	};
 	let mut reply = Vec::new();
 	server
@@ -58,6 +59,7 @@ async fn subjectpass_challenges_the_last_uncovered_recipient() {
 		mailbox: None,
 		no_dsn: Vec::new(),
 		tlsrpt_verified: false,
+		sender_verified: false,
 	};
 	let mut reply = Vec::new();
 	server

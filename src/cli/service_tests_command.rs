@@ -20,6 +20,7 @@ fn service_command_dry_run_then_change_and_no_op() {
 		file.path(),
 		action(),
 		true,
+		false,
 		&mut out,
 		&mut status,
 		|_, _| panic!("dry-run must not restart"),
@@ -46,6 +47,7 @@ fn service_command_dry_run_then_change_and_no_op() {
 			file.path(),
 			action(),
 			false,
+			false,
 			&mut out,
 			&mut status,
 			|_, _| panic!("host install must not invoke stack")
@@ -68,6 +70,7 @@ fn service_command_dry_run_then_change_and_no_op() {
 		execute_with(
 			file.path(),
 			action(),
+			false,
 			false,
 			&mut out,
 			&mut status,
@@ -105,6 +108,7 @@ fn service_command_updates_ports_and_recreates_mail() {
 		ServiceCli::Enable {
 			name: ServiceName::Webdav,
 		},
+		false,
 		false,
 		&mut Vec::new(),
 		&mut Vec::new(),

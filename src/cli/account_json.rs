@@ -14,7 +14,7 @@ use crate::config::{Config, Protocol};
 use crate::directory_store::AccountStore;
 
 /// The protocol allowlist: `null` when every protocol may sign in.
-fn protocols(allowed: Option<&Vec<Protocol>>) -> Value {
+pub(crate) fn protocols(allowed: Option<&Vec<Protocol>>) -> Value {
 	match allowed {
 		None => Value::Null,
 		Some(list) => list.iter().map(|protocol| protocol.as_str()).collect(),

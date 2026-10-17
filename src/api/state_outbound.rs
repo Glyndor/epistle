@@ -3,12 +3,11 @@
 //! submission uses, so API mail is DKIM-signed, delivered locally to local
 //! recipients and queued for the rest, under the id the caller gets back.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::ApiState;
 use crate::smtp::session::AcceptedMessage;
-use crate::smtp::sink::{MessageSink, SinkError};
+use crate::smtp::sink::{MessageSink, SinkError, Submission};
 use crate::storage::save_sent;
 
 impl ApiState {
@@ -31,12 +30,12 @@ impl ApiState {
 		&self,
 		account: &str,
 		message: AcceptedMessage,
-		extra: &BTreeMap<String, String>,
+		submission: &Submission,
 	) -> Result<uuid::Uuid, SinkError> {
 		let id = uuid::Uuid::now_v7();
 		match &self.inner.outbound {
-			Some(sink) => sink.submit(message, id, account, extra)?,
-			None => self.inner.spool.submit(message, id, account, extra)?,
+			Some(sink) => sink.submit(message, id, account, submission)?,
+			None => self.inner.spool.submit(message, id, account, submission)?,
 		}
 		Ok(id)
 	}

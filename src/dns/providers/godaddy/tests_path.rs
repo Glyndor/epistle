@@ -14,6 +14,7 @@ fn txt(name: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: "v=spf1 -all".to_string(),
 		ttl: 3600,
+		proxied: None,
 	}
 }
 

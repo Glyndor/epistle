@@ -22,9 +22,9 @@ pub(super) struct TlsStack {
 	pub tls_acceptor: Option<TlsAcceptor>,
 	/// The certificate reload handle used by the ACME renewal task.
 	pub reloadable_tls: Option<ReloadableAcceptor>,
-	/// SCRAM-SHA-256-PLUS channel binding hash; `None` when ACME is set
-	/// (the certificate rotates under us and a fixed hash would go stale).
-	pub channel_binding: Option<Vec<u8>>,
+	/// SCRAM-SHA-256-PLUS channel binding hash; `None` when ACME is set.
+	/// It follows a static certificate the operator replaces on disk.
+	pub channel_binding: Option<crate::tls::EndPoint>,
 }
 
 /// Load the TLS acceptor, build the reloadable variant, compute the
@@ -60,9 +60,29 @@ pub(super) fn build_tls(
 	// runtime, which would make a fixed hash stale, so -PLUS stays off there and
 	// clients fall back to plain SCRAM.
 	let channel_binding = match (&config.tls, &config.acme) {
-		(Some(tls), None) => tls_server_end_point(tls),
+		(Some(tls), None) => tls_server_end_point(tls).map(crate::tls::EndPoint::new),
 		_ => None,
 	};
+
+	// The operator's own pair: pick a replaced pair up without a restart,
+	// keep the channel binding with it, and republish its TLSA record.
+	if watches_files(config)
+		&& let (Some(tls), Some(reloadable)) = (&config.tls, &reloadable_tls)
+	{
+		let mut watcher = crate::tls::watch::CertWatcher::new(tls.clone(), reloadable.clone());
+		if let Some(end_point) = &channel_binding {
+			watcher = watcher.with_end_point(end_point.clone());
+		}
+		let provider = config
+			.dns
+			.as_ref()
+			.and_then(|dns| dns.build_for_host(&config.hostname));
+		tokio::spawn(crate::tls::watch::run(
+			watcher,
+			provider,
+			config.hostname.clone(),
+		));
+	}
 
 	// ACME automatic renewal: publish the certificate to every TLS listener.
 	// Requires a [tls] bootstrap certificate to reload into.
@@ -97,6 +117,13 @@ pub(super) fn build_tls(
 		reloadable_tls,
 		channel_binding,
 	})
+}
+
+/// Whether the certificate files are watched and reloaded when they change:
+/// a `[tls]` pair that no `[acme]` manages, which the operator renews by
+/// replacing the files.
+pub(super) fn watches_files(config: &Config) -> bool {
+	config.tls.is_some() && config.acme.is_none()
 }
 
 /// The responder for the configured `[acme] challenge`. Validation already
@@ -134,3 +161,7 @@ mod tests_reload;
 #[cfg(test)]
 #[path = "serve_tls_tests_restart.rs"]
 mod tests_restart;
+
+#[cfg(test)]
+#[path = "serve_tls_tests_watch.rs"]
+mod tests_watch;

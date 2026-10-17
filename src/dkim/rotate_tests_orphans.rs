@@ -12,6 +12,7 @@ fn txt(name: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: "v=DKIM1; k=ed25519; p=AAAA".into(),
 		ttl: 300,
+		proxied: None,
 	}
 }
 
@@ -24,6 +25,7 @@ fn state_with_all_three() -> RotationState {
 			selector: "ed10".into(),
 			key_file: "dkim-ed10.key".into(),
 			retire_at: NOW,
+			rsa: None,
 		}),
 		pending: Some(Pending {
 			selector: "ed190".into(),
@@ -31,7 +33,9 @@ fn state_with_all_three() -> RotationState {
 			domains: vec!["example.org".into()],
 			started_at: NOW,
 			withdrawing: None,
+			rsa: None,
 		}),
+		rsa: None,
 	}
 }
 
@@ -68,6 +72,7 @@ fn only_unnamed_rotated_records_of_signing_domains_are_orphans() {
 		txt("ed77._domainkey.example.org"),
 		DnsRecord {
 			kind: RecordKind::Cname,
+			proxied: None,
 			..txt("ed8._domainkey.example.org")
 		},
 	];
@@ -147,5 +152,61 @@ async fn an_unreadable_state_finds_nothing_to_remove() {
 	assert!(
 		!lab.root.join(CLEANUP_FILE).exists(),
 		"a refused request does not come back every minute"
+	);
+}
+
+/// A state naming an RSA key in each of its three places.
+fn dual_state() -> RotationState {
+	let mut state = state_with_all_three();
+	state.rsa = Some(RsaKey {
+		selector: "rsa100".into(),
+		key_file: "dkim-rsa100.key".into(),
+	});
+	state.previous.as_mut().expect("previous").rsa = Some(RsaKey {
+		selector: "rsa10".into(),
+		key_file: "dkim-rsa10.key".into(),
+	});
+	state.pending.as_mut().expect("pending").rsa = Some(RsaKey {
+		selector: "rsa190".into(),
+		key_file: "dkim-rsa190.key".into(),
+	});
+	state
+}
+
+#[test]
+fn unnamed_rotated_rsa_keys_and_records_are_orphans_too() {
+	let dir = tempfile::tempdir().expect("dir");
+	for name in [
+		"dkim-rsa100.key",
+		"dkim-rsa10.key",
+		"dkim-rsa190.key",
+		"dkim-rsa5.key",
+		"dkim-rsa77.key",
+		"dkim-rsa.key",
+		"dkim-rsaX1.key",
+	] {
+		std::fs::write(dir.path().join(name), "key").expect("write");
+	}
+	let state = dual_state();
+	assert_eq!(
+		orphan_key_files(dir.path(), Some(&state), &["rsa77".into()]),
+		vec![dir.path().join("dkim-rsa5.key")]
+	);
+	let records = [
+		txt("rsa100._domainkey.example.org"),
+		txt("rsa10._domainkey.example.org"),
+		txt("rsa190._domainkey.example.org"),
+		txt("rsa5._domainkey.example.org."),
+		txt("rsa77._domainkey.example.org"),
+		txt("rsa-configured._domainkey.example.org"),
+	];
+	assert_eq!(
+		orphan_records(
+			&records,
+			&["example.org".to_string()],
+			Some(&state),
+			&["rsa77".into()]
+		),
+		vec!["rsa5._domainkey.example.org".to_string()]
 	);
 }

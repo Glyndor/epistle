@@ -5,7 +5,7 @@ use crate::migrate::mox;
 
 /// An epistle configuration with no domains yet, as `init` leaves one
 /// before the first domain is added, plus its data directory.
-fn epistle(dir: &Path, extra: &str) -> PathBuf {
+pub(super) fn epistle(dir: &Path, extra: &str) -> PathBuf {
 	let data = dir.join("data");
 	std::fs::create_dir_all(&data).expect("data dir");
 	let file = dir.join("mail.toml");
@@ -25,7 +25,7 @@ fn epistle(dir: &Path, extra: &str) -> PathBuf {
 	file
 }
 
-fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
+pub(super) fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
 	let source = dir.join("mox");
 	std::fs::create_dir_all(&source).expect("mox dir");
 	let written = mox::fixture::write(&source);
@@ -33,7 +33,7 @@ fn mox_plan(dir: &Path) -> (Plan, mox::fixture::Written) {
 }
 
 /// Every file under `dir`, with its bytes, to prove a run wrote nothing.
-fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+pub(super) fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 	let mut out = Vec::new();
 	let mut pending = vec![dir.to_path_buf()];
 	while let Some(next) = pending.pop() {
@@ -52,7 +52,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 
 /// A plan for one domain whose keys can sign it, without the account epistle
 /// cannot name.
-fn single_domain(plan: &mut Plan) {
+pub(super) fn single_domain(plan: &mut Plan) {
 	plan.domains.retain(|d| d == "example.com");
 	plan.keys.retain(|k| k.domain == "example.com");
 	for account in &mut plan.accounts {
@@ -198,22 +198,6 @@ fn existing_accounts_and_domains_are_refused_unless_merged() {
 		"the existing account is untouched"
 	);
 	assert!(!alice.disabled);
-}
-
-#[test]
-fn per_domain_keys_leave_dkim_alone_and_say_why() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let config_file = epistle(dir.path(), "");
-	let (plan, _) = mox_plan(dir.path());
-	let prepared = prepare(&plan, &config_file, false).expect("prepare");
-	let outcome = apply(&plan, prepared, &Passwords::Reset).expect("apply");
-	assert!(outcome.dkim.is_none());
-	assert!(
-		outcome.notes.iter().any(|n| n.contains("one key pair")),
-		"a note explains that only one key pair signs"
-	);
-	assert_eq!(outcome.key_files.len(), 3, "every key is still saved");
-	assert!(Config::load(&config_file).expect("load").dkim.is_none());
 }
 
 #[test]

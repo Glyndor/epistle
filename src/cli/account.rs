@@ -158,6 +158,18 @@ pub enum Subcommand {
 		#[arg(value_name = "LIST")]
 		list: String,
 	},
+	/// Change account settings.
+	///
+	/// `--default-class` sets the class granted to the account's mail when
+	/// neither the request nor the credential names one (`none` clears it).
+	Set {
+		/// The account login name.
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		name: String,
+		/// `transactional`, `marketing`, `personal`, or `none`.
+		#[arg(long = "default-class", value_name = "CLASS")]
+		default_class: String,
+	},
 	/// Set whether the server saves a Sent copy of every send.
 	SaveSent {
 		/// The account login name.
@@ -321,7 +333,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	let store = prepare_show(config_path, name)?;
 	if store.is_static(name) {
-		return Err(crate::cli::exit::refused(format_args!(
+		return Err(crate::cli::exit::policy(format_args!(
 			"account {name}: edit the config file to change a static account"
 		)));
 	}
@@ -374,6 +386,7 @@ fn init_log_id(config_path: &Path) -> Result<(), ExitCode> {
 pub(super) fn run(
 	config_path: &Path,
 	subcommand: Subcommand,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	// `list`/`add`/`remove` route to the same handlers the flat
@@ -383,7 +396,7 @@ pub(super) fn run(
 	// reader, while `remove` decides the queue policy before it touches
 	// anything.
 	match subcommand {
-		Subcommand::List { json } => {
+		Subcommand::List { json: leaf } => {
 			let config = match Config::load(config_path) {
 				Ok(config) => config,
 				Err(error) => {
@@ -391,7 +404,7 @@ pub(super) fn run(
 					return ExitCode::FAILURE;
 				}
 			};
-			if json {
+			if leaf || json {
 				return super::account_json::list(&config, out);
 			}
 			super::accounts::list(&config, out)
@@ -414,6 +427,8 @@ pub(super) fn run(
 				addresses,
 				display_name.as_deref(),
 				super::prompt::stdin(),
+				out,
+				json,
 			)
 		}
 		Subcommand::Remove { name, queue, yes } => {
@@ -424,17 +439,17 @@ pub(super) fn run(
 					return ExitCode::FAILURE;
 				}
 			};
-			super::accounts::remove(&config, &name, queue, yes, out)
+			super::accounts::remove_reporting(&config, &name, queue, yes, out, json)
 		}
 		Subcommand::Password { name } => {
 			let store = match prepare(config_path, &name) {
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			password_with_store(&store, &name, super::prompt::stdin())
+			password_with_store(&store, &name, super::prompt::stdin(), out, json)
 		}
 		Subcommand::SetName { name, display_name } => match prepare(config_path, &name) {
-			Ok(store) => set_name_with_store(&store, &name, &display_name),
+			Ok(store) => set_name_with_store(&store, &name, &display_name, out, json),
 			Err(code) => code,
 		},
 		Subcommand::Disable { name } => {
@@ -442,14 +457,14 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			disable_with_store(&store, &name)
+			disable_with_store(&store, &name, out, json)
 		}
 		Subcommand::Enable { name } => {
 			let store = match prepare(config_path, &name) {
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			enable_with_store(&store, &name)
+			enable_with_store(&store, &name, out, json)
 		}
 		Subcommand::Address(args) => match args.action {
 			AddressSubcommand::Add { name, address } => {
@@ -457,14 +472,14 @@ pub(super) fn run(
 					Ok(store) => store,
 					Err(code) => return code,
 				};
-				address_add_with_store(&store, &name, &address)
+				address_add_with_store(&store, &name, &address, out, json)
 			}
 			AddressSubcommand::Remove { name, address } => {
 				let store = match prepare(config_path, &name) {
 					Ok(store) => store,
 					Err(code) => return code,
 				};
-				address_remove_with_store(&store, &name, &address)
+				address_remove_with_store(&store, &name, &address, out, json)
 			}
 		},
 		Subcommand::Quota { name, size } => {
@@ -478,7 +493,7 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			quota_with_store(&store, &name, parsed)
+			quota_with_store(&store, &name, parsed, out, json)
 		}
 		Subcommand::Protocols { name, list } => {
 			let parsed = match parse_protocol_list(&list) {
@@ -491,8 +506,12 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			protocols_with_store(&store, &name, parsed)
+			protocols_with_store(&store, &name, parsed, out, json)
 		}
+		Subcommand::Set {
+			name,
+			default_class,
+		} => super::account_class::set(config_path, &name, &default_class, json, out),
 		Subcommand::SaveSent { name, state } => {
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,
@@ -504,9 +523,9 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			save_sent_with_store(&store, &name, value)
+			save_sent_with_store(&store, &name, value, out, json)
 		}
-		Subcommand::Show { name, json } => {
+		Subcommand::Show { name, json: leaf } => {
 			let store = match prepare_show(config_path, &name) {
 				Ok(store) => store,
 				Err(code) => return code,
@@ -514,7 +533,7 @@ pub(super) fn run(
 			if let Err(code) = init_log_id(config_path) {
 				return code;
 			}
-			if json {
+			if leaf || json {
 				return super::account_json::show(&store, &name, out);
 			}
 			show_with_store(&store, &name, out)
@@ -532,7 +551,7 @@ pub(super) fn run(
 				return ExitCode::FAILURE;
 			}
 			match open_store(&config) {
-				Ok(store) => find_log_id_with_store(&store, &log_id, out),
+				Ok(store) => find_log_id_with_store(&store, &log_id, out, json),
 				Err(error) => {
 					style::error(format_args!("opening account store: {error}"));
 					ExitCode::FAILURE
@@ -543,9 +562,9 @@ pub(super) fn run(
 		// dynamic-only mutator behind each: the dispatcher refuses a
 		// static account with the config-file hint before any mutator
 		// runs, mirroring `account enable`/`disable`.
-		Subcommand::Forward(args) => dispatch_forward(args, config_path, out),
-		Subcommand::CatchAll(args) => dispatch_catch_all(args, config_path, out),
-		Subcommand::TwoFactor(args) => dispatch_two_factor(args, config_path, out),
+		Subcommand::Forward(args) => dispatch_forward(args, config_path, json, out),
+		Subcommand::CatchAll(args) => dispatch_catch_all(args, config_path, json, out),
+		Subcommand::TwoFactor(args) => dispatch_two_factor(args, config_path, json, out),
 	}
 }
 
@@ -556,6 +575,7 @@ pub(super) fn run(
 fn dispatch_forward(
 	args: ForwardArgs,
 	config_path: &Path,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let store = match prepare(config_path, dynamic_name(&args.action)) {
@@ -563,10 +583,10 @@ fn dispatch_forward(
 		Err(code) => return code,
 	};
 	match args.action {
-		ForwardSubcommand::List { name, json: true } => {
+		ForwardSubcommand::List { name, json: leaf } if leaf || json => {
 			super::account_json::forwards(&store, &name, out)
 		}
-		ForwardSubcommand::List { name, json: false } => forward_list(&store, &name, out),
+		ForwardSubcommand::List { name, .. } => forward_list(&store, &name, out),
 		ForwardSubcommand::Add { name, address } => {
 			// Delivery rewrites a forwarded envelope sender with SRS only
 			// when `srs_secret` is set; without it the next hop checks SPF
@@ -574,15 +594,15 @@ fn dispatch_forward(
 			// rejects the copy. The config loader refuses a static forward
 			// for the same reason.
 			if Config::load(config_path).is_ok_and(|config| config.srs_secret.is_none()) {
-				return crate::cli::exit::refused(format_args!(
+				return crate::cli::exit::policy(format_args!(
 					"account {name} forward: set `srs_secret` in the config first; \
 					 without SRS a forwarded copy fails SPF at the next hop"
 				));
 			}
-			forward_add_with_store(&store, &name, &address)
+			forward_add_with_store(&store, &name, &address, out, json)
 		}
 		ForwardSubcommand::Remove { name, address } => {
-			forward_remove_with_store(&store, &name, &address)
+			forward_remove_with_store(&store, &name, &address, out, json)
 		}
 	}
 }
@@ -591,6 +611,7 @@ fn dispatch_forward(
 fn dispatch_catch_all(
 	args: CatchAllArgs,
 	config_path: &Path,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let store = match prepare(config_path, catch_all_name(&args.action)) {
@@ -598,15 +619,15 @@ fn dispatch_catch_all(
 		Err(code) => return code,
 	};
 	match args.action {
-		CatchAllSubcommand::List { name, json: true } => {
+		CatchAllSubcommand::List { name, json: leaf } if leaf || json => {
 			super::account_json::catch_alls(&store, &name, out)
 		}
-		CatchAllSubcommand::List { name, json: false } => catch_all_list(&store, &name, out),
+		CatchAllSubcommand::List { name, .. } => catch_all_list(&store, &name, out),
 		CatchAllSubcommand::Add { name, domain } => {
-			catch_all_add_with_store(&store, &name, &domain)
+			catch_all_add_with_store(&store, &name, &domain, out, json)
 		}
 		CatchAllSubcommand::Remove { name, domain } => {
-			catch_all_remove_with_store(&store, &name, &domain)
+			catch_all_remove_with_store(&store, &name, &domain, out, json)
 		}
 	}
 }
@@ -637,6 +658,7 @@ fn catch_all_name(action: &CatchAllSubcommand) -> &str {
 fn dispatch_two_factor(
 	args: TwoFactorArgs,
 	config_path: &Path,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let store = match prepare(config_path, two_factor_name(&args.action)) {
@@ -644,11 +666,13 @@ fn dispatch_two_factor(
 		Err(code) => return code,
 	};
 	match args.action {
-		TwoFactorSubcommand::Show { name, json: true } => {
+		TwoFactorSubcommand::Show { name, json: leaf } if leaf || json => {
 			super::account_json::two_factor(&store, &name, out)
 		}
-		TwoFactorSubcommand::Show { name, json: false } => two_factor_show(&store, &name, out),
-		TwoFactorSubcommand::Disable { name, yes } => two_factor_disable(&store, &name, yes),
+		TwoFactorSubcommand::Show { name, .. } => two_factor_show(&store, &name, out),
+		TwoFactorSubcommand::Disable { name, yes } => {
+			two_factor_disable(&store, &name, yes, out, json)
+		}
 	}
 }
 

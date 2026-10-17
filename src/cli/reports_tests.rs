@@ -90,7 +90,7 @@ fn fixture_with_reports() -> (tempfile::TempDir, String) {
 
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let _ = run(&cfg, DEFAULT_DAYS, &mut out);
+	let _ = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	(dir, String::from_utf8(out).expect("utf8"))
 }
 
@@ -133,7 +133,7 @@ fn older_than_the_window_is_skipped() {
 
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let _ = run(&cfg, DEFAULT_DAYS, &mut out);
+	let _ = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	let output = String::from_utf8(out).expect("utf8");
 	assert!(
 		!output.contains("203.0.113.7"),
@@ -152,7 +152,7 @@ fn no_reports_directory_yet_is_empty_summary() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut out = Vec::new();
 	let cfg = load_test_config(dir.path());
-	let code = run(&cfg, DEFAULT_DAYS, &mut out);
+	let code = run(&cfg, DEFAULT_DAYS, false, &mut out);
 	assert_eq!(code, ExitCode::SUCCESS);
 	let output = String::from_utf8(out).expect("utf8");
 	assert!(output.contains("DMARC aggregate reports"), "{output}");
@@ -203,5 +203,31 @@ fn failing_count_aggregates_tlsrpt_sessions() {
 	assert_eq!(
 		agg.failing_by_result.get("starttls-not-supported"),
 		Some(&2)
+	);
+}
+
+/// `--json` carries what the text summary shows: the reporters, the row
+/// totals and the failing sources, per policy domain and per kind.
+#[test]
+fn json_summary_carries_the_totals_and_the_failing_sources() {
+	let (dir, _) = fixture_with_reports();
+	let mut out = Vec::new();
+	let code = run(&load_test_config(dir.path()), DEFAULT_DAYS, true, &mut out);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let printed: serde_json::Value = serde_json::from_slice(&out).expect("one json document");
+	assert_eq!(
+		printed,
+		serde_json::json!({
+			"dmarc": {"ingested": 1, "domains": [{
+				"domain": "example.org", "reporters": ["google.com"], "total_rows": 8,
+				"failing_by_ip": [{"key": "203.0.113.7", "count": 3}],
+				"failing_by_result": [],
+			}]},
+			"tlsrpt": {"ingested": 1, "domains": [{
+				"domain": "example.org", "reporters": ["google.com"], "total_rows": 2,
+				"failing_by_ip": [{"key": "192.0.2.10", "count": 2}],
+				"failing_by_result": [{"key": "starttls-not-supported", "count": 2}],
+			}]},
+		})
 	);
 }

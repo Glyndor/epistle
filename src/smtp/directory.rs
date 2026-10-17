@@ -88,6 +88,9 @@ pub struct Directory {
 	/// Domain aliases (alias domain → target domain): mail to `user@alias` is
 	/// resolved as `user@target`.
 	domain_aliases: HashMap<String, String>,
+	/// Hosted domains switched off: mail for them is rejected like mail for
+	/// an unknown user and nobody may send as an address in them.
+	disabled_domains: HashSet<String>,
 	/// SCRAM credentials per account name, for SCRAM-SHA-256 authentication.
 	scram: HashMap<String, super::scram::ScramStored>,
 	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
@@ -186,6 +189,7 @@ impl Directory {
 			subaddress_separators: vec!['+'],
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
+			disabled_domains: HashSet::new(),
 			scram: HashMap::new(),
 			totp: HashMap::new(),
 			disabled: HashSet::new(),
@@ -485,7 +489,9 @@ impl Directory {
 	/// taking the first configured domain would assign every account to
 	/// whichever domain happened to be configured first, and drop all of
 	/// them the day that domain is removed. The address walk matches the
-	/// approach [`Directory::quota_for`] takes for the same reason.
+	/// approach [`Directory::quota_for`] takes for the same reason. An
+	/// account with addresses in several limited domains gets the strictest
+	/// of their limits, whatever order the addresses are stored in.
 	pub fn submission_limit_for(&self, account: &str) -> Option<u32> {
 		if self.domain_submission_limits.is_empty() {
 			return None;
@@ -494,7 +500,8 @@ impl Directory {
 			.iter()
 			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
 			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
-			.find_map(|domain| self.domain_submission_limits.get(domain).copied())
+			.filter_map(|domain| self.domain_submission_limits.get(domain).copied())
+			.min()
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a
@@ -697,6 +704,9 @@ impl Directory {
 
 	/// Whether `address` belongs to `account`.
 	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
+		if self.domain_disabled(address.domain()) {
+			return false;
+		}
 		let key = normalize(&address.to_string());
 		if let Some(owner) = self.accounts_by_address.get(&key) {
 			return owner == account;
@@ -728,6 +738,10 @@ impl Directory {
 #[path = "directory_resolve.rs"]
 mod resolve;
 
+#[cfg(test)]
+#[path = "directory_disabled_domain_tests.rs"]
+mod disabled_domain_tests;
+
 #[path = "directory_scram.rs"]
 mod scram;
 
@@ -736,6 +750,9 @@ mod scram_upgrade;
 
 #[path = "directory_bans.rs"]
 pub mod bans;
+
+#[path = "directory_credential.rs"]
+mod credential;
 
 #[cfg(test)]
 #[path = "directory_tests.rs"]

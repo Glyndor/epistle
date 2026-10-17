@@ -43,8 +43,11 @@ pub const DEFAULT_DELIVERY_LOG_DAYS: u64 = 30;
 pub enum DeliveryOutcome {
 	/// The remote server accepted the message for this recipient.
 	Delivered,
-	/// A transient failure that will be retried. Emitted at most once per
-	/// recipient per message; subsequent deferrals do not write a record.
+	/// A transient failure that will be retried. Emitted once per
+	/// recipient per message for each distinct reply: a retry deferred for
+	/// the same reason as the one before writes no record, one deferred for
+	/// a new reason does, up to
+	/// [`crate::queue::limits::MAX_DEFERRALS_LOGGED`] per recipient.
 	Deferred,
 	/// Delivery failed permanently (the message expired or the remote
 	/// refused it).
@@ -113,14 +116,22 @@ pub struct DeliveryRecord {
 	/// the spool open.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reply: Option<String>,
-	/// Which attempt this record corresponds to. `0` for a record that
-	/// has no attempt (suppression, cancel).
+	/// Which attempt this record corresponds to, counting from one. `0`
+	/// for a record that has no attempt (suppression, cancel).
 	pub attempt: u32,
 	/// The caller-supplied correlation map, when the API attached one to
 	/// the submission. Empty in every record of a message the API did not
 	/// tag.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub extra: BTreeMap<String, String>,
+	/// The class of the message; absent for `personal` and in every record
+	/// written before the field existed.
+	#[serde(default, skip_serializing_if = "is_personal")]
+	pub class: crate::evidence::MailClass,
+}
+
+fn is_personal(class: &crate::evidence::MailClass) -> bool {
+	*class == crate::evidence::MailClass::Personal
 }
 
 /// The on-disk delivery log under `<data_dir>/deliverylog/`. A no-op when
@@ -258,9 +269,21 @@ impl DeliveryLog {
 	/// then the next day". A caller that needs a strict per-record
 	/// `time` order can sort the result itself; the on-disk encoding
 	/// already has the timestamp.
-	pub fn list<F>(
+	pub fn list<F>(&self, limit: Option<usize>, filter: F) -> std::io::Result<Vec<DeliveryRecord>>
+	where
+		F: FnMut(&DeliveryRecord) -> bool,
+	{
+		self.list_between(limit, (None, None), filter)
+	}
+
+	/// [`DeliveryLog::list`] for records whose time lies in `(since, until)`
+	/// (epoch seconds, either end open). A file whose day is outside the
+	/// window is not opened. `filter` still sees every record of the files
+	/// that are, so it decides on the exact second.
+	pub fn list_between<F>(
 		&self,
 		limit: Option<usize>,
+		(since, until): (Option<u64>, Option<u64>),
 		mut filter: F,
 	) -> std::io::Result<Vec<DeliveryRecord>>
 	where
@@ -270,6 +293,8 @@ impl DeliveryLog {
 		if !self.root.is_dir() {
 			return Ok(out);
 		}
+		let first = since.map(|epoch| date_for_epoch(epoch).to_string());
+		let last = until.map(|epoch| date_for_epoch(epoch).to_string());
 		// Newest day first. We list the directory and sort the file
 		// names descending; the file name is `YYYY-MM-DD.jsonl`, so a
 		// plain string sort gives the right order without parsing.
@@ -280,24 +305,37 @@ impl DeliveryLog {
 				Ok(name) => name,
 				Err(_) => continue,
 			};
-			if name.ends_with(".jsonl") {
+			if name.ends_with(".jsonl") && day_in_window(&name, first.as_deref(), last.as_deref()) {
 				files.push(entry.path());
 			}
 		}
 		files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+		let mut line = Vec::new();
 		'outer: for file in files {
-			let text = match fs::read_to_string(&file) {
-				Ok(text) => text,
+			let mut reader = match fs::File::open(&file) {
+				Ok(handle) => std::io::BufReader::with_capacity(64 * 1024, handle),
 				Err(error) => {
 					tracing::warn!(file = %file.display(), %error, "delivery log file could not be read");
 					continue;
 				}
 			};
-			for line in text.lines() {
+			loop {
+				match read_capped_line(&mut reader, &mut line, MAX_LINE_BYTES) {
+					Ok(Line::End) => break,
+					Ok(Line::TooLong) => {
+						tracing::warn!(file = %file.display(), "delivery log line over the size limit skipped");
+						continue;
+					}
+					Ok(Line::Read) => {}
+					Err(error) => {
+						tracing::warn!(file = %file.display(), %error, "delivery log file could not be read");
+						break;
+					}
+				}
 				if line.is_empty() {
 					continue;
 				}
-				let record: DeliveryRecord = match serde_json::from_str(line) {
+				let record: DeliveryRecord = match serde_json::from_slice(&line) {
 					Ok(record) => record,
 					Err(error) => {
 						tracing::warn!(file = %file.display(), %error, "delivery log line did not parse");
@@ -496,7 +534,7 @@ fn parse_duration_secs(
 /// codebase is `time::unix_now` only). The output is always UTC: an
 /// explicit `+HH:MM` offset is subtracted from the wall-clock fields, so
 /// a value like `2024-01-02T03:04:05+02:00` becomes `01:04:05 UTC`.
-fn parse_rfc3339(value: &str) -> Result<u64, String> {
+pub(crate) fn parse_rfc3339(value: &str) -> Result<u64, String> {
 	let (date, rest) = value
 		.split_once('T')
 		.ok_or_else(|| format!("since {value:?} is not RFC 3339 (no T separator)"))?;
@@ -525,8 +563,8 @@ fn parse_rfc3339(value: &str) -> Result<u64, String> {
 	if !(1..=12).contains(&month) {
 		return Err(format!("since {value:?} has a month out of range"));
 	}
-	if !(1..=31).contains(&day) {
-		return Err(format!("since {value:?} has a day-of-month out of range"));
+	if !day::is_calendar_day(year, month, day) {
+		return Err(format!("since {value:?} is not a day of the calendar"));
 	}
 	let (time, offset_seconds) = if let Some(time) = rest.strip_suffix('Z') {
 		(time, 0i64)
@@ -608,8 +646,20 @@ fn parse_offset(offset: &str) -> Result<i64, String> {
 			.map_err(|_| format!("since ... {offset:?} has a non-numeric minute"))?,
 		None => 0,
 	};
-	Ok(hours * 3600 + minutes * 60)
+	let seconds = hours * 3600 + minutes * 60;
+	if !(0..60).contains(&minutes) || !day::is_clock_offset(seconds) {
+		return Err(format!("since ... {offset:?} is not a UTC offset"));
+	}
+	Ok(seconds)
 }
+
+#[path = "delivery_log_lines.rs"]
+mod lines;
+use lines::{Line, MAX_LINE_BYTES, day_in_window, read_capped_line};
+
+#[path = "delivery_log_day.rs"]
+mod day;
+pub use day::{MAX_LINE, day_name};
 
 #[cfg(test)]
 #[path = "delivery_log_tests.rs"]

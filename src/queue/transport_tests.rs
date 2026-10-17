@@ -60,3 +60,18 @@ async fn direct_relay_connect_refused_is_transient() {
 	let result = relay_connect("127.0.0.1", 1, None).await;
 	assert!(matches!(result, Err(DeliveryError::Transient(_))));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_proxy_that_never_answers_gives_up_after_the_connect_wait() {
+	// The proxy end of the pipe is kept open and never written to.
+	let (mut client, _proxy) = tokio::io::duplex(1024);
+	let started = tokio::time::Instant::now();
+	let result = socks5_negotiate(&mut client, "mail.example.org", 25).await;
+	assert_eq!(
+		result,
+		Err(DeliveryError::Transient(
+			"timed out after 30s waiting for the connection".into()
+		))
+	);
+	assert_eq!(started.elapsed(), crate::queue::timeouts::CONNECT);
+}

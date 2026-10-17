@@ -16,7 +16,8 @@ fn queued(reverse_path: &str, from: &str) -> (Vec<u8>, String) {
 	let (pem, record) = crate::dkim::generate_key().expect("key");
 	let key_file = dir.path().join("sel.key");
 	std::fs::write(&key_file, pem).expect("write key");
-	let signer = ReloadableSigner::new(Arc::new(Signer::load("sel", &key_file).expect("load")));
+	let default = ReloadableSigner::new(Arc::new(Signer::load("sel", &key_file).expect("load")));
+	let signer = crate::dkim::PerDomainSigner::new(default, Vec::new());
 	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		["a.example".to_string(), "b.example".to_string()],
 		[
@@ -35,6 +36,7 @@ fn queued(reverse_path: &str, from: &str) -> (Vec<u8>, String) {
 			require_tls: false,
 			mailbox: None,
 			tlsrpt_verified: false,
+			sender_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("deliver");

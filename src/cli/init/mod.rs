@@ -15,6 +15,7 @@ pub(crate) mod db_roles;
 mod detect;
 mod first_account;
 pub(crate) mod host_secrets;
+pub(crate) mod host_sizing;
 pub(crate) mod images;
 mod plan;
 mod ptr;
@@ -48,6 +49,10 @@ pub struct Args {
 	pub dry_run: bool,
 	/// Print the answers template and exit.
 	pub print_answers: bool,
+	/// Print the result as one JSON object on stdout: the plan for a dry
+	/// run, the report after a run. The human plan and report stay on
+	/// stderr either way.
+	pub json: bool,
 }
 
 /// Exit codes: 0 done or nothing to do; 1 a step failed after
@@ -65,6 +70,7 @@ pub fn run(args: Args) -> ExitCode {
 	let probes = Probes {
 		detector: &detect::LiveDetector,
 		resolver: &ptr::system_resolver,
+		meminfo: std::path::Path::new("/proc/meminfo"),
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
@@ -76,6 +82,8 @@ struct Probes<'a> {
 	detector: &'a dyn detect::Detector,
 	/// Built only when there is an address to look up.
 	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
+	/// The host's `/proc/meminfo`, which sizes the containers.
+	meminfo: &'a std::path::Path,
 }
 
 /// [`run`] with the probes and the stream for the detection notices and
@@ -83,6 +91,10 @@ struct Probes<'a> {
 fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	let detector = probes.detector;
 	if args.print_answers {
+		if args.json {
+			let result = serde_json::json!({ "answers_template": Answers::template().to_string() });
+			return crate::cli::json_out::print(&mut std::io::stdout().lock(), &result);
+		}
 		println!("{}", Answers::template());
 		return ExitCode::from(EXIT_OK);
 	}
@@ -106,6 +118,9 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
 	};
+	for note in host_sizing::fill(&mut answers, probes.meminfo) {
+		let _ = writeln!(out, "{note}");
+	}
 	answers.normalise();
 	match answers.validate() {
 		Ok(warnings) => render_warnings(&warnings),
@@ -131,15 +146,26 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		}
 	};
 	render_plan(&plan);
+	let plan_lines = lines(|text| plan.write_to(&mut StringWriter::new(text)).is_ok());
+	let result = |result: &str, report: &[String]| {
+		let value = serde_json::json!({
+			"result": result, "action": "init", "config": answers.config_path.display().to_string(),
+			"plan": plan_lines, "report": report,
+		});
+		match args.json {
+			true => crate::cli::json_out::print(&mut std::io::stdout().lock(), &value),
+			false => ExitCode::from(EXIT_OK),
+		}
+	};
 	if args.dry_run {
 		let _ = writeln!(out, "dry-run: nothing was written");
 		report_ptr(&answers, probes, out);
-		return ExitCode::from(EXIT_OK);
+		return result("dry-run", &[]);
 	}
 	if args.answers.is_none() && !confirm(std::io::stdin().lock(), crate::cli::style::stderr()) {
 		let mut out = crate::cli::style::stderr();
 		let _ = writeln!(out, "aborted: nothing was written");
-		return ExitCode::from(EXIT_OK);
+		return result("unchanged", &[]);
 	}
 	// From an answers file the password is read now, after the plan and
 	// before anything is written, so a refused one leaves nothing behind.
@@ -166,7 +192,9 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	match outcome.error {
 		None => {
 			report_ptr(&answers, probes, out);
-			ExitCode::from(EXIT_OK)
+			offer_warmup(&answers.data_dir, out);
+			let report = lines(|text| outcome.report.write_to(text).is_ok());
+			result("saved", &report)
 		}
 		Some(error) => {
 			crate::cli::style::error(error);
@@ -224,6 +252,22 @@ fn report_ptr(answers: &Answers, probes: &Probes, out: &mut dyn Write) {
 	ptr::render(&answers.hostname, &addresses, resolver.as_deref(), out);
 }
 
+/// Offer the IP warm-up to a new install: one whose data directory has
+/// no warm-up settings yet. It stays off until the operator starts it, as
+/// on every install that predates it.
+fn offer_warmup(data_dir: &std::path::Path, out: &mut dyn Write) {
+	if crate::queue::warmup::settings::path(data_dir).exists() {
+		return;
+	}
+	let _ = writeln!(
+		out,
+		"warm-up: a new sending address has no reputation yet, and large receivers defer or \
+		 junk its mail when the volume jumps. To ramp it up per receiver group, run\n  \
+		 epistle warmup plan --ip-age 0d --daily-volume <recipients a day>\n\
+		 and then the same with `start`."
+	);
+}
+
 fn render_warnings(warnings: &[Warning]) {
 	for warning in warnings {
 		crate::cli::style::warn(format_args!("{warning}"));
@@ -240,6 +284,19 @@ fn render_report(report: &apply::Report) {
 	let mut out = crate::cli::style::stderr();
 	let _ = writeln!(out, "report:");
 	let _ = report.write_to(&mut out);
+}
+
+/// The non-empty lines `write` renders into a buffer, trimmed, for the
+/// `--json` result.
+fn lines(write: impl FnOnce(&mut Vec<u8>) -> bool) -> Vec<String> {
+	let mut text = Vec::new();
+	write(&mut text);
+	String::from_utf8_lossy(&text)
+		.lines()
+		.map(str::trim)
+		.filter(|line| !line.is_empty())
+		.map(str::to_string)
+		.collect()
 }
 
 /// Tiny `fmt::Write` adapter that proxies into a `std::io::Write`.
@@ -284,3 +341,11 @@ mod tests_ptr;
 #[cfg(test)]
 #[path = "init_first_account_tests.rs"]
 mod tests_first_account;
+
+#[cfg(test)]
+#[path = "init_tests_warmup.rs"]
+mod tests_warmup;
+
+#[cfg(test)]
+#[path = "init_tests_sizing.rs"]
+mod tests_sizing;

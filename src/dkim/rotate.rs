@@ -5,6 +5,13 @@
 //! to it. The previous selector's TXT stays published for an overlap window so
 //! mail signed just before the switch still verifies, then it is retired.
 //!
+//! When the server also signs with RSA (dual signing), the same rotation
+//! generates a fresh RSA key under its own selector (`rsa<day>`). Both keys
+//! are journaled in one [`Pending`], published and confirmed in every
+//! signing domain, and switch together in the one save that commits the
+//! rotation: the signer never pairs a new key with one nobody can verify,
+//! and a withdrawal or a retirement removes both.
+//!
 //! The rotation *decision* ([`decide`]) is pure and unit-tested; the I/O — key
 //! generation, the DNS upsert/delete, the signer swap, and persisting state —
 //! is the thin glue in [`Rotator::tick`].
@@ -48,6 +55,16 @@ impl ReloadableSigner {
 	}
 }
 
+/// An RSA dual-signing key that a rotation put in service, retired or is
+/// rotating to: its selector and its key file (PKCS#8 PEM).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RsaKey {
+	/// Selector published at `<selector>._domainkey.<domain>`.
+	pub selector: String,
+	/// Key file, absolute or relative to the data directory.
+	pub key_file: PathBuf,
+}
+
 /// The previous selector, kept published until its overlap window elapses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Previous {
@@ -63,6 +80,11 @@ pub struct Previous {
 	pub key_file: PathBuf,
 	/// Epoch second at/after which the old TXT may be deleted.
 	pub retire_at: u64,
+	/// The RSA key the same rotation replaced, retired with the selector
+	/// above. Absent when no RSA key was rotated out, or when the one
+	/// replaced was the configured key, which is left as it is.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rsa: Option<RsaKey>,
 }
 
 /// A rotation begun and not yet committed or withdrawn: the journal entry
@@ -82,6 +104,11 @@ pub struct Pending {
 	/// records and key are only removed, never published again.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub withdrawing: Option<String>,
+	/// The RSA key rotated in the same step, when the server dual-signs.
+	/// It is published, confirmed, committed and withdrawn together with
+	/// the ed25519 key above.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rsa: Option<RsaKey>,
 }
 
 /// Persisted rotation state (`<data_dir>/dkim-rotation.json`).
@@ -99,12 +126,16 @@ pub struct RotationState {
 	/// committed. Absent in state written before rotations were journaled.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub pending: Option<Pending>,
+	/// The RSA key a rotation put in service. Absent before the first
+	/// rotation that covered RSA: the configured RSA key signs then.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rsa: Option<RsaKey>,
 }
 
 /// File name of the persisted rotation state inside the data directory.
 pub const STATE_FILE: &str = "dkim-rotation.json";
 
-/// The ed25519 key currently in service: its selector and an absolute key path.
+/// A DKIM key currently in service: its selector and an absolute key path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveKey {
 	/// Selector published at `<selector>._domainkey.<domain>`.
@@ -167,21 +198,7 @@ pub fn active_ed25519(
 	dkim: &crate::config::Dkim,
 	data_dir: &std::path::Path,
 ) -> Result<ActiveKey, RotateError> {
-	let state = match read_state(data_dir) {
-		Ok(state) => state,
-		Err(error) => match parse_state(&data_dir.join(STATE_BACKUP_FILE)) {
-			Ok(Some(backup)) => {
-				tracing::warn!(
-					%error,
-					selector = %backup.selector,
-					"DKIM rotation state is unreadable; signing with the last good state in {STATE_BACKUP_FILE}",
-				);
-				Some(backup)
-			}
-			_ => return Err(error),
-		},
-	};
-	Ok(match state {
+	Ok(match signing_state(data_dir)? {
 		Some(state) => ActiveKey {
 			selector: state.selector,
 			key_file: data_dir.join(state.key_file),
@@ -191,6 +208,49 @@ pub fn active_ed25519(
 			key_file: dkim.key_file.clone(),
 		},
 	})
+}
+
+/// The RSA dual-signing key in service, the same way [`active_ed25519`]
+/// answers for ed25519: `None` when `[dkim]` does not set both
+/// `rsa_selector` and `rsa_key_file` (dual signing is off), the key the
+/// last rotation put in service when the state names one, the configured
+/// key otherwise.
+pub fn active_rsa(
+	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
+) -> Result<Option<ActiveKey>, RotateError> {
+	let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) else {
+		return Ok(None);
+	};
+	Ok(Some(match signing_state(data_dir)?.and_then(|s| s.rsa) {
+		Some(rsa) => ActiveKey {
+			selector: rsa.selector,
+			key_file: data_dir.join(rsa.key_file),
+		},
+		None => ActiveKey {
+			selector: selector.clone(),
+			key_file: key_file.clone(),
+		},
+	}))
+}
+
+/// The state the signer follows: [`read_state`], or the last good copy in
+/// [`STATE_BACKUP_FILE`] when the state cannot be read.
+fn signing_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
+	match read_state(data_dir) {
+		Ok(state) => Ok(state),
+		Err(error) => match parse_state(&data_dir.join(STATE_BACKUP_FILE)) {
+			Ok(Some(backup)) => {
+				tracing::warn!(
+					%error,
+					selector = %backup.selector,
+					"DKIM rotation state is unreadable; signing with the last good state in {STATE_BACKUP_FILE}",
+				);
+				Ok(Some(backup))
+			}
+			_ => Err(error),
+		},
+	}
 }
 
 /// The interval between automatic DKIM key rotations, in days.
@@ -242,6 +302,11 @@ pub fn selector_for(now: u64) -> String {
 	format!("ed{}", now / 86_400)
 }
 
+/// The RSA selector a rotation on the day of `now` puts in service.
+pub fn rsa_selector_for(now: u64) -> String {
+	format!("rsa{}", now / 86_400)
+}
+
 /// Drives DKIM rotation: owns the state file, the live signer handle, and the
 /// DNS publisher.
 pub struct Rotator {
@@ -262,6 +327,8 @@ pub struct Rotator {
 	webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// Selectors outside the state that are never orphans.
 	keep: Vec<String>,
+	/// Makes the RSA key of a dual-signing rotation.
+	rsa_keygen: rsa::RsaKeygen,
 	/// The step at which a test stops the rotator.
 	#[cfg(test)]
 	crash_at: Option<steps::Step>,
@@ -304,6 +371,7 @@ impl Rotator {
 			publication_check: None,
 			webhook: None,
 			keep: Vec::new(),
+			rsa_keygen: rsa::openssl_rsa_2048,
 			#[cfg(test)]
 			crash_at: None,
 		}
@@ -399,6 +467,7 @@ fn txt_record(name: &str, value: &str) -> DnsRecord {
 		kind: RecordKind::Txt,
 		value: value.to_string(),
 		ttl: 300,
+		proxied: None,
 	}
 }
 
@@ -450,6 +519,9 @@ mod tests_orphans;
 
 #[path = "rotate_publication.rs"]
 mod publication;
+
+#[path = "rotate_rsa.rs"]
+mod rsa;
 pub use publication::publication_waits;
 
 #[path = "rotate_request.rs"]
@@ -466,3 +538,15 @@ mod tests_active;
 #[cfg(test)]
 #[path = "rotate_tests_request.rs"]
 mod tests_request;
+
+#[cfg(test)]
+#[path = "rotate_tests_rsa_lab.rs"]
+mod tests_rsa_lab;
+
+#[cfg(test)]
+#[path = "rotate_tests_crash_rsa.rs"]
+mod tests_crash_rsa;
+
+#[cfg(test)]
+#[path = "rotate_tests_rsa.rs"]
+mod tests_rsa;

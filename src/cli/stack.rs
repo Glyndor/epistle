@@ -98,6 +98,15 @@ pub enum StackCli {
 	/// The database half of `rollback`, run as the service account.
 	#[command(hide = true)]
 	RollbackDb,
+	/// List each service's memory and process limits, or change one with `set`.
+	Resources {
+		/// Print JSON instead of a table.
+		#[arg(long, global = true)]
+		json: bool,
+		/// `set <SERVICE> --memory <SIZE>`; without it the limits are listed.
+		#[command(subcommand)]
+		action: Option<super::stack_resources::ResourcesCli>,
+	},
 }
 
 impl From<StackCli> for StackAction {
@@ -119,6 +128,7 @@ impl From<StackCli> for StackAction {
 			},
 			StackCli::Rollback { .. } => StackAction::Rollback,
 			StackCli::RollbackDb => StackAction::RollbackDb,
+			StackCli::Resources { json, action } => StackAction::Resources { action, json },
 		}
 	}
 }
@@ -128,7 +138,7 @@ impl From<StackCli> for StackAction {
 /// straight `podup` wrapper, so each variant holds the trailing
 /// arguments verbatim.
 #[derive(Debug)]
-pub(super) enum StackAction {
+pub(crate) enum StackAction {
 	/// Render the compose file again, then recreate changed services and restart mail.
 	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.
@@ -171,6 +181,13 @@ pub(super) enum StackAction {
 	Rollback,
 	/// Stop mail and restore the pre-update dump if the schema moved.
 	RollbackDb,
+	/// Show or change the limits in the compose file; podup is not run.
+	Resources {
+		/// `set`, or `None` to list.
+		action: Option<super::stack_resources::ResourcesCli>,
+		/// Print JSON.
+		json: bool,
+	},
 	/// `podup -f <compose> up -d <service>`, recreate one service from
 	/// the current compose file. A restart keeps the container as it was
 	/// created, so a change to its published ports needs this.
@@ -178,6 +195,43 @@ pub(super) enum StackAction {
 		/// The service to recreate.
 		service: String,
 	},
+}
+
+/// Run the `stack` subcommand the operator typed. With `json`, podup's
+/// own output has gone to stderr and a success prints one object naming
+/// the verb and the service: `{"result": "done", "action", "service"}`.
+/// `ps` and `resources` print their own JSON, and `logs` streams raw lines,
+/// so it refuses `--json`.
+pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitCode {
+	let (verb, service) = match &cli {
+		StackCli::Logs { .. } if json => {
+			return super::exit::refused(
+				"stack logs streams the services' raw log lines; it has no --json form",
+			);
+		}
+		StackCli::Ps { json: leaf } => {
+			let as_json = *leaf || json;
+			return run(config, StackAction::Ps { as_json });
+		}
+		StackCli::Update => ("update", None),
+		StackCli::Up => ("up", None),
+		StackCli::Down => ("down", None),
+		StackCli::Restart { service } => ("restart", service.clone()),
+		StackCli::Stop { service } => ("stop", service.clone()),
+		StackCli::Start { service } => ("start", service.clone()),
+		// These print their own output (or none), so no object follows.
+		StackCli::Logs { .. }
+		| StackCli::Resources { .. }
+		| StackCli::Rollback { .. }
+		| StackCli::RollbackDb => return run(config, cli.into()),
+	};
+	let code = run(config, cli.into());
+	if !json || code != ExitCode::SUCCESS {
+		return code;
+	}
+	let mut out = std::io::stdout().lock();
+	let result = serde_json::json!({ "result": "done", "action": verb, "service": service });
+	super::json_out::print(&mut out, &result)
 }
 
 /// Run the `stack` subcommand. The config is loaded here only to read
@@ -200,6 +254,19 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	}
+	// The limits live in the compose file alone: no podup, no socket.
+	let action = match action {
+		StackAction::Resources { action, json } => {
+			return super::stack_resources::run(
+				&compose,
+				crate::smtp::memory_fit::largest_message(config.max_message_size),
+				action,
+				json,
+				&mut std::io::stdout(),
+			);
+		}
+		action => action,
+	};
 	if let Err(error) = super::stack_socket::ensure() {
 		super::style::error(error);
 		return ExitCode::FAILURE;
@@ -292,6 +359,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
 		}
+		StackAction::Resources { action, json } => super::stack_resources::run(
+			&compose,
+			crate::smtp::memory_fit::largest_message(config.max_message_size),
+			action,
+			json,
+			&mut std::io::stdout(),
+		),
 	}
 }
 
@@ -401,7 +475,7 @@ pub(super) fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> Ex
 fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 	let status = match build_command(podup, compose, extra)
 		.stdin(Stdio::inherit())
-		.stdout(Stdio::inherit())
+		.stdout(super::json_out::child_stdout())
 		.stderr(Stdio::inherit())
 		.status()
 	{

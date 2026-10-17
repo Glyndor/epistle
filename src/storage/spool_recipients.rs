@@ -54,6 +54,68 @@ pub struct RecipientState {
 	/// sent, or deliberately skipped, so it goes out once.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub reported: bool,
+	/// Deferrals in a row in which the destination asked the queue to slow
+	/// down (see [`crate::queue::backoff`]). It picks the next backoff step
+	/// and holds the destination while the recipient waits; any other
+	/// answer sets it back to zero.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub throttled: u32,
+	/// `deferred` records the delivery log holds for this recipient, so a
+	/// remote that words each deferral differently cannot add one record
+	/// per retry (see [`crate::queue::limits::MAX_DEFERRALS_LOGGED`]).
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub deferrals_logged: u32,
+	/// The warm-up group (`gmail`, `outlook`, ...) whose daily cap the
+	/// recipient waits for (see [`crate::queue::warmup`]). Waiting for the
+	/// cap is not an attempt and not a failure; any answer clears it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub warmup: Option<String>,
+	/// When the current wait for the warm-up cap began (epoch seconds).
+	#[serde(default, skip_serializing_if = "is_zero_u64")]
+	pub capped_at: u64,
+	/// Seconds spent waiting for the warm-up cap in earlier waits. Neither
+	/// they nor the current wait count toward the give-up window.
+	#[serde(default, skip_serializing_if = "is_zero_u64")]
+	pub waited: u64,
+}
+
+fn is_zero(value: &u32) -> bool {
+	*value == 0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+	*value == 0
+}
+
+impl RecipientState {
+	/// Seconds of waiting for the warm-up cap at `now`, earlier waits
+	/// included.
+	pub fn warmup_wait(&self, now: u64) -> u64 {
+		let current = match self.warmup {
+			Some(_) => now.saturating_sub(self.capped_at),
+			None => 0,
+		};
+		self.waited.saturating_add(current)
+	}
+
+	/// Start or go on waiting for the cap of `group` until `until`.
+	pub fn wait_for_cap(&mut self, group: &str, until: u64, now: u64) {
+		if self.warmup.is_none() {
+			self.capped_at = now;
+		}
+		self.warmup = Some(group.to_string());
+		self.next_attempt = until;
+	}
+
+	/// End a wait for the warm-up cap, keeping the time it took.
+	pub fn end_cap_wait(&mut self, now: u64) {
+		if self.warmup.take().is_some() {
+			self.waited = self
+				.waited
+				.saturating_add(now.saturating_sub(self.capped_at));
+			self.capped_at = 0;
+		}
+	}
 }
 
 impl Envelope {
