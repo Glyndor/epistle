@@ -191,3 +191,26 @@ fn removing_a_disabled_domain_drops_it_from_the_list_too() {
 		text(&env)
 	);
 }
+
+#[test]
+fn the_text_list_marks_a_disabled_domain() {
+	let env = with_second_domain();
+	let list = |env: &Env| {
+		let output = epistle(&["domain", "--config", &env.config, "list"], b"");
+		assert_eq!(output.status.code(), Some(0));
+		String::from_utf8_lossy(&output.stdout).into_owned()
+	};
+	assert!(!list(&env).contains("disabled"), "{}", list(&env));
+	assert_eq!(run(&env.config, &["disable", "example.net", "--yes"]).0, 0);
+	let text = list(&env);
+	let line = text
+		.lines()
+		.find(|line| line.contains("example.net"))
+		.expect("row");
+	assert!(line.contains("example.net (disabled)"), "{text}");
+	let other = text
+		.lines()
+		.find(|line| line.contains("example.org"))
+		.expect("row");
+	assert!(!other.contains("disabled"), "{text}");
+}

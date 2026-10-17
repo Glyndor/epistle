@@ -218,6 +218,14 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 		writeln!(out)?;
 		return Ok(());
 	}
+	// A switched-off domain is named as such in the text forms.
+	let shown = |row: &DomainRow| {
+		if row.enabled {
+			row.domain.clone()
+		} else {
+			format!("{} (disabled)", row.domain)
+		}
+	};
 	if let Some(decor) = super::term::stdout(json) {
 		let mut table = Table::new(&["DOMAIN", "ALIASES TO", "ALIASES FROM"]);
 		for row in &rows {
@@ -229,7 +237,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 				}
 			};
 			table.push(vec![
-				row.domain.clone(),
+				shown(row),
 				joined(&row.aliases_to),
 				joined(&row.aliases_from),
 			]);
@@ -241,7 +249,7 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io
 		writeln!(
 			out,
 			"{:<30} {:<12} {}",
-			row.domain,
+			shown(row),
 			if row.aliases_to.is_empty() {
 				"-".into()
 			} else {
