@@ -18,6 +18,58 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     Unknown names, rejected input and a destructive action without `--yes`
     stay 2. A script that treated any non-zero code other than 1 as a usage
     error needs to read 3 as a refusal.
+  * CLI: `epistle domain disable|enable` switches a hosted domain off and on
+    without removing it. The new `disabled_domains` setting lists the
+    switched-off domains; mail for one is rejected like mail for an unknown
+    user and nobody may send as an address in it. Accounts, DNS records and
+    DKIM keys stay. `domain list` and `domain show` report `enabled`. A disabled
+    domain gets no autoconfig/autodiscover document, `GET /api/v1/domains` names
+    it under `disabled`, `masked add` refuses it and `account add`/`alias add`
+    warn about it. `domain disable` says how many queued messages still have a sender in the
+    domain (they are delivered), and the docs state that a login with an address in
+    the disabled domain fails.
+  * CLI: `epistle domain set` writes the storage quota and the submission
+    rate of one domain (the overrides `limits set --domain` already wrote),
+    and `domain show` prints them.
+  * CLI: `epistle alert show|enable|disable`. A rule switched off with the new
+    `enabled = false` key stays in the file but takes no samples and never
+    fires; `alert list` marks it and its JSON row has `enabled`.
+  * CLI: `epistle webhook enable|disable`. `enabled = false` in `[webhook]`
+    keeps the URL and the secret but posts no event, alerts included;
+    `webhook test` still posts. `webhook show` prints `enabled`. `webhook disable`
+    lists the events and alerts that go quiet, needs `--yes` while an alert posts
+    to the webhook, and `config-check` warns about such an alert.
+  * CLI: `epistle relay enable|disable`. A relay rule with `enabled = false`
+    stays in the file but is never selected, so its mail goes by the next
+    matching rule or direct to the MX. Only a relay rule can be switched off;
+    the loader refuses `enabled = false` on a `fail` or `direct` rule.
+    `relay disable` says where the mail will go instead (the next matching
+    rule, or directly to the MX from this server's own address) and needs
+    `--yes` off a terminal.
+  * Fix: `epistle queue remove` panicked with "there is no reactor running" when
+    a webhook was configured (the command line had no runtime to post the
+    `canceled` event on); it now posts it before exiting.
+  * CLI: `epistle suppression show|export|import`, and `suppression add
+    --reason`. `export` writes the list as CSV, `import` loads such a file or
+    a plain list of addresses (16 MiB and 100000 entries at most, checked whole
+    before anything is written). `suppression add` no longer says it
+    suppressed an address whose marker it could not write, and `suppression
+    list` escapes control characters in what it prints.
+  * CLI: `epistle app-password rotate|rename`. `rotate` replaces the secret
+    and prints the new one once, keeping the label, expiry, address range and
+    `save-sent` setting; the old secret stops working at once. `rename` keeps
+    the secret. App password labels are now 1 to 64 characters without
+    control characters when created or renamed, and `app-password list`
+    escapes control characters.
+  * CLI: `epistle delivery show ID` prints every record of one message and
+    `delivery export` writes the filtered records as CSV (or JSON), at most
+    100000. `delivery list` takes `--until`, and `--status` as another name
+    of `--outcome`. The delivery log is now read a line at a time (a line over
+    1 MiB is skipped), days outside `--since`/`--until` are not opened, and
+    `delivery list --limit` stops at 100000 like `export`.
+  * CLI: `epistle db status` prints the PostgreSQL version, size, tables and
+    connections from one read-only query in the stack's database container,
+    and gives up after 15 seconds, stopping what the query started with it.
 
  -- Glyndor <packages@glyndor.net>  Fri, 16 Oct 2026 03:53:23 +0000
 

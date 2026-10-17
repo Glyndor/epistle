@@ -14,6 +14,7 @@ use super::{
 	DomainAliasSubcommand, DomainCli, add_alias_map, add_domain, list, open, remove_alias_map,
 	remove_domain, show,
 };
+use super::{set, state};
 
 /// The discriminated result of [`execute`]. Returning a structured
 /// outcome (rather than `Result<ExitCode, String>`) lets the refusal
@@ -70,6 +71,71 @@ fn known_domain_alias(config: &Config, alias: &str) -> bool {
 		.domain_aliases
 		.iter()
 		.any(|(existing, _)| existing.eq_ignore_ascii_case(alias))
+}
+
+/// `domain enable|disable`: edit, then `confirm` (only for a change that is
+/// neither a dry run nor already in effect), then commit.
+fn switch(
+	path: &Path,
+	config: &Config,
+	(domain, enabled): (&str, bool),
+	(dry_run, json): (bool, bool),
+	confirm: impl FnOnce(&str) -> Result<(), ExitCode>,
+) -> Outcome {
+	if !known_domain(config, domain) {
+		return refused(format!("domain {domain} is not configured"));
+	}
+	let mut document = match open(path) {
+		Ok(document) => document,
+		Err(error) => return Outcome::Error(error),
+	};
+	if let Err(error) = state::set_enabled(config, &mut document, domain, enabled) {
+		// A rule of the server, not a mistake in the command: exit code 3.
+		return Outcome::Code(super::super::exit::policy(error));
+	}
+	let already = state::is_enabled(config, domain) == enabled;
+	if !dry_run
+		&& !already
+		&& let Err(code) = confirm(domain)
+	{
+		return code.into();
+	}
+	let mut out = std::io::stdout().lock();
+	let mut err = super::style::stderr();
+	match commit(
+		document,
+		state::commit(domain, enabled),
+		(dry_run, json),
+		&mut out,
+		&mut err,
+	) {
+		Ok(code) => {
+			// Mail already accepted for sending is not dropped by switching
+			// the domain off; say how much of it there is.
+			if !enabled && !dry_run && !already {
+				match state::queued_from(config, domain) {
+					Some(0) | None => {}
+					Some(1) => super::style::warn_to(
+						&mut err,
+						format_args!(
+							"1 queued message has a sender in {domain} and is still delivered; \
+							 `epistle queue remove` drops one"
+						),
+					),
+					Some(count) => super::style::warn_to(
+						&mut err,
+						format_args!(
+							"{count} queued messages have a sender in {domain} and are still \
+							 delivered; `epistle queue remove` drops one"
+						),
+					),
+				}
+			}
+			Outcome::Code(code)
+		}
+		Err(ResourceError::Refusal(message)) => Outcome::Refusal(message),
+		Err(ResourceError::Failure(message)) => Outcome::Error(message),
+	}
 }
 
 /// Run the chosen domain action and produce an [`Outcome`] the
@@ -141,6 +207,56 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 					ResourceError::Failure(message) => Outcome::Error(message),
 				},
 			}
+		}
+		DomainCli::Set {
+			domain,
+			quota,
+			no_quota,
+			submission_rate,
+			no_submission_rate,
+		} => {
+			if !known_domain(&config, &domain) {
+				return refused(format!("domain {domain} is not configured"));
+			}
+			let change = match set::Change::parse(
+				(quota.as_deref(), no_quota),
+				(submission_rate.as_deref(), no_submission_rate),
+			) {
+				Ok(change) => change,
+				Err(error) => return refused(error),
+			};
+			let domain = domain.trim().to_ascii_lowercase();
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = change.apply(&mut document, &domain) {
+				return Outcome::Error(error);
+			}
+			let mut out = std::io::stdout().lock();
+			let mut err = super::style::stderr();
+			match commit(
+				document,
+				set::commit(&domain, &change),
+				(dry_run, json),
+				&mut out,
+				&mut err,
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(ResourceError::Refusal(message)) => Outcome::Refusal(message),
+				Err(ResourceError::Failure(message)) => Outcome::Error(message),
+			}
+		}
+		DomainCli::Disable { domain, yes } => {
+			let question = format!(
+				"Disable domain \"{domain}\"? Mail for it is rejected until it is enabled again. [y/N]"
+			);
+			switch(path, &config, (&domain, false), (dry_run, json), |_| {
+				prompt::confirm_destructive("domain disable", &question, yes)
+			})
+		}
+		DomainCli::Enable { domain } => {
+			switch(path, &config, (&domain, true), (dry_run, json), |_| Ok(()))
 		}
 		DomainCli::Alias(args) => match args.action {
 			DomainAliasSubcommand::Add { alias, target } => {

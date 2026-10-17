@@ -116,6 +116,8 @@ struct Inner {
 	/// the deliveries handler turns that into a `404` so the caller is
 	/// not silently handed an empty page.
 	delivery_log_days: u64,
+	/// Hosted domains switched off (`disabled_domains`).
+	disabled_domains: Vec<String>,
 	/// Per-instance message-size cap, applied consistently to SMTP
 	/// (`SIZE` extension, per-line running check, end-of-DATA check,
 	/// per-chunk BDAT cap), the JMAP `Email/set` build, the JMAP
@@ -262,6 +264,7 @@ impl ApiState {
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
 				delivery_log_days: 0,
+				disabled_domains: Vec::new(),
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			}),
 		}
@@ -283,6 +286,21 @@ impl ApiState {
 			inner.delivery_log_days = days;
 		}
 		self
+	}
+
+	/// Name the hosted domains that are switched off. Must be set before the
+	/// state is shared.
+	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.disabled_domains = domains;
+		}
+		self
+	}
+
+	/// The hosted domains that are switched off: they stay in
+	/// [`ApiState::domains`] but take no mail.
+	pub fn disabled_domains(&self) -> &[String] {
+		&self.inner.disabled_domains
 	}
 
 	/// The per-instance message-size cap. Defaults to

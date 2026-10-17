@@ -126,3 +126,12 @@ fn elapsed_keeps_tenths_under_a_minute() {
 fn a_descriptor_that_is_not_a_terminal_gets_the_fallback_width() {
 	assert_eq!(width_of(-1), 80);
 }
+
+#[test]
+fn sanitize_escapes_control_and_invisible_formatting_characters() {
+	assert_eq!(sanitize("a\u{1b}[2Jb"), "a\\u{1b}[2Jb");
+	assert_eq!(sanitize("evil\u{202e}txt"), "evil\\u{202e}txt");
+	assert_eq!(sanitize("zero\u{200b}width"), "zero\\u{200b}width");
+	assert_eq!(sanitize("bom\u{feff}"), "bom\\u{feff}");
+	assert_eq!(sanitize("caf\u{e9} \u{4e2d}"), "caf\u{e9} \u{4e2d}");
+}

@@ -52,3 +52,36 @@ mod init;
 
 #[path = "cli_json/sweep.rs"]
 mod sweep;
+
+#[path = "cli_json/domain_state.rs"]
+mod domain_state;
+
+#[path = "cli_json/domain_set.rs"]
+mod domain_set;
+
+#[path = "cli_json/alert_state.rs"]
+mod alert_state;
+
+#[path = "cli_json/webhook_state.rs"]
+mod webhook_state;
+
+#[path = "cli_json/relay_state.rs"]
+mod relay_state;
+
+#[path = "cli_json/suppression_b.rs"]
+mod suppression_b;
+
+#[path = "cli_json/app_password_b.rs"]
+mod app_password_b;
+
+#[path = "cli_json/delivery_b.rs"]
+mod delivery_b;
+
+#[path = "cli_json/db_status.rs"]
+mod db_status;
+
+#[path = "cli_json/queue_webhook.rs"]
+mod queue_webhook;
+
+#[path = "cli_json/domain_disabled_use.rs"]
+mod domain_disabled_use;

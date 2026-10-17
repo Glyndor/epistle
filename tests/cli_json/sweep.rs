@@ -110,6 +110,9 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("reports", &[], Done),
 	("suppression list", &[], Done),
 	("suppression add", &["gone@example.net"], Done),
+	("suppression show", &["gone@example.net"], Done),
+	("suppression export", &[], Done),
+	("suppression import", &["@TMP/sweep-suppression.txt"], Done),
 	("suppression remove", &["gone@example.net"], Done),
 	("account list", &[], Done),
 	(
@@ -158,6 +161,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("warmup reset", &["gmail", "--yes"], Done),
 	("warmup disable", &["--yes"], Done),
 	("delivery list", &[], Done),
+	("delivery show", &[ID], Refused(2)),
+	("delivery export", &[], Done),
 	("masked list", &["bob"], Done),
 	("masked add", &["bob", "--label", "shop"], Done),
 	("masked remove", &["bob", "nobody@example.org"], Refused(2)),
@@ -165,13 +170,18 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("masked disable", &["bob", "nobody@example.org"], Refused(2)),
 	("app-password list", &[], Done),
 	("app-password create", &["bob", "phone"], Done),
-	("app-password revoke", &["bob", "phone", "--yes"], Done),
+	("app-password rotate", &["bob", "phone", "--yes"], Done),
+	("app-password rename", &["bob", "phone", "mobile"], Done),
+	("app-password revoke", &["bob", "mobile", "--yes"], Done),
 	("archive list", &["bob"], Done),
 	("archive restore", &["bob", ID], Refused(1)),
 	("archive purge", &["bob", "--yes"], Done),
 	("domain list", &[], Done),
 	("domain show", &["example.org"], Done),
 	("domain add", &["example.net"], Done),
+	("domain disable", &["example.net", "--yes"], Done),
+	("domain enable", &["example.net"], Done),
+	("domain set", &["example.net", "--quota", "1G"], Done),
 	(
 		"domain alias add",
 		&["alias.example.net", "example.net"],
@@ -201,6 +211,11 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("webhook set", &["https://hooks.example.net/in"], Done),
 	("alert list", &[], Done),
 	("alert add", &["spool", "--metric", "accepted", "--op", ">", "--threshold", "100", "--window", "5m", "--webhook"], Done),
+	("webhook disable", &["--yes"], Done),
+	("webhook enable", &[], Done),
+	("alert show", &["spool"], Done),
+	("alert disable", &["spool"], Done),
+	("alert enable", &["spool"], Done),
 	("alert remove", &["spool"], Done),
 	("webhook unset", &[], Done),
 	("relay list", &[], Done),
@@ -210,6 +225,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 		&["--domain", "example.net", "--host", "relay.example.net"],
 		Done,
 	),
+	("relay disable", &["--domain", "example.net", "--yes"], Done),
+	("relay enable", &["--domain", "example.net"], Done),
 	("relay remove", &["--domain", "example.net"], Done),
 	("service list", &[], Done),
 	("service enable", &["webdav"], Done),
@@ -259,6 +276,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("api-key rotate", &["ci"], Done),
 	("api-key revoke", &["ci", "--yes"], Done),
 	("account remove", &["alice", "--queue", "drain", "--yes"], Done),
+	("db status", &[], Refused(3)),
 	("stack resources", &[], Done),
 	("stack resources set", &["clamav", "--memory", "2g"], Done),
 ];
@@ -345,6 +363,13 @@ fn every_leaf_honours_json() {
 		// with it present a configuration edit would try to restart the stack.
 		if path.starts_with("stack resources") {
 			write_compose(&env);
+		}
+		if *path == "suppression import" {
+			std::fs::write(
+				env.dir.path().join("sweep-suppression.txt"),
+				"imported@example.net\n",
+			)
+			.expect("write sweep-suppression.txt");
 		}
 		if *path == "attachments check" {
 			std::fs::write(

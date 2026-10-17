@@ -191,6 +191,12 @@ fn pick_domain(
 	explicit: Option<String>,
 	first_address: &str,
 ) -> Result<String, String> {
+	let enabled = |domain: String| -> Result<String, String> {
+		if super::disabled_domain::domain_of(config, &format!("x@{domain}")).is_some() {
+			return Err(super::disabled_domain::refusal(&domain));
+		}
+		Ok(domain)
+	};
 	if let Some(domain) = explicit {
 		let domain = domain.to_ascii_lowercase();
 		return if config
@@ -198,7 +204,7 @@ fn pick_domain(
 			.iter()
 			.any(|d| d.eq_ignore_ascii_case(&domain))
 		{
-			Ok(domain)
+			enabled(domain)
 		} else {
 			Err(format!("{domain} is not one of the configured domains"))
 		};
@@ -208,6 +214,7 @@ fn pick_domain(
 		.map(|(_, domain)| domain.to_string())
 		.or_else(|| config.domains.first().cloned())
 		.ok_or_else(|| "no domain is configured for masked addresses".to_string())
+		.and_then(enabled)
 }
 
 /// Print an account's masks, as text lines or a JSON array.

@@ -13,6 +13,14 @@ pub struct Webhook {
 	/// `X-Webhook-Signature: sha256=<hex>` HMAC of the body.
 	#[serde(default)]
 	pub secret: Option<String>,
+	/// With `false` the section stays in the file but no event is posted.
+	/// `epistle webhook disable|enable` flips it.
+	#[serde(default = "default_enabled")]
+	pub enabled: bool,
+}
+
+const fn default_enabled() -> bool {
+	true
 }
 
 impl std::fmt::Debug for Webhook {
@@ -20,6 +28,7 @@ impl std::fmt::Debug for Webhook {
 		f.debug_struct("Webhook")
 			.field("url", &self.url)
 			.field("secret", &self.secret.as_ref().map(|_| "***"))
+			.field("enabled", &self.enabled)
 			.finish()
 	}
 }
@@ -39,6 +48,20 @@ secret = "s3cret"
 		.expect("parse webhook");
 		assert_eq!(webhook.url, "https://hooks.example/mail");
 		assert_eq!(webhook.secret.as_deref(), Some("s3cret"));
+	}
+
+	#[test]
+	fn a_webhook_is_on_unless_it_says_otherwise() {
+		let on: Webhook = toml::from_str(r#"url = "https://hooks.example/mail""#).expect("parse");
+		assert!(on.enabled);
+		let off: Webhook = toml::from_str(
+			r#"
+url = "https://hooks.example/mail"
+enabled = false
+"#,
+		)
+		.expect("parse");
+		assert!(!off.enabled);
 	}
 
 	#[test]

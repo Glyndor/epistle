@@ -3,10 +3,15 @@
 
 use std::process::ExitCode;
 
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 use crate::config::Config;
 use crate::queue::SuppressionList;
+
+#[path = "suppression_exchange.rs"]
+mod exchange;
 
 /// Actions on the outbound suppression list (`epistle suppression
 /// list|add|remove`).
@@ -36,6 +41,10 @@ pub enum SuppressionCli {
 		/// Suppress it for this sending account only, not for everyone.
 		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
+		/// Why it is suppressed, kept with the entry (at most 512 characters,
+		/// no control characters). Defaults to a note that it was added by hand.
+		#[arg(long, value_name = "TEXT")]
+		reason: Option<String>,
 		/// Print the result as one JSON object on stdout.
 		#[arg(long)]
 		json: bool,
@@ -50,6 +59,57 @@ pub enum SuppressionCli {
 		/// Remove the per-account suppression for this sender only.
 		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Show one suppressed address with when and why.
+	///
+	/// Exits 2 when the address is not suppressed in that list.
+	Show {
+		/// The address to show.
+		address: String,
+		/// Look in this sending account's list instead of the global one.
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: Option<String>,
+		/// Print the entry as one JSON object.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Write the list as CSV: address, when, why.
+	///
+	/// The output is a header line `address,since,reason` and one entry per
+	/// line, in the form `suppression import` reads.
+	Export {
+		/// Export this sending account's list instead of the global one.
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: Option<String>,
+		/// Print one JSON array of `{"address", "since", "reason"}` objects
+		/// instead of CSV.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Suppress every address of a file.
+	///
+	/// The file is UTF-8 text, at most 16 MiB and 100000 entries: one entry
+	/// per line as `address`, or `address,since,reason` with the time in
+	/// RFC 3339 UTC (the form `suppression export` writes). Blank lines and
+	/// lines starting with `#` are skipped. The file is checked whole first:
+	/// one bad line refuses it and nothing is written. An address that is
+	/// already suppressed keeps its entry.
+	Import {
+		/// The file to read.
+		file: PathBuf,
+		/// Import into this sending account's list instead of the global one.
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: Option<String>,
+		/// Reason for the lines that carry none (at most 512 characters, no
+		/// control characters).
+		#[arg(long, value_name = "TEXT")]
+		reason: Option<String>,
+		/// Count what would be added and write nothing.
+		#[arg(long)]
+		dry_run: bool,
 		/// Print the result as one JSON object on stdout.
 		#[arg(long)]
 		json: bool,
@@ -76,10 +136,14 @@ impl SuppressionCli {
 				json: true,
 			},
 			Some(SuppressionCli::Add {
-				address, account, ..
+				address,
+				account,
+				reason,
+				..
 			}) => SuppressionCli::Add {
 				address,
 				account,
+				reason,
 				json: true,
 			},
 			Some(SuppressionCli::Remove {
@@ -87,6 +151,30 @@ impl SuppressionCli {
 			}) => SuppressionCli::Remove {
 				address,
 				account,
+				json: true,
+			},
+			Some(SuppressionCli::Show {
+				address, account, ..
+			}) => SuppressionCli::Show {
+				address,
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Export { account, .. }) => SuppressionCli::Export {
+				account,
+				json: true,
+			},
+			Some(SuppressionCli::Import {
+				file,
+				account,
+				reason,
+				dry_run,
+				..
+			}) => SuppressionCli::Import {
+				file,
+				account,
+				reason,
+				dry_run,
 				json: true,
 			},
 			None => match address_to_remove {
@@ -109,6 +197,7 @@ pub(super) fn add(
 	config: &Config,
 	address: &str,
 	account: Option<&str>,
+	reason: Option<&str>,
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -116,6 +205,9 @@ pub(super) fn add(
 	// forever and match nothing, so refuse it up front.
 	if let Err(why) = crate::util::address_reason::parse(address) {
 		return super::exit::refused(format_args!("cannot suppress: {why}"));
+	}
+	if let Some(problem) = reason.and_then(exchange::reason_problem) {
+		return super::exit::refused(problem);
 	}
 	let list = match SuppressionList::open(&config.data_dir) {
 		Ok(list) => list,
@@ -129,20 +221,25 @@ pub(super) fn add(
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|elapsed| elapsed.as_secs())
 		.unwrap_or(0);
-	const REASON: &str = "added by hand (epistle suppression add)";
-	let line = match account {
-		Some(account) => {
-			list.suppress_for_because(account, &address, REASON, now);
-			format!("suppressed {address} for {account}")
-		}
-		None => {
-			list.suppress_because(&address, REASON, now);
-			format!("suppressed {address}")
-		}
+	let reason = reason.unwrap_or("added by hand (epistle suppression add)");
+	let (written, line) = match account {
+		Some(account) => (
+			list.try_suppress_for_because(account, &address, reason, now),
+			format!("suppressed {address} for {account}"),
+		),
+		None => (
+			list.try_suppress_because(&address, reason, now),
+			format!("suppressed {address}"),
+		),
 	};
+	// A marker that was not written is not a suppression: say so.
+	if let Err(error) = written {
+		super::style::error(format_args!("cannot suppress {address}: {error}"));
+		return ExitCode::FAILURE;
+	}
 	let mut report = super::json_out::Report::new(out, json);
 	report.line(line);
-	let fields = serde_json::json!({ "address": address, "account": account });
+	let fields = serde_json::json!({ "address": address, "account": account, "reason": reason });
 	report.change("add", true, fields, None)
 }
 
@@ -193,13 +290,54 @@ pub(super) fn run(
 		SuppressionCli::Add {
 			address,
 			account,
+			reason,
 			json,
-		} => add(config, &address, account.as_deref(), json, out),
+		} => add(
+			config,
+			&address,
+			account.as_deref(),
+			reason.as_deref(),
+			json,
+			out,
+		),
 		SuppressionCli::Remove {
 			address,
 			account,
 			json,
 		} => remove(config, &address, account.as_deref(), json, out),
+		SuppressionCli::Show {
+			address,
+			account,
+			json,
+		} => super::resource::exit_resource(exchange::show(
+			config,
+			&address,
+			account.as_deref(),
+			json,
+			out,
+		)),
+		SuppressionCli::Export { account, json } => {
+			super::resource::exit_resource(exchange::export(config, account.as_deref(), json, out))
+		}
+		SuppressionCli::Import {
+			file,
+			account,
+			reason,
+			dry_run,
+			json,
+		} => {
+			let request = exchange::Import {
+				file: &file,
+				account: account.as_deref(),
+				reason: reason.as_deref(),
+				dry_run,
+				json,
+			};
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map_or(0, |elapsed| elapsed.as_secs());
+			super::resource::exit_resource(exchange::import(config, request, now, out))
+		}
 	}
 }
 
@@ -256,9 +394,12 @@ fn list(
 	// One address per line; when the date and the reason were recorded they
 	// follow, tab separated, so `cut -f1` still yields the bare addresses.
 	for entry in &entries {
+		let address = super::term::sanitize(&entry.address);
 		let line = match (since(entry), &entry.reason) {
-			(Some(since), Some(reason)) => format!("{}\t{since}\t{reason}", entry.address),
-			_ => entry.address.clone(),
+			(Some(since), Some(reason)) => {
+				format!("{address}\t{since}\t{}", super::term::sanitize(reason))
+			}
+			_ => address,
 		};
 		if writeln!(out, "{line}").is_err() {
 			return ExitCode::FAILURE;

@@ -80,6 +80,37 @@ pub struct Target {
 	all: bool,
 }
 
+/// The webhook the queue actions notify: the configured one, unless it is
+/// switched off.
+pub(super) fn webhook_for(config: &crate::config::Config) -> Option<Arc<crate::webhook::Webhook>> {
+	config.active_webhook().map(|section| {
+		Arc::new(
+			crate::webhook::Webhook::new(&section.url, section.secret.clone()).expect("webhook"),
+		)
+	})
+}
+
+/// Post `event` to the webhook. Inside a runtime the post is spawned; the
+/// command line has none, so it gets a short-lived one and waits for the
+/// answer (at most ten seconds) before the process can exit.
+fn notify(webhook: &Arc<crate::webhook::Webhook>, event: crate::webhook::WebhookEvent) {
+	let webhook = Arc::clone(webhook);
+	if let Ok(handle) = tokio::runtime::Handle::try_current() {
+		handle.spawn(async move { webhook.notify(&event).await });
+		return;
+	}
+	match tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+	{
+		Ok(runtime) => runtime.block_on(async {
+			let wait = std::time::Duration::from_secs(10);
+			let _ = tokio::time::timeout(wait, webhook.notify(&event)).await;
+		}),
+		Err(error) => tracing::warn!(%error, "no runtime to post the webhook event"),
+	}
+}
+
 /// Run one queue action against the spool under `data_dir`, writing data to
 /// `out`. `now` is the current epoch second (injectable for tests).
 /// `delivery_log_days` is the operator's configured retention for the
@@ -166,13 +197,12 @@ pub(super) fn run(
 									tracing::warn!(%id, %error, "delivery log write failed");
 								}
 								if let Some(webhook) = webhook {
-									let webhook = webhook.clone();
 									let event = crate::webhook::WebhookEvent::Canceled {
 										spool_id: id,
 										recipient: recipient.clone(),
 										extra: BTreeMap::new(),
 									};
-									tokio::spawn(async move { webhook.notify(&event).await });
+									notify(webhook, event);
 								}
 							}
 						}
@@ -459,3 +489,7 @@ mod tests;
 #[cfg(test)]
 #[path = "queue_tests_destinations.rs"]
 mod tests_destinations;
+
+#[cfg(test)]
+#[path = "queue_tests_webhook.rs"]
+mod tests_webhook;

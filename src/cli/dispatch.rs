@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
@@ -225,12 +224,7 @@ impl Cli {
 				action,
 			} => match Config::load(&config) {
 				Ok(config) => {
-					let webhook = config.webhook.as_ref().map(|wh| {
-						Arc::new(
-							crate::webhook::Webhook::new(&wh.url, wh.secret.clone())
-								.expect("webhook"),
-						)
-					});
+					let webhook = queue::webhook_for(&config);
 					queue::run(
 						&config.data_dir,
 						config.storage.as_ref(),

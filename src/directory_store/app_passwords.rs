@@ -241,6 +241,74 @@ impl AppPasswordStore {
 		Ok(())
 	}
 
+	/// Apply `change` to the stored file under the sibling lock and refresh
+	/// the in-memory mirror from what was written.
+	fn update(
+		&mut self,
+		change: impl FnOnce(&mut AppPasswordFile) -> Result<(), StoreError>,
+	) -> Result<(), StoreError> {
+		let new_state = edit(
+			&self.path,
+			|text| {
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| {
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			AppPasswordFile::default,
+			change,
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.accounts.clear();
+		for (name, entry) in new_state.accounts {
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
+		}
+		Ok(())
+	}
+
+	/// Replace the hash of an account's app password, keeping its label,
+	/// expiry, range and `save_sent`. The old secret stops working in the
+	/// same write. `NotFound` if absent.
+	pub fn rotate(&mut self, account: &str, label: &str, hash: String) -> Result<(), StoreError> {
+		let account = account.to_ascii_lowercase();
+		self.update(|state| {
+			let app = find_mut(state, &account, label)?;
+			app.hash = hash;
+			Ok(())
+		})
+	}
+
+	/// Give an app password a new label, keeping its secret and settings.
+	/// `NotFound` if `label` is absent, `Duplicate` if `new_label` is taken.
+	pub fn rename(
+		&mut self,
+		account: &str,
+		label: &str,
+		new_label: &str,
+	) -> Result<(), StoreError> {
+		let account = account.to_ascii_lowercase();
+		self.update(|state| {
+			if label != new_label
+				&& state
+					.accounts
+					.get(&account)
+					.is_some_and(|entry| entry.passwords.iter().any(|app| app.label == new_label))
+			{
+				return Err(StoreError::Duplicate(new_label.to_string()));
+			}
+			find_mut(state, &account, label)?.label = new_label.to_string();
+			Ok(())
+		})
+	}
+
 	/// Drop every app password for `account` (case-insensitive). Returns
 	/// the number that were removed; persists once at the end. Idempotent:
 	/// a missing account returns `Ok(0)` without rewriting the file. Used
@@ -309,6 +377,19 @@ impl AppPasswordStore {
 		rows.sort();
 		rows
 	}
+}
+
+/// The app password `label` of `account` in `state`, or `NotFound`.
+fn find_mut<'a>(
+	state: &'a mut AppPasswordFile,
+	account: &str,
+	label: &str,
+) -> Result<&'a mut AppPassword, StoreError> {
+	state
+		.accounts
+		.get_mut(account)
+		.and_then(|entry| entry.passwords.iter_mut().find(|app| app.label == label))
+		.ok_or_else(|| StoreError::NotFound(format!("{account}/{label}")))
 }
 
 /// Compatibility for the legacy non-helper `persist()` call site that

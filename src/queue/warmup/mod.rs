@@ -37,7 +37,7 @@ pub use controller::{Grant, Warmup, day_of, sender_share};
 pub fn relay_hosts(transports: &[crate::config::Transport]) -> Vec<String> {
 	transports
 		.iter()
-		.filter(|rule| rule.kind == crate::config::TransportKind::Relay)
+		.filter(|rule| rule.kind == crate::config::TransportKind::Relay && rule.enabled)
 		.filter_map(|rule| rule.host.clone())
 		.collect()
 }

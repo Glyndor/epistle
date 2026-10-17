@@ -12,7 +12,12 @@ use serde::Serialize;
 
 use super::style;
 use super::term::table::Table;
-use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
+use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryRecord};
+
+#[path = "delivery_records.rs"]
+mod records;
+#[path = "delivery_select.rs"]
+mod select;
 
 /// `epistle delivery` arguments: the configuration file and the action.
 /// The variant in `Command` is a tuple of this struct, so the enum stays
@@ -37,11 +42,16 @@ impl DeliveryConfig {
 		if !self.json {
 			return self.action;
 		}
-		let DeliveryCli::List(mut args) = self
-			.action
-			.unwrap_or(DeliveryCli::List(ListArgs::default()));
-		args.json = true;
-		Some(DeliveryCli::List(args))
+		Some(
+			match self
+				.action
+				.unwrap_or(DeliveryCli::List(ListArgs::default()))
+			{
+				DeliveryCli::List(args) => DeliveryCli::List(ListArgs { json: true, ..args }),
+				DeliveryCli::Show(args) => DeliveryCli::Show(ShowArgs { json: true, ..args }),
+				DeliveryCli::Export(args) => DeliveryCli::Export(ExportArgs { json: true, ..args }),
+			},
+		)
 	}
 }
 
@@ -51,6 +61,38 @@ impl DeliveryConfig {
 pub enum DeliveryCli {
 	/// List delivery records (the default when no action is given).
 	List(ListArgs),
+	/// Show every record of one message.
+	Show(ShowArgs),
+	/// Write the records that pass the filters as CSV.
+	///
+	/// One line per record, newest day first: the time as RFC 3339 UTC, the
+	/// outcome, the message id, the account, the sender, the recipient, the
+	/// remote host and its reply, and the attempt. A field that a spreadsheet
+	/// would read as a formula is written with a leading apostrophe.
+	Export(ExportArgs),
+}
+
+/// `epistle delivery show` arguments.
+#[derive(Debug, Args)]
+pub struct ShowArgs {
+	/// The message id: the spool id in the SPOOL column of `delivery list`.
+	pub id: String,
+	/// Print one JSON object with the message id and its records.
+	#[arg(long)]
+	pub json: bool,
+}
+
+/// `epistle delivery export` arguments.
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+	/// Print one JSON array instead of CSV.
+	#[arg(long)]
+	pub json: bool,
+	/// Maximum number of records to write, 1 to 100000.
+	#[arg(long, value_name = "N", default_value_t = 10_000)]
+	pub limit: usize,
+	#[command(flatten)]
+	pub filters: ListFilters,
 }
 
 /// `epistle delivery list` arguments.
@@ -97,9 +139,13 @@ pub struct ListFilters {
 	/// is the upper bound of the duration.
 	#[arg(long)]
 	pub since: Option<String>,
+	/// Upper bound on the record time, in the same forms as `--since`; a
+	/// duration counts back from now.
+	#[arg(long)]
+	pub until: Option<String>,
 	/// Restrict to one outcome: `delivered`, `deferred`, `failed`,
 	/// `suppressed`, or `canceled`.
-	#[arg(long)]
+	#[arg(long, visible_alias = "status")]
 	pub outcome: Option<String>,
 }
 
@@ -113,20 +159,6 @@ pub(super) fn run(
 	now: u64,
 	out: &mut impl Write,
 ) -> ExitCode {
-	let DeliveryCli::List(args) = action.unwrap_or(DeliveryCli::List(ListArgs::default()));
-	list(data_dir, delivery_log_days, &args, now, out)
-}
-
-fn list(
-	data_dir: &Path,
-	delivery_log_days: u64,
-	args: &ListArgs,
-	now: u64,
-	out: &mut impl Write,
-) -> ExitCode {
-	let json = args.json;
-	let limit = args.limit;
-	let filters = &args.filters;
 	let log = DeliveryLog::open(data_dir, delivery_log_days);
 	if !log.is_enabled() {
 		style::error(format_args!(
@@ -135,75 +167,28 @@ fn list(
 		));
 		return ExitCode::FAILURE;
 	}
-	let outcome_filter = match filters
-		.outcome
-		.as_deref()
-		.map(str::trim)
-		.filter(|s| !s.is_empty())
-	{
-		Some(value) => match DeliveryOutcome::parse(value) {
-			Some(outcome) => Some(outcome),
-			None => {
-				style::error(format_args!(
-					"unknown --outcome {value:?}; expected one of delivered, deferred, \
-					 failed, suppressed, canceled"
-				));
-				return ExitCode::from(2);
-			}
-		},
-		None => None,
-	};
-	let since_epoch = match filters
-		.since
-		.as_deref()
-		.map(str::trim)
-		.filter(|s| !s.is_empty())
-	{
-		Some(value) => match crate::storage::delivery_log::parse_since(value, now) {
-			Ok(Some(epoch)) => Some(epoch),
-			Ok(None) => None,
-			Err(error) => {
-				style::error(format_args!("--since {value:?}: {error}"));
-				return ExitCode::from(2);
-			}
-		},
-		None => None,
-	};
-	let recipient_filter = filters
-		.recipient
-		.as_deref()
-		.map(str::trim)
-		.filter(|s| !s.is_empty());
-	let account_filter = filters
-		.account
-		.as_deref()
-		.map(str::trim)
-		.filter(|s| !s.is_empty());
+	match action.unwrap_or(DeliveryCli::List(ListArgs::default())) {
+		DeliveryCli::List(args) => list(&log, &args, now, out),
+		DeliveryCli::Show(args) => records::show(&log, &args, out),
+		DeliveryCli::Export(args) => records::export(&log, &args, now, out),
+	}
+}
 
-	let outcome_ref = outcome_filter;
-	let since_ref = since_epoch;
-	let records = match log.list(Some(limit), |record| {
-		if let Some(recipient) = recipient_filter
-			&& record.recipient != recipient
-		{
-			return false;
-		}
-		if let Some(account) = account_filter
-			&& record.account.as_deref() != Some(account)
-		{
-			return false;
-		}
-		if let Some(since) = since_ref
-			&& record.time < since
-		{
-			return false;
-		}
-		if let Some(outcome) = outcome_ref
-			&& record.outcome != outcome
-		{
-			return false;
-		}
-		true
+fn list(log: &DeliveryLog, args: &ListArgs, now: u64, out: &mut impl Write) -> ExitCode {
+	let json = args.json;
+	if !(1..=records::MAX_EXPORT).contains(&args.limit) {
+		style::error(format_args!(
+			"--limit must be between 1 and {}",
+			records::MAX_EXPORT
+		));
+		return ExitCode::from(2);
+	}
+	let selection = match select::Selection::new(&args.filters, now) {
+		Ok(selection) => selection,
+		Err(code) => return code,
+	};
+	let records = match log.list_between(Some(args.limit), selection.window(), |record| {
+		selection.matches(record)
 	}) {
 		Ok(records) => records,
 		Err(error) => {
@@ -221,7 +206,7 @@ fn list(
 /// One row of `delivery list --json`: the log record on the wire, with
 /// `outcome` rendered as a string the rest of the API and CLI share.
 #[derive(Serialize)]
-struct Row<'a> {
+pub(super) struct Row<'a> {
 	time: u64,
 	spool_id: &'a uuid::Uuid,
 	account: &'a Option<String>,
@@ -234,10 +219,9 @@ struct Row<'a> {
 	extra: &'a BTreeMap<String, String>,
 }
 
-fn print_json(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
-	let rows: Vec<Row> = records
-		.iter()
-		.map(|r| Row {
+impl<'a> From<&'a DeliveryRecord> for Row<'a> {
+	fn from(r: &'a DeliveryRecord) -> Self {
+		Row {
 			time: r.time,
 			spool_id: &r.spool_id,
 			account: &r.account,
@@ -248,8 +232,12 @@ fn print_json(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
 			reply: &r.reply,
 			attempt: r.attempt,
 			extra: &r.extra,
-		})
-		.collect();
+		}
+	}
+}
+
+fn print_json(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
+	let rows: Vec<Row> = records.iter().map(Row::from).collect();
 	match serde_json::to_writer_pretty(&mut *out, &rows) {
 		Ok(()) => {
 			let _ = writeln!(out);

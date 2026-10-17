@@ -90,7 +90,7 @@ pub(super) fn build_split_with_companions(
 		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
 		split = split.with_srs(srs, config.hostname.clone());
 	}
-	let webhook = match &config.webhook {
+	let webhook = match config.active_webhook() {
 		Some(webhook) => Some(Arc::new(
 			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
 				.map_err(std::io::Error::other)?
@@ -120,3 +120,7 @@ mod tests_restart;
 #[cfg(test)]
 #[path = "serve_dkim_tests_per_domain.rs"]
 mod tests_per_domain;
+
+#[cfg(test)]
+#[path = "serve_dkim_tests_webhook.rs"]
+mod tests_webhook;

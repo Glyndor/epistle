@@ -45,6 +45,7 @@ fn alert_rule_bounced_ge_50(window_secs: u64, cooldown_secs: u64) -> Alert {
 		threshold: 50,
 		window_secs,
 		cooldown_secs,
+		enabled: true,
 		webhook: true,
 		email: Vec::new(),
 	}
@@ -152,6 +153,7 @@ async fn runner_queues_alert_email_to_spool() {
 		threshold: 50,
 		window_secs: 1,
 		cooldown_secs: 1,
+		enabled: true,
 		webhook: false,
 		email: vec!["ops@example.org".into()],
 	}];
@@ -220,6 +222,7 @@ async fn unknown_metric_at_compile_is_dropped() {
 		threshold: 1,
 		window_secs: 1,
 		cooldown_secs: 1,
+		enabled: true,
 		webhook: true,
 		email: Vec::new(),
 	}];
@@ -235,4 +238,24 @@ fn evaluate_returns_fire_then_holds_in_cooldown() {
 	let mut state = crate::alerts::State::new();
 	assert_eq!(evaluate(&rule, &mut state, 60, 1_000), Verdict::Fire);
 	assert_eq!(evaluate(&rule, &mut state, 70, 1_010), Verdict::Hold);
+}
+
+/// A rule switched off with `enabled = false` starts no task, so it never
+/// samples a counter or fires; its enabled neighbour still runs.
+#[tokio::test]
+async fn a_disabled_rule_is_not_started() {
+	let metrics = Arc::new(Metrics::new());
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
+	let ctx = context(None, spool, "mail.example.org".into());
+	let mut off = alert_rule_bounced_ge_50(1, 1);
+	off.enabled = false;
+	assert!(
+		run(vec![off.clone()], Arc::clone(&metrics), ctx.clone()).is_none(),
+		"a lone disabled rule must not start the engine"
+	);
+	let mut on = alert_rule_bounced_ge_50(1, 1);
+	on.name = "other".into();
+	let handle = run(vec![off, on], metrics, ctx).expect("the enabled rule starts");
+	handle.stop();
 }

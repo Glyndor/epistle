@@ -397,3 +397,28 @@ fn parse_since_accepts_durations_and_rfc3339_and_rejects_garbage() {
 fn log_root(data_dir: &Path) -> std::path::PathBuf {
 	data_dir.join("deliverylog")
 }
+
+#[test]
+fn rfc3339_times_must_be_real_calendar_times() {
+	let now = 1_700_000_000;
+	for good in [
+		"2024-02-29T00:00:00Z",
+		"2026-02-28T23:59:59Z",
+		"2026-12-31T00:00:00+23:59",
+		"1970-01-01T00:00:00Z",
+	] {
+		assert!(parse_since(good, now).is_ok(), "{good} must be accepted");
+	}
+	for bad in [
+		"2026-02-30T00:00:00Z",
+		"2025-02-29T00:00:00Z",
+		"2026-04-31T00:00:00Z",
+		"2026-06-00T00:00:00Z",
+		"99999-01-01T00:00:00Z",
+		"2026-01-01T00:00:00+99:99",
+		"2026-01-01T00:00:00+24:00",
+		"2026-01-01T00:00:00+01:75",
+	] {
+		assert!(parse_since(bad, now).is_err(), "{bad} must be refused");
+	}
+}

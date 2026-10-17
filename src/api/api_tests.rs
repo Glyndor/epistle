@@ -197,6 +197,20 @@ async fn domains_are_listed() {
 }
 
 #[tokio::test]
+async fn a_disabled_domain_is_named_in_the_domain_list() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let (_, body) = request(&app, "GET", "/api/v1/domains", Some(TOKEN.as_str())).await;
+	assert_eq!(body["disabled"], serde_json::json!([]));
+	let off = test_state(dir.path(), 0).with_disabled_domains(vec!["Example.ORG".to_string()]);
+	let app = router(off);
+	let (status, body) = request(&app, "GET", "/api/v1/domains", Some(TOKEN.as_str())).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["domains"][0], "example.org");
+	assert_eq!(body["disabled"], serde_json::json!(["example.org"]));
+}
+
+#[tokio::test]
 async fn queue_pagination_walks_all_entries() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 5));

@@ -35,11 +35,13 @@ forward). Policy refusals exited `2` before they had their own code.
 | `account forward` | `list`, `add`, `remove` | |
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
-| `app-password` | `list`, `create`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
+| `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
 | `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
-| `suppression` | `list`, `add`, `remove` | `suppression`, `suppression --remove ADDR` |
+| `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
-| `masked`, `ban`, `queue`, `domain`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
+| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
+| `db` | `upgrade`, `status` | |
+| `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
 
@@ -135,7 +137,7 @@ a static one with the hint to edit the config file. `relay add
 a terminal. Echo comes back when the read ends, Ctrl-C included.
 
 **Destructive commands.** `account remove`, `account 2fa disable`,
-`app-password revoke`, `api-key revoke`, `archive purge`, `domain remove`, `domain alias remove`,
+`app-password revoke`, `app-password rotate`, `relay disable`, `api-key revoke`, `archive purge`, `domain remove`, `domain disable`, `domain alias remove`,
 `alias remove`, `masked remove`, `queue remove` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -400,6 +402,8 @@ epistle relay show [--account NAME | --domain DOMAIN] [--json]
 epistle relay add --host smtp.example.net --starttls --username mailer --password-stdin < pass.txt
 epistle relay add --domain example.net --host relay.example.net --port 2525
 epistle relay remove [--account NAME | --domain DOMAIN]
+epistle relay disable [--account NAME | --domain DOMAIN] [--yes|-y] [--dry-run]
+epistle relay enable [--account NAME | --domain DOMAIN] [--dry-run]
 epistle relay test [--account NAME | --domain DOMAIN]
 ```
 
@@ -411,6 +415,16 @@ on stdin as one line; it is stored inline in the 0600 configuration file and
 `show` and `list` print only `set` or `unset`. A re-run without `--password-stdin`
 keeps the stored password when the user is unchanged. A domain or account that
 already has a `fail` or `direct` rule is refused.
+
+`disable` writes `enabled = false` on the rule and keeps everything else, the
+password included. It warns on stderr where the mail will go and asks first; off a
+terminal it needs `--yes` (exit 2 without it). After the restart the rule is never selected: its mail goes
+by the next rule that matches, or direct to the recipient's MX when none does,
+so it leaves from this server's own address, and a rule switched off no longer
+counts as a warm-up relay. `enable` takes the key out again. Both say `unchanged`
+when the rule is already that way and refuse a selector with no relay behind it
+with exit 2. `add` on a disabled rule updates it and leaves it disabled. `show`
+and `list` print `enabled` (`list` marks a rule that is off).
 
 `test` connects to the smarthost (through `--socks-proxy` when set), sends EHLO,
 upgrades with STARTTLS and authenticates when configured, then QUITs. It never
@@ -492,6 +506,8 @@ never refused. Supports `--dry-run` and `--config FILE`.
 epistle webhook show [--json]
 epistle webhook set https://hooks.example/mail --secret-stdin < secret.txt
 epistle webhook unset
+epistle webhook disable [--dry-run]
+epistle webhook enable [--dry-run]
 epistle webhook test
 ```
 
@@ -502,6 +518,12 @@ file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps 
 secret that is already configured. `unset` is refused while an alert still posts
 to the webhook.
 
+`disable` writes `enabled = false` into the section and keeps the URL and the
+secret: after the restart no event is posted, alerts with `--webhook` included, and the warning on stderr lists which ones (`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, the warm-up reports) and the alerts that go quiet. While an alert posts to the webhook, `disable` asks first and off a terminal needs `--yes` (exit 2 without it), like `webhook unset` refusing. `config-check` warns about an alert whose webhook is off.
+`enable` takes the key out again. Both say `unchanged` when the webhook is
+already that way and refuse with exit 3 when no webhook is configured (a setting the command needs is missing; so is `unset` while an alert posts to the webhook, exit 3). `set`
+keeps a disabled webhook disabled. `show` prints `enabled`.
+
 `test` posts one `test` event (see [configuration](configuration.md)), signed like
 any other, and reports the HTTP status. It fails on a non-2xx answer, a connection
 error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
@@ -510,6 +532,9 @@ error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
 
 ```sh
 epistle alert list [--json]
+epistle alert show bounce-storm [--json]
+epistle alert disable bounce-storm [--dry-run]
+epistle alert enable bounce-storm [--dry-run]
 epistle alert add bounce-storm --metric bounced --op '>=' --threshold 50 \
   --window 5m --webhook --email ops@example.org --cooldown 1h
 epistle alert remove bounce-storm
@@ -523,6 +548,12 @@ of the counters in [configuration](configuration.md#alerts); an unknown name lis
 the valid ones. `--webhook` needs a configured webhook, names are unique, and `add`
 never overwrites a rule: remove it first. Supports `--dry-run` and `--config FILE`.
 
+`show` prints one rule (`--json` gives the object `list` gives for it). `disable`
+switches a rule off without removing it: it writes `enabled = false`, and after the
+restart the rule takes no samples and never fires. `enable` takes the key out again.
+Both say `unchanged` when the rule is already that way, and refuse an unknown name
+with exit 2. `list` marks a rule that is off, and every JSON row has `enabled`.
+
 ## Domains (`epistle domain`)
 
 ```sh
@@ -533,6 +564,9 @@ epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
 epistle domain remove old.example.org [--yes|-y]
+epistle domain disable example.net [--yes|-y] [--dry-run]
+epistle domain enable example.net [--dry-run]
+epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -541,8 +575,40 @@ epistle domain alias remove alias.example.org [--yes|-y]
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
 the alias edges plus the accounts and aliases that route mail through
 the domain, so the operator can see what depends on it before removing
-it. JSON records contain `domain`, `aliases_to`, `aliases_from`,
+it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
 `accounts` and `aliases`.
+
+`disable` switches a domain off without removing it: the name goes into
+`disabled_domains`, and after the restart mail for it is rejected at RCPT
+exactly like mail for an unknown user (a permanent 550, so senders get a
+bounce, not a retry), and no account may send as an address in it (SMTP
+submission, the API and JMAP all refuse). Accounts, mailboxes, aliases, DNS
+records and DKIM keys stay. A mailbox is still reachable by the account's own
+name over IMAP and POP3, but logging in with an address in the disabled domain
+fails, because that address no longer resolves. Mail already in the outbound
+queue with a sender in the domain is accepted mail and is still delivered; the
+command says how many messages that is, and `queue remove` drops one.
+Autoconfig and autodiscover stop answering for the domain, and
+`GET /api/v1/domains` names it under `disabled`. `masked add` refuses a
+disabled domain (exit 2), and `account add` and `alias add` create an address
+there with a warning on stderr that it receives and sends nothing until the
+domain is enabled. `disable` asks first (see
+[Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
+exit 2, and refuses to switch off the last enabled domain of a server that
+has listeners (exit 3, a rule of the server). `enable` takes the name out of
+`disabled_domains` again. Both report `result` `unchanged` when the domain is
+already in that state, and the JSON result carries `domain` and `enabled`.
+
+`set` writes the per-domain default storage quota (`domain_quotas`) and the
+per-domain submission rate in messages per minute
+(`domain_submission_limits`), the same overrides `limits set quota --domain`
+and `limits set submission-rate --domain` write and `limits show` lists. Name
+at least one of `--quota`, `--no-quota`, `--submission-rate`,
+`--no-submission-rate`; a flag left out keeps its value, and `--no-…` removes
+the override. A zero rate is refused (it would lift the limit; use
+`--no-submission-rate`), and so is an unknown domain. The JSON result carries
+`domain` and the overrides it touched (`quota`, `submission_rate`; `null`
+once removed). `show` prints both overrides.
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator
@@ -827,6 +893,22 @@ whole stack starts on the new major; on any failure the old image and its
 untouched cluster come back and `mail` starts again. The old cluster stays
 in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
 after mail is verified.
+
+### Looking at the database
+
+```sh
+epistle db status [--json]
+```
+
+Prints the PostgreSQL version, the size of the database in bytes, the number of
+user tables, the connections to it and the connection limit. It runs one
+`SELECT` over the server's own catalogues in the `db` container (`podup exec`),
+changes nothing, reads no table, and gives up after 15 seconds. The JSON result
+is `database`, `version`, `size_bytes`, `tables`, `connections` and
+`max_connections`. With no `[database]` in the configuration, or no stack to ask,
+it exits `3`; a query that fails or answers with something else exits `1` and
+prints nothing on stdout. Maintenance that rewrites data, a manual `VACUUM` or a
+second backup command next to `epistle backup`, is not offered here.
 
 ## Backup and restore
 
@@ -1135,7 +1217,9 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
 | `epistle app-password list [--account N] [--json]` | App passwords (label, expiry, IP restriction), never the secret. |
-| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
+| `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
+| `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry, CIDR, scopes, domains, bound account. Never the key. |
 | `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N]` | Create a key; prints it once. Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
@@ -1151,10 +1235,15 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--outcome O] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100). `--since` takes an RFC 3339 time or a duration such as `24h` or `7d`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
+| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
+| `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |
+| `epistle delivery export [filters] [--limit N] [--json]` | The records that pass the same filters as `list` as CSV: `time,outcome,spool_id,account,from,recipient,remote,reply,attempt`, time as RFC 3339 UTC, newest day first, at most `N` records (default 10000, at most 100000). A field a spreadsheet would run as a formula (the reply of a remote server can begin with `=`) is written with a leading apostrophe. With `--json` the records are the objects `list --json` prints, `extra` included. |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
-| `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
+| `epistle suppression add ADDR [--account SENDER] [--reason TEXT]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. `--reason` is kept with the entry and shown by `list`, `show` and `export` (at most 512 characters, no control characters; the default says it was added by hand). Exits 1, printing nothing, when the entry could not be written. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
+| `epistle suppression show ADDR [--account SENDER] [--json]` | One entry: the address, the list it is in, when and why. Exits 2 when the address is not suppressed in that list. |
+| `epistle suppression export [--account SENDER] [--json]` | Write the list as CSV on stdout: a header `address,since,reason`, then one entry per line with the time as RFC 3339 UTC. A field that begins with `=`, `+`, `-` or `@` (after any apostrophes) is written with one more leading apostrophe so a spreadsheet does not run it as a formula, and `import` takes exactly one off, so a value that really starts with an apostrophe survives the round trip. With `--json`, one array of `{address, since, reason}`. |
+| `epistle suppression import FILE [--account SENDER] [--reason TEXT] [--dry-run] [--json]` | Suppress every address of a file in the form `export` writes, or a plain list with one address per line. UTF-8 text of at most 16 MiB and 100000 entries; blank lines and lines starting with `#` are skipped. The whole file is checked first: one bad line refuses it with exit 2, naming the first ten bad lines, and nothing is written. An address that is already suppressed keeps its entry. The time must be a real RFC 3339 time (`2026-02-30T00:00:00Z` is refused); the file must be a regular file, a named pipe or a device is refused. `--reason` is the reason for lines that give none. The result counts `added`, `already` and `duplicates` (an address repeated in the file); `--dry-run` counts and writes nothing. If a write fails part way the error says how many entries were written; running the import again skips them. Run as root, the file is read through a private copy like the other input files. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 

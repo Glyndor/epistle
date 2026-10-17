@@ -44,6 +44,7 @@ a connection URL.
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
 | `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
+| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, DNS records and DKIM keys are kept. Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
 | `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
@@ -688,6 +689,7 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 |---|---|
 | `url` | Endpoint to POST events to. |
 | `secret` | Optional HMAC-SHA256 signing secret. |
+| `enabled` | Default `true`. With `false` the section stays in the file but no event is posted, not even for an alert with `webhook = true`. `epistle webhook disable\|enable` edits it. `webhook test` still posts. |
 
 Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
@@ -812,6 +814,7 @@ window.
 | `webhook` | When `true`, fire a `metric_alert` webhook event. Requires `[webhook]`. |
 | `email` | One email per entry. The alert is queued as an outbound message for each address (delivered through the queue worker like any other mail). |
 | `cooldown_secs` | Minimum seconds between consecutive fires. Must be `> 0`. |
+| `enabled` | Default `true`. With `false` the rule stays in the file but takes no samples and never fires. `epistle alert disable\|enable` edits it. |
 
 Example: a 50-bounce-storm alarm, paging on webhook and email, with a 15-min
 cooldown to keep the noise down once it has fired.
@@ -1409,6 +1412,7 @@ Outbound routing rules. Each rule matches by sender `account` (the envelope send
 | `starttls` | Upgrade to TLS before AUTH/mail on a relay. Required when AUTH is set. |
 | `username`, `password` | SMTP AUTH for the relay (submission). Sent only over TLS — never in plaintext (fail closed). |
 | `socks_proxy` | `host:port` of a SOCKS5 proxy to reach the smarthost through. |
+| `enabled` | Default `true`. With `false` the rule stays in the file but is never selected: its mail goes by the next rule that matches, or direct to the recipient's MX when none does. Only a `relay` rule may be switched off; a `fail` rule is a refusal and is removed, not paused. `epistle relay disable\|enable` edits it. |
 
 ### `[queue]`
 Outbound queue settings. Absent keeps the secure defaults.

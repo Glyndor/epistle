@@ -44,6 +44,14 @@ pub struct Alert {
 	/// Minimum seconds between consecutive fires of the same rule, **and** the
 	/// condition must have stopped holding at least once between them.
 	pub cooldown_secs: u64,
+	/// A rule switched off stays in the file but takes no samples and never
+	/// fires. `epistle alert disable|enable` flips it.
+	#[serde(default = "default_enabled")]
+	pub enabled: bool,
+}
+
+const fn default_enabled() -> bool {
+	true
 }
 
 /// Comparison operator applied to the windowed delta. The TOML syntax is the
@@ -165,6 +173,26 @@ cooldown_secs = 900
 		assert_eq!(alert.cooldown_secs, 900);
 		assert!(!alert.webhook);
 		assert!(alert.email.is_empty());
+		assert!(alert.enabled, "a rule is on unless it says otherwise");
+	}
+
+	#[test]
+	fn a_rule_can_be_switched_off() {
+		let alert: Alert = toml::from_str(
+			r#"
+name = "x"
+metric = "bounced"
+op = ">="
+threshold = 1
+window_secs = 60
+cooldown_secs = 60
+webhook = true
+enabled = false
+"#,
+		)
+		.expect("parse alert");
+		assert!(!alert.enabled);
+		assert!(alert.validate().is_ok(), "a disabled rule is still checked");
 	}
 
 	#[test]
@@ -194,6 +222,7 @@ cooldown_secs = 900
 			threshold: 1,
 			window_secs: 60,
 			cooldown_secs: 60,
+			enabled: true,
 			webhook: true,
 			email: Vec::new(),
 		};
@@ -211,6 +240,7 @@ cooldown_secs = 900
 			threshold: 1,
 			window_secs: 0,
 			cooldown_secs: 60,
+			enabled: true,
 			webhook: true,
 			email: Vec::new(),
 		};
@@ -226,6 +256,7 @@ cooldown_secs = 900
 			threshold: 1,
 			window_secs: 60,
 			cooldown_secs: 0,
+			enabled: true,
 			webhook: true,
 			email: Vec::new(),
 		};
@@ -241,6 +272,7 @@ cooldown_secs = 900
 			threshold: 1,
 			window_secs: 60,
 			cooldown_secs: 60,
+			enabled: true,
 			webhook: false,
 			email: Vec::new(),
 		};
@@ -256,6 +288,7 @@ cooldown_secs = 900
 			threshold: 1,
 			window_secs: 60,
 			cooldown_secs: 60,
+			enabled: true,
 			webhook: false,
 			email: vec!["no-at-sign".into()],
 		};

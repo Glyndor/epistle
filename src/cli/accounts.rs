@@ -102,6 +102,11 @@ pub(super) fn add_with_display_name(
 		super::style::error(error);
 		return code;
 	}
+	for address in &addresses {
+		if let Some(warning) = super::disabled_domain::warning(config, address) {
+			super::style::warn(warning);
+		}
+	}
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows
 	// that edge - rust/hard-coded-cryptographic-value reported the exit code in

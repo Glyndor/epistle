@@ -87,3 +87,23 @@ fn drain_line(reader: &mut impl BufRead) -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "delivery_log_day_tests.rs"]
 mod tests;
+
+/// Whether `year-month-day` is a day of the calendar: the month has that many
+/// days (February 29 only in a leap year) and the year is one a four-digit
+/// date can name.
+pub(super) fn is_calendar_day(year: i64, month: u64, day: u64) -> bool {
+	let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+	let length = match month {
+		1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+		4 | 6 | 9 | 11 => 30,
+		2 if leap => 29,
+		2 => 28,
+		_ => return false,
+	};
+	(1970..=9999).contains(&year) && (1..=length).contains(&day)
+}
+
+/// Whether a UTC offset in seconds is one a clock uses: at most 23:59.
+pub(super) fn is_clock_offset(seconds: i64) -> bool {
+	(0..24 * 3600).contains(&seconds)
+}

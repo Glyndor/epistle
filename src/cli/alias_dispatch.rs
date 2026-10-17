@@ -91,6 +91,9 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) 
 			if let Err(error) = add_alias(&config, &mut document, &args) {
 				return Outcome::Error(error);
 			}
+			if let Some(warning) = crate::cli::disabled_domain::warning(&config, &args.address) {
+				super::style::warn_to(&mut err, warning);
+			}
 			match commit_reporting(
 				document,
 				&normalize(&args.address),

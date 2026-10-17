@@ -83,7 +83,7 @@ fn add_suppresses_globally_and_per_account() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		add(&config, "Bob@Example.NET", None, false, &mut out),
+		add(&config, "Bob@Example.NET", None, None, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -100,6 +100,7 @@ fn add_suppresses_globally_and_per_account() {
 			&config,
 			"carol@example.net",
 			Some("alice@example.org"),
+			None,
 			false,
 			&mut out
 		),
@@ -120,7 +121,7 @@ fn add_refuses_something_that_is_not_an_address() {
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
-		add(&config, "not an address", None, false, &mut out),
+		add(&config, "not an address", None, None, false, &mut out),
 		ExitCode::from(2)
 	);
 	assert!(out.is_empty());
@@ -237,7 +238,14 @@ async fn delivery_skips_an_address_added_from_the_cli() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	assert_eq!(
-		add(&config, "bob@example.net", None, false, &mut Vec::new()),
+		add(
+			&config,
+			"bob@example.net",
+			None,
+			None,
+			false,
+			&mut Vec::new()
+		),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -255,6 +263,7 @@ async fn delivery_skips_per_account_only_for_that_account() {
 		&config_mine,
 		"bob@example.net",
 		Some("alice@example.org"),
+		None,
 		false,
 		&mut Vec::new(),
 	);
@@ -266,6 +275,7 @@ async fn delivery_skips_per_account_only_for_that_account() {
 		&config_other,
 		"bob@example.net",
 		Some("someone@example.org"),
+		None,
 		false,
 		&mut Vec::new(),
 	);

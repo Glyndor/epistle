@@ -77,3 +77,55 @@ fn remove_table_drops_the_section_and_keeps_its_comments() {
 	assert!(!doc.remove_table(&["dns"]).unwrap());
 	assert!(!doc.remove_table(&["storage", "blobs"]).unwrap());
 }
+
+const INLINE: &str = "hostname = 'mail.example.org'
+tenant = [{ name = 'acme', submission_rate_limit_per_min = 5 }, { name = 'other' }]
+";
+
+/// The `tenant` entries of a rendered document, as data: the layout of an
+/// inline table is toml_edit's business, its content is the contract.
+fn tenants(rendered: &str) -> serde_json::Value {
+	let parsed: toml::Value = toml::from_str(rendered).expect("rendered document parses");
+	serde_json::to_value(&parsed["tenant"]).expect("tenant entries")
+}
+
+#[test]
+fn an_inline_entry_gets_the_field_not_the_whole_array() {
+	let (_file, mut doc) = doc(INLINE);
+	let edited = doc
+		.edit_array_entry_field(
+			&["tenant"],
+			"acme",
+			"name",
+			"enabled",
+			Some(Value::from(false)),
+		)
+		.unwrap();
+	assert!(edited);
+	assert_eq!(
+		tenants(&doc.render()),
+		serde_json::json!([
+			{ "name": "acme", "submission_rate_limit_per_min": 5, "enabled": false },
+			{ "name": "other" },
+		])
+	);
+}
+
+#[test]
+fn an_inline_entry_loses_the_field_when_it_is_cleared() {
+	let (_file, mut doc) = doc(INLINE);
+	let edited = doc
+		.edit_array_entry_field(
+			&["tenant"],
+			"acme",
+			"name",
+			"submission_rate_limit_per_min",
+			None,
+		)
+		.unwrap();
+	assert!(edited);
+	assert_eq!(
+		tenants(&doc.render()),
+		serde_json::json!([{ "name": "acme" }, { "name": "other" }])
+	);
+}

@@ -8,6 +8,20 @@ use crate::smtp::address::Address;
 use crate::util::address::normalize;
 
 impl Directory {
+	/// Switch off hosted domains (lowercased to match resolution).
+	pub fn with_disabled_domains(mut self, domains: impl IntoIterator<Item = String>) -> Self {
+		self.disabled_domains = domains
+			.into_iter()
+			.map(|domain| domain.to_ascii_lowercase())
+			.collect();
+		self
+	}
+
+	/// Whether `domain` is switched off.
+	pub(super) fn domain_disabled(&self, domain: &str) -> bool {
+		self.disabled_domains.contains(&domain.to_ascii_lowercase())
+	}
+
 	/// Resolve a validated address.
 	pub fn resolve(&self, address: &Address) -> Resolution {
 		let local = address.local_part();
@@ -19,6 +33,11 @@ impl Directory {
 			.unwrap_or(address.domain());
 		if !self.domains.contains(domain) {
 			return Resolution::NotLocal;
+		}
+		// A switched-off domain answers like a user that never existed, so
+		// the reply gives away nothing about the accounts behind it.
+		if self.disabled_domains.contains(domain) {
+			return Resolution::UnknownUser;
 		}
 		let key = normalize(&format!("{local}@{domain}"));
 		if let Some(account) = self.accounts_by_address.get(&key) {

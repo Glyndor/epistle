@@ -173,6 +173,12 @@ pub struct Config {
 	/// is delivered as `user@target`.
 	#[serde(default)]
 	pub domain_aliases: std::collections::HashMap<String, String>,
+	/// Entries of `domains` that are switched off: the domain stays
+	/// configured (DNS records, DKIM, accounts and mailboxes are kept), but
+	/// mail for it is rejected like mail for an unknown user and no account
+	/// may send as an address in it. Each entry must also be in `domains`.
+	#[serde(default)]
+	pub disabled_domains: Vec<String>,
 	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]
@@ -380,7 +386,8 @@ pub struct Config {
 	/// Requests` answers requests above the limit.
 	#[serde(default = "default_masked_addresses_max")]
 	pub masked_addresses_max: usize,
-	/// Outbound event webhooks. Present enables notifications.
+	/// Outbound event webhooks. Present enables notifications, unless it
+	/// says `enabled = false`; read it through [`Config::active_webhook`].
 	pub webhook: Option<Webhook>,
 	/// Per-instance message-size cap in bytes. `None` keeps the
 	/// historical default of 25 MiB (the same value the SMTP
@@ -447,6 +454,7 @@ impl std::fmt::Debug for Config {
 			.field("data_dir", &self.data_dir)
 			.field("domains", &self.domains)
 			.field("domain_aliases", &self.domain_aliases)
+			.field("disabled_domains", &self.disabled_domains)
 			.field("dnsbl_zones", &self.dnsbl_zones)
 			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
 			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
@@ -537,6 +545,28 @@ impl Config {
 			kind: "config file",
 		})?;
 		Self::parse_text(&raw, path)
+	}
+
+	/// The `[webhook]` section when it is there and switched on. Whatever
+	/// posts an event reads the section through this, so a webhook with
+	/// `enabled = false` posts nothing.
+	pub fn active_webhook(&self) -> Option<&Webhook> {
+		self.webhook.as_ref().filter(|webhook| webhook.enabled)
+	}
+
+	/// The hosted domains that are switched on: `domains` without
+	/// `disabled_domains`.
+	pub fn enabled_domains(&self) -> Vec<String> {
+		self.domains
+			.iter()
+			.filter(|domain| {
+				!self
+					.disabled_domains
+					.iter()
+					.any(|disabled| disabled.eq_ignore_ascii_case(domain))
+			})
+			.cloned()
+			.collect()
 	}
 
 	/// The loopback address listeners bind to unless explicitly configured.

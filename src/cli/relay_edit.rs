@@ -150,6 +150,24 @@ pub(super) fn remove(
 	Ok(())
 }
 
+/// Switch the relay rule of `target` on or off.
+pub(super) fn switch(
+	document: &mut ConfigDocument,
+	config: &Config,
+	target: &Target,
+	enabled: bool,
+) -> Result<(), ResourceError> {
+	let target = check_target(target)?;
+	find(config, &target).map_err(ResourceError::refused)?;
+	let value = (!enabled).then(|| Value::from(false));
+	document.upsert_where(
+		"transport",
+		&|table| target.matches_table(table) && is_relay(table),
+		&[("enabled", value)],
+	)?;
+	Ok(())
+}
+
 fn capitalize(text: &str) -> String {
 	let mut chars = text.chars();
 	chars

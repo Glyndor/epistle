@@ -21,7 +21,10 @@ fn suppression_add_and_remove() {
 		run(&env.config, &["suppression", "add", "Gone@Example.NET"]),
 		(
 			0,
-			json!({"result": "saved", "action": "add", "address": "gone@example.net", "account": null})
+			json!({
+				"result": "saved", "action": "add", "address": "gone@example.net", "account": null,
+				"reason": "added by hand (epistle suppression add)",
+			})
 		)
 	);
 	assert_eq!(
