@@ -182,3 +182,19 @@ async fn listed_only_kinds_are_never_written() {
 	let (provider, _state) = mock(serde_json::json!([])).await;
 	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let record = serde_json::json!({
+		"id": "1", "name": "h.example.org", "type": "A", "content": "192.0.2.1",
+		"ttl": "600", "prio": "0", "notes": ""
+	});
+	let (provider, _state) = mock(serde_json::json!(vec![record; 100_001])).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
+	);
+}

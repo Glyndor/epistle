@@ -202,3 +202,16 @@ async fn listed_only_kinds_are_never_written() {
 	let (provider, _state) = mock(Vec::new()).await;
 	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let record = stored_at("h.example.org", "1", "A", "192.0.2.1");
+	let (provider, _state) = mock(vec![record; 100_001]).await;
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
+	);
+}

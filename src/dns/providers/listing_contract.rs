@@ -8,6 +8,10 @@
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, UNKNOWN_KIND};
 
+/// What a listing past the record cap fails with.
+pub(crate) const CAP_MESSAGE: &str =
+	"the example.org zone is larger than a listing reads (1000 pages, 100000 records)";
+
 /// The NS target of the delegated subdomain `sub.example.org`.
 pub(crate) const NS_TARGET: &str = "ns1.delegated.example.";
 /// A CAA value in presentation form.

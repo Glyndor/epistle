@@ -470,7 +470,8 @@ impl DnsProvider for OvhProvider {
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
-		Box::pin(crate::dns::providers::within(async move {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			self.list_inner(&zone).await
 		}))
 	}

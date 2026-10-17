@@ -76,6 +76,22 @@ pub(crate) async fn within<T>(
 		})
 }
 
+/// [`within`] for a listing: the same deadline, and a zone of more than
+/// [`LIST_MAX_RECORDS`] records is an error, whatever the provider's paging
+/// did, not a zone cut short.
+pub(crate) async fn listing(
+	zone: String,
+	operation: impl std::future::Future<
+		Output = Result<Vec<crate::dns::provider::DnsRecord>, crate::dns::provider::ProviderError>,
+	>,
+) -> Result<Vec<crate::dns::provider::DnsRecord>, crate::dns::provider::ProviderError> {
+	let records = within(operation).await?;
+	if records.len() > LIST_MAX_RECORDS {
+		return Err(listing_too_long(&zone));
+	}
+	Ok(records)
+}
+
 /// The HTTP client every provider uses: a connect timeout, a total timeout,
 /// and no redirects, so a provider (or whoever sits in front of it) cannot
 /// send the credential to another host or keep a command waiting.

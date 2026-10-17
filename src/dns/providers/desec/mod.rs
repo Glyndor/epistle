@@ -258,8 +258,9 @@ impl DnsProvider for DesecProvider {
 			}
 		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(crate::dns::providers::within(async move {
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone_name = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			let url = self.rrsets_url()?;
 			let response = self
 				.client

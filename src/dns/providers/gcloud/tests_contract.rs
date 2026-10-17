@@ -118,3 +118,22 @@ async fn listed_only_kinds_are_never_written() {
 	let provider = provider_for(&base);
 	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }
+
+/// A zone with more records than a listing reads is an error, not a zone cut
+/// short.
+#[tokio::test]
+async fn a_zone_past_the_record_cap_is_an_error() {
+	let (base, _state) = start_mock(vec![Rrset {
+		name: "example.org.".into(),
+		kind: "A".into(),
+		ttl: 3600,
+		rrdatas: vec!["192.0.2.1".to_string(); 100_001],
+	}])
+	.await;
+	let provider = provider_for(&base);
+	let error = provider.list("example.org").await.expect_err("too many");
+	assert_eq!(
+		error,
+		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
+	);
+}
