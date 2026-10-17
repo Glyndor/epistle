@@ -108,7 +108,9 @@ pub(super) fn create_mailbox_within_limit(
 	else {
 		return false;
 	};
-	let Ok(_lock) = crate::storage::lock::FileLock::acquire(&lock_path) else {
+	let Ok(_lock) =
+		crate::util::blocking::may_block(|| crate::storage::lock::FileLock::acquire(&lock_path))
+	else {
 		return false;
 	};
 	// Under the lock: whatever a delivery just before made is counted.

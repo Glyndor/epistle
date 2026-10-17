@@ -383,7 +383,8 @@ impl ScriptStore {
 		fs::create_dir_all(&dirs.sieve_dir).map_err(|_| StoreError::Io)?;
 		let lock = contained_child(&dirs.sieve_dir, ".lock").map_err(|_| StoreError::Io)?;
 		create_private(&lock).map_err(|_| StoreError::Io)?;
-		let lock = FileLock::acquire(&lock).map_err(|_| StoreError::Io)?;
+		let lock = crate::util::blocking::may_block(|| FileLock::acquire(&lock))
+			.map_err(|_| StoreError::Io)?;
 		let path = contained_child(&dirs.sieve_dir, ".index.json").map_err(|_| StoreError::Io)?;
 		let mut index = Index::read(&path);
 		let changed = index.reconcile(&self.names_on_disk()?);
@@ -539,3 +540,7 @@ mod names_tests;
 #[cfg(test)]
 #[path = "store_tests_tx.rs"]
 mod tx_tests;
+
+#[cfg(test)]
+#[path = "store_tests_async.rs"]
+mod async_tests;
