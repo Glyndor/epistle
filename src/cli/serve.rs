@@ -119,6 +119,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		dkim_signer,
 		webhook,
 		arc_sealer,
+		mut evidence,
 	} = super::serve_dkim::build_split_with_companions(
 		&config,
 		&metrics,
@@ -228,6 +229,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 
+	super::serve_evidence::spawn(evidence.tasks.take());
 	// The queue worker drains the outbound spool in the background.
 	super::serve_queue::spawn_queue_worker(
 		&config,
@@ -237,6 +239,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		&metrics,
 		webhook.as_ref(),
 		warmup,
+		Arc::clone(&evidence.service),
 	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.
@@ -328,6 +331,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)
 				.with_correspondents((*correspondents).clone())
+				.with_class_bindings(Arc::clone(&evidence.bindings))
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
 				state = super::serve_ratelimit::wire_api_submission_limits(
@@ -420,22 +424,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
-				let Some(acceptor) = &tls_acceptor else {
-					return Err(std::io::Error::other(
-						"POP3S listener without TLS configured",
-					));
-				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let server = Arc::new(
-					crate::pop3::server::Server::new(
-						config.data_dir.clone(),
-						directory.clone(),
-						acceptor.clone(),
-					)
-					.with_crypto(crypto.clone())
-					.with_max_connections(max_conn),
-				);
-				tasks.push(tokio::spawn(server.serve(listener)));
+				let data_dir = config.data_dir.clone();
+				let acceptor = tls_acceptor.as_ref();
+				tasks.push(super::serve_listeners::pop3s(
+					listener,
+					data_dir,
+					directory.clone(),
+					acceptor,
+					crypto.clone(),
+					max_conn,
+				)?);
 			}
 			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
 				// `autoconfigs` presents the shared, renewing certificate.
@@ -459,21 +458,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(super::serve_tasks::serve_http(listener, router));
 			}
 			ListenerKind::ManageSieve => {
-				let Some(acceptor) = &tls_acceptor else {
-					return Err(std::io::Error::other(
-						"ManageSieve listener without TLS configured",
-					));
-				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let server = Arc::new(
-					crate::managesieve::server::Server::new(
-						config.data_dir.clone(),
-						directory.clone(),
-						acceptor.clone(),
-					)
-					.with_max_connections(max_conn),
-				);
-				tasks.push(tokio::spawn(server.serve(listener)));
+				let data_dir = config.data_dir.clone();
+				let acceptor = tls_acceptor.as_ref();
+				tasks.push(super::serve_listeners::managesieve(
+					listener,
+					data_dir,
+					directory.clone(),
+					acceptor,
+					max_conn,
+				)?);
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -591,7 +585,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				// The shared `Arc<CorrespondentStore>` is the one already
 				// opened above; the cap itself comes from the static
 				// config so it is the same number across every listener.
-				server = server.with_correspondents(Arc::clone(&correspondents));
+				server = server
+					.with_correspondents(Arc::clone(&correspondents))
+					.with_class_bindings(Arc::clone(&evidence.bindings));
 				if daily_new_recipients.is_some() {
 					server = server.with_daily_new_recipients(daily_new_recipients);
 				}

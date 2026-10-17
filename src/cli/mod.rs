@@ -1,6 +1,7 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod account;
+mod account_class;
 mod account_json;
 mod account_name;
 mod account_reload;
@@ -31,6 +32,14 @@ mod dkim_show;
 mod dns_provider;
 mod dns_records;
 mod domain;
+mod evidence;
+mod evidence_abandon;
+mod evidence_bundle;
+mod evidence_clock;
+mod evidence_key;
+mod evidence_policy;
+mod evidence_timestamp;
+mod evidence_verify;
 mod exit;
 mod export;
 mod import;
@@ -54,6 +63,8 @@ mod resource;
 mod role_addresses;
 mod serve;
 mod serve_dkim;
+mod serve_evidence;
+mod serve_listeners;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;

@@ -96,6 +96,11 @@ pub struct SendRequest {
 	/// are checked.
 	#[serde(default)]
 	extra: BTreeMap<String, String>,
+	/// The class of the message (`transactional`, `marketing`, `personal`).
+	/// Absent: the class bound to the API key, else the account default,
+	/// else `personal`.
+	#[serde(default)]
+	class: Option<String>,
 }
 
 /// An attachment or inline part: base64 `data`, with the type detected
@@ -130,6 +135,20 @@ impl SendRequest {
 	/// but the save-sent logic accommodates).
 	pub fn save_sent(&self) -> Option<bool> {
 		self.save_sent
+	}
+
+	/// The explicit class, refusing a name that is not a class.
+	pub(super) fn class(&self) -> Result<Option<crate::evidence::MailClass>, ApiError> {
+		match &self.class {
+			None => Ok(None),
+			Some(name) => crate::evidence::MailClass::parse(name)
+				.map(Some)
+				.ok_or_else(|| {
+					ApiError::invalid_input(
+						"Unknown class: use transactional, marketing or personal.",
+					)
+				}),
+		}
 	}
 
 	/// The caller-supplied `extra` correlation map, after enforcing its

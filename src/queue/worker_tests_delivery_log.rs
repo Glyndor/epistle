@@ -75,7 +75,8 @@ async fn a_delivered_recipient_writes_a_record_with_the_remote_host() {
 		crate::storage::DeliveryOutcome::Delivered
 	);
 	assert_eq!(records[0].remote.as_deref(), Some("mx.remote.example"));
-	assert_eq!(records[0].reply.as_deref(), Some("250 OK"));
+	// The reply the exchanger gave to the final dot, not a stock "250 OK".
+	assert_eq!(records[0].reply.as_deref(), Some("250 2.0.0 queued"));
 	assert_eq!(records[0].from, "alice@sender.example");
 }
 
@@ -297,7 +298,7 @@ async fn a_recipient_deferred_again_for_the_same_reason_is_logged_once() {
 		vec![
 			(Deferred, Some(busy.to_string()), 1),
 			(Deferred, Some(full.to_string()), 4),
-			(Delivered, Some("250 OK".to_string()), 6),
+			(Delivered, Some("250 2.0.0 queued".to_string()), 6),
 		]
 	);
 }

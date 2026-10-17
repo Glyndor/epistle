@@ -132,6 +132,11 @@ pub(crate) const STAGED: &[Staged] = &[
 		},
 	},
 	Staged {
+		command: &["evidence", "export"],
+		arg: "out",
+		kind: Kind::WriteDir,
+	},
+	Staged {
 		command: &["init"],
 		arg: "answers",
 		kind: Kind::ReadFile {
@@ -152,6 +157,24 @@ pub(crate) const NOT_STAGED: &[(Option<&[&str]>, &str, &str)] = &[
 		"config",
 		"the service's own configuration: the account reads it, and the \
 		 editing commands rewrite it, in place",
+	),
+	(
+		Some(&["evidence", "check"]),
+		"bundle",
+		"the check never runs as the service account: whoever runs it reads the \
+		 bundle where it is",
+	),
+	(
+		Some(&["evidence", "check"]),
+		"keys",
+		"the check never runs as the service account: whoever runs it reads the \
+		 key file where it is",
+	),
+	(
+		Some(&["evidence", "timestamp", "enable"]),
+		"token_file",
+		"recorded in the timestamp settings for the server to read at run time, and \
+		 required to be 0600 and owned by the service account where it is",
 	),
 	(Some(&["dns", "provider", "set"]), "token_file", REFERENCE),
 	(

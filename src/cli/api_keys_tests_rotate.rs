@@ -23,6 +23,7 @@ fn create_key(config: &Config, label: &str) -> String {
 				scopes: vec!["read".into(), "send".into()],
 				domains: vec!["example.org".into()],
 				account: None,
+				class: None,
 			},
 			false,
 			&mut out
@@ -98,4 +99,45 @@ fn rotate_output_never_shows_the_hash() {
 	let mut out = Vec::new();
 	assert_eq!(rotate(&config, "ci", false, &mut out), ExitCode::SUCCESS);
 	assert!(!String::from_utf8_lossy(&out).contains("sha256:"));
+}
+
+#[test]
+fn a_class_bound_at_creation_follows_the_key_through_a_rotation() {
+	use crate::evidence::bindings::{BindingSet, api_key_key_of_token};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let mut out = Vec::new();
+	let created = create(
+		&config,
+		NewKey {
+			label: "notices".into(),
+			scopes: vec!["send".into()],
+			class: Some(crate::evidence::MailClass::Transactional),
+			..NewKey::default()
+		},
+		false,
+		&mut out,
+	);
+	assert_eq!(created, ExitCode::SUCCESS);
+	let first = secret_in(&out);
+	let class = |token: &str| {
+		BindingSet::open(dir.path())
+			.expect("bindings")
+			.credential(&api_key_key_of_token(token))
+	};
+	assert_eq!(
+		class(&first),
+		Some(crate::evidence::MailClass::Transactional)
+	);
+	let mut rotated = Vec::new();
+	assert_eq!(
+		rotate(&config, "notices", false, &mut rotated),
+		ExitCode::SUCCESS
+	);
+	let second = secret_in(&rotated);
+	assert_eq!(
+		class(&second),
+		Some(crate::evidence::MailClass::Transactional)
+	);
+	assert_eq!(class(&first), None, "the retired secret keeps a binding");
 }

@@ -184,6 +184,7 @@ fn log_day(dir: &Path, delivered: u32, deferred: u32) {
 			reply: Some(reply.into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		})
 		.expect("append");
 	}
@@ -287,6 +288,7 @@ fn an_operator_raise_reaches_the_running_server_and_is_judged() {
 			}),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		})
 		.expect("append");
 	}

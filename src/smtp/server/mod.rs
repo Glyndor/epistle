@@ -27,6 +27,7 @@ mod run;
 mod run_attachments;
 mod run_auth;
 mod run_band;
+mod run_class;
 mod run_sent;
 mod session_time;
 
@@ -170,6 +171,9 @@ pub struct Server {
 	/// cap (the default) so the pre-feature behaviour survives in
 	/// tests and in production builds that never enable the cap.
 	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Default classes bound to accounts and credentials; `None` grants
+	/// every submission `personal`.
+	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
 	/// Rolling 24h cap on first-time recipients per account. Pairs with
 	/// `correspondents`; either absent disables the cap.
 	daily_new_recipients: Option<u32>,

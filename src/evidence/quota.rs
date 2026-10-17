@@ -1,0 +1,647 @@
+//! How much evidence one account, and the whole server, may add in a day.
+//!
+//! The kept log is verified in full every few minutes, and a verification
+//! that runs too long holds transactional mail for every tenant. The log
+//! grows with what its clients send, so each account has a share of the day
+//! and the server a limit, and an acceptance past either is refused (`451`,
+//! retry later) before anything is written.
+//!
+//! There is one book, in memory, and no file of its own: at start it is
+//! rebuilt from the day's records in the chain, which are already on disk,
+//! signed in the day's seal and attributed (an acceptance names its account),
+//! so there is no state to parse, migrate, link-check or find owned by
+//! somebody else. A book that cannot be rebuilt admits no acceptance, and
+//! still counts facts; it never starts from nothing in the middle of a day.
+//!
+//! # Invariants
+//!
+//! The counts below are held to these, and `quota_tests.rs` checks them after
+//! every step of random sequences of acceptances, outcomes, abandonments,
+//! restarts and new days:
+//!
+//! 1. **One account per record.** Every record counted is attributed to exactly
+//!    one account (`unattributed` when it cannot be known), and the day's total
+//!    is the sum of the accounts'.
+//! 2. **Isolation.** What the server has set aside for the day (`within`) is
+//!    at most the sum over the accounts of what each holds up to its own
+//!    share, and never more than the day's limit. An account past its share
+//!    adds nothing to it: it can take no room that another account's share
+//!    could use.
+//! 3. **Facts are never refused, and never counted twice.** An outcome, an
+//!    abandonment or a cancellation records something that happened. It is
+//!    counted to its account once: not at all if its acceptance paid for it,
+//!    as a fact if not. An account past its share is turned away at its next
+//!    acceptance, not at the fact.
+//! 4. **Exact rollback.** An acceptance that wrote nothing gives back exactly
+//!    what it reserved. One that may have been written keeps it.
+//! 5. **The counts outlive the process and the day.** A restart rebuilds the
+//!    day's counts from the chain; a new day starts the day's counts again.
+//!    What a command writes from another process (a cancellation) is in the
+//!    chain, and so in the book from the next start.
+//! 6. **Shares fit the limit.** The limit is at least [`MIN_SHARES`] shares, and
+//!    what is set aside never passes it.
+//!
+//! The day only moves forward. An acceptance always reserves its own record
+//! and an outcome for each recipient, and the book remembers which outcomes
+//! are paid for so that none is counted twice. That memory is bounded per
+//! account (`MAX_OWED_PER_ACCOUNT` messages waiting for their outcomes) and
+//! in all (`MAX_OWED`, room for eight accounts at their bound at once, and a
+//! ceiling a little above it).
+//! Nothing is ever forgotten to make room: an account with no room has its
+//! acceptances refused until its outcomes come. When the whole memory is full
+//! only the accounts above their fair share are refused (the others go on, up
+//! to a ceiling a little above the full mark), with an alarm in the status;
+//! the facts are still taken and counted. An outcome that comes after a restart, or another day,
+//! is counted as a fact to the account of its acceptance when the log of the
+//! last days still names it. (Mail whose evidence is not mandatory is sent
+//! all the same when its acceptance cannot be recorded.)
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use uuid::Uuid;
+
+use super::chain::{CHAIN_DIR, day_file, open_day};
+use super::day::Day;
+use super::lines::{Line, Lines};
+use super::record::{Entry, MAX_RECORDS_PER_DAY, Record, RetentionMode};
+
+/// The account a record is counted to when its message cannot be traced.
+pub const UNATTRIBUTED: &str = "unattributed";
+/// The fewest accounts' shares the day's limit must hold.
+pub const MIN_SHARES: u64 = 4;
+/// How many days the prepaid outcomes of a message are remembered: well past
+/// the five days the queue gives up on mail by default.
+const OWED_DAYS: i64 = 14;
+/// The most messages whose prepaid outcomes are remembered, in all and per
+/// account.
+const MAX_OWED: usize = 65_536;
+const MAX_OWED_PER_ACCOUNT: usize = 8_192;
+/// Once the memory is full, an account below this many entries is still
+/// admitted, whatever the average is.
+const MIN_OWED_GUARANTEED: usize = 64;
+/// The hard ceiling of the memory: a little above the full mark, the room
+/// that accounts below their fair share have.
+const MAX_OWED_CEILING: usize = MAX_OWED + MAX_OWED / 8;
+/// The most messages of the last days whose account is remembered at start.
+const MAX_NAMED: usize = 1_000_000;
+/// What is counted at which percent of a limit the status warns.
+const WARN_PERCENT: u64 = 80;
+/// How often a book that could not be rebuilt tries again.
+const RETRY: Duration = Duration::from_secs(30);
+
+/// The limits, per UTC day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+	/// Records (an acceptance and the outcomes it owes) one account may add:
+	/// its share of the day.
+	pub account_records: u64,
+	/// Bytes one account may keep in full.
+	pub account_kept_bytes: u64,
+	/// Records of every kind the whole log may take.
+	pub day_records: u64,
+}
+
+impl Default for Limits {
+	fn default() -> Self {
+		Limits {
+			account_records: 500_000,
+			account_kept_bytes: 4 * 1024 * 1024 * 1024,
+			day_records: 5_000_000,
+		}
+	}
+}
+
+impl Limits {
+	/// The limits with the share cut down so that [`MIN_SHARES`] of them fit
+	/// the day, when it was set larger.
+	pub fn fitted(mut self) -> Self {
+		self.account_records = self.account_records.min(self.day_records / MIN_SHARES);
+		self
+	}
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Held {
+	pub(crate) records: u64,
+	pub(crate) bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Owed {
+	left: u64,
+	day: i64,
+	account: String,
+}
+
+/// The book.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct State {
+	pub(crate) day: i64,
+	/// Records counted today, all accounts.
+	pub(crate) total: u64,
+	/// What is set aside against the day's limit: each account's records up
+	/// to its share, while the limit has room.
+	pub(crate) within: u64,
+	pub(crate) accounts: BTreeMap<String, Held>,
+	/// Outcomes still to come of acceptances that paid for them, by queue id.
+	owed: BTreeMap<Uuid, Owed>,
+	/// How many entries of `owed` each account has, so that asking is cheap
+	/// whatever the table holds.
+	owed_per: HashMap<String, usize>,
+}
+
+/// Exactly what one acceptance added, to be taken back if nothing came of it.
+#[derive(Debug)]
+#[must_use]
+pub struct Reservation {
+	id: Uuid,
+	account: String,
+	records: u64,
+	kept: u64,
+	within: u64,
+	day: i64,
+}
+
+#[derive(Debug)]
+struct Book {
+	state: State,
+	/// Whether the book was rebuilt from the log yet.
+	loaded: bool,
+	/// Why the book could not be rebuilt, while it cannot: acceptances wait.
+	unavailable: Option<String>,
+	tried: Option<Instant>,
+}
+
+/// The quota.
+#[derive(Debug)]
+pub struct Quota {
+	root: PathBuf,
+	limits: Limits,
+	book: Mutex<Book>,
+}
+
+impl State {
+	/// Start the day's counts again when `today` is later than the book's.
+	/// The day only moves forward: a clock that went back does not clear
+	/// the counts. Returns the day the book is in.
+	pub(crate) fn roll(&mut self, today: Day) -> i64 {
+		if today.0 > self.day {
+			self.day = today.0;
+			self.total = 0;
+			self.within = 0;
+			self.accounts.clear();
+			// Forgetting the old ones is the work of a new day, not of every call.
+			let old: Vec<Uuid> = self
+				.owed
+				.iter()
+				.filter(|(_, owed)| today.0 - owed.day > OWED_DAYS)
+				.map(|(id, _)| *id)
+				.collect();
+			for id in old {
+				self.untrack(id);
+			}
+		}
+		self.day
+	}
+
+	/// Count `records` to `account`: the part up to its share, and up to what
+	/// the day's limit still has, is set aside.
+	fn add(&mut self, account: &str, records: u64, kept: u64, (share, day): (u64, u64)) -> u64 {
+		let held = self.accounts.entry(account.to_string()).or_default();
+		let aside = records
+			.min(share.saturating_sub(held.records))
+			.min(day.saturating_sub(self.within));
+		held.records += records;
+		held.bytes += kept;
+		self.total += records;
+		self.within += aside;
+		aside
+	}
+
+	/// Whether `account` may have one more message whose prepaid outcomes
+	/// are remembered. While the memory has room, every account has its own
+	/// bound. Once it is full, only the accounts below their fair share (the
+	/// average over the accounts that have entries, and never less than
+	/// [`MIN_OWED_GUARANTEED`]) go on, up to a ceiling a little above the
+	/// full mark; the ones above it wait. Nothing is ever taken from anybody.
+	/// Every question is a few lookups, whatever the memory holds.
+	fn has_room_for(&self, account: &str) -> bool {
+		let mine = self.owed_per.get(account).copied().unwrap_or(0);
+		if mine >= MAX_OWED_PER_ACCOUNT {
+			return false;
+		}
+		let held = self.owed.len();
+		if held < MAX_OWED {
+			return true;
+		}
+		let fair = (held / self.owed_per.len().max(1)).max(MIN_OWED_GUARANTEED);
+		held < MAX_OWED_CEILING && mine < fair
+	}
+
+	/// Remember that message `id` has `owed.left` prepaid outcomes to come.
+	/// Nothing is ever forgotten to make room: callers ask [`has_room_for`]
+	/// first, and refuse the acceptance when there is none.
+	fn track(&mut self, id: Uuid, owed: Owed) {
+		let account = owed.account.clone();
+		// An id already there is replaced, not added: the counts follow the table.
+		if let Some(old) = self.owed.insert(id, owed) {
+			self.uncount(&old.account);
+		}
+		*self.owed_per.entry(account).or_default() += 1;
+	}
+
+	fn uncount(&mut self, account: &str) {
+		if let Some(count) = self.owed_per.get_mut(account) {
+			*count = count.saturating_sub(1);
+			if *count == 0 {
+				self.owed_per.remove(account);
+			}
+		}
+	}
+
+	fn untrack(&mut self, id: Uuid) {
+		if let Some(owed) = self.owed.remove(&id) {
+			self.uncount(&owed.account);
+		}
+	}
+}
+
+impl Quota {
+	/// The quota for the log under `evidence_root`. Its book is rebuilt from
+	/// the records of the day on first use, so that starting it reads no clock.
+	/// A log that cannot be read leaves the book unavailable: no acceptance
+	/// until it can be.
+	pub fn start(evidence_root: &Path, limits: Limits) -> Quota {
+		Quota {
+			root: evidence_root.to_path_buf(),
+			limits: limits.fitted(),
+			book: Mutex::new(Book {
+				state: State::default(),
+				loaded: false,
+				unavailable: None,
+				tried: None,
+			}),
+		}
+	}
+
+	/// [`start`](Self::start), rebuilt for `today` at once.
+	#[cfg(test)]
+	pub(crate) fn start_at(evidence_root: &Path, limits: Limits, today: Day) -> Quota {
+		let quota = Self::start(evidence_root, limits);
+		quota.ensure(&mut quota.book(), today);
+		quota
+	}
+
+	/// Rebuild the book the first time it is used.
+	fn ensure(&self, book: &mut Book, today: Day) {
+		if !book.loaded {
+			book.loaded = true;
+			self.rebuild(book, today);
+		}
+	}
+
+	/// Rebuild `book` from today's day file.
+	fn rebuild(&self, book: &mut Book, today: Day) {
+		book.tried = Some(Instant::now());
+		match self.read_day(today) {
+			Ok(state) => {
+				if book.unavailable.take().is_some() {
+					tracing::warn!("the evidence quota was rebuilt from the log");
+				}
+				// What is remembered of earlier days' outcomes stays.
+				let kept = std::mem::take(&mut book.state.owed);
+				book.state = state;
+				for (id, owed) in kept {
+					if !book.state.owed.contains_key(&id) && book.state.has_room_for(&owed.account)
+					{
+						book.state.track(id, owed);
+					}
+				}
+			}
+			Err(error) => {
+				if book.unavailable.is_none() {
+					tracing::error!(%error, "the evidence quota cannot be rebuilt from the log: no new acceptances until it can");
+				}
+				book.unavailable = Some(error.to_string());
+			}
+		}
+	}
+
+	/// Which account each message of the last days was accepted for, from the
+	/// day files before `today`. Bounded: past [`MAX_NAMED`] it learns no more.
+	fn accepted_before(&self, today: Day, names: &mut HashMap<Uuid, String>) {
+		for back in [2, 1] {
+			let Ok(file) = open_day(&day_file(&self.root.join(CHAIN_DIR), Day(today.0 - back)))
+			else {
+				continue;
+			};
+			let mut lines = Lines::new(std::io::BufReader::new(file));
+			while let Ok(Some((_, line))) = lines.next_line() {
+				if let Line::Complete(bytes) = line
+					&& let Ok(Entry::Accepted(accepted)) =
+						Record::parse_canonical(bytes).map(|record| record.entry)
+					&& names.len() < MAX_NAMED
+				{
+					names.insert(accepted.spool_id, accepted.account);
+				}
+			}
+		}
+	}
+
+	/// The counts of the records of `today` in the chain.
+	fn read_day(&self, today: Day) -> std::io::Result<State> {
+		let share = (self.limits.account_records, self.limits.day_records);
+		let mut state = State {
+			day: today.0,
+			..State::default()
+		};
+		let mut names: HashMap<Uuid, String> = HashMap::new();
+		self.accepted_before(today, &mut names);
+		let file = match open_day(&day_file(&self.root.join(CHAIN_DIR), today)) {
+			Ok(file) => file,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(state),
+			Err(error) => return Err(error),
+		};
+		let mut lines = Lines::new(std::io::BufReader::new(file));
+		let mut read = 0u64;
+		while let Some((_, line)) = lines.next_line()? {
+			read += 1;
+			if read > MAX_RECORDS_PER_DAY {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::InvalidData,
+					"more records in a day than any day may hold",
+				));
+			}
+			let Line::Complete(bytes) = line else {
+				state.add(UNATTRIBUTED, 1, 0, share);
+				continue;
+			};
+			match Record::parse_canonical(bytes).map(|record| record.entry) {
+				Ok(Entry::Accepted(accepted)) => {
+					let recipients = accepted.recipients.len() as u64;
+					let kept = match accepted.retention.mode {
+						RetentionMode::Full => accepted.size,
+						_ => 0,
+					};
+					// History is not refused: an acceptance the memory has no room
+					// for is counted for its own record, and its outcomes when
+					// they are met, once.
+					let paid = recipients > 0 && state.has_room_for(&accepted.account);
+					state.add(
+						&accepted.account,
+						1 + if paid { recipients } else { 0 },
+						kept,
+						share,
+					);
+					if paid {
+						state.track(
+							accepted.spool_id,
+							Owed {
+								left: recipients,
+								day: today.0,
+								account: accepted.account.clone(),
+							},
+						);
+					}
+					if names.len() < MAX_NAMED {
+						names.insert(accepted.spool_id, accepted.account);
+					}
+				}
+				Ok(Entry::Outcome(super::record::Outcome { spool_id, .. })) => {
+					let account = names.get(&spool_id).map(String::as_str);
+					Self::settle(&mut state, account, (spool_id, false), share);
+				}
+				Ok(Entry::Abandoned(super::record::Abandoned { spool_id, .. })) => {
+					let account = names.get(&spool_id).map(String::as_str);
+					Self::settle(&mut state, account, (spool_id, true), share);
+				}
+				_ => {
+					state.add(UNATTRIBUTED, 1, 0, share);
+				}
+			}
+		}
+		Ok(state)
+	}
+
+	/// Count a fact: not at all if its acceptance paid for it, else once. A
+	/// fact that `ends` the message (an abandonment, which stands for all its
+	/// outcomes) also forgets what was still owed for it.
+	fn settle(
+		state: &mut State,
+		account: Option<&str>,
+		(id, ends): (Uuid, bool),
+		share: (u64, u64),
+	) {
+		let prepaid = state.owed.get(&id).is_some_and(|owed| owed.left > 0);
+		if prepaid {
+			if let Some(owed) = state.owed.get_mut(&id) {
+				owed.left -= 1;
+			}
+			if ends || state.owed.get(&id).is_some_and(|owed| owed.left == 0) {
+				state.untrack(id);
+			}
+			return;
+		}
+		if ends {
+			state.untrack(id);
+		}
+		state.add(account.unwrap_or(UNATTRIBUTED), 1, 0, share);
+	}
+
+	fn book(&self) -> std::sync::MutexGuard<'_, Book> {
+		self.book
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	/// Reserve room for one acceptance of `account` for a message to
+	/// `recipients` that keeps `kept` bytes, or say which limit it would pass.
+	/// The reservation is its own record and an outcome for each recipient,
+	/// always. Checking and reserving are one step.
+	pub fn reserve(
+		&self,
+		account: &str,
+		id: Uuid,
+		(recipients, kept): (u64, u64),
+		today: Day,
+	) -> std::io::Result<Reservation> {
+		let limits = self.limits;
+		let mut book = self.book();
+		self.ensure(&mut book, today);
+		let over = |what: &str| {
+			Err(std::io::Error::new(
+				std::io::ErrorKind::QuotaExceeded,
+				format!("{what} for today: retry later"),
+			))
+		};
+		if book.unavailable.is_some() {
+			if book.tried.is_none_or(|at| at.elapsed() >= RETRY) {
+				self.rebuild(&mut book, today);
+			}
+			if book.unavailable.is_some() {
+				return over("the evidence quota cannot be read");
+			}
+		}
+		let day = book.state.roll(today);
+		let records = 1 + recipients;
+		if recipients > 0 && !book.state.has_room_for(account) {
+			return over("too many messages of this account (or of all) wait for their outcomes");
+		}
+		let held = book
+			.state
+			.accounts
+			.get(account)
+			.cloned()
+			.unwrap_or_default();
+		if held.records.saturating_add(records) > limits.account_records {
+			return over("this account has added as many records as it may");
+		}
+		if held.bytes.saturating_add(kept) > limits.account_kept_bytes {
+			return over("this account has kept as many bytes as it may");
+		}
+		let aside = records.min(limits.account_records.saturating_sub(held.records));
+		if book.state.within.saturating_add(aside) > limits.day_records {
+			return over("the evidence log is full");
+		}
+		let within = book.state.add(
+			account,
+			records,
+			kept,
+			(limits.account_records, limits.day_records),
+		);
+		if recipients > 0 {
+			book.state.track(
+				id,
+				Owed {
+					left: recipients,
+					day,
+					account: account.to_string(),
+				},
+			);
+		}
+		Ok(Reservation {
+			id,
+			account: account.to_string(),
+			records,
+			kept,
+			within,
+			day,
+		})
+	}
+
+	/// Give back exactly what `held` reserved, when nothing was written.
+	pub fn release(&self, held: Reservation) {
+		let mut book = self.book();
+		let state = &mut book.state;
+		state.untrack(held.id);
+		if state.day != held.day {
+			return;
+		}
+		state.total = state.total.saturating_sub(held.records);
+		state.within = state.within.saturating_sub(held.within);
+		if let Some(entry) = state.accounts.get_mut(&held.account) {
+			entry.records = entry.records.saturating_sub(held.records);
+			entry.bytes = entry.bytes.saturating_sub(held.kept);
+			// An account the reservation introduced goes with it.
+			if *entry == Held::default() {
+				state.accounts.remove(&held.account);
+			}
+		}
+	}
+
+	/// A record of message `id` was written that is a fact: an outcome, an
+	/// abandonment. Never refused, counted once (see invariant 3), to
+	/// `account` or [`UNATTRIBUTED`].
+	pub fn fact(&self, account: Option<&str>, id: Uuid, today: Day) {
+		self.settled(account, (id, false), today);
+	}
+
+	/// A fact that ends message `id`: an abandonment, which stands for all its
+	/// outcomes. Counted like any fact, and what was still owed for the
+	/// message is forgotten, so its room goes back to the account.
+	pub fn ended(&self, account: Option<&str>, id: Uuid, today: Day) {
+		self.settled(account, (id, true), today);
+	}
+
+	fn settled(&self, account: Option<&str>, which: (Uuid, bool), today: Day) {
+		let share = (self.limits.account_records, self.limits.day_records);
+		let mut book = self.book();
+		self.ensure(&mut book, today);
+		book.state.roll(today);
+		Self::settle(&mut book.state, account, which, share);
+	}
+
+	/// What to tell the operator when a limit is near or reached, or the
+	/// book is unavailable.
+	pub fn warning(&self, today: Day) -> Option<String> {
+		let limits = self.limits;
+		let mut book = self.book();
+		self.ensure(&mut book, today);
+		if let Some(why) = &book.unavailable {
+			return Some(format!(
+				"the evidence quota cannot be read from the log ({why}): no new acceptances"
+			));
+		}
+		book.state.roll(today);
+		let state = &book.state;
+		let near = |count: u64, limit: u64| {
+			count.saturating_mul(100) >= limit.saturating_mul(WARN_PERCENT)
+		};
+		if near(state.owed.len() as u64, MAX_OWED as u64) {
+			return Some(format!(
+				"{} messages wait for their outcomes of the {MAX_OWED} the evidence quota remembers: past it only the accounts below their fair share are accepted",
+				state.owed.len()
+			));
+		}
+		if near(state.within, limits.day_records) {
+			return Some(format!(
+				"the evidence log set aside {} of {} records today: past it new acceptances are refused",
+				state.within, limits.day_records
+			));
+		}
+		state
+			.accounts
+			.iter()
+			.find(|(_, held)| {
+				near(held.records, limits.account_records)
+					|| near(held.bytes, limits.account_kept_bytes)
+			})
+			.map(|(account, held)| {
+				format!(
+					"account {} is near its evidence limits today ({} records, {} bytes kept)",
+					crate::log_id::account(account),
+					held.records,
+					held.bytes
+				)
+			})
+	}
+
+	/// The book, for tests.
+	#[cfg(test)]
+	pub(crate) fn state(&self) -> State {
+		self.book().state.clone()
+	}
+
+	/// Whether the book is waiting to be rebuilt, for tests.
+	#[cfg(test)]
+	pub(crate) fn unavailable(&self) -> bool {
+		self.book().unavailable.is_some()
+	}
+
+	/// Try to rebuild now, for tests.
+	#[cfg(test)]
+	pub(crate) fn retry_now(&self, today: Day) {
+		let mut book = self.book();
+		self.rebuild(&mut book, today);
+	}
+}
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod tests;
+#[cfg(test)]
+#[path = "quota_tests_property.rs"]
+mod tests_property;

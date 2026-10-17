@@ -75,7 +75,7 @@ fn a_forged_warning_never_reaches_a_local_recipient() {
 			submission(&["bob@example.org"]),
 			uuid::Uuid::now_v7(),
 			"alice",
-			&BTreeMap::new(),
+			&crate::smtp::sink::Submission::default(),
 		)
 		.expect("routed");
 	assert_unforged(&delivered(dir.path(), "bob"));
@@ -89,7 +89,7 @@ fn a_forged_warning_never_leaves_in_the_queue() {
 			submission(&["carol@elsewhere.example"]),
 			uuid::Uuid::now_v7(),
 			"alice",
-			&BTreeMap::new(),
+			&crate::smtp::sink::Submission::default(),
 		)
 		.expect("routed");
 	assert_unforged(&queued(dir.path()));

@@ -16,6 +16,7 @@ mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
 pub(crate) mod dns_fake;
+mod evidence_area;
 mod in_stack;
 mod ports;
 mod queue_area;
@@ -79,6 +80,8 @@ pub enum CheckArea {
 	/// The containers' memory limits fit the host, and the message memory
 	/// budget fits the mail container's.
 	Resources,
+	/// The evidence verifies; transactional mail is not held.
+	Evidence,
 }
 
 impl CheckArea {
@@ -97,6 +100,7 @@ impl CheckArea {
 		CheckArea::Subid,
 		CheckArea::Warmup,
 		CheckArea::Resources,
+		CheckArea::Evidence,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -115,6 +119,7 @@ impl CheckArea {
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
 			CheckArea::Resources => "resources",
+			CheckArea::Evidence => "evidence",
 		}
 	}
 }
@@ -260,6 +265,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
 		CheckArea::Resources => resources_area::check(ctx).await,
+		CheckArea::Evidence => evidence_area::check(ctx).await,
 	}
 }
 

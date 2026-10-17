@@ -18,6 +18,11 @@ use crate::util::address_reason;
 #[derive(Serialize)]
 pub struct Queued {
 	queued: String,
+	/// The class the server granted.
+	class: crate::evidence::MailClass,
+	/// Recipients dropped because they are on a suppression list.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	suppressed: Vec<String>,
 }
 
 /// The message the cap should be enforced against ("too many new
@@ -30,6 +35,7 @@ pub async fn send(
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<SendRequest>,
 ) -> Result<Json<Queued>, ApiError> {
+	let explicit_class = request.class()?;
 	let recipients = request.recipients();
 	if recipients.is_empty() {
 		return Err(ApiError::invalid_input(
@@ -155,12 +161,6 @@ pub async fn send(
 		return Err(ApiError::mailbox_full(&full));
 	}
 	let save_sent = request.save_sent();
-	// Clone the bytes so the Sent copy can be written after the
-	// routing sink takes ownership of the original. The clone is
-	// bounded by the message body, which is small in practice; a
-	// copy at the routing boundary would tie the saver to the
-	// sink's lifetime.
-	let sent_copy = data.clone();
 	// The same outbound path as SMTP submission: DKIM for remote mail,
 	// local recipients straight to their mailboxes. The `extra` correlation
 	// map is already validated and bounded in the request body, and the
@@ -177,11 +177,31 @@ pub async fn send(
 		sender_verified: true,
 		no_dsn: Vec::new(),
 	};
+	let mut message = message;
+	let sources = state.class_sources(Some(&auth), &account, explicit_class);
+	let prepared =
+		crate::evidence::submission::prepare(&mut message, sources, Some(state.data_dir()))
+			.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
+	if message.recipients.is_empty() {
+		return Err(ApiError::marketing_refused(
+			"every recipient is on the suppression list",
+		));
+	}
+	// Clone the bytes so the Sent copy can be written after the routing
+	// sink takes ownership of the original.
+	let sent_copy = prepared
+		.class
+		.allows_sent_copy()
+		.then(|| message.data.clone());
 	let recipient_count = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
 	let charge = budget
 		.charge(recipient_count, now)
 		.map_err(|_| rate_limited())?;
-	let id = match state.submit(&account, message, &extra) {
+	let submission = crate::smtp::sink::Submission {
+		extra,
+		class: prepared.class,
+	};
+	let id = match state.submit(&account, message, &submission) {
 		Ok(id) => id,
 		Err(error) => {
 			charge.refund();
@@ -191,15 +211,21 @@ pub async fn send(
 				SinkError::ScanUnavailable => ApiError::scan_unavailable(),
 				SinkError::ScanTooLarge => ApiError::scan_too_large(),
 				SinkError::Unavailable(_) => ApiError::internal(),
+				SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
 			});
 		}
 	};
 	// Save a copy of what the account sent into its `Sent` folder
 	// when the per-request and account-wide settings admit it. The
 	// default is "on"; the request may opt out.
-	state.save_sent_copy(&account, &sent_copy, save_sent);
+	// Transactional mail is never copied to Sent.
+	if let Some(sent_copy) = sent_copy {
+		state.save_sent_copy(&account, &sent_copy, save_sent);
+	}
 	Ok(Json(Queued {
 		queued: id.to_string(),
+		class: prepared.class,
+		suppressed: prepared.suppressed,
 	}))
 }
 

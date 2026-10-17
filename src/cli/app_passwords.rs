@@ -45,6 +45,10 @@ pub enum AppPasswordCli {
 		/// `off` opts it out (a relay, a read-only phone).
 		#[arg(long, value_name = "STATE")]
 		save_sent: Option<String>,
+		/// The class granted to mail sent with this credential
+		/// (`transactional`, `marketing`, `personal`).
+		#[arg(long, value_name = "CLASS", value_parser = crate::evidence::class::parse_arg)]
+		class: Option<crate::evidence::MailClass>,
 	},
 	/// Replace an app password's secret and print the new one once.
 	///
@@ -144,6 +148,7 @@ pub(super) fn create(
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
 	save_sent: Option<String>,
+	class: Option<crate::evidence::MailClass>,
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -193,6 +198,17 @@ pub(super) fn create(
 		"account": account, "label": label, "secret": secret,
 		"expires_at": expires_at, "ip_cidr": ip_cidr, "save_sent": save_sent,
 	});
+	// Bound before the credential exists: a binding to a hash nobody holds
+	// is inert, a credential without its binding would send as personal.
+	if let Some(class) = class {
+		let key = crate::evidence::bindings::app_password_key(&hash);
+		if let Err(error) = crate::evidence::bindings::update(&config.data_dir, |bindings| {
+			bindings.credentials.insert(key, class);
+		}) {
+			super::style::error(format_args!("binding the class: {error}"));
+			return ExitCode::FAILURE;
+		}
+	}
 	let app = AppPassword {
 		label: label.to_string(),
 		hash,
@@ -338,8 +354,9 @@ pub(super) fn run(
 			expires_at,
 			ip_cidr,
 			save_sent,
+			class,
 		} => create(
-			config, &account, &label, expires_at, ip_cidr, save_sent, json, out,
+			config, &account, &label, expires_at, ip_cidr, save_sent, class, json, out,
 		),
 		AppPasswordCli::Rotate {
 			account,

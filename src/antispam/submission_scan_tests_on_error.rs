@@ -1,8 +1,6 @@
 //! `clamd_on_error` on submissions: with `defer`, a scan that could not run
 //! asks the client to retry instead of sending the message unscanned.
 
-use std::collections::BTreeMap;
-
 use super::*;
 use crate::config::ClamdOnError;
 use crate::smtp::sink::MemorySink;
@@ -28,7 +26,12 @@ fn submit_with_clamd_down(on_error: ClamdOnError) -> (Result<(), String>, usize)
 	let clamd = Arc::new(ClamdHook::new(dir.path().join("clamd.sock")).with_on_error(on_error));
 	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None).expect("sink");
 	let outcome = sink
-		.submit(message(), uuid::Uuid::now_v7(), "alice", &BTreeMap::new())
+		.submit(
+			message(),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&crate::smtp::sink::Submission::default(),
+		)
 		.map_err(|error| error.smtp_reply().to_string());
 	(outcome, inner.messages().len())
 }
@@ -56,7 +59,12 @@ fn submit_too_large(on_error: ClamdOnError, clamd: ClamdHook) -> (Result<(), Str
 	let clamd = Arc::new(clamd.with_on_error(on_error));
 	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None).expect("sink");
 	let outcome = sink
-		.submit(message(), uuid::Uuid::now_v7(), "alice", &BTreeMap::new())
+		.submit(
+			message(),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&crate::smtp::sink::Submission::default(),
+		)
 		.map_err(|error| error.smtp_reply().to_string());
 	(outcome, inner.messages().len())
 }

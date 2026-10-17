@@ -45,6 +45,7 @@ pub(super) fn open_warmup(
 /// Build the queue worker and spawn it, unless outbound delivery is held.
 /// A resolver or MTA-STS fetcher that cannot be built, or an unreadable
 /// spool or suppression list, stops the start.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_queue_worker(
 	config: &Config,
 	crypto: MessageCrypto,
@@ -53,6 +54,7 @@ pub(super) fn spawn_queue_worker(
 	metrics: &Arc<Metrics>,
 	webhook: Option<&Arc<crate::webhook::Webhook>>,
 	warmup: Arc<crate::queue::warmup::Warmup>,
+	evidence: Arc<crate::evidence::service::EvidenceService>,
 ) -> std::io::Result<()> {
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
 	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
@@ -87,7 +89,8 @@ pub(super) fn spawn_queue_worker(
 		&config.data_dir,
 		config.delivery_log_days(),
 	))
-	.with_warmup(warmup);
+	.with_warmup(warmup)
+	.with_evidence(evidence);
 	if let Some(webhook) = webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

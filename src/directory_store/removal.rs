@@ -162,6 +162,7 @@ fn walk_and_remove(dir: &Path, visited: &mut u64) -> std::io::Result<()> {
 /// membership test stays O(1) per envelope.
 fn process_spool_queue(
 	spool: &FsSpool,
+	data_dir: &Path,
 	addresses: &[String],
 	policy: QueuePolicy,
 ) -> std::io::Result<(u32, u32)> {
@@ -178,7 +179,13 @@ fn process_spool_queue(
 			.any(|address| entry.envelope.reverse_path.eq_ignore_ascii_case(address));
 		match (matches, policy) {
 			(true, QueuePolicy::Discard) => {
-				spool.remove(id)?;
+				// A message that kept evidence ends on record, not by vanishing
+				// from the queue; an entry still owed an outcome stays.
+				crate::evidence::cancel::remove(
+					spool,
+					&crate::evidence::service::root_of(data_dir),
+					id,
+				)?;
 				discarded += 1;
 			}
 			(true, QueuePolicy::Drain) => left += 1,
@@ -232,11 +239,18 @@ pub async fn remove_account(
 		.unwrap_or_default();
 
 	let (queued_messages_discarded, queued_messages_left) =
-		process_spool_queue(spool, &addresses, queue).map_err(StoreError::Io)?;
+		process_spool_queue(spool, data_dir, &addresses, queue).map_err(StoreError::Io)?;
 
 	let masked_addresses = store.remove_all_masked(name)?;
 
 	let app_passwords = store.remove_all_app_passwords(name)?;
+
+	// A recreated account with the same name must not inherit the class
+	// the previous owner's mail was granted.
+	crate::evidence::bindings::update(data_dir, |bindings| {
+		bindings.accounts.remove(&name.to_ascii_lowercase());
+	})
+	.map_err(StoreError::Io)?;
 
 	let suppression = SuppressionList::open(data_dir).map_err(StoreError::Io)?;
 	let suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
@@ -302,3 +316,7 @@ mod tests;
 #[cfg(test)]
 #[path = "removal_tests_containment.rs"]
 mod containment_tests;
+
+#[cfg(test)]
+#[path = "removal_tests_class.rs"]
+mod class_tests;

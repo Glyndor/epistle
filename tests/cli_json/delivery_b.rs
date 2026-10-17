@@ -27,6 +27,7 @@ fn record(offset: u64, id: Uuid, recipient: &str, outcome: DeliveryOutcome) -> D
 		reply: Some("250 2.0.0 OK".into()),
 		attempt: 1,
 		extra: BTreeMap::new(),
+		class: epistle::evidence::MailClass::default(),
 	}
 }
 

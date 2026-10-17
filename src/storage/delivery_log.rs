@@ -124,6 +124,14 @@ pub struct DeliveryRecord {
 	/// tag.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub extra: BTreeMap<String, String>,
+	/// The class of the message; absent for `personal` and in every record
+	/// written before the field existed.
+	#[serde(default, skip_serializing_if = "is_personal")]
+	pub class: crate::evidence::MailClass,
+}
+
+fn is_personal(class: &crate::evidence::MailClass) -> bool {
+	*class == crate::evidence::MailClass::Personal
 }
 
 /// The on-disk delivery log under `<data_dir>/deliverylog/`. A no-op when

@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::smtp::session::AcceptedMessage;
-use crate::smtp::sink::{MessageSink, SinkError};
+use crate::smtp::sink::{MessageSink, SinkError, Submission};
 use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
@@ -19,90 +18,28 @@ use super::spool_permissions::{
 	FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir,
 };
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
+#[path = "spool_envelope.rs"]
+mod envelope;
+use envelope::LAST_ERROR_MAX;
+pub use envelope::{Envelope, PendingOutcome};
 
-/// Envelope metadata stored next to the raw message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Envelope {
-	/// Spool id (UUID v7: time-ordered).
-	pub id: Uuid,
-	/// SMTP reverse-path (empty for bounces).
-	pub reverse_path: String,
-	/// Accepted recipients.
-	pub recipients: Vec<String>,
-	/// Failed delivery attempts so far.
-	#[serde(default)]
-	pub attempts: u32,
-	/// Epoch seconds before which delivery must not be retried.
-	#[serde(default)]
-	pub next_attempt: u64,
-	/// REQUIRETLS (RFC 8689): onward delivery must use verified TLS.
-	#[serde(default)]
-	pub require_tls: bool,
-	/// Recipients that suppress failure DSNs (`NOTIFY=NEVER`, RFC 3461).
-	#[serde(default)]
-	pub no_dsn: Vec<String>,
-	/// Whether the "delivery delayed" warning DSN has already been sent, so it
-	/// is sent at most once (RFC 5321 §4.5.4.1).
-	#[serde(default)]
-	pub delay_warned: bool,
-	/// Epoch seconds at which an operator put the entry on hold. A held entry
-	/// is never attempted until released. `None` for an entry in the normal
-	/// flow, which is also how every spool file written before this field
-	/// existed loads.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub held: Option<u64>,
-	/// Seconds the entry has spent on hold in earlier hold/release cycles. The
-	/// give-up window counts message age minus this, so a message an operator
-	/// parked for a week is not bounced on its first attempt after release.
-	#[serde(default, skip_serializing_if = "is_zero")]
-	pub held_secs: u64,
-	/// Reason the most recent delivery attempt failed, for `queue show`.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub last_error: Option<String>,
-	/// Delivery state per recipient (see [`RecipientState`]). Empty in every
-	/// envelope written before it existed, which reads as all pending.
-	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-	pub recipient_state: BTreeMap<String, RecipientState>,
-	/// The local account that submitted the message, when the submission went
-	/// through one of this server's submission paths (SMTP after AUTH, the
-	/// API, JMAP). `None` when the sender is an external relay or the entry
-	/// was written before this field existed, which the delivery log records
-	/// as "submitted by an unknown account".
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub account: Option<String>,
-	/// The caller-supplied correlation map the API allows on a `send`. Kept
-	/// alongside the message in the envelope so the delivery log and the
-	/// delivery webhooks can copy it onto every record they emit, but never
-	/// written into the message itself (the field is a server-side tag, not
-	/// a header). Empty in every envelope written before this field existed.
-	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-	pub extra: BTreeMap<String, String>,
-}
+/// Writes the evidence acceptance record for the bytes about to be queued.
+pub type EvidenceHook<'a> = &'a dyn Fn(&[u8]) -> std::io::Result<()>;
 
-fn is_zero(value: &u64) -> bool {
-	*value == 0
-}
-
-/// Longest `last_error` kept in the envelope: remote replies can be long and
-/// the field is for an operator's eyes only.
-const LAST_ERROR_MAX: usize = 512;
-
-impl Envelope {
-	/// Put the entry on hold as of `now`. Holding an entry that is already
-	/// held keeps the original start so the held time is not shortened.
-	pub fn hold(&mut self, now: u64) {
-		if self.held.is_none() {
-			self.held = Some(now);
-		}
-	}
-
-	/// Release a held entry as of `now`, folding the time spent on hold into
-	/// [`Envelope::held_secs`]. A no-op for an entry that is not held.
-	pub fn release(&mut self, now: u64) {
-		if let Some(since) = self.held.take() {
-			self.held_secs = self.held_secs.saturating_add(now.saturating_sub(since));
-		}
-	}
+/// How [`FsSpool::store_with`] stores one message.
+pub struct StoreOptions<'a> {
+	/// The submitting account, `None` for relayed mail.
+	pub account: Option<&'a str>,
+	/// The caller-supplied correlation map.
+	pub extra: &'a BTreeMap<String, String>,
+	/// The class the server granted.
+	pub class: crate::evidence::MailClass,
+	/// Writes the evidence acceptance record for the queued bytes; `None`
+	/// when no evidence is kept for this message.
+	pub evidence: Option<EvidenceHook<'a>>,
+	/// Days the acceptance is kept, which its outcomes inherit; `0` when no
+	/// evidence is kept.
+	pub retain_days: u32,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -294,7 +231,35 @@ impl FsSpool {
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
 	) -> std::io::Result<Uuid> {
-		let account = account
+		self.store_with(
+			message,
+			id,
+			&StoreOptions {
+				account,
+				extra,
+				class: crate::evidence::MailClass::Personal,
+				evidence: None,
+				retain_days: 0,
+			},
+		)
+	}
+
+	/// Store `message` under `id` with `options`. Both files are written and
+	/// synced under `tmp/` first. Then the evidence hook, when there is one,
+	/// runs on the exact bytes queued: it writes the acceptance record, and
+	/// only when it succeeds are the files renamed into `new/`, envelope last,
+	/// where the worker can see them. A hook failure removes the staged files
+	/// and is returned, so nothing is queued that has no record. A crash
+	/// between the hook and the renames leaves the staged files for
+	/// [`FsSpool::leftovers`] to find at the next start.
+	pub fn store_with(
+		&self,
+		message: &AcceptedMessage,
+		id: Uuid,
+		options: &StoreOptions<'_>,
+	) -> std::io::Result<Uuid> {
+		let account = options
+			.account
 			.filter(|value| !value.is_empty())
 			.map(str::to_string);
 		let envelope = Envelope {
@@ -311,7 +276,12 @@ impl FsSpool {
 			last_error: None,
 			recipient_state: BTreeMap::new(),
 			account,
-			extra: extra.clone(),
+			extra: options.extra.clone(),
+			class: options.class,
+			evidence: options.evidence.is_some(),
+			retain_days: options.retain_days,
+			outcomes_pending: Vec::new(),
+			cancelling: None,
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;
@@ -325,7 +295,18 @@ impl FsSpool {
 			.crypto
 			.encode_with_aad(&envelope_bytes, id.as_bytes())?;
 		write_sync(&tmp_envelope, &envelope_sealed)?;
-
+		if let Some(record) = options.evidence
+			&& let Err(error) = record(&message.data)
+		{
+			let _ = fs::remove_file(&tmp_envelope);
+			let _ = fs::remove_file(&tmp_message);
+			return Err(error);
+		}
+		#[cfg(test)]
+		if std::env::var_os("EPISTLE_TEST_ABORT_AFTER_EVIDENCE").is_some() {
+			// The crash test: die between the evidence record and the queue.
+			std::process::abort();
+		}
 		fs::rename(&tmp_message, &final_message)?;
 		fs::rename(&tmp_envelope, &final_envelope)?;
 		Ok(id)
@@ -398,10 +379,17 @@ impl FsSpool {
 		let _guard = self.lock()?;
 		let mut envelope = self.read_envelope_unlocked(id)?;
 		edit(&mut envelope);
+		self.write_envelope_unlocked(id, &envelope)?;
+		Ok(envelope)
+	}
+
+	/// Replace the envelope file of `id` with `envelope`, crash-safely. The
+	/// caller holds the spool lock.
+	fn write_envelope_unlocked(&self, id: Uuid, envelope: &Envelope) -> std::io::Result<()> {
 		let tmp = self.path_in(
 			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
 		)?;
-		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
+		let bytes = serde_json::to_vec(envelope).map_err(std::io::Error::other)?;
 		let sealed = self.crypto.encode_with_aad(&bytes, id.as_bytes())?;
 		let written = write_sync(&tmp, &sealed)
 			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
@@ -409,7 +397,7 @@ impl FsSpool {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);
 		}
-		Ok(envelope)
+		Ok(())
 	}
 
 	/// Read an envelope file's bytes and decode it. The returned flag tells
@@ -521,18 +509,93 @@ impl FsSpool {
 	}
 
 	/// Remove a spooled message after successful processing.
+	///
+	/// An entry whose outcomes the evidence log has not taken yet is not
+	/// removed: that would erase the only trace of a delivery that was made.
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
+		self.remove_with(id, |_, _| Ok(())).map(|_| ())
+	}
+
+	/// Run `work` while the queue holds nothing under `id`, with the spool's
+	/// lock kept for as long as it runs, so a retry cannot queue the message
+	/// between the check and the work. Only a file that is not there is an
+	/// entry that is not there: a file that cannot be looked at (a link in its
+	/// place, permissions, a fault) is an entry that may be, and the work is not
+	/// done. Nothing is decoded, so an envelope that cannot be read still counts.
+	pub fn while_absent<T>(
+		&self,
+		id: Uuid,
+		work: impl FnOnce() -> std::io::Result<T>,
+	) -> std::io::Result<T> {
 		let _guard = self.lock()?;
+		for ext in [MessageExt::Json, MessageExt::Eml] {
+			match fs::symlink_metadata(self.entry_file(SpoolDir::New, id, ext)?) {
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+				Err(error) => return Err(error),
+				Ok(_) => {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::AlreadyExists,
+						"the queue holds this entry",
+					));
+				}
+			}
+		}
+		work()
+	}
+
+	/// [`remove`](Self::remove), calling `before` with the envelope as it is
+	/// under the spool's lock, and removing the entry only if it returns `Ok`.
+	/// Reading the envelope, deciding and unlinking are one step: nothing can
+	/// change the entry between them, so what `before` writes about it is what
+	/// is removed. Returns the envelope that was removed.
+	///
+	/// The entry is put on hold before `before` runs, and stays on hold unless
+	/// `before` fails in a way that says it wrote nothing: what `before` records
+	/// about the entry must not be contradicted by a worker delivering it in the
+	/// meantime, and a failure that leaves it unknown whether something was
+	/// written must not release it. `before` gets the envelope as it was read
+	/// (with its own hold, if it had one) and a flag it raises before each write
+	/// and lowers only when a failure says nothing was written.
+	pub fn remove_with(
+		&self,
+		id: Uuid,
+		before: impl FnOnce(&Envelope, &std::cell::Cell<bool>) -> std::io::Result<()>,
+	) -> std::io::Result<Envelope> {
+		let _guard = self.lock()?;
+		let envelope = self.read_envelope_unlocked(id)?;
+		if !envelope.outcomes_pending.is_empty() {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::ResourceBusy,
+				"the entry has evidence outcomes waiting to be written: it stays until they are",
+			));
+		}
+		let mut held = envelope.clone();
+		let now = crate::storage::delivery_log::now_epoch();
+		held.hold(now);
+		held.cancelling.get_or_insert(now);
+		if held.held != envelope.held || held.cancelling != envelope.cancelling {
+			self.write_envelope_unlocked(id, &held)?;
+		}
+		let may_have_written = std::cell::Cell::new(false);
+		if let Err(error) = before(&envelope, &may_have_written) {
+			if !may_have_written.get() && held != envelope {
+				// Nothing was written: the entry goes back as it was.
+				if let Err(restore) = self.write_envelope_unlocked(id, &envelope) {
+					tracing::error!(%id, %restore, "an entry kept after a refused removal stays on hold");
+				}
+			}
+			return Err(error);
+		}
 		// Envelope first: a message file without an envelope is invisible.
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Eml)?)?;
-		Ok(())
+		Ok(envelope)
 	}
 }
 
 impl MessageSink for FsSpool {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.submit(message, Uuid::now_v7(), "", &BTreeMap::new())
+		self.submit(message, Uuid::now_v7(), "", &Submission::default())
 	}
 
 	fn submit(
@@ -540,136 +603,44 @@ impl MessageSink for FsSpool {
 		message: AcceptedMessage,
 		queue_id: Uuid,
 		account: &str,
-		extra: &BTreeMap<String, String>,
+		submission: &Submission,
 	) -> Result<(), SinkError> {
-		self.store_as(&message, queue_id, Some(account), extra)
+		// The spool alone writes no acceptance: mail whose evidence is
+		// mandatory goes through the routing sink that does.
+		if submission.class.evidence_mandatory() {
+			return Err(SinkError::EvidenceUnavailable(
+				"the spool keeps no evidence".into(),
+			));
+		}
+		let options = StoreOptions {
+			account: Some(account),
+			extra: &submission.extra,
+			class: submission.class,
+			evidence: None,
+			retain_days: 0,
+		};
+		self.store_with(&message, queue_id, &options)
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
 }
 
+#[path = "spool_leftovers.rs"]
+pub(super) mod leftovers;
+
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn sample_message() -> AcceptedMessage {
-		AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: vec!["bob@example.org".into()],
-			data: b"Subject: hi\r\n\r\nhello\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			sender_verified: false,
-			no_dsn: Vec::new(),
-		}
-	}
-
-	#[test]
-	fn stores_and_loads_roundtrip() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-
-		let id = spool
-			.store(&sample_message(), None, &BTreeMap::new())
-			.expect("store");
-		let entry = spool.load(id).expect("load");
-
-		assert_eq!(entry.envelope.id, id);
-		assert_eq!(entry.envelope.reverse_path, "alice@example.org");
-		assert_eq!(
-			entry.envelope.recipients,
-			vec!["bob@example.org".to_string()]
-		);
-		assert_eq!(entry.data, sample_message().data);
-	}
-
-	#[test]
-	fn store_preserves_require_tls() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-		let mut message = sample_message();
-		message.require_tls = true;
-		let id = spool
-			.store(&message, None, &BTreeMap::new())
-			.expect("store");
-		assert!(spool.load(id).expect("load").envelope.require_tls);
-	}
-
-	#[test]
-	fn list_returns_ids_oldest_first() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-
-		let first = spool
-			.store(&sample_message(), None, &BTreeMap::new())
-			.expect("store first");
-		let second = spool
-			.store(&sample_message(), None, &BTreeMap::new())
-			.expect("store second");
-
-		assert_eq!(spool.list().expect("list"), vec![first, second]);
-	}
-
-	#[test]
-	fn remove_deletes_both_files() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-
-		let id = spool
-			.store(&sample_message(), None, &BTreeMap::new())
-			.expect("store");
-		spool.remove(id).expect("remove");
-
-		assert!(spool.list().expect("list").is_empty());
-		assert!(spool.load(id).is_err());
-	}
-
-	#[test]
-	fn load_unknown_id_fails() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-		assert!(spool.load(Uuid::now_v7()).is_err());
-	}
-
-	#[test]
-	fn list_ignores_foreign_files() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-		fs::write(dir.path().join("spool/new/readme.txt"), b"not mail").expect("write");
-		fs::write(dir.path().join("spool/new/bad.json"), b"{}").expect("write");
-		assert!(spool.list().expect("list").is_empty());
-	}
-
-	#[test]
-	fn incomplete_tmp_files_are_invisible() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-		// Simulate a crash: files in tmp/ never renamed.
-		fs::write(dir.path().join("spool/tmp/crash.eml"), b"partial").expect("write");
-		assert!(spool.list().expect("list").is_empty());
-	}
-
-	#[test]
-	fn sink_implementation_stores_messages() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = FsSpool::open(dir.path()).expect("open spool");
-		spool.deliver(sample_message()).expect("deliver");
-		assert_eq!(spool.list().expect("list").len(), 1);
-	}
-
-	#[test]
-	fn open_fails_on_unwritable_root() {
-		let result = FsSpool::open(Path::new("/proc/no-such-dir"));
-		assert!(result.is_err());
-	}
-}
+#[path = "spool_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "spool_tests_edit.rs"]
 mod tests_edit;
 
 #[cfg(all(test, unix))]
+#[path = "spool_tests_absent.rs"]
+mod tests_absent;
+
+#[cfg(test)]
 #[path = "spool_tests_perms.rs"]
 mod tests_perms;
 

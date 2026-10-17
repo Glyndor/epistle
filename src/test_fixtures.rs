@@ -114,3 +114,49 @@ pub(crate) fn printable_ascii_with(odd: char, len: usize) -> String {
 	text.push_str(&printable_ascii(len - before - 1));
 	text
 }
+
+/// A loopback port a test can hand to a server that binds it by itself.
+///
+/// Binding port 0 and dropping the socket gives the number back to the
+/// kernel, and a listener another test opens on port 0 in the meantime can be
+/// given the same number: the test then talks to somebody else's server (a TLS
+/// listener answered a plain HTTP request with an alert). These ports come
+/// from a range below the one the kernel hands out for port 0, each at most
+/// once in the process, so the only way to meet one is to be given it here.
+pub(crate) fn free_port() -> u16 {
+	use std::sync::atomic::{AtomicU16, Ordering};
+	/// Below the ephemeral range (`ip_local_port_range` starts at 32768).
+	const FIRST: u16 = 20_000;
+	const LAST: u16 = 29_999;
+	// Where each process starts, so that two test runs at once do not walk the
+	// same ports: a few ports of a range of ten thousand, from the process id
+	// and the clock.
+	static NEXT: LazyLock<AtomicU16> = LazyLock::new(|| {
+		let nanos = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map_or(0, |since| u64::from(since.subsec_nanos()));
+		let seed = nanos ^ u64::from(std::process::id()).wrapping_mul(0x9e37_79b9);
+		AtomicU16::new(FIRST + u16::try_from(seed % u64::from(LAST - FIRST)).unwrap_or(0))
+	});
+	for _ in 0..(LAST - FIRST) {
+		let port = NEXT.fetch_add(1, Ordering::SeqCst);
+		let port = FIRST + (port - FIRST) % (LAST - FIRST);
+		if std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
+			return port;
+		}
+	}
+	panic!("no free port in the range kept for tests");
+}
+
+#[cfg(test)]
+mod free_port_tests {
+	use super::free_port;
+
+	#[test]
+	fn ports_are_unique_free_and_outside_the_range_the_kernel_hands_out() {
+		let ports: Vec<u16> = (0..50).map(|_| free_port()).collect();
+		let unique: std::collections::HashSet<_> = ports.iter().collect();
+		assert_eq!(unique.len(), ports.len());
+		assert!(ports.iter().all(|port| (20_000..30_000).contains(port)));
+	}
+}

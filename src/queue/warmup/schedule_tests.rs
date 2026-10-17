@@ -27,6 +27,7 @@ fn day_of(attempted: u32, deferred: u32, spam: u32) -> DayTally {
 			reply: Some(reply.into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		});
 	}
 	tally
@@ -244,6 +245,7 @@ fn a_bad_day_names_the_accounts_behind_it() {
 			reply: Some("550 5.1.1 unknown".into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		});
 	}
 	let mut state = state(Some(50), 50);

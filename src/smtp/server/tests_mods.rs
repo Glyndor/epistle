@@ -43,6 +43,10 @@ mod tests_trace;
 mod tests_urlbl;
 
 #[cfg(test)]
+#[path = "server_tests_class.rs"]
+mod server_tests_class;
+
+#[cfg(test)]
 #[path = "server_tests_save_sent.rs"]
 mod tests_save_sent;
 

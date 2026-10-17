@@ -169,8 +169,14 @@ pub(super) fn run(
 			if let Err(code) = super::prompt::confirm_destructive("queue remove", &question, yes) {
 				return code;
 			}
-			match spool.remove(id) {
-				Ok(()) => {
+			// An entry that kept evidence ends on record, not by vanishing: the
+			// cancellation is recorded and the entry removed as one step.
+			match crate::evidence::cancel::remove(
+				&spool,
+				&crate::evidence::service::root_of(data_dir),
+				id,
+			) {
+				Ok(envelope) => {
 					// Record the cancel for every recipient that was still
 					// pending. Already-delivered recipients are not touched
 					// (their `delivered` record is the only thing the log
@@ -192,6 +198,7 @@ pub(super) fn run(
 									reply: state.last_error.clone(),
 									attempt: state.attempts,
 									extra: BTreeMap::new(),
+									class: envelope.class,
 								};
 								if let Err(error) = log.append(&record) {
 									tracing::warn!(%id, %error, "delivery log write failed");
@@ -493,3 +500,7 @@ mod tests_destinations;
 #[cfg(test)]
 #[path = "queue_tests_webhook.rs"]
 mod tests_webhook;
+
+#[cfg(test)]
+#[path = "queue_tests_evidence.rs"]
+mod tests_evidence;

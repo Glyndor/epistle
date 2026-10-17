@@ -16,6 +16,8 @@ mod attempt;
 mod claims;
 #[path = "worker_conversation.rs"]
 mod conversation;
+#[path = "worker_evidence.rs"]
+mod evidence;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -72,6 +74,8 @@ pub struct Worker {
 	/// (`[storage] delivery_log_days = 0`); the writer is then a no-op
 	/// and no records are produced.
 	delivery_log: Option<crate::storage::DeliveryLog>,
+	/// Records the outcomes of messages that keep evidence.
+	evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
 	/// How many conversations run at once, overall and per domain.
 	limits: super::limits::Limits,
 	/// Recipients in conversation, and the slots in use.
@@ -114,6 +118,7 @@ impl Worker {
 			schedule: super::RetrySchedule::default(),
 			jitter: super::schedule::random_factor,
 			delivery_log: None,
+			evidence: None,
 			limits: super::limits::Limits::default(),
 			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
@@ -267,6 +272,11 @@ impl Worker {
 		if test_clock != 0 {
 			return test_clock;
 		}
+		// A message ages by the cross-checked time: a clock that jumped
+		// ahead must not expire mail that only waited.
+		if let Some(evidence) = &self.evidence {
+			return evidence.time().read().cautious();
+		}
 		SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.map(|d| d.as_secs())
@@ -353,7 +363,7 @@ impl Worker {
 	) -> std::io::Result<()> {
 		let retry_now = conversation.retry_now();
 		let slow = self.slow_down(entry, conversation, now);
-		self.spool.update_envelope(id, |envelope| {
+		let apply = |envelope: &mut crate::storage::Envelope| {
 			for (recipient, result) in &conversation.results {
 				let mut state = envelope.recipient_state(recipient);
 				if let Some(capped) = conversation.capped_for(recipient) {
@@ -409,9 +419,51 @@ impl Worker {
 					}
 				}
 				envelope.set_recipient_state(recipient, state);
+				// What this delivery owes the evidence log is saved with it.
+				let kind = match result {
+					Ok(()) => Some(crate::evidence::record::OutcomeKind::Delivered),
+					Err(DeliveryError::Permanent(_)) => {
+						Some(crate::evidence::record::OutcomeKind::Bounced)
+					}
+					Err(_) => None,
+				};
+				if let Some(kind) = kind
+					&& !retry_now.contains(recipient)
+				{
+					let reason = match result {
+						Err(DeliveryError::Permanent(reason)) => Some(reason.as_str()),
+						_ => None,
+					};
+					evidence::intend(
+						envelope,
+						&evidence::Recorded {
+							recipient,
+							result: kind,
+							attempt: reports::attempt_of(entry, recipient),
+							remote: Some(conversation.remote.as_deref().unwrap_or("-")),
+							reply: reason,
+							facts: (kind == crate::evidence::record::OutcomeKind::Delivered)
+								.then_some(&conversation.facts),
+						},
+					);
+				}
 			}
 			envelope.settle();
-		})?;
+		};
+		match self.spool.update_envelope(id, apply) {
+			Ok(_) => {}
+			// An operator took the entry out while it was in conversation. The
+			// delivery was made all the same: what it owes the evidence log is
+			// written now, from the entry as it was, so the log does not say
+			// the message was never delivered.
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+				let mut gone = entry.envelope.clone();
+				apply(&mut gone);
+				self.write_owed(&gone);
+				return Err(error);
+			}
+			Err(error) => return Err(error),
+		}
 		if let Some(slow) = slow {
 			let mut holds = self.holds();
 			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
@@ -464,7 +516,12 @@ impl Worker {
 		let envelope = self.spool.load_envelope(id)?;
 		let pending = envelope.pending();
 		if pending.is_empty() {
-			return self.spool.remove(id);
+			// An outcome the log has not taken keeps the entry: it is
+			// removed when the outcome is written.
+			return match envelope.outcomes_pending.is_empty() {
+				true => self.spool.remove(id),
+				false => Ok(()),
+			};
 		}
 		let age = pending
 			.iter()
@@ -525,6 +582,10 @@ mod tests_webhook;
 #[cfg(test)]
 #[path = "worker_tests_schedule.rs"]
 mod tests_schedule;
+
+#[cfg(test)]
+#[path = "worker_tests_evidence.rs"]
+mod tests_evidence;
 
 #[cfg(test)]
 #[path = "worker_tests_delivery_log.rs"]

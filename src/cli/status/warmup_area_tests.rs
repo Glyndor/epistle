@@ -22,6 +22,7 @@ fn log_gmail(dir: &Path, time: u64, count: u32) {
 			reply: Some("250 OK".into()),
 			attempt: 1,
 			extra: Default::default(),
+			class: Default::default(),
 		})
 		.expect("log");
 	}

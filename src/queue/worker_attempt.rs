@@ -149,6 +149,15 @@ impl Worker {
 				crate::tlsrpt::sessions::record(dir, self.now_epoch(), &attempt, outcome);
 			}
 		}
+		let mut facts = std::mem::take(&mut trace.facts);
+		facts.mta_sts = route.fetched.map(|policy| {
+			match policy.mode {
+				crate::mtasts::Mode::Enforce => "enforce",
+				crate::mtasts::Mode::Testing => "testing",
+				crate::mtasts::Mode::None => "none",
+			}
+			.to_string()
+		});
 		match result {
 			Ok(results) => (
 				Conversation {
@@ -157,6 +166,7 @@ impl Worker {
 					slowed: None,
 					held_until: None,
 					capped: None,
+					facts,
 				},
 				false,
 			),

@@ -95,6 +95,7 @@ impl Worker {
 	/// Queue a job for every due recipient of every entry that has no jobs
 	/// in `schedule` yet, grouped by domain.
 	pub(super) fn scan<'a>(&'a self, schedule: &mut Schedule<'a>) -> std::io::Result<()> {
+		self.write_waiting_outcomes();
 		let now = self.now_epoch();
 		// Read every entry first: the holds come from all of them, entries
 		// that are not due included, before any is scheduled.

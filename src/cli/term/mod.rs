@@ -281,7 +281,7 @@ pub(crate) fn is_invisible_format(c: char) -> bool {
 pub(crate) fn sanitize(text: &str) -> String {
 	text.chars()
 		.flat_map(|c| {
-			if c.is_control() || is_invisible_format(c) {
+			if c.is_control() || crate::evidence::hidden::is_hidden(c) {
 				c.escape_default().collect::<Vec<_>>()
 			} else {
 				vec![c]

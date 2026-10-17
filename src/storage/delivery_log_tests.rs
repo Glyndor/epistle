@@ -19,6 +19,7 @@ fn sample_record(time: u64, recipient: &str, outcome: DeliveryOutcome) -> Delive
 		reply: Some("250 OK".into()),
 		attempt: 1,
 		extra: BTreeMap::new(),
+		class: Default::default(),
 	}
 }
 
@@ -219,6 +220,7 @@ fn records_round_trip_through_serde_with_the_documented_fields() {
 		reply: None,
 		attempt: 0,
 		extra,
+		class: Default::default(),
 	};
 	let json = serde_json::to_value(&record).expect("value");
 	assert_eq!(json["time"], 1_700_000_000u64);
@@ -261,6 +263,7 @@ fn a_record_with_no_extra_or_remote_does_not_emit_them() {
 		reply: None,
 		attempt: 0,
 		extra: BTreeMap::new(),
+		class: Default::default(),
 	};
 	let json = serde_json::to_value(&record).expect("value");
 	assert!(json.get("account").is_none(), "absent account is skipped");
@@ -421,4 +424,41 @@ fn rfc3339_times_must_be_real_calendar_times() {
 	] {
 		assert!(parse_since(bad, now).is_err(), "{bad} must be refused");
 	}
+}
+
+#[test]
+fn the_class_is_kept_and_personal_is_left_out_of_the_line() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let log = DeliveryLog::open(dir.path(), 30);
+	let now = now_epoch();
+	let mut record = DeliveryRecord {
+		time: now,
+		spool_id: Uuid::now_v7(),
+		account: Some("notices".into()),
+		from: "notices@example.org".into(),
+		recipient: "student@example.net".into(),
+		outcome: DeliveryOutcome::Delivered,
+		remote: None,
+		reply: None,
+		attempt: 1,
+		extra: BTreeMap::new(),
+		class: crate::evidence::MailClass::Transactional,
+	};
+	log.append(&record).expect("append");
+	record.class = crate::evidence::MailClass::Personal;
+	log.append(&record).expect("append");
+	let text = std::fs::read_to_string(log.path_for_day(date_for_epoch(now)).expect("path"))
+		.expect("read");
+	let lines: Vec<&str> = text.lines().collect();
+	assert!(lines[0].contains("\"class\":\"transactional\""));
+	assert!(
+		!lines[1].contains("\"class\""),
+		"personal is the default and not written"
+	);
+	let back = log.list(None, |_| true).expect("list");
+	assert_eq!(back.len(), 2);
+	assert!(
+		back.iter()
+			.any(|r| r.class == crate::evidence::MailClass::Transactional)
+	);
 }

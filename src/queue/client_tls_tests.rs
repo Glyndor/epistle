@@ -19,7 +19,7 @@ use crate::queue::client::{DeliveryError, deliver};
 
 /// A fresh self-signed certificate (and matching acceptor) for the mock MTA,
 /// returning the leaf DER so a TLSA association can be derived from it.
-fn acceptor_and_leaf() -> (TlsAcceptor, Vec<u8>) {
+pub(super) fn acceptor_and_leaf() -> (TlsAcceptor, Vec<u8>) {
 	let certified = rcgen::generate_simple_self_signed(vec!["mail.example.org".to_string()])
 		.expect("generate certificate");
 	let leaf = certified.cert.der().clone();
@@ -53,7 +53,7 @@ where
 
 /// Run the mock MTA against `server_stream`: greet, offer STARTTLS, upgrade,
 /// then accept the transaction and store nothing (success is the 250s/221).
-async fn mock_mta<S>(acceptor: TlsAcceptor, mut plain: S)
+pub(super) async fn mock_mta<S>(acceptor: TlsAcceptor, mut plain: S)
 where
 	S: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static,
 {

@@ -133,9 +133,13 @@ async fn restart_signs_with_current_rotation_key() {
 			.expect("write state");
 			let config = config(&root);
 			let raw = b"From: alice@example.org\r\nSubject: restart\r\n\r\nHello\r\n";
-			let companions = build(&config).expect("startup");
-			let handle = companions.dkim_signer.expect("signer configured");
-			let header = handle.current().sign("example.org", raw).expect("sign");
+			// The first start ends before the second: a server holds its evidence
+			// directory for as long as it lives, and two cannot.
+			let header = {
+				let companions = build(&config).expect("startup");
+				let handle = companions.dkim_signer.expect("signer configured");
+				handle.current().sign("example.org", raw).expect("sign")
+			};
 			assert_eq!(
 				signature_fields(header.as_bytes()),
 				vec![(

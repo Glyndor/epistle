@@ -327,6 +327,19 @@ pub enum Command {
 	///
 	/// Without an action it lists the log, like `delivery list`.
 	Delivery(delivery::DeliveryConfig),
+	/// Evidence of sending, and the bundles that prove it.
+	///
+	/// Verify the log, export and check bundles, set what is kept, and manage
+	/// timestamping and the signing key. `check` runs anywhere, without
+	/// configuration or server data.
+	Evidence {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Evidence action (`verify`, `export`, `check`, `policy`, `timestamp`, `acknowledge`).
+		#[command(subcommand)]
+		action: evidence::EvidenceCli,
+	},
 	/// Manage authentication bans and the allow list.
 	///
 	/// Manage authentication bans and the allow list (needs `[database]`).

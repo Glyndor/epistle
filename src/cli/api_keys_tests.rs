@@ -31,6 +31,7 @@ fn create_list_revoke_roundtrip() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
 			false,
 			&mut out
@@ -72,6 +73,7 @@ fn create_with_expiry_and_cidr_is_stored() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
 			false,
 			&mut out
@@ -101,6 +103,7 @@ fn create_without_scope_is_rejected() {
 				scopes: Vec::new(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
 			false,
 			&mut out
@@ -125,6 +128,7 @@ fn create_rejects_bad_cidr() {
 				scopes: read_scope(),
 				domains: Vec::new(),
 				account: None,
+				class: None,
 			},
 			false,
 			&mut out

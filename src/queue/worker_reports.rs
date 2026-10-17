@@ -23,7 +23,7 @@ fn message_id_of(entry: &SpoolEntry) -> Option<String> {
 
 /// The number of the attempt a conversation just made for `recipient`,
 /// counting from one: those recorded before it, plus this one.
-fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
+pub(super) fn attempt_of(entry: &SpoolEntry, recipient: &str) -> u32 {
 	entry
 		.envelope
 		.recipient_state(recipient)
@@ -73,6 +73,7 @@ impl Worker {
 			reply: reply.map(str::to_string),
 			attempt,
 			extra: envelope.extra.clone(),
+			class: envelope.class,
 		};
 		if let Err(error) = log.append(&record) {
 			tracing::warn!(id = %envelope.id, %error, "delivery log write failed");
@@ -119,10 +120,32 @@ impl Worker {
 					state.reported = true;
 					state.last_error = Some("recipient is on the suppression list".into());
 					envelope.set_recipient_state(recipient, state);
+					super::evidence::intend(
+						envelope,
+						&super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Suppressed,
+							attempt: 0,
+							remote: None,
+							reply: Some("recipient is on the suppression list"),
+							facts: None,
+						},
+					);
 				}
 				envelope.settle();
 			})?;
 			for recipient in &skipped {
+				self.record_outcome(
+					envelope,
+					super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Suppressed,
+						attempt: 0,
+						remote: None,
+						reply: Some("recipient is on the suppression list"),
+						facts: None,
+					},
+				);
 				self.log_outcome(
 					envelope,
 					recipient,
@@ -164,12 +187,25 @@ impl Worker {
 			match result {
 				Ok(()) => {
 					tracing::debug!(%id, %recipient, remote, "delivered");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Delivered,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: None,
+							facts: Some(&conversation.facts),
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Delivered,
 						Some(remote),
-						Some("250 OK"),
+						Some(&Self::bounded_reply(
+							conversation.facts.reply.as_deref().unwrap_or("250 OK"),
+						)),
 						attempt_of(entry, recipient),
 					);
 					self.notify_delivered(
@@ -208,6 +244,17 @@ impl Worker {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					self.record_outcome(
+						&entry.envelope,
+						super::evidence::Recorded {
+							recipient,
+							result: crate::evidence::record::OutcomeKind::Bounced,
+							attempt: attempt_of(entry, recipient),
+							remote: Some(remote),
+							reply: Some(reason),
+							facts: None,
+						},
+					);
 					self.log_outcome(
 						&entry.envelope,
 						recipient,
@@ -369,7 +416,20 @@ impl Worker {
 				if state.last_error.is_none() {
 					state.last_error = Some("message expired in the queue".into());
 				}
+				let reason = state.last_error.clone().unwrap_or_default();
+				let (attempts, remote) = (state.attempts, state.remote.clone());
 				envelope.set_recipient_state(recipient, state);
+				super::evidence::intend(
+					envelope,
+					&super::evidence::Recorded {
+						recipient,
+						result: crate::evidence::record::OutcomeKind::Expired,
+						attempt: attempts,
+						remote: remote.as_deref(),
+						reply: Some(&reason),
+						facts: None,
+					},
+				);
 			}
 			envelope.settle();
 		})?;
@@ -379,6 +439,17 @@ impl Worker {
 			let class = classify_reason(reason, false).class.label();
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
+			self.record_outcome(
+				&envelope,
+				super::evidence::Recorded {
+					recipient,
+					result: crate::evidence::record::OutcomeKind::Expired,
+					attempt: state.attempts,
+					remote: state.remote.as_deref(),
+					reply: Some(reason),
+					facts: None,
+				},
+			);
 			self.log_outcome(
 				&envelope,
 				recipient,

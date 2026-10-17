@@ -135,3 +135,34 @@ fn sanitize_escapes_control_and_invisible_formatting_characters() {
 	assert_eq!(sanitize("bom\u{feff}"), "bom\\u{feff}");
 	assert_eq!(sanitize("caf\u{e9} \u{4e2d}"), "caf\u{e9} \u{4e2d}");
 }
+
+#[test]
+fn sanitize_escapes_controls_and_the_format_characters_that_disguise_text() {
+	for raw in [
+		"\u{1b}[31m",
+		"\u{1b}]0;x\u{7}",
+		"\r",
+		"\n",
+		"\u{202e}",
+		"\u{200b}",
+		"\u{2066}",
+		"\u{feff}",
+		"\u{61c}",
+		"\u{180e}",
+		"\u{3164}",
+		"\u{e0041}",
+		"\u{fe0f}",
+		"\u{ad}",
+	] {
+		let shown = sanitize(&format!("a{raw}b"));
+		assert!(
+			shown.starts_with('a')
+				&& shown.ends_with('b')
+				&& shown.chars().all(|c| !c.is_control()),
+			"{raw:?} -> {shown:?}"
+		);
+		assert!(shown.len() > 2, "{raw:?} was not escaped: {shown:?}");
+		assert!(shown != format!("a{raw}b"), "{raw:?} was kept");
+	}
+	assert_eq!(sanitize("plain text, ünï"), "plain text, ünï");
+}

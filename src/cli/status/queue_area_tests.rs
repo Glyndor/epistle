@@ -33,6 +33,11 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		recipient_state: Default::default(),
 		account: None,
 		extra: BTreeMap::new(),
+		class: Default::default(),
+		evidence: false,
+		retain_days: 0,
+		outcomes_pending: Vec::new(),
+		cancelling: None,
 	};
 	std::fs::write(
 		new.join(format!("{id}.json")),
