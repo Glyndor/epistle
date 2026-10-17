@@ -315,6 +315,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_delivery_log_days(config.delivery_log_days())
+				.with_disabled_domains(config.disabled_domains.clone())
 				.with_max_message_size(max_message_size)
 				.with_quota(
 					config
@@ -448,8 +449,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					}
 				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router =
-					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
+				let router = crate::autodiscovery::router_for(&config);
 				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
 				tasks.push(tokio::spawn(serve));
 			}

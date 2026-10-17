@@ -554,6 +554,21 @@ impl Config {
 		self.webhook.as_ref().filter(|webhook| webhook.enabled)
 	}
 
+	/// The hosted domains that are switched on: `domains` without
+	/// `disabled_domains`.
+	pub fn enabled_domains(&self) -> Vec<String> {
+		self.domains
+			.iter()
+			.filter(|domain| {
+				!self
+					.disabled_domains
+					.iter()
+					.any(|disabled| disabled.eq_ignore_ascii_case(domain))
+			})
+			.cloned()
+			.collect()
+	}
+
 	/// The loopback address listeners bind to unless explicitly configured.
 	pub const fn default_bind_addr() -> IpAddr {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)

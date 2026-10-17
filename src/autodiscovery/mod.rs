@@ -144,6 +144,12 @@ struct Discovery {
 	domains: Arc<[String]>,
 }
 
+/// [`router`] for the domains of `config` that are switched on: a disabled
+/// domain takes no mail, so a client is not given settings for it.
+pub fn router_for(config: &crate::config::Config) -> Router {
+	router(config.hostname.clone(), config.enabled_domains())
+}
+
 /// Router serving the autoconfig/autodiscover documents.
 pub fn router(hostname: String, domains: Vec<String>) -> Router {
 	let state = Discovery {
@@ -279,3 +285,7 @@ mod tests_mobileconfig;
 #[cfg(test)]
 #[path = "autodiscovery_tests_tls.rs"]
 mod tests_tls;
+
+#[cfg(test)]
+#[path = "autodiscovery_tests_disabled.rs"]
+mod tests_disabled;

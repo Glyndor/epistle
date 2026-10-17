@@ -22,7 +22,10 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     without removing it. The new `disabled_domains` setting lists the
     switched-off domains; mail for one is rejected like mail for an unknown
     user and nobody may send as an address in it. Accounts, DNS records and
-    DKIM keys stay. `domain list` and `domain show` report `enabled`.
+    DKIM keys stay. `domain list` and `domain show` report `enabled`. A disabled
+    domain gets no autoconfig/autodiscover document, `GET /api/v1/domains` names
+    it under `disabled`, `masked add` refuses it and `account add`/`alias add`
+    warn about it.
   * CLI: `epistle domain set` writes the storage quota and the submission
     rate of one domain (the overrides `limits set --domain` already wrote),
     and `domain show` prints them.
