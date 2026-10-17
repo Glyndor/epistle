@@ -12,7 +12,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
-use crate::dns::providers::transport;
+use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, transport};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How deSEC wants a TXT value written and lists it back; see
@@ -261,26 +261,54 @@ impl DnsProvider for DesecProvider {
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone_name = zone.to_string();
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
-			let url = self.rrsets_url()?;
-			let response = self
-				.client
-				.get(url.into_url())
-				.header(
-					reqwest::header::AUTHORIZATION,
-					format!("Token {}", self.secret.token()),
-				)
-				.send()
-				.await
-				.map_err(transport)?;
-			let status = response.status();
-			if status == reqwest::StatusCode::UNAUTHORIZED
-				|| status == reqwest::StatusCode::FORBIDDEN
-			{
-				return Err(ProviderError::Auth);
+			// deSEC answers 400 to a list past 500 rrsets unless the request
+			// asks for a page; an empty `cursor` asks for the first, and the
+			// `Link` header of each page names the next one.
+			let mut url = self.rrsets_url()?.with_query("cursor", "");
+			let mut rrsets: Vec<Rrset> = Vec::new();
+			let mut pages = 0;
+			let mut records = 0;
+			loop {
+				let response = self
+					.client
+					.get(url.clone().into_url())
+					.header(
+						reqwest::header::AUTHORIZATION,
+						format!("Token {}", self.secret.token()),
+					)
+					.send()
+					.await
+					.map_err(transport)?;
+				let status = response.status();
+				if status == reqwest::StatusCode::UNAUTHORIZED
+					|| status == reqwest::StatusCode::FORBIDDEN
+				{
+					return Err(ProviderError::Auth);
+				}
+				if !status.is_success() {
+					return Err(ProviderError::Remote(format!("HTTP {status}")));
+				}
+				let next = response
+					.headers()
+					.get_all(reqwest::header::LINK)
+					.iter()
+					.filter_map(|value| value.to_str().ok())
+					.find_map(next_link);
+				let text = crate::dns::providers::read_body(response).await?;
+				let page: Vec<Rrset> = serde_json::from_str(&text)
+					.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				records += page.iter().map(|r| r.records.len()).sum::<usize>();
+				rrsets.extend(page);
+				if records > LIST_MAX_RECORDS {
+					return Err(listing_too_long(self.secret.zone()));
+				}
+				let Some(next) = next else { break };
+				pages += 1;
+				if pages >= LIST_MAX_PAGES {
+					return Err(listing_too_long(self.secret.zone()));
+				}
+				url = self.base.follow(&next)?;
 			}
-			let text = crate::dns::providers::read_body(response).await?;
-			let rrsets: Vec<Rrset> =
-				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 			Ok(rrsets
 				.into_iter()
 				.flat_map(|r| {
@@ -309,6 +337,19 @@ impl DnsProvider for DesecProvider {
 				.collect())
 		}))
 	}
+}
+
+/// The target of the `rel="next"` entry of a `Link` header value
+/// (`<url>; rel="next", <url>; rel="first"`), if it has one.
+fn next_link(header: &str) -> Option<String> {
+	header.split(',').find_map(|entry| {
+		let (target, params) = entry.split_once(';')?;
+		let is_next = params
+			.split(';')
+			.any(|p| p.trim().replace('"', "").eq_ignore_ascii_case("rel=next"));
+		let target = target.trim().strip_prefix('<')?.strip_suffix('>')?;
+		is_next.then(|| target.to_string())
+	})
 }
 
 /// Map a write response to success or a typed error.

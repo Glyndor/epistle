@@ -129,3 +129,95 @@ async fn a_zone_past_the_record_cap_is_an_error() {
 		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
 	);
 }
+
+/// deSEC answers 400 to a list past 500 rrsets unless a page is asked for
+/// (`cursor=`), and names the next page in the `Link` header. The zone here
+/// has two pages; a request without a cursor is refused as the real one is.
+#[tokio::test]
+async fn a_zone_past_500_rrsets_is_read_page_by_page() {
+	use axum::extract::Query;
+	use axum::http::{HeaderMap, StatusCode, header};
+	use axum::response::IntoResponse;
+	use std::collections::HashMap;
+
+	async fn page(
+		Query(query): Query<HashMap<String, String>>,
+		headers: HeaderMap,
+	) -> axum::response::Response {
+		let host = headers[header::HOST].to_str().expect("host").to_string();
+		let rrset = |subname: &str, kind: &str, value: &str| serde_json::json!({"subname": subname, "type": kind, "ttl": 3600, "records": [value]});
+		match query.get("cursor").map(String::as_str) {
+			None => (StatusCode::BAD_REQUEST, "pagination required").into_response(),
+			Some("") => (
+				[(
+					header::LINK,
+					format!("<http://{host}/domains/example.org/rrsets/?cursor=>; rel=\"first\", <http://{host}/domains/example.org/rrsets/?cursor=p2>; rel=\"next\""),
+				)],
+				axum::Json(serde_json::json!([rrset("", "A", "192.0.2.1")])),
+			)
+				.into_response(),
+			Some("p2") => (
+				[(
+					header::LINK,
+					format!("<http://{host}/domains/example.org/rrsets/?cursor=>; rel=\"first\", <http://{host}/domains/example.org/rrsets/?cursor=>; rel=\"prev\""),
+				)],
+				axum::Json(serde_json::json!([rrset("sub", "NS", "ns1.delegated.example.")])),
+			)
+				.into_response(),
+			Some(_) => StatusCode::NOT_FOUND.into_response(),
+		}
+	}
+	let app = axum::Router::new().route("/domains/{zone}/rrsets/", axum::routing::get(page));
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(async move {
+		let _ = axum::serve(listener, app).await;
+	});
+	let provider = DesecProvider::new(ScopedSecret::new("example.org", "tok"))
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).expect("url"));
+	let listed = provider.list("example.org").await.expect("list");
+	let rows: Vec<(String, String, String)> = listed
+		.iter()
+		.map(|r| (r.name.clone(), format!("{:?}", r.kind), r.value.clone()))
+		.collect();
+	assert_eq!(
+		rows,
+		vec![
+			(
+				"example.org".to_string(),
+				"A".to_string(),
+				"192.0.2.1".to_string()
+			),
+			(
+				"sub.example.org".to_string(),
+				"Ns".to_string(),
+				"ns1.delegated.example.".to_string()
+			),
+		]
+	);
+}
+
+/// A `Link` header is read for its `next` entry only, whatever the order and
+/// the quoting of its parameters.
+#[test]
+fn only_the_next_entry_of_a_link_header_is_followed() {
+	assert_eq!(
+		super::next_link(
+			"<https://a/?cursor=>; rel=\"first\", <https://a/?cursor=n>; rel=\"next\""
+		),
+		Some("https://a/?cursor=n".to_string())
+	);
+	assert_eq!(
+		super::next_link("<https://a/?cursor=n>; rel=next"),
+		Some("https://a/?cursor=n".to_string())
+	);
+	assert_eq!(
+		super::next_link(
+			"<https://a/?cursor=>; rel=\"first\", <https://a/?cursor=p>; rel=\"prev\""
+		),
+		None
+	);
+	assert_eq!(super::next_link("garbage"), None);
+}
