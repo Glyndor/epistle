@@ -1,7 +1,24 @@
 //! The transaction that teaches one verdict, once.
+//!
+//! # Lock order
+//!
+//! Every path that writes the corpus of an account takes its locks in this
+//! order, so two of them can wait for each other but never wait in a circle:
+//!
+//! 1. the row of the account in `bayes_learning`;
+//! 2. the rows of `bayes_learned`;
+//! 3. the row of the account in `bayes_corpus`;
+//! 4. the rows of `bayes_token`.
+//!
+//! [`BayesStore::learn`] and the reset and removal in [`super::reset`] follow
+//! it. `BayesStore::train`, which teaches the shared corpus from the SMTP
+//! path, takes `bayes_corpus` and then `bayes_token`, a suffix of the same
+//! order, and shares the in-process `scope_lock` with them. A transaction that
+//! PostgreSQL abandons anyway is run again ([`super::retry`]).
 
-use sqlx::{PgConnection, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 
+use super::retry::retrying;
 use super::{LearnOutcome, MAX_LEARN_TOKENS, MAX_LEARNED_PER_ACCOUNT};
 use crate::antispam::bayes;
 use crate::antispam::corpus::{BayesStore, SHARED};
@@ -67,7 +84,17 @@ impl BayesStore {
 			.map(|token| self.hash(token))
 			.collect();
 		let digest = self.message_digest(window);
+		retrying(|| self.learn_once(scope, &tokens, &digest, spam)).await
+	}
 
+	/// One attempt of [`BayesStore::learn`].
+	async fn learn_once(
+		&self,
+		scope: &str,
+		tokens: &[String],
+		digest: &str,
+		spam: bool,
+	) -> Result<LearnOutcome, sqlx::Error> {
 		let mut tx = self.pool.begin().await?;
 		sqlx::query(
 			"INSERT INTO bayes_learning (scope) VALUES ($1) ON CONFLICT (scope) DO NOTHING",
@@ -77,12 +104,17 @@ impl BayesStore {
 		.await?;
 		// The row lock serializes every lesson of the account, in this
 		// process and in any other.
-		let (enabled, entries): (bool, i64) = sqlx::query_as(
+		let Some((enabled, entries)) = sqlx::query_as::<_, (bool, i64)>(
 			"SELECT enabled, entries FROM bayes_learning WHERE scope = $1 FOR UPDATE",
 		)
 		.bind(scope)
-		.fetch_one(&mut *tx)
-		.await?;
+		.fetch_optional(&mut *tx)
+		.await?
+		else {
+			// The account was removed between the two statements.
+			tx.rollback().await?;
+			return Ok(LearnOutcome::Skipped);
+		};
 		if !enabled {
 			tx.rollback().await?;
 			return Ok(LearnOutcome::Disabled);
@@ -91,7 +123,7 @@ impl BayesStore {
 			"SELECT spam, tokens FROM bayes_learned WHERE scope = $1 AND digest = $2",
 		)
 		.bind(scope)
-		.bind(&digest)
+		.bind(digest)
 		.fetch_optional(&mut *tx)
 		.await?;
 		let outcome = match held {
@@ -108,7 +140,7 @@ impl BayesStore {
 					"UPDATE bayes_learned SET spam = $3, learned_at = now() WHERE scope = $1 AND digest = $2",
 				)
 				.bind(scope)
-				.bind(&digest)
+				.bind(digest)
 				.bind(spam)
 				.execute(&mut *tx)
 				.await?;
@@ -124,13 +156,13 @@ impl BayesStore {
 					"INSERT INTO bayes_learned (scope, digest, spam, tokens) VALUES ($1, $2, $3, $4)",
 				)
 				.bind(scope)
-				.bind(&digest)
+				.bind(digest)
 				.bind(spam)
 				.bind(i32::try_from(tokens.len()).unwrap_or(i32::MAX))
 				.execute(&mut *tx)
 				.await?;
 				let (ham, spam_delta) = if spam { (0, 1) } else { (1, 0) };
-				adjust(&mut tx, scope, &tokens, ham, spam_delta).await?;
+				adjust(&mut tx, scope, tokens, ham, spam_delta).await?;
 				bump(&mut tx, scope, Counter::Learned { spam }).await?;
 				LearnOutcome::Learned
 			}
@@ -230,19 +262,5 @@ async fn adjust(
 	.bind(tokens)
 	.execute(&mut **tx)
 	.await?;
-	Ok(())
-}
-
-/// Drop the ledger and the counters of `scope`, in the transaction that
-/// drops its corpus.
-pub async fn forget_learning(tx: &mut PgConnection, scope: &str) -> Result<(), sqlx::Error> {
-	sqlx::query("DELETE FROM bayes_learned WHERE scope = $1")
-		.bind(scope)
-		.execute(&mut *tx)
-		.await?;
-	sqlx::query("DELETE FROM bayes_learning WHERE scope = $1")
-		.bind(scope)
-		.execute(&mut *tx)
-		.await?;
 	Ok(())
 }

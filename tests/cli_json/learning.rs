@@ -90,6 +90,18 @@ fn status_switch_and_reset() {
 	let done = json!({"result": "saved", "action": "reset", "account": name, "tokens": 0});
 	assert_eq!(json(&learning(&["reset", &name, "--yes"])), (0, done));
 
+	// A reset keeps the switch: the account that was switched off to stop it
+	// teaching is still off afterwards.
+	learning(&["disable", &name]);
+	learning(&["reset", &name, "--yes"]);
+	let (_, status) = json(&learning(&["status", &name]));
+	assert_eq!(
+		status["enabled"],
+		json!(false),
+		"reset must not switch learning back on"
+	);
+	learning(&["enable", &name]);
+
 	let ghost = learning(&["enable", "no-such-account"]);
 	assert_eq!(
 		ghost.status.code(),

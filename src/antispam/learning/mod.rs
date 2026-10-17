@@ -17,12 +17,14 @@
 //! - [`ledger`]: the transaction behind `BayesStore::learn`.
 //! - [`stats`]: counters per account and the on/off switch.
 //! - [`limiter`]: how much one account may teach per minute and per day.
+//! - [`reset`]: dropping an account's corpus, with or without its switch.
+//! - [`retry`]: running again a transaction PostgreSQL abandoned.
 
 pub mod ledger;
 pub mod limiter;
+pub mod reset;
+pub mod retry;
 pub mod stats;
-
-pub use ledger::forget_learning;
 pub use stats::LearningStats;
 
 /// Unique tokens kept from one message. The window is already bounded in

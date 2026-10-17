@@ -364,18 +364,7 @@ impl BayesStore {
 	}
 
 	async fn forget_scope_inner(&self, scope: &str) -> Result<u64, sqlx::Error> {
-		let mut tx = self.pool.begin().await?;
-		// The totals first, then the tokens: the order `train` takes them in.
-		sqlx::query!("DELETE FROM bayes_corpus WHERE scope = $1", scope,)
-			.execute(&mut *tx)
-			.await?;
-		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
-			.execute(&mut *tx)
-			.await?
-			.rows_affected();
-		super::learning::forget_learning(&mut tx, scope).await?;
-		tx.commit().await?;
-		Ok(tokens)
+		self.purge_scope(scope).await
 	}
 }
 

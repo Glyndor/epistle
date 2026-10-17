@@ -65,7 +65,8 @@ pub enum LearningCli {
 	/// Drop the corpus of an account and the record of what it learned.
 	///
 	/// The account scores with the shared corpus again until it has learned
-	/// enough of its own. Use it when a corpus was taught the wrong thing.
+	/// enough of its own. The on/off switch is kept: an account switched off
+	/// stays off. Use it when a corpus was taught the wrong thing.
 	Reset {
 		/// The account whose corpus to drop.
 		#[arg(value_parser = super::account_name::parse)]
@@ -326,7 +327,7 @@ async fn reset(
 	if let Err(code) = super::prompt::confirm_destructive("learning-reset", &question, yes) {
 		return Ok(code);
 	}
-	let tokens = store.forget_scope(account).await?;
+	let tokens = store.reset_learning(account).await?;
 	let mut report = Report::new(out, json);
 	report.line(format_args!(
 		"{}: corpus dropped ({tokens} tokens)",
