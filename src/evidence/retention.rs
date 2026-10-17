@@ -156,19 +156,130 @@ fn unpurgeable(
 	None
 }
 
-/// Run one sweep at `now`, trusting the timestamp keys in `anchors`.
+/// The steps of a purge, for tests that cut it short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+	/// The statement is signed and written.
+	Statement,
+	/// The `purge` record is in the chain.
+	Recorded,
+	/// The anchor has moved.
+	Anchored,
+}
+
+/// Run one sweep at `now`, trusting the timestamp keys in `anchors`. A purge
+/// that was cut short is finished first, never repeated: the statement, the
+/// record and the anchor are each made once.
 pub fn sweep(
 	evidence_root: &Path,
 	key: &EvidenceKey,
 	anchors: &[[u8; 32]],
 	now: u64,
 ) -> std::io::Result<Sweep> {
+	sweep_steps(evidence_root, key, anchors, now, |_| false)
+}
+
+/// The statement of a purge the anchor has not caught up with, with its bytes.
+fn unfinished(evidence_root: &Path) -> std::io::Result<Option<(Statement, Vec<u8>)>> {
+	let reached = super::anchor::load(&evidence_root.join(CHAIN_DIR))?
+		.and_then(|anchor| Day::parse(&anchor.through));
+	let entries = match std::fs::read_dir(evidence_root.join(PURGES_DIR)) {
+		Ok(entries) => entries,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(error),
+	};
+	let mut newest: Option<Day> = None;
+	for entry in entries {
+		let name = entry?.file_name();
+		let Some(through) = name
+			.to_str()
+			.and_then(|name| name.strip_suffix(".json"))
+			.and_then(Day::parse)
+		else {
+			continue;
+		};
+		if reached.is_none_or(|reached| through > reached) && newest.is_none_or(|n| through > n) {
+			newest = Some(through);
+		}
+	}
+	let Some(through) = newest else {
+		return Ok(None);
+	};
+	let path = evidence_root.join(PURGES_DIR).join(through.name());
+	let Some(bytes) = checkpoint::read_bounded(&path.with_extension("json"), 1024 * 1024)? else {
+		return Ok(None);
+	};
+	let statement = serde_json::from_slice(&bytes)
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+	Ok(Some((statement, bytes)))
+}
+
+/// Whether the chain holds a `purge` record naming the statement `digest`.
+fn recorded(evidence_root: &Path, chain: &Chain, digest: &str) -> std::io::Result<bool> {
+	let mut found = false;
+	for day in chain.days()? {
+		let walked = super::verify::walk_day(evidence_root, day, None, |_, record, _| {
+			found |= matches!(&record.entry, Entry::Purge(purge) if purge.statement == digest);
+		});
+		// A day that does not walk is the verification's to report.
+		let _ = walked;
+	}
+	Ok(found)
+}
+
+/// Finish a purge that was cut short. A statement the chain never named is
+/// dropped (nothing was decided); one it names gets its anchor, and the days
+/// the anchor covers are deleted.
+fn resume(evidence_root: &Path, chain: &Chain) -> std::io::Result<()> {
+	let Some((statement, bytes)) = unfinished(evidence_root)? else {
+		return Ok(());
+	};
+	let base = evidence_root.join(PURGES_DIR).join(&statement.through);
+	if !recorded(evidence_root, chain, &to_hex(&sha256(&bytes)))? {
+		let _ = std::fs::remove_file(base.with_extension("json"));
+		let _ = std::fs::remove_file(base.with_extension("sig"));
+		return Ok(());
+	}
+	let invalid =
+		|what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
+	let position = Position {
+		hash: hash_from_hex(&statement.last_hash)
+			.ok_or_else(|| invalid("a purge statement holds a bad hash"))?,
+		seq: statement.last_seq,
+		time: statement.last_time,
+	};
+	let checkpoint_hash = hash_from_hex(&statement.checkpoint)
+		.ok_or_else(|| invalid("a purge statement holds a bad checkpoint hash"))?;
+	super::anchor::write(
+		&evidence_root.join(CHAIN_DIR),
+		&statement.through,
+		&position,
+		&checkpoint_hash,
+	)?;
+	finish_deleting(evidence_root, chain)
+}
+
+/// [`sweep`], stopping with an error after the steps `stop` names.
+pub(crate) fn sweep_steps(
+	evidence_root: &Path,
+	key: &EvidenceKey,
+	anchors: &[[u8; 32]],
+	now: u64,
+	stop: impl Fn(Step) -> bool,
+) -> std::io::Result<Sweep> {
+	let cut = |step: Step| -> std::io::Result<()> {
+		match stop(step) {
+			true => Err(std::io::Error::other("stopped")),
+			false => Ok(()),
+		}
+	};
 	let today = Day::of_epoch(now);
 	let mut done = Sweep {
 		message_dirs: sweep_messages(evidence_root, today)?,
 		..Sweep::default()
 	};
 	let chain = Chain::open(evidence_root)?;
+	resume(evidence_root, &chain)?;
 	finish_deleting(evidence_root, &chain)?;
 	let expired = expired_days(evidence_root, &chain, today)?;
 	if expired.is_empty() {
@@ -256,6 +367,7 @@ pub fn sweep(
 	let base = dir.join(through.name());
 	crate::storage::write_secret(&base.with_extension("sig"), &key.sign(&statement_bytes))?;
 	crate::storage::write_secret(&base.with_extension("json"), &statement_bytes)?;
+	cut(Step::Statement)?;
 	chain.append_at(
 		now,
 		Entry::Purge(Purge {
@@ -267,12 +379,14 @@ pub fn sweep(
 			statement: to_hex(&sha256(&statement_bytes)),
 		}),
 	)?;
+	cut(Step::Recorded)?;
 	super::anchor::write(
 		&evidence_root.join(CHAIN_DIR),
 		&through.name(),
 		&position,
 		&checkpoint_hash,
 	)?;
+	cut(Step::Anchored)?;
 	finish_deleting(evidence_root, &chain)?;
 	done.days = purgeable.len();
 	Ok(done)
@@ -415,6 +529,9 @@ fn sweep_messages(evidence_root: &Path, today: Day) -> std::io::Result<usize> {
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "retention_tests_crash.rs"]
+mod tests_crash;
 #[cfg(test)]
 #[path = "retention_tests_keys.rs"]
 mod tests_keys;
