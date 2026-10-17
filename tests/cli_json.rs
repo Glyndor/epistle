@@ -79,3 +79,6 @@ mod delivery_b;
 
 #[path = "cli_json/db_status.rs"]
 mod db_status;
+
+#[path = "cli_json/queue_webhook.rs"]
+mod queue_webhook;

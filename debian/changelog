@@ -41,6 +41,9 @@ epistle (0.12.1) UNRELEASED; urgency=medium
     `relay disable` says where the mail will go instead (the next matching
     rule, or directly to the MX from this server's own address) and needs
     `--yes` off a terminal.
+  * Fix: `epistle queue remove` panicked with "there is no reactor running" when
+    a webhook was configured (the command line had no runtime to post the
+    `canceled` event on); it now posts it before exiting.
   * CLI: `epistle suppression show|export|import`, and `suppression add
     --reason`. `export` writes the list as CSV, `import` loads such a file or
     a plain list of addresses (16 MiB and 100000 entries at most, checked whole
