@@ -40,7 +40,10 @@ fn a_purge_cut_short_at_any_step_is_finished_once_and_the_chain_verifies() {
 		sweep_steps(dir.path(), &key, &[tsa.anchor], now, |step| step == cut_at)
 			.expect_err("cut short");
 		let swept = sweep(dir.path(), &key, &[tsa.anchor], now + 300).expect("the next sweep");
-		assert!(swept.refused.is_none(), "{cut_at:?}: {:?}", swept.refused);
+		assert!(
+			swept.refused.is_none(),
+			"{cut_at:?}: the next sweep refused"
+		);
 		// Whatever the cut, the days went, once, with one statement.
 		let chain = Chain::open(dir.path()).expect("chain");
 		assert!(

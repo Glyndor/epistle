@@ -38,7 +38,7 @@ fn a_purge_after_a_rotation_signed_by_the_key_in_force_verifies() {
 	crate::evidence::rotation::rotate_at(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
 	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
 	let swept = sweep(dir.path(), &new, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
-	assert_eq!(swept.days, 3, "{:?}", swept.refused);
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
 	assert_eq!(
 		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
 		None
@@ -51,7 +51,7 @@ fn acknowledging_a_purge_statement_break_does_not_cover_a_change_in_its_files() 
 	for file in ["json", "sig"] {
 		let (dir, key, tsa, _chain) = short_lived();
 		let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
-		assert_eq!(swept.days, 3, "{:?}", swept.refused);
+		assert_eq!(swept.days, 3, "the sweep did not take the old days");
 		let path = dir
 			.path()
 			.join(PURGES_DIR)

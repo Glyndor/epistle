@@ -40,10 +40,10 @@ fn check(state: &State, limits: Limits, step: &str) {
 		state.within <= limits.day_records,
 		"{step}: the day set aside more than its limit"
 	);
-	for (account, held) in &state.accounts {
+	for held in state.accounts.values() {
 		assert!(
 			held.bytes <= limits.account_kept_bytes,
-			"{step}: {account} kept too much"
+			"{step}: an account kept too much"
 		);
 	}
 }

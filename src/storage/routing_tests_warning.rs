@@ -46,7 +46,7 @@ fn delivered(root: &std::path::Path, account: &str) -> String {
 		.flatten()
 		.map(|entry| entry.path())
 		.collect();
-	assert_eq!(files.len(), 1, "one message for {account}");
+	assert_eq!(files.len(), 1, "exactly one message in the inbox");
 	String::from_utf8(std::fs::read(files.remove(0)).expect("read")).expect("utf-8")
 }
 

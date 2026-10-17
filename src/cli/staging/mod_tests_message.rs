@@ -19,7 +19,10 @@ fn a_message_named_for_check_is_copied_and_the_line_points_at_the_copy() {
 	let line = os(&["attachments", "check", eml.to_str().unwrap(), "--json"]);
 	let stage = Stage::prepare(&line, home.path(), 0, &keep).unwrap();
 	let staged = PathBuf::from(&stage.args()[2]);
-	assert!(staged.starts_with(home.path()), "{staged:?}");
+	assert!(
+		staged.starts_with(home.path()),
+		"the staged copy is not under the home"
+	);
 	assert_eq!(fs::read(&staged).unwrap(), b"Subject: s\r\n\r\nbody\r\n");
 	assert_eq!(stage.args()[..2], line[..2]);
 	assert_eq!(stage.args()[3], OsString::from("--json"));
