@@ -9,6 +9,9 @@ use super::ast::{Argument, Command};
 /// The most forwards one run of a script may ask for (`maxNumberRedirects`).
 pub const MAX_REDIRECTS: usize = 4;
 
+/// The most different folders one run of a script files a message into.
+pub const MAX_FILEINTO: usize = 8;
+
 /// The delivery decision a script produces.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Outcome {
@@ -123,12 +126,19 @@ fn run(
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
 						let folder = vars.expand(&target);
-						outcome.fileinto.push(folder.clone());
+						// A folder is filed into once however often the script
+						// names it (RFC 5228 section 4.1 allows that), and into
+						// at most MAX_FILEINTO different ones. Every other
+						// `fileinto` is one copy more of each message stored.
+						let known = outcome.fileinto.contains(&folder);
+						if !known && outcome.fileinto.len() < MAX_FILEINTO {
+							outcome.fileinto.push(folder.clone());
+						}
 						// `:create` (RFC 5490): the delivery side creates the
 						// folder if it does not exist before filing. Without
 						// it, a missing folder is a run-time error that
 						// keeps the message in INBOX (RFC 5228 §2.10.6).
-						if has_tag(args, "create") {
+						if has_tag(args, "create") && outcome.fileinto.contains(&folder) {
 							outcome.fileinto_creates.insert(folder);
 						}
 						// `:copy` (RFC 3894) leaves the implicit keep in place.

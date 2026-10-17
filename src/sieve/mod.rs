@@ -32,6 +32,9 @@ mod vars;
 #[cfg(test)]
 mod interp_tests;
 #[cfg(test)]
+#[path = "interp_tests_fileinto.rs"]
+mod interp_tests_fileinto;
+#[cfg(test)]
 #[path = "interp_tests_limits.rs"]
 mod interp_tests_limits;
 #[cfg(test)]
