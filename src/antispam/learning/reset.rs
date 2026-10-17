@@ -1,6 +1,6 @@
 //! Dropping what an account's corpus holds.
 //!
-//! Two operations share one transaction body ([`purge`]) and differ in what
+//! Two operations share one transaction body (`purge`) and differ in what
 //! they leave behind:
 //!
 //! - [`BayesStore::reset_learning`] is the operator's `learning reset`: the
