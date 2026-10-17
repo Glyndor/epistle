@@ -13,7 +13,7 @@ use super::lockdown_handler::{Deps, LockdownArgs, execute, render};
 use crate::cli::status::dns_fake::FakeDns;
 use crate::dns::lockdown::tests_support::{Zone, a, mx, rec, txt};
 use crate::dns::lockdown::{Journal, Plan};
-use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 use crate::spf::DnsLookup;
 
 const CLOUDFLARE: &str = "\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n";
@@ -512,4 +512,43 @@ fn control_characters_in_zone_text_never_reach_the_terminal() {
 		.filter(|c| c.is_control() && *c != '\n')
 		.count();
 	assert_eq!(raw, 0, "{}", json.out);
+}
+
+/// A provider that cannot list a zone (Route 53, RFC 2136) leaves the
+/// lockdown blind to delegations: it says so and writes nothing.
+#[test]
+fn a_provider_that_cannot_list_the_zone_stops_the_lockdown_before_any_write() {
+	struct CannotList(std::sync::atomic::AtomicUsize);
+	type Op<'a> = std::pin::Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
+	type ListOp<'a> =
+		std::pin::Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
+	impl DnsProvider for CannotList {
+		fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+			self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+			Box::pin(async { Ok(()) })
+		}
+		fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+			self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+			Box::pin(async { Ok(()) })
+		}
+		fn list(&self, _zone: &str) -> ListOp<'_> {
+			Box::pin(async { Err(ProviderError::Unsupported) })
+		}
+	}
+	let provider = Arc::new(CannotList(std::sync::atomic::AtomicUsize::new(0)));
+	let setup = setup(CLOUDFLARE, Zone::default());
+	let run = run_with(
+		&setup,
+		&["--yes"],
+		Some(provider.clone()),
+		FakeDns::default(),
+	);
+	assert_eq!(run.code, ExitCode::FAILURE);
+	assert_eq!(run.out, "");
+	assert_eq!(
+		run.err,
+		"error: this DNS provider cannot list the example.org zone, so the lockdown cannot see its delegations or its records; nothing was written\n"
+	);
+	assert_eq!(provider.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+	assert!(!journal_path(&setup).exists());
 }

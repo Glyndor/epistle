@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::dns::lockdown::{
 	self, DmarcInputs, DmarcStep, Journal, Plan, PlanInput, ServedNames, canonical_name,
 };
-use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 use crate::spf::DnsLookup;
 
 #[path = "dns_lockdown_render.rs"]
@@ -302,6 +302,18 @@ fn publish(
 		.block_on(async { tokio::time::timeout(NET_TIMEOUT, provider.list(target.zone)).await });
 	let existing = match listed {
 		Ok(Ok(existing)) => existing,
+		// A provider that cannot list the zone leaves the lockdown blind to
+		// the delegations and the records it must not write over.
+		Ok(Err(ProviderError::Unsupported)) => {
+			style::error_to(
+				err,
+				format_args!(
+					"this DNS provider cannot list the {} zone, so the lockdown cannot see its delegations or its records; nothing was written",
+					target.zone
+				),
+			);
+			return ExitCode::FAILURE;
+		}
 		Ok(Err(error)) => {
 			style::error_to(
 				err,
