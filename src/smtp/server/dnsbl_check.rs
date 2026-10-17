@@ -60,7 +60,7 @@ impl Server {
 			&& let crate::dnsbl::DnsblOutcome::Listed { zone } = self.dnsbl.check(ip, dns).await
 		{
 			tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
-			self.record_dnsbl_reject(&message.data);
+			self.record_dnsbl_reject(message, peer);
 			return Some(DnsblRejection::ClientIp);
 		}
 		// RHSBL: envelope sender's domain against the domain blocklist zones.
@@ -73,7 +73,7 @@ impl Server {
 				self.dnsbl.check_domain(&domain, dns).await
 		{
 			tracing::info!(%domain, %zone, "rejecting DNSBL-listed sender domain");
-			self.record_dnsbl_reject(&message.data);
+			self.record_dnsbl_reject(message, peer);
 			return Some(DnsblRejection::SenderDomain);
 		}
 		// URIBL: hosts of every URL found in the body.
@@ -90,7 +90,7 @@ impl Server {
 					hosts = ?hosts,
 					"rejecting DNSBL-listed URL host"
 				);
-				self.record_dnsbl_reject(&message.data);
+				self.record_dnsbl_reject(message, peer);
 				return Some(DnsblRejection::UrlHost);
 			}
 		}
@@ -98,8 +98,8 @@ impl Server {
 	}
 	/// Common reject side-effect: train the corpus as spam and bump the
 	/// shared `Dnsbl` counter.
-	fn record_dnsbl_reject(&self, data: &[u8]) {
-		self.train_corpus(data, true);
+	fn record_dnsbl_reject(&self, message: &AcceptedMessage, peer: Option<IpAddr>) {
+		self.train_corpus(message, peer, true);
 		self.metrics.rejected(crate::metrics::RejectReason::Dnsbl);
 	}
 }

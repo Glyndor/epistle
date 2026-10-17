@@ -581,7 +581,10 @@ counters each listener already maintains are the only defence.
 The Bayesian corpus is keyed by scope. Two scopes are in play:
 
 - The **shared** scope (`""`) is the server's own accept/reject learning.
-  SMTP accept/reject decisions (`train_in_background`) feed it.
+  SMTP accept/reject decisions feed it: mail the server rejects or
+  quarantines is learned as spam, mail it accepts as ham, and ham only from
+  a sender the server verified (SPF or DKIM passed). That mail comes from
+  anyone, so the learning is bounded (see below).
 - The **account** scope (the local account name) is the per-user learning.
   IMAP STORE and JMAP `Email/set` train it on a `$Junk` / `$NotJunk`
   transition. Adding `$Junk` trains spam; adding `$NotJunk` or removing
@@ -600,6 +603,18 @@ first 256 KiB of the message, at most 5000 distinct words from it, written
 in one statement. The transactions of a training and of an account removal
 take their locks in the same order (the totals row, then the token rows in
 ascending order), so they cannot deadlock.
+
+The SMTP server hands each message to a queue of 64 jobs served by 2
+workers, so no more than 2 trainings run at once and the queue holds about
+16 MiB. Each client address (an IPv6 address by its /64) and each sender
+domain may have 4 jobs waiting or running and may add 30 jobs per hour. A
+job over that share, or that finds the queue full, is dropped and counted in
+`mail_bayes_training_dropped_total`; the reply to the client never waits for
+it. That limit is what one anonymous sender can teach the shared corpus per
+hour, so a sender that passes the server's checks cannot decide the corpus
+alone. A great many distinct sources can still move it slowly, which is why
+a corpus below `MIN_TRUSTED_MESSAGES` is only a fallback and an account's
+own corpus scores the mail it alone receives.
 
 An account's scope scores a message only when that account is the single
 local recipient and was addressed as itself. A message with two or more

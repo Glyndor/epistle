@@ -124,7 +124,7 @@ impl Server {
 					match dmarc {
 						crate::dmarc::DmarcOutcome::Reject => {
 							self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
-							self.train_corpus(&message.data, true);
+							self.train_corpus(&message, peer, true);
 							return Err(Reply::single(550, "5.7.1 rejected by DMARC policy"));
 						}
 						crate::dmarc::DmarcOutcome::TempError => {

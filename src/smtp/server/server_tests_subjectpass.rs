@@ -261,8 +261,10 @@ async fn the_resend_with_the_token_in_the_subject_is_accepted() {
 		stored.contains(&token),
 		"the stored message should still carry the token in the subject: {stored}"
 	);
-	// The accepted resend is ham, the same as any accepted message.
-	assert_eq!(scorer.trained(), vec![false]);
+	// Nothing verified this sender (no SPF or DKIM pass in this setup), so the
+	// shared corpus learns nothing from the resend: ham comes only from
+	// senders the server checked.
+	assert_eq!(scorer.trained(), Vec::<bool>::new());
 }
 
 #[tokio::test]
@@ -327,12 +329,12 @@ async fn a_null_reverse_path_is_never_challenged() {
 		!output.contains("550 5.7.1"),
 		"a bounce must not be challenged, got: {output}"
 	);
-	// The bounce continues down the normal accept path, which trains the
-	// ham corpus exactly as any other accepted unauthenticated message.
+	// The bounce continues down the normal accept path. It has no envelope
+	// sender to verify, so it teaches the ham corpus nothing.
 	assert_eq!(
 		scorer.trained(),
-		vec![false],
-		"a bounce delivered through the normal path trains the ham corpus"
+		Vec::<bool>::new(),
+		"a bounce has no verified sender, so it does not train the ham corpus"
 	);
 	// Delivery still happened (the bounce reaches its recipient like
 	// any other accepted message).
@@ -413,11 +415,11 @@ async fn the_band_scores_under_the_resolved_account_scope() {
 	);
 }
 
-/// Same shape, but the recipient is a multi-target alias. The alias's
-/// first member is the scope the SMTP server should consult, so the
-/// scorer is asked for `bob` (and not for `sales@example.org`).
+/// Same shape, but the recipient is a multi-target alias. The verdict
+/// reaches every member, so no member's corpus decides it: the scorer is
+/// asked for the shared scope (the empty name).
 #[tokio::test]
-async fn an_alias_recipient_scores_under_the_first_member_account() {
+async fn an_alias_recipient_scores_under_the_shared_corpus() {
 	let sink = Arc::new(MemorySink::new());
 	let scorer = FixedScorer::new(0.5);
 	let server =
@@ -435,8 +437,8 @@ async fn an_alias_recipient_scores_under_the_first_member_account() {
 	);
 	assert_eq!(
 		scorer.accounts_asked(),
-		vec!["bob".to_string(), "bob".to_string()],
-		"both passes asked for the alias's first member, not for sales@example.org"
+		vec![String::new(), String::new()],
+		"both passes asked for the shared scope, not for a member or for sales@example.org"
 	);
 }
 

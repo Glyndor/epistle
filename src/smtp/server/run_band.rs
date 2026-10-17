@@ -20,6 +20,8 @@
 //! Both checks run after DNSBL, SPF, DMARC and the scanner hook in the
 //! caller, so a hard rejection from any of those still wins.
 
+use std::net::IpAddr;
+
 use tokio::io::AsyncWrite;
 
 use super::{Reply, Server, send};
@@ -176,6 +178,7 @@ impl Server {
 	pub(super) async fn handle_uncertain_band<W>(
 		&self,
 		message: &mut AcceptedMessage,
+		peer: Option<IpAddr>,
 		is_authenticated: bool,
 		stream: &mut W,
 	) -> Result<BandOutcome, std::io::Error>
@@ -245,7 +248,7 @@ impl Server {
 
 		let Some(pass) = &self.subjectpass else {
 			// No SubjectPass configured: defer to the LLM hook only.
-			return self.handle_llm_only(message).await;
+			return self.handle_llm_only(message, peer).await;
 		};
 
 		let subject = crate::antispam::subjectpass::header_value(&message.data, "subject");
@@ -270,7 +273,7 @@ impl Server {
 					crate::antispam::hook::HookVerdict::Quarantine,
 				) => {
 					self.metrics.llm_quarantined();
-					self.train_corpus(&message.data, true);
+					self.train_corpus(&message, peer, true);
 					message.mailbox = Some("Rejects".to_string());
 					return Ok(BandOutcome::Continue);
 				}
@@ -316,6 +319,7 @@ impl Server {
 	async fn handle_llm_only(
 		&self,
 		message: &mut AcceptedMessage,
+		peer: Option<IpAddr>,
 	) -> Result<BandOutcome, std::io::Error> {
 		let Some(llm) = &self.llm else {
 			return Ok(BandOutcome::Continue);
@@ -326,7 +330,7 @@ impl Server {
 				crate::antispam::hook::HookVerdict::Quarantine,
 			) => {
 				self.metrics.llm_quarantined();
-				self.train_corpus(&message.data, true);
+				self.train_corpus(&message, peer, true);
 				message.mailbox = Some("Rejects".to_string());
 			}
 			crate::antispam::llm::ConsultOutcome::Verdict(_) => {}

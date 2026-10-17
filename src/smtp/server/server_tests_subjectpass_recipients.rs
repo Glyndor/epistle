@@ -26,7 +26,7 @@ async fn subjectpass_token_does_not_authorize_added_recipients() {
 	};
 	let mut reply = Vec::new();
 	server
-		.handle_uncertain_band(&mut message, false, &mut reply)
+		.handle_uncertain_band(&mut message, None, false, &mut reply)
 		.await
 		.expect("band");
 	assert!(
@@ -63,7 +63,7 @@ async fn subjectpass_challenges_the_last_uncovered_recipient() {
 	};
 	let mut reply = Vec::new();
 	server
-		.handle_uncertain_band(&mut message, false, &mut reply)
+		.handle_uncertain_band(&mut message, None, false, &mut reply)
 		.await
 		.expect("band");
 	assert!(
@@ -73,7 +73,7 @@ async fn subjectpass_challenges_the_last_uncovered_recipient() {
 	message.data = format!("Subject: {token_a} {token_b} {token_c}\r\n\r\nbody\r\n").into_bytes();
 	reply.clear();
 	let outcome = server
-		.handle_uncertain_band(&mut message, false, &mut reply)
+		.handle_uncertain_band(&mut message, None, false, &mut reply)
 		.await
 		.expect("band");
 	assert!(

@@ -312,6 +312,15 @@ epistle (0.12.1) unstable; urgency=medium
     statement. The transactions of a training and of `epistle account
     remove` now take their locks in one order, which ends the deadlocks
     between them.
+  * Security: the shared Bayesian corpus no longer starts a task per message,
+    and a sender cannot decide it alone. The server queues what it learns
+    (64 jobs, 2 workers) instead of spawning a task for each message; each
+    client address and sender domain may have 4 jobs waiting and add 30 per
+    hour, and a job over that share or that finds the queue full is dropped
+    and counted in `mail_bayes_training_dropped_total`. The server also
+    learns ham only from a sender whose SPF or DKIM passed, so an unverified
+    sender cannot teach the corpus that its text is ham. Mail accepted from a
+    sender with neither now teaches the shared corpus nothing.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 

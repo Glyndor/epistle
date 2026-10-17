@@ -17,10 +17,10 @@
 //!
 //! **Bounded work.** Training is fed by mail any remote sender can send, so one
 //! message costs a fixed amount whatever its size: [`BayesStore::train`] reads
-//! a window of the first
-//! [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES) bytes of
-//! the text, keeps at most [`MAX_TRAIN_TOKENS`] distinct tokens and writes them
-//! in one statement.
+//! a window of [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES) of the text, keeps at most
+//! [`MAX_TRAIN_TOKENS`] distinct tokens and writes them in one statement. The
+//! SMTP path does not call it directly: [`BayesStore::submit_training`] queues
+//! the job for a small, fixed set of workers (see [`super::shared_training`]).
 //!
 //! **Lock order.** Every transaction that takes more than one of these locks
 //! takes them in this order, so two of them cannot wait for each other (a
@@ -32,11 +32,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use super::shared_training::{SharedTraining, TrainSource};
 use super::trainer::{BayesTrainer, TrainerFuture};
 use crate::storage::load_or_create_key_file;
 
@@ -84,6 +85,9 @@ pub struct BayesStore {
 	/// (different processes, different Mutexes); the cross-process
 	/// limit is named on [`BayesStore::forget_scope`].
 	scope_lock: Arc<tokio::sync::Mutex<()>>,
+	/// The queue and workers that train the shared corpus from SMTP,
+	/// started by the first job. Clones share it.
+	shared: Arc<OnceLock<SharedTraining>>,
 }
 
 impl BayesStore {
@@ -96,6 +100,7 @@ impl BayesStore {
 			key,
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
+			shared: Arc::new(OnceLock::new()),
 		})
 	}
 
@@ -108,6 +113,20 @@ impl BayesStore {
 			key,
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
+			shared: Arc::new(OnceLock::new()),
+		}
+	}
+
+	/// This store without the shared-training queue: same pool, key,
+	/// tombstones and lock. The workers hold one, so that the queue's
+	/// sender is not kept alive by the workers it feeds.
+	fn detached(&self) -> Self {
+		BayesStore {
+			pool: self.pool.clone(),
+			key: self.key,
+			tombstones: self.tombstones.clone(),
+			scope_lock: self.scope_lock.clone(),
+			shared: Arc::new(OnceLock::new()),
 		}
 	}
 
@@ -124,15 +143,29 @@ impl BayesStore {
 		hash_token(&self.key, token)
 	}
 
-	/// Train in the background, logging on failure. Used on the delivery path so
-	/// learning never blocks or fails mail.
+	/// Queue one message for the shared corpus and return whether it was
+	/// accepted. Never waits and never fails the caller: a source over its
+	/// share, a full queue or an untracked source (see
+	/// [`super::shared_training`]) drops the job and returns `false`. Must be
+	/// called from inside a tokio runtime.
+	pub fn submit_training(
+		&self,
+		source: &TrainSource,
+		scope: &str,
+		data: &[u8],
+		spam: bool,
+	) -> bool {
+		self.shared
+			.get_or_init(|| SharedTraining::start(self.detached()))
+			.submit(source, scope, data, spam)
+	}
+
+	/// Train in the background without a named source, logging on failure.
+	/// The job goes through the same bounded queue as
+	/// [`BayesStore::submit_training`]; the queue and its workers bound it,
+	/// no source budget applies.
 	pub fn train_in_background(&self, scope: String, text: String, spam: bool) {
-		let store = self.clone();
-		tokio::spawn(async move {
-			if let Err(error) = store.train(&scope, &text, spam).await {
-				tracing::warn!(%error, "bayes training failed");
-			}
-		});
+		self.submit_training(&TrainSource::unattributed(), &scope, text.as_bytes(), spam);
 	}
 
 	/// The trained message totals for `scope` (zero when untrained).
@@ -388,6 +421,18 @@ pub trait BayesScorer: Send + Sync {
 	/// default implementation is a no-op so a fake scoring source does not
 	/// need to back a database.
 	fn train(&self, _scope: &str, _text: &str, _spam: bool) {}
+
+	/// Train the shared corpus on one inbound message from `source`, the
+	/// way the SMTP server learns from its own decisions. Returns whether
+	/// the job was accepted; `false` means it was dropped (the source is
+	/// over its share, or the queue is full) and the caller counts it. The
+	/// default forwards to [`BayesScorer::train`] and accepts everything,
+	/// which keeps a fake scorer cheap to wire in.
+	fn train_from(&self, source: &TrainSource, data: &[u8], spam: bool) -> bool {
+		let _ = source;
+		self.train(SHARED, &String::from_utf8_lossy(data), spam);
+		true
+	}
 }
 
 impl BayesScorer for BayesStore {
@@ -429,6 +474,10 @@ impl BayesScorer for BayesStore {
 
 	fn train(&self, scope: &str, text: &str, spam: bool) {
 		self.train_in_background(scope.to_string(), text.to_string(), spam);
+	}
+
+	fn train_from(&self, source: &TrainSource, data: &[u8], spam: bool) -> bool {
+		self.submit_training(source, SHARED, data, spam)
 	}
 }
 

@@ -220,15 +220,33 @@ pub struct Server {
 }
 
 impl Server {
-	/// Train the Bayesian corpus on a message in the background, when a
-	/// reputation/corpus database is configured. Accepted mail trains ham,
-	/// rejected mail trains spam, so the classifier learns from the server's
-	/// own accept/reject decisions. The no-op default on the trait keeps a
-	/// fake scorer (test-only) cheap to wire in.
-	fn train_corpus(&self, data: &[u8], spam: bool) {
-		if let Some(bayes) = &self.bayes {
-			let text = String::from_utf8_lossy(data).into_owned();
-			bayes.train(crate::antispam::corpus::SHARED, &text, spam);
+	/// Teach the shared Bayesian corpus from the server's own decisions, when
+	/// a reputation/corpus database is configured: mail it rejects or
+	/// quarantines is spam, mail it accepts is ham. The mail comes from
+	/// anyone, so three rules keep one sender from deciding the corpus:
+	/// ham is learned only from a sender the server verified (SPF or DKIM
+	/// passed, `message.sender_verified`); each client address and sender
+	/// domain has a bounded share of the learning, and a job over it, or
+	/// that the bounded queue cannot take, is dropped and counted in
+	/// `mail_bayes_training_dropped_total`; and the job never waits, so the
+	/// reply to the client does not depend on it. The no-op default on the
+	/// trait keeps a fake scorer (test-only) cheap to wire in.
+	fn train_corpus(
+		&self,
+		message: &crate::smtp::session::AcceptedMessage,
+		peer: Option<IpAddr>,
+		spam: bool,
+	) {
+		let Some(bayes) = &self.bayes else {
+			return;
+		};
+		if !spam && !message.sender_verified {
+			return;
+		}
+		let domain = message.reverse_path.rsplit_once('@').map(|(_, d)| d);
+		let source = crate::antispam::shared_training::TrainSource::new(peer, domain);
+		if !bayes.train_from(&source, &message.data, spam) {
+			self.metrics.bayes_training_dropped();
 		}
 	}
 
@@ -646,3 +664,7 @@ async fn end_cut(
 #[cfg(test)]
 #[path = "tests_mods.rs"]
 mod tests_mods;
+
+#[cfg(test)]
+#[path = "train_corpus_tests.rs"]
+mod train_corpus_tests;
