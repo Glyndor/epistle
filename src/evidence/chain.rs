@@ -71,7 +71,23 @@ pub struct Chain {
 	local: Mutex<()>,
 	/// What time it is: the wall clock, cross-checked.
 	time: Arc<TimeRef>,
+	/// A failure to make the writes have, for tests.
+	#[cfg(test)]
+	fault: std::sync::atomic::AtomicU8,
 }
+
+/// Fault injection for tests: no fault.
+#[cfg(test)]
+pub(crate) const FAULT_NONE: u8 = 0;
+/// The write fails and the line is cut off.
+#[cfg(test)]
+pub(crate) const FAULT_WRITE: u8 = 1;
+/// The write fails and the line cannot be cut off.
+#[cfg(test)]
+pub(crate) const FAULT_WRITE_AND_CUT: u8 = 2;
+/// The write works and the sync fails.
+#[cfg(test)]
+pub(crate) const FAULT_SYNC: u8 = 3;
 
 impl Chain {
 	/// Open the chain under `evidence_root`, creating its directory `0700`.
@@ -88,6 +104,8 @@ impl Chain {
 			dir,
 			local: Mutex::new(()),
 			time: Arc::new(TimeRef::new(0)),
+			#[cfg(test)]
+			fault: std::sync::atomic::AtomicU8::new(FAULT_NONE),
 		};
 		chain.time = Arc::new(chain.start_reference(evidence_root));
 		chain.confirm_from_running_server(evidence_root, wall);
@@ -251,15 +269,7 @@ impl Chain {
 		let created = !path.exists();
 		let mut file = append_file(&path)?;
 		let length = file.seek(SeekFrom::End(0))?;
-		if let Err(error) = file.write_all(&line).and_then(|()| file.sync_data()) {
-			// Never leave a partial line behind a failure we report. If the
-			// line cannot be cut off, it may be on disk: the failure is not
-			// one that says nothing was written.
-			return Err(match file.set_len(length) {
-				Ok(()) => error,
-				Err(_) => Unconfirmed::wrap(error),
-			});
-		}
+		self.write_line(&mut file, &line, length)?;
 		// From here the record is durable: a failure says so.
 		if created {
 			File::open(&self.dir)
@@ -273,6 +283,52 @@ impl Chain {
 		}
 		self.time.raise_floor(time);
 		Ok(hash)
+	}
+
+	/// Write `line` to the end of `file` and sync it. A failed write is cut
+	/// off, and the failure says nothing was written only if the cut worked. A
+	/// failed sync says nothing of the kind: what the disk holds after it is
+	/// not known, and the line may come back after a power cut.
+	fn write_line(&self, file: &mut File, line: &[u8], length: u64) -> std::io::Result<()> {
+		#[cfg(test)]
+		let fault = self.fault.load(std::sync::atomic::Ordering::SeqCst);
+		#[cfg(test)]
+		let written = match fault {
+			FAULT_WRITE | FAULT_WRITE_AND_CUT => {
+				Err(std::io::Error::other("injected write failure"))
+			}
+			_ => file.write_all(line),
+		};
+		#[cfg(not(test))]
+		let written = file.write_all(line);
+		if let Err(error) = written {
+			// Never leave a partial line behind a failure we report.
+			#[cfg(test)]
+			let cut = match fault {
+				FAULT_WRITE_AND_CUT => Err(std::io::Error::other("injected cut failure")),
+				_ => file.set_len(length),
+			};
+			#[cfg(not(test))]
+			let cut = file.set_len(length);
+			return Err(match cut {
+				Ok(()) => error,
+				Err(_) => Unconfirmed::wrap(error),
+			});
+		}
+		#[cfg(test)]
+		let synced = match fault {
+			FAULT_SYNC => Err(std::io::Error::other("injected sync failure")),
+			_ => file.sync_data(),
+		};
+		#[cfg(not(test))]
+		let synced = file.sync_data();
+		synced.map_err(Unconfirmed::wrap)
+	}
+
+	/// Make the next appends fail as `fault` says, for tests.
+	#[cfg(test)]
+	pub(crate) fn inject(&self, fault: u8) {
+		self.fault.store(fault, std::sync::atomic::Ordering::SeqCst);
 	}
 
 	/// Where the chain stands: the last record of the newest day file up to
@@ -488,6 +544,9 @@ mod tests;
 #[cfg(test)]
 #[path = "chain_tests_clock.rs"]
 mod tests_clock;
+#[cfg(test)]
+#[path = "chain_tests_faults.rs"]
+mod tests_faults;
 
 /// Lines in `day`'s file, for tests.
 #[cfg(test)]
