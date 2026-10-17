@@ -58,6 +58,10 @@ const SKIPPED: &[(&str, &str)] = &[
 		"ban allow remove",
 		"needs PostgreSQL; tests/cli_json/ban.rs",
 	),
+	(
+		"evidence key rotate",
+		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence_tests_key.rs",
+	),
 	("dns provider test", "calls the DNS provider"),
 	("webhook test", "posts to the endpoint"),
 	("relay test", "connects to the smarthost"),
@@ -289,8 +293,12 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("evidence timestamp disable", &["--yes"], Done),
 	("evidence timestamp enable", &[], Done),
 	("evidence key show", &[], Refused(2)),
-	("evidence key rotate", &["--yes"], Done),
 	("evidence acknowledge", &["--reason", "sweep", "--yes"], Done),
+	(
+		"evidence abandon",
+		&["01a142e5-edcf-7490-9152-8a1a76b72933", "--reason", "sweep", "--yes"],
+		Refused(2),
+	),
 	("evidence clock accept", &["--yes"], Done),
 	(
 		"evidence export",

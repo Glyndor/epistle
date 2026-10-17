@@ -134,6 +134,27 @@ pub enum EvidenceCli {
 		#[command(subcommand)]
 		action: TimestampCli,
 	},
+	/// Close an acceptance that nothing will settle.
+	///
+	/// A retried submission can leave the acceptance of the attempt that never
+	/// reached the queue, with no outcome. Every bundle of the same message
+	/// fails on it until it is closed. The record names the operator and the
+	/// reason; only an acceptance that has no outcome and is not in the queue
+	/// can be closed.
+	Abandon {
+		/// The queue id of the acceptance (`evidence verify` and the bundle's
+		/// error name it).
+		spool_id: uuid::Uuid,
+		/// Why it is closed (kept in the evidence).
+		#[arg(long)]
+		reason: String,
+		/// Do not ask; required when there is no terminal.
+		#[arg(long)]
+		yes: bool,
+		/// Print one JSON object instead of text.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Accept the first break in the evidence and take transactional mail again.
 	///
 	/// The acknowledgement is signed and kept in the chain; the break stays
@@ -363,6 +384,12 @@ pub(super) fn run(
 		EvidenceCli::Clock { action } => super::evidence_clock::run(&root, action, now, out),
 		EvidenceCli::Policy { action } => super::evidence_policy::run(&root, action, out),
 		EvidenceCli::Timestamp { action } => super::evidence_timestamp::run(&root, action, out),
+		EvidenceCli::Abandon {
+			spool_id,
+			reason,
+			yes,
+			json,
+		} => super::evidence_abandon::run(&config.data_dir, spool_id, &reason, yes, json, out),
 		EvidenceCli::Acknowledge { reason, yes, json } => {
 			super::evidence_verify::acknowledge(&root, &reason, yes, now, json, out)
 		}

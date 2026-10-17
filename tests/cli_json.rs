@@ -20,6 +20,9 @@ mod alias_domain;
 #[path = "cli_json/stores.rs"]
 mod stores;
 
+#[path = "cli_json/evidence.rs"]
+mod evidence;
+
 #[path = "cli_json/stack.rs"]
 mod stack;
 

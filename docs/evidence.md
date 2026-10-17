@@ -186,6 +186,13 @@ longer accounted for and the check fails. A message still in the queue has no
 outcome yet, so a bundle made too early does not verify: export it again
 later. A bundle says nothing about messages it does not contain.
 
+A client that retries a submission can leave the acceptance of the attempt
+that never reached the queue, with no outcome, and every bundle of the same
+message (or of the same recipient on that day) then fails on it. Close it with
+`epistle evidence abandon <spool-id> --reason "..."`: the record names the
+operator and the reason. Only an acceptance that has no ending and is not in
+the queue can be closed; `check` reads it as abandoned.
+
 The manifest is part of the bundle and is not signed, so a bundle for one
 recipient could be made to look like the whole story of a message. `check`
 prints what the bundle covers, says when the outcomes of other recipients were

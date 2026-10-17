@@ -33,6 +33,7 @@ mod dns_provider;
 mod dns_records;
 mod domain;
 mod evidence;
+mod evidence_abandon;
 mod evidence_bundle;
 mod evidence_clock;
 mod evidence_key;

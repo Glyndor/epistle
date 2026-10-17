@@ -275,6 +275,10 @@ fn key_show_names_the_fingerprint_and_the_keys_it_took_over_from() {
 fn key_rotate_hands_over_and_the_evidence_still_verifies() {
 	let server = Server::new();
 	let old = key_of(&server);
+	// Midday of the day, whatever the hour the test runs: a rotation waits
+	// out the first half hour of a day.
+	let midday = crate::evidence::day::Day::of_epoch(now()).start_epoch() + 12 * 3600;
+	crate::evidence::test_support::running_server(server.root(), midday);
 	let mut out = Vec::new();
 	let code = super::super::evidence_key::run(
 		server.root(),
@@ -282,7 +286,7 @@ fn key_rotate_hands_over_and_the_evidence_still_verifies() {
 			yes: true,
 			json: true,
 		},
-		now(),
+		midday,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS, "{}", text(&out));
