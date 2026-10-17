@@ -51,7 +51,9 @@ mod sieve_blob;
 mod sieve_capability;
 mod sieve_content;
 mod sieve_script;
+mod sieve_script_edit;
 mod sieve_script_query;
+mod sieve_script_set;
 mod sieve_script_validate;
 mod vacation_response;
 pub mod websocket;
@@ -338,6 +340,7 @@ pub fn dispatch_request(
 			"VacationResponse/set" => vacation_response::set(state, principal, &args, &call_id),
 			"SieveScript/get" => sieve_script::get(state, principal, &args, &call_id),
 			"SieveScript/query" => sieve_script_query::query(state, principal, &args, &call_id),
+			"SieveScript/set" => sieve_script_set::set(state, principal, &args, &call_id, uploads),
 			"SieveScript/validate" => {
 				sieve_script_validate::validate(state, principal, &args, &call_id, uploads)
 			}
@@ -356,7 +359,7 @@ fn required_scope(method: &str) -> Option<Scope> {
 	match method {
 		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => Some(Scope::Write),
 		"EmailSubmission/set" => Some(Scope::Send),
-		"VacationResponse/set" => Some(Scope::Write),
+		"VacationResponse/set" | "SieveScript/set" => Some(Scope::Write),
 		"Mailbox/get"
 		| "Mailbox/query"
 		| "Mailbox/changes"
