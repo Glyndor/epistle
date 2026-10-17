@@ -218,6 +218,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 		&["--domain", "example.net", "--host", "relay.example.net"],
 		Done,
 	),
+	("relay disable", &["--domain", "example.net"], Done),
+	("relay enable", &["--domain", "example.net"], Done),
 	("relay remove", &["--domain", "example.net"], Done),
 	("service list", &[], Done),
 	("service enable", &["webdav"], Done),

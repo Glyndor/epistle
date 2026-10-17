@@ -401,6 +401,8 @@ epistle relay show [--account NAME | --domain DOMAIN] [--json]
 epistle relay add --host smtp.example.net --starttls --username mailer --password-stdin < pass.txt
 epistle relay add --domain example.net --host relay.example.net --port 2525
 epistle relay remove [--account NAME | --domain DOMAIN]
+epistle relay disable [--account NAME | --domain DOMAIN] [--dry-run]
+epistle relay enable [--account NAME | --domain DOMAIN] [--dry-run]
 epistle relay test [--account NAME | --domain DOMAIN]
 ```
 
@@ -412,6 +414,15 @@ on stdin as one line; it is stored inline in the 0600 configuration file and
 `show` and `list` print only `set` or `unset`. A re-run without `--password-stdin`
 keeps the stored password when the user is unchanged. A domain or account that
 already has a `fail` or `direct` rule is refused.
+
+`disable` writes `enabled = false` on the rule and keeps everything else, the
+password included. After the restart the rule is never selected: its mail goes
+by the next rule that matches, or direct to the recipient's MX when none does,
+so it leaves from this server's own address, and a rule switched off no longer
+counts as a warm-up relay. `enable` takes the key out again. Both say `unchanged`
+when the rule is already that way and refuse a selector with no relay behind it
+with exit 2. `add` on a disabled rule updates it and leaves it disabled. `show`
+and `list` print `enabled` (`list` marks a rule that is off).
 
 `test` connects to the smarthost (through `--socks-proxy` when set), sends EHLO,
 upgrades with STARTTLS and authenticates when configured, then QUITs. It never

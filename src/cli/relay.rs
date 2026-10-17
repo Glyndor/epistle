@@ -113,6 +113,21 @@ pub enum RelayCli {
 		#[command(flatten)]
 		target: Target,
 	},
+	/// Switch a relay rule on again.
+	Enable {
+		/// The rule to switch on.
+		#[command(flatten)]
+		target: Target,
+	},
+	/// Switch a relay rule off without removing it.
+	///
+	/// Mail the rule would carry goes by the next rule that matches, or
+	/// direct to the recipient's MX when none does. `enable` brings it back.
+	Disable {
+		/// The rule to switch off.
+		#[command(flatten)]
+		target: Target,
+	},
 	/// Connect, EHLO, STARTTLS and AUTH as configured, then QUIT. Sends no mail.
 	Test {
 		/// The rule to test.
@@ -132,6 +147,7 @@ struct Row {
 	username: Option<String>,
 	password: &'static str,
 	socks_proxy: Option<String>,
+	enabled: bool,
 }
 
 fn row(rule: &Transport) -> Row {
@@ -154,6 +170,7 @@ fn row(rule: &Transport) -> Row {
 			"unset"
 		},
 		socks_proxy: rule.socks_proxy.clone(),
+		enabled: rule.enabled,
 	}
 }
 
@@ -172,12 +189,13 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	for row in rows {
 		writeln!(
 			out,
-			"{}\t{}:{}\tstarttls={}\tauth={}",
+			"{}\t{}:{}\tstarttls={}\tauth={}{}",
 			row.target,
 			row.host,
 			row.port,
 			if row.starttls { "yes" } else { "no" },
 			if row.username.is_some() { "yes" } else { "no" },
+			if row.enabled { "" } else { "\tdisabled" },
 		)
 		.map_err(|error| error.to_string())?;
 	}
@@ -212,6 +230,10 @@ fn show(
 		),
 		("password", row.password.to_string()),
 		("socks_proxy", row.socks_proxy.clone().unwrap_or(none)),
+		(
+			"enabled",
+			if row.enabled { "yes" } else { "no" }.to_string(),
+		),
 	] {
 		writeln!(out, "{key}\t{value}")
 			.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
@@ -230,6 +252,17 @@ pub(super) fn run(path: &Path, action: RelayCli, dry_run: bool, json: bool) -> E
 		&mut super::style::stderr(),
 		super::stack::run,
 	))
+}
+
+/// The edit behind `relay enable|disable`: a rule that is on carries no
+/// `enabled` key, a rule that is off carries `enabled = false`.
+fn switch(target: Target, enabled: bool) -> (resource::Change, &'static str, serde_json::Value) {
+	let fields = serde_json::json!({
+		"account": target.account, "domain": target.domain, "enabled": enabled,
+	});
+	let change: resource::Change =
+		Box::new(move |document, config| edit::switch(document, config, &target, enabled));
+	(change, if enabled { "enable" } else { "disable" }, fields)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -307,6 +340,8 @@ fn execute_with(
 			});
 			(change, "add", fields)
 		}
+		RelayCli::Enable { target } => switch(target, true),
+		RelayCli::Disable { target } => switch(target, false),
 		RelayCli::Remove { target } => {
 			let fields = serde_json::json!({ "account": target.account, "domain": target.domain });
 			let change: resource::Change =

@@ -107,7 +107,7 @@ fn list_prints_relay_rules_only_and_never_the_password() {
 	let (_, json) = capture(vec!["list", "--json"]);
 	assert_eq!(
 		json,
-		"[{\"target\":\"default\",\"account\":null,\"domain\":null,\"host\":\"smtp.example.net\",\"port\":587,\"starttls\":true,\"username\":\"u\",\"password\":\"set\",\"socks_proxy\":null}]\n"
+		"[{\"target\":\"default\",\"account\":null,\"domain\":null,\"host\":\"smtp.example.net\",\"port\":587,\"starttls\":true,\"username\":\"u\",\"password\":\"set\",\"socks_proxy\":null,\"enabled\":true}]\n"
 	);
 }
 
@@ -117,7 +117,7 @@ fn show_prints_the_selected_rule_and_masks_the_password() {
 	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 	assert_eq!(
 		out,
-		"target\tdefault\nhost\tsmtp.example.net\nport\t587\nstarttls\ttrue\nusername\tu\npassword\tset\nsocks_proxy\t-\n"
+		"target\tdefault\nhost\tsmtp.example.net\nport\t587\nstarttls\ttrue\nusername\tu\npassword\tset\nsocks_proxy\t-\nenabled\tyes\n"
 	);
 	assert!(
 		!out.contains("p-secret"),

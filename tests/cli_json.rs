@@ -64,3 +64,6 @@ mod alert_state;
 
 #[path = "cli_json/webhook_state.rs"]
 mod webhook_state;
+
+#[path = "cli_json/relay_state.rs"]
+mod relay_state;
