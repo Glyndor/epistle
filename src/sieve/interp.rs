@@ -38,6 +38,9 @@ pub struct Outcome {
 	/// The run spent more than it may (steps, matching work, memory, see
 	/// [`super::env`]) and was abandoned: the message is only kept.
 	pub aborted: bool,
+	/// How many different `redirect` addresses came after the limit and were
+	/// not forwarded to, for the delivery to log.
+	pub redirects_over_limit: usize,
 }
 
 /// A parsed `vacation` action (RFC 5230). The caller decides whether to send.
@@ -154,13 +157,16 @@ fn run(
 						// The action still counts as done, so the implicit keep is
 						// cancelled either way.
 						let target = vars.expand(&target);
-						if outcome.redirects.len() < MAX_REDIRECTS
-							&& !outcome
-								.redirects
-								.iter()
-								.any(|t| t.eq_ignore_ascii_case(&target))
+						if !outcome
+							.redirects
+							.iter()
+							.any(|t| t.eq_ignore_ascii_case(&target))
 						{
-							outcome.redirects.push(target);
+							if outcome.redirects.len() < MAX_REDIRECTS {
+								outcome.redirects.push(target);
+							} else {
+								outcome.redirects_over_limit += 1;
+							}
 						}
 						if !has_tag(args, "copy") {
 							*cancel_implicit = true;

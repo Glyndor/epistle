@@ -42,6 +42,17 @@ impl LocalDelivery {
 			.root(&self.data_dir)
 			.and_then(|root| root.file("filter.sieve"))
 			.ok()?;
+		// The store keeps scripts within its size limit; a file past it was not
+		// written by the store, and is not read.
+		let size = fs::metadata(&path).ok()?.len();
+		if size > crate::managesieve::store::MAX_SCRIPT_BYTES as u64 {
+			tracing::warn!(
+				account,
+				size,
+				"the account's Sieve filter is over the size limit; it was not run"
+			);
+			return None;
+		}
 		let source = fs::read_to_string(path).ok()?;
 		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
 		let commands = crate::sieve::parser::parse(&tokens).ok()?;
@@ -54,6 +65,21 @@ impl LocalDelivery {
 		let parsed = crate::sieve::interp::Message::parse(&message.data)
 			.with_envelope(message.reverse_path.clone(), message.recipients.clone())
 			.with_mailboxes(&mut mailboxes);
-		Some(crate::sieve::interp::evaluate(&commands, &parsed))
+		let outcome = crate::sieve::interp::evaluate(&commands, &parsed);
+		if outcome.aborted {
+			tracing::warn!(
+				account,
+				"the account's Sieve filter used more steps or matching work than a run may; the run was abandoned and the message kept"
+			);
+		}
+		if outcome.redirects_over_limit > 0 {
+			tracing::warn!(
+				account,
+				ignored = outcome.redirects_over_limit,
+				limit = crate::sieve::interp::MAX_REDIRECTS,
+				"the account's Sieve filter asked for redirects beyond the limit; they were not forwarded"
+			);
+		}
+		Some(outcome)
 	}
 }

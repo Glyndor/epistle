@@ -26,6 +26,12 @@ pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_token
 	}
 }
 
+/// The most folders an account may hold before a Sieve `fileinto` stops
+/// creating new ones (INBOX counts). A script that files by something a
+/// sender chooses, such as `fileinto "${1}"` on the Subject, would otherwise
+/// make one for every message; past this the message is kept in INBOX.
+pub(super) const MAX_AUTO_FOLDERS: usize = 200;
+
 /// A mailbox name a routing rule may target: levels of ASCII letters,
 /// digits, `-`, `_` and space, separated by the `/` hierarchy delimiter, at
 /// most 64 bytes in all. Each level is a valid folder level, so the name maps
@@ -48,11 +54,33 @@ pub(super) fn is_safe_mailbox(name: &str) -> bool {
 /// too, such as one with an empty level (`Lists//Rust`).
 pub(super) fn sieve_mailbox(name: &str) -> Option<String> {
 	use crate::util::path_component::MailboxName;
+	// The name is what a script built, perhaps from a header a sender wrote:
+	// not longer than a person would name a folder, and nothing that changes
+	// the direction text is shown in.
+	if name.chars().count() > MAX_FOLDER_NAME_CHARS || name.chars().any(is_bidi_control) {
+		return None;
+	}
 	let stored = crate::util::mutf7::encode(name);
 	match MailboxName::new(&stored).ok()? {
 		MailboxName::Inbox => Some("INBOX".to_string()),
 		MailboxName::Folder(_) => Some(stored),
 	}
+}
+
+/// The longest folder name, in characters, a Sieve `fileinto` may use.
+const MAX_FOLDER_NAME_CHARS: usize = 128;
+
+/// The characters that reorder or isolate the text around them (Unicode
+/// bidirectional formatting): in a folder name they make one look like
+/// another.
+fn is_bidi_control(c: char) -> bool {
+	matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Whether a new folder may be made in the account: it holds fewer than
+/// [`MAX_AUTO_FOLDERS`] (INBOX included).
+pub(super) fn may_create_mailbox(data_dir: &std::path::Path, account: &str) -> bool {
+	crate::imap::mailbox::list(data_dir, account).len() < MAX_AUTO_FOLDERS
 }
 
 /// Whether the named mailbox already exists in the account (INBOX is
