@@ -44,6 +44,7 @@ a connection URL.
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
 | `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
+| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, DNS records and DKIM keys are kept. Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
 | `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |

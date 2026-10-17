@@ -10,6 +10,9 @@ mod validate_tenants;
 #[path = "validate_database.rs"]
 mod validate_database;
 
+#[path = "validate_disabled_domains.rs"]
+mod validate_disabled_domains;
+
 #[path = "validate_addresses.rs"]
 pub(crate) mod validate_addresses;
 
@@ -21,6 +24,7 @@ impl Config {
 		self.validate_addresses()?;
 		self.validate_data_dir()?;
 		self.validate_domains()?;
+		self.validate_disabled_domains()?;
 		self.validate_dns()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;

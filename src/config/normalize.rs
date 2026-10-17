@@ -19,6 +19,10 @@ impl Config {
 			let stored = config_domain(domain);
 			note(&mut changed, "domains: ", domain, stored);
 		}
+		for domain in &mut self.disabled_domains {
+			let stored = config_domain(domain);
+			note(&mut changed, "disabled_domains: ", domain, stored);
+		}
 		let mut aliases: Vec<(String, String)> = self.domain_aliases.drain().collect();
 		aliases.sort();
 		for (alias, target) in aliases {
