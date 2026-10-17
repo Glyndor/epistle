@@ -319,7 +319,9 @@ epistle (0.12.1) unstable; urgency=medium
     (IPv4 /32 and /24, IPv6 /64 and /48) may add 30 and 120 jobs per hour,
     a sender domain 30 but only when the server verified it (the envelope
     sender is written by the client, so a forged domain spends nothing of the
-    real one), and the whole server 2000. The tables of keys drop the least
+    real one), a whole network (IPv4 /16, IPv6 /32) 125, and the whole server
+    2000, the last quarter of them kept for networks that have used few. The
+    tables of keys drop the least
     recently used entry when full instead of refusing new senders. A job over
     its budget or that finds the queue full is dropped and counted in
     `mail_bayes_training_dropped_total`. The server also learns ham only from

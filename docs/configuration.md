@@ -611,9 +611,10 @@ own block and under the wider one around it (IPv4 /32 and /24, IPv6 /64 and
 /48), and a sender domain counts only when the server verified it, because
 the envelope sender is written by the client. A single address or domain
 may have 4 jobs waiting or running and add 30 per hour; a wider block, 8
-waiting and 120 per hour; the whole server, 2000 per hour. The tables of
-keys hold 8192 addresses and 8192 domains each and drop the least recently
-used entry when full, so a flood of new addresses forgets old ones and never
+waiting and 120 per hour; a whole network (an IPv4 /16, an IPv6 /32), 125 per
+hour; the whole server, 2000 per hour, of which the last quarter is kept for
+networks that have used 31 or fewer. The tables of keys hold 8192 addresses,
+8192 domains and 8192 networks and drop the least recently used entry when full, so a flood of new addresses forgets old ones and never
 shuts a new sender out. A job over a limit, or that finds the queue full, is
 dropped and counted in `mail_bayes_training_dropped_total`; the reply to the
 client never waits for it. Those limits are what one anonymous sender can

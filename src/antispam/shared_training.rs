@@ -19,16 +19,23 @@
 //!   client: a domain the server did not verify is never a key, or anyone
 //!   could use up the budget of a domain they do not own. Each key allows
 //!   [`FINE_PENDING`]/[`COARSE_PENDING`] jobs waiting or running and
-//!   [`FINE_PER_WINDOW`]/[`COARSE_PER_WINDOW`] per [`WINDOW`], and the whole
-//!   server [`GLOBAL_PER_WINDOW`] per kind and window.
-//! - **A table that cannot be filled.** The keys of addresses and the keys
-//!   of domains live in separate tables of [`TABLE_SIZE`] entries each. A
-//!   full table drops its least recently used entry to make room, so a flood
-//!   of new keys only makes the table forget old ones, never refuses a new
-//!   source; and it cannot push a domain out by rotating addresses. A
-//!   forgotten key starts again from nothing, which costs the attacker
-//!   nothing it did not already have: the wider block and the global count
-//!   it is also counted under remember it.
+//!   [`FINE_PER_WINDOW`]/[`COARSE_PER_WINDOW`] per [`WINDOW`].
+//! - **A share of the server's budget per network.** The whole server
+//!   accepts [`GLOBAL_PER_WINDOW`] jobs per kind and window, and one network
+//!   (an IPv4 /16, an IPv6 /32) may take at most [`BLOCK_PER_WINDOW`] of
+//!   them, a sixteenth. The last quarter of the global budget is kept for
+//!   networks that have used at most [`FIRST_JOBS`] of their share: past
+//!   that, a network is held back once [`SOFT_LIMIT`] is reached, while a
+//!   network under its fair share keeps training until the global budget is
+//!   truly spent.
+//! - **Tables that cannot be filled.** Addresses, domains and networks live
+//!   in separate tables of [`TABLE_SIZE`] entries each. A full table drops
+//!   its least recently used entry to make room, so a flood of new keys only
+//!   makes the table forget old ones, never refuses a new source; and it
+//!   cannot push a domain out by rotating addresses. A forgotten key starts
+//!   again from nothing, which costs the attacker nothing it did not already
+//!   have: the wider keys and the global count it is also counted under
+//!   remember it.
 //! - **Never blocks.** [`SharedTraining::submit`] does not wait: a job that
 //!   does not fit is dropped and the caller counts it. Learning is advisory;
 //!   the SMTP reply never depends on it.
@@ -37,6 +44,26 @@
 //! learn, so the budget is the defence: what any source can teach the shared
 //! corpus per hour is capped, and the server only teaches it ham from
 //! senders it verified (see `Server::train_corpus`).
+//!
+//! # Invariants
+//!
+//! 1. No source can take from another more than that other's reserved part:
+//!    one network never takes more than [`BLOCK_PER_WINDOW`] of the global
+//!    budget in a window, and the last quarter of it can be spent only by
+//!    networks at or under [`FIRST_JOBS`]. So a network that uses at most
+//!    [`FIRST_JOBS`] jobs a window trains whenever the other networks, each
+//!    held to [`BLOCK_PER_WINDOW`], have not between them spent it all, which
+//!    takes more than fifteen of them.
+//! 2. The global budget is never exceeded: per kind and window, at most
+//!    [`GLOBAL_PER_WINDOW`] jobs are admitted, at most [`BLOCK_PER_WINDOW`]
+//!    of them from one network (for as long as the network stays in its
+//!    table, which takes [`TABLE_SIZE`] other networks pushing it out).
+//! 3. Memory is bounded: each table holds at most [`TABLE_SIZE`] keys, a key
+//!    is at most a few hundred bytes, and the queue holds
+//!    [`QUEUE_CAPACITY`] jobs of at most [`MAX_TRAINING_BYTES`].
+//! 4. Refusing is cheap and leaves no state: a refused job costs a few hash
+//!    lookups and changes nothing, not a count, not the order of use, not a
+//!    window. Admitting costs a few hash lookups and ordered-map steps.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
@@ -69,6 +96,18 @@ pub const COARSE_PER_WINDOW: u32 = 120;
 /// Jobs the whole server accepts per [`WINDOW`], for each of ham and spam.
 pub const GLOBAL_PER_WINDOW: u32 = 2000;
 
+/// Jobs one network (an IPv4 /16, an IPv6 /32) may add per [`WINDOW`], for
+/// each of ham and spam: a sixteenth of the global budget.
+pub const BLOCK_PER_WINDOW: u32 = GLOBAL_PER_WINDOW / 16;
+
+/// The global count past which only a network at or under [`FIRST_JOBS`]
+/// is still admitted: the last quarter of the budget is kept for them.
+pub const SOFT_LIMIT: u32 = GLOBAL_PER_WINDOW - GLOBAL_PER_WINDOW / 4;
+
+/// Jobs of its share a network may have used and still count as under its
+/// fair share: a quarter of [`BLOCK_PER_WINDOW`].
+pub const FIRST_JOBS: u32 = BLOCK_PER_WINDOW / 4;
+
 /// The length of the window the budgets are counted in.
 pub const WINDOW: Duration = Duration::from_secs(3600);
 
@@ -81,8 +120,8 @@ const MAX_DOMAIN_LEN: usize = 255;
 /// Who a job comes from, as the keys its budget is counted under.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrainSource {
-	/// The client's own block and the wider block around it.
-	addresses: Option<(String, String)>,
+	/// The client's own block, the wider block around it, and its network.
+	addresses: Option<(String, String, String)>,
 	/// The sender's domain, only when the server verified it.
 	domain: Option<String>,
 }
@@ -96,13 +135,18 @@ impl TrainSource {
 		let addresses = client.map(|ip| match ip {
 			IpAddr::V4(v4) => {
 				let [a, b, c, _] = v4.octets();
-				(format!("{v4}"), format!("{a}.{b}.{c}.0/24"))
+				(
+					format!("{v4}"),
+					format!("{a}.{b}.{c}.0/24"),
+					format!("{a}.{b}.0.0/16"),
+				)
 			}
 			IpAddr::V6(v6) => {
 				let [a, b, c, d, ..] = v6.segments();
 				(
 					format!("{a:x}:{b:x}:{c:x}:{d:x}::/64"),
 					format!("{a:x}:{b:x}:{c:x}::/48"),
+					format!("{a:x}:{b:x}::/32"),
 				)
 			}
 		});
@@ -252,6 +296,7 @@ impl Table {
 struct Inner {
 	addresses: Table,
 	domains: Table,
+	networks: Table,
 	global: [Count; 2],
 }
 
@@ -278,6 +323,7 @@ impl Budget {
 			inner: Mutex::new(Inner {
 				addresses: Table::new(size),
 				domains: Table::new(size),
+				networks: Table::new(size),
 				global: [Count::fresh(Instant::now()); 2],
 			}),
 		}
@@ -288,9 +334,25 @@ impl Budget {
 	pub fn admit(&self, now: Instant, source: &TrainSource, spam: bool) -> Result<(), Refusal> {
 		let kind = kind(spam);
 		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-		inner.global[kind] = inner.global[kind].at(now);
-		inner.global[kind].check(GLOBAL_PER_WINDOW, u32::MAX)?;
-		if let Some((fine, coarse)) = &source.addresses {
+		// Everything is checked first and nothing is written until the job
+		// is admitted, so a refusal leaves no trace.
+		let global = inner.global[kind].at(now);
+		let used_by_network = source
+			.addresses
+			.as_ref()
+			.map(|(_, _, network)| inner.networks.peek(network, kind, now).admitted);
+		if used_by_network.is_some_and(|used| used >= BLOCK_PER_WINDOW) {
+			return Err(Refusal::OverBudget);
+		}
+		// A network that has used at most its first jobs may spend the whole
+		// global budget; one that has used more, or whose network is not
+		// known, stops at the soft limit and leaves the rest to the former.
+		let limit = match used_by_network {
+			Some(used) if used < FIRST_JOBS => GLOBAL_PER_WINDOW,
+			_ => SOFT_LIMIT,
+		};
+		global.check(limit, u32::MAX)?;
+		if let Some((fine, coarse, _)) = &source.addresses {
 			inner
 				.addresses
 				.peek(fine, kind, now)
@@ -306,10 +368,13 @@ impl Budget {
 				.peek(domain, kind, now)
 				.check(FINE_PER_WINDOW, FINE_PENDING)?;
 		}
-		inner.global[kind].admitted += 1;
-		if let Some((fine, coarse)) = &source.addresses {
+		let mut global = global;
+		global.admitted += 1;
+		inner.global[kind] = global;
+		if let Some((fine, coarse, network)) = &source.addresses {
 			inner.addresses.charge(fine, kind, now);
 			inner.addresses.charge(coarse, kind, now);
+			inner.networks.charge(network, kind, now);
 		}
 		if let Some(domain) = &source.domain {
 			inner.domains.charge(domain, kind, now);
@@ -321,19 +386,24 @@ impl Budget {
 	pub fn release(&self, source: &TrainSource, spam: bool) {
 		let kind = kind(spam);
 		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-		if let Some((fine, coarse)) = &source.addresses {
+		if let Some((fine, coarse, network)) = &source.addresses {
 			inner.addresses.release(fine, kind);
 			inner.addresses.release(coarse, kind);
+			inner.networks.release(network, kind);
 		}
 		if let Some(domain) = &source.domain {
 			inner.domains.release(domain, kind);
 		}
 	}
 
-	/// Keys currently tracked: addresses, then domains.
-	pub fn tracked(&self) -> (usize, usize) {
+	/// Keys currently tracked: addresses, domains, networks.
+	pub fn tracked(&self) -> (usize, usize, usize) {
 		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-		(inner.addresses.slots.len(), inner.domains.slots.len())
+		(
+			inner.addresses.slots.len(),
+			inner.domains.slots.len(),
+			inner.networks.slots.len(),
+		)
 	}
 
 	/// Jobs of `source` waiting or running for ham or spam, by its most
@@ -342,7 +412,7 @@ impl Budget {
 		let kind = kind(spam);
 		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 		let mut most = 0;
-		if let Some((fine, coarse)) = &source.addresses {
+		if let Some((fine, coarse, _)) = &source.addresses {
 			for key in [fine, coarse] {
 				most = most.max(inner.addresses.peek(key, kind, Instant::now()).pending);
 			}
