@@ -23,6 +23,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How GoDaddy takes a TXT `data` and lists it back; see `record_element`.
@@ -227,7 +228,7 @@ impl GodaddyProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -251,7 +252,7 @@ impl GodaddyProvider {
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(auth_error(status));
@@ -259,10 +260,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let text = response.text().await.map_err(transport)?;
 		// The body is not echoed into the error: an HTTP 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we
@@ -291,7 +289,7 @@ impl GodaddyProvider {
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -437,7 +435,7 @@ impl GodaddyProvider {
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(auth_error(status));
@@ -445,10 +443,7 @@ impl GodaddyProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let text = response.text().await.map_err(transport)?;
 		// The body is not echoed into the error: a 200 with a
 		// diagnostic body (the response from a misbehaving gateway) can
 		// carry credentials that belong in the `Authorization` header we

@@ -28,7 +28,8 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
 use crate::dns::providers::namecheap::render::{host_from_record, host_label, split_sld_tld};
-use crate::dns::providers::namecheap::xml::{Host, extract_hosts, parse_response};
+use crate::dns::providers::namecheap::xml::{ApiResponse, Host, extract_hosts, parse_response};
+use crate::dns::providers::transport;
 use crate::net::HttpsUrl;
 
 /// Namecheap's production API endpoint; overridable via
@@ -145,54 +146,12 @@ impl NamecheapProvider {
 		params
 	}
 
-	/// Build a GET request URL with the global parameters plus any
-	/// command-specific extras (`SLD`/`TLD`). The URL is an [`HttpsUrl`]:
-	/// the key cannot be put on a cleartext request, and every value is
-	/// percent-encoded as a query pair.
-	fn build_url(&self, command: &str, extra: &[(&str, &str)]) -> HttpsUrl {
-		let mut url = self.base.clone();
-		for (key, value) in self.global_params(command) {
-			url = url.with_query(&key, &value);
-		}
-		for (key, value) in extra {
-			url = url.with_query(key, value);
-		}
-		url
-	}
-
-	/// `getHosts` against Namecheap. Returns the parsed list of [`Host`]s
-	/// currently published at the zone (an empty list if the zone has none).
-	async fn get_hosts(&self, zone: &str) -> Result<Vec<Host>, ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
-		let url = self.build_url(
-			"namecheap.domains.dns.getHosts",
-			&[("SLD", &sld), ("TLD", &tld)],
-		);
-		let response = self
-			.client
-			.get(url.into_url())
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		let api = parse_response(response).await?;
-		Ok(extract_hosts(api))
-	}
-
-	/// `setHosts` against Namecheap: "All host records that are not
-	/// included into the API call will be deleted", so `hosts` is the whole
-	/// zone. The hosts go as numbered parameters, and the documentation
-	/// recommends a POST past ten of them
-	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
-	/// read 2026-10-12); every call is a form POST, global parameters
-	/// included, so the key stays out of the URL.
-	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
-		let mut params = self.global_params("namecheap.domains.dns.setHosts");
-		params.push(("SLD".into(), sld));
-		params.push(("TLD".into(), tld));
-		params.extend(set_hosts_params(hosts));
+	/// One API call: a form POST to the API URL carrying `params`. Every
+	/// call is a POST, global parameters included, so the key stays out of
+	/// the URL and out of every error message that quotes a URL.
+	async fn call(&self, params: &[(String, String)]) -> Result<ApiResponse, ProviderError> {
 		let body = url::form_urlencoded::Serializer::new(String::new())
-			.extend_pairs(&params)
+			.extend_pairs(params)
 			.finish();
 		let response = self
 			.client
@@ -204,9 +163,33 @@ impl NamecheapProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		let _ = parse_response(response).await?;
-		Ok(())
+			.map_err(transport)?;
+		parse_response(response).await
+	}
+
+	/// `getHosts` against Namecheap. Returns the parsed list of [`Host`]s
+	/// currently published at the zone (an empty list if the zone has none).
+	async fn get_hosts(&self, zone: &str) -> Result<Vec<Host>, ProviderError> {
+		let (sld, tld) = split_sld_tld(zone);
+		let mut params = self.global_params("namecheap.domains.dns.getHosts");
+		params.push(("SLD".into(), sld));
+		params.push(("TLD".into(), tld));
+		Ok(extract_hosts(self.call(&params).await?))
+	}
+
+	/// `setHosts` against Namecheap: "All host records that are not
+	/// included into the API call will be deleted", so `hosts` is the whole
+	/// zone. The hosts go as numbered parameters, and the documentation
+	/// recommends a POST past ten of them
+	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
+	/// read 2026-10-12).
+	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
+		let (sld, tld) = split_sld_tld(zone);
+		let mut params = self.global_params("namecheap.domains.dns.setHosts");
+		params.push(("SLD".into(), sld));
+		params.push(("TLD".into(), tld));
+		params.extend(set_hosts_params(hosts));
+		self.call(&params).await.map(|_| ())
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {

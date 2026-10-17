@@ -12,6 +12,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How deSEC wants a TXT value written and lists it back; see
@@ -149,7 +150,7 @@ impl DesecProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		check(response)
 	}
 
@@ -169,7 +170,7 @@ impl DesecProvider {
 			)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -177,10 +178,7 @@ impl DesecProvider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let text = response.text().await.map_err(transport)?;
 		let rrsets: Vec<Rrset> =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 		let sub = self.subname(name);
@@ -269,17 +267,14 @@ impl DnsProvider for DesecProvider {
 				)
 				.send()
 				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				.map_err(transport)?;
 			let status = response.status();
 			if status == reqwest::StatusCode::UNAUTHORIZED
 				|| status == reqwest::StatusCode::FORBIDDEN
 			{
 				return Err(ProviderError::Auth);
 			}
-			let text = response
-				.text()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			let text = response.text().await.map_err(transport)?;
 			let rrsets: Vec<Rrset> =
 				serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 			Ok(rrsets

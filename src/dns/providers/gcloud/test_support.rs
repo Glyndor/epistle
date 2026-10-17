@@ -343,7 +343,7 @@ pub(super) async fn start_mock(initial_rrsets: Vec<Rrset>) -> (String, Shared) {
 	(format!("http://{addr}"), state)
 }
 
-pub(super) fn provider_for(base: &str) -> GcloudProvider {
+pub(crate) fn provider_for(base: &str) -> GcloudProvider {
 	let account = ServiceAccount {
 		client_email: "sa@example.iam.gserviceaccount.com".into(),
 		private_key: test_key().pem.clone(),

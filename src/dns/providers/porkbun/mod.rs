@@ -25,6 +25,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How Porkbun takes a TXT `content` and lists it back; see `upsert_inner`.
@@ -188,7 +189,7 @@ impl PorkbunProvider {
 			.body(serde_json::Value::Object(body).to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		decode(response).await
 	}
 
@@ -428,10 +429,7 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 	if http == reqwest::StatusCode::UNAUTHORIZED || http == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response
-		.text()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let text = response.text().await.map_err(transport)?;
 	let reply: Reply =
 		serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
 	if reply.status.eq_ignore_ascii_case("SUCCESS") {

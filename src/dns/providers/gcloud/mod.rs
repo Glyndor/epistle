@@ -39,6 +39,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 mod list;
@@ -252,7 +253,7 @@ impl GcloudProvider {
 			.bearer_auth(&token)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, true)?;
 		let text = self.read_body(response).await?;
 		let parsed: ListZonesResp =
@@ -286,15 +287,12 @@ impl GcloudProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, false)
 	}
 
 	async fn read_body(&self, response: reqwest::Response) -> Result<String, ProviderError> {
-		response
-			.text()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))
+		response.text().await.map_err(transport)
 	}
 
 	/// Return a valid bearer access token, refreshing the cache when needed.
@@ -329,7 +327,7 @@ impl GcloudProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		Self::classify(&response, true)?;
 		let text = self.read_body(response).await?;
 		let parsed: Value =
@@ -579,7 +577,7 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 #[path = "test_support.rs"]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

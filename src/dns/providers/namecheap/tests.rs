@@ -33,6 +33,8 @@ pub(super) struct MockState {
 	pub(super) set_hosts_calls: Vec<SetHostsCall>,
 	/// The content type of every POST, in order.
 	pub(super) post_content_types: Vec<String>,
+	/// The parameters of every `getHosts` call, in order.
+	pub(super) get_hosts_calls: Vec<HashMap<String, String>>,
 }
 
 /// One `setHosts` call as the mock received it: every parameter, query and
@@ -146,6 +148,7 @@ pub(super) async fn handle(
 	}
 	match params["Command"].as_str() {
 		"namecheap.domains.dns.getHosts" => {
+			s.get_hosts_calls.push(params.clone());
 			let xml = if s.get_hosts_xml.is_empty() {
 				EMPTY_ZONE_XML.to_string()
 			} else {

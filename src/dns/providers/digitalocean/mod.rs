@@ -14,6 +14,7 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
+use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How DigitalOcean takes a TXT `data` and lists it back; see `record_body`.
@@ -175,7 +176,7 @@ impl DigitaloceanProvider {
 				.bearer_auth(self.secret.token())
 				.send()
 				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
+				.map_err(transport)?;
 			let status = response.status();
 			if status == reqwest::StatusCode::UNAUTHORIZED
 				|| status == reqwest::StatusCode::FORBIDDEN
@@ -204,7 +205,7 @@ impl DigitaloceanProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -227,7 +228,7 @@ impl DigitaloceanProvider {
 			.body(body)
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -248,7 +249,7 @@ impl DigitaloceanProvider {
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+			.map_err(transport)?;
 		let status = response.status();
 		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 			return Err(ProviderError::Auth);
@@ -499,10 +500,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
 	}
-	let text = response
-		.text()
-		.await
-		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let text = response.text().await.map_err(transport)?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 
