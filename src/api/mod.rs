@@ -399,6 +399,10 @@ mod jmap_tests_sieve_activate;
 mod jmap_tests_sieve_authz;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_vacation.rs"]
+mod jmap_tests_sieve_vacation;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 
