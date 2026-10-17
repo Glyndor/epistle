@@ -689,6 +689,7 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 |---|---|
 | `url` | Endpoint to POST events to. |
 | `secret` | Optional HMAC-SHA256 signing secret. |
+| `enabled` | Default `true`. With `false` the section stays in the file but no event is posted, not even for an alert with `webhook = true`. `epistle webhook disable\|enable` edits it. `webhook test` still posts. |
 
 Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`

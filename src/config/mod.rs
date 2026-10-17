@@ -386,7 +386,8 @@ pub struct Config {
 	/// Requests` answers requests above the limit.
 	#[serde(default = "default_masked_addresses_max")]
 	pub masked_addresses_max: usize,
-	/// Outbound event webhooks. Present enables notifications.
+	/// Outbound event webhooks. Present enables notifications, unless it
+	/// says `enabled = false`; read it through [`Config::active_webhook`].
 	pub webhook: Option<Webhook>,
 	/// Per-instance message-size cap in bytes. `None` keeps the
 	/// historical default of 25 MiB (the same value the SMTP
@@ -544,6 +545,13 @@ impl Config {
 			kind: "config file",
 		})?;
 		Self::parse_text(&raw, path)
+	}
+
+	/// The `[webhook]` section when it is there and switched on. Whatever
+	/// posts an event reads the section through this, so a webhook with
+	/// `enabled = false` posts nothing.
+	pub fn active_webhook(&self) -> Option<&Webhook> {
+		self.webhook.as_ref().filter(|webhook| webhook.enabled)
 	}
 
 	/// The loopback address listeners bind to unless explicitly configured.

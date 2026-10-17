@@ -80,6 +80,16 @@ pub struct Target {
 	all: bool,
 }
 
+/// The webhook the queue actions notify: the configured one, unless it is
+/// switched off.
+pub(super) fn webhook_for(config: &crate::config::Config) -> Option<Arc<crate::webhook::Webhook>> {
+	config.active_webhook().map(|section| {
+		Arc::new(
+			crate::webhook::Webhook::new(&section.url, section.secret.clone()).expect("webhook"),
+		)
+	})
+}
+
 /// Run one queue action against the spool under `data_dir`, writing data to
 /// `out`. `now` is the current epoch second (injectable for tests).
 /// `delivery_log_days` is the operator's configured retention for the
@@ -459,3 +469,7 @@ mod tests;
 #[cfg(test)]
 #[path = "queue_tests_destinations.rs"]
 mod tests_destinations;
+
+#[cfg(test)]
+#[path = "queue_tests_webhook.rs"]
+mod tests_webhook;

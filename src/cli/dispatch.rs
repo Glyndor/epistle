@@ -225,12 +225,7 @@ impl Cli {
 				action,
 			} => match Config::load(&config) {
 				Ok(config) => {
-					let webhook = config.webhook.as_ref().map(|wh| {
-						Arc::new(
-							crate::webhook::Webhook::new(&wh.url, wh.secret.clone())
-								.expect("webhook"),
-						)
-					});
+					let webhook = queue::webhook_for(&config);
 					queue::run(
 						&config.data_dir,
 						config.storage.as_ref(),
