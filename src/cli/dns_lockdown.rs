@@ -324,6 +324,7 @@ fn publish(
 	let served = ServedNames::new(&config.domains, &config.hostname, &existing);
 	let dmarc = dmarc_inputs(config, target.domain, args, deps.now);
 	let plan = lockdown::build_plan(&PlanInput {
+		zone: target.zone,
 		domain: target.domain,
 		served: &served,
 		existing: &existing,
@@ -423,6 +424,7 @@ fn manual(
 	let served = ServedNames::new(&config.domains, &config.hostname, &existing);
 	let dmarc = dmarc_inputs(config, domain, args, deps.now);
 	let plan = lockdown::build_plan(&PlanInput {
+		zone: domain,
 		domain,
 		served: &served,
 		existing: &existing,
