@@ -23,6 +23,9 @@ pub(super) fn check(script: &str) -> Result<(), StoreError> {
 		let at = located.starts.get(index).copied().unwrap_or(0);
 		invalid(script, at, parse_reason(&error))
 	})?;
+	if let Some(problem) = crate::sieve::analysis::pattern_problem(&commands) {
+		return Err(StoreError::InvalidScript(problem));
+	}
 	enforce_known_extensions(&commands)?;
 	enforce_mailbox_require(&commands)
 }

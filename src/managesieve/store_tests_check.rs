@@ -82,3 +82,31 @@ fn an_unsupported_extension_name_is_shown_short_and_printable() {
 	let shown = reason("require \"a\u{1b}[31mb\";");
 	assert_eq!(shown, "extension \"a?[31mb\" is not supported");
 }
+
+#[test]
+fn a_matches_key_the_matcher_would_refuse_is_refused_at_upload() {
+	let stars = "*".repeat(33);
+	assert_eq!(
+		reason(&format!(
+			"if header :matches \"subject\" \"{stars}\" {{ keep; }}"
+		)),
+		"a :matches key has more than 32 wildcards"
+	);
+	let long = "a".repeat(257);
+	assert_eq!(
+		reason(&format!(
+			"if anyof(true, not header :matches [\"x\", \"{long}\"] \"y\") {{ keep; }}"
+		)),
+		"a :matches key is longer than 256 characters"
+	);
+	let edge = "*".repeat(32);
+	ScriptStore::validate(&format!(
+		"if header :matches \"subject\" \"{edge}\" {{ keep; }}"
+	))
+	.expect("32 wildcards are allowed");
+	// Only :matches keys are held to it.
+	ScriptStore::validate(&format!(
+		"if header :contains \"subject\" \"{stars}\" {{ keep; }}"
+	))
+	.expect("a :contains key is not a pattern");
+}

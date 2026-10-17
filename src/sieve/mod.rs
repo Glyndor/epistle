@@ -16,6 +16,7 @@ pub fn extensions() -> impl Iterator<Item = &'static str> {
 	EXTENSIONS.split_whitespace()
 }
 
+pub mod analysis;
 pub mod ast;
 mod compare;
 mod date;
