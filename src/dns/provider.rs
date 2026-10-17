@@ -178,10 +178,22 @@ impl RecordKind {
 /// not wrap the whole value is data (a CAA target is `0 issue "ca.example"`,
 /// an HTTPS parameter is `alpn="h2"`) and stays.
 pub fn unwrap_quotes(value: &str) -> &str {
-	value
+	let Some(inner) = value
 		.strip_prefix('"')
 		.and_then(|rest| rest.strip_suffix('"'))
-		.unwrap_or(value)
+	else {
+		return value;
+	};
+	// `"a" "b"` starts and ends with a quote and is two strings, not one.
+	let mut escaped = false;
+	for c in inner.chars() {
+		match c {
+			'\\' if !escaped => escaped = true,
+			'"' if !escaped => return value,
+			_ => escaped = false,
+		}
+	}
+	inner
 }
 
 /// The four parts of an SRV record, split out from the presentation form
@@ -244,7 +256,12 @@ impl std::fmt::Display for ProviderError {
 		match self {
 			ProviderError::Unsupported => f.write_str("provider does not support writes"),
 			ProviderError::Auth => f.write_str("provider authentication failed"),
-			ProviderError::Remote(detail) => write!(f, "provider error: {detail}"),
+			// What a provider answered is text from outside: control characters
+			// and bidirectional marks in it are escaped before they can reach a
+			// terminal, a log or a message.
+			ProviderError::Remote(detail) => {
+				write!(f, "provider error: {}", crate::cli::term::sanitize(detail))
+			}
 		}
 	}
 }

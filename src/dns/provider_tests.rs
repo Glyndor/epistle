@@ -135,6 +135,10 @@ fn unwrap_quotes_only_removes_a_pair_around_the_whole_value() {
 	assert_eq!(unwrap_quotes("1 . alpn=\"h2\""), "1 . alpn=\"h2\"");
 	assert_eq!(unwrap_quotes("\""), "\"");
 	assert_eq!(unwrap_quotes("\"\""), "");
+	// Two strings are not one: the quotes between them are data.
+	assert_eq!(unwrap_quotes("\"a\" \"b\""), "\"a\" \"b\"");
+	assert_eq!(unwrap_quotes("\"a\\\"b\""), "a\\\"b");
+	assert_eq!(unwrap_quotes("\"a\\\\\""), "a\\\\");
 	assert_eq!(unwrap_quotes(""), "");
 }
 
@@ -356,4 +360,15 @@ fn an_mx_target_loses_its_root_dot_except_the_null_mx() {
 	assert_eq!(mx_target_for_api("mail.example.org."), "mail.example.org");
 	assert_eq!(mx_target_for_api("mail.example.org"), "mail.example.org");
 	assert_eq!(mx_target_for_api("."), ".");
+}
+
+/// What a provider answered is escaped where an error is shown: a control
+/// character or a right-to-left override in it reaches no terminal.
+#[test]
+fn a_provider_answer_in_an_error_is_shown_escaped() {
+	let error = ProviderError::Remote("bad \u{1b}[2J\u{202e}gro".to_string());
+	assert_eq!(
+		error.to_string(),
+		"provider error: bad \\u{1b}[2J\\u{202e}gro"
+	);
 }
