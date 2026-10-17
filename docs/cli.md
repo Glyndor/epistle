@@ -583,7 +583,7 @@ it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
 exactly like mail for an unknown user (a permanent 550, so senders get a
 bounce, not a retry), and no account may send as an address in it.
 Accounts, mailboxes, aliases, DNS records and DKIM keys stay, and the
-mailboxes remain readable over IMAP. It asks first (see
+mailboxes stay on disk. `masked add` refuses a disabled domain (exit 2), and `account add` and `alias add` create an address there with a warning on stderr that it receives and sends nothing until the domain is enabled. It asks first (see
 [Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
 exit 2, and refuses to switch off the last enabled domain of a server that
 has listeners. `enable` takes the name out of `disabled_domains` again. Both

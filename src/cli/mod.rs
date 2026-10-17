@@ -25,6 +25,7 @@ mod db_harden;
 mod db_status;
 mod db_upgrade;
 mod delivery;
+mod disabled_domain;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;

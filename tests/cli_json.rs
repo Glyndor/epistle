@@ -82,3 +82,6 @@ mod db_status;
 
 #[path = "cli_json/queue_webhook.rs"]
 mod queue_webhook;
+
+#[path = "cli_json/domain_disabled_use.rs"]
+mod domain_disabled_use;
