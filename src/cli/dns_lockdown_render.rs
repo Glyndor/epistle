@@ -4,6 +4,7 @@
 
 use std::fmt::Write as _;
 
+use crate::cli::term::sanitize;
 use crate::dns::lockdown::{
 	DmarcAction, DmarcPlan, DmarcStep, Plan, REPORT_WINDOW_DAYS, UndoReport, WildcardDecision,
 };
@@ -13,28 +14,29 @@ use crate::dns::provider::{DnsRecord, RecordKind};
 pub(super) fn record_line(record: &DnsRecord) -> String {
 	format!(
 		"{} {} IN {} {}",
-		record.name,
+		sanitize(&record.name),
 		record.ttl,
-		record.kind.as_str(),
+		sanitize(record.kind.as_str()),
 		value_text(record)
 	)
 }
 
-/// A record value as a zone file writes it: TXT quoted and split.
+/// A record value as a zone file writes it: TXT quoted and split. Zone
+/// text is hostile, so a control character is escaped before it is printed.
 fn value_text(record: &DnsRecord) -> String {
-	match record.kind {
+	sanitize(&match record.kind {
 		RecordKind::Txt => crate::dns::records::txt_zone_form(&record.value),
 		_ => record.value.clone(),
-	}
+	})
 }
 
 /// The plan as text.
 pub(crate) fn plan_text(plan: &Plan) -> String {
-	let mut text = format!("Lockdown plan for {}\n\n", plan.domain);
+	let mut text = format!("Lockdown plan for {}\n\n", sanitize(&plan.domain));
 	let _ = writeln!(
 		text,
 		"DMARC at {}: {}",
-		plan.dmarc.name,
+		sanitize(&plan.dmarc.name),
 		dmarc_line(&plan.dmarc)
 	);
 	reports_lines(&mut text, &plan.domain, &plan.dmarc);
@@ -44,7 +46,7 @@ pub(crate) fn plan_text(plan: &Plan) -> String {
 	}
 	for entry in &plan.entries {
 		let _ = writeln!(text, "  + {}", record_line(&entry.record));
-		let _ = writeln!(text, "      reason: {}", entry.reason);
+		let _ = writeln!(text, "      reason: {}", sanitize(&entry.reason));
 		if let Some(old) = &entry.replaces {
 			let _ = writeln!(text, "      replaces: {}", value_text(old));
 		}
@@ -54,8 +56,8 @@ pub(crate) fn plan_text(plan: &Plan) -> String {
 		text.push_str("  (none)\n");
 	}
 	for skip in &plan.skipped {
-		let _ = writeln!(text, "  = {}", skip.name);
-		let _ = writeln!(text, "      reason: {}", skip.reason);
+		let _ = writeln!(text, "  = {}", sanitize(&skip.name));
+		let _ = writeln!(text, "      reason: {}", sanitize(&skip.reason));
 	}
 	let verdict = match plan.wildcard {
 		WildcardDecision::Added { .. } => "added",
@@ -65,8 +67,8 @@ pub(crate) fn plan_text(plan: &Plan) -> String {
 	let _ = writeln!(
 		text,
 		"\nWildcard *.{}: {verdict}; {}",
-		plan.domain,
-		plan.wildcard.reason()
+		sanitize(&plan.domain),
+		sanitize(plan.wildcard.reason())
 	);
 	text
 }
@@ -75,7 +77,7 @@ fn dmarc_line(dmarc: &DmarcPlan) -> String {
 	let next = dmarc.next.as_str();
 	let sp = dmarc.sp.as_str();
 	match &dmarc.action {
-		DmarcAction::LeftAlone { reason } => format!("left as is: {reason}"),
+		DmarcAction::LeftAlone { reason } => format!("left as is: {}", sanitize(reason)),
 		DmarcAction::Unchanged => {
 			format!("already at p={next} with sp={sp} and np=reject; nothing to change")
 		}
@@ -126,7 +128,8 @@ fn reports_lines(text: &mut String, domain: &str, dmarc: &DmarcPlan) {
 		let _ = writeln!(
 			text,
 			"  - {} ({} messages)",
-			source.source_ip, source.messages
+			sanitize(&source.source_ip),
+			source.messages
 		);
 	}
 }
@@ -146,7 +149,8 @@ pub(super) enum UndoView {
 /// The undo report as text, worded for `view`.
 pub(super) fn undo_text(domain: &str, report: &UndoReport, view: UndoView) -> String {
 	let mut text = format!(
-		"Undo lockdown for {domain}{}\n",
+		"Undo lockdown for {}{}\n",
+		sanitize(domain),
 		if view == UndoView::DryRun {
 			" (dry run)"
 		} else {
@@ -165,8 +169,8 @@ pub(super) fn undo_text(domain: &str, report: &UndoReport, view: UndoView) -> St
 		let _ = writeln!(
 			text,
 			"  - {} {}: {restored} {}",
-			record.kind.as_str(),
-			record.name,
+			sanitize(record.kind.as_str()),
+			sanitize(&record.name),
 			value_text(record)
 		);
 	}
@@ -175,7 +179,7 @@ pub(super) fn undo_text(domain: &str, report: &UndoReport, view: UndoView) -> St
 			text,
 			"  = {}: changed since the lockdown (now {}); left as is",
 			record_line(&changed.record),
-			changed.now.join(" | ")
+			sanitize(&changed.now.join(" | "))
 		);
 	}
 	for record in &report.absent {

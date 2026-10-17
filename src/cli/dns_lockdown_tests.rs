@@ -447,3 +447,69 @@ fn a_unicode_domain_and_zone_names_are_compared_as_a_labels() {
 		run.out
 	);
 }
+
+#[test]
+fn a_delegated_subdomain_is_reported_and_nothing_is_planned_under_it() {
+	let mut records = zone_records();
+	records.push(rec(
+		"sub.example.org",
+		RecordKind::Ns,
+		"ns1.delegated.example.",
+	));
+	records.push(a("host.sub.example.org"));
+	let setup = setup(CLOUDFLARE, Zone::with(records));
+	let run = run(&setup, &["--dry-run"]);
+	assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
+	assert!(
+		run.out.contains(
+			"  = sub.example.org\n      reason: sub.example.org is delegated to other nameservers; left as is\n"
+		),
+		"{}",
+		run.out
+	);
+	assert!(!run.out.contains("host.sub.example.org"), "{}", run.out);
+	assert_eq!(*setup.zone.writes.lock().unwrap(), 0);
+}
+
+/// A zone is written by whoever has an account at the DNS provider, so a
+/// name or a value in it can carry a terminal escape. Text output escapes
+/// it; JSON output escapes it the way JSON does.
+#[test]
+fn control_characters_in_zone_text_never_reach_the_terminal() {
+	let mut records = zone_records();
+	records.push(a("evil\u{1b}[2J.example.org"));
+	records.push(rec(
+		"worse\u{7}.example.org",
+		RecordKind::Ns,
+		"ns\u{1b}]0;x\u{7}.",
+	));
+	let setup = setup(CLOUDFLARE, Zone::with(records));
+	let text = run(&setup, &["--dry-run"]);
+	assert_eq!(text.code, ExitCode::SUCCESS, "{}", text.err);
+	assert!(
+		text.out
+			.contains("  + evil\\u{1b}[2j.example.org 3600 IN TXT \"v=spf1 -all\"\n"),
+		"{}",
+		text.out
+	);
+	assert!(
+		text.out.contains(
+			"  = worse\\u{7}.example.org\n      reason: worse\\u{7}.example.org is delegated"
+		),
+		"{}",
+		text.out
+	);
+	let escapes = text
+		.out
+		.chars()
+		.filter(|c| c.is_control() && *c != '\n')
+		.count();
+	assert_eq!(escapes, 0, "{}", text.out);
+	let json = run(&setup, &["--dry-run", "--json"]);
+	let raw = json
+		.out
+		.chars()
+		.filter(|c| c.is_control() && *c != '\n')
+		.count();
+	assert_eq!(raw, 0, "{}", json.out);
+}
