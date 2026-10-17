@@ -103,3 +103,50 @@ fn bytes_moved_across_the_end_of_the_day_make_another_state() {
 		assert_ne!(one, other, "pair {index} shares a digest");
 	}
 }
+
+#[test]
+fn bytes_moved_between_the_checkpoint_files_make_another_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = dir.path();
+	let paths = files(root, Day(DAY));
+	std::fs::create_dir_all(paths.json.parent().expect("dir")).expect("mkdir");
+	let state = |json: Option<&[u8]>, sig: Option<&[u8]>, tsr: Option<&[u8]>| {
+		for (path, bytes) in [(&paths.json, json), (&paths.sig, sig), (&paths.tsr, tsr)] {
+			match bytes {
+				Some(bytes) => std::fs::write(path, bytes).expect("write"),
+				None => {
+					let _ = std::fs::remove_file(path);
+				}
+			}
+		}
+		day_state(root, Day(DAY), None).expect("state")
+	};
+	let mut seen = std::collections::BTreeSet::new();
+	// The same bytes, cut at other places between the files, or left out of
+	// one of them: every arrangement is a state of its own.
+	type Bytes<'a> = Option<&'a [u8]>;
+	let arrangements: [(Bytes, Bytes, Bytes); 13] = [
+		(Some(b"abc"), Some(b"def"), None),
+		(Some(b"ab"), Some(b"cdef"), None),
+		(Some(b"abcd"), Some(b"ef"), None),
+		(Some(b"abc"), None, Some(b"def")),
+		(None, Some(b"abc"), Some(b"def")),
+		(Some(b"abcdef"), None, None),
+		(None, Some(b"abcdef"), None),
+		(None, None, Some(b"abcdef")),
+		(Some(b""), None, None),
+		(None, None, None),
+		(Some(b"abc"), Some(b"def"), Some(b"")),
+		// One file carrying the name and the start of the next, so that
+		// without lengths the two would hash the same bytes in the same order.
+		(Some(b"j"), Some(b"a\x03tsrb"), Some(b"c")),
+		(Some(b"j"), Some(b"a"), Some(b"b\x03tsrc")),
+	];
+	for arrangement in arrangements {
+		let digest = state(arrangement.0, arrangement.1, arrangement.2);
+		assert!(
+			seen.insert(digest),
+			"two different arrangements of the checkpoint files have the same state: {arrangement:?}"
+		);
+	}
+}
