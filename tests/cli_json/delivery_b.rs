@@ -124,7 +124,10 @@ fn status_is_the_outcome_filter_under_its_other_name() {
 	);
 	let (code, stdout, stderr) = plain(&env, &["list", "--status", "gone", "--json"]);
 	assert_eq!((code, stdout.as_str()), (Some(2), ""));
-	assert!(stderr.contains("unknown --outcome \"gone\""), "{stderr}");
+	assert!(
+		stderr.contains("unknown status \"gone\" for --outcome (or --status)"),
+		"{stderr}"
+	);
 }
 
 #[test]
@@ -270,5 +273,35 @@ fn the_new_commands_need_the_log_to_be_on() {
 		let (code, stdout, stderr) = plain(&env, &args);
 		assert_eq!((code, stdout.as_str()), (Some(1), ""), "{args:?}");
 		assert!(stderr.contains("the delivery log is disabled"), "{stderr}");
+	}
+}
+
+#[test]
+fn a_filter_that_is_empty_is_a_usage_error_not_no_filter() {
+	let env = four();
+	for flag in [
+		"--account",
+		"--recipient",
+		"--since",
+		"--until",
+		"--outcome",
+		"--status",
+	] {
+		for value in ["", "  "] {
+			for action in ["list", "export"] {
+				let (code, stdout, stderr) = plain(&env, &[action, flag, value, "--json"]);
+				assert_eq!(
+					(code, stdout.as_str()),
+					(Some(2), ""),
+					"{action} {flag} {value:?}"
+				);
+				let shown = flag.replace("--status", "--outcome");
+				assert_eq!(
+					stderr.trim_end(),
+					format!("error: {shown} must not be empty"),
+					"{action} {flag} {value:?}"
+				);
+			}
+		}
 	}
 }

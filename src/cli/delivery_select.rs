@@ -16,14 +16,23 @@ pub(super) struct Selection {
 	outcome: Option<DeliveryOutcome>,
 }
 
-fn present(value: &Option<String>) -> Option<&str> {
-	value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+/// The value of a filter that was given, trimmed. A filter that was given
+/// and is empty is a usage error: a script whose variable came out empty
+/// must not get everything back.
+fn present<'a>(flag: &str, value: &'a Option<String>) -> Result<Option<&'a str>, ExitCode> {
+	match value.as_deref().map(str::trim) {
+		Some("") => {
+			style::error(format_args!("{flag} must not be empty"));
+			Err(ExitCode::from(2))
+		}
+		other => Ok(other),
+	}
 }
 
 /// A `--since` or `--until` value as an epoch second, or the exit code of
 /// the refusal already printed.
 fn moment(flag: &str, value: &Option<String>, now: u64) -> Result<Option<u64>, ExitCode> {
-	let Some(value) = present(value) else {
+	let Some(value) = present(flag, value)? else {
 		return Ok(None);
 	};
 	crate::storage::delivery_log::parse_since(value, now).map_err(|error| {
@@ -37,14 +46,14 @@ impl Selection {
 	/// is not understood is refused with exit code 2 rather than matching
 	/// nothing.
 	pub(super) fn new(filters: &ListFilters, now: u64) -> Result<Self, ExitCode> {
-		let outcome = match present(&filters.outcome) {
+		let outcome = match present("--outcome", &filters.outcome)? {
 			None => None,
 			Some(value) => match DeliveryOutcome::parse(value) {
 				Some(outcome) => Some(outcome),
 				None => {
 					style::error(format_args!(
-						"unknown --outcome {value:?}; expected one of delivered, deferred, \
-						 failed, suppressed, canceled"
+						"unknown status {value:?} for --outcome (or --status); expected one of \
+						 delivered, deferred, failed, suppressed, canceled"
 					));
 					return Err(ExitCode::from(2));
 				}
@@ -56,9 +65,11 @@ impl Selection {
 			style::error("--since is after --until");
 			return Err(ExitCode::from(2));
 		}
+		let recipient = present("--recipient", &filters.recipient)?.map(str::to_string);
+		let account = present("--account", &filters.account)?.map(str::to_string);
 		Ok(Self {
-			recipient: present(&filters.recipient).map(str::to_string),
-			account: present(&filters.account).map(str::to_string),
+			recipient,
+			account,
 			since,
 			until,
 			outcome,
