@@ -10,6 +10,9 @@ use super::tests::TOKEN;
 const REDIRECT: &[u8] = b"redirect \"someone@target.example\";\r\n";
 const VACATION: &[u8] = b"require \"vacation\";\r\nvacation \"away\";\r\n";
 const REJECT: &[u8] = b"require \"reject\";\r\nreject \"no\";\r\n";
+const EREJECT: &[u8] = b"require \"ereject\";\r\nereject \"no\";\r\n";
+/// Identifiers are not case-sensitive in Sieve (RFC 5228 section 2.1).
+const SHOUTED: &[u8] = b"REDIRECT \"someone@target.example\";\r\n";
 const NESTED: &[u8] = b"if true { if not false { redirect :copy \"x@target.example\"; } }\r\n";
 const PLAIN: &[u8] = b"require \"fileinto\";\r\nfileinto \"Work\";\r\n";
 
@@ -25,7 +28,7 @@ async fn set(app: &axum::Router, secret: &str, args: Value) -> Value {
 async fn a_key_without_send_cannot_store_a_script_that_sends() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (app, secret) = ann_only(dir.path(), &["read", "write"]);
-	for script in [REDIRECT, VACATION, REJECT, NESTED] {
+	for script in [REDIRECT, VACATION, REJECT, EREJECT, SHOUTED, NESTED] {
 		let blob = upload(&app, TOKEN.as_str(), "ann", script).await;
 		let response = set(
 			&app,
@@ -130,4 +133,94 @@ async fn a_key_with_send_can_do_all_of_it() {
 		store(dir.path(), "ann").active_name().as_deref(),
 		Some("fwd")
 	);
+}
+
+async fn vacation_set(app: &axum::Router, secret: &str, patch: Value) -> Value {
+	call(
+		app,
+		secret,
+		"VacationResponse/set",
+		json!({"accountId": "ann", "update": {"singleton": patch}}),
+	)
+	.await
+}
+
+async fn vacation_get(app: &axum::Router, secret: &str) -> Value {
+	call(
+		app,
+		secret,
+		"VacationResponse/get",
+		json!({"accountId": "ann"}),
+	)
+	.await[1]["list"][0]
+		.clone()
+}
+
+#[tokio::test]
+async fn a_key_without_send_cannot_switch_the_vacation_reply_on() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (app, secret) = ann_only(dir.path(), &["read", "write"]);
+	let response = vacation_set(
+		&app,
+		&secret,
+		json!({"isEnabled": true, "textBody": "away"}),
+	)
+	.await;
+	assert_eq!(
+		response[1]["notUpdated"]["singleton"]["type"], "forbidden",
+		"{response}"
+	);
+	assert_eq!(response[1]["updated"], json!({}));
+	assert_eq!(vacation_get(&app, &secret).await["isEnabled"], false);
+	// Writing the text while it stays off is storing a setting, not sending.
+	let response = vacation_set(&app, &secret, json!({"textBody": "away"})).await;
+	assert_eq!(
+		response[1]["updated"]["singleton"],
+		Value::Null,
+		"{response}"
+	);
+}
+
+#[tokio::test]
+async fn a_key_without_send_cannot_change_a_vacation_reply_that_is_on() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// The reply was switched on by someone who may send.
+	crate::storage::vacation_store::write(
+		dir.path(),
+		"ann",
+		&crate::storage::vacation_store::VacationSetting {
+			is_enabled: true,
+			text_body: Some("away".to_string()),
+			..crate::storage::vacation_store::VacationSetting::disabled()
+		},
+	)
+	.expect("seed");
+	let (app2, plain) = ann_only(dir.path(), &["read", "write"]);
+	let changed = vacation_set(&app2, &plain, json!({"textBody": "other words"})).await;
+	assert_eq!(
+		changed[1]["notUpdated"]["singleton"]["type"], "forbidden",
+		"{changed}"
+	);
+	// Switching it off is always allowed.
+	let off = vacation_set(&app2, &plain, json!({"isEnabled": false})).await;
+	assert_eq!(off[1]["updated"]["singleton"], Value::Null, "{off}");
+	assert_eq!(vacation_get(&app2, &plain).await["isEnabled"], false);
+}
+
+#[tokio::test]
+async fn a_key_with_send_can_switch_the_vacation_reply_on() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (app, secret) = ann_only(dir.path(), &["read", "write", "send"]);
+	let response = vacation_set(
+		&app,
+		&secret,
+		json!({"isEnabled": true, "textBody": "away"}),
+	)
+	.await;
+	assert_eq!(
+		response[1]["updated"]["singleton"],
+		Value::Null,
+		"{response}"
+	);
+	assert_eq!(vacation_get(&app, &secret).await["isEnabled"], true);
 }

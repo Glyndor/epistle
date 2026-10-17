@@ -1689,7 +1689,13 @@ its own first.
 originate mail. Creating such a script, replacing the content of one, or
 activating one that exists takes the `send` scope as well; without it the
 answer is `forbidden`, and an activation is refused before the call changes
-anything. Renaming and deactivating need only `write`. ManageSieve is reached
+anything. Renaming and deactivating need only `write`. The action names are
+read without regard to case, as Sieve does. The same rule holds for the JMAP
+`VacationResponse`, which also answers mail: `VacationResponse/set` that
+switches the reply on, or changes one that is on, needs `send` as well
+(`notUpdated` `forbidden` without it); switching it off, or editing one that
+stays off, needs only `write`. Upgrading: a key with `read` and `write` only
+that used to switch the reply on now gets `forbidden`. ManageSieve is reached
 with the account's password and has no scopes.
 
 **Vacation.** The JMAP `VacationResponse` is not a Sieve script (it lives

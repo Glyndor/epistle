@@ -431,6 +431,10 @@ epistle (0.12.1) unstable; urgency=medium
     dropped. A `set` that does not fit now stops the run instead of being
     ignored, and the numbered match variables no longer share the 64 KiB of
     the script's own variables. See docs/configuration.md.
+  * JMAP: `VacationResponse/set` that switches the reply on, or changes one
+    that is on, takes the `send` scope as well as `write`, like a Sieve script
+    that replies; a key with `read` and `write` only gets `forbidden`.
+    Switching it off needs only `write`.
   * JMAP: storing or activating a Sieve script that redirects, replies or
     rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
     step under the account lock (`ifInState` is exact, the active script changes

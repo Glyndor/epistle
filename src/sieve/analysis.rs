@@ -94,7 +94,10 @@ pub fn sends_mail(script: &str) -> bool {
 	walk(
 		&commands,
 		|name, _| {
-			sends |= matches!(name, "redirect" | "vacation" | "reject" | "ereject");
+			// Identifiers are not case-sensitive (RFC 5228 section 2.1).
+			sends |= ["redirect", "vacation", "reject", "ereject"]
+				.iter()
+				.any(|action| name.eq_ignore_ascii_case(action));
 		},
 		|_| {},
 	);
