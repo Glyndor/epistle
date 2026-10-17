@@ -6,7 +6,7 @@
 //! provider's tests build this zone in its own wire format and hand the
 //! listing to [`assert_kinds_kept`].
 
-use crate::dns::provider::{DnsRecord, RecordKind, UNKNOWN_KIND};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, UNKNOWN_KIND};
 
 /// The NS target of the delegated subdomain `sub.example.org`.
 pub(crate) const NS_TARGET: &str = "ns1.delegated.example.";
@@ -94,4 +94,28 @@ pub(crate) fn assert_kinds_kept(listed: &[DnsRecord], shape: &Shape) {
 	}
 	want.sort();
 	assert_eq!(rows(listed), want, "the listing changed a record's kind");
+}
+
+/// Assert that `provider` refuses to publish or remove a record of a type
+/// it only lists. A listing that shows an NS must not make it writable: the
+/// answer is `Unsupported`, before the provider asks its API anything.
+pub(crate) async fn assert_listed_kinds_are_not_written(provider: &dyn DnsProvider) {
+	for kind in [
+		RecordKind::Ns,
+		RecordKind::Https,
+		RecordKind::Svcb,
+		RecordKind::Other("NAPTR".to_string()),
+	] {
+		let record = DnsRecord::new("www.example.org", kind.clone(), "x", 3600);
+		assert_eq!(
+			provider.upsert("example.org", record.clone()).await,
+			Err(ProviderError::Unsupported),
+			"upsert of {kind:?}"
+		);
+		assert_eq!(
+			provider.delete("example.org", record).await,
+			Err(ProviderError::Unsupported),
+			"delete of {kind:?}"
+		);
+	}
 }

@@ -147,3 +147,11 @@ async fn a_listing_that_claims_an_endless_total_stops_at_the_page_cap() {
 	);
 	assert_eq!(state.lock().unwrap().calls.len(), 1000);
 }
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (provider, _state) = mock(Vec::new()).await;
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}

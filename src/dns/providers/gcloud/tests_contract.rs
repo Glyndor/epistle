@@ -109,3 +109,12 @@ async fn list_keeps_ns_caa_https_svcb_and_unknown_kinds() {
 	let listed = provider_for(&base).list("example.org").await.expect("list");
 	assert_kinds_kept(&listed, &Shape::NAMED);
 }
+
+/// Kinds a listing shows but epistle does not publish are never written
+/// or removed.
+#[tokio::test]
+async fn listed_only_kinds_are_never_written() {
+	let (base, _state) = start_mock(Vec::new()).await;
+	let provider = provider_for(&base);
+	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
+}
