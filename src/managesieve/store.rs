@@ -6,9 +6,12 @@
 //! mirrored to `<account>/filter.sieve` — the path the delivery pipeline reads
 //! — so activating a script through ManageSieve takes effect immediately.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::store_index::Index;
+use crate::storage::lock::FileLock;
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::{contained, contained_child, contained_subdir};
 
@@ -73,6 +76,12 @@ pub struct ScriptInfo {
 	pub name: String,
 	/// Whether this is the active script.
 	pub active: bool,
+	/// The script's id: opaque, 32 hex digits, minted once and kept through
+	/// rewrites and renames, so a client can follow a script across them.
+	pub id: String,
+	/// How many times the content has been written, from 1. Together with
+	/// the id it names one version of the content (JMAP blob ids).
+	pub rev: u64,
 }
 
 /// Storage for one account's named Sieve scripts.
@@ -137,17 +146,12 @@ impl ScriptStore {
 	/// Whether a script called `name` of `size` octets could be stored now
 	/// (RFC 5804 section 2.5, HAVESPACE).
 	pub fn have_space(&self, name: &str, size: u64) -> Result<(), StoreError> {
-		let path = self.script_path(name)?;
+		self.script_path(name)?;
 		if size > MAX_SCRIPT_BYTES as u64 {
 			return Err(StoreError::TooLarge);
 		}
-		self.room_for(&path)
-	}
-
-	/// A script that is not yet stored needs a free slot; rewriting one that
-	/// is needs none.
-	fn room_for(&self, path: &Path) -> Result<(), StoreError> {
-		if path.exists() || self.list()?.len() < MAX_SCRIPTS {
+		let scripts = self.list()?;
+		if scripts.len() < MAX_SCRIPTS || scripts.iter().any(|s| s.name == name) {
 			Ok(())
 		} else {
 			Err(StoreError::TooManyScripts)
@@ -163,30 +167,37 @@ impl ScriptStore {
 			.filter(|name| !name.is_empty())
 	}
 
-	/// List every stored script with its active flag.
+	/// List every stored script with its active flag, id and revision.
 	pub fn list(&self) -> Result<Vec<ScriptInfo>, StoreError> {
-		let active = self.active_name();
-		let mut scripts = Vec::new();
-		let entries = match crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir) {
-			Ok(entries) => entries,
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scripts),
-			Err(_) => return Err(StoreError::Io),
+		let Some(txn) = self.read_txn()? else {
+			return Ok(Vec::new());
 		};
-		for entry in entries.flatten() {
-			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-				continue;
-			}
-			let file_name = entry.file_name();
-			let name = file_name.to_string_lossy();
-			if let Some(stripped) = name.strip_suffix(".sieve") {
-				scripts.push(ScriptInfo {
-					name: stripped.to_string(),
-					active: active.as_deref() == Some(stripped),
-				});
-			}
-		}
-		scripts.sort_by(|a, b| a.name.cmp(&b.name));
+		let active = self.active_name();
+		let scripts = txn
+			.index
+			.scripts
+			.iter()
+			.map(|(name, entry)| ScriptInfo {
+				name: name.clone(),
+				active: active.as_deref() == Some(name.as_str()),
+				id: entry.id.clone(),
+				rev: entry.rev,
+			})
+			.collect();
+		txn.commit()?;
 		Ok(scripts)
+	}
+
+	/// The store's change counter: it moves whenever the set of scripts,
+	/// their content, their names or the active one changes, by whichever
+	/// protocol, and at no other time.
+	pub fn state(&self) -> Result<u64, StoreError> {
+		let Some(txn) = self.read_txn()? else {
+			return Ok(0);
+		};
+		let state = txn.index.state + u64::from(txn.changed);
+		txn.commit()?;
+		Ok(state)
 	}
 
 	/// Read a script's contents.
@@ -207,35 +218,46 @@ impl ScriptStore {
 	pub fn put(&self, name: &str, content: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
 		Self::validate(content)?;
-		self.room_for(&path)?;
-		fs::create_dir_all(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
-		fs::write(&path, content).map_err(|_| StoreError::Io)?;
-		if self.active_name().as_deref() == Some(name) {
-			self.write_live(content)?;
+		let mut txn = self.write_txn()?;
+		if !txn.index.scripts.contains_key(name) && txn.index.scripts.len() >= MAX_SCRIPTS {
+			return Err(StoreError::TooManyScripts);
 		}
-		Ok(())
+		crate::storage::write_secret(&path, content.as_bytes()).map_err(|_| StoreError::Io)?;
+		txn.index.wrote(name);
+		txn.changed = true;
+		let live = if self.active_name().as_deref() == Some(name) {
+			self.write_live(content)
+		} else {
+			Ok(())
+		};
+		txn.finish(live)
 	}
 
 	/// Delete a script. Refuses to delete the active script (RFC 5804 §2.10).
 	pub fn delete(&self, name: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
+		let mut txn = self.write_txn()?;
 		if self.active_name().as_deref() == Some(name) {
 			return Err(StoreError::ActiveScript);
 		}
 		match fs::remove_file(&path) {
-			Ok(()) => Ok(()),
+			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				Err(StoreError::NoSuchScript)
+				return Err(StoreError::NoSuchScript);
 			}
-			Err(_) => Err(StoreError::Io),
+			Err(_) => return Err(StoreError::Io),
 		}
+		txn.index.scripts.remove(name);
+		txn.changed = true;
+		txn.finish(Ok(()))
 	}
 
 	/// Rename `old` to `new`. `new` must not already exist; if `old` was
-	/// active, the active marker follows the rename.
+	/// active, the active marker follows the rename. The script keeps its id.
 	pub fn rename(&self, old: &str, new: &str) -> Result<(), StoreError> {
 		let old_path = self.script_path(old)?;
 		let new_path = self.script_path(new)?;
+		let mut txn = self.write_txn()?;
 		if !old_path.exists() {
 			return Err(StoreError::NoSuchScript);
 		}
@@ -243,34 +265,42 @@ impl ScriptStore {
 			return Err(StoreError::AlreadyExists);
 		}
 		fs::rename(&old_path, &new_path).map_err(|_| StoreError::Io)?;
-		if self.active_name().as_deref() == Some(old) {
-			self.set_active_marker(Some(new))?;
-		}
-		Ok(())
+		txn.index.renamed(old, new);
+		txn.changed = true;
+		let marker = if self.active_name().as_deref() == Some(old) {
+			self.set_active_marker(Some(new))
+		} else {
+			Ok(())
+		};
+		txn.finish(marker)
 	}
 
 	/// Make `name` the active script, or deactivate all when `None`
 	/// (RFC 5804 §2.8: SETACTIVE with the empty string).
 	pub fn set_active(&self, name: Option<&str>) -> Result<(), StoreError> {
-		match name {
-			Some(name) => {
-				let content = self.get(name)?;
+		let mut txn = self.write_txn()?;
+		let was = self.active_name();
+		let outcome = match name {
+			Some(name) => self.get(name).and_then(|content| {
 				self.write_live(&content)?;
 				self.set_active_marker(Some(name))
-			}
+			}),
 			None => {
 				if let Ok(live) = self.live_path() {
 					let _ = fs::remove_file(live);
 				}
 				self.set_active_marker(None)
 			}
-		}
+		};
+		txn.changed |= outcome.is_ok() && was.as_deref() != name;
+		txn.finish(outcome)
 	}
 
 	/// Write the active script's content to the live `filter.sieve` path.
 	fn write_live(&self, content: &str) -> Result<(), StoreError> {
 		fs::create_dir_all(&self.dirs()?.account_dir).map_err(|_| StoreError::Io)?;
-		fs::write(self.live_path()?, content).map_err(|_| StoreError::Io)
+		crate::storage::write_secret(&self.live_path()?, content.as_bytes())
+			.map_err(|_| StoreError::Io)
 	}
 
 	/// The live `filter.sieve` the delivery pipeline reads.
@@ -280,18 +310,89 @@ impl ScriptStore {
 
 	/// Record (or clear) the active script name.
 	fn set_active_marker(&self, name: Option<&str>) -> Result<(), StoreError> {
-		let sieve_dir = &self.dirs()?.sieve_dir;
-		let marker = contained_child(sieve_dir, ".active").map_err(|_| StoreError::Io)?;
+		let marker =
+			contained_child(&self.dirs()?.sieve_dir, ".active").map_err(|_| StoreError::Io)?;
 		match name {
 			Some(name) => {
-				fs::create_dir_all(sieve_dir).map_err(|_| StoreError::Io)?;
-				fs::write(&marker, name).map_err(|_| StoreError::Io)
+				crate::storage::write_secret(&marker, name.as_bytes()).map_err(|_| StoreError::Io)
 			}
 			None => {
 				let _ = fs::remove_file(&marker);
 				Ok(())
 			}
 		}
+	}
+
+	/// The scripts' directory, held under the account's lock with the index
+	/// reconciled against it. `None` when the account has no scripts yet.
+	fn read_txn(&self) -> Result<Option<Txn>, StoreError> {
+		if !self.dirs()?.sieve_dir.is_dir() {
+			return Ok(None);
+		}
+		self.write_txn().map(Some)
+	}
+
+	/// As [`Self::read_txn`], creating the directory when it is missing.
+	fn write_txn(&self) -> Result<Txn, StoreError> {
+		let dirs = self.dirs()?;
+		fs::create_dir_all(&dirs.sieve_dir).map_err(|_| StoreError::Io)?;
+		let lock = contained_child(&dirs.sieve_dir, ".lock").map_err(|_| StoreError::Io)?;
+		let lock = FileLock::acquire(&lock).map_err(|_| StoreError::Io)?;
+		let path = contained_child(&dirs.sieve_dir, ".index.json").map_err(|_| StoreError::Io)?;
+		let mut index = Index::read(&path);
+		let changed = index.reconcile(&self.names_on_disk()?);
+		Ok(Txn {
+			_lock: lock,
+			path,
+			index,
+			changed,
+		})
+	}
+
+	/// The names of the scripts present as files. A file whose name could
+	/// not have been stored (it fails [`is_valid_name`]) is not a script.
+	fn names_on_disk(&self) -> Result<BTreeSet<String>, StoreError> {
+		let entries =
+			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
+		Ok(entries
+			.flatten()
+			.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+			.filter_map(|entry| {
+				let file = entry.file_name().into_string().ok()?;
+				let name = file.strip_suffix(".sieve")?;
+				is_valid_name(name).then(|| name.to_string())
+			})
+			.collect())
+	}
+}
+
+/// An operation in progress on an account's scripts: the account's lock,
+/// held until [`Txn::commit`] or the drop, and the index as it will be
+/// written.
+struct Txn {
+	_lock: FileLock,
+	path: PathBuf,
+	index: Index,
+	/// Whether the operation changed anything the counter counts.
+	changed: bool,
+}
+
+impl Txn {
+	/// Write the index, then report `outcome`. The index is written even
+	/// when a later step of the operation failed, so it describes what is on
+	/// disk.
+	fn finish(self, outcome: Result<(), StoreError>) -> Result<(), StoreError> {
+		let committed = self.commit();
+		outcome.and(committed)
+	}
+
+	/// Write the index, with the counter moved when something changed.
+	fn commit(mut self) -> Result<(), StoreError> {
+		if self.changed {
+			self.index.state += 1;
+			self.index.save(&self.path).map_err(|_| StoreError::Io)?;
+		}
+		Ok(())
 	}
 }
 
@@ -306,3 +407,7 @@ mod limits_tests;
 #[cfg(test)]
 #[path = "store_tests_check.rs"]
 mod check_tests;
+
+#[cfg(test)]
+#[path = "store_tests_index.rs"]
+mod index_tests;
