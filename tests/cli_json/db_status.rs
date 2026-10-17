@@ -1,7 +1,7 @@
 //! `db status`: one read-only query run in the stack's database container.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -34,7 +34,7 @@ fn stub(env: &Env, row: &str, exit: i32, stderr: &str) -> PathBuf {
 	bin
 }
 
-fn run(env: &Env, bin: &PathBuf, json_flag: bool) -> std::process::Output {
+fn run(env: &Env, bin: &Path, json_flag: bool) -> std::process::Output {
 	let mut args = vec!["db", "--config", &env.config, "status"];
 	if json_flag {
 		args.push("--json");
