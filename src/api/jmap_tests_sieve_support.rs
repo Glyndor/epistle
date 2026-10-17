@@ -108,3 +108,22 @@ pub(super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Router, Strin
 	.with_directory(store.handle());
 	(router(state), secret)
 }
+
+/// Upload `body` into `account`'s blob store, as a client does before it
+/// refers to the blob: the blob id.
+pub(super) async fn upload(app: &Router, token: &str, account: &str, body: &[u8]) -> String {
+	let request = Request::builder()
+		.method("POST")
+		.uri(format!("/jmap/upload/{account}"))
+		.header(header::AUTHORIZATION, format!("Bearer {token}"))
+		.header(header::CONTENT_TYPE, "application/sieve")
+		.body(Body::from(body.to_vec()))
+		.expect("request");
+	let response = app.clone().oneshot(request).await.expect("response");
+	assert_eq!(response.status().as_u16(), 200, "the upload is accepted");
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("body");
+	let json: Value = serde_json::from_slice(&bytes).expect("json");
+	json["blobId"].as_str().expect("blobId").to_string()
+}

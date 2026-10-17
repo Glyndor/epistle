@@ -49,8 +49,10 @@ pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
 mod sieve_blob;
 mod sieve_capability;
+mod sieve_content;
 mod sieve_script;
 mod sieve_script_query;
+mod sieve_script_validate;
 mod vacation_response;
 pub mod websocket;
 
@@ -336,6 +338,9 @@ pub fn dispatch_request(
 			"VacationResponse/set" => vacation_response::set(state, principal, &args, &call_id),
 			"SieveScript/get" => sieve_script::get(state, principal, &args, &call_id),
 			"SieveScript/query" => sieve_script_query::query(state, principal, &args, &call_id),
+			"SieveScript/validate" => {
+				sieve_script_validate::validate(state, principal, &args, &call_id, uploads)
+			}
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
 		method_responses.push(response);
@@ -367,7 +372,8 @@ fn required_scope(method: &str) -> Option<Scope> {
 		| "PushSubscription/get"
 		| "VacationResponse/get"
 		| "SieveScript/get"
-		| "SieveScript/query" => Some(Scope::Read),
+		| "SieveScript/query"
+		| "SieveScript/validate" => Some(Scope::Read),
 		_ => None,
 	}
 }

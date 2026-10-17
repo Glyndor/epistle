@@ -43,15 +43,16 @@ pub struct Uploads {
 }
 
 impl Uploads {
-	/// Read every uploaded blob the `Email/set` creates in `request` name.
+	/// Read every uploaded blob the requests's `Email/set` creates and
+	/// `SieveScript/set` and `SieveScript/validate` calls name.
 	pub async fn prefetch(state: &ApiState, principal: &Principal, request: &Request) -> Self {
 		let mut uploads = Uploads::default();
-		if state
+		let can_write = state
 			.require_scope_for_principal(principal, Scope::Write)
-			.is_err()
-		{
-			return uploads;
-		}
+			.is_ok();
+		let can_read = state
+			.require_scope_for_principal(principal, Scope::Read)
+			.is_ok();
 		// Most bytes read ahead for one request: no message over the size
 		// limit can be built anyway, so more would only be held in memory
 		// to be refused. The cap is the operator-configured
@@ -60,7 +61,12 @@ impl Uploads {
 		let mut budget = state.max_message_size();
 		let mut seen = 0usize;
 		for MethodCall(name, args, _) in &request.method_calls {
-			if name != "Email/set" {
+			let allowed = match name.as_str() {
+				"Email/set" | "SieveScript/set" => can_write,
+				"SieveScript/validate" => can_read,
+				_ => false,
+			};
+			if !allowed {
 				continue;
 			}
 			let Some(account) = args.get("accountId").and_then(Value::as_str) else {
@@ -69,29 +75,10 @@ impl Uploads {
 			let admitted = state.accounts().into_iter().any(|view| {
 				view.name == account && principal.admits_account(&view.name, &view.addresses)
 			});
-			let Some(create) = args.get("create").and_then(Value::as_object) else {
-				continue;
-			};
 			if !admitted {
 				continue;
 			}
-			let mut ids = Vec::new();
-			for spec in create.values() {
-				for list in ["textBody", "htmlBody", "attachments"] {
-					for part in spec
-						.get(list)
-						.and_then(Value::as_array)
-						.into_iter()
-						.flatten()
-					{
-						blob_ids(part, 0, &mut ids);
-					}
-				}
-				if let Some(structure) = spec.get("bodyStructure") {
-					blob_ids(structure, 0, &mut ids);
-				}
-			}
-			for id in ids {
+			for id in referenced_blobs(name, args) {
 				let key = (account.to_string(), id.to_string());
 				if uploads.blobs.contains_key(&key) || seen >= MAX_BLOBS {
 					continue;
@@ -125,6 +112,51 @@ impl Uploads {
 		}
 		Found::Missing
 	}
+}
+
+/// The blob ids a call refers to.
+fn referenced_blobs<'a>(method: &str, args: &'a Value) -> Vec<&'a str> {
+	let mut ids = Vec::new();
+	match method {
+		"Email/set" => {
+			for spec in args
+				.get("create")
+				.and_then(Value::as_object)
+				.into_iter()
+				.flat_map(|create| create.values())
+			{
+				for list in ["textBody", "htmlBody", "attachments"] {
+					for part in spec
+						.get(list)
+						.and_then(Value::as_array)
+						.into_iter()
+						.flatten()
+					{
+						blob_ids(part, 0, &mut ids);
+					}
+				}
+				if let Some(structure) = spec.get("bodyStructure") {
+					blob_ids(structure, 0, &mut ids);
+				}
+			}
+		}
+		// A script's content is one blob: the `blobId` of each object a call
+		// creates or updates, or the one it validates.
+		"SieveScript/set" => {
+			for key in ["create", "update"] {
+				ids.extend(
+					args.get(key)
+						.and_then(Value::as_object)
+						.into_iter()
+						.flat_map(|objects| objects.values())
+						.filter_map(|object| object.get("blobId").and_then(Value::as_str)),
+				);
+			}
+		}
+		"SieveScript/validate" => ids.extend(args.get("blobId").and_then(Value::as_str)),
+		_ => {}
+	}
+	ids
 }
 
 /// The `blobId` of `part` and of its `subParts`, depth first.
