@@ -164,7 +164,11 @@ impl Parser<'_> {
 				})
 			}
 			"not" => {
+				// `not not not ...` recurses once per keyword, so it counts
+				// toward the nesting limit like a block or a test list does.
+				self.enter()?;
 				let inner = self.test()?;
+				self.leave();
 				Ok(Test {
 					name,
 					args: Vec::new(),

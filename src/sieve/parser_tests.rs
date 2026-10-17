@@ -146,3 +146,39 @@ fn trailing_garbage_is_rejected() {
 	// A bare closing brace with no matching block.
 	assert!(parse_str("keep; }").is_err());
 }
+
+/// Parse on a thread with a very large stack, so that a parser which does
+/// recurse without bound is seen failing an assertion instead of taking the
+/// whole test process down with a stack overflow.
+fn parse_on_big_stack(script: String) -> Result<usize, ParseError> {
+	std::thread::Builder::new()
+		.stack_size(1 << 30)
+		.spawn(move || {
+			let tokens = tokenize(&script).expect("lexes");
+			// The result is reduced to a count before it crosses back, and
+			// the tree is dropped on this thread, which has the stack for it.
+			parse(&tokens).map(|commands| commands.len())
+		})
+		.expect("spawn")
+		.join()
+		.expect("the parser must not overflow even this stack")
+}
+
+#[test]
+fn a_long_chain_of_nots_is_refused_as_too_deep() {
+	// 200 000 `not` is under 1 MiB of script, so it is something a user can
+	// upload. Each one recursed one level in the parser and again in the
+	// evaluator, with nothing to stop it before the stack ran out.
+	let script = format!("if {}true {{ keep; }}", "not ".repeat(200_000));
+	let result = parse_on_big_stack(script);
+	assert!(
+		matches!(result, Err(ParseError::NestingDepth { .. })),
+		"a chain of 200000 nots must be refused as too deep, got {result:?}"
+	);
+}
+
+#[test]
+fn a_few_nots_still_parse() {
+	let result = parse_on_big_stack("if not not not true { keep; }".to_string());
+	assert_eq!(result, Ok(1));
+}
