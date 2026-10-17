@@ -341,7 +341,7 @@ Scopes are independent: holding one does not grant another.
 
 - `read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`), downloads, the WebSocket and the event source, and the
+  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event source, and the
   `GET` routes of the management API.
 - `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
   of the management API.
