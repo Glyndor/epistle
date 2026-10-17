@@ -110,3 +110,79 @@ fn status_switch_and_reset() {
 	);
 	assert!(ghost.stdout.is_empty());
 }
+
+/// The ghost account and the dry run: what must not be written when the
+/// command only previews, or when the name is not an account.
+#[test]
+fn dry_runs_write_nothing_and_unknown_accounts_are_refused() {
+	use epistle::antispam::corpus::BayesStore;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set, the learning results were not exercised");
+		return;
+	};
+	let env = env(&format!("[database]\nurl = {url:?}\ntls = \"insecure\"\n"));
+	let name = format!("lrn{}", &uuid::Uuid::now_v7().simple().to_string()[20..]);
+	add_account(&env, &name);
+	let learning = |args: &[&str]| {
+		let mut full = vec!["learning", "--config", env.config.as_str()];
+		full.extend_from_slice(args);
+		full.push("--json");
+		epistle(&full, b"")
+	};
+	// Something to lose: one message learned as spam, through the library.
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	runtime.block_on(async {
+		let pool = epistle::db::connect(&url, epistle::config::DatabaseTls::Insecure, 2, None)
+			.await
+			.expect("connect");
+		let mut key = [0u8; 32];
+		key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+		key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+		let store = BayesStore::with_key(pool, key);
+		store
+			.learn(
+				&name,
+				b"Subject: pills\r\n\r\ncheap pills discount now\r\n",
+				true,
+			)
+			.await
+			.expect("learn");
+	});
+	for args in [
+		vec!["reset", &name, "--dry-run", "--yes"],
+		vec!["reset", &name, "--dry-run"],
+	] {
+		let (code, preview) = json(&learning(&args));
+		assert_eq!(code, 0, "{args:?}");
+		assert_eq!(preview["result"], json!("dry-run"), "{args:?}");
+		let (_, status) = json(&learning(&["status", &name]));
+		assert_eq!(
+			(status["entries"].clone(), status["corpus_spam"].clone()),
+			(json!(1), json!(1)),
+			"{args:?} must not drop the corpus"
+		);
+	}
+	let (_, disabled) = json(&learning(&["disable", &name, "--dry-run"]));
+	assert_eq!(disabled["result"], json!("dry-run"));
+	let (_, status) = json(&learning(&["status", &name]));
+	assert_eq!(status["enabled"], json!(true), "a dry run does not switch");
+
+	for args in [
+		vec!["disable", "no-such-account"],
+		vec!["reset", "no-such-account", "--yes"],
+		vec!["reset", "no-such-account", "--dry-run"],
+	] {
+		let output = learning(&args);
+		assert_eq!(output.status.code(), Some(2), "{args:?}");
+		assert!(output.stdout.is_empty(), "{args:?} printed on stdout");
+	}
+	let done = learning(&["reset", &name, "--yes"]);
+	assert_eq!(done.status.code(), Some(0));
+	let (_, status) = json(&learning(&["status", &name]));
+	assert_eq!(
+		status["corpus_spam"],
+		json!(0),
+		"the real reset drops the corpus"
+	);
+}

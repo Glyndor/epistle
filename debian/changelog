@@ -636,18 +636,28 @@ epistle (0.12.1) unstable; urgency=medium
     message counts once whatever route it took (the server keeps a keyed hash
     of what each account learned, in the new `bayes_learned` table), and a
     message the user moves back takes the earlier lesson back before the new
-    one is added. Learning is bounded: 100 lessons per command, 200 a minute
-    and 5000 a day per account, 5000 tokens per lesson and 100000 learned
-    messages per account; lessons over a limit are dropped and counted in
-    `mail_bayes_training_dropped_total`. The ledger and the counts change in
-    one transaction, so a lesson that cannot be recorded is not trained.
-    Migration 0008 adds two tables and no destructive statement.
+    one is added. What an account learned before this release is in the
+    corpus but not in that record: it counts again if the user moves it and
+    cannot be taken back (`learning status` shows it as `unrecorded`).
+    Learning is bounded. A command queues at most 100 lessons, an account has
+    32 places of the 256 in the queue, 200 lessons a minute and 5000 a day,
+    and may keep the one worker busy for 10 seconds a minute. A lesson
+    touches at most 5000 tokens; an account holds at most 250000 token rows
+    and spends at most 1000000 tokens a day, and its record keeps 100000
+    messages, forgetting the oldest tenth when full. Lessons over a limit are
+    dropped and counted in `mail_bayes_training_dropped_total`, and the ones
+    lost for another reason in `mail_bayes_learning_unreadable_total`,
+    `mail_bayes_learning_failed_total` and `mail_bayes_learning_refused_total`.
+    The record and the counts change in one transaction, so a lesson that
+    cannot be recorded is not trained. Migration 0008 adds two tables and no
+    destructive statement.
   * CLI: `epistle learning status|enable|disable|reset`. `status` prints what
     each account's corpus learned (spam, ham, taken back, repeated, refused,
-    messages recorded, corpus size); `disable` and `enable` switch learning
-    per account without a restart; `reset` drops an account's corpus and its
-    record, and needs `--yes` off a terminal. It needs `[database]` and exits
-    3 without it.
+    throttled, messages recorded, token rows, unrecorded, corpus size);
+    `disable` and `enable` switch learning per account without a restart;
+    `reset` drops an account's corpus and its record and keeps the switch, so
+    an account switched off stays off, and needs `--yes` off a terminal. It
+    needs `[database]` and exits 3 without it.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 

@@ -1354,14 +1354,17 @@ inside `mail` like `ban`.
 
 | Command | What it does |
 |---|---|
-| `epistle learning status [ACCOUNT] [--json]` | Per account: `learning` on or off, `spam` and `ham` learned (a message counts again when its verdict changed), `unlearned` (earlier verdicts taken back), `repeated` (decisions that changed nothing), `refused` (the account's record is full), `messages` (rows in the record) and the `corpus-spam` and `corpus-ham` the corpus holds from any source. Without an account, every account that has learned or been switched off; an account that never learned reads as on with zero counters. |
+| `epistle learning status [ACCOUNT] [--json]` | Per account: `learning` on or off, `spam` and `ham` learned (a message counts again when its verdict changed), `unlearned` (earlier verdicts taken back), `repeated` (decisions that changed nothing), `refused` (the account holds as many token rows as it may), `throttled` (it spent the day's tokens), `messages` (rows in the record), `token-rows`, `unrecorded` (messages the corpus holds that the record does not: taught before the record existed or by the server itself, they count again if the user moves them and cannot be taken back) and the `corpus-spam` and `corpus-ham` the corpus holds from any source. Without an account, every account that has learned or been switched off, at most 10000 (a note on stderr says when the list was cut); an account that never learned reads as on with zero counters. |
 | `epistle learning enable ACCOUNT [--dry-run] [--json]` | Let the account's decisions teach its corpus (the default). |
 | `epistle learning disable ACCOUNT [--dry-run] [--json]` | Stop them. What the corpus already learned stays. |
 | `epistle learning reset ACCOUNT [--dry-run] [--yes] [--json]` | Drop the corpus and the record of the account and zero its counters; the on/off switch stays as it was, so an account switched off remains off. It scores with the shared corpus again until it holds 200 ham and 200 spam of its own. Needs `--yes` off a terminal. |
 
-The account must exist (exit 2 otherwise). Lessons dropped by the per-command,
-per-minute or per-day limits are counted by the server in
-`mail_bayes_training_dropped_total`, not per account.
+The account must exist (exit 2 otherwise), for `status` too only in the sense that
+an unknown name reads as zero. Lessons dropped by the per-command, per-account queue
+share, per-minute, per-day or worker-time limits are counted by the server in
+`mail_bayes_training_dropped_total`, and lessons lost for another reason in
+`mail_bayes_learning_unreadable_total`, `mail_bayes_learning_failed_total` and
+`mail_bayes_learning_refused_total`; none of these is per account.
 
 ## Expunged-message archive
 

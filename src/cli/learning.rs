@@ -17,6 +17,7 @@ use serde_json::json;
 use super::json_out::{Report, dry_run_object};
 use crate::antispam::corpus::BayesStore;
 use crate::antispam::learning::LearningStats;
+use crate::antispam::learning::stats::MAX_LISTED;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, load_sql_accounts};
 
@@ -165,6 +166,9 @@ async fn status(
 ) -> Result<ExitCode, sqlx::Error> {
 	let Some(account) = account else {
 		let rows = store.learning_stats_all().await?;
+		if let Some(note) = cut_note(rows.len()) {
+			super::style::warn(note);
+		}
 		if json {
 			return Ok(super::json_out::print(out, &json!(rows)));
 		}
@@ -180,6 +184,13 @@ async fn status(
 	}
 	let _ = writeln!(out, "{}", line(&row));
 	Ok(ExitCode::SUCCESS)
+}
+
+/// The warning for a listing that stopped at the cap, so a list of exactly
+/// that many is not taken for the whole.
+fn cut_note(listed: usize) -> Option<String> {
+	let cap = usize::try_from(MAX_LISTED).unwrap_or(usize::MAX);
+	(listed >= cap).then(|| format!("the list stops at {MAX_LISTED} accounts; name one to see it"))
 }
 
 /// `text` with control and invisible characters written as `\u{..}` escapes,
@@ -342,4 +353,16 @@ async fn reset(
 		json!({ "account": account, "tokens": tokens }),
 		None,
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn a_listing_at_the_cap_says_it_was_cut() {
+		assert_eq!(cut_note(3), None);
+		assert_eq!(cut_note(9_999), None);
+		assert!(cut_note(10_000).is_some_and(|note| note.contains("10000")));
+	}
 }
