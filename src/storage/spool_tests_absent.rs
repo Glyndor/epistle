@@ -52,3 +52,30 @@ fn an_entry_that_cannot_be_looked_at_is_not_an_entry_that_is_absent() {
 	assert!(result.is_err());
 	assert!(!ran, "the work ran with something under the id");
 }
+
+#[test]
+fn an_entry_that_cannot_be_looked_at_for_lack_of_permission_is_not_absent() {
+	use std::os::unix::fs::PermissionsExt;
+	// A root looks anywhere: nothing to prove.
+	if unsafe { libc::geteuid() } == 0 {
+		return;
+	}
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let id = uuid::Uuid::now_v7();
+	let new = dir.path().join("spool/new");
+	std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+	let mut ran = false;
+	let result = spool.while_absent(id, || {
+		ran = true;
+		Ok(())
+	});
+	std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o700)).expect("restore");
+	let error = result.expect_err("it could not be looked at");
+	assert_ne!(
+		error.kind(),
+		std::io::ErrorKind::NotFound,
+		"a failure to look was taken for absence"
+	);
+	assert!(!ran, "the work ran though the queue could not be looked at");
+}
