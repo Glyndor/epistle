@@ -22,7 +22,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, missing_page_count,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -61,8 +63,9 @@ struct ListResponse {
 
 #[derive(Deserialize)]
 struct Pagination {
+	/// Absent when the answer does not say how many pages there are.
 	#[serde(default)]
-	total_pages: u32,
+	total_pages: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -176,12 +179,19 @@ impl DnsimpleProvider {
 				.await
 				.map_err(transport)?;
 			let mut batch: ListResponse = decode(response).await?;
+			let count = batch.data.len();
 			all.append(&mut batch.data);
 			if all.len() > LIST_MAX_RECORDS {
 				return Err(listing_too_long(zone));
 			}
-			if page >= batch.pagination.total_pages {
-				break;
+			match batch.pagination.total_pages {
+				Some(total) if page >= total => break,
+				Some(_) => {}
+				// No page count: a short page is the last one, a full
+				// page may not be, and a zone is never read as finished
+				// on that guess.
+				None if count < PER_PAGE as usize => break,
+				None => return Err(missing_page_count(zone)),
 			}
 			if page as usize >= LIST_MAX_PAGES {
 				return Err(listing_too_long(zone));

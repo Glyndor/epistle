@@ -155,3 +155,35 @@ async fn listed_only_kinds_are_never_written() {
 	let (provider, _state) = mock(Vec::new()).await;
 	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }
+
+/// An answer without its total is not the last page: a full page may be
+/// followed by more, and reading it as the whole zone would hide the rest.
+/// A short page is the last one, total or no total.
+#[tokio::test]
+async fn a_full_page_without_a_total_is_an_error() {
+	let full: Vec<serde_json::Value> = (0..500)
+		.map(|i| serde_json::json!({"type": "A", "name": format!("h{i}"), "address": "192.0.2.1", "ttl": 3600}))
+		.collect();
+	let (provider, state) = mock(full).await;
+	state.lock().unwrap().omit_total = true;
+	let error = provider.list("example.org").await.expect_err("full page");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org listing does not say how many pages there are".to_string()
+		)
+	);
+	let (provider, state) = mock(vec![
+		serde_json::json!({"type": "A", "name": "h", "address": "192.0.2.1", "ttl": 3600}),
+	])
+	.await;
+	state.lock().unwrap().omit_total = true;
+	assert_eq!(
+		provider
+			.list("example.org")
+			.await
+			.expect("short page")
+			.len(),
+		1
+	);
+}

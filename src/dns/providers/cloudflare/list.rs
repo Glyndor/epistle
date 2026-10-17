@@ -5,6 +5,7 @@
 
 use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM};
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
+use crate::dns::providers::missing_page_count;
 use crate::dns::txt::txt_decode;
 
 /// Records asked for per page of a zone listing: Cloudflare's default,
@@ -27,13 +28,16 @@ impl CloudflareProvider {
 				.with_query("per_page", &LIST_PAGE_SIZE.to_string())
 				.with_query("page", &page.to_string());
 			let records: ListRecords = self.get_json(url).await?;
+			let count = records.result.len();
 			listed.extend(records.result);
-			let total = records
-				.result_info
-				.and_then(|info| info.total_pages)
-				.unwrap_or(1);
-			if page >= total {
-				break;
+			match records.result_info.and_then(|info| info.total_pages) {
+				Some(total) if page >= total => break,
+				Some(_) => {}
+				// No page count: a short page is the last one, a full page
+				// may not be, and a zone is never read as finished on that
+				// guess.
+				None if count < LIST_PAGE_SIZE as usize => break,
+				None => return Err(missing_page_count(zone)),
 			}
 			if page >= LIST_MAX_PAGES {
 				return Err(ProviderError::Remote(format!(

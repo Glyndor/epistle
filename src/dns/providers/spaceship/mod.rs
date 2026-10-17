@@ -10,7 +10,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use crate::dns::providers::{LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long};
+use crate::dns::providers::{
+	LIST_MAX_PAGES, LIST_MAX_RECORDS, listing_too_long, missing_page_count,
+};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
@@ -43,8 +45,9 @@ pub struct SpaceshipProvider {
 #[derive(Deserialize)]
 struct ListResponse {
 	items: Vec<serde_json::Value>,
+	/// Absent when the answer does not say how many records there are.
 	#[serde(default)]
-	total: i64,
+	total: Option<i64>,
 }
 
 impl SpaceshipProvider {
@@ -295,8 +298,15 @@ impl SpaceshipProvider {
 			if out.len() > LIST_MAX_RECORDS {
 				return Err(listing_too_long(&self.zone));
 			}
-			if out.len() as i64 >= page.total || count == 0 {
-				break;
+			match page.total {
+				Some(total) if out.len() as i64 >= total => break,
+				Some(_) if count == 0 => break,
+				Some(_) => {}
+				// No total: a short page is the last one, a full page
+				// may not be, and a zone is never read as finished on
+				// that guess.
+				None if count < PAGE_MAX => break,
+				None => return Err(missing_page_count(&self.zone)),
 			}
 			pages += 1;
 			if pages >= LIST_MAX_PAGES {

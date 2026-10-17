@@ -76,6 +76,13 @@ pub(crate) async fn within<T>(
 		})
 }
 
+/// The error for a full page that does not say whether more follow.
+pub(crate) fn missing_page_count(zone: &str) -> crate::dns::provider::ProviderError {
+	crate::dns::provider::ProviderError::Remote(format!(
+		"the {zone} listing does not say how many pages there are"
+	))
+}
+
 /// [`within`] for a listing: the same deadline, and a zone of more than
 /// [`LIST_MAX_RECORDS`] records is an error, whatever the provider's paging
 /// did, not a zone cut short.

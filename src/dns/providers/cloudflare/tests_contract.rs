@@ -208,10 +208,36 @@ async fn listed_only_kinds_are_never_written() {
 #[tokio::test]
 async fn a_zone_past_the_record_cap_is_an_error() {
 	let record = stored_at("h.example.org", "1", "A", "192.0.2.1");
-	let (provider, _state) = mock(vec![record; 100_001]).await;
+	let (provider, state) = mock(vec![record; 100_001]).await;
+	state.lock().unwrap().total_pages = Some(1);
 	let error = provider.list("example.org").await.expect_err("too many");
 	assert_eq!(
 		error,
 		ProviderError::Remote(crate::dns::providers::listing_contract::CAP_MESSAGE.to_string())
+	);
+}
+
+/// An answer without its page count is not the last page: a full page may be
+/// followed by more, and reading it as the whole zone would hide the rest.
+/// A short page is the last one, count or no count.
+#[tokio::test]
+async fn a_full_page_without_a_page_count_is_an_error() {
+	let record = stored_at("h.example.org", "1", "A", "192.0.2.1");
+	let (provider, _state) = mock(vec![record.clone(); 100]).await;
+	let error = provider.list("example.org").await.expect_err("full page");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org listing does not say how many pages there are".to_string()
+		)
+	);
+	let (provider, _state) = mock(vec![record; 99]).await;
+	assert_eq!(
+		provider
+			.list("example.org")
+			.await
+			.expect("short page")
+			.len(),
+		99
 	);
 }

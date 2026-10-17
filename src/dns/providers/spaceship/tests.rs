@@ -24,6 +24,8 @@ pub(super) struct MockState {
 	pub(super) api_secret: Option<String>,
 	/// What the listing claims for `total`, whatever it holds.
 	pub(super) total: Option<i64>,
+	/// Leave `total` out of the answer, as a degraded one does.
+	pub(super) omit_total: bool,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -74,6 +76,9 @@ async fn list_records(
 	let s = state.lock().unwrap();
 	let items: Vec<serde_json::Value> = s.records.values().cloned().collect();
 	let total = s.total.unwrap_or(items.len() as i64);
+	if s.omit_total {
+		return axum::Json(serde_json::json!({"items": items}));
+	}
 	axum::Json(serde_json::json!({"items": items, "total": total}))
 }
 

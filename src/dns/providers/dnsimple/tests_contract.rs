@@ -151,3 +151,34 @@ async fn listed_only_kinds_are_never_written() {
 	let (provider, _state) = mock(Vec::new()).await;
 	crate::dns::providers::listing_contract::assert_listed_kinds_are_not_written(&provider).await;
 }
+
+/// An answer without its page count is not the last page: a full page may be
+/// followed by more, and reading it as the whole zone would hide the rest.
+/// A short page is the last one, count or no count.
+#[tokio::test]
+async fn a_full_page_without_a_page_count_is_an_error() {
+	let (provider, state) = mock(
+		(0..100)
+			.map(|id| super::tests::record(id, "h", "A", "192.0.2.1", 3600))
+			.collect(),
+	)
+	.await;
+	state.lock().unwrap().omit_total_pages = true;
+	let error = provider.list("example.org").await.expect_err("full page");
+	assert_eq!(
+		error,
+		ProviderError::Remote(
+			"the example.org listing does not say how many pages there are".to_string()
+		)
+	);
+	let (provider, state) = mock(vec![super::tests::record(1, "h", "A", "192.0.2.1", 3600)]).await;
+	state.lock().unwrap().omit_total_pages = true;
+	assert_eq!(
+		provider
+			.list("example.org")
+			.await
+			.expect("short page")
+			.len(),
+		1
+	);
+}
