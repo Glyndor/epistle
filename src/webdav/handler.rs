@@ -52,7 +52,11 @@ const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
 /// method into the account's confined tree. Unknown methods are `405`.
 pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Response {
-	let Some(account) = auth::authenticate(request.headers(), &state.directory) else {
+	let peer = request
+		.extensions()
+		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+		.map(|info| crate::net::canonical_peer(info.0).ip());
+	let Some(account) = auth::authenticate(request.headers(), &state.directory, peer) else {
 		return challenge();
 	};
 	let Some(root) = path::account_root(&state.data_dir, &account) else {
