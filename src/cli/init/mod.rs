@@ -71,6 +71,7 @@ pub fn run(args: Args) -> ExitCode {
 		detector: &detect::LiveDetector,
 		resolver: &ptr::system_resolver,
 		meminfo: std::path::Path::new("/proc/meminfo"),
+		clock: &crate::clock::sync::probe,
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
@@ -84,6 +85,8 @@ struct Probes<'a> {
 	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
 	/// The host's `/proc/meminfo`, which sizes the containers.
 	meminfo: &'a std::path::Path,
+	/// Whether the host keeps its clock synchronised.
+	clock: &'a dyn Fn() -> crate::clock::sync::HostClock,
 }
 
 /// [`run`] with the probes and the stream for the detection notices and
@@ -121,6 +124,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	for note in host_sizing::fill(&mut answers, probes.meminfo) {
 		let _ = writeln!(out, "{note}");
 	}
+	warn_unsynced_clock(&(probes.clock)(), out);
 	answers.normalise();
 	match answers.validate() {
 		Ok(warnings) => render_warnings(&warnings),
@@ -209,6 +213,24 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			ExitCode::from(EXIT_PARTIAL)
 		}
 	}
+}
+
+/// A notice, never a refusal, when the host clock is not synchronised: the
+/// install works, but DKIM, certificates and tokens depend on a right clock.
+/// `init` changes nothing about it.
+fn warn_unsynced_clock(state: &crate::clock::sync::HostClock, out: &mut dyn Write) {
+	use crate::clock::sync::{FIX, HostClock};
+	let why = match state {
+		HostClock::Synced => return,
+		HostClock::Unsynced => "the host clock is not synchronised".to_string(),
+		HostClock::Unknown(why) => {
+			format!("cannot tell whether the host clock is synchronised ({why})")
+		}
+	};
+	let _ = writeln!(
+		out,
+		"warning: {why}; DKIM signatures, certificate validity and token expiry depend on it. To fix: {FIX}."
+	);
 }
 
 /// The answers file, and the address families it sets to `"none"`.
@@ -357,3 +379,7 @@ mod tests_warmup;
 #[cfg(test)]
 #[path = "init_tests_sizing.rs"]
 mod tests_sizing;
+
+#[cfg(test)]
+#[path = "init_tests_clock.rs"]
+mod tests_clock;

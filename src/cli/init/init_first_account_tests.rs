@@ -32,6 +32,7 @@ fn init(file: std::path::PathBuf, dry_run: bool) -> (ExitCode, String) {
 		detector: &detector,
 		resolver: &resolver,
 		meminfo: std::path::Path::new(""),
+		clock: &|| crate::clock::sync::HostClock::Synced,
 	};
 	let mut out = Vec::new();
 	let code = run_with(

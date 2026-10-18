@@ -9,6 +9,7 @@
 mod antispam_area;
 mod av_area;
 mod clock;
+mod clock_area;
 mod config_area;
 mod db_area;
 mod disk_area;
@@ -80,6 +81,8 @@ pub enum CheckArea {
 	/// The containers' memory limits fit the host, and the message memory
 	/// budget fits the mail container's.
 	Resources,
+	/// The host's clock is synchronised with a time source.
+	Clock,
 	/// The evidence verifies; transactional mail is not held.
 	Evidence,
 }
@@ -100,6 +103,7 @@ impl CheckArea {
 		CheckArea::Subid,
 		CheckArea::Warmup,
 		CheckArea::Resources,
+		CheckArea::Clock,
 		CheckArea::Evidence,
 	];
 
@@ -119,6 +123,7 @@ impl CheckArea {
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
 			CheckArea::Resources => "resources",
+			CheckArea::Clock => "clock",
 			CheckArea::Evidence => "evidence",
 		}
 	}
@@ -265,6 +270,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
 		CheckArea::Resources => resources_area::check(ctx).await,
+		CheckArea::Clock => clock_area::check(ctx).await,
 		CheckArea::Evidence => evidence_area::check(ctx).await,
 	}
 }
