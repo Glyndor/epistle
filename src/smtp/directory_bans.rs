@@ -154,7 +154,20 @@ impl Directory {
 			}
 			BanOutcome::Clear { account } => account,
 		};
-		let local = self.authenticate_local(login, password, ip, protocol);
+		// The hashing runs off the async worker and a few at a time. A check
+		// turned away for lack of a place verified nothing, so it moves no
+		// strike: it would otherwise count against an account that was never
+		// tried.
+		let local = match self
+			.hash_gate
+			.run(|| self.authenticate_local(login, password, ip, protocol))
+		{
+			Ok(local) => local,
+			Err(hash_gate::Busy) => {
+				self.record_auth_outcome(login, None, ip, protocol);
+				return None;
+			}
+		};
 		let verified = local
 			.or_else(|| {
 				// Local/SQL credentials did not match: try the live LDAP bind, if any.

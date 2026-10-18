@@ -162,6 +162,8 @@ pub struct Directory {
 	/// non-ASCII candidate set under `[auth] unicode_passwords = true`
 	/// verifies consistently with the bytes hashed at set-time.
 	password_policy: Policy,
+	/// Bounds how many password checks run at once (see `directory_hash_gate.rs`).
+	hash_gate: std::sync::Arc<hash_gate::HashGate>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -214,6 +216,7 @@ impl Directory {
 			ban_store: None,
 			scram_upgrader: None,
 			password_policy: Policy::ASCII_ONLY,
+			hash_gate: hash_gate::HashGate::shared(),
 			#[cfg(test)]
 			scram_lookup_counter: None,
 			#[cfg(test)]
@@ -684,6 +687,9 @@ mod credential;
 
 #[path = "directory_local.rs"]
 mod local;
+
+#[path = "directory_hash_gate.rs"]
+pub(crate) mod hash_gate;
 
 #[path = "directory_gate.rs"]
 mod gate;

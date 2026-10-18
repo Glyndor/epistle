@@ -106,6 +106,21 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   password. Before 0.12.2 an unknown login was refused at the first message,
   instantly, while a real one was challenged, and a failed IMAP or SMTP password
   check for an unknown login returned in microseconds.
+  A right password, or a right app password, for an account whose
+  `allowed_protocols` leaves this protocol out is refused after the same hashes
+  as a wrong one.
+- **Password checks are bounded.** The sessions run the argon2id check on the
+  async worker that drives them, so a burst of sign-in attempts could hold every
+  worker and keep a hash in memory per connection. Every password check now
+  goes through one gate shared by the process: it hands the worker over for the
+  duration of the check and lets only half the cores run at once (two at least,
+  eight at most), with a line of sixteen per place behind them. An attempt that
+  finds the line full is refused like a wrong password, before any hashing, and
+  moves no strike in the ban store because no credential was tried. The REST
+  API keeps its own gate for bearer tokens. What is left: while a burst lasts,
+  a legitimate sign-in waits behind it, and the allocator may keep the memory of
+  freed hashes (glibc raises its mmap threshold after the first one), so the
+  resident size of a busy server stays above what the gate allows live.
 
 ## Authorization
 
