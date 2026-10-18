@@ -9,6 +9,7 @@ mod domains;
 mod mailboxes;
 mod masked;
 mod queue;
+mod scope;
 mod send;
 #[cfg(test)]
 pub(crate) use send::sink_refusal;

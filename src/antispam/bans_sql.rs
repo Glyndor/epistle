@@ -114,6 +114,13 @@ impl BanStore for PgBanStore {
 		Box::pin(async move { self.clear_success_inner(&subject).await })
 	}
 
+	fn is_allow_listed(
+		&self,
+		ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async move { self.ip_allowed(ip).await })
+	}
+
 	fn sweep(
 		&self,
 		now_secs: u64,
@@ -161,10 +168,11 @@ impl PgBanStore {
 			.bind(window_start_secs as i64)
 			.fetch_one(&mut *tx)
 			.await?;
-			if count >= self.policy.threshold as i64 {
+			let threshold = self.policy.threshold_for(subject);
+			if count >= threshold as i64 {
 				let reason = format!(
-					"{} failed authentications in {} seconds",
-					self.policy.threshold, self.policy.window_secs
+					"{threshold} failed authentications in {} seconds",
+					self.policy.window_secs
 				);
 				let existing: Option<(i32,)> =
 					sqlx::query_as("SELECT strikes FROM auth_ban WHERE subject = $1 FOR UPDATE")
@@ -311,14 +319,19 @@ impl PgBanStore {
 
 	async fn remove_account_inner(&self, account: &str) {
 		let subject = subject_account(account);
+		// The pairs of this account go too. Account names are lowercase
+		// letters, digits and hyphens, so the prefix holds no LIKE wildcard.
+		let pairs = format!("pair:{}|%", account.to_ascii_lowercase());
 		let result = async {
 			let mut tx = self.pool.begin().await?;
-			sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_ban WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
-			sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_failure WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
 			tx.commit().await?;

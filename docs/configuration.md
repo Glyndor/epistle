@@ -335,6 +335,31 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+SCIM obeys the same confinement. A key with `scim` and `domains` lists, reads,
+creates, replaces, patches (including `active` and `password`) and deletes only
+the accounts that sit entirely inside its domains. An account outside them
+answers `404` on every `/scim/v2/Users` route, and a `POST` or `PUT` that names
+an address outside them is refused with `400`. A `userName` that is malformed or already held by an account outside the key's domains answers the same `400` (`userName is not available`), so a tenant cannot probe the other tenants' names; a name held inside its own domains still answers `409`. Moving an account to a domain of another tenant at its `max_accounts` cap answers `409`. Before 0.12.2 SCIM ignored
+`domains`, so a key meant for one tenant reached all of them: if you issued
+`scim` keys with `--domain`, rotate them and review the accounts they changed.
+
+A confined key holds to the same rule on every route that has per-tenant
+data, not only on the accounts routes:
+
+| Route | For a key confined to some domains |
+|---|---|
+| `GET /api/v1/status` | `domains` and `accounts` count only what the key covers; `queue_size` is left out because the queue is shared |
+| `GET /api/v1/queue`, `DELETE /api/v1/queue/{id}` | only entries whose sender is in the key's domains; an entry with an empty sender (a bounce) is for unconfined keys; any other entry answers `404` |
+| `GET /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
+| `/api/v1/accounts/{name}/masked`, `.../archive` | `404` unless the account is covered, unknown accounts included |
+| `POST /api/v1/auth/verify` | checks only the passwords of covered accounts; any other login answers `valid: false` without the password being tried |
+| `POST /api/v1/accounts`, `POST /scim/v2/Users` | a name that is malformed or held outside the key's domains gives the same `400`, so the answer does not reveal other tenants' names |
+
+Before 0.12.2 these routes ignored the key's domains. If you handed out keys
+with `domains`, treat them as having had access to the whole server and rotate
+them. `src/api/route_rules_tests.rs` lists every route with the rule it
+follows, and fails when a route is added without one.
+
 ### What each key scope reaches
 
 Scopes are independent: holding one does not grant another.
@@ -531,6 +556,11 @@ not supported — the account name is the directory primary key).
 `PATCH` accepts only `replace` of `active` and `password`. Every
 response carries `Content-Type: application/scim+json`; errors follow
 RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
+
+A key confined to domains (`api-key create --domain`) sees and changes only
+the accounts inside them (see [Domain-confined API keys](#domain-confined-api-keys-multi-tenancy)),
+and `POST /Users` honours a tenant's `max_accounts` cap with `409`, as
+`POST /api/v1/accounts` does.
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes). The server

@@ -3,16 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
-use axum::middleware::Next;
-use axum::response::Response;
-
 use crate::directory_store::{AccountStore, DirectoryHandle, MaskedAddressStore};
 use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
-use super::api_keys::Scope;
-use super::error::ApiError;
 use super::tenant_limits::TenantLimits;
 
 /// The bearer credentials the middleware extracted from the request, stashed
@@ -46,7 +40,19 @@ struct Inner {
 	domains: Vec<String>,
 	store: Arc<AccountStore>,
 	spool: FsSpool,
-	auth_limiter: std::sync::Mutex<AuthLimiter>,
+	auth_limiter: std::sync::Mutex<ClientLimiters>,
+	/// SHA-256 of the configured token, set the first time the legacy argon2
+	/// hash verified it; from then on a bearer is compared by digest.
+	configured_digest: std::sync::OnceLock<[u8; 32]>,
+	/// Limits how many argon2 verifications of the configured token run at
+	/// once. A request past the limit waits for its turn, it is not refused.
+	argon2_gate: std::sync::Arc<tokio::sync::Semaphore>,
+	/// Requests waiting for the gate; past [`MAX_ARGON2_QUEUE`] they are refused.
+	argon2_waiting: std::sync::Mutex<state_auth_queue::QueueSlots>,
+	argon2_queue_max: usize,
+	/// Test-only: argon2 runs started, running now, and the most at once.
+	#[cfg(test)]
+	argon2_stats: [std::sync::atomic::AtomicUsize; 3],
 	/// Per-account correspondent store: which addresses the account has
 	/// previously written to. The rolling 24h cap on first-time
 	/// recipients (`new_recipients_per_day`) reads from and writes to
@@ -129,60 +135,9 @@ struct Inner {
 	max_message_size: usize,
 }
 
-/// Sliding-window failure counter. Prevents brute force on the bearer token.
-///
-/// The clock and the window length are passed in by the caller so the limiter
-/// does not read `Instant::now()` itself. That makes the limiter's window
-/// logic deterministic from the tests' point of view (no sleeping, no
-/// flake under a loaded parallel run) and lets production code share one
-/// `now` value across the read and the record in the same request.
-struct AuthLimiter {
-	failures: u32,
-	window_start: std::time::Instant,
-	window: std::time::Duration,
-}
-
-const AUTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
-const AUTH_MAX_FAILURES: u32 = 20;
-
-impl AuthLimiter {
-	/// Build a limiter that will roll its window every `window` starting at
-	/// `now`. `now` is taken at the call site (typically `Instant::now()`),
-	/// not read inside the limiter.
-	fn new(window: std::time::Duration, now: std::time::Instant) -> Self {
-		AuthLimiter {
-			failures: 0,
-			window_start: now,
-			window,
-		}
-	}
-
-	/// Roll the window if `now` is at or past its end, then report whether
-	/// the failure count has reached the threshold.
-	fn is_limited(&mut self, now: std::time::Instant) -> bool {
-		if now.duration_since(self.window_start) >= self.window {
-			self.failures = 0;
-			self.window_start = now;
-		}
-		self.failures >= AUTH_MAX_FAILURES
-	}
-
-	/// Roll the window if `now` is at or past its end, then record a new
-	/// failure against the current window.
-	fn record_failure(&mut self, now: std::time::Instant) {
-		if now.duration_since(self.window_start) >= self.window {
-			self.failures = 0;
-			self.window_start = now;
-		}
-		self.failures = self.failures.saturating_add(1);
-	}
-
-	/// Clear the count and start a fresh window at `now`.
-	fn reset(&mut self, now: std::time::Instant) {
-		self.failures = 0;
-		self.window_start = now;
-	}
-}
+#[path = "state_limiter.rs"]
+mod limiter;
+use limiter::{AUTH_WINDOW, ClientLimiters};
 
 pub use super::account_view::AccountView;
 
@@ -242,10 +197,15 @@ impl ApiState {
 				domains,
 				store,
 				spool,
-				auth_limiter: std::sync::Mutex::new(AuthLimiter::new(
-					AUTH_WINDOW,
-					std::time::Instant::now(),
+				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
+				configured_digest: std::sync::OnceLock::new(),
+				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
+					MAX_CONCURRENT_ARGON2,
 				)),
+				argon2_waiting: std::sync::Mutex::new(state_auth_queue::QueueSlots::default()),
+				argon2_queue_max: MAX_ARGON2_QUEUE,
+				#[cfg(test)]
+				argon2_stats: Default::default(),
 				correspondents: None,
 				class_bindings: None,
 				new_recipients_per_day: None,
@@ -493,6 +453,85 @@ impl ApiState {
 		self
 	}
 
+	/// Test-only: count one wrong token from `ip` without sending a request.
+	#[cfg(test)]
+	pub(crate) fn seed_auth_failure(&self, ip: std::net::IpAddr) {
+		self.inner
+			.auth_limiter
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.record_failure(Some(ip), std::time::Instant::now());
+	}
+
+	/// Test-only: change how many requests may wait for an argon2 turn.
+	#[cfg(test)]
+	pub(crate) fn with_argon2_queue(mut self, max: usize) -> Self {
+		Arc::get_mut(&mut self.inner)
+			.expect("with_argon2_queue must be called before the state is shared")
+			.argon2_queue_max = max;
+		self
+	}
+
+	/// Test-only: requests holding a place in the argon2 queue right now.
+	#[cfg(test)]
+	pub(crate) fn argon2_waiting(&self) -> usize {
+		self.inner
+			.argon2_waiting
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.total()
+	}
+
+	/// Test-only: (clients, /48s) that hold a place in the argon2 queue.
+	#[cfg(test)]
+	pub(crate) fn argon2_queue_tracked(&self) -> (usize, usize) {
+		self.inner
+			.argon2_waiting
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.tracked()
+	}
+
+	/// Test-only: argon2 verifications running right now.
+	#[cfg(test)]
+	pub(crate) fn argon2_running(&self) -> usize {
+		self.inner.argon2_stats[1].load(std::sync::atomic::Ordering::SeqCst)
+	}
+
+	/// Test-only: (argon2 runs started, most at once).
+	#[cfg(test)]
+	pub(crate) fn argon2_stats(&self) -> (usize, usize) {
+		use std::sync::atomic::Ordering::SeqCst;
+		(
+			self.inner.argon2_stats[0].load(SeqCst),
+			self.inner.argon2_stats[2].load(SeqCst),
+		)
+	}
+
+	/// Test-only: behave as if the configured token had already verified once.
+	#[cfg(test)]
+	pub(crate) fn prime_configured_token(&self, token: &str) {
+		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+		let mut known = [0u8; 32];
+		known.copy_from_slice(digest.as_ref());
+		let _ = self.inner.configured_digest.set(known);
+	}
+
+	/// Test-only: lower the global failure ceiling so a test can reach it.
+	#[cfg(test)]
+	pub(crate) fn with_auth_global_max(mut self, max: u32) -> Self {
+		let inner = Arc::get_mut(&mut self.inner)
+			.expect("with_auth_global_max must be called before the state is shared");
+		let window = inner
+			.auth_limiter
+			.get_mut()
+			.unwrap_or_else(|p| p.into_inner())
+			.window();
+		inner.auth_limiter =
+			std::sync::Mutex::new(ClientLimiters::new(window).with_global_max(max));
+		self
+	}
+
 	/// Replace the auth-failure limiter with one built around a custom
 	/// window. Test-only: the router-level rate-limit test builds its state
 	/// with a long window so the wall clock under a loaded parallel run is
@@ -505,8 +544,7 @@ impl ApiState {
 	pub(crate) fn with_auth_window(mut self, window: std::time::Duration) -> Self {
 		let inner = Arc::get_mut(&mut self.inner)
 			.expect("with_auth_window must be called before the state is shared");
-		inner.auth_limiter =
-			std::sync::Mutex::new(AuthLimiter::new(window, std::time::Instant::now()));
+		inner.auth_limiter = std::sync::Mutex::new(ClientLimiters::new(window));
 		self
 	}
 
@@ -670,123 +708,11 @@ impl ApiState {
 #[derive(Clone, Copy, Debug)]
 pub struct ClientIp(pub Option<std::net::IpAddr>);
 
-/// Infer the coarse-grained scope the request needs from its method and path.
-/// The middleware uses this as a first pass; per-method JMAP handlers
-/// (`src/api/jmap/mod.rs::dispatch_request`) tighten it on top.
-///
-/// Unambiguous routes (`POST /api/v1/send`, `POST /jmap/upload`) get a
-/// single-scope slice. `POST /jmap/api` is ambiguous (every method call
-/// shares the same path), so the slice accepts any of `Read`/`Write`/`Send`
-/// — the dispatcher then enforces the actual scope per method call. The
-/// SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
-/// and writes on it require the dedicated `Scim` scope.
-fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
-	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
-	if method == axum::http::Method::POST && path == "/api/v1/send" {
-		return vec![Scope::Send];
-	}
-	if path.starts_with("/scim/v2") {
-		return vec![Scope::Scim];
-	}
-	match *method {
-		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],
-		axum::http::Method::POST
-		| axum::http::Method::PUT
-		| axum::http::Method::DELETE
-		| axum::http::Method::PATCH => {
-			if path.starts_with("/api/v1/") || path.starts_with("/jmap/upload") {
-				vec![Scope::Write]
-			} else {
-				ALL.to_vec()
-			}
-		}
-		_ => vec![Scope::Write],
-	}
-}
+/// Argon2 verifications of the configured token allowed to run at once.
+const MAX_CONCURRENT_ARGON2: usize = 2;
 
-/// Middleware: every request must carry the bearer token.
-pub async fn require_bearer_token(
-	State(state): State<ApiState>,
-	mut request: Request,
-	next: Next,
-) -> Result<Response, ApiError> {
-	// Read `now` once and pass the same value to both the pre-check and the
-	// record/reset at the bottom of the request, so a single request can never
-	// roll the window between the read and the write.
-	let now = std::time::Instant::now();
-	// Reject before any token work when failure budget is exhausted.
-	{
-		let mut limiter = state
-			.inner
-			.auth_limiter
-			.lock()
-			.unwrap_or_else(|p| p.into_inner());
-		if limiter.is_limited(now) {
-			return Err(ApiError::rate_limited());
-		}
-	}
-
-	// The client IP for API-key CIDR allowlists. `ConnectInfo` is present when
-	// the router is served with `into_make_service_with_connect_info`; absent
-	// (e.g. in tests) it is `None`, so an IP-restricted key cannot match.
-	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
-	// canonicalize here so an operator who pinned `192.0.2.0/24` on their key
-	// still gets matched by an IPv4 client that connected through the dual-stack
-	// bind. The audit channel uses the same canonical form.
-	let client_ip = request
-		.extensions()
-		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| crate::net::canonical_peer(info.0).ip());
-
-	let token = request
-		.headers()
-		.get(axum::http::header::AUTHORIZATION)
-		.and_then(|value| value.to_str().ok())
-		.and_then(|value| value.strip_prefix("Bearer "))
-		.map(str::to_owned);
-
-	// Coarse-grained scope from the request line: the per-route JMAP handlers
-	// apply their own fine-grained check on top of this. Unambiguous
-	// mutators (e.g. POST /api/v1/send, POST /jmap/upload) are caught here;
-	// ambiguous routes (POST /jmap/api) accept any scoped key and let the
-	// dispatcher decide per method call.
-	let acceptable_scopes = acceptable_scopes_for(request.method(), request.uri().path());
-	let token_ref = token.as_deref();
-	// The configured token has every scope; a leaked configured token is
-	// admin-equivalent regardless.
-	let configured = token_ref.is_some_and(|t| state.bearer_is_configured(t));
-	let authorized = configured
-		|| token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
-
-	{
-		let mut limiter = state
-			.inner
-			.auth_limiter
-			.lock()
-			.unwrap_or_else(|p| p.into_inner());
-		if authorized {
-			limiter.reset(now);
-		} else {
-			limiter.record_failure(now);
-		}
-	}
-
-	if !authorized {
-		return Err(ApiError::unauthenticated());
-	}
-	// Inject the resolved client IP so privileged handlers can attribute
-	// their state-changing actions in the audit log.
-	request.extensions_mut().insert(ClientIp(client_ip));
-	// Stash the matched credentials so per-route handlers can apply a
-	// fine-grained scope check on top of the coarse path/method inference
-	// the middleware just performed.
-	request.extensions_mut().insert(MatchedAuth {
-		token: token.clone(),
-		client_ip,
-		configured,
-	});
-	Ok(next.run(request).await)
-}
+/// Requests that may wait for an argon2 turn; the next one is told `429`.
+const MAX_ARGON2_QUEUE: usize = 64;
 
 #[cfg(test)]
 thread_local! {
@@ -794,6 +720,13 @@ thread_local! {
 	/// token hash, which may be a legacy argon2id one.
 	pub(crate) static CONFIGURED_HASH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+#[path = "state_bearer.rs"]
+mod bearer;
+pub use bearer::require_bearer_token;
+
+#[path = "state_auth_queue.rs"]
+mod state_auth_queue;
 
 #[path = "state_auth.rs"]
 mod auth;

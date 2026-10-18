@@ -175,18 +175,47 @@ impl TenantLimits {
 		addresses: &[String],
 	) -> Result<(), String> {
 		for tenant in self.tenants_for_addresses(addresses.iter().map(String::as_str)) {
-			let Some(cap) = tenant.config.max_accounts else {
-				continue;
-			};
-			// +1 because the candidate itself is not yet in the store.
-			let projected =
-				self.tenant_account_count(tenant_index_of(&self.tenants, tenant), store) + 1;
-			if projected > cap {
-				return Err(format!(
-					"tenant \"{}\" has reached its max_accounts cap of {cap}",
-					tenant.label()
-				));
+			self.check_cap(tenant, store)?;
+		}
+		Ok(())
+	}
+
+	/// Like [`Self::check_account_creation`], for an existing account whose
+	/// addresses change from `current` to `proposed`. Only a tenant the account
+	/// does not already count against is checked: it takes a place there, while
+	/// a tenant it already belongs to loses or keeps the one it had.
+	pub fn check_account_move(
+		&self,
+		store: &AccountStore,
+		current: &[String],
+		proposed: &[String],
+	) -> Result<(), String> {
+		let held: HashSet<usize> = self
+			.tenants_for_addresses(current.iter().map(String::as_str))
+			.into_iter()
+			.map(|tenant| tenant_index_of(&self.tenants, tenant))
+			.collect();
+		for tenant in self.tenants_for_addresses(proposed.iter().map(String::as_str)) {
+			if !held.contains(&tenant_index_of(&self.tenants, tenant)) {
+				self.check_cap(tenant, store)?;
 			}
+		}
+		Ok(())
+	}
+
+	/// One more account in `tenant` must stay within its `max_accounts`.
+	fn check_cap(&self, tenant: &TenantRuntime, store: &AccountStore) -> Result<(), String> {
+		let Some(cap) = tenant.config.max_accounts else {
+			return Ok(());
+		};
+		// +1 because the candidate itself is not yet counted in the tenant.
+		let projected =
+			self.tenant_account_count(tenant_index_of(&self.tenants, tenant), store) + 1;
+		if projected > cap {
+			return Err(format!(
+				"tenant \"{}\" has reached its max_accounts cap of {cap}",
+				tenant.label()
+			));
 		}
 		Ok(())
 	}

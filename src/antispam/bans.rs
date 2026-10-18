@@ -7,7 +7,19 @@
 //! drive the policy: 5 failed authentications in 15 minutes trigger a ban;
 //! the first ban lasts 15 minutes, the next on the same subject 30 minutes,
 //! then an hour, ... capped at 24 hours. A successful authentication
-//! clears both the ban and the failure history for the subject.
+//! clears the ban and the failure history of the account and of the
+//! (account, client) pair it came from, never of the client address: an
+//! attacker who owns one account must not be able to reset its own counter
+//! by logging in between guesses at others.
+//!
+//! Failures are counted on three subjects. The client (`ip:`) is the
+//! address, or the /64 for IPv6, since one host there controls a whole /64
+//! and rotating inside it costs nothing. The pair (`pair:`) is one account
+//! as seen from one client. The account (`account:`) counts every failure
+//! against a threshold [`ACCOUNT_THRESHOLD_FACTOR`] times higher, so a
+//! guess spread over many clients, each too few to be banned, still ends in
+//! a ban, while one client alone cannot lock an account out for everyone: it
+//! is stopped by its own counters long before.
 //!
 //! The store is **fail open on database errors**: a connection hiccup must
 //! never block mail, so every public method returns the safe answer (`None`
@@ -62,7 +74,25 @@ impl Default for BanPolicy {
 	}
 }
 
+/// How many times the client threshold the account subject needs. An account
+/// is attacked from many clients at once, and one client alone must not be able
+/// to fire its ban: a single client is stopped by its own counters after
+/// `threshold` failures, so it can never reach `ACCOUNT_THRESHOLD_FACTOR`
+/// times as many inside one window.
+pub const ACCOUNT_THRESHOLD_FACTOR: u32 = 4;
+
 impl BanPolicy {
+	/// The failures within the window that fire a ban for `subject`: the plain
+	/// threshold for a client or a pair, [`ACCOUNT_THRESHOLD_FACTOR`] times it
+	/// for an account.
+	pub fn threshold_for(&self, subject: &str) -> u32 {
+		if subject.starts_with("account:") {
+			self.threshold.saturating_mul(ACCOUNT_THRESHOLD_FACTOR)
+		} else {
+			self.threshold
+		}
+	}
+
 	/// How long the next ban lasts given the current `strikes` count. The
 	/// first ban (strikes = 1) is `base_secs`; each subsequent ban doubles
 	/// it, capped at `max_secs`. Saturates the exponent at 20 so the
@@ -107,6 +137,16 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		subject: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
+	/// Whether the operator's allow list covers `ip`. An allow-listed client
+	/// is never counted and never banned. The default is "not listed", which
+	/// is right for a store that has no allow list.
+	fn is_allow_listed(
+		&self,
+		_ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async { false })
+	}
+
 	/// Drop failures older than 24 hours and bans whose `until` is older
 	/// than 24 hours ago.
 	fn sweep(
@@ -125,6 +165,34 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 /// Build the canonical `'ip:<addr>'` subject for `ip`.
 pub fn subject_ip(ip: IpAddr) -> String {
 	format!("ip:{ip}")
+}
+
+/// The part of a client address that identifies the client for counting: the
+/// address itself for IPv4, the /64 network for IPv6.
+fn client_key(ip: IpAddr) -> String {
+	match ip {
+		IpAddr::V4(v4) => v4.to_string(),
+		IpAddr::V6(v6) => {
+			let mut octets = v6.octets();
+			octets[8..].fill(0);
+			std::net::Ipv6Addr::from(octets).to_string()
+		}
+	}
+}
+
+/// The `ip:` subject failures from `ip` are counted on: the address for IPv4,
+/// the /64 for IPv6.
+pub fn subject_client(ip: IpAddr) -> String {
+	format!("ip:{}", client_key(ip))
+}
+
+/// The `pair:<login>|<client>` subject for one account seen from one client
+/// (see [`subject_client`] for what a client is). Without a client address
+/// every attempt on the account shares the client `unknown`, so the pair still
+/// stops guessing at the base threshold.
+pub fn subject_pair(account: &str, ip: Option<IpAddr>) -> String {
+	let client = ip.map_or_else(|| "unknown".to_string(), client_key);
+	format!("pair:{}|{client}", account.to_ascii_lowercase())
 }
 
 /// Build the canonical `'account:<login>'` subject for `account`.

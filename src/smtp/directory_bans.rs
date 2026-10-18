@@ -21,6 +21,7 @@
 //! `account:<login>`).
 
 use super::*;
+use crate::antispam::bans;
 
 /// The result of consulting the ban store before any credential work.
 /// A ban refusal is a distinct outcome from a credential failure and must
@@ -43,6 +44,31 @@ pub enum BanOutcome {
 }
 
 impl Directory {
+	/// The stand-in account name an unknown login is counted under so it does
+	/// the ban store work a real one does: `?` (not a character an account
+	/// name can hold) and a keyed hash of the login. Each unknown login has
+	/// counters and bans of its own, like a real account, so neither a pile
+	/// of unknown logins sharing one row nor a ban on one of them is visible
+	/// from another. The key lives only in this process.
+	pub(crate) fn decoy_account(login: &str) -> String {
+		use ring::hmac;
+		static KEY: std::sync::OnceLock<hmac::Key> = std::sync::OnceLock::new();
+		let key = KEY.get_or_init(|| {
+			let bytes: [u8; 32] = ring::rand::generate(&ring::rand::SystemRandom::new())
+				.map(|random| random.expose())
+				.unwrap_or([0u8; 32]);
+			hmac::Key::new(hmac::HMAC_SHA256, &bytes)
+		});
+		let tag = hmac::sign(key, login.to_ascii_lowercase().as_bytes());
+		tag.as_ref()[..12]
+			.iter()
+			.fold(String::from("?"), |mut s, b| {
+				use std::fmt::Write;
+				let _ = write!(s, "{b:02x}");
+				s
+			})
+	}
+
 	/// Attach the shared ban store consulted on every password
 	/// authentication attempt. `None` (the default) keeps the per-connection
 	/// three-strikes counters as the only defence; with `[database]`
@@ -138,13 +164,11 @@ impl Directory {
 					.map(|account| (account, None))
 			})
 			.and_then(|(account, label)| {
-				// The protocol allowlist is enforced after the local/LDAP
-				// credential check resolves an account. A restriction that
-				// denies this protocol returns None exactly like the disabled
-				// path, so the wire response is identical for "wrong password",
-				// "disabled", and "wrong protocol"; none reveals that the
-				// account exists at all.
-				self.is_protocol_allowed(&account, protocol)
+				// The account rules run after the local/LDAP credential
+				// check resolves an account, on whichever one answered: an
+				// account the rules refuse returns None exactly like a wrong
+				// password, so the wire response says nothing about why.
+				self.admit_login(&account, protocol, Proof::Password)
 					.then_some((account, label))
 			});
 		let verified_account = verified.as_ref().map(|(account, _)| account.as_str());
@@ -182,32 +206,59 @@ impl Directory {
 			};
 		};
 		let now_secs = unix_now_secs();
-		if let Some(ip) = ip
-			&& let Some(info) =
-				block_on_async(store.is_banned(&crate::antispam::bans::subject_ip(ip), now_secs))
-		{
-			self.log_banned(
-				"ip",
-				&ip.to_string(),
-				&info.reason,
-				info.until_secs,
-				protocol,
-			);
-			return BanOutcome::Banned;
+		if let Some(ip) = ip {
+			// The exact address is always asked about: that is where an
+			// operator's manual ban or allow entry for one host lives. For
+			// IPv6 the /64 the failures are counted under is asked about too,
+			// unless the host itself is on the allow list: a neighbour in its
+			// /64 that earned a ban must not lock it out.
+			let mut subjects = vec![bans::subject_ip(ip)];
+			if ip.is_ipv6() && !block_on_async(store.is_allow_listed(ip)) {
+				subjects.push(bans::subject_client(ip));
+			}
+			for subject in subjects {
+				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
+					self.log_banned(
+						"ip",
+						&ip.to_string(),
+						&info.reason,
+						info.until_secs,
+						protocol,
+					);
+					return BanOutcome::Banned;
+				}
+			}
 		}
-		// Resolve the account name before consulting its ban row so
+		// Resolve the account name before consulting its ban rows so
 		// unknown logins cannot probe bans on accounts they cannot
 		// authenticate as.
-		if let Some((account, _)) = self.credentials(login)
-			&& let Some(info) = block_on_async(
-				store.is_banned(&crate::antispam::bans::subject_account(&account), now_secs),
-			) {
-			self.log_banned("account", &account, &info.reason, info.until_secs, protocol);
-			return BanOutcome::Banned;
+		let account = self.credentials(login).map(|(account, _)| account);
+		// An unknown login asks the store about a stand-in account all the
+		// same, and ignores the answer: with PostgreSQL each question is a round
+		// trip, and one asked only for real accounts would tell them apart.
+		let decoy;
+		let subject_account = match account.as_deref() {
+			Some(account) => account,
+			// No login at all (a malformed first message) has nothing to hide.
+			None if login.is_empty() => return BanOutcome::Clear { account },
+			None => {
+				decoy = Self::decoy_account(login);
+				&decoy
+			}
+		};
+		let subjects = [
+			("pair", bans::subject_pair(subject_account, ip)),
+			("account", bans::subject_account(subject_account)),
+		];
+		for (kind, subject) in subjects {
+			if let Some(info) = block_on_async(store.is_banned(&subject, now_secs))
+				&& let Some(account) = &account
+			{
+				self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
+				return BanOutcome::Banned;
+			}
 		}
-		BanOutcome::Clear {
-			account: self.credentials(login).map(|(account, _)| account),
-		}
+		BanOutcome::Clear { account }
 	}
 
 	/// Emit a structured audit event when a ban fires. Distinct from
@@ -247,7 +298,7 @@ impl Directory {
 	/// account-side strike is skipped and only the IP-side strike lands.
 	pub fn record_ban_outcome(
 		&self,
-		_login: &str,
+		login: &str,
 		account: Option<&str>,
 		success: bool,
 		ip: Option<std::net::IpAddr>,
@@ -259,29 +310,53 @@ impl Directory {
 		let now_secs = unix_now_secs();
 		let protocol_str = protocol.as_str();
 		if success {
-			if let Some(ip) = ip {
-				block_on_async(store.clear_success(&crate::antispam::bans::subject_ip(ip)));
-			}
+			// A success clears what the account and this account-from-this-
+			// client pair had accumulated. It never clears the client: a
+			// client that owns one account must not be able to reset its
+			// own count between guesses at others.
 			if let Some(account) = account {
-				block_on_async(
-					store.clear_success(&crate::antispam::bans::subject_account(account)),
-				);
+				block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
+				block_on_async(store.clear_success(&bans::subject_account(account)));
 			}
 			return;
 		}
-		if let Some(ip) = ip {
+		// An allow-listed client is exempt from the bans on its address and on
+		// the pair too: it may be a proxy that many users share, and five typos
+		// from them must not lock one account's owner out of the proxy. What it
+		// is not exempt from is the account's own ceiling (four times the
+		// threshold), or a trusted network could guess without limit.
+		let allowed = ip.is_some_and(|ip| block_on_async(store.is_allow_listed(ip)));
+		if let Some(ip) = ip
+			&& !allowed
+		{
+			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
+		}
+		// An unknown login is counted on a stand-in account (never read back),
+		// so it writes what a real one does; see `check_ban`.
+		let decoy;
+		let account = match account {
+			Some(account) => account,
+			None if login.is_empty() => return,
+			None => {
+				decoy = Self::decoy_account(login);
+				&decoy
+			}
+		};
+		if !allowed {
 			block_on_async(store.record_failure(
-				&crate::antispam::bans::subject_ip(ip),
+				&bans::subject_pair(account, ip),
 				protocol_str,
 				now_secs,
 			));
 		}
-		if let Some(account) = account {
-			block_on_async(store.record_failure(
-				&crate::antispam::bans::subject_account(account),
-				protocol_str,
-				now_secs,
-			));
-		}
+		// Every failure also counts against the account, at a threshold several
+		// times the client's (see `ACCOUNT_THRESHOLD_FACTOR`): a guess spread
+		// over many clients, none enough to be banned, still ends in a ban,
+		// and one client alone is stopped by its own counters long before.
+		block_on_async(store.record_failure(
+			&bans::subject_account(account),
+			protocol_str,
+			now_secs,
+		));
 	}
 }

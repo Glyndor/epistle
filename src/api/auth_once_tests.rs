@@ -70,29 +70,38 @@ async fn a_jmap_request_with_the_configured_token_checks_the_hash_once() {
 }
 
 #[tokio::test]
-async fn a_jmap_request_with_an_api_key_checks_the_hash_once() {
+async fn a_jmap_request_with_an_api_key_never_checks_the_configured_hash() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = app(dir.path());
 	let (status, checks) = checks_for(&app, "POST", "/jmap/api", SECRET, three_calls()).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(checks, 1, "configured-hash checks for one request");
+	assert_eq!(
+		checks, 0,
+		"a key is found by its SHA-256 before the configured hash is looked at"
+	);
 }
 
 #[tokio::test]
-async fn an_upload_with_an_api_key_checks_the_hash_once() {
+async fn an_upload_with_an_api_key_never_checks_the_configured_hash() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = app(dir.path());
 	let (status, checks) =
 		checks_for(&app, "POST", "/jmap/upload/ann", SECRET, Body::from("blob")).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(checks, 1, "configured-hash checks for one request");
+	assert_eq!(
+		checks, 0,
+		"a key is found by its SHA-256 before the configured hash is looked at"
+	);
 }
 
 #[tokio::test]
-async fn a_management_request_with_an_api_key_checks_the_hash_once() {
+async fn a_management_request_with_an_api_key_never_checks_the_configured_hash() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = app(dir.path());
 	let (status, checks) = checks_for(&app, "GET", "/api/v1/accounts", SECRET, Body::empty()).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(checks, 1, "configured-hash checks for one request");
+	assert_eq!(
+		checks, 0,
+		"a key is found by its SHA-256 before the configured hash is looked at"
+	);
 }

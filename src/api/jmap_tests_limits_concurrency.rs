@@ -36,7 +36,11 @@ impl futures_core::Stream for Stalled {
 }
 
 fn app(dir: &std::path::Path) -> Router {
-	router(state_with_key(dir, key(SECRET, &[], None, None)))
+	let state = state_with_key(dir, key(SECRET, &[], None, None));
+	// The requests are held in flight with a short settle: the configured
+	// token must already be known, or its first argon2 outlasts the settle.
+	state.prime_configured_token(TOKEN.as_str());
+	router(state)
 }
 
 /// Start `count` requests to `path` whose bodies never arrive, and let each
@@ -173,6 +177,7 @@ async fn one_upload_past_max_concurrent_upload_is_refused() {
 async fn a_websocket_request_counts_against_max_concurrent_requests() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_key(dir.path(), key(SECRET, &[], None, None));
+	state.prime_configured_token(TOKEN.as_str());
 	let app = router(state.clone());
 	let held = hold(&app, "/jmap/api", MAX_CONCURRENT_REQUESTS).await;
 
