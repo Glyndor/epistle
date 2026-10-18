@@ -181,3 +181,28 @@ fn a_header_of_endless_continuations_keeps_the_first_64_kib() {
 	);
 	assert!(message.visible_headers(&["a"]).truncated);
 }
+
+#[test]
+fn values_and_names_of_bad_octets_cost_no_more_than_the_octets() {
+	// Values of 21 000 octets that are not UTF-8 held three times the
+	// message, and names of 65 000 held seven times.
+	let mut values = Vec::new();
+	while values.len() < 24 * MIB {
+		values.extend_from_slice(b"h: ");
+		values.extend(std::iter::repeat_n(0xffu8, 21_000));
+		values.extend_from_slice(b"\r\n");
+	}
+	let (_, peak) = peak_bytes(|| super::interp::Message::parse(&values));
+	assert!(
+		peak < values.len() + values.len() / 2,
+		"{peak} octets held for {} of values",
+		values.len()
+	);
+	let mut names = Vec::new();
+	while names.len() < 24 * MIB {
+		names.extend(std::iter::repeat_n(0xffu8, 65_000));
+		names.extend_from_slice(b": v\r\n");
+	}
+	let (_, peak) = peak_bytes(|| super::interp::Message::parse(&names));
+	assert!(peak < 4 * MIB, "{peak} octets held for 24 MiB of names");
+}

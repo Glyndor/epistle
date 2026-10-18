@@ -1,6 +1,8 @@
 //! The message view the Sieve interpreter evaluates: parsed headers, total
 //! size, body text, and the SMTP envelope.
 
+use crate::util::header_block;
+
 use super::env::{
 	BODY_WINDOW, HEADER_NAME_VALUES, HEADER_NAME_WINDOW, HEADER_NAMES_PER_LOOKUP, MAX_HEADERS,
 };
@@ -41,14 +43,10 @@ impl Message {
 	/// 10 000 headers and the first mebibyte of the body are kept, and no
 	/// header more than 64 KiB of itself: a message is up to the operator's
 	/// size limit, and what the interpreter reads of it is a fixed window, so
-	/// what it holds of it is too. The octets are cut before they are
-	/// converted to text, so a message of bytes that are not UTF-8 costs no
-	/// more than one that is.
+	/// what it holds of it is too. Octets that are not UTF-8 become one `?`
+	/// each, so text is never longer than the octets it came from.
 	pub fn parse(raw: &[u8]) -> Message {
-		let blank = raw.windows(4).position(|w| w == b"\r\n\r\n");
-		let header_end = blank.map_or(raw.len(), |p| p + 2);
-		let body_start = blank.map_or(raw.len(), |p| p + 4);
-		let whole_body = raw.get(body_start..).unwrap_or(&[]);
+		let (block, whole_body) = header_block::split(raw);
 		// A little more than the window, so that cutting it at a character
 		// boundary leaves the window whole.
 		let kept = &whole_body[..whole_body.len().min(BODY_WINDOW + 4)];
@@ -57,10 +55,8 @@ impl Message {
 		let mut headers_cut = false;
 		let mut values_cut = false;
 		let mut current: Option<Field> = None;
-		for line in raw[..header_end].split_inclusive(|b| *b == b'\n') {
-			let line = line.strip_suffix(b"\n").unwrap_or(line);
-			let line = line.strip_suffix(b"\r").unwrap_or(line);
-			if matches!(line.first(), Some(b' ' | b'\t')) {
+		for line in header_block::lines(block) {
+			if !header_block::begins_field(line) {
 				if let Some(field) = &mut current {
 					values_cut |= field.feed(line);
 				}
@@ -69,19 +65,20 @@ impl Message {
 			if let Some(field) = current.take() {
 				field.push_into(&mut headers);
 			}
-			if !line.is_empty() {
-				if headers.len() >= MAX_HEADERS {
-					headers_cut = true;
-					break;
-				}
-				// A name is looked for in the first 64 KiB only; a line
-				// with no colon there is not a header.
-				let head = &line[..line.len().min(HEADER_NAME_WINDOW)];
-				if let Some(colon) = head.iter().position(|b| *b == b':') {
+			if headers.len() >= MAX_HEADERS {
+				headers_cut = true;
+				break;
+			}
+			// A name is at most 998 octets (RFC 5322); a line with no colon
+			// in that many is not a header.
+			let head = &line[..line.len().min(MAX_NAME + 1)];
+			match head.iter().position(|b| *b == b':') {
+				Some(colon) => {
 					let mut field = Field::named(&line[..colon]);
 					values_cut |= field.feed(&line[colon + 1..]);
 					current = Some(field);
 				}
+				None => values_cut |= line.len() > MAX_NAME,
 			}
 		}
 		if let Some(field) = current.take() {
@@ -219,26 +216,39 @@ fn window(text: &str, limit: usize) -> &str {
 	&text[..end]
 }
 
+/// The longest header name read, in octets (RFC 5322 section 2.1.1).
+const MAX_NAME: usize = 998;
+
+/// Text from octets, a `?` for each one that is not UTF-8: never longer than
+/// the octets, which is what keeps a message of bad octets from costing
+/// three times its size once converted.
+fn decode(bytes: &[u8]) -> impl Iterator<Item = char> + '_ {
+	bytes.utf8_chunks().flat_map(|chunk| {
+		chunk
+			.valid()
+			.chars()
+			.chain(std::iter::repeat_n('?', chunk.invalid().len()))
+	})
+}
+
 /// A header being read: its name, and its value as the interpreter sees it,
-/// built octet by octet: runs of white space (folding included) are one
-/// space and the ends are trimmed, and no more than 64 KiB are kept. Blanks
-/// are collapsed before the cut, so padding with them cannot push the text
-/// that follows out of the window.
+/// built as the octets come: every run of white space (folding included) is
+/// one space, the ends are trimmed, and no more than 64 KiB are kept. The
+/// blanks are collapsed before the cut, so padding with them cannot push the
+/// text that follows out of the window. White space is what `char::is_whitespace`
+/// says: space, tab, VT, FF, CR, NEL, NBSP and the other Unicode blanks.
 struct Field {
-	name: Vec<u8>,
-	value: Vec<u8>,
+	name: String,
+	value: String,
 	blank: bool,
 }
 
 impl Field {
 	fn named(name: &[u8]) -> Self {
-		let end = name
-			.iter()
-			.rposition(|b| !matches!(b, b' ' | b'\t'))
-			.map_or(0, |at| at + 1);
+		let name: String = decode(name).collect();
 		Self {
-			name: name[..end].to_vec(),
-			value: Vec::new(),
+			name: name.trim_end().to_string(),
+			value: String::new(),
 			blank: false,
 		}
 	}
@@ -246,31 +256,26 @@ impl Field {
 	/// Add `text` (a piece of a line); `true` when the value is full and some
 	/// of it was left out.
 	fn feed(&mut self, text: &[u8]) -> bool {
-		self.blank |= !self.value.is_empty();
-		let mut cut = false;
-		for &byte in text {
-			if matches!(byte, b' ' | b'\t') {
+		for c in decode(text) {
+			if c.is_whitespace() {
 				self.blank = !self.value.is_empty();
 				continue;
 			}
-			if self.value.len() >= HEADER_NAME_WINDOW {
-				cut = true;
-				break;
+			let room = c.len_utf8() + usize::from(self.blank);
+			if self.value.len() + room > HEADER_NAME_WINDOW {
+				return true;
 			}
 			if std::mem::take(&mut self.blank) {
-				self.value.push(b' ');
+				self.value.push(' ');
 			}
-			self.value.push(byte);
+			self.value.push(c);
 		}
-		cut
+		false
 	}
 
-	fn push_into(self, headers: &mut Vec<(String, String)>) {
-		// Converted after the cut, and cut again where the conversion made
-		// it longer (each octet that is not UTF-8 becomes three), so what is
-		// kept is never more than the octets read.
-		let value = String::from_utf8_lossy(&self.value);
-		let value = window(&value, HEADER_NAME_WINDOW).to_string();
-		headers.push((String::from_utf8_lossy(&self.name).into_owned(), value));
+	fn push_into(mut self, headers: &mut Vec<(String, String)>) {
+		// Built by pushing, so it holds up to twice what it needs.
+		self.value.shrink_to_fit();
+		headers.push((self.name, self.value));
 	}
 }

@@ -222,3 +222,73 @@ fn a_message_at_the_smtp_limit_with_the_servers_own_fields_is_read_whole() {
 		"{outcome:?}"
 	);
 }
+
+#[test]
+fn octets_that_are_not_utf8_do_not_hide_the_text_after_them() {
+	// 23 folded lines of 990 octets of 0xff: converted to the three-octet
+	// replacement character they pushed the word out of the window, and
+	// nothing said so. Each octet is one character now.
+	let mut raw = b"Subject:".to_vec();
+	for _ in 0..23 {
+		raw.extend_from_slice(b"\r\n ");
+		raw.extend(std::iter::repeat_n(0xffu8, 990));
+	}
+	raw.extend_from_slice(b"\r\n viagra\r\n\r\nb\r\n");
+	assert!(discarded(
+		"if header :contains \"subject\" \"viagra\" { discard; }",
+		&raw
+	));
+}
+
+#[test]
+fn the_ends_of_a_value_lose_every_blank_that_trim_loses() {
+	let script = "if header :is \"subject\" \"viagra\" { discard; }";
+	for (name, blank) in [
+		("NBSP", "\u{a0}"),
+		("ideographic", "\u{3000}"),
+		("NEL", "\u{85}"),
+		("VT", "\u{b}"),
+		("FF", "\u{c}"),
+		("CR", "\r"),
+		("tab", "\t"),
+	] {
+		for raw in [
+			format!("Subject: {blank}viagra\r\n\r\nb\r\n"),
+			format!("Subject: viagra{blank}\r\n\r\nb\r\n"),
+			format!("Subject:\r\n {blank}viagra{blank}\r\n\r\nb\r\n"),
+		] {
+			assert!(discarded(script, raw.as_bytes()), "{name}: {raw:?}");
+		}
+	}
+}
+
+#[test]
+fn a_header_name_of_endless_bad_octets_is_not_a_header() {
+	let mut raw = vec![0xffu8; 65_000];
+	raw.extend_from_slice(b": value\r\nSubject: viagra\r\n\r\nb\r\n");
+	let (outcome, _) = run(
+		"if header :contains \"subject\" \"viagra\" { discard; }",
+		&raw,
+	);
+	assert!(outcome.discarded, "the line after it is read");
+	assert!(
+		outcome.inspection_truncated,
+		"and the name left out is said"
+	);
+}
+
+#[test]
+fn a_message_with_lf_line_ends_has_its_headers_and_not_its_body_as_headers() {
+	let mut raw = b"Subject: viagra\n\n".to_vec();
+	for n in 0..20_000 {
+		raw.extend_from_slice(format!("not-a-header-{n}: y\n").as_bytes());
+	}
+	let (outcome, _) = run(
+		"if exists \"not-a-header-5\" { keep; } else { discard; }",
+		&raw,
+	);
+	assert!(
+		outcome.discarded && !outcome.inspection_truncated,
+		"{outcome:?}"
+	);
+}

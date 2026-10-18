@@ -1728,17 +1728,26 @@ by the script:
   the headers called each name it lists (a longer value is cut), for at most
   16 names. Every name has its own quota, so a thousand `Received` headers or
   a huge `X-` header cannot hide the `From` or `Subject` listed with them.
-  Only the first 10 000 headers of a message are read at all. Mail with more than 9 900
-  header fields is refused before any filter reads it, whatever the way in: at
-  `DATA` and `BDAT` with `554 5.6.0` (counted in `rejected_header_fields`), on
-  `POST /api/v1/send` with `422 too_many_header_fields`, and on JMAP
-  `EmailSubmission/set` with `forbiddenToSend`; so no sender can hide a `From`
-  or a `Subject` behind padding. (A message stored by IMAP `APPEND` or JMAP
-  `Email/import` is not read by a filter until it is sent.) A header's value is
-  read with every run of white space, folding included, as one space, and its
-  first 64 KiB. If a message with more fields got to a filter anyway it would
-  be cut, every test that looks at headers (`exists` included) would say so as
-  a truncated inspection, and `:count` would count the headers read.
+  Only the first 10 000 headers of a message are read at all. Mail with more
+  than 9 900 header fields is refused before any filter reads it, whatever the
+  way in, with one check: `554 5.6.0` at `DATA` and `BDAT`, `422
+  too_many_header_fields` on `POST /api/v1/send`, `forbiddenToSend` on JMAP
+  `EmailSubmission/set`; every refusal is counted in `rejected_header_fields`
+  and logged once an hour. For a local recipient the fields the server adds
+  (about a dozen) count too, so the limit there is that many fewer. So no
+  sender can hide a `From` or a `Subject` behind padding. (A message stored by
+  IMAP `APPEND` or JMAP `Email/import` is not read by a filter until it is
+  sent.) The header block ends at the first empty line, `CRLF` or bare `LF`.
+  A header's value is read as follows: the blanks at its ends are dropped
+  (space, tab, VT, FF, CR, NEL, NBSP and the other Unicode white space), every
+  run of blanks inside it, folding included, is one space (so `:contains
+  "a  b"`, two spaces, and `:contains "a<TAB>b"` no longer match `a  b` or
+  `a<TAB>b`, and `:is "a b"` now matches `a  b`), an octet that is not UTF-8 is
+  a `?`, and only its first 64 KiB are kept. A header name is at most 998
+  octets: a line with a longer one is not a header, and the inspection is
+  marked truncated. If a message with more fields got to a filter anyway it
+  would be cut, every test that looks at headers (`exists` included) would say
+  so as a truncated inspection, and `:count` would count the headers read.
   Text a sender
   puts past a window is not seen by the test, so a rule that must catch
   something should not depend on where in a huge message it is. The run goes
