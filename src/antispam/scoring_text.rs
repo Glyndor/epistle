@@ -125,7 +125,7 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 	};
 	let mut complete = true;
 	let mut ambiguous = false;
-	let mut parts: Vec<(Vec<u8>, Option<String>)> = Vec::new();
+	let mut parts: Vec<(Vec<u8>, Vec<String>)> = Vec::new();
 	let walked = walk::walk_text(raw, &limits, |leaf| {
 		ambiguous |= leaf.ambiguous;
 		// A part that declares two types is text to one reader and a file to
@@ -138,12 +138,12 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 		if text {
 			// A text part cut short by the budget is not all of the text.
 			complete &= !leaf.truncated;
-			parts.push((leaf.content, leaf.charset.clone()));
+			parts.push((leaf.content, leaf.charsets.clone()));
 			// A client may have taken another of the encodings it declares.
 			parts.extend(
 				leaf.alternates
 					.into_iter()
-					.map(|content| (content, leaf.charset.clone())),
+					.map(|content| (content, leaf.charsets.clone())),
 			);
 		} else if leaf.truncated
 			&& leaf
@@ -159,8 +159,8 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 	if walked.stopped.is_some() || !complete {
 		return None;
 	}
-	for (part, charset) in &parts {
-		read::push_part(window, part, charset.as_deref());
+	for (part, charsets) in &parts {
+		read::push_part(window, part, charsets);
 	}
 	// Two readers could see this message differently: read the bytes as well,
 	// so that whatever either of them shows is read.

@@ -16,36 +16,59 @@ use super::Window;
 /// Longest token the classifier takes, in bytes.
 const MAX_TOKEN: usize = 30;
 
-/// Feed a decoded part to `window`.
-pub(super) fn push_part(window: &mut Window, bytes: &[u8], charset: Option<&str>) {
+/// Most charsets of one part that are looked at.
+const MAX_CHARSETS: usize = 4;
+
+/// Feed a decoded part to `window`: as UTF-8, and, when it is not plain UTF-8
+/// text or a charset it declares says UTF-16, under each of the other readings
+/// a client could use. A reading is added, never put in place of another: a
+/// charset the part claims is the sender's word, and the bytes may be read
+/// otherwise by the client.
+pub(super) fn push_part(window: &mut Window, bytes: &[u8], charsets: &[String]) {
 	window.push_bytes(bytes);
-	let declared = declared_order(charset);
-	if declared.is_none() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok() {
+	let declared: Vec<Option<bool>> = charsets
+		.iter()
+		.take(MAX_CHARSETS)
+		.filter_map(|charset| declared_order(charset))
+		.collect();
+	let eight_bit = bytes.contains(&0) || std::str::from_utf8(bytes).is_err();
+	if declared.is_empty() && !eight_bit {
 		return;
 	}
-	match utf16_order(bytes, declared) {
-		Some(little) => {
-			let units = bytes.as_chunks::<2>().0.iter().map(|&pair| {
-				if little {
-					u16::from_le_bytes(pair)
-				} else {
-					u16::from_be_bytes(pair)
-				}
-			});
-			let chars = char::decode_utf16(units).map(|unit| unit.unwrap_or('\u{fffd}'));
-			push_chars(window, chars, false);
+	// The orders to read as UTF-16: the one the bytes show, and each one a
+	// charset names. A charset that names none means big endian (RFC 2781)
+	// when the bytes show nothing either.
+	let shown = utf16_order(bytes);
+	let mut orders: Vec<bool> = shown.into_iter().collect();
+	for order in declared {
+		let little = order.unwrap_or(false);
+		if (order.is_some() || shown.is_none()) && !orders.contains(&little) {
+			orders.push(little);
 		}
+	}
+	for little in orders {
+		let units = bytes.as_chunks::<2>().0.iter().map(|&pair| {
+			if little {
+				u16::from_le_bytes(pair)
+			} else {
+				u16::from_be_bytes(pair)
+			}
+		});
+		let chars = char::decode_utf16(units).map(|unit| unit.unwrap_or('\u{fffd}'));
+		push_chars(window, chars, false);
+	}
+	if eight_bit {
 		// Latin-1, which any other single-byte charset resembles closely
 		// enough to give the same words each time. The words with no accent in
 		// them were read already.
-		None => push_chars(window, bytes.iter().map(|&byte| char::from(byte)), true),
+		push_chars(window, bytes.iter().map(|&byte| char::from(byte)), true);
 	}
 }
 
 /// What a charset name says of UTF-16: `None` if it is not UTF-16, else the
 /// order it names (`true` little endian), or `Some(None)` when it names none.
-fn declared_order(charset: Option<&str>) -> Option<Option<bool>> {
-	let name = charset?.trim().trim_matches('"');
+fn declared_order(charset: &str) -> Option<Option<bool>> {
+	let name = charset.trim().trim_matches('"');
 	let rest = name
 		.strip_prefix("utf-16")
 		.or_else(|| name.strip_prefix("utf16"))
@@ -58,19 +81,14 @@ fn declared_order(charset: Option<&str>) -> Option<Option<bool>> {
 	})
 }
 
-/// The byte order of `bytes` read as UTF-16, `true` for little endian, when it
-/// looks like UTF-16 or the part says it is: it starts with a byte order mark,
-/// or the charset names an order, or a quarter of its units have a zero where
-/// the high byte of an ASCII letter would be. A charset that says UTF-16 and no
-/// order means big endian, as RFC 2781 does, when nothing else decides.
-fn utf16_order(bytes: &[u8], declared: Option<Option<bool>>) -> Option<bool> {
+/// The byte order of `bytes` read as UTF-16, `true` for little endian, when
+/// they look like UTF-16: they start with a byte order mark, or a quarter of
+/// the units have a zero where the high byte of an ASCII letter would be.
+fn utf16_order(bytes: &[u8]) -> Option<bool> {
 	match bytes {
 		[0xff, 0xfe, ..] => return Some(true),
 		[0xfe, 0xff, ..] => return Some(false),
 		_ => {}
-	}
-	if let Some(Some(little)) = declared {
-		return Some(little);
 	}
 	let units = bytes.len() / 2;
 	if units == 0 {
@@ -87,7 +105,7 @@ fn utf16_order(bytes: &[u8], declared: Option<Option<bool>>) -> Option<bool> {
 	} else if low >= enough {
 		Some(false)
 	} else {
-		declared.map(|_| false)
+		None
 	}
 }
 

@@ -351,7 +351,7 @@ impl Default for Budget {
 }
 
 /// What [`Budget::admit_charged`] took for one job, to give back with
-/// [`Budget::refund`]. It cannot be made or copied elsewhere.
+/// `Budget::refund`. It cannot be made or copied elsewhere.
 #[derive(Debug)]
 pub struct Charge {
 	source: TrainSource,
@@ -382,7 +382,7 @@ impl Budget {
 	}
 
 	/// [`Budget::admit`], handing back the charge it made, which
-	/// [`Budget::refund`] can give back once.
+	/// `Budget::refund` can give back once.
 	pub fn admit_charged(
 		&self,
 		now: Instant,

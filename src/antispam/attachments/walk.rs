@@ -83,8 +83,8 @@ pub struct Leaf {
 	/// The decoded content (empty for a container nobody decodes, and for a
 	/// part [`walk_text`] has no use for).
 	pub content: Vec<u8>,
-	/// The charset the part declares, lower case.
-	pub charset: Option<String>,
+	/// The charsets the part declares, lower case.
+	pub charsets: Vec<String>,
 	/// The content decoded under each other transfer encoding the part's
 	/// headers declare, which a client may have used instead.
 	pub alternates: Vec<Vec<u8>>,
@@ -396,7 +396,7 @@ impl<'a> Walker<'a> {
 					depth: depth + 1,
 					content: embedded.content,
 					alternates: Vec::new(),
-					charset: None,
+					charsets: Vec::new(),
 					truncated,
 					ambiguous: false,
 				});
@@ -410,7 +410,7 @@ impl<'a> Walker<'a> {
 			depth,
 			content,
 			alternates,
-			charset: header.charset,
+			charsets: header.charsets,
 			truncated,
 			ambiguous: header.ambiguous || garbled,
 		});

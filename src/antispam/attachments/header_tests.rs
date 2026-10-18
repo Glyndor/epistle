@@ -115,9 +115,12 @@ fn a_part_with_no_readable_type_could_be_text() {
 }
 
 #[test]
-fn the_charset_of_the_first_type_is_kept_in_lower_case() {
-	let header = parse(b"Content-Type: text/plain; charset=\"UTF-16LE\"\r\n");
-	assert_eq!(header.charset.as_deref(), Some("utf-16le"));
-	assert_eq!(parse(b"Content-Type: text/plain\r\n").charset, None);
-	assert_eq!(parse(b"Subject: x\r\n").charset, None);
+fn every_charset_a_part_declares_is_kept_in_lower_case() {
+	let header = parse(
+		b"Content-Type: text/plain; charset=\"UTF-16LE\"\r\n\
+		  Content-Type: text/plain; charset=utf-8\r\nContent-Type: text/html; charset=UTF-8\r\n",
+	);
+	assert_eq!(header.charsets, ["utf-16le", "utf-8"]);
+	assert!(parse(b"Content-Type: text/plain\r\n").charsets.is_empty());
+	assert!(parse(b"Subject: x\r\n").charsets.is_empty());
 }

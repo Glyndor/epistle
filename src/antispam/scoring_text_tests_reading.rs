@@ -135,3 +135,40 @@ fn utf16_in_a_non_latin_script_is_read_by_its_declared_charset() {
 	));
 	assert!(!has(&raw, "кредит"));
 }
+
+/// A charset that says UTF-16 adds a reading; it does not take the others
+/// away. Text a person reads as 8 bits stays readable under a false claim.
+#[test]
+fn a_false_utf16_claim_does_not_hide_8_bit_text() {
+	for charset in ["utf-16le", "utf-16be", "utf-16"] {
+		let mut bytes = format!("Content-Type: text/plain; charset={charset}\r\n\r\n").into_bytes();
+		bytes.extend(b"the caf\xe9s hiddenword\r\n");
+		assert!(has(&bytes, "cafés"), "{charset}");
+		assert!(has(&bytes, "hiddenword"), "{charset}");
+	}
+}
+
+/// Every charset a part declares is a reading: a first one that is harmless
+/// does not hide a second that is UTF-16, nor the reverse.
+#[test]
+fn every_declared_charset_is_a_reading() {
+	let text = "быстрый кредит бесплатно";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Type: text/plain; charset=utf-16le\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&le)
+	));
+	assert!(has(&raw, "кредит"));
+	let mut raw = b"Content-Type: text/plain; charset=utf-16le\r\n\
+		Content-Type: text/plain; charset=iso-8859-1\r\n\r\nthe caf"
+		.to_vec();
+	raw.extend(b"\xe9s\r\n");
+	assert!(has(&raw, "cafés"));
+	// A part that declares many charsets is read under a bounded number.
+	let many: String = (0..200)
+		.map(|n| format!("Content-Type: text/plain; charset=x{n}\r\n"))
+		.collect();
+	let raw = format!("{many}\r\nhiddenword\r\n");
+	assert!(has(raw.as_bytes(), "hiddenword"));
+}
