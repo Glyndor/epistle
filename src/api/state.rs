@@ -439,6 +439,21 @@ impl ApiState {
 		self
 	}
 
+	/// Test-only: lower the global failure ceiling so a test can reach it.
+	#[cfg(test)]
+	pub(crate) fn with_auth_global_max(mut self, max: u32) -> Self {
+		let inner = Arc::get_mut(&mut self.inner)
+			.expect("with_auth_global_max must be called before the state is shared");
+		let window = inner
+			.auth_limiter
+			.get_mut()
+			.unwrap_or_else(|p| p.into_inner())
+			.window();
+		inner.auth_limiter =
+			std::sync::Mutex::new(ClientLimiters::new(window).with_global_max(max));
+		self
+	}
+
 	/// Replace the auth-failure limiter with one built around a custom
 	/// window. Test-only: the router-level rate-limit test builds its state
 	/// with a long window so the wall clock under a loaded parallel run is
@@ -715,6 +730,10 @@ pub async fn require_bearer_token(
 			limiter.reset(client_ip);
 		} else {
 			limiter.record_failure(client_ip, now);
+		}
+		// Only a request that failed is asked about the global ceiling.
+		if !authorized && limiter.flood_limited(now) {
+			return Err(ApiError::rate_limited());
 		}
 	}
 

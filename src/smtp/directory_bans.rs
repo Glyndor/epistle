@@ -282,10 +282,11 @@ impl Directory {
 			}
 			return;
 		}
-		// An allow-listed client is exempt from the ban on its address (the
-		// store ignores it there too) but not from the account's protection:
-		// guesses from a trusted network still count against the pair and the
-		// account, or that network could never be stopped from guessing.
+		// An allow-listed client is exempt from the bans on its address and on
+		// the pair too: it may be a proxy that many users share, and five typos
+		// from them must not lock one account's owner out of the proxy. What it
+		// is not exempt from is the account's own ceiling (four times the
+		// threshold), or a trusted network could guess without limit.
 		let allowed = ip.is_some_and(|ip| block_on_async(store.is_allow_listed(ip)));
 		if let Some(ip) = ip
 			&& !allowed
@@ -295,11 +296,13 @@ impl Directory {
 		let Some(account) = account else {
 			return;
 		};
-		block_on_async(store.record_failure(
-			&bans::subject_pair(account, ip),
-			protocol_str,
-			now_secs,
-		));
+		if !allowed {
+			block_on_async(store.record_failure(
+				&bans::subject_pair(account, ip),
+				protocol_str,
+				now_secs,
+			));
+		}
 		// Every failure also counts against the account, at a threshold several
 		// times the client's (see `ACCOUNT_THRESHOLD_FACTOR`): a guess spread
 		// over many clients, none enough to be banned, still ends in a ban,

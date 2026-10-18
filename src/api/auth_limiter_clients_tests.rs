@@ -105,3 +105,36 @@ async fn an_ipv6_client_is_its_slash_64() {
 		StatusCode::OK
 	);
 }
+
+#[tokio::test]
+async fn a_flood_from_many_clients_never_blocks_a_valid_token() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.keep();
+	let app = router(
+		test_state(&path, 0)
+			.with_auth_window(Duration::from_secs(3600))
+			.with_auth_global_max(30),
+	);
+	// One wrong token from each of thirty different clients.
+	for n in 1..=29u32 {
+		assert_eq!(
+			get_status(&app, "wrong", &format!("10.0.0.{n}")).await,
+			StatusCode::UNAUTHORIZED
+		);
+	}
+	assert_eq!(
+		get_status(&app, "wrong", "10.0.0.30").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"the failure that passes the ceiling is told to slow down"
+	);
+	assert_eq!(
+		get_status(&app, "wrong", "10.0.1.1").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"and so is a client that never failed before"
+	);
+	assert_eq!(
+		get_status(&app, TOKEN.as_str(), "192.0.2.77").await,
+		StatusCode::OK,
+		"a valid token is not asked about the ceiling"
+	);
+}

@@ -225,21 +225,45 @@ async fn failures_from_a_trusted_network_still_count_against_the_account() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_allow_listed_host_is_still_stopped_by_its_pair() {
+async fn typos_behind_an_allow_listed_proxy_do_not_lock_one_account_out_of_it() {
 	let store = FakeBanStore::new(BanPolicy::default());
 	store.allow("203.0.113.0/24");
-	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store.clone()));
 	for _ in 0..5 {
 		fail(&directory, OPEN, "203.0.113.7");
 	}
 	assert_eq!(
-		attempt(&directory, OPEN, fixtures::password(), "203.0.113.7"),
-		None
+		store.failure_count("pair:alice|203.0.113.7", 0),
+		0,
+		"the pair of a trusted client is not counted"
 	);
 	assert_eq!(
-		attempt(&directory, OPEN, fixtures::password(), "198.51.100.9"),
+		attempt(&directory, OPEN, fixtures::password(), "203.0.113.7"),
 		Some(OPEN.to_string()),
-		"and cannot lock the account for its owner"
+		"the owner behind the same proxy still signs in"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_allow_listed_host_is_still_stopped_by_the_account_ceiling() {
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("203.0.113.0/24");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	for _ in 0..19 {
+		fail(&directory, OPEN, "203.0.113.7");
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "203.0.113.7"),
+		Some(OPEN.to_string()),
+		"nineteen failures are under the account's limit"
+	);
+	for _ in 0..20 {
+		fail(&directory, OPEN, "203.0.113.7");
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "198.51.100.9"),
+		None,
+		"twenty in the window ban the account, trusted network or not"
 	);
 }
 

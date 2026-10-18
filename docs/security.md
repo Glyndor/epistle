@@ -243,8 +243,9 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   (`epistle ban allow add`) if that is a problem. An allow-listed client is
   never banned on its address or /64 (and for IPv6 the /64 it shares with
   others is not asked about for it, so a neighbour's ban does not reach it),
-  but its failures still count on the pair and on the account, or a trusted
-  network could guess without limit. A route that has no client address
+  but its failures still count on the account (not on the pair, so typos
+  behind a shared proxy cannot lock one account's owner out of it), or a
+  trusted network could guess without limit. A route that has no client address
   (WebDAV now passes one) counts every attempt on an account as one client,
   `unknown`, so the pair still stops guessing at five. The owner of an
   account that many clients are guessing at is locked out for the length of
