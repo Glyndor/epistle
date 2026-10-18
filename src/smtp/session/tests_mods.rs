@@ -68,3 +68,6 @@ mod tests_scram_decoy;
 #[cfg(test)]
 #[path = "../session_tests_scram_off.rs"]
 mod tests_scram_off;
+#[cfg(test)]
+#[path = "../session_tests_send_as.rs"]
+mod tests_send_as;

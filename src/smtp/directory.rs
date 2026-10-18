@@ -748,3 +748,11 @@ mod login_form_tests;
 #[cfg(test)]
 #[path = "directory_test_support.rs"]
 mod test_support;
+
+#[cfg(test)]
+#[path = "directory_send_as_fixture.rs"]
+pub(crate) mod send_as_fixture;
+
+#[cfg(test)]
+#[path = "directory_send_as_tests.rs"]
+mod send_as_tests;

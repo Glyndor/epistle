@@ -149,6 +149,10 @@ mod jmap_tests;
 mod jmap_tests_author;
 
 #[cfg(test)]
+#[path = "send_as_tests.rs"]
+mod send_as_tests;
+
+#[cfg(test)]
 #[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
 
