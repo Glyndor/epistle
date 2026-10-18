@@ -259,7 +259,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     way for a login that does not exist as for a real one (it used to make one
     call where a real account made three, which with PostgreSQL behind it and
     SCRAM, where no password hash hides it, took a third as long), so the time
-    of a refusal no longer says which logins exist.
+    of a refusal no longer says which logins exist. Each unknown login is
+    counted under a stand-in of its own (a keyed hash of the login), so it
+    reaches the same bans as a real account and a ban on one is not visible
+    from another.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A

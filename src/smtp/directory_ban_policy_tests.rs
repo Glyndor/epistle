@@ -314,3 +314,40 @@ async fn an_unknown_login_costs_the_ban_store_what_a_real_one_does() {
 	assert_eq!(store_calls_for_a_failure("nobody-here"), real, "unknown");
 	assert_eq!(store_calls_for_a_failure(DISABLED), real, "disabled");
 }
+
+fn unix_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.expect("clock")
+		.as_secs()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_unknown_login_is_banned_on_its_own_like_a_real_account() {
+	use crate::antispam::bans::{BanStore, subject_account};
+	let store = FakeBanStore::new(BanPolicy::default());
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store.clone()));
+	// Twenty clients, one failure each: what bans a real account.
+	for host in 1..=20 {
+		fail(&directory, "ghost-one", &format!("203.0.113.{host}"));
+		fail(&directory, OPEN, &format!("198.51.100.{host}"));
+	}
+	let one = subject_account(&Directory::decoy_account("ghost-one"));
+	let other = subject_account(&Directory::decoy_account("ghost-two"));
+	assert_ne!(one, other, "a stand-in per login");
+	assert!(
+		store.is_banned(&one, unix_now()).await.is_some(),
+		"the stand-in reaches the same ban as a real account"
+	);
+	assert!(
+		store
+			.is_banned(&subject_account(OPEN), unix_now())
+			.await
+			.is_some()
+	);
+	assert!(
+		store.is_banned(&other, unix_now()).await.is_none(),
+		"and another unknown login is not touched by it"
+	);
+	assert_eq!(store.failure_count(&other, 0), 0);
+}

@@ -43,12 +43,33 @@ pub enum BanOutcome {
 	Banned,
 }
 
-/// The account name unknown logins are counted under so they do the same ban
-/// store work as real ones. It cannot be a login: `?` is not a valid account
-/// name character.
-const DECOY_ACCOUNT: &str = "?";
-
 impl Directory {
+	/// The stand-in account name an unknown login is counted under so it does
+	/// the ban store work a real one does: `?` (not a character an account
+	/// name can hold) and a keyed hash of the login. Each unknown login has
+	/// counters and bans of its own, like a real account, so neither a pile
+	/// of unknown logins sharing one row nor a ban on one of them is visible
+	/// from another. The key lives only in this process.
+	pub(crate) fn decoy_account(login: &str) -> String {
+		use ring::hmac;
+		static KEY: std::sync::OnceLock<hmac::Key> = std::sync::OnceLock::new();
+		let key = KEY.get_or_init(|| {
+			let bytes: [u8; 32] = ring::rand::generate(&ring::rand::SystemRandom::new())
+				.map(|random| random.expose())
+				.unwrap_or([0u8; 32]);
+			hmac::Key::new(hmac::HMAC_SHA256, &bytes)
+		});
+		let tag = hmac::sign(key, login.to_ascii_lowercase().as_bytes());
+		let hex = tag.as_ref()[..12]
+			.iter()
+			.fold(String::from("?"), |mut s, b| {
+				use std::fmt::Write;
+				let _ = write!(s, "{b:02x}");
+				s
+			});
+		hex
+	}
+
 	/// Attach the shared ban store consulted on every password
 	/// authentication attempt. `None` (the default) keeps the per-connection
 	/// three-strikes counters as the only defence; with `[database]`
@@ -216,7 +237,14 @@ impl Directory {
 		// An unknown login asks the store about a stand-in account all the
 		// same, and ignores the answer: with PostgreSQL each question is a round
 		// trip, and one asked only for real accounts would tell them apart.
-		let subject_account = account.as_deref().unwrap_or(DECOY_ACCOUNT);
+		let decoy;
+		let subject_account = match account.as_deref() {
+			Some(account) => account,
+			None => {
+				decoy = Self::decoy_account(login);
+				&decoy
+			}
+		};
 		let subjects = [
 			("pair", bans::subject_pair(subject_account, ip)),
 			("account", bans::subject_account(subject_account)),
@@ -269,7 +297,7 @@ impl Directory {
 	/// account-side strike is skipped and only the IP-side strike lands.
 	pub fn record_ban_outcome(
 		&self,
-		_login: &str,
+		login: &str,
 		account: Option<&str>,
 		success: bool,
 		ip: Option<std::net::IpAddr>,
@@ -304,7 +332,14 @@ impl Directory {
 		}
 		// An unknown login is counted on a stand-in account (never read back),
 		// so it writes what a real one does; see `check_ban`.
-		let account = account.unwrap_or(DECOY_ACCOUNT);
+		let decoy;
+		let account = match account {
+			Some(account) => account,
+			None => {
+				decoy = Self::decoy_account(login);
+				&decoy
+			}
+		};
 		if !allowed {
 			block_on_async(store.record_failure(
 				&bans::subject_pair(account, ip),
