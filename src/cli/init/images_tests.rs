@@ -35,7 +35,7 @@ fn the_rendered_compose_uses_exactly_the_manifest_images() {
 	assert_eq!(services["freshclam"]["image"], clamav());
 	assert_eq!(services["mail"]["image"], mail_base());
 	assert!(postgres().starts_with("docker.io/library/postgres:18@sha256:"));
-	assert!(clamav().starts_with("docker.io/clamav/clamav:1.4@sha256:"));
+	assert!(clamav().starts_with("docker.io/clamav/clamav:1.5@sha256:"));
 }
 
 #[test]
