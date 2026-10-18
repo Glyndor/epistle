@@ -8,7 +8,9 @@ The routes are described machine-readably in
 [`src/api/openapi/openapi.yaml`](../src/api/openapi/openapi.yaml) (OpenAPI 3.1).
 A running server serves the same document as JSON at
 `GET /api/v1/openapi.json`, with a key that has the `read` scope. The tests
-fail when a route in the code is missing from it, so it is complete. This
+fail when a route in the code is missing from it or it lists one the code does
+not register, and when an operation names a scope the code does not enforce;
+they do not check every field or status code in it. This
 guide is the prose around it. How the headers of the mail come out is in
 [Message headers](headers.md).
 
@@ -142,7 +144,7 @@ its answer is **plain text**, with no `error` object:
 | Status | When | Body |
 |---|---|---|
 | `400` | Malformed JSON, a query or path value of the wrong type, a path id that is not a UUID | `Failed to parse the request body as JSON: ...`, `Invalid URL: ...`, `Failed to deserialize query string: ...` |
-| `415` | A body without `Content-Type: application/json` | The text "Expected request with Content-Type: application/json" |
+| `415` | A body without `Content-Type: application/json` | The text "Expected request with `Content-Type: application/json`" |
 | `422` | A required field missing or of the wrong type | `Failed to deserialize the JSON body into the target type: ...` naming the field |
 | `413` | A request body over the size limit | `Failed to buffer the request body: length limit exceeded` |
 | `404` | A path that is not a route | Empty |
@@ -206,7 +208,7 @@ only is delivered at once and also gets an id.
 | `subject` | string | Default empty |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |
 | `attachments`, `inline` | arrays of `{name, content_type, data, content_id}` | `data` is base64 (standard alphabet, padded). An empty `content_type` is detected. Every `inline` part needs a `content_id`; the HTML refers to it as `cid:<content_id>`. At most 100 parts together |
-| `in_reply_to`, `references` | string | `<id@domain>` ids, space separated: one for `in_reply_to`, up to 100 for `references` |
+| `in_reply_to`, `references` | string | `<id@domain>` ids, space separated: one for `in_reply_to`, up to 100 for `references` (in practice about 50, because each header value is at most 1000 bytes) |
 | `importance` (or `priority`) | `high`, `normal`, `low` | Writes `Importance` and `X-Priority` |
 | `list_unsubscribe` | array of strings | Up to 4 `mailto:` or `https://` URLs |
 | `list_unsubscribe_post` | boolean | Adds the RFC 8058 one-click header. Needs an `https://` URL in `list_unsubscribe` |
@@ -353,10 +355,10 @@ The server posts events to the URL in `[webhook]` (`epistle webhook set URL
 |---|---|---|
 | `delivered` | A remote server accepted the message for a recipient | `spool_id`, `recipient`, `message_id` (or `null`), `remote` (or `null`), `extra` |
 | `delayed` | The first temporary failure of a recipient, once per recipient per message | `spool_id`, `recipient`, `reason`, `remote`, `attempt`, `extra` |
-| `delivery_failed` | A recipient failed for good (refused or expired) | `spool_id`, `recipient`, `reason`, `class` (`invalid_address`, `mailbox_full`, `policy_rejected`, `too_big`, `other`), `remote`, `extra` |
+| `delivery_failed` | A recipient failed for good (refused or expired) | `spool_id` (`null` in an entry queued before it was recorded), `recipient`, `reason`, `class` (`invalid_address`, `mailbox_full`, `policy_rejected`, `too_big`, `other`), `remote`, `extra` |
 | `suppressed` | The recipient was on a suppression list | `spool_id`, `recipient`, `extra` |
 | `canceled` | An operator removed the entry with `epistle queue remove` | `spool_id`, `recipient`, `extra` |
-| `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from`, `subject`, `message_id` (the last two may be `null`) |
+| `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from` (the envelope sender, empty for a bounce), `subject`, `message_id` (the last two may be `null`) |
 | `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](warmup.md) |
 | `test` | Only `epistle webhook test` | `message` |
 
@@ -376,6 +378,9 @@ re-encoded copy, and compare in constant time:
 ```sh
 printf %s "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex
 ```
+
+The command prints `SHA2-256(stdin)= <hex>` or just `<hex>`, depending on the
+OpenSSL version; compare the hex part with what follows `sha256=` in the header.
 
 The only other headers are `Content-Type: application/json`. There is no
 timestamp, event id or nonce, so a replay is yours to detect: the pair
@@ -417,8 +422,11 @@ key does not cover answers a `forbidden` method error inside a `200`.
 Limits, also in the Session: 10,000,000 octets per request, 16 calls, 500
 objects per `/get` or `/set`, 4 requests and 4 uploads in flight per
 credential, 4 event streams per credential, `maxSizeUpload` equal to the
-message size limit. Past one the answer is a `urn:ietf:params:jmap:error:limit`
-problem naming the limit. A key bound to one account sees only that account.
+message size limit. Past the size of a request or its number of calls the answer is
+`400` or `413` with a `urn:ietf:params:jmap:error:limit` problem naming the
+limit; past the in-flight limits it is a `429` with such a problem; past 500
+objects in a `/get` or `/set` it is a `200` whose method response is the error
+`requestTooLarge`. A key bound to one account sees only that account.
 
 ## SCIM
 
@@ -436,7 +444,9 @@ cannot be bound to an account.
 ## OAuth
 
 Present only when `[oauth] signing_key` is set; otherwise every `/oauth/*`
-path is `404`. It issues ES256 access tokens, valid for one hour, for
+path answers `401` to a request with no bearer (which counts as a failed
+authentication for the 20 per minute limit) and `404` to one with a valid
+bearer. It issues ES256 access tokens, valid for one hour, for
 OAUTHBEARER on IMAP and SMTP submission. The REST API does not accept them as
 a bearer. `POST /oauth/device_authorization` starts a device flow,
 `POST /oauth/device/approve` approves it with the account's `login` and
@@ -460,7 +470,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 | `422 marketing_refused` | A `marketing` message with no https `list_unsubscribe` and `list_unsubscribe_post`, or every recipient is suppressed |
 | `409 conflict` | A cap that waiting will not lift (tenant accounts, masked addresses) |
 | `404` on `/api/v1/deliveries` | The delivery log is off (`delivery_log_days = 0`) |
-| `404` on `/oauth/*` | No `[oauth] signing_key` |
+| `401` or `404` on `/oauth/*` | No `[oauth] signing_key`: `401` without a bearer, `404` with a valid one |
 | `404 no such dynamic account` | The account is declared in the configuration file; the API manages only API-made accounts |
 | The webhook never arrives | The server posts once with a 15 second timeout and does not retry, and a `[webhook]` with `enabled = false` posts nothing |
 | Mail accepted (`200`) but never delivered | Look at `/api/v1/deliveries` for `deferred` or `failed` with the remote reply |

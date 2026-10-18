@@ -1826,7 +1826,8 @@ paths:
       summary: Start a device authorization (RFC 8628)
       description: |-
         Present only when `[oauth] signing_key` is configured; without it
-        every `/oauth/*` path is a plain `404`. No bearer is needed. The body
+        every `/oauth/*` path answers `401` without a bearer and `404` with a valid
+        one. When the server is configured, no bearer is needed. The body
         is form-encoded or a JSON object of strings. `client_id` must be
         non-empty and is not otherwise checked; `scope` is ignored. At most
         10 grants may be pending per client address (an IPv6 /64), 100 per
