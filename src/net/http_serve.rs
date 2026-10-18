@@ -18,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
 use super::conn_limit::{
-	Admission, DEFAULT_HTTP_CONNECTIONS, DEFAULT_HTTP_CONNECTIONS_PER_IP, refuse,
+	Admission, Admitted, DEFAULT_HTTP_CONNECTIONS, DEFAULT_HTTP_CONNECTIONS_PER_IP, refuse,
 };
 
 /// How long a client gets to send a complete request head. hyper starts
@@ -95,10 +95,67 @@ pub(crate) async fn serve_on_with<A: crate::net::accept::Accept>(
 			}
 		};
 		let router = router.clone().layer(axum::Extension(ConnectInfo(peer)));
-		tokio::spawn(async move {
-			let _admitted = admitted;
-			connection(stream, router).await;
-		});
+		tokio::spawn(connection(
+			Held {
+				stream,
+				_admitted: admitted,
+			},
+			router,
+		));
+	}
+}
+
+/// A stream that keeps its [`Admitted`] places for as long as it lives. An
+/// upgraded connection (the JMAP WebSocket) outlives the future that serves
+/// the HTTP part, so the places travel inside the stream hyper hands over.
+struct Held<S> {
+	stream: S,
+	_admitted: Admitted,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Held<S> {
+	fn poll_read(
+		mut self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+		buf: &mut tokio::io::ReadBuf<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
+	}
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Held<S> {
+	fn poll_write(
+		mut self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+		buf: &[u8],
+	) -> std::task::Poll<std::io::Result<usize>> {
+		std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
+	}
+
+	fn poll_flush(
+		mut self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+	}
+
+	fn poll_shutdown(
+		mut self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+	) -> std::task::Poll<std::io::Result<()>> {
+		std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+	}
+
+	fn poll_write_vectored(
+		mut self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+		bufs: &[std::io::IoSlice<'_>],
+	) -> std::task::Poll<std::io::Result<usize>> {
+		std::pin::Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+	}
+
+	fn is_write_vectored(&self) -> bool {
+		self.stream.is_write_vectored()
 	}
 }
 

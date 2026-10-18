@@ -202,3 +202,74 @@ async fn a_served_request_still_works_under_the_limits() {
 	stream.read_to_string(&mut reply).await.expect("reply");
 	assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
 }
+
+/// An upgrade (the JMAP WebSocket) outlives the HTTP exchange; its places in
+/// the caps must last as long as the socket does.
+mod upgrades {
+	use super::*;
+	use crate::net::conn_limit::test_support::{connect, connect_when_a_place_frees};
+	use axum::extract::ws::{Message, WebSocketUpgrade};
+
+	const UPGRADE: &[u8] = b"GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+
+	async fn serving(limits: Limits) -> SocketAddr {
+		let router = Router::new().route(
+			"/ws",
+			axum::routing::get(|upgrade: WebSocketUpgrade| async move {
+				upgrade.on_upgrade(|mut socket| async move {
+					let _ = socket.send(Message::Text("hi".into())).await;
+					while socket.recv().await.is_some() {}
+				})
+			}),
+		);
+		let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+		let addr = listener.local_addr().expect("addr");
+		tokio::spawn(serve_with(listener, router, limits));
+		addr
+	}
+
+	async fn upgraded(addr: SocketAddr) -> TcpStream {
+		let mut stream = TcpStream::connect(addr).await.expect("connect");
+		stream.write_all(UPGRADE).await.expect("request");
+		let mut buf = [0u8; 512];
+		let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+			.await
+			.expect("answer in time")
+			.expect("read");
+		let text = String::from_utf8_lossy(&buf[..n]);
+		assert!(text.starts_with("HTTP/1.1 101"), "{text}");
+		stream
+	}
+
+	#[tokio::test]
+	async fn live_upgrades_count_against_the_client_cap_and_give_the_place_back() {
+		let addr = serving(Limits {
+			connections: 100,
+			per_ip: 2,
+		})
+		.await;
+		let first = upgraded(addr).await;
+		let _second = upgraded(addr).await;
+		let third = connect(addr).await;
+		assert!(
+			third
+				.refusal()
+				.is_some_and(|text| text.starts_with("HTTP/1.1 503")),
+			"a third socket from the same client must be refused while two upgrades live"
+		);
+		drop(first);
+		assert!(connect_when_a_place_frees(addr).await.refusal().is_none());
+	}
+
+	#[tokio::test]
+	async fn live_upgrades_count_against_the_listener_cap() {
+		let addr = serving(Limits {
+			connections: 2,
+			per_ip: 100,
+		})
+		.await;
+		let _first = upgraded(addr).await;
+		let _second = upgraded(addr).await;
+		assert!(connect(addr).await.refusal().is_some());
+	}
+}
