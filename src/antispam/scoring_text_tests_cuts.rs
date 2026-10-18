@@ -185,7 +185,7 @@ fn random_hostile_messages_never_panic() {
 
 /// Input that is cheap to write and expensive to read if any step is worse
 /// than linear. 8 MiB each; a quadratic step takes hours, so the bound is
-/// loose enough for a loaded machine.
+/// ten times what a quiet machine takes (0.8 s at worst in debug).
 #[test]
 fn pathological_input_costs_about_its_size() {
 	const SIZE: usize = 8 * 1024 * 1024;
@@ -214,9 +214,87 @@ fn pathological_input_costs_about_its_size() {
 			let took = started.elapsed();
 			assert!(reduced.text.len() <= MAX_TRAINING_BYTES, "{name} {shape}");
 			assert!(
-				took < std::time::Duration::from_secs(30),
+				took < std::time::Duration::from_secs(8),
 				"{name} {shape}: {took:?}"
 			);
 		}
 	}
+}
+
+/// `count` tokens of 9 bytes: `wd` and seven hex digits.
+fn nine_byte_tokens(count: usize) -> String {
+	(0..count).map(|n| format!("wd{n:07x} ")).collect()
+}
+
+/// The head takes 13 107 such tokens and the tail is trimmed when it has
+/// 19 662 more. A message of exactly that many has its middle left out by the
+/// last token, and is still a message that did not fit.
+#[test]
+fn a_cut_made_by_the_last_token_is_still_a_cut() {
+	let body = nine_byte_tokens(13_107 + 19_662);
+	let reduced = reduce(format!("\r\n{body}").as_bytes());
+	assert!(reduced.clipped, "{} bytes", reduced.text.len());
+	assert!(reduced.text.contains('\n'));
+}
+
+/// A token that does not fit in the head does not let a shorter one after it
+/// jump ahead of it: the text keeps its order.
+#[test]
+fn a_short_token_after_a_long_one_stays_after_it() {
+	let body = format!("{}abcdefghijkl ab", nine_byte_tokens(13_106));
+	let reduced = reduce(format!("\r\n{body}").as_bytes());
+	let tokens = tokenize(&reduced.text);
+	assert_eq!(tokens[tokens.len() - 2..], ["abcdefghijkl", "ab"]);
+}
+
+/// A word that is not a word, in the readings that are not plain UTF-8, is
+/// not held: no token is longer than the classifier takes.
+#[test]
+fn a_giant_word_in_utf16_or_latin1_is_dropped_whole() {
+	let word = "a".repeat(100_000);
+	let utf16: Vec<u8> = format!("{word} endword")
+		.encode_utf16()
+		.flat_map(u16::to_le_bytes)
+		.collect();
+	let mut latin1 = format!("{word} endword").into_bytes();
+	latin1.push(0xe9);
+	for bytes in [utf16, latin1] {
+		let mut raw = b"Content-Type: text/plain\r\n\r\n".to_vec();
+		raw.extend(bytes);
+		let reduced = reduce(&raw);
+		assert!(
+			reduced.text.split(' ').all(|token| token.len() <= 30),
+			"a token of {} bytes",
+			reduced.text.split(' ').map(str::len).max().unwrap_or(0)
+		);
+		assert!(tokenize(&reduced.text).iter().any(|t| t == "endword"));
+	}
+}
+
+/// The header block is cut where it ends, or at its limit when it does not:
+/// 25 MiB with no empty line is not parsed as headers.
+#[test]
+fn a_header_block_never_goes_past_its_limit() {
+	let raw = b"X-A: =?utf-8?B?5pel?=\r\n".repeat(1 << 20);
+	assert!(header_block(&raw).len() <= MAX_HEADER_BYTES);
+	assert_eq!(header_block(b"A: b\r\n\r\nbody"), b"A: b\r\n");
+	assert_eq!(header_block(b"A: b\r\nC: d"), b"A: b\r\nC: d");
+}
+
+/// A part that declares two types, the first one not text, with its body in
+/// base64: only the decoded reading shows the text, so the second type counts.
+#[test]
+fn a_second_declared_type_that_is_text_is_read_decoded() {
+	use base64::Engine as _;
+	let body = base64::engine::general_purpose::STANDARD.encode(b"hiddenword is here");
+	let raw = format!(
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\n\
+		 Content-Type: application/octet-stream\r\nContent-Type: text/plain\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{body}\r\n--b--\r\n"
+	);
+	assert!(
+		tokenize(&reduce(raw.as_bytes()).text)
+			.iter()
+			.any(|t| t == "hiddenword")
+	);
 }

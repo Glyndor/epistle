@@ -247,12 +247,10 @@ impl Window {
 			return;
 		}
 		// A byte offset can fall inside a character; whole tokens only, and a
-		// token ends at an ASCII space.
-		let mut cut = self.tail.len() - keep;
-		while !self.tail.is_char_boundary(cut) {
-			cut += 1;
-		}
-		cut = match self.tail.as_bytes()[cut..]
+		// token ends at an ASCII space, which is always a boundary, so the
+		// cut after it is too.
+		let cut = self.tail.len() - keep;
+		let cut = match self.tail.as_bytes()[cut..]
 			.iter()
 			.position(|&byte| byte == b' ')
 		{
