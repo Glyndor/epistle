@@ -20,7 +20,8 @@
 //! A message the walk calls ambiguous, one that two readers could split into
 //! parts differently, is read as raw bytes as well, so that whatever either
 //! reader shows is read; a part that declares two transfer encodings is read
-//! under each.
+//! under each, and text in a charset that is not UTF-8 is read as the person
+//! sees it (see [`read`]).
 //!
 //! The pass is linear, keeps at most about 400 KiB of tokens in memory and
 //! never decodes more than [`MAX_DECODED`] of the message's parts. A message
@@ -32,6 +33,9 @@
 
 use super::attachments::walk::{self, Limits, MAX_HEADER_BYTES};
 use super::training_queue::MAX_TRAINING_BYTES;
+
+#[path = "scoring_text_read.rs"]
+mod read;
 
 /// Most decoded bytes the walk produces for one message. Decoded text parts
 /// are held in memory while the message is read.
@@ -91,7 +95,7 @@ fn reduce(raw: &[u8]) -> ScoringText {
 /// Feed the header block and the text parts of `raw` to `window`. `None`
 /// when the message could not be read part by part.
 fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
-	window.push_bytes(header_block(raw));
+	read::push_header(window, header_block(raw));
 	let limits = Limits {
 		max_depth: MAX_DEPTH,
 		max_parts: MAX_PARTS,
@@ -122,7 +126,7 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 		return None;
 	}
 	for part in &parts {
-		window.push_bytes(part);
+		read::push_part(window, part);
 	}
 	// Two readers could see this message differently: read the bytes as well,
 	// so that whatever either of them shows is read.
@@ -246,3 +250,7 @@ mod tests;
 #[cfg(test)]
 #[path = "scoring_text_tests_adversarial.rs"]
 mod tests_adversarial;
+
+#[cfg(test)]
+#[path = "scoring_text_tests_reading.rs"]
+mod tests_reading;

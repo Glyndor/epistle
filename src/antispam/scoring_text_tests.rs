@@ -117,10 +117,10 @@ fn bytes_that_are_not_utf8_separate_words() {
 	let mut raw = b"\r\nalpha".to_vec();
 	raw.push(0xff);
 	raw.extend(b"beta gamma");
-	assert_eq!(
-		tokens_of(&scoring_text(&raw).text),
-		["alpha", "beta", "gamma"]
-	);
+	let tokens = tokens_of(&scoring_text(&raw).text);
+	// Read as UTF-8 the byte separates the words; read as Latin-1, which is
+	// what a person with an 8-bit charset sees, it is a letter of one.
+	assert_eq!(tokens, ["alpha", "beta", "gamma", "alphaÿbeta"]);
 }
 
 /// Nesting deeper than the walk follows is read as bytes, not skipped.
