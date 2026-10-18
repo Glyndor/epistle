@@ -375,13 +375,14 @@ fn the_network_and_global_caps_are_reached_and_held_over_one_window() {
 	}
 }
 
+const _: () = assert!(QUEUE_CAPACITY * MAX_TRAINING_BYTES <= 16 * 1024 * 1024);
+
 /// The size of the queue and of the pool of workers is what the memory and
 /// database bounds in the documentation are computed from.
 #[test]
 fn the_queue_and_the_workers_have_the_documented_size() {
 	assert_eq!(WORKERS, 2);
 	assert_eq!(QUEUE_CAPACITY, 64);
-	assert!(QUEUE_CAPACITY * MAX_TRAINING_BYTES <= 16 * 1024 * 1024);
 }
 
 /// The jobs a network has in flight are counted over ham and spam together:
