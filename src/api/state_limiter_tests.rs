@@ -7,7 +7,7 @@
 
 use super::limiter::{
 	AUTH_MAX_FAILURES, AuthLimiter, ClientLimiters, GLOBAL_MAX_FAILURES, MAX_CLIENTS,
-	NET_BUDGET_FACTOR, SLOW_CHECKS_PER_WINDOW,
+	NET_BUDGET_FACTOR,
 };
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -215,16 +215,4 @@ fn a_slash_48_is_limited_at_exactly_one_hundred_and_sixty_failures() {
 	assert!(!limiters.limited_after_failure(in_net(9, 50, 1), t0));
 	limiters.record_failure(in_net(9, 7, 19), t0);
 	assert!(limiters.limited_after_failure(in_net(9, 50, 1), t0));
-}
-
-#[test]
-fn the_argon2_budget_is_shared_and_spent_by_failed_checks_only() {
-	let mut limiters = ClientLimiters::new(WINDOW);
-	let t0 = Instant::now();
-	for _ in 0..SLOW_CHECKS_PER_WINDOW {
-		assert!(limiters.slow_check_allowed(t0));
-		limiters.slow_check_failed(t0);
-	}
-	assert!(!limiters.slow_check_allowed(t0));
-	assert!(limiters.slow_check_allowed(t0 + WINDOW + Duration::from_secs(1)));
 }

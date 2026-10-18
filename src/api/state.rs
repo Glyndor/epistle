@@ -50,6 +50,12 @@ struct Inner {
 	/// SHA-256 of the configured token, set the first time the legacy argon2
 	/// hash verified it; from then on a bearer is compared by digest.
 	configured_digest: std::sync::OnceLock<[u8; 32]>,
+	/// Limits how many argon2 verifications of the configured token run at
+	/// once. A request past the limit waits for its turn, it is not refused.
+	argon2_gate: tokio::sync::Semaphore,
+	/// Test-only: argon2 runs started, running now, and the most at once.
+	#[cfg(test)]
+	argon2_stats: [std::sync::atomic::AtomicUsize; 3],
 	/// Per-account correspondent store: which addresses the account has
 	/// previously written to. The rolling 24h cap on first-time
 	/// recipients (`new_recipients_per_day`) reads from and writes to
@@ -196,6 +202,9 @@ impl ApiState {
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
 				configured_digest: std::sync::OnceLock::new(),
+				argon2_gate: tokio::sync::Semaphore::new(MAX_CONCURRENT_ARGON2),
+				#[cfg(test)]
+				argon2_stats: Default::default(),
 				correspondents: None,
 				class_bindings: None,
 				new_recipients_per_day: None,
@@ -453,6 +462,16 @@ impl ApiState {
 			.record_failure(Some(ip), std::time::Instant::now());
 	}
 
+	/// Test-only: (argon2 runs started, most at once).
+	#[cfg(test)]
+	pub(crate) fn argon2_stats(&self) -> (usize, usize) {
+		use std::sync::atomic::Ordering::SeqCst;
+		(
+			self.inner.argon2_stats[0].load(SeqCst),
+			self.inner.argon2_stats[2].load(SeqCst),
+		)
+	}
+
 	/// Test-only: behave as if the configured token had already verified once.
 	#[cfg(test)]
 	pub(crate) fn prime_configured_token(&self, token: &str) {
@@ -687,6 +706,9 @@ fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> 
 	}
 }
 
+/// Argon2 verifications of the configured token allowed to run at once.
+const MAX_CONCURRENT_ARGON2: usize = 2;
+
 /// Longest bearer token considered at all.
 const MAX_BEARER_LEN: usize = 1024;
 
@@ -745,9 +767,14 @@ pub async fn require_bearer_token(
 	let token_ref = token.as_deref();
 	// The configured token has every scope; a leaked configured token is
 	// admin-equivalent regardless.
-	let configured = token_ref.is_some_and(|t| state.bearer_is_configured(t));
-	let authorized = configured
-		|| token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
+	// API keys first: a SHA-256 lookup, so a key never pays for the configured
+	// token's (possibly argon2) hash.
+	let key_ok = token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
+	let configured = match token_ref {
+		Some(t) if !key_ok => state.bearer_is_configured_async(t).await,
+		_ => false,
+	};
+	let authorized = configured || key_ok;
 
 	{
 		let mut limiter = state
@@ -782,12 +809,6 @@ pub async fn require_bearer_token(
 		configured,
 	});
 	Ok(next.run(request).await)
-}
-
-#[cfg(test)]
-thread_local! {
-	/// How many argon2 verifications of the configured token this thread ran.
-	pub(crate) static CONFIGURED_ARGON2_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

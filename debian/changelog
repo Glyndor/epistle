@@ -240,13 +240,14 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     clear that client's count, so someone holding one key could guess, call
     and guess again; the count now only ages out with the window. A token
     that is empty or over 1024 bytes is refused before any hashing. With a
-    legacy argon2id `token_hash`, every wrong token cost an argon2 per client;
-    once the real token has been seen a wrong one is told apart by a SHA-256
-    digest and costs nothing, and before that the failed argon2 checks share
-    one budget of 60 per minute for the whole server (the first use of the
-    configured token during a flood of wrong ones waits for the window).
-    Guesses from many clients are still not capped as a whole: the
-    protection is the entropy of the token, so use a long random one.
+    legacy argon2id `token_hash`, every wrong token cost an argon2 on the
+    request's own thread. API keys are now looked up first (SHA-256) and never
+    touch the configured hash; the argon2 verification runs off the async
+    workers, two at a time at most (the rest wait their turn, nobody is
+    refused), and once the real token has been seen a wrong bearer is told
+    apart by a SHA-256 digest and costs no argon2. Guesses from many clients
+    are still not capped as a whole: the protection is the entropy of the
+    token, so use a long random one.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A

@@ -256,6 +256,18 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **REST bearer token guesses.** Wrong tokens are counted per client (an IPv4
+  address or an IPv6 /64) and a client over 20 failures a minute is refused
+  before its token is looked at; a valid call does not give the failures back.
+  An IPv6 /48 (eight times a client's budget) and the whole server (2000
+  failures) only turn the `401` of a request that already failed into `429`;
+  they are never asked of a valid token, because a budget anyone can fill would
+  let an attacker refuse the operator. API keys are matched first by SHA-256.
+  With a legacy argon2id `token_hash` the verification runs off the async
+  workers, two at a time, and after the real token has been seen once a wrong
+  one is rejected by digest with no argon2. Residual risk: guesses spread over
+  many clients are not capped as a whole, so the defence is the entropy of the
+  token (use a long random one, or a `sha256:` hash of one).
 - **Device authorization grants are bounded** (`POST /oauth/device_authorization`
   needs no credentials). A client (an IPv4 address or an IPv6 /64) may hold 10
   grants, an IPv6 /48 100, the server 10000; expired ones are dropped at the
@@ -267,7 +279,13 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   is never evicted. So a newcomer gets in while anyone is above it and a heavy
   group can only displace itself. Residual risk: an attacker with many
   distinct /32s (or IPv4 addresses) can fill the pool with groups no heavier
-  than a newcomer, for the ten minutes the grants live.
+  than a newcomer, for the ten minutes the grants live. Two refinements were
+  considered and left out because each trades one weakness for another:
+  grouping IPv4 by /24 (a botnet inside one /24 would then count as one group,
+  but a shared office or carrier NAT would be evicted as one) and a hierarchy
+  /32 to /48 for eviction (it catches an attacker who stays under one /48's
+  cap in many /48s of different /32s, at the price of a rule that is harder to
+  state and test).
 - **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
   default through `scan_authenticated`). A compromised account must not
   relay malware, so what local accounts submit over SMTP, the REST API and

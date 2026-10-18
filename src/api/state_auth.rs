@@ -44,7 +44,7 @@ impl ApiState {
 	/// from `client_ip` and carries at least one of `acceptable_scopes`.
 	/// Fail-closed: an expired, IP-restricted or under-scoped key that does
 	/// not match is no different from no key at all. The configured token is
-	/// not considered here; see [`Self::bearer_is_configured`].
+	/// not considered here; see [`Self::bearer_is_configured_async`].
 	///
 	/// Pass a single-element slice when the route is unambiguous (e.g.
 	/// `POST /api/v1/send` is always `Send`); pass a multi-element slice
@@ -135,72 +135,94 @@ impl ApiState {
 		self.bearer_is_configured(token) || self.key_authorizes(token, client_ip, acceptable_scopes)
 	}
 
-	/// Whether `token` is the configured static token. Called once per
-	/// request, by the bearer middleware; see the module documentation.
+	/// Whether `token` is the configured static token, synchronously. Tests
+	/// use it; the bearer middleware uses [`Self::bearer_is_configured_async`].
+	#[cfg(test)]
 	pub(super) fn bearer_is_configured(&self, token: &str) -> bool {
-		#[cfg(test)]
 		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
-		let stored = &self.inner.token_hash;
-		if let Some(expected_hex) = stored.strip_prefix("sha256:") {
-			// O(1) SHA-256: correct threat model for a bearer token.
-			// Comparing hex-encoded digests: timing leaks here cannot reveal
-			// the preimage (SHA-256 is pre-image resistant).
-			let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
-			let actual_hex = digest
-				.as_ref()
-				.iter()
-				.fold(String::with_capacity(64), |mut s, b| {
-					use std::fmt::Write;
-					write!(s, "{b:02x}").ok();
-					s
-				});
-			crate::util::constant_time::eq(expected_hex.as_bytes(), actual_hex.as_bytes())
+		if self.inner.token_hash.starts_with("sha256:") {
+			self.configured_by_digest(token)
 		} else {
-			self.verify_legacy_configured(token)
+			crate::smtp::auth::verify_password(&self.inner.token_hash, token)
 		}
 	}
 }
 
 impl ApiState {
-	/// The legacy path of [`Self::bearer_is_configured`]: an argon2id hash.
+	/// [`Self::bearer_is_configured`] for the middleware: the same answer, but
+	/// a legacy argon2id hash is verified off the async workers
+	/// and at most [`super::MAX_CONCURRENT_ARGON2`] at a time.
 	///
-	/// Once the real token has verified, its SHA-256 is kept and a bearer is
-	/// compared by digest, so a wrong one costs nothing. Until then every
-	/// wrong token costs an argon2 and anyone can send them, so those checks
-	/// draw on one budget for the whole server; when it is spent the bearer
-	/// counts as not configured without hashing. The only price is that the
-	/// very first use of the configured token, during a flood of wrong ones,
-	/// fails until the window rolls.
-	fn verify_legacy_configured(&self, token: &str) -> bool {
+	/// Why a gate and not a budget: the operator's real token must never be
+	/// refused because of what others sent, and a budget anyone can fill does
+	/// exactly that. A gate bounds the CPU a flood of wrong tokens can take
+	/// (two cores' worth, the rest of the requests wait their turn) and
+	/// refuses nobody. Once the real token has verified, its SHA-256 is kept
+	/// and a wrong bearer costs a digest comparison, with no argon2 at all.
+	pub(super) async fn bearer_is_configured_async(&self, token: &str) -> bool {
+		#[cfg(test)]
+		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
+		if self.inner.token_hash.starts_with("sha256:") {
+			return self.configured_by_digest(token);
+		}
 		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
 		if let Some(known) = self.inner.configured_digest.get() {
 			return crate::util::constant_time::eq(known, digest.as_ref());
 		}
-		let now = std::time::Instant::now();
-		let allowed = self
-			.inner
-			.auth_limiter
-			.lock()
-			.unwrap_or_else(|p| p.into_inner())
-			.slow_check_allowed(now);
-		if !allowed {
+		let Ok(_turn) = self.inner.argon2_gate.acquire().await else {
 			return false;
+		};
+		// Someone ahead of us in the queue may have just learned the token.
+		if let Some(known) = self.inner.configured_digest.get() {
+			return crate::util::constant_time::eq(known, digest.as_ref());
 		}
+		let (stored, bearer) = (self.inner.token_hash.clone(), token.to_string());
 		#[cfg(test)]
-		super::CONFIGURED_ARGON2_RUNS.with(|runs| runs.set(runs.get() + 1));
-		if crate::smtp::auth::verify_password(&self.inner.token_hash, token) {
+		self.argon2_run_started();
+		let verified = tokio::task::spawn_blocking(move || {
+			crate::smtp::auth::verify_password(&stored, &bearer)
+		})
+		.await
+		.unwrap_or(false);
+		#[cfg(test)]
+		self.argon2_run_ended();
+		if verified {
 			let mut known = [0u8; 32];
 			known.copy_from_slice(digest.as_ref());
 			let _ = self.inner.configured_digest.set(known);
-			true
-		} else {
-			self.inner
-				.auth_limiter
-				.lock()
-				.unwrap_or_else(|p| p.into_inner())
-				.slow_check_failed(now);
-			false
 		}
+		verified
+	}
+
+	/// The `sha256:` hash form: one digest comparison.
+	fn configured_by_digest(&self, token: &str) -> bool {
+		let Some(expected_hex) = self.inner.token_hash.strip_prefix("sha256:") else {
+			return false;
+		};
+		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+		let actual_hex = digest
+			.as_ref()
+			.iter()
+			.fold(String::with_capacity(64), |mut s, b| {
+				use std::fmt::Write;
+				write!(s, "{b:02x}").ok();
+				s
+			});
+		crate::util::constant_time::eq(expected_hex.as_bytes(), actual_hex.as_bytes())
+	}
+
+	#[cfg(test)]
+	fn argon2_run_started(&self) {
+		use std::sync::atomic::Ordering::SeqCst;
+		let stats = &self.inner.argon2_stats;
+		stats[0].fetch_add(1, SeqCst);
+		let now = stats[1].fetch_add(1, SeqCst) + 1;
+		stats[2].fetch_max(now, SeqCst);
+	}
+
+	#[cfg(test)]
+	fn argon2_run_ended(&self) {
+		self.inner.argon2_stats[1].fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 	}
 }
 
