@@ -23,7 +23,8 @@
 //! - **A share of the server's budget per network.** The whole server
 //!   accepts [`GLOBAL_PER_WINDOW`] jobs per kind and window, and one network
 //!   (an IPv4 /16, an IPv6 /32) may take at most [`BLOCK_PER_WINDOW`] of
-//!   them, a sixteenth. The last quarter of the global budget is kept for
+//!   them, a sixteenth, and may have [`NETWORK_PENDING`] jobs waiting or
+//!   running, a quarter of the queue. The last quarter of the global budget is kept for
 //!   networks that have used at most [`FIRST_JOBS`] of their share: past
 //!   that, a network is held back once [`SOFT_LIMIT`] is reached, while a
 //!   network under its fair share keeps training until the global budget is
@@ -63,7 +64,9 @@
 //!    [`QUEUE_CAPACITY`] jobs of at most [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES).
 //! 4. Refusing is cheap and leaves no state: a refused job costs a few hash
 //!    lookups and changes nothing, not a count, not the order of use, not a
-//!    window. Admitting costs a few hash lookups and ordered-map steps.
+//!    window, and a job the queue has no room for is turned away before the
+//!    budget is charged. Admitting costs a few hash lookups and ordered-map
+//!    steps.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
@@ -92,6 +95,10 @@ pub const COARSE_PENDING: u32 = 8;
 
 /// Jobs a wider address block may add per [`WINDOW`], for each of ham and spam.
 pub const COARSE_PER_WINDOW: u32 = 120;
+
+/// Jobs one network may have waiting or running: a quarter of the queue, so
+/// a network spread over its blocks cannot fill it for the others.
+pub const NETWORK_PENDING: u32 = 16;
 
 /// Jobs the whole server accepts per [`WINDOW`], for each of ham and spam.
 pub const GLOBAL_PER_WINDOW: u32 = 2000;
@@ -337,13 +344,14 @@ impl Budget {
 		// Everything is checked first and nothing is written until the job
 		// is admitted, so a refusal leaves no trace.
 		let global = inner.global[kind].at(now);
-		let used_by_network = source
+		let network = source
 			.addresses
 			.as_ref()
-			.map(|(_, _, network)| inner.networks.peek(network, kind, now).admitted);
-		if used_by_network.is_some_and(|used| used >= BLOCK_PER_WINDOW) {
-			return Err(Refusal::OverBudget);
+			.map(|(_, _, network)| inner.networks.peek(network, kind, now));
+		if let Some(network) = &network {
+			network.check(BLOCK_PER_WINDOW, NETWORK_PENDING)?;
 		}
+		let used_by_network = network.map(|network| network.admitted);
 		// A network that has used at most its first jobs may spend the whole
 		// global budget; one that has used more, or whose network is not
 		// known, stops at the soft limit and leaves the rest to the former.
@@ -484,17 +492,18 @@ impl SharedTraining {
 		data: &[u8],
 		spam: bool,
 	) -> Result<(), Refusal> {
+		// The place in the queue is taken first and the budget charged after:
+		// a queue with no room is the server's state, and a source turned away
+		// for it has spent nothing.
+		let permit = self.sender.try_reserve().map_err(|_| Refusal::QueueFull)?;
 		self.budget.admit(now, source, spam)?;
-		let job = Job {
+		permit.send(Job {
 			source: source.clone(),
 			scope: scope.to_string(),
 			text: training_window(data).into_owned(),
 			spam,
-		};
-		self.sender.try_send(job).map_err(|_| {
-			self.budget.release(source, spam);
-			Refusal::QueueFull
-		})
+		});
+		Ok(())
 	}
 }
 

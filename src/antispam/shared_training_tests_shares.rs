@@ -57,7 +57,10 @@ fn the_last_quarter_is_kept_for_networks_under_their_share() {
 	// Twelve networks spend the soft limit between them (12 * 125 = 1500).
 	for net in 0..12 {
 		for host in 0..=u8::MAX {
-			let _ = budget.admit(now, &in_network(net, host), true);
+			let from = in_network(net, host);
+			if budget.admit(now, &from, true).is_ok() {
+				budget.release(&from, true);
+			}
 		}
 	}
 	// A network that already used more than its first jobs is held back...
@@ -71,8 +74,10 @@ fn the_last_quarter_is_kept_for_networks_under_their_share() {
 	// ...while a network under its fair share still trains, up to its first jobs.
 	let mut fresh = 0;
 	for host in 0..=u8::MAX {
-		if budget.admit(now, &in_network(100, host), true).is_ok() {
+		let from = in_network(100, host);
+		if budget.admit(now, &from, true).is_ok() {
 			fresh += 1;
+			budget.release(&from, true);
 		}
 	}
 	assert_eq!(fresh, FIRST_JOBS);
@@ -243,4 +248,63 @@ fn a_network_under_its_first_jobs_always_trains_whatever_others_send() {
 			}
 		}
 	}
+}
+
+/// A job the queue cannot take spends nothing of the budget: a full queue
+/// is the server's state, not something the source did.
+#[test]
+fn a_job_a_full_queue_turns_away_spends_none_of_the_budget() {
+	let (queue, mut receiver, budget) = SharedTraining::bounded(1);
+	let now = Instant::now();
+	let from = TrainSource::new(v4(1, 1), Some("verified.example"));
+	let mut full = 0;
+	for _ in 0..FINE_PER_WINDOW - 1 {
+		if queue.try_submit(now, &from, "", b"x", false) == Err(Refusal::QueueFull) {
+			full += 1;
+		}
+	}
+	assert_eq!(
+		full,
+		FINE_PER_WINDOW - 2,
+		"one job fits, the rest are turned away"
+	);
+	// The queue drains, and the source still has the rest of its hour.
+	let mut taken = 0;
+	while let Ok(job) = receiver.try_recv() {
+		budget.release(&job.source, job.spam);
+		taken += 1;
+	}
+	assert_eq!(taken, 1);
+	for n in 0..FINE_PER_WINDOW - 1 {
+		assert_eq!(
+			queue.try_submit(now, &from, "", b"x", false),
+			Ok(()),
+			"submission {n} after the queue drained was refused"
+		);
+		let job = receiver.try_recv().expect("the job is queued");
+		budget.release(&job.source, job.spam);
+	}
+}
+
+/// Spread over many /24s, one network still cannot fill the queue that the
+/// other networks share: 16 of its jobs may wait, not 64.
+#[test]
+fn one_network_cannot_fill_the_queue_by_spreading_over_its_blocks() {
+	let (queue, _receiver, _budget) = SharedTraining::bounded(QUEUE_CAPACITY);
+	let now = Instant::now();
+	let mut accepted = 0;
+	for host in 0..=u8::MAX {
+		if queue
+			.try_submit(now, &in_network(1, host), "", b"x", true)
+			.is_ok()
+		{
+			accepted += 1;
+		}
+	}
+	// Written out on purpose: a quarter of the queue.
+	assert_eq!(accepted, 16);
+	assert_eq!(
+		queue.try_submit(now, &in_network(2, 1), "", b"x", true),
+		Ok(())
+	);
 }
