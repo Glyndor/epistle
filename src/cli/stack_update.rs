@@ -166,6 +166,20 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
+	// The socket unit can be listening while `podman system service` is
+	// still starting, as it is right after an upgrade or a boot. Nothing has
+	// changed yet, so a service that never answers stops the update here.
+	if !super::stack_retry::wait_for_api(
+		&super::stack_socket::socket_path(),
+		super::stack_retry::API_WAIT,
+	) {
+		super::style::error(format_args!(
+			"Podman's API at {} did not answer within {} s; nothing was changed",
+			super::stack_socket::socket_path().display(),
+			super::stack_retry::API_WAIT.as_secs()
+		));
+		return ExitCode::FAILURE;
+	}
 	let mut host = Live {
 		config,
 		compose,
@@ -258,10 +272,26 @@ impl execute::UpdateHost for Live<'_> {
 
 	fn podup(&mut self, step: &[String]) -> Result<(), String> {
 		let args: Vec<&str> = step.iter().map(String::as_str).collect();
-		match super::stack::run_sequence(self.podup, self.compose, &[&args]) {
-			code if code == ExitCode::SUCCESS => Ok(()),
-			_ => Err(format!("`podup {}` failed", args.join(" "))),
-		}
+		let label = format!("`podup {}`", args.join(" "));
+		super::stack_retry::with_retries(
+			|| {
+				super::stack_retry::run_tee(super::stack::build_command(
+					self.podup,
+					self.compose,
+					&args,
+				))
+			},
+			|| {
+				super::stack_retry::wait_for_api(
+					&super::stack_socket::socket_path(),
+					super::stack_retry::API_WAIT,
+				)
+			},
+			|line| {
+				let _ = writeln!(super::style::stderr(), "epistle: {line}");
+			},
+		)
+		.map_err(|error| format!("{label} failed: {error}"))
 	}
 
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {

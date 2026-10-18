@@ -80,6 +80,7 @@ mod stack;
 mod stack_dumps;
 mod stack_health;
 mod stack_resources;
+mod stack_retry;
 mod stack_rollback;
 mod stack_socket;
 mod stack_started;
