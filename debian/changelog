@@ -158,8 +158,6 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     step under the account lock (`ifInState` is exact, the active script changes
     without a moment of no filter), and waiting for that lock no longer holds a
     runtime worker.
-
- -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
   * Security: every way of signing in now applies the same account rules.
     Until now SCRAM-SHA-256 (SMTP AUTH and IMAP AUTHENTICATE, only when
     `[auth] scram` is on) skipped the account's second factor and its
@@ -282,7 +280,8 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     endpoint used to resend the event, with its `X-Webhook-Signature`, to
     wherever it pointed, an internal address included. A redirect now counts
     as a failed delivery, and `epistle webhook test` reports its status.
- -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000
+
+ -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 
 epistle (0.12.1) unstable; urgency=medium
 
