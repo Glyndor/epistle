@@ -130,14 +130,15 @@ fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		return false;
 	}
 	let seen = message.visible_headers(&names);
+	if seen.truncated {
+		vars.mark_truncated();
+	}
 	if let Some(rel) = spec.count_rel() {
-		// The number of headers is known whole, so a count is exact.
+		// A count is of the headers read, which is all of them unless the
+		// message had more than the interpreter reads (`truncated`).
 		return keys
 			.iter()
 			.any(|key| spec.count_matches(rel, seen.count, key));
-	}
-	if seen.truncated {
-		vars.mark_truncated();
 	}
 	// Each value is paid for once, however many keys it is compared with.
 	for value in &seen.values {

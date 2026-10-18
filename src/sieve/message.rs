@@ -1,7 +1,9 @@
 //! The message view the Sieve interpreter evaluates: parsed headers, total
 //! size, body text, and the SMTP envelope.
 
-use super::env::{BODY_WINDOW, HEADER_NAME_VALUES, HEADER_NAME_WINDOW, HEADER_NAMES_PER_LOOKUP};
+use super::env::{
+	BODY_WINDOW, HEADER_NAME_VALUES, HEADER_NAME_WINDOW, HEADER_NAMES_PER_LOOKUP, MAX_HEADERS,
+};
 
 /// A message as the interpreter sees it: parsed headers, total size, and the
 /// SMTP envelope (for the `envelope` test).
@@ -11,8 +13,16 @@ pub struct Message {
 	/// built once so that a lookup costs what it finds and not a pass over
 	/// every header: a message may carry millions of them.
 	index: std::collections::HashMap<String, Vec<u32>>,
+	/// The message had more headers than [`MAX_HEADERS`]; the rest were not
+	/// read.
+	headers_cut: bool,
 	pub(super) size: usize,
+	/// The first [`BODY_WINDOW`] octets of the body (a few more, cut again
+	/// by [`Message::body_window`]): the rest is never read, so it is not
+	/// copied.
 	pub(super) body: String,
+	/// The body is longer than what is kept of it.
+	body_cut: bool,
 	pub(super) envelope_from: Option<String>,
 	pub(super) envelope_to: Vec<String>,
 	/// Evaluation time (Unix seconds) for `currentdate`; tests inject it.
@@ -25,21 +35,22 @@ pub struct Message {
 }
 
 impl Message {
-	/// Parse headers (unfolded) and record the total size.
+	/// Parse headers (unfolded) and record the total size. Only the first
+	/// 10 000 headers and the first mebibyte of the body are kept: a message is up to the operator's size limit, and what
+	/// the interpreter reads of it is a fixed window, so what it holds of it
+	/// is too.
 	pub fn parse(raw: &[u8]) -> Message {
-		let header_end = raw
-			.windows(4)
-			.position(|w| w == b"\r\n\r\n")
-			.map(|p| p + 2)
-			.unwrap_or(raw.len());
-		let body_start = raw
-			.windows(4)
-			.position(|w| w == b"\r\n\r\n")
-			.map(|p| p + 4)
-			.unwrap_or(raw.len());
-		let body = String::from_utf8_lossy(raw.get(body_start..).unwrap_or(&[])).into_owned();
+		let blank = raw.windows(4).position(|w| w == b"\r\n\r\n");
+		let header_end = blank.map_or(raw.len(), |p| p + 2);
+		let body_start = blank.map_or(raw.len(), |p| p + 4);
+		let whole_body = raw.get(body_start..).unwrap_or(&[]);
+		// A little more than the window, so that cutting it at a character
+		// boundary leaves the window whole.
+		let kept = &whole_body[..whole_body.len().min(BODY_WINDOW + 4)];
+		let body = String::from_utf8_lossy(kept).into_owned();
 		let block = String::from_utf8_lossy(&raw[..header_end]);
 		let mut headers = Vec::new();
+		let mut headers_cut = false;
 		let mut current: Option<String> = None;
 		for line in block.split_inclusive('\n') {
 			let content = line.trim_end_matches(['\r', '\n']);
@@ -54,6 +65,10 @@ impl Message {
 				push_header(&mut headers, &buffer);
 			}
 			if !content.is_empty() {
+				if headers.len() >= MAX_HEADERS {
+					headers_cut = true;
+					break;
+				}
 				current = Some(content.to_string());
 			}
 		}
@@ -71,8 +86,10 @@ impl Message {
 		Message {
 			headers,
 			index,
+			headers_cut,
 			size: raw.len(),
 			body,
+			body_cut: whole_body.len() > kept.len(),
 			envelope_from: None,
 			envelope_to: Vec::new(),
 			now: None,
@@ -114,10 +131,14 @@ impl Message {
 	/// holds, and every name has a quota of its own: at most
 	/// [`HEADER_NAME_VALUES`] values and [`HEADER_NAME_WINDOW`] octets of
 	/// them, and no more than [`HEADER_NAMES_PER_LOOKUP`] names. `truncated`
-	/// says the window cut something. `count` is the number of headers there
-	/// are, all of them: positions are known without reading a value.
+	/// says the window cut something, headers past [`MAX_HEADERS`] included.
+	/// `count` is the number of headers read, which is all of them unless
+	/// `truncated`.
 	pub(super) fn visible_headers<S: AsRef<str>>(&self, names: &[S]) -> Visible<'_> {
-		let mut seen = Visible::default();
+		let mut seen = Visible {
+			truncated: self.headers_cut,
+			..Visible::default()
+		};
 		for (n, name) in names.iter().enumerate() {
 			let positions = self.positions(name.as_ref());
 			seen.count += positions.len();
@@ -145,7 +166,7 @@ impl Message {
 	/// octets, and whether that is not all of it.
 	pub(super) fn body_window(&self) -> (&str, bool) {
 		let shown = window(&self.body, BODY_WINDOW);
-		(shown, shown.len() < self.body.len())
+		(shown, self.body_cut || shown.len() < self.body.len())
 	}
 
 	fn positions(&self, name: &str) -> &[u32] {

@@ -43,6 +43,14 @@ pub(super) const HEADER_NAME_WINDOW: usize = 64 * 1024;
 /// `body` test does.
 pub(super) const HEADER_NAMES_PER_LOOKUP: usize = 16;
 
+/// How many headers of a message the interpreter reads: the first 10 000.
+/// A message may hold millions of one-letter headers, and copying and
+/// indexing each one cost the server hundreds of mebibytes per recipient with
+/// a filter. What comes after is not visible to a test. The sender gains
+/// nothing by it, since a header it hides it could have left out, and what the
+/// server itself adds comes first.
+pub(super) const MAX_HEADERS: usize = 10_000;
+
 /// Variables and counters of one run.
 #[derive(Default)]
 pub(crate) struct Env {

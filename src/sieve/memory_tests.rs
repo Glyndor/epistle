@@ -76,3 +76,48 @@ fn the_other_comparisons_copy_none_of_the_text_either() {
 		"a numeric key held {peak} octets for 32 MiB of digits"
 	);
 }
+
+/// A message of about `mib` mebibytes that is nothing but headers.
+fn headers_only(mib: usize) -> Vec<u8> {
+	let mut raw = Vec::with_capacity(mib * MIB + 64);
+	let mut n = 0u64;
+	while raw.len() < mib * MIB {
+		raw.extend_from_slice(format!("h{n}: b\r\n").as_bytes());
+		n += 1;
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	raw
+}
+
+#[test]
+fn reading_a_message_of_millions_of_headers_holds_a_little_of_it() {
+	// 24 MiB of one-letter header values is about two million headers. Each
+	// one copied and indexed took 620 MiB of the server per recipient with a
+	// filter; the interpreter looks at the first few thousand.
+	let raw = headers_only(24);
+	let (message, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(peak < 8 * MIB, "{peak} octets held for 24 MiB of headers");
+	assert!(message.has_header("h0"));
+	assert!(!message.has_header("h1999999"));
+	let seen = message.visible_headers(&["h0"]);
+	assert!(seen.truncated, "a lookup says the headers were cut");
+}
+
+#[test]
+fn reading_a_message_with_a_huge_body_keeps_only_the_window_of_it() {
+	let mut raw = b"Subject: hi\r\n\r\n".to_vec();
+	raw.extend(std::iter::repeat_n(b'x', 24 * MIB));
+	let (message, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(peak < 3 * MIB, "{peak} octets held for a 24 MiB body");
+	let (shown, truncated) = message.body_window();
+	assert_eq!(shown.len(), super::env::BODY_WINDOW);
+	assert!(truncated);
+}
+
+#[test]
+fn a_few_headers_are_all_visible_and_not_truncated() {
+	let message = super::interp::Message::parse(b"A: 1\r\nB: 2\r\n\r\nbody");
+	let seen = message.visible_headers(&["a", "b"]);
+	assert_eq!(seen.values, vec!["1", "2"]);
+	assert!(!seen.truncated);
+}

@@ -120,3 +120,25 @@ fn a_name_visits_its_first_thousand_values() {
 		.discarded
 	);
 }
+
+#[test]
+fn only_the_first_ten_thousand_headers_are_read_and_a_lookup_says_so() {
+	// Subject plus 20 000 `x`: the interpreter reads the first 10 000 of all.
+	let raw = crowded(20_000);
+	let (outcome, _) = run(
+		"require \"relational\";\nif header :count \"ge\" :comparator \"i;ascii-numeric\" \"x\" \"10000\" { discard; }\n",
+		&raw,
+	);
+	assert!(!outcome.discarded, "9 999 `x` were read: {outcome:?}");
+	assert!(outcome.inspection_truncated);
+	let (outcome, _) = run(
+		"if header :contains \"subject\" \"hi\" { discard; }\n",
+		&raw,
+	);
+	assert!(
+		outcome.discarded,
+		"the headers before the cut are all there"
+	);
+	let (outcome, _) = run("if exists \"subject\" { discard; }\n", &crowded(10));
+	assert!(outcome.discarded && !outcome.inspection_truncated);
+}

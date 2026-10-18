@@ -1728,7 +1728,10 @@ by the script:
   the headers called each name it lists (a longer value is cut), for at most
   16 names. Every name has its own quota, so a thousand `Received` headers or
   a huge `X-` header cannot hide the `From` or `Subject` listed with them.
-  `:count` counts every header of the names, whatever the window. Text a sender
+  Only the first 10 000 headers of a message are read at all (the server's own
+  come first, and a sender gains nothing by hiding a header it could have left
+  out), and `:count` counts the headers read, which is all of them below that.
+  Text a sender
   puts past a window is not seen by the test, so a rule that must catch
   something should not depend on where in a huge message it is. The run goes
   on with what it saw, and a window that cut something is never silent: the

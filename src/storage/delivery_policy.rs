@@ -107,7 +107,7 @@ impl LocalDelivery {
 			if self.may_say("sieve-truncated", account) {
 				tracing::warn!(
 					account,
-					"a Sieve test of the account's filter looked at part of a message only (the first mebibyte of the body, or the first mebibyte or thousand values of the headers of a lookup); a rule that matches text past that did not see it"
+					"a Sieve test of the account's filter looked at part of a message only (the first mebibyte of the body, the first 10 000 headers, or the first mebibyte or thousand values of the headers of a lookup); a rule that matches text past that did not see it"
 				);
 			}
 		}
