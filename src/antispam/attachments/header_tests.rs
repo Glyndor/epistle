@@ -60,3 +60,40 @@ fn an_unreadable_content_type_or_any_binary_type_makes_an_attachment() {
 		vec!["text/plain", "application/x-msdownload"]
 	);
 }
+
+#[test]
+fn every_encoding_a_part_declares_is_kept_beyond_the_first() {
+	let header = parse(
+		b"Content-Type: text/plain\r\nContent-Transfer-Encoding: 7bit\r\n\
+		  Content-Transfer-Encoding: base64\r\nContent-Transfer-Encoding: base64\r\n\
+		  Content-Transfer-Encoding: Quoted-Printable\r\nContent-Transfer-Encoding: nonsense\r\n",
+	);
+	assert_eq!(header.encoding, Encoding::Identity);
+	assert_eq!(
+		header.other_encodings,
+		[Encoding::Base64, Encoding::QuotedPrintable]
+	);
+	assert!(header.ambiguous);
+	let plain = parse(b"Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n");
+	assert!(plain.other_encodings.is_empty());
+}
+
+#[test]
+fn a_part_could_be_text_unless_it_is_plainly_a_file() {
+	let could = |block: &[u8]| parse(block).could_be_text();
+	assert!(could(b"Content-Type: text/plain\r\n"));
+	assert!(could(b"Subject: no type at all\r\n"));
+	assert!(could(b"Content-Type: message/rfc822\r\n"));
+	assert!(could(b"Content-Type: multipart/mixed\r\n"));
+	assert!(could(
+		b"Content-Type: text/plain; name=a.txt\r\nContent-Disposition: attachment\r\n"
+	));
+	// Two readers disagree about it: either may show text.
+	assert!(could(
+		b"Content-Type: application/pdf\r\nContent-Type: application/zip\r\n"
+	));
+	assert!(!could(
+		b"Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=a.pdf\r\n"
+	));
+	assert!(!could(b"Content-Type: image/png; name=a.png\r\n"));
+}

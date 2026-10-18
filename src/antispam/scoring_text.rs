@@ -8,7 +8,8 @@
 //!   thousands of words nobody wrote, so a perfectly ordinary message with an
 //!   attachment looked like one with a pile of filler, and a spammer could
 //!   put the filler there. Parts that are not `text/*` are skipped, and cost
-//!   nothing of the window.
+//!   nothing of the window nor of the decoding budget, so a large file
+//!   cannot use up what the text after it needs.
 //! - Whitespace, punctuation and one-letter words are not tokens, so filler
 //!   made of them costs nothing of the window either; a message of 25 MiB
 //!   with a spam paragraph in the middle of spaces is read in full.
@@ -18,14 +19,16 @@
 //!
 //! A message the walk calls ambiguous, one that two readers could split into
 //! parts differently, is read as raw bytes as well, so that whatever either
-//! reader shows is read.
+//! reader shows is read; a part that declares two transfer encodings is read
+//! under each.
 //!
 //! The pass is linear, keeps at most about 400 KiB of tokens in memory and
 //! never decodes more than [`MAX_DECODED`] of the message's parts. A message
 //! whose structure the walk gives up on (too deep, too many parts) or whose
 //! text does not fit in the decoding budget is read as the raw bytes
 //! instead, which is what the filter always did, so nothing is skipped
-//! because the structure was odd.
+//! because the structure was odd. Text that travels encoded is not decoded
+//! that way, so such a message is `clipped`: one that was not read in full.
 
 use super::attachments::walk::{self, Limits, MAX_HEADER_BYTES};
 use super::training_queue::MAX_TRAINING_BYTES;
@@ -73,10 +76,14 @@ fn reduce(raw: &[u8]) -> ScoringText {
 	match extract(raw, &mut window) {
 		Some(()) => window.finish(),
 		None => {
-			// The structure or the size defeated the walk: read the bytes.
+			// The structure or the size defeated the walk: read the bytes. Text
+			// the message carries in an encoding is not decoded that way, so
+			// it is not a message that was read in full.
 			let mut window = Window::default();
 			window.push_bytes(raw);
-			window.finish()
+			let mut reduced = window.finish();
+			reduced.clipped = true;
+			reduced
 		}
 	}
 }
@@ -94,7 +101,7 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 	let mut complete = true;
 	let mut ambiguous = false;
 	let mut parts: Vec<Vec<u8>> = Vec::new();
-	let walked = walk::walk(raw, &limits, |leaf| {
+	let walked = walk::walk_text(raw, &limits, |leaf| {
 		ambiguous |= leaf.ambiguous;
 		// A part that declares two types is text to one reader and a file to
 		// another: it is read if any of them is text.
@@ -107,6 +114,8 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 			// A text part cut short by the budget is not all of the text.
 			complete &= !leaf.truncated;
 			parts.push(leaf.content);
+			// A client may have taken another of the encodings it declares.
+			parts.extend(leaf.alternates);
 		}
 	});
 	if walked.stopped.is_some() || !complete {
@@ -233,3 +242,7 @@ impl Window {
 #[cfg(test)]
 #[path = "scoring_text_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scoring_text_tests_adversarial.rs"]
+mod tests_adversarial;
