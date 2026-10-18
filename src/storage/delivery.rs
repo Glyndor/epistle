@@ -198,7 +198,7 @@ impl LocalDelivery {
 		message: &AcceptedMessage,
 		mailbox: Option<&str>,
 	) -> Result<Delivered, SinkError> {
-		io::refuse_padded_headers(&message.data)?;
+		crate::smtp::trace::refuse_padded_headers(&message.data, self.metrics.as_deref())?;
 		if let Some(name) = mailbox
 			&& !io::is_safe_mailbox(name)
 		{

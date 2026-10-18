@@ -10,6 +10,8 @@ mod mailboxes;
 mod masked;
 mod queue;
 mod send;
+#[cfg(test)]
+pub(crate) use send::sink_refusal;
 mod send_from;
 mod send_message;
 mod send_request;

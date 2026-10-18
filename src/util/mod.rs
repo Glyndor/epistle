@@ -7,6 +7,7 @@ pub mod blocking;
 pub mod constant_time;
 pub mod encoded_word;
 pub mod header;
+pub mod header_block;
 pub mod mailbox_path;
 pub mod mutf7;
 pub mod path_component;

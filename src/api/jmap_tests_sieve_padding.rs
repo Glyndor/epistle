@@ -64,3 +64,89 @@ fn the_local_delivery_refuses_a_message_with_too_many_header_fields() {
 		.deliver_routed(&message(MAX_HEADER_FIELDS - 3), None)
 		.expect("a message at the limit is delivered");
 }
+
+#[tokio::test]
+async fn the_api_answers_a_padded_submission_with_422() {
+	use axum::response::IntoResponse;
+	let response = super::v1::sink_refusal(SinkError::TooManyHeaderFields).into_response();
+	assert_eq!(response.status().as_u16(), 422);
+	let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("body");
+	let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+	assert_eq!(json["error"]["code"], "too_many_header_fields", "{json}");
+}
+
+#[test]
+fn smtp_refuses_a_padded_message_for_good() {
+	let reply = SinkError::TooManyHeaderFields.smtp_reply();
+	let text = format!("{reply:?}");
+	assert!(text.contains("554") && text.contains("5.6.0"), "{text}");
+}
+
+#[test]
+fn a_refusal_is_counted_and_said_once_an_hour() {
+	use crate::cli::tracing_capture::run_with_capture;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	));
+	let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+	let delivery = LocalDelivery::new(dir.path(), directory)
+		.expect("delivery")
+		.with_metrics(metrics.clone());
+	let message = AcceptedMessage {
+		reverse_path: "bob@elsewhere.example".to_string(),
+		recipients: vec!["alice@example.org".to_string()],
+		data: padded_draft(MAX_HEADER_FIELDS).into_bytes(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: true,
+		no_dsn: Vec::new(),
+	};
+	let events = run_with_capture(|| {
+		for _ in 0..4 {
+			assert!(delivery.deliver_routed(&message, None).is_err());
+		}
+	});
+	assert_eq!(metrics.snapshot()["rejected_header_fields"], 4);
+	let said = events
+		.iter()
+		.filter(|e| {
+			e.fields
+				.get("message")
+				.is_some_and(|m| m.contains("too many header fields"))
+		})
+		.count();
+	// Another test may have said it this hour already: never more than one.
+	assert!(said <= 1, "four refusals, {said} lines");
+}
+
+#[test]
+fn a_message_with_lf_line_ends_and_a_long_body_is_not_all_header() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	));
+	let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
+	let mut data = b"From: bob@elsewhere.example\nSubject: hi\n\n".to_vec();
+	for n in 0..MAX_HEADER_FIELDS + 2_000 {
+		data.extend_from_slice(format!("line {n}\n").as_bytes());
+	}
+	let message = AcceptedMessage {
+		reverse_path: "bob@elsewhere.example".to_string(),
+		recipients: vec!["alice@example.org".to_string()],
+		data,
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: true,
+		no_dsn: Vec::new(),
+	};
+	delivery
+		.deliver_routed(&message, None)
+		.expect("the body is not header fields");
+}

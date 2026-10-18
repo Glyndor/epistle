@@ -5,6 +5,7 @@
 use super::tests_data_rate::{Client, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
+use crate::smtp::trace::MAX_HEADER_FIELDS;
 
 async fn send(fields: usize) -> (Vec<String>, usize, u64) {
 	let sink = Arc::new(MemorySink::new());
@@ -45,4 +46,19 @@ async fn a_message_at_the_header_field_limit_is_accepted() {
 	assert!(!codes.iter().any(|c| c == "554"), "{codes:?}");
 	assert_eq!(delivered, 1);
 	assert_eq!(counted, 0);
+}
+
+#[test]
+fn folded_lines_are_not_header_fields() {
+	// Three fields with thousands of folded lines each are three fields.
+	let mut raw = Vec::new();
+	for name in ["A", "B", "C"] {
+		raw.extend_from_slice(format!("{name}: start\r\n").as_bytes());
+		for _ in 0..(MAX_HEADER_FIELDS + 10) {
+			raw.extend_from_slice(b" more\r\n");
+		}
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	assert_eq!(crate::util::header_block::field_count(&raw), 3);
+	assert!(crate::smtp::trace::refuse_padded_headers(&raw, None).is_ok());
 }

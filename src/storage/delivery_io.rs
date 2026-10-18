@@ -27,17 +27,6 @@ pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_token
 	}
 }
 
-/// Every message a filter can read comes through local delivery, from SMTP,
-/// from a JMAP or API submission to a local recipient, or from the queue: one
-/// with more header fields than the filter reads would have some it never
-/// sees, so it is refused for everyone.
-pub(super) fn refuse_padded_headers(data: &[u8]) -> Result<(), crate::smtp::sink::SinkError> {
-	if crate::smtp::trace::header_field_count(data) > crate::smtp::trace::MAX_HEADER_FIELDS {
-		return Err(crate::smtp::sink::SinkError::TooManyHeaderFields);
-	}
-	Ok(())
-}
-
 /// The most folders an account may hold before a Sieve `fileinto` stops
 /// creating new ones (INBOX counts). A script that files by something a
 /// sender chooses, such as `fileinto "${1}"` on the Subject, would otherwise

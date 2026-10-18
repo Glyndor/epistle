@@ -62,21 +62,26 @@ pub(crate) fn received_hop_count(data: &[u8]) -> usize {
 /// no real message has anywhere near this many.
 pub(crate) const MAX_HEADER_FIELDS: usize = 9_900;
 
-/// Count the header fields of a raw message: the lines of the header block
-/// (up to the first blank line) that do not continue the one before. Works
-/// on the octets and copies nothing.
-pub(crate) fn header_field_count(data: &[u8]) -> usize {
-	let header_end = data
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.map_or(data.len(), |p| p + 2);
-	data[..header_end]
-		.split(|b| *b == b'\n')
-		.filter(|line| {
-			let line = line.strip_suffix(b"\r").unwrap_or(line);
-			!line.is_empty() && !matches!(line.first(), Some(b' ' | b'\t'))
-		})
-		.count()
+/// Refuse a message with more header fields than [`MAX_HEADER_FIELDS`], and
+/// say so: it is counted (`rejected_header_fields`) and logged at most once an
+/// hour. This one check is made where SMTP has the message and again where
+/// local delivery starts, so it is the same whichever way a message arrives.
+/// The delivery counts the fields the server added too, so for mail with a
+/// local recipient the effective limit is a few less than the constant.
+pub(crate) fn refuse_padded_headers(
+	data: &[u8],
+	metrics: Option<&crate::metrics::Metrics>,
+) -> Result<(), crate::smtp::sink::SinkError> {
+	if crate::util::header_block::field_count(data) <= MAX_HEADER_FIELDS {
+		return Ok(());
+	}
+	if let Some(metrics) = metrics {
+		metrics.rejected(crate::metrics::RejectReason::HeaderFields);
+	}
+	if crate::util::warn_limited::allow("header-fields") {
+		tracing::warn!("rejecting message: too many header fields");
+	}
+	Err(crate::smtp::sink::SinkError::TooManyHeaderFields)
 }
 
 /// Build the RFC 5321 section 4.4 trace header prepended to accepted mail.
