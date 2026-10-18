@@ -84,5 +84,8 @@ async fn an_unknown_login_costs_the_peer_one_strike_when_the_exchange_ends() {
 	let client_final = scram_client_final("n=ghost,r=CN", &server_first, fixtures::password());
 	let out = text(&session.auth_response(&B64.encode(client_final)));
 	assert!(out.contains("a NO"), "{out}");
-	assert_eq!(ban_store.call_count("record_failure"), 1);
+	// One strike on the peer; the stand-in pair and account an unknown login is
+	// counted under (so it writes what a real one does) make the other two.
+	assert_eq!(ban_store.call_count("record_failure"), 3);
+	assert_eq!(ban_store.failure_count("ip:203.0.113.78", 0), 1);
 }

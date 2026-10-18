@@ -251,10 +251,15 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   left to the owner: counting is per /64, so a client with a whole IPv6
   allocation can spread guesses over its /64s (300 /64s of one /48 with four
   failures each never reach a ban); the account ceiling above is what stops it
-  for one account, and spraying across many accounts is not banned. Counting
-  a /48 too was tried and removed: a /48 can be a hosting provider, an office
-  or a campus, and one attacker there would then ban everyone else. The owner
-  of an
+  for one account, and spraying across many accounts is not banned. The owner
+  decides between two readings of the same trade-off: (a) no ban on the /48,
+  today's choice, which lets one attacker with an allocation rotate through its
+  /64s; (b) a /48 counter at a high factor, which bans every user of a shared
+  /48 (hosting, ISP, office, campus) because of one attacker. A middle point,
+  not built: a /48 counter at a high factor that applies only to /64s that have
+  already failed themselves, so a /64 without failures of its own is never
+  blocked for its neighbours, at the price of a more intricate rule and of
+  not stopping a rotation that spends one failure per /64. The owner of an
   account that many clients are guessing at is locked out for the length of
   the account ban as well. A credential stuffing wave from one client trips
   that client's counters. The wire response to a banned subject is identical to a wrong password (no

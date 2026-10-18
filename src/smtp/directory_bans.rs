@@ -239,6 +239,8 @@ impl Directory {
 		let decoy;
 		let subject_account = match account.as_deref() {
 			Some(account) => account,
+			// No login at all (a malformed first message) has nothing to hide.
+			None if login.is_empty() => return BanOutcome::Clear { account },
 			None => {
 				decoy = Self::decoy_account(login);
 				&decoy
@@ -334,6 +336,7 @@ impl Directory {
 		let decoy;
 		let account = match account {
 			Some(account) => account,
+			None if login.is_empty() => return,
 			None => {
 				decoy = Self::decoy_account(login);
 				&decoy
