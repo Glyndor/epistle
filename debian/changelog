@@ -1,5 +1,9 @@
 epistle (0.12.2) UNRELEASED; urgency=medium
 
+  * Security: ManageSieve now holds an unauthenticated connection to one
+    deadline for the whole phase, counted from the start of the session and
+    covering every read, including the data of a command. Bytes arriving
+    slowly no longer extend it.
   * Security: the Bayesian filter no longer lets one account decide what
     another receives. A message with more than one local recipient, or
     addressed to an alias or a list, used to be scored by the corpus of the

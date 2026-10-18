@@ -1,8 +1,8 @@
 //! Drain rejected ManageSieve literals while preserving the following command.
 
 use crate::smtp::line::LineDecoder;
-use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::time::Instant;
 
 pub(super) struct Drain {
 	pub complete: bool,
@@ -14,14 +14,14 @@ pub(super) async fn literal<S: AsyncRead + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
 	size: usize,
-	deadline: Duration,
+	deadline: Instant,
 ) -> std::io::Result<Drain> {
 	let mut remaining = size - decoder.discard_buffered(size);
 	let mut chunk = [0u8; 4096];
 	#[cfg(test)]
 	let mut peak_storage = decoder.buffer_capacity() + chunk.len();
 	while remaining > 0 {
-		let read = tokio::time::timeout(deadline, stream.read(&mut chunk))
+		let read = tokio::time::timeout_at(deadline, stream.read(&mut chunk))
 			.await
 			.map_err(|_| {
 				std::io::Error::new(std::io::ErrorKind::TimedOut, "literal read timeout")

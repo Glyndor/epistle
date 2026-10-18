@@ -66,9 +66,14 @@ async fn discarded_literal_storage_stays_below_one_mib() {
 	let mut stream = std::io::Cursor::new(bytes);
 	let mut decoder = LineDecoder::new();
 	decoder.feed(b"xxx");
-	let drained = discard::literal(&mut stream, &mut decoder, size, Duration::from_secs(2))
-		.await
-		.expect("drain");
+	let drained = discard::literal(
+		&mut stream,
+		&mut decoder,
+		size,
+		Instant::now() + Duration::from_secs(2),
+	)
+	.await
+	.expect("drain");
 	assert!(
 		drained.peak_storage < 1024 * 1024,
 		"discarded ManageSieve bytes must retain less than 1 MiB, retained {} bytes",
