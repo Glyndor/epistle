@@ -234,7 +234,11 @@ impl Server {
 					// Sieve filter would not read: refused, so none can be
 					// hidden from the filters by padding.
 					if header_field_count(&message.data) > MAX_HEADER_FIELDS {
-						tracing::warn!("rejecting message: too many header fields");
+						self.metrics
+							.rejected(crate::metrics::RejectReason::HeaderFields);
+						if crate::util::warn_limited::allow("smtp-header-fields") {
+							tracing::warn!("rejecting message: too many header fields");
+						}
 						send(
 							&mut stream,
 							&Reply::single(554, "5.6.0 too many header fields in this message"),

@@ -926,7 +926,7 @@ cooldown_secs = 900
 The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
 are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
-`rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
+`rejected_header_fields`, `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
@@ -1728,12 +1728,17 @@ by the script:
   the headers called each name it lists (a longer value is cut), for at most
   16 names. Every name has its own quota, so a thousand `Received` headers or
   a huge `X-` header cannot hide the `From` or `Subject` listed with them.
-  Only the first 10 000 headers of a message are read at all. The server
-  refuses mail with more than 9 900 header fields at `DATA` (`554 5.6.0`), so
-  no sender can hide a `From` or a `Subject` behind padding; a message that
-  reaches a filter by another way and has more is cut, every test that looks
-  at headers (`exists` included) says so as a truncated inspection, and
-  `:count` counts the headers read, which is all of them below that.
+  Only the first 10 000 headers of a message are read at all. Mail with more than 9 900
+  header fields is refused before any filter reads it, whatever the way in: at
+  `DATA` and `BDAT` with `554 5.6.0` (counted in `rejected_header_fields`), on
+  `POST /api/v1/send` with `422 too_many_header_fields`, and on JMAP
+  `EmailSubmission/set` with `forbiddenToSend`; so no sender can hide a `From`
+  or a `Subject` behind padding. (A message stored by IMAP `APPEND` or JMAP
+  `Email/import` is not read by a filter until it is sent.) A header's value is
+  read with every run of white space, folding included, as one space, and its
+  first 64 KiB. If a message with more fields got to a filter anyway it would
+  be cut, every test that looks at headers (`exists` included) would say so as
+  a truncated inspection, and `:count` would count the headers read.
   Text a sender
   puts past a window is not seen by the test, so a rule that must catch
   something should not depend on where in a huge message it is. The run goes

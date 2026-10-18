@@ -415,6 +415,10 @@ mod jmap_tests_sieve_scope;
 mod jmap_tests_sieve_cost;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_padding.rs"]
+mod jmap_tests_sieve_padding;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 

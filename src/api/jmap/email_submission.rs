@@ -319,6 +319,10 @@ fn submit_email(
 					kind: "forbiddenToSend",
 					description: Some("message too large for the content scan".into()),
 				},
+				crate::smtp::sink::SinkError::TooManyHeaderFields => Refusal {
+					kind: "forbiddenToSend",
+					description: Some("message has too many header fields".into()),
+				},
 				crate::smtp::sink::SinkError::ScanUnavailable => Refusal {
 					kind: "serverFail",
 					description: Some("content scan unavailable, try again later".into()),

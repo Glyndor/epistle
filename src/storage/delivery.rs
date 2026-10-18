@@ -198,6 +198,7 @@ impl LocalDelivery {
 		message: &AcceptedMessage,
 		mailbox: Option<&str>,
 	) -> Result<Delivered, SinkError> {
+		io::refuse_padded_headers(&message.data)?;
 		if let Some(name) = mailbox
 			&& !io::is_safe_mailbox(name)
 		{

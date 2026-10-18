@@ -163,6 +163,16 @@ impl ApiError {
 		}
 	}
 
+	/// `422` for a message with more header fields than a filter reads:
+	/// sending it again unchanged is refused again, nothing was sent.
+	pub fn too_many_header_fields() -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "too_many_header_fields",
+			message: "The message has too many header fields and was not sent.".to_string(),
+		}
+	}
+
 	/// `422` for marketing mail without the one-click unsubscribe RFC 8058
 	/// requires: sending it again unchanged is refused again.
 	pub fn marketing_refused(message: &str) -> Self {

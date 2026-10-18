@@ -6,11 +6,13 @@ use super::tests_data_rate::{Client, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 
-async fn send(fields: usize) -> (Vec<String>, usize) {
+async fn send(fields: usize) -> (Vec<String>, usize, u64) {
 	let sink = Arc::new(MemorySink::new());
+	let metrics = Arc::new(crate::metrics::Metrics::new());
 	let server = Arc::new(
 		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
-			.with_directory(test_directory()),
+			.with_directory(test_directory())
+			.with_metrics(Arc::clone(&metrics)),
 	);
 	let mut client = Client::connect(&server);
 	let mut session = b"EHLO client.example.org\r\nMAIL FROM:<a@example.net>\r\n\
@@ -23,19 +25,24 @@ async fn send(fields: usize) -> (Vec<String>, usize) {
 	client.send(&session).await;
 	let output = client.finish().await;
 	let codes = reply_codes(&output).into_iter().map(String::from).collect();
-	(codes, sink.messages().len())
+	let counted = metrics.snapshot()["rejected_header_fields"];
+	(codes, sink.messages().len(), counted)
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_message_with_thousands_of_header_fields_is_refused_at_data() {
-	let (codes, delivered) = send(crate::smtp::trace::MAX_HEADER_FIELDS + 1).await;
+async fn a_message_one_field_over_the_limit_is_refused_at_data() {
+	// The fields sent plus the Subject the helper adds.
+	let (codes, delivered, counted) = send(crate::smtp::trace::MAX_HEADER_FIELDS).await;
 	assert!(codes.iter().any(|c| c == "554"), "{codes:?}");
 	assert_eq!(delivered, 0);
+	assert_eq!(counted, 1, "the refusal is counted");
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_message_at_the_header_field_limit_is_accepted() {
-	let (codes, delivered) = send(crate::smtp::trace::MAX_HEADER_FIELDS - 1).await;
+	// The fields sent plus the Subject the helper adds.
+	let (codes, delivered, counted) = send(crate::smtp::trace::MAX_HEADER_FIELDS - 1).await;
 	assert!(!codes.iter().any(|c| c == "554"), "{codes:?}");
 	assert_eq!(delivered, 1);
+	assert_eq!(counted, 0);
 }

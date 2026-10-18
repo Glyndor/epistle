@@ -212,6 +212,7 @@ pub async fn send(
 				SinkError::ScanTooLarge => ApiError::scan_too_large(),
 				SinkError::Unavailable(_) => ApiError::internal(),
 				SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
+				SinkError::TooManyHeaderFields => ApiError::too_many_header_fields(),
 			});
 		}
 	};
