@@ -110,3 +110,40 @@ fn an_address_add_accepts_once_normalized_reaches_the_prompt() {
 		"the account must be written"
 	);
 }
+
+/// The account name is a folder name and the address is RFC 5322: a dot is
+/// refused in the first and fine in the second, and `account add` never
+/// derives one from the other (that is `init`'s job).
+#[test]
+fn a_dotted_name_is_refused_before_the_password_is_read() {
+	let (dir, file) = fixture("");
+	let (code, read) = add_offering_a_password(
+		&load(file.path()),
+		"torre.control",
+		vec!["torre.control@example.org".to_string()],
+	);
+	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
+	assert!(!read, "a refused name must not ask for the password");
+	assert!(
+		!dir.path().join("accounts.toml").exists(),
+		"a refused name must not write accounts.toml"
+	);
+}
+
+#[test]
+fn a_dotted_address_is_kept_for_an_account_with_a_hyphenated_name() {
+	let (dir, file) = fixture("");
+	let (code, read) = add_offering_a_password(
+		&load(file.path()),
+		"torre-control",
+		vec!["Torre.Control@Example.ORG".to_string()],
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(read, "an acceptable name reaches the password prompt");
+	let written = std::fs::read_to_string(dir.path().join("accounts.toml")).expect("accounts.toml");
+	assert!(written.contains("name = \"torre-control\""), "{written}");
+	assert!(
+		written.contains("\"torre.control@example.org\""),
+		"{written}"
+	);
+}

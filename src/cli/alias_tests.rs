@@ -144,6 +144,33 @@ fn add_writes_a_new_alias_with_optional_fields() {
 	assert!(after.contains("hidden = false"));
 }
 
+/// An alias address is an address, not an account name: a dot in the local
+/// part is fine, and the alias is found in any case.
+#[test]
+fn add_accepts_a_dotted_alias_address() {
+	let (_dir, file) = fixture("");
+	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let args = AddArgs {
+		address: "Name.Surname@example.org".to_string(),
+		members: vec!["alice.jones@example.org".to_string()],
+		senders: Vec::new(),
+		list_id: None,
+		visible: false,
+	};
+	add_alias(&load(file.path()), &mut document, &args).expect("add must succeed");
+	commit_and_restart(
+		document,
+		&args.address,
+		"added",
+		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+	)
+	.expect("commit must succeed");
+	let config = load(file.path());
+	assert!(find_alias(&config, "name.surname@EXAMPLE.org").is_some());
+}
+
 #[test]
 fn add_refuses_a_duplicate_alias() {
 	let (_dir, file) =

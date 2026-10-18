@@ -86,3 +86,18 @@ async fn account_create_stores_and_lists_the_lowercase_form() {
 		serde_json::json!(["bob.smith@example.org"])
 	);
 }
+
+/// The account name is a folder name, the address is RFC 5322: the API
+/// refuses a dot in the first (naming it) and keeps it in the second.
+#[tokio::test]
+async fn account_create_refuses_a_dotted_name_and_accepts_a_dotted_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let (status, body) = create(&app, "torre.control", "torre.control@example.org").await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	let message = body["error"]["message"].as_str().unwrap_or_default();
+	assert!(message.contains("'.'"), "{body}");
+	let (status, body) = create(&app, "torre-control", "torre.control@example.org").await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["created"], "torre-control");
+}

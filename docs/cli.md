@@ -1201,6 +1201,25 @@ server within seconds, no restart. A static account (`[[accounts]]` in
 
 Addresses, domains and account names are stored in lowercase whatever you type: `account add Alice` creates `alice`, with a note on stderr to use the lowercase form from now on.
 
+### Account names and addresses are two rules
+
+An account name and a mail address are checked by different rules, and they stay different.
+
+- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule.rs`) serves every command and endpoint that creates an account.
+- **The address** follows RFC 5322 and 5321: a dot inside the local part is fine (`torre.control@example.org`), not at its start or end, not twice in a row. Stored in lowercase.
+
+Only `epistle init` turns one into the other: it derives the name from the address, with dots becoming hyphens (`torre.control@example.org` gives the account `torre-control` and keeps the address as typed). Nothing else derives a name. `account add torre.control --address torre.control@example.org` is refused, naming the `'.'`, before the password is asked; `account add torre-control --address torre.control@example.org` works and the account sends and receives as `torre.control@example.org`.
+
+| Where | Account name | Address, alias or member |
+|---|---|---|
+| `epistle init` | derived from the address (dots to hyphens); refused when the local part cannot give a name | as typed, lowercase, must be in a served domain |
+| `epistle account add N --address A` | `N` must obey the name rule, refused naming the character, nothing derived | any RFC 5322 address in a served domain, dots allowed |
+| `epistle account address add N A` | `N` must exist | same as above |
+| `epistle alias add`, `alias member\|sender add` | an alias has no name | any RFC 5322 address; the alias address must be in a served domain and unused |
+| `POST /api/v1/accounts` | `name` obeys the name rule, `400` naming the character | `addresses` as above, dots allowed |
+| SCIM `POST /scim/v2/Users` | `userName` obeys the name rule, `400` naming the character, never derived from `emails` | `emails` as above, dots allowed |
+| `[[accounts]]` in `mail.toml` | the loader refuses a name that breaks the rule | `addresses` as above |
+
 | Command | What it does |
 |---|---|
 | `epistle account list [--json]` | List every account, static and dynamic, with its addresses. |
