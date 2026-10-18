@@ -151,6 +151,7 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"clock_drift_exceeded",
 		"auth_login_succeeded",
 		"auth_login_failed",
+		"auth_hash_gate_rejected",
 		"send_limited_new_recipients",
 		"bayes_training_dropped",
 		"bayes_learning_unreadable",

@@ -6,6 +6,7 @@
 //! at QUIT — all injectable, so the protocol is fully unit-testable.
 
 use super::command::Command;
+use crate::smtp::directory::hash_gate::Verdict;
 
 /// Storage backing a POP3 session. Implementations talk to the real mailbox;
 /// tests supply an in-memory fake.
@@ -16,6 +17,17 @@ pub trait Backend {
 	/// handles `unknown` as "not banned"). The audit log and the per-IP
 	/// ban row are keyed on this address.
 	fn verify(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Option<String>;
+	/// Like [`Backend::verify`], but tells a refusal from a sign-in the server
+	/// had no room to check. A backend with no such limit keeps the default.
+	fn verify_checked(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Verdict {
+		match self.verify(user, pass, peer_ip) {
+			Some(account) => Verdict::Admitted {
+				account,
+				label: None,
+			},
+			None => Verdict::Refused,
+		}
+	}
 	/// The messages in the account's inbox at login: `(unique-id, bytes)`.
 	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
@@ -266,26 +278,34 @@ impl<B: Backend> Session<B> {
 			return Response::Continuation;
 		};
 		self.pending_plain = false;
-		let account = crate::smtp::auth::parse_plain(&initial)
-			.ok()
-			.and_then(|creds| {
-				self.backend
-					.verify(&creds.authcid, &creds.password, self.peer_ip)
-			});
-		match account {
-			Some(account) => self.complete_login(account),
-			None => Response::Err("authentication failed".to_string()),
-		}
+		let verdict = match crate::smtp::auth::parse_plain(&initial) {
+			Ok(creds) => self
+				.backend
+				.verify_checked(&creds.authcid, &creds.password, self.peer_ip),
+			Err(_) => Verdict::Refused,
+		};
+		self.finish_login(verdict)
 	}
 
 	/// Verify a USER/PASS login and, on success, open the mailbox.
 	fn login(&mut self, user: &str, pass: &str) -> Response {
-		match self.backend.verify(user, pass, self.peer_ip) {
-			Some(account) => self.complete_login(account),
-			None => {
+		let verdict = self.backend.verify_checked(user, pass, self.peer_ip);
+		self.finish_login(verdict)
+	}
+
+	/// End a login: open the mailbox, refuse with one message whatever was
+	/// wrong, or ask to try again when the server had no room to check.
+	fn finish_login(&mut self, verdict: Verdict) -> Response {
+		match verdict {
+			Verdict::Admitted { account, .. } => self.complete_login(account),
+			Verdict::Refused => {
 				// No oracle: same message whether user or pass was wrong.
 				self.user = None;
 				Response::Err("authentication failed".to_string())
+			}
+			Verdict::Busy => {
+				self.user = None;
+				Response::Err("[SYS/TEMP] try again later".to_string())
 			}
 		}
 	}

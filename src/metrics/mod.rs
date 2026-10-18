@@ -95,6 +95,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
+	("auth_hash_gate_rejected", "auth_hash_gate_rejected"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
 	("bayes_training_dropped", "bayes_training_dropped"),
 	("bayes_learning_unreadable", "bayes_learning_unreadable"),
@@ -162,6 +163,7 @@ pub struct Metrics {
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
+	auth_hash_gate_rejected: AtomicU64,
 	send_limited_new_recipients: AtomicU64,
 	bayes_training_dropped: AtomicU64,
 	bayes_learning_unreadable: AtomicU64,
@@ -303,6 +305,13 @@ impl Metrics {
 	/// bind failure.
 	pub fn auth_login_failed(&self) {
 		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a password sign-in turned away because the password-check gate
+	/// had no place and no room in line. No credential was tried, so it is
+	/// not an `auth_login_failed`.
+	pub fn auth_hash_gate_rejected(&self) {
+		self.auth_hash_gate_rejected.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a submission refused because the account would exceed the
@@ -488,6 +497,7 @@ impl Metrics {
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
+			"auth_hash_gate_rejected" => &self.auth_hash_gate_rejected,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
 			"bayes_training_dropped" => &self.bayes_training_dropped,
 			"bayes_learning_unreadable" => &self.bayes_learning_unreadable,

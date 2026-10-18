@@ -377,14 +377,16 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     number quoted in the guide changes and the description does not.
   * Security: signing in with a password (SMTP, IMAP, POP3, ManageSieve,
     WebDAV and the API) takes the same time and does the same work whatever
-    the login is. A right password, or a right
-    app password, for an account that may not sign in through that protocol
-    was refused sooner than a wrong one; it now costs the same. The password
-    checks also run a few at a time and off the threads
-    that serve the connections, so a burst of sign-in attempts no longer
-    holds up the other listeners or grows the memory with the number of
-    connections; an attempt that finds the line full is refused like a wrong
-    password and counts against nobody.
+    the login is. A right password, or a right app password, for an account
+    that may not sign in through that protocol was refused sooner than a
+    wrong one; it now costs the same. The password checks also run a few at a
+    time and off the threads that serve the connections, so a burst of
+    sign-in attempts no longer holds up the other listeners or grows the
+    memory with the number of connections. While the line of checks is full,
+    a sign-in is answered with the temporary failure of its protocol (IMAP
+    `NO [UNAVAILABLE]`, SMTP `454 4.7.0`, POP3 `-ERR [SYS/TEMP]`) and not as
+    a wrong password; it counts against nobody and shows in
+    `mail_auth_hash_gate_rejected_total`.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 

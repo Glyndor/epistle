@@ -4,6 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::smtp::directory::bans::BanOutcome;
+use crate::smtp::directory::hash_gate::Verdict;
 use crate::smtp::directory::{Proof, ScramPlan, ScramRefusal};
 use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
@@ -235,14 +236,14 @@ COMPRESS=DEFLATE",
 	/// AUTH=LOGIN: verify the password (plus any TOTP, or an app password whose
 	/// CIDR allowlist matches the peer IP) against the username.
 	fn login_pass(&mut self, tag: &str, user: &str, encoded: &str) -> Output {
-		let verified = decode(encoded).and_then(|pass| {
-			self.directory
-				.authenticate_with_ip(user, &pass, self.peer_ip, self.auth_protocol)
-		});
-		match verified {
-			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
-			None => self.auth_failure(tag),
-		}
+		let verdict = match decode(encoded) {
+			Some(pass) => {
+				self.directory
+					.authenticate_verdict(user, &pass, self.peer_ip, self.auth_protocol)
+			}
+			None => Verdict::Refused,
+		};
+		self.password_verdict(tag, verdict)
 	}
 
 	/// Feed one SASL continuation line.
@@ -316,19 +317,31 @@ COMPRESS=DEFLATE",
 		// is the listener kind this session serves (Imap or Imaps) so a
 		// per-account `allowed_protocols` that does not include it rejects
 		// exactly like an unknown login.
-		let verified = crate::smtp::auth::parse_plain(encoded)
-			.ok()
-			.and_then(|creds| {
-				self.directory.authenticate_with_ip(
-					&creds.authcid,
-					&creds.password,
-					self.peer_ip,
-					self.auth_protocol,
-				)
-			});
-		match verified {
-			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
-			None => self.auth_failure(tag),
+		let verdict = match crate::smtp::auth::parse_plain(encoded) {
+			Ok(creds) => self.directory.authenticate_verdict(
+				&creds.authcid,
+				&creds.password,
+				self.peer_ip,
+				self.auth_protocol,
+			),
+			Err(_) => Verdict::Refused,
+		};
+		self.password_verdict(tag, verdict)
+	}
+
+	/// End a password AUTHENTICATE: success, a refusal counted as a failed
+	/// attempt, or the temporary failure of a full password-check gate, which
+	/// is neither a wrong credential nor counted as one.
+	fn password_verdict(&mut self, tag: &str, verdict: Verdict) -> Output {
+		match verdict {
+			Verdict::Admitted { account, .. } => {
+				self.auth_success(tag, account, "AUTHENTICATE completed")
+			}
+			Verdict::Refused => self.auth_failure(tag),
+			Verdict::Busy => {
+				self.pending_auth = None;
+				Output::text(format!("{tag} NO [UNAVAILABLE] Try again later\r\n"))
+			}
 		}
 	}
 

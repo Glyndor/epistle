@@ -12,6 +12,7 @@ use crate::imap::mailbox::mailbox_dir;
 use crate::storage::MessageCrypto;
 
 use super::session::Backend;
+use crate::smtp::directory::hash_gate::Verdict;
 
 /// Backs a POP3 session with the live account directory and on-disk inbox.
 pub struct MailboxBackend {
@@ -49,6 +50,15 @@ impl Backend for MailboxBackend {
 		// and clears on success, so POP3 participates in the same audit and
 		// ban accounting as every other listener.
 		self.directory.current().authenticate_with_ip(
+			user,
+			pass,
+			peer_ip,
+			crate::config::Protocol::Pop3s,
+		)
+	}
+
+	fn verify_checked(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Verdict {
+		self.directory.current().authenticate_verdict(
 			user,
 			pass,
 			peer_ip,

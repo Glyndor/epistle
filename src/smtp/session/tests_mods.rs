@@ -36,6 +36,9 @@ mod tests_budget_leaks;
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
 #[cfg(test)]
+#[path = "../session_tests_gate_busy.rs"]
+mod tests_gate_busy;
+#[cfg(test)]
 #[path = "../session_tests_junk.rs"]
 mod tests_junk;
 #[cfg(test)]
