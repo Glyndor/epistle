@@ -226,3 +226,49 @@ async fn list_shows_active_manual_bans_and_skips_expired_ones() {
 	store.remove_ban(live).await.expect("cleanup");
 	store.remove_ban(dead).await.expect("cleanup");
 }
+
+#[tokio::test]
+async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let tag = uuid::Uuid::now_v7().simple().to_string();
+	let doomed = format!("gone-{}", &tag[..12]);
+	let kept = format!("kept-{}", &tag[..12]);
+	let doomed_pair = format!("pair:{doomed}|203.0.113.5");
+	let doomed_account = format!("account:{doomed}");
+	let kept_pair = format!("pair:{kept}|203.0.113.5");
+	let t = now();
+	for subject in [&doomed_pair, &doomed_account, &kept_pair] {
+		for _ in 0..5 {
+			store.record_failure(subject, "imaps", t).await;
+		}
+		assert!(store.is_banned(subject, t).await.is_some(), "{subject}");
+	}
+	store.remove_account(&doomed).await;
+	assert!(store.is_banned(&doomed_pair, t).await.is_none());
+	assert!(store.is_banned(&doomed_account, t).await.is_none());
+	assert!(
+		store.is_banned(&kept_pair, t).await.is_some(),
+		"another account's pair must stay"
+	);
+	store.clear_success(&kept_pair).await;
+}
+
+#[tokio::test]
+async fn unbanning_an_ipv6_address_lifts_the_slash_64_it_is_counted_under() {
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let block = fresh_block();
+	let address: std::net::IpAddr = format!("{block}::7").parse().expect("address");
+	let counted = epistle::antispam::bans::subject_client(address);
+	assert_eq!(counted, format!("ip:{block}::"), "the /64, not the host");
+	fail_times(&store, &counted, 5).await;
+	assert!(store.is_banned(&counted, now()).await.is_some());
+	store
+		.remove_ban(BanTarget::Ip(address))
+		.await
+		.expect("remove ban");
+	assert!(store.is_banned(&counted, now()).await.is_none());
+}

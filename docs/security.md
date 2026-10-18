@@ -227,13 +227,23 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   before doing any password hashing. The product context's defaults:
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
-  then an hour, ...), capped at 24 hours. A successful authentication
-  clears both the ban and the rolling failure history for the subject.
-  Bans are scoped to the peer IP (`ip:<addr>`) and the resolved account
-  name (`account:<login>`), so a brute-force attempt against one
-  account from a botnet still trips the IP half, and a credential
-  stuffing wave against one IP still trips the account half. The wire
-  response to a banned subject is identical to a wrong password (no
+  then an hour, ...), capped at 24 hours. Failures are counted on three
+  subjects. The client (`ip:<addr>`) is the peer address, or its /64 for
+  IPv6, because one host there owns a whole /64 and rotating inside it is
+  free. The pair (`pair:<login>|<client>`) is one account seen from one
+  client. The account (`account:<login>`) takes a strike only when a pair
+  reaches its ban, so a single client can ban itself but cannot lock an
+  account out for its owner: it takes five clients, each spending its own
+  five failures. A successful authentication clears the ban and the failure
+  history of the account and of that pair, and never of the client, so an
+  attacker with an account of its own cannot reset its count by logging in
+  between guesses at others. A shared address (a NAT, a proxy) therefore
+  accumulates the typos of everyone behind it: allow-list it
+  (`epistle ban allow add`, a /64 for IPv6) if that is a problem. The
+  allow list is matched against the /64, so allow an IPv6 client by its
+  /64. A brute-force attempt against one account from a botnet trips each
+  client's counters, and a credential stuffing wave from one client trips
+  its own. The wire response to a banned subject is identical to a wrong password (no
   oracle); the audit log records the rule that fired under the
   `auth.banned` event. The store is fail-open on database errors: a
   flapping pool returns `None` to the ban check and bumps the

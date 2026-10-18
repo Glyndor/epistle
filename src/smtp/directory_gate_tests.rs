@@ -78,7 +78,6 @@ fn the_protocol_allowlist_binds_every_proof() {
 fn the_password_path_refuses_the_same_accounts_on_every_protocol() {
 	let directory = gate_directory();
 	let off_address = format!("{OFF_DOMAIN_ACCOUNT}@{OFF_DOMAIN}");
-	let with_code = format!("{}{}", fixtures::password(), current_totp_code());
 	for protocol in every_protocol() {
 		for login in [DISABLED, TWO_FACTOR, off_address.as_str()] {
 			assert_eq!(
@@ -91,6 +90,8 @@ fn the_password_path_refuses_the_same_accounts_on_every_protocol() {
 			directory.authenticate(OPEN, fixtures::password(), protocol),
 			Some(OPEN.to_string())
 		);
+		// Hashing is slow in a debug build, so take the code when it is used.
+		let with_code = format!("{}{}", fixtures::password(), current_totp_code());
 		assert_eq!(
 			directory.authenticate(TWO_FACTOR, &with_code, protocol),
 			Some(TWO_FACTOR.to_string())

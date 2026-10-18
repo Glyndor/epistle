@@ -697,6 +697,10 @@ mod gate_tests;
 mod timing_tests;
 
 #[cfg(test)]
+#[path = "directory_ban_policy_tests.rs"]
+mod ban_policy_tests;
+
+#[cfg(test)]
 #[path = "directory_decoy_counters.rs"]
 pub(crate) mod decoy_counters;
 

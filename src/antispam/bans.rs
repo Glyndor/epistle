@@ -7,7 +7,18 @@
 //! drive the policy: 5 failed authentications in 15 minutes trigger a ban;
 //! the first ban lasts 15 minutes, the next on the same subject 30 minutes,
 //! then an hour, ... capped at 24 hours. A successful authentication
-//! clears both the ban and the failure history for the subject.
+//! clears the ban and the failure history of the account and of the
+//! (account, client) pair it came from, never of the client address: an
+//! attacker who owns one account must not be able to reset its own counter
+//! by logging in between guesses at others.
+//!
+//! Failures are counted on three subjects. The client (`ip:`) is the
+//! address, or the /64 for IPv6, since one host there controls a whole /64
+//! and rotating inside it costs nothing. The pair (`pair:`) is one account
+//! as seen from one client. The account (`account:`) takes a strike only
+//! when a pair reaches its ban, so one client alone cannot lock an account
+//! out for everyone: it takes several clients each exhausting their own
+//! budget.
 //!
 //! The store is **fail open on database errors**: a connection hiccup must
 //! never block mail, so every public method returns the safe answer (`None`
@@ -125,6 +136,31 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 /// Build the canonical `'ip:<addr>'` subject for `ip`.
 pub fn subject_ip(ip: IpAddr) -> String {
 	format!("ip:{ip}")
+}
+
+/// The part of a client address that identifies the client for counting: the
+/// address itself for IPv4, the /64 network for IPv6.
+fn client_key(ip: IpAddr) -> String {
+	match ip {
+		IpAddr::V4(v4) => v4.to_string(),
+		IpAddr::V6(v6) => {
+			let mut octets = v6.octets();
+			octets[8..].fill(0);
+			std::net::Ipv6Addr::from(octets).to_string()
+		}
+	}
+}
+
+/// The `ip:` subject failures from `ip` are counted on: the address for IPv4,
+/// the /64 for IPv6.
+pub fn subject_client(ip: IpAddr) -> String {
+	format!("ip:{}", client_key(ip))
+}
+
+/// The `pair:<login>|<client>` subject for one account seen from one client
+/// (see [`subject_client`] for what a client is).
+pub fn subject_pair(account: &str, ip: IpAddr) -> String {
+	format!("pair:{}|{}", account.to_ascii_lowercase(), client_key(ip))
 }
 
 /// Build the canonical `'account:<login>'` subject for `account`.

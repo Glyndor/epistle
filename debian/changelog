@@ -209,6 +209,18 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     the password check does the same hashing work in every case. A refused
     SCRAM attempt counts as a failed attempt when the exchange ends instead of
     at the first message.
+  * Security: the shared authentication ban counts failures harder to dodge.
+    A correct login used to clear the failure count of the client address, so
+    someone with an account of their own could log in between guesses at
+    others and never reach the ban; a success now clears only the account and
+    the account-from-this-client pair. An IPv6 client is counted as its /64
+    (rotating addresses inside it no longer resets the count; allow-list an
+    IPv6 client by its /64). And five failures from anywhere used to lock the
+    victim's account for its owner: failures are now counted per account and
+    client (`pair:` in `ban list`), and the account itself is locked only when
+    five different clients each use up their five failures. A NAT or proxy
+    address shares one count among everyone behind it; allow-list it if that
+    hurts.
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000
 
 epistle (0.12.1) unstable; urgency=medium

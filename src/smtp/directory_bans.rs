@@ -21,6 +21,7 @@
 //! `account:<login>`).
 
 use super::*;
+use crate::antispam::bans;
 
 /// The result of consulting the ban store before any credential work.
 /// A ban refusal is a distinct outcome from a credential failure and must
@@ -180,32 +181,45 @@ impl Directory {
 			};
 		};
 		let now_secs = unix_now_secs();
-		if let Some(ip) = ip
-			&& let Some(info) =
-				block_on_async(store.is_banned(&crate::antispam::bans::subject_ip(ip), now_secs))
-		{
-			self.log_banned(
-				"ip",
-				&ip.to_string(),
-				&info.reason,
-				info.until_secs,
-				protocol,
-			);
-			return BanOutcome::Banned;
+		if let Some(ip) = ip {
+			// The client as counted (the /64 for IPv6) and, for IPv6, the exact
+			// address too, which is where an operator's manual ban or allow
+			// entry for a single host lives.
+			let mut subjects = vec![bans::subject_client(ip)];
+			if ip.is_ipv6() {
+				subjects.push(bans::subject_ip(ip));
+			}
+			for subject in subjects {
+				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
+					self.log_banned(
+						"ip",
+						&ip.to_string(),
+						&info.reason,
+						info.until_secs,
+						protocol,
+					);
+					return BanOutcome::Banned;
+				}
+			}
 		}
-		// Resolve the account name before consulting its ban row so
+		// Resolve the account name before consulting its ban rows so
 		// unknown logins cannot probe bans on accounts they cannot
 		// authenticate as.
-		if let Some((account, _)) = self.credentials(login)
-			&& let Some(info) = block_on_async(
-				store.is_banned(&crate::antispam::bans::subject_account(&account), now_secs),
-			) {
-			self.log_banned("account", &account, &info.reason, info.until_secs, protocol);
-			return BanOutcome::Banned;
+		let account = self.credentials(login).map(|(account, _)| account);
+		if let Some(account) = &account {
+			let mut subjects = Vec::new();
+			if let Some(ip) = ip {
+				subjects.push(("pair", bans::subject_pair(account, ip)));
+			}
+			subjects.push(("account", bans::subject_account(account)));
+			for (kind, subject) in subjects {
+				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
+					self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
+					return BanOutcome::Banned;
+				}
+			}
 		}
-		BanOutcome::Clear {
-			account: self.credentials(login).map(|(account, _)| account),
-		}
+		BanOutcome::Clear { account }
 	}
 
 	/// Emit a structured audit event when a ban fires. Distinct from
@@ -257,26 +271,41 @@ impl Directory {
 		let now_secs = unix_now_secs();
 		let protocol_str = protocol.as_str();
 		if success {
-			if let Some(ip) = ip {
-				block_on_async(store.clear_success(&crate::antispam::bans::subject_ip(ip)));
-			}
+			// A success clears what the account and this account-from-this-
+			// client pair had accumulated. It never clears the client: a
+			// client that owns one account must not be able to reset its
+			// own count between guesses at others.
 			if let Some(account) = account {
-				block_on_async(
-					store.clear_success(&crate::antispam::bans::subject_account(account)),
-				);
+				if let Some(ip) = ip {
+					block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
+				}
+				block_on_async(store.clear_success(&bans::subject_account(account)));
 			}
 			return;
 		}
 		if let Some(ip) = ip {
+			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
+		}
+		let Some(account) = account else {
+			return;
+		};
+		let Some(ip) = ip else {
+			// No client address to tell clients apart: the account takes the
+			// strike itself.
 			block_on_async(store.record_failure(
-				&crate::antispam::bans::subject_ip(ip),
+				&bans::subject_account(account),
 				protocol_str,
 				now_secs,
 			));
-		}
-		if let Some(account) = account {
+			return;
+		};
+		// The account takes a strike only when this client has used up its own
+		// budget for it, so a single client cannot lock the account for everyone.
+		let pair = bans::subject_pair(account, ip);
+		block_on_async(store.record_failure(&pair, protocol_str, now_secs));
+		if block_on_async(store.is_banned(&pair, now_secs)).is_some() {
 			block_on_async(store.record_failure(
-				&crate::antispam::bans::subject_account(account),
+				&bans::subject_account(account),
 				protocol_str,
 				now_secs,
 			));

@@ -215,9 +215,17 @@ impl BanStore for FakeBanStore {
 		self.record_call("remove_account");
 		Box::pin(async move {
 			let subject = super::subject_account(&account);
-			self.failures.lock().expect("lock").remove(&subject);
-			self.bans.lock().expect("lock").remove(&subject);
-			self.strikes.lock().expect("lock").remove(&subject);
+			let pair_prefix = format!("pair:{}|", account.to_ascii_lowercase());
+			let ours = |key: &String| *key == subject || key.starts_with(&pair_prefix);
+			self.failures
+				.lock()
+				.expect("lock")
+				.retain(|key, _| !ours(key));
+			self.bans.lock().expect("lock").retain(|key, _| !ours(key));
+			self.strikes
+				.lock()
+				.expect("lock")
+				.retain(|key, _| !ours(key));
 		})
 	}
 }

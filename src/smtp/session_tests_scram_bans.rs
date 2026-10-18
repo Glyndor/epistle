@@ -403,8 +403,8 @@ async fn smtp_scram_failure_adds_one_strike() {
 		"ban store did not record a strike for ip:203.0.113.43"
 	);
 	assert!(
-		ban_store.failure_count("account:alice", 0) >= 1,
-		"ban store did not record a strike for account:alice"
+		ban_store.failure_count("pair:alice|203.0.113.43", 0) >= 1,
+		"ban store did not record a strike for the alice/203.0.113.43 pair"
 	);
 }
 
@@ -599,6 +599,13 @@ async fn smtp_scram_success_clears_ban_store() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
+	ban_store.arm_ban(
+		"pair:alice|203.0.113.51",
+		BanInfo {
+			until_secs: visible_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org")
@@ -620,7 +627,7 @@ async fn smtp_scram_success_clears_ban_store() {
 	assert_eq!(
 		ban_store.call_count("clear_success"),
 		2,
-		"a successful SCRAM exchange must clear both IP and account, got {} clear_success calls",
+		"a successful SCRAM exchange must clear the account and the pair, got {} clear_success calls",
 		ban_store.call_count("clear_success")
 	);
 	// The two ban rows are gone. Query at `visible_until - 1` so the
@@ -634,11 +641,19 @@ async fn smtp_scram_success_clears_ban_store() {
 		tokio::runtime::Handle::current().block_on(ban_store.is_banned("account:alice", probe))
 	});
 	assert!(
-		ip_info.is_none(),
-		"the IP ban row must be cleared after a successful SCRAM exchange"
+		ip_info.is_some(),
+		"a success must not clear the client: its own logins would reset its failure count"
 	);
 	assert!(
 		account_info.is_none(),
 		"the account ban row must be cleared after a successful SCRAM exchange"
+	);
+	let pair_info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current()
+			.block_on(ban_store.is_banned("pair:alice|203.0.113.51", probe))
+	});
+	assert!(
+		pair_info.is_none(),
+		"the pair ban row must be cleared after a successful SCRAM exchange"
 	);
 }

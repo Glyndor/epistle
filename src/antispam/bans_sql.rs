@@ -311,14 +311,19 @@ impl PgBanStore {
 
 	async fn remove_account_inner(&self, account: &str) {
 		let subject = subject_account(account);
+		// The pairs of this account go too. Account names are lowercase
+		// letters, digits and hyphens, so the prefix holds no LIKE wildcard.
+		let pairs = format!("pair:{}|%", account.to_ascii_lowercase());
 		let result = async {
 			let mut tx = self.pool.begin().await?;
-			sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_ban WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
-			sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_failure WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
 			tx.commit().await?;
