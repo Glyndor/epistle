@@ -399,3 +399,41 @@ async fn the_workers_give_the_share_back_when_a_job_is_done() {
 	}
 	assert!(served, "the workers never finished the jobs of the source");
 }
+
+/// A message that could not be read teaches nothing and costs its source
+/// nothing: no place in the queue, no share of the window, no job pending.
+#[tokio::test]
+async fn a_message_that_could_not_be_read_is_not_queued_or_charged() {
+	let (queue, mut receiver, budget) = SharedTraining::bounded(4);
+	let s = alone(5);
+	for _ in 0..(FINE_PER_WINDOW + 3) {
+		crate::antispam::scoring_text::fail_next_reduction();
+		assert_eq!(
+			queue.try_submit(Instant::now(), &s, "scope", b"text here", true),
+			Err(Refusal::Unread)
+		);
+	}
+	assert!(receiver.try_recv().is_err(), "an unread message was queued");
+	assert_eq!(budget.pending(&s, true), 0);
+	for _ in 0..FINE_PENDING {
+		assert_eq!(
+			queue.try_submit(Instant::now(), &s, "scope", b"text here", true),
+			Ok(()),
+			"the failures were charged to the source"
+		);
+		let _ = receiver.try_recv();
+		budget.release(&s, true);
+	}
+	// Nor is the whole server charged: many sources failing together would
+	// otherwise use up the global share of the window.
+	for n in 0..=255u8 {
+		for _ in 0..10 {
+			crate::antispam::scoring_text::fail_next_reduction();
+			let _ = queue.try_submit(Instant::now(), &alone(n), "scope", b"text", false);
+		}
+	}
+	assert_eq!(
+		queue.try_submit(Instant::now(), &alone(77), "scope", b"text here", false),
+		Ok(())
+	);
+}

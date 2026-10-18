@@ -292,6 +292,24 @@ impl BayesStore {
 		})
 	}
 
+	/// Train the `scope` corpus on the raw message `raw`, reduced first to what
+	/// is read of it (see [`super::scoring_text`]). A message that could not be
+	/// reduced has no words to count, and teaches nothing: `Ok(false)`.
+	pub async fn train_message(
+		&self,
+		scope: &str,
+		raw: &[u8],
+		spam: bool,
+	) -> Result<bool, sqlx::Error> {
+		let reduced = scoring_text(raw);
+		if reduced.unread {
+			tracing::warn!("a message that could not be read was not learned from");
+			return Ok(false);
+		}
+		self.train(scope, &reduced.text, spam).await?;
+		Ok(true)
+	}
+
 	/// Whether `scope` holds enough ham and spam to be scored on its own
 	/// (see [`super::trainer::is_trusted`]).
 	pub async fn is_trained(&self, scope: &str) -> Result<bool, sqlx::Error> {
@@ -367,8 +385,7 @@ impl BayesTrainer for BayesStore {
 			if account == SHARED {
 				return;
 			}
-			let reduced = scoring_text(&text);
-			if let Err(error) = BayesStore::train(self, account, &reduced.text, spam).await {
+			if let Err(error) = self.train_message(account, &text, spam).await {
 				tracing::warn!(
 					account = %crate::log_id::account(account),
 					%error,

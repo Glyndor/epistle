@@ -201,6 +201,8 @@ pub enum Refusal {
 	TooManyPending,
 	/// The queue is full.
 	QueueFull,
+	/// The message could not be read, so there is nothing to learn from.
+	Unread,
 }
 
 /// One kind (ham or spam) of one key.
@@ -317,6 +319,15 @@ impl Table {
 			count.pending = count.pending.saturating_sub(1);
 		}
 	}
+
+	/// Take back a job that was charged and never ran.
+	fn refund(&mut self, key: &str, kind: usize) {
+		self.release(key, kind);
+		if let Some(slot) = self.slots.get_mut(key) {
+			let count = &mut slot.counts[kind];
+			count.admitted = count.admitted.saturating_sub(1);
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -415,19 +426,40 @@ impl Budget {
 
 	/// A job of `source` has finished, or was never queued.
 	pub fn release(&self, source: &TrainSource, spam: bool) {
+		self.give_back(source, spam, false);
+	}
+
+	/// A job of `source` was admitted and will not run: it is not held against
+	/// any key, nor counted in their windows.
+	pub fn refund(&self, source: &TrainSource, spam: bool) {
+		self.give_back(source, spam, true);
+	}
+
+	fn give_back(&self, source: &TrainSource, spam: bool, refund: bool) {
 		let kind = kind(spam);
 		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let undo = |table: &mut Table, key: &str| {
+			if refund {
+				table.refund(key, kind);
+			} else {
+				table.release(key, kind);
+			}
+		};
 		if let Some((fine, coarse, _)) = &source.addresses {
-			inner.addresses.release(fine, kind);
-			inner.addresses.release(coarse, kind);
+			undo(&mut inner.addresses, fine);
+			undo(&mut inner.addresses, coarse);
 		}
 		let network_key = match &source.addresses {
 			Some((_, _, network)) => network.as_str(),
 			None => UNATTRIBUTED_KEY,
 		};
-		inner.networks.release(network_key, kind);
+		undo(&mut inner.networks, network_key);
 		if let Some(domain) = &source.domain {
-			inner.domains.release(domain, kind);
+			undo(&mut inner.domains, domain);
+		}
+		if refund {
+			let global = &mut inner.global[kind];
+			global.admitted = global.admitted.saturating_sub(1);
 		}
 	}
 
@@ -525,10 +557,16 @@ impl SharedTraining {
 		// for it has spent nothing.
 		let permit = self.sender.try_reserve().map_err(|_| Refusal::QueueFull)?;
 		self.budget.admit(now, source, spam)?;
+		let reduced = scoring_text(data);
+		if reduced.unread {
+			// Nothing to learn: the place and the share are given back.
+			self.budget.refund(source, spam);
+			return Err(Refusal::Unread);
+		}
 		permit.send(Job {
 			source: source.clone(),
 			scope: scope.to_string(),
-			text: scoring_text(data).text.into_bytes(),
+			text: reduced.text.into_bytes(),
 			spam,
 		});
 		Ok(())

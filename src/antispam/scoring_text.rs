@@ -59,6 +59,22 @@ pub struct ScoringText {
 	/// The message had more text than fits in the window, and the middle was
 	/// left out.
 	pub clipped: bool,
+	/// The reduction failed, so nothing of the message was read. Nothing is
+	/// learned from such a message: it has no words to count.
+	pub unread: bool,
+}
+
+// Test-only: the next reduction on this thread panics, to prove what the
+// callers do with a message that could not be read.
+#[cfg(test)]
+thread_local! {
+	static FAIL_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Make the next [`scoring_text`] on this thread fail.
+#[cfg(test)]
+pub(crate) fn fail_next_reduction() {
+	FAIL_NEXT.with(|fail| fail.set(true));
 }
 
 /// Reduce the raw message `raw` to the text it is scored and trained on.
@@ -71,11 +87,16 @@ pub fn scoring_text(raw: &[u8]) -> ScoringText {
 		ScoringText {
 			text: String::new(),
 			clipped: true,
+			unread: true,
 		}
 	})
 }
 
 fn reduce(raw: &[u8]) -> ScoringText {
+	#[cfg(test)]
+	if FAIL_NEXT.with(|fail| fail.replace(false)) {
+		panic!("injected failure of the reduction");
+	}
 	let mut window = Window::default();
 	match extract(raw, &mut window) {
 		Some(()) => window.finish(),
@@ -249,6 +270,7 @@ impl Window {
 			return ScoringText {
 				text: self.head,
 				clipped: false,
+				unread: false,
 			};
 		}
 		self.drop_front();
@@ -257,6 +279,7 @@ impl Window {
 		ScoringText {
 			text: self.head,
 			clipped: true,
+			unread: false,
 		}
 	}
 }

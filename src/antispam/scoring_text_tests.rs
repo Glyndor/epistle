@@ -206,3 +206,13 @@ fn an_ambiguous_message_is_read_as_bytes_too() {
 	let tokens = tokens_of(&scoring_text(raw).text);
 	assert!(tokens.iter().any(|t| t == "hiddenword"), "{tokens:?}");
 }
+
+/// A reduction that fails is a message that was not read at all.
+#[test]
+fn a_failed_reduction_is_unread_and_never_clean() {
+	fail_next_reduction();
+	let reduced = scoring_text(b"Subject: x\r\n\r\nhello\r\n");
+	assert!(reduced.unread && reduced.clipped && reduced.text.is_empty());
+	let next = scoring_text(b"Subject: x\r\n\r\nhello\r\n");
+	assert!(!next.unread && !next.clipped);
+}
