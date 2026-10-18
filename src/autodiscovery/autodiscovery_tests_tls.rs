@@ -16,13 +16,23 @@ const AUTOCONFIG: &str = "GET /mail/config-v1.1.xml?emailaddress=alice@example.o
 Host: autoconfig.example.org\r\nConnection: close\r\n\r\n";
 
 async fn start(tls: Option<TlsAcceptor>) -> SocketAddr {
+	start_capped(tls, 8).await
+}
+
+async fn start_capped(tls: Option<TlsAcceptor>, max_connections: usize) -> SocketAddr {
 	let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let addr = listener.local_addr().expect("local addr");
 	let router = super::router(
 		"mail.example.org".to_string(),
 		vec!["example.org".to_string()],
 	);
-	tokio::spawn(super::serve(listener, router, tls, 8));
+	tokio::spawn(super::serve(
+		listener,
+		router,
+		tls,
+		max_connections,
+		Default::default(),
+	));
 	addr
 }
 
@@ -70,6 +80,21 @@ async fn tls_listener_serves_autoconfig_after_handshake() {
 		response.contains("<emailProvider id=\"example.org\">"),
 		"{response}"
 	);
+}
+
+#[tokio::test]
+async fn an_unset_connection_cap_serves_instead_of_refusing_everyone() {
+	// `max_connections_per_listener` absent reaches the listener as 0.
+	let (acceptor, cert) = acceptor_and_cert();
+	let reloadable = ReloadableAcceptor::new(acceptor);
+	let addr = start_capped(Some(reloadable.https()), 0).await;
+	let tcp = TcpStream::connect(addr).await.expect("connect");
+	let tls = connector(cert)
+		.connect(server_name(), tcp)
+		.await
+		.expect("a cap of 0 means the default, not a closed door");
+	let response = exchange(tls).await;
+	assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
 }
 
 #[tokio::test]

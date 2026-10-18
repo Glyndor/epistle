@@ -74,3 +74,42 @@ fn an_unsound_preauth_deadline_is_refused_and_not_saved() {
 		assert_eq!(before, after, "a refused value is not saved");
 	}
 }
+
+#[test]
+fn the_connection_caps_are_shown_set_and_unset() {
+	let (_dir, file) = super::tests_config::config_file();
+	for line in [
+		"max-mailbox-connections-per-ip\t200\tdefault",
+		"max-http-connections\t1024\tdefault",
+		"max-http-connections-per-ip\t256\tdefault",
+	] {
+		assert!(shown(file.path()).lines().any(|l| l == line), "{line}");
+	}
+	for (key, value, field) in [
+		(
+			"max-mailbox-connections-per-ip",
+			"500",
+			"max_mailbox_connections_per_ip = 500",
+		),
+		("max-http-connections", "64", "max_http_connections = 64"),
+		(
+			"max-http-connections-per-ip",
+			"8",
+			"max_http_connections_per_ip = 8",
+		),
+	] {
+		let (code, printed) = limits(file.path(), &["set", key, value]);
+		assert_eq!(code, ExitCode::SUCCESS, "{key}: {printed}");
+		let text = std::fs::read_to_string(file.path()).expect("config");
+		assert!(text.contains(field), "{field} missing from {text}");
+		let line = format!("{key}\t{value}\tconfigured");
+		assert!(shown(file.path()).lines().any(|l| l == line), "{line}");
+		let (code, _) = limits(file.path(), &["unset", key]);
+		assert_eq!(code, ExitCode::SUCCESS);
+		let text = std::fs::read_to_string(file.path()).expect("config");
+		assert!(
+			!text.contains(&field[..field.find(' ').expect("key")]),
+			"{text}"
+		);
+	}
+}

@@ -9,7 +9,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
 
-use super::serve_mailbox_limits::MailboxLimits;
+use super::serve_connection_limits::MailboxLimits;
 
 type Task = tokio::task::JoinHandle<std::io::Result<()>>;
 
@@ -33,6 +33,7 @@ pub(super) fn pop3s(
 		crate::pop3::server::Server::new(data_dir, directory, require(acceptor, "POP3S")?)
 			.with_crypto(crypto)
 			.with_max_connections(max_conn)
+			.with_max_connections_per_ip(limits.per_ip)
 			.with_preauth_timeout(limits.preauth_timeout),
 	);
 	Ok(tokio::spawn(server.serve(listener)))
@@ -54,6 +55,7 @@ pub(super) fn managesieve(
 			require(acceptor, "ManageSieve")?,
 		)
 		.with_max_connections(max_conn)
+		.with_max_connections_per_ip(limits.per_ip)
 		.with_preauth_timeout(limits.preauth_timeout),
 	);
 	Ok(tokio::spawn(server.serve(listener)))

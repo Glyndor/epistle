@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
@@ -14,6 +13,7 @@ use crate::directory_store::DirectoryHandle;
 use crate::smtp::line::{LineDecoder, LineError};
 
 use super::session::Session;
+use crate::net::conn_limit::{Admission, Refusal, refuse};
 use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
 use server_literal::{Taken, take_exact};
 
@@ -42,6 +42,14 @@ const IDLE_POLL: Duration = Duration::from_secs(30);
 /// Consecutive `BAD` responses before the connection is dropped (abuse guard).
 const MAX_ERROR_STREAK: u32 = 20;
 
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"* BYE too many connections, try again later\r\n",
+		Refusal::ClientFull => b"* BYE too many connections from your address\r\n",
+	}
+}
+
 /// Whether a server response is a `BAD` protocol error (abuse signal).
 fn is_bad_response(bytes: &[u8]) -> bool {
 	bytes.windows(5).any(|window| window == b" BAD ")
@@ -69,6 +77,8 @@ pub struct Server {
 	scram_enabled: bool,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// Max concurrent connections one client may hold on this listener.
+	max_per_ip: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
 	crypto: crate::storage::MessageCrypto,
 	/// Idle / command read timeout: how long a single read (including the
@@ -116,6 +126,7 @@ impl Server {
 			cbind_data: None,
 			scram_enabled: true,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			read_timeout: DEFAULT_READ_TIMEOUT,
 			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
@@ -143,6 +154,15 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Cap the connections one client may hold on this listener (0 keeps the
+	/// default). An IPv6 client is counted by its /64.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_per_ip = max;
 		}
 		self
 	}
@@ -247,7 +267,7 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let admission = Admission::new(self.max_connections, self.max_per_ip);
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = match &self.drain {
@@ -261,14 +281,18 @@ impl Server {
 			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
 			// session consults at authentication sees a plain `IpAddr::V4`.
 			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "IMAP connection limit reached, dropping");
-				continue;
+			let admitted = match admission.admit(peer.ip()) {
+				Ok(admitted) => admitted,
+				Err(why) => {
+					tracing::warn!(%peer, ?why, "IMAP connection limit reached, refusing");
+					refuse(stream, refusal(why));
+					continue;
+				}
 			};
 			let server = Arc::clone(&self);
 			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
 			tokio::spawn(async move {
-				let _permit = permit;
+				let _admitted = admitted;
 				let _tracked = tracked;
 				tracing::debug!(%peer, "imap connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
@@ -630,6 +654,10 @@ mod discard;
 
 #[path = "server_literal.rs"]
 mod server_literal;
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod tests_conn_limit;
 
 #[cfg(test)]
 #[path = "server_tests_deadline.rs"]

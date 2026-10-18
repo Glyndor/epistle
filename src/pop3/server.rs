@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
+use crate::net::conn_limit::{Admission, Refusal, refuse};
 use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
 use crate::smtp::line::LineDecoder;
 
@@ -29,12 +29,21 @@ const MAX_ERROR_STREAK: u32 = 20;
 /// Default max concurrent connections for a POP3 listener.
 const MAX_CONNECTIONS: usize = 500;
 
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"-ERR too many connections, try again later\r\n",
+		Refusal::ClientFull => b"-ERR too many connections from your address\r\n",
+	}
+}
+
 /// A TLS-only POP3 server bound to one listener.
 pub struct Server {
 	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_per_ip: usize,
 	crypto: crate::storage::MessageCrypto,
 	preauth_timeout: Duration,
 }
@@ -48,6 +57,7 @@ impl Server {
 			directory,
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 		}
@@ -63,6 +73,15 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Cap the connections one client may hold on this listener (0 keeps the
+	/// default). An IPv6 client is counted by its /64.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_per_ip = max;
 		}
 		self
 	}
@@ -84,7 +103,7 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let admission = Admission::new(self.max_connections, self.max_per_ip);
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = accepting.next().await;
@@ -92,14 +111,18 @@ impl Server {
 			// `::ffff:a.b.c.d`; canonicalize so the IP survives every
 			// downstream consumer (auth, audit) as a plain `IpAddr::V4`.
 			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "POP3 connection limit reached, dropping");
-				continue;
+			let admitted = match admission.admit(peer.ip()) {
+				Ok(admitted) => admitted,
+				Err(why) => {
+					tracing::warn!(%peer, ?why, "POP3 connection limit reached, refusing");
+					refuse(stream, refusal(why));
+					continue;
+				}
 			};
 			let server = Arc::clone(&self);
 			let peer_ip = peer.ip();
 			tokio::spawn(async move {
-				let _permit = permit;
+				let _admitted = admitted;
 				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "POP3 connection closed");
 				}
@@ -302,6 +325,10 @@ mod tests {
 		assert!(task.await.expect("join").is_ok());
 	}
 }
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod conn_limit_tests;
 
 #[cfg(test)]
 #[path = "server_tests_deadline.rs"]

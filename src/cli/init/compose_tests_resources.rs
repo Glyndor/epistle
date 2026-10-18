@@ -43,3 +43,20 @@ fn an_answer_overrides_one_value_of_one_service() {
 		"stack update reads the override back from here; init does not keep its answers"
 	);
 }
+
+#[test]
+fn the_mail_service_raises_its_open_file_limit() {
+	let value = render(&stack_answers(), true);
+	assert_eq!(
+		value["services"]["mail"]["ulimits"],
+		json!({"nofile": 65536}),
+		"a rootless container starts with the invoking user's soft limit, often 1024, \
+		 and every connection is a descriptor"
+	);
+	for name in ["db", "clamav", "freshclam"] {
+		assert!(
+			value["services"][name].get("ulimits").is_none(),
+			"{name} opens few files and keeps the default"
+		);
+	}
+}

@@ -296,6 +296,28 @@ sudo systemctl restart systemd-timesyncd
 Or install `chrony`. Use the servers of one provider only: Google smears leap
 seconds and Cloudflare steps them, so a client given both sees them disagree.
 
+### Open files and connection caps
+
+Every connection is a file descriptor. A rootless container starts with the
+soft limit of the user that runs Podman, often 1024, and around a thousand idle
+connections the SMTP and submission listeners stopped greeting. The generated
+`mail` service therefore sets `ulimits: {nofile: 65536}`; the other services
+keep the default. The listener caps together (SMTP 1000, IMAP and POP3 500,
+ManageSieve 100, plain HTTP 1024 each) plus the spool, the database socket and
+the logs fit well under it. A stack generated before this was added gets the
+limit on the next `epistle init` that regenerates the compose file. The sample
+unit in `docs/epistle.service` sets `LimitNOFILE=65536` for the same reason.
+
+Each listener also caps what one client can hold of it: `max_connections_per_ip`
+for SMTP (20), `max_mailbox_connections_per_ip` for IMAP, POP3 and ManageSieve
+(200) and `max_http_connections_per_ip` for plain HTTP (256), all adjustable
+with `epistle limits set`. The count is per client address, so it only means
+something when the listener sees the real one. The `mail` service uses `pasta`
+for that; a bridge network or a proxy in front shows every client as one
+address, and then that address holds the whole listener's share: raise the
+caps, or set them next to the listener caps, instead of letting one gateway
+address be refused for everyone behind it.
+
 ### Keys outside data_dir
 
 `mail` mounts data_dir read-write, and `epistle backup` archives it. The at-rest

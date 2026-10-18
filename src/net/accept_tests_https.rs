@@ -94,6 +94,7 @@ async fn autoconfig_over_tls_keeps_accepting() {
 		router,
 		Some(acceptor),
 		8,
+		crate::net::http_serve::Limits::default(),
 	));
 	let status = get(client, cert, "mail.example.org", "/").await;
 	assert_eq!(

@@ -142,3 +142,63 @@ async fn a_websocket_upgrade_reaches_the_handler() {
 		"the upgraded socket never carried the handler's frame"
 	);
 }
+
+async fn listening_with(limits: Limits) -> SocketAddr {
+	let router = Router::new().route("/", axum::routing::get(|| async { "up" }));
+	let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(serve_with(listener, router, limits));
+	addr
+}
+
+#[tokio::test]
+async fn a_client_over_its_cap_gets_a_503_and_a_close() {
+	use crate::net::conn_limit::test_support::connect;
+	let addr = listening_with(Limits {
+		connections: 100,
+		per_ip: 2,
+	})
+	.await;
+	let first = connect(addr).await;
+	let second = connect(addr).await;
+	assert!(first.refusal().is_none() && second.refusal().is_none());
+	let refused = connect(addr).await;
+	let text = refused.refusal().expect("refused");
+	assert!(
+		text.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+		"{text}"
+	);
+	assert!(text.contains("Connection: close\r\n"), "{text}");
+}
+
+#[tokio::test]
+async fn the_listener_cap_holds_and_a_place_is_given_back() {
+	use crate::net::conn_limit::test_support::{connect, connect_when_a_place_frees};
+	let addr = listening_with(Limits {
+		connections: 1,
+		per_ip: 10,
+	})
+	.await;
+	let held = connect(addr).await;
+	assert!(held.refusal().is_none());
+	assert!(connect(addr).await.refusal().is_some());
+	drop(held);
+	assert!(connect_when_a_place_frees(addr).await.refusal().is_none());
+}
+
+#[tokio::test]
+async fn a_served_request_still_works_under_the_limits() {
+	let addr = listening_with(Limits {
+		connections: 4,
+		per_ip: 2,
+	})
+	.await;
+	let mut stream = TcpStream::connect(addr).await.expect("connect");
+	stream
+		.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+		.await
+		.expect("request");
+	let mut reply = String::new();
+	stream.read_to_string(&mut reply).await.expect("reply");
+	assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+}

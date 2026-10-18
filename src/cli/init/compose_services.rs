@@ -9,6 +9,14 @@ use std::path::Path;
 /// waits after SIGTERM before SIGKILL. `serve` drains for 5 s less.
 pub(crate) const MAIL_STOP_GRACE_SECS: u64 = 30;
 
+/// The open-file limit of the `mail` service. Podman starts a rootless
+/// container with the invoking user's soft limit, often 1024, and every
+/// connection is a descriptor: around a thousand idle connections the
+/// listeners stopped greeting. Every listener cap together (SMTP 1000, IMAP
+/// and POP3 500, ManageSieve 100, HTTP 1024) plus the spool, the database
+/// socket and the logs stay well under this.
+pub(crate) const MAIL_NOFILE: u64 = 65_536;
+
 // ---- internal JSON shape -----------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -45,6 +53,8 @@ pub(super) struct ComposeService {
 	mem_limit: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pids_limit: Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	ulimits: Option<BTreeMap<String, u64>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	secrets: Option<Vec<SecretMount>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -169,6 +179,7 @@ impl ComposeService {
 			// not touch the host.
 			mem_limit: None,
 			pids_limit: None,
+			ulimits: Some(BTreeMap::from([("nofile".to_string(), MAIL_NOFILE)])),
 			sysctls: Some({
 				let mut map = BTreeMap::new();
 				map.insert(
@@ -308,6 +319,7 @@ impl ComposeService {
 			tmpfs: Some(vec!["/tmp".to_string()]),
 			mem_limit: None,
 			pids_limit: None,
+			ulimits: None,
 			sysctls: None,
 			// epistle's password for the healthcheck, the dumps and the role
 			// script; the admin password only here, never in mail.
@@ -407,6 +419,7 @@ impl ComposeService {
 			tmpfs: None,
 			mem_limit: None,
 			pids_limit: None,
+			ulimits: None,
 			sysctls: None,
 			secrets: None,
 			configs: None,

@@ -368,6 +368,22 @@ pub struct Config {
 	/// Absent uses 60; from 5 to 3600.
 	#[serde(default)]
 	pub preauth_timeout: Option<u64>,
+	/// Max concurrent connections one client may hold on each IMAP, POP3 and
+	/// ManageSieve listener; a client over the cap gets the protocol's
+	/// `BYE` or `-ERR` and is closed. Absent (or `0`) uses 200. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_mailbox_connections_per_ip: Option<usize>,
+	/// Max concurrent connections each plain-HTTP listener (API and JMAP,
+	/// WebDAV, autoconfig without TLS, ACME, metrics) serves; a connection
+	/// over the cap gets `503` and is closed. Absent (or `0`) uses 1024.
+	#[serde(default)]
+	pub max_http_connections: Option<usize>,
+	/// Max concurrent connections one client may hold on each plain-HTTP
+	/// listener, over the same `503`. Absent (or `0`) uses 256. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_http_connections_per_ip: Option<usize>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -518,6 +534,15 @@ impl std::fmt::Debug for Config {
 			.field("junk_command_limit", &self.junk_command_limit)
 			.field("max_session_time", &self.max_session_time)
 			.field("preauth_timeout", &self.preauth_timeout)
+			.field(
+				"max_mailbox_connections_per_ip",
+				&self.max_mailbox_connections_per_ip,
+			)
+			.field("max_http_connections", &self.max_http_connections)
+			.field(
+				"max_http_connections_per_ip",
+				&self.max_http_connections_per_ip,
+			)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)

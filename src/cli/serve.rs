@@ -174,7 +174,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		llm_hook,
 		attachment_policy,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
-	let mailbox_limits = super::serve_mailbox_limits::MailboxLimits::from_config(&config);
+	let mailbox_limits = super::serve_connection_limits::MailboxLimits::from_config(&config);
+	let http_limits = super::serve_connection_limits::http_limits(&config);
 	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
 	// sink through `submit`; the antivirus scan wraps it there.
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
@@ -352,40 +353,31 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::api::router(state);
-				tasks.push(tokio::spawn(async move {
-					// Serve with the peer address attached so API-key CIDR
-					// allowlists can be enforced from `ConnectInfo`.
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				// Serve with the peer address attached so API-key CIDR
+				// allowlists can be enforced from `ConnectInfo`.
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Acme => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
-				tasks.push(tokio::spawn(async move {
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Metrics => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let metrics = Arc::clone(&metrics);
-				let router = axum::Router::new().route(
-					"/metrics",
-					axum::routing::get(move || {
-						let metrics = Arc::clone(&metrics);
-						async move {
-							(
-								[(
-									axum::http::header::CONTENT_TYPE,
-									"text/plain; version=0.0.4",
-								)],
-								metrics.render(),
-							)
-						}
-					}),
-				);
-				tasks.push(tokio::spawn(async move {
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				let router = super::serve_metrics::router(Arc::clone(&metrics));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Imaps | ListenerKind::Imap => {
 				let Some(acceptor) = &tls_acceptor else {
@@ -422,6 +414,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				imap_server = imap_server.with_scram_enabled(config.auth.scram);
 				imap_server = imap_server
 					.with_max_connections(max_conn)
+					.with_max_connections_per_ip(mailbox_limits.per_ip)
 					.with_preauth_timeout(mailbox_limits.preauth_timeout);
 				imap_server = imap_server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
@@ -453,13 +446,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::autodiscovery::router_for(&config);
-				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
+				let serve =
+					crate::autodiscovery::serve(listener, router, tls, max_conn, http_limits);
 				tasks.push(tokio::spawn(serve));
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
-				tasks.push(super::serve_tasks::serve_http(listener, router));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::ManageSieve => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
