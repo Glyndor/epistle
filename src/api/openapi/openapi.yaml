@@ -11,6 +11,9 @@ openapi: "3.1.0"
 info:
   title: Epistle HTTP API
   version: "1"
+  license:
+    name: MIT
+    identifier: MIT
   summary: Management, send, JMAP, SCIM and OAuth routes of one epistle server.
   description: |-
     Everything under `/api/v1` is the versioned management API. `/jmap/*`,
