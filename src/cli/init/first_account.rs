@@ -135,8 +135,15 @@ impl FirstAccount {
 				domains.join(", ")
 			));
 		}
-		account_rule::derive(local)
-			.map_err(|fault| format!("{local:?} cannot give an account name: {fault}"))?;
+		account_rule::derive(local).map_err(|fault| {
+			let converted = match fault {
+				account_rule::Fault::BadChar(_) => {
+					" (ASCII capital letters are converted on their own)"
+				}
+				_ => "",
+			};
+			format!("{local:?} cannot give an account name: {fault}{converted}")
+		})?;
 		if let Some(raw) = &self.display_name {
 			crate::directory_store::display_name::validate(raw)
 				.map_err(|why| format!("display_name: {why}"))?;
@@ -208,7 +215,8 @@ pub(super) fn create(
 	.map_err(|error| fail(format!("opening the account store: {error}")))?;
 	let name = first.name();
 	let address = first.stored_address();
-	let exists = name_is_free_or_ours(&name, &address, &store, &config.accounts).map_err(fail)?;
+	let exists = name_is_free_or_ours(&name, &address, &store, &static_accounts_of(config_path))
+		.map_err(fail)?;
 	if exists {
 		report.steps.push(ReportStep::Skipped {
 			name: format!("account {name}"),
@@ -251,7 +259,7 @@ fn name_is_free_or_ours(
 	name: &str,
 	address: &str,
 	store: &AccountStore,
-	static_accounts: &[crate::config::Account],
+	static_accounts: &[(String, Vec<String>)],
 ) -> Result<bool, String> {
 	let holder: Option<Vec<String>> = store
 		.dynamic(name)
@@ -259,13 +267,43 @@ fn name_is_free_or_ours(
 		.or_else(|| {
 			static_accounts
 				.iter()
-				.find(|a| a.name == name)
-				.map(|a| a.addresses.clone())
+				.find(|(static_name, _)| static_name == name)
+				.map(|(_, addresses)| addresses.clone())
 		});
 	match holder {
 		Some(holder) => name_holder(name, address, &holder),
 		None => Ok(false),
 	}
+}
+
+/// The `[[accounts]]` of a configuration file as name and addresses, read
+/// from the raw TOML so a file the full loader refuses still counts.
+fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
+	let Ok(text) = std::fs::read_to_string(config_path) else {
+		return Vec::new();
+	};
+	let Ok(table) = text.parse::<toml::Table>() else {
+		return Vec::new();
+	};
+	let Some(accounts) = table.get("accounts").and_then(|v| v.as_array()) else {
+		return Vec::new();
+	};
+	accounts
+		.iter()
+		.filter_map(|entry| {
+			let name = entry.get("name")?.as_str()?.to_string();
+			let addresses = entry
+				.get("addresses")
+				.and_then(|v| v.as_array())
+				.map(|list| {
+					list.iter()
+						.filter_map(|a| a.as_str().map(str::to_string))
+						.collect()
+				})
+				.unwrap_or_default();
+			Some((name, addresses))
+		})
+		.collect()
 }
 
 /// The collision check that needs no write: with a configuration already on
@@ -274,24 +312,24 @@ fn name_is_free_or_ours(
 /// `--dry-run`) with nothing written, and the assistant can ask again.
 pub(super) fn precheck(
 	first: &FirstAccount,
+	domains: &[String],
 	data_dir: &Path,
 	config_path: &Path,
 ) -> Result<(), String> {
-	let Ok(config) = Config::load(config_path) else {
-		return Ok(());
+	// The store is opened from `data_dir` whether or not the configuration
+	// exists or loads: a lost or unreadable config must not hide the
+	// accounts already on disk, and `[[accounts]]` come from the raw file.
+	let (domains, aliases) = match Config::load(config_path) {
+		Ok(config) => (config.domains, config.domain_aliases),
+		Err(_) => (domains.to_vec(), Default::default()),
 	};
-	let store = AccountStore::open(
-		data_dir,
-		config.domains.clone(),
-		config.domain_aliases.clone(),
-		config.accounts.clone(),
-	)
-	.map_err(|error| format!("opening the account store: {error}"))?;
+	let store = AccountStore::open(data_dir, domains, aliases, Vec::new())
+		.map_err(|error| format!("opening the account store: {error}"))?;
 	name_is_free_or_ours(
 		&first.name(),
 		&first.stored_address(),
 		&store,
-		&config.accounts,
+		&static_accounts_of(config_path),
 	)
 	.map(|_| ())
 }

@@ -317,7 +317,7 @@ domains = ["example.org", "second.example"]
 #[test]
 fn rejects_account_with_unsafe_name() {
 	for (name, expected) in [
-		("", "empty"),
+		("", "must not be empty"),
 		("Alice", "'A'"),
 		("a/b", "'/'"),
 		("-x", "hyphen"),

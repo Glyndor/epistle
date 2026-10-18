@@ -45,18 +45,18 @@ impl fmt::Display for Fault {
 			Fault::LeadingHyphen => f.write_str("it must not start with a hyphen"),
 			Fault::BadChar(c) if c.is_ascii_uppercase() => write!(
 				f,
-				"{c:?} is a capital letter; names are lowercase (init and account add convert ASCII capital letters on their own)"
+				"{c:?} is a capital letter; names are lowercase"
 			),
 			Fault::BadChar(c) if c.is_uppercase() => write!(
 				f,
-				"{c:?} is a capital letter outside ASCII, which is not converted; an account name has lowercase ASCII letters, digits and hyphens only"
+				"{c:?} is a capital letter outside ASCII; an account name has lowercase ASCII letters, digits and hyphens only"
 			),
 			Fault::BadChar('.') => f.write_str(
 				"'.' is not allowed in an account name, which has lowercase letters, digits and hyphens only; use a hyphen",
 			),
 			Fault::BadChar(c) => write!(
 				f,
-				"{c:?} is not allowed; an account name has lowercase letters, digits and hyphens only (ASCII capital letters are converted on their own)"
+				"{c:?} is not allowed; an account name has lowercase letters, digits and hyphens only"
 			),
 			Fault::DotAtStart => f.write_str("the part before @ starts with a dot"),
 			Fault::DotAtEnd => f.write_str("the part before @ ends with a dot"),

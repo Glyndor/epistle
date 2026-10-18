@@ -25,7 +25,7 @@ fn a_character_outside_the_rule_is_named() {
 	assert_eq!(derive("josé"), Err(Fault::BadChar('é')));
 	assert_eq!(derive("ñandú"), Err(Fault::BadChar('ñ')));
 	let message = derive("a_b").unwrap_err().to_string();
-	assert!(message.contains("'_'") && message.contains("capital letters are converted"));
+	assert!(message.contains("'_'") && message.contains("lowercase letters, digits and hyphens"));
 }
 
 #[test]
@@ -62,17 +62,17 @@ fn two_addresses_that_differ_only_by_dot_or_hyphen_give_the_same_name() {
 }
 
 #[test]
-fn only_ascii_capitals_are_said_to_be_converted() {
-	let ascii = Fault::BadChar('A').to_string();
-	assert!(ascii.contains("convert ASCII capital letters"), "{ascii}");
+fn the_messages_never_promise_a_conversion() {
+	// The same text reaches the API, SCIM, config-check and migrations,
+	// where nothing converts a capital letter; only init does, and it says
+	// so itself.
+	for c in ['A', 'É', '_', '+', 'é', ' '] {
+		let text = Fault::BadChar(c).to_string();
+		assert!(!text.contains("convert"), "{c:?}: {text}");
+		assert!(!text.contains("init"), "{c:?}: {text}");
+	}
 	let outside = Fault::BadChar('É').to_string();
-	assert!(outside.contains("not converted"), "{outside}");
-	assert!(!outside.contains("are converted on their own"), "{outside}");
-	let other = Fault::BadChar('_').to_string();
-	assert!(
-		other.contains("ASCII capital letters are converted"),
-		"{other}"
-	);
+	assert!(outside.contains("outside ASCII"), "{outside}");
 }
 
 #[test]

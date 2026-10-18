@@ -78,6 +78,13 @@ fn an_address_whose_local_part_cannot_give_a_name_is_refused_naming_the_characte
 			"{address}: {refused:?}"
 		);
 	}
+	let refused = account("jose_perez@example.org").check(&domains());
+	assert!(
+		refused
+			.as_ref()
+			.is_err_and(|why| why.contains("ASCII capital letters are converted")),
+		"init says it converts capitals: {refused:?}"
+	);
 	let long = format!("{}@example.org", "a".repeat(65));
 	assert!(account(&long).check(&domains()).is_err());
 }

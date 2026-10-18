@@ -278,6 +278,7 @@ pub fn run<R: BufRead>(
 	while let Some(first) = &first_account {
 		let Err(why) = super::first_account::precheck(
 			first,
+			&domains,
 			std::path::Path::new(&data_dir),
 			std::path::Path::new(&config_path),
 		) else {

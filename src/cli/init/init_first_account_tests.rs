@@ -118,6 +118,26 @@ fn install_with_static_account(dir: &Path) {
 	std::fs::write(&config, text).expect("write config");
 }
 
+/// Every path under `dir` with its size, sorted, without the answers file
+/// the helpers rewrite on each call.
+fn listing(dir: &Path) -> Vec<String> {
+	fn tree(dir: &Path, into: &mut Vec<String>) {
+		for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+			let path = entry.path();
+			let len = entry.metadata().map_or(0, |m| m.len());
+			into.push(format!("{}:{len}", path.display()));
+			if path.is_dir() {
+				tree(&path, into);
+			}
+		}
+	}
+	let mut names = Vec::new();
+	tree(dir, &mut names);
+	names.retain(|line| !line.contains("answers.toml"));
+	names.sort();
+	names
+}
+
 #[test]
 fn a_static_account_holding_the_derived_name_is_a_collision_or_is_skipped() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -150,22 +170,6 @@ fn a_clash_stops_a_dry_run_and_a_real_run_before_anything_is_written() {
 		init(answers(dir.path(), &table), false).0,
 		ExitCode::from(EXIT_OK)
 	);
-	fn tree(dir: &Path, into: &mut Vec<String>) {
-		for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
-			let path = entry.path();
-			let len = entry.metadata().map_or(0, |m| m.len());
-			into.push(format!("{}:{len}", path.display()));
-			if path.is_dir() {
-				tree(&path, into);
-			}
-		}
-	}
-	let listing = |dir: &Path| {
-		let mut names = Vec::new();
-		tree(dir, &mut names);
-		names.sort();
-		names
-	};
 	let before = listing(dir.path());
 	let clash = first_account_table(dir.path(), "torre.control@example.org");
 	for dry_run in [true, false] {
@@ -176,12 +180,71 @@ fn a_clash_stops_a_dry_run_and_a_real_run_before_anything_is_written() {
 			"dry_run {dry_run}: {out}"
 		);
 	}
-	let mut after = listing(dir.path());
-	let mut expected = before;
-	// The answers file itself is rewritten by the helper on each call.
-	after.retain(|line| !line.contains("answers.toml"));
-	expected.retain(|line| !line.contains("answers.toml"));
-	assert_eq!(after, expected, "the clash left the tree as it was");
+	assert_eq!(
+		listing(dir.path()),
+		before,
+		"the clash left the tree as it was"
+	);
+}
+
+#[test]
+fn a_clash_is_found_when_the_config_is_gone_and_only_the_data_dir_remains() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let table = first_account_table(dir.path(), "torre-control@example.org");
+	assert_eq!(
+		init(answers(dir.path(), &table), false).0,
+		ExitCode::from(EXIT_OK)
+	);
+	std::fs::remove_file(dir.path().join("etc").join("mail.toml")).expect("remove config");
+	let before = listing(dir.path());
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	for dry_run in [true, false] {
+		let (code, out) = init(answers(dir.path(), &clash), dry_run);
+		assert_eq!(
+			code,
+			ExitCode::from(EXIT_INVALID),
+			"dry_run {dry_run}: {out}"
+		);
+	}
+	assert_eq!(listing(dir.path()), before, "no config, no acme, nothing");
+}
+
+#[test]
+fn a_clash_is_found_when_the_existing_config_does_not_load() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let table = first_account_table(dir.path(), "torre-control@example.org");
+	assert_eq!(
+		init(answers(dir.path(), &table), false).0,
+		ExitCode::from(EXIT_OK)
+	);
+	// A config the loader refuses (group-readable) that a changed domain
+	// list would make the run rewrite.
+	let config = dir.path().join("etc").join("mail.toml");
+	std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o664)).expect("chmod");
+	let before = listing(dir.path());
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	for dry_run in [true, false] {
+		let file = answers(dir.path(), &clash);
+		let text = std::fs::read_to_string(&file)
+			.expect("read")
+			.replace("\"example.net\"]", "\"example.net\", \"example.com\"]");
+		std::fs::write(&file, text).expect("write");
+		let (code, out) = init(file, dry_run);
+		assert_eq!(
+			code,
+			ExitCode::from(EXIT_INVALID),
+			"dry_run {dry_run}: {out}"
+		);
+	}
+	assert_eq!(listing(dir.path()), before, "the config was not rewritten");
+	assert_eq!(
+		std::fs::metadata(&config)
+			.expect("meta")
+			.permissions()
+			.mode() & 0o777,
+		0o664
+	);
 }
 
 #[test]
