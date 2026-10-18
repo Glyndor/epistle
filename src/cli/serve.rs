@@ -638,6 +638,10 @@ mod wait;
 mod tests;
 
 #[cfg(test)]
+#[path = "serve_tests_limits.rs"]
+mod tests_limits;
+
+#[cfg(test)]
 #[path = "serve_tests_mta_sts.rs"]
 mod tests_mta_sts;
 

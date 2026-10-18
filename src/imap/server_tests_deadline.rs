@@ -38,11 +38,11 @@ fn start_server(
 	(client, task, dir, cert)
 }
 
-/// Complete the handshake of an implicit-TLS server and read its greeting.
-async fn sign_in_screen(
+/// Complete the TLS handshake on `client`.
+async fn handshake(
 	client: tokio::io::DuplexStream,
 	cert: CertificateDer<'static>,
-) -> impl AsyncRead + AsyncWrite + Unpin {
+) -> tokio_rustls::client::TlsStream<tokio::io::DuplexStream> {
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
 	crate::tls::ensure_crypto_provider();
@@ -51,7 +51,15 @@ async fn sign_in_screen(
 		.with_no_client_auth();
 	let connector = TlsConnector::from(Arc::new(config));
 	let name = ServerName::try_from("mail.example.org").expect("name");
-	let mut tls = connector.connect(name, client).await.expect("handshake");
+	connector.connect(name, client).await.expect("handshake")
+}
+
+/// Complete the handshake of an implicit-TLS server and read its greeting.
+async fn sign_in_screen(
+	client: tokio::io::DuplexStream,
+	cert: CertificateDer<'static>,
+) -> impl AsyncRead + AsyncWrite + Unpin {
+	let mut tls = handshake(client, cert).await;
 	read_until(&mut tls, "IMAP4rev2 ready").await;
 	tls
 }
@@ -187,4 +195,57 @@ async fn a_signed_in_session_is_not_held_to_the_pre_auth_deadline() {
 	tls.write_all(b"a2 NOOP\r\n").await.expect("noop");
 	read_until(&mut tls, "a2 OK").await;
 	task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn starttls_without_a_client_hello_is_cut_at_the_deadline_of_the_session() {
+	let (mut client, task, _dir, _cert) = start_server(TlsMode::StartTls);
+	greeting(&mut client).await;
+	let start = Instant::now();
+	tokio::time::sleep(PREAUTH - Duration::from_secs(2)).await;
+	client
+		.write_all(b"a1 STARTTLS\r\n")
+		.await
+		.expect("starttls");
+	let mut said = Vec::new();
+	let _ = client.read_to_end(&mut said).await;
+	assert_eq!(
+		start.elapsed(),
+		PREAUTH,
+		"the handshake gets what is left of the session deadline, not a window of its own"
+	);
+	assert!(String::from_utf8_lossy(&said).contains("a1 OK"));
+	assert!(task.await.expect("server task").is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_deadline_does_not_restart_after_the_starttls_handshake() {
+	let (mut client, task, _dir, cert) = start_server(TlsMode::StartTls);
+	greeting(&mut client).await;
+	let start = Instant::now();
+	tokio::time::sleep(Duration::from_secs(2)).await;
+	client
+		.write_all(b"a1 STARTTLS\r\n")
+		.await
+		.expect("starttls");
+	read_until(&mut client, "a1 OK").await;
+	let mut tls = handshake(client, cert).await;
+	let (lived, reply) = drip_until_closed(&mut tls, start, b"x").await;
+	assert!(lived <= PREAUTH.as_secs() + 1, "lived {lived}s");
+	assert!(reply.ends_with("* BYE idle timeout\r\n"), "{reply}");
+	task.await.expect("server task").expect("server result");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_tail_of_a_rejected_command_with_a_chained_literal_keeps_the_deadline() {
+	let (client, task, _dir, cert) = start_server(TlsMode::Implicit);
+	let mut tls = sign_in_screen(client, cert).await;
+	let start = Instant::now();
+	tls.write_all(b"a1 APPEND INBOX {1+}\r\na {100000+}\r\n")
+		.await
+		.expect("append");
+	let (lived, reply) = drip_until_closed(&mut tls, start, b"x").await;
+	assert!(lived <= PREAUTH.as_secs() + 1, "lived {lived}s");
+	assert!(reply.ends_with("* BYE read timeout\r\n"), "{reply}");
+	task.await.expect("server task").expect("server result");
 }

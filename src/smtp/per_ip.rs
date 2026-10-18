@@ -123,6 +123,12 @@ impl PerIpCounter {
 		self.state.try_acquire(ip, trusted)
 	}
 
+	/// How many clients the map tracks right now.
+	#[cfg(test)]
+	pub fn tracked(&self) -> usize {
+		self.state.counts.lock().expect("per-IP counter").len()
+	}
+
 	/// The current count for the client `ip` belongs to. Mostly useful for
 	/// tests.
 	pub fn count(&self, ip: IpAddr) -> usize {
@@ -205,6 +211,22 @@ mod tests {
 			counter.try_acquire(mapped, &[]).is_none(),
 			"the mapped form is the same client"
 		);
+	}
+
+	#[test]
+	fn the_map_forgets_a_client_whose_connections_have_all_ended() {
+		// The key is chosen by whoever connects, so a leftover entry per
+		// address would let a client grow the map without bound.
+		let counter = Arc::new(PerIpCounter::new(2));
+		for n in 0..1000u32 {
+			let v4: IpAddr = std::net::Ipv4Addr::from(0x0a00_0000 + n).into();
+			let v6: IpAddr = std::net::Ipv6Addr::from((u128::from(n) + 1) << 64).into();
+			let first = counter.try_acquire(v4, &[]).expect("v4");
+			let second = counter.try_acquire(v6, &[]).expect("v6");
+			assert_eq!(counter.tracked(), 2);
+			drop((first, second));
+			assert_eq!(counter.tracked(), 0, "entry {n} was left behind");
+		}
 	}
 
 	#[test]
