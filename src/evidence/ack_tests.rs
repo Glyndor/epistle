@@ -153,7 +153,7 @@ fn an_acknowledgement_signed_before_a_rotation_still_counts() {
 		at(DAY + 3, 13),
 	)
 	.expect("acknowledge");
-	crate::evidence::rotation::rotate_at(fixture.root(), true, at(DAY + 3, 14)).expect("rotate");
+	crate::evidence::rotation::rotate_at(fixture.root(), at(DAY + 3, 14)).expect("rotate");
 	let report = crate::evidence::audit::verify(
 		fixture.root(),
 		&crate::evidence::audit::Options {
@@ -175,7 +175,7 @@ fn acknowledged_after_a_rotation(
 	signer: &EvidenceKey,
 ) -> crate::evidence::audit::Report {
 	let first = break_on_first_day(fixture);
-	crate::evidence::rotation::rotate_at(fixture.root(), true, at(DAY + 3, 13)).expect("rotate");
+	crate::evidence::rotation::rotate_at(fixture.root(), at(DAY + 3, 13)).expect("rotate");
 	acknowledge_at(
 		fixture.root(),
 		signer,
@@ -215,8 +215,7 @@ fn an_acknowledgement_after_a_rotation_signed_by_the_key_in_force_counts() {
 	let fixture = Fixture::new();
 	let rotated_key = {
 		// The key in force after the rotation the helper performs.
-		crate::evidence::rotation::rotate_at(fixture.root(), true, at(DAY + 3, 12))
-			.expect("rotate");
+		crate::evidence::rotation::rotate_at(fixture.root(), at(DAY + 3, 12)).expect("rotate");
 		EvidenceKey::load_or_create(fixture.root()).expect("key")
 	};
 	let first = break_on_first_day(&fixture);
@@ -283,7 +282,7 @@ fn a_break_found_only_after_the_whole_walk_can_be_acknowledged() {
 		.expect("chain")
 		.append_at(at(DAY + 3, 1), crate::evidence::test_support::accepted(7))
 		.expect("append");
-	crate::evidence::rotation::rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	crate::evidence::rotation::rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	crate::evidence::checkpoint::seal_closed_days(
 		fixture.root(),
 		&fixture.key,

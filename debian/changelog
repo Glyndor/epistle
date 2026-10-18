@@ -290,7 +290,9 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     log ever had was closed and not yet sealed made the server seal that day
     as untimestamped, which the next check refused as a downgrade and held
     `transactional` mail until it was acknowledged. A day is now sealed in the
-    mode the log has for it, whatever the settings file says at that moment.
+    mode the log has for it, whatever the settings file says at that moment;
+    `epistle evidence key rotate`, which seals the closed days too, had the
+    same defect and no longer reads the settings file either.
   * Status: the `resources` warning that the containers may use more than 85%
     of the host's memory named one `epistle stack resources set` command, and
     on an install that kept the limits of an older release (7 GiB of limits on
