@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use super::{
@@ -19,6 +20,22 @@ use super::{
 };
 use crate::api::ApiState;
 use crate::util::constant_time;
+
+/// Grants alive at once, over all clients. A pending grant is a few hundred
+/// bytes, so this bounds the memory an unauthenticated caller can pin, and the
+/// linear scan `device_approve` does under the same lock.
+pub(super) const MAX_DEVICE_GRANTS: usize = 10_000;
+/// Grants alive at once for one client (an IPv4 address or an IPv6 /64).
+pub(super) const MAX_GRANTS_PER_CLIENT: usize = 10;
+
+/// What a client is for the per-client cap: the address for IPv4, the /64 for
+/// IPv6 (one host there owns the whole /64).
+pub(super) fn client_bucket(ip: std::net::IpAddr) -> (bool, u64) {
+	match ip {
+		std::net::IpAddr::V4(v4) => (false, u64::from(u32::from(v4))),
+		std::net::IpAddr::V6(v6) => (true, (u128::from(v6) >> 64) as u64),
+	}
+}
 
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
@@ -34,6 +51,7 @@ fn now_secs() -> u64 {
 /// are the only credential.
 pub async fn device_authorization(
 	State(state): State<ApiState>,
+	peer: Option<axum::Extension<ConnectInfo<std::net::SocketAddr>>>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
@@ -56,17 +74,35 @@ pub async fn device_authorization(
 		return oauth_error("server_error");
 	};
 	let now = now_secs();
+	let client = peer.map(|axum::Extension(ConnectInfo(addr))| {
+		client_bucket(crate::net::canonical_peer(addr).ip())
+	});
 	let grant = DeviceGrant {
 		user_code: user_code.clone(),
 		approved_account: None,
 		expires_at: now + CODE_TTL_SECS,
 		next_poll_at: now,
+		client,
 	};
-	authz
-		.devices
-		.lock()
-		.unwrap_or_else(|p| p.into_inner())
-		.insert(device_code.clone(), grant);
+	{
+		let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
+		let full = |devices: &std::collections::HashMap<String, DeviceGrant>| {
+			devices.len() >= MAX_DEVICE_GRANTS
+				|| devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT
+		};
+		if full(&devices) {
+			// Expired grants nobody polled for would otherwise count forever.
+			devices.retain(|_, g| g.expires_at > now);
+			if full(&devices) {
+				return (
+					StatusCode::TOO_MANY_REQUESTS,
+					Json(serde_json::json!({ "error": "slow_down" })),
+				)
+					.into_response();
+			}
+		}
+		devices.insert(device_code.clone(), grant);
+	}
 	// epistle is headless: the verification URI is the approval endpoint a user
 	// (or CLI) posts the user_code and credentials to.
 	let verification_uri = "/oauth/device/approve";

@@ -74,6 +74,9 @@ struct DeviceGrant {
 	expires_at: u64,
 	/// Earliest Unix second the client may poll the token endpoint again.
 	next_poll_at: u64,
+	/// Who started the flow (an IPv4 address or an IPv6 /64), for the
+	/// per-client cap; `None` when the peer address was not available.
+	client: Option<(bool, u64)>,
 }
 
 /// An issued authorization code bound to an account and a PKCE challenge.
@@ -276,3 +279,7 @@ pub fn authenticated_router() -> Router<super::ApiState> {
 #[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "device_limits_tests.rs"]
+mod device_limits_tests;
