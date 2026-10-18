@@ -124,3 +124,30 @@ fn every_charset_a_part_declares_is_kept_in_lower_case() {
 	assert!(parse(b"Content-Type: text/plain\r\n").charsets.is_empty());
 	assert!(parse(b"Subject: x\r\n").charsets.is_empty());
 }
+
+#[test]
+fn the_extended_and_quoted_forms_of_a_charset_are_read() {
+	let charsets = |block: &[u8]| parse(block).charsets;
+	assert_eq!(
+		charsets(b"Content-Type: text/plain; charset*=UTF-16LE''x\r\n"),
+		["utf-16le"]
+	);
+	// Pieces of a split value are junk names too, which do no harm.
+	assert!(
+		charsets(b"Content-Type: text/plain; charset*0*=utf-16be''ab; charset*1*=cd\r\n")
+			.contains(&"utf-16be".to_string())
+	);
+	let twice = charsets(
+		b"Content-Type: text/plain; charset=\"utf-8\"\r\nContent-Type: text/plain; charset*=utf-8''x\r\n",
+	);
+	assert_eq!(twice.iter().filter(|name| *name == "utf-8").count(), 1);
+	let many: String = (0..3000)
+		.map(|n| format!("Content-Type: text/plain; charset=c{n}\r\n"))
+		.collect();
+	let all = charsets(many.as_bytes());
+	assert_eq!(all.len(), 3000);
+	assert_eq!(
+		all.iter().collect::<std::collections::HashSet<_>>().len(),
+		3000
+	);
+}

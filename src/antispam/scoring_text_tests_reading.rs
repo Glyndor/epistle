@@ -165,10 +165,72 @@ fn every_declared_charset_is_a_reading() {
 		.to_vec();
 	raw.extend(b"\xe9s\r\n");
 	assert!(has(&raw, "cafés"));
-	// A part that declares many charsets is read under a bounded number.
-	let many: String = (0..200)
-		.map(|n| format!("Content-Type: text/plain; charset=x{n}\r\n"))
+}
+
+fn cyrillic_le() -> Vec<u8> {
+	"быстрый кредит бесплатно"
+		.encode_utf16()
+		.flat_map(u16::to_le_bytes)
+		.collect()
+}
+
+/// Charsets made up before the one that matters do not push it out.
+#[test]
+fn junk_charsets_before_utf16_do_not_hide_it() {
+	for junk in [0, 3, 4, 8, 40, 400] {
+		let types: String = (0..junk)
+			.map(|n| format!("Content-Type: text/plain; charset=junk{n}\r\n"))
+			.collect();
+		let raw = multipart(&format!(
+			"--bb\r\n{types}Content-Type: text/plain; charset=utf-16le\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&cyrillic_le())
+		));
+		assert!(has(&raw, "кредит"), "{junk} junk charsets");
+	}
+}
+
+/// The names a client takes for UTF-16, and the ways to write the parameter.
+#[test]
+fn every_way_to_say_utf16_is_one() {
+	for parameter in [
+		"charset=unicode",
+		"charset=UNICODE",
+		"charset=utf_16le",
+		"charset='utf-16le'",
+		"charset*=utf-16le''x",
+		"charset*=\"UTF-16LE\"",
+		"charset=\" utf-16le \"",
+		"charset=utf-16-le",
+		"charset=ucs-2le",
+	] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; {parameter}\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&cyrillic_le())
+		));
+		assert!(has(&raw, "кредит"), "{parameter}");
+	}
+	let be: Vec<u8> = "быстрый кредит"
+		.encode_utf16()
+		.flat_map(u16::to_be_bytes)
 		.collect();
-	let raw = format!("{many}\r\nhiddenword\r\n");
-	assert!(has(raw.as_bytes(), "hiddenword"));
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=unicodeFFFE\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&be)
+	));
+	assert!(has(&raw, "кредит"), "unicodeFFFE");
+}
+
+/// The reading a part gets under its second transfer encoding is in the same
+/// charset as the first.
+#[test]
+fn the_second_encoding_of_a_part_is_read_in_its_charset() {
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-16le\r\n\
+		 Content-Transfer-Encoding: 7bit\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&cyrillic_le())
+	));
+	assert!(has(&raw, "кредит"));
 }

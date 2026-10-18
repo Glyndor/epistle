@@ -16,9 +16,6 @@ use super::Window;
 /// Longest token the classifier takes, in bytes.
 const MAX_TOKEN: usize = 30;
 
-/// Most charsets of one part that are looked at.
-const MAX_CHARSETS: usize = 4;
-
 /// Feed a decoded part to `window`: as UTF-8, and, when it is not plain UTF-8
 /// text or a charset it declares says UTF-16, under each of the other readings
 /// a client could use. A reading is added, never put in place of another: a
@@ -26,9 +23,10 @@ const MAX_CHARSETS: usize = 4;
 /// otherwise by the client.
 pub(super) fn push_part(window: &mut Window, bytes: &[u8], charsets: &[String]) {
 	window.push_bytes(bytes);
+	// All of them are looked at, as the only ones that count are UTF-16 and
+	// they are folded into at most two orders below.
 	let declared: Vec<Option<bool>> = charsets
 		.iter()
-		.take(MAX_CHARSETS)
 		.filter_map(|charset| declared_order(charset))
 		.collect();
 	let eight_bit = bytes.contains(&0) || std::str::from_utf8(bytes).is_err();
@@ -67,14 +65,22 @@ pub(super) fn push_part(window: &mut Window, bytes: &[u8], charsets: &[String]) 
 
 /// What a charset name says of UTF-16: `None` if it is not UTF-16, else the
 /// order it names (`true` little endian), or `Some(None)` when it names none.
+/// `unicode` is what Windows calls UTF-16 little endian and `unicodeFFFE` big.
 fn declared_order(charset: &str) -> Option<Option<bool>> {
-	let name = charset.trim().trim_matches('"');
+	let name: String = charset
+		.chars()
+		.filter(|c| !matches!(c, '-' | '_' | '"' | '\'' | ' ' | '\t'))
+		.collect::<String>()
+		.to_ascii_lowercase();
+	match name.as_str() {
+		"unicode" | "unicodefeff" => return Some(Some(true)),
+		"unicodefffe" => return Some(Some(false)),
+		_ => {}
+	}
 	let rest = name
-		.strip_prefix("utf-16")
-		.or_else(|| name.strip_prefix("utf16"))
-		.or_else(|| name.strip_prefix("ucs-2"))
+		.strip_prefix("utf16")
 		.or_else(|| name.strip_prefix("ucs2"))?;
-	Some(match rest.trim_start_matches(['-', '_']) {
+	Some(match rest {
 		"le" => Some(true),
 		"be" => Some(false),
 		_ => None,

@@ -174,14 +174,25 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		}
 	}
 
+	// Every `charset` of every `Content-Type`, each once. mail-parser decodes
+	// the single-part extended form `charset*=name''text` with the charset it
+	// names and keeps neither, so those names are read from the block.
 	let mut charsets: Vec<String> = Vec::new();
-	for charset in types
+	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+	let from_attributes = types
 		.iter()
-		.filter_map(|ct| ct.attribute("charset"))
-		.map(|value| value.trim().to_ascii_lowercase())
-	{
-		if !charsets.contains(&charset) {
-			charsets.push(charset);
+		.flat_map(|ct| ct.attributes().unwrap_or(&[]))
+		.filter(|attribute| {
+			attribute
+				.name
+				.trim_end_matches('*')
+				.eq_ignore_ascii_case("charset")
+		})
+		.map(|attribute| attribute.value.to_ascii_lowercase());
+	for name in from_attributes.chain(extended_charsets(&block)) {
+		let name = name.trim().to_string();
+		if !name.is_empty() && seen.insert(name.clone()) {
+			charsets.push(name);
 		}
 	}
 	let multipart = declared_type.starts_with("multipart/");
@@ -243,6 +254,38 @@ impl PartHeader {
 					.any(|prefix| kind.starts_with(prefix))
 			})
 	}
+}
+
+/// The names in `charset*=name''...` and `charset*0*=name''...` of a header block,
+/// lower case.
+fn extended_charsets(block: &[u8]) -> Vec<String> {
+	const KEY: &[u8] = b"charset*";
+	let mut found = Vec::new();
+	let mut at = 0;
+	while at + KEY.len() <= block.len() {
+		if !block[at..at + KEY.len()].eq_ignore_ascii_case(KEY) {
+			at += 1;
+			continue;
+		}
+		let mut rest = &block[at + KEY.len()..];
+		while let [b'0'..=b'9' | b'*', tail @ ..] = rest {
+			rest = tail;
+		}
+		if let [b'=', tail @ ..] = rest {
+			let name: Vec<u8> = tail
+				.iter()
+				.copied()
+				.skip_while(|byte| matches!(byte, b'"' | b' '))
+				.take_while(|byte| !matches!(byte, b'\'' | b'"' | b';' | b' ' | b'\r' | b'\n'))
+				.take(64)
+				.collect();
+			if let Ok(name) = String::from_utf8(name) {
+				found.push(name.to_ascii_lowercase());
+			}
+		}
+		at += KEY.len();
+	}
+	found
 }
 
 /// Candidate names whose extensions differ: one client may show `a.pdf`

@@ -353,6 +353,7 @@ impl Default for Budget {
 /// What [`Budget::admit_charged`] took for one job, to give back with
 /// `Budget::refund`. It cannot be made or copied elsewhere.
 #[derive(Debug)]
+#[must_use = "a charge that is neither kept nor refunded is a job counted and never run"]
 pub struct Charge {
 	source: TrainSource,
 	spam: bool,
