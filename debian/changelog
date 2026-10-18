@@ -225,6 +225,11 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     route with no client address counts as one client `unknown`, and WebDAV
     now passes the client address. A NAT or proxy address shares one count
     among everyone behind it; allow-list it if that hurts.
+  * Security: the REST API counts wrong bearer tokens per client (an IPv4
+    address or an IPv6 /64) instead of one count for everyone, so one client
+    cannot lock the rest out with wrong tokens, and a valid token from another
+    client does not give it back its attempts. The limit still applies before
+    the token is looked at, and the table of clients is bounded.
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000
 
 epistle (0.12.1) unstable; urgency=medium

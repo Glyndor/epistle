@@ -335,6 +335,10 @@ mod tenancy_tests_routes;
 mod route_rules_tests;
 
 #[cfg(test)]
+#[path = "auth_limiter_clients_tests.rs"]
+mod auth_limiter_clients_tests;
+
+#[cfg(test)]
 #[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
 
