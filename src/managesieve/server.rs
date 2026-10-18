@@ -238,15 +238,23 @@ where
 	// Before authentication the whole phase shares one deadline counted from
 	// the start of the session, so neither a slow trickle of bytes nor a
 	// stream of cheap commands can hold the connection past it. Afterwards
-	// each command (line plus literal) gets the idle timeout.
-	let preauth_until = Instant::now() + preauth_timeout;
+	// each command gets the idle timeout for its line, and a fresh one for its
+	// literal from the moment the line is complete. A session that signs out
+	// (UNAUTHENTICATE) starts a new pre-authentication phase, with a new window.
+	let mut preauth_until = Instant::now() + preauth_timeout;
+	let mut was_signed_in = session.account_is_some();
 	loop {
-		let read_deadline = if session.account_is_some() {
+		let signed_in = session.account_is_some();
+		if was_signed_in && !signed_in {
+			preauth_until = Instant::now() + preauth_timeout;
+		}
+		was_signed_in = signed_in;
+		let line_deadline = if signed_in {
 			Instant::now() + TIMEOUT
 		} else {
 			preauth_until
 		};
-		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, line_deadline).await?
 		else {
 			write(
 				&mut stream,
@@ -254,6 +262,11 @@ where
 			)
 			.await?;
 			return Ok(());
+		};
+		let read_deadline = if signed_in {
+			Instant::now() + TIMEOUT
+		} else {
+			preauth_until
 		};
 		let Ok(line) = String::from_utf8(line) else {
 			write(
@@ -348,7 +361,7 @@ where
 			let Some(tls) = tls_acceptor else {
 				return Ok(());
 			};
-			let upgraded = crate::tls::accept_within(tls, stream).await?;
+			let upgraded = crate::tls::accept_until(tls, stream, read_deadline).await?;
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();

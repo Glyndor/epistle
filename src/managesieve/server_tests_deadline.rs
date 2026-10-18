@@ -128,3 +128,140 @@ async fn a_dripped_discarded_literal_does_not_extend_the_deadline() {
 	);
 	task.await.expect("server task").expect("server result");
 }
+
+const IDLE: u64 = 1800;
+
+/// A session already signed in as `alice`, over the same short pre-auth
+/// window, so any use of that window after login shows up at once.
+fn start_authed() -> (
+	tokio::io::DuplexStream,
+	tokio::task::JoinHandle<std::io::Result<()>>,
+	tempfile::TempDir,
+) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	));
+	let (tls, _) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(dir.path().to_path_buf(), directory, tls)
+		.with_max_literal(4096)
+		.with_preauth_timeout(PREAUTH);
+	let (client, stream) = tokio::io::duplex(8192);
+	let task = tokio::spawn(async move { server.handle_preauth_for_test(stream, "alice").await });
+	(client, task, dir)
+}
+
+async fn say(client: &mut tokio::io::DuplexStream, bytes: &[u8]) -> String {
+	client.write_all(bytes).await.expect("write");
+	let mut buf = [0u8; 4096];
+	let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+		.await
+		.expect("the server answered")
+		.expect("read");
+	String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_signed_in_session_is_not_held_to_the_pre_auth_window() {
+	let (mut client, task, _dir) = start_authed();
+	greeting(&mut client).await;
+	for _ in 0..3 {
+		tokio::time::sleep(Duration::from_secs(IDLE - 60)).await;
+		assert_eq!(say(&mut client, b"NOOP\r\n").await, "OK\r\n");
+	}
+	drop(client);
+	let _ = task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_signed_in_command_is_cut_after_the_idle_timeout() {
+	let (mut client, task, _dir) = start_authed();
+	greeting(&mut client).await;
+	let start = Instant::now();
+	client
+		.write_all(b"PUTSCRIPT \"a\" {1000+}\r\n")
+		.await
+		.expect("announcement");
+	let mut buf = [0u8; 64];
+	let mut seen = Vec::new();
+	for _ in 0..40 {
+		if client.write_all(b"x").await.is_err() {
+			break;
+		}
+		tokio::time::sleep(Duration::from_secs(100)).await;
+	}
+	let _ = tokio::time::timeout(Duration::from_secs(5), async {
+		while let Ok(n) = client.read(&mut buf).await {
+			if n == 0 {
+				break;
+			}
+			seen.extend_from_slice(&buf[..n]);
+		}
+	})
+	.await;
+	let lived = start.elapsed().as_secs();
+	assert!(
+		(IDLE..=IDLE + 200).contains(&lived),
+		"cut at the idle timeout, lived {lived}s"
+	);
+	assert_eq!(String::from_utf8_lossy(&seen), "BYE \"read timeout\"\r\n");
+	let _ = task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_time_before_a_command_does_not_shorten_its_literal() {
+	let (mut client, task, _dir) = start_authed();
+	greeting(&mut client).await;
+	tokio::time::sleep(Duration::from_secs(IDLE - 10)).await;
+	client
+		.write_all(b"PUTSCRIPT \"a\" {7+}\r\n")
+		.await
+		.expect("announcement");
+	tokio::time::sleep(Duration::from_secs(20)).await;
+	assert_eq!(say(&mut client, b"keep;\r\n").await, "OK\r\n");
+	drop(client);
+	let _ = task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn signing_out_opens_a_fresh_pre_auth_window() {
+	let (mut client, task, _dir) = start_authed();
+	greeting(&mut client).await;
+	tokio::time::sleep(PREAUTH * 3).await;
+	assert_eq!(say(&mut client, b"UNAUTHENTICATE\r\n").await, "OK\r\n");
+	tokio::time::sleep(PREAUTH - Duration::from_secs(1)).await;
+	let reply = say(&mut client, b"CAPABILITY\r\n").await;
+	assert!(
+		reply.contains("\"IMPLEMENTATION\""),
+		"still served: {reply}"
+	);
+	let start = Instant::now();
+	let mut rest = Vec::new();
+	let _ = tokio::time::timeout(Duration::from_secs(20), client.read_to_end(&mut rest)).await;
+	assert!(start.elapsed() <= PREAUTH + Duration::from_secs(1));
+	assert_eq!(
+		String::from_utf8_lossy(&rest),
+		"BYE \"Pre-authentication timeout.\"\r\n"
+	);
+	let _ = task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_tls_handshake_shares_the_pre_auth_deadline() {
+	let (mut client, task, _dir) = start_server();
+	greeting(&mut client).await;
+	let start = Instant::now();
+	tokio::time::sleep(PREAUTH - Duration::from_secs(1)).await;
+	let reply = say(&mut client, b"STARTTLS\r\n").await;
+	assert_eq!(reply, "OK \"Begin TLS negotiation now.\"\r\n");
+	let mut rest = Vec::new();
+	let _ = tokio::time::timeout(Duration::from_secs(60), client.read_to_end(&mut rest)).await;
+	let lived = start.elapsed();
+	assert!(
+		lived <= PREAUTH + Duration::from_secs(1),
+		"a handshake that never starts is cut with the window, lived {lived:?}"
+	);
+	let _ = task.await;
+}
