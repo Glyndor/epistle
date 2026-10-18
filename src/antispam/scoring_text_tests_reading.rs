@@ -105,3 +105,33 @@ fn invisible_characters_do_not_split_a_word_in_utf16_or_latin1() {
 	assert!(has(raw, "free"));
 	assert!(has(raw, "viagra"));
 }
+
+/// UTF-16 with no byte order mark and no zero byte to give it away (Cyrillic,
+/// Arabic, Persian) is read in the order the part declares.
+#[test]
+fn utf16_in_a_non_latin_script_is_read_by_its_declared_charset() {
+	let text = "быстрый кредит бесплатно";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let be: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+	for (charset, bytes) in [
+		("utf-16le", &le),
+		("UTF-16LE", &le),
+		("utf-16be", &be),
+		("utf-16", &be),
+		("ucs-2le", &le),
+	] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; charset=\"{charset}\"\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(bytes)
+		));
+		assert!(has(&raw, "кредит"), "{charset}");
+	}
+	// The same bytes under a charset that says something else are not UTF-16.
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-8\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&le)
+	));
+	assert!(!has(&raw, "кредит"));
+}

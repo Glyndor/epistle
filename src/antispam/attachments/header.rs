@@ -49,6 +49,8 @@ pub struct PartHeader {
 	/// The encodings the other copies of the header declare, when they
 	/// differ from [`PartHeader::encoding`]: a client may use any of them.
 	pub other_encodings: Vec<Encoding>,
+	/// The charset the first `Content-Type` declares, lower case.
+	pub charset: Option<String>,
 	/// The multipart boundary, when the part is a usable multipart.
 	pub boundary: Option<Vec<u8>>,
 	/// Two readers could see this part differently.
@@ -172,6 +174,10 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		}
 	}
 
+	let charset = types
+		.first()
+		.and_then(|ct| ct.attribute("charset"))
+		.map(|value| value.trim().to_ascii_lowercase());
 	let multipart = declared_type.starts_with("multipart/");
 	let boundary = types
 		.first()
@@ -210,6 +216,7 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		attachment,
 		encoding,
 		other_encodings,
+		charset,
 		boundary,
 		ambiguous,
 	}

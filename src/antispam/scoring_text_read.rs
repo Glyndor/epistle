@@ -17,12 +17,13 @@ use super::Window;
 const MAX_TOKEN: usize = 30;
 
 /// Feed a decoded part to `window`.
-pub(super) fn push_part(window: &mut Window, bytes: &[u8]) {
+pub(super) fn push_part(window: &mut Window, bytes: &[u8], charset: Option<&str>) {
 	window.push_bytes(bytes);
-	if !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok() {
+	let declared = declared_order(charset);
+	if declared.is_none() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok() {
 		return;
 	}
-	match utf16_order(bytes) {
+	match utf16_order(bytes, declared) {
 		Some(little) => {
 			let units = bytes.as_chunks::<2>().0.iter().map(|&pair| {
 				if little {
@@ -41,14 +42,35 @@ pub(super) fn push_part(window: &mut Window, bytes: &[u8]) {
 	}
 }
 
+/// What a charset name says of UTF-16: `None` if it is not UTF-16, else the
+/// order it names (`true` little endian), or `Some(None)` when it names none.
+fn declared_order(charset: Option<&str>) -> Option<Option<bool>> {
+	let name = charset?.trim().trim_matches('"');
+	let rest = name
+		.strip_prefix("utf-16")
+		.or_else(|| name.strip_prefix("utf16"))
+		.or_else(|| name.strip_prefix("ucs-2"))
+		.or_else(|| name.strip_prefix("ucs2"))?;
+	Some(match rest.trim_start_matches(['-', '_']) {
+		"le" => Some(true),
+		"be" => Some(false),
+		_ => None,
+	})
+}
+
 /// The byte order of `bytes` read as UTF-16, `true` for little endian, when it
-/// looks like UTF-16: it starts with a byte order mark, or a quarter of its
-/// units have a zero where the high byte of an ASCII letter would be.
-fn utf16_order(bytes: &[u8]) -> Option<bool> {
+/// looks like UTF-16 or the part says it is: it starts with a byte order mark,
+/// or the charset names an order, or a quarter of its units have a zero where
+/// the high byte of an ASCII letter would be. A charset that says UTF-16 and no
+/// order means big endian, as RFC 2781 does, when nothing else decides.
+fn utf16_order(bytes: &[u8], declared: Option<Option<bool>>) -> Option<bool> {
 	match bytes {
 		[0xff, 0xfe, ..] => return Some(true),
 		[0xfe, 0xff, ..] => return Some(false),
 		_ => {}
+	}
+	if let Some(Some(little)) = declared {
+		return Some(little);
 	}
 	let units = bytes.len() / 2;
 	if units == 0 {
@@ -65,7 +87,7 @@ fn utf16_order(bytes: &[u8]) -> Option<bool> {
 	} else if low >= enough {
 		Some(false)
 	} else {
-		None
+		declared.map(|_| false)
 	}
 }
 

@@ -113,3 +113,11 @@ fn a_part_with_no_readable_type_could_be_text() {
 		assert!(parse(block).could_be_text(), "{block:?}");
 	}
 }
+
+#[test]
+fn the_charset_of_the_first_type_is_kept_in_lower_case() {
+	let header = parse(b"Content-Type: text/plain; charset=\"UTF-16LE\"\r\n");
+	assert_eq!(header.charset.as_deref(), Some("utf-16le"));
+	assert_eq!(parse(b"Content-Type: text/plain\r\n").charset, None);
+	assert_eq!(parse(b"Subject: x\r\n").charset, None);
+}
