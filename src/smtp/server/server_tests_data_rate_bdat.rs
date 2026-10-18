@@ -13,6 +13,7 @@ use super::tests_data_rate::{
 	test_directory,
 };
 use super::*;
+use crate::smtp::line::filler;
 use crate::smtp::sink::MemorySink;
 
 #[tokio::test(start_paused = true)]
@@ -76,7 +77,7 @@ async fn a_fast_first_chunk_buys_only_the_time_its_octets_cover() {
 	client.send(OPEN).await;
 	let started = Instant::now();
 	client.send(b"BDAT 2097152\r\n").await;
-	client.send(&vec![b'x'; 2 * 1024 * 1024]).await;
+	client.send(&filler(2 * 1024 * 1024)).await;
 	client.send(b"BDAT 4096 LAST\r\n").await;
 	let output = client.finish().await;
 	let elapsed = started.elapsed();
@@ -103,13 +104,13 @@ async fn chunks_at_the_floor_with_the_commands_between_them_are_delivered() {
 	client.send(OPEN).await;
 	for _ in 0..199 {
 		client.send(format!("BDAT {FLOOR}\r\n").as_bytes()).await;
-		client.send(&vec![b'y'; FLOOR]).await;
+		client.send(&filler(FLOOR)).await;
 		pass(Duration::from_secs(1)).await;
 	}
 	client
 		.send(format!("BDAT {FLOOR} LAST\r\n").as_bytes())
 		.await;
-	client.send(&vec![b'y'; FLOOR]).await;
+	client.send(&filler(FLOOR)).await;
 	client.send(b"QUIT\r\n").await;
 	let output = client.finish().await;
 	let mut expected = vec!["220", "250", "250", "250"];
@@ -120,7 +121,11 @@ async fn chunks_at_the_floor_with_the_commands_between_them_are_delivered() {
 		expected,
 		"every chunk and the message"
 	);
-	assert!(sink.messages()[0].data.ends_with(&vec![b'y'; 200 * FLOOR]));
+	assert!(
+		sink.messages()[0]
+			.data
+			.ends_with(&filler(FLOOR).repeat(200))
+	);
 }
 
 #[tokio::test(start_paused = true)]

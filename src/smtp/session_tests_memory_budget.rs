@@ -150,7 +150,7 @@ fn bdat_delivery_releases_the_reservation() {
 	let Action::CollectChunk { .. } = session.command_line("BDAT 11") else {
 		panic!("expected CollectChunk");
 	};
-	let action = session.bdat_chunk(b"hello world\n", true);
+	let action = session.bdat_chunk(b"hello world\r\n", true);
 	assert!(matches!(action, Action::Deliver(..)));
 	drop(session.take_delivery_reservation());
 	assert_eq!(
@@ -250,7 +250,10 @@ fn bdat_last_hands_over_the_body_without_copying_it() {
 	session.command_line("MAIL FROM:<a@example.org>");
 	session.command_line("RCPT TO:<b@example.org>");
 	session.command_line("BDAT 4096");
-	assert_eq!(reply_code(&session.bdat_chunk(&[b'x'; 4096], false)), 250);
+	assert_eq!(
+		reply_code(&session.bdat_chunk(&crate::smtp::line::filler(4096), false)),
+		250
+	);
 	let State::ReceivingData { body, .. } = &session.state else {
 		panic!("expected an open transaction");
 	};

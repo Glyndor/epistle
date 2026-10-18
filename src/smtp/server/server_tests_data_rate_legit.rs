@@ -47,7 +47,7 @@ async fn bursts_with_long_pauses_between_them_are_not_cut() {
 	let (server, sink) = default_server();
 	let mut client = Client::connect(&server);
 	client.send(OPEN).await;
-	let burst = vec![b'z'; 1024 * 1024];
+	let burst = crate::smtp::line::filler(1024 * 1024);
 	for _ in 0..20 {
 		client.send(b"BDAT 1048576\r\n").await;
 		client.send(&burst).await;

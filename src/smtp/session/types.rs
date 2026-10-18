@@ -1,6 +1,7 @@
 //! SMTP session value types: connection state, accepted messages, actions.
 
 use super::Reply;
+use crate::smtp::line::LineCheck;
 use crate::smtp::memory_budget::Reservation;
 
 /// Where the session is in the SMTP dialogue.
@@ -27,6 +28,10 @@ pub(super) enum State {
 		/// Whether a BDAT chunk has begun (RFC 3030): once true, DATA and RCPT
 		/// are no longer valid in this transaction.
 		chunking: bool,
+		/// The CRLF framing of the BDAT octets received so far, carried from
+		/// one chunk to the next because a line, or its CRLF, may be cut
+		/// between chunks. DATA gets the same rules from the line decoder.
+		line_check: LineCheck,
 		/// The octets of this in-flight body held against the shared memory
 		/// budget. Dropping the state drops the reservation, so every way
 		/// out of `ReceivingData` (a reply, `RSET`, `EHLO`, a disconnect, a

@@ -126,22 +126,22 @@ fn bdat_chunks_deliver_message() {
 	session.command_line("MAIL FROM:<alice@example.org>");
 	session.command_line("RCPT TO:<bob@example.org>");
 	// First (non-final) chunk asks the network layer to read its bytes.
-	let Action::CollectChunk { size, last } = session.command_line("BDAT 12") else {
+	let Action::CollectChunk { size, last } = session.command_line("BDAT 13") else {
 		panic!("expected CollectChunk");
 	};
-	assert_eq!((size, last), (12, false));
-	let cont = session.bdat_chunk(b"Subject: hi\n", false);
+	assert_eq!((size, last), (13, false));
+	let cont = session.bdat_chunk(b"Subject: hi\r\n", false);
 	assert_eq!(reply_code(&cont), 250);
 	// Final chunk delivers the accumulated body verbatim (no dot-stuffing).
-	let Action::CollectChunk { size, last } = session.command_line("BDAT 5 LAST") else {
+	let Action::CollectChunk { size, last } = session.command_line("BDAT 7 LAST") else {
 		panic!("expected final CollectChunk");
 	};
-	assert_eq!((size, last), (5, true));
-	let Action::Deliver(reply, message) = session.bdat_chunk(b"hello", true) else {
+	assert_eq!((size, last), (7, true));
+	let Action::Deliver(reply, message) = session.bdat_chunk(b"hello\r\n", true) else {
 		panic!("expected delivery");
 	};
 	assert_eq!(reply.code(), 250);
-	assert_eq!(message.data, b"Subject: hi\nhello");
+	assert_eq!(message.data, b"Subject: hi\r\nhello\r\n");
 	assert_eq!(message.recipients, vec!["bob@example.org".to_string()]);
 }
 
