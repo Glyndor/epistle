@@ -656,15 +656,26 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
     queues at most 100 lessons; the rest are dropped and counted in
     `mail_bayes_training_dropped_total`. The queue to the worker holds 256,
     and one account may have 32 of those places at a time, so one account (or
-    any seven) cannot take them all. Past seven accounts at their share the
-    queue can be full and another account's lesson is dropped, counted.
+    any seven) cannot take them all. Eight accounts at their share fill it
+    (8 x 32 = 256): another account's lesson is then dropped, counted, and one
+    that is accepted waits behind up to 256 others, which at a few hundred
+    milliseconds each is about a minute. The queue is served in order, not
+    account by account, so this is a limit of a deployment with many accounts
+    sending at once, for instance several of one tenant.
   - One account may teach 200 lessons a minute and 5000 a day, and may keep
-    the single worker busy for 10 seconds in a minute, measured from what the
-    worker actually spent. Lessons over a limit are dropped and counted.
-  - One lesson touches at most 5000 distinct tokens of the first 256 KiB of
-    the message, written with two statements whatever their number. The worker
-    reads only that window of an unencrypted message; an encrypted one is read
-    whole, because it is sealed as one piece.
+    the single worker busy for 10 seconds in a minute, measured from the work
+    of its own lessons (reading the message and writing the corpus), not from
+    the time they waited behind other jobs. Lessons over a limit are dropped and counted.
+  - A message is read the way the SMTP path reads it: its headers and its text
+    parts, decoded and in the charset they declare, without attachments, cut to
+    a window of the first and the last half of 256 KiB of words. A lesson
+    touches at most 5000 distinct tokens of it, the same cap and the same keyed
+    sample the server's own training takes, written with two statements
+    whatever their number. The worker reads the stored file whole, up to
+    32 MiB, because the structure is what tells text from an attachment; a
+    larger file, or one that cannot be read, teaches nothing, spends none of
+    the day's tokens and gives back its place in the minute and day counts
+    (`mail_bayes_learning_unreadable_total`).
   - One account holds at most 250000 token rows (about 100 MB with the index)
     and spends at most 1000000 tokens a day. A lesson past either is refused
     or held back, and counted per account as `refused` and `throttled`. A
