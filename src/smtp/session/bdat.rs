@@ -1,7 +1,9 @@
 //! BDAT chunked message data (RFC 3030 CHUNKING): `BDAT <size> [LAST]` replaces
 //! the dot-terminated DATA stream with length-prefixed binary chunks.
 
+use super::super::line::MAX_LINE_LENGTH;
 use super::super::reply::Reply;
+use super::super::trace::line_error_reply;
 use super::types::{AcceptedMessage, State};
 use super::{Action, Session};
 use crate::smtp::memory_budget::Reservation;
@@ -79,6 +81,7 @@ impl Session {
 				size,
 				body,
 				chunking,
+				line_check,
 				reserved,
 				..
 			} = &mut self.state
@@ -88,6 +91,18 @@ impl Session {
 				return Action::Continue(Reply::bad_sequence());
 			};
 			*chunking = true;
+			// The same framing DATA gets from the line decoder: no bare CR or
+			// LF, no NUL, no line past the SMTP limit, whichever way the
+			// octets are cut into chunks. A violation ends the connection as
+			// it does in DATA; this chunk is already off the wire, so nothing
+			// of it can be read as a command.
+			let framing = line_check
+				.feed(data, MAX_LINE_LENGTH)
+				.and_then(|()| if last { line_check.finish() } else { Ok(()) });
+			if let Err(error) = framing {
+				self.reset();
+				return Action::Close(line_error_reply(&error));
+			}
 			*size += data.len();
 			over = *size > self.max_message_size;
 			if !over {
