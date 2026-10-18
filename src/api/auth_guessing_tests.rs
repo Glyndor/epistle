@@ -347,3 +347,28 @@ async fn one_ipv6_allocation_cannot_fill_the_queue_either() {
 	idle(&state).await;
 	assert_eq!(state.argon2_stats().0, 4, "a /48 holds four places");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_finished_guess_gives_its_place_back_to_its_net_too() {
+	// Ten guesses one after another, each from another /64 of the same /48: if
+	// a finished guess kept the /48's place, the fifth would find the /48 full
+	// and the operator in it would be told 429 until a restart.
+	let (app, state) = app_and_state();
+	for n in 0..10 {
+		assert_eq!(
+			get(&app, "wrong", &format!("2001:db8:88:{n:x}::1")).await,
+			StatusCode::UNAUTHORIZED,
+			"guess {n} must not find the /48 full"
+		);
+	}
+	assert_eq!(state.argon2_waiting(), 0);
+	assert_eq!(
+		state.argon2_queue_tracked(),
+		(0, 0),
+		"entries at zero are dropped, so the maps do not grow with every client seen"
+	);
+	assert_eq!(
+		get(&app, TOKEN.as_str(), "2001:db8:88:ff::1").await,
+		StatusCode::OK
+	);
+}

@@ -289,7 +289,14 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   `429` and a retry gets the same answer for as long as the flood lasts. That
   only concerns a legacy argon2id `token_hash` and never API keys; store the
   token as `sha256:` (what `epistle token-hash` writes) and the exposure
-  disappears.
+  disappears. Two consequences of the places per origin, both only before the
+  first successful use of an argon2 `token_hash` since start-up: an operator
+  who shares an IPv6 /48 with an attacker is told `429` for as long as the
+  flood lasts (measured: from another /48 the real token got in within 38 ms,
+  from the same /48 1250 answers in a row were `429` over 20 seconds), and a
+  panel that opens three or more requests in parallel on its first use gets
+  `429` on the surplus ones, because one client holds two places, until the
+  first of them verifies the token.
 
   Known limits, measured by the second review and not changed: a ban on a real
   account answers in under a millisecond where an unknown login pays for its

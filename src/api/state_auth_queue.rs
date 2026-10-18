@@ -38,6 +38,12 @@ pub(super) struct QueueSlots {
 }
 
 impl QueueSlots {
+	/// Test-only: clients and /48s with a place held.
+	#[cfg(test)]
+	pub(super) fn tracked(&self) -> (usize, usize) {
+		(self.clients.len(), self.nets.len())
+	}
+
 	#[cfg(test)]
 	pub(super) fn total(&self) -> usize {
 		self.total

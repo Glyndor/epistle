@@ -482,6 +482,16 @@ impl ApiState {
 			.total()
 	}
 
+	/// Test-only: (clients, /48s) that hold a place in the argon2 queue.
+	#[cfg(test)]
+	pub(crate) fn argon2_queue_tracked(&self) -> (usize, usize) {
+		self.inner
+			.argon2_waiting
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.tracked()
+	}
+
 	/// Test-only: argon2 verifications running right now.
 	#[cfg(test)]
 	pub(crate) fn argon2_running(&self) -> usize {
