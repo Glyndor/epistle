@@ -21,37 +21,68 @@ const BUSY: &str = "451 4.7.1 content scan unavailable, try again later\r\n";
 
 const MESSAGE: &str = "From: x@example.net\r\nTo: alice@example.org\r\nSubject: s\r\n\r\nhello\r\n";
 
-/// Inspections stay inside the hook while this is `true`.
-static HOLD: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
-/// Inspections that reached the hook.
-static ENTERED: AtomicUsize = AtomicUsize::new(0);
-
-fn hold() {
-	ENTERED.fetch_add(1, Ordering::SeqCst);
-	let mut held = HOLD.0.lock().expect("hold lock");
-	while *held {
-		held = HOLD.1.wait(held).expect("hold wait");
-	}
+/// A gate the inspections of one test wait at. Each test builds its own, so
+/// no count or release leaks from one test into another.
+struct Hold {
+	held: Mutex<bool>,
+	released: Condvar,
+	/// Inspections that reached the hook.
+	entered: AtomicUsize,
+	/// Inspections that came back out of it.
+	left: AtomicUsize,
 }
 
-fn release() {
-	*HOLD.0.lock().expect("hold lock") = false;
-	HOLD.1.notify_all();
+impl Hold {
+	fn new() -> Arc<Self> {
+		Arc::new(Self {
+			held: Mutex::new(true),
+			released: Condvar::new(),
+			entered: AtomicUsize::new(0),
+			left: AtomicUsize::new(0),
+		})
+	}
+
+	/// The hook: stay inside until [`Hold::release`].
+	fn hook(self: &Arc<Self>) -> impl Fn() + Send + Sync + 'static {
+		let hold = Arc::clone(self);
+		move || {
+			hold.entered.fetch_add(1, Ordering::SeqCst);
+			let mut held = hold.held.lock().expect("hold lock");
+			while *held {
+				held = hold.released.wait(held).expect("hold wait");
+			}
+			hold.left.fetch_add(1, Ordering::SeqCst);
+		}
+	}
+
+	fn release(&self) {
+		*self.held.lock().expect("hold lock") = false;
+		self.released.notify_all();
+	}
+
+	fn entered(&self) -> usize {
+		self.entered.load(Ordering::SeqCst)
+	}
 }
 
 /// Lets held inspections go when the test ends, also when it fails, so no
 /// blocking thread is left waiting.
-struct Release;
+struct Release(Arc<Hold>);
 
 impl Drop for Release {
 	fn drop(&mut self) {
-		release();
+		self.0.release();
 	}
 }
 
+/// How long a test waits for something it expects to happen at once. Only
+/// a failing test ever waits this long: the checks below do not depend on
+/// it being short.
+const PATIENCE: Duration = Duration::from_secs(120);
+
 /// The next reply, or a marker when none comes in time.
 async fn answer(client: &mut DuplexStream) -> String {
-	tokio::time::timeout(Duration::from_secs(10), reply(client))
+	tokio::time::timeout(PATIENCE, reply(client))
 		.await
 		.unwrap_or_else(|_| "no reply in time".to_string())
 }
@@ -95,9 +126,9 @@ async fn send(policy: &Arc<Policy>, peer: &str) -> DuplexStream {
 	client
 }
 
-async fn entered(count: usize) {
-	let deadline = Instant::now() + Duration::from_secs(10);
-	while ENTERED.load(Ordering::SeqCst) < count {
+async fn entered(hold: &Hold, count: usize) {
+	let deadline = Instant::now() + PATIENCE;
+	while hold.entered() < count {
 		assert!(
 			Instant::now() < deadline,
 			"inspection {count} never started"
@@ -108,10 +139,15 @@ async fn entered(count: usize) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flood_from_one_client_is_deferred_and_others_keep_their_share() {
-	let _release = Release;
-	let policy = Arc::new(policy().with_inbound_caps(2, 1).with_check_hook(hold));
+	let hold = Hold::new();
+	let _release = Release(Arc::clone(&hold));
+	let policy = Arc::new(
+		policy()
+			.with_inbound_caps(2, 1)
+			.with_check_hook(hold.hook()),
+	);
 	let mut first = send(&policy, "192.0.2.1").await;
-	entered(1).await;
+	entered(&hold, 1).await;
 	let mut flood = Vec::new();
 	for _ in 0..5 {
 		flood.push(send(&policy, "192.0.2.1").await);
@@ -120,11 +156,11 @@ async fn a_flood_from_one_client_is_deferred_and_others_keep_their_share() {
 		assert_eq!(answer(client).await, BUSY, "the client is at its share");
 	}
 	let mut other = send(&policy, "198.51.100.7").await;
-	entered(2).await;
+	entered(&hold, 2).await;
 	let mut third = send(&policy, "203.0.113.9").await;
 	assert_eq!(answer(&mut third).await, BUSY, "the server is at its cap");
-	assert_eq!(ENTERED.load(Ordering::SeqCst), 2, "nothing past a cap ran");
-	release();
+	assert_eq!(hold.entered(), 2, "nothing past a cap ran");
+	hold.release();
 	assert!(answer(&mut first).await.starts_with("250 "));
 	assert!(answer(&mut other).await.starts_with("250 "));
 	let mut again = send(&policy, "192.0.2.1").await;
@@ -166,20 +202,23 @@ async fn a_panicking_inspection_defers_the_message_and_the_session_goes_on() {
 	assert!(reply(&mut client).await.starts_with("221 "));
 }
 
-fn slow() {
-	std::thread::sleep(Duration::from_secs(7));
-}
-
+// The inspection stays stuck until the test ends, so the reply can only come
+// from the session giving up on it, and that it came while the inspection was
+// still stuck is what shows the session did not wait. No bound on how long
+// the wait took: that would be the clock deciding a test about a deadline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_inspection_past_its_deadline_defers_the_message() {
 	// The inspection's own deadline is checked between parts; this one is
 	// stuck inside a single step, and the session stops waiting for it.
-	let policy = Arc::new(policy().with_timeout(Duration::ZERO).with_check_hook(slow));
-	let started = Instant::now();
+	let hold = Hold::new();
+	let _release = Release(Arc::clone(&hold));
+	let policy = Arc::new(
+		policy()
+			.with_timeout(Duration::ZERO)
+			.with_check_hook(hold.hook()),
+	);
 	let mut client = send(&policy, "192.0.2.60").await;
 	assert_eq!(answer(&mut client).await, BUSY);
-	assert!(
-		started.elapsed() < Duration::from_secs(7),
-		"it did not wait"
-	);
+	assert_eq!(hold.entered(), 1, "the inspection had started");
+	assert_eq!(hold.left.load(Ordering::SeqCst), 0, "and was still stuck");
 }
