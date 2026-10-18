@@ -291,3 +291,26 @@ async fn without_a_client_address_the_account_is_stopped_at_the_base_threshold()
 		"five failures without an address ban the account, not twenty"
 	);
 }
+
+/// The ban store calls (`is_banned`, `record_failure`, `clear_success`) one
+/// failed attempt for `login` makes.
+fn store_calls_for_a_failure(login: &str) -> (usize, usize) {
+	let store = FakeBanStore::new(BanPolicy::default());
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store.clone()));
+	fail(&directory, login, "203.0.113.5");
+	(
+		store.call_count("is_banned"),
+		store.call_count("record_failure"),
+	)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unknown_login_costs_the_ban_store_what_a_real_one_does() {
+	// With PostgreSQL behind it each call is a round trip or a transaction, and
+	// SCRAM has no password hash to hide the difference, so a login that
+	// touched the store less would be told apart by its time.
+	let real = store_calls_for_a_failure(OPEN);
+	assert!(real.0 >= 3 && real.1 >= 3, "a real account: {real:?}");
+	assert_eq!(store_calls_for_a_failure("nobody-here"), real, "unknown");
+	assert_eq!(store_calls_for_a_failure(DISABLED), real, "disabled");
+}

@@ -43,6 +43,11 @@ pub enum BanOutcome {
 	Banned,
 }
 
+/// The account name unknown logins are counted under so they do the same ban
+/// store work as real ones. It cannot be a login: `?` is not a valid account
+/// name character.
+const DECOY_ACCOUNT: &str = "?";
+
 impl Directory {
 	/// Attach the shared ban store consulted on every password
 	/// authentication attempt. `None` (the default) keeps the per-connection
@@ -208,16 +213,20 @@ impl Directory {
 		// unknown logins cannot probe bans on accounts they cannot
 		// authenticate as.
 		let account = self.credentials(login).map(|(account, _)| account);
-		if let Some(account) = &account {
-			let subjects = [
-				("pair", bans::subject_pair(account, ip)),
-				("account", bans::subject_account(account)),
-			];
-			for (kind, subject) in subjects {
-				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
-					self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
-					return BanOutcome::Banned;
-				}
+		// An unknown login asks the store about a stand-in account all the
+		// same, and ignores the answer: with PostgreSQL each question is a round
+		// trip, and one asked only for real accounts would tell them apart.
+		let subject_account = account.as_deref().unwrap_or(DECOY_ACCOUNT);
+		let subjects = [
+			("pair", bans::subject_pair(subject_account, ip)),
+			("account", bans::subject_account(subject_account)),
+		];
+		for (kind, subject) in subjects {
+			if let Some(info) = block_on_async(store.is_banned(&subject, now_secs))
+				&& let Some(account) = &account
+			{
+				self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
+				return BanOutcome::Banned;
 			}
 		}
 		BanOutcome::Clear { account }
@@ -293,9 +302,9 @@ impl Directory {
 		{
 			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
 		}
-		let Some(account) = account else {
-			return;
-		};
+		// An unknown login is counted on a stand-in account (never read back),
+		// so it writes what a real one does; see `check_ban`.
+		let account = account.unwrap_or(DECOY_ACCOUNT);
 		if !allowed {
 			block_on_async(store.record_failure(
 				&bans::subject_pair(account, ip),

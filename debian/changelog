@@ -255,6 +255,11 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     told an attacker which accounts exist and which have app passwords. Every
     refusal now runs the hashes of the account with the most, real ones and
     stand-ins alike.
+  * Security: the ban store is asked the same questions and written the same
+    way for a login that does not exist as for a real one (it used to make one
+    call where a real account made three, which with PostgreSQL behind it and
+    SCRAM, where no password hash hides it, took a third as long), so the time
+    of a refusal no longer says which logins exist.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A
