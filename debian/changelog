@@ -62,6 +62,21 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     choosing learned as spam within its budget. Behind a container network
     that hides the client address (rootless Podman with a bridge) the server
     sees one address and learns at the rate of one.
+  * Security: the Bayesian filter reads mail the way a client shows it, in
+    more cases. Attachments no longer use up the budget for decoding text, so
+    text sent as base64 or quoted-printable after a large file is read; a part
+    that declares two transfer encodings is read under each; text in UTF-16 or
+    an 8-bit charset, and RFC 2047 encoded words in the headers, are read as a
+    person sees them; zero width characters and soft hyphens no longer split a
+    word; and a message the filter could not follow (too deep, too many parts,
+    a text part or a message inside it past the 2 MiB decoding budget) counts
+    as not read in full, so it scores at least 0.5. Letters outside ASCII are
+    now lowercased as well: a token with a capital outside ASCII ("Привет",
+    "École") that the corpus learned before this release is not found under
+    its new lower case form and is learned again; the old rows stay in the
+    table, unused, because the corpus keeps keyed hashes and cannot convert
+    them. Tokens in ASCII are unchanged. A message that cannot be reduced at all
+    teaches nothing and spends none of the sender's budget.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 

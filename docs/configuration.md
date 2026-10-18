@@ -606,8 +606,19 @@ PDF or a photo scores as the message without it. Whitespace, punctuation and
 one-letter words are not words and cost nothing either. A message that two
 readers could split into parts differently is read as raw bytes as well. A message whose
 structure cannot be followed (nested too deep, too many parts, or a text part
-larger than 2 MiB once decoded) is read as raw bytes, as the filter always
-did.
+larger than 2 MiB once decoded, or a message inside it that size) is read as
+raw bytes, as the filter always did, and counts as not read in full (see the
+floor of 0.5 below), since text that travels encoded is not decoded that way.
+Files that no client could show as text do not use up the 2 MiB. A part that
+declares two transfer encodings is read under each. Text in UTF-16, or in an
+8-bit charset such as Latin-1 or Windows-1251, is also read as its bytes would
+be shown; RFC 2047 encoded words in the headers are read decoded; zero width
+characters and soft hyphens do not split a word; and letters outside ASCII are
+lowercased. A token with a capital outside ASCII ("Привет", "École") that the
+corpus learned before 0.12.2 is looked up now under its lower case form and is
+learned again; the old rows stay in the table, unused, because the corpus
+holds keyed hashes and cannot convert them. UTF-32, UTF-7 and the tags and
+entities of HTML are not read.
 
 What a message costs. Learning from, and scoring, one message costs a fixed
 amount whatever its size. Of the words, the first and the last 128 KiB are
