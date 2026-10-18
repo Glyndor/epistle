@@ -164,3 +164,55 @@ async fn a_pool_of_only_approved_grants_refuses_instead_of_evicting() {
 		StatusCode::TOO_MANY_REQUESTS
 	);
 }
+
+#[tokio::test]
+async fn a_pool_of_light_nets_refuses_a_newcomer_instead_of_evicting_one_of_them() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_authz(dir.path(), &keys());
+	let authz = state.authz().expect("authz");
+	{
+		let mut devices = authz.devices.lock().unwrap();
+		for n in 0..super::device::MAX_DEVICE_GRANTS as u64 {
+			devices.insert(format!("one{n}"), grant(Some((false, n + 10)), now() + 600));
+		}
+	}
+	let app = router(state.clone());
+	assert_eq!(
+		start(&app, "198.51.100.150").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"every net holds one grant, none is above its share"
+	);
+	assert_eq!(
+		authz.devices.lock().unwrap().len(),
+		super::device::MAX_DEVICE_GRANTS
+	);
+}
+
+#[tokio::test]
+async fn a_heavy_net_cannot_push_out_a_light_nets_grants_by_asking_again() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_authz(dir.path(), &keys());
+	let authz = state.authz().expect("authz");
+	// The requester's own address already holds as many as the heaviest net.
+	let mine = super::device::client_bucket("198.51.100.60".parse().expect("ip"));
+	{
+		let mut devices = authz.devices.lock().unwrap();
+		for n in 0..5u64 {
+			devices.insert(format!("mine{n}"), grant(Some(mine), now() + 600));
+		}
+		for n in 0..(super::device::MAX_DEVICE_GRANTS - 5) as u64 {
+			// Light nets of up to five grants each.
+			devices.insert(
+				format!("light{n}"),
+				grant(Some((false, n / 5 + 1_000)), now() + 600),
+			);
+		}
+	}
+	let app = router(state.clone());
+	assert_eq!(
+		start(&app, "198.51.100.60").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"nobody is heavier than the requester, so nobody is evicted for it"
+	);
+	assert!(authz.devices.lock().unwrap().contains_key("light0"));
+}

@@ -242,8 +242,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     an IPv6 /48 100, and the server 10000. At a cap the expired grants are
     dropped first; a client or /48 still over its cap gets `429 slow_down`,
     and when only the server's total is full the oldest pending grant of the
-    group holding the most is evicted (an approved grant never is), so a flood
-    from a few prefixes cannot keep everyone else from starting a flow.
+    group holding the most is evicted, but only if that group holds more than
+    the requester does (an approved grant never is, and with no group above
+    its share the call is refused), so a flood from a few prefixes cannot keep
+    everyone else from starting a flow, nor push out the grants of light ones.
   * Security: the webhook no longer follows redirects. A `307` from the
     endpoint used to resend the event, with its `X-Webhook-Signature`, to
     wherever it pointed, an internal address included. A redirect now counts

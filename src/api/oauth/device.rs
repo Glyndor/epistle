@@ -86,9 +86,16 @@ fn admit(
 		for g in devices.values().filter(|g| g.approved_account.is_none()) {
 			*per_net.entry(net_of(g.client)).or_default() += 1;
 		}
-		let Some(heaviest) = per_net.into_iter().max_by_key(|(_, n)| *n).map(|(k, _)| k) else {
+		let Some((heaviest, heaviest_count)) = per_net.into_iter().max_by_key(|(_, n)| *n) else {
 			return false;
 		};
+		// Only a group strictly above the requester's own share gives up a
+		// grant: otherwise a newcomer, or a heavy requester asking again,
+		// would push out grants of nets that are not over their share.
+		let mine = devices.values().filter(|g| net_of(g.client) == net).count();
+		if heaviest_count <= 1 || heaviest_count <= mine {
+			return false;
+		}
 		let oldest = devices
 			.iter()
 			.filter(|(_, g)| g.approved_account.is_none() && net_of(g.client) == heaviest)
