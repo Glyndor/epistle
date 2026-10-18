@@ -52,7 +52,10 @@ struct Inner {
 	configured_digest: std::sync::OnceLock<[u8; 32]>,
 	/// Limits how many argon2 verifications of the configured token run at
 	/// once. A request past the limit waits for its turn, it is not refused.
-	argon2_gate: tokio::sync::Semaphore,
+	argon2_gate: std::sync::Arc<tokio::sync::Semaphore>,
+	/// Requests waiting for the gate; past [`MAX_ARGON2_QUEUE`] they are refused.
+	argon2_waiting: std::sync::atomic::AtomicUsize,
+	argon2_queue_max: usize,
 	/// Test-only: argon2 runs started, running now, and the most at once.
 	#[cfg(test)]
 	argon2_stats: [std::sync::atomic::AtomicUsize; 3],
@@ -202,7 +205,11 @@ impl ApiState {
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
 				configured_digest: std::sync::OnceLock::new(),
-				argon2_gate: tokio::sync::Semaphore::new(MAX_CONCURRENT_ARGON2),
+				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
+					MAX_CONCURRENT_ARGON2,
+				)),
+				argon2_waiting: std::sync::atomic::AtomicUsize::new(0),
+				argon2_queue_max: MAX_ARGON2_QUEUE,
 				#[cfg(test)]
 				argon2_stats: Default::default(),
 				correspondents: None,
@@ -462,6 +469,21 @@ impl ApiState {
 			.record_failure(Some(ip), std::time::Instant::now());
 	}
 
+	/// Test-only: change how many requests may wait for an argon2 turn.
+	#[cfg(test)]
+	pub(crate) fn with_argon2_queue(mut self, max: usize) -> Self {
+		Arc::get_mut(&mut self.inner)
+			.expect("with_argon2_queue must be called before the state is shared")
+			.argon2_queue_max = max;
+		self
+	}
+
+	/// Test-only: argon2 verifications running right now.
+	#[cfg(test)]
+	pub(crate) fn argon2_running(&self) -> usize {
+		self.inner.argon2_stats[1].load(std::sync::atomic::Ordering::SeqCst)
+	}
+
 	/// Test-only: (argon2 runs started, most at once).
 	#[cfg(test)]
 	pub(crate) fn argon2_stats(&self) -> (usize, usize) {
@@ -709,6 +731,9 @@ fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> 
 /// Argon2 verifications of the configured token allowed to run at once.
 const MAX_CONCURRENT_ARGON2: usize = 2;
 
+/// Requests that may wait for an argon2 turn; the next one is told `429`.
+const MAX_ARGON2_QUEUE: usize = 64;
+
 /// Longest bearer token considered at all.
 const MAX_BEARER_LEN: usize = 1024;
 
@@ -736,14 +761,16 @@ pub async fn require_bearer_token(
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
 		.map(|info| crate::net::canonical_peer(info.0).ip());
 	// Reject before any token work when this client's failure budget is
-	// exhausted. The budget is per client: failures elsewhere do not count.
+	// exhausted, and reserve one failure under the same lock: requests that
+	// arrive together would all pass a bare check before any was counted. The
+	// reservation is given back below if the token proves valid.
 	{
 		let mut limiter = state
 			.inner
 			.auth_limiter
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
-		if limiter.is_limited(client_ip, now) {
+		if !limiter.reserve(client_ip, now) {
 			return Err(ApiError::rate_limited());
 		}
 	}
@@ -771,7 +798,12 @@ pub async fn require_bearer_token(
 	// token's (possibly argon2) hash.
 	let key_ok = token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
 	let configured = match token_ref {
-		Some(t) if !key_ok => state.bearer_is_configured_async(t).await,
+		Some(t) if !key_ok => match state.bearer_is_configured_async(t).await {
+			Ok(answer) => answer,
+			// Too many guesses are already waiting for an argon2: tell this
+			// one to come back. The failure it reserved stays counted.
+			Err(auth::ArgonBusy) => return Err(ApiError::rate_limited()),
+		},
 		_ => false,
 	};
 	let authorized = configured || key_ok;
@@ -782,10 +814,11 @@ pub async fn require_bearer_token(
 			.auth_limiter
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
-		// A valid call does not give the client's failures back: someone with
-		// one key of their own could otherwise guess, call, guess again.
-		if !authorized {
-			limiter.record_failure(client_ip, now);
+		// A valid call gives back only the failure it reserved, not the
+		// client's earlier ones: someone holding one key of their own could
+		// otherwise guess, call and guess again.
+		if authorized {
+			limiter.refund(client_ip);
 		}
 		// Only a request that failed is asked about the /48 and the global
 		// ceiling; a valid token is never refused for other people's failures.

@@ -148,6 +148,31 @@ impl ApiState {
 	}
 }
 
+/// Too many wrong-looking tokens are already waiting for an argon2.
+#[derive(Debug)]
+pub(super) struct ArgonBusy;
+
+/// A place in the queue for the argon2 gate, given back on drop (so also when
+/// the request is cancelled while it waits).
+struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> Waiting<'a> {
+	fn enter(counter: &'a std::sync::atomic::AtomicUsize, max: usize) -> Option<Self> {
+		use std::sync::atomic::Ordering::SeqCst;
+		if counter.fetch_add(1, SeqCst) >= max {
+			counter.fetch_sub(1, SeqCst);
+			return None;
+		}
+		Some(Self(counter))
+	}
+}
+
+impl Drop for Waiting<'_> {
+	fn drop(&mut self) {
+		self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+	}
+}
+
 impl ApiState {
 	/// [`Self::bearer_is_configured`] for the middleware: the same answer, but
 	/// a legacy argon2id hash is verified off the async workers
@@ -159,39 +184,51 @@ impl ApiState {
 	/// (two cores' worth, the rest of the requests wait their turn) and
 	/// refuses nobody. Once the real token has verified, its SHA-256 is kept
 	/// and a wrong bearer costs a digest comparison, with no argon2 at all.
-	pub(super) async fn bearer_is_configured_async(&self, token: &str) -> bool {
+	pub(super) async fn bearer_is_configured_async(&self, token: &str) -> Result<bool, ArgonBusy> {
 		#[cfg(test)]
 		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
 		if self.inner.token_hash.starts_with("sha256:") {
-			return self.configured_by_digest(token);
+			return Ok(self.configured_by_digest(token));
 		}
 		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
 		if let Some(known) = self.inner.configured_digest.get() {
-			return crate::util::constant_time::eq(known, digest.as_ref());
+			return Ok(crate::util::constant_time::eq(known, digest.as_ref()));
 		}
-		let Ok(_turn) = self.inner.argon2_gate.acquire().await else {
-			return false;
+		let mut known = [0u8; 32];
+		known.copy_from_slice(digest.as_ref());
+		// A bounded queue: a flood waits at most this long, and the request
+		// that would be one too many is refused instead of piling up.
+		let _waiting = Waiting::enter(&self.inner.argon2_waiting, self.inner.argon2_queue_max)
+			.ok_or(ArgonBusy)?;
+		let Ok(permit) = std::sync::Arc::clone(&self.inner.argon2_gate)
+			.acquire_owned()
+			.await
+		else {
+			return Ok(false);
 		};
 		// Someone ahead of us in the queue may have just learned the token.
-		if let Some(known) = self.inner.configured_digest.get() {
-			return crate::util::constant_time::eq(known, digest.as_ref());
+		if let Some(real) = self.inner.configured_digest.get() {
+			return Ok(crate::util::constant_time::eq(real, &known));
 		}
-		let (stored, bearer) = (self.inner.token_hash.clone(), token.to_string());
-		#[cfg(test)]
-		self.argon2_run_started();
+		let (state, bearer) = (self.clone(), token.to_string());
+		// The permit travels into the blocking task: it is released when the
+		// argon2 ends, not when this request is dropped, so a client that
+		// hangs up cannot start the next verification while one still runs.
 		let verified = tokio::task::spawn_blocking(move || {
-			crate::smtp::auth::verify_password(&stored, &bearer)
+			let _permit = permit;
+			#[cfg(test)]
+			state.argon2_run_started();
+			let verified = crate::smtp::auth::verify_password(&state.inner.token_hash, &bearer);
+			#[cfg(test)]
+			state.argon2_run_ended();
+			if verified {
+				let _ = state.inner.configured_digest.set(known);
+			}
+			verified
 		})
 		.await
 		.unwrap_or(false);
-		#[cfg(test)]
-		self.argon2_run_ended();
-		if verified {
-			let mut known = [0u8; 32];
-			known.copy_from_slice(digest.as_ref());
-			let _ = self.inner.configured_digest.set(known);
-		}
-		verified
+		Ok(verified)
 	}
 
 	/// The `sha256:` hash form: one digest comparison.

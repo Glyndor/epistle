@@ -264,8 +264,13 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   they are never asked of a valid token, because a budget anyone can fill would
   let an attacker refuse the operator. API keys are matched first by SHA-256.
   With a legacy argon2id `token_hash` the verification runs off the async
-  workers, two at a time, and after the real token has been seen once a wrong
-  one is rejected by digest with no argon2. Residual risk: guesses spread over
+  workers, two at a time (the turn is held until the argon2 ends, even if the
+  client hangs up), behind a queue of 64; the next request is told `429`, and
+  every request reserves its failure under the same lock as the limit check
+  and gives it back if the token is valid, so requests arriving together
+  cannot all pass a client's limit. After the real token has been seen once a
+  wrong one is rejected by digest with no argon2. The operator's first use of
+  the token while the queue is full is told `429` and succeeds on retry. Residual risk: guesses spread over
   many clients are not capped as a whole, so the defence is the entropy of the
   token (use a long random one, or a `sha256:` hash of one).
 - **Device authorization grants are bounded** (`POST /oauth/device_authorization`

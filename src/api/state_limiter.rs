@@ -61,6 +61,11 @@ impl AuthLimiter {
 		self.failures = self.failures.saturating_add(1);
 	}
 
+	/// Give back one failure reserved with [`AuthLimiter::record_failure`].
+	pub(super) fn refund(&mut self) {
+		self.failures = self.failures.saturating_sub(1);
+	}
+
 	/// Clear the count and start a fresh window at `now`.
 	#[cfg(test)]
 	pub(super) fn reset(&mut self, now: std::time::Instant) {
@@ -200,6 +205,31 @@ impl ClientLimiters {
 				net,
 				AUTH_MAX_FAILURES.saturating_mul(NET_BUDGET_FACTOR),
 			);
+		}
+	}
+
+	/// Reserve a failure for the client behind `ip` before its token is
+	/// evaluated, under the same lock as the limit check: `false` if the
+	/// client is already over its budget. Without the reservation, requests
+	/// that arrive together all pass the check before any of them is counted.
+	pub(super) fn reserve(&mut self, ip: Option<IpAddr>, now: Instant) -> bool {
+		if self.is_limited(ip, now) {
+			return false;
+		}
+		self.record_failure(ip, now);
+		true
+	}
+
+	/// Give back what [`ClientLimiters::reserve`] took, for a token that
+	/// proved valid. Only that request's own reservation: failures from other
+	/// requests stay, so a valid call does not reset anything.
+	pub(super) fn refund(&mut self, ip: Option<IpAddr>) {
+		self.global.refund();
+		if let Some(limiter) = self.clients.get_mut(&ClientKey::of(ip)) {
+			limiter.refund();
+		}
+		if let Some(limiter) = ClientKey::net(ip).and_then(|net| self.nets.get_mut(&net)) {
+			limiter.refund();
 		}
 	}
 

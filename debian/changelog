@@ -243,8 +243,9 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     legacy argon2id `token_hash`, every wrong token cost an argon2 on the
     request's own thread. API keys are now looked up first (SHA-256) and never
     touch the configured hash; the argon2 verification runs off the async
-    workers, two at a time at most (the rest wait their turn, nobody is
-    refused), and once the real token has been seen a wrong bearer is told
+    workers, two at a time at most (up to 64 more wait their turn; past that a
+    request is told `429`), and a request's failure is counted before it
+    waits, so requests arriving together cannot all pass a client's limit. Once the real token has been seen a wrong bearer is told
     apart by a SHA-256 digest and costs no argon2. Guesses from many clients
     are still not capped as a whole: the protection is the entropy of the
     token, so use a long random one.
