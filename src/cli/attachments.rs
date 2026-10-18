@@ -29,7 +29,7 @@ pub enum AttachmentsCli {
 		/// Print one JSON object instead of text.
 		#[arg(long)]
 		json: bool,
-		/// Exit with 1 when the verdict is quarantine or reject.
+		/// Exit with 3 when the verdict is quarantine or reject.
 		#[arg(long)]
 		strict: bool,
 	},

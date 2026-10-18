@@ -306,3 +306,175 @@ async fn a_probe_in_a_test_does_not_leave_the_machine() {
 		started.elapsed()
 	);
 }
+
+/// Timestamps switched off while the first day the chain ever had is closed
+/// and not yet sealed: that day is sealed as the chain has it (enabled, with
+/// the setting record in a later day), not as the settings file says.
+#[tokio::test]
+async fn disabling_timestamps_before_the_first_day_is_sealed_is_not_a_downgrade() {
+	use crate::evidence::record::{Entry, Setting};
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 1, 1)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	// The operator disables it just after midnight, before the first seal.
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	chain
+		.append_at(
+			at(DAY + 1, 0),
+			Entry::Setting(Setting {
+				name: "timestamp".into(),
+				value: "disabled by op".into(),
+			}),
+		)
+		.expect("setting");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 1, 1)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+	assert_eq!(service.held(), None);
+}
+
+fn setting_entry(value: &str) -> crate::evidence::record::Entry {
+	use crate::evidence::record::{Entry, Setting};
+	Entry::Setting(Setting {
+		name: "timestamp".into(),
+		value: value.into(),
+	})
+}
+
+/// The key rotation seals the closed days too; with timestamps switched off
+/// before the first seal it seals that day as the log has it, like a tick.
+#[tokio::test]
+async fn rotating_the_key_after_disabling_timestamps_is_not_a_downgrade() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 1, 6)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	chain
+		.append_at(at(DAY + 1, 0), setting_entry("disabled by op"))
+		.expect("setting");
+	crate::evidence::rotation::rotate_at(service.root(), at(DAY + 1, 5)).expect("rotate");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 1, 6)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+}
+
+/// Settings file edited off with no record in the chain, over several days.
+#[tokio::test]
+async fn a_settings_edit_without_a_record_changes_no_seal() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 2, 1)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	chain
+		.append_at(at(DAY + 1, 1), accepted(2))
+		.expect("append");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 2, 1)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+	for d in [DAY, DAY + 1] {
+		let (cp, _) = crate::evidence::checkpoint::load(service.root(), Day(d))
+			.unwrap()
+			.unwrap();
+		assert_eq!(cp.timestamp, "enabled", "day {d}");
+		assert!(
+			crate::evidence::checkpoint::files(service.root(), Day(d))
+				.tsr
+				.exists(),
+			"tsr {d}"
+		);
+	}
+}
+
+/// disable and re-enable in one closed day, then seal.
+#[tokio::test]
+async fn disabling_and_enabling_in_one_day_seals_it_enabled() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 2, 1)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	chain
+		.append_at(at(DAY, 2), setting_entry("disabled by op"))
+		.expect("s");
+	chain
+		.append_at(at(DAY, 3), setting_entry("enabled (x) by op"))
+		.expect("s");
+	chain
+		.append_at(at(DAY + 1, 1), accepted(2))
+		.expect("append");
+	chain
+		.append_at(at(DAY + 1, 2), setting_entry("disabled by op"))
+		.expect("s");
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 2, 1)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+	let (cp0, _) = crate::evidence::checkpoint::load(service.root(), Day(DAY))
+		.unwrap()
+		.unwrap();
+	let (cp1, _) = crate::evidence::checkpoint::load(service.root(), Day(DAY + 1))
+		.unwrap()
+		.unwrap();
+	assert_eq!(
+		(cp0.timestamp.as_str(), cp1.timestamp.as_str()),
+		("enabled", "disabled")
+	);
+}
+
+/// First day carries the disable itself.
+#[tokio::test]
+async fn a_first_day_that_holds_the_disable_is_sealed_disabled() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 1, 1)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	chain
+		.append_at(at(DAY, 2), setting_entry("disabled by op"))
+		.expect("s");
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 1, 1)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+	let (cp0, _) = crate::evidence::checkpoint::load(service.root(), Day(DAY))
+		.unwrap()
+		.unwrap();
+	assert_eq!(cp0.timestamp, "disabled");
+}

@@ -396,7 +396,7 @@ pub fn resume(evidence_root: &Path) -> std::io::Result<Option<String>> {
 /// be sealed by the new one without a record explaining the change. A
 /// rotation that was cut short is finished, never repeated: the staged key,
 /// the statement and the record are each made once.
-pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Result<String> {
+pub fn rotate(evidence_root: &Path, now: u64) -> std::io::Result<String> {
 	// The rotation seals every closed day and names today in its statement:
 	// at a clock nobody has confirmed, it would seal the wrong days. A
 	// rotation cut short is finished whatever the clock says.
@@ -413,24 +413,19 @@ pub fn rotate(evidence_root: &Path, timestamp: bool, now: u64) -> std::io::Resul
 			 or run epistle evidence clock accept first",
 		));
 	}
-	rotate_steps(evidence_root, timestamp, now, |_| false)
+	rotate_steps(evidence_root, now, |_| false)
 }
 
 /// [`rotate`] without asking whether the clock is right, for tests that give
 /// their own times.
 #[cfg(test)]
-pub(crate) fn rotate_at(
-	evidence_root: &Path,
-	timestamp: bool,
-	now: u64,
-) -> std::io::Result<String> {
-	rotate_steps(evidence_root, timestamp, now, |_| false)
+pub(crate) fn rotate_at(evidence_root: &Path, now: u64) -> std::io::Result<String> {
+	rotate_steps(evidence_root, now, |_| false)
 }
 
 /// [`rotate`], stopping with an error after the steps `stop` names.
 pub(crate) fn rotate_steps(
 	evidence_root: &Path,
-	timestamp: bool,
 	now: u64,
 	stop: impl Fn(Step) -> bool,
 ) -> std::io::Result<String> {
@@ -457,7 +452,9 @@ pub(crate) fn rotate_steps(
 	super::checkpoint::seal_closed_days(
 		evidence_root,
 		&old,
-		timestamp,
+		// The first day's mode is the log's default, as in a tick: see
+		// `seal_and_sweep`. The settings file does not seed it.
+		true,
 		now.saturating_sub(super::timeref::SEAL_MARGIN_SECS),
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?;

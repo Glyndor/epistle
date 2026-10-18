@@ -17,7 +17,7 @@ fn rotated() -> (Fixture, String) {
 		.expect("chain")
 		.append_at(at(DAY + 3, 1), accepted(7))
 		.expect("append");
-	let new = rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	let new = rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	(fixture, new)
 }
 
@@ -92,7 +92,7 @@ fn rotating_seals_the_closed_days_with_the_old_key_first() {
 	std::fs::remove_file(files(fixture.root(), Day(DAY + 2)).tsr).expect("tsr");
 	std::fs::remove_file(files(fixture.root(), Day(DAY + 2)).sig).expect("sig");
 	std::fs::remove_file(files(fixture.root(), Day(DAY + 2)).json).expect("json");
-	let new = rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	let new = rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	let sealed: Checkpoint = serde_json::from_slice(
 		&std::fs::read(files(fixture.root(), Day(DAY + 2)).json).expect("json"),
 	)
@@ -196,7 +196,7 @@ fn a_rotation_that_stopped_before_the_replacement_keeps_the_old_key_and_can_fini
 		old.id()
 	);
 	assert_eq!(lineage(fixture.root()).expect("lineage"), vec![old.id()]);
-	let finished = rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	let finished = rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	assert_eq!(
 		finished,
 		new.id(),
@@ -208,7 +208,7 @@ fn a_rotation_that_stopped_before_the_replacement_keeps_the_old_key_and_can_fini
 fn a_rotation_that_stopped_before_the_pin_moved_is_repaired() {
 	let fixture = Fixture::new();
 	let old = EvidenceKey::load_or_create(fixture.root()).expect("key");
-	let new = rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	let new = rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	// As if the process died after the replacement and before the pin.
 	std::fs::write(key::pin_path(fixture.root()), format!("{}\n", old.id())).expect("pin");
 	assert_eq!(
@@ -274,7 +274,7 @@ fn a_key_that_handed_over_cannot_sign_a_later_day() {
 fn an_oldest_key_cannot_sign_once_the_chain_reached_the_third() {
 	let (mut fixture, _b) = rotated();
 	seal(&mut fixture, at(DAY + 4, 0));
-	let c = rotate_at(fixture.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	let c = rotate_at(fixture.root(), at(DAY + 4, 5)).expect("second rotation");
 	seal(&mut fixture, at(DAY + 5, 0));
 	assert_eq!(verified(&fixture, at(DAY + 5, 12)).first_break, None);
 	assert_eq!(lineage(fixture.root()).expect("lineage").len(), 3);
@@ -366,7 +366,7 @@ fn a_record_whose_statement_does_not_verify_is_not_believed() {
 fn more_verified_rotations_than_the_cap_are_an_error_not_a_truncation() {
 	let fixture = Fixture::new();
 	for _ in 0..=MAX_ROTATIONS {
-		rotate_at(fixture.root(), true, at(DAY + 3, 1)).expect("rotate");
+		rotate_at(fixture.root(), at(DAY + 3, 1)).expect("rotate");
 	}
 	let error = Timeline::load(fixture.root()).expect_err("over the cap");
 	assert_eq!(

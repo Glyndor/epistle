@@ -50,8 +50,8 @@ fn lowering_mail_stops_where_its_largest_messages_need() {
 		(
 			Level::Warn,
 			"the containers may use 4.0 GiB of the host's 4.0 GiB (100%), more than 85%; the \
-			 largest are mail (3g) and db (1g); lower one with `epistle stack resources set \
-			 mail --memory 2816m`"
+			 largest are mail (3g) and db (1g); lower them with `epistle stack resources \
+			 set mail --memory 2816m` and `epistle stack resources set db --memory 512m`"
 				.to_string()
 		)
 	);
