@@ -162,6 +162,21 @@ impl crate::antispam::trainer::BayesTrainer for Slow {
 		Box::pin(async move { tokio::time::sleep(self.0).await })
 	}
 
+	fn learn<'a>(
+		&'a self,
+		_account: &'a str,
+		_text: Vec<u8>,
+		_spam: bool,
+	) -> crate::antispam::trainer::TrainerFuture<'a, crate::antispam::learning::Lesson> {
+		Box::pin(async move {
+			tokio::time::sleep(self.0).await;
+			crate::antispam::learning::Lesson {
+				outcome: crate::antispam::learning::LearnOutcome::Learned,
+				busy: self.0,
+			}
+		})
+	}
+
 	fn score_for_account<'a>(
 		&'a self,
 		_account: &'a str,

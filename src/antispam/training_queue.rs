@@ -331,9 +331,17 @@ async fn run_worker_with(
 		let crypto = crypto.clone();
 		let path = job.path.clone();
 		let window = tokio::task::spawn_blocking(move || read_message(&path, &crypto)).await;
+		// What the account is charged: reading its message and the work of
+		// its lesson. The wait behind another job's lock or for a pooled
+		// connection is theirs, so it is not in the wall time of the call.
+		let mut busy = started.elapsed();
 		match window {
 			Ok(Ok(text)) => {
-				let Lesson { outcome, .. } = trainer.learn(&job.account, text, job.spam).await;
+				let Lesson {
+					outcome,
+					busy: worked,
+				} = trainer.learn(&job.account, text, job.spam).await;
+				busy = busy.saturating_add(worked);
 				match outcome {
 					LearnOutcome::Failed => metrics.bayes_learning_failed(),
 					LearnOutcome::Refused | LearnOutcome::Throttled => {
@@ -366,7 +374,7 @@ async fn run_worker_with(
 		}
 		fairness
 			.limiter
-			.record_busy(&job.account, started.elapsed(), std::time::Instant::now());
+			.record_busy(&job.account, busy, std::time::Instant::now());
 		fairness.release(&job.account);
 	}
 }
