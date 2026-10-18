@@ -245,7 +245,11 @@ pub async fn device_approve(
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let grant = devices.values_mut().find(|g| {
-		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
+		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes())
+			&& g.expires_at > now
+			// An approval stands: a second account knowing the code must not
+			// replace the first, or the device would be handed its token.
+			&& g.approved_account.is_none()
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {

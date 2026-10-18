@@ -263,6 +263,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     counted under a stand-in of its own (a keyed hash of the login), so it
     reaches the same bans as a real account and a ban on one is not visible
     from another.
+  * Security: a device grant that has been approved can no longer be approved
+    again. A second account that knew the `user_code` replaced the first
+    approval, and the device that was polling received the second account's
+    token. This was present in 0.12.0 and 0.12.1.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A

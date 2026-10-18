@@ -256,3 +256,41 @@ async fn spreading_over_many_slash_48s_of_one_slash_32_is_one_group() {
 		4_999
 	);
 }
+
+#[tokio::test]
+async fn a_grant_already_approved_cannot_be_approved_again_by_anyone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_authz(dir.path(), &keys());
+	let authz = state.authz().expect("authz");
+	{
+		let mut g = grant(None, now() + 600);
+		g.user_code = "BCDF-GHJK".to_string();
+		g.approved_account = Some("bob".to_string());
+		authz.devices.lock().unwrap().insert("dc".into(), g);
+	}
+	let app = router(state.clone());
+	let mut request = Request::builder()
+		.method("POST")
+		.uri("/oauth/device/approve")
+		.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+		.body(Body::from(format!(
+			"user_code=BCDF-GHJK&login=alice@example.org&password={}",
+			crate::test_fixtures::password()
+		)))
+		.expect("request");
+	request
+		.extensions_mut()
+		.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+			[198, 51, 100, 3],
+			4000,
+		))));
+	let status = app.oneshot(request).await.expect("response").status();
+	assert_eq!(status, StatusCode::BAD_REQUEST, "refused like a wrong code");
+	assert_eq!(
+		authz.devices.lock().unwrap()["dc"]
+			.approved_account
+			.as_deref(),
+		Some("bob"),
+		"the first approval stands"
+	);
+}
