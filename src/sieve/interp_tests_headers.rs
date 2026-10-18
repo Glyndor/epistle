@@ -169,3 +169,56 @@ fn every_test_that_looks_at_headers_says_when_some_were_not_read() {
 		assert!(outcome.inspection_truncated, "{script}: {outcome:?}");
 	}
 }
+
+fn discarded(script: &str, raw: &[u8]) -> bool {
+	let (outcome, _) = run(script, raw);
+	outcome.discarded
+}
+
+#[test]
+fn padding_with_blanks_does_not_push_the_text_out_of_the_window() {
+	let script = "if header :contains \"subject\" \"viagra\" { discard; }";
+	let spaces = " ".repeat(70_000);
+	// In the first line, in a folded line, after text, and as many folded lines.
+	let first = format!("Subject:{spaces}viagra\r\n\r\nb\r\n");
+	let folded = format!("Subject: cheap\r\n{spaces}viagra\r\n\r\nb\r\n");
+	let inside = format!("Subject: cheap{spaces}viagra\r\n\r\nb\r\n");
+	let lines = format!("Subject:{} viagra\r\n\r\nb\r\n", "\r\n ".repeat(70_000));
+	for raw in [first, folded, inside, lines] {
+		assert!(discarded(script, raw.as_bytes()), "{}", &raw[..40]);
+	}
+}
+
+#[test]
+fn a_value_keeps_its_words_whatever_the_blanks_between_them() {
+	let raw = b"Subject:  two\t words   and\r\n more \r\n\r\nb\r\n";
+	assert!(discarded(
+		"if header :is \"subject\" \"two words and more\" { discard; }",
+		raw
+	));
+}
+
+#[test]
+fn a_message_at_the_smtp_limit_with_the_servers_own_fields_is_read_whole() {
+	// SMTP lets MAX_HEADER_FIELDS through and the server adds about a dozen
+	// (a hundred is the margin): the last field must still be under the cut.
+	let mut raw = Vec::new();
+	for n in 0..crate::smtp::trace::MAX_HEADER_FIELDS - 1 {
+		raw.extend_from_slice(format!("x{n}: y\r\n").as_bytes());
+	}
+	raw.extend_from_slice(b"From: evil@x.example\r\n");
+	let mut stamped = Vec::new();
+	for n in 0..100 {
+		stamped.extend_from_slice(format!("Received: hop {n}\r\n").as_bytes());
+	}
+	stamped.extend_from_slice(&raw);
+	stamped.extend_from_slice(b"\r\nbody\r\n");
+	let (outcome, _) = run(
+		"if address :is \"from\" \"evil@x.example\" { discard; }",
+		&stamped,
+	);
+	assert!(
+		outcome.discarded && !outcome.inspection_truncated,
+		"{outcome:?}"
+	);
+}

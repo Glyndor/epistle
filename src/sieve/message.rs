@@ -56,36 +56,36 @@ impl Message {
 		let mut headers = Vec::new();
 		let mut headers_cut = false;
 		let mut values_cut = false;
-		let mut current: Option<String> = None;
+		let mut current: Option<Field> = None;
 		for line in raw[..header_end].split_inclusive(|b| *b == b'\n') {
 			let line = line.strip_suffix(b"\n").unwrap_or(line);
 			let line = line.strip_suffix(b"\r").unwrap_or(line);
-			let kept = &line[..line.len().min(HEADER_NAME_WINDOW)];
-			values_cut |= kept.len() < line.len();
 			if matches!(line.first(), Some(b' ' | b'\t')) {
-				if let Some(buffer) = &mut current
-					&& buffer.len() < HEADER_NAME_WINDOW
-				{
-					buffer.push(' ');
-					buffer.push_str(String::from_utf8_lossy(kept).trim_start());
-				} else if current.is_some() {
-					values_cut = true;
+				if let Some(field) = &mut current {
+					values_cut |= field.feed(line);
 				}
 				continue;
 			}
-			if let Some(buffer) = current.take() {
-				push_header(&mut headers, &buffer);
+			if let Some(field) = current.take() {
+				field.push_into(&mut headers);
 			}
 			if !line.is_empty() {
 				if headers.len() >= MAX_HEADERS {
 					headers_cut = true;
 					break;
 				}
-				current = Some(String::from_utf8_lossy(kept).into_owned());
+				// A name is looked for in the first 64 KiB only; a line
+				// with no colon there is not a header.
+				let head = &line[..line.len().min(HEADER_NAME_WINDOW)];
+				if let Some(colon) = head.iter().position(|b| *b == b':') {
+					let mut field = Field::named(&line[..colon]);
+					values_cut |= field.feed(&line[colon + 1..]);
+					current = Some(field);
+				}
 			}
 		}
-		if let Some(buffer) = current.take() {
-			push_header(&mut headers, &buffer);
+		if let Some(field) = current.take() {
+			field.push_into(&mut headers);
 		}
 		let mut index: std::collections::HashMap<String, Vec<u32>> =
 			std::collections::HashMap::new();
@@ -219,11 +219,58 @@ fn window(text: &str, limit: usize) -> &str {
 	&text[..end]
 }
 
-fn push_header(headers: &mut Vec<(String, String)>, line: &str) {
-	if let Some(colon) = line.find(':') {
-		headers.push((
-			line[..colon].trim_end().to_string(),
-			line[colon + 1..].trim().to_string(),
-		));
+/// A header being read: its name, and its value as the interpreter sees it,
+/// built octet by octet: runs of white space (folding included) are one
+/// space and the ends are trimmed, and no more than 64 KiB are kept. Blanks
+/// are collapsed before the cut, so padding with them cannot push the text
+/// that follows out of the window.
+struct Field {
+	name: Vec<u8>,
+	value: Vec<u8>,
+	blank: bool,
+}
+
+impl Field {
+	fn named(name: &[u8]) -> Self {
+		let end = name
+			.iter()
+			.rposition(|b| !matches!(b, b' ' | b'\t'))
+			.map_or(0, |at| at + 1);
+		Self {
+			name: name[..end].to_vec(),
+			value: Vec::new(),
+			blank: false,
+		}
+	}
+
+	/// Add `text` (a piece of a line); `true` when the value is full and some
+	/// of it was left out.
+	fn feed(&mut self, text: &[u8]) -> bool {
+		self.blank |= !self.value.is_empty();
+		let mut cut = false;
+		for &byte in text {
+			if matches!(byte, b' ' | b'\t') {
+				self.blank = !self.value.is_empty();
+				continue;
+			}
+			if self.value.len() >= HEADER_NAME_WINDOW {
+				cut = true;
+				break;
+			}
+			if std::mem::take(&mut self.blank) {
+				self.value.push(b' ');
+			}
+			self.value.push(byte);
+		}
+		cut
+	}
+
+	fn push_into(self, headers: &mut Vec<(String, String)>) {
+		// Converted after the cut, and cut again where the conversion made
+		// it longer (each octet that is not UTF-8 becomes three), so what is
+		// kept is never more than the octets read.
+		let value = String::from_utf8_lossy(&self.value);
+		let value = window(&value, HEADER_NAME_WINDOW).to_string();
+		headers.push((String::from_utf8_lossy(&self.name).into_owned(), value));
 	}
 }

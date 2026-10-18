@@ -145,3 +145,39 @@ fn a_message_of_one_endless_line_of_bad_octets_is_cut_before_it_is_converted() {
 	);
 	assert!(!message.has_header("h"));
 }
+
+#[test]
+fn long_headers_that_are_not_utf8_are_kept_no_longer_than_they_came() {
+	// 400 headers of 64 KiB of octets that are not UTF-8: converted to text
+	// each is three times as long, and 77 MiB were held for 25 MiB.
+	let mut raw = Vec::new();
+	for _ in 0..400 {
+		raw.extend_from_slice(b"h: ");
+		raw.extend(std::iter::repeat_n(0xffu8, 64 * 1024 - 8));
+		raw.extend_from_slice(b"\r\n");
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let (_, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(
+		peak < raw.len() + 2 * MIB,
+		"{peak} octets held for {} of headers",
+		raw.len()
+	);
+}
+
+#[test]
+fn a_header_of_endless_continuations_keeps_the_first_64_kib() {
+	let mut raw = b"a: start\r\n".to_vec();
+	for _ in 0..400 {
+		raw.extend_from_slice(b" ");
+		raw.extend(std::iter::repeat_n(b'x', 60_000));
+		raw.extend_from_slice(b"\r\n");
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let (message, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(
+		peak < 4 * MIB,
+		"{peak} octets held for 24 MiB of continuation"
+	);
+	assert!(message.visible_headers(&["a"]).truncated);
+}
