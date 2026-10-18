@@ -103,3 +103,20 @@ fn a_part_that_declares_two_encodings_is_read_under_both() {
 		assert!(has(&raw, "hiddenword"), "{headers}");
 	}
 }
+
+/// A part with no `Content-Type` that is marked as an attachment is text to a
+/// client (RFC 2045), so it is read, however it is encoded.
+#[test]
+fn a_typeless_attachment_is_read_as_text() {
+	for headers in [
+		"Content-Disposition: attachment\r\n",
+		"Content-Disposition: attachment; filename=\"a.txt\"\r\n",
+		"Content-Type:\r\nContent-Disposition: attachment\r\n",
+	] {
+		let raw = multipart(&format!(
+			"--bb\r\n{headers}Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(b"hiddenword is here")
+		));
+		assert!(has(&raw, "hiddenword"), "{headers}");
+	}
+}

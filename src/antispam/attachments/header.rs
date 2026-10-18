@@ -218,11 +218,12 @@ pub fn parse(block: &[u8]) -> PartHeader {
 impl PartHeader {
 	/// Whether a client could show this part as text, or open it as a message
 	/// that holds some: a part that is not an attachment, a text part, a
-	/// message or a multipart, or a part whose headers two readers take
-	/// differently.
+	/// message or a multipart, a part with no type declared (RFC 2045 makes it
+	/// `text/plain`), or a part whose headers two readers take differently.
 	pub fn could_be_text(&self) -> bool {
 		!self.attachment
 			|| self.ambiguous
+			|| self.declared_types.is_empty()
 			|| self.declared_types.iter().any(|kind| {
 				["text/", "message/", "multipart/"]
 					.iter()

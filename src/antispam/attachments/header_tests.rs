@@ -97,3 +97,19 @@ fn a_part_could_be_text_unless_it_is_plainly_a_file() {
 	));
 	assert!(!could(b"Content-Type: image/png; name=a.png\r\n"));
 }
+
+/// No `Content-Type` is `text/plain` (RFC 2045), also on a part marked as an
+/// attachment, and a type nobody can read is text to the client that falls
+/// back to it.
+#[test]
+fn a_part_with_no_readable_type_could_be_text() {
+	for block in [
+		&b"Content-Disposition: attachment\r\n"[..],
+		b"Content-Disposition: attachment; filename=a.txt\r\n",
+		b"Content-Type:\r\nContent-Disposition: attachment\r\n",
+		b"Content-Type: ;;\r\nContent-Disposition: attachment\r\n",
+		b"Content-Transfer-Encoding: base64\r\nContent-Disposition: attachment\r\n",
+	] {
+		assert!(parse(block).could_be_text(), "{block:?}");
+	}
+}
