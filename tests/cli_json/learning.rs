@@ -177,12 +177,76 @@ fn dry_runs_write_nothing_and_unknown_accounts_are_refused() {
 		assert_eq!(output.status.code(), Some(2), "{args:?}");
 		assert!(output.stdout.is_empty(), "{args:?} printed on stdout");
 	}
-	let done = learning(&["reset", &name, "--yes"]);
-	assert_eq!(done.status.code(), Some(0));
+	let (_, before) = json(&learning(&["status", &name]));
+	let rows = before["token_rows"].clone();
+	assert!(
+		rows.as_i64().is_some_and(|n| n > 0),
+		"the lesson wrote rows"
+	);
+	let (code, done) = json(&learning(&["reset", &name, "--yes"]));
+	assert_eq!(code, 0);
+	assert_eq!(
+		done["tokens"], rows,
+		"the report says how many token rows the reset dropped"
+	);
 	let (_, status) = json(&learning(&["status", &name]));
 	assert_eq!(
 		status["corpus_spam"],
 		json!(0),
 		"the real reset drops the corpus"
 	);
+}
+
+/// A listing that stops at the cap says so on stderr, where a list of exactly
+/// that many accounts cannot be taken for the whole.
+#[test]
+fn a_listing_cut_at_the_cap_says_so_on_stderr() {
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set, the learning results were not exercised");
+		return;
+	};
+	let env = env(&format!("[database]\nurl = {url:?}\ntls = \"insecure\"\n"));
+	let prefix = format!("zzzzcut-{}-", uuid::Uuid::now_v7().simple());
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	let pool = runtime.block_on(async {
+		let pool = epistle::db::connect(&url, epistle::config::DatabaseTls::Insecure, 2, None)
+			.await
+			.expect("connect");
+		// Named to sort after every real account, so the rows the cap cuts
+		// are these and not another test's.
+		sqlx::query(
+			"INSERT INTO bayes_learning (scope) \
+			 SELECT $1 || n FROM generate_series(1, 10000) AS n",
+		)
+		.bind(&prefix)
+		.execute(&pool)
+		.await
+		.expect("seed");
+		pool
+	});
+	let output = epistle(
+		&[
+			"learning",
+			"--config",
+			env.config.as_str(),
+			"status",
+			"--json",
+		],
+		b"",
+	);
+	runtime.block_on(async {
+		sqlx::query("DELETE FROM bayes_learning WHERE scope LIKE $1 || '%'")
+			.bind(&prefix)
+			.execute(&pool)
+			.await
+			.expect("cleanup");
+	});
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("the list stops at 10000 accounts"),
+		"stderr: {stderr}"
+	);
+	let (code, rows) = json(&output);
+	assert_eq!(code, 0);
+	assert_eq!(rows.as_array().map(Vec::len), Some(10_000));
 }
