@@ -56,6 +56,29 @@ pub(crate) fn received_hop_count(data: &[u8]) -> usize {
 		.count()
 }
 
+/// The most header fields inbound mail may carry. A Sieve filter reads the
+/// first 10 000 headers of a message and the server adds a few dozen of its
+/// own, so a message past this would have fields the filter never sees, and
+/// no real message has anywhere near this many.
+pub(crate) const MAX_HEADER_FIELDS: usize = 9_900;
+
+/// Count the header fields of a raw message: the lines of the header block
+/// (up to the first blank line) that do not continue the one before. Works
+/// on the octets and copies nothing.
+pub(crate) fn header_field_count(data: &[u8]) -> usize {
+	let header_end = data
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.map_or(data.len(), |p| p + 2);
+	data[..header_end]
+		.split(|b| *b == b'\n')
+		.filter(|line| {
+			let line = line.strip_suffix(b"\r").unwrap_or(line);
+			!line.is_empty() && !matches!(line.first(), Some(b' ' | b'\t'))
+		})
+		.count()
+}
+
 /// Build the RFC 5321 section 4.4 trace header prepended to accepted mail.
 pub(crate) fn received_header(
 	helo: Option<&str>,

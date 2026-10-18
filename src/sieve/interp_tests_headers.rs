@@ -142,3 +142,30 @@ fn only_the_first_ten_thousand_headers_are_read_and_a_lookup_says_so() {
 	let (outcome, _) = run("if exists \"subject\" { discard; }\n", &crowded(10));
 	assert!(outcome.discarded && !outcome.inspection_truncated);
 }
+
+/// 12 000 filler headers and then the ones a filter would look at.
+fn padded() -> Vec<u8> {
+	let mut raw = Vec::new();
+	for n in 0..12_000 {
+		raw.extend_from_slice(format!("x{n}: y\r\n").as_bytes());
+	}
+	raw.extend_from_slice(b"From: evil@x.example\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\nSubject: cheap\r\n\r\nbody\r\n");
+	raw
+}
+
+#[test]
+fn every_test_that_looks_at_headers_says_when_some_were_not_read() {
+	// SMTP refuses such a message, but a message can reach the filter by
+	// other ways (the cut is the safety net), and no test may answer "not
+	// there" about a header past the cut without a trace.
+	for script in [
+		"if header :contains \"subject\" \"cheap\" { discard; }",
+		"if address :is \"from\" \"evil@x.example\" { discard; }",
+		"if exists \"from\" { discard; }",
+		"if not exists \"from\" { keep; }",
+		"require \"date\";\nif date :is \"date\" \"year\" \"2024\" { discard; }",
+	] {
+		let (outcome, _) = run(script, &padded());
+		assert!(outcome.inspection_truncated, "{script}: {outcome:?}");
+	}
+}

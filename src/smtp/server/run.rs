@@ -9,7 +9,8 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
+	MAX_HEADER_FIELDS, RECEIVED_HOP_LIMIT, header_field_count, line_error_reply, received_header,
+	received_hop_count,
 };
 
 use super::data_rate::{Cut, RateWindow, send_within};
@@ -225,6 +226,18 @@ impl Server {
 						send(
 							&mut stream,
 							&Reply::single(554, "5.4.6 too many hops, this message is looping"),
+						)
+						.await?;
+						continue;
+					}
+					// A message with thousands of header fields has fields a
+					// Sieve filter would not read: refused, so none can be
+					// hidden from the filters by padding.
+					if header_field_count(&message.data) > MAX_HEADER_FIELDS {
+						tracing::warn!("rejecting message: too many header fields");
+						send(
+							&mut stream,
+							&Reply::single(554, "5.6.0 too many header fields in this message"),
 						)
 						.await?;
 						continue;

@@ -16,6 +16,8 @@ pub struct Message {
 	/// The message had more headers than [`MAX_HEADERS`]; the rest were not
 	/// read.
 	headers_cut: bool,
+	/// Some header was longer than is kept of it.
+	values_cut: bool,
 	pub(super) size: usize,
 	/// The first [`BODY_WINDOW`] octets of the body (a few more, cut again
 	/// by [`Message::body_window`]): the rest is never read, so it is not
@@ -36,9 +38,12 @@ pub struct Message {
 
 impl Message {
 	/// Parse headers (unfolded) and record the total size. Only the first
-	/// 10 000 headers and the first mebibyte of the body are kept: a message is up to the operator's size limit, and what
-	/// the interpreter reads of it is a fixed window, so what it holds of it
-	/// is too.
+	/// 10 000 headers and the first mebibyte of the body are kept, and no
+	/// header more than 64 KiB of itself: a message is up to the operator's
+	/// size limit, and what the interpreter reads of it is a fixed window, so
+	/// what it holds of it is too. The octets are cut before they are
+	/// converted to text, so a message of bytes that are not UTF-8 costs no
+	/// more than one that is.
 	pub fn parse(raw: &[u8]) -> Message {
 		let blank = raw.windows(4).position(|w| w == b"\r\n\r\n");
 		let header_end = blank.map_or(raw.len(), |p| p + 2);
@@ -48,28 +53,35 @@ impl Message {
 		// boundary leaves the window whole.
 		let kept = &whole_body[..whole_body.len().min(BODY_WINDOW + 4)];
 		let body = String::from_utf8_lossy(kept).into_owned();
-		let block = String::from_utf8_lossy(&raw[..header_end]);
 		let mut headers = Vec::new();
 		let mut headers_cut = false;
+		let mut values_cut = false;
 		let mut current: Option<String> = None;
-		for line in block.split_inclusive('\n') {
-			let content = line.trim_end_matches(['\r', '\n']);
-			if content.starts_with(' ') || content.starts_with('\t') {
-				if let Some(buffer) = &mut current {
+		for line in raw[..header_end].split_inclusive(|b| *b == b'\n') {
+			let line = line.strip_suffix(b"\n").unwrap_or(line);
+			let line = line.strip_suffix(b"\r").unwrap_or(line);
+			let kept = &line[..line.len().min(HEADER_NAME_WINDOW)];
+			values_cut |= kept.len() < line.len();
+			if matches!(line.first(), Some(b' ' | b'\t')) {
+				if let Some(buffer) = &mut current
+					&& buffer.len() < HEADER_NAME_WINDOW
+				{
 					buffer.push(' ');
-					buffer.push_str(content.trim_start());
+					buffer.push_str(String::from_utf8_lossy(kept).trim_start());
+				} else if current.is_some() {
+					values_cut = true;
 				}
 				continue;
 			}
 			if let Some(buffer) = current.take() {
 				push_header(&mut headers, &buffer);
 			}
-			if !content.is_empty() {
+			if !line.is_empty() {
 				if headers.len() >= MAX_HEADERS {
 					headers_cut = true;
 					break;
 				}
-				current = Some(content.to_string());
+				current = Some(String::from_utf8_lossy(kept).into_owned());
 			}
 		}
 		if let Some(buffer) = current.take() {
@@ -87,6 +99,7 @@ impl Message {
 			headers,
 			index,
 			headers_cut,
+			values_cut,
 			size: raw.len(),
 			body,
 			body_cut: whole_body.len() > kept.len(),
@@ -121,6 +134,11 @@ impl Message {
 		self
 	}
 
+	/// Whether the message had more headers than are read.
+	pub(super) fn headers_cut(&self) -> bool {
+		self.headers_cut
+	}
+
 	/// Whether a header is called `name` (ignoring case).
 	pub(super) fn has_header(&self, name: &str) -> bool {
 		!self.positions(name).is_empty()
@@ -136,7 +154,7 @@ impl Message {
 	/// `truncated`.
 	pub(super) fn visible_headers<S: AsRef<str>>(&self, names: &[S]) -> Visible<'_> {
 		let mut seen = Visible {
-			truncated: self.headers_cut,
+			truncated: self.headers_cut || self.values_cut,
 			headers_cut: self.headers_cut,
 			..Visible::default()
 		};

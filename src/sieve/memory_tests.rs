@@ -121,3 +121,27 @@ fn a_few_headers_are_all_visible_and_not_truncated() {
 	assert_eq!(seen.values, vec!["1", "2"]);
 	assert!(!seen.truncated);
 }
+
+#[test]
+fn headers_that_are_not_utf8_cost_no_more_than_headers_that_are() {
+	// One octet that is not UTF-8 used to make the whole header block be
+	// copied (and each such octet three times as long) before any cut.
+	let mut raw = Vec::new();
+	while raw.len() < 24 * MIB {
+		raw.extend_from_slice(b"h: \xff\xfe\r\n");
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let (_, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(peak < 8 * MIB, "{peak} octets held for 24 MiB of headers");
+}
+
+#[test]
+fn a_message_of_one_endless_line_of_bad_octets_is_cut_before_it_is_converted() {
+	let raw = vec![0xffu8; 24 * MIB];
+	let (message, peak) = peak_bytes(|| super::interp::Message::parse(&raw));
+	assert!(
+		peak < 4 * MIB,
+		"{peak} octets held for 24 MiB without a break"
+	);
+	assert!(!message.has_header("h"));
+}

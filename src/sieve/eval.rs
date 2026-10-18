@@ -26,9 +26,15 @@ pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool 
 			.is_some_and(|c| eval_test(c, message, vars)),
 		"allof" => test.children.iter().all(|c| eval_test(c, message, vars)),
 		"anyof" => test.children.iter().any(|c| eval_test(c, message, vars)),
-		"exists" => strings(&test.args)
-			.iter()
-			.all(|name| vars.charge(lookup_cost(name)) && message.has_header(name)),
+		"exists" => {
+			// A header past the ones read is not found: say so.
+			if message.headers_cut() {
+				vars.mark_truncated();
+			}
+			strings(&test.args)
+				.iter()
+				.all(|name| vars.charge(lookup_cost(name)) && message.has_header(name))
+		}
 		"header" => header_test(test, message, vars),
 		"address" => address_test(test, message, vars),
 		"envelope" => envelope_test(test, message, vars),
