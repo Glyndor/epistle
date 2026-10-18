@@ -297,6 +297,9 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     a 5.8 GiB host) running it left the warning in place. It now lists the
     commands that bring the sum under the line together, and says the host
     needs more memory when the floors of the services do not get there.
+  * The outbound suppression markers and their directories are created with
+    explicit modes (0600 and 0700), like the rest of the spool, and no longer
+    with whatever umask the process that wrote the first one had.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 
