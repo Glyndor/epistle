@@ -21,7 +21,7 @@
 //! parts differently, is read as raw bytes as well, so that whatever either
 //! reader shows is read; a part that declares two transfer encodings is read
 //! under each, and text in a charset that is not UTF-8 is read as the person
-//! sees it (see [`read`]).
+//! sees it.
 //!
 //! The pass is linear, keeps at most about 400 KiB of tokens in memory and
 //! never decodes more than [`MAX_DECODED`] of the message's parts. A message
