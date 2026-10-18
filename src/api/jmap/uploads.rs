@@ -20,6 +20,14 @@ use crate::api::state::ApiState;
 /// Most blob ids read ahead for one request.
 const MAX_BLOBS: usize = 256;
 
+/// How many blobs a request may make the server read in full and then put
+/// aside for passing the byte budget. Past it the blobs not yet read count as
+/// over the budget without being read: a request that names two hundred blobs
+/// of the largest size, each too big for what is left, would otherwise have
+/// the server read and decrypt gigabytes before saying so. A request that
+/// stays within its budget never gets near this.
+const MAX_WASTED_READS: usize = 4;
+
 /// Deepest `bodyStructure` searched for blob ids.
 const MAX_DEPTH: usize = 16;
 
@@ -65,6 +73,7 @@ impl Uploads {
 		// REST `POST /api/v1/send` builder use.
 		let mut budget = state.max_message_size();
 		let mut seen = 0usize;
+		let mut wasted = 0usize;
 		for MethodCall(name, args, _) in &request.method_calls {
 			let allowed = match name.as_str() {
 				"Email/set" | "SieveScript/set" => can_write,
@@ -89,12 +98,17 @@ impl Uploads {
 					continue;
 				}
 				seen += 1;
+				if wasted >= MAX_WASTED_READS {
+					uploads.over_budget.push(key);
+					continue;
+				}
 				let backend = state.blob_backend();
 				let Some(data) = blobs::read_blob(backend, account, id, state.crypto()).await
 				else {
 					continue;
 				};
 				if data.len() > budget {
+					wasted += 1;
 					uploads.over_budget.push(key);
 					continue;
 				}
