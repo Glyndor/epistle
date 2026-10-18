@@ -237,7 +237,9 @@ fn decode(bytes: &[u8]) -> impl Iterator<Item = char> + '_ {
 	})
 }
 
-/// A header being read: its name, and its value as the interpreter sees it,
+/// A header being read: its name (cut of the spaces and tabs before its colon,
+/// and of no other blank: a name that ends in a no-break space is not the name
+/// without it, for the readers that parse it elsewhere in the server), and its value as the interpreter sees it,
 /// built as the octets come: every run of white space (folding included) is
 /// one space, the ends are trimmed, and no more than 64 KiB are kept. The
 /// blanks are collapsed before the cut, so padding with them cannot push the
@@ -253,7 +255,7 @@ impl Field {
 	fn named(name: &[u8]) -> Self {
 		let name: String = decode(name).collect();
 		Self {
-			name: name.trim_end().to_string(),
+			name: name.trim_end_matches([' ', '\t']).to_string(),
 			value: String::new(),
 			blank: false,
 		}
@@ -285,3 +287,7 @@ impl Field {
 		headers.push((self.name, self.value));
 	}
 }
+
+#[cfg(test)]
+#[path = "message_tests.rs"]
+mod tests;

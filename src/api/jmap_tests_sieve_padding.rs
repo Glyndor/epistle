@@ -160,3 +160,32 @@ fn a_message_with_bare_lf_is_all_header_here_and_refused_when_it_has_thousands_o
 		Err(SinkError::TooManyHeaderFields)
 	));
 }
+
+/// A sink that refuses everything for having too many header fields.
+struct Padded;
+
+impl crate::smtp::sink::MessageSink for Padded {
+	fn deliver(&self, _: AcceptedMessage) -> Result<(), SinkError> {
+		Err(SinkError::TooManyHeaderFields)
+	}
+}
+
+#[tokio::test]
+async fn post_api_send_answers_a_padded_refusal_with_422() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app =
+		router(super::tests::test_state(dir.path(), 0).with_outbound(std::sync::Arc::new(Padded)));
+	let (status, body) = super::tests::request_with_body(
+		&app,
+		"POST",
+		"/api/v1/send",
+		Some(super::tests::TOKEN.as_str()),
+		Some(serde_json::json!({
+			"from": "alice@example.org", "to": ["bob@elsewhere.example"],
+			"subject": "s", "text": "hello"
+		})),
+	)
+	.await;
+	assert_eq!(status.as_u16(), 422, "{body}");
+	assert_eq!(body["error"]["code"], "too_many_header_fields", "{body}");
+}
