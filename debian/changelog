@@ -77,6 +77,71 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     table, unused, because the corpus keeps keyed hashes and cannot convert
     them. Tokens in ASCII are unchanged. A message that cannot be reduced at all
     teaches nothing and spends none of the sender's budget.
+  * JMAP: Sieve scripts (RFC 9661). The session advertises
+    `urn:ietf:params:jmap:sieve`, and `SieveScript/get`, `/query`, `/set` and
+    `/validate` manage the same scripts ManageSieve does: a script written
+    over either is listed, valid and active in the other, with an id that
+    survives a rename. Exactly one script is active, switched with
+    `onSuccessActivateScript` and `onSuccessDeactivateScript`. The limits
+    apply to both protocols: 1 MiB per script, 50 scripts, names of 128
+    characters and 200 octets, and a `require` of an extension the
+    interpreter does not run is refused (ManageSieve answers
+    `NO (QUOTA/MAXSIZE)` and `NO (QUOTA/MAXSCRIPTS)`, and HAVESPACE checks
+    them). A refusal names the line and never repeats the script. See
+    docs/configuration.md.
+  * Sieve: a script is now bounded in what one run may spend. `:matches` no
+    longer overflows the stack or takes exponential time on a pattern of many
+    wildcards (a 100 KB script aborted the server), and a text of any length
+    still matches; `set "a" "${a}${a}"` repeated no longer builds gigabytes
+    (variables are cut to 4096 octets, 64 KiB per run); a run is stopped past
+    20000 steps or 256 MiB of work (what it decided about where the
+    message goes stands, what it would have sent is dropped); `fileinto` files
+    into a folder once and into at most 8 folders; no chain of `not` nests past
+    64 levels (about 200000 of them overflowed the stack). A filter that files
+    by a header (`fileinto "${1}"`) makes no folder past 200 in the account,
+    counting every level, and keeps the message in INBOX instead.
+  * Sieve `redirect`: at most 4 addresses per message and an address once, and
+    the target must be a valid address (a line break in it was written into
+    the outbound `RCPT TO` command). A redirect to something that is not an
+    address keeps the message instead of dropping it behind a redirect that
+    never happened. Upgrading: an active script that redirects to more than 4
+    different addresses now forwards to the first 4 and the log says how many
+    it ignored; a script that relied on `redirect` of a malformed address now
+    leaves the message in INBOX.
+  * Sieve scripts (ManageSieve and JMAP, one check): a `require` of an extension
+    the interpreter does not run is refused when saving, and the list now
+    includes `subaddress`, `comparator-i;octet` and `comparator-i;ascii-casemap`.
+    Upgrading: a stored script that requires an unsupported extension keeps
+    running but cannot be saved again until it is fixed; names with U+2028 or
+    U+2029, with white space at either end, with a bidirectional control or not
+    in normal form C are no longer listed (the log names the account once;
+    rename the files in `<data_dir>/accounts/<account>/sieve/`); an account
+    with more than 50 scripts keeps them all and cannot add one until it is
+    under the limit. The active marker is no longer trimmed.
+  * Sieve: what a test reads of a message is a fixed window: the first 1 MiB
+    of the body, and per header name of a lookup the first 1000 values and
+    64 KiB (16 names at most), so no header hides the others listed with it.
+    Upgrading: a stored script with a `:matches` key over 256 characters or 32
+    wildcards no longer matches (the test is false, the rest of the script
+    runs, and the log names the account once an hour); it used to match. A
+    message bigger than that no longer makes a script run out of work, and a rule that matches text past the
+    window does not see it: the log says so once an hour per account and the
+    new counter `mail_sieve_inspection_truncated_total` (alert metric
+    `sieve_inspection_truncated`) counts the messages. A run that does run
+    out keeps its `discard`, `fileinto` and flags, drops its `redirect`,
+    `reject` and `vacation`, and keeps the message if anything outward was
+    dropped. A `set` that does not fit now stops the run instead of being
+    ignored, and the numbered match variables no longer share the 64 KiB of
+    the script's own variables. See docs/configuration.md.
+  * JMAP: `VacationResponse/set` that switches the reply on, or changes one
+    that is on, takes the `send` scope as well as `write`, like a Sieve script
+    that replies; a key with `read` and `write` only gets `forbidden`.
+    Switching it off needs only `write`.
+  * JMAP: storing or activating a Sieve script that redirects, replies or
+    rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
+    step under the account lock (`ifInState` is exact, the active script changes
+    without a moment of no filter), and waiting for that lock no longer holds a
+    runtime worker.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 
@@ -375,71 +440,6 @@ epistle (0.12.1) unstable; urgency=medium
     alone and never written to, a wildcard hidden by a delegation does not
     block the domain's wildcard, and `--undo` leaves a record in a name
     delegated since. See docs/dns.md.
-  * JMAP: Sieve scripts (RFC 9661). The session advertises
-    `urn:ietf:params:jmap:sieve`, and `SieveScript/get`, `/query`, `/set` and
-    `/validate` manage the same scripts ManageSieve does: a script written
-    over either is listed, valid and active in the other, with an id that
-    survives a rename. Exactly one script is active, switched with
-    `onSuccessActivateScript` and `onSuccessDeactivateScript`. The limits
-    apply to both protocols: 1 MiB per script, 50 scripts, names of 128
-    characters and 200 octets, and a `require` of an extension the
-    interpreter does not run is refused (ManageSieve answers
-    `NO (QUOTA/MAXSIZE)` and `NO (QUOTA/MAXSCRIPTS)`, and HAVESPACE checks
-    them). A refusal names the line and never repeats the script. See
-    docs/configuration.md.
-  * Sieve: a script is now bounded in what one run may spend. `:matches` no
-    longer overflows the stack or takes exponential time on a pattern of many
-    wildcards (a 100 KB script aborted the server), and a text of any length
-    still matches; `set "a" "${a}${a}"` repeated no longer builds gigabytes
-    (variables are cut to 4096 octets, 64 KiB per run); a run is abandoned and
-    stopped past 20000 steps or 256 MiB of work (what it decided about where the
-    message goes stands, what it would have sent is dropped); `fileinto` files
-    into a folder once and into at most 8 folders; no chain of `not` nests past
-    64 levels (about 200000 of them overflowed the stack). A filter that files
-    by a header (`fileinto "${1}"`) makes no folder past 200 in the account,
-    counting every level, and keeps the message in INBOX instead.
-  * Sieve `redirect`: at most 4 addresses per message and an address once, and
-    the target must be a valid address (a line break in it was written into
-    the outbound `RCPT TO` command). A redirect to something that is not an
-    address keeps the message instead of dropping it behind a redirect that
-    never happened. Upgrading: an active script that redirects to more than 4
-    different addresses now forwards to the first 4 and the log says how many
-    it ignored; a script that relied on `redirect` of a malformed address now
-    leaves the message in INBOX.
-  * Sieve scripts (ManageSieve and JMAP, one check): a `require` of an extension
-    the interpreter does not run is refused when saving, and the list now
-    includes `subaddress`, `comparator-i;octet` and `comparator-i;ascii-casemap`.
-    Upgrading: a stored script that requires an unsupported extension keeps
-    running but cannot be saved again until it is fixed; names with U+2028 or
-    U+2029, with white space at either end, with a bidirectional control or not
-    in normal form C are no longer listed (the log names the account once;
-    rename the files in `<data_dir>/accounts/<account>/sieve/`); an account
-    with more than 50 scripts keeps them all and cannot add one until it is
-    under the limit. The active marker is no longer trimmed.
-  * Sieve: what a test reads of a message is a fixed window: the first 1 MiB
-    of the body, and per header name of a lookup the first 1000 values and
-    64 KiB (16 names at most), so no header hides the others listed with it.
-    Upgrading: a stored script with a `:matches` key over 256 characters or 32
-    wildcards no longer matches (the test is false, the rest of the script
-    runs, and the log names the account once an hour); it used to match. A message bigger than that no longer
-    makes a script run out of work, and a rule that matches text past the
-    window does not see it: the log says so once an hour per account and the
-    new counter `mail_sieve_inspection_truncated_total` (alert metric
-    `sieve_inspection_truncated`) counts the messages. A run that does run
-    out keeps its `discard`, `fileinto` and flags, drops its `redirect`,
-    `reject` and `vacation`, and keeps the message if anything outward was
-    dropped. A `set` that does not fit now stops the run instead of being
-    ignored, and the numbered match variables no longer share the 64 KiB of
-    the script's own variables. See docs/configuration.md.
-  * JMAP: `VacationResponse/set` that switches the reply on, or changes one
-    that is on, takes the `send` scope as well as `write`, like a Sieve script
-    that replies; a key with `read` and `write` only gets `forbidden`.
-    Switching it off needs only `write`.
-  * JMAP: storing or activating a Sieve script that redirects, replies or
-    rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
-    step under the account lock (`ifInState` is exact, the active script changes
-    without a moment of no filter), and waiting for that lock no longer holds a
-    runtime worker.
 
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 19:27:09 +0000
 
