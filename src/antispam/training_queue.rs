@@ -9,7 +9,7 @@
 //!
 //! A job names the message file instead of carrying its bytes. The
 //! worker reads and decodes the file when it gets to it, and tokenises
-//! at most [`MAX_TRAINING_BYTES`]. A message expunged in between is
+//! at most [`MAX_TRAINING_BYTES`] of it (see [`super::scoring_text`]). A message expunged in between is
 //! skipped.
 //!
 //! Training is advisory. [`TrainingQueue::submit`] never waits: when the
@@ -29,11 +29,38 @@ use crate::storage::MessageCrypto;
 /// Jobs the queue holds before [`TrainingQueue::submit`] starts dropping.
 pub const TRAINING_QUEUE_CAPACITY: usize = 256;
 
-/// Leading bytes of a message the trainer tokenises, the same window the
-/// SMTP path scans for URLs ([`super::urls::MAX_SCAN_BYTES`]). The
-/// headers and the opening of the body carry the signal; the bound keeps
-/// one large attachment from becoming tens of thousands of token rows.
+/// Bytes of a message the trainer and the scorer tokenise, the size of the
+/// window the SMTP path scans for URLs ([`super::urls::MAX_SCAN_BYTES`]). The
+/// headers and the opening of the body carry the signal, and the end of the
+/// message too; the bound keeps one large attachment from becoming tens of
+/// thousands of token rows.
 pub const MAX_TRAINING_BYTES: usize = super::urls::MAX_SCAN_BYTES;
+
+/// Whether a byte can be part of a token: an ASCII letter or digit, or a byte
+/// of a multi-byte character.
+fn in_token(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric() || byte >= 0x80
+}
+
+/// The furthest back from `at` (at most) that does not cut a token in two: a
+/// token is at most 30 bytes, so a run longer than that is no token and is
+/// left as it is.
+pub(crate) fn seam_before(bytes: &[u8], at: usize) -> usize {
+	let mut cut = at;
+	while at - cut <= 31 && cut > 0 && in_token(bytes[cut - 1]) && in_token(bytes[cut]) {
+		cut -= 1;
+	}
+	if at - cut > 31 { at } else { cut }
+}
+
+/// The nearest point from `at` on (at most) that does not cut a token in two.
+pub(crate) fn seam_after(bytes: &[u8], at: usize) -> usize {
+	let mut cut = at;
+	while cut - at <= 31 && cut < bytes.len() && in_token(bytes[cut - 1]) && in_token(bytes[cut]) {
+		cut += 1;
+	}
+	if cut - at > 31 { at } else { cut }
+}
 
 /// One message to train on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,12 +145,12 @@ pub async fn run_worker(
 	}
 }
 
-/// Read and decode the message at `path`, keeping the training window.
+/// Read and decode the message at `path`. The trainer reduces it to the text
+/// it learns from (see [`super::scoring_text`]); that needs the whole message,
+/// because the structure is what tells a text part from an attachment.
 fn read_window(path: &std::path::Path, crypto: &MessageCrypto) -> std::io::Result<Vec<u8>> {
 	let stored = std::fs::read(path)?;
-	let mut text = crypto.decode(&stored)?;
-	text.truncate(MAX_TRAINING_BYTES);
-	Ok(text)
+	crypto.decode(&stored)
 }
 
 #[cfg(test)]

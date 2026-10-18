@@ -197,7 +197,7 @@ impl Metrics {
 			),
 			(
 				"mail_bayes_training_dropped_total",
-				"Per-account Bayesian training jobs dropped because the bounded hand-off queue was full.",
+				"Bayesian training jobs dropped: a bounded hand-off queue was full, or the source had used its share of the shared corpus.",
 				&self.bayes_training_dropped,
 			),
 			(

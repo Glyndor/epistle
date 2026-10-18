@@ -60,3 +60,94 @@ fn an_unreadable_content_type_or_any_binary_type_makes_an_attachment() {
 		vec!["text/plain", "application/x-msdownload"]
 	);
 }
+
+#[test]
+fn every_encoding_a_part_declares_is_kept_beyond_the_first() {
+	let header = parse(
+		b"Content-Type: text/plain\r\nContent-Transfer-Encoding: 7bit\r\n\
+		  Content-Transfer-Encoding: base64\r\nContent-Transfer-Encoding: base64\r\n\
+		  Content-Transfer-Encoding: Quoted-Printable\r\nContent-Transfer-Encoding: nonsense\r\n",
+	);
+	assert_eq!(header.encoding, Encoding::Identity);
+	assert_eq!(
+		header.other_encodings,
+		[Encoding::Base64, Encoding::QuotedPrintable]
+	);
+	assert!(header.ambiguous);
+	let plain = parse(b"Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n");
+	assert!(plain.other_encodings.is_empty());
+}
+
+#[test]
+fn a_part_could_be_text_unless_it_is_plainly_a_file() {
+	let could = |block: &[u8]| parse(block).could_be_text();
+	assert!(could(b"Content-Type: text/plain\r\n"));
+	assert!(could(b"Subject: no type at all\r\n"));
+	assert!(could(b"Content-Type: message/rfc822\r\n"));
+	assert!(could(b"Content-Type: multipart/mixed\r\n"));
+	assert!(could(
+		b"Content-Type: text/plain; name=a.txt\r\nContent-Disposition: attachment\r\n"
+	));
+	// Two readers disagree about it: either may show text.
+	assert!(could(
+		b"Content-Type: application/pdf\r\nContent-Type: application/zip\r\n"
+	));
+	assert!(!could(
+		b"Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=a.pdf\r\n"
+	));
+	assert!(!could(b"Content-Type: image/png; name=a.png\r\n"));
+}
+
+/// No `Content-Type` is `text/plain` (RFC 2045), also on a part marked as an
+/// attachment, and a type nobody can read is text to the client that falls
+/// back to it.
+#[test]
+fn a_part_with_no_readable_type_could_be_text() {
+	for block in [
+		&b"Content-Disposition: attachment\r\n"[..],
+		b"Content-Disposition: attachment; filename=a.txt\r\n",
+		b"Content-Type:\r\nContent-Disposition: attachment\r\n",
+		b"Content-Type: ;;\r\nContent-Disposition: attachment\r\n",
+		b"Content-Transfer-Encoding: base64\r\nContent-Disposition: attachment\r\n",
+	] {
+		assert!(parse(block).could_be_text(), "{block:?}");
+	}
+}
+
+#[test]
+fn every_charset_a_part_declares_is_kept_in_lower_case() {
+	let header = parse(
+		b"Content-Type: text/plain; charset=\"UTF-16LE\"\r\n\
+		  Content-Type: text/plain; charset=utf-8\r\nContent-Type: text/html; charset=UTF-8\r\n",
+	);
+	assert_eq!(header.charsets, ["utf-16le", "utf-8"]);
+	assert!(parse(b"Content-Type: text/plain\r\n").charsets.is_empty());
+	assert!(parse(b"Subject: x\r\n").charsets.is_empty());
+}
+
+#[test]
+fn the_extended_and_quoted_forms_of_a_charset_are_read() {
+	let charsets = |block: &[u8]| parse(block).charsets;
+	assert_eq!(
+		charsets(b"Content-Type: text/plain; charset*=UTF-16LE''x\r\n"),
+		["utf-16le"]
+	);
+	// Pieces of a split value are junk names too, which do no harm.
+	assert!(
+		charsets(b"Content-Type: text/plain; charset*0*=utf-16be''ab; charset*1*=cd\r\n")
+			.contains(&"utf-16be".to_string())
+	);
+	let twice = charsets(
+		b"Content-Type: text/plain; charset=\"utf-8\"\r\nContent-Type: text/plain; charset*=utf-8''x\r\n",
+	);
+	assert_eq!(twice.iter().filter(|name| *name == "utf-8").count(), 1);
+	let many: String = (0..3000)
+		.map(|n| format!("Content-Type: text/plain; charset=c{n}\r\n"))
+		.collect();
+	let all = charsets(many.as_bytes());
+	assert_eq!(all.len(), 3000);
+	assert_eq!(
+		all.iter().collect::<std::collections::HashSet<_>>().len(),
+		3000
+	);
+}

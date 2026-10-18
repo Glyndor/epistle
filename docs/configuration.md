@@ -90,7 +90,7 @@ a connection URL.
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26279936` (25 MiB + 64 KiB) | Messages above this size are not sent to clamd. With `clamd_on_error = "accept"` they are accepted unscanned; with `defer` they are refused with `552 5.3.4 message too large for the content scan`. The size counts the trace and authentication headers the server adds, so `defer` requires at least `max_message_size` + 64 KiB (the configuration is refused otherwise). A message exactly at the limit is scanned. |
 | `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
-| `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus. |
+| `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
 ```toml
@@ -581,7 +581,10 @@ counters each listener already maintains are the only defence.
 The Bayesian corpus is keyed by scope. Two scopes are in play:
 
 - The **shared** scope (`""`) is the server's own accept/reject learning.
-  SMTP accept/reject decisions (`train_in_background`) feed it.
+  SMTP accept/reject decisions feed it: mail the server rejects or
+  quarantines is learned as spam, mail it accepts as ham from a sender it
+  verified. That mail comes from anyone, so the learning is bounded (see
+  below).
 - The **account** scope (the local account name) is the per-user learning.
   IMAP STORE and JMAP `Email/set` train it on a `$Junk` / `$NotJunk`
   transition. Adding `$Junk` trains spam; adding `$NotJunk` or removing
@@ -594,6 +597,95 @@ which falls back to the shared scope for any account whose own scope
 has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
 the threshold the per-account classifier is not trustworthy, so the
 user gets the server's general training rather than a coin-flip.
+
+What a message is read as. The filter reads what a person reads: the header
+block and the `text/*` parts, decoded (base64 and quoted-printable text is
+read for what it says), as a stream of words. Attachments, images and any
+other part that is not text are skipped and cost nothing, so a message with a
+PDF or a photo scores as the message without it. Whitespace, punctuation and
+one-letter words are not words and cost nothing either. A message that two
+readers could split into parts differently is read as raw bytes as well. A message whose
+structure cannot be followed (nested too deep, too many parts, or a text part
+larger than 2 MiB once decoded, or a message inside it that size) is read as
+raw bytes, as the filter always did, and counts as not read in full (see the
+floor of 0.5 below), since text that travels encoded is not decoded that way.
+Files that no client could show as text do not use up the 2 MiB. A part that
+declares two transfer encodings is read under each. Text in UTF-16, or in an
+8-bit charset such as Latin-1 or Windows-1251, is also read as its bytes would
+be shown; RFC 2047 encoded words in the headers are read decoded; zero width
+characters and soft hyphens do not split a word; and letters outside ASCII are
+lowercased. A token with a capital outside ASCII ("Привет", "École") that the
+corpus learned before 0.12.2 is looked up now under its lower case form and is
+learned again; the old rows stay in the table, unused, because the corpus
+holds keyed hashes and cannot convert them. UTF-32, UTF-7 and the tags and
+entities of HTML are not read.
+
+What a message costs. Learning from, and scoring, one message costs a fixed
+amount whatever its size. Of the words, the first and the last 128 KiB are
+read; of those, at most 5000 distinct words. A message under both bounds is
+scored on all of it, exactly as before. A message over either is not read in
+full: its first and last 1000 distinct words are read, the rest of the 5000
+are chosen by a keyed hash of the word (the sender does not hold the key, so
+it cannot choose which of them are read by where it puts them), and it is
+scored on that and never below 0.5, because filler is what a sender hiding
+spam would send. A score of 0.5 is not Junk with the default `bayes_junk_at`
+(0.95), and only `[antispam_llm]` turns it into a second opinion; so on a
+server without it, spam padded with more than 256 KiB of words or 5000
+distinct words, with the spam in the middle, can still reach the inbox. That
+is the detection lost to the bound; the 0.12.1 read the whole message at a cost
+of hundreds of MiB per message. Every figure is a constant, not a setting.
+
+Training is written in one statement, and the transactions of a training and
+of an account removal take their locks in the same order (the totals row, then
+the token rows in ascending order), so they cannot deadlock. A message of 5000
+new words adds 5000 rows, about 1.7 MB of table and 3.5 MB of write-ahead log;
+nothing prunes the shared corpus yet, so the limits below are also the growth of
+the disk: one address can add 30 such messages an hour.
+
+The SMTP server hands each message to a queue of 64 jobs served by 2
+workers, so no more than 2 trainings run at once and the queue holds about
+16 MiB. Ham and spam are counted apart. A client address counts under its
+own block and under the wider one around it (IPv4 /32 and /24, IPv6 /64 and
+/48), and a sender domain counts only when the server verified it, because
+the envelope sender is written by the client. A single address or domain
+may have 4 jobs waiting or running and add 30 per hour; a wider block, 8
+waiting and 120 per hour; a whole network (an IPv4 /16, an IPv6 /32), 16
+waiting over ham and spam together and 125 per hour; the whole server, 2000
+per hour, of which the last quarter is kept for networks that have used 31 or
+fewer. A job with no client address is one network of its own with 4 waiting.
+The tables of keys hold 8192 addresses, 8192 domains and 8192 networks and
+drop the least recently used entry when full, so a flood of new addresses
+forgets old ones and never shuts a new sender out. A job over a limit, or that
+finds the queue full, is dropped and counted in
+`mail_bayes_training_dropped_total`; the reply to the client never waits for
+it, and a job the queue has no room for spends none of the budget. Behind a
+container network that hides the client address (rootless Podman with a
+bridge), every message comes from one address and the whole server learns at
+the rate of one: 30 jobs per hour per kind.
+
+What can be taught. Ham is learned only from a sender the server verified (SPF
+or DKIM passed): a bounce, a SubjectPass resend or any mail from a sender with
+neither teaches nothing. Spam is learned from what the server rejects or
+quarantines, and a sender that fails the checks can make that happen on
+purpose, so within its budget it can have text of its choosing learned as
+spam: about 30 copies of a message are enough to make that message score as
+spam. The limits are what one anonymous sender can do per hour, not a
+guarantee that it can do nothing. A great many distinct networks can still
+move the corpus, which is why a corpus below `MIN_TRUSTED_MESSAGES` is only a
+fallback.
+
+Who scores. An account's scope scores a message only when that account is the
+single local recipient, was addressed as itself and has enough of its own
+(`MIN_TRUSTED_MESSAGES`). Every other message is scored by the shared scope
+when that has enough: one with two or more local recipients, one addressed to
+an alias or a list, and one for an account without enough of its own. The
+verdict (Junk, or a `550` at DATA) applies to every recipient, and what one
+user taught their own corpus must not decide what another user receives. The
+envelope order does not matter, and an alias with a single member counts as
+an alias. Mail to aliases, lists and accounts that have not trained their own
+corpus is therefore subject to `bayes_junk_at` and `bayes_reject_at` through
+the shared corpus, where before it was not scored unless its first member had a
+trained corpus.
 
 Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
 on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to

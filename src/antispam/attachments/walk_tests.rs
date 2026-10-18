@@ -260,3 +260,69 @@ fn the_cost_stays_linear_when_nesting_grows_with_the_input() {
 	);
 	assert_eq!(results, vec![Err(Stop::TooDeep); 3]);
 }
+
+/// A reader of text has no use for a photo or a PDF: it is handed over with no
+/// content and costs nothing of the budget, so the text after it still fits.
+#[test]
+fn walking_for_text_decodes_no_file_and_charges_nothing_for_it() {
+	let big = vec![b'A'; 100_000];
+	let mut words = b"the words after the file ".repeat(2_400);
+	words.extend(b"endword");
+	let raw = corpus::message(&[
+		corpus::attachment("Content-Type: application/pdf; name=a.pdf", &big),
+		corpus::attachment("Content-Type: text/plain", &words),
+	]);
+	let limits = Limits {
+		max_decoded: 110_000,
+		..LIMITS
+	};
+	let mut found = Vec::new();
+	let walked = walk_text(&raw, &limits, |leaf| found.push(leaf));
+	assert!(walked.stopped.is_none());
+	assert_eq!(found.len(), 3, "the body, the file and the text");
+	assert!(found[1].content.is_empty() && !found[1].truncated);
+	assert_eq!(found[1].filename(), Some("a.pdf"));
+	assert_eq!(found[2].content, words);
+	assert!(!found[2].truncated);
+	// Walking for everything decodes the file and the text no longer fits.
+	let (all, _) = leaves(&raw, &limits);
+	assert_eq!(all[1].content.len(), 100_000);
+	assert!(all[2].truncated);
+}
+
+/// A file whose headers two readers take differently, or that one of them
+/// could open as a message, is still decoded for a reader of text.
+#[test]
+fn walking_for_text_still_decodes_what_could_be_text() {
+	let raw = corpus::message(&[
+		corpus::attachment(
+			"Content-Type: application/pdf; name=a.pdf\r\nContent-Type: text/plain",
+			b"two types",
+		),
+		corpus::attachment(
+			"Content-Type: message/rfc822; name=a.eml",
+			b"Subject: x\r\n\r\ninner",
+		),
+	]);
+	let mut found = Vec::new();
+	walk_text(&raw, &LIMITS, |leaf| found.push(leaf));
+	assert!(
+		found
+			.iter()
+			.any(|leaf| leaf.content.starts_with(b"two types"))
+	);
+	assert!(found.iter().any(|leaf| leaf.content.starts_with(b"inner")));
+}
+
+/// A part that declares two transfer encodings is decoded under the second as
+/// well, for the client that takes it.
+#[test]
+fn a_part_with_two_encodings_is_decoded_under_each() {
+	let raw = b"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\n\
+		Content-Type: text/plain\r\nContent-Transfer-Encoding: 7bit\r\n\
+		Content-Transfer-Encoding: base64\r\n\r\naGlkZGVu\r\n--b--\r\n";
+	let (found, _) = leaves(raw, &LIMITS);
+	assert_eq!(found[0].content, b"aGlkZGVu");
+	assert_eq!(found[0].alternates, [b"hidden".to_vec()]);
+	assert!(found[0].ambiguous);
+}

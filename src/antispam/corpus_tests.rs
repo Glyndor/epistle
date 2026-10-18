@@ -463,3 +463,25 @@ async fn a_poisoned_tombstone_lock_still_allows_training() {
 		Err(_) => panic!("the spawned task was cancelled, not panicked"),
 	}
 }
+
+/// A message that could not be reduced is not learned from, and does not even
+/// reach the database: the pool here cannot connect, so an attempt would be an
+/// error.
+#[tokio::test]
+async fn a_message_that_could_not_be_read_teaches_nothing() {
+	let pool = sqlx::postgres::PgPoolOptions::new()
+		.acquire_timeout(std::time::Duration::from_millis(200))
+		.connect_lazy("postgres://nobody@127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, fixture_key());
+	crate::antispam::scoring_text::fail_next_reduction();
+	assert!(matches!(
+		store.train_message("alice", b"any body text", true).await,
+		Ok(false)
+	));
+	let attempt = store.train_message("alice", b"any body text", true).await;
+	assert!(
+		attempt.is_err(),
+		"a message that was read must reach the SQL"
+	);
+}

@@ -44,8 +44,13 @@ pub struct PartHeader {
 	pub declared_types: Vec<String>,
 	/// The part is an attachment rather than message text.
 	pub attachment: bool,
-	/// The body's transfer encoding.
+	/// The body's transfer encoding: the first one declared, as clients do.
 	pub encoding: Encoding,
+	/// The encodings the other copies of the header declare, when they
+	/// differ from [`PartHeader::encoding`]: a client may use any of them.
+	pub other_encodings: Vec<Encoding>,
+	/// The charsets every `Content-Type` declares, lower case, distinct.
+	pub charsets: Vec<String>,
 	/// The multipart boundary, when the part is a usable multipart.
 	pub boundary: Option<Vec<u8>>,
 	/// Two readers could see this part differently.
@@ -131,28 +136,65 @@ pub fn parse(block: &[u8]) -> PartHeader {
 
 	// `Base64 `, `"base64"` and `base64; x=y` all reach some client as
 	// base64; anything past case and outer whitespace is flagged.
-	let encoding_token = encodings.first().map(|value| {
-		let token = value
+	let encoding_token = |value: &str| {
+		value
 			.trim_matches('"')
 			.split(|c: char| c == ';' || c.is_whitespace())
 			.next()
 			.unwrap_or("")
-			.to_string();
+			.to_string()
+	};
+	let named = |token: &str| match token {
+		"" | "7bit" | "8bit" | "binary" => Some(Encoding::Identity),
+		"base64" => Some(Encoding::Base64),
+		"quoted-printable" => Some(Encoding::QuotedPrintable),
+		"x-uuencode" | "uuencode" | "x-uue" => Some(Encoding::Uuencode),
+		_ => None,
+	};
+	let first = encodings.first().map(|value| {
+		let token = encoding_token(value);
 		ambiguous |= token != *value;
 		token
 	});
-	let encoding = match encoding_token.as_deref() {
-		None | Some("7bit" | "8bit" | "binary" | "") => Encoding::Identity,
-		Some("base64") => Encoding::Base64,
-		Some("quoted-printable") => Encoding::QuotedPrintable,
-		Some("x-uuencode" | "uuencode" | "x-uue") => Encoding::Uuencode,
-		Some(_) => {
+	let encoding = match first.as_deref() {
+		None => Encoding::Identity,
+		Some(token) => named(token).unwrap_or_else(|| {
 			// An encoding nobody can name is read as-is, and flagged.
 			ambiguous = true;
 			Encoding::Identity
-		}
+		}),
 	};
+	let mut other_encodings: Vec<Encoding> = Vec::new();
+	for value in encodings.iter().skip(1) {
+		if let Some(other) = named(&encoding_token(value))
+			&& other != encoding
+			&& !other_encodings.contains(&other)
+		{
+			other_encodings.push(other);
+		}
+	}
 
+	// Every `charset` of every `Content-Type`, each once. mail-parser decodes
+	// the single-part extended form `charset*=name''text` with the charset it
+	// names and keeps neither, so those names are read from the block.
+	let mut charsets: Vec<String> = Vec::new();
+	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+	let from_attributes = types
+		.iter()
+		.flat_map(|ct| ct.attributes().unwrap_or(&[]))
+		.filter(|attribute| {
+			attribute
+				.name
+				.trim_end_matches('*')
+				.eq_ignore_ascii_case("charset")
+		})
+		.map(|attribute| attribute.value.to_ascii_lowercase());
+	for name in from_attributes.chain(extended_charsets(&block)) {
+		let name = name.trim().to_string();
+		if !name.is_empty() && seen.insert(name.clone()) {
+			charsets.push(name);
+		}
+	}
 	let multipart = declared_type.starts_with("multipart/");
 	let boundary = types
 		.first()
@@ -190,9 +232,60 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		declared_types,
 		attachment,
 		encoding,
+		other_encodings,
+		charsets,
 		boundary,
 		ambiguous,
 	}
+}
+
+impl PartHeader {
+	/// Whether a client could show this part as text, or open it as a message
+	/// that holds some: a part that is not an attachment, a text part, a
+	/// message or a multipart, a part with no type declared (RFC 2045 makes it
+	/// `text/plain`), or a part whose headers two readers take differently.
+	pub fn could_be_text(&self) -> bool {
+		!self.attachment
+			|| self.ambiguous
+			|| self.declared_types.is_empty()
+			|| self.declared_types.iter().any(|kind| {
+				["text/", "message/", "multipart/"]
+					.iter()
+					.any(|prefix| kind.starts_with(prefix))
+			})
+	}
+}
+
+/// The names in `charset*=name''...` and `charset*0*=name''...` of a header block,
+/// lower case.
+fn extended_charsets(block: &[u8]) -> Vec<String> {
+	const KEY: &[u8] = b"charset*";
+	let mut found = Vec::new();
+	let mut at = 0;
+	while at + KEY.len() <= block.len() {
+		if !block[at..at + KEY.len()].eq_ignore_ascii_case(KEY) {
+			at += 1;
+			continue;
+		}
+		let mut rest = &block[at + KEY.len()..];
+		while let [b'0'..=b'9' | b'*', tail @ ..] = rest {
+			rest = tail;
+		}
+		if let [b'=', tail @ ..] = rest {
+			let name: Vec<u8> = tail
+				.iter()
+				.copied()
+				.skip_while(|byte| matches!(byte, b'"' | b' '))
+				.take_while(|byte| !matches!(byte, b'\'' | b'"' | b';' | b' ' | b'\r' | b'\n'))
+				.take(64)
+				.collect();
+			if let Ok(name) = String::from_utf8(name) {
+				found.push(name.to_ascii_lowercase());
+			}
+		}
+		at += KEY.len();
+	}
+	found
 }
 
 /// Candidate names whose extensions differ: one client may show `a.pdf`
