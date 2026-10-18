@@ -264,26 +264,26 @@ impl std::io::Read for Endless {
 }
 
 #[test]
-fn the_worker_reads_only_the_window_of_a_message_that_is_not_encrypted() {
-	use crate::antispam::training_queue::{MAX_TRAINING_BYTES, read_window_from};
+fn the_worker_does_not_read_a_message_file_past_its_ceiling() {
+	use crate::antispam::training_queue::{MAX_STORED_BYTES, read_message_from};
 	use std::io::Read;
 	let taken = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-	let window = read_window_from(
-		Endless(std::sync::Arc::clone(&taken)).take(25 << 20),
+	let error = read_message_from(
+		Endless(std::sync::Arc::clone(&taken)).take(1 << 30),
 		&crate::storage::MessageCrypto::disabled(),
 	)
-	.expect("window");
-	assert_eq!(window.len(), MAX_TRAINING_BYTES);
+	.expect_err("a file of a gibibyte is not a message");
+	assert_eq!(error.to_string(), "message too large to read");
 	let read = taken.load(std::sync::atomic::Ordering::SeqCst);
 	assert!(
-		read <= (MAX_TRAINING_BYTES as u64) + 64 * 1024,
-		"{read} bytes were read of a 25 MiB message"
+		read <= MAX_STORED_BYTES + 1,
+		"{read} bytes were read of a gibibyte"
 	);
 }
 
 #[test]
-fn an_encrypted_message_is_decrypted_and_trimmed_to_the_window() {
-	use crate::antispam::training_queue::{MAX_TRAINING_BYTES, read_window_from};
+fn a_message_is_read_whole_so_that_its_structure_can_be_told() {
+	use crate::antispam::training_queue::{MAX_TRAINING_BYTES, read_message_from};
 	let mut key = [0u8; 32];
 	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
 	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
@@ -291,8 +291,17 @@ fn an_encrypted_message_is_decrypted_and_trimmed_to_the_window() {
 	let plain = vec![b'x'; MAX_TRAINING_BYTES + 5_000];
 	let sealed = crypto.encode(&plain).expect("seal");
 	assert!(sealed.starts_with(crate::storage::MAGIC));
-	let window = read_window_from(std::io::Cursor::new(sealed), &crypto).expect("window");
-	assert_eq!(window, plain[..MAX_TRAINING_BYTES]);
+	let whole = read_message_from(std::io::Cursor::new(sealed), &crypto).expect("message");
+	assert_eq!(whole, plain, "an encrypted message is opened whole");
+	let clear = read_message_from(
+		std::io::Cursor::new(plain.clone()),
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("message");
+	assert_eq!(
+		clear, plain,
+		"a message that is not encrypted is read whole"
+	);
 }
 
 #[tokio::test]
@@ -314,9 +323,9 @@ async fn what_the_worker_cannot_teach_is_counted_by_reason() {
 			_a: &'a str,
 			_t: Vec<u8>,
 			_s: bool,
-		) -> crate::antispam::trainer::TrainerFuture<'a, LearnOutcome> {
+		) -> crate::antispam::trainer::TrainerFuture<'a, crate::antispam::learning::Lesson> {
 			let outcome = self.0;
-			Box::pin(async move { outcome })
+			Box::pin(async move { outcome.into() })
 		}
 		fn score_for_account<'a>(
 			&'a self,

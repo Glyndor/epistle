@@ -16,23 +16,24 @@
 //! order, and shares the in-process `scope_lock` with them. A transaction that
 //! PostgreSQL abandons anyway is run again ([`super::retry`]).
 
-use sqlx::{Postgres, Transaction};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
-use super::LearnOutcome;
+use sqlx::{Connection, Postgres, Transaction};
+
 use super::retry::retrying;
-use crate::antispam::bayes;
+use super::{LearnOutcome, Lesson};
 use crate::antispam::corpus::{BayesStore, SHARED};
-use crate::antispam::training_queue::MAX_TRAINING_BYTES;
+use crate::antispam::scoring_text::scoring_text;
 
 impl BayesStore {
-	/// The keyed hash that names a message in the ledger: the window of the
-	/// message under the instance key, hex encoded. It is not a token hash,
-	/// so the two never share a space.
-	fn message_digest(&self, window: &[u8]) -> String {
-		let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &self.key);
-		let mut context = ring::hmac::Context::with_key(&key);
+	/// The keyed hash that names a message in the ledger: the text read of
+	/// the message under the instance key, hex encoded. It is not a token
+	/// hash, so the two never share a space.
+	fn message_digest(&self, text: &str) -> String {
+		let mut context = ring::hmac::Context::with_key(&self.mac);
 		context.update(b"learned-message\0");
-		context.update(window);
+		context.update(text.as_bytes());
 		context
 			.sign()
 			.as_ref()
@@ -44,8 +45,14 @@ impl BayesStore {
 			})
 	}
 
-	/// Teach the corpus of `scope` that the message whose window is `window`
-	/// is spam (`spam`) or ham, once.
+	/// Teach the corpus of `scope` that the raw message `raw` is spam
+	/// (`spam`) or ham, once.
+	///
+	/// The message is reduced first to the text a person reads of it, as the
+	/// SMTP path does (see [`scoring_text`]): headers and text parts, cut to a
+	/// window, at most [`LearnLimits::tokens_per_lesson`](super::LearnLimits)
+	/// distinct tokens. A message that cannot be read is
+	/// [`LearnOutcome::Unread`] and costs nothing but the reading.
 	///
 	/// - A message the account has not learned is added.
 	/// - The same verdict again changes nothing.
@@ -59,12 +66,38 @@ impl BayesStore {
 	pub async fn learn(
 		&self,
 		scope: &str,
-		window: &[u8],
+		raw: &[u8],
 		spam: bool,
 	) -> Result<LearnOutcome, sqlx::Error> {
+		Ok(self.learn_timed(scope, raw, spam).await?.outcome)
+	}
+
+	/// [`BayesStore::learn`], also saying how long it kept the worker busy
+	/// ([`Lesson::busy`]): the reduction and the transaction, not the wait for
+	/// the lock of the store or for a connection.
+	pub async fn learn_timed(
+		&self,
+		scope: &str,
+		raw: &[u8],
+		spam: bool,
+	) -> Result<Lesson, sqlx::Error> {
 		if scope == SHARED {
-			return Ok(LearnOutcome::Skipped);
+			return Ok(LearnOutcome::Skipped.into());
 		}
+		// Read and hashed before anything is locked, so the work that grows
+		// with the message never holds the lock.
+		let started = Instant::now();
+		let reduced = scoring_text(raw);
+		if reduced.unread {
+			tracing::warn!("a message that could not be read was not learned from");
+			return Ok(Lesson {
+				outcome: LearnOutcome::Unread,
+				busy: started.elapsed(),
+			});
+		}
+		let tokens = self.lesson_tokens(&reduced.text, self.limits.tokens_per_lesson);
+		let digest = self.message_digest(&reduced.text);
+		let prepared = started.elapsed();
 		let _scope_guard = self.scope_lock.lock().await;
 		if self
 			.tombstones
@@ -72,31 +105,43 @@ impl BayesStore {
 			.unwrap_or_else(|error| error.into_inner())
 			.contains(scope)
 		{
-			return Ok(LearnOutcome::Skipped);
+			return Ok(Lesson {
+				outcome: LearnOutcome::Skipped,
+				busy: prepared,
+			});
 		}
-		// The caller already trimmed the window; this bound holds for any
-		// caller, and comes before tokenizing so the work is linear in it.
-		let window = &window[..window.len().min(MAX_TRAINING_BYTES)];
-		let text = String::from_utf8_lossy(window);
-		let tokens: Vec<String> = bayes::tokenize(&text)
-			.iter()
-			.take(self.limits.tokens_per_lesson)
-			.map(|token| self.hash(token))
-			.collect();
-		let digest = self.message_digest(window);
-		retrying(|| self.learn_once(scope, &tokens, &digest, spam)).await
+		let writing = AtomicU64::new(0);
+		let outcome = retrying(|| async {
+			let (outcome, took) = self
+				.learn_once(scope, &reduced.text, &tokens, &digest, spam)
+				.await?;
+			writing.fetch_add(
+				u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
+				Ordering::Relaxed,
+			);
+			Ok(outcome)
+		})
+		.await?;
+		Ok(Lesson {
+			outcome,
+			busy: prepared.saturating_add(Duration::from_nanos(writing.load(Ordering::Relaxed))),
+		})
 	}
 
 	/// One attempt of [`BayesStore::learn`].
 	async fn learn_once(
 		&self,
 		scope: &str,
+		text: &str,
 		tokens: &[String],
 		digest: &str,
 		spam: bool,
-	) -> Result<LearnOutcome, sqlx::Error> {
+	) -> Result<(LearnOutcome, Duration), sqlx::Error> {
 		let limits = self.limits;
-		let mut tx = self.pool.begin().await?;
+		// The wait for a pooled connection is not the lesson's own time.
+		let mut connection = self.pool.acquire().await?;
+		let began = Instant::now();
+		let mut tx = connection.begin().await?;
 		// A row that starts here is told how many token rows the account
 		// already holds, so an account that learned before the ledger existed
 		// is counted too.
@@ -122,11 +167,11 @@ impl BayesStore {
 		else {
 			// The account was removed between the two statements.
 			tx.rollback().await?;
-			return Ok(LearnOutcome::Skipped);
+			return Ok((LearnOutcome::Skipped, began.elapsed()));
 		};
 		if !enabled {
 			tx.rollback().await?;
-			return Ok(LearnOutcome::Disabled);
+			return Ok((LearnOutcome::Disabled, began.elapsed()));
 		}
 		let held: Option<(bool, i32)> = sqlx::query_as(
 			"SELECT spam, tokens FROM bayes_learned WHERE scope = $1 AND digest = $2",
@@ -141,14 +186,22 @@ impl BayesStore {
 				LearnOutcome::Repeated
 			}
 			Some((_, counted)) => {
-				// Only the tokens that were counted are moved back.
-				let counted = usize::try_from(counted).unwrap_or(0).min(tokens.len());
+				// Only the tokens that were counted are moved back. A cap that
+				// changed since gives another set, so the set of that cap is
+				// read again from the same text.
+				let counted = usize::try_from(counted).unwrap_or(0);
+				let back = if counted == tokens.len() {
+					tokens.to_vec()
+				} else {
+					self.lesson_tokens(text, counted)
+				};
+				let counted = back.len();
 				if over_budget(spent, counted, &limits) {
 					bump(&mut tx, scope, Counter::Throttled).await?;
 					LearnOutcome::Throttled
 				} else {
 					let (ham, spam_delta) = if spam { (-1, 1) } else { (1, -1) };
-					adjust(&mut tx, scope, &tokens[..counted], ham, spam_delta).await?;
+					adjust(&mut tx, scope, &back, ham, spam_delta).await?;
 					sqlx::query(
 						"UPDATE bayes_learned SET spam = $3, learned_at = now() WHERE scope = $1 AND digest = $2",
 					)
@@ -200,7 +253,7 @@ impl BayesStore {
 			}
 		};
 		tx.commit().await?;
-		Ok(outcome)
+		Ok((outcome, began.elapsed()))
 	}
 }
 

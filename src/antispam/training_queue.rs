@@ -33,8 +33,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use super::learning::LearnOutcome;
 use super::learning::limiter::LearnLimiter;
+use super::learning::{LearnOutcome, Lesson};
 use super::trainer::BayesTrainerHandle;
 use crate::metrics::Metrics;
 use crate::storage::MessageCrypto;
@@ -330,13 +330,24 @@ async fn run_worker_with(
 		let started = std::time::Instant::now();
 		let crypto = crypto.clone();
 		let path = job.path.clone();
-		let window = tokio::task::spawn_blocking(move || read_window(&path, &crypto)).await;
+		let window = tokio::task::spawn_blocking(move || read_message(&path, &crypto)).await;
 		match window {
-			Ok(Ok(text)) => match trainer.learn(&job.account, text, job.spam).await {
-				LearnOutcome::Failed => metrics.bayes_learning_failed(),
-				LearnOutcome::Refused | LearnOutcome::Throttled => metrics.bayes_learning_refused(),
-				_ => {}
-			},
+			Ok(Ok(text)) => {
+				let Lesson { outcome, .. } = trainer.learn(&job.account, text, job.spam).await;
+				match outcome {
+					LearnOutcome::Failed => metrics.bayes_learning_failed(),
+					LearnOutcome::Refused | LearnOutcome::Throttled => {
+						metrics.bayes_learning_refused()
+					}
+					LearnOutcome::Unread => {
+						// Nothing was learned: the place in the account's
+						// minute and day is given back.
+						metrics.bayes_learning_unreadable();
+						fairness.limiter.refund(&job.account);
+					}
+					_ => {}
+				}
+			}
 			Ok(Err(error)) => {
 				metrics.bayes_learning_unreadable();
 				tracing::debug!(
@@ -360,11 +371,30 @@ async fn run_worker_with(
 	}
 }
 
+/// Most a stored message file may be for the worker to read it: above the
+/// largest message the server accepts by default. A file over it is counted
+/// as unreadable instead of being held in memory.
+pub(crate) const MAX_STORED_BYTES: u64 = 32 << 20;
+
 /// Read and decode the message at `path`. The trainer reduces it to the text
 /// it learns from (see [`super::scoring_text`]); that needs the whole message,
 /// because the structure is what tells a text part from an attachment.
-fn read_window(path: &std::path::Path, crypto: &MessageCrypto) -> std::io::Result<Vec<u8>> {
-	let stored = std::fs::read(path)?;
+fn read_message(path: &std::path::Path, crypto: &MessageCrypto) -> std::io::Result<Vec<u8>> {
+	read_message_from(std::fs::File::open(path)?, crypto)
+}
+
+/// [`read_message`] over any reader, taking at most [`MAX_STORED_BYTES`] of
+/// it: an endless or oversized file is an error, not an allocation.
+pub(crate) fn read_message_from(
+	reader: impl std::io::Read,
+	crypto: &MessageCrypto,
+) -> std::io::Result<Vec<u8>> {
+	use std::io::Read;
+	let mut stored = Vec::new();
+	reader.take(MAX_STORED_BYTES + 1).read_to_end(&mut stored)?;
+	if stored.len() as u64 > MAX_STORED_BYTES {
+		return Err(std::io::Error::other("message too large to read"));
+	}
 	crypto.decode(&stored)
 }
 

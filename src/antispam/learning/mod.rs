@@ -5,9 +5,11 @@
 //! verdict once: deciding the same thing twice changes nothing, and
 //! deciding the other way takes back the lesson before adding the new one.
 //! [`BayesStore::learn`](crate::antispam::corpus::BayesStore::learn) does that against a ledger of the messages the
-//! account has learned (`bayes_learned`), keyed by a keyed hash of the
-//! message window so a message that is copied, moved or appended elsewhere
-//! is still the same message.
+//! account has learned (`bayes_learned`), keyed by a keyed hash of the text
+//! read of the message (see [`scoring_text`](crate::antispam::scoring_text)):
+//! the same reading the SMTP path scores and trains the shared corpus with, so
+//! a message that is copied, moved or appended elsewhere is still the same
+//! message, and an attachment is neither learned nor able to bury the words.
 //!
 //! The ledger and the token counts change in one transaction. When the
 //! ledger cannot be written the counts do not move either, so a failure
@@ -27,10 +29,12 @@ pub mod retry;
 pub mod stats;
 pub use stats::LearningStats;
 
-/// Unique tokens kept from one message. The window is already bounded in
-/// bytes; this bounds the rows a single lesson touches, so a window made
-/// of short distinct words costs the same as an ordinary message.
-pub const MAX_LEARN_TOKENS: usize = 5_000;
+/// Unique tokens kept from one message: the same cap the shared corpus
+/// trains with ([`MAX_TRAIN_TOKENS`](crate::antispam::corpus::MAX_TRAIN_TOKENS)),
+/// so a message costs the same rows whoever teaches it. The text is the one
+/// [`scoring_text`](crate::antispam::scoring_text) reads, already cut to a
+/// window; this bounds the rows a single lesson touches.
+pub const MAX_LEARN_TOKENS: usize = crate::antispam::corpus::MAX_TRAIN_TOKENS;
 
 /// Messages one account may hold in its ledger. At the limit the oldest
 /// tenth is forgotten to make room: the corpus keeps what they taught, and
@@ -94,11 +98,40 @@ pub enum LearnOutcome {
 	/// The scope cannot learn from a user (the shared one, or one being
 	/// removed); nothing moved.
 	Skipped,
+	/// Nothing could be read of the message (see
+	/// [`ScoringText::unread`](crate::antispam::scoring_text::ScoringText::unread)),
+	/// so it has no words to count; nothing moved and nothing was spent.
+	Unread,
 	/// The database refused the lesson; nothing was recorded and nothing
 	/// moved.
 	Failed,
 }
 
+/// A verdict taught, and what it cost the worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lesson {
+	/// What was done with the verdict.
+	pub outcome: LearnOutcome,
+	/// The time the lesson kept the worker busy: reading the message and
+	/// writing the corpus. The wait for the store's lock and for a pooled
+	/// connection is not in it, because that time belongs to whoever held
+	/// them and an account must not pay for it.
+	pub busy: std::time::Duration,
+}
+
+impl From<LearnOutcome> for Lesson {
+	fn from(outcome: LearnOutcome) -> Self {
+		Lesson {
+			outcome,
+			busy: std::time::Duration::ZERO,
+		}
+	}
+}
+
 #[cfg(test)]
 #[path = "learning_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "learning_tests_unread.rs"]
+mod tests_unread;

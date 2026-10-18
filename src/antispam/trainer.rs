@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use super::bayes::Corpus;
-use super::learning::LearnOutcome;
+use super::learning::{LearnOutcome, Lesson};
 
 /// The boxed future every [`BayesTrainer`] method returns.
 pub type TrainerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -35,18 +35,18 @@ pub trait BayesTrainer: Send + Sync {
 
 	/// Teach the scope of `account` the verdict of the user on one message,
 	/// once: the same verdict again changes nothing, and the other verdict
-	/// takes back the earlier one first. `text` is the window of the
-	/// message. The default has no ledger and trains every time, which is
-	/// right only for a fake.
+	/// takes back the earlier one first. `text` is the whole raw message,
+	/// read as the SMTP path reads it. The default has no ledger and trains
+	/// every time, which is right only for a fake.
 	fn learn<'a>(
 		&'a self,
 		account: &'a str,
 		text: Vec<u8>,
 		spam: bool,
-	) -> TrainerFuture<'a, LearnOutcome> {
+	) -> TrainerFuture<'a, Lesson> {
 		Box::pin(async move {
 			self.train(account, text, spam).await;
-			LearnOutcome::Learned
+			LearnOutcome::Learned.into()
 		})
 	}
 

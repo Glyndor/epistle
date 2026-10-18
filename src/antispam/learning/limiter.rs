@@ -99,6 +99,20 @@ impl LearnLimiter {
 		}
 	}
 
+	/// Give back the place a decision took with [`LearnLimiter::allow`], for
+	/// one that taught nothing because the message could not be read. The
+	/// time it kept the worker busy stays charged.
+	pub fn refund(&self, account: &str) {
+		let mut accounts = self
+			.accounts
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		if let Some(window) = accounts.get_mut(account) {
+			window.minute = window.minute.saturating_sub(1);
+			window.day = window.day.saturating_sub(1);
+		}
+	}
+
 	/// Whether `account` may teach one more decision at `now`, counting it
 	/// when it may. Never waits.
 	pub fn allow(&self, account: &str, now: Instant) -> bool {

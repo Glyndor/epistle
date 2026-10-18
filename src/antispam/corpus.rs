@@ -37,9 +37,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use super::learning::{LearnOutcome, Lesson};
 use super::scoring_text::scoring_text;
 use super::shared_training::{SharedTraining, TrainSource};
-use super::learning::LearnOutcome;
 use super::trainer::{BayesTrainer, TrainerFuture};
 use crate::storage::load_or_create_key_file;
 
@@ -402,17 +402,17 @@ impl BayesTrainer for BayesStore {
 		account: &'a str,
 		text: Vec<u8>,
 		spam: bool,
-	) -> TrainerFuture<'a, LearnOutcome> {
+	) -> TrainerFuture<'a, Lesson> {
 		Box::pin(async move {
-			match BayesStore::learn(self, account, &text, spam).await {
-				Ok(outcome) => outcome,
+			match BayesStore::learn_timed(self, account, &text, spam).await {
+				Ok(lesson) => lesson,
 				Err(error) => {
 					tracing::warn!(
 						account = %crate::log_id::account(account),
 						%error,
 						"per-account bayes learning failed"
 					);
-					LearnOutcome::Failed
+					LearnOutcome::Failed.into()
 				}
 			}
 		})
