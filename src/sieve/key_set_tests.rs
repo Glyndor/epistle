@@ -104,6 +104,11 @@ fn a_list_of_keys_is_charged_one_pass_over_the_text() {
 	let spent = started - env.remaining_work();
 	assert!(!env.exhausted());
 	assert!(
+		spent >= text.len() as u64,
+		"{spent} units for a pass over {} octets: the pass is not free",
+		text.len()
+	);
+	assert!(
 		spent < 2 * (1 << 20),
 		"{spent} units for 1100 keys over 1 MiB, one pass is 1 MiB"
 	);

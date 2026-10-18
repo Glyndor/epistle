@@ -15,13 +15,13 @@ use crate::sieve::parser::{self, ParseError};
 /// so a caller that holds it has the proof, and a request that names the same
 /// text many times pays for the check once.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Validated(String);
+pub struct Validated(std::sync::Arc<str>);
 
 impl Validated {
 	/// `text`, if it passes the check every protocol makes.
 	pub fn new(text: String) -> Result<Self, StoreError> {
 		check(&text)?;
-		Ok(Self(text))
+		Ok(Self(text.into()))
 	}
 
 	/// The script.
@@ -33,6 +33,8 @@ impl Validated {
 /// Check `script`: size, grammar, the extensions it requires, and the
 /// `mailbox` extension's own rule.
 pub(super) fn check(script: &str) -> Result<(), StoreError> {
+	#[cfg(test)]
+	counted::note(script);
 	if script.len() > MAX_SCRIPT_BYTES {
 		return Err(StoreError::TooLarge);
 	}
@@ -205,4 +207,29 @@ fn declares_mailbox_require(commands: &[crate::sieve::ast::Command]) -> bool {
 		}
 		Command::If(_) => false,
 	})
+}
+
+/// In tests, which scripts were checked (by their first line), so that a test
+/// can say how many times a script was checked and not how long it took.
+#[cfg(test)]
+pub(crate) mod counted {
+	use std::sync::Mutex;
+
+	static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+	pub(super) fn note(script: &str) {
+		let first = script.lines().next().unwrap_or("").to_string();
+		SEEN.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.push(first);
+	}
+
+	/// How many times a script whose first line is `first` was checked.
+	pub(crate) fn times(first: &str) -> usize {
+		SEEN.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.iter()
+			.filter(|line| line.as_str() == first)
+			.count()
+	}
 }
