@@ -248,3 +248,27 @@ async fn the_operator_gets_in_while_attackers_are_queued() {
 	}
 	idle(&state).await;
 }
+
+#[tokio::test]
+async fn being_told_the_queue_is_full_is_not_a_failed_credential() {
+	let (app, state) = app_with_queue(0);
+	// Thirty refusals because there is no room: more than the 20 a client may
+	// fail. None checked anything, so none may have been counted.
+	for _ in 0..30 {
+		assert_eq!(
+			get(&app, "wrong", "198.51.100.90").await,
+			StatusCode::TOO_MANY_REQUESTS
+		);
+	}
+	// Room is back (the real token is known, so a wrong one is rejected by
+	// digest): the client is still where it was, not limited.
+	state.prime_configured_token(TOKEN.as_str());
+	assert_eq!(
+		get(&app, "wrong", "198.51.100.90").await,
+		StatusCode::UNAUTHORIZED
+	);
+	assert_eq!(
+		get(&app, TOKEN.as_str(), "198.51.100.90").await,
+		StatusCode::OK
+	);
+}

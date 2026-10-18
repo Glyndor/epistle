@@ -801,8 +801,19 @@ pub async fn require_bearer_token(
 		Some(t) if !key_ok => match state.bearer_is_configured_async(t).await {
 			Ok(answer) => answer,
 			// Too many guesses are already waiting for an argon2: tell this
-			// one to come back. The failure it reserved stays counted.
-			Err(auth::ArgonBusy) => return Err(ApiError::rate_limited()),
+			// one to come back. Nothing was checked, so it was no failed
+			// credential and the failure it reserved is given back: otherwise
+			// a flood that fills the queue would run good clients into
+			// their limit.
+			Err(auth::ArgonBusy) => {
+				state
+					.inner
+					.auth_limiter
+					.lock()
+					.unwrap_or_else(|p| p.into_inner())
+					.refund(client_ip);
+				return Err(ApiError::rate_limited());
+			}
 		},
 		_ => false,
 	};
