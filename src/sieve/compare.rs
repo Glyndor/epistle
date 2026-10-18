@@ -193,6 +193,15 @@ impl MatchSpec {
 		}
 	}
 
+	/// For `:contains`, whether it ignores ASCII case (the keys of a long list
+	/// are then found in one pass, see [`super::key_set`]).
+	pub(super) fn contains_fold(&self) -> Option<bool> {
+		match self.match_type {
+			MatchType::Contains => Some(matches!(self.collation, Collation::AsciiCasemap)),
+			_ => None,
+		}
+	}
+
 	/// Relational comparison of a value count against `key`.
 	pub(super) fn count_matches(&self, rel: Rel, count: usize, key: &str) -> bool {
 		rel.test(self.collation.order(&count.to_string(), key))

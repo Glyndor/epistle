@@ -181,3 +181,43 @@ fn only_the_first_mebibyte_of_the_body_is_read() {
 		"past the window"
 	);
 }
+
+/// A block-list of `count` different words as one `body :contains` test, and
+/// a rule after it.
+fn word_list_script(count: usize) -> String {
+	let words: Vec<String> = (0..count).map(|n| format!("\"spamword{n}\"")).collect();
+	format!(
+		"require [\"body\"];\n\
+		if body :contains [{}] {{ discard; stop; }}\n\
+		if address :is \"from\" \"ext@elsewhere.example\" {{ discard; stop; }}\n",
+		words.join(",")
+	)
+}
+
+#[test]
+fn a_long_word_list_costs_one_pass_over_the_body_not_one_per_word() {
+	// 1100 words over a 1 MiB body that has none of them: one pass per word
+	// charged 1100 times the cost of reading the body, the run ran out and the
+	// rules after the list were skipped.
+	let outcome = run(&word_list_script(1100), &big(1, ""));
+	assert!(!outcome.aborted, "{outcome:?}");
+	assert!(outcome.discarded, "the rule after the list still runs");
+}
+
+#[test]
+fn a_long_word_list_still_finds_each_word() {
+	let script = word_list_script(1100);
+	for n in [0, 1, 7, 550, 1099] {
+		let message = big_with_head(1, &format!("a SPAMWORD{n} b"));
+		let tokens = tokenize(&script).expect("lex");
+		let commands = parse(&tokens).expect("parse");
+		let outcome = evaluate(
+			&commands,
+			&Message::parse(&message).with_envelope("nobody@x.example".to_string(), vec![]),
+		);
+		assert!(
+			outcome.discarded && !outcome.aborted,
+			"word {n}: {outcome:?}"
+		);
+	}
+}

@@ -28,6 +28,7 @@ mod date;
 mod env;
 mod eval;
 pub mod interp;
+mod key_set;
 pub mod lexer;
 pub mod message;
 pub mod parser;

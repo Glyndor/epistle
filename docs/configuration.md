@@ -1740,7 +1740,13 @@ by the script:
   `sieve_inspection_truncated`) counts the messages for which a test did not
   see everything. Each value is paid for once per lookup, and a key that
   makes a pass over it (`:contains`, `:matches`) costs a quarter of its length
-  more. 200 ordinary rules never reach the ceiling on a 25 MiB message.
+  more. A `:contains` test with 8 or more keys (up to 64 KiB of keys) finds
+  them all in one pass, so a block-list of a thousand words costs what reading
+  the text twice does, not a thousand passes; a `:matches` list, or a
+  `:contains` list over 64 KiB, still costs a pass per key, and a list long
+  enough to pass the ceiling on a mebibyte makes the run stop and skips the
+  rules after it. 200 ordinary rules never reach the ceiling on a 25 MiB
+  message.
 - A variable is cut to 4096 octets, a run holds 64 KiB in at most 128 of them,
   and a string built with `${...}` is at most as long as the larger of what
   the script wrote and 4096 octets.

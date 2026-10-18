@@ -137,6 +137,7 @@ impl Message {
 	pub(super) fn visible_headers<S: AsRef<str>>(&self, names: &[S]) -> Visible<'_> {
 		let mut seen = Visible {
 			truncated: self.headers_cut,
+			headers_cut: self.headers_cut,
 			..Visible::default()
 		};
 		for (n, name) in names.iter().enumerate() {
@@ -186,6 +187,9 @@ pub(super) struct Visible<'a> {
 	/// How many headers there are of those names, whatever the window.
 	pub(super) count: usize,
 	pub(super) truncated: bool,
+	/// The message had more headers than are read, so `count` is of those
+	/// read and not of all.
+	pub(super) headers_cut: bool,
 }
 
 /// The first `limit` octets of `text`, cut at a character boundary.

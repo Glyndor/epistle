@@ -5,6 +5,7 @@ use super::ast::{Argument, Test};
 use super::compare::{self, MatchSpec};
 use super::env::Env;
 use super::interp::{has_tag, strings};
+use super::key_set::Keys;
 use super::message::Message;
 
 /// What looking up a header by name costs a run: the name, and a minimum.
@@ -130,25 +131,27 @@ fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 		return false;
 	}
 	let seen = message.visible_headers(&names);
-	if seen.truncated {
-		vars.mark_truncated();
-	}
 	if let Some(rel) = spec.count_rel() {
 		// A count is of the headers read, which is all of them unless the
-		// message had more than the interpreter reads (`truncated`).
+		// message had more than the interpreter reads.
+		if seen.headers_cut {
+			vars.mark_truncated();
+		}
 		return keys
 			.iter()
 			.any(|key| spec.count_matches(rel, seen.count, key));
 	}
+	if seen.truncated {
+		vars.mark_truncated();
+	}
 	// Each value is paid for once, however many keys it is compared with.
+	let keys = Keys::new(&spec, &keys, vars);
 	for value in &seen.values {
 		if !vars.charge(value.len() as u64) {
 			return false;
 		}
-		for key in &keys {
-			if spec.test_read(value, key, vars) {
-				return true;
-			}
+		if keys.any(&spec, value, vars) {
+			return true;
 		}
 	}
 	false
@@ -210,11 +213,10 @@ fn match_values(spec: &MatchSpec, values: &[String], keys: &[String], vars: &mut
 			.iter()
 			.any(|key| spec.count_matches(rel, values.len(), key));
 	}
+	let keys = Keys::new(spec, keys, vars);
 	for value in values {
-		for key in keys {
-			if spec.test_read(value, key, vars) {
-				return true;
-			}
+		if keys.any(spec, value, vars) {
+			return true;
 		}
 	}
 	false
@@ -293,9 +295,8 @@ fn body_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	if !vars.charge(body.len() as u64) {
 		return false;
 	}
-	compare::positional_strings(&test.args)
-		.iter()
-		.any(|key| spec.test_read(body, key, vars))
+	let keys = compare::positional_strings(&test.args);
+	Keys::new(&spec, &keys, vars).any(&spec, body, vars)
 }
 
 /// `size :over|:under <number>`.
