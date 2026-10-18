@@ -127,7 +127,7 @@ fn bytes_that_are_not_utf8_separate_words() {
 #[test]
 fn a_structure_the_walk_gives_up_on_is_read_as_bytes() {
 	let mut raw = String::from("Subject: x\r\n");
-	for level in 0..15 {
+	for level in 0..MAX_DEPTH + 5 {
 		raw.push_str(&format!(
 			"Content-Type: multipart/mixed; boundary=\"b{level}\"\r\n\r\n--b{level}\r\n"
 		));

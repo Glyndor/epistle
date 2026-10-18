@@ -70,7 +70,7 @@ fn text_after_attachments_that_fill_the_budget_is_still_decoded() {
 #[test]
 fn a_message_read_as_bytes_is_never_taken_for_clean() {
 	let mut raw = String::from("Subject: x\r\n");
-	for level in 0..15 {
+	for level in 0..MAX_DEPTH + 5 {
 		raw.push_str(&format!(
 			"Content-Type: multipart/mixed; boundary=\"b{level}\"\r\n\r\n--b{level}\r\n"
 		));

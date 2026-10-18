@@ -41,10 +41,18 @@ mod read;
 /// are held in memory while the message is read.
 pub const MAX_DECODED: usize = 2 * 1024 * 1024;
 
-/// Deepest nesting and most parts followed; the figures the attachment
-/// inspection uses.
-const MAX_DEPTH: usize = 10;
-const MAX_PARTS: usize = 1000;
+/// Deepest nesting followed. A message nested deeper is read as bytes and is
+/// `clipped`, which scores it at the floor of 0.5, under `bayes_junk_at`, so
+/// the cap is also the depth at which text in base64 stops being read. The
+/// walk keeps its open boundaries on a stack it owns and compares a line
+/// with each of them, so the cost is linear in the depth: measured in release
+/// on 25 MiB of near-delimiter lines with 60 bytes of prefix in common, about
+/// 0.15 s at depth 10, 0.5 s at 32 and 1.2 s at 64.
+const MAX_DEPTH: usize = 32;
+
+/// Most parts followed. A part costs a fixed amount whatever the size of the
+/// message: 20000 parts took 76 ms in debug.
+const MAX_PARTS: usize = 10_000;
 
 /// Extra room the tail may grow to before its oldest tokens are dropped,
 /// so dropping them is not done token by token.
@@ -298,3 +306,7 @@ mod tests_reading;
 #[cfg(test)]
 #[path = "scoring_text_tests_cuts.rs"]
 mod tests_cuts;
+
+#[cfg(test)]
+#[path = "scoring_text_tests_caps.rs"]
+mod tests_caps;
