@@ -73,16 +73,31 @@ impl BayesStore {
 	}
 
 	/// [`BayesStore::learn`], also saying how long it kept the worker busy
-	/// ([`Lesson::busy`]): the reduction and the transaction, not the wait for
-	/// the lock of the store or for a connection.
+	/// ([`Lesson::busy`]).
 	pub async fn learn_timed(
 		&self,
 		scope: &str,
 		raw: &[u8],
 		spam: bool,
 	) -> Result<Lesson, sqlx::Error> {
+		let (outcome, busy) = self.learn_accounted(scope, raw, spam).await;
+		outcome.map(|outcome| Lesson { outcome, busy })
+	}
+
+	/// [`BayesStore::learn`] with the time it kept the worker busy, whatever
+	/// became of the lesson: the reduction of the message, then everything
+	/// from the moment the store's lock is held, every attempt and the wait
+	/// between them included, a failed one as much as one that taught. The
+	/// wait for the lock and for a pooled connection is not in it, because
+	/// that time belongs to whoever held them.
+	pub async fn learn_accounted(
+		&self,
+		scope: &str,
+		raw: &[u8],
+		spam: bool,
+	) -> (Result<LearnOutcome, sqlx::Error>, Duration) {
 		if scope == SHARED {
-			return Ok(LearnOutcome::Skipped.into());
+			return (Ok(LearnOutcome::Skipped), Duration::ZERO);
 		}
 		// Read and hashed before anything is locked, so the work that grows
 		// with the message never holds the lock.
@@ -90,42 +105,28 @@ impl BayesStore {
 		let reduced = scoring_text(raw);
 		if reduced.unread {
 			tracing::warn!("a message that could not be read was not learned from");
-			return Ok(Lesson {
-				outcome: LearnOutcome::Unread,
-				busy: started.elapsed(),
-			});
+			return (Ok(LearnOutcome::Unread), started.elapsed());
 		}
 		let tokens = self.lesson_tokens(&reduced.text, self.limits.tokens_per_lesson);
 		let digest = self.message_digest(&reduced.text);
 		let prepared = started.elapsed();
 		let _scope_guard = self.scope_lock.lock().await;
+		let locked = Instant::now();
 		if self
 			.tombstones
 			.lock()
 			.unwrap_or_else(|error| error.into_inner())
 			.contains(scope)
 		{
-			return Ok(Lesson {
-				outcome: LearnOutcome::Skipped,
-				busy: prepared,
-			});
+			return (Ok(LearnOutcome::Skipped), prepared);
 		}
-		let writing = AtomicU64::new(0);
-		let outcome = retrying(|| async {
-			let (outcome, took) = self
-				.learn_once(scope, &reduced.text, &tokens, &digest, spam)
-				.await?;
-			writing.fetch_add(
-				u64::try_from(took.as_nanos()).unwrap_or(u64::MAX),
-				Ordering::Relaxed,
-			);
-			Ok(outcome)
-		})
-		.await?;
-		Ok(Lesson {
-			outcome,
-			busy: prepared.saturating_add(Duration::from_nanos(writing.load(Ordering::Relaxed))),
-		})
+		let pool_wait = AtomicU64::new(0);
+		let outcome =
+			retrying(|| self.learn_once(scope, &reduced.text, &tokens, &digest, spam, &pool_wait))
+				.await;
+		let waited = Duration::from_nanos(pool_wait.load(Ordering::Relaxed));
+		let busy = prepared.saturating_add(locked.elapsed().saturating_sub(waited));
+		(outcome, busy)
 	}
 
 	/// One attempt of [`BayesStore::learn`].
@@ -136,11 +137,17 @@ impl BayesStore {
 		tokens: &[String],
 		digest: &str,
 		spam: bool,
-	) -> Result<(LearnOutcome, Duration), sqlx::Error> {
+		pool_wait: &AtomicU64,
+	) -> Result<LearnOutcome, sqlx::Error> {
 		let limits = self.limits;
 		// The wait for a pooled connection is not the lesson's own time.
-		let mut connection = self.pool.acquire().await?;
-		let began = Instant::now();
+		let asked = Instant::now();
+		let connection = self.pool.acquire().await;
+		pool_wait.fetch_add(
+			u64::try_from(asked.elapsed().as_nanos()).unwrap_or(u64::MAX),
+			Ordering::Relaxed,
+		);
+		let mut connection = connection?;
 		let mut tx = connection.begin().await?;
 		// A row that starts here does not know how many token rows the account
 		// holds (-1), because it may have learned before the record existed.
@@ -168,11 +175,11 @@ impl BayesStore {
 		else {
 			// The account was removed between the two statements.
 			tx.rollback().await?;
-			return Ok((LearnOutcome::Skipped, began.elapsed()));
+			return Ok(LearnOutcome::Skipped);
 		};
 		if !enabled {
 			tx.rollback().await?;
-			return Ok((LearnOutcome::Disabled, began.elapsed()));
+			return Ok(LearnOutcome::Disabled);
 		}
 		let token_rows = if token_rows < 0 {
 			sqlx::query_scalar(
@@ -266,7 +273,7 @@ impl BayesStore {
 			}
 		};
 		tx.commit().await?;
-		Ok((outcome, began.elapsed()))
+		Ok(outcome)
 	}
 }
 

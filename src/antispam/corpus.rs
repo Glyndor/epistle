@@ -404,15 +404,19 @@ impl BayesTrainer for BayesStore {
 		spam: bool,
 	) -> TrainerFuture<'a, Lesson> {
 		Box::pin(async move {
-			match BayesStore::learn_timed(self, account, &text, spam).await {
-				Ok(lesson) => lesson,
+			let (outcome, busy) = BayesStore::learn_accounted(self, account, &text, spam).await;
+			match outcome {
+				Ok(outcome) => Lesson { outcome, busy },
 				Err(error) => {
 					tracing::warn!(
 						account = %crate::log_id::account(account),
 						%error,
 						"per-account bayes learning failed"
 					);
-					LearnOutcome::Failed.into()
+					Lesson {
+						outcome: LearnOutcome::Failed,
+						busy,
+					}
 				}
 			}
 		})
