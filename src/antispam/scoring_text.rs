@@ -254,3 +254,7 @@ mod tests_adversarial;
 #[cfg(test)]
 #[path = "scoring_text_tests_reading.rs"]
 mod tests_reading;
+
+#[cfg(test)]
+#[path = "scoring_text_tests_cuts.rs"]
+mod tests_cuts;

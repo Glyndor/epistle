@@ -184,6 +184,21 @@ mod tests {
 		assert!(window.contains('\n'));
 	}
 
+	/// The cut of the window on every byte of a character, for every width.
+	#[test]
+	fn no_shift_of_a_wide_text_makes_the_window_cut_a_character() {
+		for unit in ["é", "日", "𝐚"] {
+			for shift in 0..8 {
+				let mut text = "q".repeat(shift);
+				text.push_str(&unit.repeat(MAX_TRAINING_BYTES));
+				text.push_str(" tail");
+				let window = training_window(&text);
+				assert!(window.len() <= MAX_TRAINING_BYTES);
+				assert!(window.ends_with("tail") && window.contains('\n'));
+			}
+		}
+	}
+
 	#[test]
 	fn the_middle_of_a_long_text_is_left_out() {
 		let text = format!(
