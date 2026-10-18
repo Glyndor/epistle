@@ -44,6 +44,7 @@ pub(super) const HEADER_NAME_WINDOW: usize = 64 * 1024;
 pub(super) const HEADER_NAMES_PER_LOOKUP: usize = 16;
 
 /// Variables and counters of one run.
+#[derive(Default)]
 pub(crate) struct Env {
 	vars: HashMap<String, String>,
 	/// `${0}` to `${32}`: what the last successful `:matches` captured. They
@@ -59,21 +60,6 @@ pub(crate) struct Env {
 	truncated: bool,
 	/// A `:matches` key was over the length or wildcard caps.
 	pattern_over_caps: bool,
-}
-
-impl Default for Env {
-	fn default() -> Self {
-		Self {
-			vars: HashMap::new(),
-			captures: Vec::new(),
-			var_bytes: 0,
-			steps: 0,
-			work: 0,
-			exhausted: false,
-			truncated: false,
-			pattern_over_caps: false,
-		}
-	}
 }
 
 impl Env {
