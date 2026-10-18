@@ -478,6 +478,14 @@ impl ApiState {
 		self
 	}
 
+	/// Test-only: requests holding a place in the argon2 queue right now.
+	#[cfg(test)]
+	pub(crate) fn argon2_waiting(&self) -> usize {
+		self.inner
+			.argon2_waiting
+			.load(std::sync::atomic::Ordering::SeqCst)
+	}
+
 	/// Test-only: argon2 verifications running right now.
 	#[cfg(test)]
 	pub(crate) fn argon2_running(&self) -> usize {

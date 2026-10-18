@@ -272,3 +272,41 @@ async fn being_told_the_queue_is_full_is_not_a_failed_credential() {
 		StatusCode::OK
 	);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_guess_gives_its_place_in_the_queue_back() {
+	// A queue of two and six guesses one after another, each from a client of
+	// its own: if a finished guess kept its place, the third would find the
+	// queue full, and with the real 64 the operator would be refused for good
+	// after 64 wrong tokens.
+	let (app, state) = app_with_queue(2);
+	for n in 0..6 {
+		assert_eq!(
+			get(&app, "wrong", &format!("203.0.113.{}", 30 + n)).await,
+			StatusCode::UNAUTHORIZED,
+			"guess {n} must not find the queue full"
+		);
+	}
+	assert_eq!(state.argon2_waiting(), 0);
+	assert_eq!(
+		get(&app, TOKEN.as_str(), "198.51.100.9").await,
+		StatusCode::OK
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_requests_give_their_places_back_too() {
+	let (app, state) = app_with_queue(8);
+	let calls: Vec<_> = (0..6)
+		.map(|n| guess(&app, format!("203.0.113.{}", 60 + n)))
+		.collect();
+	tokio::time::sleep(Duration::from_millis(100)).await;
+	for call in &calls {
+		call.abort();
+	}
+	for call in calls {
+		call.await.ok();
+	}
+	idle(&state).await;
+	assert_eq!(state.argon2_waiting(), 0);
+}
