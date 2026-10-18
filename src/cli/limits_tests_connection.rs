@@ -113,3 +113,24 @@ fn the_connection_caps_are_shown_set_and_unset() {
 		);
 	}
 }
+
+#[test]
+fn a_zero_cap_is_saved_with_a_note_that_it_means_the_default() {
+	for (key, default) in [
+		("max-mailbox-connections-per-ip", "200"),
+		("max-http-connections", "1024"),
+		("max-http-connections-per-ip", "256"),
+		("max-connections-per-ip", "20"),
+	] {
+		let (_dir, file) = super::tests_config::config_file();
+		let (code, printed) = limits(file.path(), &["set", key, "0"]);
+		assert_eq!(code, ExitCode::SUCCESS, "{key}: {printed}");
+		assert!(
+			printed.contains(&format!("0 means the default ({default}), not unlimited")),
+			"{key}: {printed}"
+		);
+	}
+	let (_dir, file) = super::tests_config::config_file();
+	let (_, printed) = limits(file.path(), &["set", "max-http-connections", "5"]);
+	assert!(!printed.contains("not unlimited"), "{printed}");
+}

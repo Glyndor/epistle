@@ -464,6 +464,18 @@ fn run_with_restart(
 			}
 		)
 		.map_err(|error| error.to_string())?;
+		if key.zero_is_default()
+			&& let Some(Ok(0)) = value
+				.as_deref()
+				.map(|raw| values::parse_value(raw, key.unit(), key.max()))
+		{
+			let default = key.default_value().unwrap_or(0);
+			writeln!(
+				status,
+				"note: 0 means the default ({default}), not unlimited"
+			)
+			.map_err(|error| error.to_string())?;
+		}
 		super::config_edit::after_change_with(&config, outcome, true, status, restart)
 	})();
 	match result {

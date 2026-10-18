@@ -26,10 +26,6 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
-/// Pre-authentication read deadline. An unauthenticated client must
-/// not be able to hold a connection slot forever, so the deadline is
-/// much shorter than the post-auth one.
-const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default maximum script literal size (1 MiB). Configurable per server
 /// so the test suite can drive a small bound.
 const DEFAULT_MAX_LITERAL: usize = super::store::MAX_SCRIPT_BYTES;
@@ -95,7 +91,7 @@ impl Server {
 			max_connections: MAX_CONNECTIONS,
 			max_per_ip: crate::net::conn_limit::DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			max_literal: DEFAULT_MAX_LITERAL,
-			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
+			preauth_timeout: crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT,
 		}
 	}
 

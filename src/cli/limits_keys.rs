@@ -191,6 +191,17 @@ impl Key {
 		)
 	}
 
+	/// Whether a configured `0` means "the default", not "no limit".
+	pub(super) fn zero_is_default(self) -> bool {
+		matches!(
+			self,
+			Self::MaxConnectionsPerIp
+				| Self::MaxMailboxConnectionsPerIp
+				| Self::MaxHttpConnections
+				| Self::MaxHttpConnectionsPerIp
+		)
+	}
+
 	/// Whether the key takes a comma-separated list of values.
 	pub(super) fn is_list(self) -> bool {
 		matches!(self, Self::QueueBackoff)
