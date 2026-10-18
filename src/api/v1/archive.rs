@@ -5,15 +5,17 @@
 //! client can tell the difference between "the archive is empty" and
 //! "retention is off".
 
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::{Extension, Json};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::error::ApiError;
-use crate::api::state::ApiState;
+use crate::api::state::{ApiState, MatchedAuth};
 use crate::imap::archive;
 use crate::util::path_component::AccountName;
+
+use super::scope::account_in_scope;
 
 /// One entry in the archive listing. `mailbox` is the mailbox the message
 /// was in when it was expunged; `deleted_at` is the unix time the archive
@@ -36,8 +38,10 @@ pub struct ArchiveListing {
 /// exist (retention is off, or the account has never received an expunge).
 pub async fn list(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<ArchiveListing>, ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	if !account_known(&state, &name) {
 		return Err(ApiError::not_found("no such account"));
 	}
@@ -70,8 +74,10 @@ pub struct Restored {
 /// mailbox no longer exists, then remove it from the archive.
 pub async fn restore(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path((name, id)): Path<(String, Uuid)>,
 ) -> Result<Json<Restored>, ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	if !account_known(&state, &name) {
 		return Err(ApiError::not_found("no such account"));
 	}

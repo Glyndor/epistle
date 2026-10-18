@@ -327,6 +327,14 @@ mod jmap_tests_limits_backref;
 mod tenancy_tests;
 
 #[cfg(test)]
+#[path = "tenancy_tests_routes.rs"]
+mod tenancy_tests_routes;
+
+#[cfg(test)]
+#[path = "route_rules_tests.rs"]
+mod route_rules_tests;
+
+#[cfg(test)]
 #[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
 

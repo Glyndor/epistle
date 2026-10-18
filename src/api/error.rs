@@ -66,6 +66,15 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a route the calling credential may not use at all.
+	pub fn forbidden(message: &str) -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: message.to_string(),
+		}
+	}
+
 	/// `403` for a submission whose envelope sender the acting account does
 	/// not own. One answer for every such sender, owned by another account
 	/// or by none, so the refusal says nothing about which addresses exist.

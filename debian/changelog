@@ -185,6 +185,20 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     is honoured now (only `start_index` was). This was present in 0.12.0 and 0.12.1:
     if you issued `scim` keys with `--domain`, rotate them.
 
+  * Security: an API key confined to some domains (`--domain`) now stays inside
+    them on every route, not only on the accounts routes. It could list and
+    remove the queue entries of every tenant, read and clear the shared
+    suppression list, mint, change and remove masked addresses and read and
+    restore the archive of another tenant's account, read server-wide counters,
+    and use `POST /api/v1/auth/verify` to check whether a password is right for
+    any account. Such a key now sees and touches only its own tenant (`404` for
+    anything else), the shared suppression list answers `403`, `status` leaves
+    out `queue_size`, and `auth/verify` answers `valid: false` for accounts
+    outside the key's domains without trying the password. Creating an account
+    whose name another tenant holds answers like an unusable name. This was
+    present in 0.12.0 and 0.12.1: if you issued keys with `--domain`, rotate
+    them. A test now lists every route with its domain rule and fails when a
+    route is added without one.
  -- Glyndor <packages@glyndor.net>  Sat, 17 Oct 2026 18:00:00 +0000
 
 epistle (0.12.1) unstable; urgency=medium

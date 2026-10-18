@@ -343,6 +343,23 @@ an address outside them is refused with `400`. A `userName` that is malformed or
 `domains`, so a key meant for one tenant reached all of them: if you issued
 `scim` keys with `--domain`, rotate them and review the accounts they changed.
 
+A confined key holds to the same rule on every route that has per-tenant
+data, not only on the accounts routes:
+
+| Route | For a key confined to some domains |
+|---|---|
+| `GET /api/v1/status` | `domains` and `accounts` count only what the key covers; `queue_size` is left out because the queue is shared |
+| `GET /api/v1/queue`, `DELETE /api/v1/queue/{id}` | only entries whose sender is in the key's domains; an entry with an empty sender (a bounce) is for unconfined keys; any other entry answers `404` |
+| `GET /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
+| `/api/v1/accounts/{name}/masked`, `.../archive` | `404` unless the account is covered, unknown accounts included |
+| `POST /api/v1/auth/verify` | checks only the passwords of covered accounts; any other login answers `valid: false` without the password being tried |
+| `POST /api/v1/accounts`, `POST /scim/v2/Users` | a name that is malformed or held outside the key's domains gives the same `400`, so the answer does not reveal other tenants' names |
+
+Before 0.12.2 these routes ignored the key's domains. If you handed out keys
+with `domains`, treat them as having had access to the whole server and rotate
+them. `src/api/route_rules_tests.rs` lists every route with the rule it
+follows, and fails when a route is added without one.
+
 ### What each key scope reaches
 
 Scopes are independent: holding one does not grant another.

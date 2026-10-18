@@ -99,6 +99,11 @@ pub async fn create(
 			"address outside the domains this key may act on",
 		));
 	}
+	super::scope::name_available(
+		&state,
+		&scope,
+		&crate::directory_store::account_name(&request.name),
+	)?;
 	// Per-tenant `max_accounts`: a cap waiting will not lift is a `409`, not
 	// a `429` (`ApiError::conflict` exists exactly for this). Checked before
 	// the password for the same reason as the scope check above.
