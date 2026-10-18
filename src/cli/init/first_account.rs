@@ -215,8 +215,8 @@ pub(super) fn create(
 	.map_err(|error| fail(format!("opening the account store: {error}")))?;
 	let name = first.name();
 	let address = first.stored_address();
-	let exists = name_is_free_or_ours(&name, &address, &store, &static_accounts_of(config_path))
-		.map_err(fail)?;
+	let exists =
+		name_is_free_or_ours(&name, &address, &store, &static_pairs(&config)).map_err(fail)?;
 	if exists {
 		report.steps.push(ReportStep::Skipped {
 			name: format!("account {name}"),
@@ -312,26 +312,30 @@ fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
 /// `--dry-run`) with nothing written, and the assistant can ask again.
 pub(super) fn precheck(
 	first: &FirstAccount,
-	domains: &[String],
 	data_dir: &Path,
 	config_path: &Path,
 ) -> Result<(), String> {
 	// The store is opened from `data_dir` whether or not the configuration
 	// exists or loads: a lost or unreadable config must not hide the
-	// accounts already on disk, and `[[accounts]]` come from the raw file.
-	let (domains, aliases) = match Config::load(config_path) {
-		Ok(config) => (config.domains, config.domain_aliases),
-		Err(_) => (domains.to_vec(), Default::default()),
+	// accounts already on disk. A config that loads gives its accounts
+	// normalised and with `${VAR}` expanded; the raw file is only the
+	// fallback when it does not load.
+	let (aliases, statics) = match Config::load(config_path) {
+		Ok(config) => (config.domain_aliases.clone(), static_pairs(&config)),
+		Err(_) => (Default::default(), static_accounts_of(config_path)),
 	};
-	let store = AccountStore::open(data_dir, domains, aliases, Vec::new())
+	let store = AccountStore::open(data_dir, Vec::new(), aliases, Vec::new())
 		.map_err(|error| format!("opening the account store: {error}"))?;
-	name_is_free_or_ours(
-		&first.name(),
-		&first.stored_address(),
-		&store,
-		&static_accounts_of(config_path),
-	)
-	.map(|_| ())
+	name_is_free_or_ours(&first.name(), &first.stored_address(), &store, &statics).map(|_| ())
+}
+
+/// The static accounts of a loaded configuration as name and addresses.
+fn static_pairs(config: &Config) -> Vec<(String, Vec<String>)> {
+	config
+		.accounts
+		.iter()
+		.map(|account| (account.name.clone(), account.addresses.clone()))
+		.collect()
 }
 
 /// Whether the account already named `name` is the one `address` asks for.

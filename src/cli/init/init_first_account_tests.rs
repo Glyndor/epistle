@@ -247,6 +247,91 @@ fn a_clash_is_found_when_the_existing_config_does_not_load() {
 	);
 }
 
+/// A static account written the way a loaded config reads it: the install
+/// is done, the dynamic copy is gone, and `lines` is appended to the config.
+fn install_then_declare(dir: &Path, lines: &str) {
+	let table = first_account_table(dir, "torre-control@example.org");
+	assert_eq!(init(answers(dir, &table), false).0, ExitCode::from(EXIT_OK));
+	std::fs::remove_file(dir.join("data").join("accounts.toml")).expect("drop dynamic copy");
+	let config = dir.join("etc").join("mail.toml");
+	let mut text = std::fs::read_to_string(&config).expect("read config");
+	text.push_str(lines);
+	std::fs::write(&config, text).expect("write config");
+}
+
+#[test]
+fn a_static_account_with_padded_addresses_is_the_same_account_not_a_clash() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	install_then_declare(
+		dir.path(),
+		"\n[[accounts]]\nname = \"torre-control\"\naddresses = [\"  Torre-Control@example.org \"]\n",
+	);
+	let before = listing(dir.path());
+	let table = first_account_table(dir.path(), "torre-control@example.org");
+	let (code, out) = init(answers(dir.path(), &table), true);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "dry run: {out}");
+	assert_eq!(listing(dir.path()), before, "a dry run writes nothing");
+	let (code, out) = init(answers(dir.path(), &table), false);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "re-run is a skip: {out}");
+}
+
+#[test]
+fn a_static_account_named_by_an_environment_variable_is_found_by_its_value() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// SAFETY-free variant: the variable name is unique to this test.
+	unsafe { std::env::set_var("EPISTLE_TEST_1208_ACCT", "torre-control") };
+	install_then_declare(
+		dir.path(),
+		"\n[[accounts]]\nname = \"${EPISTLE_TEST_1208_ACCT}\"\naddresses = [\"torre-control@example.org\"]\n",
+	);
+	let before = listing(dir.path());
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	for dry_run in [true, false] {
+		let (code, out) = init(answers(dir.path(), &clash), dry_run);
+		assert_eq!(
+			code,
+			ExitCode::from(EXIT_INVALID),
+			"dry_run {dry_run}: {out}"
+		);
+	}
+	assert_eq!(listing(dir.path()), before, "nothing was written");
+	let same = first_account_table(dir.path(), "torre-control@example.org");
+	let (code, out) = init(answers(dir.path(), &same), false);
+	assert_eq!(
+		code,
+		ExitCode::from(EXIT_OK),
+		"the same account is skipped: {out}"
+	);
+}
+
+#[test]
+fn a_static_account_is_still_found_when_the_config_does_not_load() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	install_then_declare(
+		dir.path(),
+		"\n[[accounts]]\nname = \"torre-control\"\naddresses = [\"torre-control@example.org\"]\n",
+	);
+	let config = dir.path().join("etc").join("mail.toml");
+	std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o664)).expect("chmod");
+	let before = listing(dir.path());
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	for dry_run in [true, false] {
+		let file = answers(dir.path(), &clash);
+		let text = std::fs::read_to_string(&file)
+			.expect("read")
+			.replace("\"example.net\"]", "\"example.net\", \"example.com\"]");
+		std::fs::write(&file, text).expect("write");
+		let (code, out) = init(file, dry_run);
+		assert_eq!(
+			code,
+			ExitCode::from(EXIT_INVALID),
+			"dry_run {dry_run}: {out}"
+		);
+	}
+	assert_eq!(listing(dir.path()), before, "nothing was written");
+}
+
 #[test]
 fn an_answers_file_creates_the_account_and_points_the_role_addresses_at_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
