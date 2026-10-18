@@ -86,7 +86,10 @@ macro_rules! select {
 	($tail:literal) => {
 		concat!(
 			"SELECT l.scope, l.enabled, l.spam_learned, l.ham_learned, l.unlearned, \
-			 l.repeated, l.refused, l.throttled, l.entries, l.token_rows, \
+			 l.repeated, l.refused, l.throttled, l.entries, \
+			 CASE WHEN l.token_rows < 0 THEN \
+			 (SELECT COUNT(*) FROM bayes_token t WHERE t.scope = l.scope) \
+			 ELSE l.token_rows END, \
 			 COALESCE(c.spam_messages, 0), COALESCE(c.ham_messages, 0) \
 			 FROM bayes_learning l LEFT JOIN bayes_corpus c ON c.scope = l.scope ",
 			$tail
@@ -105,6 +108,11 @@ impl BayesStore {
 		if let Some(row) = row {
 			return Ok(row.into());
 		}
+		let token_rows: i64 =
+			sqlx::query_scalar("SELECT COUNT(*) FROM bayes_token WHERE scope = $1")
+				.bind(account)
+				.fetch_one(&self.pool)
+				.await?;
 		let corpus = self.corpus(account).await?;
 		let corpus_spam = i64::try_from(corpus.spam_messages).unwrap_or(i64::MAX);
 		let corpus_ham = i64::try_from(corpus.ham_messages).unwrap_or(i64::MAX);
@@ -118,7 +126,7 @@ impl BayesStore {
 			refused: 0,
 			throttled: 0,
 			entries: 0,
-			token_rows: 0,
+			token_rows,
 			unrecorded: corpus_spam.saturating_add(corpus_ham),
 			corpus_spam,
 			corpus_ham,
@@ -142,8 +150,11 @@ impl BayesStore {
 			return Ok(false);
 		}
 		let mut tx = self.pool.begin().await?;
+		// A new row does not know how many token rows the account holds (-1);
+		// the first lesson counts them (see `ledger`).
 		sqlx::query(
-			"INSERT INTO bayes_learning (scope) VALUES ($1) ON CONFLICT (scope) DO NOTHING",
+			"INSERT INTO bayes_learning (scope, token_rows) VALUES ($1, -1) \
+			 ON CONFLICT (scope) DO NOTHING",
 		)
 		.bind(account)
 		.execute(&mut *tx)

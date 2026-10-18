@@ -142,12 +142,13 @@ impl BayesStore {
 		let mut connection = self.pool.acquire().await?;
 		let began = Instant::now();
 		let mut tx = connection.begin().await?;
-		// A row that starts here is told how many token rows the account
-		// already holds, so an account that learned before the ledger existed
-		// is counted too.
+		// A row that starts here does not know how many token rows the account
+		// holds (-1), because it may have learned before the record existed.
+		// It is counted below, once the row is locked, and not here: a count
+		// taken while another transaction removes the account would be of
+		// rows that are about to go.
 		sqlx::query(
-			"INSERT INTO bayes_learning (scope, token_rows) \
-			 VALUES ($1, (SELECT COUNT(*) FROM bayes_token WHERE scope = $1)) \
+			"INSERT INTO bayes_learning (scope, token_rows) VALUES ($1, -1) \
 			 ON CONFLICT (scope) DO NOTHING",
 		)
 		.bind(scope)
@@ -173,6 +174,18 @@ impl BayesStore {
 			tx.rollback().await?;
 			return Ok((LearnOutcome::Disabled, began.elapsed()));
 		}
+		let token_rows = if token_rows < 0 {
+			sqlx::query_scalar(
+				"UPDATE bayes_learning SET token_rows = \
+				 (SELECT COUNT(*) FROM bayes_token WHERE scope = $1) \
+				 WHERE scope = $1 RETURNING token_rows",
+			)
+			.bind(scope)
+			.fetch_one(&mut *tx)
+			.await?
+		} else {
+			token_rows
+		};
 		let held: Option<(bool, i32)> = sqlx::query_as(
 			"SELECT spam, tokens FROM bayes_learned WHERE scope = $1 AND digest = $2",
 		)
@@ -228,7 +241,7 @@ impl BayesStore {
 				.fetch_one(&mut *tx)
 				.await?;
 				let new_rows = i64::try_from(tokens.len()).unwrap_or(i64::MAX) - existing;
-				if token_rows.saturating_add(new_rows) > limits.token_rows {
+				if new_rows > 0 && token_rows.saturating_add(new_rows) > limits.token_rows {
 					bump(&mut tx, scope, Counter::Refused).await?;
 					LearnOutcome::Refused
 				} else {
