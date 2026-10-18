@@ -126,6 +126,7 @@ fn mode(path: &std::path::Path) -> u32 {
 /// process umask is (the usual 022 would make them 0644 and 0755).
 #[cfg(unix)]
 #[test]
+#[ignore = "run by markers_are_owner_only_under_every_umask in a child with its own umask"]
 fn markers_and_their_directories_are_owner_only() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let suppression = list(dir.path());
@@ -157,4 +158,30 @@ fn markers_and_their_directories_are_owner_only() {
 	}
 	// The root, three markers, `accounts`, the account's directory, three markers.
 	assert_eq!(seen, 9);
+}
+
+/// The same check in a child whose umask is 0 (the old code would give 0666
+/// and 0777) and in one whose umask is 077 (where 0600 and 0700 come out
+/// of the old code too): the mode is the code's, whatever the umask is.
+#[cfg(unix)]
+#[test]
+fn markers_are_owner_only_under_every_umask() {
+	for umask in ["0", "022", "077"] {
+		let test = std::env::current_exe().expect("test binary");
+		let status = std::process::Command::new("sh")
+			.arg("-c")
+			.arg(format!(
+				"umask {umask}; exec \"$0\" --exact --ignored --nocapture \
+				 queue::suppression::tests::markers_and_their_directories_are_owner_only"
+			))
+			.arg(test)
+			.output()
+			.expect("run the test binary");
+		let out = String::from_utf8_lossy(&status.stdout);
+		assert!(
+			status.status.success() && out.contains("1 passed"),
+			"umask {umask}: {out} {}",
+			String::from_utf8_lossy(&status.stderr)
+		);
+	}
 }
