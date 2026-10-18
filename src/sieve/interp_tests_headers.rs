@@ -278,17 +278,24 @@ fn a_header_name_of_endless_bad_octets_is_not_a_header() {
 }
 
 #[test]
-fn a_message_with_lf_line_ends_has_its_headers_and_not_its_body_as_headers() {
+fn a_message_with_bare_lf_is_read_as_headers_to_its_end_and_a_long_one_says_it_was_cut() {
+	// The header block ends at CRLF CRLF only, the longest any reader takes,
+	// so that the field count and the interpreter see the same fields.
 	let mut raw = b"Subject: viagra\n\n".to_vec();
 	for n in 0..20_000 {
-		raw.extend_from_slice(format!("not-a-header-{n}: y\n").as_bytes());
+		raw.extend_from_slice(format!("x-{n}: y\n").as_bytes());
 	}
-	let (outcome, _) = run(
-		"if exists \"not-a-header-5\" { keep; } else { discard; }",
-		&raw,
-	);
-	assert!(
-		outcome.discarded && !outcome.inspection_truncated,
-		"{outcome:?}"
-	);
+	let (outcome, _) = run("if exists \"x-5\" { keep; } else { discard; }", &raw);
+	assert!(outcome.keep && outcome.inspection_truncated, "{outcome:?}");
+}
+
+#[test]
+fn the_field_count_is_never_below_the_headers_the_interpreter_reads() {
+	use crate::util::header_block::{cases, field_count};
+	for raw in cases::messages() {
+		assert!(
+			field_count(&raw) >= Message::parse(&raw).header_total(),
+			"{raw:?}"
+		);
+	}
 }

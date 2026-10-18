@@ -125,28 +125,38 @@ fn a_refusal_is_counted_and_said_once_an_hour() {
 }
 
 #[test]
-fn a_message_with_lf_line_ends_and_a_long_body_is_not_all_header() {
+fn a_message_with_bare_lf_is_all_header_here_and_refused_when_it_has_thousands_of_lines() {
+	// Readers end the header block at different places for bare LF (IMAP and
+	// POP3 at LF LF, others only at CRLF CRLF). The count takes the longest,
+	// so a message with LF line ends is counted whole: a long one is refused
+	// (the safe side), a short one is delivered.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
 	));
 	let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
-	let mut data = b"From: bob@elsewhere.example\nSubject: hi\n\n".to_vec();
-	for n in 0..MAX_HEADER_FIELDS + 2_000 {
-		data.extend_from_slice(format!("line {n}\n").as_bytes());
-	}
-	let message = AcceptedMessage {
-		reverse_path: "bob@elsewhere.example".to_string(),
-		recipients: vec!["alice@example.org".to_string()],
-		data,
-		require_tls: false,
-		mailbox: None,
-		tlsrpt_verified: false,
-		sender_verified: true,
-		no_dsn: Vec::new(),
+	let message = |lines: usize| {
+		let mut data = b"From: bob@elsewhere.example\nSubject: hi\n\n".to_vec();
+		for n in 0..lines {
+			data.extend_from_slice(format!("line {n}\n").as_bytes());
+		}
+		AcceptedMessage {
+			reverse_path: "bob@elsewhere.example".to_string(),
+			recipients: vec!["alice@example.org".to_string()],
+			data,
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			sender_verified: true,
+			no_dsn: Vec::new(),
+		}
 	};
 	delivery
-		.deliver_routed(&message, None)
-		.expect("the body is not header fields");
+		.deliver_routed(&message(100), None)
+		.expect("a short message with LF is delivered");
+	assert!(matches!(
+		delivery.deliver_routed(&message(MAX_HEADER_FIELDS + 2_000), None),
+		Err(SinkError::TooManyHeaderFields)
+	));
 }

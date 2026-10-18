@@ -1737,7 +1737,11 @@ by the script:
   (about a dozen) count too, so the limit there is that many fewer. So no
   sender can hide a `From` or a `Subject` behind padding. (A message stored by
   IMAP `APPEND` or JMAP `Email/import` is not read by a filter until it is
-  sent.) The header block ends at the first empty line, `CRLF` or bare `LF`.
+  sent.) The header block ends at the first `CRLF CRLF`, the longest block any reader
+  of a message takes (IMAP and POP3 also end it at a bare `LF LF`), so that the
+  count never sees fewer fields than a reader does; a message with bare `LF`
+  line ends is counted whole, and one with more than 9 900 lines is refused as
+  having too many fields.
   A header's value is read as follows: the blanks at its ends are dropped
   (space, tab, VT, FF, CR, NEL, NBSP and the other Unicode white space), every
   run of blanks inside it, folding included, is one space (so `:contains

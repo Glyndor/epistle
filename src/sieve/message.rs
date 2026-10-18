@@ -131,6 +131,12 @@ impl Message {
 		self
 	}
 
+	/// How many headers were read.
+	#[cfg(test)]
+	pub(super) fn header_total(&self) -> usize {
+		self.headers.len()
+	}
+
 	/// Whether the message had more headers than are read.
 	pub(super) fn headers_cut(&self) -> bool {
 		self.headers_cut
