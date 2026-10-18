@@ -149,3 +149,60 @@ fn a_text_part_past_the_budget_is_read_as_bytes() {
 	assert!(tokens.iter().any(|t| t == "endword"));
 	assert!(reduced.clipped);
 }
+
+/// Words of two, three and four bytes per character, in a body long enough to
+/// need cutting: the cut must land between characters, whatever the shift.
+#[test]
+fn a_long_body_of_multibyte_characters_is_cut_without_panicking() {
+	let words = ["éé", "日本語", "ñandú", "𝐚𝐛𝐜", "ありがとう", "Привет"];
+	for shift in 0..16 {
+		let mut body = "q".repeat(shift);
+		body.push(' ');
+		let mut n = 0;
+		while body.len() < 3 * MAX_TRAINING_BYTES {
+			body.push_str(words[n % words.len()]);
+			body.push_str(&format!("{n:x} "));
+			n += 1;
+		}
+		let raw = format!("Subject: x\r\n\r\n{body}\r\n");
+		let reduced = scoring_text(raw.as_bytes());
+		assert!(reduced.clipped);
+		assert!(reduced.text.len() <= MAX_TRAINING_BYTES);
+		assert!(reduced.text.contains('\n'));
+	}
+}
+
+/// Four-byte, 3-byte and 2-byte characters only, no ASCII between words.
+#[test]
+fn a_body_of_nothing_but_wide_characters_does_not_panic() {
+	for unit in ["日本", "𝐚𝐛", "éé"] {
+		let body = format!("{unit} ").repeat(MAX_TRAINING_BYTES);
+		let reduced = scoring_text(format!("\r\n{body}").as_bytes());
+		assert!(reduced.clipped);
+	}
+}
+
+/// A part that declares two types is read as text by one client and as an
+/// attachment by another: the text is read.
+#[test]
+fn a_part_that_declares_two_types_is_read_if_either_is_text() {
+	let raw = b"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\n\
+		Content-Type: application/octet-stream\r\nContent-Type: text/plain\r\n\r\n\
+		hiddenword\r\n--b--\r\n";
+	let tokens = tokens_of(&scoring_text(raw).text);
+	assert!(tokens.iter().any(|t| t == "hiddenword"));
+}
+
+/// A message the walk marks ambiguous is read both ways: the extracted text
+/// and the raw bytes, so no reading hides content.
+#[test]
+fn an_ambiguous_message_is_read_as_bytes_too() {
+	// The delimiter is a line two readers can split on differently, and the
+	// part would be skipped as a pdf by the strict reading.
+	let raw = b"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\n\
+		Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"a.pdf\"\r\n\
+		Content-Disposition: attachment; filename=\"a.exe\"\r\n\r\n\
+		hiddenword\r\n--b--\r\n";
+	let tokens = tokens_of(&scoring_text(raw).text);
+	assert!(tokens.iter().any(|t| t == "hiddenword"), "{tokens:?}");
+}

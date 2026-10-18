@@ -16,6 +16,10 @@
 //!   first half and the last half. A message that does not fit is `clipped`,
 //!   and the scorer treats it as one it has not read in full.
 //!
+//! A message the walk calls ambiguous, one that two readers could split into
+//! parts differently, is read as raw bytes as well, so that whatever either
+//! reader shows is read.
+//!
 //! The pass is linear, keeps at most about 400 KiB of tokens in memory and
 //! never decodes more than [`MAX_DECODED`] of the message's parts. A message
 //! whose structure the walk gives up on (too deep, too many parts) or whose
@@ -52,6 +56,19 @@ pub struct ScoringText {
 
 /// Reduce the raw message `raw` to the text it is scored and trained on.
 pub fn scoring_text(raw: &[u8]) -> ScoringText {
+	// Whatever the walk or the window may do with a message of someone else's
+	// making, it must not take the worker or the session down with it: a
+	// message that cannot be reduced is one that was not read, never clean.
+	std::panic::catch_unwind(|| reduce(raw)).unwrap_or_else(|_| {
+		tracing::error!("reducing a message to its text failed");
+		ScoringText {
+			text: String::new(),
+			clipped: true,
+		}
+	})
+}
+
+fn reduce(raw: &[u8]) -> ScoringText {
 	let mut window = Window::default();
 	match extract(raw, &mut window) {
 		Some(()) => window.finish(),
@@ -75,9 +92,18 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 		deadline: None,
 	};
 	let mut complete = true;
+	let mut ambiguous = false;
 	let mut parts: Vec<Vec<u8>> = Vec::new();
 	let walked = walk::walk(raw, &limits, |leaf| {
-		if leaf.declared_type.starts_with("text/") {
+		ambiguous |= leaf.ambiguous;
+		// A part that declares two types is text to one reader and a file to
+		// another: it is read if any of them is text.
+		let text = leaf.declared_type.starts_with("text/")
+			|| leaf
+				.declared_types
+				.iter()
+				.any(|declared| declared.starts_with("text/"));
+		if text {
 			// A text part cut short by the budget is not all of the text.
 			complete &= !leaf.truncated;
 			parts.push(leaf.content);
@@ -88,6 +114,11 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 	}
 	for part in &parts {
 		window.push_bytes(part);
+	}
+	// Two readers could see this message differently: read the bytes as well,
+	// so that whatever either of them shows is read.
+	if ambiguous || walked.ambiguous {
+		window.push_bytes(raw);
 	}
 	Some(())
 }
@@ -163,13 +194,19 @@ impl Window {
 		if self.tail.len() <= keep {
 			return;
 		}
+		// A byte offset can fall inside a character; whole tokens only, and a
+		// token ends at an ASCII space.
 		let mut cut = self.tail.len() - keep;
-		// Whole tokens only: tokens are ASCII-delimited by a space.
-		if let Some(space) = self.tail[cut..].find(' ') {
-			cut += space + 1;
-		} else {
-			cut = self.tail.len();
+		while !self.tail.is_char_boundary(cut) {
+			cut += 1;
 		}
+		cut = match self.tail.as_bytes()[cut..]
+			.iter()
+			.position(|&byte| byte == b' ')
+		{
+			Some(space) => cut + space + 1,
+			None => self.tail.len(),
+		};
 		self.tail.drain(..cut);
 		self.dropped = true;
 	}

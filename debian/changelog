@@ -32,7 +32,8 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     25 MiB inside the session of an unauthenticated sender (338 MiB of heap
     for one message). The filter now reads what a person reads: the headers
     and the text parts, decoded, not attachments or images, and whitespace and
-    one-letter words cost nothing. A message under 128 KiB + 128 KiB of
+    one-letter words cost nothing; a message that two readers could split
+    into parts differently is read as raw bytes as well. A message under 128 KiB + 128 KiB of
     words and 5000 distinct words scores on all of it, as before; one with an
     attachment now scores as the message without it (before, any attachment of
     more than about 125 KiB gave the message a score of 0.5). A message over

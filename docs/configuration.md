@@ -603,7 +603,8 @@ block and the `text/*` parts, decoded (base64 and quoted-printable text is
 read for what it says), as a stream of words. Attachments, images and any
 other part that is not text are skipped and cost nothing, so a message with a
 PDF or a photo scores as the message without it. Whitespace, punctuation and
-one-letter words are not words and cost nothing either. A message whose
+one-letter words are not words and cost nothing either. A message that two
+readers could split into parts differently is read as raw bytes as well. A message whose
 structure cannot be followed (nested too deep, too many parts, or a text part
 larger than 2 MiB once decoded) is read as raw bytes, as the filter always
 did.
