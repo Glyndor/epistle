@@ -40,6 +40,8 @@ pub struct FakeBanStore {
 	/// listener tests to assert the ban store is consulted on every
 	/// authentication attempt from every listener.
 	calls: Arc<Mutex<HashMap<&'static str, usize>>>,
+	/// Allow-list entries (`network/prefix` or a bare address).
+	allowed: Arc<Mutex<Vec<String>>>,
 }
 
 impl std::fmt::Debug for FakeBanStore {
@@ -61,7 +63,13 @@ impl FakeBanStore {
 			strikes: Arc::new(Mutex::new(HashMap::new())),
 			next_is_banned_fails: Arc::new(Mutex::new(false)),
 			calls: Arc::new(Mutex::new(HashMap::new())),
+			allowed: Arc::new(Mutex::new(Vec::new())),
 		}
+	}
+
+	/// Put an address or network on the fake's allow list.
+	pub fn allow(&self, entry: &str) {
+		self.allowed.lock().expect("lock").push(entry.to_string());
 	}
 
 	/// Arm the next `is_banned` call to return `None` and then clear the
@@ -108,13 +116,6 @@ impl FakeBanStore {
 			.map(|entries| entries.iter().filter(|t| **t >= since).count())
 			.unwrap_or(0)
 	}
-
-	fn reason(&self) -> String {
-		format!(
-			"{} failed authentications in {} seconds",
-			self.policy.threshold, self.policy.window_secs
-		)
-	}
 }
 
 impl BanStore for FakeBanStore {
@@ -141,7 +142,8 @@ impl BanStore for FakeBanStore {
 			let in_window = failures.get(&subject).map(|v| v.len()).unwrap_or(0);
 			drop(failures);
 
-			if in_window >= self.policy.threshold as usize {
+			let threshold = self.policy.threshold_for(&subject) as usize;
+			if in_window >= threshold {
 				let mut strikes = self.strikes.lock().expect("lock");
 				let current = strikes.get(&subject).copied().unwrap_or(0);
 				let next = current.saturating_add(1);
@@ -151,7 +153,10 @@ impl BanStore for FakeBanStore {
 				let duration = self.policy.duration_for(next);
 				let info = BanInfo {
 					until_secs: now_secs.saturating_add(duration.as_secs()),
-					reason: self.reason(),
+					reason: format!(
+						"{threshold} failed authentications in {} seconds",
+						self.policy.window_secs
+					),
 				};
 				self.bans.lock().expect("lock").insert(subject, info);
 			}
@@ -186,6 +191,20 @@ impl BanStore for FakeBanStore {
 			self.failures.lock().expect("lock").remove(&subject);
 			self.bans.lock().expect("lock").remove(&subject);
 			self.strikes.lock().expect("lock").remove(&subject);
+		})
+	}
+
+	fn is_allow_listed(
+		&self,
+		ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async move {
+			self.allowed
+				.lock()
+				.expect("lock")
+				.iter()
+				.filter_map(|entry| crate::cidr::Cidr::parse(entry))
+				.any(|cidr| cidr.contains(ip))
 		})
 	}
 

@@ -68,12 +68,12 @@ async fn one_client_cannot_lock_an_account_for_everyone() {
 	);
 }
 
-/// `clients` distinct clients each fail until they are banned, then the owner
-/// signs in from elsewhere.
-fn owner_after(clients: u8) -> Option<String> {
+/// `clients` distinct clients each fail `each` times against `alice`, then the
+/// owner signs in from elsewhere.
+fn owner_after(clients: u8, each: usize) -> Option<String> {
 	let directory = directory();
 	for client in 1..=clients {
-		for _ in 0..5 {
+		for _ in 0..each {
 			fail(&directory, OPEN, &format!("203.0.113.{client}"));
 		}
 	}
@@ -83,15 +83,26 @@ fn owner_after(clients: u8) -> Option<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn several_clients_each_exhausting_their_budget_lock_the_account() {
 	assert_eq!(
-		owner_after(4),
+		owner_after(3, 5),
 		Some(OPEN.to_string()),
-		"four clients are not enough"
+		"three clients are not enough"
 	);
 	assert_eq!(
-		owner_after(5),
+		owner_after(4, 5),
 		None,
-		"five clients guessing at one account lock it for everyone"
+		"four clients, five failures each, lock it"
 	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guess_spread_over_many_clients_each_under_the_limit_still_ends_in_a_ban() {
+	// Two failures each is far below what bans a client or a pair.
+	assert_eq!(
+		owner_after(9, 2),
+		Some(OPEN.to_string()),
+		"eighteen failures are under the account limit"
+	);
+	assert_eq!(owner_after(10, 2), None, "twenty failures lock the account");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -146,5 +157,40 @@ async fn a_banned_pair_refuses_that_account_from_that_client_only() {
 		),
 		Some(TWO_FACTOR.to_string()),
 		"the same client is fine for another account"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allow_listed_host_is_not_locked_out_by_a_neighbour_in_its_slash_64() {
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("2001:db8:1:2::10/128");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	for last in 1..=5 {
+		fail(&directory, TWO_FACTOR, &format!("2001:db8:1:2::{last}"));
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "2001:db8:1:2::99"),
+		None,
+		"the neighbours' /64 is banned"
+	);
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "2001:db8:1:2::10"),
+		Some(OPEN.to_string()),
+		"the allow-listed host in the same /64 is not"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allow_listed_hosts_failures_ban_nobody() {
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("2001:db8:1:2::10/128");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	for _ in 0..30 {
+		fail(&directory, OPEN, "2001:db8:1:2::10");
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "2001:db8:1:2::99"),
+		Some(OPEN.to_string()),
+		"neither its /64 nor the account was counted"
 	);
 }

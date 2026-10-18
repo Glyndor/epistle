@@ -91,8 +91,8 @@ async fn imap_login_records_the_peer_ip() {
 	assert!(out.contains("a NO"), "{out}");
 
 	assert!(
-		ban_store.call_count("record_failure") >= 2,
-		"ban store recorded {} failure(s); expected at least two (IP and account)",
+		ban_store.call_count("record_failure") >= 3,
+		"ban store recorded {} failure(s); expected at least three (client, pair and account)",
 		ban_store.call_count("record_failure")
 	);
 	assert!(
@@ -268,8 +268,8 @@ async fn imap_scram_failure_adds_one_strike() {
 
 	assert_eq!(
 		ban_store.call_count("record_failure"),
-		2,
-		"ban store recorded {} failure(s); expected exactly two (IP and account)",
+		3,
+		"ban store recorded {} failure(s); expected exactly three (client, pair and account)",
 		ban_store.call_count("record_failure")
 	);
 	assert!(

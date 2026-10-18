@@ -15,10 +15,11 @@
 //! Failures are counted on three subjects. The client (`ip:`) is the
 //! address, or the /64 for IPv6, since one host there controls a whole /64
 //! and rotating inside it costs nothing. The pair (`pair:`) is one account
-//! as seen from one client. The account (`account:`) takes a strike only
-//! when a pair reaches its ban, so one client alone cannot lock an account
-//! out for everyone: it takes several clients each exhausting their own
-//! budget.
+//! as seen from one client. The account (`account:`) counts every failure
+//! against a threshold [`ACCOUNT_THRESHOLD_FACTOR`] times higher, so a
+//! guess spread over many clients, each too few to be banned, still ends in
+//! a ban, while one client alone cannot lock an account out for everyone: it
+//! is stopped by its own counters long before.
 //!
 //! The store is **fail open on database errors**: a connection hiccup must
 //! never block mail, so every public method returns the safe answer (`None`
@@ -73,7 +74,25 @@ impl Default for BanPolicy {
 	}
 }
 
+/// How many times the client threshold the account subject needs. An account
+/// is attacked from many clients at once, and one client alone must not be able
+/// to fire its ban: a single client is stopped by its own counters after
+/// `threshold` failures, so it can never reach `ACCOUNT_THRESHOLD_FACTOR`
+/// times as many inside one window.
+pub const ACCOUNT_THRESHOLD_FACTOR: u32 = 4;
+
 impl BanPolicy {
+	/// The failures within the window that fire a ban for `subject`: the plain
+	/// threshold for a client or a pair, [`ACCOUNT_THRESHOLD_FACTOR`] times it
+	/// for an account.
+	pub fn threshold_for(&self, subject: &str) -> u32 {
+		if subject.starts_with("account:") {
+			self.threshold.saturating_mul(ACCOUNT_THRESHOLD_FACTOR)
+		} else {
+			self.threshold
+		}
+	}
+
 	/// How long the next ban lasts given the current `strikes` count. The
 	/// first ban (strikes = 1) is `base_secs`; each subsequent ban doubles
 	/// it, capped at `max_secs`. Saturates the exponent at 20 so the
@@ -117,6 +136,16 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		&self,
 		subject: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
+
+	/// Whether the operator's allow list covers `ip`. An allow-listed client
+	/// is never counted and never banned. The default is "not listed", which
+	/// is right for a store that has no allow list.
+	fn is_allow_listed(
+		&self,
+		_ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async { false })
+	}
 
 	/// Drop failures older than 24 hours and bans whose `until` is older
 	/// than 24 hours ago.

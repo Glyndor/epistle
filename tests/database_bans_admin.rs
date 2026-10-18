@@ -240,7 +240,13 @@ async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
 	let kept_pair = format!("pair:{kept}|203.0.113.5");
 	let t = now();
 	for subject in [&doomed_pair, &doomed_account, &kept_pair] {
-		for _ in 0..5 {
+		// An account needs four times a pair's failures to be banned.
+		let failures = if subject.starts_with("account:") {
+			20
+		} else {
+			5
+		};
+		for _ in 0..failures {
 			store.record_failure(subject, "imaps", t).await;
 		}
 		assert!(store.is_banned(subject, t).await.is_some(), "{subject}");
@@ -271,4 +277,46 @@ async fn unbanning_an_ipv6_address_lifts_the_slash_64_it_is_counted_under() {
 		.await
 		.expect("remove ban");
 	assert!(store.is_banned(&counted, now()).await.is_none());
+}
+
+#[tokio::test]
+async fn an_account_needs_four_times_the_failures_of_a_client_to_be_banned() {
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let tag = uuid::Uuid::now_v7().simple().to_string();
+	let account = format!("account:thr-{}", &tag[..12]);
+	let pair = format!("pair:thr-{}|203.0.113.5", &tag[..12]);
+	let t = now();
+	fail_times(&store, &pair, 5).await;
+	assert!(store.is_banned(&pair, t).await.is_some(), "five ban a pair");
+	fail_times(&store, &account, 19).await;
+	assert!(
+		store.is_banned(&account, t).await.is_none(),
+		"nineteen do not ban an account"
+	);
+	fail_times(&store, &account, 1).await;
+	let info = store.is_banned(&account, t).await.expect("twenty ban it");
+	assert_eq!(info.reason, "20 failed authentications in 60 seconds");
+	store.clear_success(&pair).await;
+	store.clear_success(&account).await;
+}
+
+#[tokio::test]
+async fn the_store_reports_whether_the_allow_list_covers_an_address() {
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let block = fresh_block();
+	let host: std::net::IpAddr = format!("{block}::10").parse().expect("host");
+	let neighbour: std::net::IpAddr = format!("{block}::11").parse().expect("neighbour");
+	let entry = parse_allow(&format!("{block}::10")).expect("entry");
+	assert!(!store.is_allow_listed(host).await);
+	store.allow_add(entry).await.expect("allow");
+	assert!(store.is_allow_listed(host).await);
+	assert!(
+		!store.is_allow_listed(neighbour).await,
+		"only the host, not its /64"
+	);
+	store.allow_remove(entry).await.expect("unallow");
 }

@@ -394,8 +394,8 @@ async fn smtp_scram_failure_adds_one_strike() {
 
 	assert_eq!(
 		ban_store.call_count("record_failure"),
-		2,
-		"ban store recorded {} failure(s); expected exactly two (IP and account)",
+		3,
+		"ban store recorded {} failure(s); expected exactly three (client, pair and account)",
 		ban_store.call_count("record_failure")
 	);
 	assert!(

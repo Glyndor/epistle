@@ -114,6 +114,13 @@ impl BanStore for PgBanStore {
 		Box::pin(async move { self.clear_success_inner(&subject).await })
 	}
 
+	fn is_allow_listed(
+		&self,
+		ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async move { self.ip_allowed(ip).await })
+	}
+
 	fn sweep(
 		&self,
 		now_secs: u64,
@@ -161,10 +168,11 @@ impl PgBanStore {
 			.bind(window_start_secs as i64)
 			.fetch_one(&mut *tx)
 			.await?;
-			if count >= self.policy.threshold as i64 {
+			let threshold = self.policy.threshold_for(subject);
+			if count >= threshold as i64 {
 				let reason = format!(
-					"{} failed authentications in {} seconds",
-					self.policy.threshold, self.policy.window_secs
+					"{threshold} failed authentications in {} seconds",
+					self.policy.window_secs
 				);
 				let existing: Option<(i32,)> =
 					sqlx::query_as("SELECT strikes FROM auth_ban WHERE subject = $1 FOR UPDATE")

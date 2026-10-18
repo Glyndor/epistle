@@ -231,19 +231,21 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   subjects. The client (`ip:<addr>`) is the peer address, or its /64 for
   IPv6, because one host there owns a whole /64 and rotating inside it is
   free. The pair (`pair:<login>|<client>`) is one account seen from one
-  client. The account (`account:<login>`) takes a strike only when a pair
-  reaches its ban, so a single client can ban itself but cannot lock an
-  account out for its owner: it takes five clients, each spending its own
-  five failures. A successful authentication clears the ban and the failure
-  history of the account and of that pair, and never of the client, so an
-  attacker with an account of its own cannot reset its count by logging in
-  between guesses at others. A shared address (a NAT, a proxy) therefore
-  accumulates the typos of everyone behind it: allow-list it
-  (`epistle ban allow add`, a /64 for IPv6) if that is a problem. The
-  allow list is matched against the /64, so allow an IPv6 client by its
-  /64. A brute-force attempt against one account from a botnet trips each
-  client's counters, and a credential stuffing wave from one client trips
-  its own. The wire response to a banned subject is identical to a wrong password (no
+  client. The account (`account:<login>`) counts every failure too, but it
+  fires at four times the threshold (20 in 15 minutes): a guess spread over
+  many clients, each too few to be banned, still ends in a ban, while a
+  single client cannot lock an account out for its owner, because its own
+  counters stop it after five. A successful authentication clears the ban
+  and the failure history of the account and of that pair, and never of the
+  client, so an attacker with an account of its own cannot reset its count by
+  logging in between guesses at others. A shared address (a NAT, a proxy)
+  therefore accumulates the typos of everyone behind it: allow-list it
+  (`epistle ban allow add`) if that is a problem. An allow-listed client is
+  never counted, and for IPv6 the /64 it shares with others is not asked
+  about for it, so a neighbour's ban does not reach it. The owner of an
+  account that many clients are guessing at is locked out for the length of
+  the account ban as well. A credential stuffing wave from one client trips
+  that client's counters. The wire response to a banned subject is identical to a wrong password (no
   oracle); the audit log records the rule that fired under the
   `auth.banned` event. The store is fail-open on database errors: a
   flapping pool returns `None` to the ban check and bumps the

@@ -182,12 +182,14 @@ impl Directory {
 		};
 		let now_secs = unix_now_secs();
 		if let Some(ip) = ip {
-			// The client as counted (the /64 for IPv6) and, for IPv6, the exact
-			// address too, which is where an operator's manual ban or allow
-			// entry for a single host lives.
-			let mut subjects = vec![bans::subject_client(ip)];
-			if ip.is_ipv6() {
-				subjects.push(bans::subject_ip(ip));
+			// The exact address is always asked about: that is where an
+			// operator's manual ban or allow entry for one host lives. For
+			// IPv6 the /64 the failures are counted under is asked about too,
+			// unless the host itself is on the allow list: a neighbour in its
+			// /64 that earned a ban must not lock it out.
+			let mut subjects = vec![bans::subject_ip(ip)];
+			if ip.is_ipv6() && !block_on_async(store.is_allow_listed(ip)) {
+				subjects.push(bans::subject_client(ip));
 			}
 			for subject in subjects {
 				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
@@ -283,32 +285,34 @@ impl Directory {
 			}
 			return;
 		}
+		// An allow-listed client is never counted, on the client, the pair or
+		// the account, however many times it fails.
+		if let Some(ip) = ip
+			&& block_on_async(store.is_allow_listed(ip))
+		{
+			return;
+		}
 		if let Some(ip) = ip {
 			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
 		}
 		let Some(account) = account else {
 			return;
 		};
-		let Some(ip) = ip else {
-			// No client address to tell clients apart: the account takes the
-			// strike itself.
+		if let Some(ip) = ip {
 			block_on_async(store.record_failure(
-				&bans::subject_account(account),
-				protocol_str,
-				now_secs,
-			));
-			return;
-		};
-		// The account takes a strike only when this client has used up its own
-		// budget for it, so a single client cannot lock the account for everyone.
-		let pair = bans::subject_pair(account, ip);
-		block_on_async(store.record_failure(&pair, protocol_str, now_secs));
-		if block_on_async(store.is_banned(&pair, now_secs)).is_some() {
-			block_on_async(store.record_failure(
-				&bans::subject_account(account),
+				&bans::subject_pair(account, ip),
 				protocol_str,
 				now_secs,
 			));
 		}
+		// Every failure also counts against the account, at a threshold several
+		// times the client's (see `ACCOUNT_THRESHOLD_FACTOR`): a guess spread
+		// over many clients, none enough to be banned, still ends in a ban,
+		// and one client alone is stopped by its own counters long before.
+		block_on_async(store.record_failure(
+			&bans::subject_account(account),
+			protocol_str,
+			now_secs,
+		));
 	}
 }
