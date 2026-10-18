@@ -1,4 +1,20 @@
+use std::cell::RefCell;
+
 use super::*;
+
+thread_local! {
+	/// The pairs [`shown`] uses on this test's thread instead of the
+	/// environment's, which a process reads once.
+	pub(super) static OVERRIDE: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with [`shown`] rewriting `staged` to `named`.
+pub(crate) fn with_pair<T>(staged: &str, named: &str, f: impl FnOnce() -> T) -> T {
+	OVERRIDE.with(|pairs| *pairs.borrow_mut() = Some(vec![(staged.into(), named.into())]));
+	let result = f();
+	OVERRIDE.with(|pairs| *pairs.borrow_mut() = None);
+	result
+}
 
 #[test]
 fn staged_paths_read_as_the_operators() {

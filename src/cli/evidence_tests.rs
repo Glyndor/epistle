@@ -478,3 +478,32 @@ fn an_accepted_break_is_not_reported_as_verified() {
 		text(&out)
 	);
 }
+
+/// A run delegated to the service account writes into a staged copy of the
+/// directory; the line it prints names the path the operator asked for.
+#[test]
+fn export_names_the_requested_path_not_the_staged_one() {
+	let server = Server::new();
+	let out_dir = tempfile::tempdir().expect("tempdir");
+	let staged = out_dir.path().join("staged-bundle");
+	let staged_text = staged.display().to_string();
+	let selector = crate::evidence::bundle::Selector::MessageId("<1@example.org>".into());
+	for as_json in [false, true] {
+		let _ = std::fs::remove_dir_all(&staged);
+		let mut out = Vec::new();
+		let code = super::super::staging::with_shown_pair(&staged_text, "/home/op/bundle", || {
+			super::super::evidence_bundle::export(
+				server.root(),
+				&crate::storage::MessageCrypto::disabled(),
+				&selector,
+				&staged,
+				(as_json, false),
+				&mut out,
+			)
+		});
+		assert_eq!(code, ExitCode::SUCCESS, "{}", text(&out));
+		let printed = text(&out);
+		assert!(printed.contains("/home/op/bundle"), "{printed}");
+		assert!(!printed.contains(&staged_text), "{printed}");
+	}
+}

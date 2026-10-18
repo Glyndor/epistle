@@ -30,6 +30,10 @@ pub(super) fn decode(value: &str) -> Vec<(String, String)> {
 /// `text` with every staged path the root parent passed replaced by the
 /// path the operator named. Unchanged outside a delegated run.
 pub(crate) fn shown(text: &str) -> String {
+	#[cfg(test)]
+	if let Some(pairs) = tests::OVERRIDE.with(|pairs| pairs.borrow().clone()) {
+		return replace(&pairs, text);
+	}
 	static PAIRS: OnceLock<Vec<(String, String)>> = OnceLock::new();
 	let pairs = PAIRS.get_or_init(|| {
 		std::env::var(ENV)
@@ -51,4 +55,4 @@ fn replace(pairs: &[(String, String)], text: &str) -> String {
 
 #[cfg(test)]
 #[path = "shown_tests.rs"]
-mod tests;
+pub(crate) mod tests;

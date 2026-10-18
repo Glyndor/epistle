@@ -183,12 +183,15 @@ pub(super) fn export(
 		true => ExitCode::SUCCESS,
 		false => ExitCode::FAILURE,
 	};
+	// A delegated run wrote into a staged copy of the directory; the
+	// operator is told the path they asked for.
+	let shown_dir = super::staging::shown(&dir.display().to_string());
 	if as_json {
 		let messages: Vec<String> = done.messages.iter().map(ToString::to_string).collect();
 		let printed = super::evidence::json(
 			out,
 			&json!({
-				"bundle": dir.display().to_string(),
+				"bundle": shown_dir,
 				"messages": messages,
 				"records": done.records,
 				"unsealed": unsealed,
@@ -204,7 +207,7 @@ pub(super) fn export(
 		"exported {} records of {} messages to {}",
 		done.records,
 		done.messages.len(),
-		sanitize(&dir.display().to_string())
+		sanitize(&shown_dir)
 	);
 	if !unsealed.is_empty() {
 		let _ = writeln!(
