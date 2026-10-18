@@ -156,8 +156,50 @@ impl ApiState {
 				});
 			crate::util::constant_time::eq(expected_hex.as_bytes(), actual_hex.as_bytes())
 		} else {
-			// Backward compat: argon2id PHC (legacy; generate new hash with `mail token-hash`).
-			crate::smtp::auth::verify_password(stored, token)
+			self.verify_legacy_configured(token)
+		}
+	}
+}
+
+impl ApiState {
+	/// The legacy path of [`Self::bearer_is_configured`]: an argon2id hash.
+	///
+	/// Once the real token has verified, its SHA-256 is kept and a bearer is
+	/// compared by digest, so a wrong one costs nothing. Until then every
+	/// wrong token costs an argon2 and anyone can send them, so those checks
+	/// draw on one budget for the whole server; when it is spent the bearer
+	/// counts as not configured without hashing. The only price is that the
+	/// very first use of the configured token, during a flood of wrong ones,
+	/// fails until the window rolls.
+	fn verify_legacy_configured(&self, token: &str) -> bool {
+		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+		if let Some(known) = self.inner.configured_digest.get() {
+			return crate::util::constant_time::eq(known, digest.as_ref());
+		}
+		let now = std::time::Instant::now();
+		let allowed = self
+			.inner
+			.auth_limiter
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.slow_check_allowed(now);
+		if !allowed {
+			return false;
+		}
+		#[cfg(test)]
+		super::CONFIGURED_ARGON2_RUNS.with(|runs| runs.set(runs.get() + 1));
+		if crate::smtp::auth::verify_password(&self.inner.token_hash, token) {
+			let mut known = [0u8; 32];
+			known.copy_from_slice(digest.as_ref());
+			let _ = self.inner.configured_digest.set(known);
+			true
+		} else {
+			self.inner
+				.auth_limiter
+				.lock()
+				.unwrap_or_else(|p| p.into_inner())
+				.slow_check_failed(now);
+			false
 		}
 	}
 }

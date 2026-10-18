@@ -7,7 +7,7 @@
 
 use super::limiter::{
 	AUTH_MAX_FAILURES, AuthLimiter, ClientLimiters, GLOBAL_MAX_FAILURES, MAX_CLIENTS,
-	NET_BUDGET_FACTOR,
+	NET_BUDGET_FACTOR, SLOW_CHECKS_PER_WINDOW,
 };
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -92,19 +92,6 @@ fn one_clients_failures_do_not_limit_another() {
 	for _ in 0..AUTH_MAX_FAILURES {
 		limiters.record_failure(client(1), t0);
 	}
-	assert!(limiters.is_limited(client(1), t0));
-	assert!(!limiters.is_limited(client(2), t0));
-}
-
-#[test]
-fn a_success_clears_only_its_own_client() {
-	let mut limiters = ClientLimiters::new(WINDOW);
-	let t0 = Instant::now();
-	for _ in 0..AUTH_MAX_FAILURES {
-		limiters.record_failure(client(1), t0);
-		limiters.record_failure(client(2), t0);
-	}
-	limiters.reset(client(2));
 	assert!(limiters.is_limited(client(1), t0));
 	assert!(!limiters.is_limited(client(2), t0));
 }
@@ -214,4 +201,30 @@ fn with_the_tables_full_untracked_failures_still_reach_the_global_ceiling() {
 	assert!(limiters.limited_after_failure(far(3_000_000), t0));
 	// One that has not failed is not refused for it.
 	assert!(!limiters.is_limited(far(4_000_000), t0));
+}
+
+#[test]
+fn a_slash_48_is_limited_at_exactly_one_hundred_and_sixty_failures() {
+	// Written out on purpose: it pins the eight-fold budget, which a test
+	// built from the constants would follow wherever the constants went.
+	let mut limiters = ClientLimiters::new(WINDOW);
+	let t0 = Instant::now();
+	for n in 0..159u64 {
+		limiters.record_failure(in_net(9, n / 20, n % 20), t0);
+	}
+	assert!(!limiters.limited_after_failure(in_net(9, 50, 1), t0));
+	limiters.record_failure(in_net(9, 7, 19), t0);
+	assert!(limiters.limited_after_failure(in_net(9, 50, 1), t0));
+}
+
+#[test]
+fn the_argon2_budget_is_shared_and_spent_by_failed_checks_only() {
+	let mut limiters = ClientLimiters::new(WINDOW);
+	let t0 = Instant::now();
+	for _ in 0..SLOW_CHECKS_PER_WINDOW {
+		assert!(limiters.slow_check_allowed(t0));
+		limiters.slow_check_failed(t0);
+	}
+	assert!(!limiters.slow_check_allowed(t0));
+	assert!(limiters.slow_check_allowed(t0 + WINDOW + Duration::from_secs(1)));
 }

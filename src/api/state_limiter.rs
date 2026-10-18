@@ -80,6 +80,10 @@ pub(super) const NET_BUDGET_FACTOR: u32 = 8;
 /// addresses than the tables below can track.
 pub(super) const GLOBAL_MAX_FAILURES: u32 = 2_000;
 
+/// Failed argon2 checks of a legacy configured token allowed in one window,
+/// from anyone, until the real token has been seen once.
+pub(super) const SLOW_CHECKS_PER_WINDOW: u32 = 60;
+
 /// Most clients tracked at once. A client is only tracked after a failure, and
 /// its entry is dropped when its window passes, so this bounds memory under a
 /// flood from many addresses (about 100,000 entries, a few megabytes).
@@ -127,6 +131,9 @@ pub(super) struct ClientLimiters {
 	/// fit in the tables. Consulted only after a request failed, never for
 	/// one that presents a valid token, so it cannot lock out a good client.
 	global: AuthLimiter,
+	/// Argon2 checks of the configured token that failed, from anyone. See
+	/// [`ClientLimiters::slow_check_allowed`].
+	slow: AuthLimiter,
 	last_sweep: Instant,
 }
 
@@ -137,6 +144,7 @@ impl ClientLimiters {
 			clients: HashMap::new(),
 			nets: HashMap::new(),
 			global: AuthLimiter::with_max(window, Instant::now(), GLOBAL_MAX_FAILURES),
+			slow: AuthLimiter::with_max(window, Instant::now(), SLOW_CHECKS_PER_WINDOW),
 			last_sweep: Instant::now(),
 		}
 	}
@@ -177,6 +185,20 @@ impl ClientLimiters {
 				.is_some_and(|limiter| limiter.is_limited(now))
 	}
 
+	/// Whether another argon2 check of the configured token may run: a legacy
+	/// `token_hash` is argon2id, so every wrong token costs one, and anyone
+	/// can send wrong tokens. Until the real token has been seen (after which
+	/// a wrong one is told apart by a digest and costs nothing), failed checks
+	/// share one budget of [`SLOW_CHECKS_PER_WINDOW`] per window.
+	pub(super) fn slow_check_allowed(&mut self, now: Instant) -> bool {
+		!self.slow.is_limited(now)
+	}
+
+	/// Count an argon2 check of the configured token that failed.
+	pub(super) fn slow_check_failed(&mut self, now: Instant) {
+		self.slow.record_failure(now);
+	}
+
 	/// Count one failure for the client behind `ip`, its /48 and the total.
 	pub(super) fn record_failure(&mut self, ip: Option<IpAddr>, now: Instant) {
 		self.global.record_failure(now);
@@ -201,13 +223,6 @@ impl ClientLimiters {
 				AUTH_MAX_FAILURES.saturating_mul(NET_BUDGET_FACTOR),
 			);
 		}
-	}
-
-	/// Forget the failures of the client behind `ip` after it presented a
-	/// valid token. Other clients and the /48 keep theirs: a success elsewhere
-	/// gives a flooder nothing back.
-	pub(super) fn reset(&mut self, ip: Option<IpAddr>) {
-		self.clients.remove(&ClientKey::of(ip));
 	}
 
 	/// Drop entries whose window has passed, at most once a second so a flood

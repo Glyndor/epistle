@@ -47,6 +47,9 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<ClientLimiters>,
+	/// SHA-256 of the configured token, set the first time the legacy argon2
+	/// hash verified it; from then on a bearer is compared by digest.
+	configured_digest: std::sync::OnceLock<[u8; 32]>,
 	/// Per-account correspondent store: which addresses the account has
 	/// previously written to. The rolling 24h cap on first-time
 	/// recipients (`new_recipients_per_day`) reads from and writes to
@@ -192,6 +195,7 @@ impl ApiState {
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
+				configured_digest: std::sync::OnceLock::new(),
 				correspondents: None,
 				class_bindings: None,
 				new_recipients_per_day: None,
@@ -449,6 +453,15 @@ impl ApiState {
 			.record_failure(Some(ip), std::time::Instant::now());
 	}
 
+	/// Test-only: behave as if the configured token had already verified once.
+	#[cfg(test)]
+	pub(crate) fn prime_configured_token(&self, token: &str) {
+		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+		let mut known = [0u8; 32];
+		known.copy_from_slice(digest.as_ref());
+		let _ = self.inner.configured_digest.set(known);
+	}
+
 	/// Test-only: lower the global failure ceiling so a test can reach it.
 	#[cfg(test)]
 	pub(crate) fn with_auth_global_max(mut self, max: u32) -> Self {
@@ -674,6 +687,9 @@ fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> 
 	}
 }
 
+/// Longest bearer token considered at all.
+const MAX_BEARER_LEN: usize = 1024;
+
 /// Middleware: every request must carry the bearer token.
 pub async fn require_bearer_token(
 	State(state): State<ApiState>,
@@ -715,6 +731,9 @@ pub async fn require_bearer_token(
 		.get(axum::http::header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
 		.and_then(|value| value.strip_prefix("Bearer "))
+		// Nothing a key or the configured token can be: refused before any
+		// hashing, so oversized junk costs a comparison of lengths.
+		.filter(|value| !value.is_empty() && value.len() <= MAX_BEARER_LEN)
 		.map(str::to_owned);
 
 	// Coarse-grained scope from the request line: the per-route JMAP handlers
@@ -736,9 +755,9 @@ pub async fn require_bearer_token(
 			.auth_limiter
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
-		if authorized {
-			limiter.reset(client_ip);
-		} else {
+		// A valid call does not give the client's failures back: someone with
+		// one key of their own could otherwise guess, call, guess again.
+		if !authorized {
 			limiter.record_failure(client_ip, now);
 		}
 		// Only a request that failed is asked about the /48 and the global
@@ -763,6 +782,12 @@ pub async fn require_bearer_token(
 		configured,
 	});
 	Ok(next.run(request).await)
+}
+
+#[cfg(test)]
+thread_local! {
+	/// How many argon2 verifications of the configured token this thread ran.
+	pub(crate) static CONFIGURED_ARGON2_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

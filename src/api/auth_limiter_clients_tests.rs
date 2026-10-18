@@ -34,7 +34,9 @@ fn app() -> axum::Router {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// Keep the directory alive for the whole process: the router borrows files in it.
 	let path = dir.keep();
-	router(test_state(&path, 0).with_auth_window(Duration::from_secs(3600)))
+	let state = test_state(&path, 0).with_auth_window(Duration::from_secs(3600));
+	state.prime_configured_token(TOKEN.as_str());
+	router(state)
 }
 
 #[tokio::test]
@@ -110,11 +112,11 @@ async fn an_ipv6_client_is_its_slash_64() {
 async fn a_flood_from_many_clients_never_blocks_a_valid_token() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.keep();
-	let app = router(
-		test_state(&path, 0)
-			.with_auth_window(Duration::from_secs(3600))
-			.with_auth_global_max(30),
-	);
+	let state = test_state(&path, 0)
+		.with_auth_window(Duration::from_secs(3600))
+		.with_auth_global_max(30);
+	state.prime_configured_token(TOKEN.as_str());
+	let app = router(state);
 	// One wrong token from each of thirty different clients.
 	for n in 1..=29u32 {
 		assert_eq!(

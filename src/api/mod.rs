@@ -335,6 +335,10 @@ mod tenancy_tests_routes;
 mod route_rules_tests;
 
 #[cfg(test)]
+#[path = "auth_guessing_tests.rs"]
+mod auth_guessing_tests;
+
+#[cfg(test)]
 #[path = "auth_limiter_clients_tests.rs"]
 mod auth_limiter_clients_tests;
 
