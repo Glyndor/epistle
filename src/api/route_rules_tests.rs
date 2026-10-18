@@ -51,6 +51,8 @@ const fn rule(
 
 const RULES: &[Rule] = &[
 	rule("/healthz", "none", Domain::Open, "-"),
+	// The description of the API itself: no tenant data.
+	rule("/api/v1/openapi.json", "read", Domain::Open, "-"),
 	// JMAP and send act for the principal behind the key.
 	rule(
 		"/.well-known/jmap",
@@ -331,4 +333,18 @@ fn every_rule_names_a_test_that_exists() {
 		);
 		assert!(!rule.scope.is_empty());
 	}
+}
+
+/// The key scopes `RULES` gives `pattern` (`read/write` is two), or `None`
+/// for a route it does not list. The OpenAPI tests hold their own scopes to it.
+pub(super) fn scopes_of(pattern: &str) -> Option<BTreeSet<&'static str>> {
+	RULES
+		.iter()
+		.find(|rule| rule.pattern == pattern)
+		.map(|rule| {
+			rule.scope
+				.split('/')
+				.filter(|scope| *scope != "none")
+				.collect()
+		})
 }

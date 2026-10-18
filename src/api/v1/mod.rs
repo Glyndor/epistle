@@ -29,6 +29,7 @@ use super::state::ApiState;
 pub fn router(max_message_size: usize) -> Router<ApiState> {
 	Router::new()
 		.route("/status", get(status::get))
+		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
 		.route("/domains", get(domains::list))
 		.route("/accounts", get(accounts::list).post(accounts::create))

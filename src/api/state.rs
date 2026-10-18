@@ -723,6 +723,10 @@ thread_local! {
 
 #[path = "state_bearer.rs"]
 mod bearer;
+/// The scopes the bearer middleware accepts for a request line, for the tests
+/// that hold the OpenAPI description to it.
+#[cfg(test)]
+pub(in crate::api) use bearer::acceptable_scopes_for;
 pub use bearer::require_bearer_token;
 
 #[path = "state_auth_queue.rs"]
