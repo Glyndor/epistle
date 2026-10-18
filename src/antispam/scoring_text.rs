@@ -120,6 +120,15 @@ fn extract(raw: &[u8], window: &mut Window) -> Option<()> {
 			parts.push(leaf.content);
 			// A client may have taken another of the encodings it declares.
 			parts.extend(leaf.alternates);
+		} else if leaf.truncated
+			&& leaf
+				.declared_types
+				.iter()
+				.any(|kind| kind.starts_with("message/") || kind.starts_with("multipart/"))
+		{
+			// A message inside the message that the budget cut short holds text
+			// that was not read.
+			complete = false;
 		}
 	});
 	if walked.stopped.is_some() || !complete {
