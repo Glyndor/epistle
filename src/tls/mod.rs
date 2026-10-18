@@ -185,7 +185,26 @@ pub async fn accept_within<IO>(
 where
 	IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-	match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+	accept_until(
+		acceptor,
+		stream,
+		tokio::time::Instant::now() + HANDSHAKE_TIMEOUT,
+	)
+	.await
+}
+
+/// [`accept_within`], but never past `deadline`: a caller with a deadline of
+/// its own for the whole phase does not get [`HANDSHAKE_TIMEOUT`] on top of it.
+pub async fn accept_until<IO>(
+	acceptor: &TlsAcceptor,
+	stream: IO,
+	deadline: tokio::time::Instant,
+) -> std::io::Result<tokio_rustls::server::TlsStream<IO>>
+where
+	IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+	let deadline = deadline.min(tokio::time::Instant::now() + HANDSHAKE_TIMEOUT);
+	match tokio::time::timeout_at(deadline, acceptor.accept(stream)).await {
 		Ok(result) => result,
 		Err(_) => Err(std::io::Error::new(
 			std::io::ErrorKind::TimedOut,

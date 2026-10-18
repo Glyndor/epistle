@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
@@ -234,13 +235,26 @@ where
 
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
+	// Before authentication the whole phase shares one deadline counted from
+	// the start of the session, so neither a slow trickle of bytes nor a
+	// stream of cheap commands can hold the connection past it. Afterwards
+	// each command gets the idle timeout for its line, and a fresh one for its
+	// literal from the moment the line is complete. A session that signs out
+	// (UNAUTHENTICATE) starts a new pre-authentication phase, with a new window.
+	let mut preauth_until = Instant::now() + preauth_timeout;
+	let mut was_signed_in = session.account_is_some();
 	loop {
-		let read_deadline = if session.account_is_some() {
-			TIMEOUT
+		let signed_in = session.account_is_some();
+		if was_signed_in && !signed_in {
+			preauth_until = Instant::now() + preauth_timeout;
+		}
+		was_signed_in = signed_in;
+		let line_deadline = if signed_in {
+			Instant::now() + TIMEOUT
 		} else {
-			preauth_timeout
+			preauth_until
 		};
-		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, line_deadline).await?
 		else {
 			write(
 				&mut stream,
@@ -248,6 +262,11 @@ where
 			)
 			.await?;
 			return Ok(());
+		};
+		let read_deadline = if signed_in {
+			Instant::now() + TIMEOUT
+		} else {
+			preauth_until
 		};
 		let Ok(line) = String::from_utf8(line) else {
 			write(
@@ -300,9 +319,22 @@ where
 					}
 					continue;
 				}
-				match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
-					Some(bytes) => Some(bytes),
-					None => {
+				let read = read_literal(
+					&mut stream,
+					&mut decoder,
+					&mut buffer,
+					literal.len,
+					read_deadline,
+				)
+				.await;
+				match read {
+					Ok(Some(bytes)) => Some(bytes),
+					Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+						write(&mut stream, &Response::Bye("read timeout".into())).await?;
+						return Ok(());
+					}
+					Err(error) => return Err(error),
+					Ok(None) => {
 						// The connection closed before the announced
 						// literal size arrived: drop the partial payload
 						// instead of parsing it as a complete script.
@@ -329,7 +361,7 @@ where
 			let Some(tls) = tls_acceptor else {
 				return Ok(());
 			};
-			let upgraded = crate::tls::accept_within(tls, stream).await?;
+			let upgraded = crate::tls::accept_until(tls, stream, read_deadline).await?;
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();
@@ -339,15 +371,15 @@ where
 	}
 }
 
-/// Read one command line, or `None` on clean EOF/timeout. `deadline`
-/// is the per-read timeout the caller wants to enforce; the post-auth
-/// deadline is generous (30 minutes), the pre-auth deadline is tight
-/// so an idle attacker cannot exhaust the listener's connection slots.
+/// Read one command line, or `None` on clean EOF/timeout. `deadline` is an
+/// absolute instant that incoming bytes do not move; the post-auth one is
+/// generous (30 minutes), the pre-auth one is tight so an idle or dripping
+/// attacker cannot exhaust the listener's connection slots.
 async fn read_line(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
-	deadline: Duration,
+	deadline: Instant,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	loop {
 		match decoder.next_line() {
@@ -355,7 +387,7 @@ async fn read_line(
 			Ok(None) => {}
 			Err(_) => return Ok(None),
 		}
-		let read = match tokio::time::timeout(deadline, stream.read(buffer)).await {
+		let read = match tokio::time::timeout_at(deadline, stream.read(buffer)).await {
 			Ok(Ok(n)) => n,
 			Ok(Err(error)) => return Err(error),
 			Err(_) => return Ok(None),
@@ -370,16 +402,21 @@ async fn read_line(
 /// Read exactly `size` literal octets, or detect a truncated connection
 /// and return `None` so the caller can reject the command. The trailing
 /// CRLF after the literal is left for the next `read_line`, which skips
-/// it as a blank line.
+/// it as a blank line. Running past `deadline` is a `TimedOut` error.
 async fn read_literal(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
 	size: usize,
+	deadline: Instant,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	let mut literal = decoder.take_buffered(size);
 	while literal.len() < size {
-		let read = stream.read(buffer).await?;
+		let read = tokio::time::timeout_at(deadline, stream.read(buffer))
+			.await
+			.map_err(|_| {
+				std::io::Error::new(std::io::ErrorKind::TimedOut, "literal read timeout")
+			})??;
 		if read == 0 {
 			return Ok(None);
 		}
@@ -414,6 +451,10 @@ mod tests_starttls;
 
 #[path = "server_discard.rs"]
 mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_deadline.rs"]
+mod tests_deadline;
 
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]
