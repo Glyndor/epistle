@@ -81,6 +81,12 @@ pub(super) fn push_chars(
 	let mut too_long = false;
 	let mut accented = false;
 	for c in chars.chain(std::iter::once(' ')) {
+		if is_invisible(c) {
+			// It joins the two halves of a word that the UTF-8 reading splits,
+			// so the word is new even if it has no accent.
+			accented = true;
+			continue;
+		}
 		if c.is_alphanumeric() {
 			if token.len() + c.len_utf8() > MAX_TOKEN {
 				too_long = true;

@@ -82,3 +82,26 @@ fn invisible_characters_do_not_split_a_word() {
 	// Plain accented text is read as before.
 	assert!(has("Subject: x\r\n\r\nñandú comió\r\n".as_bytes(), "ñandú"));
 }
+
+/// The same in the readings that go through [`read::push_chars`]: UTF-16 in
+/// both orders and with a mark, and Latin-1 where 0xAD is a soft hyphen.
+#[test]
+fn invisible_characters_do_not_split_a_word_in_utf16_or_latin1() {
+	let text = "cheap f\u{200b}ree v\u{00ad}iagra now";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let be: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+	let mut marked = vec![0xfe, 0xff];
+	marked.extend(&be);
+	for (name, bytes) in [("le", le), ("be", be), ("bom", marked)] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; charset=utf-16\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&bytes)
+		));
+		assert!(has(&raw, "free"), "utf-16 {name}");
+		assert!(has(&raw, "viagra"), "utf-16 {name}");
+	}
+	let raw = b"Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncheap fr\xadee vi\xadagra caf\xe9\r\n";
+	assert!(has(raw, "free"));
+	assert!(has(raw, "viagra"));
+}
