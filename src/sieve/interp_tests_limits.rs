@@ -149,6 +149,38 @@ fn a_key_over_the_caps_is_a_false_test_and_the_rest_of_the_script_runs() {
 	assert_eq!(outcome.fileinto, vec!["After".to_string()]);
 }
 
+#[test]
+fn a_key_over_the_caps_under_not_never_loses_the_message() {
+	// `not` turns the false of an over-cap key into true, so a script written
+	// for 0.12.1 (where such a key could match) would discard everything: an
+	// allow-list kept as "discard what is not on it". The test is not
+	// trustworthy, so no `discard` or `reject` of the run stands.
+	let long = format!("{}@work.example", "a*".repeat(40));
+	for action in ["discard;", "reject \"no\";"] {
+		let script = format!(
+			"require \"reject\";\n\
+			if not header :matches \"from\" \"{long}\" {{ {action} stop; }}\n"
+		);
+		let outcome = run_with(&script, b"From: boss@work.example\r\n\r\nx\r\n");
+		assert!(outcome.pattern_over_caps, "{action}: {outcome:?}");
+		assert!(
+			!outcome.discarded && outcome.reject.is_none() && outcome.keep,
+			"{action}: {outcome:?}"
+		);
+	}
+}
+
+#[test]
+fn a_key_over_the_caps_does_not_undo_a_fileinto_that_is_safe() {
+	let long = "a".repeat(300);
+	let script = format!(
+		"require \"fileinto\";\nfileinto \"First\";\n\
+		if header :matches \"subject\" \"{long}\" {{ discard; }}\n"
+	);
+	let outcome = run(&script);
+	assert_eq!(outcome.fileinto, vec!["First".to_string()]);
+}
+
 fn flags_script(count: usize) -> String {
 	let flags: Vec<String> = (0..count).map(|n| format!("\"k{n}\"")).collect();
 	format!("require \"imap4flags\";\naddflag [{}];\n", flags.join(","))
@@ -202,4 +234,19 @@ fn many_flag_actions_are_steps_and_work_of_the_run() {
 		"addflag \"a\";\n".repeat(30_000)
 	);
 	assert!(run(&script).aborted);
+}
+
+#[test]
+fn what_was_decided_before_a_key_over_the_caps_stands() {
+	// A block-list that discards, then a rule with a key written before the
+	// caps: the discard of a message that matched the block-list is not undone.
+	let long = "a".repeat(300);
+	let script = format!(
+		"if header :contains \"subject\" \"spam\" {{ discard; stop; }}\n\
+		if header :matches \"subject\" \"{long}\" {{ keep; }}\n"
+	);
+	let spam = run_with(&script, b"Subject: spam offer\r\n\r\nx\r\n");
+	assert!(spam.discarded && !spam.pattern_over_caps, "{spam:?}");
+	let other = run_with(&script, b"Subject: hello\r\n\r\nx\r\n");
+	assert!(other.pattern_over_caps && other.keep && !other.discarded);
 }

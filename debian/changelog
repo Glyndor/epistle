@@ -123,7 +123,9 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     64 KiB (16 names at most), so no header hides the others listed with it.
     Upgrading: a stored script with a `:matches` key over 256 characters or 32
     wildcards no longer matches (the test is false, the rest of the script
-    runs, and the log names the account once an hour); it used to match. A
+    runs but from that test on it keeps the message instead of discarding or
+    rejecting it, so a `not` around such a key cannot lose mail, and the log
+    names the account once an hour); it used to match. A
     message bigger than that no longer makes a script run out of work, and a rule that matches text past the
     window does not see it: the log says so once an hour per account and the
     new counter `mail_sieve_inspection_truncated_total` (alert metric

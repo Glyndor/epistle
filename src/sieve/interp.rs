@@ -161,12 +161,25 @@ fn run(
 			Command::Action { name, args } => match name.as_str() {
 				"keep" => outcome.keep = true,
 				"discard" => {
-					outcome.discarded = true;
-					cancel.local = true;
+					// After a key over the caps made a test false, which `not`
+					// or `else` can turn into the branch that loses mail, the
+					// run cannot be trusted to mean what its author wrote: it
+					// keeps the message instead of discarding it. What it
+					// decided before that point stands.
+					if vars.pattern_over_caps() {
+						outcome.keep = true;
+					} else {
+						outcome.discarded = true;
+						cancel.local = true;
+					}
 				}
 				// reject / ereject (RFC 5429): refuse + bounce; cancels keep.
 				"reject" | "ereject" => {
-					if let Some(reason) = first_str(args) {
+					if vars.pattern_over_caps() {
+						// As `discard`: no bounce is sent for a message the run
+						// may be wrong about, and it is kept.
+						outcome.keep = true;
+					} else if let Some(reason) = first_str(args) {
 						let reason = vars.expand(&reason);
 						if vars.exhausted() {
 							return true;

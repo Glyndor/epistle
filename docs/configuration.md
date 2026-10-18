@@ -1745,8 +1745,11 @@ by the script:
   make a Subject as long as the message allows, and the filter still sees
   it); its cost is counted in the run's budget. A key over 256 characters or
   32 wildcards is never run: saving a script that holds one is refused, and a
-  script stored earlier that does treats that test as false and goes on (the
-  log says so once an hour per account; shorten the key). Upgrading: a
+  script stored earlier that does treats that test as false and goes on, but
+  from that test on the run does not `discard` or `reject`: it keeps the
+  message instead, because `not` or `else` can turn that false into the branch
+  that loses mail (what the run decided before the test stands; the log says
+  so once an hour per account; shorten the key). Upgrading: a
   `:matches` key longer than that, which used to match, now never does.
 - `fileinto` files into a folder once however often the script names it, and
   into at most 8 different folders. A folder the filter would make is made

@@ -116,7 +116,7 @@ impl LocalDelivery {
 				account,
 				max_chars = crate::sieve::MAX_PATTERN_CHARS,
 				max_wildcards = crate::sieve::MAX_WILDCARDS,
-				"the account's Sieve filter has a :matches key over the length or wildcard limit; its test is false and the rest of the script ran. Shorten the key"
+				"the account's Sieve filter has a :matches key over the length or wildcard limit; its test is false and the rest of the script ran, but from that test on the run keeps the message instead of discarding or rejecting it. Shorten the key"
 			);
 		}
 		if outcome.fileinto_over_limit > 0 && self.may_say("sieve-fileinto", account) {
