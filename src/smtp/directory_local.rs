@@ -22,12 +22,16 @@ impl Directory {
 		password: &str,
 		ip: Option<std::net::IpAddr>,
 	) -> Option<(String, Option<String>)> {
-		let (account, hash) = self.credentials(login)?;
-		// Disabled check runs after the credential lookup (which lowercases the
-		// bare-login path) but before any hashing — argon2id and SCRAM are both
-		// skipped, which is the whole point. Lookup is O(1); the disabled set
-		// is small in practice.
+		let Some((account, hash)) = self.credentials(login) else {
+			self.burn_password_check(password);
+			return None;
+		};
+		// A disabled account is refused after the credential lookup (which
+		// lowercases the bare-login path). It still pays for one hash: a
+		// refusal that skipped it would be fast, and the speed would say the
+		// account exists and is disabled.
 		if self.disabled.contains(&account) {
+			self.burn_password_check(password);
 			return None;
 		}
 		// TOTP applies to the primary password only; strip and verify the code.
@@ -42,7 +46,12 @@ impl Directory {
 			Some(candidate) => self.password_policy.login_form(candidate),
 			None => Cow::Borrowed(""),
 		};
-		if !prepared.is_empty() && crate::smtp::auth::verify_password(hash, &prepared) {
+		if prepared.is_empty() {
+			// A missing or wrong TOTP code leaves no password to check; the
+			// work is still done so the refusal is not quicker than a wrong
+			// password.
+			self.burn_password_check(password);
+		} else if crate::smtp::auth::verify_password(hash, &prepared) {
 			self.maybe_upgrade_scram(&account, &prepared);
 			return Some((account, None));
 		}
@@ -63,6 +72,28 @@ impl Directory {
 			}
 		}
 		None
+	}
+
+	/// Check `candidate` against a password hash made for this purpose. A login
+	/// with no password to check (unknown, disabled, receive-only, a missing
+	/// TOTP code) runs this so it costs what a wrong password on a real account
+	/// costs: the hash is argon2id with the parameters of a stored one, and the
+	/// result is thrown away. Without it the refusal returns in microseconds and
+	/// the delay tells an attacker which logins exist.
+	fn burn_password_check(&self, candidate: &str) {
+		static HASH: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
+			use base64::Engine;
+			let seed: [u8; 18] = ring::rand::generate(&ring::rand::SystemRandom::new())
+				.ok()?
+				.expose();
+			let password = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(seed);
+			crate::smtp::auth::hash_password(&password).ok()
+		});
+		#[cfg(test)]
+		self.count_password_decoy();
+		if let Some(hash) = HASH.as_deref() {
+			let _ = crate::smtp::auth::verify_password(hash, candidate);
+		}
 	}
 
 	/// Strip and verify the trailing 6-digit TOTP code from `password`, returning

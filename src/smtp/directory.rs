@@ -165,6 +165,10 @@ pub struct Directory {
 	/// isolated from any other test in the same `cargo test` process.
 	#[cfg(test)]
 	scram_lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+	/// Test-only counts of the stand-in work done for logins that have no
+	/// credential of their own (see `directory_test_counter.rs`).
+	#[cfg(test)]
+	decoy_counters: Option<std::sync::Arc<decoy_counters::DecoyCounters>>,
 }
 
 impl Directory {
@@ -208,6 +212,8 @@ impl Directory {
 			password_policy: Policy::ASCII_ONLY,
 			#[cfg(test)]
 			scram_lookup_counter: None,
+			#[cfg(test)]
+			decoy_counters: None,
 		}
 	}
 
@@ -685,6 +691,14 @@ pub(crate) mod gate_fixture;
 #[cfg(test)]
 #[path = "directory_gate_tests.rs"]
 mod gate_tests;
+
+#[cfg(test)]
+#[path = "directory_timing_tests.rs"]
+mod timing_tests;
+
+#[cfg(test)]
+#[path = "directory_decoy_counters.rs"]
+pub(crate) mod decoy_counters;
 
 #[cfg(test)]
 #[path = "directory_tests.rs"]

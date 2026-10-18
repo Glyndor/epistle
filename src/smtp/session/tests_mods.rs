@@ -63,5 +63,8 @@ mod tests_scram_ban_lifecycle;
 #[path = "../session_tests_scram_bans.rs"]
 mod tests_scram_bans;
 #[cfg(test)]
+#[path = "../session_tests_scram_decoy.rs"]
+mod tests_scram_decoy;
+#[cfg(test)]
 #[path = "../session_tests_scram_off.rs"]
 mod tests_scram_off;

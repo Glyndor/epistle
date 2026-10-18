@@ -94,7 +94,18 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   else. Before 0.12.2 SCRAM skipped the TOTP code and the disabled flag, and a
   bearer token or client certificate skipped the disabled flag.
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
-  password, and repeated failures close the connection.
+  password, and repeated failures close the connection. For a password
+  mechanism that includes the time: a login with no password of its own
+  (unknown, disabled, receive-only, or a TOTP code that is missing) checks the
+  candidate against an argon2id hash made for the purpose, so the refusal costs
+  what a wrong password on a real account costs. For SCRAM, a login nobody
+  holds, an account without a verifier and an account the rules refuse get the
+  same server-first message as a real account: the salt is a keyed hash of the
+  login (stable for that login, not computable by the client) and the iteration
+  count is the current one, and the exchange ends at the proof like a wrong
+  password. Before 0.12.2 an unknown login was refused at the first message,
+  instantly, while a real one was challenged, and a failed IMAP or SMTP password
+  check for an unknown login returned in microseconds.
 
 ## Authorization
 

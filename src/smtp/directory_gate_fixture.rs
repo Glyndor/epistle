@@ -181,3 +181,40 @@ pub(crate) fn current_totp_code() -> String {
 		.unwrap_or(0);
 	format!("{:06}", crate::totp::totp(&totp_secret(), now))
 }
+
+/// A directory whose only account, `alice`, carries a SCRAM verifier as a
+/// current install stores it: 600000 iterations and a random-looking salt. The
+/// keys are arbitrary, which is enough to look at the challenge but never to
+/// finish an exchange.
+pub(crate) fn directory_with_production_verifier() -> Directory {
+	use crate::smtp::scram::SCRAM_ITERATIONS;
+	let stored = ScramStored::from_credentials(&ScramCredentials {
+		salt: fixtures::salt().to_vec(),
+		iterations: SCRAM_ITERATIONS,
+		stored_key: [7u8; 32],
+		server_key: [9u8; 32],
+	});
+	Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), OPEN.to_string())],
+	)
+	.with_password_hashes([(
+		OPEN.to_string(),
+		crate::smtp::auth::tests::hash(fixtures::password()),
+	)])
+	.with_scram([(OPEN.to_string(), stored)])
+}
+
+/// The `s=` salt and `i=` count of a server-first message.
+pub(crate) fn salt_and_iterations(server_first: &str) -> (Vec<u8>, u32) {
+	let field = |key: &str| {
+		server_first
+			.split(',')
+			.find_map(|part| part.strip_prefix(key))
+			.expect("field in server-first")
+	};
+	(
+		B64.decode(field("s=")).expect("base64 salt"),
+		field("i=").parse().expect("iteration count"),
+	)
+}

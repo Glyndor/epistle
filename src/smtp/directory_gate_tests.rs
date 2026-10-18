@@ -1,6 +1,7 @@
 //! The account rules in [`Directory::admit_login`], the SCRAM planning built
 //! on them, and the password path checked against every protocol.
 
+use super::decoy_counters::DecoyCounters;
 use super::gate_fixture::*;
 use super::{Directory, Proof, ScramRefusal};
 use crate::config::Protocol;
@@ -124,9 +125,7 @@ fn directory_without_a_verifier() -> Directory {
 
 #[test]
 fn an_open_account_plans_a_real_exchange() {
-	let plan = gate_directory()
-		.plan_scram(OPEN, None, Protocol::Imaps)
-		.expect("plan");
+	let plan = gate_directory().plan_scram(OPEN, None, Protocol::Imaps);
 	assert_eq!(plan.account, OPEN);
 	assert_eq!(plan.refusal, None);
 	assert_eq!(plan.credentials.iterations, 4096);
@@ -136,9 +135,7 @@ fn an_open_account_plans_a_real_exchange() {
 fn a_refused_account_plans_a_decoy_counted_against_it() {
 	let directory = gate_directory();
 	for name in [DISABLED, TWO_FACTOR] {
-		let plan = directory
-			.plan_scram(name, None, Protocol::Imaps)
-			.expect("plan");
+		let plan = directory.plan_scram(name, None, Protocol::Imaps);
 		assert_eq!(
 			plan.refusal,
 			Some(ScramRefusal::Denied {
@@ -158,7 +155,6 @@ fn the_decoy_salt_is_stable_per_login_and_not_a_plain_hash_of_it() {
 	let salt = |login: &str| {
 		directory
 			.plan_scram(login, None, Protocol::Imaps)
-			.expect("plan")
 			.credentials
 			.salt
 	};
@@ -175,8 +171,48 @@ fn the_decoy_salt_is_stable_per_login_and_not_a_plain_hash_of_it() {
 }
 
 #[test]
-fn a_login_with_no_verifier_has_no_exchange_and_counts_against_its_account() {
-	let directory = directory_without_a_verifier();
-	let outcome = directory.plan_scram("dana", None, Protocol::Imaps);
-	assert_eq!(outcome.err(), Some(Some("dana".to_string())));
+fn a_login_with_no_verifier_runs_a_decoy_exchange_counted_against_its_account() {
+	let plan = directory_without_a_verifier().plan_scram("dana", None, Protocol::Imaps);
+	assert_eq!(
+		plan.refusal,
+		Some(ScramRefusal::Denied {
+			account: Some("dana".to_string())
+		})
+	);
+	assert_eq!(plan.credentials.stored_key, [0u8; 32]);
+}
+
+#[test]
+fn a_login_nobody_holds_runs_the_decoy_exchange_a_refused_account_does() {
+	let counters = std::sync::Arc::new(DecoyCounters::default());
+	let directory = gate_directory().with_decoy_counters(counters.clone());
+	let ghost = directory.plan_scram("ghost", None, Protocol::Imaps);
+	assert_eq!(ghost.refusal, Some(ScramRefusal::Denied { account: None }));
+	assert_eq!(counters.scram(), 1, "the decoy credentials were built");
+	directory.plan_scram(DISABLED, None, Protocol::Imaps);
+	assert_eq!(
+		counters.scram(),
+		2,
+		"a refused account builds them the same way"
+	);
+	directory.plan_scram(OPEN, None, Protocol::Imaps);
+	assert_eq!(counters.scram(), 2, "a real exchange builds none");
+}
+
+#[test]
+fn a_login_without_a_password_still_pays_for_one_hash_check() {
+	let counters = std::sync::Arc::new(DecoyCounters::default());
+	let directory = gate_directory().with_decoy_counters(counters.clone());
+	for (login, password, expected) in [
+		("ghost", fixtures::password().to_string(), 1),
+		(DISABLED, fixtures::password().to_string(), 2),
+		(TWO_FACTOR, fixtures::password().to_string(), 3),
+		(OPEN, fixtures::wrong_password().to_string(), 3),
+	] {
+		assert_eq!(
+			directory.authenticate(login, &password, Protocol::Imaps),
+			None
+		);
+		assert_eq!(counters.password(), expected, "after {login}");
+	}
 }

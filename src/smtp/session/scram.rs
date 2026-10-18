@@ -92,16 +92,9 @@ impl Session {
 		// under a ban gets decoy credentials. Either way the wire shows the
 		// same `334` and then a `535` at client-final, exactly as a wrong
 		// proof would, so nothing tells a refusal from a bad password.
-		let plan = match self
+		let plan = self
 			.directory
-			.plan_scram(&username, self.peer_ip, self.auth_protocol)
-		{
-			Ok(plan) => plan,
-			Err(account) => {
-				self.record_scram_outcome(&username, account.as_deref(), false);
-				return self.scram_failure();
-			}
-		};
+			.plan_scram(&username, self.peer_ip, self.auth_protocol);
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
 			self.count_scram_failure(&username, &plan);

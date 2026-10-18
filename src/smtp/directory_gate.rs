@@ -83,47 +83,42 @@ impl Directory {
 	}
 
 	/// Plan the answer to a SCRAM client-first message for `username`. Bans
-	/// are consulted before any credential lookup. An account that may not
-	/// sign in with SCRAM gets decoy credentials, so the exchange looks like a
-	/// wrong password from outside and nothing says why it failed.
-	///
-	/// `Err` carries the account to count a failure against (when the login
-	/// resolved to one) for a login with no SCRAM verifier: there is no
-	/// exchange to run.
+	/// are consulted before any credential lookup. A login that cannot finish
+	/// the exchange (a ban, an account the rules refuse, a login nobody holds,
+	/// an account with no SCRAM verifier) gets decoy credentials, so the
+	/// exchange looks like a wrong password from outside and nothing says why
+	/// it failed, or whether the login exists.
 	pub fn plan_scram(
 		&self,
 		username: &str,
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
-	) -> Result<ScramPlan, Option<String>> {
+	) -> ScramPlan {
 		let resolved = match self.check_ban(username, ip, protocol) {
 			BanOutcome::Banned => {
-				return Ok(ScramPlan {
+				return ScramPlan {
 					credentials: self.decoy_scram_credentials(username),
 					account: username.to_string(),
 					refusal: Some(ScramRefusal::Banned),
-				});
+				};
 			}
 			BanOutcome::Clear { account } => account,
 		};
-		let Some(credentials) = self.scram_credentials(username) else {
-			return Err(resolved);
-		};
-		let Some((account, _)) = self.credentials(username) else {
-			return Err(resolved);
-		};
-		if self.admit_login(&account, protocol, Proof::Scram) {
-			return Ok(ScramPlan {
+		if let Some(credentials) = self.scram_credentials(username)
+			&& let Some((account, _)) = self.credentials(username)
+			&& self.admit_login(&account, protocol, Proof::Scram)
+		{
+			return ScramPlan {
 				credentials,
 				account,
 				refusal: None,
-			});
+			};
 		}
-		Ok(ScramPlan {
+		ScramPlan {
 			credentials: self.decoy_scram_credentials(username),
 			account: username.to_string(),
 			refusal: Some(ScramRefusal::Denied { account: resolved }),
-		})
+		}
 	}
 
 	/// Credentials that exist only to build a server-first message and never
@@ -137,6 +132,8 @@ impl Directory {
 	/// here: the same failure stops the session from drawing a server nonce,
 	/// and it closes the exchange before any decoy is sent.
 	fn decoy_scram_credentials(&self, username: &str) -> ScramCredentials {
+		#[cfg(test)]
+		self.count_scram_decoy();
 		static KEY: std::sync::OnceLock<hmac::Key> = std::sync::OnceLock::new();
 		let key = KEY.get_or_init(|| {
 			let bytes: [u8; 32] = ring::rand::generate(&ring::rand::SystemRandom::new())
