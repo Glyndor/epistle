@@ -275,11 +275,44 @@ fn a_static_account_with_padded_addresses_is_the_same_account_not_a_clash() {
 	assert_eq!(code, ExitCode::from(EXIT_OK), "re-run is a skip: {out}");
 }
 
+/// An environment variable set for one test and removed when the guard
+/// drops, also when the test fails before its end.
+struct EnvVar(&'static str);
+
+impl EnvVar {
+	fn set(name: &'static str, value: &str) -> Self {
+		// SAFETY: `name` is unique to the one test that creates this guard, so
+		// no other test reads or writes it. Tests elsewhere in the process
+		// only read other variables, the same arrangement as
+		// `expands_environment_variables` in config_tests.rs.
+		unsafe { std::env::set_var(name, value) };
+		EnvVar(name)
+	}
+}
+
+impl Drop for EnvVar {
+	fn drop(&mut self) {
+		// SAFETY: same uniquely-named variable as set in `EnvVar::set`.
+		unsafe { std::env::remove_var(self.0) };
+	}
+}
+
+#[test]
+fn the_env_guard_removes_the_variable_even_on_a_panic() {
+	let name = "EPISTLE_TEST_1208_GUARD";
+	let unwound = std::panic::catch_unwind(|| {
+		let _env = EnvVar::set(name, "x");
+		assert_eq!(std::env::var(name).as_deref(), Ok("x"));
+		panic!("the test fails before its end");
+	});
+	assert!(unwound.is_err());
+	assert!(std::env::var(name).is_err(), "the variable did not leak");
+}
+
 #[test]
 fn a_static_account_named_by_an_environment_variable_is_found_by_its_value() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	// SAFETY-free variant: the variable name is unique to this test.
-	unsafe { std::env::set_var("EPISTLE_TEST_1208_ACCT", "torre-control") };
+	let _env = EnvVar::set("EPISTLE_TEST_1208_ACCT", "torre-control");
 	install_then_declare(
 		dir.path(),
 		"\n[[accounts]]\nname = \"${EPISTLE_TEST_1208_ACCT}\"\naddresses = [\"torre-control@example.org\"]\n",
