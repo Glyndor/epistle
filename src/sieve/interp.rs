@@ -100,7 +100,8 @@ pub use super::message::Message;
 
 /// Run a parsed script against a message and return the delivery outcome.
 ///
-/// A run that spends more than it may (see [`super::env`]) stops where it is,
+/// A run that spends more than it may (the step and work ceilings of the
+/// run's `Env`) stops where it is,
 /// as a `stop` would, with this rule. What it had decided about where the
 /// message goes (`discard`, `fileinto`, `keep`, flags) stays decided, so that
 /// the size of a message cannot undo a user's `discard`. What it had asked to

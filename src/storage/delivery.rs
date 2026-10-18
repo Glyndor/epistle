@@ -620,3 +620,7 @@ mod redirect_tests;
 #[cfg(test)]
 #[path = "delivery_tests_sieve_limits.rs"]
 mod sieve_limits;
+
+#[cfg(test)]
+#[path = "delivery_tests_sieve_warnings.rs"]
+mod sieve_warnings;
