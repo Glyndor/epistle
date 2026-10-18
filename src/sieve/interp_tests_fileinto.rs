@@ -52,3 +52,14 @@ fn a_copy_of_a_repeated_folder_keeps_the_implicit_keep() {
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
 	assert!(outcome.keep);
 }
+
+#[test]
+fn files_beyond_the_limit_are_counted() {
+	let mut script = String::from("require \"fileinto\";\n");
+	for n in 0..12 {
+		script.push_str(&format!("fileinto :copy \"F{n}\";\n"));
+	}
+	let outcome = run(&script);
+	assert_eq!(outcome.fileinto.len(), 8);
+	assert_eq!(outcome.fileinto_over_limit, 4);
+}

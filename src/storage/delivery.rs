@@ -317,11 +317,13 @@ impl LocalDelivery {
 		// section 2.10.6) and not lost behind a redirect that never happened.
 		let mut keep = outcome.keep;
 		if unusable > 0 {
-			tracing::warn!(
-				account,
-				unusable,
-				"a Sieve redirect names something that is not an address; the message was kept"
-			);
+			if self.may_say("sieve-redirect-address", account) {
+				tracing::warn!(
+					account,
+					unusable,
+					"a Sieve redirect names something that is not an address; the message was kept"
+				);
+			}
 			keep = true;
 		}
 		redirects.extend(forwards);
@@ -352,11 +354,13 @@ impl LocalDelivery {
 				// Past the account's limit no folder is made: the message is
 				// kept in INBOX instead, never lost and never filed nowhere.
 				if !io::create_mailbox_within_limit(&self.data_dir, account, folder) {
-					tracing::warn!(
-						account,
-						limit = io::MAX_AUTO_FOLDERS,
-						"a Sieve fileinto cannot make its folder (past the account's limit, too deep, or no lock); the message was kept"
-					);
+					if self.may_say("sieve-folder", account) {
+						tracing::warn!(
+							account,
+							limit = io::MAX_AUTO_FOLDERS,
+							"a Sieve fileinto cannot make its folder (past the account's limit, too deep, or no lock); the message was kept"
+						);
+					}
 					if !kept {
 						self.deliver_to_account(account, None, data, &outcome.flags)
 							.map_err(|error| SinkError::Unavailable(error.to_string()))?;

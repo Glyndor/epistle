@@ -382,7 +382,7 @@ impl ScriptStore {
 		let dirs = self.dirs()?;
 		fs::create_dir_all(&dirs.sieve_dir).map_err(|_| StoreError::Io)?;
 		let lock = contained_child(&dirs.sieve_dir, ".lock").map_err(|_| StoreError::Io)?;
-		create_private(&lock).map_err(|_| StoreError::Io)?;
+		crate::storage::lock::create_private(&lock).map_err(|_| StoreError::Io)?;
 		let lock = crate::util::blocking::may_block(|| FileLock::acquire(&lock))
 			.map_err(|_| StoreError::Io)?;
 		let path = contained_child(&dirs.sieve_dir, ".index.json").map_err(|_| StoreError::Io)?;
@@ -463,19 +463,6 @@ impl ScriptStore {
 			warn();
 		}
 	}
-}
-
-/// Create `path` empty and readable by its owner alone, if it is not there:
-/// the lock file is not a place for anything but the lock.
-fn create_private(path: &Path) -> std::io::Result<()> {
-	use std::os::unix::fs::OpenOptionsExt;
-	fs::OpenOptions::new()
-		.create(true)
-		.truncate(false)
-		.write(true)
-		.mode(0o600)
-		.open(path)
-		.map(drop)
 }
 
 /// An operation in progress on an account's scripts: the account's lock,

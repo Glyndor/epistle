@@ -1765,7 +1765,14 @@ by the script:
   account is filtered again there. The loop check stops a message that comes
   back to an address it went through, but a chain across different accounts
   that each redirect is bounded only by the number of accounts.
-- A filter file over 1 MiB (the store never writes one) is not run.
+- A filter file over 1 MiB (the store never writes one) is not run, and nor is
+  one the parser refuses today (a script stored before a stricter check): mail
+  goes to INBOX and the log says so. Every warning a filter causes (a run that
+  stopped, a window that cut something, a key over the caps, redirects or
+  folders past the limit, a filter that is not run) is logged once an hour per
+  account, not once per message.
+- `fileinto` past 8 different folders is counted and logged like `redirect`
+  past 4. The `.flags` of a message hold at most 32 different flags.
 
 ## Example
 

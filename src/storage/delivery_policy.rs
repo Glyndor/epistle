@@ -10,6 +10,13 @@ use crate::storage::delivery::{LocalDelivery, MAX_FORWARD_HOPS, received_hops};
 use crate::util::path_component::AccountName;
 
 impl LocalDelivery {
+	/// Whether the line `kind` about `account` may be logged now: once an
+	/// hour. A filter that misbehaves does so on every message, and a log
+	/// line per message would make the mail itself the way to fill the log.
+	pub(super) fn may_say(&self, kind: &str, account: &str) -> bool {
+		crate::util::warn_limited::allow(&format!("{kind}:{}:{account}", self.data_dir.display()))
+	}
+
 	/// Admin-configured external forwarding targets for an account, with the
 	/// keep-local flag. Empty when the account has no forwarding, the sender
 	/// is null (a bounce, never forward, loop risk), or the message has
@@ -46,16 +53,31 @@ impl LocalDelivery {
 		// written by the store, and is not read.
 		let size = fs::metadata(&path).ok()?.len();
 		if size > crate::managesieve::store::MAX_SCRIPT_BYTES as u64 {
-			tracing::warn!(
-				account,
-				size,
-				"the account's Sieve filter is over the size limit; it was not run"
-			);
+			if self.may_say("sieve-size", account) {
+				tracing::warn!(
+					account,
+					size,
+					"the account's Sieve filter is over the size limit; it was not run"
+				);
+			}
 			return None;
 		}
 		let source = fs::read_to_string(path).ok()?;
-		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
-		let commands = crate::sieve::parser::parse(&tokens).ok()?;
+		let Some(commands) = crate::sieve::lexer::tokenize(&source)
+			.ok()
+			.and_then(|tokens| crate::sieve::parser::parse(&tokens).ok())
+		else {
+			// A script stored before a stricter check can be one the parser
+			// refuses today (a chain of `not` deeper than 64, say): the mail
+			// goes to INBOX, and the owner is told why their filter is idle.
+			if self.may_say("sieve-parse", account) {
+				tracing::warn!(
+					account,
+					"the account's Sieve filter could not be read as a Sieve script; it was not run and mail goes to INBOX. Save a corrected script"
+				);
+			}
+			return None;
+		};
 		// The `mailbox` extension's `mailboxexists` test consults the
 		// account's mailbox list, so hand the interpreter the names in
 		// their IMAP on-disk spelling (modified UTF-7). `imap::mailbox::list`
@@ -66,11 +88,7 @@ impl LocalDelivery {
 			.with_envelope(message.reverse_path.clone(), message.recipients.clone())
 			.with_mailboxes(&mut mailboxes);
 		let outcome = crate::sieve::interp::evaluate(&commands, &parsed);
-		if outcome.aborted
-			&& crate::util::warn_limited::allow(&format!(
-				"sieve-aborted:{}:{account}",
-				self.data_dir.display()
-			)) {
+		if outcome.aborted && self.may_say("sieve-aborted", account) {
 			tracing::warn!(
 				account,
 				redirects_dropped = outcome.dropped.redirects,
@@ -86,21 +104,14 @@ impl LocalDelivery {
 			if let Some(metrics) = &self.metrics {
 				metrics.sieve_inspection_truncated();
 			}
-			if crate::util::warn_limited::allow(&format!(
-				"sieve-truncated:{}:{account}",
-				self.data_dir.display()
-			)) {
+			if self.may_say("sieve-truncated", account) {
 				tracing::warn!(
 					account,
 					"a Sieve test of the account's filter looked at part of a message only (the first mebibyte of the body, or the first mebibyte or thousand values of the headers of a lookup); a rule that matches text past that did not see it"
 				);
 			}
 		}
-		if outcome.pattern_over_caps
-			&& crate::util::warn_limited::allow(&format!(
-				"sieve-pattern:{}:{account}",
-				self.data_dir.display()
-			)) {
+		if outcome.pattern_over_caps && self.may_say("sieve-pattern", account) {
 			tracing::warn!(
 				account,
 				max_chars = crate::sieve::MAX_PATTERN_CHARS,
@@ -108,11 +119,15 @@ impl LocalDelivery {
 				"the account's Sieve filter has a :matches key over the length or wildcard limit; its test is false and the rest of the script ran. Shorten the key"
 			);
 		}
-		if outcome.redirects_over_limit > 0
-			&& crate::util::warn_limited::allow(&format!(
-				"sieve-redirects:{}:{account}",
-				self.data_dir.display()
-			)) {
+		if outcome.fileinto_over_limit > 0 && self.may_say("sieve-fileinto", account) {
+			tracing::warn!(
+				account,
+				ignored = outcome.fileinto_over_limit,
+				limit = crate::sieve::interp::MAX_FILEINTO,
+				"the account's Sieve filter files into folders beyond the limit of folders for one message; those were not carried out"
+			);
+		}
+		if outcome.redirects_over_limit > 0 && self.may_say("sieve-redirects", account) {
 			tracing::warn!(
 				account,
 				ignored = outcome.redirects_over_limit,

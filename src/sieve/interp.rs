@@ -51,6 +51,9 @@ pub struct Outcome {
 	/// How many different `redirect` addresses came after the limit and were
 	/// not forwarded to, for the delivery to log.
 	pub redirects_over_limit: usize,
+	/// How many `fileinto` named a ninth or later different folder and were
+	/// not carried out.
+	pub fileinto_over_limit: usize,
 }
 
 /// The external effects an aborted run had asked for and did not get.
@@ -198,6 +201,8 @@ fn run(
 						let known = outcome.fileinto.contains(&folder);
 						if !known && outcome.fileinto.len() < MAX_FILEINTO {
 							outcome.fileinto.push(folder.clone());
+						} else if !known {
+							outcome.fileinto_over_limit += 1;
 						}
 						// `:create` (RFC 5490): the delivery side creates the
 						// folder if it does not exist before filing. Without

@@ -460,3 +460,86 @@ fn the_flags_sidecar_holds_no_more_than_the_limit() {
 		serde_json::from_slice(&fs::read(path).expect("read")).expect("json");
 	assert_eq!(written.len(), crate::sieve::interp::MAX_FLAGS);
 }
+
+fn said(events: &[crate::cli::tracing_capture::CapturedEvent], text: &str) -> usize {
+	events
+		.iter()
+		.filter(|e| e.fields.get("message").is_some_and(|m| m.contains(text)))
+		.count()
+}
+
+#[test]
+fn the_folder_lock_is_private() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = setup(
+		dir.path(),
+		"require \"fileinto\";\nfileinto :create \"Lists\";\n",
+	);
+	delivery
+		.deliver_routed(&message("hi"), None)
+		.expect("deliver");
+	let mode = fs::metadata(dir.path().join("accounts/alice/.folders.lock"))
+		.expect("lock file")
+		.permissions()
+		.mode();
+	assert_eq!(mode & 0o077, 0, "{mode:o}");
+}
+
+#[test]
+fn a_filter_that_does_not_parse_is_said_once_an_hour_and_the_mail_is_kept() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = setup(dir.path(), "if if if { ;; \"unterminated\n");
+	let events = run_with_capture(|| {
+		for _ in 0..3 {
+			delivery
+				.deliver_routed(&message("hi"), None)
+				.expect("deliver");
+		}
+	});
+	assert_eq!(inbox(dir.path()), 3);
+	assert_eq!(said(&events, "could not be read as a Sieve script"), 1);
+}
+
+#[test]
+fn files_into_more_folders_than_the_limit_are_counted_and_said_once() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut script = String::from("require \"fileinto\";\n");
+	for n in 0..12 {
+		script.push_str(&format!("fileinto :copy \"F{n}\";\n"));
+	}
+	let delivery = setup(dir.path(), &script);
+	let events = run_with_capture(|| {
+		for _ in 0..3 {
+			delivery
+				.deliver_routed(&message("hi"), None)
+				.expect("deliver");
+		}
+	});
+	assert_eq!(said(&events, "beyond the limit of folders"), 1);
+	let made = (0..12)
+		.filter(|n| {
+			dir.path()
+				.join(format!("accounts/alice/folders/F{n}"))
+				.exists()
+		})
+		.count();
+	assert_eq!(made, 8, "eight folders, not twelve");
+}
+
+#[test]
+fn the_other_delivery_warnings_are_said_once_an_hour_too() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = setup(
+		dir.path(),
+		"redirect \"not an address\";\nredirect :copy \"also not\";\n",
+	);
+	let events = run_with_capture(|| {
+		for _ in 0..4 {
+			delivery
+				.deliver_routed(&message("hi"), None)
+				.expect("deliver");
+		}
+	});
+	assert_eq!(said(&events, "not an address"), 1, "{events:?}");
+}

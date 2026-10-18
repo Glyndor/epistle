@@ -109,6 +109,9 @@ pub(super) fn create_mailbox_within_limit(
 	else {
 		return false;
 	};
+	if crate::storage::lock::create_private(&lock_path).is_err() {
+		return false;
+	}
 	let Ok(_lock) =
 		crate::util::blocking::may_block(|| crate::storage::lock::FileLock::acquire(&lock_path))
 	else {
