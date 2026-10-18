@@ -55,7 +55,7 @@ pub(super) fn managesieve(
 			require(acceptor, "ManageSieve")?,
 		)
 		.with_max_connections(max_conn)
-		.with_max_connections_per_ip(limits.per_ip)
+		.with_max_connections_per_ip(limits.managesieve_per_ip)
 		.with_preauth_timeout(limits.preauth_timeout),
 	);
 	Ok(tokio::spawn(server.serve(listener)))

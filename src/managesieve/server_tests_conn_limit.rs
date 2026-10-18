@@ -51,3 +51,20 @@ async fn a_full_listener_says_so_even_to_a_new_client() {
 		Some("BYE \"too many connections, try again later\"\r\n")
 	);
 }
+
+#[test]
+fn the_default_cap_per_client_can_act_before_the_listener_is_full() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	));
+	let (acceptor, _cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(dir.path().to_path_buf(), directory, acceptor);
+	assert!(
+		server.max_per_ip < server.max_connections,
+		"a per-client cap of {} cannot stop one client from filling a listener of {}",
+		server.max_per_ip,
+		server.max_connections
+	);
+}

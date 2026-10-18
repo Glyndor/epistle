@@ -37,6 +37,14 @@ fn absent_or_zero_caps_keep_the_built_in_ones() {
 }
 
 #[test]
+fn managesieve_defaults_below_its_listener_cap_and_follows_a_configured_value() {
+	let limits = MailboxLimits::from_config(&config(""));
+	assert_eq!((limits.per_ip, limits.managesieve_per_ip), (200, 40));
+	let limits = MailboxLimits::from_config(&config("max_mailbox_connections_per_ip = 7"));
+	assert_eq!((limits.per_ip, limits.managesieve_per_ip), (7, 7));
+}
+
+#[test]
 fn configured_caps_are_used() {
 	let config = config(
 		"max_mailbox_connections_per_ip = 7\nmax_http_connections = 50\nmax_http_connections_per_ip = 9",

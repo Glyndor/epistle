@@ -21,6 +21,13 @@ use crate::smtp::per_ip::{PerIpCounter, Slot};
 /// so the default leaves room for a whole small installation behind it.
 pub const DEFAULT_MAILBOX_CONNECTIONS_PER_IP: usize = 200;
 
+/// The same for ManageSieve, whose listener holds 100 connections: a cap of
+/// 200 would never act, since one client could not reach it. A script editor
+/// keeps one or two connections open, so 40 leaves room for a whole office
+/// behind one address and stops one host from taking more than 40% of the
+/// listener, the share IMAP and POP3 give at their defaults (200 of 500).
+pub const DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP: usize = 40;
+
 /// Concurrent connections a plain-HTTP listener serves.
 pub const DEFAULT_HTTP_CONNECTIONS: usize = 1024;
 

@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::net::conn_limit::{
 	DEFAULT_HTTP_CONNECTIONS, DEFAULT_HTTP_CONNECTIONS_PER_IP, DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
+	DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 };
 use crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT;
 
@@ -13,8 +14,11 @@ use crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT;
 pub(super) struct MailboxLimits {
 	/// How long a client gets, from the start of the connection, to sign in.
 	pub preauth_timeout: Duration,
-	/// Connections one client may hold on a listener.
+	/// Connections one client may hold on an IMAP or POP3 listener.
 	pub per_ip: usize,
+	/// The same on a ManageSieve listener, whose own listener cap is lower:
+	/// it defaults to less when the configuration does not say.
+	pub managesieve_per_ip: usize,
 }
 
 impl MailboxLimits {
@@ -26,6 +30,10 @@ impl MailboxLimits {
 			per_ip: nonzero(
 				config.max_mailbox_connections_per_ip,
 				DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
+			),
+			managesieve_per_ip: nonzero(
+				config.max_mailbox_connections_per_ip,
+				DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			),
 		}
 	}

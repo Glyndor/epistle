@@ -93,7 +93,7 @@ impl Server {
 			accounts_root: data_dir.join("accounts"),
 			tls,
 			max_connections: MAX_CONNECTIONS,
-			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			max_literal: DEFAULT_MAX_LITERAL,
 			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 		}

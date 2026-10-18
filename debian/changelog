@@ -18,7 +18,7 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     preauth-timeout`.
   * Security: one client address can no longer hold every connection of a
     listener. IMAP, POP3 and ManageSieve cap the connections one client holds
-    (200 by default, `max_mailbox_connections_per_ip`), and the plain-HTTP
+    (200 by default, 40 for ManageSieve, `max_mailbox_connections_per_ip`), and the plain-HTTP
     listeners cap both their connections (1024, `max_http_connections`) and
     what one client holds (256, `max_http_connections_per_ip`); an IPv6 client
     is counted by its /64, as for SMTP. A connection over a cap gets the
