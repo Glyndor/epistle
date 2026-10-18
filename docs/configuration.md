@@ -719,7 +719,8 @@ other part that is not text are skipped and cost nothing, so a message with a
 PDF or a photo scores as the message without it. Whitespace, punctuation and
 one-letter words are not words and cost nothing either. A message that two
 readers could split into parts differently is read as raw bytes as well. A message whose
-structure cannot be followed (nested too deep, too many parts, or a text part
+structure cannot be followed (nested more than 32 levels deep, more than
+10 000 parts, or a text part
 larger than 2 MiB once decoded, or a message inside it that size) is read as
 raw bytes, as the filter always did, and counts as not read in full (see the
 floor of 0.5 below), since text that travels encoded is not decoded that way.

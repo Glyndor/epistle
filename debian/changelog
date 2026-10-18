@@ -31,6 +31,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     the deadlocks between them. The shared corpus is not pruned: a message of
     5000 new words adds about 1.7 MB of table and 3.5 MB of log, and one
     address may teach 30 such messages an hour.
+  * Security: the Bayesian filter follows a deeper message structure, up to 32
+    levels and 10 000 parts where it was 10 and 1000. The cost of reading
+    stays linear in the size of the message, and a message past either limit
+    is still read as raw bytes and still counts as not read in full.
   * Security: scoring a message with the Bayesian corpus is bounded the same
     way. It tokenized, hashed and looked up every word of a message of up to
     25 MiB inside the session of an unauthenticated sender (338 MiB of heap

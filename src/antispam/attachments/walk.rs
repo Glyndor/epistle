@@ -26,7 +26,7 @@ const TRUNCATED_PREFIX: usize = super::sniff::SNIFF_WINDOW;
 // see each other.
 #[cfg(test)]
 thread_local! {
-	pub(super) static STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+	pub(crate) static STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
