@@ -140,9 +140,8 @@ fn a_nested_message_past_the_budget_is_never_taken_for_clean() {
 		));
 		assert!(scoring_text(&raw).clipped, "{encoding}");
 	}
-	let small = multipart(&format!(
-		"--bb\r\nContent-Type: message/rfc822\r\n\r\nSubject: x\r\n\r\nhiddenword\r\n"
-	));
+	let small =
+		multipart("--bb\r\nContent-Type: message/rfc822\r\n\r\nSubject: x\r\n\r\nhiddenword\r\n");
 	let reduced = scoring_text(&small);
 	assert!(!reduced.clipped && has(&small, "hiddenword"));
 }
