@@ -80,7 +80,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::corpus::BayesStore;
-use super::training_queue::training_window;
+use super::scoring_text::scoring_text;
 
 /// Jobs the queue holds before [`SharedTraining::submit`] starts dropping.
 pub const QUEUE_CAPACITY: usize = 64;
@@ -503,7 +503,8 @@ impl SharedTraining {
 		queue
 	}
 
-	/// Queue `data` (its [`training_window`], at most [`MAX_TRAINING_BYTES`](super::training_queue::MAX_TRAINING_BYTES), is kept) for
+	/// Queue `data`, reduced to what is read of it (see [`super::scoring_text`]),
+	/// for
 	/// `scope` without waiting. Returns whether it was queued.
 	pub fn submit(&self, source: &TrainSource, scope: &str, data: &[u8], spam: bool) -> bool {
 		self.try_submit(Instant::now(), source, scope, data, spam)
@@ -527,7 +528,7 @@ impl SharedTraining {
 		permit.send(Job {
 			source: source.clone(),
 			scope: scope.to_string(),
-			text: training_window(data).into_owned(),
+			text: scoring_text(data).text.into_bytes(),
 			spam,
 		});
 		Ok(())

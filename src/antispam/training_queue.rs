@@ -9,7 +9,7 @@
 //!
 //! A job names the message file instead of carrying its bytes. The
 //! worker reads and decodes the file when it gets to it, and tokenises
-//! at most [`MAX_TRAINING_BYTES`] of it (see [`training_window`]). A message expunged in between is
+//! at most [`MAX_TRAINING_BYTES`] of it (see [`super::scoring_text`]). A message expunged in between is
 //! skipped.
 //!
 //! Training is advisory. [`TrainingQueue::submit`] never waits: when the
@@ -35,26 +35,6 @@ pub const TRAINING_QUEUE_CAPACITY: usize = 256;
 /// message too; the bound keeps one large attachment from becoming tens of
 /// thousands of token rows.
 pub const MAX_TRAINING_BYTES: usize = super::urls::MAX_SCAN_BYTES;
-
-/// The part of a message that is trained or scored on: all of it when it fits
-/// in [`MAX_TRAINING_BYTES`], else its first and its last half, joined by a
-/// newline. Only the start would let whoever writes the message hide what
-/// matters behind filler, so the end counts as much as the start.
-pub fn training_window(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-	if bytes.len() <= MAX_TRAINING_BYTES {
-		return std::borrow::Cow::Borrowed(bytes);
-	}
-	let head_end = seam_before(bytes, MAX_TRAINING_BYTES / 2);
-	let tail_start = seam_after(
-		bytes,
-		bytes.len() - (MAX_TRAINING_BYTES - MAX_TRAINING_BYTES / 2 - 1),
-	);
-	let mut window = Vec::with_capacity(MAX_TRAINING_BYTES);
-	window.extend_from_slice(&bytes[..head_end]);
-	window.push(b'\n');
-	window.extend_from_slice(&bytes[tail_start..]);
-	std::borrow::Cow::Owned(window)
-}
 
 /// Whether a byte can be part of a token: an ASCII letter or digit, or a byte
 /// of a multi-byte character.
@@ -165,11 +145,12 @@ pub async fn run_worker(
 	}
 }
 
-/// Read and decode the message at `path`, keeping the training window.
+/// Read and decode the message at `path`. The trainer reduces it to the text
+/// it learns from (see [`super::scoring_text`]); that needs the whole message,
+/// because the structure is what tells a text part from an attachment.
 fn read_window(path: &std::path::Path, crypto: &MessageCrypto) -> std::io::Result<Vec<u8>> {
 	let stored = std::fs::read(path)?;
-	let text = crypto.decode(&stored)?;
-	Ok(training_window(&text).into_owned())
+	crypto.decode(&stored)
 }
 
 #[cfg(test)]

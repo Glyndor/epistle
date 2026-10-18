@@ -330,16 +330,38 @@ fn without_a_source_the_small_network_of_its_own_bounds_the_job() {
 #[tokio::test]
 async fn a_job_keeps_only_the_window_of_a_huge_message() {
 	let (queue, mut receiver, _budget) = SharedTraining::bounded(4);
-	let mut huge = vec![b'a'; 3 * MAX_TRAINING_BYTES];
-	huge[..5].copy_from_slice(b"start");
-	let end = huge.len();
-	huge[end - 3..].copy_from_slice(b"end");
-	assert!(queue.submit(&alone(1), "scope", &huge, true));
+	let body: String = (0..60_000).map(|n| format!("wd{n:07x} ")).collect();
+	let huge = format!("Subject: x\r\n\r\nstartword {body}endword\r\n");
+	assert!(queue.submit(&alone(1), "scope", huge.as_bytes(), true));
 	let job = receiver.recv().await.expect("queued job");
-	assert_eq!(job.text.len(), MAX_TRAINING_BYTES);
-	assert!(job.text.starts_with(b"start") && job.text.ends_with(b"end"));
+	assert!(job.text.len() <= MAX_TRAINING_BYTES);
+	assert!(
+		job.text.len() > MAX_TRAINING_BYTES - 1024,
+		"the window was not filled"
+	);
+	let text = String::from_utf8(job.text).expect("tokens are text");
+	assert!(text.starts_with("Subject startword") && text.trim_end().ends_with("endword"));
 	assert_eq!(job.scope, "scope");
 	assert!(job.spam);
+}
+
+/// An attachment is not part of what the corpus learns from.
+#[tokio::test]
+async fn a_job_does_not_carry_the_attachments_of_the_message() {
+	let (queue, mut receiver, _budget) = SharedTraining::bounded(4);
+	let raw = format!(
+		"Subject: x\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\n\
+		 Content-Type: text/plain\r\n\r\nhello world\r\n--b\r\n\
+		 Content-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n--b--\r\n",
+		"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n".repeat(20_000)
+	);
+	assert!(queue.submit(&alone(1), "", raw.as_bytes(), false));
+	let job = receiver.recv().await.expect("queued job");
+	assert!(
+		job.text.len() < 200,
+		"the job carried {} bytes",
+		job.text.len()
+	);
 }
 
 #[tokio::test]

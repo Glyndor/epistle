@@ -13,9 +13,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{
-	MAX_TRAINING_BYTES, TRAINING_QUEUE_CAPACITY, TrainingJob, TrainingQueue, training_window,
-};
+use super::{TRAINING_QUEUE_CAPACITY, TrainingJob, TrainingQueue};
 use crate::metrics::Metrics;
 
 /// One job's worth of payload, all unique so the trainer would notice
@@ -120,54 +118,4 @@ fn a_flood_counts_every_drop_and_never_blocks_the_producer() {
 		drained += 1;
 	}
 	assert_eq!(drained, TRAINING_QUEUE_CAPACITY);
-}
-
-/// A message over the window is trained on its start and its end, so
-/// filler in front of the part that matters does not hide it.
-#[test]
-fn the_window_of_a_long_message_is_its_start_and_its_end() {
-	let mut message = vec![b'x'; 3 * MAX_TRAINING_BYTES];
-	message[..6].copy_from_slice(b"HEADER");
-	let middle = message.len() / 2;
-	message[middle..middle + 6].copy_from_slice(b"MIDDLE");
-	let end = message.len();
-	message[end - 4..].copy_from_slice(b"TAIL");
-	let window = training_window(&message);
-	assert_eq!(window.len(), MAX_TRAINING_BYTES);
-	assert!(window.starts_with(b"HEADER") && window.ends_with(b"TAIL"));
-	assert!(!window.windows(6).any(|part| part == b"MIDDLE"));
-}
-
-#[test]
-fn a_message_that_fits_is_trained_whole() {
-	let message = vec![b'x'; MAX_TRAINING_BYTES];
-	assert!(matches!(
-		training_window(&message),
-		std::borrow::Cow::Borrowed(_)
-	));
-	assert_eq!(training_window(b"short").as_ref(), b"short");
-	assert!(training_window(b"").is_empty());
-}
-
-/// The seams of the window never leave half a word behind: a word cut by
-/// the window would become a token nobody wrote.
-#[test]
-fn the_window_does_not_cut_a_word_at_its_seams() {
-	for shift in 0..12 {
-		let mut message = "x".repeat(shift).into_bytes();
-		message.extend_from_slice(&"wordy ".repeat(3 * MAX_TRAINING_BYTES / 6).into_bytes());
-		let window = training_window(&message);
-		assert!(window.len() <= MAX_TRAINING_BYTES);
-		let text = String::from_utf8(window.into_owned()).expect("utf-8");
-		for token in text.split(|c: char| !c.is_alphanumeric()) {
-			assert!(
-				token.is_empty()
-					|| token == "wordy"
-					|| token.starts_with("xwordy")
-					|| token.chars().all(|c| c == 'x')
-					|| token.ends_with("wordy"),
-				"a fragment {token:?} appeared at a seam"
-			);
-		}
-	}
 }

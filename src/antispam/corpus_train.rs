@@ -47,21 +47,36 @@ pub(super) struct WindowTokens {
 impl BayesStore {
 	/// The distinct tokens of the window of `text`, at most `cap`. A message
 	/// that fits keeps all of its tokens in order of appearance, as it always
-	/// did. One with more is cut down to the `cap` tokens whose keyed hash is
-	/// smallest, so the sender, who does not hold the key, cannot choose which
-	/// of its words are looked at by where it puts them. The scan keeps `cap`
-	/// entries at most.
-	pub(super) fn window_tokens(&self, text: &str, cap: usize) -> WindowTokens {
+	/// did. One with more is cut down: the first and the last `positional`
+	/// distinct tokens are kept, where a message says what it is, and the rest
+	/// of the room goes to the tokens whose keyed hash is smallest, so the
+	/// sender, who does not hold the key, cannot choose which of the others
+	/// are read by where it puts them. The scan keeps `cap` entries at most.
+	pub(super) fn window_tokens(&self, text: &str, cap: usize, positional: usize) -> WindowTokens {
 		let window = training_window(text);
-		let plain = bayes::tokenize_bounded(&window, cap + 1);
-		if plain.len() <= cap {
+		let clipped = matches!(window, Cow::Owned(_));
+		let first = bayes::tokenize_bounded(&window, cap + 1);
+		if first.len() <= cap {
 			return WindowTokens {
-				plain,
-				capped: false,
+				plain: first,
+				capped: clipped,
 			};
 		}
+		let mut plain: Vec<String> = first.into_iter().take(positional).collect();
+		for token in bayes::last_tokens(&window, positional) {
+			if !plain.contains(&token) {
+				plain.push(token);
+			}
+		}
+		let kept: std::collections::HashSet<String> = plain.iter().cloned().collect();
+		plain.extend(bayes::sample_tokens_without(
+			&window,
+			cap - plain.len(),
+			|token| self.tag(token),
+			&kept,
+		));
 		WindowTokens {
-			plain: bayes::sample_tokens(&window, cap, |token| self.tag(token)),
+			plain,
 			capped: true,
 		}
 	}
@@ -72,7 +87,7 @@ impl BayesStore {
 	/// crosswise.
 	fn training_tokens(&self, text: &str) -> Vec<String> {
 		let mut hashed: Vec<String> = self
-			.window_tokens(text, MAX_TRAIN_TOKENS)
+			.window_tokens(text, MAX_TRAIN_TOKENS, 0)
 			.plain
 			.iter()
 			.map(|token| self.hash(token))
@@ -179,6 +194,27 @@ mod tests {
 		let window = training_window(&text);
 		assert!(window.starts_with("head") && window.ends_with("tail"));
 		assert!(!window.contains("middle"));
+	}
+
+	/// The seams of the window never leave half a word behind: a word cut by
+	/// the window would become a token nobody wrote.
+	#[test]
+	fn the_window_does_not_cut_a_word_at_its_seams() {
+		for shift in 0..12 {
+			let text = format!(
+				"{}{}",
+				"x".repeat(shift),
+				"wordy ".repeat(3 * MAX_TRAINING_BYTES / 6)
+			);
+			let window = training_window(&text);
+			assert!(window.len() <= MAX_TRAINING_BYTES);
+			for token in window.split(|c: char| !c.is_alphanumeric()) {
+				assert!(
+					token.is_empty() || token.ends_with("wordy") || token.chars().all(|c| c == 'x'),
+					"a fragment {token:?} appeared at a seam"
+				);
+			}
+		}
 	}
 
 	#[test]

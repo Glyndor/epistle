@@ -1,33 +1,46 @@
 epistle (0.12.2) UNRELEASED; urgency=medium
 
-  * Security: an inbound message with more than one local recipient, or one
-    addressed to an alias or a list, is now scored by the shared Bayesian
-    corpus only. It used to be scored by the corpus of the first local account
-    of the envelope (the first member of an alias), and that verdict (Junk, or
-    a `550` at DATA) applied to every recipient, so an account that taught its
-    own corpus a spammer's text as ham could let that spam through to anyone
-    addressed alongside it. An account's own corpus now scores a message only
-    when that account is the single local recipient and was addressed as
-    itself. Mail to an alias, even one with a single member, uses the shared
-    corpus.
+  * Security: the Bayesian filter no longer lets one account decide what
+    another receives. A message with more than one local recipient, or
+    addressed to an alias or a list, used to be scored by the corpus of the
+    first local account of the envelope (the first member of an alias), and
+    that verdict (Junk, or a `550` at DATA) applied to every recipient, so an
+    account that taught its own corpus a spammer's text as ham could let that
+    spam through to anyone addressed alongside it. An account's own corpus now
+    scores a message only when that account is the single local recipient,
+    was addressed as itself and has at least 200 ham and 200 spam of its own.
+    Everything else is scored by the shared corpus when that has as much,
+    which changes delivery: mail to aliases, lists and accounts that have not
+    trained their own corpus is now subject to `bayes_junk_at` and
+    `bayes_reject_at` through the shared corpus, where before it was scored
+    only when the first member had a trained corpus of its own.
   * Security: training the Bayesian corpus on a message is bounded. The shared
     corpus learns from every message the server accepts or rejects, whoever
     sent it, and it tokenized the whole message (up to 25 MiB, a few million
     words) and wrote one row per word, one statement each, holding a lock
     that the lessons of the accounts waited for. A message now teaches the
-    corpus from its first and last 128 KiB, at most 5000 distinct words (a
-    sample chosen by a keyed hash of the words when there are more, so where
-    the sender puts them decides nothing), in one statement. The transactions
-    of a training and of `epistle account remove` now take their locks in one
-    order, which ends the deadlocks between them.
+    corpus from at most 5000 distinct words of the first and last 128 KiB of
+    what it says, in one statement; when it has more, the first and last 1000
+    are kept and the rest chosen by a keyed hash of the word, so where the
+    sender puts the others decides nothing. The transactions of a training and
+    of `epistle account remove` now take their locks in one order, which ends
+    the deadlocks between them. The shared corpus is not pruned: a message of
+    5000 new words adds about 1.7 MB of table and 3.5 MB of log, and one
+    address may teach 30 such messages an hour.
   * Security: scoring a message with the Bayesian corpus is bounded the same
     way. It tokenized, hashed and looked up every word of a message of up to
     25 MiB inside the session of an unauthenticated sender (338 MiB of heap
-    for one message). It now reads the first and last 128 KiB and at most 5000
-    distinct words, in one query. A message under both bounds scores exactly
-    as before. A message with more distinct words than that is scored on a
-    sample of them chosen by a keyed hash, never below 0.5, so that filler
-    does not dilute spam into a clean score.
+    for one message). The filter now reads what a person reads: the headers
+    and the text parts, decoded, not attachments or images, and whitespace and
+    one-letter words cost nothing. A message under 128 KiB + 128 KiB of
+    words and 5000 distinct words scores on all of it, as before; one with an
+    attachment now scores as the message without it (before, any attachment of
+    more than about 125 KiB gave the message a score of 0.5). A message over
+    either bound is scored on part of it and never below 0.5, which is not
+    Junk with the default `bayes_junk_at` of 0.95 and only reaches a second
+    opinion with `[antispam_llm]`: spam padded with more than 256 KiB of words,
+    or with more than 5000 distinct words, with the spam in the middle, can
+    escape the filter. That is the detection lost to the bound.
   * Security: the shared Bayesian corpus no longer starts a task per message,
     and a sender cannot decide it alone. The server queues what it learns
     (64 jobs, 2 workers) instead of spawning a task for each message. Ham and
@@ -35,15 +48,19 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     (IPv4 /32 and /24, IPv6 /64 and /48) may add 30 and 120 jobs per hour,
     a sender domain 30 but only when the server verified it (the envelope
     sender is written by the client, so a forged domain spends nothing of the
-    real one), a whole network (IPv4 /16, IPv6 /32) 125, and the whole server
-    2000, the last quarter of them kept for networks that have used few. The
-    tables of keys drop the least recently used entry when full instead of
-    refusing new senders. A job over its budget or that finds the queue full
-    is dropped and counted in `mail_bayes_training_dropped_total`. The server
-    also learns ham only from a sender whose SPF or DKIM passed, so an
-    unverified sender cannot teach the corpus that its text is ham. Mail
-    accepted from a sender with neither now teaches the shared corpus
-    nothing.
+    real one), a whole network (IPv4 /16, IPv6 /32) 125 and 16 in flight,
+    and the whole server 2000, the last quarter of them kept for networks that
+    have used few. The tables of keys drop the least recently used entry when
+    full instead of refusing new senders. A job over its budget or that finds
+    the queue full is dropped, without spending any budget when it was the
+    queue that had no room, and counted in `mail_bayes_training_dropped_total`.
+    The server also learns ham only from a sender whose SPF or DKIM passed,
+    so an unverified sender cannot teach the corpus that its text is ham;
+    bounces, SubjectPass resends and mail from a sender with neither teach
+    nothing. A sender that fails the checks can still have text of its
+    choosing learned as spam within its budget. Behind a container network
+    that hides the client address (rootless Podman with a bridge) the server
+    sees one address and learns at the rate of one.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 

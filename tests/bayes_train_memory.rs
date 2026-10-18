@@ -123,7 +123,6 @@ async fn the_largest_message_does_not_make_the_scorer_hold_its_tokens() {
 /// valid UTF-8 (any binary attachment) must not be decoded whole.
 #[tokio::test]
 async fn the_largest_message_does_not_make_the_smtp_scoring_path_copy_it() {
-	use epistle::antispam::corpus::BayesScorer;
 	let _serial = SERIAL.lock().await;
 	let mut raw = largest_message().into_bytes();
 	raw[0] = 0xff;
@@ -135,10 +134,10 @@ async fn the_largest_message_does_not_make_the_smtp_scoring_path_copy_it() {
 
 	let before = CURRENT.load(Ordering::Relaxed);
 	PEAK.store(before, Ordering::Relaxed);
-	let score = store.score_for_account("memory-probe", &raw).await;
+	let outcome = store.score_message("memory-probe", &raw).await;
 	let growth = PEAK.load(Ordering::Relaxed).saturating_sub(before);
 
-	assert!(score.is_none(), "the closed port must stop the scoring");
+	assert!(outcome.is_err(), "the closed port must stop the scoring");
 	assert!(
 		growth <= 8 * 1024 * 1024,
 		"scoring 25 MiB of bytes grew the heap by {} MiB",

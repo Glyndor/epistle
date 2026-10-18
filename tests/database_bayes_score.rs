@@ -117,7 +117,8 @@ async fn spam_after_a_long_filler_still_scores_as_spam() {
 	assert!(got > 0.9, "the spam scored {got}");
 }
 
-/// What is in the middle of a long message is not read; the start and the end are.
+/// What is in the middle of a long message is not read, the start and the
+/// end are, and a message that was not read in full is never below 0.5.
 #[tokio::test]
 async fn a_long_message_is_scored_on_its_start_and_its_end() {
 	let Some((store, pool, scope)) = trained_store(&TRAINED).await else {
@@ -126,11 +127,22 @@ async fn a_long_message_is_scored_on_its_start_and_its_end() {
 	};
 	let head = "agenda budget review ";
 	let tail = " lunch design team friday";
-	let filler = "x ".repeat(150 * 1024);
-	let long = format!("{head}{filler}{SPAM}{filler}{tail}");
-	let got = store.score(&scope, &long).await.expect("score");
+	let filler = "filler ".repeat(40 * 1024);
+	// Clean at both ends, spam in the middle: only the floor shows.
+	let middle = format!("{head}{filler}{SPAM}{filler}{tail}");
+	let got_middle = store.score(&scope, &middle).await.expect("score");
+	// Spam at the end is read.
+	let at_the_end = format!("{head}{filler}{filler}{SPAM}");
+	let got_end = store.score(&scope, &at_the_end).await.expect("score");
 	cleanup(&pool, &scope).await;
-	assert_eq!(got, reference(&TRAINED, &format!("{head}{tail}")));
+	assert_eq!(
+		got_middle,
+		reference(&TRAINED, &format!("{head}{tail}")).max(0.5)
+	);
+	assert_eq!(
+		got_end,
+		reference(&TRAINED, &format!("{head}filler {SPAM}")).max(0.5)
+	);
 }
 
 /// More distinct words than the cap: the message is scored on a sample no

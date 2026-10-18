@@ -80,6 +80,20 @@ pub fn sample_tokens<F>(text: &str, cap: usize, tag_of: F) -> Vec<String>
 where
 	F: Fn(&str) -> TokenTag,
 {
+	sample_tokens_without(text, cap, tag_of, &HashSet::new())
+}
+
+/// [`sample_tokens`] that leaves out the tokens in `exclude`, which the
+/// caller already has.
+pub fn sample_tokens_without<F>(
+	text: &str,
+	cap: usize,
+	tag_of: F,
+	exclude: &HashSet<String>,
+) -> Vec<String>
+where
+	F: Fn(&str) -> TokenTag,
+{
 	if cap == 0 {
 		return Vec::new();
 	}
@@ -91,6 +105,9 @@ where
 			continue;
 		}
 		let token = raw.to_ascii_lowercase();
+		if exclude.contains(&token) {
+			continue;
+		}
 		let tag = tag_of(&token);
 		if tags.contains(&tag) {
 			continue;
@@ -110,6 +127,25 @@ where
 		.into_iter()
 		.map(|(_, token)| token)
 		.collect()
+}
+
+/// The last `n` distinct tokens of `text`, in order of appearance.
+pub fn last_tokens(text: &str, n: usize) -> Vec<String> {
+	let mut seen = HashSet::new();
+	let mut tokens = Vec::new();
+	for raw in text.rsplit(|c: char| !c.is_alphanumeric()) {
+		if tokens.len() >= n {
+			break;
+		}
+		if (MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
+			let token = raw.to_ascii_lowercase();
+			if seen.insert(token.clone()) {
+				tokens.push(token);
+			}
+		}
+	}
+	tokens.reverse();
+	tokens
 }
 
 /// The probability a message is spam given a single token's corpus counts
@@ -224,6 +260,28 @@ mod tests {
 		assert_eq!(first, sample_tokens(&backward, 25, tag));
 		assert_eq!(first, sample_tokens(&repeated, 25, tag));
 		assert_eq!(first, sample_tokens(&forward.to_uppercase(), 25, tag));
+	}
+
+	#[test]
+	fn last_tokens_are_the_distinct_tail_in_order_of_appearance() {
+		assert_eq!(
+			last_tokens("one two three two four five", 3),
+			["two", "four", "five"].map(String::from)
+		);
+		assert_eq!(
+			last_tokens("alpha beta", 9),
+			["alpha", "beta"].map(String::from)
+		);
+		assert!(last_tokens("alpha", 0).is_empty());
+	}
+
+	#[test]
+	fn sample_tokens_without_leaves_out_what_the_caller_has() {
+		let text: String = (0..200).map(|n| format!("tok{n:04} ")).collect();
+		let exclude: HashSet<String> = tokenize(&text).into_iter().take(100).collect();
+		let sample = sample_tokens_without(&text, 30, tag, &exclude);
+		assert_eq!(sample.len(), 30);
+		assert!(sample.iter().all(|token| !exclude.contains(token)));
 	}
 
 	#[test]

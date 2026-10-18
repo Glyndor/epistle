@@ -17,6 +17,7 @@ pub use greylist_sql::PgGreylistStore;
 pub mod hook;
 pub mod llm;
 pub mod reputation;
+pub mod scoring_text;
 pub mod shared_training;
 pub mod subjectpass;
 pub mod submission_scan;

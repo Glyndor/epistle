@@ -37,9 +37,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use super::scoring_text::scoring_text;
 use super::shared_training::{SharedTraining, TrainSource};
 use super::trainer::{BayesTrainer, TrainerFuture};
-use super::training_queue::training_window;
 use crate::storage::load_or_create_key_file;
 
 /// The shared corpus scope (the server's own accept/reject learning).
@@ -59,6 +59,11 @@ pub const MAX_TRAIN_TOKENS: usize = 5000;
 /// runs inline in the session of an unauthenticated sender, so a larger one
 /// cannot cost more.
 pub const MAX_SCORE_TOKENS: usize = 5000;
+
+/// Of those, the first and the last this many distinct tokens of the window
+/// are always read when there are more than the cap: where a message says what
+/// it is. The rest are chosen by a keyed hash.
+pub const SCORE_POSITIONAL: usize = 1000;
 
 /// The lowest score a message gets when it holds more distinct tokens than
 /// [`MAX_SCORE_TOKENS`]: neither clean nor spam. Such a message is scored on a
@@ -85,7 +90,8 @@ pub fn new_tombstone_set() -> TombstoneSet {
 #[derive(Clone)]
 pub struct BayesStore {
 	pool: PgPool,
-	key: [u8; 32],
+	/// The keyed hash of tokens, built once from the instance key.
+	mac: ring::hmac::Key,
 	/// Scopes whose removal is currently happening, or has just
 	/// committed, so a training worker that has already read its
 	/// message off disk drops the job rather than recreating the
@@ -112,7 +118,7 @@ impl BayesStore {
 		let key = load_or_create_key_file(data_dir, KEY_FILE)?;
 		Ok(BayesStore {
 			pool,
-			key,
+			mac: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key),
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
@@ -125,7 +131,7 @@ impl BayesStore {
 	pub fn with_key(pool: PgPool, key: [u8; 32]) -> Self {
 		BayesStore {
 			pool,
-			key,
+			mac: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key),
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
@@ -138,7 +144,7 @@ impl BayesStore {
 	fn detached(&self) -> Self {
 		BayesStore {
 			pool: self.pool.clone(),
-			key: self.key,
+			mac: self.mac.clone(),
 			tombstones: self.tombstones.clone(),
 			scope_lock: self.scope_lock.clone(),
 			shared: Arc::new(OnceLock::new()),
@@ -155,12 +161,15 @@ impl BayesStore {
 
 	/// The stored (hashed) form of a token.
 	fn hash(&self, token: &str) -> String {
-		hash_token(&self.key, token)
+		hex(&self.tag(token))
 	}
 
 	/// The keyed fingerprint of a token, the raw bytes of [`BayesStore::hash`].
 	fn tag(&self, token: &str) -> bayes::TokenTag {
-		token_tag(&self.key, token)
+		let tag = ring::hmac::sign(&self.mac, token.as_bytes());
+		let mut out = [0u8; 32];
+		out.copy_from_slice(tag.as_ref());
+		out
 	}
 
 	/// Queue one message for the shared corpus and return whether it was
@@ -236,9 +245,25 @@ impl BayesStore {
 	/// is scored on a keyed sample of them and never below
 	/// [`CAPPED_SCORE_FLOOR`]. A message under both bounds scores on all of it.
 	pub async fn score(&self, scope: &str, text: &str) -> Result<f64, sqlx::Error> {
+		self.score_text(scope, text, false).await
+	}
+
+	/// Score a raw message the way the SMTP server does: reduced first to
+	/// what a person reads (see [`super::scoring_text`]): the headers and the
+	/// text parts, not the attachments, cut to a window. A message that
+	/// did not fit in the window is scored like one with too many words.
+	pub async fn score_message(&self, scope: &str, raw: &[u8]) -> Result<f64, sqlx::Error> {
+		let reduced = scoring_text(raw);
+		self.score_text(scope, &reduced.text, reduced.clipped).await
+	}
+
+	/// [`BayesStore::score`] for text that may already have been cut to a
+	/// window by the caller (`clipped`).
+	async fn score_text(&self, scope: &str, text: &str, clipped: bool) -> Result<f64, sqlx::Error> {
 		// A window of the text and a cap on distinct tokens, applied before
 		// anything is hashed or looked up (see [`MAX_SCORE_TOKENS`]).
-		let tokens = self.window_tokens(text, MAX_SCORE_TOKENS);
+		let tokens = self.window_tokens(text, MAX_SCORE_TOKENS, SCORE_POSITIONAL);
+		let capped = tokens.capped || clipped;
 		let plain = tokens.plain;
 		let hashed: Vec<String> = plain.iter().map(|t| self.hash(t)).collect();
 		let corpus = self.corpus(scope).await?;
@@ -260,7 +285,7 @@ impl BayesStore {
 			},
 			corpus,
 		);
-		Ok(if tokens.capped {
+		Ok(if capped {
 			score.max(CAPPED_SCORE_FLOOR)
 		} else {
 			score
@@ -342,9 +367,8 @@ impl BayesTrainer for BayesStore {
 			if account == SHARED {
 				return;
 			}
-			let window = training_window(&text);
-			let text = String::from_utf8_lossy(&window);
-			if let Err(error) = BayesStore::train(self, account, &text, spam).await {
+			let reduced = scoring_text(&text);
+			if let Err(error) = BayesStore::train(self, account, &reduced.text, spam).await {
 				tracing::warn!(
 					account = %crate::log_id::account(account),
 					%error,
@@ -372,11 +396,7 @@ impl BayesTrainer for BayesStore {
 				}
 			};
 			let scope = scoring_scope(trained, account);
-			// The window first: decoding the whole message would copy up to
-			// 25 MiB when it is not valid UTF-8.
-			let window = training_window(text);
-			let text = String::from_utf8_lossy(&window);
-			match self.score(scope, &text).await {
+			match self.score_message(scope, text).await {
 				Ok(score) => Some(score),
 				Err(error) => {
 					tracing::warn!(
@@ -404,23 +424,19 @@ pub fn scoring_scope(trained: bool, account: &str) -> &str {
 /// The stored form of a token: a keyed HMAC-SHA256, hex-encoded. Deterministic
 /// (so lookups work) but irreversible without the key (so a database leak does
 /// not reveal the words).
+#[cfg(test)]
 fn hash_token(key: &[u8], token: &str) -> String {
-	token_tag(key, token)
-		.iter()
-		.fold(String::new(), |mut acc, byte| {
-			use std::fmt::Write;
-			let _ = write!(acc, "{byte:02x}");
-			acc
-		})
+	let mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+	hex(ring::hmac::sign(&mac, token.as_bytes()).as_ref())
 }
 
-/// The keyed HMAC-SHA256 of a token.
-fn token_tag(key: &[u8], token: &str) -> bayes::TokenTag {
-	let mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
-	let tag = ring::hmac::sign(&mac, token.as_bytes());
-	let mut out = [0u8; 32];
-	out.copy_from_slice(tag.as_ref());
-	out
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+	bytes.iter().fold(String::new(), |mut acc, byte| {
+		use std::fmt::Write;
+		let _ = write!(acc, "{byte:02x}");
+		acc
+	})
 }
 
 /// A pluggable scoring source for the uncertain band. The production
