@@ -209,11 +209,10 @@ impl Directory {
 		// authenticate as.
 		let account = self.credentials(login).map(|(account, _)| account);
 		if let Some(account) = &account {
-			let mut subjects = Vec::new();
-			if let Some(ip) = ip {
-				subjects.push(("pair", bans::subject_pair(account, ip)));
-			}
-			subjects.push(("account", bans::subject_account(account)));
+			let subjects = [
+				("pair", bans::subject_pair(account, ip)),
+				("account", bans::subject_account(account)),
+			];
 			for (kind, subject) in subjects {
 				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
 					self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
@@ -278,33 +277,29 @@ impl Directory {
 			// client that owns one account must not be able to reset its
 			// own count between guesses at others.
 			if let Some(account) = account {
-				if let Some(ip) = ip {
-					block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
-				}
+				block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
 				block_on_async(store.clear_success(&bans::subject_account(account)));
 			}
 			return;
 		}
-		// An allow-listed client is never counted, on the client, the pair or
-		// the account, however many times it fails.
+		// An allow-listed client is exempt from the ban on its address (the
+		// store ignores it there too) but not from the account's protection:
+		// guesses from a trusted network still count against the pair and the
+		// account, or that network could never be stopped from guessing.
+		let allowed = ip.is_some_and(|ip| block_on_async(store.is_allow_listed(ip)));
 		if let Some(ip) = ip
-			&& block_on_async(store.is_allow_listed(ip))
+			&& !allowed
 		{
-			return;
-		}
-		if let Some(ip) = ip {
 			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
 		}
 		let Some(account) = account else {
 			return;
 		};
-		if let Some(ip) = ip {
-			block_on_async(store.record_failure(
-				&bans::subject_pair(account, ip),
-				protocol_str,
-				now_secs,
-			));
-		}
+		block_on_async(store.record_failure(
+			&bans::subject_pair(account, ip),
+			protocol_str,
+			now_secs,
+		));
 		// Every failure also counts against the account, at a threshold several
 		// times the client's (see `ACCOUNT_THRESHOLD_FACTOR`): a guess spread
 		// over many clients, none enough to be banned, still ends in a ban,

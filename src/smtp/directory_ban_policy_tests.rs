@@ -181,16 +181,89 @@ async fn an_allow_listed_host_is_not_locked_out_by_a_neighbour_in_its_slash_64()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_allow_listed_hosts_failures_ban_nobody() {
+async fn an_allow_listed_hosts_failures_never_ban_its_address_or_slash_64() {
 	let store = FakeBanStore::new(BanPolicy::default());
 	store.allow("2001:db8:1:2::10/128");
-	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store.clone()));
 	for _ in 0..30 {
 		fail(&directory, OPEN, "2001:db8:1:2::10");
 	}
 	assert_eq!(
-		attempt(&directory, OPEN, fixtures::password(), "2001:db8:1:2::99"),
+		store.failure_count("ip:2001:db8:1:2::", 0),
+		0,
+		"the /64 was not counted"
+	);
+	assert_eq!(
+		attempt(
+			&directory,
+			TWO_FACTOR,
+			&format!("{}{}", fixtures::password(), current_totp_code()),
+			"2001:db8:1:2::99"
+		),
+		Some(TWO_FACTOR.to_string()),
+		"a neighbour is not affected"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failures_from_a_trusted_network_still_count_against_the_account() {
+	// Ten allow-listed hosts, two failures each: none comes near a client or
+	// pair limit, and together they are the guess the account limit exists for.
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("203.0.113.0/24");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	for host in 1..=10 {
+		for _ in 0..2 {
+			fail(&directory, OPEN, &format!("203.0.113.{host}"));
+		}
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "198.51.100.9"),
+		None,
+		"the account is banned, trusted network or not"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_allow_listed_host_is_still_stopped_by_its_pair() {
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("203.0.113.0/24");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store));
+	for _ in 0..5 {
+		fail(&directory, OPEN, "203.0.113.7");
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "203.0.113.7"),
+		None
+	);
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "198.51.100.9"),
 		Some(OPEN.to_string()),
-		"neither its /64 nor the account was counted"
+		"and cannot lock the account for its owner"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_client_address_the_account_is_stopped_at_the_base_threshold() {
+	let directory = directory();
+	let guess = |times: usize| {
+		for _ in 0..times {
+			assert_eq!(
+				directory.authenticate(OPEN, fixtures::wrong_password(), Protocol::Imaps),
+				None
+			);
+		}
+	};
+	guess(4);
+	assert_eq!(
+		directory.authenticate(OPEN, fixtures::password(), Protocol::Imaps),
+		Some(OPEN.to_string()),
+		"four failures are under the limit"
+	);
+	guess(5);
+	assert_eq!(
+		directory.authenticate(OPEN, fixtures::password(), Protocol::Imaps),
+		None,
+		"five failures without an address ban the account, not twenty"
 	);
 }

@@ -187,9 +187,12 @@ pub fn subject_client(ip: IpAddr) -> String {
 }
 
 /// The `pair:<login>|<client>` subject for one account seen from one client
-/// (see [`subject_client`] for what a client is).
-pub fn subject_pair(account: &str, ip: IpAddr) -> String {
-	format!("pair:{}|{}", account.to_ascii_lowercase(), client_key(ip))
+/// (see [`subject_client`] for what a client is). Without a client address
+/// every attempt on the account shares the client `unknown`, so the pair still
+/// stops guessing at the base threshold.
+pub fn subject_pair(account: &str, ip: Option<IpAddr>) -> String {
+	let client = ip.map_or_else(|| "unknown".to_string(), client_key);
+	format!("pair:{}|{client}", account.to_ascii_lowercase())
 }
 
 /// Build the canonical `'account:<login>'` subject for `account`.

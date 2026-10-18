@@ -241,8 +241,12 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   logging in between guesses at others. A shared address (a NAT, a proxy)
   therefore accumulates the typos of everyone behind it: allow-list it
   (`epistle ban allow add`) if that is a problem. An allow-listed client is
-  never counted, and for IPv6 the /64 it shares with others is not asked
-  about for it, so a neighbour's ban does not reach it. The owner of an
+  never banned on its address or /64 (and for IPv6 the /64 it shares with
+  others is not asked about for it, so a neighbour's ban does not reach it),
+  but its failures still count on the pair and on the account, or a trusted
+  network could guess without limit. A route that has no client address
+  (WebDAV now passes one) counts every attempt on an account as one client,
+  `unknown`, so the pair still stops guessing at five. The owner of an
   account that many clients are guessing at is locked out for the length of
   the account ban as well. A credential stuffing wave from one client trips
   that client's counters. The wire response to a banned subject is identical to a wrong password (no
