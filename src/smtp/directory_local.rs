@@ -21,6 +21,7 @@ impl Directory {
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
 	) -> Option<(String, Option<String>)> {
 		let Some((account, hash)) = self.credentials(login) else {
 			self.burn_refusal(password, 0);
@@ -55,6 +56,13 @@ impl Directory {
 			#[cfg(test)]
 			self.count_password_hash();
 			if crate::smtp::auth::verify_password(hash, &prepared) {
+				// A right password on an account that may not sign in this way
+				// is refused after the same work as a wrong one, and without
+				// the SCRAM upgrade a success would do.
+				if !self.admit_login(&account, protocol, super::Proof::Password) {
+					self.burn_refusal(password, 1);
+					return None;
+				}
 				self.maybe_upgrade_scram(&account, &prepared);
 				return Some((account, None));
 			}
@@ -70,10 +78,14 @@ impl Directory {
 			.get(&account)
 			.map(Vec::as_slice)
 			.unwrap_or(&[]);
-		for app in apps {
+		for (index, app) in apps.iter().enumerate() {
 			#[cfg(test)]
 			self.count_password_hash();
 			if app.admits(password, &self.password_policy, ip, now) {
+				if !self.admit_login(&account, protocol, super::Proof::Password) {
+					self.burn_refusal(password, 2 + index);
+					return None;
+				}
 				return Some((account.clone(), Some(app.label.clone())));
 			}
 		}

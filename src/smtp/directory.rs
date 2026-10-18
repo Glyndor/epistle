@@ -698,6 +698,10 @@ pub(crate) mod gate_fixture;
 mod gate_tests;
 
 #[cfg(test)]
+#[path = "directory_protocol_refusal_tests.rs"]
+mod protocol_refusal_tests;
+
+#[cfg(test)]
 #[path = "directory_timing_tests.rs"]
 mod timing_tests;
 

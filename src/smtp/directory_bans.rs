@@ -154,8 +154,8 @@ impl Directory {
 			}
 			BanOutcome::Clear { account } => account,
 		};
-		let verified = self
-			.authenticate_local(login, password, ip)
+		let local = self.authenticate_local(login, password, ip, protocol);
+		let verified = local
 			.or_else(|| {
 				// Local/SQL credentials did not match: try the live LDAP bind, if any.
 				self.ldap
