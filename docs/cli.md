@@ -375,6 +375,7 @@ stack.
 | `data-rate-grace` | Time from the start of a message before `min-data-rate` applies, once per transaction, default 120 seconds, between 1 second and 1 hour. |
 | `junk-command-limit` | Commands without progress (`NOOP`, `RSET`, `VRFY`, unknown commands, a repeated `EHLO`, an empty `BDAT` chunk, `AUTH` response lines) one SMTP session may send before `421 4.7.0` and a disconnect, default 100, never reset during the session; refused commands count against the same limit since the last accepted message. `0` turns it off and shows as `disabled`; otherwise between 10 and 10000. |
 | `max-session-time` | How long one SMTP session may last before `421 4.4.2` at the next command boundary, default 1800 seconds; a message body being received is never cut. `0` turns it off and shows as `disabled`; otherwise between 1 minute and 1 day. |
+| `preauth-timeout` | How long an IMAP, POP3 or ManageSieve client gets, from the start of the connection, to sign in, default 60 seconds, between 5 seconds and 1 hour. One deadline covers the TLS handshake and everything before authentication; slow bytes and repeated cheap commands do not extend it. A signed-in session is not held to it. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |

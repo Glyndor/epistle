@@ -66,6 +66,7 @@ mod serve;
 mod serve_dkim;
 mod serve_evidence;
 mod serve_listeners;
+mod serve_mailbox_limits;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;

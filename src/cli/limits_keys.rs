@@ -64,10 +64,13 @@ pub enum Key {
 	/// `421 4.4.2` at the next command boundary. Default is 1800; `0`
 	/// turns it off.
 	MaxSessionTime,
+	/// Seconds an IMAP, POP3 or ManageSieve client gets, from the start of
+	/// the connection, to sign in. Default is 60.
+	PreauthTimeout,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 23] = [
+	pub(super) const ALL: [Self; 24] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -91,6 +94,7 @@ impl Key {
 		Self::DataRateGrace,
 		Self::JunkCommandLimit,
 		Self::MaxSessionTime,
+		Self::PreauthTimeout,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -118,6 +122,7 @@ impl Key {
 			Self::DataRateGrace => "data-rate-grace",
 			Self::JunkCommandLimit => "junk-command-limit",
 			Self::MaxSessionTime => "max-session-time",
+			Self::PreauthTimeout => "preauth-timeout",
 		}
 	}
 
@@ -146,6 +151,7 @@ impl Key {
 			Self::DataRateGrace => "data_rate_grace",
 			Self::JunkCommandLimit => "junk_command_limit",
 			Self::MaxSessionTime => "max_session_time",
+			Self::PreauthTimeout => "preauth_timeout",
 		}
 	}
 
@@ -192,6 +198,7 @@ impl Key {
 			Self::QueueGiveUp
 			| Self::DataRateGrace
 			| Self::MaxSessionTime
+			| Self::PreauthTimeout
 			| Self::QueueRetryBase
 			| Self::QueueRetryCap
 			| Self::QueueDelayWarning
@@ -251,6 +258,7 @@ impl Key {
 			Self::DataRateGrace => config.data_rate_grace,
 			Self::JunkCommandLimit => config.junk_command_limit,
 			Self::MaxSessionTime => config.max_session_time,
+			Self::PreauthTimeout => config.preauth_timeout,
 		}
 	}
 
@@ -277,6 +285,7 @@ impl Key {
 				Some(u64::from(crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT))
 			}
 			Self::MaxSessionTime => Some(crate::smtp::server::DEFAULT_MAX_SESSION_TIME_SECS),
+			Self::PreauthTimeout => Some(crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT.as_secs()),
 			_ => None,
 		}
 	}

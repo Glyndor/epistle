@@ -492,6 +492,10 @@ mod tests_data_rate;
 mod tests_session_limits;
 
 #[cfg(test)]
+#[path = "limits_tests_connection.rs"]
+mod tests_connection;
+
+#[cfg(test)]
 #[path = "limits_tests_schedule.rs"]
 mod tests_schedule;
 

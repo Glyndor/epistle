@@ -174,6 +174,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		llm_hook,
 		attachment_policy,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	let mailbox_limits = super::serve_mailbox_limits::MailboxLimits::from_config(&config);
 	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
 	// sink through `submit`; the antivirus scan wraps it there.
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
@@ -419,7 +420,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
 				imap_server = imap_server.with_scram_enabled(config.auth.scram);
-				imap_server = imap_server.with_max_connections(max_conn);
+				imap_server = imap_server
+					.with_max_connections(max_conn)
+					.with_preauth_timeout(mailbox_limits.preauth_timeout);
 				imap_server = imap_server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
@@ -434,6 +437,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					acceptor,
 					crypto.clone(),
 					max_conn,
+					&mailbox_limits,
 				)?);
 			}
 			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
@@ -467,6 +471,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					directory.clone(),
 					acceptor,
 					max_conn,
+					&mailbox_limits,
 				)?);
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {

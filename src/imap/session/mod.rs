@@ -335,6 +335,11 @@ impl Session {
 		}
 	}
 
+	/// Whether the client has signed in.
+	pub fn is_authenticated(&self) -> bool {
+		self.account().is_some()
+	}
+
 	fn account(&self) -> Option<&str> {
 		match &self.state {
 			State::NotAuthenticated { .. } => None,

@@ -6,6 +6,16 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     deadline for the whole phase, counted from the start of the session and
     covering every read, including the data of a command. Bytes arriving
     slowly no longer extend it.
+  * Security: IMAP and POP3 hold an unauthenticated connection to the same
+    kind of deadline: one for the whole phase before sign-in, counted from the
+    start of the session, covering the TLS handshake, every command and
+    every literal, which neither the bytes that arrive nor a stream of cheap
+    commands extend. Before, each read had its own timeout of 30 minutes
+    (IMAP) or 10 minutes (POP3), so one byte just before it ran out kept a
+    connection open for as long as the client liked. A signed-in session is
+    not held to it. The deadline is 60 seconds by default and is set for the
+    three protocols with `preauth_timeout` or `epistle limits set
+    preauth-timeout`.
   * Security: the Bayesian filter no longer lets one account decide what
     another receives. A message with more than one local recipient, or
     addressed to an alias or a list, used to be scored by the corpus of the

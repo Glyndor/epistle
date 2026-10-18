@@ -18,6 +18,7 @@
 //! future Rust upgrade cannot silently regress this invariant.
 
 pub mod accept;
+pub mod deadline;
 pub mod http_serve;
 mod https_url;
 

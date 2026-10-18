@@ -361,6 +361,13 @@ pub struct Config {
 	/// from 60 to 86400.
 	#[serde(default)]
 	pub max_session_time: Option<u64>,
+	/// Seconds an IMAP, POP3 or ManageSieve client gets, from the start of
+	/// the connection, to sign in. One deadline covers the TLS handshake,
+	/// every command and every literal before authentication, and nothing
+	/// the client sends moves it; a signed-in session is not held to it.
+	/// Absent uses 60; from 5 to 3600.
+	#[serde(default)]
+	pub preauth_timeout: Option<u64>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -510,6 +517,7 @@ impl std::fmt::Debug for Config {
 			.field("data_rate_grace", &self.data_rate_grace)
 			.field("junk_command_limit", &self.junk_command_limit)
 			.field("max_session_time", &self.max_session_time)
+			.field("preauth_timeout", &self.preauth_timeout)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)
