@@ -110,12 +110,18 @@ impl Server {
 		// `scoring_account`). The trusted-or-not check looks at that
 		// scope's totals so the minimum-training guard is the one the
 		// band already validated.
+		// An account whose own corpus is too small to be trusted is scored by
+		// the shared one (see `score_for_account`), so it is the shared
+		// corpus whose training is checked then, as for an alias or a second
+		// recipient: the same spam gets the same treatment whoever it is
+		// addressed to.
 		let account = scoring_account(&self.directory.current(), &message.recipients);
-		let scope = account
-			.as_deref()
-			.unwrap_or(crate::antispam::corpus::SHARED);
-
-		if !bayes.is_trusted(scope).await {
+		let own = match account.as_deref() {
+			Some(name) if bayes.is_trusted(name).await => Some(name),
+			_ => None,
+		};
+		let scope = own.unwrap_or(crate::antispam::corpus::SHARED);
+		if own.is_none() && !bayes.is_trusted(scope).await {
 			return Ok(BayesOutcome::Continue);
 		}
 

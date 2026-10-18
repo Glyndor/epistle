@@ -255,6 +255,8 @@ async fn a_bounce_is_never_junked() {
 struct ScopedScorer {
 	own: f64,
 	shared: f64,
+	/// Whether the per-account corpora hold enough to be trusted on their own.
+	own_trusted: bool,
 }
 
 impl crate::antispam::corpus::BayesScorer for ScopedScorer {
@@ -279,12 +281,33 @@ impl crate::antispam::corpus::BayesScorer for ScopedScorer {
 		};
 		Box::pin(async move { Some(score) })
 	}
+	fn is_trusted<'a>(
+		&'a self,
+		scope: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+		let trusted = scope == crate::antispam::corpus::SHARED || self.own_trusted;
+		Box::pin(async move { trusted })
+	}
 }
 
 /// Run the threshold pass for `recipients` against a scorer whose
 /// per-account corpora say `own` and whose shared corpus says `shared`.
 async fn outcome_for(recipients: &[&str], own: f64, shared: f64) -> BayesOutcome {
-	let scorer = Arc::new(ScopedScorer { own, shared });
+	outcome_with(recipients, own, shared, true).await
+}
+
+/// [`outcome_for`] with the per-account corpora trusted or not.
+async fn outcome_with(
+	recipients: &[&str],
+	own: f64,
+	shared: f64,
+	own_trusted: bool,
+) -> BayesOutcome {
+	let scorer = Arc::new(ScopedScorer {
+		own,
+		shared,
+		own_trusted,
+	});
 	let mut message = sample_message("sender@remote.test", b"From: a@b\r\n\r\nbody\r\n");
 	message.recipients = recipients.iter().map(|r| r.to_string()).collect();
 	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, None);
@@ -340,4 +363,26 @@ async fn a_single_recipient_is_still_scored_by_its_own_corpus() {
 async fn a_remote_recipient_does_not_dilute_a_single_local_one() {
 	let outcome = outcome_for(&["someone@remote.test", "bob@example.org"], 1.0, 0.0).await;
 	assert_eq!(outcome, BayesOutcome::SendToJunk);
+}
+
+/// The same spam gets the same treatment whoever it is addressed to: a
+/// single recipient whose account has too little of its own to be trusted is
+/// scored by the shared corpus, as an alias or a second recipient is.
+#[tokio::test]
+async fn a_single_recipient_without_a_trusted_corpus_is_scored_by_the_shared_one() {
+	let alone = outcome_with(&["bob@example.org"], 0.0, 1.0, false).await;
+	let two = outcome_with(&["alice@example.org", "bob@example.org"], 0.0, 1.0, false).await;
+	let alias = outcome_with(&["team@example.org"], 0.0, 1.0, false).await;
+	assert_eq!(alone, BayesOutcome::SendToJunk);
+	assert_eq!(two, BayesOutcome::SendToJunk);
+	assert_eq!(alias, BayesOutcome::SendToJunk);
+}
+
+/// A trusted account corpus still decides alone for its own mail.
+#[tokio::test]
+async fn a_trusted_account_corpus_still_decides_for_its_own_mail() {
+	assert_eq!(
+		outcome_with(&["bob@example.org"], 0.0, 1.0, true).await,
+		BayesOutcome::Continue
+	);
 }
