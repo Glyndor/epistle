@@ -131,6 +131,14 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			return ExitCode::from(EXIT_INVALID);
 		}
 	}
+	// A name clash is found before any plan is shown or anything written,
+	// in a dry run too.
+	if let Some(first) = &answers.first_account
+		&& let Err(why) = first_account::precheck(first, &answers.data_dir, &answers.config_path)
+	{
+		crate::cli::style::error(format_args!("first_account: {why}"));
+		return ExitCode::from(EXIT_INVALID);
+	}
 	let plan = match apply::plan(&answers) {
 		Ok(plan) => plan,
 		Err(error) => {

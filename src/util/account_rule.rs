@@ -38,26 +38,39 @@ pub enum Fault {
 impl fmt::Display for Fault {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Fault::Empty => f.write_str("the account name is empty"),
+			Fault::Empty => f.write_str("it is empty"),
 			Fault::TooLong(len) => {
 				write!(f, "it is {len} characters long and the limit is {MAX_LEN}")
 			}
 			Fault::LeadingHyphen => f.write_str("it must not start with a hyphen"),
 			Fault::BadChar(c) if c.is_ascii_uppercase() => write!(
 				f,
-				"{c:?} is a capital letter; names are lowercase (init and account add convert capital letters on their own)"
+				"{c:?} is a capital letter; names are lowercase (init and account add convert ASCII capital letters on their own)"
+			),
+			Fault::BadChar(c) if c.is_uppercase() => write!(
+				f,
+				"{c:?} is a capital letter outside ASCII, which is not converted; an account name has lowercase ASCII letters, digits and hyphens only"
 			),
 			Fault::BadChar('.') => f.write_str(
-				"'.' is not allowed in an account name, which has lowercase letters, digits and hyphens only; use a hyphen (init turns dots into hyphens on its own)",
+				"'.' is not allowed in an account name, which has lowercase letters, digits and hyphens only; use a hyphen",
 			),
 			Fault::BadChar(c) => write!(
 				f,
-				"{c:?} is not allowed; an account name has lowercase letters, digits and hyphens only (capital letters are converted on their own)"
+				"{c:?} is not allowed; an account name has lowercase letters, digits and hyphens only (ASCII capital letters are converted on their own)"
 			),
 			Fault::DotAtStart => f.write_str("the part before @ starts with a dot"),
 			Fault::DotAtEnd => f.write_str("the part before @ ends with a dot"),
 			Fault::DoubleDot => f.write_str("the part before @ has two dots in a row"),
 		}
+	}
+}
+
+/// The refusal of `name` as one line: the name and why, or just that the
+/// name is empty (quoting an empty name adds nothing).
+pub fn refusal(name: &str, fault: &Fault) -> String {
+	match fault {
+		Fault::Empty => "account name must not be empty".to_string(),
+		_ => format!("account name \"{name}\": {fault}"),
 	}
 }
 

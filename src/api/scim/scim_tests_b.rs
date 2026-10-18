@@ -114,3 +114,27 @@ async fn filter_rejects_unsupported_expressions() {
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 	assert_eq!(body["status"], "400");
 }
+
+#[tokio::test]
+async fn a_user_name_with_a_dot_is_refused_naming_the_character() {
+	let (_dir, state) = build_state();
+	let create = serde_json::json!({
+		"userName": "john.doe",
+		"active": true,
+		"emails": [{"value": "john.doe@example.org"}],
+		"password": "Correct-Horse-Battery-9"
+	});
+	let (status, body) = send(
+		&app(state.clone()),
+		"POST",
+		"/scim/v2/Users",
+		Some(SCIM_KEY_SECRET.as_str()),
+		Some(&create),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	let detail = body["detail"].as_str().unwrap_or_default();
+	assert!(detail.contains("'.'"), "{body}");
+	assert!(!detail.contains("init"), "{body}");
+	assert!(state.store().dynamic("john.doe").is_none());
+}

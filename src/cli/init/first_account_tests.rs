@@ -45,12 +45,19 @@ fn a_dot_in_the_address_gives_a_hyphenated_account_name() {
 	assert_eq!(first.check(&domains()), Ok(()));
 	assert_eq!(first.name(), "torre-control");
 	assert_eq!(first.stored_address(), "torre.control@example.org");
-	let note = first
-		.name_note()
-		.expect("the name differs from the local part");
-	assert!(
-		note.contains("torre-control") && note.contains("torre.control"),
-		"{note}"
+	assert_eq!(
+		first.name_note().as_deref(),
+		Some(
+			"the account name will be \"torre-control\" (dots become hyphens and capital letters become lowercase)"
+		)
+	);
+	assert_eq!(
+		account("torre.control@example.org").name_note().as_deref(),
+		Some("the account name will be \"torre-control\" (dots become hyphens)")
+	);
+	assert_eq!(
+		account("Alice@example.org").name_note().as_deref(),
+		Some("the account name will be \"alice\" (capital letters become lowercase)")
 	);
 	assert_eq!(account("alice@example.org").name_note(), None);
 }

@@ -46,5 +46,5 @@ pub(super) fn with_safe_names<T>(
 
 pub(crate) fn validate_name(name: &str) -> Result<(), StoreError> {
 	crate::util::account_rule::check(name)
-		.map_err(|fault| StoreError::Invalid(format!("account name \"{name}\": {fault}")))
+		.map_err(|fault| StoreError::Invalid(crate::util::account_rule::refusal(name, &fault)))
 }

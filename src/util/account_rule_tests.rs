@@ -60,3 +60,35 @@ fn two_addresses_that_differ_only_by_dot_or_hyphen_give_the_same_name() {
 	// The collision `init` must detect: the rule alone cannot tell them apart.
 	assert_eq!(derive("torre.control"), derive("torre-control"));
 }
+
+#[test]
+fn only_ascii_capitals_are_said_to_be_converted() {
+	let ascii = Fault::BadChar('A').to_string();
+	assert!(ascii.contains("convert ASCII capital letters"), "{ascii}");
+	let outside = Fault::BadChar('É').to_string();
+	assert!(outside.contains("not converted"), "{outside}");
+	assert!(!outside.contains("are converted on their own"), "{outside}");
+	let other = Fault::BadChar('_').to_string();
+	assert!(
+		other.contains("ASCII capital letters are converted"),
+		"{other}"
+	);
+}
+
+#[test]
+fn the_dot_message_does_not_claim_init_converts_it() {
+	// The same text reaches the API, SCIM, config-check and migrations,
+	// where nothing turns a dot into a hyphen.
+	let dot = Fault::BadChar('.').to_string();
+	assert!(dot.contains("'.'") && dot.contains("use a hyphen"), "{dot}");
+	assert!(!dot.contains("init"), "{dot}");
+}
+
+#[test]
+fn an_empty_name_is_one_plain_sentence() {
+	assert_eq!(refusal("", &Fault::Empty), "account name must not be empty");
+	assert_eq!(
+		refusal("a.b", &Fault::BadChar('.')),
+		format!("account name \"a.b\": {}", Fault::BadChar('.'))
+	);
+}

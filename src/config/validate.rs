@@ -228,8 +228,8 @@ impl Config {
 			let name = &account.name;
 			// The name becomes a directory under data_dir: keep it boring.
 			if let Err(fault) = crate::util::account_rule::check(name) {
-				return Err(ConfigError::Invalid(format!(
-					"account name \"{name}\": {fault}"
+				return Err(ConfigError::Invalid(crate::util::account_rule::refusal(
+					name, &fault,
 				)));
 			}
 			if !names.insert(name.clone()) {

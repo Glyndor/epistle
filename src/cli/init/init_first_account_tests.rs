@@ -105,6 +105,85 @@ fn two_addresses_that_give_the_same_account_name_are_refused_not_merged() {
 	assert_eq!(accounts[0].addresses, ["torre-control@example.org"]);
 }
 
+/// Install once without an account, then declare `torre-control` as a
+/// static `[[accounts]]` entry in the written config.
+fn install_with_static_account(dir: &Path) {
+	let (code, out) = init(answers(dir, ""), false);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "{out}");
+	let config = dir.join("etc").join("mail.toml");
+	let mut text = std::fs::read_to_string(&config).expect("read config");
+	text.push_str(
+		"\n[[accounts]]\nname = \"torre-control\"\naddresses = [\"torre-control@example.org\"]\n",
+	);
+	std::fs::write(&config, text).expect("write config");
+}
+
+#[test]
+fn a_static_account_holding_the_derived_name_is_a_collision_or_is_skipped() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	install_with_static_account(dir.path());
+	let before = std::fs::read(dir.path().join("etc").join("mail.toml")).expect("read");
+
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	let (code, _) = init(answers(dir.path(), &clash), false);
+	assert_eq!(code, ExitCode::from(EXIT_INVALID), "a clash stops the run");
+	assert_eq!(
+		std::fs::read(dir.path().join("etc").join("mail.toml")).expect("read"),
+		before,
+		"nothing is rewritten when the name clashes"
+	);
+
+	let same = first_account_table(dir.path(), "torre-control@example.org");
+	let (code, _) = init(answers(dir.path(), &same), false);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "the same account is skipped");
+	assert!(
+		store(dir.path()).dynamic("torre-control").is_none(),
+		"no dynamic copy of the static account is created"
+	);
+}
+
+#[test]
+fn a_clash_stops_a_dry_run_and_a_real_run_before_anything_is_written() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let table = first_account_table(dir.path(), "torre-control@example.org");
+	assert_eq!(
+		init(answers(dir.path(), &table), false).0,
+		ExitCode::from(EXIT_OK)
+	);
+	fn tree(dir: &Path, into: &mut Vec<String>) {
+		for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+			let path = entry.path();
+			let len = entry.metadata().map_or(0, |m| m.len());
+			into.push(format!("{}:{len}", path.display()));
+			if path.is_dir() {
+				tree(&path, into);
+			}
+		}
+	}
+	let listing = |dir: &Path| {
+		let mut names = Vec::new();
+		tree(dir, &mut names);
+		names.sort();
+		names
+	};
+	let before = listing(dir.path());
+	let clash = first_account_table(dir.path(), "torre.control@example.org");
+	for dry_run in [true, false] {
+		let (code, out) = init(answers(dir.path(), &clash), dry_run);
+		assert_eq!(
+			code,
+			ExitCode::from(EXIT_INVALID),
+			"dry_run {dry_run}: {out}"
+		);
+	}
+	let mut after = listing(dir.path());
+	let mut expected = before;
+	// The answers file itself is rewritten by the helper on each call.
+	after.retain(|line| !line.contains("answers.toml"));
+	expected.retain(|line| !line.contains("answers.toml"));
+	assert_eq!(after, expected, "the clash left the tree as it was");
+}
+
 #[test]
 fn an_answers_file_creates_the_account_and_points_the_role_addresses_at_it() {
 	let dir = tempfile::tempdir().expect("tempdir");

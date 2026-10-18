@@ -89,13 +89,30 @@ impl FirstAccount {
 		account_rule::derive(local).unwrap_or_else(|_| local.to_string())
 	}
 
-	/// The name chosen when it differs from the address's local part, as a
-	/// line for the operator; `None` when the two are the same.
+	/// A line telling the operator which name was chosen and what was done
+	/// to the typed local part to get it (dots to hyphens, capitals to
+	/// lowercase); `None` when the name is the local part as typed.
 	pub fn name_note(&self) -> Option<String> {
-		let address = self.stored_address();
-		let local = address.split_once('@').map(|(local, _)| local)?;
+		let typed = self
+			.address
+			.trim()
+			.split_once('@')
+			.map(|(local, _)| local)?;
 		let name = self.name();
-		(name != local).then(|| format!("the account name will be \"{name}\" (from {local:?})"))
+		if name == typed {
+			return None;
+		}
+		let mut changes = Vec::new();
+		if typed.contains('.') {
+			changes.push("dots become hyphens");
+		}
+		if typed.chars().any(|c| c.is_ascii_uppercase()) {
+			changes.push("capital letters become lowercase");
+		}
+		Some(format!(
+			"the account name will be \"{name}\" ({})",
+			changes.join(" and ")
+		))
 	}
 
 	/// Whether the address, the name it gives and the display name are
@@ -191,20 +208,7 @@ pub(super) fn create(
 	.map_err(|error| fail(format!("opening the account store: {error}")))?;
 	let name = first.name();
 	let address = first.stored_address();
-	let holder: Option<Vec<String>> = store
-		.dynamic(&name)
-		.map(|existing| existing.addresses)
-		.or_else(|| {
-			config
-				.accounts
-				.iter()
-				.find(|a| a.name == name)
-				.map(|a| a.addresses.clone())
-		});
-	let exists = match holder {
-		Some(holder) => name_holder(&name, &address, &holder).map_err(fail)?,
-		None => false,
-	};
+	let exists = name_is_free_or_ours(&name, &address, &store, &config.accounts).map_err(fail)?;
 	if exists {
 		report.steps.push(ReportStep::Skipped {
 			name: format!("account {name}"),
@@ -238,6 +242,58 @@ pub(super) fn create(
 		});
 	}
 	add_role_aliases(first, &config, config_path, &address, report)
+}
+
+/// Whether the account named `name` already exists and is the one `address`
+/// asks for (`Ok(true)`), does not exist (`Ok(false)`), or exists under other
+/// addresses (an error: the collision).
+fn name_is_free_or_ours(
+	name: &str,
+	address: &str,
+	store: &AccountStore,
+	static_accounts: &[crate::config::Account],
+) -> Result<bool, String> {
+	let holder: Option<Vec<String>> = store
+		.dynamic(name)
+		.map(|existing| existing.addresses)
+		.or_else(|| {
+			static_accounts
+				.iter()
+				.find(|a| a.name == name)
+				.map(|a| a.addresses.clone())
+		});
+	match holder {
+		Some(holder) => name_holder(name, address, &holder),
+		None => Ok(false),
+	}
+}
+
+/// The collision check that needs no write: with a configuration already on
+/// disk, whether an account other than the one asked for holds the derived
+/// name. Run before anything is applied, so a clash stops the run (and
+/// `--dry-run`) with nothing written, and the assistant can ask again.
+pub(super) fn precheck(
+	first: &FirstAccount,
+	data_dir: &Path,
+	config_path: &Path,
+) -> Result<(), String> {
+	let Ok(config) = Config::load(config_path) else {
+		return Ok(());
+	};
+	let store = AccountStore::open(
+		data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| format!("opening the account store: {error}"))?;
+	name_is_free_or_ours(
+		&first.name(),
+		&first.stored_address(),
+		&store,
+		&config.accounts,
+	)
+	.map(|_| ())
 }
 
 /// Whether the account already named `name` is the one `address` asks for.
