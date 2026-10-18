@@ -178,6 +178,15 @@ impl Window {
 	}
 
 	fn push_str(&mut self, text: &str) {
+		if !text.is_ascii() {
+			// What takes no room on the screen does not split a word.
+			read::push_chars(
+				self,
+				text.chars().filter(|&c| !read::is_invisible(c)),
+				false,
+			);
+			return;
+		}
 		for raw in text.split(|c: char| !c.is_alphanumeric()) {
 			if (2..=30).contains(&raw.len()) {
 				self.push_token(raw);

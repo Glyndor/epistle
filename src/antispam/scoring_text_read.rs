@@ -72,7 +72,11 @@ fn utf16_order(bytes: &[u8]) -> Option<bool> {
 /// Split `chars` into tokens the way [`Window::push_str`] does and feed them
 /// to `window`; with `accented_only`, only the tokens that have a character
 /// outside ASCII in them. Holds one token at a time.
-fn push_chars(window: &mut Window, chars: impl Iterator<Item = char>, accented_only: bool) {
+pub(super) fn push_chars(
+	window: &mut Window,
+	chars: impl Iterator<Item = char>,
+	accented_only: bool,
+) {
 	let mut token = String::new();
 	let mut too_long = false;
 	let mut accented = false;
@@ -93,6 +97,29 @@ fn push_chars(window: &mut Window, chars: impl Iterator<Item = char>, accented_o
 		too_long = false;
 		accented = false;
 	}
+}
+
+/// Whether `c` takes no room on the screen and is no break between words: a
+/// zero width space or joiner, a soft hyphen, a byte order mark, a variation
+/// selector, a tag character.
+pub(super) fn is_invisible(c: char) -> bool {
+	matches!(
+		c,
+		'\u{00ad}'
+			| '\u{034f}'
+			| '\u{061c}'
+			| '\u{115f}'..='\u{1160}'
+			| '\u{17b4}'..='\u{17b5}'
+			| '\u{180b}'..='\u{180f}'
+			| '\u{200b}'..='\u{200f}'
+			| '\u{202a}'..='\u{202e}'
+			| '\u{2060}'..='\u{206f}'
+			| '\u{3164}'
+			| '\u{fe00}'..='\u{fe0f}'
+			| '\u{feff}'
+			| '\u{ffa0}'
+			| '\u{e0000}'..='\u{e0fff}'
+	)
 }
 
 /// Feed the header block to `window`: as it is, and, when it holds encoded

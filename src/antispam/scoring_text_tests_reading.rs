@@ -56,3 +56,29 @@ fn an_encoded_word_in_a_header_is_read_decoded() {
 	assert!(has(raw, "hiddenword"));
 	assert!(has(raw, "otherword"));
 }
+
+/// Characters that take no room on the screen are not a space between two
+/// halves of a word: a person reads `viagra`.
+#[test]
+fn invisible_characters_do_not_split_a_word() {
+	for invisible in [
+		'\u{200b}',
+		'\u{200c}',
+		'\u{200d}',
+		'\u{00ad}',
+		'\u{2060}',
+		'\u{feff}',
+		'\u{034f}',
+		'\u{180e}',
+		'\u{fe0f}',
+		'\u{e0020}',
+	] {
+		let raw = format!(
+			"Subject: x\r\n\r\ncheap vi{invisible}agra n{invisible}ow café{invisible}s\r\n"
+		);
+		assert!(has(raw.as_bytes(), "viagra"), "U+{:04X}", invisible as u32);
+		assert!(has(raw.as_bytes(), "cafés"));
+	}
+	// Plain accented text is read as before.
+	assert!(has("Subject: x\r\n\r\nñandú comió\r\n".as_bytes(), "ñandú"));
+}
