@@ -88,7 +88,20 @@ pub struct Policy {
 	/// Called at the start of every inspection, so a test can make one
 	/// panic or block.
 	#[cfg(test)]
-	check_hook: Option<fn()>,
+	check_hook: Option<CheckHook>,
+}
+
+/// A test's hook, owned by the policy it was given to, so two tests never
+/// share the state behind it.
+#[cfg(test)]
+#[derive(Clone)]
+struct CheckHook(Arc<dyn Fn() + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for CheckHook {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str("CheckHook")
+	}
 }
 
 impl Policy {
@@ -150,8 +163,8 @@ impl Policy {
 
 	/// Run `hook` at the start of every inspection.
 	#[cfg(test)]
-	pub(crate) fn with_check_hook(mut self, hook: fn()) -> Self {
-		self.check_hook = Some(hook);
+	pub(crate) fn with_check_hook(mut self, hook: impl Fn() + Send + Sync + 'static) -> Self {
+		self.check_hook = Some(CheckHook(Arc::new(hook)));
 		self
 	}
 
@@ -164,7 +177,7 @@ impl Policy {
 	/// Inspect `raw` and decide.
 	pub fn check(&self, raw: &[u8]) -> (Report, Decision) {
 		#[cfg(test)]
-		if let Some(hook) = self.check_hook {
+		if let Some(CheckHook(hook)) = &self.check_hook {
 			hook();
 		}
 		let report = inspect(
