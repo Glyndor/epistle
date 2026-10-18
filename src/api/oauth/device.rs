@@ -39,9 +39,9 @@ pub(super) fn client_bucket(ip: std::net::IpAddr) -> (bool, u64) {
 	}
 }
 
-/// The wider group a client belongs to for fair sharing: an IPv6 /48 (an
-/// allocation is many /64s), or the address itself for IPv4.
-fn net_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
+/// The /48 of an IPv6 client (the cap on one allocation); an IPv4 address is
+/// its own.
+fn net48_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
 	client.map(|(v6, bits)| {
 		if v6 {
 			(true, bits >> 16)
@@ -51,13 +51,37 @@ fn net_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
 	})
 }
 
-/// Store `grant` under `device_code` if the caps allow it, `false` if not.
+/// The group a client is counted in when the pool is full: an IPv6 /32 (an
+/// attacker spreading grants over many /48s of one allocation stays one
+/// group), or the address for IPv4.
+fn group_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
+	client.map(|(v6, bits)| {
+		if v6 {
+			(true, bits >> 32)
+		} else {
+			(false, bits)
+		}
+	})
+}
+
+/// Store `grant` under `device_code` if the policy allows it, `false` if not.
 ///
-/// A client, and an IPv6 /48 as a whole, may hold only so many; expired grants
-/// are dropped first. When the pool itself is full the oldest pending grant of
-/// the group holding the most is evicted to make room, so a flood from a few
-/// prefixes cannot lock everyone else out; an approved grant is never evicted,
-/// and a pool of only approved grants refuses.
+/// The policy, whole:
+/// 1. A client, and an IPv6 /48, may hold only so many grants, and the pool
+///    only [`MAX_DEVICE_GRANTS`]. Expired grants are dropped first.
+/// 2. A client or /48 over its cap is refused.
+/// 3. With the pool full, the oldest pending grant of the group (an IPv6 /32,
+///    or an IPv4 address) holding the most pending grants is evicted, provided
+///    that group holds strictly more than the requester's own. If the
+///    requester's group is itself the heaviest, or nothing is pending, it is
+///    refused.
+/// 4. An approved grant is never evicted and is not counted in 3.
+///
+/// So a newcomer always gets in while anyone is above it, a heavy group can
+/// only ever displace itself, and the endpoint's request rate stays limited
+/// per origin. Residual risk: an attacker with many distinct /32s (or IPv4
+/// addresses) each holding a little can fill the pool with groups no heavier
+/// than a legitimate newcomer; the grants expire after ten minutes.
 fn admit(
 	devices: &std::sync::Mutex<std::collections::HashMap<String, DeviceGrant>>,
 	device_code: String,
@@ -66,39 +90,38 @@ fn admit(
 ) -> bool {
 	let mut devices = devices.lock().unwrap_or_else(|p| p.into_inner());
 	let client = grant.client;
-	let net = net_of(client);
-	let over_group_cap = |devices: &std::collections::HashMap<String, DeviceGrant>| {
+	let net = net48_of(client);
+	let over_cap = |devices: &std::collections::HashMap<String, DeviceGrant>| {
 		devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT
 			|| (net.is_some_and(|n| n.0)
-				&& devices.values().filter(|g| net_of(g.client) == net).count()
-					>= MAX_GRANTS_PER_NET)
+				&& devices
+					.values()
+					.filter(|g| net48_of(g.client) == net)
+					.count() >= MAX_GRANTS_PER_NET)
 	};
-	if devices.len() >= MAX_DEVICE_GRANTS || over_group_cap(&devices) {
+	if devices.len() >= MAX_DEVICE_GRANTS || over_cap(&devices) {
 		// Expired grants nobody polled for would otherwise count forever.
 		devices.retain(|_, g| g.expires_at > now);
 	}
-	if over_group_cap(&devices) {
+	if over_cap(&devices) {
 		return false;
 	}
 	if devices.len() >= MAX_DEVICE_GRANTS {
-		let mut per_net: std::collections::HashMap<Option<(bool, u64)>, usize> =
+		let mut pending: std::collections::HashMap<Option<(bool, u64)>, usize> =
 			std::collections::HashMap::new();
 		for g in devices.values().filter(|g| g.approved_account.is_none()) {
-			*per_net.entry(net_of(g.client)).or_default() += 1;
+			*pending.entry(group_of(g.client)).or_default() += 1;
 		}
-		let Some((heaviest, heaviest_count)) = per_net.into_iter().max_by_key(|(_, n)| *n) else {
+		let mine = pending.get(&group_of(client)).copied().unwrap_or(0);
+		let Some((heaviest, count)) = pending.into_iter().max_by_key(|(_, n)| *n) else {
 			return false;
 		};
-		// Only a group strictly above the requester's own share gives up a
-		// grant: otherwise a newcomer, or a heavy requester asking again,
-		// would push out grants of nets that are not over their share.
-		let mine = devices.values().filter(|g| net_of(g.client) == net).count();
-		if heaviest_count <= 1 || heaviest_count <= mine {
+		if count <= mine {
 			return false;
 		}
 		let oldest = devices
 			.iter()
-			.filter(|(_, g)| g.approved_account.is_none() && net_of(g.client) == heaviest)
+			.filter(|(_, g)| g.approved_account.is_none() && group_of(g.client) == heaviest)
 			.min_by_key(|(_, g)| g.expires_at)
 			.map(|(code, _)| code.clone());
 		if let Some(code) = oldest {

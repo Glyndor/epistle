@@ -166,34 +166,36 @@ async fn a_pool_of_only_approved_grants_refuses_instead_of_evicting() {
 }
 
 #[tokio::test]
-async fn a_pool_of_light_nets_refuses_a_newcomer_instead_of_evicting_one_of_them() {
+async fn a_newcomer_always_gets_in_by_displacing_the_heaviest_group() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_authz(dir.path(), &keys());
 	let authz = state.authz().expect("authz");
 	{
 		let mut devices = authz.devices.lock().unwrap();
-		for n in 0..super::device::MAX_DEVICE_GRANTS as u64 {
-			devices.insert(format!("one{n}"), grant(Some((false, n + 10)), now() + 600));
+		// Every address holds one grant except one that holds two.
+		for n in 0..(super::device::MAX_DEVICE_GRANTS - 2) as u64 {
+			let mut g = grant(Some((false, n + 10)), now() + 600);
+			g.user_code = format!("L{n}");
+			devices.insert(format!("one{n}"), g);
 		}
+		devices.insert("two_a".into(), grant(Some((false, 5)), now() + 100));
+		devices.insert("two_b".into(), grant(Some((false, 5)), now() + 200));
 	}
 	let app = router(state.clone());
-	assert_eq!(
-		start(&app, "198.51.100.150").await,
-		StatusCode::TOO_MANY_REQUESTS,
-		"every net holds one grant, none is above its share"
-	);
-	assert_eq!(
-		authz.devices.lock().unwrap().len(),
-		super::device::MAX_DEVICE_GRANTS
+	assert_eq!(start(&app, "198.51.100.150").await, StatusCode::OK);
+	let devices = authz.devices.lock().unwrap();
+	assert_eq!(devices.len(), super::device::MAX_DEVICE_GRANTS);
+	assert!(
+		!devices.contains_key("two_a"),
+		"the grant that went was the heaviest group's"
 	);
 }
 
 #[tokio::test]
-async fn a_heavy_net_cannot_push_out_a_light_nets_grants_by_asking_again() {
+async fn a_requester_who_is_the_heaviest_group_displaces_nobody() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_authz(dir.path(), &keys());
 	let authz = state.authz().expect("authz");
-	// The requester's own address already holds as many as the heaviest net.
 	let mine = super::device::client_bucket("198.51.100.60".parse().expect("ip"));
 	{
 		let mut devices = authz.devices.lock().unwrap();
@@ -201,7 +203,7 @@ async fn a_heavy_net_cannot_push_out_a_light_nets_grants_by_asking_again() {
 			devices.insert(format!("mine{n}"), grant(Some(mine), now() + 600));
 		}
 		for n in 0..(super::device::MAX_DEVICE_GRANTS - 5) as u64 {
-			// Light nets of up to five grants each.
+			// Light groups of up to five grants each.
 			devices.insert(
 				format!("light{n}"),
 				grant(Some((false, n / 5 + 1_000)), now() + 600),
@@ -211,8 +213,46 @@ async fn a_heavy_net_cannot_push_out_a_light_nets_grants_by_asking_again() {
 	let app = router(state.clone());
 	assert_eq!(
 		start(&app, "198.51.100.60").await,
-		StatusCode::TOO_MANY_REQUESTS,
-		"nobody is heavier than the requester, so nobody is evicted for it"
+		StatusCode::TOO_MANY_REQUESTS
 	);
-	assert!(authz.devices.lock().unwrap().contains_key("light0"));
+	let devices = authz.devices.lock().unwrap();
+	assert!(devices.contains_key("light0") && devices.contains_key("mine0"));
+}
+
+#[tokio::test]
+async fn spreading_over_many_slash_48s_of_one_slash_32_is_one_group() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_authz(dir.path(), &keys());
+	let authz = state.authz().expect("authz");
+	let attacker = super::device::client_bucket("2001:db8:1::1".parse().expect("ip"));
+	{
+		let mut devices = authz.devices.lock().unwrap();
+		// Half the pool, in 5000 distinct /48s of the attacker's /32.
+		for n in 0..5_000u64 {
+			let mut g = grant(Some((true, attacker.1 + (n << 16))), now() + 600);
+			g.user_code = format!("A{n}");
+			devices.insert(format!("atk{n}"), g);
+		}
+		for n in 0..(super::device::MAX_DEVICE_GRANTS - 5_000) as u64 {
+			devices.insert(
+				format!("legit{n}"),
+				grant(Some((false, n + 10)), now() + 600),
+			);
+		}
+	}
+	let app = router(state.clone());
+	// One more /48 of the same /32 asks: it is in the heaviest group itself.
+	assert_eq!(
+		start(&app, "2001:db8:ffff::1").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"the attacker gains nothing by asking from yet another /48"
+	);
+	// A legitimate newcomer elsewhere displaces one of the attacker's.
+	assert_eq!(start(&app, "198.51.100.220").await, StatusCode::OK);
+	let devices = authz.devices.lock().unwrap();
+	assert!(devices.contains_key("legit0"), "no legitimate grant went");
+	assert_eq!(
+		devices.keys().filter(|k| k.starts_with("atk")).count(),
+		4_999
+	);
 }

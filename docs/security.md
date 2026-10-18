@@ -256,6 +256,18 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Device authorization grants are bounded** (`POST /oauth/device_authorization`
+  needs no credentials). A client (an IPv4 address or an IPv6 /64) may hold 10
+  grants, an IPv6 /48 100, the server 10000; expired ones are dropped at the
+  caps, and a client or /48 over its cap gets `429 slow_down`. With the pool
+  full, the oldest *pending* grant of the group holding the most pending grants
+  (an IPv6 /32, or an IPv4 address) is evicted, but only if that group holds
+  strictly more than the requester's own; a requester who is itself the
+  heaviest group, or a pool with nothing pending, is refused. An approved grant
+  is never evicted. So a newcomer gets in while anyone is above it and a heavy
+  group can only displace itself. Residual risk: an attacker with many
+  distinct /32s (or IPv4 addresses) can fill the pool with groups no heavier
+  than a newcomer, for the ten minutes the grants live.
 - **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
   default through `scan_authenticated`). A compromised account must not
   relay malware, so what local accounts submit over SMTP, the REST API and
