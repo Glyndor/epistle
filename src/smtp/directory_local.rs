@@ -56,7 +56,7 @@ impl Directory {
 			return Some((account, None));
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
-		// passwords are not subject to TOTP — they are independent secrets.
+		// passwords are not subject to TOTP: they are independent secrets.
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
