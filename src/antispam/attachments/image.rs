@@ -213,6 +213,7 @@ fn contains_payload(region: &[u8]) -> bool {
 		.map_or(&region[region.len()..], |start| &region[start..]);
 	text.starts_with(b"#!/")
 		|| (0..region.len()).any(|at| {
+			probe(4);
 			let rest = &region[at..];
 			rest.starts_with(b"\x7fELF")
 				|| rest.starts_with(b"PK\x03\x04")
@@ -221,12 +222,31 @@ fn contains_payload(region: &[u8]) -> bool {
 }
 
 fn is_pe(mz: &[u8]) -> bool {
+	probe(8);
 	let Some(offset) = mz.get(0x3c..0x40) else {
 		return false;
 	};
 	let offset = u32::from_le_bytes([offset[0], offset[1], offset[2], offset[3]]) as usize;
 	mz.get(offset..offset.saturating_add(4)) == Some(b"PE\0\0")
 }
+
+#[cfg(test)]
+thread_local! {
+	/// Bytes the tail scan has looked at on this thread, so a test can bound
+	/// the work by counting instead of by the clock.
+	static PROBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One position compares at most 4 bytes against the payload prefixes, and
+/// `is_pe` reads at most 8 more (the offset field and the signature).
+#[cfg(test)]
+fn probe(bytes: usize) {
+	PROBED.with(|probed| probed.set(probed.get() + bytes));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn probe(_: usize) {}
 
 #[cfg(test)]
 #[path = "image_tests.rs"]
