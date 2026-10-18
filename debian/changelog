@@ -344,11 +344,13 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     Learning is bounded. A command queues at most 100 lessons, an account has
     32 places of the 256 in the queue, 200 lessons a minute and 5000 a day,
     and may keep the one worker busy for 10 seconds a minute, counted from the
-    work of its own lessons and not from the time they waited. A message is
+    work of its own lessons, failed ones included, and not from the time they
+    waited. A message is
     read as the SMTP path reads it (headers and text parts, no attachments, in
     the charset it declares), and a lesson touches at most 5000 tokens of it,
     the cap the server's own training uses; a message that cannot be read
-    teaches nothing and costs nothing. An account holds at most 250000 token rows
+    teaches nothing and spends none of the lessons or tokens of the account,
+    though the time spent trying to read it is charged to it. An account holds at most 250000 token rows
     and spends at most 1000000 tokens a day, and its record keeps 100000
     messages, forgetting the oldest tenth when full. Lessons over a limit are
     dropped and counted in `mail_bayes_training_dropped_total`, and the ones

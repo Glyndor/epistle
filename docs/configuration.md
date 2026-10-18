@@ -664,8 +664,10 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
     sending at once, for instance several of one tenant.
   - One account may teach 200 lessons a minute and 5000 a day, and may keep
     the single worker busy for 10 seconds in a minute, measured from the work
-    of its own lessons (reading the message and writing the corpus), not from
-    the time they waited behind other jobs. Lessons over a limit are dropped and counted.
+    of its own lessons (reading the message and writing the corpus, every
+    attempt of a lesson that fails or is retried included), not from the time
+    they waited behind other jobs. Lessons over a limit are dropped and
+    counted.
   - A message is read the way the SMTP path reads it: its headers and its text
     parts, decoded and in the charset they declare, without attachments, cut to
     a window of the first and the last half of 256 KiB of words. A lesson
@@ -675,7 +677,10 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
     32 MiB, because the structure is what tells text from an attachment; a
     larger file, or one that cannot be read, teaches nothing, spends none of
     the day's tokens and gives back its place in the minute and day counts
-    (`mail_bayes_learning_unreadable_total`).
+    (`mail_bayes_learning_unreadable_total`); the time spent reading it is
+    still charged to the account. The message is reduced on the worker's own
+    task, as the SMTP path does, so one lesson of a large message holds one
+    runtime thread for about a second.
   - One account holds at most 250000 token rows (about 100 MB with the index)
     and spends at most 1000000 tokens a day. A lesson past either is refused
     or held back, and counted per account as `refused` and `throttled`. A
