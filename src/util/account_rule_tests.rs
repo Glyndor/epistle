@@ -1,0 +1,62 @@
+//! The account-name rule and the name an address gives.
+
+use super::*;
+
+#[test]
+fn a_dot_becomes_a_hyphen_and_capitals_are_lowered() {
+	assert_eq!(derive("torre.control"), Ok("torre-control".to_string()));
+	assert_eq!(derive("Torre.Control"), Ok("torre-control".to_string()));
+	assert_eq!(derive("a.b.c"), Ok("a-b-c".to_string()));
+	assert_eq!(derive("alice"), Ok("alice".to_string()));
+}
+
+#[test]
+fn a_dot_at_the_start_at_the_end_or_twice_in_a_row_is_refused() {
+	assert_eq!(derive(".torre"), Err(Fault::DotAtStart));
+	assert_eq!(derive("torre."), Err(Fault::DotAtEnd));
+	assert_eq!(derive("torre..control"), Err(Fault::DoubleDot));
+	assert_eq!(derive("."), Err(Fault::DotAtStart));
+}
+
+#[test]
+fn a_character_outside_the_rule_is_named() {
+	assert_eq!(derive("a_b"), Err(Fault::BadChar('_')));
+	assert_eq!(derive("a+b"), Err(Fault::BadChar('+')));
+	assert_eq!(derive("josé"), Err(Fault::BadChar('é')));
+	assert_eq!(derive("ñandú"), Err(Fault::BadChar('ñ')));
+	let message = derive("a_b").unwrap_err().to_string();
+	assert!(message.contains("'_'") && message.contains("capital letters are converted"));
+}
+
+#[test]
+fn a_leading_hyphen_an_empty_name_and_a_long_name_are_refused() {
+	assert_eq!(derive("-a"), Err(Fault::LeadingHyphen));
+	assert_eq!(derive(""), Err(Fault::Empty));
+	assert_eq!(derive(&"a".repeat(64)), Ok("a".repeat(64)));
+	assert_eq!(derive(&"a".repeat(65)), Err(Fault::TooLong(65)));
+	assert_eq!(
+		derive(&format!("{}.b", "a".repeat(63))),
+		Err(Fault::TooLong(65))
+	);
+}
+
+#[test]
+fn the_stored_form_is_checked_without_converting_anything() {
+	assert_eq!(check("torre-control"), Ok(()));
+	assert_eq!(check("Torre"), Err(Fault::BadChar('T')));
+	assert_eq!(check("torre.control"), Err(Fault::BadChar('.')));
+	assert_eq!(check("-torre"), Err(Fault::LeadingHyphen));
+	assert_eq!(check(""), Err(Fault::Empty));
+	assert!(
+		check("Torre")
+			.unwrap_err()
+			.to_string()
+			.contains("capital letter")
+	);
+}
+
+#[test]
+fn two_addresses_that_differ_only_by_dot_or_hyphen_give_the_same_name() {
+	// The collision `init` must detect: the rule alone cannot tell them apart.
+	assert_eq!(derive("torre.control"), derive("torre-control"));
+}

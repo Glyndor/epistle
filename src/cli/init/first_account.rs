@@ -19,6 +19,7 @@ use super::apply::{ApplyError, Report, ReportStep};
 use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, DynamicAccount};
+use crate::util::account_rule;
 
 /// The role local parts pointed at the first account, in the order they
 /// are listed.
@@ -76,12 +77,25 @@ impl FirstAccount {
 		self.address.trim().to_ascii_lowercase()
 	}
 
-	/// The account name: the local part of the address.
+	/// The account name the address gives: its local part in lowercase,
+	/// dots turned into hyphens (`torre.control` is `torre-control`). When
+	/// the local part cannot give a name, [`FirstAccount::check`] refuses
+	/// the address, and this is the plain lowercase local part.
 	pub fn name(&self) -> String {
 		let address = self.stored_address();
-		address
+		let local = address
 			.split_once('@')
-			.map_or(address.clone(), |(local, _)| local.to_string())
+			.map_or(address.as_str(), |(local, _)| local);
+		account_rule::derive(local).unwrap_or_else(|_| local.to_string())
+	}
+
+	/// The name chosen when it differs from the address's local part, as a
+	/// line for the operator; `None` when the two are the same.
+	pub fn name_note(&self) -> Option<String> {
+		let address = self.stored_address();
+		let local = address.split_once('@').map(|(local, _)| local)?;
+		let name = self.name();
+		(name != local).then(|| format!("the account name will be \"{name}\" (from {local:?})"))
 	}
 
 	/// Whether the address, the name it gives and the display name are
@@ -104,16 +118,8 @@ impl FirstAccount {
 				domains.join(", ")
 			));
 		}
-		let usable = local.len() <= 64
-			&& !local.starts_with('-')
-			&& local
-				.chars()
-				.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-		if !usable {
-			return Err(format!(
-				"the account name is the part before @, and {local:?} must be lowercase letters, digits and hyphens"
-			));
-		}
+		account_rule::derive(local)
+			.map_err(|fault| format!("{local:?} cannot give an account name: {fault}"))?;
 		if let Some(raw) = &self.display_name {
 			crate::directory_store::display_name::validate(raw)
 				.map_err(|why| format!("display_name: {why}"))?;
@@ -185,7 +191,21 @@ pub(super) fn create(
 	.map_err(|error| fail(format!("opening the account store: {error}")))?;
 	let name = first.name();
 	let address = first.stored_address();
-	if store.dynamic(&name).is_some() || config.accounts.iter().any(|a| a.name == name) {
+	let holder: Option<Vec<String>> = store
+		.dynamic(&name)
+		.map(|existing| existing.addresses)
+		.or_else(|| {
+			config
+				.accounts
+				.iter()
+				.find(|a| a.name == name)
+				.map(|a| a.addresses.clone())
+		});
+	let exists = match holder {
+		Some(holder) => name_holder(&name, &address, &holder).map_err(fail)?,
+		None => false,
+	};
+	if exists {
 		report.steps.push(ReportStep::Skipped {
 			name: format!("account {name}"),
 			reason: "it already exists".to_string(),
@@ -218,6 +238,24 @@ pub(super) fn create(
 		});
 	}
 	add_role_aliases(first, &config, config_path, &address, report)
+}
+
+/// Whether the account already named `name` is the one `address` asks for.
+/// An account with that name but other addresses is a collision, such as
+/// `torre.control` and `torre-control` both giving `torre-control`: it is
+/// refused instead of being skipped as if it were the same account.
+fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result<bool, String> {
+	if holder_addresses
+		.iter()
+		.any(|existing| existing.eq_ignore_ascii_case(address))
+	{
+		return Ok(true);
+	}
+	Err(format!(
+		"the account name \"{name}\" is already used by the account with the address {}, \
+		 and {address} would get the same name; use another address",
+		holder_addresses.join(", ")
+	))
 }
 
 /// Add each role address as an `[[alias]]` table delivering to `target`,

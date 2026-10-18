@@ -43,10 +43,10 @@ async fn creating_an_account_with_a_separator_is_refused_and_creates_nothing() {
 		.await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "name {name:?}");
 		assert_eq!(body["error"]["code"], "invalid_input", "name {name:?}");
-		assert_eq!(
-			body["error"]["message"],
-			format!("account name \"{name}\" must be lowercase alphanumeric/hyphen"),
-			"name {name:?}"
+		let message = body["error"]["message"].as_str().unwrap_or_default();
+		assert!(
+			message.starts_with(&format!("account name \"{name}\": ")),
+			"name {name:?}: {message}"
 		);
 	}
 	assert_eq!(entries(dir.path()), before, "no account directory appears");

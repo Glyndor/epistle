@@ -316,13 +316,21 @@ domains = ["example.org", "second.example"]
 
 #[test]
 fn rejects_account_with_unsafe_name() {
-	for name in ["", "Alice", "a/b", "-x", "a b"] {
+	for (name, expected) in [
+		("", "empty"),
+		("Alice", "'A'"),
+		("a/b", "'/'"),
+		("-x", "hyphen"),
+		("a b", "' '"),
+		("torre.control", "'.'"),
+		("josé", "'é'"),
+	] {
 		let result = config_from(&format!(
 			"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n\n[[accounts]]\nname = \"{name}\"\naddresses = [\"a@example.org\"]\n"
 		));
 		assert!(
-			matches!(result, Err(ConfigError::Invalid(_))),
-			"name {name:?} must be rejected"
+			matches!(&result, Err(ConfigError::Invalid(why)) if why.contains(expected)),
+			"name {name:?} must be rejected naming {expected}: {result:?}"
 		);
 	}
 }

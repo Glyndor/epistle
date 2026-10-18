@@ -70,6 +70,41 @@ fn config_check(dir: &Path) -> String {
 	String::from_utf8(err).expect("utf-8")
 }
 
+fn first_account_table(dir: &Path, address: &str) -> String {
+	let secret = dir.join("password");
+	std::fs::write(&secret, format!("{PASSWORD}\n")).expect("write secret");
+	format!(
+		"[first_account]\naddress = \"{address}\"\npassword_file = \"{}\"\n",
+		secret.display()
+	)
+}
+
+#[test]
+fn a_dotted_address_creates_a_hyphenated_account_that_keeps_the_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let table = first_account_table(dir.path(), "Torre.Control@example.org");
+	let (code, out) = init(answers(dir.path(), &table), false);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "{out}");
+	let account = store(dir.path())
+		.dynamic("torre-control")
+		.expect("the account is named after the address, dots as hyphens");
+	assert_eq!(account.addresses, ["torre.control@example.org"]);
+}
+
+#[test]
+fn two_addresses_that_give_the_same_account_name_are_refused_not_merged() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let table = first_account_table(dir.path(), "torre-control@example.org");
+	let (code, out) = init(answers(dir.path(), &table), false);
+	assert_eq!(code, ExitCode::from(EXIT_OK), "{out}");
+	let table = first_account_table(dir.path(), "torre.control@example.org");
+	let (code, out) = init(answers(dir.path(), &table), false);
+	assert_ne!(code, ExitCode::from(EXIT_OK), "{out}");
+	let accounts = store(dir.path()).dynamic_accounts();
+	assert_eq!(accounts.len(), 1, "the second address must not be added");
+	assert_eq!(accounts[0].addresses, ["torre-control@example.org"]);
+}
+
 #[test]
 fn an_answers_file_creates_the_account_and_points_the_role_addresses_at_it() {
 	let dir = tempfile::tempdir().expect("tempdir");

@@ -45,17 +45,6 @@ pub(super) fn with_safe_names<T>(
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), StoreError> {
-	let safe = !name.is_empty()
-		&& name.len() <= 64
-		&& name
-			.chars()
-			.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-		&& !name.starts_with('-');
-	if safe {
-		Ok(())
-	} else {
-		Err(StoreError::Invalid(format!(
-			"account name \"{name}\" must be lowercase alphanumeric/hyphen"
-		)))
-	}
+	crate::util::account_rule::check(name)
+		.map_err(|fault| StoreError::Invalid(format!("account name \"{name}\": {fault}")))
 }

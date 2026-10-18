@@ -368,7 +368,12 @@ fn ask_first_account<R: BufRead>(
 			return Ok((None, None));
 		}
 		match first.check(&domains) {
-			Ok(()) => break,
+			Ok(()) => {
+				if let Some(note) = first.name_note() {
+					let _ = writeln!(out, "  {note}");
+				}
+				break;
+			}
 			Err(why) => {
 				let _ = writeln!(out, "  {why}; try again");
 			}
