@@ -123,3 +123,15 @@ fn names_the_line_it_stopped_at() {
 	assert!(refused("a: 1\nb: yes\n").starts_with("line 2:"));
 	assert!(refused("").contains("empty"));
 }
+
+#[test]
+fn a_non_ascii_space_in_the_indentation_is_an_error_not_a_panic() {
+	for text in [
+		"a: |\n  x\n \u{a0}y\n",
+		"a:\n\u{a0}b: 1\n",
+		"\u{2003}a: 1\n",
+	] {
+		let message = refused(text);
+		assert!(message.contains("only spaces"), "{text:?} gave {message:?}");
+	}
+}

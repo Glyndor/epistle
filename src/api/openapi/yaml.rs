@@ -25,8 +25,21 @@ pub(super) fn parse(text: &str) -> Result<Value, String> {
 		lines: text.lines().map(str::to_owned).collect(),
 		pos: 0,
 	};
-	if parser.lines.iter().any(|line| leading_tab(line)) {
-		return Err("tabs cannot indent a line".into());
+	for (at, line) in parser.lines.iter().enumerate() {
+		if line
+			.chars()
+			.take_while(|c| c.is_whitespace())
+			.any(|c| c == '\t')
+		{
+			return Err(format!("line {}: tabs cannot indent a line", at + 1));
+		}
+		if line
+			.chars()
+			.take_while(|c| c.is_whitespace())
+			.any(|c| c != ' ')
+		{
+			return Err(format!("line {}: only spaces may indent a line", at + 1));
+		}
 	}
 	let Some((indent, _)) = parser.current() else {
 		return Err("the document is empty".into());
@@ -36,12 +49,6 @@ pub(super) fn parse(text: &str) -> Result<Value, String> {
 		None => Ok(value),
 		Some(_) => Err(parser.fail("unexpected content after the document")),
 	}
-}
-
-fn leading_tab(line: &str) -> bool {
-	line.chars()
-		.take_while(|c| c.is_whitespace())
-		.any(|c| c == '\t')
 }
 
 struct Parser {
