@@ -38,6 +38,9 @@ pub struct LineCheck {
 	len: usize,
 	/// The last byte was a CR still waiting for its LF.
 	cr: bool,
+	/// Count a leading dot as two octets, the way the same line is counted
+	/// once a sender has dot-stuffed it (see [`Self::stored`]).
+	escape_dot: bool,
 }
 
 impl LineCheck {
@@ -46,10 +49,25 @@ impl LineCheck {
 		Self::default()
 	}
 
+	/// A check on message octets as they are stored, not as they cross a
+	/// DATA wire. DATA caps a line with its stuffing dot, so a stored line
+	/// that begins with a dot is held one octet shorter: it grows by that dot
+	/// when it is sent on, and BDAT must refuse what DATA refuses.
+	pub fn stored() -> Self {
+		Self {
+			escape_dot: true,
+			..Self::default()
+		}
+	}
+
 	/// A check that has already seen `len` octets of a line, none of them
 	/// CR, LF or NUL.
 	fn resume(len: usize) -> Self {
-		Self { len, cr: false }
+		Self {
+			len,
+			cr: false,
+			escape_dot: false,
+		}
 	}
 
 	/// Octets of the current line seen so far, a pending CR not counted.
@@ -80,7 +98,11 @@ impl LineCheck {
 				Ok(Step::More)
 			}
 			_ => {
-				self.len += 1;
+				self.len += if self.escape_dot && self.len == 0 && byte == b'.' {
+					2
+				} else {
+					1
+				};
 				Ok(Step::More)
 			}
 		}
@@ -106,10 +128,15 @@ impl LineCheck {
 		Ok(())
 	}
 
-	/// The stream ended: a CR still waiting for its LF is a bare CR.
-	pub fn finish(&self) -> Result<(), LineError> {
+	/// The stream ended: a CR still waiting for its LF is a bare CR, and a
+	/// last line left open past `max_line` is too long (the sender will end
+	/// it with a CRLF of its own).
+	pub fn finish(&self, max_line: usize) -> Result<(), LineError> {
 		if self.cr {
 			return Err(LineError::BareControlCharacter);
+		}
+		if self.len > max_line {
+			return Err(LineError::TooLong);
 		}
 		Ok(())
 	}

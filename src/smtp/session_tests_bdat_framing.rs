@@ -54,6 +54,21 @@ fn outcome(action: Action) -> Option<Outcome> {
 	}
 }
 
+/// `body` as a DATA client puts it on the wire: a line that begins with a dot
+/// gets another one in front (RFC 5321 section 4.5.2).
+fn stuffed(body: &[u8]) -> Vec<u8> {
+	let mut wire = Vec::new();
+	let mut line_start = true;
+	for &byte in body {
+		if line_start && byte == b'.' {
+			wire.push(b'.');
+		}
+		wire.push(byte);
+		line_start = byte == b'\n';
+	}
+	wire
+}
+
 /// `body` over DATA: through the line decoder, as the connection loop does.
 fn via_data(body: &[u8], authenticated: bool) -> Outcome {
 	let mut session = ready(authenticated);
@@ -62,7 +77,7 @@ fn via_data(body: &[u8], authenticated: bool) -> Outcome {
 		Action::CollectData(_)
 	));
 	let mut decoder = LineDecoder::new();
-	decoder.feed(body);
+	decoder.feed(&stuffed(body));
 	decoder.feed(b".\r\n");
 	loop {
 		match decoder.next_line() {
@@ -205,6 +220,60 @@ fn a_line_past_the_smtp_limit_is_refused_over_both() {
 }
 
 #[test]
+fn a_dotted_line_counts_the_dot_that_data_would_add() {
+	// 998 octets starting with a dot are 999 on a DATA wire, which DATA
+	// refuses; the sender of the stored message would add the dot again.
+	let head: &[u8] = b"From: alice@example.org\r\n\r\n";
+	for (octets, delivered) in [(997, true), (998, false)] {
+		let mut body = head.to_vec();
+		body.push(b'.');
+		body.extend(std::iter::repeat_n(b'b', octets - 1));
+		body.extend_from_slice(b"\r\n");
+		let verdict = assert_same_verdict(&body, false);
+		if delivered {
+			assert_eq!(verdict, Outcome::Delivered(body.clone()));
+		} else {
+			assert_eq!(verdict, Outcome::Closed(LONG.into()));
+		}
+	}
+}
+
+#[test]
+fn an_open_last_line_past_the_limit_is_refused() {
+	let head: &[u8] = b"From: alice@example.org\r\n\r\n";
+	// Without a CRLF, as one chunk or as two: 999 and 1000 octets are over
+	// the limit the sender would put a CRLF behind, 998 is not.
+	for (octets, delivered) in [(998, true), (999, false), (1000, false)] {
+		let mut body = head.to_vec();
+		body.extend(std::iter::repeat_n(b'a', octets));
+		let halves = [Vec::new(), vec![head.len() + octets / 2]];
+		for cuts in halves {
+			let verdict = via_bdat(&body, &cuts, false);
+			if delivered {
+				assert_eq!(verdict, Outcome::Delivered(body.clone()), "{octets}");
+			} else {
+				assert_eq!(verdict, Outcome::Closed(LONG.into()), "{octets} {cuts:?}");
+			}
+		}
+	}
+}
+
+#[test]
+fn an_open_line_past_the_limit_is_refused_before_the_last_chunk() {
+	// A client that never ends a line cannot keep growing the body.
+	let mut session = ready(false);
+	session.command_line("BDAT 500");
+	assert_eq!(
+		tests_basic::reply_code(&session.bdat_chunk(&[b'a'; 500], false)),
+		250
+	);
+	session.command_line("BDAT 500");
+	let action = session.bdat_chunk(&[b'a'; 500], false);
+	assert!(matches!(action, Action::Close(_)));
+	assert_eq!(reply_text(&action), LONG);
+}
+
+#[test]
 fn a_bare_lf_cannot_hide_a_second_from_in_a_submission() {
 	// The From check reads one field; a bare LF would let a second one ride
 	// behind it. Refused before the check is reached.
@@ -327,7 +396,7 @@ fn the_line_decoder_and_the_bdat_check_agree_on_every_short_stream() {
 			let verdict = check
 				.feed(&wire[..cut], CAP)
 				.and_then(|()| check.feed(&wire[cut..], CAP))
-				.and_then(|()| check.finish());
+				.and_then(|()| check.finish(CAP));
 			assert_eq!(verdict.is_ok(), data_ok, "{wire:?} cut at {cut}");
 		}
 	}

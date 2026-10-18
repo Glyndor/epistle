@@ -638,7 +638,7 @@ impl Session {
 					body: Vec::new(),
 					require_tls,
 					chunking: false,
-					line_check: crate::smtp::line::LineCheck::new(),
+					line_check: crate::smtp::line::LineCheck::stored(),
 					reserved: Reservation::none(),
 					budget_exhausted: false,
 				};

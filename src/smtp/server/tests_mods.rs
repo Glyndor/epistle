@@ -114,6 +114,10 @@ mod tests_tls_drip;
 mod tests_bdat_growth;
 
 #[cfg(test)]
+#[path = "server_tests_bdat_framing.rs"]
+mod tests_bdat_framing;
+
+#[cfg(test)]
 #[path = "server_tests_session_limits.rs"]
 mod tests_session_limits;
 

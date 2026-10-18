@@ -96,9 +96,13 @@ impl Session {
 			// octets are cut into chunks. A violation ends the connection as
 			// it does in DATA; this chunk is already off the wire, so nothing
 			// of it can be read as a command.
-			let framing = line_check
-				.feed(data, MAX_LINE_LENGTH)
-				.and_then(|()| if last { line_check.finish() } else { Ok(()) });
+			let framing = line_check.feed(data, MAX_LINE_LENGTH).and_then(|()| {
+				if last {
+					line_check.finish(MAX_LINE_LENGTH)
+				} else {
+					Ok(())
+				}
+			});
 			if let Err(error) = framing {
 				self.reset();
 				return Action::Close(line_error_reply(&error));
