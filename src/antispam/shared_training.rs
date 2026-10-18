@@ -350,6 +350,14 @@ impl Default for Budget {
 	}
 }
 
+/// What [`Budget::admit_charged`] took for one job, to give back with
+/// [`Budget::refund`]. It cannot be made or copied elsewhere.
+#[derive(Debug)]
+pub struct Charge {
+	source: TrainSource,
+	spam: bool,
+}
+
 fn kind(spam: bool) -> usize {
 	usize::from(spam)
 }
@@ -370,6 +378,17 @@ impl Budget {
 	/// Admit one job of `source`, ham or spam, at `now`, or say why not.
 	/// Every key must have room; nothing is counted unless all do.
 	pub fn admit(&self, now: Instant, source: &TrainSource, spam: bool) -> Result<(), Refusal> {
+		self.admit_charged(now, source, spam).map(drop)
+	}
+
+	/// [`Budget::admit`], handing back the charge it made, which
+	/// [`Budget::refund`] can give back once.
+	pub fn admit_charged(
+		&self,
+		now: Instant,
+		source: &TrainSource,
+		spam: bool,
+	) -> Result<Charge, Refusal> {
 		let kind = kind(spam);
 		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 		// Everything is checked first and nothing is written until the job
@@ -421,7 +440,10 @@ impl Budget {
 		if let Some(domain) = &source.domain {
 			inner.domains.charge(domain, kind, now);
 		}
-		Ok(())
+		Ok(Charge {
+			source: source.clone(),
+			spam,
+		})
 	}
 
 	/// A job of `source` has finished, or was never queued.
@@ -429,10 +451,11 @@ impl Budget {
 		self.give_back(source, spam, false);
 	}
 
-	/// A job of `source` was admitted and will not run: it is not held against
-	/// any key, nor counted in their windows.
-	pub fn refund(&self, source: &TrainSource, spam: bool) {
-		self.give_back(source, spam, true);
+	/// A job that was admitted will not run: it is not held against any key,
+	/// nor counted in their windows. The charge is spent by it, so a job
+	/// cannot be given back twice, or without having been charged.
+	pub(crate) fn refund(&self, charge: Charge) {
+		self.give_back(&charge.source, charge.spam, true);
 	}
 
 	fn give_back(&self, source: &TrainSource, spam: bool, refund: bool) {
@@ -556,11 +579,11 @@ impl SharedTraining {
 		// a queue with no room is the server's state, and a source turned away
 		// for it has spent nothing.
 		let permit = self.sender.try_reserve().map_err(|_| Refusal::QueueFull)?;
-		self.budget.admit(now, source, spam)?;
+		let charge = self.budget.admit_charged(now, source, spam)?;
 		let reduced = scoring_text(data);
 		if reduced.unread {
 			// Nothing to learn: the place and the share are given back.
-			self.budget.refund(source, spam);
+			self.budget.refund(charge);
 			return Err(Refusal::Unread);
 		}
 		permit.send(Job {

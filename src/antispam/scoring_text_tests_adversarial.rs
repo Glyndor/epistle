@@ -145,3 +145,22 @@ fn a_nested_message_past_the_budget_is_never_taken_for_clean() {
 	let reduced = scoring_text(&small);
 	assert!(!reduced.clipped && has(&small, "hiddenword"));
 }
+
+/// A `multipart` with no boundary cannot be split, and a client may show its
+/// body as text. Past the budget it was not read, and it is said not to have
+/// been.
+#[test]
+fn a_multipart_with_no_boundary_past_the_budget_is_never_taken_for_clean() {
+	let body = base64_of(&vec![b'q'; 3 * MAX_DECODED]);
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: multipart/mixed\r\nContent-Disposition: attachment\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{body}\r\n"
+	));
+	assert!(scoring_text(&raw).clipped);
+	let small = multipart(&format!(
+		"--bb\r\nContent-Type: multipart/mixed\r\nContent-Disposition: attachment\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(b"small")
+	));
+	assert!(!scoring_text(&small).clipped);
+}

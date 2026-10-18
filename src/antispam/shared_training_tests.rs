@@ -437,3 +437,64 @@ async fn a_message_that_could_not_be_read_is_not_queued_or_charged() {
 		Ok(())
 	);
 }
+
+/// Every key a job was charged to gets its share back, not only the finest
+/// address: the domain, the wider block and the network.
+#[tokio::test]
+async fn a_refund_reaches_every_key_the_job_was_charged_to() {
+	let ip = |a: u8, b: u8, c: u8, d: u8| Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+	// (what the sources share, how many jobs it takes to fill it, the sources)
+	let mut cases: Vec<(&str, Vec<TrainSource>)> = Vec::new();
+	cases.push((
+		"domain",
+		(0..=255u8)
+			.map(|n| TrainSource::new(ip(10, n, 0, 1), Some("example.org")))
+			.collect(),
+	));
+	cases.push((
+		"block",
+		(1..=250u8)
+			.map(|n| TrainSource::new(ip(10, 1, 1, n), None))
+			.collect(),
+	));
+	cases.push((
+		"network",
+		(0..=250u8)
+			.map(|n| TrainSource::new(ip(10, 2, n, 1), None))
+			.collect(),
+	));
+	for (name, sources) in cases {
+		let (queue, mut receiver, budget) = SharedTraining::bounded(4);
+		for round in 0..(BLOCK_PER_WINDOW as usize + 20) {
+			crate::antispam::scoring_text::fail_next_reduction();
+			let source = &sources[round % sources.len()];
+			assert_eq!(
+				queue.try_submit(Instant::now(), source, "scope", b"text", true),
+				Err(Refusal::Unread),
+				"{name}: the unread jobs were charged (round {round})"
+			);
+		}
+		assert!(receiver.try_recv().is_err());
+		assert_eq!(budget.pending(&sources[0], true), 0, "{name}");
+	}
+}
+
+/// A refund gives back what one job was charged and no more: after it, the
+/// source can still be admitted exactly as often as before.
+#[test]
+fn a_refund_gives_back_one_job_and_no_more() {
+	let budget = Budget::default();
+	let s = alone(3);
+	let now = Instant::now();
+	// One job that did run is counted, whatever is refunded after it.
+	budget.admit(now, &s, true).expect("admitted");
+	budget.release(&s, true);
+	let charge = budget.admit_charged(now, &s, true).expect("admitted");
+	budget.refund(charge);
+	let mut admitted = 0;
+	while budget.admit(now, &s, true).is_ok() {
+		budget.release(&s, true);
+		admitted += 1;
+	}
+	assert_eq!(admitted, FINE_PER_WINDOW as usize - 1);
+}
