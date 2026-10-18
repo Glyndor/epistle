@@ -55,7 +55,7 @@ pub fn tokenize_bounded(text: &str, max_tokens: usize) -> Vec<String> {
 			break;
 		}
 		if (MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
-			let token = raw.to_ascii_lowercase();
+			let token = raw.to_lowercase();
 			if seen.insert(token.clone()) {
 				tokens.push(token);
 			}
@@ -104,7 +104,7 @@ where
 		if !(MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
 			continue;
 		}
-		let token = raw.to_ascii_lowercase();
+		let token = raw.to_lowercase();
 		if exclude.contains(&token) {
 			continue;
 		}
@@ -138,7 +138,7 @@ pub fn last_tokens(text: &str, n: usize) -> Vec<String> {
 			break;
 		}
 		if (MIN_TOKEN_LEN..=MAX_TOKEN_LEN).contains(&raw.len()) {
-			let token = raw.to_ascii_lowercase();
+			let token = raw.to_lowercase();
 			if seen.insert(token.clone()) {
 				tokens.push(token);
 			}
@@ -282,6 +282,21 @@ mod tests {
 		let sample = sample_tokens_without(&text, 30, tag, &exclude);
 		assert_eq!(sample.len(), 30);
 		assert!(sample.iter().all(|token| !exclude.contains(token)));
+	}
+
+	/// A word in capitals in an alphabet with two cases is the same word: only
+	/// ASCII was folded, so `ПРИВЕТ` and `привет` were two tokens.
+	#[test]
+	fn letters_outside_ascii_are_folded_too() {
+		assert_eq!(tokenize("ПРИВЕТ Привет привет ÑANDÚ"), ["привет", "ñandú"]);
+		assert_eq!(tokenize_bounded("ÉCOLE école", 9), ["école"]);
+		assert_eq!(last_tokens("ÉCOLE école", 9), ["école"]);
+		let tag = |token: &str| {
+			let mut tag = [0u8; 32];
+			tag[0] = token.len() as u8;
+			tag
+		};
+		assert_eq!(sample_tokens("ÉCOLE école", 9, tag), ["école"]);
 	}
 
 	#[test]
