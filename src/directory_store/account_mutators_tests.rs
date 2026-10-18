@@ -471,3 +471,34 @@ fn remove_address_ignores_case_and_keeps_the_others_in_order() {
 	let remaining = store.dynamic("bob").expect("bob").addresses;
 	assert_eq!(remaining, vec!["bob@example.org", "bob3@example.org"]);
 }
+
+/// `account add` and `init` share one name rule: a dot, a stray symbol or a
+/// leading hyphen is refused, and the message names the character. Capitals
+/// are lowered before the check, so they never reach it.
+#[test]
+fn add_refuses_a_name_the_shared_rule_refuses_and_names_the_character() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	let addresses = vec!["new@example.org".to_string()];
+	for (name, expected) in [
+		("torre.control", "'.'"),
+		("jose_perez", "'_'"),
+		("josé", "'é'"),
+		("-torre", "hyphen"),
+		("", "empty"),
+	] {
+		let refused = store.validate_for_add(name, &addresses);
+		assert!(
+			matches!(&refused, Err(StoreError::Invalid(why)) if why.contains(expected)),
+			"{name:?}: {refused:?}"
+		);
+	}
+	assert!(
+		store
+			.validate_for_add("  Torre-Control ", &addresses)
+			.is_ok(),
+		"capitals and surrounding spaces are converted, not refused"
+	);
+	let long = "a".repeat(65);
+	assert!(store.validate_for_add(&long, &addresses).is_err());
+}

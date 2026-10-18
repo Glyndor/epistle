@@ -28,7 +28,14 @@ async fn creating_an_account_with_a_separator_is_refused_and_creates_nothing() {
 	let (dir, state) = archive_test_state().await;
 	let before = entries(dir.path());
 	let app = super::super::super::router(state);
-	for name in ["a/b", "../x", "..", "a\\b", ""] {
+	for (name, named) in [
+		("a/b", "'/'"),
+		("../x", "'.'"),
+		("..", "'.'"),
+		("a\\b", "'\\\\'"),
+		("john.doe", "'.'"),
+		("", "must not be empty"),
+	] {
 		let (status, body) = request_with_body(
 			&app,
 			"POST",
@@ -43,10 +50,14 @@ async fn creating_an_account_with_a_separator_is_refused_and_creates_nothing() {
 		.await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "name {name:?}");
 		assert_eq!(body["error"]["code"], "invalid_input", "name {name:?}");
-		assert_eq!(
-			body["error"]["message"],
-			format!("account name \"{name}\" must be lowercase alphanumeric/hyphen"),
-			"name {name:?}"
+		let message = body["error"]["message"].as_str().unwrap_or_default();
+		assert!(
+			message.contains(named),
+			"name {name:?} must be refused naming {named}: {message}"
+		);
+		assert!(
+			!message.contains("init"),
+			"the API message must not talk about init: {message}"
 		);
 	}
 	assert_eq!(entries(dir.path()), before, "no account directory appears");

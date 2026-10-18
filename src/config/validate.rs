@@ -227,15 +227,9 @@ impl Config {
 		for account in &self.accounts {
 			let name = &account.name;
 			// The name becomes a directory under data_dir: keep it boring.
-			let safe_name = !name.is_empty()
-				&& name.len() <= 64
-				&& name
-					.chars()
-					.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-				&& !name.starts_with('-');
-			if !safe_name {
-				return Err(ConfigError::Invalid(format!(
-					"account name \"{name}\" must be lowercase alphanumeric/hyphen"
+			if let Err(fault) = crate::util::account_rule::check(name) {
+				return Err(ConfigError::Invalid(crate::util::account_rule::refusal(
+					name, &fault,
 				)));
 			}
 			if !names.insert(name.clone()) {

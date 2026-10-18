@@ -33,17 +33,76 @@ fn an_address_outside_the_domains_or_with_an_unusable_local_part_is_refused() {
 			.is_err_and(|why| why.contains("not one of the configured domains")),
 		"{outside:?}"
 	);
-	let dotted = account("jose.perez@example.org").check(&domains());
-	assert!(
-		dotted
-			.as_ref()
-			.is_err_and(|why| why.contains("lowercase letters, digits and hyphens")),
-		"{dotted:?}"
-	);
 	assert!(account("not-an-address").check(&domains()).is_err());
 	let mut named = account("alice@example.org");
 	named.display_name = Some("bad\u{7}name".to_string());
 	assert!(named.check(&domains()).is_err());
+}
+
+#[test]
+fn a_dot_in_the_address_gives_a_hyphenated_account_name() {
+	let first = account("Torre.Control@example.org");
+	assert_eq!(first.check(&domains()), Ok(()));
+	assert_eq!(first.name(), "torre-control");
+	assert_eq!(first.stored_address(), "torre.control@example.org");
+	assert_eq!(
+		first.name_note().as_deref(),
+		Some(
+			"the account name will be \"torre-control\" (dots become hyphens and capital letters become lowercase)"
+		)
+	);
+	assert_eq!(
+		account("torre.control@example.org").name_note().as_deref(),
+		Some("the account name will be \"torre-control\" (dots become hyphens)")
+	);
+	assert_eq!(
+		account("Alice@example.org").name_note().as_deref(),
+		Some("the account name will be \"alice\" (capital letters become lowercase)")
+	);
+	assert_eq!(account("alice@example.org").name_note(), None);
+}
+
+#[test]
+fn an_address_whose_local_part_cannot_give_a_name_is_refused_naming_the_character() {
+	for (address, expected) in [
+		(".torre@example.org", "starts with a dot"),
+		("torre.@example.org", "ends with a dot"),
+		("torre..control@example.org", "two dots in a row"),
+		("jose_perez@example.org", "'_'"),
+		("josé@example.org", "'é'"),
+		("-torre@example.org", "hyphen"),
+	] {
+		let refused = account(address).check(&domains());
+		assert!(
+			refused.as_ref().is_err_and(|why| why.contains(expected)),
+			"{address}: {refused:?}"
+		);
+	}
+	let refused = account("jose_perez@example.org").check(&domains());
+	assert!(
+		refused
+			.as_ref()
+			.is_err_and(|why| why.contains("ASCII capital letters are converted")),
+		"init says it converts capitals: {refused:?}"
+	);
+	let long = format!("{}@example.org", "a".repeat(65));
+	assert!(account(&long).check(&domains()).is_err());
+}
+
+#[test]
+fn an_existing_account_with_the_same_name_but_other_addresses_is_a_collision() {
+	let same = vec!["torre.control@example.org".to_string()];
+	assert_eq!(
+		name_holder("torre-control", "torre.control@example.org", &same),
+		Ok(true)
+	);
+	let other = vec!["torre-control@example.org".to_string()];
+	let why = name_holder("torre-control", "torre.control@example.org", &other)
+		.expect_err("a different address under the same name must not be skipped");
+	assert!(
+		why.contains("torre-control@example.org") && why.contains("same name"),
+		"{why}"
+	);
 }
 
 #[test]

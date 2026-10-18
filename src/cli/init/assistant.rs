@@ -257,7 +257,7 @@ pub fn run<R: BufRead>(
 	let hostname = ask_domain(reader, "hostname> ", out)?;
 	let _ = writeln!(out, "domains:");
 	let domains = ask_domain_list(reader, out)?;
-	let (first_account, first_password) = ask_first_account(reader, out, &domains)?;
+	let (mut first_account, mut first_password) = ask_first_account(reader, out, &domains)?;
 	if let Some(hint) = super::detect::nat_hint(detected_v4.is_none(), detected_v6.is_none()) {
 		let _ = writeln!(out, "  {hint}");
 	}
@@ -273,6 +273,19 @@ pub fn run<R: BufRead>(
 		});
 	let data_dir = ask_line(reader, "data_dir> ", out)?;
 	let config_path = ask_line(reader, "config_path> ", out)?;
+	// An account that already holds the derived name under another address
+	// is found now, while the operator can still pick another address.
+	while let Some(first) = &first_account {
+		let Err(why) = super::first_account::precheck(
+			first,
+			std::path::Path::new(&data_dir),
+			std::path::Path::new(&config_path),
+		) else {
+			break;
+		};
+		let _ = writeln!(out, "  {why}; try again");
+		(first_account, first_password) = ask_first_account(reader, out, &domains)?;
+	}
 	let dns = if mode == Mode::Automatic {
 		let provider = ask_line(reader, "dns provider> ", out)?;
 		let zone = ask_domain(reader, "dns zone> ", out)?;
@@ -368,7 +381,12 @@ fn ask_first_account<R: BufRead>(
 			return Ok((None, None));
 		}
 		match first.check(&domains) {
-			Ok(()) => break,
+			Ok(()) => {
+				if let Some(note) = first.name_note() {
+					let _ = writeln!(out, "  {note}");
+				}
+				break;
+			}
 			Err(why) => {
 				let _ = writeln!(out, "  {why}; try again");
 			}

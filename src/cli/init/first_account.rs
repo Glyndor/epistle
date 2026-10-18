@@ -19,6 +19,7 @@ use super::apply::{ApplyError, Report, ReportStep};
 use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, DynamicAccount};
+use crate::util::account_rule;
 
 /// The role local parts pointed at the first account, in the order they
 /// are listed.
@@ -76,12 +77,42 @@ impl FirstAccount {
 		self.address.trim().to_ascii_lowercase()
 	}
 
-	/// The account name: the local part of the address.
+	/// The account name the address gives: its local part in lowercase,
+	/// dots turned into hyphens (`torre.control` is `torre-control`). When
+	/// the local part cannot give a name, [`FirstAccount::check`] refuses
+	/// the address, and this is the plain lowercase local part.
 	pub fn name(&self) -> String {
 		let address = self.stored_address();
-		address
+		let local = address
 			.split_once('@')
-			.map_or(address.clone(), |(local, _)| local.to_string())
+			.map_or(address.as_str(), |(local, _)| local);
+		account_rule::derive(local).unwrap_or_else(|_| local.to_string())
+	}
+
+	/// A line telling the operator which name was chosen and what was done
+	/// to the typed local part to get it (dots to hyphens, capitals to
+	/// lowercase); `None` when the name is the local part as typed.
+	pub fn name_note(&self) -> Option<String> {
+		let typed = self
+			.address
+			.trim()
+			.split_once('@')
+			.map(|(local, _)| local)?;
+		let name = self.name();
+		if name == typed {
+			return None;
+		}
+		let mut changes = Vec::new();
+		if typed.contains('.') {
+			changes.push("dots become hyphens");
+		}
+		if typed.chars().any(|c| c.is_ascii_uppercase()) {
+			changes.push("capital letters become lowercase");
+		}
+		Some(format!(
+			"the account name will be \"{name}\" ({})",
+			changes.join(" and ")
+		))
 	}
 
 	/// Whether the address, the name it gives and the display name are
@@ -104,16 +135,15 @@ impl FirstAccount {
 				domains.join(", ")
 			));
 		}
-		let usable = local.len() <= 64
-			&& !local.starts_with('-')
-			&& local
-				.chars()
-				.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-		if !usable {
-			return Err(format!(
-				"the account name is the part before @, and {local:?} must be lowercase letters, digits and hyphens"
-			));
-		}
+		account_rule::derive(local).map_err(|fault| {
+			let converted = match fault {
+				account_rule::Fault::BadChar(_) => {
+					" (ASCII capital letters are converted on their own)"
+				}
+				_ => "",
+			};
+			format!("{local:?} cannot give an account name: {fault}{converted}")
+		})?;
 		if let Some(raw) = &self.display_name {
 			crate::directory_store::display_name::validate(raw)
 				.map_err(|why| format!("display_name: {why}"))?;
@@ -185,7 +215,9 @@ pub(super) fn create(
 	.map_err(|error| fail(format!("opening the account store: {error}")))?;
 	let name = first.name();
 	let address = first.stored_address();
-	if store.dynamic(&name).is_some() || config.accounts.iter().any(|a| a.name == name) {
+	let exists =
+		name_is_free_or_ours(&name, &address, &store, &static_pairs(&config)).map_err(fail)?;
+	if exists {
 		report.steps.push(ReportStep::Skipped {
 			name: format!("account {name}"),
 			reason: "it already exists".to_string(),
@@ -218,6 +250,110 @@ pub(super) fn create(
 		});
 	}
 	add_role_aliases(first, &config, config_path, &address, report)
+}
+
+/// Whether the account named `name` already exists and is the one `address`
+/// asks for (`Ok(true)`), does not exist (`Ok(false)`), or exists under other
+/// addresses (an error: the collision).
+fn name_is_free_or_ours(
+	name: &str,
+	address: &str,
+	store: &AccountStore,
+	static_accounts: &[(String, Vec<String>)],
+) -> Result<bool, String> {
+	let holder: Option<Vec<String>> = store
+		.dynamic(name)
+		.map(|existing| existing.addresses)
+		.or_else(|| {
+			static_accounts
+				.iter()
+				.find(|(static_name, _)| static_name == name)
+				.map(|(_, addresses)| addresses.clone())
+		});
+	match holder {
+		Some(holder) => name_holder(name, address, &holder),
+		None => Ok(false),
+	}
+}
+
+/// The `[[accounts]]` of a configuration file as name and addresses, read
+/// from the raw TOML so a file the full loader refuses still counts.
+fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
+	let Ok(text) = std::fs::read_to_string(config_path) else {
+		return Vec::new();
+	};
+	let Ok(table) = text.parse::<toml::Table>() else {
+		return Vec::new();
+	};
+	let Some(accounts) = table.get("accounts").and_then(|v| v.as_array()) else {
+		return Vec::new();
+	};
+	accounts
+		.iter()
+		.filter_map(|entry| {
+			let name = entry.get("name")?.as_str()?.to_string();
+			let addresses = entry
+				.get("addresses")
+				.and_then(|v| v.as_array())
+				.map(|list| {
+					list.iter()
+						.filter_map(|a| a.as_str().map(str::to_string))
+						.collect()
+				})
+				.unwrap_or_default();
+			Some((name, addresses))
+		})
+		.collect()
+}
+
+/// The collision check that needs no write: with a configuration already on
+/// disk, whether an account other than the one asked for holds the derived
+/// name. Run before anything is applied, so a clash stops the run (and
+/// `--dry-run`) with nothing written, and the assistant can ask again.
+pub(super) fn precheck(
+	first: &FirstAccount,
+	data_dir: &Path,
+	config_path: &Path,
+) -> Result<(), String> {
+	// The store is opened from `data_dir` whether or not the configuration
+	// exists or loads: a lost or unreadable config must not hide the
+	// accounts already on disk. A config that loads gives its accounts
+	// normalised and with `${VAR}` expanded; the raw file is only the
+	// fallback when it does not load.
+	let (aliases, statics) = match Config::load(config_path) {
+		Ok(config) => (config.domain_aliases.clone(), static_pairs(&config)),
+		Err(_) => (Default::default(), static_accounts_of(config_path)),
+	};
+	let store = AccountStore::open(data_dir, Vec::new(), aliases, Vec::new())
+		.map_err(|error| format!("opening the account store: {error}"))?;
+	name_is_free_or_ours(&first.name(), &first.stored_address(), &store, &statics).map(|_| ())
+}
+
+/// The static accounts of a loaded configuration as name and addresses.
+fn static_pairs(config: &Config) -> Vec<(String, Vec<String>)> {
+	config
+		.accounts
+		.iter()
+		.map(|account| (account.name.clone(), account.addresses.clone()))
+		.collect()
+}
+
+/// Whether the account already named `name` is the one `address` asks for.
+/// An account with that name but other addresses is a collision, such as
+/// `torre.control` and `torre-control` both giving `torre-control`: it is
+/// refused instead of being skipped as if it were the same account.
+fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result<bool, String> {
+	if holder_addresses
+		.iter()
+		.any(|existing| existing.eq_ignore_ascii_case(address))
+	{
+		return Ok(true);
+	}
+	Err(format!(
+		"the account name \"{name}\" is already used by the account with the address {}, \
+		 and {address} would get the same name; use another address",
+		holder_addresses.join(", ")
+	))
 }
 
 /// Add each role address as an `[[alias]]` table delivering to `target`,

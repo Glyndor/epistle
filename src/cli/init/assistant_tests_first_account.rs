@@ -102,3 +102,54 @@ fn an_empty_address_skips_the_first_account() {
 		"{printed}"
 	);
 }
+
+#[test]
+fn the_wizard_says_which_account_name_the_address_gives() {
+	let text = input("Torre.Control@example.org\n\nZq8!vT3#mL0@pW6$\n\n");
+	let (result, printed) = drive(&text);
+	let filled = result.unwrap_or_else(|()| panic!("gave up: {printed}"));
+	assert!(
+		printed.contains(
+			"the account name will be \"torre-control\" (dots become hyphens and capital letters become lowercase)"
+		),
+		"{printed}"
+	);
+	assert_eq!(
+		filled.answers.first_account.map(|a| a.name()),
+		Some("torre-control".to_string())
+	);
+	let (_, plain) = drive(&input("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\n"));
+	assert!(!plain.contains("the account name will be"), "{plain}");
+}
+
+#[test]
+fn an_address_whose_name_is_taken_is_asked_again_once_the_paths_are_known() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = dir.path().join("etc").join("mail.toml");
+	let data = dir.path().join("data");
+	std::fs::create_dir_all(config.parent().expect("parent")).expect("mkdir");
+	std::fs::write(
+		&config,
+		format!("hostname = \"mail.example.org\"\ndata_dir = \"{}\"\ndomains = [\"example.org\"]\n\n[[accounts]]\nname = \"torre-control\"\naddresses = [\"torre-control@example.org\"]\n", data.display()),
+	)
+	.expect("write config");
+	{
+		use std::os::unix::fs::PermissionsExt;
+		std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+	}
+	let mut text = String::from("manual\nmail.example.org\nexample.org\nexample.net\n\n");
+	text.push_str("torre.control@example.org\n\nZq8!vT3#mL0@pW6$\n\n");
+	text.push_str(&format!("\n\n{}\n{}\n", data.display(), config.display()));
+	text.push_str("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\n");
+	text.push_str(&"\n".repeat(8));
+	let (result, printed) = drive(&text);
+	let filled = result.unwrap_or_else(|()| panic!("gave up: {printed}"));
+	assert!(
+		printed.contains("same name") && printed.contains("try again"),
+		"{printed}"
+	);
+	assert_eq!(
+		filled.answers.first_account.map(|a| a.address),
+		Some("alice@example.org".to_string())
+	);
+}

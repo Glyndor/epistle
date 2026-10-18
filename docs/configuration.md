@@ -1346,7 +1346,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 
 | Key | Meaning |
 |---|---|
-| `name` | Lowercase alphanumeric/hyphen; becomes the mailbox directory name. |
+| `name` | Lowercase letters, digits and hyphens, no hyphen first, 64 characters at most; becomes the mailbox directory name. |
 | `addresses` | One or more addresses (each in a configured domain). |
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
