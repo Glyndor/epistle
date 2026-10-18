@@ -281,8 +281,28 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   every request reserves its failure under the same lock as the limit check
   and gives it back if the token is valid, so requests arriving together
   cannot all pass a client's limit. After the real token has been seen once a
-  wrong one is rejected by digest with no argon2. The operator's first use of
-  the token while the queue is full is told `429` and succeeds on retry. Residual risk: guesses spread over
+  wrong one is rejected by digest with no argon2. One client holds at most two
+  places in the queue and an IPv6 /48 four, so a single origin cannot fill it.
+  A sustained flood from some 300 distinct clients (about 105 requests a
+  second, the rate two cores verify at) can still keep the queue full: until
+  the real token has been seen once since start-up, its first use is then told
+  `429` and a retry gets the same answer for as long as the flood lasts. That
+  only concerns a legacy argon2id `token_hash` and never API keys; store the
+  token as `sha256:` (what `epistle token-hash` writes) and the exposure
+  disappears.
+
+  Known limits, measured by the second review and not changed: a ban on a real
+  account answers in under a millisecond where an unknown login pays for its
+  hashing, which tells that the name exists to someone who first spends twenty
+  failures from five clients on it (not verified against the fix); the device
+  grant pool scans its entries under one lock, about 0.45 ms a request when
+  full; each attempt on an unknown login writes three rows to the ban tables
+  where it used to write one, and they expire with the 24-hour sweep; every
+  refusal costs one hash plus as many as the account with the most app
+  passwords has, and nothing caps the app passwords an account can hold; the
+  HTTP clients of the antispam hook and the LLM scanner, and the ACME and S3
+  clients, still follow redirects. The /48 question above is also still open,
+  and was not re-measured after the revert. Residual risk: guesses spread over
   many clients are not capped as a whole, so the defence is the entropy of the
   token (use a long random one, or a `sha256:` hash of one).
 - **Device authorization grants are bounded** (`POST /oauth/device_authorization`

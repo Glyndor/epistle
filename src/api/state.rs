@@ -54,7 +54,7 @@ struct Inner {
 	/// once. A request past the limit waits for its turn, it is not refused.
 	argon2_gate: std::sync::Arc<tokio::sync::Semaphore>,
 	/// Requests waiting for the gate; past [`MAX_ARGON2_QUEUE`] they are refused.
-	argon2_waiting: std::sync::atomic::AtomicUsize,
+	argon2_waiting: std::sync::Mutex<state_auth_queue::QueueSlots>,
 	argon2_queue_max: usize,
 	/// Test-only: argon2 runs started, running now, and the most at once.
 	#[cfg(test)]
@@ -208,7 +208,7 @@ impl ApiState {
 				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
 					MAX_CONCURRENT_ARGON2,
 				)),
-				argon2_waiting: std::sync::atomic::AtomicUsize::new(0),
+				argon2_waiting: std::sync::Mutex::new(state_auth_queue::QueueSlots::default()),
 				argon2_queue_max: MAX_ARGON2_QUEUE,
 				#[cfg(test)]
 				argon2_stats: Default::default(),
@@ -483,7 +483,9 @@ impl ApiState {
 	pub(crate) fn argon2_waiting(&self) -> usize {
 		self.inner
 			.argon2_waiting
-			.load(std::sync::atomic::Ordering::SeqCst)
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.total()
 	}
 
 	/// Test-only: argon2 verifications running right now.
@@ -806,7 +808,7 @@ pub async fn require_bearer_token(
 	// token's (possibly argon2) hash.
 	let key_ok = token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
 	let configured = match token_ref {
-		Some(t) if !key_ok => match state.bearer_is_configured_async(t).await {
+		Some(t) if !key_ok => match state.bearer_is_configured_async(t, client_ip).await {
 			Ok(answer) => answer,
 			// Too many guesses are already waiting for an argon2: tell this
 			// one to come back. Nothing was checked, so it was no failed
@@ -869,6 +871,9 @@ thread_local! {
 	/// token hash, which may be a legacy argon2id one.
 	pub(crate) static CONFIGURED_HASH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+#[path = "state_auth_queue.rs"]
+mod state_auth_queue;
 
 #[path = "state_auth.rs"]
 mod auth;

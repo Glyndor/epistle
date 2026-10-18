@@ -152,27 +152,6 @@ impl ApiState {
 #[derive(Debug)]
 pub(super) struct ArgonBusy;
 
-/// A place in the queue for the argon2 gate, given back on drop (so also when
-/// the request is cancelled while it waits).
-struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
-
-impl<'a> Waiting<'a> {
-	fn enter(counter: &'a std::sync::atomic::AtomicUsize, max: usize) -> Option<Self> {
-		use std::sync::atomic::Ordering::SeqCst;
-		if counter.fetch_add(1, SeqCst) >= max {
-			counter.fetch_sub(1, SeqCst);
-			return None;
-		}
-		Some(Self(counter))
-	}
-}
-
-impl Drop for Waiting<'_> {
-	fn drop(&mut self) {
-		self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-	}
-}
-
 impl ApiState {
 	/// [`Self::bearer_is_configured`] for the middleware: the same answer, but
 	/// a legacy argon2id hash is verified off the async workers
@@ -184,7 +163,11 @@ impl ApiState {
 	/// (two cores' worth, the rest of the requests wait their turn) and
 	/// refuses nobody. Once the real token has verified, its SHA-256 is kept
 	/// and a wrong bearer costs a digest comparison, with no argon2 at all.
-	pub(super) async fn bearer_is_configured_async(&self, token: &str) -> Result<bool, ArgonBusy> {
+	pub(super) async fn bearer_is_configured_async(
+		&self,
+		token: &str,
+		client_ip: Option<std::net::IpAddr>,
+	) -> Result<bool, ArgonBusy> {
 		#[cfg(test)]
 		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
 		if self.inner.token_hash.starts_with("sha256:") {
@@ -198,8 +181,12 @@ impl ApiState {
 		known.copy_from_slice(digest.as_ref());
 		// A bounded queue: a flood waits at most this long, and the request
 		// that would be one too many is refused instead of piling up.
-		let _waiting = Waiting::enter(&self.inner.argon2_waiting, self.inner.argon2_queue_max)
-			.ok_or(ArgonBusy)?;
+		let _waiting = super::state_auth_queue::Waiting::enter(
+			&self.inner.argon2_waiting,
+			client_ip,
+			self.inner.argon2_queue_max,
+		)
+		.ok_or(ArgonBusy)?;
 		let Ok(permit) = std::sync::Arc::clone(&self.inner.argon2_gate)
 			.acquire_owned()
 			.await

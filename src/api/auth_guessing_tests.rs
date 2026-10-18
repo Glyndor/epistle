@@ -310,3 +310,40 @@ async fn cancelled_requests_give_their_places_back_too() {
 	idle(&state).await;
 	assert_eq!(state.argon2_waiting(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_client_cannot_fill_the_queue_alone() {
+	let (app, state) = app_and_state();
+	// Six at once from one address, with 64 places in the queue.
+	let calls: Vec<_> = (0..6)
+		.map(|_| guess(&app, "203.0.113.200".to_string()))
+		.collect();
+	let mut busy = 0;
+	for call in calls {
+		if call.await.expect("task") == StatusCode::TOO_MANY_REQUESTS {
+			busy += 1;
+		}
+	}
+	idle(&state).await;
+	assert_eq!(state.argon2_stats().0, 2, "a client holds two places");
+	assert_eq!(busy, 4);
+	// Someone else is not held back by it.
+	assert_eq!(
+		get(&app, TOKEN.as_str(), "198.51.100.77").await,
+		StatusCode::OK
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_ipv6_allocation_cannot_fill_the_queue_either() {
+	let (app, state) = app_and_state();
+	// Ten different /64s of one /48 at once.
+	let calls: Vec<_> = (0..10)
+		.map(|n| guess(&app, format!("2001:db8:77:{n:x}::1")))
+		.collect();
+	for call in calls {
+		call.await.ok();
+	}
+	idle(&state).await;
+	assert_eq!(state.argon2_stats().0, 4, "a /48 holds four places");
+}
