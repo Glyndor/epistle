@@ -504,6 +504,7 @@ impl Txn {
 
 #[path = "store_by_id.rs"]
 mod by_id;
+pub use super::store_check::Validated;
 pub use by_id::Tx;
 
 #[cfg(test)]

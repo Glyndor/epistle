@@ -9,9 +9,9 @@
 use serde_json::{Map, Value, json};
 
 use super::sieve_blob;
-use super::sieve_content::{self, set_error};
+use super::sieve_content::set_error;
 use super::uploads::Uploads;
-use crate::managesieve::store::{ScriptInfo, StoreError, Tx, is_valid_name};
+use crate::managesieve::store::{ScriptInfo, StoreError, Tx, Validated, is_valid_name};
 
 /// How many generated names are tried before giving up: a name is eight hex
 /// digits, so a clash is rare, and so is a second one.
@@ -50,8 +50,8 @@ fn needs_send() -> Value {
 impl Edit<'_> {
 	/// `Err` when the script sends mail and the credential has no `send`
 	/// scope: `write` stores a filter, and does not originate mail.
-	fn allowed(&self, text: &str) -> Result<(), Value> {
-		if self.can_send || !crate::sieve::analysis::sends_mail(text) {
+	fn allowed(&self, sends: bool) -> Result<(), Value> {
+		if self.can_send || !sends {
 			Ok(())
 		} else {
 			Err(needs_send())
@@ -75,13 +75,17 @@ impl Edit<'_> {
 		}
 	}
 
-	/// The text of the script in the blob named by `value`.
-	fn content(&self, value: &Value) -> Result<String, Value> {
+	/// The script in the blob named by `value`, checked (once per blob for
+	/// the whole request), and whether it sends mail.
+	fn content(&self, value: &Value) -> Result<(Validated, bool), Value> {
 		let Some(blob_id) = value.as_str() else {
 			return Err(invalid_properties(&["blobId"]));
 		};
-		sieve_content::script_text(self.uploads.find(self.account, blob_id))
-			.map_err(|unusable| unusable.into_set_error(blob_id))
+		let verdict = self.uploads.script(self.account, blob_id);
+		match &verdict.script {
+			Ok(text) => Ok((text.clone(), verdict.sends)),
+			Err(unusable) => Err(unusable.set_error_for(blob_id)),
+		}
 	}
 
 	/// The object's `name`, when it has one: valid, or the SetError.
@@ -112,10 +116,10 @@ impl Edit<'_> {
 		} else {
 			self.name(object)?
 		};
-		let text = self.content(object.get("blobId").unwrap_or(&Value::Null))?;
-		self.allowed(&text)?;
+		let (text, sends) = self.content(object.get("blobId").unwrap_or(&Value::Null))?;
+		self.allowed(sends)?;
 		let created = match name {
-			Some(name) => tx.create(name, &text),
+			Some(name) => tx.create_validated(name, &text),
 			None => Self::create_unnamed(tx, &text),
 		};
 		created
@@ -124,11 +128,11 @@ impl Edit<'_> {
 	}
 
 	/// Create a script under a name of the server's choosing.
-	fn create_unnamed(tx: &mut Tx<'_>, text: &str) -> Result<ScriptInfo, StoreError> {
+	fn create_unnamed(tx: &mut Tx<'_>, text: &Validated) -> Result<ScriptInfo, StoreError> {
 		let mut last = StoreError::AlreadyExists;
 		for _ in 0..NAME_ATTEMPTS {
 			let unique = uuid::Uuid::now_v7().simple().to_string();
-			match tx.create(&format!("script-{}", &unique[24..]), text) {
+			match tx.create_validated(&format!("script-{}", &unique[24..]), text) {
 				Err(StoreError::AlreadyExists) => last = StoreError::AlreadyExists,
 				outcome => return outcome,
 			}
@@ -155,15 +159,19 @@ impl Edit<'_> {
 			return Err(invalid_properties(&unknown));
 		}
 		let name = self.name(object)?;
+		// An id that names no script is refused before a blob is looked at.
+		if !tx.scripts().iter().any(|script| script.id == id) {
+			return Err(set_error(&StoreError::NoSuchScript));
+		}
 		let text = object
 			.get("blobId")
 			.map(|value| self.content(value))
 			.transpose()?;
-		if let Some(text) = &text {
-			self.allowed(text)?;
+		if let Some((_, sends)) = &text {
+			self.allowed(*sends)?;
 		}
 		let script = tx
-			.update(id, name, text.as_deref())
+			.update_validated(id, name, text.as_ref().map(|(text, _)| text))
 			.map_err(|error| Self::refusal(tx, &error, name))?;
 		Ok(match text {
 			Some(_) => json!({"blobId": sieve_blob::blob_id(&script.id, script.rev)}),

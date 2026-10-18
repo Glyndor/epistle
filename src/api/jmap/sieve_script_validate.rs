@@ -5,10 +5,9 @@ use serde_json::{Value, json};
 
 use super::super::Principal;
 use super::super::state::ApiState;
-use super::sieve_content::{self, Unusable};
+use super::sieve_content::Unusable;
 use super::sieve_script::method_error;
 use super::uploads::Uploads;
-use crate::managesieve::store::ScriptStore;
 
 /// `SieveScript/validate`.
 pub(crate) fn validate(
@@ -25,13 +24,11 @@ pub(crate) fn validate(
 	let Some(blob_id) = args.get("blobId").and_then(Value::as_str) else {
 		return method_error("invalidArguments", call_id);
 	};
-	let error = match sieve_content::script_text(uploads.find(&account, blob_id)) {
+	let verdict = uploads.script(&account, blob_id);
+	let error = match &verdict.script {
 		Err(Unusable::NotFound) => return method_error("blobNotFound", call_id),
-		Err(Unusable::Error(error)) => error,
-		Ok(text) => match ScriptStore::validate(&text) {
-			Ok(()) => Value::Null,
-			Err(refusal) => sieve_content::set_error(&refusal),
-		},
+		Err(Unusable::Error(error)) => error.clone(),
+		Ok(_) => Value::Null,
 	};
 	json!(["SieveScript/validate", { "accountId": account, "error": error }, call_id])
 }

@@ -11,6 +11,25 @@ use crate::sieve::ast::{Argument, Command};
 use crate::sieve::lexer::{self, LexError};
 use crate::sieve::parser::{self, ParseError};
 
+/// Script text that has passed the check every protocol makes. Only [`Validated::new`] makes one,
+/// so a caller that holds it has the proof, and a request that names the same
+/// text many times pays for the check once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Validated(String);
+
+impl Validated {
+	/// `text`, if it passes the check every protocol makes.
+	pub fn new(text: String) -> Result<Self, StoreError> {
+		check(&text)?;
+		Ok(Self(text))
+	}
+
+	/// The script.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
 /// Check `script`: size, grammar, the extensions it requires, and the
 /// `mailbox` extension's own rule.
 pub(super) fn check(script: &str) -> Result<(), StoreError> {

@@ -7,10 +7,10 @@
 use serde_json::{Value, json};
 
 use super::uploads::Found;
-use crate::managesieve::store::{MAX_SCRIPT_BYTES, StoreError};
+use crate::managesieve::store::{MAX_SCRIPT_BYTES, StoreError, Validated};
 
 /// Why a blob cannot be used as a script.
-pub(super) enum Unusable {
+pub(crate) enum Unusable {
 	/// No such blob in the account: a method error where there is no object
 	/// to attach a SetError to, a `blobNotFound` SetError where there is.
 	NotFound,
@@ -20,10 +20,10 @@ pub(super) enum Unusable {
 
 impl Unusable {
 	/// The SetError for `blob_id`.
-	pub(super) fn into_set_error(self, blob_id: &str) -> Value {
+	pub(crate) fn set_error_for(&self, blob_id: &str) -> Value {
 		match self {
 			Self::NotFound => json!({"type": "blobNotFound", "notFound": [blob_id]}),
-			Self::Error(error) => error,
+			Self::Error(error) => error.clone(),
 		}
 	}
 }
@@ -32,9 +32,33 @@ fn invalid_sieve(description: &str) -> Unusable {
 	Unusable::Error(json!({"type": "invalidSieve", "description": description}))
 }
 
-/// The script text in a prefetched blob. The checks that depend on the
-/// store (grammar, extensions, limits on names and counts) are the store's.
-pub(super) fn script_text(found: Found<'_>) -> Result<String, Unusable> {
+/// What a blob came to as a script: the text if it passes the check every
+/// protocol makes, and whether the script sends mail. It is worked out once
+/// per blob per request, however many objects or calls name the blob, so a
+/// request pays for the bytes it brought and not for how often it points at
+/// them.
+pub(crate) struct Verdict {
+	pub(crate) script: Result<Validated, Unusable>,
+	/// The script redirects, replies or rejects (false when it is unusable).
+	pub(crate) sends: bool,
+}
+
+impl Verdict {
+	/// The verdict on a prefetched blob. The checks that depend on the store
+	/// (names, counts) are the store's, made when the script is stored.
+	pub(crate) fn of(found: Found<'_>) -> Self {
+		let script = script_text(found).and_then(|text| {
+			Validated::new(text).map_err(|refusal| Unusable::Error(set_error(&refusal)))
+		});
+		let sends = script
+			.as_ref()
+			.is_ok_and(|text| crate::sieve::analysis::sends_mail(text.as_str()));
+		Self { script, sends }
+	}
+}
+
+/// The script text in a prefetched blob.
+fn script_text(found: Found<'_>) -> Result<String, Unusable> {
 	let upload = match found {
 		Found::Blob(upload) => upload,
 		Found::OverBudget => return Err(Unusable::Error(json!({"type": "tooLarge"}))),

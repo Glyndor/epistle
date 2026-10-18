@@ -7,7 +7,7 @@
 //! under it, so a request that says "only if nothing changed" is checked
 //! where the change is made and not before.
 
-use super::{ScriptInfo, ScriptStore, StoreError, Txn};
+use super::{ScriptInfo, ScriptStore, StoreError, Txn, Validated};
 
 impl Txn {
 	/// The name of the script with this id.
@@ -71,8 +71,17 @@ impl Tx<'_> {
 	/// Store a new script. A script of that name is [`StoreError::AlreadyExists`],
 	/// never overwritten.
 	pub fn create(&mut self, name: &str, content: &str) -> Result<ScriptInfo, StoreError> {
-		ScriptStore::validate(content)?;
-		self.store.write_in(&mut self.txn, name, content, true)?;
+		self.create_validated(name, &Validated::new(content.to_string())?)
+	}
+
+	/// As [`Tx::create`], for content that has been checked already.
+	pub fn create_validated(
+		&mut self,
+		name: &str,
+		content: &Validated,
+	) -> Result<ScriptInfo, StoreError> {
+		self.store
+			.write_in(&mut self.txn, name, content.as_str(), true)?;
 		let active = self.store.active_name();
 		self.txn.info(name, active.as_deref()).ok_or(StoreError::Io)
 	}
@@ -86,9 +95,19 @@ impl Tx<'_> {
 		name: Option<&str>,
 		content: Option<&str>,
 	) -> Result<ScriptInfo, StoreError> {
-		if let Some(content) = content {
-			ScriptStore::validate(content)?;
-		}
+		let content = content
+			.map(|text| Validated::new(text.to_string()))
+			.transpose()?;
+		self.update_validated(id, name, content.as_ref())
+	}
+
+	/// As [`Tx::update`], for content that has been checked already.
+	pub fn update_validated(
+		&mut self,
+		id: &str,
+		name: Option<&str>,
+		content: Option<&Validated>,
+	) -> Result<ScriptInfo, StoreError> {
 		let Some(mut current) = self.txn.name_of(id) else {
 			return Err(StoreError::NoSuchScript);
 		};
@@ -98,7 +117,7 @@ impl Tx<'_> {
 		}
 		if let Some(content) = content {
 			self.store
-				.write_in(&mut self.txn, &current, content, false)?;
+				.write_in(&mut self.txn, &current, content.as_str(), false)?;
 		}
 		let active = self.store.active_name();
 		self.txn

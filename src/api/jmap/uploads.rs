@@ -7,9 +7,11 @@
 //! accounts the principal may write to, within a byte budget.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use super::sieve_content::Verdict;
 use super::{MethodCall, Request, blobs};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
@@ -40,6 +42,9 @@ pub(crate) enum Found<'a> {
 pub struct Uploads {
 	blobs: HashMap<(String, String), Upload>,
 	over_budget: Vec<(String, String)>,
+	/// What each blob came to as a Sieve script, worked out the first time
+	/// a call of the request names it.
+	scripts: Mutex<HashMap<(String, String), Arc<Verdict>>>,
 }
 
 impl Uploads {
@@ -99,6 +104,29 @@ impl Uploads {
 			}
 		}
 		uploads
+	}
+
+	/// The blob `blob_id` of `account` as a Sieve script. The check is made
+	/// the first time the request asks and remembered, so a request that
+	/// names one blob five hundred times, or in sixteen calls, pays for it
+	/// once.
+	pub(crate) fn script(&self, account: &str, blob_id: &str) -> Arc<Verdict> {
+		let key = (account.to_string(), blob_id.to_string());
+		let known = self
+			.scripts
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.get(&key)
+			.cloned();
+		if let Some(verdict) = known {
+			return verdict;
+		}
+		let verdict = Arc::new(Verdict::of(self.find(account, blob_id)));
+		self.scripts
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.insert(key, Arc::clone(&verdict));
+		verdict
 	}
 
 	/// The uploaded blob `blob_id` of `account`, if it was read ahead.
