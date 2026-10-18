@@ -84,6 +84,11 @@ not sealed yet, or sealed and waiting for its token, keeps the mode it had:
 it is sealed as timestamped, and its token is still requested from the
 authorities kept in the settings.
 
+Disabling because the authority does not answer does not avoid the token: the
+day sealed before the change still waits for one, and once the three days of
+grace pass without it the day is a break and the server holds `transactional`
+mail until you acknowledge it.
+
 ## When the evidence does not verify
 
 The server verifies the whole log every five minutes. It takes no
