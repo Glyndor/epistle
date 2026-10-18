@@ -143,8 +143,7 @@ fn an_unverified_domain_is_no_key_and_spends_nothing_of_a_verified_one() {
 	// A forger on its own address names the victim's domain in every message
 	// the server did not verify: the server builds those sources without it.
 	for n in 0..200u8 {
-		let forged = TrainSource::new(v4(n, 9), None);
-		let _ = budget.admit(now, &forged, true);
+		let _ = budget.admit(now, &alone(n), true);
 	}
 	assert_eq!(budget.tracked().1, 0, "no domain key from unverified mail");
 	// The real sender, verified from its own address, has its whole budget.
@@ -176,16 +175,27 @@ fn the_whole_server_has_a_budget_per_kind() {
 }
 
 #[test]
-fn a_source_without_keys_is_never_refused_by_the_per_key_budget() {
+fn a_source_without_keys_is_one_small_network_with_the_budget_of_one() {
 	let budget = Budget::default();
 	let now = Instant::now();
+	let mut accepted = 0;
 	for _ in 0..1000 {
-		assert_eq!(
-			budget.admit(now, &TrainSource::unattributed(), false),
-			Ok(())
-		);
+		if budget
+			.admit(now, &TrainSource::unattributed(), false)
+			.is_ok()
+		{
+			accepted += 1;
+			budget.release(&TrainSource::unattributed(), false);
+		}
 	}
-	assert_eq!(budget.tracked(), (0, 0, 0));
+	assert_eq!(accepted, BLOCK_PER_WINDOW);
+	// No address and no domain key; only the network of its own.
+	assert_eq!(budget.tracked(), (0, 0, 1));
+}
+
+/// A source with a verified domain and an address of its own network.
+fn named(n: u8, domain: &str) -> TrainSource {
+	TrainSource::new(Some(IpAddr::V4(Ipv4Addr::new(10, n, 0, 1))), Some(domain))
 }
 
 #[test]
@@ -193,16 +203,16 @@ fn a_full_table_forgets_the_oldest_key_and_refuses_nobody() {
 	let budget = Budget::with_table_size(4);
 	let now = Instant::now();
 	for n in 0..4 {
-		let from = TrainSource::new(None, Some(&format!("d{n}.example")));
+		let from = named(n, &format!("d{n}.example"));
 		budget.admit(now, &from, false).expect("room");
 	}
-	let newcomer = TrainSource::new(None, Some("new.example"));
+	let newcomer = named(9, "new.example");
 	assert_eq!(budget.admit(now, &newcomer, false), Ok(()));
 	assert_eq!(budget.tracked().1, 4);
 	// d0 was the oldest and is forgotten: it starts from nothing, with no
 	// share waiting. d3 still holds its job.
-	let d0 = TrainSource::new(None, Some("d0.example"));
-	let d3 = TrainSource::new(None, Some("d3.example"));
+	let d0 = named(0, "d0.example");
+	let d3 = named(3, "d3.example");
 	assert_eq!(budget.pending(&d3, false), 1);
 	assert_eq!(budget.admit(now, &d0, false), Ok(()));
 	assert_eq!(budget.tracked().1, 4);
@@ -212,9 +222,9 @@ fn a_full_table_forgets_the_oldest_key_and_refuses_nobody() {
 fn using_a_key_keeps_it_from_being_the_oldest() {
 	let budget = Budget::with_table_size(2);
 	let now = Instant::now();
-	let a = TrainSource::new(None, Some("a.example"));
-	let b = TrainSource::new(None, Some("b.example"));
-	let c = TrainSource::new(None, Some("c.example"));
+	let a = named(1, "a.example");
+	let b = named(2, "b.example");
+	let c = named(3, "c.example");
 	budget.admit(now, &a, false).expect("a");
 	budget.admit(now, &b, false).expect("b");
 	budget.admit(now, &a, false).expect("a again");
@@ -227,7 +237,7 @@ fn using_a_key_keeps_it_from_being_the_oldest() {
 fn rotating_addresses_cannot_push_a_domain_out_of_its_table() {
 	let budget = Budget::with_table_size(8);
 	let now = Instant::now();
-	let domain = TrainSource::new(None, Some("kept.example"));
+	let domain = named(250, "kept.example");
 	budget.admit(now, &domain, false).expect("domain");
 	for n in 0..=u8::MAX {
 		let _ = budget.admit(now, &TrainSource::new(v4(n, 1), None), true);
@@ -304,7 +314,7 @@ fn one_source_cannot_fill_the_queue_for_the_rest() {
 }
 
 #[test]
-fn without_a_source_only_the_queue_bounds_the_job() {
+fn without_a_source_the_small_network_of_its_own_bounds_the_job() {
 	let (queue, _receiver, _budget) = SharedTraining::bounded(10);
 	let now = Instant::now();
 	let accepted = (0..50)
@@ -314,7 +324,7 @@ fn without_a_source_only_the_queue_bounds_the_job() {
 				.is_ok()
 		})
 		.count();
-	assert_eq!(accepted, 10);
+	assert_eq!(accepted, UNATTRIBUTED_PENDING as usize);
 }
 
 #[tokio::test]

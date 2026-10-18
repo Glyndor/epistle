@@ -24,7 +24,8 @@
 //!   accepts [`GLOBAL_PER_WINDOW`] jobs per kind and window, and one network
 //!   (an IPv4 /16, an IPv6 /32) may take at most [`BLOCK_PER_WINDOW`] of
 //!   them, a sixteenth, and may have [`NETWORK_PENDING`] jobs waiting or
-//!   running, a quarter of the queue. The last quarter of the global budget is kept for
+//!   running over ham and spam together, a quarter of the queue. A job with
+//!   no address counts as a network of its own with [`UNATTRIBUTED_PENDING`]. The last quarter of the global budget is kept for
 //!   networks that have used at most [`FIRST_JOBS`] of their share: past
 //!   that, a network is held back once [`SOFT_LIMIT`] is reached, while a
 //!   network under its fair share keeps training until the global budget is
@@ -50,11 +51,14 @@
 //!
 //! 1. No source can take from another more than that other's reserved part:
 //!    one network never takes more than [`BLOCK_PER_WINDOW`] of the global
-//!    budget in a window, and the last quarter of it can be spent only by
-//!    networks at or under [`FIRST_JOBS`]. So a network that uses at most
-//!    [`FIRST_JOBS`] jobs a window trains whenever the other networks, each
-//!    held to [`BLOCK_PER_WINDOW`], have not between them spent it all, which
-//!    takes more than fifteen of them.
+//!    budget in a window, never has more than [`NETWORK_PENDING`] jobs in
+//!    flight (ham and spam together), and the last quarter of the global
+//!    budget can be spent only by networks at or under [`FIRST_JOBS`]. So a
+//!    network that uses at most [`FIRST_JOBS`] jobs a window trains whenever
+//!    the other networks, each held to [`BLOCK_PER_WINDOW`], have not between
+//!    them spent it all, which takes more than fifteen of them. Jobs with no
+//!    address are one network of their own, held to [`UNATTRIBUTED_PENDING`]
+//!    in flight and to the soft limit.
 //! 2. The global budget is never exceeded: per kind and window, at most
 //!    [`GLOBAL_PER_WINDOW`] jobs are admitted, at most [`BLOCK_PER_WINDOW`]
 //!    of them from one network (for as long as the network stays in its
@@ -96,9 +100,18 @@ pub const COARSE_PENDING: u32 = 8;
 /// Jobs a wider address block may add per [`WINDOW`], for each of ham and spam.
 pub const COARSE_PER_WINDOW: u32 = 120;
 
-/// Jobs one network may have waiting or running: a quarter of the queue, so
-/// a network spread over its blocks cannot fill it for the others.
+/// Jobs one network may have waiting or running, ham and spam together: a
+/// quarter of the queue, so a network spread over its blocks cannot fill it
+/// for the others.
 pub const NETWORK_PENDING: u32 = 16;
+
+/// Jobs without an address may have this many waiting or running: they are
+/// one network of their own, and a small one.
+pub const UNATTRIBUTED_PENDING: u32 = 4;
+
+/// The key of that network in the table of networks. It cannot be the key
+/// of an address: those are made of digits, dots and colons.
+const UNATTRIBUTED_KEY: &str = "unattributed";
 
 /// Jobs the whole server accepts per [`WINDOW`], for each of ham and spam.
 pub const GLOBAL_PER_WINDOW: u32 = 2000;
@@ -291,6 +304,13 @@ impl Table {
 		self.recency.insert(tick, key.to_string());
 	}
 
+	/// Jobs of `key` waiting or running, ham and spam together.
+	fn pending_total(&self, key: &str) -> u32 {
+		self.slots.get(key).map_or(0, |slot| {
+			slot.counts.iter().map(|count| count.pending).sum()
+		})
+	}
+
 	fn release(&mut self, key: &str, kind: usize) {
 		if let Some(slot) = self.slots.get_mut(key) {
 			let count = &mut slot.counts[kind];
@@ -344,19 +364,22 @@ impl Budget {
 		// Everything is checked first and nothing is written until the job
 		// is admitted, so a refusal leaves no trace.
 		let global = inner.global[kind].at(now);
-		let network = source
-			.addresses
-			.as_ref()
-			.map(|(_, _, network)| inner.networks.peek(network, kind, now));
-		if let Some(network) = &network {
-			network.check(BLOCK_PER_WINDOW, NETWORK_PENDING)?;
+		// A source with no address is a network of its own, with a small cap.
+		let (network_key, pending_cap) = match &source.addresses {
+			Some((_, _, network)) => (network.as_str(), NETWORK_PENDING),
+			None => (UNATTRIBUTED_KEY, UNATTRIBUTED_PENDING),
+		};
+		let network = inner.networks.peek(network_key, kind, now);
+		network.check(BLOCK_PER_WINDOW, u32::MAX)?;
+		// What a network has in flight counts over ham and spam together.
+		if inner.networks.pending_total(network_key) >= pending_cap {
+			return Err(Refusal::TooManyPending);
 		}
-		let used_by_network = network.map(|network| network.admitted);
 		// A network that has used at most its first jobs may spend the whole
 		// global budget; one that has used more, or whose network is not
 		// known, stops at the soft limit and leaves the rest to the former.
-		let limit = match used_by_network {
-			Some(used) if used < FIRST_JOBS => GLOBAL_PER_WINDOW,
+		let limit = match &source.addresses {
+			Some(_) if network.admitted < FIRST_JOBS => GLOBAL_PER_WINDOW,
 			_ => SOFT_LIMIT,
 		};
 		global.check(limit, u32::MAX)?;
@@ -379,11 +402,11 @@ impl Budget {
 		let mut global = global;
 		global.admitted += 1;
 		inner.global[kind] = global;
-		if let Some((fine, coarse, network)) = &source.addresses {
+		if let Some((fine, coarse, _)) = &source.addresses {
 			inner.addresses.charge(fine, kind, now);
 			inner.addresses.charge(coarse, kind, now);
-			inner.networks.charge(network, kind, now);
 		}
+		inner.networks.charge(network_key, kind, now);
 		if let Some(domain) = &source.domain {
 			inner.domains.charge(domain, kind, now);
 		}
@@ -394,11 +417,15 @@ impl Budget {
 	pub fn release(&self, source: &TrainSource, spam: bool) {
 		let kind = kind(spam);
 		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-		if let Some((fine, coarse, network)) = &source.addresses {
+		if let Some((fine, coarse, _)) = &source.addresses {
 			inner.addresses.release(fine, kind);
 			inner.addresses.release(coarse, kind);
-			inner.networks.release(network, kind);
 		}
+		let network_key = match &source.addresses {
+			Some((_, _, network)) => network.as_str(),
+			None => UNATTRIBUTED_KEY,
+		};
+		inner.networks.release(network_key, kind);
 		if let Some(domain) = &source.domain {
 			inner.domains.release(domain, kind);
 		}

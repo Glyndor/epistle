@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use super::tests::{v4, v6};
 use super::*;
+use crate::antispam::training_queue::MAX_TRAINING_BYTES;
 
 /// An address of network `net` (an IPv4 /16): `host` picks the /24 inside it,
 /// so no finer key is shared between two hosts.
@@ -134,6 +135,14 @@ fn random_source(rng: &mut Rng, networks: u64) -> TrainSource {
 	TrainSource::new(Some(ip), domain.as_deref())
 }
 
+/// The network a source is counted under.
+fn network_of(source: &TrainSource) -> String {
+	source.addresses.as_ref().map_or_else(
+		|| "unattributed".to_string(),
+		|(_, _, network)| network.clone(),
+	)
+}
+
 /// The state of a budget, for comparing before and after a refusal.
 fn fingerprint(budget: &Budget) -> String {
 	format!("{:?}", *budget.inner.lock().unwrap())
@@ -160,6 +169,7 @@ fn the_invariants_hold_under_random_sequences() {
 		let mut refused = 0u32;
 		let mut peak = 0u32;
 		let mut per_network: std::collections::HashMap<(u8, bool, u32), u32> = Default::default();
+		let mut in_flight: std::collections::HashMap<String, u32> = Default::default();
 		for _ in 0..steps {
 			if rng.next(500) == 0 {
 				now += Duration::from_secs(rng.next(2 * WINDOW.as_secs()));
@@ -170,18 +180,27 @@ fn the_invariants_hold_under_random_sequences() {
 			if !live.is_empty() && rng.next(3) == 0 {
 				let (source, spam) = live.swap_remove(rng.next(live.len() as u64) as usize);
 				budget.release(&source, spam);
+				if let Some(count) = in_flight.get_mut(&network_of(&source)) {
+					*count -= 1;
+				}
 			}
-			let source = random_source(&mut rng, networks);
+			// Now and then a job with no address at all.
+			let source = if rng.next(20) == 0 {
+				TrainSource::unattributed()
+			} else {
+				random_source(&mut rng, networks)
+			};
 			let spam = rng.next(2) == 0;
 			let before = fingerprint(&budget);
 			match budget.admit(now, &source, spam) {
 				Ok(()) => {
 					live.push((source.clone(), spam));
 					global[usize::from(spam)] += 1;
-					let (_, _, network) = source.addresses.clone().unwrap();
+					let network = network_of(&source);
 					*per_network
 						.entry((network.len() as u8, spam, hash(&network)))
 						.or_default() += 1;
+					*in_flight.entry(network).or_default() += 1;
 				}
 				Err(_) => {
 					refused += 1;
@@ -191,6 +210,15 @@ fn the_invariants_hold_under_random_sequences() {
 			assert!(global[0] <= GLOBAL_PER_WINDOW && global[1] <= GLOBAL_PER_WINDOW);
 			if table >= networks as usize * 2 {
 				assert!(per_network.values().all(|&used| used <= BLOCK_PER_WINDOW));
+				// Invariant 1: what a network has in flight, over both kinds.
+				for (network, count) in &in_flight {
+					let cap = if network == "unattributed" {
+						UNATTRIBUTED_PENDING
+					} else {
+						NETWORK_PENDING
+					};
+					assert!(*count <= cap, "{network} has {count} jobs in flight");
+				}
 				peak = peak.max(per_network.values().copied().max().unwrap_or(0));
 			}
 			let (addresses, domains, nets) = budget.tracked();
@@ -307,4 +335,86 @@ fn one_network_cannot_fill_the_queue_by_spreading_over_its_blocks() {
 		queue.try_submit(now, &in_network(2, 1), "", b"x", true),
 		Ok(())
 	);
+}
+
+/// One long window with no resets: the caps the module documents are reached
+/// and held, which the short windows of the random test never get to.
+#[test]
+fn the_network_and_global_caps_are_reached_and_held_over_one_window() {
+	// A few networks, each pushed against its cap.
+	let mut rng = Rng(0x51ed_270b_e5c9_a3d1);
+	let budget = Budget::default();
+	let now = Instant::now();
+	let mut per_network: std::collections::HashMap<String, u32> = Default::default();
+	for _ in 0..20_000 {
+		let from = random_source(&mut rng, 3);
+		let spam = rng.next(2) == 0;
+		if budget.admit(now, &from, spam).is_ok() {
+			budget.release(&from, spam);
+			let network = from.addresses.clone().unwrap().2;
+			*per_network.entry(format!("{network}/{spam}")).or_default() += 1;
+		}
+	}
+	let most = per_network.values().copied().max().unwrap_or(0);
+	assert_eq!(most, BLOCK_PER_WINDOW, "no network was held to its cap");
+
+	// Many networks, to push the whole server against its own.
+	let budget = Budget::default();
+	let mut admitted = [0u32; 2];
+	for _ in 0..60_000 {
+		let from = random_source(&mut rng, 200);
+		let spam = rng.next(2) == 0;
+		if budget.admit(now, &from, spam).is_ok() {
+			budget.release(&from, spam);
+			admitted[usize::from(spam)] += 1;
+		}
+	}
+	for count in admitted {
+		assert!(count <= GLOBAL_PER_WINDOW, "the server admitted {count}");
+		assert!(count >= SOFT_LIMIT, "the server stopped at {count}");
+	}
+}
+
+/// The size of the queue and of the pool of workers is what the memory and
+/// database bounds in the documentation are computed from.
+#[test]
+fn the_queue_and_the_workers_have_the_documented_size() {
+	assert_eq!(WORKERS, 2);
+	assert_eq!(QUEUE_CAPACITY, 64);
+	assert!(QUEUE_CAPACITY * MAX_TRAINING_BYTES <= 16 * 1024 * 1024);
+}
+
+/// The jobs a network has in flight are counted over ham and spam together:
+/// the cap is on the network, not on each kind.
+#[test]
+fn a_network_has_one_pending_cap_for_both_kinds() {
+	let budget = Budget::default();
+	let now = Instant::now();
+	let mut accepted = 0;
+	for host in 0..=u8::MAX {
+		let spam = host % 2 == 0;
+		if budget.admit(now, &in_network(1, host), spam).is_ok() {
+			accepted += 1;
+		}
+	}
+	// Written out on purpose: a quarter of the queue, over both kinds.
+	assert_eq!(accepted, 16);
+}
+
+/// Jobs that come with no address are one network of their own, with a
+/// small cap of its own.
+#[test]
+fn jobs_without_a_network_have_a_small_pending_cap_of_their_own() {
+	let budget = Budget::default();
+	let now = Instant::now();
+	let accepted = (0..100)
+		.filter(|n| {
+			budget
+				.admit(now, &TrainSource::unattributed(), n % 2 == 0)
+				.is_ok()
+		})
+		.count();
+	assert_eq!(accepted, 4);
+	// An address-bearing source is not touched by it.
+	assert_eq!(budget.admit(now, &in_network(1, 1), true), Ok(()));
 }

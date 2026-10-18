@@ -118,3 +118,30 @@ async fn the_largest_message_does_not_make_the_scorer_hold_its_tokens() {
 		growth / (1024 * 1024)
 	);
 }
+
+/// The path the SMTP server takes: bytes, not text. A message that is not
+/// valid UTF-8 (any binary attachment) must not be decoded whole.
+#[tokio::test]
+async fn the_largest_message_does_not_make_the_smtp_scoring_path_copy_it() {
+	use epistle::antispam::corpus::BayesScorer;
+	let _serial = SERIAL.lock().await;
+	let mut raw = largest_message().into_bytes();
+	raw[0] = 0xff;
+	let pool = sqlx::postgres::PgPoolOptions::new()
+		.acquire_timeout(std::time::Duration::from_millis(500))
+		.connect_lazy("postgres://nobody@127.0.0.1:1/none")
+		.expect("lazy pool");
+	let store = BayesStore::with_key(pool, [7u8; 32]);
+
+	let before = CURRENT.load(Ordering::Relaxed);
+	PEAK.store(before, Ordering::Relaxed);
+	let score = store.score_for_account("memory-probe", &raw).await;
+	let growth = PEAK.load(Ordering::Relaxed).saturating_sub(before);
+
+	assert!(score.is_none(), "the closed port must stop the scoring");
+	assert!(
+		growth <= 8 * 1024 * 1024,
+		"scoring 25 MiB of bytes grew the heap by {} MiB",
+		growth / (1024 * 1024)
+	);
+}
