@@ -79,6 +79,11 @@ epistle evidence timestamp enable --tsa https://tsa.example.net --anchor <sha256
 epistle evidence timestamp disable    # asks; --yes off a terminal; recorded in the evidence
 ```
 
+Disabling applies from the day the change is recorded in. A closed day that is
+not sealed yet, or sealed and waiting for its token, keeps the mode it had:
+it is sealed as timestamped, and its token is still requested from the
+authorities kept in the settings.
+
 ## When the evidence does not verify
 
 The server verifies the whole log every five minutes. It takes no

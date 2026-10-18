@@ -306,3 +306,38 @@ async fn a_probe_in_a_test_does_not_leave_the_machine() {
 		started.elapsed()
 	);
 }
+
+/// Timestamps switched off while the first day the chain ever had is closed
+/// and not yet sealed: that day is sealed as the chain has it (enabled, with
+/// the setting record in a later day), not as the settings file says.
+#[tokio::test]
+async fn disabling_timestamps_before_the_first_day_is_sealed_is_not_a_downgrade() {
+	use crate::evidence::record::{Entry, Setting};
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let service = service(dir.path());
+	let _tsa = with_tsa(dir.path(), at(DAY + 1, 1)).await;
+	let chain = Chain::open(service.root()).expect("chain");
+	chain.append_at(at(DAY, 1), accepted(1)).expect("append");
+	// The operator disables it just after midnight, before the first seal.
+	let mut current = settings::load(service.root()).expect("settings");
+	current.enabled = false;
+	settings::save(service.root(), &current).expect("save");
+	chain
+		.append_at(
+			at(DAY + 1, 0),
+			Entry::Setting(Setting {
+				name: "timestamp".into(),
+				value: "disabled by op".into(),
+			}),
+		)
+		.expect("setting");
+	let tasks = Tasks::new(Arc::clone(&service)).expect("tasks");
+	let status = tasks.tick_following(at(DAY + 1, 1)).await;
+	assert_eq!(
+		status.held, None,
+		"{:?} {:?}",
+		status.errors, status.pending
+	);
+	assert_eq!(service.held(), None);
+}
