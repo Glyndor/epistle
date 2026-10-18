@@ -34,6 +34,9 @@ pub(super) fn is_dropped_connection(stderr: &str) -> bool {
 		"connection refused",
 		"broken pipe",
 		"error trying to connect",
+		"http error: connection error",
+		"error reading a body from connection",
+		"socket connection error",
 		"incomplete message",
 	]
 	.iter()

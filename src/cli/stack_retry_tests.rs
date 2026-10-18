@@ -22,6 +22,12 @@ const DROPPED: &str =
 fn only_connection_errors_count_as_dropped() {
 	assert!(is_dropped_connection(DROPPED));
 	assert!(is_dropped_connection("Connection refused (os error 111)"));
+	assert!(is_dropped_connection(
+		"podup: error: podman error: http error: connection error"
+	));
+	assert!(is_dropped_connection(
+		"pull warning: http error: error reading a body from connection"
+	));
 	assert!(!is_dropped_connection("error: image not found"));
 	assert!(!is_dropped_connection(
 		"error: port 25 is already allocated"
