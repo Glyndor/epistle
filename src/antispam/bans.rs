@@ -81,6 +81,12 @@ impl Default for BanPolicy {
 /// times as many inside one window.
 pub const ACCOUNT_THRESHOLD_FACTOR: u32 = 4;
 
+/// How many times the client threshold an IPv6 /48 needs. Rotating through the
+/// /64s of one allocation gives each /64 its own free attempts, and this is
+/// what adds them up; it is high because a /48 can hold many unrelated users
+/// (a hosting provider, an office, a campus).
+pub const NET_THRESHOLD_FACTOR: u32 = 8;
+
 impl BanPolicy {
 	/// The failures within the window that fire a ban for `subject`: the plain
 	/// threshold for a client or a pair, [`ACCOUNT_THRESHOLD_FACTOR`] times it
@@ -88,6 +94,8 @@ impl BanPolicy {
 	pub fn threshold_for(&self, subject: &str) -> u32 {
 		if subject.starts_with("account:") {
 			self.threshold.saturating_mul(ACCOUNT_THRESHOLD_FACTOR)
+		} else if subject.starts_with("net:") {
+			self.threshold.saturating_mul(NET_THRESHOLD_FACTOR)
 		} else {
 			self.threshold
 		}
@@ -184,6 +192,17 @@ fn client_key(ip: IpAddr) -> String {
 /// the /64 for IPv6.
 pub fn subject_client(ip: IpAddr) -> String {
 	format!("ip:{}", client_key(ip))
+}
+
+/// The `net:<prefix>` subject an IPv6 client's failures also count on: its
+/// /48. `None` for IPv4, where the address is already as wide as it gets.
+pub fn subject_net(ip: IpAddr) -> Option<String> {
+	let IpAddr::V6(v6) = ip else {
+		return None;
+	};
+	let mut octets = v6.octets();
+	octets[6..].fill(0);
+	Some(format!("net:{}/48", std::net::Ipv6Addr::from(octets)))
 }
 
 /// The `pair:<login>|<client>` subject for one account seen from one client

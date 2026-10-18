@@ -216,6 +216,7 @@ impl Directory {
 			let mut subjects = vec![bans::subject_ip(ip)];
 			if ip.is_ipv6() && !block_on_async(store.is_allow_listed(ip)) {
 				subjects.push(bans::subject_client(ip));
+				subjects.extend(bans::subject_net(ip));
 			}
 			for subject in subjects {
 				if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
@@ -240,6 +241,8 @@ impl Directory {
 		let decoy;
 		let subject_account = match account.as_deref() {
 			Some(account) => account,
+			// No login at all (a malformed first message) has nothing to hide.
+			None if login.is_empty() => return BanOutcome::Clear { account },
 			None => {
 				decoy = Self::decoy_account(login);
 				&decoy
@@ -329,12 +332,18 @@ impl Directory {
 			&& !allowed
 		{
 			block_on_async(store.record_failure(&bans::subject_client(ip), protocol_str, now_secs));
+			// An IPv6 client also counts on its /48, at a higher threshold: each
+			// /64 of an allocation has its own free attempts otherwise.
+			if let Some(net) = bans::subject_net(ip) {
+				block_on_async(store.record_failure(&net, protocol_str, now_secs));
+			}
 		}
 		// An unknown login is counted on a stand-in account (never read back),
 		// so it writes what a real one does; see `check_ban`.
 		let decoy;
 		let account = match account {
 			Some(account) => account,
+			None if login.is_empty() => return,
 			None => {
 				decoy = Self::decoy_account(login);
 				&decoy

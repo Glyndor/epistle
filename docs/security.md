@@ -228,7 +228,10 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
   then an hour, ...), capped at 24 hours. Failures are counted on three
-  subjects. The client (`ip:<addr>`) is the peer address, or its /64 for
+  subjects (an IPv6 client also counts on its /48, at eight times the
+  threshold, so rotating through the /64s of one allocation adds up; a /48 can
+  hold many unrelated users, hence the high threshold, and `ban allow add`
+  exempts one). The client (`ip:<addr>`) is the peer address, or its /64 for
   IPv6, because one host there owns a whole /64 and rotating inside it is
   free. The pair (`pair:<login>|<client>`) is one account seen from one
   client. The account (`account:<login>`) counts every failure too, but it

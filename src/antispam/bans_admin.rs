@@ -146,12 +146,13 @@ impl PgBanStore {
 
 	/// Lift the ban on `target` and forget its failure counter, so the next
 	/// failure starts from zero. For an IPv6 address that includes the /64 its
-	/// failures are counted under (see [`subject_client`]). Returns
+	/// failures are counted under (see [`subject_client`]) and its /48. Returns
 	/// `(bans removed, failures cleared)`.
 	pub async fn remove_ban(&self, target: BanTarget) -> Result<(u64, u64), sqlx::Error> {
 		let mut subjects = vec![target.subject()];
 		if let BanTarget::Ip(ip) = target {
 			subjects.push(subject_client(ip));
+			subjects.extend(super::subject_net(ip));
 		}
 		let mut tx = self.pool.begin().await?;
 		let bans = sqlx::query("DELETE FROM auth_ban WHERE subject = ANY($1)")

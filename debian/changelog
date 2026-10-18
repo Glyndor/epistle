@@ -263,6 +263,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     counted under a stand-in of its own (a keyed hash of the login), so it
     reaches the same bans as a real account and a ban on one is not visible
     from another.
+  * Security: the shared authentication ban also counts an IPv6 client on its
+    /48, at 40 failures in 15 minutes (eight times a client's). Each /64 of an
+    allocation used to have five free attempts of its own, so rotating through
+    them was never banned. `ban remove` of an IPv6 address lifts its /48 too.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A

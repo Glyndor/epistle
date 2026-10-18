@@ -351,3 +351,70 @@ async fn each_unknown_login_is_banned_on_its_own_like_a_real_account() {
 	);
 	assert_eq!(store.failure_count(&other, 0), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rotating_through_the_slash_64s_of_one_slash_48_ends_in_a_ban_of_the_slash_48() {
+	let directory = directory();
+	// Four failures from each of ten /64s of 2001:db8:aa::/48, a different
+	// login each time (spraying): no /64 reaches its five and no account its
+	// twenty, and together they are the forty a /48 is allowed.
+	for slash64 in 0..10 {
+		for host in 1..=4 {
+			fail(
+				&directory,
+				&format!("spray-{slash64}-{host}"),
+				&format!("2001:db8:aa:{slash64:x}::{host:x}"),
+			);
+		}
+	}
+	assert_eq!(
+		attempt(
+			&directory,
+			OPEN,
+			fixtures::password(),
+			"2001:db8:aa:7fff::1"
+		),
+		None,
+		"a /64 that never failed, in the banned /48"
+	);
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password(), "2001:db8:ab::1"),
+		Some(OPEN.to_string()),
+		"another /48 is untouched"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_allow_listed_host_is_not_counted_on_its_slash_48() {
+	let store = FakeBanStore::new(BanPolicy::default());
+	store.allow("2001:db8:aa::10/128");
+	let directory = gate_directory().with_ban_store(std::sync::Arc::new(store.clone()));
+	for _ in 0..30 {
+		fail(&directory, OPEN, "2001:db8:aa::10");
+	}
+	assert_eq!(store.failure_count("net:2001:db8:aa::/48", 0), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slash_48_is_not_banned_below_forty_failures() {
+	let directory = directory();
+	for slash64 in 0..10 {
+		for host in 1..=3 {
+			fail(
+				&directory,
+				&format!("spray-{slash64}-{host}"),
+				&format!("2001:db8:aa:{slash64:x}::{host:x}"),
+			);
+		}
+	}
+	assert_eq!(
+		attempt(
+			&directory,
+			OPEN,
+			fixtures::password(),
+			"2001:db8:aa:7fff::1"
+		),
+		Some(OPEN.to_string()),
+		"thirty failures in a /48 are under its forty"
+	);
+}
