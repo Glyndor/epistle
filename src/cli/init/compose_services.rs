@@ -17,6 +17,32 @@ pub(crate) const MAIL_STOP_GRACE_SECS: u64 = 30;
 /// socket and the logs stay well under this.
 pub(crate) const MAIL_NOFILE: u64 = 65_536;
 
+/// The open-file limit to ask for given the hard limit of the process that
+/// writes the compose file (`None` when it is unlimited or unknown). Podman
+/// refuses to start a container whose limit is above the hard limit of the
+/// user that runs it (`setrlimit RLIMIT_NOFILE: Operation not permitted`), so
+/// a lower hard limit lowers the request, and one that leaves nothing above
+/// the usual soft limit of 1024 asks for nothing.
+pub(crate) fn mail_nofile(host_hard_limit: Option<u64>) -> Option<u64> {
+	match host_hard_limit {
+		None => Some(MAIL_NOFILE),
+		Some(hard) if hard > 1024 => Some(hard.min(MAIL_NOFILE)),
+		Some(_) => None,
+	}
+}
+
+/// The hard open-file limit of this process, or `None` when it is unlimited
+/// or cannot be read.
+pub(crate) fn host_hard_nofile() -> Option<u64> {
+	let mut limit = libc::rlimit {
+		rlim_cur: 0,
+		rlim_max: 0,
+	};
+	// SAFETY: `limit` is a valid, writable `rlimit` for the whole call.
+	let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+	(read == 0 && limit.rlim_max != libc::RLIM_INFINITY).then_some(limit.rlim_max)
+}
+
 // ---- internal JSON shape -----------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -97,6 +123,7 @@ impl ComposeService {
 		answers: &Answers,
 		database: bool,
 		published_ports: Vec<String>,
+		nofile: Option<u64>,
 	) -> Self {
 		let config_path = &answers.config_path;
 		let data_dir = &answers.data_dir;
@@ -179,7 +206,7 @@ impl ComposeService {
 			// not touch the host.
 			mem_limit: None,
 			pids_limit: None,
-			ulimits: Some(BTreeMap::from([("nofile".to_string(), MAIL_NOFILE)])),
+			ulimits: nofile.map(|limit| BTreeMap::from([("nofile".to_string(), limit)])),
 			sysctls: Some({
 				let mut map = BTreeMap::new();
 				map.insert(

@@ -308,6 +308,16 @@ the logs fit well under it. A stack generated before this was added gets the
 limit on the next `epistle init` that regenerates the compose file. The sample
 unit in `docs/epistle.service` sets `LimitNOFILE=65536` for the same reason.
 
+Podman refuses to start a container whose open-file limit is above the hard
+limit of the user that runs it (`setrlimit RLIMIT_NOFILE: Operation not
+permitted`), which happens on hosts with a hard limit of 4096 such as
+CentOS 7 or a session without systemd. `epistle init` therefore reads its own
+hard limit and asks for the lower of it and 65536, and asks for nothing when
+the hard limit is 1024. It reads the limit of the process that runs `init`,
+which can differ from that of the account that runs the stack; if the `mail`
+container fails to start with that error, lower `nofile` in the compose file
+or raise the hard limit of that account (`LimitNOFILE` in its user manager).
+
 Each listener also caps what one client can hold of it: `max_connections_per_ip`
 for SMTP (20), `max_mailbox_connections_per_ip` for IMAP, POP3 and ManageSieve
 (200) and `max_http_connections_per_ip` for plain HTTP (256), all adjustable

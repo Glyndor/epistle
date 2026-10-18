@@ -29,8 +29,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
   * The generated `mail` service raises its open-file limit to 65536 (and the
     sample systemd unit sets `LimitNOFILE=65536`). A rootless container
     started with the default soft limit of 1024 stopped greeting on ports 25
-    and 587 at around a thousand idle connections. Run `epistle init` again
-    to regenerate an existing stack's compose file.
+    and 587 at around a thousand idle connections. The request is lowered to
+    the hard limit of the host when that is smaller, because Podman refuses to
+    start a container above it. Run `epistle init` again to regenerate an
+    existing stack's compose file.
   * An autoconfig listener with TLS and no `max_connections_per_listener` set
     refused every connection, because the unset cap reached it as 0. It now
     uses the default of 1024.
