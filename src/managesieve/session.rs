@@ -8,15 +8,10 @@
 use super::command::Command;
 use super::store::{ScriptStore, StoreError};
 
-/// The Sieve extensions advertised in the `SIEVE` capability — only those the
+/// The Sieve extensions advertised in the `SIEVE` capability: only those the
 /// interpreter actually honors at delivery time. A client checks this list
-/// before `require`-ing an extension, so it must match the interpreter:
-/// fileinto/envelope (RFC 5228), vacation (RFC 5230), imap4flags (RFC 5232),
-/// relational (RFC 5231), variables (RFC 5229), reject/ereject (RFC 5429),
-/// copy (RFC 3894), body (RFC 5173), date (RFC 5260), mailbox (RFC 5490)
-/// and the `i;ascii-numeric` comparator (RFC 4790).
-pub const SIEVE_EXTENSIONS: &str = "fileinto envelope vacation imap4flags relational \
-variables reject ereject copy body date mailbox comparator-i;ascii-numeric";
+/// before `require`-ing an extension, so it must match the interpreter.
+pub const SIEVE_EXTENSIONS: &str = crate::sieve::EXTENSIONS;
 
 /// Storage and authentication backing a session.
 pub trait Backend {
@@ -245,7 +240,7 @@ impl<B: Backend> Session<B> {
 			}
 			Command::DeleteScript(name) => result(store.delete(&name)),
 			Command::RenameScript { from, to } => result(store.rename(&from, &to)),
-			Command::HaveSpace { .. } => Response::Ok(None),
+			Command::HaveSpace { name, size } => result(store.have_space(&name, size)),
 			_ => Response::No(Some("Unsupported command.".to_string())),
 		}
 	}
@@ -328,7 +323,15 @@ fn store_error(error: StoreError) -> Response {
 		StoreError::InvalidScript(reason) => {
 			Response::No(Some(format!("Script does not parse: {reason}")))
 		}
-		StoreError::Io => Response::No(Some("Storage error.".to_string())),
+		StoreError::TooLarge => {
+			Response::NoCode("QUOTA/MAXSIZE", "Script is too large.".to_string())
+		}
+		StoreError::TooManyScripts => {
+			Response::NoCode("QUOTA/MAXSCRIPTS", "Too many scripts.".to_string())
+		}
+		StoreError::Io | StoreError::StateMismatch => {
+			Response::No(Some("Storage error.".to_string()))
+		}
 	}
 }
 
@@ -353,3 +356,7 @@ mod tests;
 #[cfg(test)]
 #[path = "session_tests_continuation.rs"]
 mod continuation_tests;
+
+#[cfg(test)]
+#[path = "session_tests_limits.rs"]
+mod limits_tests;

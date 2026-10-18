@@ -30,14 +30,32 @@ pub enum ParseError {
 
 /// Parse a whole script into a command list.
 pub fn parse(tokens: &[Token]) -> Result<Vec<Command>, ParseError> {
+	parse_located(tokens).map_err(|(error, _)| error)
+}
+
+/// [`parse`], and on failure the index of the token the parser stopped at,
+/// so the caller can say where the script went wrong.
+pub fn parse_located(tokens: &[Token]) -> Result<Vec<Command>, (ParseError, usize)> {
 	let mut parser = Parser {
 		tokens,
 		pos: 0,
 		depth: 0,
 	};
-	let commands = parser.commands(false)?;
+	let last = tokens.len().saturating_sub(1);
+	let commands = parser.commands(false).map_err(|error| {
+		// A token the parser rejected after reading it is the one before the
+		// cursor; any other failure stopped at the cursor.
+		let at = match error {
+			ParseError::Unexpected(_) => parser.pos.saturating_sub(1),
+			_ => parser.pos,
+		};
+		(error, at.min(last))
+	})?;
 	if parser.pos != tokens.len() {
-		return Err(ParseError::Unexpected(parser.tokens[parser.pos].clone()));
+		return Err((
+			ParseError::Unexpected(parser.tokens[parser.pos].clone()),
+			parser.pos,
+		));
 	}
 	Ok(commands)
 }
@@ -164,7 +182,11 @@ impl Parser<'_> {
 				})
 			}
 			"not" => {
+				// `not not not ...` recurses once per keyword, so it counts
+				// toward the nesting limit like a block or a test list does.
+				self.enter()?;
 				let inner = self.test()?;
+				self.leave();
 				Ok(Test {
 					name,
 					args: Vec::new(),

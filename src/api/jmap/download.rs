@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 
 use super::super::Principal;
 use super::super::state::MatchedAuth;
-use super::{ApiState, DEFAULT_BLOB_TYPE, blobs, jmap_error, objects};
+use super::{ApiState, DEFAULT_BLOB_TYPE, blobs, jmap_error, objects, sieve_blob};
 
 /// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
 /// transfer-decoded bytes of a MIME leaf, a stored message or an uploaded blob.
@@ -21,6 +21,10 @@ pub async fn download(
 	};
 	if !principal.admits_account(&view.name, &view.addresses) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
+	}
+	// A script's content is a blob of the account's script store.
+	if let Some(bytes) = sieve_blob::content(state.data_dir(), &account, &blob_id) {
+		return ([(header::CONTENT_TYPE, sieve_blob::MEDIA_TYPE)], bytes).into_response();
 	}
 	let (message_id, part_id) = blob_id
 		.split_once('.')

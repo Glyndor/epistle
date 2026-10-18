@@ -54,6 +54,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "sieve_run"
+path = "fuzz_targets/sieve_run.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sieve_validate"
+path = "fuzz_targets/sieve_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pop3_command"
 path = "fuzz_targets/pop3_command.rs"
 test = false

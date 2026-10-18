@@ -341,7 +341,7 @@ Scopes are independent: holding one does not grant another.
 
 - `read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`), downloads, the WebSocket and the event source, and the
+  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event source, and the
   `GET` routes of the management API.
 - `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
   of the management API.
@@ -926,8 +926,8 @@ cooldown_secs = 900
 The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
 are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
-`rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
-`relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
+`rejected_header_fields`, `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
+`relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
 
@@ -1600,6 +1600,212 @@ VacationResponse is enabled it is the account's vacation, and the Sieve
 action is ignored, including outside the JMAP date window, when no reply
 is sent at all. With the JMAP setting disabled, the Sieve action answers
 as before.
+
+## JMAP Sieve scripts
+
+The JMAP session advertises `urn:ietf:params:jmap:sieve` (RFC 9661). Its
+session value names the implementation and version. Each account's value
+carries the limits below and the extension list, and the Sieve account is a
+primary account. The methods are `SieveScript/get`, `SieveScript/query`,
+`SieveScript/set` and `SieveScript/validate`. `/get`, `/query` and
+`/validate` need the `read` scope and `/set` the `write` scope, and `/set`
+also the `send` scope for a script that sends mail (below). The account check
+is the one every JMAP method uses. There is no `SieveScript/changes` (the RFC
+defines none): a client re-reads with `/get`, which an account can always
+answer in full because it holds at most 50 scripts.
+
+**One store, two protocols.** JMAP and ManageSieve (RFC 5804) read and write
+the same scripts under `<data_dir>/accounts/<account>/sieve/`, with the same
+checks, so a script written by either is listed, valid and active in the
+other. Each script has an id of 32 hex digits that survives a rewrite and a
+rename through either protocol. `state` (and `queryState`) is a counter that
+moves on every change by either protocol and at no other time. Every
+operation runs under a lock per account, and a whole `/set` is one step under
+it: `ifInState` is compared where the changes are made, so of several calls
+carrying one state exactly one runs. Waiting for the lock does not hold a
+runtime worker.
+
+| Limit | Value | Advertised as |
+|---|---|---|
+| Script size | 1 MiB (1048576 octets), also the ManageSieve literal limit | `maxSizeScript` |
+| Scripts per account | 50 | `maxNumberScripts` |
+| Script name | 128 characters and 200 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (200) |
+| `redirect` actions per run of a script | 4, each address once | `maxNumberRedirects` |
+| `sieveExtensions` | `fileinto envelope vacation imap4flags relational variables reject ereject copy body date mailbox subaddress comparator-i;octet comparator-i;ascii-casemap comparator-i;ascii-numeric`, the list ManageSieve puts in `SIEVE` | `sieveExtensions` |
+
+`notificationMethods` and `externalLists` are `null`: `enotify` and
+`extlists` are not run. **Known deviations from RFC 9661:** `maxSizeScriptName`
+is 200 and not the 512 octets the RFC asks for, because a script name is a
+file name and 200 octets is what fits next to the staging file of an atomic
+write; and an empty script is accepted, as ManageSieve accepts it (the RFC
+asks for at least one character), so that the one check is the same for both
+protocols.
+
+**Content is a blob.** A client uploads the script (`POST
+/jmap/upload/{accountId}`) and names the blob in `blobId` on `create` or
+`update`. A script's own `blobId` is `sieve-<id>-<revision>` and the
+download URL serves that version as `application/sieve`. A script rewritten
+since is a new blob id and the old one is a 404. `Blob/upload` and
+`Blob/get` (RFC 9404) are not implemented.
+
+**Checks, the same for `/set`, `/validate`, PUTSCRIPT and CHECKSCRIPT.**
+UTF-8, at most 1 MiB, valid Sieve (at most 64 levels of blocks, test lists
+and `not` chains; a literal `:matches` key of at most 256 characters and 32
+wildcards), and `require` only of the extensions listed above. A refusal is
+`invalidSieve` with a description that names the line and the kind of mistake
+(`line 3: expected '{'`, `extension "enotify" is not supported`) and never
+repeats the script. `/validate` answers `error: null` or that SetError,
+`tooLarge` or a `blobNotFound` method error, and stores nothing. The check
+runs when a script is stored; a script stored before this check and still
+active keeps running as it is, but cannot be saved again while it requires an
+extension that is not listed.
+
+**`/set`.** `create` takes `name` (or none, and the server picks
+`script-<8 hex>`) and `blobId`; `id` and `isActive` are the server's and
+are `invalidProperties` if sent. `update` takes `name`, `blobId` or both and
+changes nothing if either is refused. SetErrors: `alreadyExists` with the
+`existingId` (a name is never overwritten), `tooLarge`, `overQuota` (the
+script count), `invalidSieve`, `blobNotFound`, `invalidProperties` with the
+property names, `invalidPatch`, `notFound`, `forbidden` (the `send` scope,
+below) and `sieveIsActive` for the active script. `ifInState` mismatch is
+`stateMismatch`. `#cid` names a creation of the same call in `destroy` and
+in `onSuccessActivateScript`; as a key of `update` the dispatcher reads it as
+a result reference (RFC 8620 section 3.7), so an update names the id the
+server returned.
+
+Exactly one script is active. `onSuccessActivateScript` and
+`onSuccessDeactivateScript` run last and only if every create, update and
+destroy succeeded, and they are one change: the script that ends up active
+is the one named, or none when asked to deactivate, and it is reported as
+`isActive` in `created` or `updated`, with the one that was active reported
+inactive. An id that names no script is ignored. Activating copies the script
+to `<data_dir>/accounts/<account>/filter.sieve`, which delivery reads, and
+replaces the previous copy, so delivery always finds a filter; deactivating
+removes it. The active script cannot be destroyed: deactivate it in a call of
+its own first.
+
+**Scopes.** A script that redirects, replies (`vacation`) or rejects (`reject`,
+`ereject`) makes the server send mail when mail arrives, and `write` does not
+originate mail. Creating such a script, replacing the content of one, or
+activating one that exists takes the `send` scope as well; without it the
+answer is `forbidden`, and an activation is refused before the call changes
+anything. Renaming and deactivating need only `write`. The action names are
+read without regard to case, as Sieve does. The same rule holds for the JMAP
+`VacationResponse`, which also answers mail: `VacationResponse/set` that
+switches the reply on, or changes one that is on, needs `send` as well
+(`notUpdated` `forbidden` without it); switching it off, or editing one that
+stays off, needs only `write`. Upgrading: a key with `read` and `write` only
+that used to switch the reply on now gets `forbidden`. ManageSieve is reached
+with the account's password and has no scopes.
+
+**Vacation.** The JMAP `VacationResponse` is not a Sieve script (it lives
+in `.vacation.json`), so a script cannot be confused with it. Both can
+exist: while the `VacationResponse` is enabled it is the account's vacation
+and the `vacation` action of the active script is ignored, including outside
+its date window; with it disabled the script's `vacation` answers, under the
+same rules as in the section above.
+
+**What one run of a script may spend.** A script is text its owner wrote,
+run against mail anyone can send, so a run is bounded by the server and not
+by the script:
+
+- 20000 commands and tests, and 256 MiB of work (octets read and compared).
+  The ceiling is fixed: it does not grow with the size of the message, which
+  is the sender's choice. A run that passes either stops where it is, as a
+  `stop` would, and the log says what happened (once an hour per account).
+  What it had decided about where the message goes (`discard`, `fileinto`,
+  `keep`, flags) stands, so a big message cannot undo a `discard`. What it had
+  asked to send outward (`redirect`, `reject`, `ereject`, `vacation`) is
+  dropped, because a run that did not finish never originates mail; and if
+  anything outward was dropped, no `discard` stands and the message is kept,
+  since a run cannot both lose the forward and suppress the delivery. A
+  message nothing local was decided about is kept in INBOX. A string that
+  could not be built within the budget does not give its action: the action
+  does not happen.
+- **What a filter sees of a big message.** A test reads a window, not the
+  whole message: the first 1 MiB of the body (the `body` test), and, for a
+  `header`, `address` or `date` lookup, the first 1000 values and 64 KiB of
+  the headers called each name it lists (a longer value is cut), for at most
+  16 names. Every name has its own quota, so a thousand `Received` headers or
+  a huge `X-` header cannot hide the `From` or `Subject` listed with them.
+  Only the first 10 000 headers of a message are read at all. Mail with more
+  than 9 900 header fields is refused before any filter reads it, whatever the
+  way in, with one check: `554 5.6.0` at `DATA` and `BDAT`, `422
+  too_many_header_fields` on `POST /api/v1/send`, `forbiddenToSend` on JMAP
+  `EmailSubmission/set`; every refusal is counted in `rejected_header_fields`
+  and logged once an hour. For a local recipient the fields the server adds
+  (about a dozen) count too, so the limit there is that many fewer. So no
+  sender can hide a `From` or a `Subject` behind padding. (A message stored by
+  IMAP `APPEND` or JMAP `Email/import` is not read by a filter until it is
+  sent.) The header block ends at the first `CRLF CRLF`, the longest block any reader
+  of a message takes (IMAP and POP3 also end it at a bare `LF LF`), so that the
+  count never sees fewer fields than a reader does; a message with bare `LF`
+  line ends is counted whole, and one with more than 9 900 lines is refused as
+  having too many fields.
+  A header's value is read as follows: the blanks at its ends are dropped
+  (space, tab, VT, FF, CR, NEL, NBSP and the other Unicode white space), every
+  run of blanks inside it, folding included, is one space (so `:contains
+  "a  b"`, two spaces, and `:contains "a<TAB>b"` no longer match `a  b` or
+  `a<TAB>b`, and `:is "a b"` now matches `a  b`), an octet that is not UTF-8 is
+  a `?`, and only its first 64 KiB are kept. A header name is at most 998
+  octets: a line with a longer one is not a header, and the inspection is
+  marked truncated. If a message with more fields got to a filter anyway it
+  would be cut, every test that looks at headers (`exists` included) would say
+  so as a truncated inspection, and `:count` would count the headers read.
+  Text a sender
+  puts past a window is not seen by the test, so a rule that must catch
+  something should not depend on where in a huge message it is. The run goes
+  on with what it saw, and a window that cut something is never silent: the
+  log says so once an hour per account, and the counter
+  `mail_sieve_inspection_truncated_total` (alert metric
+  `sieve_inspection_truncated`) counts the messages for which a test did not
+  see everything. Each value is paid for once per lookup, and a key that
+  makes a pass over it (`:contains`, `:matches`) costs a quarter of its length
+  more. A `:contains` test with 8 or more keys (up to 64 KiB of keys) finds
+  them all in one pass, so a block-list of a thousand words costs what reading
+  the text twice does, not a thousand passes; a `:matches` list, or a
+  `:contains` list over 64 KiB, still costs a pass per key, and a list long
+  enough to pass the ceiling on a mebibyte makes the run stop and skips the
+  rules after it. 200 ordinary rules never reach the ceiling on a 25 MiB
+  message.
+- A variable is cut to 4096 octets, a run holds 64 KiB in at most 128 of them,
+  and a string built with `${...}` is at most as long as the larger of what
+  the script wrote and 4096 octets.
+- `:matches` never looks at the length of the text it is given (a sender can
+  make a Subject as long as the message allows, and the filter still sees
+  it); its cost is counted in the run's budget. A key over 256 characters or
+  32 wildcards is never run: saving a script that holds one is refused, and a
+  script stored earlier that does treats that test as false and goes on, but
+  from that test on the run does not `discard` or `reject`: it keeps the
+  message instead, because `not` or `else` can turn that false into the branch
+  that loses mail (what the run decided before the test stands; the log says
+  so once an hour per account; shorten the key). Upgrading: a
+  `:matches` key longer than that, which used to match, now never does.
+- `fileinto` files into a folder once however often the script names it, and
+  into at most 8 different folders. A folder the filter would make is made
+  only while the account stays within 200 folders (INBOX included, every level
+  of a deep name counted, at most 4 levels, a name of at most 128 characters
+  and without bidirectional controls); past that the message is kept in INBOX
+  and the log says so. The count and the creation are under one lock.
+- A `redirect` is forwarded at most 4 times per message and to an address
+  once, and only if the strict address parser accepts the target (it is
+  written into an `RCPT TO` line, so a line break in it would have been an
+  SMTP command). A redirect that names something that is not an address is a
+  run-time error: the message is kept. Redirects past the limit are not
+  forwarded and the log says so. Known gap: the forwards a script
+  makes are not charged to the sending limits of
+  `submission_rate_limit_per_min`, and a message forwarded to another local
+  account is filtered again there. The loop check stops a message that comes
+  back to an address it went through, but a chain across different accounts
+  that each redirect is bounded only by the number of accounts.
+- A filter file over 1 MiB (the store never writes one) is not run, and nor is
+  one the parser refuses today (a script stored before a stricter check): mail
+  goes to INBOX and the log says so. Every warning a filter causes (a run that
+  stopped, a window that cut something, a key over the caps, redirects or
+  folders past the limit, a filter that is not run) is logged once an hour per
+  account, not once per message.
+- `fileinto` past 8 different folders is counted and logged like `redirect`
+  past 4. The `.flags` of a message hold at most 32 different flags.
 
 ## Example
 

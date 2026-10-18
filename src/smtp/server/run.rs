@@ -10,6 +10,7 @@ use crate::smtp::session::{Action, Session};
 use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
+	refuse_padded_headers,
 };
 
 use super::data_rate::{Cut, RateWindow, send_within};
@@ -227,6 +228,14 @@ impl Server {
 							&Reply::single(554, "5.4.6 too many hops, this message is looping"),
 						)
 						.await?;
+						continue;
+					}
+					// A message with thousands of header fields has fields a
+					// Sieve filter would not read: refused, so none can be
+					// hidden from the filters by padding.
+					if let Err(refused) = refuse_padded_headers(&message.data, Some(&self.metrics))
+					{
+						send(&mut stream, &refused.smtp_reply()).await?;
 						continue;
 					}
 					// DNSBL screening: reject an unauthenticated client whose

@@ -198,6 +198,7 @@ impl LocalDelivery {
 		message: &AcceptedMessage,
 		mailbox: Option<&str>,
 	) -> Result<Delivered, SinkError> {
+		crate::smtp::trace::refuse_padded_headers(&message.data, self.metrics.as_deref())?;
 		if let Some(name) = mailbox
 			&& !io::is_safe_mailbox(name)
 		{
@@ -306,20 +307,37 @@ impl LocalDelivery {
 		// Never redirect a bounce (null sender): that risks mail loops.
 		// Account-level forwards are additive to the user's filter; local
 		// storage follows the filter (keep_local governs only the no-filter case).
-		let mut redirects = if message.reverse_path.is_empty() {
+		let requested = if message.reverse_path.is_empty() {
 			Vec::new()
 		} else {
 			outcome.redirects
 		};
+		let (mut redirects, unusable) = trace::deliverable(requested);
+		// A `redirect` to something that is not an address fails, and a failed
+		// action is a run-time error: the message is kept (RFC 5228
+		// section 2.10.6) and not lost behind a redirect that never happened.
+		let mut keep = outcome.keep;
+		if unusable > 0 {
+			if self.may_say("sieve-redirect-address", account) {
+				tracing::warn!(
+					account,
+					unusable,
+					"a Sieve redirect names something that is not an address; the message was kept"
+				);
+			}
+			keep = true;
+		}
 		redirects.extend(forwards);
 		if let Some(looped) = trace::forwarding_loop(message, delivered_to, &redirects) {
 			return Ok(looped);
 		}
-		let folders: Vec<Option<String>> = outcome
-			.fileinto
-			.iter()
-			.map(|folder| io::sieve_mailbox(folder))
-			.collect();
+		// A folder is one folder however many names reach it.
+		let mut folders: Vec<Option<String>> = Vec::new();
+		for folder in outcome.fileinto.iter().map(|name| io::sieve_mailbox(name)) {
+			if !folders.contains(&folder) {
+				folders.push(folder);
+			}
+		}
 		// A fileinto that cannot be carried out is a run-time error, which
 		// falls back to the implicit keep (RFC 5228 §2.10.6) instead of
 		// dropping the message. With the `mailbox` extension (RFC 5490
@@ -327,13 +345,30 @@ impl LocalDelivery {
 		// project's prior behavior already auto-creates folders, so the
 		// tag is observed by the validator but the delivery path treats
 		// both cases the same.
-		if outcome.keep || folders.iter().any(Option::is_none) {
+		let mut kept = keep || folders.iter().any(Option::is_none);
+		if kept {
 			self.deliver_to_account(account, None, data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		for folder in folders.iter().flatten() {
 			if !io::mailbox_exists(&self.data_dir, account, folder) {
-				io::ensure_mailbox(&self.data_dir, account, folder);
+				// Past the account's limit no folder is made: the message is
+				// kept in INBOX instead, never lost and never filed nowhere.
+				if !io::create_mailbox_within_limit(&self.data_dir, account, folder) {
+					if self.may_say("sieve-folder", account) {
+						tracing::warn!(
+							account,
+							limit = io::MAX_AUTO_FOLDERS,
+							"a Sieve fileinto cannot make its folder (past the account's limit, too deep, or no lock); the message was kept"
+						);
+					}
+					if !kept {
+						self.deliver_to_account(account, None, data, &outcome.flags)
+							.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+						kept = true;
+					}
+					continue;
+				}
 			}
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -578,3 +613,15 @@ mod containment;
 #[cfg(test)]
 #[path = "delivery_tests_sieve_names.rs"]
 mod sieve_names;
+
+#[cfg(test)]
+#[path = "delivery_tests_redirects.rs"]
+mod redirect_tests;
+
+#[cfg(test)]
+#[path = "delivery_tests_sieve_limits.rs"]
+mod sieve_limits;
+
+#[cfg(test)]
+#[path = "delivery_tests_sieve_warnings.rs"]
+mod sieve_warnings;

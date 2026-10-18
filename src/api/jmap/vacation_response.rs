@@ -12,6 +12,7 @@
 use serde_json::{Value, json};
 
 use super::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::state::ApiState;
 use crate::storage::vacation_store::{
 	self, MAX_BODY_BYTES, VacationSetting, read as read_setting, write as write_setting,
@@ -109,6 +110,9 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 			not_destroyed.insert(id.to_string(), forbidden_value());
 		}
 	}
+	let can_send = state
+		.require_scope_for_principal(principal, Scope::Send)
+		.is_ok();
 	let mut updated = serde_json::Map::new();
 	if let Some(updates) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in updates {
@@ -119,6 +123,19 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 			let current = read_setting(state.data_dir(), &account)
 				.unwrap_or_else(|_| VacationSetting::disabled());
 			match apply_patch(&current, patch) {
+				// A reply that is on makes the server send mail: switching it
+				// on, or changing one that is on, takes `send`, as storing a
+				// script that replies does. Switching it off, or editing one
+				// that stays off, takes only `write`.
+				Ok(next) if next.is_enabled && next != current && !can_send => {
+					not_updated.insert(
+						id.clone(),
+						json!({
+							"type": "forbidden",
+							"description": "a vacation reply that is on needs the send scope",
+						}),
+					);
+				}
 				Ok(next) => {
 					if let Err(error) = write_setting(state.data_dir(), &account, &next) {
 						not_updated.insert(

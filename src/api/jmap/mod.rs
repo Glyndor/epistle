@@ -19,6 +19,7 @@ use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
 use caller_slots::{CallerSlot, Work};
+use sieve_capability::SIEVE_CAPABILITY;
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -46,6 +47,14 @@ mod methods;
 mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
+mod sieve_blob;
+mod sieve_capability;
+mod sieve_content;
+mod sieve_script;
+mod sieve_script_edit;
+mod sieve_script_query;
+mod sieve_script_set;
+mod sieve_script_validate;
 mod vacation_response;
 pub mod websocket;
 
@@ -96,6 +105,7 @@ pub async fn session(
 						CORE_CAPABILITY: {}, MAIL_CAPABILITY: {},
 						SUBMISSION_CAPABILITY: {}, QUOTA_CAPABILITY: {},
 						VACATION_CAPABILITY: {},
+						SIEVE_CAPABILITY: sieve_capability::account_value(),
 					},
 				}),
 			)
@@ -104,8 +114,11 @@ pub async fn session(
 	let primary: serde_json::Map<String, Value> = accounts
 		.keys()
 		.next()
-		.map(|id| (CORE_CAPABILITY.to_string(), Value::String(id.clone())))
 		.into_iter()
+		.flat_map(|id| {
+			[CORE_CAPABILITY, SIEVE_CAPABILITY]
+				.map(|capability| (capability.to_string(), Value::String(id.clone())))
+		})
 		.collect();
 
 	// The Session resource advertises the configured cap, not a hard-coded
@@ -150,6 +163,7 @@ pub async fn session(
 				"supportsPush": true,
 			},
 			VACATION_CAPABILITY: {},
+			SIEVE_CAPABILITY: sieve_capability::session_value(),
 		},
 		"accounts": accounts,
 		"primaryAccounts": primary,
@@ -324,6 +338,12 @@ pub fn dispatch_request(
 			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			"VacationResponse/get" => vacation_response::get(state, principal, &args, &call_id),
 			"VacationResponse/set" => vacation_response::set(state, principal, &args, &call_id),
+			"SieveScript/get" => sieve_script::get(state, principal, &args, &call_id),
+			"SieveScript/query" => sieve_script_query::query(state, principal, &args, &call_id),
+			"SieveScript/set" => sieve_script_set::set(state, principal, &args, &call_id, uploads),
+			"SieveScript/validate" => {
+				sieve_script_validate::validate(state, principal, &args, &call_id, uploads)
+			}
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
 		method_responses.push(response);
@@ -339,7 +359,7 @@ fn required_scope(method: &str) -> Option<Scope> {
 	match method {
 		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => Some(Scope::Write),
 		"EmailSubmission/set" => Some(Scope::Send),
-		"VacationResponse/set" => Some(Scope::Write),
+		"VacationResponse/set" | "SieveScript/set" => Some(Scope::Write),
 		"Mailbox/get"
 		| "Mailbox/query"
 		| "Mailbox/changes"
@@ -353,7 +373,10 @@ fn required_scope(method: &str) -> Option<Scope> {
 		| "Identity/get"
 		| "Quota/get"
 		| "PushSubscription/get"
-		| "VacationResponse/get" => Some(Scope::Read),
+		| "VacationResponse/get"
+		| "SieveScript/get"
+		| "SieveScript/query"
+		| "SieveScript/validate" => Some(Scope::Read),
 		_ => None,
 	}
 }

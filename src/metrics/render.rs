@@ -56,6 +56,11 @@ impl Metrics {
 				&self.sieve_rejected,
 			),
 			(
+				"mail_sieve_inspection_truncated_total",
+				"Messages a Sieve test could not look at whole (body past 1 MiB, more headers than a lookup visits).",
+				&self.sieve_inspection_truncated,
+			),
+			(
 				"mail_vacation_sent_total",
 				"Sieve vacation autoresponses sent.",
 				&self.vacation_sent,

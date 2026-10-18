@@ -1,18 +1,22 @@
 //! Sieve test evaluation: `eval_test` and the per-test predicates (header,
 //! address, envelope, body, size, date), the comparator, and glob matching.
 
-use std::collections::HashMap;
-
 use super::ast::{Argument, Test};
 use super::compare::{self, MatchSpec};
+use super::env::Env;
 use super::interp::{has_tag, strings};
+use super::key_set::Keys;
 use super::message::Message;
 
-pub(super) fn eval_test(
-	test: &Test,
-	message: &Message,
-	vars: &mut HashMap<String, String>,
-) -> bool {
+/// What looking up a header by name costs a run: the name, and a minimum.
+fn lookup_cost(name: &str) -> u64 {
+	64 + name.len() as u64
+}
+
+pub(super) fn eval_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
+	if !vars.step() {
+		return false;
+	}
 	match test.name.as_str() {
 		"true" => true,
 		"false" => false,
@@ -22,16 +26,22 @@ pub(super) fn eval_test(
 			.is_some_and(|c| eval_test(c, message, vars)),
 		"allof" => test.children.iter().all(|c| eval_test(c, message, vars)),
 		"anyof" => test.children.iter().any(|c| eval_test(c, message, vars)),
-		"exists" => strings(&test.args)
-			.iter()
-			.all(|name| !message.header_values(name).is_empty()),
+		"exists" => {
+			// A header past the ones read is not found: say so.
+			if message.headers_cut() {
+				vars.mark_truncated();
+			}
+			strings(&test.args)
+				.iter()
+				.all(|name| vars.charge(lookup_cost(name)) && message.has_header(name))
+		}
 		"header" => header_test(test, message, vars),
 		"address" => address_test(test, message, vars),
 		"envelope" => envelope_test(test, message, vars),
 		"body" => body_test(test, message, vars),
 		"size" => size_test(test, message),
-		"date" => date_test(test, message),
-		"currentdate" => currentdate_test(test, message),
+		"date" => date_test(test, message, vars),
+		"currentdate" => currentdate_test(test, message, vars),
 		"mailboxexists" => mailboxexists_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
@@ -65,16 +75,28 @@ fn mailbox_exists(name: &str, mailboxes: &[String]) -> bool {
 
 /// `date [match-type] [comparator] <header-name> <date-part> <key-list>`
 /// (RFC 5260).
-fn date_test(test: &Test, message: &Message) -> bool {
+fn date_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let strings = compare::positional_strings(&test.args);
 	if strings.len() < 3 {
 		return false;
 	}
 	let (header, part, keys) = (&strings[0], &strings[1], &strings[2..]);
-	for value in message.header_values(header) {
+	if !vars.charge(lookup_cost(header)) {
+		return false;
+	}
+	let seen = message.visible_headers(std::slice::from_ref(header));
+	if seen.truncated {
+		vars.mark_truncated();
+	}
+	for value in seen.values {
+		// The value is read to find its date part, and every key is
+		// compared with it: all of that is paid for.
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
 		if let Some(extracted) = super::date::extract_part(value, part)
-			&& keys.iter().any(|key| spec.test_simple(&extracted, key))
+			&& keys.iter().any(|key| spec.test(&extracted, key, vars))
 		{
 			return true;
 		}
@@ -83,7 +105,7 @@ fn date_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `currentdate [match-type] [comparator] <date-part> <key-list>` (RFC 5260).
-fn currentdate_test(test: &Test, message: &Message) -> bool {
+fn currentdate_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let strings = compare::positional_strings(&test.args);
 	if strings.len() < 2 {
@@ -100,48 +122,75 @@ fn currentdate_test(test: &Test, message: &Message) -> bool {
 	};
 	strings[1..]
 		.iter()
-		.any(|key| spec.test_simple(&extracted, key))
+		.any(|key| spec.test(&extracted, key, vars))
 }
 
 /// `header [match-type] [comparator] <header-names> <key-list>`.
-fn header_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn header_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args) else {
 		return false;
 	};
-	let values = || names.iter().flat_map(|name| message.header_values(name));
-	if let Some(rel) = spec.count_rel() {
-		let count = values().count();
-		return keys.iter().any(|key| spec.count_matches(rel, count, key));
+	// Looking a name up costs the name; what is found is paid for as it is
+	// visited, in `spec.test`.
+	if !names.iter().all(|name| vars.charge(lookup_cost(name))) {
+		return false;
 	}
-	for value in values() {
-		for key in &keys {
-			if spec.test(value, key, vars) {
-				return true;
-			}
+	let seen = message.visible_headers(&names);
+	if let Some(rel) = spec.count_rel() {
+		// A count is of the headers read, which is all of them unless the
+		// message had more than the interpreter reads.
+		if seen.headers_cut {
+			vars.mark_truncated();
+		}
+		return keys
+			.iter()
+			.any(|key| spec.count_matches(rel, seen.count, key));
+	}
+	if seen.truncated {
+		vars.mark_truncated();
+	}
+	// Each value is paid for once, however many keys it is compared with.
+	let keys = Keys::new(&spec, &keys, vars);
+	for value in &seen.values {
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
+		if keys.any(&spec, value, vars) {
+			return true;
 		}
 	}
 	false
 }
 
 /// `address [match-type] [comparator] [part] <header-names> <key-list>`.
-fn address_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn address_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args) else {
 		return false;
 	};
 	let part = address_part(&test.args);
-	let extracted: Vec<String> = names
-		.iter()
-		.flat_map(|name| message.header_values(name))
-		.filter_map(|value| part.of(&addr_spec(value)))
-		.collect();
+	if !names.iter().all(|name| vars.charge(lookup_cost(name))) {
+		return false;
+	}
+	let mut extracted: Vec<String> = Vec::new();
+	let seen = message.visible_headers(&names);
+	if seen.truncated {
+		vars.mark_truncated();
+	}
+	for value in seen.values {
+		// What is copied out of the message is paid for first.
+		if !vars.charge(value.len() as u64) {
+			return false;
+		}
+		extracted.extend(part.of(&addr_spec(value)));
+	}
 	match_values(&spec, &extracted, &keys, vars)
 }
 
 /// `envelope [match-type] [comparator] [part] <envelope-part-list> <key-list>`
 /// (RFC 5228 §5.4): `from` matches MAIL FROM, `to` matches RCPT TO.
-fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+fn envelope_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
 	let Some((parts, keys)) = split_names_keys(&test.args) else {
 		return false;
@@ -156,26 +205,24 @@ fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, Stri
 		})
 		.filter_map(|address| part.of(&addr_spec(&address)))
 		.collect();
+	if !vars.charge(extracted.iter().map(|value| value.len() as u64).sum()) {
+		return false;
+	}
 	match_values(&spec, &extracted, &keys, vars)
 }
 
-/// Test extracted values against keys, honoring `:count`.
-fn match_values(
-	spec: &MatchSpec,
-	values: &[String],
-	keys: &[String],
-	vars: &mut HashMap<String, String>,
-) -> bool {
+/// Test extracted values against keys, honoring `:count`. The caller has
+/// paid for the octets of the values.
+fn match_values(spec: &MatchSpec, values: &[String], keys: &[String], vars: &mut Env) -> bool {
 	if let Some(rel) = spec.count_rel() {
 		return keys
 			.iter()
 			.any(|key| spec.count_matches(rel, values.len(), key));
 	}
+	let keys = Keys::new(spec, keys, vars);
 	for value in values {
-		for key in keys {
-			if spec.test(value, key, vars) {
-				return true;
-			}
+		if keys.any(spec, value, vars) {
+			return true;
 		}
 	}
 	false
@@ -243,12 +290,19 @@ fn addr_spec(value: &str) -> String {
 	value.trim().to_string()
 }
 
-/// `body [match-type] [comparator] [:raw|:text] <key-list>` (RFC 5173).
-fn body_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
+/// `body [match-type] [comparator] [:raw|:text] <key-list>` (RFC 5173). The
+/// test reads the first mebibyte of the body.
+fn body_test(test: &Test, message: &Message, vars: &mut Env) -> bool {
 	let spec = compare::match_spec(&test.args);
-	compare::positional_strings(&test.args)
-		.iter()
-		.any(|key| spec.test(&message.body, key, vars))
+	let (body, truncated) = message.body_window();
+	if truncated {
+		vars.mark_truncated();
+	}
+	if !vars.charge(body.len() as u64) {
+		return false;
+	}
+	let keys = compare::positional_strings(&test.args);
+	Keys::new(&spec, &keys, vars).any(&spec, body, vars)
 }
 
 /// `size :over|:under <number>`.

@@ -50,6 +50,19 @@ pub(crate) fn flock_exclusive_nonblocking(fd: RawFd) -> std::io::Result<()> {
 	}
 }
 
+/// Create `path` empty and readable by its owner alone, if it is not there:
+/// a lock file is not a place for anything but the lock.
+pub(crate) fn create_private(path: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::OpenOptionsExt;
+	OpenOptions::new()
+		.create(true)
+		.truncate(false)
+		.write(true)
+		.mode(0o600)
+		.open(path)
+		.map(drop)
+}
+
 /// Open (creating if absent) the lock file at `path`. The file is
 /// closed when the last `File` that wraps it drops; the kernel releases
 /// the flock at that point.

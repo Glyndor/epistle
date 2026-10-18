@@ -90,6 +90,10 @@ pub enum SinkError {
 	/// while the evidence does not verify. Transient: the client retries.
 	#[error("evidence unavailable: {0}")]
 	EvidenceUnavailable(String),
+	/// The message has more header fields than a Sieve filter reads, so
+	/// some could not be seen by the recipient's rules. Permanent.
+	#[error("too many header fields")]
+	TooManyHeaderFields,
 }
 
 impl SinkError {
@@ -116,6 +120,9 @@ impl SinkError {
 			}
 			SinkError::ScanTooLarge => {
 				Reply::single(552, "5.3.4 message too large for the content scan")
+			}
+			SinkError::TooManyHeaderFields => {
+				Reply::single(554, "5.6.0 too many header fields in this message")
 			}
 		}
 	}

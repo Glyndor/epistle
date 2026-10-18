@@ -42,7 +42,9 @@ async fn a_subject_longer_than_a_header_line_is_refused() {
 	assert_eq!(error["properties"], json!(["subject"]));
 }
 
-/// `ann` and `bob` on separate domains, and a key bound to `ann` alone.
+/// `ann` and `bob` on separate domains, and a key bound to `ann` alone. It
+/// may send: switching a reply on takes that scope, and these tests are about
+/// which account the key reaches, not about scopes (jmap_tests_sieve_scope.rs).
 fn ann_only(dir: &std::path::Path) -> (Router, String) {
 	let secret = crate::test_fixtures::api_key().to_string();
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
@@ -51,7 +53,7 @@ fn ann_only(dir: &std::path::Path) -> (Router, String) {
 		hash: crate::api::api_keys::sha256_hash(&secret),
 		expires_at: None,
 		ip_cidr: None,
-		scopes: vec!["read".to_string(), "write".to_string()],
+		scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 		domains: Vec::new(),
 		account: Some("ann".to_string()),
 	})
