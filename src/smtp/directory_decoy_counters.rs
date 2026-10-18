@@ -15,12 +15,19 @@ use super::Directory;
 pub(crate) struct DecoyCounters {
 	password: AtomicUsize,
 	scram: AtomicUsize,
+	hashes: AtomicUsize,
 }
 
 impl DecoyCounters {
 	/// Password hashes checked for a login with no password of its own.
 	pub(crate) fn password(&self) -> usize {
 		self.password.load(Ordering::Relaxed)
+	}
+
+	/// Every password hash a failed check ran: the primary password, each app
+	/// password and each stand-in, so two refusals can be compared by work.
+	pub(crate) fn hashes(&self) -> usize {
+		self.hashes.load(Ordering::Relaxed)
 	}
 
 	/// Decoy SCRAM credential sets built.
@@ -39,6 +46,12 @@ impl Directory {
 	pub(super) fn count_password_decoy(&self) {
 		if let Some(counters) = &self.decoy_counters {
 			counters.password.fetch_add(1, Ordering::Relaxed);
+		}
+	}
+
+	pub(super) fn count_password_hash(&self) {
+		if let Some(counters) = &self.decoy_counters {
+			counters.hashes.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 

@@ -23,7 +23,7 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 	) -> Option<(String, Option<String>)> {
 		let Some((account, hash)) = self.credentials(login) else {
-			self.burn_password_check(password);
+			self.burn_refusal(password, 0);
 			return None;
 		};
 		// A disabled account is refused after the credential lookup (which
@@ -31,7 +31,7 @@ impl Directory {
 		// refusal that skipped it would be fast, and the speed would say the
 		// account exists and is disabled.
 		if self.disabled.contains(&account) {
-			self.burn_password_check(password);
+			self.burn_refusal(password, 0);
 			return None;
 		}
 		// TOTP applies to the primary password only; strip and verify the code.
@@ -51,7 +51,11 @@ impl Directory {
 			// work is still done so the refusal is not quicker than a wrong
 			// password.
 			self.burn_password_check(password);
-		} else if crate::smtp::auth::verify_password(hash, &prepared) {
+		} else if {
+			#[cfg(test)]
+			self.count_password_hash();
+			crate::smtp::auth::verify_password(hash, &prepared)
+		} {
 			self.maybe_upgrade_scram(&account, &prepared);
 			return Some((account, None));
 		}
@@ -61,17 +65,32 @@ impl Directory {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		for app in self
+		let apps = self
 			.app_passwords
 			.get(&account)
 			.map(Vec::as_slice)
-			.unwrap_or(&[])
-		{
+			.unwrap_or(&[]);
+		for app in apps {
+			#[cfg(test)]
+			self.count_password_hash();
 			if app.admits(password, &self.password_policy, ip, now) {
 				return Some((account.clone(), Some(app.label.clone())));
 			}
 		}
+		// The primary password and each app password cost one hash. A refusal
+		// pads up to the account with the most, or its time would say how many
+		// app passwords this one holds.
+		self.burn_refusal(password, 1 + apps.len());
 		None
+	}
+
+	/// Run the stand-in hashes that bring a refusal that already did `done`
+	/// password hashes up to the same total as every other refusal: one for the
+	/// primary password plus one per app password of the account holding most.
+	fn burn_refusal(&self, candidate: &str, done: usize) {
+		for _ in done..1 + self.max_app_passwords {
+			self.burn_password_check(candidate);
+		}
 	}
 
 	/// Check `candidate` against a password hash made for this purpose. A login
@@ -90,7 +109,10 @@ impl Directory {
 			crate::smtp::auth::hash_password(&password).ok()
 		});
 		#[cfg(test)]
-		self.count_password_decoy();
+		{
+			self.count_password_decoy();
+			self.count_password_hash();
+		}
 		if let Some(hash) = HASH.as_deref() {
 			let _ = crate::smtp::auth::verify_password(hash, candidate);
 		}

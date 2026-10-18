@@ -248,6 +248,12 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     apart by a SHA-256 digest and costs no argon2. Guesses from many clients
     are still not capped as a whole: the protection is the entropy of the
     token, so use a long random one.
+  * Security: a refused password check now costs the same whatever the login
+    holds. An account with app passwords paid one hash per app password on top
+    of the primary one (3.2 times an unknown login with two of them), which
+    told an attacker which accounts exist and which have app passwords. Every
+    refusal now runs the hashes of the account with the most, real ones and
+    stand-ins alike.
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A

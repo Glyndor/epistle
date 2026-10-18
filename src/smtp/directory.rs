@@ -123,6 +123,9 @@ pub struct Directory {
 	/// Secondary app passwords per account name. Each entry is tried when the
 	/// primary password check fails (see [`Directory::authenticate_with_ip`]).
 	app_passwords: HashMap<String, Vec<crate::directory_store::AppPassword>>,
+	/// The most app passwords any one account holds. A refusal does the work of
+	/// a primary password plus this many, so it costs the same for every login.
+	max_app_passwords: usize,
 	/// Optional live LDAP/AD authenticator. Consulted only when the local
 	/// credential path yields no match, so local and SQL accounts never incur an
 	/// LDAP round trip (see [`Directory::authenticate_with_ip`]).
@@ -202,6 +205,7 @@ impl Directory {
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
+			max_app_passwords: 0,
 			account_save_sent: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
@@ -259,6 +263,7 @@ impl Directory {
 				.or_default()
 				.push(password);
 		}
+		self.max_app_passwords = self.app_passwords.values().map(Vec::len).max().unwrap_or(0);
 		self
 	}
 
