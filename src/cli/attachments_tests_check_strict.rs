@@ -65,3 +65,17 @@ fn strict_with_json_still_prints_the_object_and_exits_3() {
 	let value: serde_json::Value = serde_json::from_str(&out).expect("one JSON value");
 	assert_eq!(value["verdict"], "reject");
 }
+
+/// The help of `--strict` names the code the command really exits with.
+#[test]
+fn the_help_of_strict_names_exit_3() {
+	use clap::CommandFactory;
+
+	let mut cli = crate::cli::Cli::command();
+	let check = cli
+		.find_subcommand_mut("attachments")
+		.and_then(|a| a.find_subcommand_mut("check"))
+		.expect("attachments check exists");
+	let help = check.render_long_help().to_string();
+	assert!(help.contains("Exit with 3 when the verdict"), "{help}");
+}
