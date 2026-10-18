@@ -1172,6 +1172,8 @@ scope here):
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
+The API keys made with `epistle api-key` open the HTTP API, described in the [HTTP API guide](api.md).
+
 ## Rotations (`epistle dkim`, `epistle tls`, `epistle api-key`)
 
 | Command | What it does |

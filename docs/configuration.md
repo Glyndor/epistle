@@ -905,6 +905,10 @@ Each request is a JSON object whose `event` field names the event:
 it carries `account` and `signature`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
+The events for each recipient of outbound mail (`delivered`, `delayed`,
+`suppressed`, `canceled`), the warm-up events, how to verify the signature and
+what is and is not retried are in the [HTTP API guide](api.md#webhooks).
+
 `delivery_failed` is sent per recipient when outbound delivery fails for good
 (refused, or expired in the queue). `reason` is the remote reply as one line, or
 the local error when no server answered; `remote` is the server that answered

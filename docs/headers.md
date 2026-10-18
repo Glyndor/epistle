@@ -66,7 +66,7 @@ without regard to case.
 | `TLS-Report-Domain`, `TLS-Report-Submitter` | TLS-RPT report emails | RFC 8460 |
 | `TLS-Required` | Read on submitted mail, removed from inbound mail | `TLS-Required: No` from a local sender makes the MTA-STS and DANE policies advisory for that message. Left in place when the message goes out |
 | `To` | REST (empty `to` is allowed when `cc` or `bcc` has someone); JMAP; system messages | |
-| `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, not `X-Priority`. Written last in the block. The name keeps the case you gave it |
+| `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, not `X-Priority`. Written after the other optional headers, before `MIME-Version`. The name keeps the case you gave it |
 | `X-Epistle-Attachment-Warning` | Inbound mail the `[attachments]` policy flags or quarantines | Comma-separated reason codes only, never text from the message. Removed first from inbound and from every submission, so only the server's own verdict is ever in it |
 | `X-Mailbox` | Written by `epistle export` and read by `epistle import` in an mbox file | A marker of the mbox format, not a header of any message in transit |
 | `X-Spam-Score`, `X-Spam-Status` | Inbound mail from a peer that did not log in whose Bayesian score reaches `bayes_junk_at` | `X-Spam-Status: Yes` and the probability with six decimals, above `Received`. A sender can write these too: the server does not remove them |

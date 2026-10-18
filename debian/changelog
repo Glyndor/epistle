@@ -370,6 +370,11 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     `reset` drops an account's corpus and its record and keeps the switch, so
     an account switched off stays off, and needs `--yes` off a terminal. It
     needs `[database]` and exits 3 without it.
+  * API: `GET /api/v1/openapi.json` serves an OpenAPI 3.1 description of
+    every HTTP route (the `read` scope, like `status`), and `docs/api.md` and
+    `docs/headers.md` describe the API and the headers of the mail it sends.
+    Tests fail when a route, a header, an error code or a limit changes and
+    the description does not.
 
  -- Glyndor <packages@glyndor.net>  Sun, 18 Oct 2026 12:00:00 +0000
 

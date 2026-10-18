@@ -23,6 +23,11 @@ guide is the prose around it. How the headers of the mail come out is in
 Not in the API, because they exist only in the CLI: DKIM keys, TLS, evidence,
 warm-up, limits, domains (listing excepted), aliases, relays, backups.
 
+The other protocols the server speaks (SMTP, IMAP, POP3, ManageSieve) and the
+WebDAV, CardDAV and CalDAV listener are not described here. The mail client
+autodiscovery, ACME and metrics listeners are HTTP and are in the OpenAPI
+document, with the listener each one is served on.
+
 ## Turn it on
 
 The API is closed until a listener and a token hash are configured:
@@ -103,10 +108,20 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. Wait a minute; there is no `Retry-After` header |
 
-A valid call does not use up the budget. The limit is per client address (an
-IPv6 client counts as its /64, and its /48 has a larger shared budget), and
-there is a ceiling for failures from everyone at once that only ever refuses
-a request that already failed. There is no limit on the rate of valid calls.
+A valid call does not use up the budget, and it does not clear failures already
+counted. The limit is per client address (an IPv6 client counts as its /64, and
+its /48 has a larger shared budget), and there is a ceiling for failures from
+everyone at once that only ever refuses a request that already failed. There is
+no limit on the rate of valid calls. The server reads the address of the TCP
+connection and no `X-Forwarded-For`, so behind a reverse proxy every client has
+the proxy's address: twenty failures from any of them refuse all of them for a
+minute. Give a program that sits behind a proxy its own address to the API.
+
+Checks of a password (`POST /api/v1/auth/verify`, and the `/oauth` endpoints)
+are counted apart, in the shared ban table: 5 failures in 15 minutes ban the
+client or the account for 15 minutes, doubling up to 24 hours, with the same
+answer as a wrong password. That table needs `[database]`; see
+[Security](security.md).
 
 If the static token's hash in `[api] token_hash` is an old argon2id string
 and not `sha256:`, each request that is not a key costs an argon2 check: 2
