@@ -27,6 +27,8 @@ use crate::util::constant_time;
 pub(super) const MAX_DEVICE_GRANTS: usize = 10_000;
 /// Grants alive at once for one client (an IPv4 address or an IPv6 /64).
 pub(super) const MAX_GRANTS_PER_CLIENT: usize = 10;
+/// Grants alive at once for one IPv6 /48.
+pub(super) const MAX_GRANTS_PER_NET: usize = 100;
 
 /// What a client is for the per-client cap: the address for IPv4, the /64 for
 /// IPv6 (one host there owns the whole /64).
@@ -35,6 +37,69 @@ pub(super) fn client_bucket(ip: std::net::IpAddr) -> (bool, u64) {
 		std::net::IpAddr::V4(v4) => (false, u64::from(u32::from(v4))),
 		std::net::IpAddr::V6(v6) => (true, (u128::from(v6) >> 64) as u64),
 	}
+}
+
+/// The wider group a client belongs to for fair sharing: an IPv6 /48 (an
+/// allocation is many /64s), or the address itself for IPv4.
+fn net_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
+	client.map(|(v6, bits)| {
+		if v6 {
+			(true, bits >> 16)
+		} else {
+			(false, bits)
+		}
+	})
+}
+
+/// Store `grant` under `device_code` if the caps allow it, `false` if not.
+///
+/// A client, and an IPv6 /48 as a whole, may hold only so many; expired grants
+/// are dropped first. When the pool itself is full the oldest pending grant of
+/// the group holding the most is evicted to make room, so a flood from a few
+/// prefixes cannot lock everyone else out; an approved grant is never evicted,
+/// and a pool of only approved grants refuses.
+fn admit(
+	devices: &std::sync::Mutex<std::collections::HashMap<String, DeviceGrant>>,
+	device_code: String,
+	grant: DeviceGrant,
+	now: u64,
+) -> bool {
+	let mut devices = devices.lock().unwrap_or_else(|p| p.into_inner());
+	let client = grant.client;
+	let net = net_of(client);
+	let over_group_cap = |devices: &std::collections::HashMap<String, DeviceGrant>| {
+		devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT
+			|| (net.is_some_and(|n| n.0)
+				&& devices.values().filter(|g| net_of(g.client) == net).count()
+					>= MAX_GRANTS_PER_NET)
+	};
+	if devices.len() >= MAX_DEVICE_GRANTS || over_group_cap(&devices) {
+		// Expired grants nobody polled for would otherwise count forever.
+		devices.retain(|_, g| g.expires_at > now);
+	}
+	if over_group_cap(&devices) {
+		return false;
+	}
+	if devices.len() >= MAX_DEVICE_GRANTS {
+		let mut per_net: std::collections::HashMap<Option<(bool, u64)>, usize> =
+			std::collections::HashMap::new();
+		for g in devices.values().filter(|g| g.approved_account.is_none()) {
+			*per_net.entry(net_of(g.client)).or_default() += 1;
+		}
+		let Some(heaviest) = per_net.into_iter().max_by_key(|(_, n)| *n).map(|(k, _)| k) else {
+			return false;
+		};
+		let oldest = devices
+			.iter()
+			.filter(|(_, g)| g.approved_account.is_none() && net_of(g.client) == heaviest)
+			.min_by_key(|(_, g)| g.expires_at)
+			.map(|(code, _)| code.clone());
+		if let Some(code) = oldest {
+			devices.remove(&code);
+		}
+	}
+	devices.insert(device_code, grant);
+	true
 }
 
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
@@ -84,24 +149,12 @@ pub async fn device_authorization(
 		next_poll_at: now,
 		client,
 	};
-	{
-		let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
-		let full = |devices: &std::collections::HashMap<String, DeviceGrant>| {
-			devices.len() >= MAX_DEVICE_GRANTS
-				|| devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT
-		};
-		if full(&devices) {
-			// Expired grants nobody polled for would otherwise count forever.
-			devices.retain(|_, g| g.expires_at > now);
-			if full(&devices) {
-				return (
-					StatusCode::TOO_MANY_REQUESTS,
-					Json(serde_json::json!({ "error": "slow_down" })),
-				)
-					.into_response();
-			}
-		}
-		devices.insert(device_code.clone(), grant);
+	if !admit(&authz.devices, device_code.clone(), grant, now) {
+		return (
+			StatusCode::TOO_MANY_REQUESTS,
+			Json(serde_json::json!({ "error": "slow_down" })),
+		)
+			.into_response();
 	}
 	// epistle is headless: the verification URI is the approval endpoint a user
 	// (or CLI) posts the user_code and credentials to.

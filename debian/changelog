@@ -238,9 +238,12 @@ epistle (0.12.2) UNRELEASED; urgency=medium
   * Security: `POST /oauth/device_authorization`, which needs no credentials,
     kept every grant it created in memory until someone polled for it, so an
     unauthenticated caller could grow the server's memory without limit. A
-    client (an IPv4 address or an IPv6 /64) may now hold 10 pending grants and
-    the server 10000; past that it answers `429 slow_down`, after dropping the
-    expired ones.
+    client (an IPv4 address or an IPv6 /64) may now hold 10 pending grants,
+    an IPv6 /48 100, and the server 10000. At a cap the expired grants are
+    dropped first; a client or /48 still over its cap gets `429 slow_down`,
+    and when only the server's total is full the oldest pending grant of the
+    group holding the most is evicted (an approved grant never is), so a flood
+    from a few prefixes cannot keep everyone else from starting a flow.
   * Security: the webhook no longer follows redirects. A `307` from the
     endpoint used to resend the event, with its `X-Webhook-Signature`, to
     wherever it pointed, an internal address included. A redirect now counts
