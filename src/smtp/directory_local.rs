@@ -51,13 +51,13 @@ impl Directory {
 			// work is still done so the refusal is not quicker than a wrong
 			// password.
 			self.burn_password_check(password);
-		} else if {
+		} else {
 			#[cfg(test)]
 			self.count_password_hash();
-			crate::smtp::auth::verify_password(hash, &prepared)
-		} {
-			self.maybe_upgrade_scram(&account, &prepared);
-			return Some((account, None));
+			if crate::smtp::auth::verify_password(hash, &prepared) {
+				self.maybe_upgrade_scram(&account, &prepared);
+				return Some((account, None));
+			}
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
 		// passwords are not subject to TOTP: they are independent secrets.

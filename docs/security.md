@@ -228,10 +228,7 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
   then an hour, ...), capped at 24 hours. Failures are counted on three
-  subjects (an IPv6 client also counts on its /48, at eight times the
-  threshold, so rotating through the /64s of one allocation adds up; a /48 can
-  hold many unrelated users, hence the high threshold, and `ban allow add`
-  exempts one). The client (`ip:<addr>`) is the peer address, or its /64 for
+  subjects. The client (`ip:<addr>`) is the peer address, or its /64 for
   IPv6, because one host there owns a whole /64 and rotating inside it is
   free. The pair (`pair:<login>|<client>`) is one account seen from one
   client. The account (`account:<login>`) counts every failure too, but it
@@ -250,7 +247,14 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   behind a shared proxy cannot lock one account's owner out of it), or a
   trusted network could guess without limit. A route that has no client address
   (WebDAV now passes one) counts every attempt on an account as one client,
-  `unknown`, so the pair still stops guessing at five. The owner of an
+  `unknown`, so the pair still stops guessing at five. Residual risk,
+  left to the owner: counting is per /64, so a client with a whole IPv6
+  allocation can spread guesses over its /64s (300 /64s of one /48 with four
+  failures each never reach a ban); the account ceiling above is what stops it
+  for one account, and spraying across many accounts is not banned. Counting
+  a /48 too was tried and removed: a /48 can be a hosting provider, an office
+  or a campus, and one attacker there would then ban everyone else. The owner
+  of an
   account that many clients are guessing at is locked out for the length of
   the account ban as well. A credential stuffing wave from one client trips
   that client's counters. The wire response to a banned subject is identical to a wrong password (no
