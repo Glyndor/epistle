@@ -10,6 +10,7 @@ fn no_lookups(detector: &dyn super::detect::Detector) -> Probes<'_> {
 		detector,
 		resolver: &|| None,
 		meminfo: std::path::Path::new("/nonexistent/meminfo"),
+		clock: &|| crate::clock::sync::HostClock::Synced,
 	}
 }
 

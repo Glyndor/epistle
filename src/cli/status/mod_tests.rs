@@ -143,6 +143,7 @@ fn status_covers_every_area_in_a_stable_order() {
 			"subid",
 			"warmup",
 			"resources",
+			"clock",
 			"evidence"
 		]
 	);

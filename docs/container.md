@@ -276,6 +276,26 @@ defaults above.
 | Quota | the default 5 GiB per account fills after about 370 of them; the rest get `452 4.2.2` and wait in the sender's queue. Raise it with `epistle account quota alice 100G`, `epistle limits set quota --domain example.org 100G` or `epistle limits set quota 100G` |
 | Time | the link is the bound: 67 GiB is about 10 minutes at 1 Gbit/s and about 1 h 40 min at 100 Mbit/s. 29 parallel transfers share the link, and `min_data_rate` only cuts a client below 10 KiB/s |
 
+### The host clock
+
+The containers share the host kernel's clock, and epistle does not set it.
+DKIM signatures, certificate validity, token and key expiry, the timestamp
+authority's seals and the [evidence log](evidence.md#the-clock) all depend on
+it. `epistle status` has a `clock` area that warns when the host is not
+synchronised with a time source, and `epistle init` warns about the same;
+neither changes anything. The `.deb` recommends `systemd-timesyncd` or
+`chrony`. To fix it on a host with systemd, run one of these:
+
+```sh
+sudo timedatectl set-ntp true
+# or point systemd-timesyncd at one provider: set NTP=time.cloudflare.com
+# in /etc/systemd/timesyncd.conf, then
+sudo systemctl restart systemd-timesyncd
+```
+
+Or install `chrony`. Use the servers of one provider only: Google smears leap
+seconds and Cloudflare steps them, so a client given both sees them disagree.
+
 ### Keys outside data_dir
 
 `mail` mounts data_dir read-write, and `epistle backup` archives it. The at-rest
