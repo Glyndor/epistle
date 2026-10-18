@@ -165,14 +165,17 @@ fn rotating_through_the_slash_64s_of_one_allocation_is_stopped_by_its_slash_48()
 	for host in 0..missing {
 		limiters.record_failure(in_net(5, 1, 100 + u64::from(host)), t0);
 	}
+	// Someone else in that /48 who presents a valid token is not asked about
+	// the /48's budget; only a request that has already failed is.
 	assert!(
-		limiters.is_limited(in_net(5, 40, 1), t0),
-		"a fresh /64 of that /48"
+		!limiters.is_limited(in_net(5, 40, 1), t0),
+		"a fresh /64 of that /48 is not limited before its token is checked"
 	);
 	assert!(
-		!limiters.is_limited(in_net(6, 0, 1), t0),
-		"another /48 is untouched"
+		limiters.limited_after_failure(in_net(5, 40, 1), t0),
+		"but its failing requests are"
 	);
+	assert!(!limiters.limited_after_failure(in_net(6, 0, 1), t0));
 }
 
 #[test]
@@ -182,12 +185,33 @@ fn the_global_ceiling_is_reached_by_failures_and_never_limits_a_client() {
 	for n in 0..u64::from(GLOBAL_MAX_FAILURES - 1) {
 		limiters.record_failure(far(n), t0);
 	}
-	assert!(!limiters.flood_limited(t0));
+	assert!(!limiters.limited_after_failure(far(1), t0));
 	limiters.record_failure(far(999_999), t0);
-	assert!(limiters.flood_limited(t0));
+	assert!(limiters.limited_after_failure(far(1), t0));
 	// It only answers the question asked after a failure: a client that has not
 	// failed is not limited by it, which is what keeps valid tokens working.
 	assert!(!limiters.is_limited(far(5_000_000), t0));
 	let later = t0 + WINDOW + Duration::from_secs(2);
-	assert!(!limiters.flood_limited(later));
+	assert!(!limiters.limited_after_failure(far(1), later));
+}
+
+#[test]
+fn with_the_tables_full_untracked_failures_still_reach_the_global_ceiling() {
+	let mut limiters = ClientLimiters::new(WINDOW);
+	let t0 = Instant::now();
+	for n in 0..MAX_CLIENTS as u64 {
+		limiters.record_failure(far(n), t0);
+	}
+	// Count the attacker's failures from zero.
+	let mut limiters = limiters.with_global_max(30);
+	assert_eq!(limiters.tracked(), MAX_CLIENTS);
+	// An attacker with fresh addresses: none fits in the tables, and the
+	// failures must still add up.
+	for n in 0..29u64 {
+		limiters.record_failure(far(2_000_000 + n), t0);
+	}
+	limiters.record_failure(far(3_000_000), t0);
+	assert!(limiters.limited_after_failure(far(3_000_000), t0));
+	// One that has not failed is not refused for it.
+	assert!(!limiters.is_limited(far(4_000_000), t0));
 }

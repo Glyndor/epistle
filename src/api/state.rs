@@ -439,6 +439,16 @@ impl ApiState {
 		self
 	}
 
+	/// Test-only: count one wrong token from `ip` without sending a request.
+	#[cfg(test)]
+	pub(crate) fn seed_auth_failure(&self, ip: std::net::IpAddr) {
+		self.inner
+			.auth_limiter
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.record_failure(Some(ip), std::time::Instant::now());
+	}
+
 	/// Test-only: lower the global failure ceiling so a test can reach it.
 	#[cfg(test)]
 	pub(crate) fn with_auth_global_max(mut self, max: u32) -> Self {
@@ -731,8 +741,9 @@ pub async fn require_bearer_token(
 		} else {
 			limiter.record_failure(client_ip, now);
 		}
-		// Only a request that failed is asked about the global ceiling.
-		if !authorized && limiter.flood_limited(now) {
+		// Only a request that failed is asked about the /48 and the global
+		// ceiling; a valid token is never refused for other people's failures.
+		if !authorized && limiter.limited_after_failure(client_ip, now) {
 			return Err(ApiError::rate_limited());
 		}
 	}

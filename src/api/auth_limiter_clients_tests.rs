@@ -138,3 +138,27 @@ async fn a_flood_from_many_clients_never_blocks_a_valid_token() {
 		"a valid token is not asked about the ceiling"
 	);
 }
+
+#[tokio::test]
+async fn a_valid_token_gets_in_from_an_ipv6_net_whose_budget_is_spent() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = test_state(&dir.keep(), 0).with_auth_window(Duration::from_secs(3600));
+	// Eight /64s of one /48, each spending its own whole budget.
+	for slash64 in 0..8 {
+		for host in 1..=20 {
+			let ip = format!("2001:db8:7:{slash64}::{host}").parse().expect("ip");
+			state.seed_auth_failure(ip);
+		}
+	}
+	let app = router(state);
+	assert_eq!(
+		get_status(&app, "wrong", "2001:db8:7:99::1").await,
+		StatusCode::TOO_MANY_REQUESTS,
+		"a wrong token from another /64 of that /48 is told to slow down"
+	);
+	assert_eq!(
+		get_status(&app, TOKEN.as_str(), "2001:db8:7:99::2").await,
+		StatusCode::OK,
+		"a valid one is not asked about the /48's budget"
+	);
+}

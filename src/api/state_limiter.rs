@@ -69,8 +69,8 @@ impl AuthLimiter {
 	}
 }
 
-/// An IPv6 /48 is allowed this many times a client's budget before the whole
-/// /48 is limited: rotating through the /64s of one allocation spends one
+/// An IPv6 /48 is allowed this many times a client's budget before its failing
+/// requests answer `429`: rotating through the /64s of one allocation spends one
 /// budget per /64, and this is what stops it.
 pub(super) const NET_BUDGET_FACTOR: u32 = 8;
 
@@ -123,10 +123,9 @@ pub(super) struct ClientLimiters {
 	clients: HashMap<ClientKey, AuthLimiter>,
 	/// One budget per IPv6 /48, [`NET_BUDGET_FACTOR`] times a client's.
 	nets: HashMap<ClientKey, AuthLimiter>,
-	/// Every failure from anyone. Consulted only after a request failed, never
-	/// for one that presents a valid token, so it cannot lock out a good
-	/// client; it still answers `429` to a flood spread over more addresses
-	/// than the tables hold.
+	/// Every failure from anyone, including those from clients that did not
+	/// fit in the tables. Consulted only after a request failed, never for
+	/// one that presents a valid token, so it cannot lock out a good client.
 	global: AuthLimiter,
 	last_sweep: Instant,
 }
@@ -155,24 +154,27 @@ impl ClientLimiters {
 		self
 	}
 
-	/// Whether the client behind `ip`, or the IPv6 /48 it sits in, has used up
-	/// its failures in the window. A client without an entry is not limited:
-	/// the table being full is no reason to refuse someone who never failed.
+	/// Whether the client behind `ip` has used up its failures in the window.
+	/// This is asked before the token is looked at, so it holds only what one
+	/// client did itself: a client without an entry is not limited (a full
+	/// table is no reason to refuse someone who never failed), and neither
+	/// the /48 nor the global count is consulted, because other people's
+	/// failures must not keep a valid token out.
 	pub(super) fn is_limited(&mut self, ip: Option<IpAddr>, now: Instant) -> bool {
-		if let Some(limiter) = self.clients.get_mut(&ClientKey::of(ip))
-			&& limiter.is_limited(now)
-		{
-			return true;
-		}
-		ClientKey::net(ip)
-			.and_then(|net| self.nets.get_mut(&net))
+		self.clients
+			.get_mut(&ClientKey::of(ip))
 			.is_some_and(|limiter| limiter.is_limited(now))
 	}
 
-	/// Whether failures from all clients together have passed the global
-	/// ceiling. Ask only after a request failed.
-	pub(super) fn flood_limited(&mut self, now: Instant) -> bool {
+	/// Whether a request that has just failed should be told to slow down
+	/// (`429`) rather than `401`: its IPv6 /48 has spent its budget, or
+	/// failures from everyone have passed the global ceiling. Ask only after
+	/// the token proved wrong, never for a valid one.
+	pub(super) fn limited_after_failure(&mut self, ip: Option<IpAddr>, now: Instant) -> bool {
 		self.global.is_limited(now)
+			|| ClientKey::net(ip)
+				.and_then(|net| self.nets.get_mut(&net))
+				.is_some_and(|limiter| limiter.is_limited(now))
 	}
 
 	/// Count one failure for the client behind `ip`, its /48 and the total.
