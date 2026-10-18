@@ -13,8 +13,8 @@ use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, tok
 use super::{
 	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, attachments,
 	autoconfig, autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, evidence,
-	export, import, init, local, masked, mobileconfig, probe, queue, report_abuse, reports, serve,
-	srv, stack, status, style, suppression, tls_cli, verify, verify_dns, warmup,
+	export, import, init, learning, local, masked, mobileconfig, probe, queue, report_abuse,
+	reports, serve, srv, stack, status, style, suppression, tls_cli, verify, verify_dns, warmup,
 };
 use crate::config::Config;
 
@@ -288,6 +288,13 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 					&mut style::stderr(),
 				),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Learning { config, action } => match Config::load(&config) {
+				Ok(config) => learning::run(&config, action, &mut std::io::stdout().lock()),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

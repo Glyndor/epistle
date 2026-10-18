@@ -622,6 +622,90 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
   train (the equality skip in `Snapshot::store_flags` keeps the
   no-op out of the trainer).
 
+  Moving mail teaches the same corpus. A message copied or moved into the
+  account's Junk mailbox (`Junk`, `Spam` or `Rejects`, the name the server
+  lists with the `\Junk` special use) trains spam. A message moved out of
+  Junk into any mailbox but Trash trains ham: Junk to Trash is the user
+  throwing spam away, and a copy out of Junk leaves the message in Junk, so
+  neither says the message is not junk. A folder that only ends in `Junk`
+  (`Archive/Junk`) has no role. IMAP COPY and MOVE and the mailbox change of
+  JMAP `Email/set` all take this decision, and when an update also sets
+  `$Junk` or `$NotJunk` the move is the last word. IMAP APPEND into Junk
+  does not train, because a migration tool appends whole folders.
+
+  The server records what each account has learned, one row per message in
+  `bayes_learned`, keyed by a keyed hash of the first 256 KiB of the message
+  (the same window and the same key file as the token hashes). That makes the
+  lessons idempotent however many ways a message reaches the same verdict:
+  moved into Junk, then marked `$Junk`, then copied again counts once. When
+  the user decides the other way (a message goes back to the inbox), the
+  earlier lesson is taken back token by token and the new verdict added, so a
+  message that goes back and forth leaves the corpus where the last move put
+  it. The row, the token counts and the message totals change in one
+  transaction: when the record cannot be written nothing is trained, and a
+  transaction PostgreSQL abandons (a deadlock) is run again up to four times.
+  The locks are always taken in the same order, so the server and
+  `epistle learning reset` can run at the same time. What an account taught
+  before the ledger existed (through `$Junk`, or by the server's own
+  decisions) is in the corpus but not in the ledger: it counts again if the
+  user moves it and cannot be taken back. `epistle learning status` shows
+  that number as `unrecorded`.
+
+  Learning is bounded, per command, per account and in the worker:
+  - Each IMAP COPY or MOVE, each IMAP STORE and each JMAP `Email/set` call
+    queues at most 100 lessons; the rest are dropped and counted in
+    `mail_bayes_training_dropped_total`. The queue to the worker holds 256,
+    and one account may have 32 of those places at a time, so one account (or
+    any seven) cannot take them all. Eight accounts at their share fill it
+    (8 x 32 = 256): another account's lesson is then dropped, counted, and one
+    that is accepted waits behind up to 256 others, which at a few hundred
+    milliseconds each is about a minute. The queue is served in order, not
+    account by account, so this is a limit of a deployment with many accounts
+    sending at once, for instance several of one tenant.
+  - One account may teach 200 lessons a minute and 5000 a day, and may keep
+    the single worker busy for 10 seconds in a minute, measured from the work
+    of its own lessons (reading the message and writing the corpus, every
+    attempt of a lesson that fails or is retried included), not from the time
+    they waited behind other jobs. Lessons over a limit are dropped and
+    counted.
+  - A message is read the way the SMTP path reads it: its headers and its text
+    parts, decoded and in the charset they declare, without attachments, cut to
+    a window of the first and the last half of 256 KiB of words. A lesson
+    touches at most 5000 distinct tokens of it, the same cap and the same keyed
+    sample the server's own training takes, written with two statements
+    whatever their number. The worker reads the stored file whole, up to
+    32 MiB, because the structure is what tells text from an attachment; a
+    larger file, or one that cannot be read, teaches nothing, spends none of
+    the day's tokens and gives back its place in the minute and day counts
+    (`mail_bayes_learning_unreadable_total`); the time spent reading it is
+    still charged to the account. The message is reduced on the worker's own
+    task, as the SMTP path does, so one lesson of a large message holds one
+    runtime thread for about a second.
+  - One account holds at most 250000 token rows (about 100 MB with the index)
+    and spends at most 1000000 tokens a day. A lesson past either is refused
+    or held back, and counted per account as `refused` and `throttled`. A
+    lesson that only reuses words the account already has pays for the rows it
+    adds. Taking a lesson back writes the same rows and spends the same.
+  - The ledger keeps at most 100000 messages; at the limit the oldest tenth is
+    forgotten, so those can no longer be taken back and count again if moved.
+  - Lessons lost for another reason are counted in the server's metrics:
+    `mail_bayes_learning_unreadable_total` (the file was gone when the worker
+    came to it, which is normal after emptying Junk),
+    `mail_bayes_learning_failed_total` (the database refused the lesson) and
+    `mail_bayes_learning_refused_total` (a ceiling or the day's budget). They
+    are warnings, not a guarantee that every move taught something.
+  - The shared scope is never taught by a user, and an account only ever
+    teaches its own scope. The message is named by the file the server wrote
+    and the mailbox by the server's own special-use table: a header or a
+    flag a client invents decides nothing.
+  - A message with several local recipients is scored with the corpus of the
+    first of them. That is the existing behaviour of the SMTP path and is not
+    changed here.
+
+  Training never sends mail. `epistle learning` shows the counters per
+  account and switches learning off or on; see `docs/cli.md`. Without
+  `[database]` there is no corpus and nothing is learned.
+
 The LLM-assisted uncertain band uses `BayesStore::score_for_account`,
 which falls back to the shared scope for any account whose own scope
 has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below

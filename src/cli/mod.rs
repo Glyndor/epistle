@@ -45,6 +45,7 @@ mod export;
 mod import;
 mod init;
 mod json_out;
+mod learning;
 mod legacy;
 mod limits;
 mod local;

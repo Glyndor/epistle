@@ -165,14 +165,7 @@ fn internal_day(message: &mailbox::MessageRef) -> i64 {
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an
 /// empty string. Matching is case-insensitive on the leaf name.
 pub(super) fn special_use_attribute(name: &str) -> &'static str {
-	match name.to_ascii_lowercase().as_str() {
-		"junk" | "spam" | "rejects" => "\\Junk",
-		"drafts" => "\\Drafts",
-		"sent" => "\\Sent",
-		"trash" | "deleted" => "\\Trash",
-		"archive" => "\\Archive",
-		_ => "",
-	}
+	crate::imap::special_use::attribute(name)
 }
 
 /// Legacy recent keys remain unavailable after revision 2 is enabled.

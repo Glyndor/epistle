@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use super::learning::{LearnOutcome, Lesson};
 use super::scoring_text::scoring_text;
 use super::shared_training::{SharedTraining, TrainSource};
 use super::trainer::{BayesTrainer, TrainerFuture};
@@ -89,14 +90,14 @@ pub fn new_tombstone_set() -> TombstoneSet {
 /// A PostgreSQL-backed Bayesian corpus that stores tokens as keyed hashes.
 #[derive(Clone)]
 pub struct BayesStore {
-	pool: PgPool,
+	pub(super) pool: PgPool,
 	/// The keyed hash of tokens, built once from the instance key.
-	mac: ring::hmac::Key,
+	pub(super) mac: ring::hmac::Key,
 	/// Scopes whose removal is currently happening, or has just
 	/// committed, so a training worker that has already read its
 	/// message off disk drops the job rather than recreating the
 	/// rows the purge is dropping. See [`BayesStore::train`].
-	tombstones: TombstoneSet,
+	pub(super) tombstones: TombstoneSet,
 	/// Serializes `train` and `forget_scope` against each other within
 	/// this process so a worker that passed the tombstone check cannot
 	/// race the DELETE commit. Training is infrequent, so holding it
@@ -105,10 +106,12 @@ pub struct BayesStore {
 	/// run from the CLI does not see the server's training worker
 	/// (different processes, different Mutexes); the cross-process
 	/// limit is named on [`BayesStore::forget_scope`].
-	scope_lock: Arc<tokio::sync::Mutex<()>>,
+	pub(super) scope_lock: Arc<tokio::sync::Mutex<()>>,
 	/// The queue and workers that train the shared corpus from SMTP,
 	/// started by the first job. Clones share it.
 	shared: Arc<OnceLock<SharedTraining>>,
+	/// The ceilings of [`BayesStore::learn`].
+	pub(super) limits: super::learning::LearnLimits,
 }
 
 impl BayesStore {
@@ -122,6 +125,7 @@ impl BayesStore {
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
+			limits: super::learning::LearnLimits::default(),
 		})
 	}
 
@@ -135,6 +139,7 @@ impl BayesStore {
 			tombstones: new_tombstone_set(),
 			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 			shared: Arc::new(OnceLock::new()),
+			limits: super::learning::LearnLimits::default(),
 		}
 	}
 
@@ -148,7 +153,14 @@ impl BayesStore {
 			tombstones: self.tombstones.clone(),
 			scope_lock: self.scope_lock.clone(),
 			shared: Arc::new(OnceLock::new()),
+			limits: self.limits,
 		}
+	}
+
+	/// This store with other ceilings for [`BayesStore::learn`].
+	pub fn with_learn_limits(mut self, limits: super::learning::LearnLimits) -> Self {
+		self.limits = limits;
+		self
 	}
 
 	/// The shared tombstone set the training worker consults before
@@ -160,7 +172,7 @@ impl BayesStore {
 	}
 
 	/// The stored (hashed) form of a token.
-	fn hash(&self, token: &str) -> String {
+	pub(super) fn hash(&self, token: &str) -> String {
 		hex(&self.tag(token))
 	}
 
@@ -363,17 +375,7 @@ impl BayesStore {
 	}
 
 	async fn forget_scope_inner(&self, scope: &str) -> Result<u64, sqlx::Error> {
-		let mut tx = self.pool.begin().await?;
-		// The totals first, then the tokens: the order `train` takes them in.
-		sqlx::query!("DELETE FROM bayes_corpus WHERE scope = $1", scope,)
-			.execute(&mut *tx)
-			.await?;
-		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
-			.execute(&mut *tx)
-			.await?
-			.rows_affected();
-		tx.commit().await?;
-		Ok(tokens)
+		self.purge_scope(scope).await
 	}
 }
 
@@ -391,6 +393,31 @@ impl BayesTrainer for BayesStore {
 					%error,
 					"per-account bayes training failed"
 				);
+			}
+		})
+	}
+
+	fn learn<'a>(
+		&'a self,
+		account: &'a str,
+		text: Vec<u8>,
+		spam: bool,
+	) -> TrainerFuture<'a, Lesson> {
+		Box::pin(async move {
+			let (outcome, busy) = BayesStore::learn_accounted(self, account, &text, spam).await;
+			match outcome {
+				Ok(outcome) => Lesson { outcome, busy },
+				Err(error) => {
+					tracing::warn!(
+						account = %crate::log_id::account(account),
+						%error,
+						"per-account bayes learning failed"
+					);
+					Lesson {
+						outcome: LearnOutcome::Failed,
+						busy,
+					}
+				}
 			}
 		})
 	}

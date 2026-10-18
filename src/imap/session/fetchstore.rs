@@ -171,6 +171,11 @@ impl Session {
 		}
 		let mut response = String::new();
 		let mut modified: Vec<u32> = Vec::new();
+		// One STORE teaches at most one command's worth of lessons.
+		let mut lessons = training
+			.as_ref()
+			.map(crate::antispam::training_queue::TrainingQueue::command_budget)
+			.unwrap_or_default();
 		for sequence_number in 1..=total {
 			if gone.contains(&sequence_number) {
 				continue;
@@ -206,12 +211,13 @@ impl Session {
 			// queue never waits and a full one drops the job, so the
 			// STORE reply does not depend on it.
 			if let Some(queue) = &training {
-				super::super::junk_trainer::enqueue_junk_transition(
+				super::super::junk_trainer::enqueue_junk_transition_within(
 					queue,
 					&account,
 					&previous_flags,
 					&stored,
 					message_path,
+					&mut lessons,
 				);
 			}
 			let stored_render = render_flags(&stored);

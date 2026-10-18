@@ -15,6 +15,7 @@ pub mod greylist;
 mod greylist_sql;
 pub use greylist_sql::PgGreylistStore;
 pub mod hook;
+pub mod learning;
 pub mod llm;
 pub mod reputation;
 pub mod scoring_text;

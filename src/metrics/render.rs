@@ -206,6 +206,21 @@ impl Metrics {
 				&self.bayes_training_dropped,
 			),
 			(
+				"mail_bayes_learning_unreadable_total",
+				"Lessons from a user's decisions that the worker could not read because the message was gone.",
+				&self.bayes_learning_unreadable,
+			),
+			(
+				"mail_bayes_learning_failed_total",
+				"Lessons from a user's decisions that the database refused; nothing was recorded.",
+				&self.bayes_learning_failed,
+			),
+			(
+				"mail_bayes_learning_refused_total",
+				"Lessons from a user's decisions refused by an account's ceiling or day budget.",
+				&self.bayes_learning_refused,
+			),
+			(
 				"mail_subjectpass_passed_total",
 				"Unauthenticated messages accepted by a valid SubjectPass token in the subject.",
 				&self.subjectpass_passed,

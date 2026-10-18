@@ -97,6 +97,9 @@ const COUNTERS: &[(&str, &str)] = &[
 	("auth_login_failed", "auth_login_failed"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
 	("bayes_training_dropped", "bayes_training_dropped"),
+	("bayes_learning_unreadable", "bayes_learning_unreadable"),
+	("bayes_learning_failed", "bayes_learning_failed"),
+	("bayes_learning_refused", "bayes_learning_refused"),
 	("subjectpass_passed", "subjectpass_passed"),
 	("subjectpass_challenged", "subjectpass_challenged"),
 	("dmarc_reports_ingested", "dmarc_reports_ingested"),
@@ -161,6 +164,9 @@ pub struct Metrics {
 	auth_login_failed: AtomicU64,
 	send_limited_new_recipients: AtomicU64,
 	bayes_training_dropped: AtomicU64,
+	bayes_learning_unreadable: AtomicU64,
+	bayes_learning_failed: AtomicU64,
+	bayes_learning_refused: AtomicU64,
 	dmarc_reports_ingested: AtomicU64,
 	dmarc_report_rows_failing: AtomicU64,
 	tlsrpt_reports_ingested: AtomicU64,
@@ -319,6 +325,29 @@ impl Metrics {
 		self.bayes_training_dropped.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a lesson the worker could not read: the message was gone when
+	/// it came to it, which is normal after emptying Junk.
+	pub fn bayes_learning_unreadable(&self) {
+		self.bayes_learning_unreadable
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a lesson the database refused. Nothing was recorded.
+	pub fn bayes_learning_failed(&self) {
+		self.bayes_learning_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a lesson an account's ceiling or day budget refused.
+	pub fn bayes_learning_refused(&self) {
+		self.bayes_learning_refused.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count `jobs` lessons dropped at once.
+	pub fn bayes_training_dropped_by(&self, jobs: u64) {
+		self.bayes_training_dropped
+			.fetch_add(jobs, Ordering::Relaxed);
+	}
+
 	/// Count one ingested DMARC aggregate or TLS-RPT report.
 	pub fn report_ingested(&self, kind: crate::reports::Kind) {
 		let counter = match kind {
@@ -461,6 +490,9 @@ impl Metrics {
 			"auth_login_failed" => &self.auth_login_failed,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
 			"bayes_training_dropped" => &self.bayes_training_dropped,
+			"bayes_learning_unreadable" => &self.bayes_learning_unreadable,
+			"bayes_learning_failed" => &self.bayes_learning_failed,
+			"bayes_learning_refused" => &self.bayes_learning_refused,
 			"subjectpass_passed" => &self.subjectpass_passed,
 			"subjectpass_challenged" => &self.subjectpass_challenged,
 			"dmarc_reports_ingested" => &self.dmarc_reports_ingested,

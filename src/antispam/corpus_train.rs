@@ -86,8 +86,15 @@ impl BayesStore {
 	/// same for every transaction, so concurrent trainings cannot lock rows
 	/// crosswise.
 	fn training_tokens(&self, text: &str) -> Vec<String> {
+		self.lesson_tokens(text, MAX_TRAIN_TOKENS)
+	}
+
+	/// [`BayesStore::training_tokens`] with room for `cap` tokens. A user's
+	/// lesson reads and cuts a message exactly as the shared corpus does and
+	/// differs only in the cap it may be lowered to.
+	pub(in crate::antispam) fn lesson_tokens(&self, text: &str, cap: usize) -> Vec<String> {
 		let mut hashed: Vec<String> = self
-			.window_tokens(text, MAX_TRAIN_TOKENS, 0)
+			.window_tokens(text, cap, 0)
 			.plain
 			.iter()
 			.map(|token| self.hash(token))

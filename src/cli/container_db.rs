@@ -11,6 +11,7 @@ use crate::config::Config;
 fn database_config(command: &Command) -> Option<&Path> {
 	match command {
 		Command::Ban { config, .. }
+		| Command::Learning { config, .. }
 		| Command::Check {
 			config,
 			area: CheckArea::Db,

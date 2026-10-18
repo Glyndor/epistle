@@ -42,6 +42,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `db` | `upgrade`, `status` | |
 | `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
+| `learning` | `status`, `enable`, `disable`, `reset` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
@@ -1339,6 +1340,31 @@ a ban. It does not change the per-connection limit that SMTP applies to one
 connection (three failed attempts close it), which keeps no state between
 connections. A network ban (`add 203.0.113.0/24`) covers every address in it;
 `add 203.0.113.9/32` is the same ban as `add 203.0.113.9`.
+
+## Learning from the user's moves (`epistle learning`)
+
+An account's Bayesian corpus learns from what its user does: a message moved
+or copied into Junk is spam, a message moved out of Junk to anywhere but Trash
+is ham, and `$Junk` / `$NotJunk` say the same (the rules and the limits are in
+`docs/configuration.md`). `epistle learning` shows what each corpus has learned
+and switches it. It needs `[database]`, because the counters and the switch live
+in PostgreSQL; without it the command exits 3. A change reaches the running
+server at its next lesson, with no restart. With the container stack it runs
+inside `mail` like `ban`.
+
+| Command | What it does |
+|---|---|
+| `epistle learning status [ACCOUNT] [--json]` | Per account: `learning` on or off, `spam` and `ham` learned (a message counts again when its verdict changed), `unlearned` (earlier verdicts taken back), `repeated` (decisions that changed nothing), `refused` (the account holds as many token rows as it may), `throttled` (it spent the day's tokens), `messages` (rows in the record), `token-rows`, `unrecorded` (messages the corpus holds that the record does not: taught before the record existed or by the server itself, they count again if the user moves them and cannot be taken back) and the `corpus-spam` and `corpus-ham` the corpus holds from any source. Without an account, every account that has learned or been switched off, at most 10000 (a note on stderr says when the list was cut); an account that never learned reads as on with zero counters. |
+| `epistle learning enable ACCOUNT [--dry-run] [--json]` | Let the account's decisions teach its corpus (the default). |
+| `epistle learning disable ACCOUNT [--dry-run] [--json]` | Stop them. What the corpus already learned stays. |
+| `epistle learning reset ACCOUNT [--dry-run] [--yes] [--json]` | Drop the corpus and the record of the account and zero its counters; the on/off switch stays as it was, so an account switched off remains off. It scores with the shared corpus again until it holds 200 ham and 200 spam of its own. Needs `--yes` off a terminal. |
+
+The account must exist (exit 2 otherwise), for `status` too only in the sense that
+an unknown name reads as zero. Lessons dropped by the per-command, per-account queue
+share, per-minute, per-day or worker-time limits are counted by the server in
+`mail_bayes_training_dropped_total`, and lessons lost for another reason in
+`mail_bayes_learning_unreadable_total`, `mail_bayes_learning_failed_total` and
+`mail_bayes_learning_refused_total`; none of these is per account.
 
 ## Expunged-message archive
 

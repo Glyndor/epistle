@@ -133,6 +133,8 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		&["evidence", "acknowledge", "--reason", "restored", "--yes"],
 		true,
 	),
+	(&["learning", "status", "--json"], true),
+	(&["learning", "disable", "alice", "--dry-run"], true),
 	(&["ban", "list", "--json"], true),
 	(&["ban", "add", "203.0.113.0/24", "--for", "24h"], true),
 	(&["ban", "remove", "203.0.113.9"], true),
