@@ -15,7 +15,6 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
@@ -73,7 +72,9 @@ impl Server {
 		metrics: Arc<Metrics>,
 	) -> io::Result<()> {
 		let mut accepting = crate::net::accept::Accepting::new(listener);
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let semaphore = Arc::new(crate::net::conn_limit::connection_semaphore(
+			self.max_connections,
+		));
 		let mut connections = JoinSet::new();
 		loop {
 			tokio::select! {

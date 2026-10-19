@@ -125,6 +125,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		let _ = writeln!(out, "{note}");
 	}
 	warn_unsynced_clock(&(probes.clock)(), out);
+	compose::warn_low_nofile(compose::host_hard_nofile(), out);
 	answers.normalise();
 	match answers.validate() {
 		Ok(warnings) => render_warnings(&warnings),

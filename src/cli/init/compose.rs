@@ -327,6 +327,7 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 mod services;
 use services::ComposeService;
 pub(crate) use services::MAIL_STOP_GRACE_SECS;
+pub(super) use services::{host_hard_nofile, warn_low_nofile};
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {

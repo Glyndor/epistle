@@ -34,6 +34,21 @@ pub const DEFAULT_HTTP_CONNECTIONS: usize = 1024;
 /// Concurrent connections one client may hold on a plain-HTTP listener.
 pub const DEFAULT_HTTP_CONNECTIONS_PER_IP: usize = 256;
 
+/// The largest supported connection cap, also safe for semaphore construction.
+pub const MAX_CONNECTIONS: usize = 1_000_000;
+
+/// Bound direct callers too, even when configuration validation was bypassed.
+pub(crate) fn connection_semaphore(requested: usize) -> Semaphore {
+	if requested > MAX_CONNECTIONS {
+		tracing::warn!(
+			requested,
+			maximum = MAX_CONNECTIONS,
+			"connection cap exceeds the supported maximum, using the maximum"
+		);
+	}
+	Semaphore::new(requested.min(MAX_CONNECTIONS))
+}
+
 /// How long a refusal may take to reach the peer before it is dropped.
 const REFUSAL_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -62,7 +77,7 @@ impl Admission {
 	/// Admit at most `listener` connections, and `per_client` for one client.
 	pub fn new(listener: usize, per_client: usize) -> Self {
 		Admission {
-			listener: Arc::new(Semaphore::new(listener)),
+			listener: Arc::new(connection_semaphore(listener)),
 			clients: Arc::new(PerIpCounter::new(per_client)),
 		}
 	}

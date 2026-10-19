@@ -119,3 +119,13 @@ async fn a_refused_peer_gets_the_reply_and_a_close() {
 	client.read_to_end(&mut seen).await.expect("read");
 	assert_eq!(seen, b"* BYE busy\r\n");
 }
+
+#[test]
+fn excessive_listener_caps_are_clamped_before_admission() {
+	for requested in [MAX_CONNECTIONS + 1, usize::MAX] {
+		let admission = Admission::new(requested, 2);
+		assert_eq!(admission.listener.available_permits(), MAX_CONNECTIONS);
+		assert!(admission.admit(ip("203.0.113.9")).is_ok());
+	}
+	assert_eq!(connection_semaphore(7).available_permits(), 7);
+}

@@ -31,6 +31,16 @@ pub(crate) fn mail_nofile(host_hard_limit: Option<u64>) -> Option<u64> {
 	}
 }
 
+/// Explain why a generated request leaves too little room for the listeners.
+pub(crate) fn warn_low_nofile(hard: Option<u64>, out: &mut dyn std::io::Write) {
+	if let Some(requested) = mail_nofile(hard).filter(|limit| *limit < 8192) {
+		let _ = writeln!(
+			out,
+			"warning: the mail container nofile limit is {requested}, below 8192, because the host RLIMIT_NOFILE hard limit is {requested}; raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
+		);
+	}
+}
+
 /// The hard open-file limit of this process, or `None` when it is unlimited
 /// or cannot be read.
 pub(crate) fn host_hard_nofile() -> Option<u64> {

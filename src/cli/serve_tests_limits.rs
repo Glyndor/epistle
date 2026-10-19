@@ -128,3 +128,43 @@ async fn serve_applies_the_http_listener_cap() {
 	third_is_refused("metrics", port, "HTTP/1.1 503 Service Unavailable").await;
 	server.abort();
 }
+
+#[tokio::test]
+async fn serve_applies_the_http_caps_to_api_webdav_and_autoconfig() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ports: Vec<u16> = (0..3).map(|_| crate::test_fixtures::free_port()).collect();
+	let listeners = [
+		("api", ports[0]),
+		("web-dav", ports[1]),
+		("autoconfig", ports[2]),
+	];
+	let hash = format!("sha256:{}", "ab".repeat(32));
+	let settings = format!("max_http_connections_per_ip = 2\n[api]\ntoken_hash = \"{hash}\"");
+	let server = tokio::spawn(serve(config(dir.path(), &listeners, &settings)));
+	third_is_refused("api", ports[0], "HTTP/1.1 503 Service Unavailable").await;
+	third_is_refused("web-dav", ports[1], "HTTP/1.1 503 Service Unavailable").await;
+	third_is_refused("autoconfig", ports[2], "HTTP/1.1 503 Service Unavailable").await;
+	server.abort();
+}
+
+#[tokio::test]
+async fn serve_applies_the_managesieve_default_of_40() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let port = crate::test_fixtures::free_port();
+	let server = tokio::spawn(serve(config(dir.path(), &[("manage-sieve", port)], "")));
+	let mut kept = Vec::new();
+	let mut last = String::new();
+	for i in 0..41 {
+		let (s, said) = attempt(port).await;
+		kept.push(s);
+		if i == 39 {
+			assert!(!said.contains("too many"), "40th refused: {said}");
+		}
+		last = said;
+	}
+	assert!(
+		last.contains("too many connections from your address"),
+		"41st: {last}"
+	);
+	server.abort();
+}

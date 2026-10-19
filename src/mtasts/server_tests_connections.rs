@@ -120,3 +120,32 @@ async fn permits_burst_to_limit_and_drops_the_next() {
 	task.abort();
 	let _ = task.await;
 }
+
+#[tokio::test]
+async fn excessive_listener_cap_still_accepts_a_tls_handshake() {
+	crate::tls::ensure_crypto_provider();
+	let (_dir, server, certified) = fixture();
+	let (listener, client) = crate::net::accept::scripted::failing_then_connecting(&[]);
+	let task = tokio::spawn(
+		server
+			.with_max_connections(usize::MAX)
+			.serve_on(listener, Arc::new(crate::metrics::Metrics::new())),
+	);
+	let mut roots = RootCertStore::empty();
+	roots
+		.add(certified.cert.der().clone())
+		.expect("trust anchor");
+	let config = ClientConfig::builder()
+		.with_root_certificates(roots)
+		.with_no_client_auth();
+	let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+	tokio::time::timeout(Duration::from_secs(5), async {
+		connector
+			.connect("mta-sts.example.org".try_into().expect("name"), client)
+			.await
+			.expect("handshake")
+	})
+	.await
+	.expect("handshake deadline");
+	task.abort();
+}

@@ -134,3 +134,24 @@ fn a_zero_cap_is_saved_with_a_note_that_it_means_the_default() {
 	let (_, printed) = limits(file.path(), &["set", "max-http-connections", "5"]);
 	assert!(!printed.contains("not unlimited"), "{printed}");
 }
+
+#[test]
+fn excessive_listener_caps_are_refused_without_saving() {
+	for key in [Key::MaxHttpConnections, Key::MaxConnectionsPerListener] {
+		assert!(parse_override(key, "1000001").is_err());
+		assert_eq!(parse_override(key, "1000000"), Ok(1_000_000));
+	}
+	for key in ["max-http-connections", "max-connections-per-listener"] {
+		for value in ["1000001", "9223372036854775807"] {
+			let (_dir, file) = super::tests_config::config_file();
+			let before = std::fs::read(file.path()).expect("config");
+			let (code, printed) = limits(file.path(), &["set", key, value]);
+			assert_eq!(code, ExitCode::FAILURE, "{key}: {printed}");
+			assert!(printed.contains("1000000"), "{printed}");
+			assert_eq!(std::fs::read(file.path()).expect("config"), before);
+		}
+		let (_dir, file) = super::tests_config::config_file();
+		let (code, printed) = limits(file.path(), &["set", key, "1000000"]);
+		assert_eq!(code, ExitCode::SUCCESS, "{printed}");
+	}
+}
