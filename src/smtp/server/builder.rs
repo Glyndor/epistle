@@ -62,7 +62,20 @@ impl Server {
 			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
+			#[cfg(test)]
+			strip_for_test: None,
 		}
+	}
+
+	/// Swap the trust-field stripper for one that does not fold the
+	/// leader byte the production stripper mirrors from mail-parser
+	/// (`inbound_headers::strip_buggy`). Used by the safety-net test
+	/// to confirm that the second pass refuses the message when the
+	/// first one misses.
+	#[cfg(test)]
+	pub fn with_strip_for_test(mut self, strip: fn(&mut Vec<u8>, &str)) -> Self {
+		self.strip_for_test = Some(strip);
+		self
 	}
 
 	/// Tag every password authentication attempt through this server with

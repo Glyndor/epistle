@@ -20,7 +20,7 @@ DKIM table below to the signed names and their repetition counts in CI.
 | **SMTP submission** (587, 465, after AUTH) | `Received`; `Message-ID` and `Date` only when the client left them out; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail | `Bcc` and `Resent-Bcc`; `Epistle-Class`; `X-Epistle-Attachment-Warning`; any `Precedence` the client wrote, for marketing mail | Everything else, including a `Received`, `Authentication-Results`, `Return-Path` or `Delivered-To` the client wrote |
 | **REST API** (`POST /api/v1/send`) | `From`, `Subject`, `Date`, `Message-ID`, `MIME-Version`, `Content-Type` always; `To`, `Sender`, `Cc`, `Reply-To`, `In-Reply-To`, `References`, `Importance` with `X-Priority`, `List-Unsubscribe` with `List-Unsubscribe-Post`, `Auto-Submitted`, `Feedback-ID` and your `X-` headers when the request has the field; `Content-Transfer-Encoding`, `Content-Disposition`, `Content-ID` for bodies and attachments; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail | `X-Epistle-Attachment-Warning` if you send it as a custom header | Nothing: the request names every header, and only the fields listed in the [API guide](api.md) turn into one |
 | **JMAP** (`Email/set` then `EmailSubmission/set`) | The headers of the Email object (`From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `In-Reply-To`, `References`, `MIME-Version`, `Content-*`); `Message-ID` and `Date` when missing; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail | `Bcc` and `Resent-Bcc` at submission; `Epistle-Class`; any `Precedence` the draft had, for marketing mail | Nothing the draft carries besides the above. Custom `header:` properties on `Email/set` create are ignored |
-| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Return-Path` (replaced by the server's); `TLS-Required`; `X-Epistle-Attachment-Warning` (replaced by the server's verdict) | Everything else, including `Authentication-Results`, `Received-SPF`, `Delivered-To`, `X-Spam-Status`, `Epistle-Class` and `Bcc` written by the sender |
+| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Authentication-Results` with our authserv-id or an unparseable authserv-id; `Received-SPF`; `X-Spam-*`; `X-Epistle-*`; `Delivered-To`; `Return-Path`; `Epistle-Class`, before adding local fields; `TLS-Required` at delivery | Other `Authentication-Results` with a parseable foreign authserv-id, as untrusted information; `DKIM-Signature`; `ARC-*`; earlier `Received`; `Bcc`; other fields not listed as removed |
 | **Forwarding** (account forward, Sieve `redirect`) | `Delivered-To` naming the forwarding address; the ARC set when an ARC key is configured | Nothing in the message; the envelope sender is rewritten with SRS when it is enabled | The original message, headers and body. No `Resent-*` and no `X-Forwarded-*` is added |
 | **Lists** (an alias with a list id) | `List-Id`, `List-Post`, `List-Unsubscribe` on each delivered copy | Nothing | The original message |
 | **Relay to the next MTA** (the queue worker) | Nothing | Nothing | The queued bytes, as signed at submission |
@@ -44,15 +44,15 @@ without regard to case.
 | `ARC-Authentication-Results`, `ARC-Message-Signature`, `ARC-Seal` | Inbound mail checked by SPF, and forwarded copies, when an ARC key is configured | One set per hop, written as `ARC-Seal`, `ARC-Message-Signature` and `ARC-Authentication-Results` right after `Authentication-Results`. `cv` is `none` for a message without a chain and carries the status of an inbound chain otherwise. A forward does not seal a message whose newest instance is already ours |
 | `Action`, `Diagnostic-Code`, `Final-Recipient`, `Remote-MTA`, `Reporting-MTA`, `Status` | Inside the `message/delivery-status` part of a failure or delay notice | RFC 3464 fields, not top-level headers. One block per recipient |
 | `Arrival-Date`, `Feedback-Type`, `Original-Mail-From`, `Reported-Domain`, `Source-IP`, `User-Agent`, `Version` | Inside the `message/feedback-report` part of an abuse report | RFC 5965 fields, not top-level headers. `User-Agent` is the mail hostname in the report epistle sends on its own, and `epistle/<version>` in the report `epistle report-abuse` prints |
-| `Authentication-Results` | Inbound mail from a peer that did not log in, when a resolver is configured and the peer address is known | Authserv-id is the mail hostname. Lists `spf`, one `dkim` entry per signature (`dkim=none` without one) and `dmarc`. A header of the same name written by the sender is kept below ours |
+| `Authentication-Results` | Inbound mail from a peer that did not log in, when a resolver is configured and the peer address is known | Authserv-id is the mail hostname. Lists `spf`, one `dkim` entry per signature (`dkim=none` without one) and `dmarc`. On unauthenticated SMTP, fields naming our hostname (case-insensitively) or with an unparseable authserv-id are removed before ours is added. Parseable foreign ids are kept below ours as untrusted information. The preamble reader accepts MIME tokens and quoted values, comments, folding and an optional numeric version |
 | `Auto-Submitted` | REST `auto_submitted` field; failure and delay notices (`auto-replied`); vacation replies (`auto-replied (vacation)`); alert emails and abuse reports (`auto-generated`) | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). Planned: see [Planned changes](#planned-changes) |
 | `Bcc`, `Resent-Bcc` | Removed at SMTP submission and at JMAP `EmailSubmission/set`; never written by the REST API | The recipients stay on the envelope. A JMAP draft keeps `Bcc`. Inbound mail keeps whatever the sender wrote |
 | `Cc`, `Sender`, `Reply-To` | REST fields `cc`, `sender`, `reply_to`; JMAP Email properties | Written only when given |
 | `Content-Disposition`, `Content-ID`, `Content-Transfer-Encoding`, `Content-Type`, `MIME-Version` | The MIME builder behind REST, JMAP, replies and reports | `Content-Transfer-Encoding` is `7bit`, `quoted-printable` or `base64` as the content needs. `Content-ID` only on inline parts |
 | `DKIM-Signature` | The copy of a message that goes to a remote recipient, from any submission path, and vacation replies | See [DKIM](#dkim). Not on the copy stored for a local recipient, not on the Sent copy |
 | `Date` | REST always; SMTP submission and JMAP when missing; every system message | RFC 5322 format in UTC with `+0000` |
-| `Delivered-To` | Every stored copy, once per mailbox delivery, and forwarded copies | Names the address the copy was finally delivered to. Earlier `Delivered-To` fields are kept, because a message that returns naming the address it is about to be forwarded from has looped |
-| `Epistle-Class` | Removed from every submission and ignored | The class of a message is decided by the server (see the [API guide](api.md#class-and-evidence)). Inbound mail keeps whatever the sender wrote, and the server does not read it |
+| `Delivered-To` | Every stored copy, once per mailbox delivery, and forwarded copies | Names the address the copy was finally delivered to. Sender-supplied fields are removed at unauthenticated SMTP ingress. Internal delivery and forwarding retain earlier fields for forwarding-loop detection; mail returning through SMTP is still subject to the `Received` hop limit |
+| `Epistle-Class` | Removed from every submission and from unauthenticated SMTP inbound mail | The class of a message is decided by the server (see the [API guide](api.md#class-and-evidence)), never by this header |
 | `Feedback-ID` | REST `feedback_id` field | Written only when given. Planned: see [Planned changes](#planned-changes) |
 | `From` | REST (with the `from_name` or the account's display name as phrase); JMAP; system messages | On SMTP submission the client's `From` is kept as is. The send-as rule decides which addresses an account may use |
 | `Importance`, `X-Priority` | REST `importance` field | `high` writes `Importance: high` and `X-Priority: 1 (Highest)`, `normal` writes `3 (Normal)`, `low` writes `5 (Lowest)` |
@@ -62,16 +62,17 @@ without regard to case.
 | `Message-ID` | REST always; SMTP submission and JMAP when missing; alert emails; DMARC and TLS-RPT reports | `<uuid-v7@domain>`. REST uses the first configured domain, not the sender's. SMTP submission uses the domain of the envelope sender (the hostname when there is none). Failure notices, vacation replies and abuse reports get none from epistle |
 | `Precedence` | `bulk` on marketing mail | Any `Precedence` the client wrote is removed first. Other classes are left alone |
 | `Received` | SMTP, both inbound and submission | `Received: from <EHLO name> ([<peer ip>])` then `by <hostname> with <protocol>;` and the date. The protocol is `SMTP`, `ESMTP`, `ESMTPS`, `ESMTPA` or `ESMTPSA`. The client address appears even on submission, and there is no setting to leave it out. Not added by REST, JMAP, forwarding or the queue worker |
-| `Received-SPF` | Inbound mail from a peer that did not log in | `Received-SPF: <result> (domain of <domain>) client-ip=<ip>`. A failed SPF is refused at SMTP and never reaches this point |
+| `Received-SPF` | Inbound mail from a peer that did not log in | `Received-SPF: <result> (domain of <domain>) client-ip=<ip>`. Sender-supplied instances are removed before the local result is added. A failed SPF is refused at SMTP and never reaches this point |
 | `Return-Path` | Every stored copy | The envelope sender, `<>` for a bounce. Any `Return-Path` the message arrived with is removed first. Not added to the copy that leaves for a remote recipient, and not to the Sent copy; a `Return-Path` a client wrote on submission goes out as written |
 | `Subject` | REST always (empty when not given); JMAP; system messages | Non-ASCII text is written as RFC 2047 encoded words |
 | `TLS-Report-Domain`, `TLS-Report-Submitter` | TLS-RPT report emails | RFC 8460 |
 | `TLS-Required` | Read on submitted mail, removed from inbound mail | `TLS-Required: No` from a local sender makes the MTA-STS and DANE policies advisory for that message. Left in place when the message goes out |
 | `To` | REST (empty `to` is allowed when `cc` or `bcc` has someone); JMAP; system messages | |
 | `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, not `X-Priority`. Written after the other optional headers, before `MIME-Version`. The name keeps the case you gave it |
+| `X-Epistle-*` | Reserved for local verdicts | All sender-supplied fields in this namespace are removed on unauthenticated SMTP ingress |
 | `X-Epistle-Attachment-Warning` | Inbound mail the `[attachments]` policy flags or quarantines | Comma-separated reason codes only, never text from the message. Removed first from inbound and from every submission, so only the server's own verdict is ever in it |
 | `X-Mailbox` | Written by `epistle export` and read by `epistle import` in an mbox file | A marker of the mbox format, not a header of any message in transit |
-| `X-Spam-Score`, `X-Spam-Status` | Inbound mail from a peer that did not log in whose Bayesian score reaches `bayes_junk_at` | `X-Spam-Status: Yes` and the probability with six decimals, above `Received`. A sender can write these too: the server does not remove them |
+| `X-Spam-Score`, `X-Spam-Status` | Inbound mail from a peer that did not log in whose Bayesian score reaches `bayes_junk_at` | `X-Spam-Status: Yes` and the probability with six decimals, above `Received`. All sender-supplied `X-Spam-*` fields are removed on unauthenticated SMTP ingress before local verdicts are added |
 
 ## System mail
 
@@ -170,13 +171,29 @@ adding `List-Unsubscribe` of its own is what is meant by the warning.
 
 ## What passes through
 
-The server removes only what the tables name. Anything else a client or a
-sender writes reaches the stored or queued message, so a header such as
-`Authentication-Results`, `Received-SPF`, `X-Spam-Status` or `Delivered-To` in
-inbound mail can have been written by the sender. Read the topmost one: the
-server's own is added above what arrived. `Authentication-Results` is the one
-to be careful with, because a sender can use the server's own hostname as the
-authserv-id.
+The server removes only what the tables name. On unauthenticated SMTP
+inbound mail, signature verification reads the original message first, then
+local trust fields are removed before local headers are added and the message
+reaches scanners, Sieve or delivery. `DKIM-Signature`, `ARC-*` and earlier
+`Received` fields remain intact. Removing a field covered by a sender's
+signature can affect later verification of that signature.
+
+The names listed in the Removed columns are matched case-insensitively, and
+whitespace or control bytes inside or around the name are aligned against the
+canonical form so a sender cannot smuggle a reserved field past the stripper
+by breaking up the name. The configured hostname is normalised before it is
+compared with an `Authentication-Results` authserv-id and before it is emitted
+in one, so the same identity reads and writes the field.
+
+A preserved `Authentication-Results` with a foreign authserv-id is untrusted
+information, even when it reports a pass. Only the result epistle writes for
+its own hostname describes this hop's checks. Authenticated submission keeps
+its separate header policy in the table above.
+
+A second pass over the header section with the same parser the downstream
+readers use (mail-parser 0.11.9) catches a reserved field the stripper left
+behind; the message is then refused with `550 5.7.1` and never reaches a
+mailbox.
 
 ## Planned changes
 

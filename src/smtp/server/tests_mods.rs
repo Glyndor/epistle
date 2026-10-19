@@ -140,3 +140,11 @@ mod tests_bdat_share;
 #[cfg(test)]
 #[path = "server_tests_attachments_flood.rs"]
 mod tests_attachments_flood;
+
+#[cfg(test)]
+#[path = "server_tests_inbound_headers.rs"]
+mod tests_inbound_headers;
+
+#[cfg(test)]
+#[path = "server_tests_inbound_order.rs"]
+mod tests_inbound_order;

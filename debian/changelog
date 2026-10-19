@@ -9,6 +9,14 @@ epistle (0.12.2) UNRELEASED; urgency=medium
   * DKIM: long signature fields fold within the line limit and unsafe field names
     are not signed; dual-signed recipients carry one ed25519 and one RSA signature.
   * Add advisory DNS provider credential checks.
+  * Security: sanitize trust headers on inbound mail.
+  * Security: the inbound trust-field stripper matches names against the
+    canonical form even when whitespace or form-feed bytes break them up,
+    folds a leading `:` and any ASCII whitespace the same way mail-parser
+    0.11.9 folds them before the name starts, and refuses the message with
+    `550 5.7.1` when a reserved field still appears after strip. The
+    configured hostname is normalised before it is compared with or emitted
+    in an `Authentication-Results` authserv-id.
   * Security: IMAP ID no longer discloses the server version.
   * Status reports API key configuration warnings.
   * Security: ManageSieve now holds an unauthenticated connection to one
