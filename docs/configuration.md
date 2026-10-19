@@ -549,6 +549,11 @@ create, read, replace, patch, delete). `Groups` returns `501` — the
 directory has no group membership yet, so provisioning groups would be
 a no-op pretending to be a feature.
 
+`GET /Users` reports `totalResults` for all resources matching the filter
+within the caller's domain scope, independent of pagination. `startIndex` is
+1-based, and `itemsPerPage` is the number of resources returned in that page.
+Use `count=0` to return the total without resources.
+
 `active: false` is honoured: the account stays on disk and keeps its
 mailboxes, but `authenticate` rejects every password before any
 hashing. `PUT` and `PATCH` refuse to change `userName` (renames are

@@ -64,6 +64,7 @@ async fn paging_counts_only_the_callers_own_accounts() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(user_names(&page), ["bob"]);
+	assert_eq!(page["totalResults"], 2);
 	assert_eq!(page["itemsPerPage"], 1);
 	let (_, past) = call(
 		&app,

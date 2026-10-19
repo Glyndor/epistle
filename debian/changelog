@@ -190,6 +190,8 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     tenant answers like an unusable one. The `startIndex` query parameter
     is honoured now (only `start_index` was). This was present in 0.12.0 and 0.12.1:
     if you issued `scim` keys with `--domain`, rotate them.
+  * SCIM user lists now report the total number of matching resources independently
+    of the current page.
 
   * Security: an API key confined to some domains (`--domain`) now stays inside
     them on every route, not only on the accounts routes. It could list and

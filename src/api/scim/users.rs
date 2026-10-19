@@ -273,7 +273,7 @@ pub async fn list_users(
 	Query(query): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let start_index = query.start_index.unwrap_or(1).max(1);
-	let count = query.count.unwrap_or(100).clamp(1, 200);
+	let count = query.count.unwrap_or(100).min(200);
 
 	let scope = state.domain_scope(&auth);
 	let users: Vec<DynamicAccount> = state
@@ -293,13 +293,15 @@ pub async fn list_users(
 		users
 	};
 
+	let total_results = matched.len() as u64;
+	let offset = usize::try_from(start_index.saturating_sub(1)).unwrap_or(usize::MAX);
 	let rendered: Vec<User> = matched
 		.iter()
-		.skip((start_index.saturating_sub(1)) as usize)
+		.skip(offset)
 		.take(count as usize)
 		.map(render_user)
 		.collect();
-	let response = ListResponse::single_page(start_index, rendered.len() as u64, rendered);
+	let response = ListResponse::single_page(start_index, total_results, rendered);
 	Ok(scim_resource(StatusCode::OK, response))
 }
 
