@@ -178,10 +178,22 @@ reaches scanners, Sieve or delivery. `DKIM-Signature`, `ARC-*` and earlier
 `Received` fields remain intact. Removing a field covered by a sender's
 signature can affect later verification of that signature.
 
+The names listed in the Removed columns are matched case-insensitively, and
+whitespace or control bytes inside or around the name are aligned against the
+canonical form so a sender cannot smuggle a reserved field past the stripper
+by breaking up the name. The configured hostname is normalised before it is
+compared with an `Authentication-Results` authserv-id and before it is emitted
+in one, so the same identity reads and writes the field.
+
 A preserved `Authentication-Results` with a foreign authserv-id is untrusted
 information, even when it reports a pass. Only the result epistle writes for
 its own hostname describes this hop's checks. Authenticated submission keeps
 its separate header policy in the table above.
+
+A second pass over the header section with the same parser the downstream
+readers use (mail-parser 0.11.9) catches a reserved field the stripper left
+behind; the message is then refused with `550 5.7.1` and never reaches a
+mailbox.
 
 ## Planned changes
 

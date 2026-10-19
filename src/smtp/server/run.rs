@@ -319,7 +319,33 @@ impl Server {
 					// Verify signatures first, then remove outside authority before
 					// adding our own fields or handing the message to filters.
 					if session.authenticated().is_none() {
-						crate::smtp::inbound_headers::strip(&mut message.data, &self.hostname);
+						self.strip_inbound(&mut message.data);
+						// Defence in depth: re-parse the header section with
+						// the same parser downstream readers use, and refuse
+						// the message if any reserved field strip missed.
+						// A line whose name mail-parser folds but the
+						// stripper does not would otherwise survive as a
+						// forged trust header; the safety net turns every
+						// such leak into a permanent refusal. One extra
+						// linear pass over the header section only.
+						if let Some(leak) = crate::smtp::inbound_headers::reserved_remaining(
+							&message.data,
+							&self.hostname,
+						) {
+							tracing::warn!(
+								name = %leak,
+								"refusing inbound: trust field survived strip"
+							);
+							send(
+								&mut stream,
+								&Reply::single(
+									550,
+									"5.7.1 trust field could not be removed before delivery",
+								),
+							)
+							.await?;
+							continue;
+						}
 					}
 					let header = received_header(
 						session.helo_domain(),

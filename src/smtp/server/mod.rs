@@ -217,6 +217,13 @@ pub struct Server {
 	/// `Protocol::Submission` matches the historical behaviour (SMTP AUTH
 	/// is client submission regardless of the listener's port).
 	auth_protocol: crate::config::Protocol,
+	/// Test-only override of the trust-field stripper. `None` in
+	/// production, where the server uses
+	/// [`crate::smtp::inbound_headers::strip`]; `Some` swaps in an
+	/// alternative so the safety net can be exercised with a strip that
+	/// deliberately fails the leading-byte fold.
+	#[cfg(test)]
+	strip_for_test: Option<fn(&mut Vec<u8>, &str)>,
 }
 
 impl Server {
@@ -232,6 +239,19 @@ impl Server {
 	/// `mail_bayes_training_dropped_total`; and the job never waits, so the
 	/// reply to the client does not depend on it. The no-op default on the
 	/// trait keeps a fake scorer (test-only) cheap to wire in.
+	/// Remove sender-supplied trust fields from one inbound message. In
+	/// production this is the canonical stripper; tests can swap it for
+	/// one with a deliberate hole (the safety net check in `run` is what
+	/// the swap exercises).
+	fn strip_inbound(&self, data: &mut Vec<u8>) {
+		#[cfg(test)]
+		if let Some(strip) = self.strip_for_test {
+			strip(data, &self.hostname);
+			return;
+		}
+		crate::smtp::inbound_headers::strip(data, &self.hostname);
+	}
+
 	fn train_corpus(
 		&self,
 		message: &crate::smtp::session::AcceptedMessage,

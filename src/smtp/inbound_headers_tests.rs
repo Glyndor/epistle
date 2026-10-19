@@ -3,6 +3,70 @@ use super::*;
 const HOST: &str = "mail.example.org";
 
 #[test]
+fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
+	for name in [
+		"Authentication-Results",
+		"Received-SPF",
+		"Delivered-To",
+		"Return-Path",
+		"Epistle-Class",
+		"X-Spam-Status",
+		"X-Spam-Score",
+		"X-Spam-Future",
+		"X-Epistle-Attachment-Warning",
+		"X-Epistle-Future",
+	] {
+		for at in 0..=name.len() {
+			for byte in [b' ', b'\t', 0x0c, 0x0b, 0x1f, 0x7f] {
+				let alias = format!("{}{}{}", &name[..at], char::from(byte), &name[at..]);
+				let mut data = format!(
+					"{alias}: {HOST}; dkim=pass\r\n\tcontinued\r\nSubject: kept\r\n\r\nbody"
+				)
+				.into_bytes();
+				data.extend_from_slice(b"\0\xff");
+				strip(&mut data, HOST);
+				assert_eq!(data, b"Subject: kept\r\n\r\nbody\0\xff", "{alias:?}");
+				let parsed = mail_parser::MessageParser::default()
+					.parse(&data)
+					.expect("message");
+				assert!(parsed.header(name).is_none(), "{alias:?}");
+			}
+		}
+	}
+}
+
+#[test]
+fn accepted_hostname_is_canonical_for_comparison_and_emission() {
+	for hostname in [
+		" mail.example.org ",
+		"MAIL.EXAMPLE.ORG",
+		" Mail.Example.Org. ",
+	] {
+		let raw = format!(
+			r#"
+hostname = "{hostname}"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+[[accounts]]
+name = "alice"
+addresses = ["alice@example.org", "postmaster@example.org"]
+"#
+		);
+		let config = crate::config::Config::parse_text(&raw, std::path::Path::new("mail.toml"))
+			.expect("accepted configuration");
+		let mut data =
+			format!("Authentication-Results: {HOST}; dkim=pass\r\n\r\nbody").into_bytes();
+		strip(&mut data, &config.hostname);
+		assert_eq!(data, b"\r\nbody", "{hostname:?}");
+		assert_eq!(config.hostname, HOST);
+		assert_eq!(
+			crate::smtp::trace::format_auth_results(&config.hostname, &["dkim=none".into()]),
+			format!("Authentication-Results: {HOST};\r\n\tdkim=none\r\n")
+		);
+	}
+}
+
+#[test]
 fn local_and_unparseable_authserv_ids_are_removed() {
 	for value in [
 		"mail.example.org; spf=pass",
@@ -130,5 +194,167 @@ fn empty_header_only_and_lf_messages_have_the_same_policy() {
 		let mut data = input.to_vec();
 		strip(&mut data, HOST);
 		assert_eq!(data, expected);
+	}
+}
+
+/// Leading `:` and ASCII whitespace at the start of the line are folded by
+/// mail-parser 0.11.9 (`src/parsers/header.rs::parse_header_name`); the
+/// stripper mirrors that byte rule so the canonical-name comparison sees
+/// the same effective name every downstream reader does. Without this,
+/// `:Authentication-Results: mail.example.org; dkim=pass` parsed to an
+/// empty name and survived strip as a forged trust field.
+#[test]
+fn leading_colon_and_whitespace_are_folded_to_the_canonical_name() {
+	for name in [
+		"Authentication-Results",
+		"Received-SPF",
+		"Delivered-To",
+		"Return-Path",
+		"Epistle-Class",
+		"X-Spam-Status",
+		"X-Spam-Score",
+		"X-Epistle-Attachment-Warning",
+	] {
+		for prefix in [
+			":",
+			"::",
+			":::",
+			": ",
+			" :",
+			"\t:",
+			":\t",
+			":\t:",
+			" : ",
+			"\t :\t:\t",
+		] {
+			let value = if name == "Authentication-Results" {
+				format!("{HOST}; dkim=pass; forged")
+			} else {
+				"forged".to_string()
+			};
+			let original =
+				format!("{prefix}{name}: {value}\r\nSubject: kept\r\n\r\nbody").into_bytes();
+			// Pre-condition: mail-parser does fold the leader and reads the
+			// canonical name. If a future change broke that fold, this
+			// assertion would fail before the strip code is exercised, so a
+			// test never passes on a buffer that no parser would ever treat
+			// as the canonical name in the first place.
+			let pre = mail_parser::MessageParser::default()
+				.parse(&original)
+				.expect("original parses");
+			assert!(
+				pre.header(name).is_some(),
+				"mail-parser must read it before strip: {prefix:?}{name:?}"
+			);
+			let mut data = original.clone();
+			strip(&mut data, HOST);
+			assert_eq!(data, b"Subject: kept\r\n\r\nbody", "{prefix:?}{name:?}");
+			let post = mail_parser::MessageParser::default()
+				.parse(&data)
+				.expect("stripped parses");
+			assert!(
+				post.header(name).is_none(),
+				"mail-parser must not see it after strip: {prefix:?}{name:?}"
+			);
+		}
+	}
+}
+
+/// Lines made up of nothing but folded leader bytes (`:` and whitespace)
+/// have no header at all per mail-parser; strip leaves them in place.
+#[test]
+fn leader_only_lines_are_kept_without_a_name() {
+	for prefix in [":", "::", ": \t:", "::::::", "   \t  "] {
+		let input = format!("{prefix}\r\nSubject: kept\r\n\r\nbody").into_bytes();
+		let pre = mail_parser::MessageParser::default()
+			.parse(&input)
+			.expect("parses");
+		assert!(pre.header("Authentication-Results").is_none(), "{prefix:?}");
+		let mut data = input.clone();
+		strip(&mut data, HOST);
+		assert_eq!(data, input, "{prefix:?}");
+		assert!(reserved_remaining(&data, HOST).is_none(), "{prefix:?}");
+	}
+}
+
+/// The safety net re-parses with mail-parser and reports any reserved
+/// field strip missed. It exists so a future mail-parser change that
+/// folds a byte strip does not anticipate does not turn into a forged
+/// header delivered.
+#[test]
+fn safety_net_flags_a_reserved_field_strip_would_leave() {
+	for (name, value, expected) in [
+		(
+			"Authentication-Results",
+			"mail.example.org; dkim=pass\r\n",
+			"Authentication-Results",
+		),
+		("Received-SPF", "forged\r\n", "Received-SPF"),
+		("Delivered-To", "alice@example.org\r\n", "Delivered-To"),
+		("Return-Path", "<forged@example.org>\r\n", "Return-Path"),
+		("Epistle-Class", "marketing\r\n", "Epistle-Class"),
+		("X-Spam-Status", "Yes\r\n", "X-Spam-Status"),
+		("X-Spam-Score", "0.97\r\n", "X-Spam-Status"),
+		(
+			"X-Epistle-Attachment-Warning",
+			"executable\r\n",
+			"X-Epistle-Attachment-Warning",
+		),
+	] {
+		let data = format!("{name}: {value}Subject: kept\r\n\r\nbody").into_bytes();
+		assert_eq!(
+			reserved_remaining(&data, HOST).unwrap_or(""),
+			expected,
+			"{name}"
+		);
+	}
+}
+
+/// The safety net must NOT flag a foreign, parseable `Authentication-Results`
+/// (the stripper keeps it as untrusted information, by design) nor any
+/// non-reserved field.
+#[test]
+fn safety_net_does_not_flag_foreign_or_unrelated_fields() {
+	for data in [
+		&b"Authentication-Results: other.example; spf=pass\r\nSubject: kept\r\n\r\nbody"[..],
+		&b"From: eve@sender.example\r\nTo: alice@example.org\r\nSubject: hi\r\n\r\nbody"[..],
+		&b"DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=sender.example; s=external; h=from:to; bh=; b=\r\nSubject: kept\r\n\r\nbody"[..],
+		&b"Authentication-Results: prior.example; spf=pass\r\nSubject: kept\r\n\r\nbody"[..],
+	] {
+		assert!(reserved_remaining(data, HOST).is_none(), "{data:?}");
+	}
+}
+
+/// End-to-end through the strip-with-hole helper: a hole in the leader
+/// fold lets `:Authentication-Results: x` survive strip; the safety net
+/// must still flag it. This is what the SMTP path will hand the server
+/// when run.rs calls `reserved_remaining` after `strip`.
+#[test]
+fn safety_net_catches_a_hypothetical_hole_in_strip() {
+	for (name, expected) in [
+		("Authentication-Results", "Authentication-Results"),
+		("Received-SPF", "Received-SPF"),
+		("Delivered-To", "Delivered-To"),
+		("Return-Path", "Return-Path"),
+		("Epistle-Class", "Epistle-Class"),
+		("X-Spam-Status", "X-Spam-Status"),
+		("X-Spam-Score", "X-Spam-Status"),
+		(
+			"X-Epistle-Attachment-Warning",
+			"X-Epistle-Attachment-Warning",
+		),
+	] {
+		let mut data = format!(":{name}: forged\r\nSubject: kept\r\n\r\nbody").into_bytes();
+		strip_buggy(&mut data, HOST);
+		assert_eq!(
+			reserved_remaining(&data, HOST).unwrap_or(""),
+			expected,
+			"{name}"
+		);
+		// And `strip` (with the leader fold) clears it, so the safety net
+		// is the second pass, not the first.
+		let mut fixed = format!(":{name}: forged\r\nSubject: kept\r\n\r\nbody").into_bytes();
+		strip(&mut fixed, HOST);
+		assert!(reserved_remaining(&fixed, HOST).is_none(), "{name}");
 	}
 }
