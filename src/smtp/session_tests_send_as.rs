@@ -65,7 +65,7 @@ fn mail_from_follows_the_table() {
 			let code = if *allowed { "250" } else { "553" };
 			assert!(
 				reply.starts_with(code),
-				"{account} MAIL FROM {from}: {reply}"
+				"MAIL FROM {from} got an unexpected reply: {reply}"
 			);
 		}
 	}
@@ -80,14 +80,14 @@ fn the_from_header_follows_the_table() {
 			if *allowed {
 				assert!(
 					matches!(action, Action::Deliver(..)),
-					"{account} From {from}: {}",
+					"From {from} got an unexpected action: {}",
 					reply_text(&action)
 				);
 			} else {
 				assert_eq!(
 					reply_text(&action),
 					"550 5.7.1 From header not owned by the authenticated account\r\n",
-					"{account} From {from}"
+					"From {from} was not refused as not owned"
 				);
 			}
 		}

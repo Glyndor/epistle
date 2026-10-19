@@ -179,10 +179,13 @@ async fn an_account_reads_only_its_own_scripts_and_blobs() {
 	for account in ["bob", "ann"] {
 		let path = format!("/jmap/download/{account}/sieve-{}-1/x", bobs.id);
 		let (status, _, body) = download(&app, &secret, &path).await;
-		assert_eq!(status, 404, "{account}");
+		assert_eq!(
+			status, 404,
+			"the download of a script that is not the caller's"
+		);
 		assert!(
 			!String::from_utf8_lossy(&body).contains("keep;"),
-			"{account}"
+			"the body of the refused download must not carry the script"
 		);
 	}
 	let (status, _, _) = download(

@@ -11,7 +11,7 @@ fn every_case_gets_its_answer() {
 		assert_eq!(
 			directory.owns_address(account, &address),
 			*allowed,
-			"{account} sending as {from}"
+			"sending as {from} gave an unexpected verdict"
 		);
 	}
 }
@@ -24,7 +24,7 @@ fn the_table_covers_allowed_and_refused_for_each_account() {
 		for outcome in [true, false] {
 			assert!(
 				CASES.iter().any(|(a, _, o)| *a == account && *o == outcome),
-				"{account} has no case that is {outcome}"
+				"an account has no case that is {outcome}"
 			);
 		}
 	}

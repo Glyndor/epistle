@@ -144,7 +144,7 @@ fn with_the_default_limits_two_accounts_flooding_leave_room_for_a_third() {
 	for account in ["alice", "bob", "carol"] {
 		assert!(
 			queue.submit(job(account)),
-			"{account} still gets a place after two accounts hit the limits"
+			"an account that stayed under the limits still gets a place after two accounts hit them"
 		);
 	}
 }
