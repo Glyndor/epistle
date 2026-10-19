@@ -133,7 +133,7 @@ function name is the stable reference.
 | 7.1.1 No secrets/PII in logs | Met | All 50 `tracing` call sites audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth.rs`). |
 | 7.1.2 No credentials in logs even on the failure path | Met | The decoded PLAIN/LOGIN/SCRAM bytes never reach a log macro; no protocol logs its raw command line. |
 | 7.4.1 Generic error to the client; details server-side | Met | API errors return fixed strings (`src/api/error.rs::internal` → "Internal error."); underlying errors dropped via `.map_err(|_| …)`; JMAP errors are static. No stack trace, file path, SQL text or version reaches a client. |
-| 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version; no HTTP `Server` header. (The IMAP `ID` response includes the version only after the client issues `ID`, RFC 2971 — conventional; the `/status` version is behind the closed API.) |
+| 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version, IMAP `ID` returns `NIL`, and no HTTP `Server` header is sent. The `/status` version is behind the closed API. |
 | 7.2 / 7.3 Security-event logging | Met | Authn/authz failures and delivery outcomes are logged/metered (`src/metrics/`), without sensitive data. |
 
 ---
