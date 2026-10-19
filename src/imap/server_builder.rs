@@ -5,7 +5,7 @@ use super::*;
 impl Server {
 	/// Set APPENDLIMIT (RFC 7889), the largest literal an APPEND or
 	/// REPLACE command may carry on this listener. `0` keeps the
-	/// built-in default ([`super::command::DEFAULT_APPEND_LIMIT`]); any
+	/// built-in default ([`crate::imap::command::DEFAULT_APPEND_LIMIT`]); any
 	/// other value is taken as given. Flows from `[server]
 	/// max_message_size`, the same cap the SMTP, REST and JMAP
 	/// submission paths enforce.
