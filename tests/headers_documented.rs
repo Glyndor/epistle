@@ -20,6 +20,14 @@ use std::path::{Path, PathBuf};
 const NOT_HEADERS: &[(&str, &str)] = &[
 	("Proc-Type", "a PEM key header in the key importer"),
 	("Report-ID", "text inside the subject of a DMARC report"),
+	(
+		"Content-Length",
+		"a header of the HTTP refusal a full listener sends, not of a message",
+	),
+	(
+		"Retry-After",
+		"a header of the HTTP refusal a full listener sends, not of a message",
+	),
 ];
 
 /// Single-word names that count as headers; any name with a hyphen does.
