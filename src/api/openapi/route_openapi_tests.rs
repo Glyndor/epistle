@@ -26,7 +26,11 @@ const ROUTERS: [(&str, &str, &str); 7] = [
 		include_str!("../../acme/http01.rs"),
 		"",
 	),
-	("src/cli/serve.rs", include_str!("../../cli/serve.rs"), ""),
+	(
+		"src/cli/serve_metrics.rs",
+		include_str!("../../cli/serve_metrics.rs"),
+		"",
+	),
 ];
 
 const METHODS: [&str; 7] = ["get", "post", "put", "patch", "delete", "head", "options"];
