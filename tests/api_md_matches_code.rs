@@ -124,7 +124,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 	),
 	(
 		"src/smtp/session/mod.rs",
-		&["MAX_RECIPIENTS"],
+		&["DEFAULT_MAX_RECIPIENTS"],
 		"Together at most {}",
 	),
 	(
