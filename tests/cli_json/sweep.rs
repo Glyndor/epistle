@@ -78,6 +78,7 @@ const SKIPPED: &[(&str, &str)] = &[
 		"evidence key rotate",
 		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence_tests_key.rs",
 	),
+	("dns provider check", "calls the DNS provider"),
 	("dns provider test", "calls the DNS provider"),
 	("webhook test", "posts to the endpoint"),
 	("relay test", "connects to the smarthost"),

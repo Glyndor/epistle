@@ -261,6 +261,71 @@ RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
 
+### Checking provider credentials
+
+Run `epistle dns provider check [--json]` to inspect the configured credential.
+This command only reports findings. It never changes records or settings,
+restarts the server, or prevents another command from running. Findings use
+`verified`, `not verifiable with this provider` (`not_verifiable` in JSON),
+or `failure` with a cause. JSON carries the same facts as text. The command
+exits successfully after printing its report, even when a finding fails.
+
+Cloudflare checks user-token activity and expiration, lists visible zones,
+and reads a record page in each visible zone needed by a hosted domain,
+the mail hostname, `autoconfig`, `autodiscover`, or `mta-sts`. It names extra
+zones and own names for which no visible zone matches. A visible zone is an
+API visibility result, not proof of DNS delegation. Expiration within seven
+days is reported explicitly. An omitted expiration date stays unknown.
+
+When token policies are readable, Cloudflare also reports DNS Write grants
+for visible required zones and whether DNS access extends beyond them.
+The write finding describes the token policy, without attempting a write;
+it cannot establish restrictions inherited from the account owner's role.
+A wildcard policy is broader even when the account currently has one zone.
+Unfamiliar policies and account-specific nested resources stay unknown.
+The [token details endpoint](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
+requires API Tokens Read or Write. A token without that extra permission
+can still report activity, expiration, zones and record reading. Do not add
+token-management permissions merely to make every finding verifiable.
+
+For Bunny, deSEC, DigitalOcean, DNSimple, Google Cloud DNS, GoDaddy,
+Namecheap, OVH, Porkbun and Spaceship, the existing zone listing can verify
+record reading in the configured zone. It does not enumerate every zone
+accessible to the credential. Other findings stay unknown. Route 53,
+RFC 2136 and manual mode currently expose no inspection metadata.
+Read-only operations at Porkbun and Namecheap use POST; Google may exchange
+a service-account assertion for an access token. None writes DNS records.
+Tokens, token identifiers and remote error bodies are never printed.
+
+### Creating credentials with the least access
+
+Create a separate credential for epistle and restrict it to the zone it
+manages wherever the provider offers that restriction. Grant only the
+operations below for record automation. The table describes endpoints used
+by the implementations in `src/dns/providers/`, including writes needed by
+publishing and cleanup, not writes performed by `provider check`.
+For every provider other than Cloudflare, the exact permission names,
+credential creation steps, available zone restrictions and expiration
+controls must be checked in that provider's documentation. A local
+`ScopedSecret` restriction does not restrict the credential at the provider.
+
+| Provider | Access to request when creating the credential |
+|---|---|
+| Cloudflare | Create a custom API token with Zone DNS Edit and Zone Read, restricted to the required zones. Publishing uses `GET /zones`, and GET, POST, PUT and DELETE on `/zones/{id}/dns_records[/{id}]`. Inspection adds GET `/user/tokens/verify` and, if permitted, `/user/tokens/{id}`. See [token creation](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/). |
+| Bunny | Use a key that can GET `/dnszone?search=...` and `/dnszone/{id}`, PUT `/dnszone/{id}/records`, and POST or DELETE `/dnszone/{id}/records/{record_id}`. Verify whether a DNS-only, zone-limited key is available. |
+| deSEC | Use a token limited to reading and updating `/domains/{zone}/rrsets/` with GET and PUT. Deletion uses an empty record set. Verify the provider's token policy controls. |
+| DigitalOcean | Use a token for GET and POST `/v2/domains/{zone}/records`, and PUT and DELETE `/v2/domains/{zone}/records/{id}`. Verify domain restrictions and permission names. |
+| DNSimple | Use a token for GET and POST `/v2/{account}/zones/{zone}/records`, and PATCH and DELETE `/v2/{account}/zones/{zone}/records/{id}`. Verify account and zone restriction options. |
+| Google Cloud DNS | Use a dedicated service account that can list `/dns/v1/projects/{project}/managedZones`, GET `/{zone}/rrsets`, and POST `/{zone}/changes` under that collection. The implementation requests OAuth scope `ndev.clouddns.readwrite` through `/token`. Verify the smallest IAM permission set and resource bindings. |
+| GoDaddy | Use an API key and secret for GET `/v1/domains/{zone}/records[/type/name]`, PUT `/v1/domains/{zone}/records/{type}/{name}`, and DELETE at the same record path. Verify production API eligibility and zone restriction options. |
+| Namecheap | Enable only the account access needed for `namecheap.domains.dns.getHosts` and `namecheap.domains.dns.setHosts` through form POST `/xml.response`. Supply the permitted egress IPv4 address. Verify key restrictions in the provider documentation; `setHosts` replaces the zone's host list. |
+| OVH | Create application and consumer credentials for GET `/domain/zone/{zone}/record[/{id}]`, POST on `/record` and `/refresh`, and PUT and DELETE on `/record/{id}`. Verify access-rule syntax for those paths. |
+| Porkbun | Use an API key and secret for POST `/api/json/v3/dns/retrieve/{zone}`, `/dns/create/{zone}`, `/dns/edit/{zone}/{id}`, and `/dns/delete/{zone}/{id}` under the same API base. Verify domain API access and key restrictions. |
+| Route 53 | Use credentials for `ListResourceRecordSets` (GET `/2013-04-01/hostedzone/{id}/rrset`) and `ChangeResourceRecordSets` (POST at that path). Restrict to the hosted zone where IAM permits it; verify the IAM action and resource syntax. |
+| RFC 2136 | Create a TSIG key on the authoritative nameserver with an update policy limited to the zone and record names/types epistle publishes. There is no HTTP endpoint or token inspection. Verify update-policy syntax in the nameserver documentation. |
+| Spaceship | Use an API key and secret for GET, PUT and DELETE `/api/v1/dns/records/{zone}`. Verify DNS-only permissions and domain restrictions in the API manager documentation. |
+| Manual | No token is needed; records are published by hand. |
+
 ### What a listing returns
 
 `epistle dns lockdown`, `epistle dns provider test` and the DKIM clean-up
