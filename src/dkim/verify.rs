@@ -268,6 +268,23 @@ pub(crate) fn parse_key(text: &str) -> Option<Vec<u8>> {
 	None
 }
 
+/// Names this parser reads out of a raw message, with the `trim_end` it
+/// applies on each header name. Tests use it to confirm the real DKIM
+/// parser agrees with the inbound trust-field stripper about whether a
+/// reserved name survived.
+#[cfg(test)]
+pub(crate) fn header_names(raw: &[u8]) -> Vec<String> {
+	Message::split(raw)
+		.map(|message| {
+			message
+				.headers
+				.into_iter()
+				.map(|h| h.name.to_string())
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
 /// Remove the value of the `b=` tag, keeping the tag itself (section 3.7).
 fn strip_b_tag(value: &str) -> String {
 	value

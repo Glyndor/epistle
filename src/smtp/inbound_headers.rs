@@ -1,18 +1,52 @@
 //! Remove sender-supplied authority before stamping an inbound SMTP message.
 
+// Counter of bytes moved by `copy_within_tracking` during tests. The
+// compaction test exposes this so a regression to per-field `Vec::drain`
+// (which moves the suffix once per removed field, and so is quadratic)
+// fails an assertion instead of the existing pointer/contents checks
+// that pass even when the algorithm is quadratic.
+#[cfg(test)]
+thread_local! {
+	static BYTES_MOVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_moves(bytes: usize) {
+	BYTES_MOVED.with(|c| c.set(c.get() + bytes));
+}
+
+#[cfg(test)]
+fn reset_moves() {
+	BYTES_MOVED.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+fn moves() -> usize {
+	BYTES_MOVED.with(|c| c.get())
+}
+
 /// Strip local trust fields in one pass, including folded continuations.
 /// Authentication and ARC validation must run on the original bytes first.
 /// Each retained field and the body are moved at most once, in place.
 pub(crate) fn strip(data: &mut Vec<u8>, hostname: &str) {
-	strip_with(data, hostname, true);
+	strip_with(data, hostname, true, false);
 }
 
 /// Same pass as [`strip`], with `skip_leader` controlling whether leading
 /// `:` and ASCII whitespace bytes are folded before the name starts.
 /// `false` reproduces the old behaviour the second review flagged as
 /// unable to match `:Authentication-Results:`; the test suite drives it
-/// through `false` to simulate a hypothetical hole in [`strip`].
-fn strip_with(data: &mut Vec<u8>, hostname: &str, skip_leader: bool) {
+/// through `false` to simulate a hypothetical hole in [`strip`]. The
+/// `drain_per_field` flag is a test-only escape hatch that replaces the
+/// in-place compaction with one `Vec::drain` per removed field, which
+/// moves the suffix once per field and so is quadratic.
+#[cfg_attr(not(test), allow(unused_variables))]
+fn strip_with(data: &mut Vec<u8>, hostname: &str, skip_leader: bool, drain_per_field: bool) {
+	#[cfg(test)]
+	if drain_per_field {
+		strip_drain(data, hostname, skip_leader);
+		return;
+	}
 	let mut read = 0;
 	let mut write = 0;
 	while read < data.len() {
@@ -26,13 +60,78 @@ fn strip_with(data: &mut Vec<u8>, hostname: &str, skip_leader: bool) {
 			read = line_end(data, read);
 		}
 		if !remove(&data[start..read], hostname, skip_leader) {
-			data.copy_within(start..read, write);
+			copy_within_tracking(data, start..read, write);
 			write += read - start;
 		}
 	}
 	let tail = data.len() - read;
-	data.copy_within(read.., write);
+	copy_within_tracking(data, read.., write);
 	data.truncate(write + tail);
+}
+
+/// Test-only quadratic version of the strip pass: one `Vec::drain` per
+/// removed field. The compaction test asserts that the in-place pass
+/// stays linear and that swapping to this version is caught.
+#[cfg(test)]
+fn strip_drain(data: &mut Vec<u8>, hostname: &str, skip_leader: bool) {
+	let mut read = 0;
+	let mut write = 0;
+	while read < data.len() {
+		let start = read;
+		let end = line_end(data, read);
+		if matches!(&data[read..end], b"\r\n" | b"\n") {
+			break;
+		}
+		read = end;
+		while read < data.len() && matches!(data[read], b' ' | b'\t') {
+			read = line_end(data, read);
+		}
+		if remove(&data[start..read], hostname, skip_leader) {
+			// Per-field drain: the suffix moves once per removed field.
+			let len = data.len();
+			record_moves(len - start);
+			data.drain(start..read);
+			read = start;
+		} else {
+			if write != start {
+				let len = data.len();
+				record_moves(len - start);
+				data.copy_within(start..read, write);
+			}
+			write += read - start;
+		}
+	}
+}
+
+/// Same pass as [`strip`], with `skip_leader` controlling whether leading
+/// `:` and ASCII whitespace bytes are folded before the name starts.
+/// `false` reproduces the old behaviour the second review flagged as
+/// unable to match `:Authentication-Results:`; the test suite drives it
+/// through `false` to simulate a hypothetical hole in [`strip`].
+#[cfg(test)]
+pub(crate) fn strip_with_drain_for_test(data: &mut Vec<u8>, hostname: &str) {
+	strip_with(data, hostname, true, true);
+}
+
+#[cfg(test)]
+#[allow(clippy::ptr_arg)]
+fn copy_within_tracking<R: std::ops::RangeBounds<usize>>(data: &mut Vec<u8>, src: R, dst: usize) {
+	let len = match src.end_bound() {
+		std::ops::Bound::Included(n) => n + 1,
+		std::ops::Bound::Excluded(n) => *n,
+		std::ops::Bound::Unbounded => data.len(),
+	} - match src.start_bound() {
+		std::ops::Bound::Included(n) => *n,
+		std::ops::Bound::Excluded(n) => n + 1,
+		std::ops::Bound::Unbounded => 0,
+	};
+	record_moves(len);
+	data.copy_within(src, dst);
+}
+
+#[cfg(not(test))]
+fn copy_within_tracking<R: std::ops::RangeBounds<usize>>(data: &mut [u8], src: R, dst: usize) {
+	data.copy_within(src, dst);
 }
 
 fn line_end(data: &[u8], start: usize) -> usize {
@@ -60,7 +159,7 @@ fn remove(field: &[u8], hostname: &str, skip_leader: bool) -> bool {
 	let Some(rel) = field[i..].iter().position(|&byte| byte == b':') else {
 		return false;
 	};
-	let name = field[i..i + rel].trim_ascii_end();
+	let name = trim_trailing_whitespace(field[i..i + rel].trim_ascii_end());
 	if name_matches(name, b"Authentication-Results") {
 		return authserv_id(&field[i + rel + 1..]).is_none_or(|id| {
 			id.trim_end_matches('.')
@@ -103,21 +202,34 @@ fn name_starts_with(name: &[u8], prefix: &[u8]) -> bool {
 	j == prefix.len()
 }
 
-/// Walk `name` and `reserved` in lockstep. `name` may contain any of the
-/// obfuscation bytes in place of the corresponding reserved byte. A `-` in
-/// `reserved` is matched by an obfuscation byte in `name` (so a header like
-/// `X Spam-Foo` lines up with the canonical `X-Spam-` prefix). `-` in `name`
-/// that does not align with the current reserved byte is treated as a
-/// separator and skipped.
+/// Walk `name` and `reserved` in lockstep. A name byte that is a foldable
+/// obfuscation byte (whitespace-like bytes other than `-`, see
+/// [`is_obfuscation_byte`]) is dropped without consuming the reserved
+/// byte at the same position; a reserved `-` matches a foldable name
+/// byte and consumes both. A `-` in `name` that follows a fold from
+/// whitespace to a reserved `-` is consumed as part of the same fold
+/// (mail-parser includes the `-` in the effective header bytes). A `-` in
+/// `name` outside that case breaks the match: no reader folds the stray
+/// dash, so the field is a distinct foreign header and stays in the
+/// message.
 fn align(name: &[u8], reserved: &[u8]) -> (usize, usize) {
 	let mut i = 0;
 	let mut j = 0;
+	let mut last_fold_was_dash = false;
 	while i < name.len() && j < reserved.len() {
 		let nc = name[i];
 		let rc = reserved[j];
-		if nc.eq_ignore_ascii_case(&rc) || (rc == b'-' && is_obfuscation_byte(nc)) {
+		if nc.eq_ignore_ascii_case(&rc) {
 			i += 1;
 			j += 1;
+			last_fold_was_dash = false;
+		} else if rc == b'-' && is_obfuscation_byte(nc) {
+			i += 1;
+			j += 1;
+			last_fold_was_dash = true;
+		} else if last_fold_was_dash && nc == b'-' {
+			i += 1;
+			last_fold_was_dash = false;
 		} else if is_obfuscation_byte(nc) {
 			i += 1;
 		} else {
@@ -127,12 +239,13 @@ fn align(name: &[u8], reserved: &[u8]) -> (usize, usize) {
 	(i, j)
 }
 
-/// Bytes that are valid as field-name character (CRLF aside) per RFC 5322 §3.6.8
-/// only when the byte sequence forms the canonical name; here we list the bytes
-/// that lenient downstream readers may fold out of an otherwise-matching
-/// header, and that align against `-` to keep the prefix position intact.
+/// Whitespace-like bytes that lenient downstream readers may fold out of
+/// an otherwise-matching header name. `-` is no longer foldable here: it
+/// only maps to a `-` at the same position in the canonical name, so a
+/// stray `-` (`-Delivered-To`, `Authentication--Results`) breaks the
+/// match instead of being silently consumed as obfuscation.
 fn is_obfuscation_byte(byte: u8) -> bool {
-	matches!(byte, b' ' | b'\t' | 0x0c | 0x0b | 0x1f | 0x7f | b'-')
+	matches!(byte, b' ' | b'\t' | 0x0c | 0x0b | 0x1f | 0x7f)
 }
 
 /// Read the RFC 8601 preamble: CFWS, a MIME token or quoted value, an
@@ -195,6 +308,20 @@ fn authserv_id(value: &[u8]) -> Option<String> {
 
 fn token(byte: u8) -> bool {
 	byte.is_ascii_graphic() && !b"()<>@,;:\\\"/[]?=".contains(&byte)
+}
+
+/// Fold trailing Unicode whitespace, matching DKIM and ARC-AMS which
+/// apply `name.trim_end()` on each header. RFC 5322 §3.6.8 limits field
+/// names to printable ASCII, so any non-ASCII byte at the end is already
+/// invalid; folding the 19 code points of `char::is_whitespace` closes
+/// the gap that let `Authentication-Results\u{00A0}` reach the sink as
+/// a canonical reserved name. Invalid UTF-8 is left untouched (mail-parser
+/// itself rejects it).
+fn trim_trailing_whitespace(name: &[u8]) -> &[u8] {
+	let Ok(s) = std::str::from_utf8(name) else {
+		return name;
+	};
+	s.trim_end().as_bytes()
 }
 
 /// Skip whitespace and nested comments without recursion or backtracking.
@@ -260,9 +387,13 @@ pub(crate) fn reserved_remaining(data: &[u8], hostname: &str) -> Option<&'static
 }
 
 fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Option<&'static str> {
-	// mail-parser keeps the case of names it does not know, so compare
-	// without regard to case: a lower-case spelling is still the field.
-	let lower = name.to_ascii_lowercase();
+	// Use the union of mail-parser's reading (which keeps the case and
+	// every byte of the name) and DKIM/ARC's reading (which fold trailing
+	// Unicode whitespace with `name.trim_end()`). mail-parser alone misses
+	// the trailing non-ASCII whitespace that DKIM/ARC fold, which is how
+	// a forged `Authentication-Results\u{00A0}` would survive strip and
+	// be presented to the downstream readers as canonical.
+	let lower = name.trim_end().to_ascii_lowercase();
 	match lower.as_str() {
 		"authentication-results" => {
 			// A value that is not text cannot be shown to name a foreign
@@ -289,9 +420,13 @@ fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Opti
 
 #[cfg(test)]
 pub(crate) fn strip_buggy(data: &mut Vec<u8>, hostname: &str) {
-	strip_with(data, hostname, false);
+	strip_with(data, hostname, false, false);
 }
 
 #[cfg(test)]
 #[path = "inbound_headers_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "inbound_headers_reserved_names_tests.rs"]
+mod reserved_names_tests;

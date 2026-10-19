@@ -29,3 +29,6 @@ pub(crate) use spki::spki_for_rsa;
 pub(crate) use verify::parse_key;
 
 pub(crate) use verify::verify_tlsrpt;
+
+#[cfg(test)]
+pub(crate) use verify::header_names;

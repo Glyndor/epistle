@@ -2,8 +2,20 @@ use super::*;
 
 const HOST: &str = "mail.example.org";
 
+/// Aliases of a reserved name where an obfuscation byte (whitespace, VT,
+/// FF, US or DEL) is inserted at any position. The strip pass must
+/// remove the field whenever mail-parser 0.11.9 would read the canonical
+/// name in the original bytes; mail-parser folds leading `:` and ASCII
+/// whitespace, so the strip mirrors that fold. mail-parser does NOT fold
+/// interior whitespace or any non-ASCII whitespace, and DKIM/ARC do not
+/// fold interior whitespace either, so an interior obfuscation byte
+/// keeps the field as a foreign name (no leading reader sees the canonical
+/// form, no strip is needed). The pre-condition below captures that
+/// distinction: if mail-parser does not see the canonical name in the
+/// original, removing the line is over-removal.
 #[test]
 fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
+	let parser = mail_parser::MessageParser::default();
 	for name in [
 		"Authentication-Results",
 		"Received-SPF",
@@ -19,16 +31,23 @@ fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
 		for at in 0..=name.len() {
 			for byte in [b' ', b'\t', 0x0c, 0x0b, 0x1f, 0x7f] {
 				let alias = format!("{}{}{}", &name[..at], char::from(byte), &name[at..]);
-				let mut data = format!(
+				let original = format!(
 					"{alias}: {HOST}; dkim=pass\r\n\tcontinued\r\nSubject: kept\r\n\r\nbody"
 				)
 				.into_bytes();
+				// Pre-condition: mail-parser must read the canonical name
+				// in the original, so a strip that silently leaves the
+				// line cannot make the assertion pass by virtue of the
+				// reader never reading it anyway.
+				let pre = parser.parse(&original).expect("message");
+				if pre.header(name).is_none() {
+					continue;
+				}
+				let mut data = original.clone();
 				data.extend_from_slice(b"\0\xff");
 				strip(&mut data, HOST);
 				assert_eq!(data, b"Subject: kept\r\n\r\nbody\0\xff", "{alias:?}");
-				let parsed = mail_parser::MessageParser::default()
-					.parse(&data)
-					.expect("message");
+				let parsed = parser.parse(&data).expect("message");
 				assert!(parsed.header(name).is_none(), "{alias:?}");
 			}
 		}
@@ -161,19 +180,62 @@ fn repeated_fields_are_compacted_without_reallocating_or_changing_the_body() {
 		let mut data = "Authentication-Results: mail.example.org; spf=pass\r\n\tfolded\r\n"
 			.repeat(count)
 			.into_bytes();
+		let field_len = b"Authentication-Results: mail.example.org; spf=pass\r\n\tfolded\r\n".len();
 		data.extend_from_slice(b"Subject: kept\r\n\r\n");
-		data.extend(std::iter::repeat_n(0xff, 1024 * 1024));
+		let body = std::iter::repeat_n(0xff, 1024 * 1024).collect::<Vec<u8>>();
+		data.extend_from_slice(&body);
 		let ptr = data.as_ptr();
+		// Reset the bytes-moved counter so this test owns the assertion
+		// for the compaction cost. The linear in-place pass moves each
+		// kept field once and the body once, so the total is at most
+		// `(kept_field_count) * field_len + body_len`. A regression to
+		// per-field `Vec::drain` would move the suffix once per removed
+		// field (quadratic in `count * field_len`), which blows past the
+		// bound by orders of magnitude. The bound leaves room for one
+		// move of every kept field plus one move of the body, with a
+		// generous margin for the test harness.
+		reset_moves();
 		strip(&mut data, HOST);
 		assert_eq!(data.as_ptr(), ptr);
 		assert!(data.starts_with(b"Subject: kept\r\n\r\n"));
-		assert_eq!(data.len(), b"Subject: kept\r\n\r\n".len() + 1024 * 1024);
+		assert_eq!(data.len(), b"Subject: kept\r\n\r\n".len() + body.len());
 		assert!(
 			data[b"Subject: kept\r\n\r\n".len()..]
 				.iter()
 				.all(|b| *b == 0xff)
 		);
+		let linear_bound = 2 * (field_len + b"Subject: kept\r\n\r\n".len() + body.len());
+		let moved = moves();
+		assert!(
+			moved <= linear_bound,
+			"moves {moved} exceeds linear bound {linear_bound} for count={count}"
+		);
 	}
+}
+
+/// `strip_with_drain_for_test` swaps the in-place compaction for one
+/// `Vec::drain` per removed field. The result and the buffer pointer
+/// are the same; only the work is quadratic. The compaction test above
+/// MUST fail under this swap, otherwise it does not really bound the
+/// cost and a regression to the drain form would not be caught.
+#[test]
+fn the_linear_per_field_swap_is_caught_by_the_compaction_cost_test() {
+	let count = 9_800;
+	let mut data = "Authentication-Results: mail.example.org; spf=pass\r\n\tfolded\r\n"
+		.repeat(count)
+		.into_bytes();
+	data.extend_from_slice(b"Subject: kept\r\n\r\n");
+	let body = std::iter::repeat_n(0xff, 1024 * 1024).collect::<Vec<u8>>();
+	data.extend_from_slice(&body);
+	let field_len = b"Authentication-Results: mail.example.org; spf=pass\r\n\tfolded\r\n".len();
+	let linear_bound = 2 * (field_len + b"Subject: kept\r\n\r\n".len() + body.len());
+	reset_moves();
+	strip_with_drain_for_test(&mut data, HOST);
+	let moved = moves();
+	assert!(
+		moved > linear_bound,
+		"drain swap moved only {moved} bytes; expected quadratic over linear bound {linear_bound}"
+	);
 }
 
 #[test]
@@ -385,4 +447,31 @@ fn safety_net_catches_a_hypothetical_hole_in_strip() {
 		strip(&mut fixed, HOST);
 		assert!(reserved_remaining(&fixed, HOST).is_none(), "{name}");
 	}
+}
+
+/// Direct tests of the safety net on `Authentication-Results:` with an
+/// empty value. mail-parser 0.11.9 parses the value as `HeaderValue::Empty`
+/// (no text bytes), so `header.value().as_text()` is `None`. The
+/// `let Some(value) = value else ...` branch in `check_reserved_name`
+/// refuses the message because a reserved field with no usable value is
+/// treated as ours (we cannot tell it apart from the local verdict we
+/// add). Reverting that branch to `let value = value?` propagates the
+/// `None` and silently drops the leak. This test makes that regression
+/// observable.
+#[test]
+fn reserved_remaining_flags_an_empty_authentication_results_value() {
+	let original = b"Authentication-Results:\r\nSubject: kept\r\n\r\nbody";
+	assert_eq!(
+		reserved_remaining(original, HOST),
+		Some("Authentication-Results"),
+	);
+}
+
+#[test]
+fn reserved_remaining_flags_an_empty_authentication_results_value_in_lowercase() {
+	let original = b"authentication-results:\r\nSubject: kept\r\n\r\nbody";
+	assert_eq!(
+		reserved_remaining(original, HOST),
+		Some("Authentication-Results"),
+	);
 }
