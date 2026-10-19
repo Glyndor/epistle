@@ -2,6 +2,7 @@
 
 pub mod backoff;
 pub mod bounce;
+pub mod cancel;
 pub mod client;
 pub mod destination;
 pub mod limits;

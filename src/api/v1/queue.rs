@@ -102,10 +102,17 @@ pub async fn remove(
 		_ => return Err(ApiError::not_found("no such queue entry")),
 	}
 	// The cancellation is recorded, and the entry removed, as one step.
-	crate::evidence::cancel::remove(
+	crate::queue::cancel::remove(
 		state.spool(),
 		&crate::evidence::service::root_of(state.data_dir()),
+		state.data_dir(),
+		state.delivery_log_days().unwrap_or_default(),
 		id,
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_secs(),
+		state.webhook(),
 	)
 	.map_err(|error| match error.kind() {
 		std::io::ErrorKind::NotFound => ApiError::not_found("no such queue entry"),

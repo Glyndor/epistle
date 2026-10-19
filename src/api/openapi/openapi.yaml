@@ -811,9 +811,10 @@ paths:
         The entry is removed in one step. For an entry that keeps evidence
         (transactional mail) a `canceled` outcome per pending recipient is
         written to the evidence chain first, and the entry stays if that
-        cannot be done. Unlike `epistle queue remove`, this route writes no
-        delivery-log record and posts no `canceled` webhook event. An entry
-        of another tenant answers like one that is not there.
+        cannot be done. Each pending recipient gets a delivery-log record with
+        outcome `canceled`; when the delivery log is enabled, the configured
+        webhook receives a `canceled` event with the message's `extra`. An
+        entry of another tenant answers like one that is not there.
       x-epistle-scope: [write]
       parameters:
         - name: id

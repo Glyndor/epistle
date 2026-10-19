@@ -318,6 +318,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_delivery_log_days(config.delivery_log_days())
+				.with_webhook(webhook.clone())
 				.with_disabled_domains(config.disabled_domains.clone())
 				.with_max_message_size(max_message_size)
 				.with_quota(

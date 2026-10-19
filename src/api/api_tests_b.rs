@@ -67,6 +67,42 @@ async fn read_scoped_key_is_rejected_on_send() {
 	assert_eq!(body["error"]["code"], "unauthenticated");
 }
 
+#[tokio::test]
+async fn queue_removal_requires_the_write_scope() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
+	key_store
+		.add(crate::api::api_keys::ApiKey {
+			label: "reader".to_string(),
+			hash: crate::api::api_keys::sha256_hash("reader-secret"),
+			expires_at: None,
+			ip_cidr: None,
+			scopes: vec!["read".to_string()],
+			domains: Vec::new(),
+			account: None,
+		})
+		.expect("add key");
+	drop(key_store);
+	let (_, page) = request(
+		&router(test_state(dir.path(), 1)),
+		"GET",
+		"/api/v1/queue",
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	let id = page["entries"][0]["id"].as_str().expect("id");
+	let app = router(test_state(dir.path(), 1));
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some("reader-secret"),
+	)
+	.await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(body["error"]["code"], "unauthenticated");
+}
+
 /// A send-only API key cannot write to `/api/v1/accounts` — scopes are
 /// independent (a `send` key is not also a `write` key).
 #[tokio::test]
