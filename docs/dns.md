@@ -369,3 +369,32 @@ publishes never contain either character.
 To show your brand logo in supporting inboxes you need DMARC at enforce
 (`p=quarantine` or `p=reject`), an SVG Tiny PS logo hosted over HTTPS, and a
 `default._bimi.example.org` TXT record (Gmail additionally requires a paid VMC).
+
+## DNS provider token storage
+
+I keep the provider token in an owner-only file outside `data_dir`, beside the
+storage and OAuth keys. To move the current inline or environment token:
+
+```sh
+epistle dns provider set desec --zone example.org --store-token --config /etc/epistle/mail.toml
+```
+
+Use your provider and zone, and repeat its other required settings, such as
+`--account-id` for DNSimple. `--store-token` reads the current token without
+printing it, writes `<data_dir>/../secrets/dns_provider_token` with mode `0600`,
+and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
+`--token-env NAME` or `--token-file /absolute/path`, it imports that source
+instead. A different existing destination is refused. `--dry-run` previews the
+redacted configuration change without writing the token or Compose file.
+
+For a generated stack, the command removes the old token environment entry,
+adds a read-only file mount only to `mail`, and recreates `mail`. Without a
+stack, restart the server yourself. Remove the old environment variable from
+your shell, service configuration, answers file and Compose overrides too.
+Keep the secret separately from data backups.
+
+Existing inline and environment sources keep working. `epistle status` reports
+a warning with migration instructions, without displaying the token. A file
+accessible to group or other users is rejected with an instruction to restrict
+it to `0600`. For a new `init`, use `dns.token_file` in the answers file to name
+the secret; `init` mounts that file read-only only into `mail` at the same path.
