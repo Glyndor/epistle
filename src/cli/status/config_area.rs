@@ -35,7 +35,18 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		1 => summary.push_str(", 1 address with two owners"),
 		n => summary.push_str(&format!(", {n} addresses with two owners")),
 	}
-	AreaReport::from_items(std::iter::once(restart).chain(addresses).collect(), summary)
+	let mut items: Vec<_> = std::iter::once(restart).chain(addresses).collect();
+	if config
+		.dns
+		.as_ref()
+		.is_some_and(|dns| dns.token.is_some() || dns.token_env.is_some())
+	{
+		let detail = "DNS token is inline or supplied through the environment; move it with `epistle dns provider set <provider> --zone <zone> --store-token`, including the provider's other required settings";
+		summary.push_str("; ");
+		summary.push_str(detail);
+		items.push(Item::new("DNS token", Level::Warn, detail));
+	}
+	AreaReport::from_items(items, summary)
 }
 
 /// One warning per address two owners claim, the lines the server logs at

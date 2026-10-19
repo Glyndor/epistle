@@ -344,6 +344,22 @@ On an install from before this layout, `epistle stack update` (and a rerun of
 named the old path, and leaves both copies in place, with an error, if they
 differ. Backups do not carry these keys: save `secrets/` separately.
 
+### DNS provider token
+
+I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
+with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
+moves an existing inline or environment token there, updates the generated
+Compose file to mount it read-only only in `mail`, and recreates that service.
+Supply any other settings required by your provider. For `init`, point
+`dns.token_file` in the answers at this file. See [DNS token storage](dns.md#dns-provider-token-storage).
+
+An environment token is passed to the container and can be exposed through
+`podman inspect` in `Config.Env`. A token stored inline in `mail.toml` remains
+in the mounted configuration file. A token file mount exposes its path in
+container metadata rather than its contents. Remove old environment entries
+from Compose overrides and service configuration after migration, and save
+`secrets/` separately from data backups.
+
 ### The database roles
 
 PostgreSQL's bootstrap superuser is `epistle_admin`, whose password is in

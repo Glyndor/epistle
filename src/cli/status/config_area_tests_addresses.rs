@@ -48,3 +48,52 @@ async fn one_owner_per_address_is_ok() {
 		.expect("addresses item");
 	assert_eq!(item.status, Level::Ok, "{item:?}");
 }
+
+#[tokio::test]
+async fn dns_token_sources_warn_without_disclosing_values() {
+	unsafe { std::env::set_var("PRIVATE_DNS_TOKEN", "private-dns-token") };
+	for source in [
+		"token = 'private-dns-token'",
+		"token_env = 'PRIVATE_DNS_TOKEN'",
+	] {
+		let dir = tempfile::tempdir().unwrap();
+		let ctx = ctx(
+			dir.path(),
+			&format!("[dns]\nprovider = 'desec'\nzone = 'example.org'\n{source}\n"),
+		);
+		let report = check(&ctx).await;
+		assert_eq!(report.status, Level::Warn);
+		let item = report
+			.items
+			.iter()
+			.find(|item| item.name == "DNS token")
+			.unwrap();
+		assert_eq!(item.status, Level::Warn);
+		assert!(item.detail.contains("--store-token"));
+		assert!(!format!("{report:?}").contains("private-dns-token"));
+		assert!(
+			!serde_json::to_string(&report)
+				.unwrap()
+				.contains("private-dns-token")
+		);
+		assert!(report.detail.contains("DNS token"));
+		let mut out = Vec::new();
+		crate::cli::status::report::render_table(
+			&[(crate::cli::status::CheckArea::Config, report)],
+			true,
+			None,
+			&mut out,
+		)
+		.unwrap();
+		let out = String::from_utf8(out).unwrap();
+		assert!(out.contains("--store-token") && !out.contains("private-dns-token"));
+	}
+	let dir = tempfile::tempdir().unwrap();
+	let token_path = dir.path().join("token");
+	crate::storage::write_secret(&token_path, b"private-dns-token").unwrap();
+	let ctx = ctx(
+		dir.path(),
+		&format!("[dns]\nprovider = 'desec'\nzone = 'example.org'\ntoken_file = {token_path:?}\n"),
+	);
+	assert_eq!(check(&ctx).await.status, Level::Ok);
+}

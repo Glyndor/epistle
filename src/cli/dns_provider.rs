@@ -14,6 +14,8 @@ use crate::config::Config;
 mod lockdown_handler;
 #[path = "dns_provider_probe.rs"]
 mod probe;
+#[path = "dns_provider_secret.rs"]
+mod secret;
 #[path = "dns_provider_set.rs"]
 mod set;
 #[path = "dns_provider_show.rs"]
@@ -120,6 +122,17 @@ fn execute_with(
 			return probe::run(&config, out, status);
 		}
 		ProviderCli::Set { provider, args } => {
+			if args.store_token {
+				return secret::run(
+					path,
+					(&provider, &args),
+					dry_run,
+					json,
+					out,
+					status,
+					restart,
+				);
+			}
 			let fields = set::fields(&provider, &args)?;
 			let change: resource::Change = Box::new(move |document, _| {
 				document
@@ -150,3 +163,7 @@ fn execute_with(
 	};
 	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }
+
+#[cfg(all(test, unix))]
+#[path = "dns_provider_secret_tests.rs"]
+mod tests_secret;
