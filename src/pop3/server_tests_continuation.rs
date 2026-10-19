@@ -34,6 +34,7 @@ async fn pop3_plain_login_and_cancel_over_duplex_wire() {
 		backend,
 		None,
 		SessionClock::start(DEFAULT_PREAUTH_TIMEOUT, TIMEOUT),
+		None,
 	));
 	let mut client = BufReader::new(client);
 	expect_line(

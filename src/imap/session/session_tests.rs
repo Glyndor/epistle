@@ -200,6 +200,9 @@ mod thread_references;
 #[path = "session_tests_appendlimit.rs"]
 mod appendlimit;
 
+#[path = "session_tests_per_account.rs"]
+mod per_account;
+
 #[path = "session_tests_notify_status.rs"]
 mod notify_status;
 

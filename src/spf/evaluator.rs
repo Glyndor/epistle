@@ -8,6 +8,12 @@ use super::record::{Mechanism, Qualifier, Record};
 /// Maximum DNS-querying terms per evaluation (RFC 7208 section 4.6.4).
 const MAX_DNS_MECHANISMS: u32 = 10;
 
+/// Maximum void DNS lookups per evaluation (RFC 7208 section 4.6.4). A
+/// void lookup is one that returns either NXDOMAIN or a response with
+/// no relevant records. Two voids are tolerated; a third turns the
+/// evaluation into `permerror`.
+const MAX_VOID_LOOKUPS: u32 = 2;
+
 /// SPF evaluation result (RFC 7208 section 2.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpfOutcome {
@@ -58,32 +64,67 @@ pub async fn check_host(
 	sender: &str,
 	helo: &str,
 ) -> SpfOutcome {
-	let mut budget = MAX_DNS_MECHANISMS;
-	check_host_inner(dns, ip, domain, sender, helo, &mut budget, 0).await
+	let mut budget = Budget::default();
+	let ctx = CheckContext {
+		dns,
+		ip,
+		sender,
+		helo,
+	};
+	check_host_inner(&ctx, domain, &mut budget).await
+}
+
+/// What every recursive step of [`check_host_inner`] needs about the
+/// message being evaluated. The four fields do not change as evaluation
+/// descends through `include:` or `redirect=` (RFC 7208 §4.6.3 keeps the
+/// same caller identity, only the target domain moves), so holding them
+/// in one reference keeps the recursive call below clippy's
+/// `too_many_arguments` threshold.
+struct CheckContext<'a> {
+	dns: &'a dyn DnsLookup,
+	ip: IpAddr,
+	sender: &'a str,
+	helo: &'a str,
+}
+
+/// Mutable SPF evaluation state threaded through every recursive step.
+/// `remaining` is the RFC 7208 §4.6.4 cap on DNS-querying terms (max 10);
+/// `voids` is the cap on lookups that returned no records (max 2);
+/// `depth` is the include/redirect nesting depth (`MAX_DEPTH`).
+struct Budget {
+	remaining: u32,
+	voids: u32,
+	depth: u32,
+}
+
+impl Default for Budget {
+	fn default() -> Self {
+		Self {
+			remaining: MAX_DNS_MECHANISMS,
+			voids: 0,
+			depth: 0,
+		}
+	}
 }
 
 /// Recursion depth guard: includes/redirects each consume DNS budget, but a
 /// cycle of zero-budget terms must still terminate.
 const MAX_DEPTH: u32 = 10;
 
-async fn check_host_inner(
-	dns: &dyn DnsLookup,
-	ip: IpAddr,
-	domain: &str,
-	sender: &str,
-	helo: &str,
-	budget: &mut u32,
-	depth: u32,
-) -> SpfOutcome {
-	if depth >= MAX_DEPTH {
+async fn check_host_inner(ctx: &CheckContext<'_>, domain: &str, budget: &mut Budget) -> SpfOutcome {
+	if budget.depth >= MAX_DEPTH {
 		return SpfOutcome::PermError;
 	}
 
-	let record = match fetch_record(dns, domain).await {
+	let record = match fetch_record(ctx.dns, domain, &mut budget.voids).await {
 		Ok(Some(record)) => record,
 		Ok(None) => return SpfOutcome::None,
 		Err(outcome) => return outcome,
 	};
+	let dns = ctx.dns;
+	let ip = ctx.ip;
+	let sender = ctx.sender;
+	let helo = ctx.helo;
 
 	for (qualifier, mechanism) in &record.directives {
 		let matched = match mechanism {
@@ -101,7 +142,7 @@ async fn check_host_inner(
 				prefix4,
 				prefix6,
 			} => {
-				if !consume(budget) {
+				if !consume(&mut budget.remaining) {
 					return SpfOutcome::PermError;
 				}
 				let spec = target.as_deref().unwrap_or(domain);
@@ -110,9 +151,16 @@ async fn check_host_inner(
 					Err(e) => return e,
 				};
 				match dns.addresses(&name).await {
-					Ok(addresses) => addresses
-						.iter()
-						.any(|address| address_matches(ip, *address, *prefix4, *prefix6)),
+					Ok(addresses) => {
+						if addresses.is_empty()
+							&& let Some(permerror) = count_void(&mut budget.voids)
+						{
+							return permerror;
+						}
+						addresses
+							.iter()
+							.any(|address| address_matches(ip, *address, *prefix4, *prefix6))
+					}
 					Err(DnsFailure::Temporary) => return SpfOutcome::TempError,
 				}
 			}
@@ -121,7 +169,7 @@ async fn check_host_inner(
 				prefix4,
 				prefix6,
 			} => {
-				if !consume(budget) {
+				if !consume(&mut budget.remaining) {
 					return SpfOutcome::PermError;
 				}
 				let spec = target.as_deref().unwrap_or(domain);
@@ -130,13 +178,25 @@ async fn check_host_inner(
 					Err(e) => return e,
 				};
 				let exchangers = match dns.mx(&name).await {
-					Ok(exchangers) => exchangers,
+					Ok(exchangers) => {
+						if exchangers.is_empty()
+							&& let Some(permerror) = count_void(&mut budget.voids)
+						{
+							return permerror;
+						}
+						exchangers
+					}
 					Err(DnsFailure::Temporary) => return SpfOutcome::TempError,
 				};
 				let mut matched = false;
 				for exchanger in exchangers.iter().take(10) {
 					match dns.addresses(exchanger).await {
 						Ok(addresses) => {
+							if addresses.is_empty()
+								&& let Some(permerror) = count_void(&mut budget.voids)
+							{
+								return permerror;
+							}
 							if addresses
 								.iter()
 								.any(|address| address_matches(ip, *address, *prefix4, *prefix6))
@@ -151,24 +211,19 @@ async fn check_host_inner(
 				matched
 			}
 			Mechanism::Include { domain: spec } => {
-				if !consume(budget) {
+				if !consume(&mut budget.remaining) {
 					return SpfOutcome::PermError;
 				}
 				let included = match expand_macro(spec, ip, domain, sender, helo) {
 					Ok(d) => d,
 					Err(e) => return e,
 				};
-				match Box::pin(check_host_inner(
-					dns,
-					ip,
-					&included,
-					sender,
-					helo,
-					budget,
-					depth + 1,
-				))
-				.await
-				{
+				let nested = Budget {
+					remaining: budget.remaining,
+					voids: budget.voids,
+					depth: budget.depth + 1,
+				};
+				match Box::pin(check_host_inner(ctx, &included, &mut { nested })).await {
 					SpfOutcome::Pass => true,
 					SpfOutcome::Fail | SpfOutcome::SoftFail | SpfOutcome::Neutral => false,
 					// include of a domain without a record is a permerror
@@ -181,11 +236,18 @@ async fn check_host_inner(
 			}
 			Mechanism::Exists { domain } => {
 				// RFC 7208 §5.7: pass if the domain has any A/AAAA record.
-				if !consume(budget) {
+				if !consume(&mut budget.remaining) {
 					return SpfOutcome::PermError;
 				}
 				match dns.addresses(domain).await {
-					Ok(addresses) => !addresses.is_empty(),
+					Ok(addresses) => {
+						if addresses.is_empty()
+							&& let Some(permerror) = count_void(&mut budget.voids)
+						{
+							return permerror;
+						}
+						!addresses.is_empty()
+					}
 					Err(DnsFailure::Temporary) => return SpfOutcome::TempError,
 				}
 			}
@@ -195,7 +257,7 @@ async fn check_host_inner(
 				// discouraged by the RFC. Treated as non-matching to avoid
 				// PermError on records that contain it. Consumes DNS budget
 				// to discourage abuse of multiple ptr: terms.
-				if !consume(budget) {
+				if !consume(&mut budget.remaining) {
 					return SpfOutcome::PermError;
 				}
 				false
@@ -213,23 +275,19 @@ async fn check_host_inner(
 	}
 
 	if let Some(spec) = &record.redirect {
-		if !consume(budget) {
+		if !consume(&mut budget.remaining) {
 			return SpfOutcome::PermError;
 		}
 		let target = match expand_macro(spec, ip, domain, sender, helo) {
 			Ok(d) => d,
 			Err(e) => return e,
 		};
-		let outcome = Box::pin(check_host_inner(
-			dns,
-			ip,
-			&target,
-			sender,
-			helo,
-			budget,
-			depth + 1,
-		))
-		.await;
+		let nested = Budget {
+			remaining: budget.remaining,
+			voids: budget.voids,
+			depth: budget.depth + 1,
+		};
+		let outcome = Box::pin(check_host_inner(ctx, &target, &mut { nested })).await;
 		// A redirect target without a record is a permerror (section 6.1).
 		return if outcome == SpfOutcome::None {
 			SpfOutcome::PermError
@@ -250,9 +308,23 @@ fn consume(budget: &mut u32) -> bool {
 	true
 }
 
-async fn fetch_record(dns: &dyn DnsLookup, domain: &str) -> Result<Option<Record>, SpfOutcome> {
+async fn fetch_record(
+	dns: &dyn DnsLookup,
+	domain: &str,
+	void_lookups: &mut u32,
+) -> Result<Option<Record>, SpfOutcome> {
 	let texts = match dns.txt(domain).await {
-		Ok(texts) => texts,
+		Ok(texts) => {
+			// An empty TXT response is a void lookup for the purpose
+			// of the §4.6.4 budget: the record fetch is the first
+			// lookup the evaluator performs and counts.
+			if texts.is_empty()
+				&& let Some(permerror) = count_void(void_lookups)
+			{
+				return Err(permerror);
+			}
+			texts
+		}
 		Err(DnsFailure::Temporary) => return Err(SpfOutcome::TempError),
 	};
 	let mut records = texts
@@ -268,6 +340,20 @@ async fn fetch_record(dns: &dyn DnsLookup, domain: &str) -> Result<Option<Record
 	super::record::parse(text)
 		.map(Some)
 		.map_err(|_| SpfOutcome::PermError)
+}
+
+/// Add a void lookup to the running count and return
+/// [`SpfOutcome::PermError`] once the §4.6.4 budget runs out; `None`
+/// while the count is still within tolerance. The caller short-circuits
+/// on `Some(PermError)` so the permerror decision bubbles up to
+/// `check_host_inner` and back to the public entry point.
+fn count_void(void_lookups: &mut u32) -> Option<SpfOutcome> {
+	*void_lookups += 1;
+	if *void_lookups > MAX_VOID_LOOKUPS {
+		Some(SpfOutcome::PermError)
+	} else {
+		None
+	}
 }
 
 fn address_matches(ip: IpAddr, candidate: IpAddr, prefix4: u8, prefix6: u8) -> bool {
@@ -448,3 +534,7 @@ mod tests;
 #[cfg(test)]
 #[path = "evaluator_macro_tests.rs"]
 mod macro_tests;
+
+#[cfg(test)]
+#[path = "evaluator_void_tests.rs"]
+mod void_tests;

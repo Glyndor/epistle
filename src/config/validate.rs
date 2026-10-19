@@ -44,6 +44,7 @@ impl Config {
 		self.validate_database()?;
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
+		self.validate_max_recipients()?;
 		self.validate_message_limits()
 	}
 

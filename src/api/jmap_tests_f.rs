@@ -134,7 +134,7 @@ fn tenant_state(dir: &std::path::Path, per_min: u32) -> super::ApiState {
 /// Seed the alice mailbox with a stored email whose body lists every
 /// recipient. Used by the JMAP rate-limit and recipient-cap tests so
 /// the envelope-only `rcptTo` and the body header `To` agree.
-fn seed_email(dir: &std::path::Path, recipients: &[String]) -> uuid::Uuid {
+pub(super) fn seed_email(dir: &std::path::Path, recipients: &[String]) -> uuid::Uuid {
 	let path = dir.join("accounts").join("alice").join("new");
 	std::fs::create_dir_all(&path).expect("mkdir");
 	let id = uuid::Uuid::now_v7();
@@ -162,7 +162,7 @@ fn seed_email_with_all_kinds(dir: &std::path::Path, headers: &[(&str, &str)]) ->
 	id
 }
 
-fn submission_request(email_id: &uuid::Uuid, rcpt_to: &[String]) -> serde_json::Value {
+pub(super) fn submission_request(email_id: &uuid::Uuid, rcpt_to: &[String]) -> serde_json::Value {
 	let rcpts: Vec<serde_json::Value> = rcpt_to
 		.iter()
 		.map(|email| serde_json::json!({"email": email}))
@@ -188,7 +188,7 @@ fn submission_request(email_id: &uuid::Uuid, rcpt_to: &[String]) -> serde_json::
 async fn jmap_email_submission_caps_recipients_at_max() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let rcpts: Vec<String> = (0..crate::smtp::session::MAX_RECIPIENTS + 1)
+	let rcpts: Vec<String> = (0..crate::smtp::session::DEFAULT_MAX_RECIPIENTS + 1)
 		.map(|i| format!("r{i}@elsewhere.example"))
 		.collect();
 	let email_id = seed_email(dir.path(), &rcpts);
@@ -205,7 +205,7 @@ async fn jmap_email_submission_caps_recipients_at_max() {
 	let response = &body["methodResponses"][0];
 	assert_eq!(
 		response[1]["notCreated"]["s1"]["type"], "tooManyRecipients",
-		"envelope with more than MAX_RECIPIENTS must be refused: {body}"
+		"envelope with more than DEFAULT_MAX_RECIPIENTS must be refused: {body}"
 	);
 }
 

@@ -195,7 +195,7 @@ impl Session {
 				StatusItem::AppendLimit => {
 					// RFC 7889 §4: the same octet limit CAPABILITY
 					// advertises, since it holds for every mailbox.
-					format!("APPENDLIMIT {}", crate::imap::command::MAX_APPEND_SIZE)
+					format!("APPENDLIMIT {}", self.append_limit)
 				}
 			};
 			parts.push_str(&rendered);

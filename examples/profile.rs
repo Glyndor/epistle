@@ -77,7 +77,10 @@ fn parse_pass(raw: &[u8]) {
 	// Recipient address parsing (resolution input).
 	let _ = Address::parse(RECIPIENT);
 	// A representative client FETCH against the delivered message.
-	let _ = imap_parse("a1 UID FETCH 1:* (FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT)])");
+	let _ = imap_parse(
+		"a1 UID FETCH 1:* (FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT)])",
+		usize::MAX,
+	);
 	// Decode the raw header block line by line, as the receive path does.
 	let head_end = raw
 		.windows(4)

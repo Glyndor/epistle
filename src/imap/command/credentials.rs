@@ -87,13 +87,16 @@ pub enum Line {
 	Authenticate(AuthenticateRequest),
 }
 
-/// Parse one client line, routing credential-bearing verbs to their own types.
-pub fn parse_line(line: &str) -> Result<Line, ParseError> {
+/// Parse one client line, routing credential-bearing verbs to their own
+/// types. `append_limit` is the per-listener APPENDLIMIT, used by
+/// APPEND and REPLACE to refuse over-size literals with
+/// `NO [TOOBIG]` (RFC 7889 §3) before any payload is collected.
+pub fn parse_line(line: &str, append_limit: usize) -> Result<Line, ParseError> {
 	let (tag, verb, args) = split_line(line)?;
 	match verb.to_ascii_uppercase().as_str() {
 		"LOGIN" => parse_login(tag, args).map(Line::Login),
 		"AUTHENTICATE" => parse_authenticate(tag, args).map(Line::Authenticate),
-		_ => parse(line).map(Line::Command),
+		_ => parse(line, append_limit).map(Line::Command),
 	}
 }
 

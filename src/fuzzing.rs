@@ -11,7 +11,7 @@ pub fn imap_command_line(line: &str) {
 	if let Some(literal) = crate::imap::command::literal_announcement_in_line(line) {
 		std::hint::black_box(literal.size);
 	}
-	let _ = crate::imap::command::parse(line);
+	let _ = crate::imap::command::parse(line, crate::imap::command::DEFAULT_APPEND_LIMIT);
 }
 
 /// DKIM-Signature header value: the tag-list parser (`b=`, `bh=`, `h=`

@@ -50,6 +50,9 @@ pub(super) struct SmtpSharedState {
 	/// Per-instance message-size cap in bytes. `0` keeps the SMTP
 	/// session's built-in default ([`crate::smtp::session::MAX_MESSAGE_SIZE`]).
 	pub max_message_size: usize,
+	/// Recipients one message may name (`max_recipients`), on every SMTP
+	/// listener, the REST send endpoint and JMAP submission.
+	pub max_recipients: usize,
 	/// Optional shared byte budget every `DATA` / `BDAT` reservation
 	/// draws from, shared by every SMTP listener: `[server]
 	/// message_memory_budget`, or when unset the one derived from the mail
@@ -190,6 +193,9 @@ pub(super) fn build_smtp_shared_state_with(
 		max_conn,
 		max_connections_per_ip,
 		max_message_size,
+		max_recipients: config
+			.max_recipients
+			.unwrap_or(crate::smtp::session::DEFAULT_MAX_RECIPIENTS),
 		memory_budget,
 		data_rate,
 		session_limits: session_limits(config),

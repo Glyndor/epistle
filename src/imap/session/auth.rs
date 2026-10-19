@@ -92,9 +92,9 @@ impl Session {
 	/// STARTTLS/LOGINDISABLED state.
 	pub(super) fn capabilities(&self) -> String {
 		// APPENDLIMIT (RFC 7889 §3) carries the number because the limit is
-		// the same for every mailbox: it is the literal cap the parser and
-		// the network layer enforce.
-		let append_limit = crate::imap::command::MAX_APPEND_SIZE;
+		// the same for every mailbox: it is the per-listener APPENDLIMIT
+		// the parser and the network layer enforce.
+		let append_limit = self.append_limit;
 		let mut capabilities = format!(
 			"IMAP4rev1 IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
 THREAD=ORDEREDSUBJECT THREAD=REFERENCES APPENDLIMIT={append_limit} UNSELECT ENABLE ESEARCH \

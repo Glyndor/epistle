@@ -326,6 +326,6 @@ mod tests {
 		// SEARCH/ESEARCH line with a stray `)` before any `(` must return an
 		// error, not panic.
 		let crash = "E-- SEARCH       return   m E-) ESEARCH  HEADER EFFFFn   TMETFYm Y";
-		let _ = super::super::parse(crash);
+		let _ = super::super::parse(crash, super::super::DEFAULT_APPEND_LIMIT);
 	}
 }

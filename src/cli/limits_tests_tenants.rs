@@ -32,6 +32,7 @@ fn tenant_submission_rate_set_unset_round_trip() {
 		None,
 		Some("acme"),
 		Some("120"),
+		&mut Vec::new(),
 	)
 	.expect("set tenant submission-rate");
 	assert_eq!(
@@ -43,8 +44,15 @@ fn tenant_submission_rate_set_unset_round_trip() {
 			.expect("config");
 	assert_eq!(config.tenants.len(), 1);
 	assert_eq!(config.tenants[0].submission_rate_limit_per_min, Some(120));
-	let doc = edit_document(file.path(), Key::SubmissionRate, None, Some("acme"), None)
-		.expect("unset tenant submission-rate");
+	let doc = edit_document(
+		file.path(),
+		Key::SubmissionRate,
+		None,
+		Some("acme"),
+		None,
+		&mut Vec::new(),
+	)
+	.expect("unset tenant submission-rate");
 	assert_eq!(
 		doc.commit().unwrap(),
 		super::super::config_edit::Outcome::Changed
@@ -68,6 +76,7 @@ fn tenant_command_refuses_unknown_tenant_name() {
 			None,
 			Some("missing"),
 			Some("100"),
+			&mut Vec::new(),
 		)
 		.err()
 		.as_deref(),
@@ -85,6 +94,7 @@ fn tenant_command_refuses_combined_domain_and_tenant() {
 			Some("example.org"),
 			Some("acme"),
 			Some("100"),
+			&mut Vec::new(),
 		)
 		.err()
 		.as_deref(),
@@ -96,9 +106,16 @@ fn tenant_command_refuses_combined_domain_and_tenant() {
 fn tenant_command_only_accepts_submission_rate_for_now() {
 	let (_dir, file) = tenant_config_file();
 	assert_eq!(
-		edit_document(file.path(), Key::Quota, None, Some("acme"), Some("10G"))
-			.err()
-			.as_deref(),
+		edit_document(
+			file.path(),
+			Key::Quota,
+			None,
+			Some("acme"),
+			Some("10G"),
+			&mut Vec::new()
+		)
+		.err()
+		.as_deref(),
 		Some("per-tenant limits support submission-rate only")
 	);
 }
@@ -118,6 +135,7 @@ fn tenant_submission_rate_round_trip_preserves_the_other_tenant_fields() {
 		None,
 		Some("acme"),
 		Some("200"),
+		&mut Vec::new(),
 	)
 	.expect("set submission-rate")
 	.commit()

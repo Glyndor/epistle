@@ -103,6 +103,15 @@ pub struct Server {
 	/// The bounded queue to the per-account Bayesian trainer, handed to
 	/// every session. `None` disables training and STORE answers the same.
 	training: Option<crate::antispam::training_queue::TrainingQueue>,
+	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
+	/// command may carry. Follows `[server] max_message_size`, the same
+	/// cap the SMTP, REST and JMAP submission paths enforce. Default is
+	/// [`super::command::DEFAULT_APPEND_LIMIT`].
+	append_limit: usize,
+	/// Shared per-account counter applied after authentication. A
+	/// session over the cap answers `NO [LIMIT]` and closes; the slot
+	/// is released on every disconnect path.
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 }
 
 impl Server {
@@ -134,7 +143,34 @@ impl Server {
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
+			append_limit: super::command::DEFAULT_APPEND_LIMIT,
+			per_account_counter: None,
 		}
+	}
+
+	/// Set APPENDLIMIT (RFC 7889), the largest literal an APPEND or
+	/// REPLACE command may carry on this listener. `0` keeps the
+	/// built-in default ([`super::command::DEFAULT_APPEND_LIMIT`]); any
+	/// other value is taken as given. Flows from `[server]
+	/// max_message_size`, the same cap the SMTP, REST and JMAP
+	/// submission paths enforce.
+	pub fn with_append_limit(mut self, bytes: usize) -> Self {
+		if bytes > 0 {
+			self.append_limit = bytes;
+		}
+		self
+	}
+
+	/// Apply the shared per-account counter after authentication. The
+	/// listener must call this once at startup with the counter built
+	/// from `[server] max_connections_per_account`. `None` keeps the
+	/// listener free of any per-account cap (the historical behaviour).
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
 	}
 
 	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
@@ -247,7 +283,11 @@ impl Server {
 		.with_oauth(self.oauth.clone())
 		.with_retention_days(self.retention_days)
 		.with_auth_protocol(self.auth_protocol)
-		.with_scram_enabled(self.scram_enabled);
+		.with_scram_enabled(self.scram_enabled)
+		.with_append_limit(self.append_limit);
+		if let Some(counter) = &self.per_account_counter {
+			session = session.with_per_account_counter(Arc::clone(counter));
+		}
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.current());
 		}
@@ -407,7 +447,15 @@ impl Server {
 				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
 				// message), not to a new one.
 				let deadline = clock.step(session.is_authenticated());
-				match discard::rejected_tail(&mut *stream, &mut decoder, &line, deadline).await? {
+				match discard::rejected_tail(
+					&mut *stream,
+					&mut decoder,
+					&line,
+					deadline,
+					self.append_limit,
+				)
+				.await?
+				{
 					Some(more) => rejected_tail = more,
 					None => return Ok(()),
 				}
@@ -425,7 +473,7 @@ impl Server {
 				continue;
 			};
 
-			if discard::oversized_sent_literal(&line) {
+			if discard::oversized_sent_literal(&line, self.append_limit) {
 				stream.write_all(b"* BYE literal too large\r\n").await?;
 				stream.flush().await?;
 				return Ok(());

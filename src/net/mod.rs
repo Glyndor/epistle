@@ -22,6 +22,7 @@ pub mod conn_limit;
 pub mod deadline;
 pub mod http_serve;
 mod https_url;
+pub mod per_account_conn;
 
 pub use https_url::{HttpsUrl, HttpsUrlError};
 

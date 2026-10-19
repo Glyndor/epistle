@@ -15,7 +15,7 @@ struct Limits {
 
 /// Run `epistle limits <args>` against `file`; returns the exit code and
 /// what was printed on both streams.
-fn limits(file: &Path, args: &[&str]) -> (ExitCode, String) {
+pub(super) fn limits(file: &Path, args: &[&str]) -> (ExitCode, String) {
 	let parsed = Limits::try_parse_from(std::iter::once("limits").chain(args.iter().copied()));
 	assert!(parsed.is_ok(), "`limits {}` must parse", args.join(" "));
 	let mut out = Vec::new();
@@ -33,13 +33,13 @@ fn limits(file: &Path, args: &[&str]) -> (ExitCode, String) {
 	(code, printed)
 }
 
-fn shown(file: &Path) -> String {
+pub(super) fn shown(file: &Path) -> String {
 	let (code, printed) = limits(file, &["show"]);
 	assert_eq!(code, ExitCode::SUCCESS);
 	printed
 }
 
-fn assert_shown(file: &Path, lines: &[&str]) {
+pub(super) fn assert_shown(file: &Path, lines: &[&str]) {
 	let printed = shown(file);
 	for line in lines {
 		assert!(
@@ -64,8 +64,8 @@ fn both_limits_are_set_shown_and_unset() {
 	assert_shown(
 		file.path(),
 		&[
-			"junk-command-limit\t50\tconfigured",
-			"max-session-time\t3600 seconds\tconfigured",
+			"junk-command-limit\t50\tconfigured\tadjustable\tno standard mandate",
+			"max-session-time\t3600 seconds\tconfigured\tadjustable\tno standard mandate",
 		],
 	);
 	for key in ["junk-command-limit", "max-session-time"] {
@@ -85,18 +85,18 @@ fn the_defaults_and_limits_turned_off_are_shown() {
 	assert_shown(
 		file.path(),
 		&[
-			"junk-command-limit\t100\tdefault",
-			"max-session-time\t1800 seconds\tdefault",
+			"junk-command-limit\t100\tdefault\tadjustable\tno standard mandate",
+			"max-session-time\t1800 seconds\tdefault\tadjustable\tno standard mandate",
 		],
 	);
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["junk-command-limit"],
-		serde_json::json!({"value": 100, "unit": "count", "source": "default"})
+		serde_json::json!({"value": 100, "unit": "count", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(
 		show_json(&config)["max-session-time"],
-		serde_json::json!({"value": 1800, "unit": "seconds", "source": "default"})
+		serde_json::json!({"value": 1800, "unit": "seconds", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
 	);
 	for key in ["junk-command-limit", "max-session-time"] {
 		let (code, _) = limits(file.path(), &["set", key, "0"]);
@@ -105,18 +105,18 @@ fn the_defaults_and_limits_turned_off_are_shown() {
 	assert_shown(
 		file.path(),
 		&[
-			"junk-command-limit\tdisabled\tconfigured",
-			"max-session-time\tdisabled\tconfigured",
+			"junk-command-limit\tdisabled\tconfigured\tadjustable\tno standard mandate",
+			"max-session-time\tdisabled\tconfigured\tadjustable\tno standard mandate",
 		],
 	);
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["junk-command-limit"],
-		serde_json::json!({"value": null, "unit": "count", "source": "configured"})
+		serde_json::json!({"value": null, "unit": "count", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(
 		show_json(&config)["max-session-time"],
-		serde_json::json!({"value": null, "unit": "seconds", "source": "configured"})
+		serde_json::json!({"value": null, "unit": "seconds", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
 	);
 }
 

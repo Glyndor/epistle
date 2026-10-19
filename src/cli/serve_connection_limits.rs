@@ -1,6 +1,7 @@
 //! What the IMAP, POP3, ManageSieve and plain-HTTP listeners are held to,
 //! from the configuration: absent (or zero) keys keep the built-in values.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::Config;
@@ -9,6 +10,9 @@ use crate::net::conn_limit::{
 	DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 };
 use crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT;
+use crate::net::per_account_conn::{
+	DEFAULT_PER_ACCOUNT_PER_IP, DEFAULT_PER_ACCOUNT_TOTAL, PerAccountCounter,
+};
 
 /// The limits shared by the three mailbox-access listeners.
 pub(super) struct MailboxLimits {
@@ -19,6 +23,9 @@ pub(super) struct MailboxLimits {
 	/// The same on a ManageSieve listener, whose own listener cap is lower:
 	/// it defaults to less when the configuration does not say.
 	pub managesieve_per_ip: usize,
+	/// The shared per-account counter applied after authentication on
+	/// the IMAP, POP3 and JMAP event-source paths.
+	pub per_account_counter: Arc<PerAccountCounter>,
 }
 
 impl MailboxLimits {
@@ -35,6 +42,16 @@ impl MailboxLimits {
 				config.max_mailbox_connections_per_ip,
 				DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			),
+			per_account_counter: Arc::new(PerAccountCounter::new(
+				nonzero_usize(
+					config.max_connections_per_account_per_ip,
+					DEFAULT_PER_ACCOUNT_PER_IP,
+				),
+				nonzero_usize(
+					config.max_connections_per_account_total,
+					DEFAULT_PER_ACCOUNT_TOTAL,
+				),
+			)),
 		}
 	}
 }
@@ -53,6 +70,13 @@ pub(super) fn http_limits(config: &Config) -> crate::net::http_serve::Limits {
 /// A configured cap, or `default` when it is absent or `0`.
 fn nonzero(configured: Option<usize>, default: usize) -> usize {
 	configured.filter(|value| *value != 0).unwrap_or(default)
+}
+
+fn nonzero_usize(configured: Option<u32>, default: usize) -> usize {
+	configured
+		.filter(|value| *value != 0)
+		.map(|value| value as usize)
+		.unwrap_or(default)
 }
 
 #[cfg(test)]

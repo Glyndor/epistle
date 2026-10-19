@@ -43,6 +43,9 @@ pub enum Key {
 	/// Per-instance message-size cap in bytes. Applies to SMTP DATA / BDAT
 	/// and to the JMAP / REST submission paths. Default is 25 MiB.
 	MaxMessageSize,
+	/// Recipients one message may name, on SMTP, REST send and JMAP
+	/// submission. Default is 100, the least RFC 5321 lets a server accept.
+	MaxRecipients,
 	/// Shared byte budget every DATA / BDAT reservation draws from. The
 	/// reservation is released on every path that drops the in-flight
 	/// body (success, error, RSET, disconnect). `0` disables the
@@ -79,7 +82,14 @@ pub enum Key {
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 27] = [
+	/// Every adjustable key, in the order the catalog lists it.
+	/// `catalog::ADJUSTABLE` is the catalog's table; the two are kept
+	/// in lockstep by `tests_catalog::every_catalog_key_appears_in_show_text_with_kind_and_reference`,
+	/// so a key added here without listing it slips the test rather than
+	/// appearing in `limits show` without the metadata the operator
+	/// needs.
+	#[allow(dead_code)] // The catalog is the new iteration surface; ALL is kept for direct tests.
+	pub(super) const ALL: [Self; 28] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -97,6 +107,7 @@ impl Key {
 		Self::QueuePerDomainConcurrency,
 		Self::QueueBackoff,
 		Self::MaxMessageSize,
+		Self::MaxRecipients,
 		Self::MessageMemoryBudget,
 		Self::MaxConnectionsPerIp,
 		Self::MinDataRate,
@@ -128,6 +139,7 @@ impl Key {
 			Self::QueuePerDomainConcurrency => "queue-per-domain-concurrency",
 			Self::QueueBackoff => "queue-backoff",
 			Self::MaxMessageSize => "max-message-size",
+			Self::MaxRecipients => "max-recipients",
 			Self::MessageMemoryBudget => "message-memory-budget",
 			Self::MaxConnectionsPerIp => "max-connections-per-ip",
 			Self::MinDataRate => "min-data-rate",
@@ -160,6 +172,7 @@ impl Key {
 			Self::QueuePerDomainConcurrency => "per_domain_concurrency",
 			Self::QueueBackoff => "backoff_steps",
 			Self::MaxMessageSize => "max_message_size",
+			Self::MaxRecipients => "max_recipients",
 			Self::MessageMemoryBudget => "message_memory_budget",
 			Self::MaxConnectionsPerIp => "max_connections_per_ip",
 			Self::MinDataRate => "min_data_rate",
@@ -220,6 +233,38 @@ impl Key {
 		}
 	}
 
+	/// The least value an Internet standard lets the key take, with the
+	/// reason `set` gives when a value goes below it.
+	pub(super) fn must_floor(self) -> Option<(u64, &'static str)> {
+		match self {
+			Self::MaxRecipients => Some((
+				crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
+				crate::smtp::session::MIN_MAX_RECIPIENTS_REASON,
+			)),
+			_ => None,
+		}
+	}
+
+	/// The smallest value the RFC still recommends (SHOULD). A value
+	/// below this is accepted with a warning, never refused. The
+	/// returned string is the exact one-line warning `epistle limits
+	/// set` prints.
+	pub(super) fn should_floor(self) -> Option<(u64, &'static str)> {
+		match self {
+			Self::QueueGiveUp => Some((
+				crate::queue::schedule::SHOULD_GIVE_UP_SECS,
+				"queue-give-up is below the 4 days RFC 5321 §4.5.4.1 recommends; \
+				 recipients will bounce sooner than the standard expects",
+			)),
+			Self::QueueRetryBase => Some((
+				crate::queue::schedule::SHOULD_RETRY_BASE_SECS,
+				"queue-retry-base is below the 30 minutes the RFC recommends; \
+				 the first retry is sooner than receivers expect",
+			)),
+			_ => None,
+		}
+	}
+
 	pub(super) fn unit(self) -> Unit {
 		match self {
 			Self::Quota | Self::MaxMessageSize | Self::MessageMemoryBudget => Unit::Size,
@@ -256,6 +301,7 @@ impl Key {
 				crate::queue::limits::MAX_CONCURRENCY as u64
 			}
 			Self::QueueBackoff => crate::queue::backoff::MAX_STEP_SECS,
+			Self::MaxRecipients => crate::smtp::session::MAX_MAX_RECIPIENTS as u64,
 			Self::MaxMessageSize | Self::MessageMemoryBudget => i64::MAX as u64,
 			_ => i64::MAX as u64,
 		}
@@ -285,6 +331,7 @@ impl Key {
 			Self::QueuePerDomainConcurrency => Some(config.queue.per_domain_concurrency as u64),
 			Self::QueueBackoff => None,
 			Self::MaxMessageSize => config.max_message_size.filter(|value| *value != 0),
+			Self::MaxRecipients => config.max_recipients.map(|value| value as u64),
 			Self::MessageMemoryBudget => config.message_memory_budget,
 			Self::MaxConnectionsPerIp => config.max_connections_per_ip.map(|value| value as u64),
 			Self::MinDataRate => config.min_data_rate,
@@ -321,6 +368,7 @@ impl Key {
 				Some(crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY as u64)
 			}
 			Self::MaxMessageSize => Some(crate::smtp::session::MAX_MESSAGE_SIZE as u64),
+			Self::MaxRecipients => Some(crate::smtp::session::DEFAULT_MAX_RECIPIENTS as u64),
 			Self::MaxConnectionsPerIp => {
 				Some(crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP as u64)
 			}

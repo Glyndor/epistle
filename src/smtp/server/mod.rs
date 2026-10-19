@@ -200,6 +200,10 @@ pub struct Server {
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; raise or lower
 	/// with [`Server::with_max_message_size`].
 	max_message_size: usize,
+	/// Recipients one transaction on this listener may name. The default is
+	/// [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`]; change it with
+	/// [`Server::with_max_recipients`].
+	max_recipients: usize,
 	/// The minimum average rate of one DATA body or one BDAT chunk once
 	/// its grace period is over (see [`DataRate`]).
 	data_rate: DataRate,
@@ -383,6 +387,7 @@ impl Server {
 			.with_metrics(Arc::clone(&self.metrics))
 			.with_scram_enabled(self.scram_enabled)
 			.with_max_message_size(self.max_message_size)
+			.with_max_recipients(self.max_recipients)
 			.with_junk_command_limit(self.junk_command_limit);
 		if let Some(budget) = &self.memory_budget {
 			session = session.with_memory_budget(Arc::clone(budget));

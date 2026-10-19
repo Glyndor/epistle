@@ -42,19 +42,16 @@ fn shown(file: &Path) -> String {
 #[test]
 fn the_preauth_deadline_is_shown_set_and_unset() {
 	let (_dir, file) = super::tests_config::config_file();
-	assert!(
-		shown(file.path())
-			.lines()
-			.any(|line| line == "preauth-timeout\t60 seconds\tdefault")
-	);
+	assert!(shown(file.path()).lines().any(
+		|line| line == "preauth-timeout\t60 seconds\tdefault\tadjustable\tno standard mandate"
+	));
 	let (code, printed) = limits(file.path(), &["set", "preauth-timeout", "2m"]);
 	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
 	let text = std::fs::read_to_string(file.path()).expect("config");
 	assert!(text.contains("preauth_timeout = 120"), "{text}");
 	assert!(
-		shown(file.path())
-			.lines()
-			.any(|line| line == "preauth-timeout\t120 seconds\tconfigured")
+		shown(file.path()).lines().any(|line| line
+			== "preauth-timeout\t120 seconds\tconfigured\tadjustable\tno standard mandate")
 	);
 	let (code, _) = limits(file.path(), &["unset", "preauth-timeout"]);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -79,9 +76,9 @@ fn an_unsound_preauth_deadline_is_refused_and_not_saved() {
 fn the_connection_caps_are_shown_set_and_unset() {
 	let (_dir, file) = super::tests_config::config_file();
 	for line in [
-		"max-mailbox-connections-per-ip\t200\tdefault",
-		"max-http-connections\t1024\tdefault",
-		"max-http-connections-per-ip\t256\tdefault",
+		"max-mailbox-connections-per-ip\t200\tdefault\tadjustable\tno standard mandate",
+		"max-http-connections\t1024\tdefault\tadjustable\tno standard mandate",
+		"max-http-connections-per-ip\t256\tdefault\tadjustable\tno standard mandate",
 	] {
 		assert!(shown(file.path()).lines().any(|l| l == line), "{line}");
 	}
@@ -102,7 +99,7 @@ fn the_connection_caps_are_shown_set_and_unset() {
 		assert_eq!(code, ExitCode::SUCCESS, "{key}: {printed}");
 		let text = std::fs::read_to_string(file.path()).expect("config");
 		assert!(text.contains(field), "{field} missing from {text}");
-		let line = format!("{key}\t{value}\tconfigured");
+		let line = format!("{key}\t{value}\tconfigured\tadjustable\tno standard mandate");
 		assert!(shown(file.path()).lines().any(|l| l == line), "{line}");
 		let (code, _) = limits(file.path(), &["unset", key]);
 		assert_eq!(code, ExitCode::SUCCESS);

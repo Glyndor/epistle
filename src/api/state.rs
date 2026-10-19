@@ -136,6 +136,10 @@ struct Inner {
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
 	/// lower it with the `[server] max_message_size` config key.
 	max_message_size: usize,
+	/// Recipients one message may name through the REST send endpoint and
+	/// JMAP `EmailSubmission/set`, the same count the SMTP listeners accept.
+	/// The default is [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`].
+	max_recipients: usize,
 }
 
 #[path = "state_limiter.rs"]
@@ -233,6 +237,7 @@ impl ApiState {
 				webhook: None,
 				disabled_domains: Vec::new(),
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
+				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			}),
 		}
 	}
@@ -297,6 +302,24 @@ impl ApiState {
 			&& bytes > 0
 		{
 			inner.max_message_size = bytes;
+		}
+		self
+	}
+
+	/// How many recipients one message may name through the REST send
+	/// endpoint and JMAP `EmailSubmission/set`.
+	pub fn max_recipients(&self) -> usize {
+		self.inner.max_recipients
+	}
+
+	/// Override the per-message recipient cap. Used by `serve` to apply the
+	/// operator's `max_recipients`. Must be set before the state is shared.
+	/// `0` keeps the default.
+	pub fn with_max_recipients(mut self, count: usize) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner)
+			&& count > 0
+		{
+			inner.max_recipients = count;
 		}
 		self
 	}

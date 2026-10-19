@@ -3,17 +3,31 @@ use super::*;
 #[test]
 fn parses_simple_commands() {
 	assert_eq!(
-		parse("a1 CAPABILITY").expect("parses").command,
+		parse("a1 CAPABILITY", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Capability
 	);
-	assert_eq!(parse("a2 noop").expect("parses").command, Command::Noop);
-	assert_eq!(parse("a3 LOGOUT").expect("parses").tag, "a3".to_string());
+	assert_eq!(
+		parse("a2 noop", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
+		Command::Noop
+	);
+	assert_eq!(
+		parse("a3 LOGOUT", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.tag,
+		"a3".to_string()
+	);
 }
 
 #[test]
 fn parses_list_and_select() {
 	assert_eq!(
-		parse(r#"a1 LIST "" "*""#).expect("parses").command,
+		parse(r#"a1 LIST "" "*""#, DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::List(ListCommand {
 			reference: String::new(),
 			patterns: vec!["*".into()],
@@ -21,7 +35,9 @@ fn parses_list_and_select() {
 		})
 	);
 	assert_eq!(
-		parse("a2 SELECT INBOX").expect("parses").command,
+		parse("a2 SELECT INBOX", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Select {
 			mailbox: "INBOX".into(),
 			qresync: None,
@@ -31,7 +47,7 @@ fn parses_list_and_select() {
 
 #[test]
 fn parses_fetch_variants() {
-	let parsed = parse("a1 FETCH 1:5 (FLAGS RFC822.SIZE)").expect("parses");
+	let parsed = parse("a1 FETCH 1:5 (FLAGS RFC822.SIZE)", DEFAULT_APPEND_LIMIT).expect("parses");
 	let Command::Fetch {
 		sequence,
 		items,
@@ -48,7 +64,7 @@ fn parses_fetch_variants() {
 	assert!(sequence.contains(3, 10, &[]));
 	assert!(!sequence.contains(6, 10, &[]));
 
-	let parsed = parse("a2 UID FETCH 1:* (BODY[])").expect("parses");
+	let parsed = parse("a2 UID FETCH 1:* (BODY[])", DEFAULT_APPEND_LIMIT).expect("parses");
 	let Command::Fetch { items, uid, .. } = parsed.command else {
 		panic!("expected fetch");
 	};
@@ -70,19 +86,27 @@ fn sequence_star_means_max() {
 
 #[test]
 fn rejects_malformed_lines() {
-	assert_eq!(parse("CAPABILITY"), Err(ParseError::Malformed));
-	assert_eq!(parse(""), Err(ParseError::Malformed));
-	assert_eq!(parse("ta!g NOOP"), Err(ParseError::Malformed));
+	assert_eq!(
+		parse("CAPABILITY", DEFAULT_APPEND_LIMIT),
+		Err(ParseError::Malformed)
+	);
+	assert_eq!(parse("", DEFAULT_APPEND_LIMIT), Err(ParseError::Malformed));
+	assert_eq!(
+		parse("ta!g NOOP", DEFAULT_APPEND_LIMIT),
+		Err(ParseError::Malformed)
+	);
 }
 
 #[test]
 fn unknown_commands_keep_the_tag() {
 	assert_eq!(
-		parse("a1 XFROBNICATE"),
+		parse("a1 XFROBNICATE", DEFAULT_APPEND_LIMIT),
 		Err(ParseError::Unknown("a1".to_string()))
 	);
 	assert_eq!(
-		parse("a2 STARTTLS").expect("parses").command,
+		parse("a2 STARTTLS", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::StartTls
 	);
 }
@@ -90,11 +114,11 @@ fn unknown_commands_keep_the_tag() {
 #[test]
 fn rejects_bad_arguments() {
 	assert_eq!(
-		parse("a1 FETCH 0 (FLAGS)"),
+		parse("a1 FETCH 0 (FLAGS)", DEFAULT_APPEND_LIMIT),
 		Err(ParseError::BadArguments("a1".to_string()))
 	);
 	assert_eq!(
-		parse("a1 FETCH 1 (BOGUS)"),
+		parse("a1 FETCH 1 (BOGUS)", DEFAULT_APPEND_LIMIT),
 		Err(ParseError::BadArguments("a1".to_string()))
 	);
 }
@@ -103,7 +127,7 @@ fn rejects_bad_arguments() {
 fn parses_search_or_not() {
 	use crate::imap::mailbox::Flag;
 
-	let cmd = parse("a1 SEARCH OR SEEN FLAGGED").expect("parses");
+	let cmd = parse("a1 SEARCH OR SEEN FLAGGED", DEFAULT_APPEND_LIMIT).expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -123,7 +147,7 @@ fn parses_search_or_not() {
 		cmd.command
 	);
 
-	let cmd = parse("a2 SEARCH NOT SEEN").expect("parses");
+	let cmd = parse("a2 SEARCH NOT SEEN", DEFAULT_APPEND_LIMIT).expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -141,7 +165,7 @@ fn parses_search_or_not() {
 
 #[test]
 fn parses_search_date_and_size() {
-	let cmd = parse("a1 SEARCH BEFORE 1-Jan-2024").expect("parses");
+	let cmd = parse("a1 SEARCH BEFORE 1-Jan-2024", DEFAULT_APPEND_LIMIT).expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -152,7 +176,11 @@ fn parses_search_date_and_size() {
 		cmd.command
 	);
 
-	let cmd = parse("a2 SEARCH SINCE 15-Jun-2023 SMALLER 1000").expect("parses");
+	let cmd = parse(
+		"a2 SEARCH SINCE 15-Jun-2023 SMALLER 1000",
+		DEFAULT_APPEND_LIMIT,
+	)
+	.expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -170,7 +198,7 @@ fn parses_search_nested_paren_group() {
 	use crate::imap::mailbox::Flag;
 
 	// OR (NOT SEEN) FLAGGED
-	let cmd = parse("a1 SEARCH OR (NOT SEEN) FLAGGED").expect("parses");
+	let cmd = parse("a1 SEARCH OR (NOT SEEN) FLAGGED", DEFAULT_APPEND_LIMIT).expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -206,14 +234,14 @@ fn parses_imap_date() {
 #[test]
 fn search_with_no_criteria_is_bad_arguments() {
 	assert!(matches!(
-		parse("t1 SEARCH"),
+		parse("t1 SEARCH", DEFAULT_APPEND_LIMIT),
 		Err(ParseError::BadArguments(_))
 	));
 }
 
 #[test]
 fn parses_search_on_date_criterion() {
-	let cmd = parse("a1 SEARCH ON 1-Jan-2024").expect("parses");
+	let cmd = parse("a1 SEARCH ON 1-Jan-2024", DEFAULT_APPEND_LIMIT).expect("parses");
 	assert!(
 		matches!(
 			cmd.command,
@@ -265,24 +293,31 @@ fn rejects_commands_with_bad_arguments() {
 		"a CAPABILITY extra",
 		"a NOOP extra",
 	] {
-		assert!(parse(line).is_err(), "expected error for {line:?}");
+		assert!(
+			parse(line, DEFAULT_APPEND_LIMIT).is_err(),
+			"expected error for {line:?}"
+		);
 	}
 }
 
 #[test]
 fn rejects_uid_without_valid_subcommand() {
-	assert!(parse("a UID").is_err());
-	assert!(parse("a UID BOGUS 1").is_err());
+	assert!(parse("a UID", DEFAULT_APPEND_LIMIT).is_err());
+	assert!(parse("a UID BOGUS 1", DEFAULT_APPEND_LIMIT).is_err());
 }
 
 #[test]
 fn parses_uid_fetch_and_search() {
 	assert!(matches!(
-		parse("a UID FETCH 1 (FLAGS)").expect("parses").command,
+		parse("a UID FETCH 1 (FLAGS)", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Fetch { uid: true, .. }
 	));
 	assert!(matches!(
-		parse("a UID SEARCH ALL").expect("parses").command,
+		parse("a UID SEARCH ALL", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Search { uid: true, .. }
 	));
 }
@@ -290,19 +325,26 @@ fn parses_uid_fetch_and_search() {
 #[test]
 fn parses_id_nil_and_enable() {
 	assert!(matches!(
-		parse("a ID NIL").expect("parses").command,
+		parse("a ID NIL", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Id
 	));
 	assert!(matches!(
-		parse("a ENABLE CONDSTORE QRESYNC").expect("parses").command,
+		parse("a ENABLE CONDSTORE QRESYNC", DEFAULT_APPEND_LIMIT)
+			.expect("parses")
+			.command,
 		Command::Enable { .. }
 	));
 }
 
 #[test]
 fn parses_esearch_with_scope_and_return() {
-	let parsed = parse("m1 ESEARCH IN (mailboxes (\"INBOX\" \"Archive\")) RETURN (COUNT) ALL")
-		.expect("parses");
+	let parsed = parse(
+		"m1 ESEARCH IN (mailboxes (\"INBOX\" \"Archive\")) RETURN (COUNT) ALL",
+		DEFAULT_APPEND_LIMIT,
+	)
+	.expect("parses");
 	match parsed.command {
 		Command::Esearch {
 			sources,
@@ -325,7 +367,7 @@ fn parses_esearch_with_scope_and_return() {
 
 #[test]
 fn esearch_defaults_to_selected_and_all() {
-	let parsed = parse("m1 ESEARCH ALL").expect("parses");
+	let parsed = parse("m1 ESEARCH ALL", DEFAULT_APPEND_LIMIT).expect("parses");
 	match parsed.command {
 		Command::Esearch {
 			sources,
@@ -341,22 +383,34 @@ fn esearch_defaults_to_selected_and_all() {
 
 #[test]
 fn esearch_rejects_unknown_scope() {
-	assert!(parse("m1 ESEARCH IN (bogus) ALL").is_err());
+	assert!(parse("m1 ESEARCH IN (bogus) ALL", DEFAULT_APPEND_LIMIT).is_err());
 }
 
 #[test]
 fn esearch_rejects_missing_criteria() {
-	assert!(parse("m1 ESEARCH IN (mailboxes (\"INBOX\"))").is_err());
+	assert!(
+		parse(
+			"m1 ESEARCH IN (mailboxes (\"INBOX\"))",
+			DEFAULT_APPEND_LIMIT
+		)
+		.is_err()
+	);
 }
 
 #[test]
 fn esearch_rejects_unclosed_scope() {
-	assert!(parse("m1 ESEARCH IN (mailboxes (\"INBOX\") ALL").is_err());
+	assert!(
+		parse(
+			"m1 ESEARCH IN (mailboxes (\"INBOX\") ALL",
+			DEFAULT_APPEND_LIMIT
+		)
+		.is_err()
+	);
 }
 
 #[test]
 fn parses_replace_command() {
-	let parsed = parse(r"m1 REPLACE 3 Archive (\Seen) {10}").expect("parses");
+	let parsed = parse(r"m1 REPLACE 3 Archive (\Seen) {10}", DEFAULT_APPEND_LIMIT).expect("parses");
 	match parsed.command {
 		Command::Replace {
 			sequence,
@@ -381,7 +435,7 @@ fn parses_replace_command() {
 
 #[test]
 fn parses_uid_replace_command() {
-	let parsed = parse("m1 UID REPLACE 42 INBOX {5}").expect("parses");
+	let parsed = parse("m1 UID REPLACE 42 INBOX {5}", DEFAULT_APPEND_LIMIT).expect("parses");
 	match parsed.command {
 		Command::Replace { sequence, uid, .. } => {
 			assert_eq!(sequence, 42);
@@ -393,13 +447,13 @@ fn parses_uid_replace_command() {
 
 #[test]
 fn replace_rejects_missing_sequence_and_zero() {
-	assert!(parse("m1 REPLACE INBOX {5}").is_err());
-	assert!(parse("m1 REPLACE 0 INBOX {5}").is_err());
+	assert!(parse("m1 REPLACE INBOX {5}", DEFAULT_APPEND_LIMIT).is_err());
+	assert!(parse("m1 REPLACE 0 INBOX {5}", DEFAULT_APPEND_LIMIT).is_err());
 }
 
 #[test]
 fn parses_fetch_preview() {
-	let parsed = parse("m1 FETCH 1 (PREVIEW)").expect("parses");
+	let parsed = parse("m1 FETCH 1 (PREVIEW)", DEFAULT_APPEND_LIMIT).expect("parses");
 	match parsed.command {
 		Command::Fetch { items, .. } => assert!(items.contains(&FetchItem::Preview)),
 		other => panic!("expected Fetch, got {other:?}"),
@@ -408,7 +462,11 @@ fn parses_fetch_preview() {
 
 #[test]
 fn parses_getmetadata_single_and_list() {
-	let parsed = parse("m1 GETMETADATA INBOX /private/comment").expect("parses");
+	let parsed = parse(
+		"m1 GETMETADATA INBOX /private/comment",
+		DEFAULT_APPEND_LIMIT,
+	)
+	.expect("parses");
 	match parsed.command {
 		Command::GetMetadata { mailbox, entries } => {
 			assert_eq!(mailbox, "INBOX");
@@ -416,8 +474,11 @@ fn parses_getmetadata_single_and_list() {
 		}
 		other => panic!("expected GetMetadata, got {other:?}"),
 	}
-	let parsed =
-		parse("m2 GETMETADATA (MAXSIZE 1024) INBOX (/private/a /shared/b)").expect("parses");
+	let parsed = parse(
+		"m2 GETMETADATA (MAXSIZE 1024) INBOX (/private/a /shared/b)",
+		DEFAULT_APPEND_LIMIT,
+	)
+	.expect("parses");
 	match parsed.command {
 		Command::GetMetadata { entries, .. } => {
 			assert_eq!(
@@ -431,8 +492,11 @@ fn parses_getmetadata_single_and_list() {
 
 #[test]
 fn parses_setmetadata_with_value_and_nil() {
-	let parsed =
-		parse("m1 SETMETADATA INBOX (/private/comment \"hi\" /private/old NIL)").expect("parses");
+	let parsed = parse(
+		"m1 SETMETADATA INBOX (/private/comment \"hi\" /private/old NIL)",
+		DEFAULT_APPEND_LIMIT,
+	)
+	.expect("parses");
 	match parsed.command {
 		Command::SetMetadata { mailbox, items } => {
 			assert_eq!(mailbox, "INBOX");
@@ -448,5 +512,11 @@ fn parses_setmetadata_with_value_and_nil() {
 
 #[test]
 fn setmetadata_rejects_unbalanced() {
-	assert!(parse("m1 SETMETADATA INBOX /private/x \"v\"").is_err());
+	assert!(
+		parse(
+			"m1 SETMETADATA INBOX /private/x \"v\"",
+			DEFAULT_APPEND_LIMIT
+		)
+		.is_err()
+	);
 }

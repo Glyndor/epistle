@@ -5,6 +5,8 @@
 //! credential verification, the message snapshot taken at login, and deletion
 //! at QUIT — all injectable, so the protocol is fully unit-testable.
 
+use std::sync::Arc;
+
 use super::command::Command;
 use crate::smtp::directory::hash_gate::Verdict;
 
@@ -129,6 +131,12 @@ pub struct Session<B: Backend> {
 	/// loop starts. Drives the per-IP ban store check on every
 	/// `USER`/`PASS`/`AUTH PLAIN` attempt.
 	peer_ip: Option<std::net::IpAddr>,
+	/// Shared per-account counter applied after authentication. `None`
+	/// keeps the historical behaviour (no per-account cap).
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
+	/// The slot the session holds on [`Session::per_account_counter`].
+	/// Dropping the session releases the slot.
+	per_account_slot: Option<crate::net::per_account_conn::PerAccountSlot>,
 }
 
 impl<B: Backend> Session<B> {
@@ -147,6 +155,8 @@ impl<B: Backend> Session<B> {
 			account: None,
 			messages: Vec::new(),
 			peer_ip: None,
+			per_account_counter: None,
+			per_account_slot: None,
 		}
 	}
 
@@ -154,6 +164,15 @@ impl<B: Backend> Session<B> {
 	/// network layer after `accept()`; `None` for in-memory tests.
 	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
 		self.peer_ip = ip;
+	}
+
+	/// Attach the shared per-account counter this listener enforces.
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
 	}
 
 	/// The greeting sent on connect.
@@ -317,6 +336,21 @@ impl<B: Backend> Session<B> {
 
 	/// Load `account`'s mailbox and enter the transaction state.
 	fn complete_login(&mut self, account: String) -> Response {
+		// `[server] max_connections_per_account` (default 10 per
+		// (account, IP) and 50 in total). Applied after the backend
+		// admits the credentials but before the mailbox is loaded so a
+		// refused connection does not touch the mail store. The slot
+		// lives on the session; dropping the session releases it.
+		if let (Some(counter), Some(peer)) = (&self.per_account_counter, self.peer_ip) {
+			match counter.try_acquire(&account, peer) {
+				Ok(slot) => self.per_account_slot = Some(slot),
+				Err(_) => {
+					return Response::Err(
+						"[IN-USE] Too many concurrent connections for this account".into(),
+					);
+				}
+			}
+		}
 		self.messages = self
 			.backend
 			.load(&account)

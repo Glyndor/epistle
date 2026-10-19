@@ -81,7 +81,7 @@ impl Settings {
 			dry_run,
 			limits: Limits {
 				line: 64 * 1024,
-				literal: crate::imap::command::MAX_APPEND_SIZE,
+				literal: crate::imap::command::DEFAULT_APPEND_LIMIT,
 				idle: Duration::from_secs(60),
 				response: Duration::from_secs(600),
 			},
