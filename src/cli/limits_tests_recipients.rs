@@ -13,7 +13,7 @@ fn a_cap_is_set_shown_and_unset() {
 	let (_dir, file) = super::tests_config::config_file();
 	assert_shown(
 		file.path(),
-		&["max-recipients\t100\tdefault\tfixed\tRFC 5321 §4.5.3.1.8 (at least 100)"],
+		&["max-recipients\t100\tdefault\trecommended\tRFC 5321 §4.5.3.1.8 (at least 100)"],
 	);
 	let (code, printed) = limits(file.path(), &["set", "max-recipients", "500"]);
 	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
@@ -21,13 +21,13 @@ fn a_cap_is_set_shown_and_unset() {
 	assert!(text.contains("max_recipients = 500"), "{text}");
 	assert_shown(
 		file.path(),
-		&["max-recipients\t500\tconfigured\tfixed\tRFC 5321 §4.5.3.1.8 (at least 100)"],
+		&["max-recipients\t500\tconfigured\trecommended\tRFC 5321 §4.5.3.1.8 (at least 100)"],
 	);
 	let (code, printed) = limits(file.path(), &["unset", "max-recipients"]);
 	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
 	assert_shown(
 		file.path(),
-		&["max-recipients\t100\tdefault\tfixed\tRFC 5321 §4.5.3.1.8 (at least 100)"],
+		&["max-recipients\t100\tdefault\trecommended\tRFC 5321 §4.5.3.1.8 (at least 100)"],
 	);
 }
 

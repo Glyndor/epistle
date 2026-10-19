@@ -31,14 +31,14 @@ rule comes from.
 | key | default | unit | kind | bounds | reference |
 | --- | --- | --- | --- | --- | --- |
 | `quota` | 5368709120 | bytes | adjustable | | no standard mandate |
-| `submission-rate` | | messages-per-minute | adjustable | | no standard mandate |
+| `submission-rate` | | count | adjustable | | no standard mandate |
 | `new-recipients-per-day` | | count | adjustable | | no standard mandate |
 | `queue-give-up` | 432000 | seconds | recommended | at-least 345600 | RFC 5321 §4.5.4.1 (4-5 days recommended) |
 | `queue-retry-base` | 60 | seconds | recommended | at-least 1800 | RFC 5321 §4.5.4.1 (30 minutes recommended) |
 | `queue-retry-cap` | 3600 | seconds | adjustable | | no standard mandate |
 | `queue-delay-warning` | 14400 | seconds | adjustable | | no standard mandate |
-| `inbound-rate-per-ip` | | messages-per-minute | adjustable | | no standard mandate |
-| `inbound-rate-per-sender` | | messages-per-minute | adjustable | | no standard mandate |
+| `inbound-rate-per-ip` | | count | adjustable | | no standard mandate |
+| `inbound-rate-per-sender` | | count | adjustable | | no standard mandate |
 | `max-connections-per-listener` | protocol defaults | count | adjustable | | no standard mandate |
 | `max-connections-per-ip` | 20 | count | adjustable | | no standard mandate |
 | `masked-addresses-max` | 100 | count | adjustable | | no standard mandate |
@@ -48,7 +48,7 @@ rule comes from.
 | `queue-per-domain-concurrency` | 2 | count | adjustable | | no standard mandate |
 | `queue-backoff` | 60,300,900,3600 | seconds | adjustable | | no standard mandate |
 | `max-message-size` | 26214400 | bytes | adjustable | | no standard mandate |
-| `max-recipients` | 100 | count | fixed | at-least 100 | RFC 5321 §4.5.3.1.8 (at least 100) |
+| `max-recipients` | 100 | count | recommended | at-least 100 | RFC 5321 §4.5.3.1.8 (at least 100) |
 | `message-memory-budget` | derived | bytes | adjustable | | no standard mandate |
 | `min-data-rate` | 10240 | bytes-per-second | adjustable | | no standard mandate |
 | `data-rate-grace` | 120 | seconds | adjustable | | no standard mandate |
@@ -67,7 +67,7 @@ mandatory (MUST). They are listed so the operator sees what is in force;
 
 | key | value | unit | reference |
 | --- | --- | --- | --- |
-| `smtp-line-length` | 998 | octets | RFC 5321 §4.5.3.1.4 (998 octets incl. CRLF) |
+| `smtp-line-length` | 998 | octets | RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF) |
 | `smtp-command-minimum-timeout` | 300 | seconds | RFC 5321 §4.5.3.2 (5 minute minimum) |
 | `smtp-never-bounce-a-bounce` | true | boolean | RFC 5321 §5.3.3 (no bounce of a bounce) |
 | `spf-max-dns-lookups` | 10 | count | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
@@ -81,7 +81,9 @@ order: the value's own type (size, duration, count), the catalog's
 standard floor (the `at-least` / `at-most` in the table above), and
 finally `Config::validate()` on the resulting configuration. The
 `at-least 100` floor on `max-recipients` is the only MUST the catalog
-enforces today: a value below it is refused with
+enforces today, even though it is marked `recommended` (the operator
+may set a value above it; only the lower bound is mandatory): a value
+below it is refused with
 
 ```
 refused: RFC 5321 §4.5.3.1.8 requires accepting at least 100 recipients

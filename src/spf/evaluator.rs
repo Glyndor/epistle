@@ -218,21 +218,31 @@ async fn check_host_inner(ctx: &CheckContext<'_>, domain: &str, budget: &mut Bud
 					Ok(d) => d,
 					Err(e) => return e,
 				};
-				let nested = Budget {
+				let mut nested = Budget {
 					remaining: budget.remaining,
 					voids: budget.voids,
 					depth: budget.depth + 1,
 				};
-				match Box::pin(check_host_inner(ctx, &included, &mut { nested })).await {
-					SpfOutcome::Pass => true,
-					SpfOutcome::Fail | SpfOutcome::SoftFail | SpfOutcome::Neutral => false,
-					// include of a domain without a record is a permerror
-					// (RFC 7208 section 5.2).
-					SpfOutcome::None => return SpfOutcome::PermError,
-					outcome @ (SpfOutcome::TempError | SpfOutcome::PermError) => {
-						return outcome;
-					}
-				}
+				let include_matched =
+					match Box::pin(check_host_inner(ctx, &included, &mut nested)).await {
+						SpfOutcome::Pass => true,
+						SpfOutcome::Fail | SpfOutcome::SoftFail | SpfOutcome::Neutral => false,
+						// include of a domain without a record is a permerror
+						// (RFC 7208 section 5.2).
+						SpfOutcome::None => return SpfOutcome::PermError,
+						outcome @ (SpfOutcome::TempError | SpfOutcome::PermError) => {
+							return outcome;
+						}
+					};
+				// Propagate the child's consumed counts back into the
+				// caller's budget. The §4.6.4 limits are shared across
+				// the whole evaluation, not per-record, so a void that
+				// happened inside the include must count against the
+				// caller's counter (and vice versa). Same for the
+				// remaining DNS-term cap.
+				budget.remaining = nested.remaining;
+				budget.voids = nested.voids;
+				include_matched
 			}
 			Mechanism::Exists { domain } => {
 				// RFC 7208 §5.7: pass if the domain has any A/AAAA record.
@@ -282,12 +292,16 @@ async fn check_host_inner(ctx: &CheckContext<'_>, domain: &str, budget: &mut Bud
 			Ok(d) => d,
 			Err(e) => return e,
 		};
-		let nested = Budget {
+		let mut nested = Budget {
 			remaining: budget.remaining,
 			voids: budget.voids,
 			depth: budget.depth + 1,
 		};
-		let outcome = Box::pin(check_host_inner(ctx, &target, &mut { nested })).await;
+		let outcome = Box::pin(check_host_inner(ctx, &target, &mut nested)).await;
+		// Propagate the child's consumed counts back into the caller's
+		// budget (same §4.6.4 contract as `include:` above).
+		budget.remaining = nested.remaining;
+		budget.voids = nested.voids;
 		// A redirect target without a record is a permerror (section 6.1).
 		return if outcome == SpfOutcome::None {
 			SpfOutcome::PermError
@@ -538,3 +552,7 @@ mod macro_tests;
 #[cfg(test)]
 #[path = "evaluator_void_tests.rs"]
 mod void_tests;
+
+#[cfg(test)]
+#[path = "evaluator_budget_propagation_tests.rs"]
+mod budget_propagation_tests;

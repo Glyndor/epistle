@@ -23,6 +23,11 @@ pub(super) enum Kind {
 	/// hard-coded in the server. `limits show` lists it so the operator
 	/// sees what the server enforces, but `limits set` rejects any
 	/// attempt to override it.
+	#[allow(dead_code)] // Reserved for MUST-grade keys; today every
+	// adjustable entry is either adjustable (no
+	// standard mandate) or recommended (operator may
+	// set it with a warning). Reachable through `match`
+	// on `kind` in the snapshot helper.
 	Fixed,
 }
 
@@ -178,7 +183,7 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 	Adjustable {
 		key: Key::MaxRecipients,
-		kind: Kind::Fixed,
+		kind: Kind::Recommended,
 		bound: Some(Bound::AtLeast(
 			crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
 		)),
@@ -248,7 +253,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		name: "smtp-line-length",
 		value: "998",
 		unit: "octets",
-		reference: "RFC 5321 §4.5.3.1.4 (998 octets incl. CRLF)",
+		reference: "RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)",
 	},
 	FixedEntry {
 		name: "smtp-command-minimum-timeout",
@@ -287,4 +292,97 @@ pub(super) const FIXED: &[FixedEntry] = &[
 #[allow(dead_code)] // The docs page is hand-maintained today and reuses Key::default_value directly.
 pub(super) fn adjustable_default(entry: &Adjustable) -> Option<u64> {
 	entry.key.default_value()
+}
+
+/// One row of the catalog exposed for the integration test that keeps
+/// `docs/limits.md` in lockstep with the in-process catalog. The struct
+/// lives in `pub` so a closed-over copy in `tests/limits_docs.rs` can
+/// read it without depending on the catalog's internal types; every
+/// other consumer goes through `show` / `show_json`, which carry the
+/// same data through the CLI surface the operator already uses.
+#[doc(hidden)]
+#[allow(dead_code)]
+pub struct DocsRow {
+	pub name: &'static str,
+	pub kind: &'static str,
+	pub unit: &'static str,
+	pub reference: &'static str,
+	pub default: Option<&'static str>,
+	pub bounds: Option<&'static str>,
+	pub value: Option<&'static str>,
+}
+
+/// Every catalog row as a `Vec` of `DocsRow`. Hidden from the public docs
+/// but reachable from integration tests through the `#[doc(hidden)]`
+/// declaration on `DocsRow`. The order matches the printed catalog.
+#[doc(hidden)]
+#[allow(dead_code)]
+pub fn docs_snapshot() -> Vec<DocsRow> {
+	let mut rows = Vec::with_capacity(ADJUSTABLE.len() + FIXED.len());
+	for entry in ADJUSTABLE {
+		rows.push(DocsRow {
+			name: entry.key.name(),
+			kind: kind_label(entry.kind),
+			unit: unit_label(entry.key.unit()),
+			reference: entry.reference,
+			default: entry.key.default_value().map(value_label),
+			bounds: entry.bound.map(bound_label),
+			value: None,
+		});
+	}
+	for fixed in FIXED {
+		rows.push(DocsRow {
+			name: fixed.name,
+			kind: "fixed",
+			unit: fixed.unit,
+			reference: fixed.reference,
+			default: None,
+			bounds: None,
+			value: Some(fixed.value),
+		});
+	}
+	rows
+}
+
+#[doc(hidden)]
+#[allow(dead_code)]
+fn kind_label(kind: Kind) -> &'static str {
+	match kind {
+		Kind::Adjustable => "adjustable",
+		Kind::Recommended => "recommended",
+		Kind::Fixed => "fixed",
+	}
+}
+
+#[doc(hidden)]
+#[allow(dead_code)]
+fn unit_label(unit: super::values::Unit) -> &'static str {
+	match unit {
+		super::values::Unit::Size => "bytes",
+		super::values::Unit::Rate => "bytes-per-second",
+		super::values::Unit::Duration => "seconds",
+		super::values::Unit::Count => "count",
+	}
+}
+
+#[doc(hidden)]
+#[allow(dead_code)]
+fn value_label(value: u64) -> &'static str {
+	// The `default_value` of every adjustable key fits in `u64`; the
+	// box is opaque to the operator so a plain decimal form is enough.
+	// We leak a small `String` per unique value to obtain a
+	// `'static str`; the snapshot is built once per test process and
+	// never mutated, so the leak is bounded.
+	let rendered = value.to_string();
+	Box::leak(rendered.into_boxed_str())
+}
+
+#[doc(hidden)]
+#[allow(dead_code)]
+fn bound_label(bound: Bound) -> &'static str {
+	let rendered = match bound {
+		Bound::AtLeast(value) => format!("at-least {value}"),
+		Bound::AtMost(value) => format!("at-most {value}"),
+	};
+	Box::leak(rendered.into_boxed_str())
 }

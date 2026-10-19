@@ -186,6 +186,31 @@ impl PerAccountCounter {
 			.copied()
 			.unwrap_or(0)
 	}
+
+	/// The number of distinct (account, IP) pairs the counter is currently
+	/// tracking. The counter must drop the entry the moment a pair's count
+	/// returns to zero, so a long stream of distinct connections that all
+	/// disconnect leaves the map empty.
+	#[cfg(test)]
+	pub fn tracked_pairs(&self) -> usize {
+		self.state
+			.counts
+			.lock()
+			.expect("per-account counter")
+			.by_pair
+			.len()
+	}
+
+	/// The number of distinct accounts the counter is currently tracking.
+	#[cfg(test)]
+	pub fn tracked_accounts(&self) -> usize {
+		self.state
+			.counts
+			.lock()
+			.expect("per-account counter")
+			.by_account
+			.len()
+	}
 }
 
 #[cfg(test)]
@@ -267,6 +292,41 @@ mod tests {
 			counter.try_acquire("bob", ip("203.0.113.3")).unwrap_err(),
 			PerAccountRefusal::PerAccountTotal,
 			"bob's total of 2 is full"
+		);
+	}
+
+	#[test]
+	fn churn_through_a_thousand_distinct_pairs_leaves_an_empty_map() {
+		// The counter's two maps are bounded by the number of distinct
+		// pairs that hold a connection at the same time. A long stream
+		// of distinct connections that all disconnect must not leave
+		// any stale key behind: `Drop` removes the entry the moment its
+		// count returns to zero, otherwise the maps grow without bound
+		// under sustained churn.
+		let counter = Arc::new(PerAccountCounter::new(10, 10_000));
+		for index in 0..1_000_u32 {
+			let account = format!("user{index}");
+			let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+				203,
+				0,
+				113,
+				((index >> 8) & 0xff) as u8,
+			));
+			let slot = counter.try_acquire(&account, ip).expect("acquire");
+			assert_eq!(counter.pair(&account, ip), 1);
+			drop(slot);
+			assert_eq!(counter.pair(&account, ip), 0);
+			assert_eq!(counter.total(&account), 0);
+		}
+		assert_eq!(
+			counter.tracked_pairs(),
+			0,
+			"no (account, IP) pair may outlive its slot"
+		);
+		assert_eq!(
+			counter.tracked_accounts(),
+			0,
+			"no account may outlive its slot"
 		);
 	}
 }

@@ -150,9 +150,9 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 		"submission-rate\tdisabled\tdefault\tadjustable\tno standard mandate",
 		"queue-give-up\t432000 seconds\tdefault\trecommended\tRFC 5321 §4.5.4.1 (4-5 days recommended)",
 		"queue-retry-base\t60 seconds\tdefault\trecommended\tRFC 5321 §4.5.4.1 (30 minutes recommended)",
-		"max-recipients\t100\tdefault\tfixed\tRFC 5321 §4.5.3.1.8 (at least 100)",
+		"max-recipients\t100\tdefault\trecommended\tRFC 5321 §4.5.3.1.8 (at least 100)",
 		"message-memory-budget\tauto (204 MiB, no mail container limit found, 1g assumed)\tderived\tadjustable\tno standard mandate",
-		"smtp-line-length\t998 octets\tfixed\tfixed\tRFC 5321 §4.5.3.1.4 (998 octets incl. CRLF)",
+		"smtp-line-length\t998 octets\tfixed\tfixed\tRFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)",
 		"spf-max-dns-lookups\t10 count\tfixed\tfixed\tRFC 7208 §4.6.4 (max 10 DNS-querying terms)",
 		"tls-minimum-version\t1.2 version\tfixed\tfixed\tRFC 8996 (TLS 1.0/1.1 prohibited)",
 	] {

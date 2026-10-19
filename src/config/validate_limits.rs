@@ -150,6 +150,23 @@ impl Config {
 				"preauth_timeout must be between 5 and {MAX_PREAUTH_TIMEOUT_SECS} seconds"
 			)));
 		}
+		self.validate_per_account_caps()
+	}
+
+	/// The singular `max_connections_per_account` is not wired to any
+	/// guard: `MailboxLimits::from_config` only reads `_per_ip` and
+	/// `_total`. Reject it up front so an operator who set the singular
+	/// key does not silently keep the 10/50 defaults they meant to
+	/// override.
+	fn validate_per_account_caps(&self) -> Result<(), ConfigError> {
+		if self.max_connections_per_account.is_some() {
+			return Err(ConfigError::Invalid(
+				"max_connections_per_account is not configurable; use \
+				 max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
+					.into(),
+			));
+		}
 		Ok(())
 	}
 }
@@ -372,6 +389,26 @@ mod tests {
 			Err(
 				"invalid configuration: max_recipients (10001) is above 10000, the most one \
 				 message may name"
+					.to_string()
+			)
+		);
+	}
+
+	#[test]
+	fn the_singular_max_connections_per_account_is_rejected() {
+		// The implementation has only `_per_ip` and `_total`. The singular
+		// `max_connections_per_account` is accepted by the TOML parser
+		// but never read by `MailboxLimits::from_config`, so an operator
+		// who set `max_connections_per_account = 1` would see no effect
+		// at all: the second connection from alice on the same IP is
+		// admitted with the cap at 50 per `default`. The key is rejected
+		// up front so the failure is loud.
+		assert_eq!(
+			validate("max_connections_per_account = 1"),
+			Err(
+				"invalid configuration: max_connections_per_account is not configurable; \
+				 use max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
 					.to_string()
 			)
 		);

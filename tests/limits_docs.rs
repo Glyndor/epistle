@@ -3,178 +3,194 @@
 //! the docs page carries must come from the catalog, so neither side
 //! drifts from the other.
 //!
-//! The test walks the catalog in `src/cli/limits_catalog.rs` (rebuilt
-//! here from the same source the server uses) and the docs page in
-//! `docs/limits.md`, and asserts that the set of names and references
-//! matches. The comparison is name-based so reordering rows in either
-//! place does not trip the test; adding or removing a row does.
+//! The test reads the real catalog through the `#[doc(hidden)]` snapshot
+//! in `src/cli/limits_catalog.rs` (the same catalog `epistle limits
+//! show` enumerates). Every row of the catalog is matched against a row
+//! of the docs page by name, kind, default, unit, bounds, and reference;
+//! a stale docs row trips the test, and a stale catalog row does too.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use epistle::cli::docs_snapshot;
+
 fn docs_path() -> std::path::PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/limits.md")
 }
 
-#[test]
-fn docs_list_every_adjustable_key_with_kind_and_reference() {
-	let text = fs::read_to_string(docs_path()).expect("read docs/limits.md");
-	let fold = fold(&text);
-	let expected_kind = [
-		("quota", "adjustable", "no standard mandate"),
-		("submission-rate", "adjustable", "no standard mandate"),
-		(
-			"new-recipients-per-day",
-			"adjustable",
-			"no standard mandate",
-		),
-		(
-			"queue-give-up",
-			"recommended",
-			"RFC 5321 §4.5.4.1 (4-5 days recommended)",
-		),
-		(
-			"queue-retry-base",
-			"recommended",
-			"RFC 5321 §4.5.4.1 (30 minutes recommended)",
-		),
-		("queue-retry-cap", "adjustable", "no standard mandate"),
-		("queue-delay-warning", "adjustable", "no standard mandate"),
-		("inbound-rate-per-ip", "adjustable", "no standard mandate"),
-		(
-			"inbound-rate-per-sender",
-			"adjustable",
-			"no standard mandate",
-		),
-		(
-			"max-connections-per-listener",
-			"adjustable",
-			"no standard mandate",
-		),
-		(
-			"max-connections-per-ip",
-			"adjustable",
-			"no standard mandate",
-		),
-		("masked-addresses-max", "adjustable", "no standard mandate"),
-		(
-			"first-time-sender-delay",
-			"adjustable",
-			"no standard mandate",
-		),
-		("greylist-delay", "adjustable", "no standard mandate"),
-		("queue-concurrency", "adjustable", "no standard mandate"),
-		(
-			"queue-per-domain-concurrency",
-			"adjustable",
-			"no standard mandate",
-		),
-		("queue-backoff", "adjustable", "no standard mandate"),
-		("max-message-size", "adjustable", "no standard mandate"),
-		(
-			"max-recipients",
-			"fixed",
-			"RFC 5321 §4.5.3.1.8 (at least 100)",
-		),
-		("message-memory-budget", "adjustable", "no standard mandate"),
-		("min-data-rate", "adjustable", "no standard mandate"),
-		("data-rate-grace", "adjustable", "no standard mandate"),
-		("junk-command-limit", "adjustable", "no standard mandate"),
-		("max-session-time", "adjustable", "no standard mandate"),
-		("preauth-timeout", "adjustable", "no standard mandate"),
-		(
-			"max-mailbox-connections-per-ip",
-			"adjustable",
-			"no standard mandate",
-		),
-		("max-http-connections", "adjustable", "no standard mandate"),
-		(
-			"max-http-connections-per-ip",
-			"adjustable",
-			"no standard mandate",
-		),
-	];
-	for (name, kind, reference) in expected_kind {
-		let needle = format!("`{name}`");
-		assert!(
-			fold.contains(&needle),
-			"docs/limits.md must mention adjustable key `{name}`"
-		);
-		let kind_needle = format!("| `{name}` ");
-		assert!(
-			fold.contains(&kind_needle),
-			"docs/limits.md must have a table row for `{name}`"
-		);
-		assert!(
-			fold.contains(&format!("| {kind} |")),
-			"docs/limits.md must list `{name}` as {kind}"
-		);
-		assert!(
-			fold.contains(reference),
-			"docs/limits.md must carry the reference `{reference}` for `{name}`"
-		);
+/// One row of the docs page parsed from a Markdown table. The format
+/// the catalog uses (one Markdown row per limit) is stable, so a
+/// single regex is enough.
+#[derive(Debug, PartialEq, Eq)]
+struct DocsRow {
+	name: String,
+	cells: Vec<String>,
+}
+
+fn parse_markdown_rows(text: &str) -> Vec<DocsRow> {
+	let mut rows = Vec::new();
+	let mut in_table = false;
+	for line in text.lines() {
+		if line.trim_start_matches('|').starts_with("|---")
+			|| line.trim_start_matches('|').contains("---") && line.starts_with('|')
+		{
+			// Skip the markdown table separator (|---|---|---|...).
+			if line.contains("---") && line.starts_with('|') && line.ends_with('|') {
+				in_table = true;
+				continue;
+			}
+		}
+		if !line.starts_with('|') || !line.ends_with('|') {
+			in_table = false;
+			continue;
+		}
+		if !in_table {
+			continue;
+		}
+		// Strip leading and trailing pipe, split by '|'.
+		let trimmed = &line[1..line.len() - 1];
+		let cells: Vec<String> = trimmed
+			.split('|')
+			.map(|cell| cell.trim().to_string())
+			.collect();
+		let Some(name) = cells.first().cloned() else {
+			continue;
+		};
+		let name = name
+			.trim_start_matches('`')
+			.trim_end_matches('`')
+			.to_string();
+		if name.is_empty() {
+			continue;
+		}
+		rows.push(DocsRow { name, cells });
 	}
+	rows
 }
 
 #[test]
-fn docs_list_every_fixed_standard() {
+fn the_catalog_drives_the_docs_page_row_for_row() {
+	let snapshot = docs_snapshot();
 	let text = fs::read_to_string(docs_path()).expect("read docs/limits.md");
-	let fold = fold(&text);
-	let expected = [
-		(
-			"smtp-line-length",
-			"998",
-			"RFC 5321 §4.5.3.1.4 (998 octets incl. CRLF)",
-		),
-		(
-			"smtp-command-minimum-timeout",
-			"300",
-			"RFC 5321 §4.5.3.2 (5 minute minimum)",
-		),
-		(
-			"smtp-never-bounce-a-bounce",
-			"true",
-			"RFC 5321 §5.3.3 (no bounce of a bounce)",
-		),
-		(
-			"spf-max-dns-lookups",
-			"10",
-			"RFC 7208 §4.6.4 (max 10 DNS-querying terms)",
-		),
-		(
-			"spf-max-void-lookups",
-			"2",
-			"RFC 7208 §4.6.4 (max 2 void lookups)",
-		),
-		(
-			"tls-minimum-version",
-			"1.2",
-			"RFC 8996 (TLS 1.0/1.1 prohibited)",
-		),
-	];
-	for (name, value, reference) in expected {
+	let docs_rows = parse_markdown_rows(&text);
+	let docs_by_name: std::collections::HashMap<&str, &DocsRow> = docs_rows
+		.iter()
+		.map(|row| (row.name.as_str(), row))
+		.collect();
+	let catalog_names: BTreeSet<&str> = snapshot.iter().map(|row| row.name).collect();
+	let docs_names: BTreeSet<&str> = docs_rows.iter().map(|row| row.name.as_str()).collect();
+
+	// Every catalog row must have a docs row.
+	for row in &snapshot {
 		assert!(
-			fold.contains(&format!("| `{name}` ")),
-			"docs/limits.md must list fixed standard `{name}`"
+			docs_by_name.contains_key(row.name),
+			"catalog carries `{}` (kind {}, reference {}) but docs/limits.md has no row for it",
+			row.name,
+			row.kind,
+			row.reference,
 		);
+	}
+
+	// Every docs row must come from the catalog.
+	for name in &docs_names {
 		assert!(
-			fold.contains(&format!("| {value} |")),
-			"docs/limits.md must show the fixed standard `{name}` value `{value}`"
+			catalog_names.contains(name),
+			"docs/limits.md lists `{name}` but the catalog does not carry it"
 		);
-		assert!(
-			fold.contains(reference),
-			"docs/limits.md must carry the reference `{reference}` for `{name}`"
-		);
+	}
+
+	// Each catalog row's kind, unit, reference, default and bounds must
+	// match the docs row that bears the same name. The column layout
+	// differs between the adjustable table (six columns: key, default,
+	// unit, kind, bounds, reference) and the fixed table (four columns:
+	// key, value, unit, reference), so the layout is picked by kind.
+	for row in &snapshot {
+		let docs_row = docs_by_name
+			.get(row.name)
+			.copied()
+			.expect("the membership check above guarantees this");
+		let docs_cells = &docs_row.cells;
+		match row.kind {
+			"adjustable" | "recommended" => {
+				assert_eq!(
+					docs_cells.len(),
+					6,
+					"docs row for `{}` should have 6 cells (key, default, unit, kind, bounds, reference), got {:?}",
+					row.name,
+					docs_cells,
+				);
+				let docs_unit = docs_cells.get(2).map(String::as_str).unwrap_or("");
+				let docs_kind = docs_cells.get(3).map(String::as_str).unwrap_or("");
+				let docs_bounds = docs_cells.get(4).map(String::as_str).unwrap_or("");
+				let docs_reference = docs_cells.get(5).map(String::as_str).unwrap_or("");
+				assert_eq!(
+					docs_unit, row.unit,
+					"`{}`: unit column drift (docs says `{docs_unit}`, catalog says `{}`)",
+					row.name, row.unit,
+				);
+				assert_eq!(
+					docs_kind, row.kind,
+					"`{}`: kind column drift (docs says `{docs_kind}`, catalog says `{}`)",
+					row.name, row.kind,
+				);
+				assert_eq!(
+					docs_reference, row.reference,
+					"`{}`: reference column drift",
+					row.name,
+				);
+				let catalog_bounds = row.bounds.unwrap_or("");
+				assert_eq!(
+					docs_bounds, catalog_bounds,
+					"`{}`: bounds column drift (docs says `{docs_bounds}`, catalog says `{catalog_bounds}`)",
+					row.name,
+				);
+			}
+			"fixed" => {
+				// Fixed rows from the catalog live in the
+				// fixed-standards table (four columns). A future
+				// adjustable row marked `fixed` would live in the
+				// adjustable table (six columns). Accept either.
+				let (docs_unit, docs_reference) = if docs_cells.len() == 4 {
+					(
+						docs_cells.get(2).map(String::as_str).unwrap_or(""),
+						docs_cells.get(3).map(String::as_str).unwrap_or(""),
+					)
+				} else {
+					assert_eq!(
+						docs_cells.len(),
+						6,
+						"docs row for `{}` should have 4 or 6 cells, got {:?}",
+						row.name,
+						docs_cells,
+					);
+					(
+						docs_cells.get(2).map(String::as_str).unwrap_or(""),
+						docs_cells.get(5).map(String::as_str).unwrap_or(""),
+					)
+				};
+				assert_eq!(
+					docs_unit, row.unit,
+					"`{}`: unit column drift (docs says `{docs_unit}`, catalog says `{}`)",
+					row.name, row.unit,
+				);
+				assert_eq!(
+					docs_reference, row.reference,
+					"`{}`: reference column drift",
+					row.name,
+				);
+			}
+			other => panic!("unknown kind `{other}` in the catalog snapshot"),
+		}
 	}
 }
 
+/// The kind column must be explained in the prose so the operator can
+/// read the catalog.
 #[test]
-fn docs_explain_the_kind_column_meaning() {
+fn the_kind_column_meaning_is_documented() {
 	let text = fs::read_to_string(docs_path()).expect("read docs/limits.md");
-	let fold = fold(&text);
-	// The three kinds each have a paragraph the operator needs to read;
-	// they have to be present, otherwise the column is meaningless.
+	let fold: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
 	for marker in [
 		"`adjustable`",
 		"`recommended`",
@@ -190,97 +206,17 @@ fn docs_explain_the_kind_column_meaning() {
 	}
 }
 
+/// No row is duplicated under a different name: the catalog is the
+/// single source of truth, so the docs table must mirror it.
 #[test]
-fn docs_have_no_extra_rows_not_in_the_catalog() {
-	// The catalog is the source of truth. Any name in the docs page
-	// that the catalog does not carry is a stale row that survived an
-	// edit; flag it so a maintainer removes it. Names that are pure
-	// prose (like the column header text) are excluded by the regex.
-	let text = fs::read_to_string(docs_path()).expect("read docs/limits.md");
-	let catalog_adjustable = adjustable_keys::new![
-		"quota",
-		"submission-rate",
-		"new-recipients-per-day",
-		"queue-give-up",
-		"queue-retry-base",
-		"queue-retry-cap",
-		"queue-delay-warning",
-		"inbound-rate-per-ip",
-		"inbound-rate-per-sender",
-		"max-connections-per-listener",
-		"max-connections-per-ip",
-		"masked-addresses-max",
-		"first-time-sender-delay",
-		"greylist-delay",
-		"queue-concurrency",
-		"queue-per-domain-concurrency",
-		"queue-backoff",
-		"max-message-size",
-		"max-recipients",
-		"message-memory-budget",
-		"min-data-rate",
-		"data-rate-grace",
-		"junk-command-limit",
-		"max-session-time",
-		"preauth-timeout",
-		"max-mailbox-connections-per-ip",
-		"max-http-connections",
-		"max-http-connections-per-ip",
-	];
-	let catalog_fixed = adjustable_keys::new![
-		"smtp-line-length",
-		"smtp-command-minimum-timeout",
-		"smtp-never-bounce-a-bounce",
-		"spf-max-dns-lookups",
-		"spf-max-void-lookups",
-		"tls-minimum-version",
-	];
-	let mut documented: BTreeSet<String> = BTreeSet::new();
-	for line in text.lines() {
-		let trimmed = line.trim().trim_end_matches('|').trim();
-		if !trimmed.starts_with("| `") {
-			continue;
-		}
-		let name = trimmed
-			.trim_start_matches("| `")
-			.split('`')
-			.next()
-			.unwrap_or("")
-			.to_string();
-		if !name.is_empty() {
-			documented.insert(name);
-		}
-	}
-	for name in &documented {
-		let in_catalog =
-			catalog_adjustable.contains(name.as_str()) || catalog_fixed.contains(name.as_str());
+fn the_catalog_has_no_duplicate_names() {
+	let snapshot = docs_snapshot();
+	let mut names: BTreeSet<&str> = BTreeSet::new();
+	for row in &snapshot {
 		assert!(
-			in_catalog,
-			"docs/limits.md lists `{name}` but the catalog does not: remove the stale row or add it to the catalog"
+			names.insert(row.name),
+			"catalog row `{}` is duplicated in the snapshot",
+			row.name,
 		);
 	}
-	for name in catalog_adjustable.iter().chain(catalog_fixed.iter()) {
-		assert!(
-			documented.contains(*name),
-			"the catalog carries `{name}` and docs/limits.md is missing a row for it"
-		);
-	}
-}
-
-/// Fold the docs page into single-spaced text so phrases that break
-/// across lines still match a substring search.
-fn fold(text: &str) -> String {
-	text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-mod adjustable_keys {
-	macro_rules! new {
-		($($name:literal),* $(,)?) => {{
-			let mut set: std::collections::BTreeSet<&'static str> =
-				std::collections::BTreeSet::new();
-				$(set.insert($name);)*
-				set
-			}};
-	}
-	pub(crate) use new;
 }

@@ -73,11 +73,15 @@ fn show_json_lists_kind_bounds_and_reference_for_every_key() {
 
 #[test]
 fn the_max_recipients_floor_is_the_rfc_must_value() {
+	// The §4.5.3.1.8 floor is a hard lower bound (MUST accept at least
+	// 100) but the operator may set a value above it; `set
+	// max-recipients 500` is valid. The catalog marks it
+	// `recommended` so the operator sees a warning, not a refusal.
 	let (_dir, file) = super::tests_config::config_file();
 	let config = Config::load(file.path()).unwrap();
 	let json = show_json(&config);
 	let row = &json["max-recipients"];
-	assert_eq!(row["kind"], "fixed");
+	assert_eq!(row["kind"], "recommended");
 	assert_eq!(row["bounds"], json!({"at-least": 100_u64}));
 	assert!(
 		row["reference"]
