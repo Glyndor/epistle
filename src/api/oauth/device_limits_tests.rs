@@ -125,7 +125,7 @@ async fn a_full_pool_drops_the_oldest_pending_grant_of_the_heaviest_net() {
 		}
 		// Everybody else: one each, one of them already approved.
 		for n in 0..(super::device::MAX_DEVICE_GRANTS - 5_000) as u64 {
-			let mut g = grant(Some((false, n + 10)), now() + 1);
+			let mut g = grant(Some((false, n + 10)), now() + 600);
 			g.approved_account = (n == 0).then(|| "alice".to_string());
 			devices.insert(format!("other{n}"), g);
 		}
