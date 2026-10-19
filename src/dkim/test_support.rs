@@ -74,13 +74,18 @@ pub(crate) fn rsa_verifies(line: &str, record: &str, raw: &[u8]) -> bool {
 		return false;
 	}
 	let mut input = String::new();
+	let mut fields: Vec<_> = headers
+		.lines()
+		.filter_map(|line| line.split_once(':'))
+		.map(Some)
+		.collect();
 	for name in signature.signed_headers {
-		let (name, value) = headers
-			.lines()
-			.filter_map(|line| line.split_once(':'))
-			.find(|(field, _)| field.eq_ignore_ascii_case(&name))
-			.expect("signed header");
-		input.push_str(&super::canon::header(signature.header_canon, name, value));
+		if let Some(field) = fields.iter_mut().rev().find(|field| {
+			field.is_some_and(|(header_name, _)| header_name.eq_ignore_ascii_case(&name))
+		}) {
+			let (name, value) = field.take().expect("unused header");
+			input.push_str(&super::canon::header(signature.header_canon, name, value));
+		}
 	}
 	let unsigned = format!("{}b=", value.rsplit_once("b=").expect("signature value").0);
 	let canonical = super::canon::header(signature.header_canon, "DKIM-Signature", &unsigned);

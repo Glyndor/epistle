@@ -10,6 +10,8 @@ The tests read this page. `tests/headers_documented.rs` fails when the source
 writes or removes a header this page does not name, and
 `tests/headers_system_mail.rs` builds each message of [System mail](#system-mail)
 and fails when its header names differ from the table.
+`dkim::sign::tests_headers::signed_header_table_matches_the_signer` ties the
+DKIM table below to the signed names and their repetition counts in CI.
 
 ## Summary by path
 
@@ -109,14 +111,49 @@ or to inbound mail.
 - Algorithm `ed25519-sha256`. When an RSA key is configured the message carries
   a second `DKIM-Signature` with `rsa-sha256` and the RSA selector.
 - Canonicalization `relaxed/relaxed`.
-- `h=` is `from:to:cc:subject:date:message-id`, naming only the ones the
-  message has, taking the last instance of each. A header outside that list is
-  not signed today, `Reply-To`, `List-Unsubscribe`, `MIME-Version` and
-  `Content-Type` among them.
+- Both algorithms use the same `h=` list, covering every present instance of
+  the fields below, selected from the bottom of the message upward.
+- Important fields are oversigned: their name occurs in `h=` once more than
+  the number of present instances. An absent important field, including
+  `Reply-To`, is listed once. RFC 6376 sections
+  [5.4](https://www.rfc-editor.org/rfc/rfc6376.html#section-5.4) and
+  [5.4.2](https://www.rfc-editor.org/rfc/rfc6376.html#section-5.4.2) permit this
+  to detect later additions. Adding even an identical copy breaks the signature.
+- Both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered when present,
+  as required for one-click unsubscribe by
+  [RFC 8058 section 4](https://www.rfc-editor.org/rfc/rfc8058.html#section-4).
+- `Received`, `Return-Path`, `Authentication-Results`, `X-*` and other fields
+  outside the table are excluded. Existing `Resent-*` fields are signed,
+  without oversigning, so a later resending hop can prepend a new block.
 - `d=` is the domain of the single `From` when the server hosts it, and the
   domain of the envelope sender otherwise (then DMARC does not align). With no
   such domain, or with two `From` fields, or none, the message is not signed.
 - No `t=`, `x=`, `l=` or `i=` tag.
+
+| Signed header | Oversigned |
+|---|---|
+| `From` | Yes |
+| `To` | Yes |
+| `Cc` | Yes |
+| `Subject` | Yes |
+| `Date` | Yes |
+| `Message-ID` | Yes |
+| `Reply-To` | Yes |
+| `Sender` | No |
+| `MIME-Version` | No |
+| `Content-Type` | Yes |
+| `Content-Transfer-Encoding` | No |
+| `References` | No |
+| `In-Reply-To` | No |
+| `List-Id` | No |
+| `List-Unsubscribe` | Yes |
+| `List-Unsubscribe-Post` | Yes |
+| `List-Help` | No |
+| `List-Post` | No |
+| `List-Owner` | No |
+| `List-Archive` | No |
+| `Feedback-ID` | No |
+| `Resent-*` | No |
 
 ## What passes through
 
@@ -136,7 +173,6 @@ These are not done. Do not depend on any of them yet.
 - A `List-Id` and the matching list headers on API mail that asks for them.
 - An `Auto-Submitted` value chosen by the server for the mail it generates, and
   a wider use of it.
-- More headers under the DKIM signature than the six above.
 - BIMI. Which headers it will add or read is not decided.
 
 Until they land, the `Feedback-ID`, `List-Id`, `Auto-Submitted` and `DKIM-Signature`

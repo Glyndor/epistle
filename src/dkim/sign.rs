@@ -11,7 +11,43 @@ use super::canon;
 use super::signature::Canon;
 
 /// Headers included in the signature when present.
-const SIGNED_HEADERS: [&str; 6] = ["from", "to", "cc", "subject", "date", "message-id"];
+const SIGNED_HEADERS: &[&str] = &[
+	"from",
+	"to",
+	"cc",
+	"subject",
+	"date",
+	"message-id",
+	"reply-to",
+	"sender",
+	"mime-version",
+	"content-type",
+	"content-transfer-encoding",
+	"references",
+	"in-reply-to",
+	"list-id",
+	"list-unsubscribe",
+	"list-unsubscribe-post",
+	"list-help",
+	"list-post",
+	"list-owner",
+	"list-archive",
+	"feedback-id",
+];
+
+/// List each name once beyond its present count, even when absent (RFC 6376 section 5.4).
+const OVERSIGNED_HEADERS: &[&str] = &[
+	"from",
+	"to",
+	"cc",
+	"subject",
+	"reply-to",
+	"date",
+	"message-id",
+	"list-unsubscribe",
+	"list-unsubscribe-post",
+	"content-type",
+];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.
 pub struct Signer {
@@ -121,40 +157,30 @@ impl Signer {
 	/// header line (with trailing CRLF) to prepend.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
 		let (headers, body) = split_message(raw)?;
-		// One From field, or no signature: the send-as check and DMARC read
-		// the single From, and with two the signature below would cover only
-		// the last one (RFC 6376 section 5.4.2 picks bottom-up).
+		// Require the single From field used by the send-as check and DMARC.
 		let from_fields = headers
 			.iter()
 			.filter(|(name, _)| name.eq_ignore_ascii_case("from"))
 			.count();
-		if from_fields > 1 {
+		if from_fields != 1 {
 			return None;
 		}
 
 		let canonical_body = canon::body(Canon::Relaxed, body);
 		let body_hash = BASE64.encode(ring::digest::digest(&ring::digest::SHA256, &canonical_body));
 
-		// Collect present signable headers, bottom-up per name.
+		// Consume every selected instance bottom-up (RFC 6376 section 5.4.2).
 		let mut signed_names = Vec::new();
 		let mut header_input = String::new();
-		for name in SIGNED_HEADERS {
-			for (header_name, header_value) in headers.iter().rev() {
-				if header_name.eq_ignore_ascii_case(name) {
-					signed_names.push(name.to_string());
-					header_input.push_str(&canon::header(
-						Canon::Relaxed,
-						header_name,
-						header_value,
-					));
-					break;
-				}
+		for (header_name, header_value) in headers.iter().rev() {
+			let name = header_name.to_ascii_lowercase();
+			if SIGNED_HEADERS.contains(&name.as_str()) || name.starts_with("resent-") {
+				signed_names.push(name);
+				header_input.push_str(&canon::header(Canon::Relaxed, header_name, header_value));
 			}
 		}
-		if !signed_names.contains(&"from".to_string()) {
-			// Unsigned From is forbidden; refuse to produce a signature.
-			return None;
-		}
+		// Absent instances contribute no bytes, but prevent later additions.
+		signed_names.extend(OVERSIGNED_HEADERS.iter().map(|name| (*name).to_string()));
 		let names = signed_names.join(":");
 
 		// ed25519 first, then the optional RSA signature.
@@ -508,3 +534,7 @@ mod tests {
 		assert!(dns.mx("x").await.expect("ok").is_empty());
 	}
 }
+
+#[cfg(test)]
+#[path = "sign_tests_headers.rs"]
+mod tests_headers;
