@@ -51,14 +51,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// visible before any listener binds. The wording is the shared helper
 	// reused by `config-check` and `verify-dns`.
 	super::serve_tasks::log_single_signature_dkim_warning(&config);
-	// SHOULD warnings: a configured retry-schedule value below the RFC
-	// recommendation is accepted with a warning so the operator sees the
-	// deviation at start-up and in `epistle limits set`. The same lines
-	// come from `Config::retry_schedule_warnings` so the two surfaces
-	// agree.
-	for warning in config.retry_schedule_warnings() {
-		tracing::warn!("{warning}");
-	}
+	super::serve_connection_limits::log_retry_schedule_warnings(&config);
 	if config.listeners.is_empty() {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());

@@ -82,3 +82,13 @@ fn nonzero_usize(configured: Option<u32>, default: usize) -> usize {
 #[cfg(test)]
 #[path = "serve_connection_limits_tests.rs"]
 mod tests;
+
+/// SHOULD warnings: a retry-schedule value below the RFC recommendation is
+/// accepted with a warning so the operator sees the deviation at start-up
+/// and in `epistle limits set`. Both surfaces print the lines of
+/// `Config::retry_schedule_warnings`, so they agree.
+pub(super) fn log_retry_schedule_warnings(config: &Config) {
+	for warning in config.retry_schedule_warnings() {
+		tracing::warn!("{warning}");
+	}
+}
