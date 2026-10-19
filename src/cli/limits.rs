@@ -52,7 +52,12 @@ fn edit_document(
 	let value = value
 		.map(|input| values::parse_value(input, key.unit(), key.max()))
 		.transpose()
-		.map_err(|error| format!("{}: {error}", key.name()))?;
+		.map_err(|error| match key {
+			Key::MaxConnectionsPerListener | Key::MaxHttpConnections => {
+				format!("{}: {error}; maximum {} connections", key.name(), key.max())
+			}
+			_ => format!("{}: {error}", key.name()),
+		})?;
 	// The limiter reads a zero cap as no limit at all, the opposite of what
 	// `set submission-rate 0` looks like it asks for. Removing the limit is
 	// `unset`; a cap of zero is refused rather than silently lifting it.

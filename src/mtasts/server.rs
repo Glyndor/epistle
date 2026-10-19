@@ -15,7 +15,6 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
@@ -40,6 +39,7 @@ pub struct Server {
 	router: Router,
 	tls: FileAcceptor,
 	max_connections: usize,
+	max_connections_per_ip: usize,
 }
 
 impl Server {
@@ -51,12 +51,19 @@ impl Server {
 				.with_state(policy_dir.join("mta-sts.txt")),
 			tls: FileAcceptor::new(tls)?,
 			max_connections: DEFAULT_MAX_CONNECTIONS,
+			max_connections_per_ip: crate::net::conn_limit::DEFAULT_MTA_STS_CONNECTIONS_PER_IP,
 		})
 	}
 
 	/// Override the per-listener concurrency cap.
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		self.max_connections = max;
+		self
+	}
+
+	/// Override the per-client concurrency cap.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		self.max_connections_per_ip = max;
 		self
 	}
 
@@ -73,22 +80,36 @@ impl Server {
 		metrics: Arc<Metrics>,
 	) -> io::Result<()> {
 		let mut accepting = crate::net::accept::Accepting::new(listener);
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		// One cap on the listener, one cap per client address, both held
+		// inside the connection task until it ends. The same `Admission`
+		// pattern the autoconfig TLS branch uses; see `net::conn_limit` for
+		// the guard, the /64 grouping and the IPv4-mapped canonicalisation.
+		let admission = crate::net::conn_limit::Admission::new(
+			self.max_connections,
+			self.max_connections_per_ip,
+		);
 		let mut connections = JoinSet::new();
 		loop {
 			tokio::select! {
-				(stream, _) = accepting.next() => {
-					let tls = self.tls.current();
-					let router = self.router.clone();
-					let semaphore = Arc::clone(&semaphore);
-					let metrics = Arc::clone(&metrics);
-					connections.spawn(async move {
-						let Ok(_permit) = semaphore.try_acquire_owned() else {
+				(stream, peer) = accepting.next() => {
+					let peer = crate::net::canonical_peer(peer);
+					let admitted = match admission.admit(peer.ip()) {
+						Ok(admitted) => admitted,
+						Err(why) => {
+							tracing::warn!(
+								%peer,
+								?why,
+								"MTA-STS connection limit reached, refusing"
+							);
 							metrics.mta_sts_connections_dropped();
 							drop(stream);
-							return;
-						};
-						connection(stream, tls, router).await;
+							continue;
+						}
+					};
+					let tls = self.tls.current();
+					let router = self.router.clone();
+					connections.spawn(async move {
+						connection(stream, tls, router, admitted).await;
 					});
 				}
 				Some(_) = connections.join_next(), if !connections.is_empty() => {}
@@ -97,8 +118,12 @@ impl Server {
 	}
 }
 
-async fn connection<S>(stream: S, tls: TlsAcceptor, router: Router)
-where
+async fn connection<S>(
+	stream: S,
+	tls: TlsAcceptor,
+	router: Router,
+	_admitted: crate::net::conn_limit::Admitted,
+) where
 	S: AsyncRead + AsyncWrite + Unpin,
 {
 	let work = async {

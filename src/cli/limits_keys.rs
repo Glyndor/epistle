@@ -245,10 +245,11 @@ impl Key {
 			| Self::InboundRatePerIp
 			| Self::InboundRatePerSender
 			| Self::JunkCommandLimit => u32::MAX as u64,
-			Self::MaxConnectionsPerListener
-			| Self::MaskedAddressesMax
+			Self::MaxConnectionsPerListener | Self::MaxHttpConnections => {
+				crate::net::conn_limit::MAX_CONNECTIONS as u64
+			}
+			Self::MaskedAddressesMax
 			| Self::MaxMailboxConnectionsPerIp
-			| Self::MaxHttpConnections
 			| Self::MaxHttpConnectionsPerIp
 			| Self::MaxConnectionsPerIp => (usize::MAX as u64).min(i64::MAX as u64),
 			Self::QueueConcurrency | Self::QueuePerDomainConcurrency => {

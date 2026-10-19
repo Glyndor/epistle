@@ -93,7 +93,26 @@ impl Config {
 				"max_session_time must be 0 (off) or between 60 and {MAX_SESSION_TIME_SECS} seconds"
 			)));
 		}
+		self.validate_connection_caps()?;
 		self.validate_preauth_timeout()
+	}
+
+	fn validate_connection_caps(&self) -> Result<(), ConfigError> {
+		for (name, cap) in [
+			(
+				"max_connections_per_listener",
+				self.max_connections_per_listener,
+			),
+			("max_http_connections", self.max_http_connections),
+		] {
+			if cap.is_some_and(|cap| cap > crate::net::conn_limit::MAX_CONNECTIONS) {
+				return Err(ConfigError::Invalid(format!(
+					"{name} must be at most {} connections",
+					crate::net::conn_limit::MAX_CONNECTIONS
+				)));
+			}
+		}
+		Ok(())
 	}
 
 	/// A deadline under five seconds cuts a client still on its TLS
@@ -136,6 +155,19 @@ mod tests {
 		))
 		.expect("parse");
 		config.validate().map_err(|error| error.to_string())
+	}
+
+	#[test]
+	fn excessive_listener_caps_are_rejected_by_configuration_validation() {
+		for key in ["max_connections_per_listener", "max_http_connections"] {
+			for value in [1_000_001_u64, 9_223_372_036_854_775_807] {
+				let error = validate(&format!("{key} = {value}")).expect_err("excessive cap");
+				assert!(error.contains(key) && error.contains("1000000"), "{error}");
+			}
+			for value in [0, 1, 1_000_000] {
+				assert_eq!(validate(&format!("{key} = {value}")), Ok(()));
+			}
+		}
 	}
 
 	#[test]

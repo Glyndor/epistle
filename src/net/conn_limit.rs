@@ -34,6 +34,28 @@ pub const DEFAULT_HTTP_CONNECTIONS: usize = 1024;
 /// Concurrent connections one client may hold on a plain-HTTP listener.
 pub const DEFAULT_HTTP_CONNECTIONS_PER_IP: usize = 256;
 
+/// Concurrent connections one client may hold on the MTA-STS listener. The
+/// listener default of 256 is short-lived (the policy is a few hundred
+/// bytes and a fetch per `max_age` of up to a week), so 32 leaves room
+/// for a single resolver fleet to refetch at the same time without one
+/// sweeping address consuming the whole listener.
+pub const DEFAULT_MTA_STS_CONNECTIONS_PER_IP: usize = 32;
+
+/// The largest supported connection cap, also safe for semaphore construction.
+pub const MAX_CONNECTIONS: usize = 1_000_000;
+
+/// Bound direct callers too, even when configuration validation was bypassed.
+pub(crate) fn connection_semaphore(requested: usize) -> Semaphore {
+	if requested > MAX_CONNECTIONS {
+		tracing::warn!(
+			requested,
+			maximum = MAX_CONNECTIONS,
+			"connection cap exceeds the supported maximum, using the maximum"
+		);
+	}
+	Semaphore::new(requested.min(MAX_CONNECTIONS))
+}
+
 /// How long a refusal may take to reach the peer before it is dropped.
 const REFUSAL_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -62,7 +84,7 @@ impl Admission {
 	/// Admit at most `listener` connections, and `per_client` for one client.
 	pub fn new(listener: usize, per_client: usize) -> Self {
 		Admission {
-			listener: Arc::new(Semaphore::new(listener)),
+			listener: Arc::new(connection_semaphore(listener)),
 			clients: Arc::new(PerIpCounter::new(per_client)),
 		}
 	}

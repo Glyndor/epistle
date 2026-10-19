@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 
 pub use super::directory::Directory;
 pub use super::diskspace::DiskGuard;
@@ -442,7 +441,9 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let semaphore = Arc::new(crate::net::conn_limit::connection_semaphore(
+			self.max_connections,
+		));
 		let per_ip = Arc::new(crate::smtp::per_ip::PerIpCounter::new(
 			self.max_connections_per_ip,
 		));
