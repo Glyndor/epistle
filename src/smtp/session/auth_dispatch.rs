@@ -164,7 +164,8 @@ impl Session {
 				credentials,
 				account,
 				refusal,
-			}) => self.scram_client_final(line, *server, *credentials, &account, refusal),
+				bypassed,
+			}) => self.scram_client_final(line, *server, *credentials, &account, refusal, bypassed),
 			None => self.verify_plain(line),
 		}
 	}

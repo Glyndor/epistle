@@ -346,7 +346,18 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   threshold counter or by the operator) is not lifted from a known
   network: that address stays refused for the whole ban, so lifting it
   for the account would also lift it for everyone else behind the same
-  address.
+  address. A ban placed on the `(account, client)` pair is also not
+  lifted from a known network: that pair is what caps repeated failures
+  from one client, and a known network (a NAT, a corporate VPN) still
+  needs it, otherwise an attacker on the same network could guess
+  without limit while the owner is admitted. The `check_ban` loop
+  only evaluates the bypass when the ban subject is the account, so a
+  pair ban in force refuses the request even from the owner's known
+  network; the pair counter keeps rising for wrong-password attempts
+  from the known network, so the pair ban can fire from that network
+  itself. A successful sign-in via the bypass does not call
+  `clear_success`: the ban row stays in force for any other client,
+  and only the bypass list `(account, network)` is refreshed.
 - **Trusted reverse proxies.** `[api] trusted_proxies` defaults to `[]`, so
   forwarded headers have no authority by default. Only a peer in a configured
   IPv4 or IPv6 CIDR may supply `X-Forwarded-For`. The entire header must be a

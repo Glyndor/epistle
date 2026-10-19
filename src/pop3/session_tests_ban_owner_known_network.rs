@@ -19,10 +19,11 @@ use std::collections::HashMap;
 /// bypass list is admitted with the right password. The test arms an
 /// account ban, arms the `(alice, network)` row on the bypass list,
 /// drives `USER` + `PASS` with the right password, and asserts the
-/// wire reply is `Response::Ok`. The success path also writes the
-/// network back into the bypass list (a refresh of `last_seen`), so
-/// the test asserts the row's `last_seen` is non-None after the
-/// sign-in.
+/// wire reply is `Response::Ok`. The success path refreshes the
+/// bypass list (`record_known_network` is called and the row's
+/// `last_seen` is non-None), but it does not call `clear_success`
+/// on the account or pair row: the ban stays in force for any
+/// other network the attacker might use.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pop3_banned_account_from_known_network_is_admitted() {
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -63,10 +64,16 @@ async fn pop3_banned_account_from_known_network_is_admitted() {
 		session.handle(Command::Pass(fixture_password().into())),
 		Response::Ok(_)
 	));
-	assert!(
-		ban_store.call_count("clear_success") >= 2,
-		"a successful POP3 sign-in must clear both the account and the pair rows: got {} clear_success calls",
+	assert_eq!(
+		ban_store.call_count("clear_success"),
+		0,
+		"a successful POP3 sign-in via the bypass must not clear_success the account or the pair: got {} clear_success calls",
 		ban_store.call_count("clear_success")
+	);
+	assert!(
+		ban_store.call_count("record_known_network") >= 1,
+		"a successful POP3 sign-in via the bypass must refresh the (alice, network) row: got {} record_known_network calls",
+		ban_store.call_count("record_known_network")
 	);
 	assert!(
 		ban_store

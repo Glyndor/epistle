@@ -231,7 +231,7 @@ async fn smtp_scram_banned_account_known_network_wrong_proof_still_records_a_str
 /// address in the /64 puts the whole /64 on the bypass list, so a
 /// later sign-in from a sibling address in the same /64 still lifts
 /// the ban. The test arms a ban, arms the /64 row, drives a SCRAM
-/// exchange from a sibling address in the /64, and asserts the
+/// exchange from a sibling address in the same /64, and asserts the
 /// reply is `235`. The exact host half of the test address is
 /// irrelevant: the bypass key uses the lower 64 bits zeroed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -271,5 +271,138 @@ async fn smtp_scram_banned_account_known_ipv6_slash_64_is_admitted_from_any_host
 		reply_code(&session.auth_line(&b64(&client_final))),
 		235,
 		"a banned account must be admitted from any host half in the /64 the owner signed in from"
+	);
+}
+
+/// The bypass lifts the account ban only, not the pair ban. A SCRAM
+/// exchange from a known network with the right password is refused
+/// when the pair ban is in force. The test arms a pair ban on
+/// `(alice, 203.0.113.73)`, arms the bypass row, drives a SCRAM
+/// exchange, and asserts the wire reply is `535`. The bypass does
+/// not admit the owner: the pair ban is what caps repeated failures
+/// from one network, so the known network still needs it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_scram_pair_ban_is_not_bypassed_from_a_known_network() {
+	use crate::antispam::bans::subject_pair;
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy};
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	ban_store.arm_ban(
+		&subject_pair("alice", "203.0.113.73".parse().ok()),
+		BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	ban_store.arm_known_network("alice", "203.0.113.73", now);
+
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_scram_nonce(fixtures::nonce())
+		.tap_ehlo();
+	session.set_peer_ip(Some("203.0.113.73".parse().expect("peer")));
+
+	let challenge = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
+	assert_eq!(
+		reply_code(&challenge),
+		334,
+		"a pair ban in force must still challenge with 334"
+	);
+	let server_first = decode_server_first(&scram_challenge_text(&challenge));
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
+	assert_eq!(
+		reply_code(&session.auth_line(&b64(&client_final))),
+		535,
+		"a pair ban in force must not be bypassed by a known network: the right password still fails"
+	);
+	assert_eq!(
+		ban_store.call_count("clear_success"),
+		0,
+		"a pair-ban-refused exchange must not clear_success: got {} clear_success calls",
+		ban_store.call_count("clear_success")
+	);
+}
+
+/// A SCRAM success via the bypass does not lift the account ban.
+/// The ban store records the success (the bypass list is refreshed)
+/// but `clear_success` is not called on either the account row or
+/// the pair row. The test arms an account ban, arms the bypass row,
+/// drives a SCRAM exchange with the right password, asserts the
+/// reply is `235`, and asserts `clear_success` was never called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_scram_bypass_success_does_not_clear_any_ban_row() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy};
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	ban_store.arm_ban(
+		"account:alice",
+		BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let network = "203.0.113.74";
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	ban_store.arm_known_network("alice", network, now);
+
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_scram_nonce(fixtures::nonce())
+		.tap_ehlo();
+	session.set_peer_ip(Some(network.parse().expect("peer")));
+
+	let challenge = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
+	assert_eq!(reply_code(&challenge), 334);
+	let server_first = decode_server_first(&scram_challenge_text(&challenge));
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
+	assert_eq!(
+		reply_code(&session.auth_line(&b64(&client_final))),
+		235,
+		"a valid SCRAM proof from a banned account on a known network must succeed"
+	);
+	assert_eq!(
+		ban_store.call_count("clear_success"),
+		0,
+		"a SCRAM success via the bypass must not clear_success: got {} clear_success calls",
+		ban_store.call_count("clear_success")
+	);
+	assert!(
+		ban_store.call_count("record_known_network") >= 1,
+		"a SCRAM success via the bypass must refresh the (alice, network) row: got {} record_known_network calls",
+		ban_store.call_count("record_known_network")
+	);
+	// The account ban must still be in force: from a fresh IP, a
+	// fresh sign-in attempt is refused with the same shape a wrong
+	// password produces.
+	let directory2 = scram_directory_with_ban_store(ban_store.clone(), None);
+	let mut session2 = Session::new("mail.example.org")
+		.with_directory(directory2)
+		.with_tls_active()
+		.with_scram_nonce(fixtures::nonce())
+		.tap_ehlo();
+	session2.set_peer_ip(Some("198.51.100.74".parse().expect("peer")));
+	let _ = session2.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
+	let bad_proof = b64_bytes(&[0u8; 32]);
+	let r2 = session2.auth_line(&b64(&format!(
+		"c=biws,r=CN{},p={bad_proof}",
+		fixtures::nonce()
+	)));
+	assert_eq!(
+		reply_code(&r2),
+		535,
+		"a successful sign-in via the bypass must not lift the ban for other networks"
 	);
 }

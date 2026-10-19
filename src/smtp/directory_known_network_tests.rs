@@ -40,8 +40,10 @@ fn admitted(directory: &Directory, login: &str, password: &str, from: &str) -> b
 /// on the bypass list, calls `authenticate_verdict` with the right
 /// password, and asserts the verdict is `Admitted`. The audit event
 /// for the ban is still emitted (the ban is not lifted, only the
-/// single request bypassed), and the ban store's `clear_success` was
-/// called for the account and the pair.
+/// single request bypassed), the ban store's `clear_success` was
+/// NOT called on the account or the pair (the ban must stay in
+/// force for any other client), and the bypass list row was
+/// refreshed by the success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn directory_admits_a_banned_account_from_a_known_network() {
 	let store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -63,16 +65,78 @@ async fn directory_admits_a_banned_account_from_a_known_network() {
 		admitted(&directory, OPEN, fixtures::password(), "203.0.113.50"),
 		"a banned account from a known network must be admitted with the right password"
 	);
-	assert!(
-		store.call_count("clear_success") >= 2,
-		"a successful sign-in must clear both the account and the pair rows: got {} clear_success calls",
+	assert_eq!(
+		store.call_count("clear_success"),
+		0,
+		"a successful sign-in via the bypass must not clear_success the account or the pair: got {} clear_success calls",
 		store.call_count("clear_success")
+	);
+	assert!(
+		store.call_count("record_known_network") >= 1,
+		"a successful sign-in via the bypass must refresh the (alice, network) row: got {} record_known_network calls",
+		store.call_count("record_known_network")
 	);
 	assert!(
 		store
 			.known_network_last_seen("alice", "203.0.113.50")
 			.is_some(),
 		"the success path must leave the (alice, network) row in the bypass list"
+	);
+}
+
+/// A successful sign-in via the bypass leaves the account ban in
+/// place: from another network the ban still refuses the attempt.
+/// The test arms the account ban and a bypass row, signs in once
+/// with the right credentials from the known network, and asserts
+/// a second attempt from a different network is refused with the
+/// same wire shape a wrong password produces. This is the
+/// oracle-free property the bypass lift has to keep: the attacker
+/// who tripped the ban from another network must not be un-banned
+/// by the owner's successful sign-in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_bypass_sign_in_keeps_the_account_ban_in_force() {
+	let store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	store.arm_ban(
+		"account:alice",
+		crate::antispam::bans::BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	store.arm_known_network("alice", "203.0.113.50", now);
+	let directory = directory_with(store.clone());
+
+	// First: the owner signs in from the known network with the
+	// right password. The bypass lifts the account ban for this
+	// single request.
+	assert!(
+		admitted(&directory, OPEN, fixtures::password(), "203.0.113.50"),
+		"a banned account from a known network must be admitted with the right password"
+	);
+	assert_eq!(
+		store.call_count("clear_success"),
+		0,
+		"the bypass sign-in must not clear any ban row: got {} clear_success calls",
+		store.call_count("clear_success")
+	);
+	// Then: from another network the account ban is still in
+	// force: the verdict is Refused with the same wire shape a
+	// wrong password produces. The bypass row is for the owner's
+	// network, not the attacker's.
+	assert_eq!(
+		verdict(&directory, OPEN, fixtures::password(), "198.51.100.5"),
+		Verdict::Refused,
+		"a successful sign-in via the bypass must not lift the ban for other networks"
+	);
+	assert_eq!(
+		store.call_count("record_failure"),
+		0,
+		"a ban refusal at the second attempt must not record a strike: got {} record_failure calls",
+		store.call_count("record_failure")
 	);
 }
 
@@ -271,5 +335,125 @@ async fn a_manual_ban_is_not_bypassed_from_a_known_network() {
 	assert!(
 		!admitted(&directory, OPEN, fixtures::password(), "203.0.113.50"),
 		"a ban placed by an operator must hold from a known network"
+	);
+}
+
+/// The bypass lifts the account ban only, not the pair ban
+/// (`account|client`). A pair ban from this network stays enforced
+/// even when the account ban is bypassed: the pair counter caps
+/// failures from one client, so the known network still needs it.
+/// Otherwise an attacker behind a known NAT or VPN could guess
+/// without limit while the owner is admitted. The test arms a pair
+/// ban on `(alice, 203.0.113.55)`, arms the bypass row, and asserts
+/// a fresh sign-in from that network with the right password is
+/// refused. The account ban is not in force here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_pair_ban_is_not_bypassed_from_a_known_network() {
+	use crate::antispam::bans::subject_pair;
+	let store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	store.arm_ban(
+		&subject_pair("alice", "203.0.113.55".parse().ok()),
+		crate::antispam::bans::BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	store.arm_known_network("alice", "203.0.113.55", now);
+	let directory = directory_with(store.clone());
+
+	assert!(
+		!admitted(&directory, OPEN, fixtures::password(), "203.0.113.55"),
+		"a pair ban in force must not be bypassed by a known network"
+	);
+	assert_eq!(
+		store.call_count("clear_success"),
+		0,
+		"a banned-by-pair sign-in must not clear_success: got {} clear_success calls",
+		store.call_count("clear_success")
+	);
+}
+
+/// Failures from a known network keep adding strikes to the pair
+/// counter even when the account ban is bypassed for this network.
+/// The pair ban is what caps repeated failures from one client, so
+/// the counter must keep rising while the bypass lifts the account
+/// ban. The test arms an account ban, arms the bypass row, drives
+/// one wrong-password attempt (the bypass lifts the account ban,
+/// the credential check rejects, the failure is recorded against
+/// the pair), and asserts the pair counter went up while no strike
+/// was recorded against the attacker from a fresh IP that did not
+/// see the attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_failures_from_a_known_network_keep_incrementing_pair() {
+	let store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	store.arm_ban(
+		"account:alice",
+		crate::antispam::bans::BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	store.arm_known_network("alice", "203.0.113.56", now);
+	let directory = directory_with(store.clone());
+
+	assert_eq!(
+		verdict(&directory, OPEN, fixtures::wrong_password(), "203.0.113.56"),
+		Verdict::Refused,
+		"a wrong password on a bypassed account must still refuse"
+	);
+	assert!(
+		store.call_count("record_failure") >= 3,
+		"a wrong password on a known network must record a strike on the client, pair, and account: got {} record_failure calls",
+		store.call_count("record_failure")
+	);
+}
+
+/// The pair counter reaching its threshold from a known network
+/// fires the pair ban. The bypass lifts the account ban for the
+/// owner, but the pair ban the owner drove themselves is what stops
+/// further attempts from this network. The test arms an account
+/// ban and the bypass row, drives enough wrong-password attempts
+/// from the known network to trip the pair threshold, then asserts
+/// a fresh attempt with the right password is refused (the pair
+/// ban holds, the bypass only covers the account ban).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_pair_ban_fires_from_repeated_failures_on_a_known_network() {
+	let policy = BanPolicy {
+		window_secs: 60,
+		threshold: 5,
+		base_secs: 60,
+		max_secs: 600,
+		known_network_window_secs: 60 * 60,
+		known_network_max_per_account: 32,
+	};
+	let store = std::sync::Arc::new(FakeBanStore::new(policy));
+	store.arm_ban(
+		"account:alice",
+		crate::antispam::bans::BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let now: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::SystemTime::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	store.arm_known_network("alice", "203.0.113.57", now);
+	let directory = directory_with(store.clone());
+
+	for _ in 0..5 {
+		let _ = verdict(&directory, OPEN, fixtures::wrong_password(), "203.0.113.57");
+	}
+	assert!(
+		!admitted(&directory, OPEN, fixtures::password(), "203.0.113.57"),
+		"a pair ban that fired from a known network must not be bypassed, even with the right password"
 	);
 }

@@ -53,6 +53,12 @@ pub struct ScramPlan {
 	pub account: String,
 	/// `None` for a real exchange.
 	pub refusal: Option<ScramRefusal>,
+	/// `true` when the exchange was admitted by the known-network
+	/// bypass ([`BanOutcome::BannedButKnown`]) at client-first. The
+	/// SCRAM success path records the outcome and must skip the
+	/// ban-row clear when this flag is set, so the attacker's ban
+	/// from another network stays in force.
+	pub bypassed: bool,
 }
 
 impl Directory {
@@ -94,12 +100,15 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) -> ScramPlan {
-		let resolved = match self.check_ban(username, ip, protocol) {
+		let ban_outcome = self.check_ban(username, ip, protocol);
+		let bypassed = matches!(ban_outcome, BanOutcome::BannedButKnown { .. });
+		let resolved = match ban_outcome {
 			BanOutcome::Banned => {
 				return ScramPlan {
 					credentials: self.decoy_scram_credentials(username),
 					account: username.to_string(),
 					refusal: Some(ScramRefusal::Banned),
+					bypassed: false,
 				};
 			}
 			// A banned account from a known network falls through to the
@@ -120,12 +129,14 @@ impl Directory {
 				credentials,
 				account,
 				refusal: None,
+				bypassed,
 			};
 		}
 		ScramPlan {
 			credentials: self.decoy_scram_credentials(username),
 			account: username.to_string(),
 			refusal: Some(ScramRefusal::Denied { account: resolved }),
+			bypassed: false,
 		}
 	}
 
