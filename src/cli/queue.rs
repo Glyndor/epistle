@@ -8,7 +8,6 @@
 use std::io::Write;
 
 use super::term::table::Table;
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -197,7 +196,7 @@ pub(super) fn run(
 									remote: state.remote.clone(),
 									reply: state.last_error.clone(),
 									attempt: state.attempts,
-									extra: BTreeMap::new(),
+									extra: envelope.extra.clone(),
 									class: envelope.class,
 								};
 								if let Err(error) = log.append(&record) {
@@ -207,7 +206,7 @@ pub(super) fn run(
 									let event = crate::webhook::WebhookEvent::Canceled {
 										spool_id: id,
 										recipient: recipient.clone(),
-										extra: BTreeMap::new(),
+										extra: envelope.extra.clone(),
 									};
 									notify(webhook, event);
 								}
@@ -500,6 +499,10 @@ mod tests_destinations;
 #[cfg(test)]
 #[path = "queue_tests_webhook.rs"]
 mod tests_webhook;
+
+#[cfg(test)]
+#[path = "queue_tests_extra.rs"]
+mod tests_extra;
 
 #[cfg(test)]
 #[path = "queue_tests_evidence.rs"]

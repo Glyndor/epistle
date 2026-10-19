@@ -13,6 +13,7 @@ mod error;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
+pub(crate) mod openapi;
 mod principal;
 mod quota;
 pub mod scim;

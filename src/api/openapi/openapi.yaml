@@ -1,0 +1,2947 @@
+# The OpenAPI 3.1 description of the HTTP routes epistle registers.
+#
+# Served by `GET /api/v1/openapi.json` and checked against the routers by
+# `route_openapi_tests.rs`: adding a route in the code without describing it
+# here, or describing one the code does not register, fails the tests.
+#
+# Written in the YAML subset `yaml.rs` reads: block style, no anchors, no
+# trailing comments, plain scalars that could be read as a number or a YAML
+# 1.1 word are quoted.
+openapi: "3.1.0"
+info:
+  title: Epistle HTTP API
+  version: "1"
+  license:
+    name: MIT
+    identifier: MIT
+  summary: Management, send, JMAP, SCIM and OAuth routes of one epistle server.
+  description: |-
+    Everything under `/api/v1` is the versioned management API. `/jmap/*`,
+    `/scim/v2/*` and `/oauth/*` are standard protocols served by the same
+    listener. The routes at the end (autodiscovery, ACME, metrics) live on
+    their own listeners, see their `servers` entries.
+
+    **Authentication.** Every route of the API listener except `/healthz` and
+    `/oauth/*` needs `Authorization: Bearer <token>`: the token whose hash is
+    `[api] token_hash`, or an API key made with `epistle api-key create`.
+    A key carries scopes (`read`, `write`, `send`, `scim`); a request the
+    scopes do not cover is answered `401 unauthenticated`, the same as an
+    unknown token, not `403`. `x-epistle-scope` on each operation names the
+    scope it needs.
+
+    **Errors.** A failure the API itself decides is JSON,
+    `{"error": {"code": "...", "message": "..."}}` (see `ApiError`). A body,
+    query string or path the HTTP layer cannot read is refused before the
+    handler runs, with `text/plain` and no `error` object: `400` for
+    malformed JSON, query or path values, `415` without
+    `Content-Type: application/json`, `422` for a missing or mistyped field.
+    An unknown path is `404` with an empty body; a known path with another
+    method is `405` with an `allow` header. Nothing sends `Retry-After`.
+
+    **Stability.** `/api/v1` keeps its paths, field names and error codes
+    within the major version; new optional fields, new error codes and new
+    routes can appear. `docs/api.md` lists what is stable.
+servers:
+  - url: "http://127.0.0.1:8025"
+    description: The `api` listener. The port and address are the operator's choice.
+tags:
+  - name: Service
+    description: Liveness, status and this description.
+  - name: Accounts
+    description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
+  - name: Queue
+    description: The outbound queue, the suppression list and the delivery log.
+  - name: Send
+    description: Mail submission from JSON.
+  - name: JMAP
+    description: JMAP (RFC 8620, 8621, 8887) over the same bearer keys.
+  - name: SCIM
+    description: SCIM 2.0 provisioning (RFC 7643, 7644).
+  - name: OAuth
+    description: The built-in authorization server; present only with an `[oauth]` signing key.
+  - name: Discovery
+    description: Mail client autodiscovery, on the autoconfig listeners.
+  - name: Operations
+    description: ACME HTTP-01 and Prometheus metrics, on their own listeners.
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [Service]
+      summary: Liveness probe
+      description: Reveals nothing but that the process answers. Needs no credentials.
+      security: []
+      x-epistle-scope: []
+      responses:
+        "200":
+          description: The server is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+  /api/v1/openapi.json:
+    get:
+      operationId: getOpenApi
+      tags: [Service]
+      summary: This description as JSON
+      description: |-
+        The OpenAPI document the running server was built with. It is behind
+        the bearer check like the rest of `/api/v1`.
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The OpenAPI 3.1 document.
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      tags: [Service]
+      summary: Counters for the server, or for the reach of a confined key
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The counters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/auth/verify:
+    post:
+      operationId: verifyCredentials
+      tags: [Accounts]
+      summary: Check an account login and password
+      description: |-
+        Lets a panel check the credentials of an operator without holding
+        their password hash. An unknown login and a wrong password answer
+        the same `valid: false`. `admin` is true only for a valid account
+        listed in `[api] admins`. The attempt is attributed to the caller's
+        IP like any other authentication attempt, so the account's own
+        failure counters and bans apply. A key confined to some domains only
+        gets a real check for logins inside them.
+      x-epistle-scope: [write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyRequest"
+      responses:
+        "200":
+          description: The verdict. Always 200 when the request was readable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResponse"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/domains:
+    get:
+      operationId: listDomains
+      tags: [Accounts]
+      summary: The hosted domains in the key's reach
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The domains, and which of them are switched off.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domains"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/accounts:
+    get:
+      operationId: listAccounts
+      tags: [Accounts]
+      summary: The accounts in the key's reach
+      description: Not paged. A confined key sees only accounts whose addresses all lie in its domains.
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AccountView"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+    post:
+      operationId: createAccount
+      tags: [Accounts]
+      summary: Create an API-managed account
+      description: |-
+        The name is lowercased. Checks run in this order, so a refusal never
+        reveals more than the step before it allowed: addresses inside the
+        key's domains, name available, tenant `max_accounts`, password policy
+        (12 to 64 printable ASCII characters, not in the bundled breach
+        list), then the store (duplicate name or address, unknown domain,
+        malformed name). Answers `200`, not `201`.
+      x-epistle-scope: [write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccount"
+      responses:
+        "200":
+          description: The account was created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [created]
+                properties:
+                  created:
+                    type: string
+                    description: The stored (lowercased) account name.
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "409":
+          description: |-
+            `conflict`: the tenant is at its `max_accounts`. Waiting does not
+            help; delete an account or raise the cap.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}:
+    delete:
+      operationId: deleteAccount
+      tags: [Accounts]
+      summary: Delete an API-managed account
+      description: |-
+        Removes the account, its mailbox, masked addresses, app passwords,
+        suppression entries, correspondents and Bayesian rows. `queue` is
+        required so a client never drops queued mail by omission. Accounts
+        declared in the configuration file are not API-managed and answer
+        `404 no such dynamic account`.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+        - name: queue
+          in: query
+          required: true
+          description: What to do with queued mail the account sent. `discard` drops it, `drain` leaves it to be delivered.
+          schema:
+            type: string
+            enum: [discard, drain]
+      responses:
+        "200":
+          description: What was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountRemoved"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/password:
+    put:
+      operationId: setAccountPassword
+      tags: [Accounts]
+      summary: Replace the password of an API-managed account
+      description: |-
+        The same password policy as account creation. The SCRAM verifier is
+        replaced too (or dropped when `[auth] scram = false`).
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  minLength: 12
+                  maxLength: 64
+                  description: Printable ASCII, 12 to 64 characters, not in the bundled breach list.
+      responses:
+        "200":
+          description: The password was replaced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Updated"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/display_name:
+    put:
+      operationId: setAccountDisplayName
+      tags: [Accounts]
+      summary: Set or clear the person's name of an API-managed account
+      description: |-
+        Kept as written, trimmed; an empty value clears it. It becomes the
+        phrase of the `From` header of mail sent with `POST /api/v1/send`
+        when the request names none.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              properties:
+                display_name:
+                  type: string
+                  maxLength: 128
+                  description: At most 128 characters after trimming, no control characters.
+      responses:
+        "200":
+          description: The stored name, or null when it was cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [display_name]
+                properties:
+                  display_name:
+                    type: [string, "null"]
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/totp:
+    post:
+      operationId: enrollTotp
+      tags: [Accounts]
+      summary: Generate and store a fresh TOTP secret
+      description: |-
+        Replaces any secret the account had and takes effect at once; there
+        is no confirmation step. The secret is returned here and nowhere else.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: The secret and its provisioning URI.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret, otpauth_uri]
+                properties:
+                  secret:
+                    type: string
+                    description: Base32 secret.
+                  otpauth_uri:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      operationId: disableTotp
+      tags: [Accounts]
+      summary: Turn off two-factor authentication for an account
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: Two-factor authentication is off.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Updated"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/mailboxes:
+    get:
+      operationId: listMailboxes
+      tags: [Accounts]
+      summary: The mailboxes of an account
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: Every stored mailbox name, and the same mailboxes as a tree.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mailboxes"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/accounts/{name}/masked:
+    get:
+      operationId: listMaskedAddresses
+      tags: [Accounts]
+      summary: The masked addresses of an account
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: Every masked address the account owns, in creation order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [addresses]
+                properties:
+                  addresses:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MaskedAddress"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+    post:
+      operationId: createMaskedAddress
+      tags: [Accounts]
+      summary: Mint a masked address
+      description: |-
+        The local part is the label reduced to lowercase letters, digits and
+        hyphens, a dot and 8 random base32 characters; the domain is that of
+        the account's first address. Mail sent to it lands in the account
+        while it is enabled.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+                  description: Must contain at least one ASCII letter or digit.
+      responses:
+        "201":
+          description: The address was minted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [address]
+                properties:
+                  address:
+                    type: string
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the account is at the per-account cap of masked
+            addresses (`masked_addresses_max`). Delete one or raise the cap.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/masked/{address}:
+    patch:
+      operationId: updateMaskedAddress
+      tags: [Accounts]
+      summary: Enable or disable a masked address
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+        - $ref: "#/components/parameters/MaskedAddress"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [address, enabled]
+                properties:
+                  address:
+                    type: string
+                  enabled:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      operationId: deleteMaskedAddress
+      tags: [Accounts]
+      summary: Remove a masked address
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+        - $ref: "#/components/parameters/MaskedAddress"
+      responses:
+        "200":
+          description: The address that was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemovedAddress"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/archive:
+    get:
+      operationId: listArchive
+      tags: [Accounts]
+      summary: Archived (expunged) messages of an account
+      description: |-
+        The archive exists when `[storage] deleted_retention_days` is set.
+        Oldest first, not paged. A failure to read the archive answers
+        `404 not_found` with the reason in the message.
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: The archived messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, mailbox, deleted_at]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        mailbox:
+                          type: string
+                          description: The mailbox the message was in when it was expunged.
+                        deleted_at:
+                          type: integer
+                          description: Epoch seconds.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/accounts/{name}/archive/{id}/restore:
+    post:
+      operationId: restoreArchived
+      tags: [Accounts]
+      summary: Put an archived message back
+      description: |-
+        Re-appends it to the mailbox it was expunged from, or to `INBOX`
+        when that mailbox no longer exists, and removes it from the archive.
+        Any failure, an unknown id included, answers `404 not_found` with
+        `cannot restore: ...`.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+        - name: id
+          in: path
+          required: true
+          description: The archive entry id from `listArchive`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Where the message went.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, restored_to]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  restored_to:
+                    type: string
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/queue:
+    get:
+      operationId: listQueue
+      tags: [Queue]
+      summary: Messages waiting in the outbound queue
+      description: |-
+        Oldest first, keyset-paged by the queue id (a UUIDv7, so ids sort by
+        time). A key confined to some domains sees only entries whose sender
+        lies in them; to find a page of its own the server reads at most
+        1000 entries per request, so a page can come back short with a
+        `next_cursor` and the next call carries on. Bounces (empty sender)
+        are shown only to unconfined keys.
+      x-epistle-scope: [read]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Above 100 it is cut to 100; 0 is refused.
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: A page of queue entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, reverse_path, recipients]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        reverse_path:
+                          type: string
+                          description: The envelope sender; empty for a bounce.
+                        recipients:
+                          type: array
+                          items:
+                            type: string
+                          description: The envelope recipients still pending, Bcc included.
+                  next_cursor:
+                    type: string
+                    format: uuid
+                    description: Present when more entries remain; absent on the last page.
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}:
+    delete:
+      operationId: cancelQueueEntry
+      tags: [Queue]
+      summary: Remove a message from the queue
+      description: |-
+        The entry is removed in one step. For an entry that keeps evidence
+        (transactional mail) a `canceled` outcome per pending recipient is
+        written to the evidence chain first, and the entry stays if that
+        cannot be done. Unlike `epistle queue remove`, this route writes no
+        delivery-log record and posts no `canceled` webhook event. An entry
+        of another tenant answers like one that is not there.
+      x-epistle-scope: [write]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The queue id.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The entry was removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed:
+                    type: string
+                    format: uuid
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the entry has evidence outcomes waiting to be written
+            and stays until they are. Retrying later works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/suppression:
+    get:
+      operationId: listSuppression
+      tags: [Queue]
+      summary: Suppressed recipient addresses
+      description: |-
+        Without `account`, the global list, which is shared by every tenant:
+        a key confined to some domains is refused with `403 forbidden`. With
+        `account`, that sending account's own list.
+      x-epistle-scope: [read]
+      parameters:
+        - name: account
+          in: query
+          required: false
+          description: The sending account whose list to show.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Above 100 it is cut to 100; 0 is refused.
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+        - name: after
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page; addresses strictly after it are returned.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of addresses, sorted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [addresses]
+                properties:
+                  addresses:
+                    type: array
+                    items:
+                      type: string
+                  next_cursor:
+                    type: string
+                    description: Present when more remain.
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/suppression/{address}:
+    delete:
+      operationId: removeSuppression
+      tags: [Queue]
+      summary: Take an address off a suppression list
+      description: |-
+        Removing an address that is not on the list still answers `200`.
+        The global list is refused to a confined key, as for the listing.
+      x-epistle-scope: [write]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: The address, percent-encoded.
+          schema:
+            type: string
+        - name: account
+          in: query
+          required: false
+          description: Remove from this sending account's list instead of the global one.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The address that was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemovedAddress"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/deliveries:
+    get:
+      operationId: listDeliveries
+      tags: [Queue]
+      summary: The per-recipient delivery log
+      description: |-
+        Newest day first. There is no cursor: narrow with `since`, `outcome`
+        or `recipient`. A key bound to one account sees only its own
+        records; a key confined to some domains sees none, because records
+        carry an account, not a domain. Records are kept for
+        `[storage] delivery_log_days` (30 by default); with `0` the log is
+        off and this answers `404`.
+      x-epistle-scope: [read]
+      parameters:
+        - name: recipient
+          in: query
+          required: false
+          description: Exact recipient address.
+          schema:
+            type: string
+        - name: account
+          in: query
+          required: false
+          description: The sending account. Ignored for a key bound to one account.
+          schema:
+            type: string
+        - name: since
+          in: query
+          required: false
+          description: |-
+            A duration such as `30s`, `15m`, `24h` or `7d`, or an RFC 3339
+            timestamp. Records at or after it are returned.
+          schema:
+            type: string
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DeliveryOutcome"
+        - name: limit
+          in: query
+          required: false
+          description: Most records returned. Cut to the range 1 to 100.
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: The records.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DeliveryEntry"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/send:
+    post:
+      operationId: sendMail
+      tags: [Send]
+      summary: Build a message from JSON and submit it
+      description: |-
+        The message takes the path of SMTP submission: DKIM-signed for the
+        sender's domain when mail leaves the server, delivered at once to
+        local recipients, queued for the rest. The `queued` id names the
+        queue entry and is the `spool_id` of delivery records and webhook
+        events. There is no idempotency key: a retried request is a second
+        message.
+
+        The sender (`from`, and `sender` when given) must be an address the
+        acting account owns. A key bound to one account acts for that
+        account; any other key acts for the account that owns `from`, if the
+        key reaches it. Anything else answers `403 forbidden_from`, the same
+        whether the address belongs to another account or to none.
+
+        A request body larger than `[server] max_message_size` (25 MiB by
+        default) is refused before it is read with a plain-text `413`; one
+        whose built message is larger answers `413 message_too_large`.
+      x-epistle-scope: [send]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendRequest"
+      responses:
+        "200":
+          description: The message was accepted for delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queued"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden_from`: the sender is not an address the credential may
+            act for. Also `forbidden` when the bound account is disabled or
+            gone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: |-
+            `message_too_large` (JSON) when the built message exceeds the
+            limit, or `scan_too_large` (JSON) when the message is too large
+            for the content scan and the server lets nothing pass unscanned.
+            A request body over the limit is `text/plain`: `Failed to buffer
+            the request body: length limit exceeded`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: |-
+            Refused for its content, and sending it again unchanged is
+            refused again: `virus_detected`, `attachment_refused`,
+            `too_many_header_fields`, `marketing_refused` (marketing mail
+            without a working one-click unsubscribe, or every recipient on a
+            suppression list). A missing or mistyped field is a `text/plain`
+            `422` instead.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+            text/plain:
+              schema:
+                type: string
+        "429":
+          description: |-
+            `rate_limited` from the authentication limiter (too many failed
+            attempts from this client), or from the sending limits: the
+            per-account or per-tenant submission rate (`sending rate limit
+            exceeded; retry later`) or the daily cap on first-time
+            recipients (`too many new recipients today; retry tomorrow`).
+            Nothing was sent. The message tells them apart; there is no
+            `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          description: |-
+            Nothing was sent and retrying later works: `scan_unavailable`
+            (the content scan cannot run now) or `evidence_unavailable`
+            (transactional mail whose evidence cannot be recorded, or is held
+            until an operator acknowledges a break).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "507":
+          description: |-
+            `mailbox_full`: a local recipient's mailbox is full or would be
+            with this message. Nothing was queued for anyone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /.well-known/jmap:
+    get:
+      operationId: jmapWellKnown
+      tags: [JMAP]
+      summary: JMAP autodiscovery (RFC 8620 section 2.2)
+      description: |-
+        Answers the Session resource itself, not a redirect to
+        `/jmap/session`. A key bound to one account is allowed here.
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The Session resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapSession"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /jmap/session:
+    get:
+      operationId: jmapSession
+      tags: [JMAP]
+      summary: The JMAP Session resource
+      description: |-
+        Lists the accounts the key reaches (all of them for an unconfined
+        key, the accounts inside its domains for a confined one, only its own
+        for a bound key), the capabilities and the limits. The URLs in it are
+        relative.
+      x-epistle-scope: [read]
+      responses:
+        "200":
+          description: The Session resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapSession"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /jmap/api:
+    post:
+      operationId: jmapApi
+      tags: [JMAP]
+      summary: Run JMAP method calls
+      description: |-
+        The coarse check lets any key with `read`, `write` or `send` in; each
+        method call is then checked against the scope it needs, and a call
+        the key's scopes do not cover answers a `forbidden` method error
+        inside a `200` response. `read` covers `*/get`, `*/query`,
+        `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`,
+        `PushSubscription/get`, `VacationResponse/get`, `SieveScript/get`,
+        `SieveScript/query` and `SieveScript/validate`; `write` covers
+        `Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`,
+        `VacationResponse/set` and `SieveScript/set`; `send` covers
+        `EmailSubmission/set`. `Core/echo` needs none. Other methods answer
+        `unknownMethod`. `using` is accepted and ignored.
+
+        Limits (also in the Session): body at most 10,000,000 octets, 16
+        calls per request, 500 objects per `/get` or `/set`, 4 requests in
+        flight per credential. `EmailSubmission/set` accepts the extension
+        property `epistle:class`.
+      x-epistle-scope: [read, write, send]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JmapRequest"
+      responses:
+        "200":
+          description: One response per method call, errors included.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapResponse"
+        "400":
+          description: |-
+            A request-level problem: more than 16 calls (a
+            `urn:ietf:params:jmap:error:limit` problem naming
+            `maxCallsInRequest`), or a body that is not a JMAP request
+            (`text/plain`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "413":
+          description: The body is over `maxSizeRequest`; a `limit` problem.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          description: |-
+            Either the authentication limiter (`rate_limited`, an `ApiError`)
+            or a `limit` problem naming `maxConcurrentRequests`: this
+            credential already has 4 requests in flight.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - $ref: "#/components/schemas/JmapProblem"
+  /jmap/ws:
+    get:
+      operationId: jmapWebSocket
+      tags: [JMAP]
+      summary: JMAP over WebSocket (RFC 8887)
+      description: |-
+        Upgrades to a WebSocket. Text frames only, each a JSON object with an
+        `@type` of `Request`, `WebSocketPushEnable` or `WebSocketPushDisable`;
+        the server answers `Response`, `StateChange` and `RequestError`
+        frames. The `Authorization` header is read on the upgrade, so a
+        browser, which cannot set it on a WebSocket, cannot use this route.
+        The server does not answer the `jmap` subprotocol. The credential is
+        checked again on every frame; once it no longer holds, the frame is
+        refused with a `forbidden` `RequestError` and the socket closes with
+        code 1008. A `Request` frame counts against the same
+        `maxSizeRequest` and `maxConcurrentRequests` as `POST /jmap/api`.
+        Push is connection-scoped: a `StateChange` follows only the requests
+        made on the same socket. Use the event source for changes made
+        elsewhere.
+      x-epistle-scope: [read]
+      responses:
+        "101":
+          description: Switching protocols.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /jmap/eventsource:
+    get:
+      operationId: jmapEventSource
+      tags: [JMAP]
+      summary: JMAP push over server-sent events (RFC 8620 section 7.3)
+      description: |-
+        A `text/event-stream` that stays open. A `state` event carries a
+        `StateChange` whenever the state of `Email`, `Mailbox` or `Thread`
+        moves in an account the credential reaches, whichever protocol made
+        the change (the account's change journal is polled every second). A
+        `ping` event, `{"interval": N}`, is sent when nothing else was. The
+        stream ends when the credential stops holding or loses `read`. No
+        event ids are sent, so there is no replay: catch up with `/changes`
+        from the states you hold. One credential may hold 4 streams.
+      x-epistle-scope: [read]
+      parameters:
+        - name: types
+          in: query
+          required: false
+          description: "`*` (the default) or a comma-separated list. Only `Email`, `Mailbox` and `Thread` have states; other names are accepted and never pushed."
+          schema:
+            type: string
+            default: "*"
+        - name: closeafter
+          in: query
+          required: false
+          description: "`state` ends the response after the first `state` event; `no` (the default) keeps it open."
+          schema:
+            type: string
+            enum: [state, "no"]
+        - name: ping
+          in: query
+          required: false
+          description: Seconds between `ping` events; 0 for none. Cut to 1 to 300.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: A `urn:ietf:params:jmap:error:invalidArguments` problem for a bad parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: The credential has no identity to count the stream against (a `forbidden` problem).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "429":
+          description: |-
+            Either the authentication limiter or a `limit` problem naming
+            `maxConcurrentEventSources`: 4 streams are already open.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - $ref: "#/components/schemas/JmapProblem"
+  /jmap/download/{account_id}/{blob_id}/{name}:
+    get:
+      operationId: jmapDownload
+      tags: [JMAP]
+      summary: Download a blob (RFC 8620 section 6.2)
+      description: |-
+        The transfer-decoded bytes of a stored message, one of its parts
+        (`<message id>.<part id>`), an uploaded blob or a Sieve script. The
+        `name` segment is ignored. The media type is the one recorded for
+        the blob; a stored message is `application/octet-stream`. An account
+        the key does not reach answers the same `404` as one that does not
+        exist.
+      x-epistle-scope: [read]
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: The account name, which is the JMAP account id.
+          schema:
+            type: string
+        - name: blob_id
+          in: path
+          required: true
+          description: "The blob id: a message id, `<message id>.<part id>`, an uploaded blob id or a Sieve script id."
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          description: A file name for the client; ignored.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The blob.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: A `urn:ietf:params:jmap:error:notFound` problem.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /jmap/upload/{account_id}:
+    post:
+      operationId: jmapUpload
+      tags: [JMAP]
+      summary: Upload a blob (RFC 8620 section 6.1)
+      description: |-
+        Stores the request body and returns its blob id. The `Content-Type`
+        of the request is recorded and served back on download (default
+        `application/octet-stream`). The body is held to `maxSizeUpload`,
+        which is `[server] max_message_size`; the account's storage quota
+        and the tenant's aggregate quota apply; 4 uploads may be in flight
+        per credential. Uploaded blobs are reclaimed after a while if no
+        message refers to them.
+      x-epistle-scope: [write]
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          description: The account name, which is the JMAP account id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          "*/*":
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The stored blob.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accountId, blobId, type, size]
+                properties:
+                  accountId:
+                    type: string
+                  blobId:
+                    type: string
+                  type:
+                    type: string
+                  size:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: The account does not exist or the key does not reach it (a `notFound` problem).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "413":
+          description: The body is over `maxSizeUpload` (a `limit` problem).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "429":
+          description: |-
+            Either the authentication limiter or a `limit` problem naming
+            `maxConcurrentUpload`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiError"
+                  - $ref: "#/components/schemas/JmapProblem"
+        "500":
+          description: The blob could not be stored (a `serverFail` problem).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+        "507":
+          description: |-
+            The upload would exceed the account's storage quota (`limit:
+            storage`) or the tenant's aggregate quota (`limit:
+            tenant_storage`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JmapProblem"
+  /scim/v2/ServiceProviderConfig:
+    get:
+      operationId: scimServiceProviderConfig
+      tags: [SCIM]
+      summary: SCIM discovery, what this server supports
+      x-epistle-scope: [scim]
+      responses:
+        "200":
+          description: A static ServiceProviderConfig (patch yes, bulk no, filter yes with 200 results, sort no, etag no).
+          content:
+            application/scim+json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /scim/v2/Schemas:
+    get:
+      operationId: scimSchemas
+      tags: [SCIM]
+      summary: SCIM discovery, the User schema
+      x-epistle-scope: [scim]
+      responses:
+        "200":
+          description: A ListResponse holding the User schema only.
+          content:
+            application/scim+json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /scim/v2/ResourceTypes:
+    get:
+      operationId: scimResourceTypes
+      tags: [SCIM]
+      summary: SCIM discovery, the User resource type
+      x-epistle-scope: [scim]
+      responses:
+        "200":
+          description: A ListResponse holding the User resource type only.
+          content:
+            application/scim+json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /scim/v2/Users:
+    get:
+      operationId: scimListUsers
+      tags: [SCIM]
+      summary: List the API-managed accounts as SCIM users
+      description: |-
+        Only API-managed (dynamic) accounts inside the key's domains. The
+        only filter is `userName eq "x"`. `totalResults` is the number of
+        users on this page, not the number that match.
+      x-epistle-scope: [scim]
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          description: "Only `userName eq \"name\"`; anything else is a 400."
+          schema:
+            type: string
+        - name: startIndex
+          in: query
+          required: false
+          description: 1-based index of the first user. Defaults to 1.
+          schema:
+            type: integer
+            minimum: 1
+        - name: count
+          in: query
+          required: false
+          description: Users per page, cut to the range 1 to 200. Defaults to 100.
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A ListResponse.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/ScimList"
+        "400":
+          $ref: "#/components/responses/ScimBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+    post:
+      operationId: scimCreateUser
+      tags: [SCIM]
+      summary: Create an account
+      description: |-
+        `userName` becomes the lowercased account name and the `id`.
+        `emails` give the addresses. Without `password` the account is made
+        with no usable password. `active: false` creates it disabled.
+      x-epistle-scope: [scim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScimUser"
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/ScimUser"
+      responses:
+        "201":
+          description: The account, rendered as a SCIM user.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/ScimUser"
+        "400":
+          $ref: "#/components/responses/ScimBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          $ref: "#/components/responses/ScimConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/ScimInternal"
+  /scim/v2/Users/{id}:
+    get:
+      operationId: scimGetUser
+      tags: [SCIM]
+      summary: Read one account
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "200":
+          description: The account as a SCIM user.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/ScimUser"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/ScimNotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+    put:
+      operationId: scimReplaceUser
+      tags: [SCIM]
+      summary: Replace an account
+      description: |-
+        `userName` must equal the id. `emails` replaces the addresses (an
+        empty list keeps the current ones), `active` sets the disabled flag,
+        `password` when present sets a new one, and an absent `displayName`
+        clears it.
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScimUser"
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/ScimUser"
+      responses:
+        "200":
+          description: The account as it is now.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/ScimUser"
+        "400":
+          $ref: "#/components/responses/ScimBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/ScimNotFound"
+        "409":
+          $ref: "#/components/responses/ScimConflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/ScimInternal"
+    patch:
+      operationId: scimPatchUser
+      tags: [SCIM]
+      summary: Change one attribute of an account
+      description: |-
+        Operations are applied in order and a failing one stops the rest
+        (the ones before it stay applied). Only `replace` and `add`, with a
+        `path` of `active` (boolean), `password` (string) or `displayName`
+        (string). `remove` and any other path are a 400.
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScimPatch"
+          application/scim+json:
+            schema:
+              $ref: "#/components/schemas/ScimPatch"
+      responses:
+        "200":
+          description: The account as it is now.
+          content:
+            application/scim+json:
+              schema:
+                $ref: "#/components/schemas/ScimUser"
+        "400":
+          $ref: "#/components/responses/ScimBadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/ScimNotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/ScimInternal"
+    delete:
+      operationId: scimDeleteUser
+      tags: [SCIM]
+      summary: Delete an account
+      description: Queued mail the account sent is left to be delivered, as with `queue=drain`.
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "204":
+          description: The account was deleted.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/ScimNotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/ScimInternal"
+  /scim/v2/Groups:
+    get:
+      operationId: scimListGroups
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+    post:
+      operationId: scimCreateGroup
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+  /scim/v2/Groups/{id}:
+    get:
+      operationId: scimGetGroup
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+    put:
+      operationId: scimReplaceGroup
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+    patch:
+      operationId: scimPatchGroup
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+    delete:
+      operationId: scimDeleteGroup
+      tags: [SCIM]
+      summary: Not implemented
+      x-epistle-scope: [scim]
+      parameters:
+        - $ref: "#/components/parameters/ScimId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "501":
+          $ref: "#/components/responses/ScimNotImplemented"
+  /oauth/device_authorization:
+    post:
+      operationId: oauthDeviceAuthorization
+      tags: [OAuth]
+      summary: Start a device authorization (RFC 8628)
+      description: |-
+        Present only when `[oauth] signing_key` is configured; without it
+        every `/oauth/*` path answers `401` without a bearer and `404` with a valid
+        one. When the server is configured, no bearer is needed. The body
+        is form-encoded or a JSON object of strings. `client_id` must be
+        non-empty and is not otherwise checked; `scope` is ignored. At most
+        10 grants may be pending per client address (an IPv6 /64), 100 per
+        IPv6 /48 and 10,000 in all; past them the answer is `429 slow_down`.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/DeviceAuthorizationRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceAuthorizationRequest"
+      responses:
+        "200":
+          description: The codes. The grant lives 600 seconds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceAuthorization"
+        "400":
+          $ref: "#/components/responses/OAuthError"
+        "429":
+          $ref: "#/components/responses/OAuthSlowDown"
+  /oauth/device/approve:
+    post:
+      operationId: oauthDeviceApprove
+      tags: [OAuth]
+      summary: Approve a device grant with an account's credentials
+      description: |-
+        The headless stand-in for a verification page. Send `user_code` and
+        the account's `login` and `password` (form or JSON), or the
+        credentials as HTTP Basic. No bearer is needed. A wrong code, an
+        expired code, an unknown account, a wrong password, an account that
+        may not use the API protocol and a grant someone else already
+        approved all answer the same `400 invalid_grant`.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/DeviceApproveRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceApproveRequest"
+      responses:
+        "200":
+          description: The grant is approved; the device's next poll gets a token.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [approved]
+        "400":
+          $ref: "#/components/responses/OAuthError"
+  /oauth/authorize:
+    post:
+      operationId: oauthAuthorize
+      tags: [OAuth]
+      summary: Issue an authorization code (PKCE, S256 only)
+      description: |-
+        Send `client_id` (non-empty, not otherwise checked),
+        `code_challenge`, `code_challenge_method=S256` and the account's
+        `login` and `password` (form or JSON) or HTTP Basic. No bearer is
+        needed. The code lives 600 seconds and is single-use. `plain` is
+        refused. Bad credentials are `400 invalid_grant`.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/AuthorizeRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizeRequest"
+      responses:
+        "200":
+          description: The code, and `state` echoed when it was sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code:
+                    type: string
+                  state:
+                    type: string
+        "400":
+          $ref: "#/components/responses/OAuthError"
+  /oauth/token:
+    post:
+      operationId: oauthToken
+      tags: [OAuth]
+      summary: Redeem a device code or an authorization code
+      description: |-
+        Form or JSON. `grant_type` is
+        `urn:ietf:params:oauth:grant-type:device_code` (with `device_code`;
+        poll no faster than every 5 seconds or get `429 slow_down`) or
+        `authorization_code` (with `code` and `code_verifier`; the code is
+        consumed even when the verifier is wrong). The token is an ES256 JWT
+        with `sub` the account name, valid for 3600 seconds. It is for
+        OAUTHBEARER on IMAP and SMTP submission; the REST API does not
+        accept it as a bearer.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: The access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/OAuthError"
+        "429":
+          $ref: "#/components/responses/OAuthSlowDown"
+  /mail/config-v1.1.xml:
+    servers:
+      - url: "http://autoconfig.example.org"
+        description: The `autoconfig` (HTTP) or `autoconfigs` (HTTPS) listener.
+    get:
+      operationId: autoconfigThunderbird
+      tags: [Discovery]
+      summary: Thunderbird autoconfig
+      security: []
+      x-epistle-scope: []
+      parameters:
+        - $ref: "#/components/parameters/EmailAddress"
+      responses:
+        "200":
+          description: The autoconfig document for the address's domain.
+          content:
+            application/xml:
+              schema:
+                type: string
+        "400":
+          description: No usable `emailaddress`. Empty body.
+        "404":
+          description: The domain is not hosted here. Empty body.
+  /.well-known/autoconfig/mail/config-v1.1.xml:
+    servers:
+      - url: "https://autoconfig.example.org"
+        description: The `autoconfig` (HTTP) or `autoconfigs` (HTTPS) listener.
+    get:
+      operationId: autoconfigThunderbirdWellKnown
+      tags: [Discovery]
+      summary: Thunderbird autoconfig, well-known location
+      security: []
+      x-epistle-scope: []
+      parameters:
+        - $ref: "#/components/parameters/EmailAddress"
+      responses:
+        "200":
+          description: The autoconfig document for the address's domain.
+          content:
+            application/xml:
+              schema:
+                type: string
+        "400":
+          description: No usable `emailaddress`. Empty body.
+        "404":
+          description: The domain is not hosted here. Empty body.
+  /autodiscover/autodiscover.xml:
+    servers:
+      - url: "https://autodiscover.example.org"
+        description: The `autoconfig` (HTTP) or `autoconfigs` (HTTPS) listener.
+    get:
+      operationId: autodiscoverXmlGet
+      tags: [Discovery]
+      summary: Microsoft Autodiscover v1
+      description: Keyed on the mail hostname; the request body and query are not read.
+      security: []
+      x-epistle-scope: []
+      responses:
+        "200":
+          description: The Autodiscover document.
+          content:
+            application/xml:
+              schema:
+                type: string
+    post:
+      operationId: autodiscoverXmlPost
+      tags: [Discovery]
+      summary: Microsoft Autodiscover v1
+      description: Answers the same document as `GET`; the request body is not read.
+      security: []
+      x-epistle-scope: []
+      responses:
+        "200":
+          description: The Autodiscover document.
+          content:
+            application/xml:
+              schema:
+                type: string
+  /autodiscover/autodiscover.json:
+    servers:
+      - url: "https://autodiscover.example.org"
+        description: The `autoconfig` (HTTP) or `autoconfigs` (HTTPS) listener.
+    get:
+      operationId: autodiscoverJson
+      tags: [Discovery]
+      summary: Microsoft Autodiscover v2
+      security: []
+      x-epistle-scope: []
+      parameters:
+        - name: Protocol
+          in: query
+          required: true
+          description: The protocol asked for. Parameter names are matched ignoring case.
+          schema:
+            type: string
+        - name: Email
+          in: query
+          required: false
+          description: When given, its domain must be hosted here.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The settings for the protocol.
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: No `Protocol`. Empty body.
+        "404":
+          description: The domain is not hosted here, or the protocol is not offered. Empty body.
+  /mobileconfig:
+    servers:
+      - url: "https://autoconfig.example.org"
+        description: The `autoconfig` (HTTP) or `autoconfigs` (HTTPS) listener.
+    get:
+      operationId: appleMobileconfig
+      tags: [Discovery]
+      summary: Apple configuration profile for an address
+      description: Installs the IMAP and submission accounts without a password.
+      security: []
+      x-epistle-scope: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          description: A plausible address (non-empty local part and domain, no whitespace or control characters) in a hosted domain.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The profile, served as an attachment named `mail.mobileconfig`.
+          content:
+            application/x-apple-aspen-config:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: No usable `email`. Empty body.
+        "404":
+          description: The domain is not hosted here. Empty body.
+  /.well-known/acme-challenge/{token}:
+    servers:
+      - url: "http://mail.example.org"
+        description: The `acme` listener, port 80 for the HTTP-01 challenge.
+    get:
+      operationId: acmeChallenge
+      tags: [Operations]
+      summary: ACME HTTP-01 key authorization
+      security: []
+      x-epistle-scope: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The ACME challenge token.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The key authorization for a token published for a challenge in progress.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: No such token. Empty body.
+  /metrics:
+    servers:
+      - url: "http://127.0.0.1:9090"
+        description: The `metrics` listener.
+    get:
+      operationId: metrics
+      tags: [Operations]
+      summary: Prometheus metrics
+      description: No authentication; bind the listener to loopback or protect it in front.
+      security: []
+      x-epistle-scope: []
+      responses:
+        "200":
+          description: The metrics in the Prometheus text format, version 0.0.4.
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |-
+        The static token whose `sha256:` hash is `[api] token_hash`, or an
+        API key from `epistle api-key create` (52 lowercase base32
+        characters, shown once). The header is exactly
+        `Authorization: Bearer <token>`; a token over 1024 bytes is not
+        considered. The static token holds every scope and reaches every
+        domain.
+  parameters:
+    AccountName:
+      name: name
+      in: path
+      required: true
+      description: The account name (lowercase letters, digits and hyphens, at most 64 characters).
+      schema:
+        type: string
+    MaskedAddress:
+      name: address
+      in: path
+      required: true
+      description: The full masked address, percent-encoded.
+      schema:
+        type: string
+    ScimId:
+      name: id
+      in: path
+      required: true
+      description: The account name, which is the SCIM `id`.
+      schema:
+        type: string
+    EmailAddress:
+      name: emailaddress
+      in: query
+      required: true
+      description: An address whose domain is hosted here.
+      schema:
+        type: string
+  responses:
+    Unauthenticated:
+      description: |-
+        `unauthenticated`: no `Authorization: Bearer` header, an unknown or
+        expired token, a key pinned to another client IP, or a key whose
+        scopes do not cover this route. All four look the same on purpose.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    AccountBoundKey:
+      description: |-
+        `forbidden`: the key is bound to one account and this route is
+        administrative. Bound keys reach JMAP, `/api/v1/send` and
+        `/api/v1/deliveries` only.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    AuthRateLimited:
+      description: |-
+        `rate_limited`: this client address already made 20 requests with
+        credentials that did not hold in the last 60 seconds, so every
+        request from it, valid or not, is refused until the window passes;
+        or too many credential checks are already waiting. There is no
+        `Retry-After`; wait a minute.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: |-
+        `not_found`. The message says what is missing: `no such account`,
+        `no such dynamic account` (the account exists but is declared in the
+        configuration file), `no such masked address`, `no such queue entry`,
+        `the delivery log is disabled`. An account outside a confined key's
+        domains answers exactly like one that does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InvalidInput:
+      description: |-
+        `invalid_input` with the reason in `message`, or, when the HTTP layer
+        could not read the request (malformed JSON, a query or path value of
+        the wrong type, an unreadable UUID), a `text/plain` message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+        text/plain:
+          schema:
+            type: string
+    UnreadableRequest:
+      description: The HTTP layer could not read the request (malformed JSON, a bad query or path value). `text/plain`, no `error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+    UnsupportedMediaType:
+      description: The request has no `Content-Type` of `application/json`. `text/plain`.
+      content:
+        text/plain:
+          schema:
+            type: string
+    UnprocessableBody:
+      description: A required field is missing or has the wrong type. `text/plain` naming the field, no `error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+    Internal:
+      description: |-
+        `internal`: the server could not do it for a reason of its own
+        (storage). The message never carries details. Retrying may work.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    ScimBadRequest:
+      description: A SCIM error with status "400".
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    ScimConflict:
+      description: A SCIM error with status 409, the user name or an address is taken, or the tenant is at its account cap.
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    ScimNotFound:
+      description: A SCIM error with status "404". An account outside a confined key's domains answers like one that does not exist.
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    ScimNotImplemented:
+      description: A SCIM error with status 501, Groups are not supported.
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    ScimInternal:
+      description: A SCIM error with status "500".
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    OAuthError:
+      description: |-
+        An RFC 6749 error, `{"error": "<code>"}`: `invalid_request`,
+        `invalid_grant`, `unsupported_grant_type`, `authorization_pending`,
+        `expired_token` or `server_error`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OAuthErrorBody"
+    OAuthSlowDown:
+      description: |-
+        `{"error": "slow_down"}`: the device code was polled before its
+        interval passed, or too many grants are pending.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OAuthErrorBody"
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |-
+                Stable, for programs. One of `unauthenticated` (401),
+                `forbidden` and `forbidden_from` (403), `not_found` (404),
+                `invalid_input` (400), `conflict` (409), `message_too_large`
+                and `scan_too_large` (413), `virus_detected`,
+                `attachment_refused`, `too_many_header_fields` and
+                `marketing_refused` (422), `rate_limited` (429), `internal`
+                (500), `scan_unavailable` and `evidence_unavailable` (503),
+                `mailbox_full` (507). New codes can appear.
+            message:
+              type: string
+              description: For people; its wording is not a contract.
+    Status:
+      type: object
+      required: [version, domains, accounts]
+      properties:
+        version:
+          type: string
+          description: The server version.
+        domains:
+          type: integer
+          description: Hosted domains in the key's reach.
+        accounts:
+          type: integer
+          description: Accounts in the key's reach.
+        queue_size:
+          type: integer
+          description: Messages in the outbound queue. Absent for a key confined to some domains, because the queue is shared.
+    VerifyRequest:
+      type: object
+      required: [name, password]
+      properties:
+        name:
+          type: string
+          description: The login name or one of the account's addresses.
+        password:
+          type: string
+    VerifyResponse:
+      type: object
+      required: [valid, admin]
+      properties:
+        valid:
+          type: boolean
+        admin:
+          type: boolean
+          description: Always false when `valid` is false.
+    Domains:
+      type: object
+      required: [domains, disabled]
+      properties:
+        domains:
+          type: array
+          items:
+            type: string
+        disabled:
+          type: array
+          description: The domains above that are switched off and take no mail.
+          items:
+            type: string
+    AccountView:
+      type: object
+      required: [name, display_name, addresses, dynamic]
+      properties:
+        name:
+          type: string
+        display_name:
+          type: [string, "null"]
+        addresses:
+          type: array
+          items:
+            type: string
+        dynamic:
+          type: boolean
+          description: True for an account made through the API (deletable here); false for one declared in the configuration file.
+    CreateAccount:
+      type: object
+      required: [name, addresses, password]
+      properties:
+        name:
+          type: string
+          maxLength: 64
+          description: Lowercased on the way in; then lowercase letters, digits and hyphens, not starting with a hyphen.
+        addresses:
+          type: array
+          items:
+            type: string
+          description: Delivery addresses, each in a hosted domain.
+        password:
+          type: string
+          minLength: 12
+          maxLength: 64
+          description: Printable ASCII, not in the bundled breach list.
+        display_name:
+          type: string
+          maxLength: 128
+          description: The person's name, trimmed; no control characters.
+    AccountRemoved:
+      type: object
+      required: [removed, mailbox_files, masked_addresses, app_passwords, suppressed_addresses, correspondent_addresses, queued_messages_discarded, queued_messages_left, bayes_tokens_removed]
+      properties:
+        removed:
+          type: string
+        mailbox_files:
+          type: integer
+          description: Files removed from the account's mailbox directory, the directory included.
+        masked_addresses:
+          type: integer
+        app_passwords:
+          type: integer
+        suppressed_addresses:
+          type: integer
+          description: Entries of the account's own suppression list.
+        correspondent_addresses:
+          type: integer
+        queued_messages_discarded:
+          type: integer
+          description: Non-zero only with `queue=discard`.
+        queued_messages_left:
+          type: integer
+          description: Non-zero only with `queue=drain`.
+        bayes_tokens_removed:
+          type: integer
+    Updated:
+      type: object
+      required: [updated]
+      properties:
+        updated:
+          type: string
+          description: The account name.
+    Mailboxes:
+      type: object
+      required: [mailboxes, tree]
+      properties:
+        mailboxes:
+          type: array
+          items:
+            type: string
+        tree:
+          type: array
+          items:
+            type: object
+            required: [id, name, parent_id]
+            properties:
+              id:
+                type: string
+                description: The stored name, `/` between levels.
+              name:
+                type: string
+                description: The last level, for people.
+              parent_id:
+                type: [string, "null"]
+                description: The nearest mailbox above it that exists.
+    MaskedAddress:
+      type: object
+      required: [address, label, enabled, created_at]
+      properties:
+        address:
+          type: string
+        label:
+          type: string
+        enabled:
+          type: boolean
+        created_at:
+          type: integer
+          description: Epoch seconds.
+        last_used_at:
+          type: integer
+          description: Epoch seconds of the last delivery; absent until it is used.
+    RemovedAddress:
+      type: object
+      required: [removed]
+      properties:
+        removed:
+          type: string
+    DeliveryOutcome:
+      type: string
+      enum: [delivered, deferred, failed, suppressed, canceled]
+      description: |-
+        `delivered`: the remote server accepted the message for this
+        recipient. `deferred`: a temporary failure, retried later; a new
+        record is written only when the reason changes. `failed`: refused
+        for good or expired in the queue. `suppressed`: a suppression list
+        refused the recipient before any attempt. `canceled`: an operator
+        removed the entry with the CLI first.
+    DeliveryEntry:
+      type: object
+      required: [time, spool_id, account, from, recipient, outcome, remote, reply, attempt, extra]
+      properties:
+        time:
+          type: integer
+          description: Epoch seconds.
+        spool_id:
+          type: string
+          format: uuid
+          description: The `queued` id of the message.
+        account:
+          type: [string, "null"]
+          description: The local account that submitted it; null for mail relayed from another server.
+        from:
+          type: string
+          description: The envelope sender; empty for a bounce.
+        recipient:
+          type: string
+        outcome:
+          $ref: "#/components/schemas/DeliveryOutcome"
+        remote:
+          type: [string, "null"]
+          description: The remote host that answered, when one did.
+        reply:
+          type: [string, "null"]
+          description: The first 200 bytes of the remote reply.
+        attempt:
+          type: integer
+          description: The attempt, counting from 1; 0 for a record with no attempt (suppression, cancel).
+        extra:
+          type: object
+          additionalProperties:
+            type: string
+          description: The `extra` map the send request carried; empty otherwise.
+    MailClass:
+      type: string
+      enum: [transactional, marketing, personal]
+    SendPart:
+      type: object
+      required: [data]
+      properties:
+        name:
+          type: string
+          description: File name. At most 1000 bytes, no control characters.
+        content_type:
+          type: string
+          description: Detected from the bytes and the name when empty. At most 1000 bytes.
+        data:
+          type: string
+          description: Base64, standard alphabet with padding.
+        content_id:
+          type: string
+          description: Required for `inline` parts, which the HTML refers to as `cid:<content_id>`.
+    SendRequest:
+      type: object
+      required: [from, to]
+      description: |-
+        Fields the server does not know are ignored. Every value that ends
+        up on a header line, in every field below including the attachment
+        names and types, may not hold a control character other than a tab
+        and is at most 1000 bytes.
+      properties:
+        from:
+          type: string
+          description: A bare address (no display name; use `from_name`) that the acting account owns.
+        from_name:
+          type: string
+          maxLength: 128
+          description: The sender's name for `From`. Absent uses the account's display name. Non-ASCII is written as RFC 2047.
+        to:
+          type: array
+          items:
+            type: string
+        cc:
+          type: array
+          items:
+            type: string
+          default: []
+        bcc:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Envelope only; never written into the message.
+        reply_to:
+          type: string
+        sender:
+          type: string
+          description: Written as `Sender`. Must be an address the account owns, like `from`.
+        subject:
+          type: string
+          default: ""
+        text:
+          type: string
+        html:
+          type: string
+          description: With `text`, both go into a `multipart/alternative`, text first.
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SendPart"
+          default: []
+        inline:
+          type: array
+          items:
+            $ref: "#/components/schemas/SendPart"
+          default: []
+          description: Attachments and inline parts together are at most 100.
+        in_reply_to:
+          type: string
+          description: Exactly one `<id@domain>` message id.
+        references:
+          type: string
+          description: Up to 100 `<id@domain>` message ids separated by white space.
+        importance:
+          type: string
+          enum: [high, normal, low]
+          description: Writes `Importance` and `X-Priority`. Also accepted as `priority`. Case-insensitive.
+        list_unsubscribe:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+          description: "`mailto:` and `https://` URLs, written as `List-Unsubscribe`."
+        list_unsubscribe_post:
+          type: boolean
+          default: false
+          description: Adds `List-Unsubscribe-Post` (RFC 8058). Needs an `https://` URL in `list_unsubscribe`.
+        auto_submitted:
+          type: string
+          enum: ["no", auto-generated, auto-replied, auto-notified]
+          description: Written as `Auto-Submitted`. Case-insensitive.
+        feedback_id:
+          type: string
+          description: Written as `Feedback-ID`. Printable ASCII without spaces.
+        headers:
+          type: object
+          maxProperties: 32
+          additionalProperties:
+            type: string
+          description: Custom headers. A name is `X-` followed by letters, digits and hyphens, at most 76 characters, and not `X-Priority`.
+        save_sent:
+          type: boolean
+          description: Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied.
+        extra:
+          type: object
+          maxProperties: 10
+          additionalProperties:
+            type: string
+            maxLength: 256
+          description: |-
+            A correlation map returned by `/api/v1/deliveries` and in the
+            webhook events of this message, never written into the message.
+            Keys are printable ASCII without spaces, at most 64 bytes;
+            values at most 256 bytes.
+        class:
+          $ref: "#/components/schemas/MailClass"
+    Queued:
+      type: object
+      required: [queued, class]
+      properties:
+        queued:
+          type: string
+          format: uuid
+          description: The queue id, also the `spool_id` of delivery records and webhook events.
+        class:
+          $ref: "#/components/schemas/MailClass"
+        suppressed:
+          type: array
+          items:
+            type: string
+          description: Recipients dropped because they are on a suppression list (marketing only). Absent when none.
+    JmapSession:
+      type: object
+      description: The RFC 8620 Session resource.
+      required: [capabilities, accounts, primaryAccounts, username, apiUrl, downloadUrl, uploadUrl, eventSourceUrl, state]
+      properties:
+        capabilities:
+          type: object
+          description: |-
+            `urn:ietf:params:jmap:core` (with `maxSizeUpload`,
+            `maxConcurrentUpload`, `maxSizeRequest`, `maxConcurrentRequests`,
+            `maxCallsInRequest`, `maxObjectsInGet`, `maxObjectsInSet`),
+            `mail`, `submission`, `quota`, `vacationresponse`, `sieve` and
+            `websocket`.
+        accounts:
+          type: object
+          description: The accounts the credential reaches, keyed by account name, which is the JMAP account id.
+        primaryAccounts:
+          type: object
+        username:
+          type: string
+          description: Always empty.
+        apiUrl:
+          type: string
+        downloadUrl:
+          type: string
+        uploadUrl:
+          type: string
+        eventSourceUrl:
+          type: string
+        state:
+          type: string
+    JmapRequest:
+      type: object
+      required: [methodCalls]
+      properties:
+        using:
+          type: array
+          items:
+            type: string
+          description: Accepted and ignored.
+        methodCalls:
+          type: array
+          maxItems: 16
+          description: Each call is `[name, arguments, callId]`.
+          items:
+            type: array
+            minItems: 3
+            maxItems: 3
+    JmapResponse:
+      type: object
+      required: [methodResponses]
+      properties:
+        methodResponses:
+          type: array
+          items:
+            type: array
+    JmapProblem:
+      type: object
+      description: An RFC 7807 problem as RFC 8620 uses it.
+      required: [type, status, detail]
+      properties:
+        type:
+          type: string
+          description: "`urn:ietf:params:jmap:error:<kind>`, for example `limit`, `notFound`, `invalidArguments`, `forbidden`, `serverFail`."
+        status:
+          type: integer
+        detail:
+          type: string
+        limit:
+          type: string
+          description: For a `limit` problem, the limit that applied, such as `maxCallsInRequest` or `storage`.
+    ScimEmail:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: string
+        type:
+          type: string
+          description: Rendered as `work` for the first address and `other` for the rest; ignored on input.
+        primary:
+          type: boolean
+    ScimUser:
+      type: object
+      required: [userName, active]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+          readOnly: true
+          description: The account name.
+        externalId:
+          type: string
+        userName:
+          type: string
+        displayName:
+          type: string
+        active:
+          type: boolean
+          description: False means the account is disabled.
+        emails:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScimEmail"
+        name:
+          type: object
+          properties:
+            givenName:
+              type: string
+            familyName:
+              type: string
+        password:
+          type: string
+          writeOnly: true
+          description: Same policy as account creation (12 to 64 printable ASCII characters).
+    ScimList:
+      type: object
+      required: [schemas, totalResults, Resources, startIndex, itemsPerPage]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        totalResults:
+          type: integer
+          description: The number of users on this page, not the number that match.
+        Resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScimUser"
+        startIndex:
+          type: integer
+        itemsPerPage:
+          type: integer
+    ScimPatch:
+      type: object
+      required: [Operations]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        Operations:
+          type: array
+          items:
+            type: object
+            required: [op, path]
+            properties:
+              op:
+                type: string
+                enum: [replace, add]
+              path:
+                type: string
+                enum: [active, password, displayName]
+              value:
+                description: A boolean for `active`, a string for the others.
+    ScimError:
+      type: object
+      required: [schemas, status, detail]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          description: The HTTP status as a string.
+        detail:
+          type: string
+    DeviceAuthorizationRequest:
+      type: object
+      required: [client_id]
+      properties:
+        client_id:
+          type: string
+        scope:
+          type: string
+          description: Ignored.
+    DeviceAuthorization:
+      type: object
+      required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval]
+      properties:
+        device_code:
+          type: string
+        user_code:
+          type: string
+          description: "`XXXX-XXXX` from an alphabet without look-alike characters."
+        verification_uri:
+          type: string
+          description: Always `/oauth/device/approve`, a relative path.
+        verification_uri_complete:
+          type: string
+        expires_in:
+          type: integer
+          description: "600."
+        interval:
+          type: integer
+          description: "5."
+    DeviceApproveRequest:
+      type: object
+      required: [user_code]
+      properties:
+        user_code:
+          type: string
+        login:
+          type: string
+        password:
+          type: string
+    AuthorizeRequest:
+      type: object
+      required: [client_id, code_challenge, code_challenge_method]
+      properties:
+        client_id:
+          type: string
+        code_challenge:
+          type: string
+        code_challenge_method:
+          type: string
+          enum: [S256]
+        state:
+          type: string
+        login:
+          type: string
+        password:
+          type: string
+    TokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type:
+          type: string
+          enum: ["urn:ietf:params:oauth:grant-type:device_code", authorization_code]
+        device_code:
+          type: string
+        code:
+          type: string
+        code_verifier:
+          type: string
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: An ES256 JWT with `sub` the account name.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: "3600."
+    OAuthErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string

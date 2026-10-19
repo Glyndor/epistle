@@ -358,7 +358,7 @@ fn remove_with_log_disabled_does_not_write_records() {
 }
 
 /// Start a webhook receiver; returns its URL and a shared body list.
-async fn webhook_receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+pub(super) async fn webhook_receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
 	let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 	async fn handler(
 		axum::extract::State(state): axum::extract::State<

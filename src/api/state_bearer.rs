@@ -20,7 +20,7 @@ use super::{ApiState, ClientIp, MatchedAuth, auth};
 /// — the dispatcher then enforces the actual scope per method call. The
 /// SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
 /// and writes on it require the dedicated `Scim` scope.
-fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
+pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
 	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
