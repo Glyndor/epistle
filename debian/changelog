@@ -7,6 +7,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
   * Security: the known-network bypass lifts the account ban only, not the
     pair ban or operator-placed bans, and a successful sign-in via the
     bypass refreshes the bypass list without clearing the ban row.
+  * Security: the SCRAM ban check at client-final re-reads the ban store
+    instead of trusting the value computed at client-first, so a ban that
+    fires or lapses between the two messages is enforced or lifted by the
+    server that actually completes the proof.
   * Security: the hourly purge of the known-network rows now respects the
     window the operator set, so a row past the configured horizon is dropped
     and one inside it stays.
