@@ -30,5 +30,17 @@ fn a_message_with_two_from_fields_is_not_signed() {
 fn a_message_with_one_from_field_is_signed() {
 	let raw = b"From: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n";
 	let header = signer().sign("example.org", raw).expect("signs");
-	assert!(header.contains(" h=from:subject;"), "{header}");
+	let signature =
+		super::super::signature::parse(header.strip_prefix("DKIM-Signature:").expect("header"))
+			.expect("parse signature");
+	for name in ["from", "subject"] {
+		assert_eq!(
+			signature
+				.signed_headers
+				.iter()
+				.filter(|field| *field == name)
+				.count(),
+			2
+		);
+	}
 }

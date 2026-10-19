@@ -10,8 +10,47 @@ use ring::signature::{Ed25519KeyPair, KeyPair, RSA_PKCS1_SHA256, RsaKeyPair};
 use super::canon;
 use super::signature::Canon;
 
+#[path = "sign_wire.rs"]
+mod wire;
+
 /// Headers included in the signature when present.
-const SIGNED_HEADERS: [&str; 6] = ["from", "to", "cc", "subject", "date", "message-id"];
+const SIGNED_HEADERS: &[&str] = &[
+	"from",
+	"to",
+	"cc",
+	"subject",
+	"date",
+	"message-id",
+	"reply-to",
+	"sender",
+	"mime-version",
+	"content-type",
+	"content-transfer-encoding",
+	"references",
+	"in-reply-to",
+	"list-id",
+	"list-unsubscribe",
+	"list-unsubscribe-post",
+	"list-help",
+	"list-post",
+	"list-owner",
+	"list-archive",
+	"feedback-id",
+];
+
+/// List each name once beyond its present count, even when absent (RFC 6376 section 5.4).
+const OVERSIGNED_HEADERS: &[&str] = &[
+	"from",
+	"to",
+	"cc",
+	"subject",
+	"reply-to",
+	"date",
+	"message-id",
+	"list-unsubscribe",
+	"list-unsubscribe-post",
+	"content-type",
+];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.
 pub struct Signer {
@@ -118,43 +157,39 @@ impl Signer {
 	}
 
 	/// Sign a raw message for `domain`, returning the full DKIM-Signature
-	/// header line (with trailing CRLF) to prepend.
+	/// fields (with folding and trailing CRLF) to prepend.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
 		let (headers, body) = split_message(raw)?;
-		// One From field, or no signature: the send-as check and DMARC read
-		// the single From, and with two the signature below would cover only
-		// the last one (RFC 6376 section 5.4.2 picks bottom-up).
+		// Require the single From field used by the send-as check and DMARC.
 		let from_fields = headers
 			.iter()
 			.filter(|(name, _)| name.eq_ignore_ascii_case("from"))
 			.count();
-		if from_fields > 1 {
+		if from_fields != 1 {
 			return None;
 		}
 
 		let canonical_body = canon::body(Canon::Relaxed, body);
 		let body_hash = BASE64.encode(ring::digest::digest(&ring::digest::SHA256, &canonical_body));
 
-		// Collect present signable headers, bottom-up per name.
+		// Consume every selected instance bottom-up (RFC 6376 section 5.4.2).
+		let unsafe_resent = collect_unsafe_resent_names(raw);
 		let mut signed_names = Vec::new();
 		let mut header_input = String::new();
-		for name in SIGNED_HEADERS {
-			for (header_name, header_value) in headers.iter().rev() {
-				if header_name.eq_ignore_ascii_case(name) {
-					signed_names.push(name.to_string());
-					header_input.push_str(&canon::header(
-						Canon::Relaxed,
-						header_name,
-						header_value,
-					));
-					break;
-				}
+		for (header_name, header_value) in headers.iter().rev() {
+			let name = header_name.to_ascii_lowercase();
+			let known = SIGNED_HEADERS.contains(&name.as_str());
+			let resent = !known
+				&& name.starts_with("resent-")
+				&& is_safe_header_name(&name)
+				&& !unsafe_resent.contains(&name);
+			if known || resent {
+				signed_names.push(name);
+				header_input.push_str(&canon::header(Canon::Relaxed, header_name, header_value));
 			}
 		}
-		if !signed_names.contains(&"from".to_string()) {
-			// Unsigned From is forbidden; refuse to produce a signature.
-			return None;
-		}
+		// Absent instances contribute no bytes, but prevent later additions.
+		signed_names.extend(OVERSIGNED_HEADERS.iter().map(|name| (*name).to_string()));
 		let names = signed_names.join(":");
 
 		// ed25519 first, then the optional RSA signature.
@@ -194,16 +229,14 @@ impl Signer {
 		header_input: &str,
 		sign: &dyn Fn(&[u8]) -> Option<Vec<u8>>,
 	) -> Option<String> {
-		let value = format!(
-			" v=1; a={algorithm}; c=relaxed/relaxed; d={domain}; s={selector}; h={names}; bh={body_hash}; b="
-		);
+		let value = wire::unsigned(algorithm, selector, domain, names, body_hash)?;
 		let mut dkim_line = canon::header(Canon::Relaxed, "DKIM-Signature", &value);
 		dkim_line.truncate(dkim_line.len() - 2);
 		let mut hash_input = header_input.to_string();
 		hash_input.push_str(&dkim_line);
 
 		let signature = BASE64.encode(sign(hash_input.as_bytes())?);
-		Some(format!("DKIM-Signature:{value}{signature}\r\n"))
+		wire::finish(value, &signature)
 	}
 }
 
@@ -343,6 +376,47 @@ fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
 		parsed.push((header[..colon].trim_end(), &header[colon + 1..]));
 	}
 	Some((parsed, body))
+}
+
+/// Field names from the message that begin with `Resent-` but cannot appear
+/// verbatim in a DKIM `h=` tag: a name with `:` or `;` would terminate the
+/// tag or split it, and RFC 5322 §2.2 only allows printable US-ASCII without
+/// `:`. The names are read from the raw bytes so a malformed one with
+/// trailing whitespace that `split_message` would otherwise trim is still
+/// caught.
+fn collect_unsafe_resent_names(raw: &[u8]) -> std::collections::HashSet<String> {
+	let mut unsafe_names = std::collections::HashSet::new();
+	for raw_line in raw.split(|&b| b == b'\r' || b == b'\n') {
+		if raw_line
+			.first()
+			.is_none_or(|byte| matches!(byte, b' ' | b'\t'))
+		{
+			continue;
+		}
+		let Ok(line) = std::str::from_utf8(raw_line) else {
+			continue;
+		};
+		let Some((raw_name, _)) = line.split_once(':') else {
+			continue;
+		};
+		if !is_safe_header_name(raw_name) {
+			let trimmed = raw_name.trim_end().to_ascii_lowercase();
+			if trimmed.starts_with("resent-") {
+				unsafe_names.insert(trimmed);
+			}
+		}
+	}
+	unsafe_names
+}
+
+/// Whether `name` can be written into the DKIM `h=` tag. RFC 5322 §2.2
+/// restricts field names to printable US-ASCII without `:`; DKIM §3.2 adds
+/// `;` as the tag separator, so the name cannot contain one either.
+fn is_safe_header_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.bytes()
+			.all(|b| (33..=126).contains(&b) && b != b':' && b != b';')
 }
 
 #[cfg(test)]
@@ -508,3 +582,7 @@ mod tests {
 		assert!(dns.mx("x").await.expect("ok").is_empty());
 	}
 }
+
+#[cfg(test)]
+#[path = "sign_tests_headers.rs"]
+mod tests_headers;

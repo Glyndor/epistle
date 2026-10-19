@@ -32,12 +32,31 @@ impl DnsLookup for KeyDns {
 	}
 }
 
-pub(crate) fn signature_fields(raw: &[u8]) -> Vec<(String, String, String)> {
+/// Complete signature fields, including their continuation lines and trailing CRLF.
+pub(crate) fn signature_headers(raw: &[u8]) -> Vec<String> {
 	let text = std::str::from_utf8(raw).expect("message is UTF-8");
-	text.split("\r\n\r\n")
-		.next()
-		.expect("header block")
-		.lines()
+	let mut fields: Vec<String> = Vec::new();
+	let mut in_signature = false;
+	for line in text.split_inclusive("\r\n") {
+		if line == "\r\n" {
+			break;
+		}
+		if !line.starts_with([' ', '\t']) {
+			in_signature = line.starts_with("DKIM-Signature:");
+			if in_signature {
+				fields.push(String::new());
+			}
+		}
+		if in_signature {
+			fields.last_mut().expect("signature field").push_str(line);
+		}
+	}
+	fields
+}
+
+pub(crate) fn signature_fields(raw: &[u8]) -> Vec<(String, String, String)> {
+	signature_headers(raw)
+		.iter()
 		.filter_map(|line| line.strip_prefix("DKIM-Signature:"))
 		.map(|line| {
 			let tag = |name: &str| {
@@ -46,6 +65,7 @@ pub(crate) fn signature_fields(raw: &[u8]) -> Vec<(String, String, String)> {
 					.find(|(key, _)| *key == name)
 					.expect("signature tag exists")
 					.1
+					.trim()
 					.to_string()
 			};
 			(tag("s"), tag("d"), tag("a"))
@@ -74,13 +94,18 @@ pub(crate) fn rsa_verifies(line: &str, record: &str, raw: &[u8]) -> bool {
 		return false;
 	}
 	let mut input = String::new();
+	let mut fields: Vec<_> = headers
+		.lines()
+		.filter_map(|line| line.split_once(':'))
+		.map(Some)
+		.collect();
 	for name in signature.signed_headers {
-		let (name, value) = headers
-			.lines()
-			.filter_map(|line| line.split_once(':'))
-			.find(|(field, _)| field.eq_ignore_ascii_case(&name))
-			.expect("signed header");
-		input.push_str(&super::canon::header(signature.header_canon, name, value));
+		if let Some(field) = fields.iter_mut().rev().find(|field| {
+			field.is_some_and(|(header_name, _)| header_name.eq_ignore_ascii_case(&name))
+		}) {
+			let (name, value) = field.take().expect("unused header");
+			input.push_str(&super::canon::header(signature.header_canon, name, value));
+		}
 	}
 	let unsigned = format!("{}b=", value.rsplit_once("b=").expect("signature value").0);
 	let canonical = super::canon::header(signature.header_canon, "DKIM-Signature", &unsigned);
