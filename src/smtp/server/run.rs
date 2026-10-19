@@ -316,6 +316,11 @@ impl Server {
 						message.tlsrpt_verified =
 							crate::dkim::verify_tlsrpt(dns.as_ref(), &message.data).await;
 					}
+					// Verify signatures first, then remove outside authority before
+					// adding our own fields or handing the message to filters.
+					if session.authenticated().is_none() {
+						crate::smtp::inbound_headers::strip(&mut message.data, &self.hostname);
+					}
 					let header = received_header(
 						session.helo_domain(),
 						peer,
