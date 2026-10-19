@@ -259,6 +259,15 @@ pub(crate) fn oauth_error(code: &'static str) -> Response {
 	(status, Json(serde_json::json!({ "error": code }))).into_response()
 }
 
+/// OAuth throttling response with the remaining wait in whole seconds.
+fn oauth_rate_limited(seconds: u64) -> Response {
+	let mut response = oauth_error("slow_down");
+	response
+		.headers_mut()
+		.insert(header::RETRY_AFTER, seconds.into());
+	response
+}
+
 /// Build the public OAuth router (the `token` and `device_authorization`
 /// endpoints; no auth — the codes are the credential). Mounted only when the
 /// authorization server is configured.
@@ -283,3 +292,6 @@ mod tests;
 #[cfg(test)]
 #[path = "device_limits_tests.rs"]
 mod device_limits_tests;
+
+#[cfg(test)]
+mod proxy_tests;

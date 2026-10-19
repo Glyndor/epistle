@@ -152,10 +152,11 @@ impl ClientLimiters {
 		self.window
 	}
 
-	/// Replace the global ceiling. Test-only.
+	/// Replace the global ceiling, anchored at `now` so a virtual clock can
+	/// drive it. Test-only.
 	#[cfg(test)]
-	pub(super) fn with_global_max(mut self, max: u32) -> Self {
-		self.global = AuthLimiter::with_max(self.window, Instant::now(), max);
+	pub(super) fn with_global_max(mut self, max: u32, now: Instant) -> Self {
+		self.global = AuthLimiter::with_max(self.window, now, max);
 		self
 	}
 
@@ -180,6 +181,30 @@ impl ClientLimiters {
 			|| ClientKey::net(ip)
 				.and_then(|net| self.nets.get_mut(&net))
 				.is_some_and(|limiter| limiter.is_limited(now))
+	}
+
+	/// Seconds until all applicable exhausted windows end, rounded up.
+	pub(super) fn retry_after(&mut self, ip: Option<IpAddr>, now: Instant, shared: bool) -> u64 {
+		let remaining = |limiter: &mut AuthLimiter| {
+			if !limiter.is_limited(now) {
+				return 0;
+			}
+			let left = limiter
+				.window
+				.saturating_sub(now.duration_since(limiter.window_start));
+			left.as_secs() + u64::from(left.subsec_nanos() > 0)
+		};
+		let mut seconds = self
+			.clients
+			.get_mut(&ClientKey::of(ip))
+			.map_or(0, remaining);
+		if shared {
+			seconds = seconds.max(remaining(&mut self.global));
+			if let Some(net) = ClientKey::net(ip).and_then(|net| self.nets.get_mut(&net)) {
+				seconds = seconds.max(remaining(net));
+			}
+		}
+		seconds
 	}
 
 	/// Count one failure for the client behind `ip`, its /48 and the total.

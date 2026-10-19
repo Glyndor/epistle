@@ -190,7 +190,7 @@ fn with_the_tables_full_untracked_failures_still_reach_the_global_ceiling() {
 		limiters.record_failure(far(n), t0);
 	}
 	// Count the attacker's failures from zero.
-	let mut limiters = limiters.with_global_max(30);
+	let mut limiters = limiters.with_global_max(30, t0);
 	assert_eq!(limiters.tracked(), MAX_CLIENTS);
 	// An attacker with fresh addresses: none fits in the tables, and the
 	// failures must still add up.
@@ -215,4 +215,47 @@ fn a_slash_48_is_limited_at_exactly_one_hundred_and_sixty_failures() {
 	assert!(!limiters.limited_after_failure(in_net(9, 50, 1), t0));
 	limiters.record_failure(in_net(9, 7, 19), t0);
 	assert!(limiters.limited_after_failure(in_net(9, 50, 1), t0));
+}
+
+#[test]
+fn retry_after_tracks_remaining_windows_and_rounds_up() {
+	let t0 = Instant::now();
+	let mut limiters = ClientLimiters::new(WINDOW);
+	for _ in 0..20 {
+		limiters.record_failure(client(1), t0);
+	}
+	assert_eq!(limiters.retry_after(client(1), t0, false), 60);
+	assert_eq!(
+		limiters.retry_after(client(1), t0 + Duration::from_millis(1250), false),
+		59
+	);
+	assert_eq!(
+		limiters.retry_after(client(1), t0 + Duration::from_secs(59), false),
+		1
+	);
+	assert_eq!(limiters.retry_after(client(1), t0 + WINDOW, false), 0);
+	assert_eq!(limiters.retry_after(client(2), t0 + WINDOW, false), 0);
+}
+
+#[test]
+fn retry_after_includes_only_applicable_shared_limits() {
+	let t0 = Instant::now();
+	let mut limiters = ClientLimiters::new(WINDOW);
+	for n in 0..160 {
+		limiters.record_failure(in_net(5, n / 20, n % 20), t0);
+	}
+	let later = t0 + Duration::from_secs(10);
+	assert_eq!(limiters.retry_after(in_net(5, 90, 1), later, true), 50);
+	assert_eq!(limiters.retry_after(in_net(6, 90, 1), later, true), 0);
+	assert_eq!(limiters.retry_after(in_net(5, 90, 1), later, false), 0);
+	let mut limiters = limiters.with_global_max(1, later);
+	limiters.record_failure(client(2), later);
+	assert_eq!(
+		limiters.retry_after(client(3), later + Duration::from_secs(5), true),
+		55
+	);
+	assert_eq!(
+		limiters.retry_after(client(3), later + Duration::from_secs(5), false),
+		0
+	);
 }

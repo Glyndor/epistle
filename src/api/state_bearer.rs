@@ -4,7 +4,7 @@
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 
 use super::super::api_keys::Scope;
 use super::super::error::ApiError;
@@ -52,24 +52,16 @@ pub async fn require_bearer_token(
 	State(state): State<ApiState>,
 	mut request: Request,
 	next: Next,
-) -> Result<Response, ApiError> {
+) -> Response {
 	// Read `now` once and pass the same value to both the pre-check and the
 	// record/reset at the bottom of the request, so a single request can never
 	// roll the window between the read and the write.
 	let now = std::time::Instant::now();
-	// The client IP for API-key CIDR allowlists and for the failure limit.
-	// `ConnectInfo` is present when the router is served with
-	// `into_make_service_with_connect_info`; absent (e.g. in tests) it is
-	// `None`, so an IP-restricted key cannot match and every such request
-	// shares one failure budget.
-	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
-	// canonicalize here so an operator who pinned `192.0.2.0/24` on their key
-	// still gets matched by an IPv4 client that connected through the dual-stack
-	// bind. The audit channel uses the same canonical form.
-	let client_ip = request
+	let peer = request
 		.extensions()
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| crate::net::canonical_peer(info.0).ip());
+		.map(|info| info.0);
+	let client_ip = state.effective_client_ip(peer, request.headers());
 	// Reject before any token work when this client's failure budget is
 	// exhausted, and reserve one failure under the same lock: requests that
 	// arrive together would all pass a bare check before any was counted. The
@@ -81,7 +73,7 @@ pub async fn require_bearer_token(
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
 		if !limiter.reserve(client_ip, now) {
-			return Err(ApiError::rate_limited());
+			return rate_limited(limiter.retry_after(client_ip, now, false));
 		}
 	}
 
@@ -122,7 +114,7 @@ pub async fn require_bearer_token(
 					.lock()
 					.unwrap_or_else(|p| p.into_inner())
 					.refund(client_ip);
-				return Err(ApiError::rate_limited());
+				return ApiError::rate_limited().into_response();
 			}
 		},
 		_ => false,
@@ -144,12 +136,12 @@ pub async fn require_bearer_token(
 		// Only a request that failed is asked about the /48 and the global
 		// ceiling; a valid token is never refused for other people's failures.
 		if !authorized && limiter.limited_after_failure(client_ip, now) {
-			return Err(ApiError::rate_limited());
+			return rate_limited(limiter.retry_after(client_ip, now, true));
 		}
 	}
 
 	if !authorized {
-		return Err(ApiError::unauthenticated());
+		return ApiError::unauthenticated().into_response();
 	}
 	// Inject the resolved client IP so privileged handlers can attribute
 	// their state-changing actions in the audit log.
@@ -162,5 +154,13 @@ pub async fn require_bearer_token(
 		client_ip,
 		configured,
 	});
-	Ok(next.run(request).await)
+	next.run(request).await
+}
+
+fn rate_limited(seconds: u64) -> Response {
+	let mut response = ApiError::rate_limited().into_response();
+	response
+		.headers_mut()
+		.insert(axum::http::header::RETRY_AFTER, seconds.into());
+	response
 }

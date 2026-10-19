@@ -13,37 +13,55 @@ pub struct Api {
 	/// empty (the default) means no account is a panel admin.
 	#[serde(default)]
 	pub admins: Vec<String>,
+	/// Networks allowed to supply the client address through X-Forwarded-For.
+	#[serde(default, deserialize_with = "trusted_proxies")]
+	pub trusted_proxies: Vec<crate::cidr::Cidr>,
+}
+
+/// Maximum number of CIDR networks `trusted_proxies` may list. Beyond this
+/// the lookup in `effective_client_ip` is O(n) per parsed forwarded address,
+/// so the cap exists to bound the cost of a misconfigured or hostile list.
+pub(super) const MAX_TRUSTED_PROXIES: usize = 1024;
+
+/// Deserialize trusted proxy networks once, rejecting malformed CIDR entries,
+/// a universal `0` prefix (`0.0.0.0/0` or `::/0`), duplicates, and lists
+/// above [`MAX_TRUSTED_PROXIES`].
+fn trusted_proxies<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<Vec<crate::cidr::Cidr>, D::Error> {
+	let raw = Vec::<String>::deserialize(deserializer)?;
+	if raw.len() > MAX_TRUSTED_PROXIES {
+		return Err(serde::de::Error::custom(format!(
+			"[api] trusted_proxies has {} entries, the maximum is {MAX_TRUSTED_PROXIES}",
+			raw.len()
+		)));
+	}
+	let mut out: Vec<crate::cidr::Cidr> = Vec::with_capacity(raw.len());
+	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+	for spec in raw {
+		if !spec.contains('/') {
+			return Err(serde::de::Error::custom(
+				"[api] trusted_proxies entries must be IPv4 or IPv6 CIDR networks",
+			));
+		}
+		let cidr = crate::cidr::Cidr::parse(&spec).ok_or_else(|| {
+			serde::de::Error::custom(format!(
+				"[api] trusted_proxies contains invalid CIDR: {spec}"
+			))
+		})?;
+		if cidr.prefix() == 0 {
+			return Err(serde::de::Error::custom(format!(
+				"[api] trusted_proxies rejects {spec}: a /0 prefix trusts every address and \
+				 lets a direct peer pick its own IP through X-Forwarded-For"
+			)));
+		}
+		if seen.insert(cidr.to_string()) {
+			out.push(cidr);
+		}
+	}
+	Ok(out)
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn parses_api_section() {
-		let api: Api = toml::from_str(r#"token_hash = "$argon2id$x""#).expect("parse");
-		assert_eq!(api.token_hash, "$argon2id$x");
-		assert!(api.admins.is_empty());
-	}
-
-	#[test]
-	fn parses_admins_list() {
-		let api: Api = toml::from_str(
-			r#"token_hash = "$argon2id$x"
-admins = ["ops-a1b2"]"#,
-		)
-		.expect("parse");
-		assert_eq!(api.admins, vec!["ops-a1b2".to_string()]);
-	}
-
-	#[test]
-	fn rejects_unknown_keys() {
-		assert!(
-			toml::from_str::<Api>(
-				r#"token_hash = "x"
-port = 1"#
-			)
-			.is_err()
-		);
-	}
-}
+#[path = "api_tests.rs"]
+mod tests;

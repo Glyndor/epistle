@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use super::{
@@ -64,7 +63,7 @@ fn group_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
 	})
 }
 
-/// Store `grant` under `device_code` if the policy allows it, `false` if not.
+/// Store `grant`, or return seconds until the blocking grants expire.
 ///
 /// The policy, whole:
 /// 1. A client, and an IPv6 /48, may hold only so many grants, and the pool
@@ -87,7 +86,7 @@ fn admit(
 	device_code: String,
 	grant: DeviceGrant,
 	now: u64,
-) -> bool {
+) -> Result<(), u64> {
 	let mut devices = devices.lock().unwrap_or_else(|p| p.into_inner());
 	let client = grant.client;
 	let net = net48_of(client);
@@ -104,7 +103,28 @@ fn admit(
 		devices.retain(|_, g| g.expires_at > now);
 	}
 	if over_cap(&devices) {
-		return false;
+		let client_wait = devices
+			.values()
+			.filter(|g| g.client == client)
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
+		let net_wait = devices
+			.values()
+			.filter(|g| net48_of(g.client) == net)
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
+		let client_full =
+			devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT;
+		let net_full = net.is_some_and(|n| n.0)
+			&& devices
+				.values()
+				.filter(|g| net48_of(g.client) == net)
+				.count() >= MAX_GRANTS_PER_NET;
+		return Err(
+			(if client_full { client_wait } else { 0 }).max(if net_full { net_wait } else { 0 }),
+		);
 	}
 	if devices.len() >= MAX_DEVICE_GRANTS {
 		let mut pending: std::collections::HashMap<Option<(bool, u64)>, usize> =
@@ -113,11 +133,16 @@ fn admit(
 			*pending.entry(group_of(g.client)).or_default() += 1;
 		}
 		let mine = pending.get(&group_of(client)).copied().unwrap_or(0);
+		let pool_wait = devices
+			.values()
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
 		let Some((heaviest, count)) = pending.into_iter().max_by_key(|(_, n)| *n) else {
-			return false;
+			return Err(pool_wait);
 		};
 		if count <= mine {
-			return false;
+			return Err(pool_wait);
 		}
 		let oldest = devices
 			.iter()
@@ -129,7 +154,7 @@ fn admit(
 		}
 	}
 	devices.insert(device_code, grant);
-	true
+	Ok(())
 }
 
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
@@ -169,9 +194,12 @@ pub async fn device_authorization(
 		return oauth_error("server_error");
 	};
 	let now = now_secs();
-	let client = peer.map(|axum::Extension(ConnectInfo(addr))| {
-		client_bucket(crate::net::canonical_peer(addr).ip())
-	});
+	let client = state
+		.effective_client_ip(
+			peer.map(|axum::Extension(ConnectInfo(addr))| addr),
+			&headers,
+		)
+		.map(client_bucket);
 	let grant = DeviceGrant {
 		user_code: user_code.clone(),
 		approved_account: None,
@@ -179,12 +207,8 @@ pub async fn device_authorization(
 		next_poll_at: now,
 		client,
 	};
-	if !admit(&authz.devices, device_code.clone(), grant, now) {
-		return (
-			StatusCode::TOO_MANY_REQUESTS,
-			Json(serde_json::json!({ "error": "slow_down" })),
-		)
-			.into_response();
+	if let Err(seconds) = admit(&authz.devices, device_code.clone(), grant, now) {
+		return super::oauth_rate_limited(seconds);
 	}
 	// epistle is headless: the verification URI is the approval endpoint a user
 	// (or CLI) posts the user_code and credentials to.
@@ -221,25 +245,14 @@ pub async fn device_approve(
 	let user_code = fields.get("user_code").cloned().unwrap_or_default();
 	let credentials = account_credentials(&headers, &fields);
 
-	// Authenticate first, unconditionally, so the work done is the same whether or
-	// not the user_code exists (no timing oracle on code existence). The OAuth
-	// grant endpoints sit outside `require_bearer_token`, so the peer IP is
-	// sourced from `ConnectInfo` here; wired in by the listener's
-	// `into_make_service_with_connect_info`; and forwarded to the ban-aware
-	// authentication path. A dual-stack `::` listener reports an IPv4 peer as
-	// `::ffff:a.b.c.d`; canonicalize so the ban / audit pipeline sees a plain
-	// `IpAddr::V4`.
-	let peer = crate::net::canonical_peer(peer);
+	// Authenticate before looking up the code to avoid a code-existence oracle.
+	// Use the same effective IP as bearer authentication for bans and auditing.
+	let client_ip = state.effective_client_ip(Some(peer), &headers);
 	let account = credentials.and_then(|(login, password)| {
 		// The OAuth approval flow is a user-facing API authentication: the
 		// account must opt into `api` in its `allowed_protocols` to bind a
 		// grant, matching how `/api/v1/auth/verify` tags its callers.
-		state.authenticate_with_ip(
-			&login,
-			&password,
-			Some(peer.ip()),
-			crate::config::Protocol::Api,
-		)
+		state.authenticate_with_ip(&login, &password, client_ip, crate::config::Protocol::Api)
 	});
 
 	let now = now_secs();
@@ -315,7 +328,7 @@ pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
 	if now < grant.next_poll_at {
 		// Polling too fast: tell the client to back off (RFC 8628 §3.5).
 		grant.next_poll_at = now + POLL_INTERVAL_SECS;
-		return oauth_error("slow_down");
+		return super::oauth_rate_limited(grant.next_poll_at - now);
 	}
 	grant.next_poll_at = now + POLL_INTERVAL_SECS;
 	let Some(account) = grant.approved_account.clone() else {

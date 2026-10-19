@@ -36,7 +36,10 @@ info:
     malformed JSON, query or path values, `415` without
     `Content-Type: application/json`, `422` for a missing or mistyped field.
     An unknown path is `404` with an empty body; a known path with another
-    method is `405` with an `allow` header. Nothing sends `Retry-After`.
+    method is `405` with an `allow` header. Authentication-window and OAuth
+    throttling responses include `Retry-After` in seconds. Client attribution
+    uses the TCP peer unless `[api] trusted_proxies` permits a validated
+    `X-Forwarded-For` chain, scanned from right to left.
 
     **Stability.** `/api/v1` keeps its paths, field names and error codes
     within the major version; new optional fields, new error codes and new
@@ -1110,8 +1113,8 @@ paths:
             per-account or per-tenant submission rate (`sending rate limit
             exceeded; retry later`) or the daily cap on first-time
             recipients (`too many new recipients today; retry tomorrow`).
-            Nothing was sent. The message tells them apart; there is no
-            `Retry-After`.
+            Nothing was sent. The message tells them apart. Authentication-window
+            refusals include `Retry-After` with the remaining seconds rounded up.
           content:
             application/json:
               schema:
@@ -2216,8 +2219,15 @@ components:
         `rate_limited`: this client address already made 20 requests with
         credentials that did not hold in the last 60 seconds, so every
         request from it, valid or not, is refused until the window passes;
-        or too many credential checks are already waiting. There is no
-        `Retry-After`; wait a minute.
+        or too many credential checks are already waiting. Window-based refusals
+        include `Retry-After` with the remaining seconds rounded up. Queue
+        saturation has no fixed window.
+      headers:
+        Retry-After:
+          description: Remaining authentication window in seconds, rounded up.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
@@ -2313,7 +2323,14 @@ components:
     OAuthSlowDown:
       description: |-
         `{"error": "slow_down"}`: the device code was polled before its
-        interval passed, or too many grants are pending.
+        interval passed, or too many grants are pending. `Retry-After` gives
+        the seconds until the next allowed poll or blocking grant expiry.
+      headers:
+        Retry-After:
+          description: Remaining polling or grant expiry wait in seconds.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
