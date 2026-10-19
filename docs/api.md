@@ -301,13 +301,15 @@ curl -s -H "Authorization: Bearer $KEY" \
 failure being retried (a record is written again only when the reason
 changes); `failed` a permanent refusal or expiry in the queue; `suppressed`
 the recipient was on a suppression list; `canceled` an operator removed the
-entry with `epistle queue remove`. A key confined to some domains sees no
-records, because they carry an account and not a domain.
+entry through the API or `epistle queue remove`. A key confined to some
+domains sees no records, because they carry an account and not a domain.
 
 `GET /api/v1/queue` lists what is still waiting (`limit` 1 to 100, `cursor`
-from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry. The API
-removal writes no delivery record and posts no `canceled` event; the CLI
-does both. `GET /api/v1/suppression` and `DELETE /api/v1/suppression/{address}`
+from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
+each pending recipient as `canceled` in the delivery log, then posts a
+`canceled` webhook event when the delivery log is enabled and a webhook is
+configured.
+`GET /api/v1/suppression` and `DELETE /api/v1/suppression/{address}`
 list and clear suppressed recipients, globally or for one sending account with
 `?account=`. Pages end when `next_cursor` is absent.
 
@@ -357,7 +359,7 @@ The server posts events to the URL in `[webhook]` (`epistle webhook set URL
 | `delayed` | The first temporary failure of a recipient, once per recipient per message | `spool_id`, `recipient`, `reason`, `remote`, `attempt`, `extra` |
 | `delivery_failed` | A recipient failed for good (refused or expired) | `spool_id` (`null` in an entry queued before it was recorded), `recipient`, `reason`, `class` (`invalid_address`, `mailbox_full`, `policy_rejected`, `too_big`, `other`), `remote`, `extra` |
 | `suppressed` | The recipient was on a suppression list | `spool_id`, `recipient`, `extra` |
-| `canceled` | An operator removed the entry with `epistle queue remove` | `spool_id`, `recipient`, `extra` |
+| `canceled` | An operator removed the entry through the API or `epistle queue remove` | `spool_id`, `recipient`, `extra` |
 | `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from` (the envelope sender, empty for a bounce), `subject`, `message_id` (the last two may be `null`) |
 | `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](warmup.md) |
 | `test` | Only `epistle webhook test` | `message` |

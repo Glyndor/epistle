@@ -123,6 +123,8 @@ struct Inner {
 	/// the deliveries handler turns that into a `404` so the caller is
 	/// not silently handed an empty page.
 	delivery_log_days: u64,
+	/// Optional advisory webhook used for queue cancellation events.
+	webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// Hosted domains switched off (`disabled_domains`).
 	disabled_domains: Vec<String>,
 	/// Per-instance message-size cap, applied consistently to SMTP
@@ -226,6 +228,7 @@ impl ApiState {
 				bayes: bayes::BayesBindings::default(),
 				outbound: None,
 				delivery_log_days: 0,
+				webhook: None,
 				disabled_domains: Vec::new(),
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			}),
@@ -248,6 +251,18 @@ impl ApiState {
 			inner.delivery_log_days = days;
 		}
 		self
+	}
+
+	/// Attach the configured webhook used for queue cancellation events.
+	pub fn with_webhook(mut self, webhook: Option<Arc<crate::webhook::Webhook>>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.webhook = webhook;
+		}
+		self
+	}
+
+	pub(crate) fn webhook(&self) -> Option<&Arc<crate::webhook::Webhook>> {
+		self.inner.webhook.as_ref()
 	}
 
 	/// Name the hosted domains that are switched off. Must be set before the

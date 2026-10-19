@@ -1,5 +1,6 @@
 epistle (0.12.2) UNRELEASED; urgency=medium
 
+  * Queue: record API cancellations in the delivery log and notify webhooks.
   * Security: IMAP ID no longer discloses the server version.
   * Status reports API key configuration warnings.
   * Security: ManageSieve now holds an unauthenticated connection to one

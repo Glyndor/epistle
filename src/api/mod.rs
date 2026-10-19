@@ -446,3 +446,7 @@ mod tests_addresses;
 #[cfg(test)]
 #[path = "api_tests_display_name.rs"]
 mod tests_display_name;
+
+#[cfg(test)]
+#[path = "api_tests_queue.rs"]
+mod tests_queue;
