@@ -10,6 +10,9 @@ use ring::signature::{Ed25519KeyPair, KeyPair, RSA_PKCS1_SHA256, RsaKeyPair};
 use super::canon;
 use super::signature::Canon;
 
+#[path = "sign_wire.rs"]
+mod wire;
+
 /// Headers included in the signature when present.
 const SIGNED_HEADERS: &[&str] = &[
 	"from",
@@ -154,7 +157,7 @@ impl Signer {
 	}
 
 	/// Sign a raw message for `domain`, returning the full DKIM-Signature
-	/// header line (with trailing CRLF) to prepend.
+	/// fields (with folding and trailing CRLF) to prepend.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
 		let (headers, body) = split_message(raw)?;
 		// Require the single From field used by the send-as check and DMARC.
@@ -170,11 +173,14 @@ impl Signer {
 		let body_hash = BASE64.encode(ring::digest::digest(&ring::digest::SHA256, &canonical_body));
 
 		// Consume every selected instance bottom-up (RFC 6376 section 5.4.2).
+		let unsafe_resent = collect_unsafe_resent_names(raw);
 		let mut signed_names = Vec::new();
 		let mut header_input = String::new();
 		for (header_name, header_value) in headers.iter().rev() {
 			let name = header_name.to_ascii_lowercase();
-			if SIGNED_HEADERS.contains(&name.as_str()) || name.starts_with("resent-") {
+			let known = SIGNED_HEADERS.contains(&name.as_str());
+			let resent = !known && name.starts_with("resent-") && !unsafe_resent.contains(&name);
+			if known || resent {
 				signed_names.push(name);
 				header_input.push_str(&canon::header(Canon::Relaxed, header_name, header_value));
 			}
@@ -220,16 +226,14 @@ impl Signer {
 		header_input: &str,
 		sign: &dyn Fn(&[u8]) -> Option<Vec<u8>>,
 	) -> Option<String> {
-		let value = format!(
-			" v=1; a={algorithm}; c=relaxed/relaxed; d={domain}; s={selector}; h={names}; bh={body_hash}; b="
-		);
+		let value = wire::unsigned(algorithm, selector, domain, names, body_hash)?;
 		let mut dkim_line = canon::header(Canon::Relaxed, "DKIM-Signature", &value);
 		dkim_line.truncate(dkim_line.len() - 2);
 		let mut hash_input = header_input.to_string();
 		hash_input.push_str(&dkim_line);
 
 		let signature = BASE64.encode(sign(hash_input.as_bytes())?);
-		Some(format!("DKIM-Signature:{value}{signature}\r\n"))
+		wire::finish(value, &signature)
 	}
 }
 
@@ -369,6 +373,47 @@ fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
 		parsed.push((header[..colon].trim_end(), &header[colon + 1..]));
 	}
 	Some((parsed, body))
+}
+
+/// Field names from the message that begin with `Resent-` but cannot appear
+/// verbatim in a DKIM `h=` tag: a name with `:` or `;` would terminate the
+/// tag or split it, and RFC 5322 §2.2 only allows printable US-ASCII without
+/// `:`. The names are read from the raw bytes so a malformed one with
+/// trailing whitespace that `split_message` would otherwise trim is still
+/// caught.
+fn collect_unsafe_resent_names(raw: &[u8]) -> std::collections::HashSet<String> {
+	let mut unsafe_names = std::collections::HashSet::new();
+	for raw_line in raw.split(|&b| b == b'\r' || b == b'\n') {
+		if raw_line
+			.first()
+			.is_none_or(|byte| matches!(byte, b' ' | b'\t'))
+		{
+			continue;
+		}
+		let Ok(line) = std::str::from_utf8(raw_line) else {
+			continue;
+		};
+		let Some((raw_name, _)) = line.split_once(':') else {
+			continue;
+		};
+		if !is_safe_header_name(raw_name) {
+			let trimmed = raw_name.trim_end().to_ascii_lowercase();
+			if trimmed.starts_with("resent-") {
+				unsafe_names.insert(trimmed);
+			}
+		}
+	}
+	unsafe_names
+}
+
+/// Whether `name` can be written into the DKIM `h=` tag. RFC 5322 §2.2
+/// restricts field names to printable US-ASCII without `:`; DKIM §3.2 adds
+/// `;` as the tag separator, so the name cannot contain one either.
+fn is_safe_header_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.bytes()
+			.all(|b| (33..=126).contains(&b) && b != b':' && b != b';')
 }
 
 #[cfg(test)]

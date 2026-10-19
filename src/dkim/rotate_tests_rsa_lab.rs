@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use crate::dkim::test_support::{KeyDns, rsa_verifies, signature_fields};
+use crate::dkim::test_support::{KeyDns, rsa_verifies, signature_fields, signature_headers};
 
 const DAY: u64 = 86_400;
 const RAW: &[u8] = b"From: alice@example.org\r\nSubject: dual\r\n\r\nHello\r\n";
@@ -165,8 +165,8 @@ impl RsaLab {
 			.collect();
 		assert_eq!(selectors, [ed, rsa], "{when}: the selectors that sign");
 		let records = self.lab.zone.records.lock().unwrap().clone();
-		let lines: Vec<&str> = header.lines().collect();
-		let ed_signed = [lines[0].as_bytes(), b"\r\n", RAW].concat();
+		let lines = signature_headers(header.as_bytes());
+		let ed_signed = [lines[0].as_bytes(), RAW].concat();
 		let results = crate::dkim::verify_message(&KeyDns(records.clone()), &ed_signed).await;
 		assert_eq!(
 			results.iter().map(|r| r.outcome).collect::<Vec<_>>(),
@@ -179,7 +179,7 @@ impl RsaLab {
 			.cloned()
 			.unwrap_or_default();
 		assert!(
-			rsa_verifies(lines[1], &published, RAW),
+			rsa_verifies(&lines[1], &published, RAW),
 			"{when}: the RSA key must be the one published"
 		);
 	}

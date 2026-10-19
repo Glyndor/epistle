@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::dkim::test_support::KeyDns;
+use crate::dkim::test_support::{KeyDns, signature_headers};
 use crate::dkim::{DkimOutcome, verify_message};
 
 const FIELDS: &[(&str, &str, bool)] = &[
@@ -71,10 +71,21 @@ fn names(signature: &str) -> Vec<String> {
 		.signed_headers
 }
 
+fn algorithm_selector_domain(signature: &str) -> (String, String, String) {
+	let parsed =
+		super::super::signature::parse(signature.strip_prefix("DKIM-Signature:").expect("header"))
+			.expect("parse signature");
+	let algorithm = match parsed.algorithm {
+		super::super::signature::Algorithm::Ed25519Sha256 => "ed25519-sha256",
+		super::super::signature::Algorithm::RsaSha256 => "rsa-sha256",
+	};
+	(algorithm.to_string(), parsed.selector, parsed.domain)
+}
+
 async fn check(dns: &KeyDns, signature: &str, raw: &str, expected: DkimOutcome) {
 	let signed = format!("{signature}{raw}");
 	let results = verify_message(dns, signed.as_bytes()).await;
-	assert_eq!(results.len(), signature.lines().count());
+	assert_eq!(results.len(), signature_headers(signature.as_bytes()).len());
 	for result in results {
 		assert_eq!(result.outcome, expected);
 	}
@@ -86,8 +97,34 @@ async fn signs_every_documented_field_with_both_algorithms() {
 		let (signer, dns) = fixture(dual);
 		let raw = message();
 		let signature = signer.sign("example.org", raw.as_bytes()).expect("sign");
-		let lists: Vec<_> = signature.lines().map(names).collect();
-		assert_eq!(lists.len(), if dual { 2 } else { 1 });
+		let fields = signature_headers(signature.as_bytes());
+		assert_eq!(fields.len(), if dual { 2 } else { 1 });
+		let expected: Vec<(String, String, String)> = if dual {
+			vec![
+				(
+					"ed25519-sha256".to_string(),
+					"ed".to_string(),
+					"example.org".to_string(),
+				),
+				(
+					"rsa-sha256".to_string(),
+					"rsa".to_string(),
+					"example.org".to_string(),
+				),
+			]
+		} else {
+			vec![(
+				"ed25519-sha256".to_string(),
+				"ed".to_string(),
+				"example.org".to_string(),
+			)]
+		};
+		let seen: Vec<_> = fields
+			.iter()
+			.map(|field| algorithm_selector_domain(field))
+			.collect();
+		assert_eq!(seen, expected);
+		let lists: Vec<_> = fields.iter().map(|field| names(field.as_str())).collect();
 		for list in &lists {
 			for (name, _, oversigned) in FIELDS {
 				assert_eq!(
@@ -144,7 +181,10 @@ async fn absent_important_fields_are_oversigned_once() {
 	let (signer, dns) = fixture(true);
 	let raw = "From: alice@example.org\r\n\r\nbody\r\n";
 	let signature = signer.sign("example.org", raw.as_bytes()).expect("sign");
-	for list in signature.lines().map(names) {
+	for list in signature_headers(signature.as_bytes())
+		.iter()
+		.map(|field| names(field))
+	{
 		for (name, _, oversigned) in FIELDS {
 			let count = list
 				.iter()
@@ -212,7 +252,10 @@ async fn repeated_fields_and_all_resent_names_are_signed_bottom_up() {
 	check(&dns, &signature, &raw, DkimOutcome::Pass).await;
 	let resent = format!("Resent-From: next@example.org\r\nResent-Custom: next\r\n{raw}");
 	check(&dns, &signature, &resent, DkimOutcome::Pass).await;
-	for list in signature.lines().map(names) {
+	for list in signature_headers(signature.as_bytes())
+		.iter()
+		.map(|field| names(field))
+	{
 		assert_eq!(list.iter().filter(|name| *name == "subject").count(), 4);
 		assert_eq!(list.iter().filter(|name| *name == "sender").count(), 3);
 	}
@@ -242,7 +285,10 @@ async fn transit_headers_are_excluded_and_can_change() {
 		message()
 	);
 	let signature = signer.sign("example.org", raw.as_bytes()).expect("sign");
-	for list in signature.lines().map(names) {
+	for list in signature_headers(signature.as_bytes())
+		.iter()
+		.map(|field| names(field))
+	{
 		assert!(!list.iter().any(|name| {
 			name.starts_with("x-")
 				|| [
@@ -304,8 +350,14 @@ fn signed_header_table_matches_the_signer() {
 	assert_eq!(documented, selected);
 	assert_eq!(oversigned, important);
 	expected.sort();
-	for mut list in signature.lines().map(names) {
+	for mut list in signature_headers(signature.as_bytes())
+		.iter()
+		.map(|field| names(field))
+	{
 		list.sort();
 		assert_eq!(list, expected);
 	}
 }
+
+#[path = "sign_tests_wire.rs"]
+mod wire;

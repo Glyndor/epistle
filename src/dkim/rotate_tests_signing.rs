@@ -4,7 +4,7 @@ use super::*;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use crate::dkim::test_support::{KeyDns, signature_fields};
+use crate::dkim::test_support::{KeyDns, signature_fields, signature_headers};
 use crate::dns::provider::ProviderError;
 
 const DAY: u64 = 86_400;
@@ -103,14 +103,13 @@ fn fixture() -> Fixture {
 
 async fn verify(signer: &ReloadableSigner, dns: &RecordingDns) {
 	let header = signer.current().sign("example.org", RAW).expect("sign");
-	let lines: Vec<_> = header.lines().collect();
+	let lines = signature_headers(header.as_bytes());
 	assert_eq!(
 		lines.len(),
 		2,
 		"dual signing emits two verifiable signatures"
 	);
-	let ed_header = format!("{}\r\n", lines[0]);
-	let signed = [ed_header.as_bytes(), RAW].concat();
+	let signed = [lines[0].as_bytes(), RAW].concat();
 	let dns = KeyDns(dns.records.lock().unwrap().clone());
 	let results = crate::dkim::verify_message(&dns, &signed).await;
 	assert_eq!(
@@ -125,7 +124,7 @@ async fn verify(signer: &ReloadableSigner, dns: &RecordingDns) {
 	);
 	let rsa_selector = &signature_fields(header.as_bytes())[1].0;
 	verify_rsa(
-		lines[1],
+		&lines[1],
 		&dns.0[&format!("{rsa_selector}._domainkey.example.org")][0],
 	);
 }

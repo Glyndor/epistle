@@ -155,6 +155,19 @@ or to inbound mail.
 | `Feedback-ID` | No |
 | `Resent-*` | No |
 
+Oversigning and the `Resent-*` wildcard are deliberate, and they have a real
+cost at delivery. A header covered by `h=` is locked: Rewriting `Content-Type`
+to add a charset, adding an absent oversigned field, or any other change to a
+field the signature covers breaks both signatures. Relaxed canonicalisation
+tolerates equivalent folding and whitespace, the TCP line
+limit, but it does not tolerate changes to field values, including the value
+of `Content-Type`. A list, forwarder or relay that rewrites a covered field
+or adds one that was absent makes DKIM fail for that copy, and the receiver
+is then left with whatever SPF alignment it can compute. If SPF is no longer
+aligned, DMARC alignment is lost for that copy as well. Transit fields are
+excluded because relays change them, and a list rewriting `Content-Type` or
+adding `List-Unsubscribe` of its own is what is meant by the warning.
+
 ## What passes through
 
 The server removes only what the tables name. Anything else a client or a
