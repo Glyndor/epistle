@@ -18,25 +18,48 @@ pub struct Api {
 	pub trusted_proxies: Vec<crate::cidr::Cidr>,
 }
 
-/// Deserialize trusted proxy networks once, rejecting malformed CIDR entries.
+/// Maximum number of CIDR networks `trusted_proxies` may list. Beyond this
+/// the lookup in `effective_client_ip` is O(n) per parsed forwarded address,
+/// so the cap exists to bound the cost of a misconfigured or hostile list.
+pub(super) const MAX_TRUSTED_PROXIES: usize = 1024;
+
+/// Deserialize trusted proxy networks once, rejecting malformed CIDR entries,
+/// a universal `0` prefix (`0.0.0.0/0` or `::/0`), duplicates, and lists
+/// above [`MAX_TRUSTED_PROXIES`].
 fn trusted_proxies<'de, D: serde::Deserializer<'de>>(
 	deserializer: D,
 ) -> Result<Vec<crate::cidr::Cidr>, D::Error> {
-	Vec::<String>::deserialize(deserializer)?
-		.into_iter()
-		.map(|spec| {
-			if !spec.contains('/') {
-				return Err(serde::de::Error::custom(
-					"[api] trusted_proxies entries must be IPv4 or IPv6 CIDR networks",
-				));
-			}
-			crate::cidr::Cidr::parse(&spec).ok_or_else(|| {
-				serde::de::Error::custom(format!(
-					"[api] trusted_proxies contains invalid CIDR: {spec}"
-				))
-			})
-		})
-		.collect()
+	let raw = Vec::<String>::deserialize(deserializer)?;
+	if raw.len() > MAX_TRUSTED_PROXIES {
+		return Err(serde::de::Error::custom(format!(
+			"[api] trusted_proxies has {} entries, the maximum is {MAX_TRUSTED_PROXIES}",
+			raw.len()
+		)));
+	}
+	let mut out: Vec<crate::cidr::Cidr> = Vec::with_capacity(raw.len());
+	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+	for spec in raw {
+		if !spec.contains('/') {
+			return Err(serde::de::Error::custom(
+				"[api] trusted_proxies entries must be IPv4 or IPv6 CIDR networks",
+			));
+		}
+		let cidr = crate::cidr::Cidr::parse(&spec).ok_or_else(|| {
+			serde::de::Error::custom(format!(
+				"[api] trusted_proxies contains invalid CIDR: {spec}"
+			))
+		})?;
+		if cidr.prefix() == 0 {
+			return Err(serde::de::Error::custom(format!(
+				"[api] trusted_proxies rejects {spec}: a /0 prefix trusts every address and \
+				 lets a direct peer pick its own IP through X-Forwarded-For"
+			)));
+		}
+		if seen.insert(cidr.to_string()) {
+			out.push(cidr);
+		}
+	}
+	Ok(out)
 }
 
 #[cfg(test)]

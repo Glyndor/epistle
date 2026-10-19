@@ -82,14 +82,19 @@ async fn forwarded_oauth_grants_are_counted_per_client_with_retry_after() {
 
 #[tokio::test]
 async fn oauth_grants_ignore_untrusted_forwarding_and_group_forwarded_ipv6() {
-	for (peer, prefix) in [
-		("192.0.2.1:80", "198.51.100."),
-		("10.0.0.1:80", "2001:db8:1:2::"),
+	for (peer, prefix, extra_peer, extra_prefix) in [
+		("192.0.2.1:80", "198.51.100.", "192.0.2.2:80", "203.0.113."),
+		(
+			"10.0.0.1:80",
+			"2001:db8:1:2::",
+			"10.0.0.1:80",
+			"2001:db8:1:3::",
+		),
 	] {
 		let dir = tempfile::tempdir().unwrap();
 		let state = state_with_authz(dir.path(), &keys())
 			.with_trusted_proxies(vec![crate::cidr::Cidr::parse("10.0.0.0/8").unwrap()]);
-		let app = crate::api::router(state);
+		let app = crate::api::router(state.clone());
 		for host in 1..=10 {
 			assert_eq!(
 				post(
@@ -116,6 +121,40 @@ async fn oauth_grants_ignore_untrusted_forwarding_and_group_forwarded_ipv6() {
 			.status(),
 			StatusCode::TOO_MANY_REQUESTS
 		);
+		// A different /64 (or, for the untrusted IPv4 case, a different peer)
+		// must still have its own budget. Without this, attributing the grants
+		// to the proxy's IP would let the proxy share one bucket and the test
+		// would still pass on the first eleven requests.
+		assert_eq!(
+			post(
+				&app,
+				"/oauth/device_authorization",
+				extra_peer,
+				&format!("{extra_prefix}1"),
+				"client_id=cli"
+			)
+			.await
+			.status(),
+			StatusCode::OK
+		);
+		// For the IPv6 case, the stored client bucket of the first ten grants
+		// must be the forwarded address, not the peer, otherwise IPv6 clients
+		// would share the proxy's per-client cap and the per-/48 cap would be
+		// bypassed.
+		if let Ok(first_ip) = format!("{prefix}1").parse::<std::net::IpAddr>()
+			&& first_ip.is_ipv6()
+		{
+			let devices = state.authz().unwrap().devices.lock().unwrap();
+			let expected = device::client_bucket(first_ip);
+			let stored_with_bucket = devices
+				.values()
+				.filter(|g| g.client == Some(expected))
+				.count();
+			assert!(
+				stored_with_bucket >= 10,
+				"expected at least 10 grants stored with the forwarded bucket, got {stored_with_bucket}"
+			);
+		}
 	}
 }
 

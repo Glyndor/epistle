@@ -326,6 +326,13 @@ address outside `trusted_proxies`. A missing or malformed header, or a chain
 containing only trusted addresses, uses the TCP peer. An untrusted peer's header
 is ignored. IPv4-mapped IPv6 client addresses are canonicalized to IPv4.
 
+A universal prefix (`0.0.0.0/0` or `::/0`) is refused at load time: a `/0`
+tricks the server into treating every direct peer as a trusted proxy, so a peer
+that sets its own `X-Forwarded-For` would pick the address the server uses for
+limits, audit and credential IP checks. Duplicates are dropped, and the list is
+capped at 1024 entries to bound the cost of the linear lookup on every
+forwarded address.
+
 This address is used for API authentication limits, credential IP restrictions,
 audit events, OAuth password bans and device grant counters. IPv6 clients still
 share their /64 budget. The default empty list preserves socket-based attribution.

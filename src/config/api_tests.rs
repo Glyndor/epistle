@@ -63,3 +63,67 @@ fn trusted_proxy_cidrs_are_validated_during_config_loading() {
 		);
 	}
 }
+
+#[test]
+fn trusted_proxies_rejects_universal_slash_zero_prefix() {
+	use crate::config::Config;
+	let base = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/tmp/epistle\"\n[api]\ntoken_hash = \"sha256:{}\"\n",
+		"0".repeat(64)
+	);
+	let file = tempfile::NamedTempFile::new().unwrap();
+	for invalid in ["0.0.0.0/0", "::/0"] {
+		let err = Config::parse_text(
+			&format!("{base}trusted_proxies = [\"{invalid}\"]"),
+			file.path(),
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(
+			err.contains("[api] trusted_proxies") && err.contains(invalid),
+			"{err}"
+		);
+	}
+}
+
+#[test]
+fn trusted_proxies_deduplicates_entries_at_load_time() {
+	use crate::config::Config;
+	let base = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/tmp/epistle\"\n[api]\ntoken_hash = \"sha256:{}\"\n",
+		"0".repeat(64)
+	);
+	let file = tempfile::NamedTempFile::new().unwrap();
+	let config = Config::parse_text(
+		&format!(
+			"{base}trusted_proxies = [\"192.0.2.0/24\", \"192.0.2.0/24\", \
+			 \"192.0.2.55/24\", \"2001:db8::/32\"]"
+		),
+		file.path(),
+	)
+	.unwrap();
+	assert_eq!(config.api.unwrap().trusted_proxies.len(), 2);
+}
+
+#[test]
+fn trusted_proxies_rejects_lists_above_the_documented_maximum() {
+	use crate::config::Config;
+	let base = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/tmp/epistle\"\n[api]\ntoken_hash = \"sha256:{}\"\n",
+		"0".repeat(64)
+	);
+	let file = tempfile::NamedTempFile::new().unwrap();
+	let mut entries: Vec<String> = (0..=super::MAX_TRUSTED_PROXIES)
+		.map(|n| format!("\"10.0.{}.0/24\"", n / 256))
+		.collect();
+	entries.push("\"10.0.99.0/24\"".to_string());
+	let toml = format!("{base}trusted_proxies = [{}]", entries.join(", "));
+	let err = Config::parse_text(&toml, file.path())
+		.unwrap_err()
+		.to_string();
+	assert!(err.contains("[api] trusted_proxies"), "{err}");
+	assert!(
+		err.contains(&format!("{}", super::MAX_TRUSTED_PROXIES + 2)),
+		"{err}"
+	);
+}
