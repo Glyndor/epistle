@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
+use crate::net::conn_limit::{Admission, Refusal, refuse};
 use crate::smtp::line::LineDecoder;
 
 use super::command;
@@ -26,15 +26,19 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
-/// Pre-authentication read deadline. An unauthenticated client must
-/// not be able to hold a connection slot forever, so the deadline is
-/// much shorter than the post-auth one.
-const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default maximum script literal size (1 MiB). Configurable per server
 /// so the test suite can drive a small bound.
 const DEFAULT_MAX_LITERAL: usize = super::store::MAX_SCRIPT_BYTES;
 /// Default max concurrent connections for a ManageSieve listener.
 const MAX_CONNECTIONS: usize = 100;
+
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"BYE \"too many connections, try again later\"\r\n",
+		Refusal::ClientFull => b"BYE \"too many connections from your address\"\r\n",
+	}
+}
 
 /// Storage/auth backend backed by the live directory and the accounts tree.
 struct DirectoryBackend {
@@ -72,6 +76,7 @@ pub struct Server {
 	accounts_root: PathBuf,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_per_ip: usize,
 	max_literal: usize,
 	preauth_timeout: Duration,
 }
@@ -84,8 +89,9 @@ impl Server {
 			accounts_root: data_dir.join("accounts"),
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			max_literal: DEFAULT_MAX_LITERAL,
-			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
+			preauth_timeout: crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT,
 		}
 	}
 
@@ -93,6 +99,15 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Cap the connections one client may hold on this listener (0 keeps the
+	/// default). An IPv6 client is counted by its /64.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_per_ip = max;
 		}
 		self
 	}
@@ -126,7 +141,7 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let admission = Admission::new(self.max_connections, self.max_per_ip);
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = accepting.next().await;
@@ -134,14 +149,18 @@ impl Server {
 			// `::ffff:a.b.c.d`; canonicalize so the audit channel and the
 			// ban-aware authentication path see a plain `IpAddr::V4`.
 			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "ManageSieve connection limit reached, dropping");
-				continue;
+			let admitted = match admission.admit(peer.ip()) {
+				Ok(admitted) => admitted,
+				Err(why) => {
+					tracing::warn!(%peer, ?why, "ManageSieve connection limit reached, refusing");
+					refuse(stream, refusal(why));
+					continue;
+				}
 			};
 			let server = Arc::clone(&self);
 			let peer_ip = peer.ip();
 			tokio::spawn(async move {
-				let _permit = permit;
+				let _admitted = admitted;
 				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "ManageSieve connection closed");
 				}
@@ -451,6 +470,10 @@ mod tests_starttls;
 
 #[path = "server_discard.rs"]
 mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod conn_limit_tests;
 
 #[cfg(test)]
 #[path = "server_tests_deadline.rs"]

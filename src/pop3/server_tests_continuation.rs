@@ -29,7 +29,12 @@ async fn pop3_plain_login_and_cancel_over_duplex_wire() {
 	)]));
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), dir.path().into());
 	let (client, server) = duplex(4096);
-	let task = tokio::spawn(run(server, backend, None));
+	let task = tokio::spawn(run(
+		server,
+		backend,
+		None,
+		SessionClock::start(DEFAULT_PREAUTH_TIMEOUT, TIMEOUT),
+	));
 	let mut client = BufReader::new(client);
 	expect_line(
 		&mut client,

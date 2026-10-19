@@ -7,6 +7,36 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     deadline for the whole phase, counted from the start of the session and
     covering every read, including the data of a command. Bytes arriving
     slowly no longer extend it.
+  * Security: IMAP and POP3 hold an unauthenticated connection to the same
+    kind of deadline: one for the whole phase before sign-in, counted from the
+    start of the session, covering the TLS handshake, every command and
+    every literal, which neither the bytes that arrive nor a stream of cheap
+    commands extend. Before, each read had its own timeout of 30 minutes
+    (IMAP) or 10 minutes (POP3), so one byte just before it ran out kept a
+    connection open for as long as the client liked. A signed-in session is
+    not held to it. The deadline is 60 seconds by default and is set for the
+    three protocols with `preauth_timeout` or `epistle limits set
+    preauth-timeout`.
+  * Security: one client address can no longer hold every connection of a
+    listener. IMAP, POP3 and ManageSieve cap the connections one client holds
+    (200 by default, 40 for ManageSieve, `max_mailbox_connections_per_ip`), and the plain-HTTP
+    listeners cap both their connections (1024, `max_http_connections`) and
+    what one client holds (256, `max_http_connections_per_ip`); an IPv6 client
+    is counted by its /64, as for SMTP. A connection over a cap gets the
+    protocol's `BYE`, `-ERR` or `503` and is closed before any handshake, and
+    its place is released however the connection ends. All three are set with
+    `epistle limits`. Behind a proxy or NAT that hides the client address every
+    client shares one count, so raise them there.
+  * The generated `mail` service raises its open-file limit to 65536 (and the
+    sample systemd unit sets `LimitNOFILE=65536`). A rootless container
+    started with the default soft limit of 1024 stopped greeting on ports 25
+    and 587 at around a thousand idle connections. The request is lowered to
+    the hard limit of the host when that is smaller, because Podman refuses to
+    start a container above it. Run `epistle init` again to regenerate an
+    existing stack's compose file.
+  * An autoconfig listener with TLS and no `max_connections_per_listener` set
+    refused every connection, because the unset cap reached it as 0. It now
+    uses the default of 1024.
   * Security: the Bayesian filter no longer lets one account decide what
     another receives. A message with more than one local recipient, or
     addressed to an alias or a list, used to be scored by the corpus of the

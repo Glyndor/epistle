@@ -132,6 +132,11 @@ pub struct Session<B: Backend> {
 }
 
 impl<B: Backend> Session<B> {
+	/// Whether the client has signed in (the TRANSACTION state).
+	pub fn is_authenticated(&self) -> bool {
+		self.state == State::Transaction
+	}
+
 	/// Start a session in the AUTHORIZATION state.
 	pub fn new(backend: B) -> Self {
 		Self {

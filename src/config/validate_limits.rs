@@ -93,9 +93,26 @@ impl Config {
 				"max_session_time must be 0 (off) or between 60 and {MAX_SESSION_TIME_SECS} seconds"
 			)));
 		}
+		self.validate_preauth_timeout()
+	}
+
+	/// A deadline under five seconds cuts a client still on its TLS
+	/// handshake over a slow link; over an hour it bounds nothing.
+	fn validate_preauth_timeout(&self) -> Result<(), ConfigError> {
+		if self
+			.preauth_timeout
+			.is_some_and(|secs| !(5..=MAX_PREAUTH_TIMEOUT_SECS).contains(&secs))
+		{
+			return Err(ConfigError::Invalid(format!(
+				"preauth_timeout must be between 5 and {MAX_PREAUTH_TIMEOUT_SECS} seconds"
+			)));
+		}
 		Ok(())
 	}
 }
+
+/// The longest `preauth_timeout` accepted, in seconds: an hour.
+const MAX_PREAUTH_TIMEOUT_SECS: u64 = 3_600;
 
 /// The highest `junk_command_limit` accepted.
 const MAX_JUNK_COMMAND_LIMIT: u64 = 10_000;
@@ -238,6 +255,27 @@ mod tests {
 					.to_string()),
 				"{settings}"
 			);
+		}
+	}
+
+	#[test]
+	fn a_preauth_timeout_outside_five_seconds_to_an_hour_is_refused() {
+		for settings in [
+			"preauth_timeout = 0",
+			"preauth_timeout = 4",
+			"preauth_timeout = 3601",
+		] {
+			assert_eq!(
+				validate(settings),
+				Err(
+					"invalid configuration: preauth_timeout must be between 5 and 3600 seconds"
+						.to_string()
+				),
+				"{settings}"
+			);
+		}
+		for settings in ["preauth_timeout = 5", "preauth_timeout = 3600"] {
+			assert_eq!(validate(settings), Ok(()), "{settings}");
 		}
 	}
 

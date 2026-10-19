@@ -9,6 +9,8 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
 
+use super::serve_connection_limits::MailboxLimits;
+
 type Task = tokio::task::JoinHandle<std::io::Result<()>>;
 
 fn require(acceptor: Option<&TlsAcceptor>, what: &str) -> std::io::Result<TlsAcceptor> {
@@ -25,11 +27,14 @@ pub(super) fn pop3s(
 	acceptor: Option<&TlsAcceptor>,
 	crypto: crate::storage::MessageCrypto,
 	max_conn: usize,
+	limits: &MailboxLimits,
 ) -> std::io::Result<Task> {
 	let server = Arc::new(
 		crate::pop3::server::Server::new(data_dir, directory, require(acceptor, "POP3S")?)
 			.with_crypto(crypto)
-			.with_max_connections(max_conn),
+			.with_max_connections(max_conn)
+			.with_max_connections_per_ip(limits.per_ip)
+			.with_preauth_timeout(limits.preauth_timeout),
 	);
 	Ok(tokio::spawn(server.serve(listener)))
 }
@@ -41,6 +46,7 @@ pub(super) fn managesieve(
 	directory: DirectoryHandle,
 	acceptor: Option<&TlsAcceptor>,
 	max_conn: usize,
+	limits: &MailboxLimits,
 ) -> std::io::Result<Task> {
 	let server = Arc::new(
 		crate::managesieve::server::Server::new(
@@ -48,7 +54,9 @@ pub(super) fn managesieve(
 			directory,
 			require(acceptor, "ManageSieve")?,
 		)
-		.with_max_connections(max_conn),
+		.with_max_connections(max_conn)
+		.with_max_connections_per_ip(limits.managesieve_per_ip)
+		.with_preauth_timeout(limits.preauth_timeout),
 	);
 	Ok(tokio::spawn(server.serve(listener)))
 }

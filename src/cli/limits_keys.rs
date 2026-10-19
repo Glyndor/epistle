@@ -64,10 +64,22 @@ pub enum Key {
 	/// `421 4.4.2` at the next command boundary. Default is 1800; `0`
 	/// turns it off.
 	MaxSessionTime,
+	/// Seconds an IMAP, POP3 or ManageSieve client gets, from the start of
+	/// the connection, to sign in. Default is 60.
+	PreauthTimeout,
+	/// Concurrent connections one client may hold on each IMAP, POP3 and
+	/// ManageSieve listener. Default is 200.
+	MaxMailboxConnectionsPerIp,
+	/// Concurrent connections each plain-HTTP listener serves. Default is
+	/// 1024.
+	MaxHttpConnections,
+	/// Concurrent connections one client may hold on each plain-HTTP
+	/// listener. Default is 256.
+	MaxHttpConnectionsPerIp,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 23] = [
+	pub(super) const ALL: [Self; 27] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -91,6 +103,10 @@ impl Key {
 		Self::DataRateGrace,
 		Self::JunkCommandLimit,
 		Self::MaxSessionTime,
+		Self::PreauthTimeout,
+		Self::MaxMailboxConnectionsPerIp,
+		Self::MaxHttpConnections,
+		Self::MaxHttpConnectionsPerIp,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -118,6 +134,10 @@ impl Key {
 			Self::DataRateGrace => "data-rate-grace",
 			Self::JunkCommandLimit => "junk-command-limit",
 			Self::MaxSessionTime => "max-session-time",
+			Self::PreauthTimeout => "preauth-timeout",
+			Self::MaxMailboxConnectionsPerIp => "max-mailbox-connections-per-ip",
+			Self::MaxHttpConnections => "max-http-connections",
+			Self::MaxHttpConnectionsPerIp => "max-http-connections-per-ip",
 		}
 	}
 
@@ -146,6 +166,10 @@ impl Key {
 			Self::DataRateGrace => "data_rate_grace",
 			Self::JunkCommandLimit => "junk_command_limit",
 			Self::MaxSessionTime => "max_session_time",
+			Self::PreauthTimeout => "preauth_timeout",
+			Self::MaxMailboxConnectionsPerIp => "max_mailbox_connections_per_ip",
+			Self::MaxHttpConnections => "max_http_connections",
+			Self::MaxHttpConnectionsPerIp => "max_http_connections_per_ip",
 		}
 	}
 
@@ -164,6 +188,17 @@ impl Key {
 		matches!(
 			self,
 			Self::MinDataRate | Self::JunkCommandLimit | Self::MaxSessionTime
+		)
+	}
+
+	/// Whether a configured `0` means "the default", not "no limit".
+	pub(super) fn zero_is_default(self) -> bool {
+		matches!(
+			self,
+			Self::MaxConnectionsPerIp
+				| Self::MaxMailboxConnectionsPerIp
+				| Self::MaxHttpConnections
+				| Self::MaxHttpConnectionsPerIp
 		)
 	}
 
@@ -192,6 +227,7 @@ impl Key {
 			Self::QueueGiveUp
 			| Self::DataRateGrace
 			| Self::MaxSessionTime
+			| Self::PreauthTimeout
 			| Self::QueueRetryBase
 			| Self::QueueRetryCap
 			| Self::QueueDelayWarning
@@ -211,6 +247,9 @@ impl Key {
 			| Self::JunkCommandLimit => u32::MAX as u64,
 			Self::MaxConnectionsPerListener
 			| Self::MaskedAddressesMax
+			| Self::MaxMailboxConnectionsPerIp
+			| Self::MaxHttpConnections
+			| Self::MaxHttpConnectionsPerIp
 			| Self::MaxConnectionsPerIp => (usize::MAX as u64).min(i64::MAX as u64),
 			Self::QueueConcurrency | Self::QueuePerDomainConcurrency => {
 				crate::queue::limits::MAX_CONCURRENCY as u64
@@ -251,6 +290,19 @@ impl Key {
 			Self::DataRateGrace => config.data_rate_grace,
 			Self::JunkCommandLimit => config.junk_command_limit,
 			Self::MaxSessionTime => config.max_session_time,
+			Self::PreauthTimeout => config.preauth_timeout,
+			Self::MaxMailboxConnectionsPerIp => config
+				.max_mailbox_connections_per_ip
+				.filter(|value| *value != 0)
+				.map(|value| value as u64),
+			Self::MaxHttpConnections => config
+				.max_http_connections
+				.filter(|value| *value != 0)
+				.map(|value| value as u64),
+			Self::MaxHttpConnectionsPerIp => config
+				.max_http_connections_per_ip
+				.filter(|value| *value != 0)
+				.map(|value| value as u64),
 		}
 	}
 
@@ -277,6 +329,16 @@ impl Key {
 				Some(u64::from(crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT))
 			}
 			Self::MaxSessionTime => Some(crate::smtp::server::DEFAULT_MAX_SESSION_TIME_SECS),
+			Self::PreauthTimeout => Some(crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT.as_secs()),
+			Self::MaxMailboxConnectionsPerIp => {
+				Some(crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP as u64)
+			}
+			Self::MaxHttpConnections => {
+				Some(crate::net::conn_limit::DEFAULT_HTTP_CONNECTIONS as u64)
+			}
+			Self::MaxHttpConnectionsPerIp => {
+				Some(crate::net::conn_limit::DEFAULT_HTTP_CONNECTIONS_PER_IP as u64)
+			}
 			_ => None,
 		}
 	}
