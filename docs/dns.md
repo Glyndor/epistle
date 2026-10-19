@@ -276,13 +276,16 @@ the mail hostname, `autoconfig`, `autodiscover`, or `mta-sts`. It names extra
 zones and own names for which no visible zone matches. A visible zone is an
 API visibility result, not proof of DNS delegation. Expiration within seven
 days is reported explicitly. An omitted expiration date stays unknown.
+Cloudflare inspection accepts at most 16384 own names and 100000 visible
+zones. Zone matching uses a name index and yields to the operation deadline.
 
 When token policies are readable, Cloudflare also reports DNS Write grants
 for visible required zones and whether DNS access extends beyond them.
 The write finding describes the token policy, without attempting a write;
 it cannot establish restrictions inherited from the account owner's role.
 A wildcard policy is broader even when the account currently has one zone.
-Unfamiliar policies and account-specific nested resources stay unknown.
+Permission groups are recognized by their stable identifiers, not their display
+names. Unrecognized groups and account-specific nested resources stay unknown.
 The [token details endpoint](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/)
 requires API Tokens Read or Write. A token without that extra permission
 can still report activity, expiration, zones and record reading. Do not add
@@ -295,7 +298,10 @@ accessible to the credential. Other findings stay unknown. Route 53,
 RFC 2136 and manual mode currently expose no inspection metadata.
 Read-only operations at Porkbun and Namecheap use POST; Google may exchange
 a service-account assertion for an access token. None writes DNS records.
-Tokens, token identifiers and remote error bodies are never printed.
+Tokens, token identifiers and remote error bodies are never printed. Zone names
+containing the full token or its first or last eight characters are redacted,
+including case variants. Configuration errors omit source excerpts and values;
+TOML errors retain a numeric byte position when the parser supplies one.
 
 ### Creating credentials with the least access
 

@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::CloudflareProvider;
 use crate::dns::provider::ProviderError;
-use crate::dns::providers::check::{AccessReport, Finding, covers, failure_cause};
+use crate::dns::providers::check::{AccessReport, Finding, failure_cause};
 use crate::net::HttpsUrl;
 
 mod policy;
@@ -168,7 +168,7 @@ impl CloudflareProvider {
 		}
 		match self.inspect_zones().await {
 			Ok(zones) => {
-				let (finding, needed) = zone_finding(&zones, names);
+				let (finding, needed) = zone_finding(&zones, names, self.secret.token()).await;
 				report.zones = finding;
 				if !needed.is_empty() {
 					report.record_read =
@@ -294,33 +294,105 @@ fn expiry(value: Option<&str>, now: u64) -> Finding {
 	}
 }
 
-fn zone_finding<'a>(zones: &'a [Zone], names: &[String]) -> (Finding, Vec<&'a Zone>) {
-	let mut needed: Vec<&Zone> = Vec::new();
+const MAX_OWN_NAMES: usize = 16_384;
+
+async fn zone_finding<'a>(
+	zones: &'a [Zone],
+	names: &[String],
+	token: &str,
+) -> (Finding, Vec<&'a Zone>) {
+	use std::collections::{HashMap, HashSet};
+	if names.len() > MAX_OWN_NAMES
+		|| zones.len() > crate::dns::providers::LIST_MAX_RECORDS
+		|| names.iter().any(|name| name.len() > 254)
+		|| zones.iter().any(|zone| zone.name.len() > 254)
+	{
+		return (
+			Finding::failure("zone inspection exceeds the name or zone limits"),
+			Vec::new(),
+		);
+	}
+	let mut index = HashMap::with_capacity(zones.len());
+	for (i, zone) in zones.iter().enumerate() {
+		if i % 128 == 0 {
+			tokio::task::yield_now().await;
+		}
+		#[cfg(test)]
+		MATCH_WORK.with(|work| work.set(work.get() + 1));
+		index.insert(zone.name.trim_end_matches('.').to_ascii_lowercase(), zone);
+	}
+	let mut needed = Vec::new();
+	let mut needed_ids = HashSet::new();
 	let mut missing = Vec::new();
-	for name in names {
-		if let Some(zone) = zones
-			.iter()
-			.filter(|z| covers(&z.name, name))
-			.max_by_key(|z| z.name.len())
-		{
-			if !needed.iter().any(|old| old.id == zone.id) {
+	for (i, name) in names.iter().enumerate() {
+		if i % 128 == 0 {
+			tokio::task::yield_now().await;
+		}
+		let canonical = name.trim_end_matches('.').to_ascii_lowercase();
+		let mut suffix = canonical.as_str();
+		let zone = loop {
+			#[cfg(test)]
+			MATCH_WORK.with(|work| work.set(work.get() + 1));
+			if let Some(zone) = index.get(suffix) {
+				break Some(*zone);
+			}
+			let Some((_, rest)) = suffix.split_once('.') else {
+				break None;
+			};
+			suffix = rest;
+		};
+		if let Some(zone) = zone {
+			if needed_ids.insert(zone.id.as_str()) {
 				needed.push(zone);
 			}
 		} else {
 			missing.push(name.as_str());
 		}
 	}
-	let visible = zones.iter().map(|z| z.name.as_str()).collect::<Vec<_>>();
+	// Eight characters is the minimum fragment, apart from a shorter full token.
+	let fragments = [
+		token.to_ascii_lowercase(),
+		token
+			.chars()
+			.take(8)
+			.collect::<String>()
+			.to_ascii_lowercase(),
+		token
+			.chars()
+			.rev()
+			.take(8)
+			.collect::<String>()
+			.chars()
+			.rev()
+			.collect::<String>()
+			.to_ascii_lowercase(),
+	];
+	let safe_name = |name: &str| {
+		let lower = name.to_ascii_lowercase();
+		if fragments
+			.iter()
+			.any(|part| !part.is_empty() && lower.contains(part))
+		{
+			"[redacted]".to_string()
+		} else {
+			name.to_string()
+		}
+	};
+	let visible = zones.iter().map(|z| safe_name(&z.name)).collect::<Vec<_>>();
 	let extra = zones
 		.iter()
-		.filter(|z| !needed.iter().any(|n| n.id == z.id))
-		.map(|z| z.name.as_str())
+		.filter(|z| !needed_ids.contains(z.id.as_str()))
+		.map(|z| safe_name(&z.name))
 		.collect::<Vec<_>>();
 	let detail = format!(
 		"visible zones: {}; extra zones: {}; own names not visible: {}",
 		visible.join(", "),
 		extra.join(", "),
-		missing.join(", ")
+		missing
+			.iter()
+			.map(|name| safe_name(name))
+			.collect::<Vec<_>>()
+			.join(", ")
 	);
 	let finding = if missing.is_empty() {
 		Finding::verified(detail)
@@ -336,3 +408,8 @@ mod http_tests;
 #[cfg(test)]
 #[path = "check_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+	static MATCH_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

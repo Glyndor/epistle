@@ -5,7 +5,42 @@ use std::io::Write;
 use crate::config::Config;
 use crate::dns::providers::check::{AccessReport, Outcome};
 
+pub(super) fn config_error(error: &crate::config::ConfigError) -> String {
+	use crate::config::ConfigError;
+	// Parser and validation messages may include expanded credential values.
+	match error {
+		ConfigError::Parse { source, .. } => match source.span() {
+			Some(span) => format!("invalid TOML configuration near byte {}", span.start + 1),
+			None => "invalid TOML configuration".into(),
+		},
+		ConfigError::Read { source, .. } => {
+			format!("cannot read configuration: {}", source.kind())
+		}
+		ConfigError::InsecurePermissions { .. } => {
+			"configuration permissions must be owner-only (0600 or 0400)".into()
+		}
+		ConfigError::MissingEnv(_) => {
+			"configuration references an undefined environment variable".into()
+		}
+		ConfigError::Invalid(_) => "configuration validation failed".into(),
+	}
+}
+
 pub(super) fn run(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
+	run_with(config, json, out, |dns, hostname| {
+		dns.build_for_host(hostname)
+	})
+}
+
+fn run_with(
+	config: &Config,
+	json: bool,
+	out: &mut impl Write,
+	build: impl FnOnce(
+		&crate::config::Dns,
+		&str,
+	) -> Option<std::sync::Arc<dyn crate::dns::provider::DnsProvider>>,
+) -> Result<(), String> {
 	let mut names = vec![config.hostname.clone()];
 	for domain in &config.domains {
 		names.push(domain.clone());
@@ -18,7 +53,7 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl Write) -> Result<(
 	let report = if let Some(dns) = &config.dns {
 		if dns.provider.eq_ignore_ascii_case("manual") {
 			AccessReport::unknown()
-		} else if let Some(provider) = dns.build_for_host(&config.hostname) {
+		} else if let Some(provider) = build(dns, &config.hostname) {
 			let runtime = tokio::runtime::Builder::new_current_thread()
 				.enable_all()
 				.build()

@@ -110,7 +110,7 @@ fn execute_with(
 	let (change, verb, fields): (resource::Change, _, _) = match action {
 		ProviderCli::Check { json: leaf } => {
 			let config = Config::load(path)
-				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+				.map_err(|error| resource::ResourceError::Failure(check::config_error(&error)))?;
 			check::run(&config, leaf || json, out)?;
 			return Ok(ExitCode::SUCCESS);
 		}

@@ -1,5 +1,7 @@
 //! Interpret only documented zone resource policies; unfamiliar shapes stay unknown.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -20,7 +22,7 @@ pub(super) struct Policy {
 
 #[derive(Deserialize)]
 struct Group {
-	name: Option<String>,
+	id: Option<String>,
 }
 
 // None means the resource shape cannot be interpreted without guessing.
@@ -56,11 +58,21 @@ pub(super) fn findings(
 	visible: &[Zone],
 	needed: &[&Zone],
 ) -> (Finding, Finding) {
-	let mut writes = Vec::new();
-	let mut dns_zones = Vec::new();
+	let mut writes = HashSet::new();
+	let mut dns_zones = HashSet::new();
 	for policy in policies {
 		// A deny or unfamiliar policy may override a grant. Do not claim access.
-		if policy.effect != "allow" || policy.permission_groups.iter().any(|g| g.name.is_none()) {
+		if policy.effect != "allow"
+			|| policy.permission_groups.iter().any(|g| {
+				!matches!(
+					g.id.as_deref(),
+					Some(
+						"4755a26eedb94da69e1066d98aa820be"
+							| "82e64a83756745bbbb1c9c2701bf816b"
+							| "c8fed203ed3043cba015a93ad1616f1f"
+					)
+				)
+			}) {
 			return unknown();
 		}
 		let Some(zones) = resources(&policy.resources) else {
@@ -69,12 +81,12 @@ pub(super) fn findings(
 		let has_write = policy
 			.permission_groups
 			.iter()
-			.any(|g| g.name.as_deref() == Some("DNS Write"));
+			.any(|g| g.id.as_deref() == Some("4755a26eedb94da69e1066d98aa820be"));
 		let has_dns = has_write
 			|| policy
 				.permission_groups
 				.iter()
-				.any(|g| g.name.as_deref() == Some("DNS Read"));
+				.any(|g| g.id.as_deref() == Some("82e64a83756745bbbb1c9c2701bf816b"));
 		if has_write {
 			writes.extend(zones.clone());
 		}
@@ -82,11 +94,15 @@ pub(super) fn findings(
 			dns_zones.extend(zones);
 		}
 	}
+	let needed_ids = needed
+		.iter()
+		.map(|zone| zone.id.as_str())
+		.collect::<HashSet<_>>();
 	let write = if needed.is_empty() {
 		Finding::unknown("no required zone was visible to evaluate DNS Write")
 	} else if needed
 		.iter()
-		.all(|z| writes.iter().any(|id| id == "*" || id == &z.id))
+		.all(|z| writes.contains("*") || writes.contains(&z.id))
 	{
 		Finding::verified(
 			"token policy grants DNS Write for each visible required zone; no write was attempted",
@@ -94,12 +110,10 @@ pub(super) fn findings(
 	} else {
 		Finding::failure("token policy does not grant DNS Write for each visible required zone")
 	};
-	let scope = if dns_zones.iter().any(|id| id == "*") {
+	let scope = if dns_zones.contains("*") {
 		Finding::verified("broader than needed: DNS policy grants account-wide or all-zone access")
-	} else if dns_zones
-		.iter()
-		.any(|id| !needed.iter().any(|z| &z.id == id))
-		|| visible.iter().any(|z| !needed.iter().any(|n| n.id == z.id))
+	} else if dns_zones.iter().any(|id| !needed_ids.contains(id.as_str()))
+		|| visible.iter().any(|z| !needed_ids.contains(z.id.as_str()))
 	{
 		Finding::verified("broader than needed: token has access to extra zones")
 	} else {
