@@ -249,7 +249,10 @@ async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
 		for _ in 0..failures {
 			store.record_failure(subject, "imaps", t).await;
 		}
-		assert!(store.is_banned(subject, t).await.is_some(), "{subject}");
+		assert!(
+			store.is_banned(subject, t).await.is_some(),
+			"a banned subject must be reported as banned"
+		);
 	}
 	store.remove_account(&doomed).await;
 	assert!(store.is_banned(&doomed_pair, t).await.is_none());

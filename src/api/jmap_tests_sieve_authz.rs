@@ -158,7 +158,7 @@ async fn the_same_name_in_two_accounts_is_two_scripts() {
 		let response = call(&app, TOKEN.as_str(), "SieveScript/set", json!({"accountId": account, "create": {"a": {"name": "work", "blobId": blob}}, "onSuccessActivateScript": "#a"})).await;
 		assert!(
 			response[1]["created"]["a"]["id"].is_string(),
-			"{account}: {response}"
+			"the script was not created: {response}"
 		);
 	}
 	assert_eq!(

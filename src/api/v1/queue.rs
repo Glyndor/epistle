@@ -54,7 +54,7 @@ pub async fn list(
 		Some(cursor) => ids.partition_point(|id| *id <= cursor),
 		None => 0,
 	};
-	let mut entries = Vec::with_capacity(limit);
+	let mut entries = Vec::new();
 	let mut last_read = None;
 	let mut scanned = 0;
 	while position < ids.len() && entries.len() < limit && scanned < MAX_SCAN {

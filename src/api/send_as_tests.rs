@@ -72,13 +72,13 @@ async fn api_send_follows_the_table() {
 				assert_eq!(
 					status,
 					StatusCode::OK,
-					"{account} sending as {from}: {response}"
+					"sending as {from} gave an unexpected status: {response}"
 				);
 			} else {
 				assert_eq!(
 					status,
 					StatusCode::FORBIDDEN,
-					"{account} sending as {from}: {response}"
+					"sending as {from} gave an unexpected status: {response}"
 				);
 				assert_eq!(response["error"]["code"], "forbidden_from", "{from}");
 			}
@@ -142,7 +142,7 @@ async fn jmap_submission_from_header_follows_the_table() {
 			assert_eq!(
 				queued(&response),
 				allowed,
-				"{account} From {from}: {response}"
+				"From {from} gave an unexpected verdict: {response}"
 			);
 			if !allowed {
 				assert_eq!(
@@ -165,7 +165,7 @@ async fn jmap_submission_envelope_follows_the_table() {
 			assert_eq!(
 				queued(&response),
 				allowed,
-				"{account} mailFrom {sender}: {response}"
+				"mailFrom {sender} gave an unexpected verdict: {response}"
 			);
 			if !allowed {
 				assert_eq!(

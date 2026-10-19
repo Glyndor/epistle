@@ -330,7 +330,7 @@ fn rejects_account_with_unsafe_name() {
 		));
 		assert!(
 			matches!(&result, Err(ConfigError::Invalid(why)) if why.contains(expected)),
-			"name {name:?} must be rejected naming {expected}: {result:?}"
+			"an invalid account name must be rejected naming {expected}"
 		);
 	}
 }
