@@ -7,6 +7,7 @@
 //! runs one and lists its findings.
 
 mod antispam_area;
+mod api_keys_area;
 mod av_area;
 mod clock;
 mod clock_area;
@@ -64,6 +65,9 @@ pub enum CheckArea {
 	Dns,
 	/// The configured database answers `SELECT 1`.
 	Db,
+	/// API keys have explicit expiry and SCIM domain associations.
+	#[value(name = "api_keys")]
+	ApiKeys,
 	/// The configured clamd answers `PING`.
 	Antivirus,
 	/// Antispam engine state: which features are on, which are off and why.
@@ -95,6 +99,7 @@ impl CheckArea {
 		CheckArea::Tls,
 		CheckArea::Dns,
 		CheckArea::Db,
+		CheckArea::ApiKeys,
 		CheckArea::Antivirus,
 		CheckArea::Antispam,
 		CheckArea::Queue,
@@ -115,6 +120,7 @@ impl CheckArea {
 			CheckArea::Tls => "tls",
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
+			CheckArea::ApiKeys => "api_keys",
 			CheckArea::Antivirus => "antivirus",
 			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
@@ -262,6 +268,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Tls => tls_area::check(ctx).await,
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
+		CheckArea::ApiKeys => api_keys_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
 		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
