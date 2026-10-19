@@ -38,6 +38,7 @@ fn text_and_json_have_the_same_facts_without_remote_errors_or_secret_fragments()
 	let error = ProviderError::Remote(format!("remote reflected {secret}"));
 	let mut report = AccessReport::failed(failure_cause(&error));
 	report.expiry = Finding::verified("expires at 2026-10-25T00:00:00Z; expires within seven days");
+	report.record_read = Finding::unknown("remote\u{1b}[31m\n\u{200b}\u{202e}\tend");
 	let (mut text, mut json) = (Vec::new(), Vec::new());
 	print(&report, false, &mut text).unwrap();
 	print(&report, true, &mut json).unwrap();
@@ -48,9 +49,38 @@ fn text_and_json_have_the_same_facts_without_remote_errors_or_secret_fragments()
 		assert!(!text.contains(fragment));
 		assert!(!json.contains(fragment));
 	}
-	for (key, finding) in value.as_object().unwrap() {
-		assert!(text.contains(key));
-		assert!(text.contains(finding["detail"].as_str().unwrap()));
+	assert_eq!(text.lines().count(), 6);
+	assert_eq!(
+		text.lines()
+			.map(|line| line.split('\t').next().unwrap())
+			.collect::<std::collections::BTreeSet<_>>(),
+		value
+			.as_object()
+			.unwrap()
+			.keys()
+			.map(String::as_str)
+			.collect::<std::collections::BTreeSet<_>>()
+	);
+	assert!(text.contains(r"remote\u{1b}[31m\n\u{200b}\u{202e}\tend"));
+	assert!(!text.contains(['\u{1b}', '\u{200b}', '\u{202e}']));
+	for line in text.lines() {
+		let fields = line.split('\t').collect::<Vec<_>>();
+		assert_eq!(fields.len(), 3);
+		let finding = &value[fields[0]];
+		let status = match finding["status"].as_str().unwrap() {
+			"verified" => "verified",
+			"not_verifiable" => "not verifiable with this provider",
+			"failure" => "failure",
+			_ => panic!("unexpected inspection status"),
+		};
+		assert_eq!(fields[1], status);
+		let detail = finding["detail"].as_str().unwrap();
+		if fields[0] == "record_read" {
+			assert_eq!(detail, "remote\u{1b}[31m\n\u{200b}\u{202e}\tend");
+			assert_eq!(fields[2], r"remote\u{1b}[31m\n\u{200b}\u{202e}\tend");
+		} else {
+			assert_eq!(fields[2], detail);
+		}
 	}
 }
 
@@ -122,5 +152,119 @@ async fn default_inspection_proves_only_reading_and_keeps_failures_secret() {
 			assert!(!out.contains(&secret));
 			assert!(!out.contains(&secret[..8]));
 		}
+	}
+}
+
+#[test]
+fn malformed_config_never_discloses_credentials() {
+	const ENV: &str = "EPISTLE_DNS_CHECK_PARSE_SECRET";
+	if std::env::var_os(ENV).is_none() {
+		let secret = crate::test_fixtures::fresh_secret();
+		let result = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([
+				"--exact",
+				"cli::dns_provider::check::tests::malformed_config_never_discloses_credentials",
+				"--nocapture",
+			])
+			.env(ENV, &secret)
+			.output()
+			.unwrap();
+		assert!(
+			result.status.success(),
+			"credential-safe parse assertions failed in child process"
+		);
+		return;
+	}
+	let secret = std::env::var(ENV).unwrap();
+	for token in [secret.clone(), format!("${{{ENV}}}")] {
+		for field in [
+			format!("token = '{token}' INVALID"),
+			format!("token = ['{token}']"),
+		] {
+			for args in [vec!["check"], vec!["check", "--json"]] {
+				let extra =
+					format!("\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\n{field}\n");
+				let run = run(&extra, &args, false);
+				let error = run.result.expect_err("malformed configuration must fail");
+				for output in [run.out.as_str(), run.status.as_str(), error.as_ref()] {
+					for fragment in [secret.as_str(), &secret[..8], &secret[secret.len() - 8..]] {
+						assert!(
+							!output.contains(fragment),
+							"configuration error disclosed a credential fragment"
+						);
+					}
+				}
+				assert!(error.as_ref().contains("TOML"));
+				assert!(run.out.is_empty());
+			}
+		}
+	}
+}
+
+#[test]
+fn check_passes_every_own_name_to_the_provider() {
+	use std::sync::{Arc, Mutex};
+	type WriteOp<'a> =
+		std::pin::Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
+	type ListOp<'a> = std::pin::Pin<
+		Box<
+			dyn Future<Output = Result<Vec<crate::dns::provider::DnsRecord>, ProviderError>>
+				+ Send
+				+ 'a,
+		>,
+	>;
+	struct Capture(Arc<Mutex<Vec<String>>>);
+	impl DnsProvider for Capture {
+		fn upsert(&self, _: &str, _: crate::dns::provider::DnsRecord) -> WriteOp<'_> {
+			panic!("inspection must never write records")
+		}
+		fn delete(&self, _: &str, _: crate::dns::provider::DnsRecord) -> WriteOp<'_> {
+			panic!("inspection must never delete records")
+		}
+		fn list(&self, _: &str) -> ListOp<'_> {
+			panic!("inspection must use the provider capability check")
+		}
+		fn check_access<'a>(
+			&'a self,
+			zone: &'a str,
+			names: &'a [String],
+		) -> crate::dns::providers::check::CheckOp<'a> {
+			Box::pin(async move {
+				assert_eq!(zone, "example.org");
+				*self.0.lock().unwrap() = names.to_vec();
+				AccessReport::unknown()
+			})
+		}
+	}
+	let (_dir, file) = crate::cli::resource::test_config("");
+	let mut config = Config::load(file.path()).unwrap();
+	config.domains = vec![
+		"example.org".into(),
+		"example.net".into(),
+		"example.org".into(),
+	];
+	config.dns = Some(toml::from_str("provider = 'cloudflare'\nzone = 'example.org'").unwrap());
+	let expected = vec![
+		"autoconfig.example.net",
+		"autoconfig.example.org",
+		"autodiscover.example.net",
+		"autodiscover.example.org",
+		"example.net",
+		"example.org",
+		"mail.example.org",
+		"mta-sts.example.net",
+		"mta-sts.example.org",
+	];
+	for json in [false, true] {
+		let captured = Arc::new(Mutex::new(Vec::new()));
+		let mut out = Vec::new();
+		run_with(&config, json, &mut out, |dns, hostname| {
+			assert_eq!(dns.provider, "cloudflare");
+			assert_eq!(hostname, "mail.example.org");
+			Some(Arc::new(Capture(captured.clone())))
+		})
+		.unwrap();
+		assert_eq!(*captured.lock().unwrap(), expected);
+		assert!(!out.is_empty());
 	}
 }

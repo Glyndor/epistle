@@ -108,10 +108,3 @@ pub(crate) fn failure_cause(error: &ProviderError) -> &'static str {
 		}
 	}
 }
-
-/// DNS suffix comparison with a label boundary and canonical spelling.
-pub(crate) fn covers(zone: &str, name: &str) -> bool {
-	let zone = zone.trim_end_matches('.').to_ascii_lowercase();
-	let name = name.trim_end_matches('.').to_ascii_lowercase();
-	!zone.is_empty() && (name == zone || name.ends_with(&format!(".{zone}")))
-}

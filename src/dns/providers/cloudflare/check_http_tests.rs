@@ -27,7 +27,7 @@ struct Mock {
 fn fixture() -> Mock {
 	Mock {
 		verify: json!({"id":ID, "status":"active", "expires_on":"2099-01-01T00:00:00Z"}),
-		policies: json!({"policies":[{"effect":"allow", "permission_groups":[{"name":"DNS Write"}], "resources":{format!("com.cloudflare.api.account.zone.{ID}"):"*"}}]}),
+		policies: json!({"policies":[{"effect":"allow", "permission_groups":[{"id":"4755a26eedb94da69e1066d98aa820be","name":"DNS Write"}], "resources":{format!("com.cloudflare.api.account.zone.{ID}"):"*"}}]}),
 		zones: vec![json!({"id":ID,"name":"example.org"})],
 		policy_status: StatusCode::OK,
 		calls: Arc::default(),
@@ -120,6 +120,8 @@ async fn active_token_with_write_reads_only() {
 async fn token_without_write_permission() {
 	let mut mock = fixture();
 	mock.policies["policies"][0]["permission_groups"][0]["name"] = json!("DNS Read");
+	mock.policies["policies"][0]["permission_groups"][0]["id"] =
+		json!("82e64a83756745bbbb1c9c2701bf816b");
 	let (report, _) = inspect(mock).await;
 	assert_eq!(report.record_read.status, Outcome::Verified);
 	assert_eq!(report.record_write.status, Outcome::Failure);

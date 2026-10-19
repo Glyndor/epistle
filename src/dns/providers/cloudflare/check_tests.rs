@@ -14,7 +14,11 @@ fn zones() -> Vec<Zone> {
 
 fn policies(permission: &str, resource: &str) -> Vec<policy::Policy> {
 	serde_json::from_value(json!([{
-		"effect": "allow", "permission_groups": [{"name": permission}],
+		"effect": "allow", "permission_groups": [{"name": permission, "id": match permission {
+			"DNS Write" => "4755a26eedb94da69e1066d98aa820be",
+			"DNS Read" => "82e64a83756745bbbb1c9c2701bf816b",
+			_ => "unknown",
+		}}],
 		"resources": {resource: "*"}
 	}]))
 	.unwrap()
@@ -78,8 +82,8 @@ fn wildcard_policy_is_broader_even_when_only_one_zone_is_visible() {
 fn deny_or_unknown_resource_policies_are_not_guessed() {
 	let zones = zones();
 	for value in [
-		json!([{"effect":"deny", "permission_groups":[{"name":"DNS Write"}], "resources":{"com.cloudflare.api.account.zone.*":"*"}}]),
-		json!([{"effect":"allow", "permission_groups":[{"name":"DNS Write"}], "resources":{"unfamiliar":"*"}}]),
+		json!([{"effect":"deny", "permission_groups":[{"id":"4755a26eedb94da69e1066d98aa820be","name":"DNS Write"}], "resources":{"com.cloudflare.api.account.zone.*":"*"}}]),
+		json!([{"effect":"allow", "permission_groups":[{"id":"4755a26eedb94da69e1066d98aa820be","name":"DNS Write"}], "resources":{"unfamiliar":"*"}}]),
 		json!([{"effect":"allow", "permission_groups":[{}], "resources":{"com.cloudflare.api.account.zone.*":"*"}}]),
 	] {
 		let policies: Vec<policy::Policy> = serde_json::from_value(value).unwrap();
@@ -89,8 +93,8 @@ fn deny_or_unknown_resource_policies_are_not_guessed() {
 	}
 }
 
-#[test]
-fn zones_report_extra_and_missing_own_names() {
+#[tokio::test]
+async fn zones_report_extra_and_missing_own_names() {
 	let mut zones = zones();
 	zones.push(Zone {
 		id: OTHER_ID.into(),
@@ -101,7 +105,7 @@ fn zones_report_extra_and_missing_own_names() {
 		"autoconfig.example.net".into(),
 		"mta-sts.example.net".into(),
 	];
-	let (finding, needed) = zone_finding(&zones, &names);
+	let (finding, needed) = zone_finding(&zones, &names, "").await;
 	assert_eq!(finding.status, Outcome::Failure);
 	assert_eq!(needed.len(), 1);
 	assert!(finding.detail.contains("extra zones: extra.example"));
@@ -118,18 +122,18 @@ fn zones_report_extra_and_missing_own_names() {
 	assert!(scope.detail.contains("broader than needed"));
 }
 
-#[test]
-fn zone_matching_uses_a_label_boundary_case_and_most_specific_zone() {
+#[tokio::test]
+async fn zone_matching_uses_a_label_boundary_case_and_most_specific_zone() {
 	let mut zones = zones();
 	zones.push(Zone {
 		id: OTHER_ID.into(),
 		name: "sub.example.org".into(),
 	});
-	let (finding, needed) = zone_finding(&zones, &["MAIL.SUB.EXAMPLE.ORG.".into()]);
+	let (finding, needed) = zone_finding(&zones, &["MAIL.SUB.EXAMPLE.ORG.".into()], "").await;
 	assert_eq!(finding.status, Outcome::Verified);
 	assert_eq!(needed[0].id, OTHER_ID);
 	assert!(finding.detail.contains("extra zones: example.org"));
-	let (finding, _) = zone_finding(&zones, &["badexample.org".into()]);
+	let (finding, _) = zone_finding(&zones, &["badexample.org".into()], "").await;
 	assert_eq!(finding.status, Outcome::Failure);
 }
 
@@ -198,4 +202,139 @@ fn invalid_dates_are_not_reported_as_verified() {
 		not_before: None,
 	};
 	assert_eq!(token_finding(&token, now).status, Outcome::Failure);
+}
+
+#[test]
+fn unknown_permission_never_establishes_scope() {
+	let zones = zones();
+	for permission in ["Future DNS Admin", "", "DNS Write renamed"] {
+		let policies = policies(permission, "com.cloudflare.api.account.zone.*");
+		let (write, scope) = policy::findings(&policies, &zones, &[&zones[0]]);
+		assert_eq!(scope.status, Outcome::NotVerifiable);
+		assert_eq!(write.status, Outcome::NotVerifiable);
+	}
+}
+
+#[tokio::test]
+async fn zone_report_never_reflects_credential_fragments() {
+	let token = crate::test_fixtures::bytes::<20>()
+		.iter()
+		.map(|b| format!("{b:02x}"))
+		.collect::<String>();
+	for fragment in [token.as_str(), &token[..8], &token[token.len() - 8..]] {
+		for name in [
+			format!("{fragment}.example"),
+			format!("{}.example", fragment.to_ascii_uppercase()),
+		] {
+			let zones = vec![Zone {
+				id: ZONE_ID.into(),
+				name: name.clone(),
+			}];
+			for names in [
+				vec![format!("mail.{name}")],
+				vec![format!("mail.{name}.missing.test")],
+			] {
+				let (finding, _) = zone_finding(&zones, &names, &token).await;
+				let mut report = AccessReport::unknown();
+				report.zones = finding;
+				let json = serde_json::to_string(&report).unwrap();
+				for output in [report.zones.detail.as_str(), json.as_str()] {
+					assert!(
+						!output
+							.to_ascii_lowercase()
+							.contains(&fragment.to_ascii_lowercase()),
+						"zone report disclosed a credential fragment"
+					);
+				}
+			}
+		}
+	}
+}
+
+#[tokio::test]
+async fn thousands_of_zones_use_linear_matching_work() {
+	let count = 4000;
+	let zones = (0..count)
+		.map(|i| Zone {
+			id: format!("{i:032x}"),
+			name: format!("d{i}.example"),
+		})
+		.collect::<Vec<_>>();
+	let names = zones
+		.iter()
+		.map(|z| format!("mail.{}", z.name))
+		.collect::<Vec<_>>();
+	MATCH_WORK.with(|work| work.set(0));
+	let (finding, needed) = zone_finding(&zones, &names, "").await;
+	assert_eq!(finding.status, Outcome::Verified);
+	assert_eq!(needed.len(), count);
+	assert!(
+		MATCH_WORK.with(|work| work.get()) <= count * 4,
+		"zone matching exceeded a linear lookup budget"
+	);
+}
+
+#[tokio::test]
+async fn inspection_refuses_excessive_own_names() {
+	let names = vec!["mail.example.org".into(); 16_385];
+	let zones = zones();
+	let (finding, needed) = zone_finding(&zones, &names, "").await;
+	assert_eq!(finding.status, Outcome::Failure);
+	assert!(needed.is_empty());
+}
+
+#[test]
+fn permission_ids_define_grants_instead_of_display_names() {
+	let zones = zones();
+	for (id, name, expected) in [
+		(
+			"4755a26eedb94da69e1066d98aa820be",
+			"DNS permission renamed",
+			Outcome::Verified,
+		),
+		("unknown", "DNS Write", Outcome::NotVerifiable),
+		(
+			"c8fed203ed3043cba015a93ad1616f1f",
+			"Zone Read",
+			Outcome::Failure,
+		),
+	] {
+		let policies = serde_json::from_value::<Vec<policy::Policy>>(json!([{
+			"effect":"allow", "permission_groups":[{"id":id,"name":name}],
+			"resources":{format!("com.cloudflare.api.account.zone.{ZONE_ID}"):"*"}
+		}]))
+		.unwrap();
+		let (write, scope) = policy::findings(&policies, &zones, &[&zones[0]]);
+		assert_eq!(write.status, expected);
+		assert_eq!(
+			scope.status,
+			if expected == Outcome::NotVerifiable {
+				Outcome::NotVerifiable
+			} else {
+				Outcome::Verified
+			}
+		);
+	}
+}
+
+#[tokio::test]
+async fn matching_cooperates_with_the_operation_deadline() {
+	use crate::dns::providers::{TEST_OPERATION_DEADLINE, within};
+	let zones = (0..4000)
+		.map(|i| Zone {
+			id: format!("{i:032x}"),
+			name: format!("d{i}.example"),
+		})
+		.collect::<Vec<_>>();
+	let names = zones
+		.iter()
+		.map(|z| format!("mail.{}", z.name))
+		.collect::<Vec<_>>();
+	TEST_OPERATION_DEADLINE.with(|limit| limit.set(Some(std::time::Duration::ZERO)));
+	let result = within(async { Ok(zone_finding(&zones, &names, "").await) }).await;
+	TEST_OPERATION_DEADLINE.with(|limit| limit.set(None));
+	assert!(
+		result.is_err(),
+		"CPU matching must yield to the operation deadline"
+	);
 }
