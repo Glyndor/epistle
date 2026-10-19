@@ -179,7 +179,10 @@ impl Signer {
 		for (header_name, header_value) in headers.iter().rev() {
 			let name = header_name.to_ascii_lowercase();
 			let known = SIGNED_HEADERS.contains(&name.as_str());
-			let resent = !known && name.starts_with("resent-") && !unsafe_resent.contains(&name);
+			let resent = !known
+				&& name.starts_with("resent-")
+				&& is_safe_header_name(&name)
+				&& !unsafe_resent.contains(&name);
 			if known || resent {
 				signed_names.push(name);
 				header_input.push_str(&canon::header(Canon::Relaxed, header_name, header_value));
