@@ -330,6 +330,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)
 				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
+				.with_trusted_proxies(api.trusted_proxies.clone())
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)

@@ -310,6 +310,20 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Trusted reverse proxies.** `[api] trusted_proxies` defaults to `[]`, so
+  forwarded headers have no authority by default. Only a peer in a configured
+  IPv4 or IPv6 CIDR may supply `X-Forwarded-For`. The entire header must be a
+  valid IP chain; Epistle selects the first untrusted address from right to
+  left. Missing, malformed and wholly trusted chains use the TCP peer. Trust
+  only controlled proxies that append the real connecting address or replace
+  the header. API failure limits, credential IP restrictions, audit events,
+  OAuth password bans and device grant counters use this effective IP, with
+  the existing IPv6 /64 grouping. Invalid CIDRs prevent startup. Changes need
+  a restart. See [configuration](configuration.md#api).
+  API authentication-window `429` responses carry `Retry-After` with the
+  remaining seconds rounded up. OAuth `429 slow_down` responses report the
+  remaining grant expiry or polling wait; password bans keep their ordinary
+  authentication failure response.
 - **REST bearer token guesses.** Wrong tokens are counted per client (an IPv4
   address or an IPv6 /64) and a client over 20 failures a minute is refused
   before its token is looked at; a valid call does not give the failures back.

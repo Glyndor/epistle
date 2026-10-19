@@ -306,7 +306,35 @@ Management API (consumed by `epistle-panel`). Closed by default.
 | Key | Meaning |
 |---|---|
 | `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
+| `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
+
+`trusted_proxies` is an optional list of IPv4 and IPv6 CIDR networks, empty by
+default. Invalid CIDRs stop configuration loading. For example:
+
+```toml
+[api]
+token_hash = "${API_TOKEN_HASH}"
+trusted_proxies = ["192.0.2.10/32", "2001:db8:100::/48"]
+```
+
+Trust only the addresses of reverse proxies under your control. The proxy must
+append the address it connected from to `X-Forwarded-For`, or replace the header
+with the actual client address. When the TCP peer is trusted, Epistle validates
+the whole header and scans its addresses from right to left, taking the first
+address outside `trusted_proxies`. A missing or malformed header, or a chain
+containing only trusted addresses, uses the TCP peer. An untrusted peer's header
+is ignored. IPv4-mapped IPv6 client addresses are canonicalized to IPv4.
+
+This address is used for API authentication limits, credential IP restrictions,
+audit events, OAuth password bans and device grant counters. IPv6 clients still
+share their /64 budget. The default empty list preserves socket-based attribution.
+Restart the server after changing `trusted_proxies`.
+
+Authentication-window `429` responses include `Retry-After`, the remaining
+seconds rounded up. OAuth `429 slow_down` responses include the wait until
+blocking grants expire or the next allowed poll. Password bans retain their
+ordinary authentication failure response.
 
 ### Domain-confined API keys (multi-tenancy)
 

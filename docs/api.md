@@ -108,16 +108,22 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 | `401` `unauthenticated` | No header, an unknown or expired key, a key pinned to another network, **or a key whose scopes do not cover the route**. The four look the same |
 | `403` `forbidden` | The key is bound to one account and the route is administrative, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
-| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. Wait a minute; there is no `Retry-After` header |
+| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up |
 
 A valid call does not use up the budget, and it does not clear failures already
 counted. The limit is per client address (an IPv6 client counts as its /64, and
 its /48 has a larger shared budget), and there is a ceiling for failures from
 everyone at once that only ever refuses a request that already failed. There is
-no limit on the rate of valid calls. The server reads the address of the TCP
-connection and no `X-Forwarded-For`, so behind a reverse proxy every client has
-the proxy's address: twenty failures from any of them refuse all of them for a
-minute. Give a program that sits behind a proxy its own address to the API.
+no limit on the rate of valid calls. The server uses the TCP peer by default. With
+[`[api] trusted_proxies`](configuration.md#api), a trusted peer may supply
+`X-Forwarded-For`: the whole chain must parse as IP addresses, and the first
+untrusted address from right to left is the client. Missing, malformed or wholly
+trusted chains fall back to the peer; an untrusted peer cannot override its
+address. This applies to OAuth bans and device grant counters too. Configure
+only proxies under your control, with forwarding headers appended or replaced
+using the actual connecting client's address. Restart after changing the list.
+OAuth `429 slow_down` responses carry `Retry-After` for grant expiry or polling;
+password bans keep the same response as an incorrect password.
 
 Checks of a password (`POST /api/v1/auth/verify`, and the `/oauth` endpoints)
 are counted apart, in the shared ban table: 5 failures in 15 minutes ban the

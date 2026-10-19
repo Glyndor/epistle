@@ -17,7 +17,7 @@ pub struct MatchedAuth {
 	/// The raw bearer token as presented by the client, or `None` for
 	/// unauthenticated routes (which never reach the API surface).
 	pub token: Option<String>,
-	/// The peer IP, when the listener was started with `ConnectInfo`. `None`
+	/// The effective client IP, when the listener has `ConnectInfo`. `None`
 	/// means the IP is unknown; an IP-restricted key cannot match in that
 	/// case (fail-closed).
 	pub client_ip: Option<std::net::IpAddr>,
@@ -41,6 +41,7 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<ClientLimiters>,
+	trusted_proxies: Vec<crate::cidr::Cidr>,
 	/// SHA-256 of the configured token, set the first time the legacy argon2
 	/// hash verified it; from then on a bearer is compared by digest.
 	configured_digest: std::sync::OnceLock<[u8; 32]>,
@@ -200,6 +201,7 @@ impl ApiState {
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
+				trusted_proxies: Vec::new(),
 				configured_digest: std::sync::OnceLock::new(),
 				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
 					MAX_CONCURRENT_ARGON2,
@@ -537,13 +539,14 @@ impl ApiState {
 	pub(crate) fn with_auth_global_max(mut self, max: u32) -> Self {
 		let inner = Arc::get_mut(&mut self.inner)
 			.expect("with_auth_global_max must be called before the state is shared");
+		let now = std::time::Instant::now();
 		let window = inner
 			.auth_limiter
 			.get_mut()
 			.unwrap_or_else(|p| p.into_inner())
 			.window();
 		inner.auth_limiter =
-			std::sync::Mutex::new(ClientLimiters::new(window).with_global_max(max));
+			std::sync::Mutex::new(ClientLimiters::new(window).with_global_max(max, now));
 		self
 	}
 
@@ -714,7 +717,7 @@ impl ApiState {
 	}
 }
 
-/// The client IP extracted from the `ConnectInfo<SocketAddr>` extension of
+/// The effective client IP resolved from the `ConnectInfo<SocketAddr>` extension of
 /// the inbound request. `None` when the listener was not built with
 /// `into_make_service_with_connect_info` (e.g. in unit tests, where the IP
 /// is irrelevant to the test and `unknown` will be logged). The audit
@@ -769,3 +772,6 @@ mod tests;
 #[cfg(test)]
 #[path = "state_limiter_tests.rs"]
 mod limiter_tests;
+
+#[path = "state_client_ip.rs"]
+mod client_ip;
