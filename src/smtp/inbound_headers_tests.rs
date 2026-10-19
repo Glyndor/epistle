@@ -325,6 +325,34 @@ fn safety_net_does_not_flag_foreign_or_unrelated_fields() {
 	}
 }
 
+/// The safety net compares names without regard to case: mail-parser keeps
+/// the case of the names it does not know, so a lower-case spelling that
+/// strip missed must still be refused.
+#[test]
+fn safety_net_ignores_the_case_of_the_name() {
+	for (name, expected) in [
+		("authentication-results", "Authentication-Results"),
+		("AUTHENTICATION-RESULTS", "Authentication-Results"),
+		("received-spf", "Received-SPF"),
+		("delivered-to", "Delivered-To"),
+		("return-path", "Return-Path"),
+		("epistle-class", "Epistle-Class"),
+		("x-spam-status", "X-Spam-Status"),
+		("X-SPAM-Score", "X-Spam-Status"),
+		(
+			"x-epistle-attachment-warning",
+			"X-Epistle-Attachment-Warning",
+		),
+	] {
+		let data = format!("{name}: {HOST}; none\r\nSubject: kept\r\n\r\nbody").into_bytes();
+		assert_eq!(
+			reserved_remaining(&data, HOST).unwrap_or(""),
+			expected,
+			"{name}"
+		);
+	}
+}
+
 /// End-to-end through the strip-with-hole helper: a hole in the leader
 /// fold lets `:Authentication-Results: x` survive strip; the safety net
 /// must still flag it. This is what the SMTP path will hand the server

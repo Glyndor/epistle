@@ -245,6 +245,9 @@ fn cfws(rest: &mut &[u8]) -> Option<()> {
 /// foreign, parseable authserv-id is kept as untrusted information, by
 /// design.
 pub(crate) fn reserved_remaining(data: &[u8], hostname: &str) -> Option<&'static str> {
+	// When the reader finds no header section at all there is nothing it
+	// could take for a trust field, so there is nothing to refuse; a message
+	// with odd lines before its headers must not be refused for that alone.
 	let message = mail_parser::MessageParser::default().parse_headers(data)?;
 	for header in message.headers() {
 		let name = header.name();
@@ -257,9 +260,16 @@ pub(crate) fn reserved_remaining(data: &[u8], hostname: &str) -> Option<&'static
 }
 
 fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Option<&'static str> {
-	match name {
-		"Authentication-Results" => {
-			let value = value?;
+	// mail-parser keeps the case of names it does not know, so compare
+	// without regard to case: a lower-case spelling is still the field.
+	let lower = name.to_ascii_lowercase();
+	match lower.as_str() {
+		"authentication-results" => {
+			// A value that is not text cannot be shown to name a foreign
+			// authserv-id, so it counts as ours.
+			let Some(value) = value else {
+				return Some("Authentication-Results");
+			};
 			authserv_id(value)
 				.is_none_or(|id| {
 					id.trim_end_matches('.')
@@ -267,12 +277,12 @@ fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Opti
 				})
 				.then_some("Authentication-Results")
 		}
-		"Received-SPF" => Some("Received-SPF"),
-		"Delivered-To" => Some("Delivered-To"),
-		"Return-Path" => Some("Return-Path"),
-		"Epistle-Class" => Some("Epistle-Class"),
-		other if other.starts_with("X-Spam-") => Some("X-Spam-Status"),
-		other if other.starts_with("X-Epistle-") => Some("X-Epistle-Attachment-Warning"),
+		"received-spf" => Some("Received-SPF"),
+		"delivered-to" => Some("Delivered-To"),
+		"return-path" => Some("Return-Path"),
+		"epistle-class" => Some("Epistle-Class"),
+		other if other.starts_with("x-spam-") => Some("X-Spam-Status"),
+		other if other.starts_with("x-epistle-") => Some("X-Epistle-Attachment-Warning"),
 		_ => None,
 	}
 }
