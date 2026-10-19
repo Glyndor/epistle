@@ -76,6 +76,8 @@ mod condstore_search;
 mod encoded_search;
 #[path = "session_tests_esearch_sets.rs"]
 mod esearch_sets;
+#[path = "session_tests_gate_busy.rs"]
+mod gate_busy;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
 #[path = "session_tests_learn_e2e.rs"]

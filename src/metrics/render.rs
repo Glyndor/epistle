@@ -136,6 +136,11 @@ impl Metrics {
 				&self.auth_login_failed,
 			),
 			(
+				"mail_auth_hash_gate_rejected_total",
+				"Password sign-ins turned away with a temporary failure because too many password checks were already waiting.",
+				&self.auth_hash_gate_rejected,
+			),
+			(
 				"mail_dmarc_reports_ingested_total",
 				"DMARC aggregate reports successfully ingested from a receiver.",
 				&self.dmarc_reports_ingested,

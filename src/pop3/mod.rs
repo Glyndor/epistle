@@ -13,3 +13,6 @@ mod session_tests;
 
 #[cfg(test)]
 mod session_tests_termination;
+
+#[cfg(test)]
+mod session_tests_gate_busy;

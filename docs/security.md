@@ -106,6 +106,35 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   password. Before 0.12.2 an unknown login was refused at the first message,
   instantly, while a real one was challenged, and a failed IMAP or SMTP password
   check for an unknown login returned in microseconds.
+  A right password, or a right app password, for an account whose
+  `allowed_protocols` leaves this protocol out is refused after the same hashes
+  as a wrong one.
+- **Password checks are bounded.** The sessions run the argon2id check on the
+  async worker that drives them, so a burst of sign-in attempts could hold every
+  worker and keep a hash in memory per connection. Every password check now
+  goes through one gate shared by the process: it hands the worker over for the
+  duration of the check and lets only half the cores run at once (two at least,
+  eight at most), with a line of sixteen per place behind them. An attempt that
+  finds the line full is not tried at all: it gets the temporary failure of its
+  protocol (IMAP `NO [UNAVAILABLE]`, SMTP `454 4.7.0`, POP3 `-ERR [SYS/TEMP]`),
+  moves no strike in the ban store and does not count as a failed login. It is
+  counted in `mail_auth_hash_gate_rejected_total` and the log says so at most
+  every 30 seconds (`auth.hash_gate_full`). The answer depends on the load and
+  never on the login, so it tells nothing about an account. The REST API keeps
+  its own gate for bearer tokens. What is left:
+  - While a burst lasts, a legitimate sign-in waits behind it, and with the
+    line full it is told to try again. A distributed flood of about
+    `17 x places` simultaneous attempts keeps the line full; a client that
+    retries gets in between them, and clients that stop after one temporary
+    failure do not.
+  - The wait cannot be cut short by the session's own deadlines or by the
+    client hanging up, and it grows with the largest number of app passwords
+    any account holds, because every refusal does that much work.
+  - The memory held live is bounded by the places (about 19 MiB each). The
+    published builds use musl, where a busy server measured 210 MB at eight
+    places and 87 MB at two. A build from source against glibc may keep the
+    memory of freed hashes (glibc raises its mmap threshold after the first
+    one), so its resident size stays well above that.
 
 ## Authorization
 

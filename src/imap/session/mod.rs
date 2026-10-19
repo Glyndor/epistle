@@ -4,6 +4,7 @@ use super::command::{
 	Command, FetchItem, Line, ParseError, SearchKey, StoreMode, Tagged, ThreadAlgorithm,
 };
 use super::mailbox;
+use crate::smtp::directory::hash_gate::Verdict;
 
 mod acl;
 mod auth;
@@ -316,15 +317,16 @@ impl Session {
 		let State::NotAuthenticated { login_failures } = &mut self.state else {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		};
-		let verified = self.directory.authenticate_with_ip(
+		let verdict = self.directory.authenticate_verdict(
 			username,
 			password,
 			self.peer_ip,
 			self.auth_protocol,
 		);
-		match verified {
-			Some(account) => self.auth_success(tag, account, "LOGIN completed"),
-			None => {
+		match verdict {
+			Verdict::Admitted { account, .. } => self.auth_success(tag, account, "LOGIN completed"),
+			Verdict::Busy => Output::text(format!("{tag} NO [UNAVAILABLE] Try again later\r\n")),
+			Verdict::Refused => {
 				*login_failures += 1;
 				let response = format!("{tag} NO LOGIN failed\r\n");
 				if *login_failures >= 3 {

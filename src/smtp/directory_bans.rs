@@ -139,6 +139,22 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) -> Option<(String, Option<String>)> {
+		match self.authenticate_verdict(login, password, ip, protocol) {
+			hash_gate::Verdict::Admitted { account, label } => Some((account, label)),
+			hash_gate::Verdict::Refused | hash_gate::Verdict::Busy => None,
+		}
+	}
+
+	/// Like [`Directory::authenticate_with_ip_full`], but tells a refusal from
+	/// a sign-in turned away because the password-check gate was full. Only
+	/// the sessions that can answer with a temporary failure call it.
+	pub fn authenticate_verdict(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) -> hash_gate::Verdict {
 		// Ban check first: an active ban on the client IP or on the
 		// account is the answer, so the password verifier is never reached.
 		// The check runs before the credentials lookup so a banned IP
@@ -150,12 +166,21 @@ impl Directory {
 		let resolved_account = match self.check_ban(login, ip, protocol) {
 			BanOutcome::Banned => {
 				self.record_auth_outcome(login, None, ip, protocol);
-				return None;
+				return hash_gate::Verdict::Refused;
 			}
 			BanOutcome::Clear { account } => account,
 		};
-		let verified = self
-			.authenticate_local(login, password, ip)
+		// The hashing runs off the async worker and a few at a time. A check
+		// turned away for lack of a place verified nothing: it moves no
+		// strike, it is not a failed login, and the session says "try again".
+		let Ok(local) = self
+			.hash_gate
+			.run(|| self.authenticate_local(login, password, ip, protocol))
+		else {
+			self.note_gate_rejection(protocol);
+			return hash_gate::Verdict::Busy;
+		};
+		let verified = local
 			.or_else(|| {
 				// Local/SQL credentials did not match: try the live LDAP bind, if any.
 				self.ldap
@@ -180,7 +205,10 @@ impl Directory {
 		// login never reaches the account side.
 		let account_for_record = verified_account.or(resolved_account.as_deref());
 		self.record_ban_outcome(login, account_for_record, verified.is_some(), ip, protocol);
-		verified
+		match verified {
+			Some((account, label)) => hash_gate::Verdict::Admitted { account, label },
+			None => hash_gate::Verdict::Refused,
+		}
 	}
 
 	/// The shared ban check that every password-based authentication path

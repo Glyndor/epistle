@@ -4,9 +4,16 @@
 use base64::Engine;
 
 use super::super::directory::Proof;
+use super::super::directory::hash_gate::Verdict;
 use super::{Action, Reply, Session};
 
 impl Session {
+	/// The password checks are queued to the limit: a temporary failure, not
+	/// a wrong credential, and not counted as one.
+	fn auth_busy(&mut self) -> Action {
+		Action::Continue(Reply::single(454, "4.7.0 Temporary authentication failure"))
+	}
+
 	/// Verify a SASL PLAIN response (`\0authcid\0password`).
 	pub(super) fn verify_plain(&mut self, encoded: &str) -> Action {
 		let Ok(credentials) = super::super::auth::parse_plain(encoded) else {
@@ -17,14 +24,15 @@ impl Session {
 		// protocol tag is the listener kind this session serves (Submission
 		// or Submissions), so a per-account `allowed_protocols` that does
 		// not include it rejects exactly like an unknown login.
-		match self.directory.authenticate_with_ip_full(
+		match self.directory.authenticate_verdict(
 			&credentials.authcid,
 			&credentials.password,
 			self.peer_ip,
 			self.auth_protocol,
 		) {
-			Some((account, label)) => self.auth_success(account, label),
-			None => self.auth_fail(),
+			Verdict::Admitted { account, label } => self.auth_success(account, label),
+			Verdict::Refused => self.auth_fail(),
+			Verdict::Busy => self.auth_busy(),
 		}
 	}
 
@@ -42,14 +50,15 @@ impl Session {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
-		match self.directory.authenticate_with_ip_full(
+		match self.directory.authenticate_verdict(
 			user,
 			&String::from_utf8_lossy(&bytes),
 			self.peer_ip,
 			self.auth_protocol,
 		) {
-			Some((account, label)) => self.auth_success(account, label),
-			None => self.auth_fail(),
+			Verdict::Admitted { account, label } => self.auth_success(account, label),
+			Verdict::Refused => self.auth_fail(),
+			Verdict::Busy => self.auth_busy(),
 		}
 	}
 
