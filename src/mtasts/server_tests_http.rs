@@ -47,10 +47,18 @@ impl Fixture {
 
 	async fn raw(&mut self, request: &str) -> String {
 		let (client, server) = tokio::io::duplex(32768);
+		// Tests bypass the listener so they hold an admit guard by hand;
+		// each call reserves one per-IP slot for the loopback address.
+		let admission = crate::net::conn_limit::Admission::new(100, 100);
+		let peer: std::net::SocketAddr = "127.0.0.1:1".parse().expect("peer");
+		let admitted = admission
+			.admit(peer.ip())
+			.expect("loopback under the cap of 100");
 		let serve = connection(
 			server,
 			self.server.tls.current(),
 			self.server.router.clone(),
+			admitted,
 		);
 		let exchange = async {
 			let mut tls = self

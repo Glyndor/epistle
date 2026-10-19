@@ -5,7 +5,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 async fn connection_timeout_covers_stalled_tls_handshake() {
 	let (tls, _) = crate::tls::test_support::acceptor_and_cert();
 	let (mut client, server) = tokio::io::duplex(64);
-	let connection = connection(server, tls, Router::new());
+	// Tests bypass the listener and hold an admit guard by hand.
+	let admission = crate::net::conn_limit::Admission::new(100, 100);
+	let peer: std::net::SocketAddr = "127.0.0.1:1".parse().expect("peer");
+	let admitted = admission
+		.admit(peer.ip())
+		.expect("loopback under the cap of 100");
+	let connection = connection(server, tls, Router::new(), admitted);
 	tokio::pin!(connection);
 	assert!(
 		std::future::poll_fn(|cx| std::task::Poll::Ready(

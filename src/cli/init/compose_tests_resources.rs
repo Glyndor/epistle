@@ -84,6 +84,8 @@ fn the_request_follows_the_hard_limit_of_the_host() {
 
 #[test]
 fn low_nofile_warns_with_the_host_limit_and_how_to_raise_it() {
+	// `mail_nofile` asks for `hard` when `hard > 1024`. The warning
+	// describes the value the container ends up with.
 	for hard in [1025, 2048, 4096, 8191] {
 		let mut out = Vec::new();
 		services::warn_low_nofile(Some(hard), &mut out);
@@ -99,7 +101,29 @@ fn low_nofile_warns_with_the_host_limit_and_how_to_raise_it() {
 		);
 		assert!(text.contains("run epistle init again"), "{text}");
 	}
-	for hard in [None, Some(1024), Some(8192), Some(65536)] {
+	// `mail_nofile` declines to ask when `hard <= 1024`. The warning
+	// names the host hard limit and the kernel soft limit the container
+	// then inherits; covered here for 1024 itself and a smaller 512.
+	for hard in [512u64, 1024u64] {
+		let mut out = Vec::new();
+		services::warn_low_nofile(Some(hard), &mut out);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(
+			text.contains(&format!("host RLIMIT_NOFILE hard limit is {hard}")),
+			"{text}"
+		);
+		assert!(
+			text.contains("kernel soft limit"),
+			"hard={hard}: warning must explain why no request was made, got: {text}"
+		);
+		assert!(
+			text.contains("LimitNOFILE") && text.contains("limits.conf"),
+			"{text}"
+		);
+		assert!(text.contains("run epistle init again"), "{text}");
+	}
+	// Above the warn floor (8192) or unknown host hard limit, stay silent.
+	for hard in [None, Some(8192), Some(65536)] {
 		let mut out = Vec::new();
 		services::warn_low_nofile(hard, &mut out);
 		assert!(out.is_empty(), "{hard:?}");

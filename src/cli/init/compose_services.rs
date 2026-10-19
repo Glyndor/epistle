@@ -32,12 +32,37 @@ pub(crate) fn mail_nofile(host_hard_limit: Option<u64>) -> Option<u64> {
 }
 
 /// Explain why a generated request leaves too little room for the listeners.
+///
+/// Two cases warrant a warning, both about the host's `RLIMIT_NOFILE`
+/// hard limit landing below 8192:
+///
+/// 1. The host hard limit is known and the ask `mail_nofile(hard)` made
+///    is still below 8192 (`hard` is between 1025 and 8191 inclusive).
+///    The warning names the value the container ends up with.
+/// 2. The host hard limit is so low that `mail_nofile` declines to ask
+///    for anything (`hard <= 1024`, including the boundary at 1024). The
+///    container then inherits the kernel soft limit, so the warning
+///    names the host hard limit and the reason no larger value was
+///    requested.
+///
+/// Both cases describe a host whose limit is the real ceiling; the
+/// earlier shape missed case 2 at the 1024 boundary.
 pub(crate) fn warn_low_nofile(hard: Option<u64>, out: &mut dyn std::io::Write) {
-	if let Some(requested) = mail_nofile(hard).filter(|limit| *limit < 8192) {
-		let _ = writeln!(
-			out,
-			"warning: the mail container nofile limit is {requested}, below 8192, because the host RLIMIT_NOFILE hard limit is {requested}; raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
-		);
+	const WARN_BELOW: u64 = 8192;
+	match (mail_nofile(hard), hard) {
+		(Some(requested), _) if requested < WARN_BELOW => {
+			let _ = writeln!(
+				out,
+				"warning: the mail container nofile limit is {requested}, below {WARN_BELOW}, because the host RLIMIT_NOFILE hard limit is {requested}; raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
+			);
+		}
+		(None, Some(host_hard)) if host_hard < WARN_BELOW => {
+			let _ = writeln!(
+				out,
+				"warning: the host RLIMIT_NOFILE hard limit is {host_hard}, below {WARN_BELOW}, so the mail container inherits the kernel soft limit and the nofile request is omitted (the container cannot be raised above the host hard limit); raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
+			);
+		}
+		_ => {}
 	}
 }
 
