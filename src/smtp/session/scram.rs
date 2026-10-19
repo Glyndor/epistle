@@ -150,12 +150,19 @@ impl Session {
 			}
 			None => {}
 		}
-		if matches!(
-			self.directory
-				.check_ban(account, self.peer_ip, self.auth_protocol),
-			BanOutcome::Banned
-		) {
-			return self.scram_failure();
+		// The recheck at client-final must apply the same bypass the
+		// first check did: a banned account from a network on the
+		// bypass list reaches the verifier the same way the first
+		// check let it through. A ban that fired between
+		// client-first and client-final still refuses the exchange,
+		// because `BannedButKnown` is only emitted when the bypass
+		// list says so at the time of the check.
+		match self
+			.directory
+			.check_ban(account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::BannedButKnown { .. } | BanOutcome::Clear { .. } => {}
 		}
 		let Some(client_final) = decode(encoded) else {
 			self.record_scram_outcome(account, Some(account), false);

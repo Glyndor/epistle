@@ -95,11 +95,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// When `[database]` is configured the shared ban store is built and
 	// attached to every rebuilt directory. Without a database, the ban
 	// store is absent and the per-connection three-strikes counters are
-	// the only defence; exactly the pre-table behaviour.
+	// the only defence; exactly the pre-table behaviour. The policy is
+	// bound here so the periodic sweeper spawned below reads the same
+	// `known_network_window_secs` the operator set.
+	let policy = ban_policy::ban_policy_for(&config);
 	if let Some(pool) = &reputation_pool {
-		let ban_store: Arc<dyn crate::antispam::bans::BanStore> = Arc::new(
-			crate::antispam::bans::PgBanStore::new(pool.clone(), Some(metrics.clone())),
-		);
+		let ban_store: Arc<dyn crate::antispam::bans::BanStore> =
+			Arc::new(crate::antispam::bans::PgBanStore::with_policy(
+				pool.clone(),
+				Some(metrics.clone()),
+				policy,
+			));
 		store = store.with_ban_store(ban_store);
 	}
 	// `into_shared` wires the live store as the SCRAM upgrader, so a
@@ -270,8 +276,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
 	// the tables stay bounded. No-op when no database is configured: the
-	// ban store is absent in that case.
-	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
+	// ban store is absent in that case. The bypass list is purged with the
+	// same window the operator set under `[limits] known-network-window`,
+	// so the sweeper does not fall back to the built-in default.
+	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 
 	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
 	// renewal task. Loaded here so every listener picks the same acceptor up
@@ -640,6 +648,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 #[path = "serve_wait.rs"]
 mod wait;
+
+#[path = "serve_ban_policy.rs"]
+mod ban_policy;
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]

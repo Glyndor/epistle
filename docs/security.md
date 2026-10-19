@@ -302,14 +302,51 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   already failed themselves, so a /64 without failures of its own is never
   blocked for its neighbours, at the price of a more intricate rule and of
   not stopping a rotation that spends one failure per /64. The owner of an
-  account that many clients are guessing at is locked out for the length of
-  the account ban as well. A credential stuffing wave from one client trips
+  account that many clients are guessing at is locked out for the length of the
+  account ban as well. A credential stuffing wave from one client trips
   that client's counters. The wire response to a banned subject is identical to a wrong password (no
   oracle); the audit log records the rule that fired under the
   `auth.banned` event. The store is fail-open on database errors: a
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Banned account, known network** (requires `[database]`). When an
+  account is banned, the right credentials let it in only from a
+  network the account has signed in from successfully within the
+  configured window (`known-network-window`, 30 days by default;
+  the per-account cap of 32 networks keeps the list bounded, the
+  oldest non-current row is dropped on each insert past the cap).
+  The decision lives in one place (`Directory::check_ban` /
+  `authenticate_verdict`), so every listener that goes through the
+  shared gate inherits the policy: SMTP submission, IMAP, POP3,
+  ManageSieve, the API (with the trusted-proxy-resolved client IP)
+  and WebDAV. A ban an operator placed by hand (`epistle ban add`) is
+  never bypassed, and neither is an IP ban: the exception is for the
+  ban that failed sign-ins cause on the account, not for a decision
+  somebody took. From the unknown network the response to a banned
+  account is identical to today's: same message, same hash work,
+  same outcome for a wrong password as for a right one, so the
+  ban cannot be used as an oracle for guessing passwords from
+  elsewhere. A successful sign-in writes the network onto the
+  bypass list; a wrong sign-in from a known network still records
+  the strike. An attempt cannot insert itself onto the list: the
+  write only happens through the success path of
+  `record_ban_outcome`, so a guessed password does not register
+  itself. The write is throttled inside SQL to at most one row
+  per (account, network) per hour, and the cap eviction runs in
+  the same transaction, so the latency-sensitive sign-in path
+  never grows the table without bound. A `/64` is the unit for
+  IPv6 clients, the same keying the ban store already uses for the
+  client counter, so a roaming client does not have to re-auth
+  every time its host half changes. The `is_known_network` lookup
+  fails closed on a database error (a missing row must not let a
+  banned account in), and the audit log emits the same `auth.banned`
+  event it would for any other ban check. The bypass only lifts bans
+  placed on the account. A ban placed on the client address (by the
+  threshold counter or by the operator) is not lifted from a known
+  network: that address stays refused for the whole ban, so lifting it
+  for the account would also lift it for everyone else behind the same
+  address.
 - **Trusted reverse proxies.** `[api] trusted_proxies` defaults to `[]`, so
   forwarded headers have no authority by default. Only a peer in a configured
   IPv4 or IPv6 CIDR may supply `X-Forwarded-For`. The entire header must be a

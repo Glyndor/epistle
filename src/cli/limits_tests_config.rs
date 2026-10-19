@@ -34,6 +34,7 @@ fn limits_set_unset_round_trip_preserves_every_other_key() {
 		(Key::MaxMessageSize, "10M", 10 * 1024 * 1024),
 		(Key::MessageMemoryBudget, "128M", 128 * 1024 * 1024),
 		(Key::MaxConnectionsPerIp, "5", 5),
+		(Key::KnownNetworkWindow, "7d", 7 * 86400),
 	] {
 		let result = change_config(file.path(), key, Some(input));
 		assert!(
@@ -225,6 +226,12 @@ fn limits_show_json_lists_every_domain_override_and_every_tenant_entry() {
 	let submission = &json["submission-rate"];
 	assert_eq!(submission["unit"], "count");
 	assert_eq!(submission["source"], "default");
+	// The known-network window is a duration key the operator can
+	// override through the same CLI surface; absent keeps the
+	// 30-day default the policy ships with.
+	let known_network = &json["known-network-window"];
+	assert_eq!(known_network["unit"], "seconds");
+	assert_eq!(known_network["value"], 30 * 24 * 60 * 60_u64);
 }
 
 /// `epistle limits set --json` emits a single JSON object on stdout and

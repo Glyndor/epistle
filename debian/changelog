@@ -1,6 +1,12 @@
 epistle (0.12.2) UNRELEASED; urgency=medium
 
   * Improve DNS provider inspection safety and accuracy.
+  * Security: a banned account signs in with the right credentials from a network
+    it has used before; from any other network the response stays the same and
+    the ban cannot be probed for valid credentials.
+  * Security: the hourly purge of the known-network rows now respects the
+    window the operator set, so a row past the configured horizon is dropped
+    and one inside it stays.
   * Queue: record API cancellations in the delivery log and notify webhooks.
   * Security: keep DNS provider tokens in private secret files and warn about
     legacy credential sources.

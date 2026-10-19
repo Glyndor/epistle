@@ -716,6 +716,10 @@ mod timing_tests;
 mod ban_policy_tests;
 
 #[cfg(test)]
+#[path = "directory_known_network_tests.rs"]
+mod known_network_tests;
+
+#[cfg(test)]
 #[path = "directory_decoy_counters.rs"]
 pub(crate) mod decoy_counters;
 
