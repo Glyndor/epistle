@@ -72,6 +72,26 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 }
 
 #[test]
+fn json_includes_api_keys_without_exposing_the_stored_hash() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = valid(dir.path());
+	std::fs::write(
+		dir.path().join("api_keys.toml"),
+		"[[keys]]\nlabel = \"automation\"\nhash = \"sha256:private-digest\"\nscopes = [\"read\"]\n",
+	)
+	.expect("key store");
+	let mut out = Vec::new();
+	let code = execute(&path, &[CheckArea::ApiKeys], true, false, &mut out);
+	let output = String::from_utf8(out).expect("utf8");
+	let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+	assert_eq!(value["api_keys"]["status"], "warn", "{output}");
+	assert_eq!(value["api_keys"]["items"][0]["name"], "automation (read)");
+	assert!(output.contains("no expiry"));
+	assert!(!output.contains("private-digest"));
+	assert_eq!(code, ExitCode::SUCCESS);
+}
+
+#[test]
 fn a_warning_alone_does_not_fail_the_run() {
 	let reports = vec![(
 		CheckArea::Config,
@@ -128,6 +148,10 @@ fn check_lists_items_under_the_area_line_and_status_does_not() {
 fn status_covers_every_area_in_a_stable_order() {
 	let names: Vec<_> = CheckArea::ALL.iter().map(|area| area.name()).collect();
 	assert_eq!(
+		clap::ValueEnum::from_str("api_keys", false),
+		Ok(CheckArea::ApiKeys)
+	);
+	assert_eq!(
 		names,
 		[
 			"config",
@@ -135,6 +159,7 @@ fn status_covers_every_area_in_a_stable_order() {
 			"tls",
 			"dns",
 			"db",
+			"api_keys",
 			"antivirus",
 			"antispam",
 			"queue",
