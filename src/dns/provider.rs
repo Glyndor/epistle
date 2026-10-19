@@ -323,6 +323,27 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 /// A DNS provider that can publish and remove records in a zone. Object-safe
 /// and test-injectable (mirrors the [`crate::spf::DnsLookup`] pattern).
 pub trait DnsProvider: Send + Sync {
+	/// Inspect credential capabilities using read operations only. Unsupported
+	/// metadata stays unknown; a successful listing proves only record reading.
+	fn check_access<'a>(
+		&'a self,
+		zone: &'a str,
+		_names: &'a [String],
+	) -> crate::dns::providers::check::CheckOp<'a> {
+		Box::pin(async move {
+			let mut report = crate::dns::providers::check::AccessReport::unknown();
+			report.record_read = match self.list(zone).await {
+				Ok(_) => crate::dns::providers::check::Finding::verified(
+					"records can be read in the configured zone",
+				),
+				Err(ProviderError::Unsupported) => report.record_read,
+				Err(error) => crate::dns::providers::check::Finding::failure(
+					crate::dns::providers::check::failure_cause(&error),
+				),
+			};
+			report
+		})
+	}
 	/// Create or replace `record` in `zone`. The contract on matching is
 	/// spelled out at the top of the module:
 	///
@@ -357,6 +378,13 @@ pub trait DnsProvider: Send + Sync {
 pub struct ManualProvider;
 
 impl DnsProvider for ManualProvider {
+	fn check_access<'a>(
+		&'a self,
+		_: &'a str,
+		_: &'a [String],
+	) -> crate::dns::providers::check::CheckOp<'a> {
+		Box::pin(async { crate::dns::providers::check::AccessReport::unknown() })
+	}
 	fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
 		Box::pin(async { Err(ProviderError::Unsupported) })
 	}

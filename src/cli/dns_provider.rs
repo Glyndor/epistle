@@ -10,6 +10,8 @@ use super::resource;
 use super::stack::StackAction;
 use crate::config::Config;
 
+#[path = "dns_provider_check.rs"]
+mod check;
 #[path = "dns_lockdown.rs"]
 mod lockdown_handler;
 #[path = "dns_provider_probe.rs"]
@@ -52,6 +54,12 @@ pub enum DnsCli {
 /// Provider actions.
 #[derive(Debug, Subcommand)]
 pub enum ProviderCli {
+	/// Report credential capabilities without changing records or settings.
+	Check {
+		/// Print the same findings as JSON.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Show the configured provider. Credentials are never printed.
 	Show {
 		/// Print the provider settings as JSON.
@@ -100,6 +108,12 @@ fn execute_with(
 		return Err("dns lockdown runs through its own path; this should not be reached".into());
 	};
 	let (change, verb, fields): (resource::Change, _, _) = match action {
+		ProviderCli::Check { json: leaf } => {
+			let config = Config::load(path)
+				.map_err(|error| resource::ResourceError::Failure(error.to_string()))?;
+			check::run(&config, leaf || json, out)?;
+			return Ok(ExitCode::SUCCESS);
+		}
 		ProviderCli::Show { json: leaf } => {
 			show::run(
 				&Config::load(path)

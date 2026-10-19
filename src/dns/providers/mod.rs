@@ -207,6 +207,7 @@ pub(crate) async fn read_bounded(
 }
 
 pub mod bunny;
+pub mod check;
 pub mod cloudflare;
 pub mod desec;
 pub mod digitalocean;
