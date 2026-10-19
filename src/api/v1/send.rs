@@ -43,7 +43,8 @@ pub async fn send(
 		));
 	}
 	// Bound the recipient list to the same ceiling the SMTP path enforces.
-	if recipients.len() > crate::smtp::session::MAX_RECIPIENTS {
+	let max_recipients = state.max_recipients();
+	if recipients.len() > max_recipients {
 		return Err(ApiError::invalid_input("Too many recipients."));
 	}
 	// Header-injection guard (mandatory), before anything is built: no CR,

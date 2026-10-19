@@ -109,6 +109,12 @@ mod webhook_admin;
 /// depending on the otherwise-private `init` module.
 pub use {init::Answers, pick::run_from_env};
 
+/// Re-export of the catalog snapshot so integration tests can keep
+/// `docs/limits.md` in lockstep with the in-process catalog without
+/// pulling the catalog module into its public surface.
+#[doc(hidden)]
+pub use limits::catalog::docs_snapshot;
+
 use {std::path::PathBuf, util::generate_secret};
 
 use clap::{Parser, Subcommand};

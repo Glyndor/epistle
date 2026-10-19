@@ -48,6 +48,30 @@ impl Config {
 		self.validate_data_rate()
 	}
 
+	/// `max_recipients` stays within what RFC 5321 §4.5.3.1.8 demands of a
+	/// server (at least 100 recipients per message) and what one message
+	/// may ask of the server (at most [`MAX_MAX_RECIPIENTS`]).
+	pub(super) fn validate_max_recipients(&self) -> Result<(), ConfigError> {
+		use crate::smtp::session::{
+			MAX_MAX_RECIPIENTS, MIN_MAX_RECIPIENTS, MIN_MAX_RECIPIENTS_REASON,
+		};
+		let Some(count) = self.max_recipients else {
+			return Ok(());
+		};
+		if count < MIN_MAX_RECIPIENTS {
+			return Err(ConfigError::Invalid(format!(
+				"max_recipients ({count}) is below {MIN_MAX_RECIPIENTS}: {MIN_MAX_RECIPIENTS_REASON}"
+			)));
+		}
+		if count > MAX_MAX_RECIPIENTS {
+			return Err(ConfigError::Invalid(format!(
+				"max_recipients ({count}) is above {MAX_MAX_RECIPIENTS}, the most one message \
+				 may name"
+			)));
+		}
+		Ok(())
+	}
+
 	/// The rate floor is off at `0` and cannot ask for more than any real
 	/// client link gives; its grace must leave a client time to start and
 	/// must not hand a slow client its reservation for more than an hour.
@@ -125,6 +149,23 @@ impl Config {
 			return Err(ConfigError::Invalid(format!(
 				"preauth_timeout must be between 5 and {MAX_PREAUTH_TIMEOUT_SECS} seconds"
 			)));
+		}
+		self.validate_per_account_caps()
+	}
+
+	/// The singular `max_connections_per_account` is not wired to any
+	/// guard: `MailboxLimits::from_config` only reads `_per_ip` and
+	/// `_total`. Reject it up front so an operator who set the singular
+	/// key does not silently keep the 10/50 defaults they meant to
+	/// override.
+	fn validate_per_account_caps(&self) -> Result<(), ConfigError> {
+		if self.max_connections_per_account.is_some() {
+			return Err(ConfigError::Invalid(
+				"max_connections_per_account is not configurable; use \
+				 max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
+					.into(),
+			));
 		}
 		Ok(())
 	}
@@ -317,6 +358,59 @@ mod tests {
 			validate("min_data_rate = 1073741825"),
 			Err("invalid configuration: min_data_rate must be at most 1073741824 bytes per second (0 turns it off)"
 				.to_string())
+		);
+	}
+	#[test]
+	fn a_recipient_cap_below_one_hundred_is_refused_with_the_standard() {
+		for count in [0, 1, 99] {
+			assert_eq!(
+				validate(&format!("max_recipients = {count}")),
+				Err(format!(
+					"invalid configuration: max_recipients ({count}) is below 100: RFC 5321 \
+					 §4.5.3.1.8 requires accepting at least 100 recipients"
+				)),
+				"{count}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_recipient_cap_from_one_hundred_to_ten_thousand_is_accepted() {
+		for settings in [
+			"",
+			"max_recipients = 100",
+			"max_recipients = 500",
+			"max_recipients = 10000",
+		] {
+			assert_eq!(validate(settings), Ok(()), "{settings}");
+		}
+		assert_eq!(
+			validate("max_recipients = 10001"),
+			Err(
+				"invalid configuration: max_recipients (10001) is above 10000, the most one \
+				 message may name"
+					.to_string()
+			)
+		);
+	}
+
+	#[test]
+	fn the_singular_max_connections_per_account_is_rejected() {
+		// The implementation has only `_per_ip` and `_total`. The singular
+		// `max_connections_per_account` is accepted by the TOML parser
+		// but never read by `MailboxLimits::from_config`, so an operator
+		// who set `max_connections_per_account = 1` would see no effect
+		// at all: the second connection from alice on the same IP is
+		// admitted with the cap at 50 per `default`. The key is rejected
+		// up front so the failure is loud.
+		assert_eq!(
+			validate("max_connections_per_account = 1"),
+			Err(
+				"invalid configuration: max_connections_per_account is not configurable; \
+				 use max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
+					.to_string()
+			)
 		);
 	}
 }

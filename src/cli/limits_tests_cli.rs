@@ -77,7 +77,7 @@ fn limits_show_command_writes_data_without_restart() {
 	);
 	assert_eq!(
 		String::from_utf8(out).unwrap().lines().next(),
-		Some("quota\t5368709120 bytes\tdefault"),
+		Some("quota\t5368709120 bytes\tdefault\tadjustable\tno standard mandate"),
 		"limits show command must write the effective values to stdout"
 	);
 	assert!(

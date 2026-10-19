@@ -57,6 +57,7 @@ impl Server {
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
+			max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			data_rate: super::DataRate::default(),
 			junk_command_limit: crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT,
 			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
@@ -228,6 +229,17 @@ impl Server {
 	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
 		if bytes > 0 {
 			self.max_message_size = bytes;
+		}
+		self
+	}
+
+	/// Set how many recipients one transaction on this listener may name:
+	/// advertised as `LIMITS RCPTMAX` and enforced at `RCPT TO`. `0` keeps
+	/// the built-in default
+	/// ([`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`]).
+	pub fn with_max_recipients(mut self, count: usize) -> Self {
+		if count > 0 {
+			self.max_recipients = count;
 		}
 		self
 	}

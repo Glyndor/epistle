@@ -58,6 +58,17 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     the hard limit of the host when that is smaller, because Podman refuses to
     start a container above it. Run `epistle init` again to regenerate an
     existing stack's compose file.
+  * Limits follow the standards: every adjustable limit has an industry-standard
+    default and the operator may change it; rules the standards make mandatory
+    (MUST) cannot be crossed, and rules they only recommend (SHOULD) print a
+    warning. `epistle limits show` and `--json` carry the kind (`adjustable`,
+    `recommended`, `fixed`) and the RFC reference for every limit, and the
+    same table backs `docs/limits.md` so the operator-facing page stays in
+    step with the code.
+  * Security: tighten the SPF §4.6.4 budget enforcement, the catalog's
+    metadata for the limits the standards only recommend, and the
+    rejection of misconfigured connection-cap keys; the operator-facing
+    table in `docs/limits.md` now mirrors the in-process catalog exactly.
   * An autoconfig listener with TLS and no `max_connections_per_listener` set
     refused every connection, because the unset cap reached it as 0. It now
     uses the default of 1024.

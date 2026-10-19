@@ -69,14 +69,13 @@ pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>
 }
 
 /// Whether a command line announces a non-synchronizing literal above the
-/// APPEND limit, which ends the connection. Its payload is already on the
-/// wire and draining an arbitrary announced size is not worth it. A
-/// synchronizing one goes on to the session, which answers NO [TOOBIG]
-/// (RFC 7889 §3) before the client sends any of it.
-pub(super) fn oversized_sent_literal(line: &str) -> bool {
-	crate::imap::command::literal_announcement_in_line(line).is_some_and(|literal| {
-		literal.size > crate::imap::command::MAX_APPEND_SIZE && !literal.synchronizing
-	})
+/// per-listener APPENDLIMIT, which ends the connection. Its payload is
+/// already on the wire and draining an arbitrary announced size is not
+/// worth it. A synchronizing one goes on to the session, which answers
+/// `NO [TOOBIG]` (RFC 7889 §3) before the client sends any of it.
+pub(super) fn oversized_sent_literal(line: &str, append_limit: usize) -> bool {
+	crate::imap::command::literal_announcement_in_line(line)
+		.is_some_and(|literal| literal.size > append_limit && !literal.synchronizing)
 }
 
 /// Drop a line that follows a drained literal of a rejected command: its
@@ -90,12 +89,13 @@ pub(super) async fn rejected_tail<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 	decoder: &mut LineDecoder,
 	line: &[u8],
 	deadline: Instant,
+	append_limit: usize,
 ) -> std::io::Result<Option<bool>> {
 	let tail = String::from_utf8_lossy(line);
 	let Some(literal) = crate::imap::command::literal_announcement_in_tail(&tail) else {
 		return Ok(Some(false));
 	};
-	if literal.size > crate::imap::command::MAX_APPEND_SIZE {
+	if literal.size > append_limit {
 		stream.write_all(b"* BYE literal too large\r\n").await?;
 		stream.flush().await?;
 		return Ok(None);

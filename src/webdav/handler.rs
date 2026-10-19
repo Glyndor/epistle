@@ -47,6 +47,14 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 /// resource may be larger than a message. A per-account
 /// storage quota (the `quota_bytes` field in the account config) still
 /// applies on top of this for cumulative usage; this is the per-file cap.
+///
+/// WebDAV `PUT` keeps its own cap rather than `[server] max_message_size`
+/// because a single resource (a calendar, a long vCard, a large attachment
+/// archive) can be larger than a single mail message by design. The cap is
+/// fixed at `PUT_BODY_LIMIT` and is **not** configurable from
+/// `epistle limits set`: an Internet standard does not require a specific
+/// size for a DAV resource, only that the server advertises the limit it
+/// will accept.
 const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
 
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the

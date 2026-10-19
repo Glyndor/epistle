@@ -190,6 +190,10 @@ mod jmap_tests_f;
 mod jmap_tests_g;
 
 #[cfg(test)]
+#[path = "recipients_tests.rs"]
+mod recipients_tests;
+
+#[cfg(test)]
 #[path = "jmap_tests_principal.rs"]
 mod jmap_tests_principal;
 

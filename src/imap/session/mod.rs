@@ -63,7 +63,7 @@ impl Session {
 
 	/// Feed one command line (CRLF stripped).
 	pub fn command_line(&mut self, line: &str) -> Output {
-		let tagged = match super::command::parse_line(line) {
+		let tagged = match super::command::parse_line(line, self.append_limit) {
 			Ok(Line::Command(tagged)) => tagged,
 			Ok(Line::Login(request)) => {
 				return self.login(&request.tag, request.username(), request.password());

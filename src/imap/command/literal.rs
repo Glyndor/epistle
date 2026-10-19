@@ -3,20 +3,26 @@
 //! network layer collects after the command line.
 
 use super::date_time::split_date_time;
-use super::parse::{MAX_APPEND_SIZE, parse_astring};
+use super::parse::parse_astring;
 use super::{Command, LiteralAnnouncement, ParseError};
 use crate::imap::internal_date::InternalDate;
 
 /// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date
-/// becomes the message's INTERNALDATE.
-pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
+/// becomes the message's INTERNALDATE. `append_limit` is the per-listener
+/// APPENDLIMIT the session advertises: literals above it are refused
+/// with `NO [TOOBIG]` (RFC 7889 §3).
+pub(super) fn parse_append(
+	tag: &str,
+	args: &str,
+	append_limit: usize,
+) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (mailbox, rest) = parse_astring(args).ok_or_else(bad)?;
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
 	let rest = rest.trim();
-	let (flags, date, literal) = parse_flags_and_literal(tag, rest, &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(tag, rest, &bad, append_limit)?;
 	let utf8 = utf8_data_item(rest);
 	Ok(Command::Append {
 		mailbox,
@@ -60,8 +66,15 @@ fn utf8_data_item(tail: &str) -> bool {
 }
 
 /// Parse `REPLACE <seq> <mailbox> [(flags)] [date] {literal}` (RFC 8508).
-/// `uid` selects `UID REPLACE`, where the sequence is a UID.
-pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
+/// `uid` selects `UID REPLACE`, where the sequence is a UID. `append_limit`
+/// is the per-listener APPENDLIMIT; literals above it are refused with
+/// `NO [TOOBIG]` (RFC 7889 §3).
+pub(super) fn parse_replace(
+	tag: &str,
+	args: &str,
+	uid: bool,
+	append_limit: usize,
+) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (seq_token, rest) = args.trim().split_once(' ').ok_or_else(bad)?;
 	// REPLACE targets exactly one message; a set or `*` is not allowed.
@@ -73,7 +86,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, date, literal) = parse_flags_and_literal(tag, rest.trim(), &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(tag, rest.trim(), &bad, append_limit)?;
 	Ok(Command::Replace {
 		sequence,
 		mailbox,
@@ -95,6 +108,7 @@ fn parse_flags_and_literal(
 	tag: &str,
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
+	append_limit: usize,
 ) -> Result<(Vec<String>, Option<InternalDate>, LiteralAnnouncement), ParseError> {
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
@@ -110,13 +124,15 @@ fn parse_flags_and_literal(
 	};
 
 	let (date, literal_text) = split_date_time(literal_text).map_err(|()| bad())?;
-	let literal = literal_announcement(literal_text).ok_or_else(bad)?;
+	let literal = literal_announcement(literal_text).ok_or(bad())?;
 	if literal.size == 0 {
 		return Err(bad());
 	}
 	// RFC 7889 §3: a message above the advertised APPENDLIMIT is refused
-	// with TOOBIG, which tells the client not to retry it unchanged.
-	if literal.size > MAX_APPEND_SIZE {
+	// with TOOBIG, which tells the client not to retry it unchanged. The
+	// limit is the per-listener APPENDLIMIT, which follows
+	// `[server] max_message_size` (the SMTP/JMAP/REST cap).
+	if literal.size > append_limit {
 		return Err(ParseError::TooBig(tag.to_string()));
 	}
 	Ok((flags, date, literal))

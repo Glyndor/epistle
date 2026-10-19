@@ -26,7 +26,7 @@ fn start() -> (
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), dir.path().into());
 	let (client, server) = tokio::io::duplex(8192);
 	let clock = SessionClock::start(PREAUTH, TIMEOUT);
-	let task = tokio::spawn(run(server, backend, None, clock));
+	let task = tokio::spawn(run(server, backend, None, clock, None));
 	(client, task, dir)
 }
 

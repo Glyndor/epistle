@@ -29,13 +29,13 @@ pub(super) fn pop3s(
 	max_conn: usize,
 	limits: &MailboxLimits,
 ) -> std::io::Result<Task> {
-	let server = Arc::new(
-		crate::pop3::server::Server::new(data_dir, directory, require(acceptor, "POP3S")?)
-			.with_crypto(crypto)
-			.with_max_connections(max_conn)
-			.with_max_connections_per_ip(limits.per_ip)
-			.with_preauth_timeout(limits.preauth_timeout),
-	);
+	let server = crate::pop3::server::Server::new(data_dir, directory, require(acceptor, "POP3S")?)
+		.with_crypto(crypto)
+		.with_max_connections(max_conn)
+		.with_max_connections_per_ip(limits.per_ip)
+		.with_preauth_timeout(limits.preauth_timeout)
+		.with_per_account_counter(Arc::clone(&limits.per_account_counter));
+	let server = Arc::new(server);
 	Ok(tokio::spawn(server.serve(listener)))
 }
 

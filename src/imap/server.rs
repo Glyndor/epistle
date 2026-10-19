@@ -103,6 +103,15 @@ pub struct Server {
 	/// The bounded queue to the per-account Bayesian trainer, handed to
 	/// every session. `None` disables training and STORE answers the same.
 	training: Option<crate::antispam::training_queue::TrainingQueue>,
+	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
+	/// command may carry. Follows `[server] max_message_size`, the same
+	/// cap the SMTP, REST and JMAP submission paths enforce. Default is
+	/// [`super::command::DEFAULT_APPEND_LIMIT`].
+	append_limit: usize,
+	/// Shared per-account counter applied after authentication. A
+	/// session over the cap answers `NO [LIMIT]` and closes; the slot
+	/// is released on every disconnect path.
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 }
 
 impl Server {
@@ -134,105 +143,9 @@ impl Server {
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
+			append_limit: super::command::DEFAULT_APPEND_LIMIT,
+			per_account_counter: None,
 		}
-	}
-
-	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
-	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
-		self.crypto = crypto;
-		self
-	}
-
-	/// Days to keep expunged messages in `<account>/.archive/` before the
-	/// hourly sweeper removes them. `0` keeps the legacy behaviour.
-	pub fn with_retention_days(mut self, days: u64) -> Self {
-		self.retention_days = days;
-		self
-	}
-
-	/// Cap concurrent connections for this listener (0 keeps the default).
-	pub fn with_max_connections(mut self, max: usize) -> Self {
-		if max > 0 {
-			self.max_connections = max;
-		}
-		self
-	}
-
-	/// Cap the connections one client may hold on this listener (0 keeps the
-	/// default). An IPv6 client is counted by its /64.
-	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
-		if max > 0 {
-			self.max_per_ip = max;
-		}
-		self
-	}
-
-	/// Set the per-account storage quota applied to sessions.
-	pub fn with_quota(mut self, bytes: u64) -> Self {
-		self.quota_bytes = bytes;
-		self
-	}
-
-	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
-	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
-		self.oauth = Some(verifier);
-		self
-	}
-
-	/// Follow `drain`: stop accepting when it starts and close each
-	/// session with `* BYE` once its current command is done.
-	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
-		self.drain = Some(drain);
-		self
-	}
-
-	/// Cap the idle / literal-read deadline. The default is 30 minutes
-	/// (RFC 9051 §5.4); production callers leave it alone, but the test
-	/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
-	/// a test for half an hour.
-	pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
-		self.read_timeout = timeout;
-		self
-	}
-
-	/// Set the deadline for the whole pre-authentication phase. The default
-	/// is 60 seconds; a slow client or a slow password hash fits well within
-	/// it, a client that holds the connection without signing in does not.
-	pub fn with_preauth_timeout(mut self, timeout: Duration) -> Self {
-		self.preauth_timeout = timeout;
-		self
-	}
-
-	/// Provide the `tls-server-end-point` certificate hash, enabling
-	/// AUTH=SCRAM-SHA-256-PLUS.
-	pub fn with_channel_binding(mut self, cert_hash: crate::tls::EndPoint) -> Self {
-		self.cbind_data = Some(cert_hash);
-		self
-	}
-
-	/// Toggle the `[auth] scram` knob for this listener. `false` hides
-	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS in `CAPABILITY AUTH=` and
-	/// refuses an explicit `AUTHENTICATE` against them; PLAIN/LOGIN stay in.
-	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
-		self.scram_enabled = enabled;
-		self
-	}
-
-	/// Tag every password authentication attempt through this server with
-	/// `protocol` so the directory's per-account `allowed_protocols` set
-	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
-	/// listener kind (`Protocol::Imaps` for implicit-TLS port 993,
-	/// `Protocol::Imap` for the STARTTLS port 143).
-	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
-		self.auth_protocol = protocol;
-		self
-	}
-
-	/// Attach the training queue, shared with the JMAP state so both
-	/// protocols feed the one worker of the process.
-	pub fn with_training(mut self, queue: crate::antispam::training_queue::TrainingQueue) -> Self {
-		self.training = Some(queue);
-		self
 	}
 
 	/// Build a session with this server's quota, OAuth and channel-binding.
@@ -247,7 +160,11 @@ impl Server {
 		.with_oauth(self.oauth.clone())
 		.with_retention_days(self.retention_days)
 		.with_auth_protocol(self.auth_protocol)
-		.with_scram_enabled(self.scram_enabled);
+		.with_scram_enabled(self.scram_enabled)
+		.with_append_limit(self.append_limit);
+		if let Some(counter) = &self.per_account_counter {
+			session = session.with_per_account_counter(Arc::clone(counter));
+		}
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.current());
 		}
@@ -407,7 +324,15 @@ impl Server {
 				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
 				// message), not to a new one.
 				let deadline = clock.step(session.is_authenticated());
-				match discard::rejected_tail(&mut *stream, &mut decoder, &line, deadline).await? {
+				match discard::rejected_tail(
+					&mut *stream,
+					&mut decoder,
+					&line,
+					deadline,
+					self.append_limit,
+				)
+				.await?
+				{
 					Some(more) => rejected_tail = more,
 					None => return Ok(()),
 				}
@@ -425,7 +350,7 @@ impl Server {
 				continue;
 			};
 
-			if discard::oversized_sent_literal(&line) {
+			if discard::oversized_sent_literal(&line, self.append_limit) {
 				stream.write_all(b"* BYE literal too large\r\n").await?;
 				stream.flush().await?;
 				return Ok(());
@@ -628,6 +553,9 @@ impl Server {
 		}
 	}
 }
+
+#[path = "server_builder.rs"]
+mod builder;
 
 #[cfg(test)]
 #[path = "server_tests.rs"]

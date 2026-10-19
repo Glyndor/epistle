@@ -7,7 +7,7 @@ fn test_directory() -> Arc<Directory> {
 		("c@example.org".to_string(), "bob".to_string()),
 		("overflow@example.org".to_string(), "bob".to_string()),
 	];
-	for i in 0..=MAX_RECIPIENTS {
+	for i in 0..=DEFAULT_MAX_RECIPIENTS {
 		entries.push((format!("r{i}@example.org"), "bob".to_string()));
 	}
 	Arc::new(Directory::new(["example.org".to_string()], entries))
@@ -86,7 +86,7 @@ fn ehlo_greeting_advertises_extensions() {
 		"EHLO must advertise STARTTLS"
 	);
 	assert!(
-		rendered.contains(&format!("LIMITS RCPTMAX={MAX_RECIPIENTS}")),
+		rendered.contains(&format!("LIMITS RCPTMAX={DEFAULT_MAX_RECIPIENTS}")),
 		"EHLO must advertise the recipient limit"
 	);
 	assert!(session.esmtp());
@@ -387,7 +387,7 @@ fn malformed_reverse_path_is_rejected() {
 fn recipient_limit_is_enforced() {
 	let mut session = greeted();
 	session.command_line("MAIL FROM:<a@example.org>");
-	for i in 0..MAX_RECIPIENTS {
+	for i in 0..DEFAULT_MAX_RECIPIENTS {
 		let action = session.command_line(&format!("RCPT TO:<r{i}@example.org>"));
 		assert_eq!(reply_code(&action), 250, "recipient {i} accepted");
 	}

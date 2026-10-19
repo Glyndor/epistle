@@ -209,7 +209,7 @@ only is delivered at once and also gets an id.
 |---|---|---|
 | `from` | string, required | A bare address, no display name. Must be one the acting account owns |
 | `from_name` | string | The phrase of `From`. Absent uses the account's display name. At most 128 characters |
-| `to`, `cc`, `bcc` | arrays of strings | `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100. `bcc` is envelope only |
+| `to`, `cc`, `bcc` | arrays of strings | `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 by default (`max_recipients`). `bcc` is envelope only |
 | `reply_to`, `sender` | string | `sender` must be an address the account owns, like `from` |
 | `subject` | string | Default empty |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |

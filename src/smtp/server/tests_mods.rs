@@ -126,6 +126,10 @@ mod tests_session_limits;
 mod tests_header_fields;
 
 #[cfg(test)]
+#[path = "server_tests_recipients.rs"]
+mod tests_recipients;
+
+#[cfg(test)]
 #[path = "server_tests_session_time.rs"]
 mod tests_session_time;
 

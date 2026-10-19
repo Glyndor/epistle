@@ -22,7 +22,15 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 				.replace("=  12 # rate", "=  50 # rate"),
 		),
 	] {
-		let doc = edit_document(file.path(), key, Some("example.org"), None, Some(input)).unwrap();
+		let doc = edit_document(
+			file.path(),
+			key,
+			Some("example.org"),
+			None,
+			Some(input),
+			&mut Vec::new(),
+		)
+		.unwrap();
 		assert_eq!(
 			doc.commit().unwrap(),
 			super::super::config_edit::Outcome::Changed
@@ -44,7 +52,8 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 			Key::Quota,
 			Some("example.org"),
 			None,
-			Some("10G")
+			Some("10G"),
+			&mut Vec::new(),
 		)
 		.unwrap()
 		.commit()
@@ -55,10 +64,17 @@ fn domain_maps_and_global_limits_preserve_exact_commented_text() {
 		std::fs::metadata(file.path()).unwrap().modified().unwrap(),
 		modified
 	);
-	edit_document(file.path(), Key::Quota, Some("example.org"), None, None)
-		.unwrap()
-		.commit()
-		.unwrap();
+	edit_document(
+		file.path(),
+		Key::Quota,
+		Some("example.org"),
+		None,
+		None,
+		&mut Vec::new(),
+	)
+	.unwrap()
+	.commit()
+	.unwrap();
 	assert!(
 		std::fs::read_to_string(file.path()).unwrap()
 			== format!(
@@ -92,10 +108,17 @@ fn limits_dry_run_returns_diff_without_writing_or_restarting() {
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert_eq!(
 		String::from_utf8(out).unwrap(),
-		edit_document(file.path(), Key::Quota, None, None, Some("10G"))
-			.unwrap()
-			.dry_run()
-			.unwrap(),
+		edit_document(
+			file.path(),
+			Key::Quota,
+			None,
+			None,
+			Some("10G"),
+			&mut Vec::new()
+		)
+		.unwrap()
+		.dry_run()
+		.unwrap(),
 		"limits dry-run must print the engine diff"
 	);
 	assert!(status.is_empty(), "dry-run must keep status output empty");
@@ -115,7 +138,8 @@ fn unsupported_domain_key_reports_exact_error_without_writing() {
 			Key::QueueGiveUp,
 			Some("example.org"),
 			None,
-			Some("5d")
+			Some("5d"),
+			&mut Vec::new(),
 		)
 		.err()
 		.as_deref(),

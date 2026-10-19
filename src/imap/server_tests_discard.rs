@@ -70,7 +70,7 @@ async fn above_cap_synchronizing_literal_is_refused_with_toobig() {
 	greeting(&mut client).await;
 	// RFC 7889 §3: the client waits for a continuation that never comes,
 	// so the server answers TOOBIG and the connection carries on.
-	let over = crate::imap::command::MAX_APPEND_SIZE + 1;
+	let over = crate::imap::command::DEFAULT_APPEND_LIMIT + 1;
 	client
 		.write_all(format!("a2 APPEND INBOX {{{over}}}\r\na3 NOOP\r\na4 LOGOUT\r\n").as_bytes())
 		.await

@@ -60,6 +60,9 @@ mod tests_oauth;
 #[path = "../session_tests_ratelimit.rs"]
 mod tests_ratelimit;
 #[cfg(test)]
+#[path = "../session_tests_recipients.rs"]
+mod tests_recipients;
+#[cfg(test)]
 #[path = "../session_tests_scram.rs"]
 mod tests_scram;
 #[cfg(test)]

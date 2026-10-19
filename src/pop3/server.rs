@@ -46,6 +46,9 @@ pub struct Server {
 	max_per_ip: usize,
 	crypto: crate::storage::MessageCrypto,
 	preauth_timeout: Duration,
+	/// Shared per-account counter applied after authentication. `None`
+	/// keeps the historical behaviour (no per-account cap).
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 }
 
 impl Server {
@@ -60,7 +63,19 @@ impl Server {
 			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
+			per_account_counter: None,
 		}
+	}
+
+	/// Apply the shared per-account counter after authentication.
+	/// `None` keeps the listener free of any per-account cap (the
+	/// historical behaviour).
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
 	}
 
 	/// Decode stored message bodies through `crypto` when serving RETR/TOP.
@@ -141,7 +156,14 @@ impl Server {
 			self.data_dir.clone(),
 			self.crypto.clone(),
 		);
-		run(stream, backend, Some(peer_ip), clock).await
+		run(
+			stream,
+			backend,
+			Some(peer_ip),
+			clock,
+			self.per_account_counter.clone(),
+		)
+		.await
 	}
 }
 
@@ -152,12 +174,16 @@ async fn run<S>(
 	backend: MailboxBackend,
 	peer_ip: Option<std::net::IpAddr>,
 	mut clock: SessionClock,
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 ) -> std::io::Result<()>
 where
 	S: AsyncRead + AsyncWrite + Unpin,
 {
 	let mut session = Session::new(backend);
 	session.set_peer_ip(peer_ip);
+	if let Some(counter) = per_account_counter {
+		session = session.with_per_account_counter(counter);
+	}
 	stream.write_all(&session.greeting().encode()).await?;
 
 	let mut decoder = LineDecoder::new();
@@ -236,7 +262,7 @@ mod tests {
 	#[tokio::test]
 	async fn too_many_errors_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		// Drain the greeting, then spam invalid commands.
 		let mut chunk = [0u8; 4096];
 		let _ = client.read(&mut chunk).await;
@@ -265,7 +291,7 @@ mod tests {
 	#[tokio::test]
 	async fn quit_after_greeting_closes_cleanly() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let greeting = read_chunk(&mut client).await;
 		assert!(greeting.starts_with("+OK"), "{greeting}");
 		client.write_all(b"QUIT\r\n").await.expect("write");
@@ -280,7 +306,7 @@ mod tests {
 	#[tokio::test]
 	async fn eof_ends_the_session() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		drop(client); // client hangs up before any command.
 		assert!(task.await.expect("join").is_ok());
@@ -289,7 +315,7 @@ mod tests {
 	#[tokio::test]
 	async fn overlong_line_is_rejected() {
 		let (mut client, server) = duplex(256 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		// A line far longer than the protocol allows.
 		let huge = vec![b'A'; 100 * 1024];
@@ -303,7 +329,7 @@ mod tests {
 	#[tokio::test]
 	async fn non_ascii_command_is_rejected() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		client.write_all(&[0xff, 0xfe]).await.expect("write");
 		client.write_all(b"\r\n").await.expect("write");
@@ -317,7 +343,7 @@ mod tests {
 	#[tokio::test(start_paused = true)]
 	async fn idle_timeout_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None, clock()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await; // greeting
 		// Send nothing: the read timeout (paused clock) fires and closes.
 		let mut chunk = [0u8; 16];

@@ -1,7 +1,9 @@
-use super::super::{Command, NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, parse};
+use super::super::{
+	Command, DEFAULT_APPEND_LIMIT, NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, parse,
+};
 
 fn notify(line: &str) -> Result<NotifyRequest, ()> {
-	match parse(line).map_err(|_| ())?.command {
+	match parse(line, DEFAULT_APPEND_LIMIT).map_err(|_| ())?.command {
 		Command::Notify(request) => Ok(request),
 		_ => Err(()),
 	}

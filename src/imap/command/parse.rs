@@ -1,8 +1,9 @@
 use super::fetch::parse_fetch;
 use super::*;
 
-/// Maximum literal size accepted for APPEND (matches the SMTP cap).
-pub const MAX_APPEND_SIZE: usize = 25 * 1024 * 1024;
+/// Default per-listener APPENDLIMIT (RFC 7889) when no `[server]
+/// max_message_size` is configured: the SMTP `MAX_MESSAGE_SIZE` it shares.
+pub const DEFAULT_APPEND_LIMIT: usize = crate::smtp::session::MAX_MESSAGE_SIZE;
 
 /// Split a line into its validated tag, verb and argument text.
 pub(super) fn split_line(line: &str) -> Result<(String, &str, &str), ParseError> {
@@ -28,7 +29,7 @@ pub(super) fn split_line(line: &str) -> Result<(String, &str, &str), ParseError>
 /// Parse one command line. LOGIN and AUTHENTICATE carry credentials and are
 /// refused here as unknown: they parse through [`super::parse_line`] into
 /// their own types, so a `Command` never holds a secret.
-pub fn parse(line: &str) -> Result<Tagged, ParseError> {
+pub fn parse(line: &str, append_limit: usize) -> Result<Tagged, ParseError> {
 	let (tag, verb, args) = split_line(line)?;
 
 	let command = match verb.to_ascii_uppercase().as_str() {
@@ -101,8 +102,8 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		}
 		"EXPUNGE" => no_args(&tag, args, Command::Expunge)?,
 		"IDLE" => no_args(&tag, args, Command::Idle)?,
-		"APPEND" => super::literal::parse_append(&tag, args)?,
-		"REPLACE" => super::literal::parse_replace(&tag, args, false)?,
+		"APPEND" => super::literal::parse_append(&tag, args, append_limit)?,
+		"REPLACE" => super::literal::parse_replace(&tag, args, false, append_limit)?,
 		"FETCH" => parse_fetch(&tag, args, false)?,
 		"STORE" => parse_store(&tag, args, false)?,
 		"COPY" => parse_copy(&tag, args, false, false)?,
@@ -153,7 +154,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 			} else if sub.eq_ignore_ascii_case("THREAD") {
 				super::search::parse_thread(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("REPLACE") {
-				super::literal::parse_replace(&tag, sub_args, true)?
+				super::literal::parse_replace(&tag, sub_args, true, append_limit)?
 			} else if sub.eq_ignore_ascii_case("EXPUNGE") {
 				let sequence = super::parse_sequence_set(sub_args)
 					.ok_or_else(|| ParseError::BadArguments(tag.clone()))?;

@@ -374,6 +374,28 @@ pub struct Config {
 	/// client is counted by its /64; no peer is exempt.
 	#[serde(default)]
 	pub max_mailbox_connections_per_ip: Option<usize>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined. Two caps apply
+	/// together: at most `max_connections_per_account_per_ip` per
+	/// (account, client IP) and at most `max_connections_per_account_total`
+	/// per account. Absent (or `0`) uses the built-in defaults of 10 per
+	/// (account, IP) and 50 per account, matching Dovecot's
+	/// `mail_max_userip_connections`. Applied after authentication: a
+	/// connection over the cap is answered with the protocol's
+	/// "user is busy" reply (`NO [LIMIT]` on IMAP, `-ERR [IN-USE]` on
+	/// POP3, HTTP 429 on JMAP) and closed.
+	#[serde(default)]
+	pub max_connections_per_account: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined per (account, client IP).
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 10.
+	#[serde(default)]
+	pub max_connections_per_account_per_ip: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined across every client IP.
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 50.
+	#[serde(default)]
+	pub max_connections_per_account_total: Option<u32>,
 	/// Max concurrent connections each plain-HTTP listener (API and JMAP,
 	/// WebDAV, autoconfig without TLS, ACME, metrics) serves; a connection
 	/// over the cap gets `503` and is closed. Absent (or `0`) uses 1024.
@@ -423,6 +445,12 @@ pub struct Config {
 	/// the same value.
 	#[serde(default)]
 	pub max_message_size: Option<u64>,
+	/// Recipients one message may name, on SMTP (`RCPT TO`, advertised as
+	/// `LIMITS RCPTMAX`), `POST /api/v1/send` and JMAP `EmailSubmission/set`.
+	/// Absent keeps 100. RFC 5321 §4.5.3.1.8 says a server MUST accept at
+	/// least 100, so a lower value is refused; at most 10000.
+	#[serde(default)]
+	pub max_recipients: Option<usize>,
 	/// Tenant definitions: named groups of domains with optional aggregate
 	/// caps on accounts, domains, storage and submission rate. Absent or
 	/// empty means no tenancy is in effect and the server behaves exactly as
@@ -528,6 +556,7 @@ impl std::fmt::Debug for Config {
 				&self.max_connections_per_listener,
 			)
 			.field("max_connections_per_ip", &self.max_connections_per_ip)
+			.field("max_recipients", &self.max_recipients)
 			.field("message_memory_budget", &self.message_memory_budget)
 			.field("min_data_rate", &self.min_data_rate)
 			.field("data_rate_grace", &self.data_rate_grace)
@@ -537,6 +566,18 @@ impl std::fmt::Debug for Config {
 			.field(
 				"max_mailbox_connections_per_ip",
 				&self.max_mailbox_connections_per_ip,
+			)
+			.field(
+				"max_connections_per_account",
+				&self.max_connections_per_account,
+			)
+			.field(
+				"max_connections_per_account_per_ip",
+				&self.max_connections_per_account_per_ip,
+			)
+			.field(
+				"max_connections_per_account_total",
+				&self.max_connections_per_account_total,
 			)
 			.field("max_http_connections", &self.max_http_connections)
 			.field(

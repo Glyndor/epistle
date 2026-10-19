@@ -176,6 +176,25 @@ pub struct Session {
 	/// offered through `AUTHENTICATE`. `false` hides both on the wire
 	/// and refuses an explicit `AUTHENTICATE` against them.
 	pub(super) scram_enabled: bool,
+	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
+	/// command may carry. Follows `[server] max_message_size`, the same
+	/// cap the SMTP, REST and JMAP submission paths enforce. The default
+	/// is [`super::super::command::DEFAULT_APPEND_LIMIT`]; raised or
+	/// lowered by [`Session::with_append_limit`].
+	pub(super) append_limit: usize,
+	/// Shared per-account counter. `Some` when the listener was built
+	/// with a counter; the session claims one slot on every successful
+	/// authentication and releases it on every disconnect path. `None`
+	/// keeps the historical behaviour (no per-account cap).
+	pub(super) per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
+	/// The slot the session holds on [`Session::per_account_counter`].
+	/// `Some` between successful authentication and the next
+	/// [`Session::release_per_account_slot`] call. Dropping the session
+	/// without an explicit release (the test path) does not lose the
+	/// slot: [`Session::release_per_account_slot`] is also called from
+	/// [`Session::take_per_account_slot`] when the slot is taken and the
+	/// function is not the only owner.
+	pub(super) per_account_slot: Option<crate::net::per_account_conn::PerAccountSlot>,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -260,7 +279,60 @@ impl Session {
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
 			scram_enabled: true,
+			append_limit: super::super::command::DEFAULT_APPEND_LIMIT,
+			per_account_counter: None,
+			per_account_slot: None,
 		}
+	}
+
+	/// Set APPENDLIMIT (RFC 7889), the largest literal an APPEND or
+	/// REPLACE command may carry. `0` keeps the built-in default
+	/// ([`super::super::command::DEFAULT_APPEND_LIMIT`]); any other value
+	/// is taken as given. The server's value flows from
+	/// `[server] max_message_size`, the same cap the SMTP, REST and
+	/// JMAP submission paths enforce.
+	pub fn with_append_limit(mut self, bytes: usize) -> Self {
+		if bytes > 0 {
+			self.append_limit = bytes;
+		}
+		self
+	}
+
+	/// APPENDLIMIT (RFC 7889), the largest literal an APPEND or REPLACE
+	/// command may carry.
+	pub fn append_limit(&self) -> usize {
+		self.append_limit
+	}
+
+	/// Attach the shared per-account counter this listener enforces.
+	/// `None` disables the cap. The counter is consulted on every
+	/// successful authentication; the slot is released by the network
+	/// layer when the connection ends.
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
+	}
+
+	/// Take and immediately drop the slot the session holds on the
+	/// per-account counter, releasing one place for the same account.
+	/// Called by the network layer on every disconnect path so the
+	/// count goes back regardless of how the connection ends.
+	pub fn release_per_account_slot(&mut self) {
+		self.per_account_slot = None;
+	}
+
+	/// Hand the per-account slot to the caller. The caller owns the
+	/// slot until it drops, which is how the IMAP server ensures the
+	/// count is released on every disconnect path (success, error,
+	/// panic, timeout) without having to thread the explicit release
+	/// through every error path.
+	pub fn take_per_account_slot(
+		&mut self,
+	) -> Option<crate::net::per_account_conn::PerAccountSlot> {
+		self.per_account_slot.take()
 	}
 
 	/// Tag every password authentication attempt through this session with
