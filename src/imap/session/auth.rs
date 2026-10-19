@@ -36,10 +36,6 @@ pub(super) enum PendingAuth {
 		/// subject who completes the exchange must not clear the ban with a
 		/// valid proof nor extend it with a bad one.
 		refusal: Option<ScramRefusal>,
-		/// `true` when the exchange was admitted by the known-network
-		/// bypass at client-first. A successful proof is a bypass
-		/// lift and must skip the ban-row clear.
-		bypassed: bool,
 	},
 	/// AUTH=LOGIN: awaiting the base64 username.
 	LoginUser { tag: String },
@@ -266,16 +262,7 @@ COMPRESS=DEFLATE",
 				credentials,
 				account,
 				refusal,
-				bypassed,
-			}) => self.scram_final(
-				&tag,
-				line,
-				*server,
-				*credentials,
-				&account,
-				refusal,
-				bypassed,
-			),
+			}) => self.scram_final(&tag, line, *server, *credentials, &account, refusal),
 			Some(PendingAuth::LoginUser { tag }) => self.login_user(&tag, line),
 			Some(PendingAuth::LoginPass { tag, user }) => self.login_pass(&tag, &user, line),
 			Some(PendingAuth::External { tag }) => self.auth_external(&tag, line),
@@ -423,15 +410,12 @@ COMPRESS=DEFLATE",
 			credentials: Box::new(plan.credentials),
 			account: plan.account,
 			refusal: plan.refusal,
-			bypassed: plan.bypassed,
 		});
 		continuation(&BASE64.encode(server_first))
 	}
 
 	/// Count a failure that ends an exchange before the proof, unless a ban
-	/// caused it: a ban refusal never moves the strike count. A failure
-	/// never carries the bypass flag, because the bypass lifts a ban, it
-	/// does not cause a new failure.
+	/// caused it: a ban refusal never moves the strike count.
 	fn count_scram_failure(&self, username: &str, plan: &ScramPlan) {
 		match &plan.refusal {
 			Some(ScramRefusal::Banned) => {}
@@ -451,7 +435,6 @@ COMPRESS=DEFLATE",
 		credentials: ScramCredentials,
 		account: &str,
 		refusal: Option<ScramRefusal>,
-		bypassed: bool,
 	) -> Output {
 		// A refused exchange stays refused at client-final. A ban that was in
 		// force at client-first holds even if it has since expired: a banned
@@ -467,13 +450,24 @@ COMPRESS=DEFLATE",
 			}
 			None => {}
 		}
-		if matches!(
-			self.directory
-				.check_ban(account, self.peer_ip, self.auth_protocol),
-			BanOutcome::Banned
-		) {
-			return self.auth_failure(tag);
-		}
+		// The recheck at client-final: a ban that fired between
+		// client-first and client-final still refuses the exchange,
+		// because `Banned` is only emitted when the ban is in force at
+		// the time of the check.
+		// The flag that decides whether the success lifts the ban rows
+		// comes from THIS check, not from any value carried from
+		// client-first: between the two messages a ban can fire
+		// (turning a `Clear` into a `Banned` that the recheck refuses)
+		// or lapse (turning a `BannedButKnown` into a `Clear` that
+		// lifts the ban as a normal success would).
+		let bypassed = match self
+			.directory
+			.check_ban(account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.auth_failure(tag),
+			BanOutcome::BannedButKnown { .. } => true,
+			BanOutcome::Clear { .. } => false,
+		};
 		let Some(client_final) = decode(encoded) else {
 			self.record_scram_outcome(account, Some(account), false, false);
 			return self.auth_failure(tag);
@@ -482,10 +476,10 @@ COMPRESS=DEFLATE",
 			Ok(server_final) => {
 				// Clear the ban store for both subjects on a successful
 				// proof; the ban check at client-first already consulted
-				// the same store with the same keys, so the success here
-				// undoes any in-flight strikes the same way the PLAIN path
-				// does. A bypass lift keeps the ban row in force: only
-				// the bypass list gets refreshed.
+				// the store with the same keys, so the success here undoes
+				// any in-flight strikes the same way the PLAIN path does.
+				// A bypass lift keeps the ban row in force: only the
+				// bypass list gets refreshed.
 				self.record_scram_outcome(account, Some(account), true, bypassed);
 				self.auth_success(
 					tag,

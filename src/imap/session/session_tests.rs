@@ -66,6 +66,8 @@ mod auth;
 mod auth_ban_lifecycle;
 #[path = "session_tests_auth_ban_owner_known_network.rs"]
 mod auth_ban_owner_known_network;
+#[path = "session_tests_auth_ban_toctou.rs"]
+mod auth_ban_toctou;
 #[path = "session_tests_auth_bans.rs"]
 mod auth_bans;
 #[path = "session_tests_basic.rs"]

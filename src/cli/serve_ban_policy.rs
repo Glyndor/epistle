@@ -19,3 +19,17 @@ pub(super) fn ban_policy_for(config: &Config) -> crate::antispam::bans::BanPolic
 		..default
 	}
 }
+
+/// The store of bans and known networks over `pool`, with the policy of the
+/// operator's configuration.
+pub(super) fn pg_ban_store(
+	pool: &sqlx::PgPool,
+	metrics: &std::sync::Arc<crate::metrics::Metrics>,
+	policy: crate::antispam::bans::BanPolicy,
+) -> std::sync::Arc<dyn crate::antispam::bans::BanStore> {
+	std::sync::Arc::new(crate::antispam::bans::PgBanStore::with_policy(
+		pool.clone(),
+		Some(metrics.clone()),
+		policy,
+	))
+}

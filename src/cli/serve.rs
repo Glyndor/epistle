@@ -100,13 +100,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// `known_network_window_secs` the operator set.
 	let policy = ban_policy::ban_policy_for(&config);
 	if let Some(pool) = &reputation_pool {
-		let ban_store: Arc<dyn crate::antispam::bans::BanStore> =
-			Arc::new(crate::antispam::bans::PgBanStore::with_policy(
-				pool.clone(),
-				Some(metrics.clone()),
-				policy,
-			));
-		store = store.with_ban_store(ban_store);
+		store = store.with_ban_store(ban_policy::pg_ban_store(pool, &metrics, policy));
 	}
 	// `into_shared` wires the live store as the SCRAM upgrader, so a
 	// successful cleartext login rewrites a low-iteration verifier.
