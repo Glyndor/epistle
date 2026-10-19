@@ -239,11 +239,34 @@ pub(crate) fn data_dir_with_compose(parent: &Path) -> PathBuf {
 	data_dir
 }
 
-/// The presence check needs no live socket in podup-only fixtures.
+/// A runtime directory whose Podman socket answers `/libpod/_ping`, which
+/// `stack update` waits for before it changes anything.
 #[allow(dead_code)]
 pub(crate) fn fake_podman_runtime(parent: &Path) -> PathBuf {
 	let runtime = parent.join("runtime");
 	std::fs::create_dir_all(runtime.join("podman")).expect("create runtime fixture");
-	std::fs::write(runtime.join("podman/podman.sock"), b"").expect("write socket marker");
+	let socket = runtime.join("podman/podman.sock");
+	// A second call for the same directory finds the first one serving.
+	if !socket.exists() {
+		let listener =
+			std::os::unix::net::UnixListener::bind(&socket).expect("bind fake Podman API");
+		serve_ping(listener);
+	}
 	runtime
+}
+
+/// Answer every request on `listener` with a 200, for the life of the test
+/// process.
+#[allow(dead_code)]
+pub(crate) fn serve_ping(listener: std::os::unix::net::UnixListener) {
+	std::thread::spawn(move || {
+		use std::io::{Read, Write};
+		for stream in listener.incoming().flatten() {
+			let mut stream = stream;
+			let mut request = [0u8; 512];
+			let _ = stream.read(&mut request);
+			let _ = stream
+				.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
+		}
+	});
 }

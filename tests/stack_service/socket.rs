@@ -34,6 +34,17 @@ fn every_stack_action_repairs_an_absent_socket_before_podup() {
 			),
 		)
 		.unwrap();
+		// The systemctl shim only records its arguments, so the socket unit
+		// "comes up" once the shim has run: bind the API then.
+		let socket = dir.path().join("runtime/podman/podman.sock");
+		let seen = log.clone();
+		std::thread::spawn(move || {
+			while std::fs::read_to_string(&seen).map_or(true, |text| text.is_empty()) {
+				std::thread::sleep(std::time::Duration::from_millis(10));
+			}
+			std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+			serve_ping(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+		});
 		let output = Command::new(binary())
 			.args(["stack", "--config", cfg.to_str().unwrap(), action])
 			.env("PATH", path_with_shim_first(&shim))
