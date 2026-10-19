@@ -166,10 +166,7 @@ impl Session {
 					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
 				))
 			}
-			Command::Id => Output::text(format!(
-				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
-				env!("CARGO_PKG_VERSION"),
-			)),
+			Command::Id => Output::text(format!("* ID NIL\r\n{tag} OK ID completed\r\n")),
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),

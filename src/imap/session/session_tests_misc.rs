@@ -62,17 +62,27 @@ fn namespace_after_auth_lists_personal_namespace() {
 }
 
 #[test]
-fn id_returns_server_identity_and_accepts_client_params() {
+fn id_hides_server_version_and_accepts_client_params() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 ID (\"name\" \"Thunderbird\" \"version\" \"128\")");
 	let response = text(&output);
+	let id = response
+		.lines()
+		.find(|line| line.starts_with("* ID "))
+		.unwrap();
+	assert_eq!(id, "* ID NIL");
 	assert!(
-		response.contains("* ID (\"name\" \"Glyndor\""),
-		"{response}"
+		!id.chars().any(|character| character.is_ascii_digit()),
+		"{id}"
 	);
 	assert!(response.contains("a1 OK ID completed"), "{response}");
-	assert!(text(&session.command_line("a2 ID NIL")).contains("a2 OK"));
+	let response = text(&session.command_line("a2 ID NIL"));
+	assert_eq!(response, "* ID NIL\r\na2 OK ID completed\r\n");
+
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a3 ID NIL"));
+	assert_eq!(response, "* ID NIL\r\na3 OK ID completed\r\n");
 }
 
 #[test]
