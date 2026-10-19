@@ -19,4 +19,6 @@ mod session_tests_gate_busy;
 
 #[cfg(test)]
 mod session_tests_per_account;
+
+#[cfg(test)]
 mod session_tests_ban_owner_known_network;
