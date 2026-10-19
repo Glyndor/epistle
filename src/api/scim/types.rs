@@ -146,15 +146,15 @@ pub struct PatchOperation {
 
 impl ListResponse {
 	/// Build a single-page response from `users`. The `start_index` and
-	/// `items_per_page` are derived from the request; total is the full
-	/// match count.
-	pub fn single_page(start_index: u64, items_per_page: u64, users: Vec<User>) -> Self {
+	/// `items_per_page` are derived from the request and returned resources;
+	/// `total_results` is the full match count before pagination.
+	pub fn single_page(start_index: u64, total_results: u64, users: Vec<User>) -> Self {
 		ListResponse {
 			schemas: vec![LIST_RESPONSE_SCHEMA.to_string()],
-			total_results: users.len() as u64,
+			total_results,
+			items_per_page: users.len() as u64,
 			resources: users,
 			start_index,
-			items_per_page,
 		}
 	}
 }
@@ -195,7 +195,7 @@ mod tests {
 
 	#[test]
 	fn list_response_carries_scim_resource_field_name() {
-		let list = ListResponse::single_page(1, 1, Vec::new());
+		let list = ListResponse::single_page(1, 0, Vec::new());
 		let encoded = serde_json::to_string(&list).expect("encode");
 		assert!(encoded.contains("\"Resources\""), "{encoded}");
 		assert!(encoded.contains(LIST_RESPONSE_SCHEMA), "{encoded}");
