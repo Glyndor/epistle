@@ -146,5 +146,9 @@ mod tests_attachments_flood;
 mod tests_inbound_headers;
 
 #[cfg(test)]
+#[path = "server_tests_inbound_headers_unicode.rs"]
+mod tests_inbound_headers_unicode;
+
+#[cfg(test)]
 #[path = "server_tests_inbound_order.rs"]
 mod tests_inbound_order;

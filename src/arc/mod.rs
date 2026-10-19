@@ -13,6 +13,9 @@ pub mod signature;
 pub mod validate;
 
 #[cfg(test)]
+pub(crate) use ams::header_names;
+
+#[cfg(test)]
 mod ams_tests;
 #[cfg(test)]
 mod chain_tests;
