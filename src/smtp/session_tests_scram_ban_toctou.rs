@@ -99,7 +99,7 @@ async fn smtp_scram_bypass_toctou_ban_appears_in_flight_keeps_ban() {
 	assert_eq!(
 		reply_code(&session.auth_line(&b64(&client_final))),
 		235,
-		"a valid SCRAM proof from a known network must succeed even when a ban fires in flight: {challenge:?}",
+		"a valid SCRAM proof from a known network must succeed even when a ban fires in flight",
 	);
 
 	assert_eq!(

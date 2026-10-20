@@ -65,7 +65,7 @@ fn mail_from_follows_the_table() {
 			let code = if *allowed { "250" } else { "553" };
 			assert!(
 				reply.starts_with(code),
-				"MAIL FROM {from} got an unexpected reply: {reply}"
+				"MAIL FROM {from} got an unexpected reply"
 			);
 		}
 	}

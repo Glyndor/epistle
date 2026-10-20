@@ -53,11 +53,7 @@ async fn imap_scram_banned_account_from_known_network_is_admitted() {
 		"a AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
 	));
-	assert!(
-		challenge.collect_auth,
-		"expected a continuation challenge, got {:?}",
-		challenge
-	);
+	assert!(challenge.collect_auth, "expected a continuation challenge");
 	// Decode the server-first; the SCRAM proof builder uses the
 	// nonce from the server-first, not the static test nonce.
 	let server_first = super::auth_bans::decode_server_first(&text(&challenge));
