@@ -41,6 +41,21 @@ pub enum BanOutcome {
 	/// (see `log_banned`); the caller returns the wire failure and does
 	/// not call `record_ban_outcome`.
 	Banned,
+	/// The account is banned, but the (account, network) pair is on the
+	/// bypass list: the caller is allowed to proceed with the credential
+	/// check, exactly as if there were no ban. The account ban stays
+	/// active; only the network the owner has used before lifts the
+	/// short-circuit. Without an `ip`, or for a network that is not on
+	/// the list, the result is [`BanOutcome::Banned`]. From any other
+	/// network the response is identical to a banned subject, so the
+	/// ban does not become an oracle for guessing passwords from
+	/// elsewhere.
+	BannedButKnown {
+		/// The account the ban check resolved. The caller uses this
+		/// to key the credential check and the success-side
+		/// `record_ban_outcome` call.
+		account: String,
+	},
 }
 
 impl Directory {
@@ -163,10 +178,29 @@ impl Directory {
 		// records the rule that fired. A ban refusal is distinct from a
 		// credential failure: the strike count and ban expiry do not
 		// move, so the ban keeps ending when it was going to end.
-		let resolved_account = match self.check_ban(login, ip, protocol) {
+		//
+		// The bypass list lets a banned account sign in from a network
+		// the owner has used before: the credential check still runs,
+		// the response shape is the same, and only the network the
+		// owner has proven themselves from lifts the short-circuit.
+		// The flag travels with the success path so a successful
+		// sign-in via the bypass does not lift the ban row: the ban
+		// must stay in force for any other client that connects from
+		// another network.
+		let ban_outcome = self.check_ban(login, ip, protocol);
+		let bypassed = matches!(ban_outcome, BanOutcome::BannedButKnown { .. });
+		let resolved_account = match ban_outcome {
 			BanOutcome::Banned => {
 				self.record_auth_outcome(login, None, ip, protocol);
 				return hash_gate::Verdict::Refused;
+			}
+			BanOutcome::BannedButKnown { account } => {
+				// The account ban is bypassed for this request, not
+				// lifted. The audit event for the ban stays in place
+				// (the check that fired is still in effect for any
+				// other client) and the credential check still has
+				// to admit or refuse the attempt on its own merits.
+				Some(account)
 			}
 			BanOutcome::Clear { account } => account,
 		};
@@ -204,7 +238,14 @@ impl Directory {
 		// app-password CIDR miss, a protocol allowlist denial). An unknown
 		// login never reaches the account side.
 		let account_for_record = verified_account.or(resolved_account.as_deref());
-		self.record_ban_outcome(login, account_for_record, verified.is_some(), ip, protocol);
+		self.record_ban_outcome(
+			login,
+			account_for_record,
+			verified.is_some(),
+			bypassed,
+			ip,
+			protocol,
+		);
 		match verified {
 			Some((account, label)) => hash_gate::Verdict::Admitted { account, label },
 			None => hash_gate::Verdict::Refused,
@@ -279,10 +320,54 @@ impl Directory {
 			("account", bans::subject_account(subject_account)),
 		];
 		for (kind, subject) in subjects {
-			if let Some(info) = block_on_async(store.is_banned(&subject, now_secs))
-				&& let Some(account) = &account
-			{
-				self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
+			if let Some(info) = block_on_async(store.is_banned(&subject, now_secs)) {
+				// Only the real account (not the stand-in for an unknown
+				// login) has rows in the bypass list, so the lookup is
+				// gated on the login resolving locally. The check asks
+				// the store; the store says `false` on a database error
+				// (fail closed), so a ban stays a ban.
+				// A ban an operator placed by hand is a decision, not a
+				// consequence of failed attempts: it is never bypassed,
+				// whatever network the request comes from.
+				// The bypass lifts the account ban only. A pair ban
+				// (`account|client`) caps failures from one network, so a
+				// known network still needs the cap: without it an attacker
+				// on a shared NAT or a known VPN could guess without limit.
+				let bypassable = info.reason != bans::MANUAL_REASON;
+				let bypassed = bypassable
+					&& kind == "account"
+					&& account.is_some()
+					&& ip.is_some() && block_on_async(store.is_known_network(
+					subject_account,
+					ip.expect("ip present"),
+					now_secs,
+				));
+				if bypassed {
+					// The ban row is still in force for any other
+					// client; what we record is that this single
+					// request was admitted by the bypass, not by the
+					// absence of a ban. The audit event for the
+					// bypass carries the rule that fired and the
+					// network the request came from, so an operator
+					// can correlate one log line with the same line
+					// in the ban table.
+					if let Some(account) = &account {
+						self.log_banned_bypass(
+							kind,
+							account,
+							&info.reason,
+							info.until_secs,
+							ip.expect("ip present"),
+							protocol,
+						);
+					}
+					return BanOutcome::BannedButKnown {
+						account: subject_account.to_string(),
+					};
+				}
+				if let Some(account) = &account {
+					self.log_banned(kind, account, &info.reason, info.until_secs, protocol);
+				}
 				return BanOutcome::Banned;
 			}
 		}
@@ -314,12 +399,49 @@ impl Directory {
 		);
 	}
 
+	/// Emit a structured audit event when a ban is in force but the
+	/// request is admitted by the known-network bypass. The event is
+	/// distinct from `auth.banned` so a log filter can tell a refusal
+	/// from a bypass lift; the network is included so an operator can
+	/// correlate the bypass lift with a row in the bypass list.
+	fn log_banned_bypass(
+		&self,
+		kind: &str,
+		identifier: &str,
+		reason: &str,
+		until_secs: u64,
+		network: std::net::IpAddr,
+		protocol: crate::config::Protocol,
+	) {
+		tracing::info!(
+			target: "epistle::auth",
+			event = "auth.banned_bypass",
+			kind = %kind,
+			identifier = %identifier,
+			reason = %reason,
+			until_secs = %until_secs,
+			network = %network,
+			protocol = protocol.as_str(),
+			"authentication admitted by the known-network bypass"
+		);
+	}
+
 	/// After the authentication outcome is known, write it back to the
 	/// shared ban store. A credential failure records against both the IP
 	/// (when known) and the resolved account; a success clears both. A
 	/// ban refusal is NOT recorded here (the caller never reaches this
 	/// method for a ban refusal), so the strike count and the ban
 	/// expiry stay where they were.
+	///
+	/// `bypassed` says the credential check was admitted by the
+	/// known-network bypass ([`BanOutcome::BannedButKnown`]) rather than
+	/// the absence of a ban. A success that came through the bypass
+	/// refreshes the `(account, network)` row in the bypass list but
+	/// does NOT call `clear_success`: lifting the account ban here
+	/// would un-ban the attacker who tripped it from another network,
+	/// and lifting the pair row would reset the per-IP cap from this
+	/// network. The ban must stay in force for any other client; the
+	/// bypass only lets the owner through for this one request.
 	///
 	/// `account` is the account the ban check or the credential check
 	/// resolved; `None` when the login did not resolve locally, so the
@@ -329,6 +451,7 @@ impl Directory {
 		login: &str,
 		account: Option<&str>,
 		success: bool,
+		bypassed: bool,
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) {
@@ -342,9 +465,23 @@ impl Directory {
 			// client pair had accumulated. It never clears the client: a
 			// client that owns one account must not be able to reset its
 			// own count between guesses at others.
+			//
+			// The bypass list is also written here, but only after a
+			// full successful sign-in (with the credential check done
+			// and the second factor accepted, if any). The write is
+			// throttled inside the store so a hot sign-in pattern does
+			// not pay a round trip per request, and it only happens for
+			// the IP the listener actually saw. An unknown login never
+			// reaches here (the caller routed it through the stand-in
+			// account, which is not the real account name).
 			if let Some(account) = account {
-				block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
-				block_on_async(store.clear_success(&bans::subject_account(account)));
+				if !bypassed {
+					block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
+					block_on_async(store.clear_success(&bans::subject_account(account)));
+				}
+				if let Some(ip) = ip {
+					block_on_async(store.record_known_network(account, ip, now_secs));
+				}
 			}
 			return;
 		}

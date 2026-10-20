@@ -79,6 +79,13 @@ pub enum Key {
 	/// Concurrent connections one client may hold on each plain-HTTP
 	/// listener. Default is 256.
 	MaxHttpConnectionsPerIp,
+	/// Seconds a successful authentication keeps a (account, network)
+	/// pair on the bypass list that lets a banned account sign in from
+	/// a network the owner has used before. The row ages out of the
+	/// list after this many seconds; a network the owner has not used
+	/// in the window falls back to the no-bypass response. Default is
+	/// 30 days; from one hour to one year.
+	KnownNetworkWindow,
 }
 
 impl Key {
@@ -89,7 +96,7 @@ impl Key {
 	/// appearing in `limits show` without the metadata the operator
 	/// needs.
 	#[allow(dead_code)] // The catalog is the new iteration surface; ALL is kept for direct tests.
-	pub(super) const ALL: [Self; 28] = [
+	pub(super) const ALL: [Self; 29] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -118,6 +125,7 @@ impl Key {
 		Self::MaxMailboxConnectionsPerIp,
 		Self::MaxHttpConnections,
 		Self::MaxHttpConnectionsPerIp,
+		Self::KnownNetworkWindow,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -150,6 +158,7 @@ impl Key {
 			Self::MaxMailboxConnectionsPerIp => "max-mailbox-connections-per-ip",
 			Self::MaxHttpConnections => "max-http-connections",
 			Self::MaxHttpConnectionsPerIp => "max-http-connections-per-ip",
+			Self::KnownNetworkWindow => "known-network-window",
 		}
 	}
 
@@ -183,6 +192,7 @@ impl Key {
 			Self::MaxMailboxConnectionsPerIp => "max_mailbox_connections_per_ip",
 			Self::MaxHttpConnections => "max_http_connections",
 			Self::MaxHttpConnectionsPerIp => "max_http_connections_per_ip",
+			Self::KnownNetworkWindow => "known_network_window_secs",
 		}
 	}
 
@@ -269,7 +279,8 @@ impl Key {
 		match self {
 			Self::Quota | Self::MaxMessageSize | Self::MessageMemoryBudget => Unit::Size,
 			Self::MinDataRate => Unit::Rate,
-			Self::QueueGiveUp
+			Self::KnownNetworkWindow
+			| Self::QueueGiveUp
 			| Self::DataRateGrace
 			| Self::MaxSessionTime
 			| Self::PreauthTimeout
@@ -351,6 +362,7 @@ impl Key {
 				.max_http_connections_per_ip
 				.filter(|value| *value != 0)
 				.map(|value| value as u64),
+			Self::KnownNetworkWindow => config.known_network_window_secs,
 		}
 	}
 
@@ -388,6 +400,7 @@ impl Key {
 			Self::MaxHttpConnectionsPerIp => {
 				Some(crate::net::conn_limit::DEFAULT_HTTP_CONNECTIONS_PER_IP as u64)
 			}
+			Self::KnownNetworkWindow => Some(30 * 24 * 60 * 60),
 			_ => None,
 		}
 	}

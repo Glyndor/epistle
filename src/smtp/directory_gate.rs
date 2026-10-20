@@ -94,7 +94,8 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) -> ScramPlan {
-		let resolved = match self.check_ban(username, ip, protocol) {
+		let ban_outcome = self.check_ban(username, ip, protocol);
+		let resolved = match ban_outcome {
 			BanOutcome::Banned => {
 				return ScramPlan {
 					credentials: self.decoy_scram_credentials(username),
@@ -102,6 +103,14 @@ impl Directory {
 					refusal: Some(ScramRefusal::Banned),
 				};
 			}
+			// A banned account from a known network falls through to the
+			// credential lookup: the exchange must succeed or fail on
+			// the proof, the same way it would without the ban. The
+			// SCRAM credential the planner returns is the same it would
+			// return for the same account from any other network, so the
+			// server-first the client sees does not depend on whether the
+			// network was on the bypass list.
+			BanOutcome::BannedButKnown { account } => Some(account),
 			BanOutcome::Clear { account } => account,
 		};
 		if let Some(credentials) = self.scram_credentials(username)

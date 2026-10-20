@@ -481,6 +481,14 @@ pub struct Config {
 	/// alert engine entirely (the default).
 	#[serde(default)]
 	pub alerts: Vec<Alert>,
+	/// Seconds a successful authentication keeps an (account, network)
+	/// pair on the bypass list that lets a banned account sign in from
+	/// a network the owner has used before. Absent uses the 30-day
+	/// default. The row ages out of the list after this many seconds
+	/// during the daily sweep, and a network the owner has not used
+	/// within the window falls back to the no-bypass refusal.
+	#[serde(default)]
+	pub known_network_window_secs: Option<u64>,
 	/// When `true`, the outbound queue worker is not started: mail submitted
 	/// for a recipient outside a configured domain stays in the spool, and
 	/// no outbound SMTP connection is ever opened. Only `epistle local`

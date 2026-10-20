@@ -226,6 +226,12 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 		reference: "no standard mandate",
 	},
 	Adjustable {
+		key: Key::KnownNetworkWindow,
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
+	},
+	Adjustable {
 		key: Key::MaxMailboxConnectionsPerIp,
 		kind: Kind::Adjustable,
 		bound: None,

@@ -33,6 +33,8 @@ fn shrink_policy() -> BanPolicy {
 		threshold: 5,
 		base_secs: 60,
 		max_secs: 600,
+		known_network_window_secs: 60 * 60,
+		known_network_max_per_account: 32,
 	}
 }
 

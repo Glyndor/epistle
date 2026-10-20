@@ -55,6 +55,7 @@ rule comes from.
 | `junk-command-limit` | 100 | count | adjustable | | no standard mandate |
 | `max-session-time` | 1800 | seconds | adjustable | | no standard mandate |
 | `preauth-timeout` | 60 | seconds | adjustable | | no standard mandate |
+| `known-network-window` | 2592000 | seconds | adjustable | | no standard mandate |
 | `max-mailbox-connections-per-ip` | 200 | count | adjustable | | no standard mandate |
 | `max-http-connections` | 1024 | count | adjustable | | no standard mandate |
 | `max-http-connections-per-ip` | 256 | count | adjustable | | no standard mandate |

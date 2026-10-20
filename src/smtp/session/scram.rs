@@ -72,7 +72,7 @@ impl Session {
 			if self.is_ip_banned() {
 				return self.scram_failure();
 			}
-			self.record_scram_outcome("", None, false);
+			self.record_scram_outcome("", None, false, false);
 			return self.scram_failure();
 		};
 		let Some(username) = username_of(&client_first) else {
@@ -83,7 +83,7 @@ impl Session {
 			if self.is_ip_banned() {
 				return self.scram_failure();
 			}
-			self.record_scram_outcome("", None, false);
+			self.record_scram_outcome("", None, false, false);
 			return self.scram_failure();
 		};
 		// The directory plans the whole exchange: the ban check comes before
@@ -120,9 +120,9 @@ impl Session {
 		match &plan.refusal {
 			Some(ScramRefusal::Banned) => {}
 			Some(ScramRefusal::Denied { account }) => {
-				self.record_scram_outcome(username, account.as_deref(), false);
+				self.record_scram_outcome(username, account.as_deref(), false, false);
 			}
-			None => self.record_scram_outcome(username, Some(&plan.account), false),
+			None => self.record_scram_outcome(username, Some(&plan.account), false, false),
 		}
 	}
 
@@ -145,20 +145,31 @@ impl Session {
 		match refusal {
 			Some(ScramRefusal::Banned) => return self.scram_failure(),
 			Some(ScramRefusal::Denied { account: counted }) => {
-				self.record_scram_outcome(account, counted.as_deref(), false);
+				self.record_scram_outcome(account, counted.as_deref(), false, false);
 				return self.scram_failure();
 			}
 			None => {}
 		}
-		if matches!(
-			self.directory
-				.check_ban(account, self.peer_ip, self.auth_protocol),
-			BanOutcome::Banned
-		) {
-			return self.scram_failure();
-		}
+		// The recheck at client-final: a ban that fired between
+		// client-first and client-final still refuses the exchange,
+		// because `Banned` is only emitted when the ban is in force at
+		// the time of the check.
+		// The flag that decides whether the success lifts the ban rows
+		// comes from THIS check, not from any value carried from
+		// client-first: between the two messages a ban can fire
+		// (turning a `Clear` into a `Banned` that the recheck refuses)
+		// or lapse (turning a `BannedButKnown` into a `Clear` that
+		// lifts the ban as a normal success would).
+		let bypassed = match self
+			.directory
+			.check_ban(account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::BannedButKnown { .. } => true,
+			BanOutcome::Clear { .. } => false,
+		};
 		let Some(client_final) = decode(encoded) else {
-			self.record_scram_outcome(account, Some(account), false);
+			self.record_scram_outcome(account, Some(account), false, false);
 			return self.scram_failure();
 		};
 		match server.finish(&client_final, &credentials) {
@@ -167,8 +178,9 @@ impl Session {
 				// proof; the ban check at client-first already consulted
 				// the same store with the same keys, so the success here
 				// undoes any in-flight strikes the same way the PLAIN path
-				// does.
-				self.record_scram_outcome(account, Some(account), true);
+				// does. A bypass lift keeps the ban row in force: only
+				// the bypass list gets refreshed.
+				self.record_scram_outcome(account, Some(account), true, bypassed);
 				self.authenticated = Some(account.to_string());
 				Action::Continue(Reply::single(
 					235,
@@ -176,7 +188,7 @@ impl Session {
 				))
 			}
 			Err(_) => {
-				self.record_scram_outcome(account, Some(account), false);
+				self.record_scram_outcome(account, Some(account), false, false);
 				self.scram_failure()
 			}
 		}
@@ -202,15 +214,24 @@ impl Session {
 	/// Write the outcome of a SCRAM authentication attempt back to the
 	/// shared ban store, keyed exactly as the PLAIN path keys it
 	/// (`ip:<peer>` and the account the credential check resolved). A
-	/// success clears both subjects; a failure records a strike against
-	/// both. The ban check at the start of the exchange already decided
-	/// whether to refuse the attempt; a ban refusal never reaches this
-	/// helper, so the strike count and ban expiry stay where they were.
-	fn record_scram_outcome(&self, login: &str, account: Option<&str>, success: bool) {
+	/// success clears both subjects unless the proof was a bypass lift
+	/// (`bypassed = true`), in which case only the bypass list is
+	/// refreshed; a failure records a strike against both. The ban
+	/// check at the start of the exchange already decided whether to
+	/// refuse the attempt; a ban refusal never reaches this helper, so
+	/// the strike count and ban expiry stay where they were.
+	fn record_scram_outcome(
+		&self,
+		login: &str,
+		account: Option<&str>,
+		success: bool,
+		bypassed: bool,
+	) {
 		self.directory.record_ban_outcome(
 			login,
 			account,
 			success,
+			bypassed,
 			self.peer_ip,
 			self.auth_protocol,
 		);
