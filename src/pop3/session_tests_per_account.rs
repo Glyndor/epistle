@@ -40,7 +40,7 @@ fn the_eleventh_authentication_from_one_account_and_ip_is_refused_with_in_use() 
 			super::session::Response::Ok(text) => text,
 			other => panic!("expected Ok, got {other:?}"),
 		};
-		assert!(text.contains("mailbox ready"), "got {text}");
+		assert!(text.contains("mailbox ready"), "the mailbox was not ready");
 		sessions.push(session);
 	}
 	// The eleventh connection is refused.
@@ -65,7 +65,7 @@ fn the_eleventh_authentication_from_one_account_and_ip_is_refused_with_in_use() 
 		super::session::Response::Ok(text) => text,
 		other => panic!("expected Ok, got {other:?}"),
 	};
-	assert!(text.contains("mailbox ready"), "got {text}");
+	assert!(text.contains("mailbox ready"), "the mailbox was not ready");
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn the_per_account_total_cap_holds_across_distinct_ip_addresses() {
 			super::session::Response::Ok(text) => text,
 			other => panic!("expected Ok, got {other:?}"),
 		};
-		assert!(text.contains("mailbox ready"), "{text}");
+		assert!(text.contains("mailbox ready"), "the mailbox was not ready");
 		sessions.push(session);
 	}
 	let peer: std::net::IpAddr = "203.0.113.42".parse().unwrap();
@@ -105,5 +105,5 @@ fn the_per_account_total_cap_holds_across_distinct_ip_addresses() {
 		super::session::Response::Ok(text) => text,
 		other => panic!("expected Ok, got {other:?}"),
 	};
-	assert!(text.contains("mailbox ready"), "{text}");
+	assert!(text.contains("mailbox ready"), "the mailbox was not ready");
 }
