@@ -10,6 +10,9 @@ epistle (0.12.2) UNRELEASED; urgency=medium
   * DKIM: long signature fields fold within the line limit and unsafe field names
     are not signed; dual-signed recipients carry one ed25519 and one RSA signature.
   * Add advisory DNS provider credential checks.
+  * `epistle status` and `init` no longer wait for a host clock probe that does
+    not answer, and a line of the message body no longer changes which
+    `Resent-*` headers a DKIM signature covers.
   * Security: sanitize trust headers on inbound mail, closing the gaps
     left when mail-parser 0.11.9 and the local DKIM/ARC readers disagree
     about how a reserved header name folds.

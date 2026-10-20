@@ -386,7 +386,14 @@ fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
 /// caught.
 fn collect_unsafe_resent_names(raw: &[u8]) -> std::collections::HashSet<String> {
 	let mut unsafe_names = std::collections::HashSet::new();
-	for raw_line in raw.split(|&b| b == b'\r' || b == b'\n') {
+	// Only the header block is read: a line of the body that looks like a
+	// field must not change what the signature covers.
+	let end = raw
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.or_else(|| raw.windows(2).position(|w| w == b"\n\n"))
+		.unwrap_or(raw.len());
+	for raw_line in raw[..end].split(|&b| b == b'\r' || b == b'\n') {
 		if raw_line
 			.first()
 			.is_none_or(|byte| matches!(byte, b' ' | b'\t'))

@@ -1,7 +1,7 @@
 //! Tests for the host clock probe: the judgement on injected answers, plus
 //! the real syscall, which must answer without root.
 
-use super::{HostClock, STA_UNSYNC, TIME_ERROR, classify, parse_timedatectl, probe};
+use super::{HostClock, STA_UNSYNC, TIME_ERROR, classify, output_within, parse_timedatectl, probe};
 
 #[test]
 fn a_clean_status_word_is_synced() {
@@ -34,5 +34,30 @@ fn the_real_probe_answers_without_root() {
 			HostClock::Synced | HostClock::Unsynced | HostClock::Unknown(_)
 		),
 		"{verdict:?}"
+	);
+}
+
+#[test]
+fn a_probe_that_never_answers_is_killed_at_its_deadline() {
+	let started = std::time::Instant::now();
+	let mut command = std::process::Command::new("sleep");
+	command.arg("30");
+	assert_eq!(
+		output_within(command, std::time::Duration::from_millis(200)),
+		None
+	);
+	assert!(
+		started.elapsed() < std::time::Duration::from_secs(5),
+		"the probe was waited for instead of being given up"
+	);
+}
+
+#[test]
+fn a_probe_that_answers_in_time_returns_its_output() {
+	let mut command = std::process::Command::new("echo");
+	command.arg("yes");
+	assert_eq!(
+		output_within(command, std::time::Duration::from_secs(5)).as_deref(),
+		Some("yes\n")
 	);
 }

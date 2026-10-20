@@ -71,14 +71,47 @@ pub(crate) fn classify(state: i32, status: i32) -> HostClock {
 
 /// `timedatectl show -p NTPSynchronized --value`, when it exists and answers.
 fn timedatectl() -> Option<HostClock> {
-	let output = Command::new("timedatectl")
-		.args(["show", "-p", "NTPSynchronized", "--value"])
-		.output()
+	let mut command = Command::new("timedatectl");
+	command.args(["show", "-p", "NTPSynchronized", "--value"]);
+	let text = output_within(command, PROBE_TIMEOUT)?;
+	parse_timedatectl(&text)
+}
+
+/// How long the host probe may take before it is given up and killed.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run a command and return its standard output when it succeeds within
+/// `timeout`. A command that is still running at the deadline is killed and
+/// reaped, so a probe that never answers cannot hold `status` or `init`.
+fn output_within(mut command: Command, timeout: std::time::Duration) -> Option<String> {
+	use std::io::Read;
+	use std::process::Stdio;
+	let mut child = command
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::null())
+		.spawn()
 		.ok()?;
-	if !output.status.success() {
+	let deadline = std::time::Instant::now() + timeout;
+	let status = loop {
+		match child.try_wait() {
+			Ok(Some(status)) => break status,
+			Ok(None) if std::time::Instant::now() < deadline => {
+				std::thread::sleep(std::time::Duration::from_millis(20));
+			}
+			_ => {
+				let _ = child.kill();
+				let _ = child.wait();
+				return None;
+			}
+		}
+	};
+	if !status.success() {
 		return None;
 	}
-	parse_timedatectl(&String::from_utf8_lossy(&output.stdout))
+	let mut text = String::new();
+	child.stdout.take()?.read_to_string(&mut text).ok()?;
+	Some(text)
 }
 
 /// Parse the `yes`/`no` that `timedatectl` prints.

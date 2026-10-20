@@ -24,7 +24,7 @@ pub(super) struct MailboxLimits {
 	/// it defaults to less when the configuration does not say.
 	pub managesieve_per_ip: usize,
 	/// The shared per-account counter applied after authentication on
-	/// the IMAP, POP3 and JMAP event-source paths.
+	/// the IMAP and POP3 paths.
 	pub per_account_counter: Arc<PerAccountCounter>,
 }
 
