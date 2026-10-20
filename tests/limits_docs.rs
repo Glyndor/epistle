@@ -220,3 +220,16 @@ fn the_catalog_has_no_duplicate_names() {
 		);
 	}
 }
+
+#[test]
+fn per_account_connection_defaults_are_documented() {
+	let text = fs::read_to_string(docs_path()).unwrap();
+	for (name, default) in [
+		("max-connections-per-account-per-ip", "10"),
+		("max-connections-per-account-total", "50"),
+	] {
+		assert!(text.contains(&format!(
+			"| `{name}` | {default} | count | adjustable | | no standard mandate |"
+		)));
+	}
+}

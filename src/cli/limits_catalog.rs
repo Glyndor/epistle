@@ -140,6 +140,18 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 		reference: "no standard mandate",
 	},
 	Adjustable {
+		key: Key::MaxConnectionsPerAccountPerIp,
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
+	},
+	Adjustable {
+		key: Key::MaxConnectionsPerAccountTotal,
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
+	},
+	Adjustable {
 		key: Key::MaskedAddressesMax,
 		kind: Kind::Adjustable,
 		bound: None,

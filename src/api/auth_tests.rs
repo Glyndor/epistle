@@ -126,7 +126,7 @@ async fn verify_requires_the_bearer_token() {
 // when the bearer had no `domains` of its own. A SQL-sourced account whose
 // password authenticates through the directory was then answered with
 // `valid: false` because its name never reaches that listing. The fix lets
-// the configured token and any key without `domains` skip the membership check
+// the configured token and administrative keys without `account` or `domains` skip the membership check
 // entirely (the pre-tenancy `0.12.1` behaviour); a key confined to some
 // domains still relies on the static+dynamic listing, so an account the
 // listing cannot resolve against stays "fail closed", as documented in
@@ -136,6 +136,27 @@ async fn verify_requires_the_bearer_token() {
 /// or dynamic row for it. If `key` is `Some`, the matching API key is written
 /// into `api_keys.toml` first so `ApiState::new` loads it from disk.
 fn sql_account_state(dir: &std::path::Path, key: Option<super::api_keys::ApiKey>) -> ApiState {
+	sql_account_state_counted(dir, key).0
+}
+
+fn count_directory(
+	handle: &crate::directory_store::DirectoryHandle,
+) -> Arc<crate::smtp::directory::decoy_counters::DecoyCounters> {
+	let counters = Arc::new(crate::smtp::directory::decoy_counters::DecoyCounters::default());
+	let directory = handle.current();
+	handle.replace(crate::smtp::directory::Directory::default());
+	let directory = Arc::try_unwrap(directory).expect("exclusive directory snapshot");
+	handle.replace(directory.with_decoy_counters(counters.clone()));
+	counters
+}
+
+fn sql_account_state_counted(
+	dir: &std::path::Path,
+	key: Option<super::api_keys::ApiKey>,
+) -> (
+	ApiState,
+	Arc<crate::smtp::directory::decoy_counters::DecoyCounters>,
+) {
 	if let Some(key) = key {
 		let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
 		key_store.add(key).expect("add key");
@@ -157,14 +178,16 @@ fn sql_account_state(dir: &std::path::Path, key: Option<super::api_keys::ApiKey>
 		addresses: vec!["sql-user@sql.example".to_string()],
 		password_hash: Some(hash),
 	}]);
-	ApiState::new(
+	let counters = count_directory(&store.handle());
+	let state = ApiState::new(
 		&hash_password(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),
 		spool,
 	)
-	.with_directory(store.handle())
+	.with_directory(store.handle());
+	(state, counters)
 }
 
 /// Write-scoped key (the scope the bearer middleware assigns to
@@ -207,7 +230,7 @@ async fn verify_accepts_sql_account_with_the_configured_token() {
 	assert_eq!(body["admin"], false);
 }
 
-/// A read-scoped key without `domains` is also unconfined
+/// A write-scoped administrative key without `domains` is also unconfined
 /// (`DomainScope::All`), so it must reach the SQL-backed account too.
 #[tokio::test]
 async fn verify_accepts_sql_account_with_a_key_without_domains() {
@@ -299,4 +322,92 @@ async fn verify_rejects_wrong_password_and_unknown_sql_account_identically() {
 	)
 	.await;
 	assert_eq!(unknown, wrong);
+}
+
+#[tokio::test]
+async fn confined_verify_never_checks_out_of_scope_passwords() {
+	for domain in ["sql.example", "other.example"] {
+		let dir = tempfile::tempdir().unwrap();
+		let secret = "confined-password-counter";
+		let (state, counters) =
+			sql_account_state_counted(dir.path(), Some(verify_key(secret, vec![domain.into()])));
+		let app = router(state);
+		for login in ["sql-user", "sql-user@sql.example", "ghost@sql.example"] {
+			for password in [test_password(), fixtures::wrong_password()] {
+				let response = request_with_body(
+					&app,
+					"POST",
+					"/api/v1/auth/verify",
+					Some(secret),
+					Some(json!({"name": login, "password": password})),
+				)
+				.await;
+				assert_eq!(
+					response,
+					(StatusCode::OK, json!({"valid": false, "admin": false}))
+				);
+				assert_eq!(counters.hashes(), 0, "{domain}: {login}");
+				assert_eq!(counters.password(), 0, "{domain}: {login}");
+			}
+		}
+	}
+}
+
+#[tokio::test]
+async fn confined_verify_checks_the_effective_owner_after_authentication() {
+	let dir = tempfile::tempdir().unwrap();
+	let secret = "effective-owner-secret";
+	let mut keys = crate::api::ApiKeyStore::open(dir.path()).unwrap();
+	keys.add(verify_key(secret, vec!["sql.example".into()]))
+		.unwrap();
+	// The first claimant owns the address, but a later row admits the login.
+	let accounts = [
+		("owner", vec!["shared@sql.example", "owner@other.example"]),
+		("shadow", vec!["shared@sql.example"]),
+	]
+	.into_iter()
+	.map(|(name, addresses)| crate::config::Account {
+		name: name.into(),
+		addresses: addresses.into_iter().map(String::from).collect(),
+		password_hash: Some(hash_password(test_password())),
+		display_name: None,
+		catch_all: vec![],
+		quota_bytes: None,
+		forward: vec![],
+		forward_keep_local: true,
+		allowed_protocols: None,
+	})
+	.collect();
+	let domains = vec!["sql.example".into(), "other.example".into()];
+	let store = Arc::new(
+		AccountStore::open(dir.path(), domains.clone(), Default::default(), accounts).unwrap(),
+	);
+	let counters = count_directory(&store.handle());
+	let state = ApiState::new(
+		&hash_password(TOKEN.as_str()),
+		dir.path().into(),
+		domains,
+		store.clone(),
+		FsSpool::open(dir.path()).unwrap(),
+	)
+	.with_directory(store.handle())
+	.with_admins(vec!["owner".into()]);
+	let app = router(state);
+	let response = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(secret),
+		Some(json!({"name": "shared@sql.example", "password": test_password()})),
+	)
+	.await;
+	assert_eq!(
+		response,
+		(StatusCode::OK, json!({"valid": false, "admin": false}))
+	);
+	assert_eq!(
+		counters.hashes(),
+		1,
+		"precheck must admit the login and authenticate its owner"
+	);
 }

@@ -280,3 +280,31 @@ async fn two_voids_total_with_one_inside_the_include_stays_under_the_cap() {
 		"two voids are within tolerance; no outer mechanism matches"
 	);
 }
+
+/// Inspect the returned budget because redirect terminates its caller.
+#[tokio::test]
+async fn redirect_alone_propagates_consumed_terms_and_voids() {
+	let mut dns = VoidDns::default();
+	dns.txt.insert(
+		"example.org".into(),
+		vec!["v=spf1 redirect=target.example.org".into()],
+	);
+	dns.txt.insert(
+		"target.example.org".into(),
+		vec!["v=spf1 exists:empty.example.org ptr:unused.example.org -all".into()],
+	);
+	let ctx = CheckContext {
+		dns: &dns,
+		ip: "192.0.2.1".parse().unwrap(),
+		sender: "alice@example.org",
+		helo: "example.org",
+	};
+	let mut budget = Budget::default();
+	assert_eq!(
+		check_host_inner(&ctx, "example.org", &mut budget).await,
+		SpfOutcome::Fail
+	);
+	assert_eq!(budget.remaining, MAX_DNS_MECHANISMS - 3);
+	assert_eq!(budget.voids, 1);
+	assert_eq!(budget.depth, 0);
+}

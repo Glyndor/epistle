@@ -213,3 +213,32 @@ fn catalog_kind_name(kind: catalog::Kind) -> &'static str {
 		catalog::Kind::Fixed => "fixed",
 	}
 }
+
+#[test]
+fn per_account_connection_limits_are_shown_and_set() {
+	use clap::ValueEnum;
+	let (_dir, file) = super::tests_config::config_file();
+	for (name, default) in [
+		("max-connections-per-account-per-ip", 10),
+		("max-connections-per-account-total", 50),
+	] {
+		let config = Config::load(file.path()).unwrap();
+		let rows = show_json(&config);
+		assert_eq!(rows[name]["value"], default, "{name}");
+		assert_eq!(rows[name]["unit"], "count");
+		assert_eq!(rows[name]["kind"], "adjustable");
+		assert_eq!(rows[name]["reference"], "no standard mandate");
+		let key = Key::from_str(name, false).expect("CLI accepts the key");
+		assert!(change_config(file.path(), key, Some("73")).is_ok());
+		let config = Config::load(file.path()).unwrap();
+		assert_eq!(show_json(&config)[name]["value"], 73);
+		assert_eq!(key.value(&config), Some(73));
+		assert_eq!(key.max(), u64::from(u32::MAX));
+		assert!(change_config(file.path(), key, Some("4294967296")).is_err());
+		assert!(change_config(file.path(), key, Some("0")).is_ok());
+		let config = Config::load(file.path()).unwrap();
+		assert_eq!(show_json(&config)[name]["value"], default);
+		assert!(key.zero_is_default());
+		assert!(change_config(file.path(), key, None).is_ok());
+	}
+}
