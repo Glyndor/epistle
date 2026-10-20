@@ -87,8 +87,15 @@ fn login_in_scope(state: &ApiState, scope: &DomainScope, login: &str) -> bool {
 	})
 }
 
-/// Whether the account named `name` is covered by the scope.
+/// Whether the account named `name` is covered by the scope. An unconfined key
+/// (the configured token and any API key without `domains`) never filters by
+/// account: the post-auth check exists to keep a confined key from confirming
+/// the password of another tenant's account, and that risk only exists for
+/// scoped keys.
 fn account_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> bool {
+	if matches!(scope, DomainScope::All) {
+		return true;
+	}
 	state
 		.accounts()
 		.iter()

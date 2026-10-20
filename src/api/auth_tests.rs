@@ -1,10 +1,16 @@
 //! Tests for `/api/v1/auth/verify` — panel credential verification.
 
+use std::sync::Arc;
+
+use crate::directory_store::{AccountStore, SqlAccount};
+use crate::smtp::auth::tests::hash as hash_password;
+use crate::storage::FsSpool;
 use crate::test_fixtures as fixtures;
 use axum::http::StatusCode;
 use serde_json::json;
 
 use super::router;
+use super::state::ApiState;
 use super::tests::{TOKEN, request_with_body, test_state};
 
 fn test_password() -> &'static str {
@@ -111,4 +117,186 @@ async fn verify_requires_the_bearer_token() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+// --- SQL directory regression -------------------------------------------------
+//
+// Before this fix, `account_in_scope` always required the resolved account to
+// appear in the static+dynamic listing that `state.accounts()` returns, even
+// when the bearer had no `domains` of its own. A SQL-sourced account whose
+// password authenticates through the directory was then answered with
+// `valid: false` because its name never reaches that listing. The fix lets
+// the configured token and any key without `domains` skip the membership check
+// entirely (the pre-tenancy `0.12.1` behaviour); a key confined to some
+// domains still relies on the static+dynamic listing, so an account the
+// listing cannot resolve against stays "fail closed", as documented in
+// `docs/api.md` as the known limit on confined keys.
+
+/// Build an `ApiState` whose directory carries one SQL account but no static
+/// or dynamic row for it. If `key` is `Some`, the matching API key is written
+/// into `api_keys.toml` first so `ApiState::new` loads it from disk.
+fn sql_account_state(dir: &std::path::Path, key: Option<super::api_keys::ApiKey>) -> ApiState {
+	if let Some(key) = key {
+		let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
+		key_store.add(key).expect("add key");
+	}
+	let domains = vec!["sql.example".to_string(), "other.example".to_string()];
+	let spool = FsSpool::open(dir).expect("open spool");
+	let store = Arc::new(
+		AccountStore::open(
+			dir,
+			domains.clone(),
+			std::collections::HashMap::new(),
+			Vec::new(),
+		)
+		.expect("open store"),
+	);
+	let hash = hash_password(test_password());
+	store.set_sql_accounts(vec![SqlAccount {
+		name: "sql-user".to_string(),
+		addresses: vec!["sql-user@sql.example".to_string()],
+		password_hash: Some(hash),
+	}]);
+	ApiState::new(
+		&hash_password(TOKEN.as_str()),
+		dir.to_path_buf(),
+		domains,
+		store.clone(),
+		spool,
+	)
+	.with_directory(store.handle())
+}
+
+/// Write-scoped key (the scope the bearer middleware assigns to
+/// `POST /api/v1/auth/verify`) the post-auth scope check must answer
+/// correctly for a SQL-sourced login. An empty `domains` list corresponds to
+/// [`DomainScope::All`]; passing a domain narrows the scope.
+fn verify_key(secret: &str, domains: Vec<String>) -> super::api_keys::ApiKey {
+	super::api_keys::ApiKey {
+		label: "ci".to_string(),
+		hash: super::api_keys::sha256_hash(secret),
+		expires_at: None,
+		ip_cidr: None,
+		scopes: vec!["write".to_string()],
+		domains,
+		account: None,
+	}
+}
+
+/// The configured token is an unconfined bearer, so the post-auth scope check
+/// must not consult the static+dynamic listing at all. The SQL row
+/// authenticates and the response is `valid: true`.
+#[tokio::test]
+async fn verify_accepts_sql_account_with_the_configured_token() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(sql_account_state(dir.path(), None));
+
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(TOKEN.as_str()),
+		Some(json!({
+			"name": "sql-user@sql.example",
+			"password": test_password(),
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["valid"], true);
+	assert_eq!(body["admin"], false);
+}
+
+/// A read-scoped key without `domains` is also unconfined
+/// (`DomainScope::All`), so it must reach the SQL-backed account too.
+#[tokio::test]
+async fn verify_accepts_sql_account_with_a_key_without_domains() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let secret = "no-domains-secret";
+	let app = router(sql_account_state(
+		dir.path(),
+		Some(verify_key(secret, Vec::new())),
+	));
+
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(secret),
+		Some(json!({
+			"name": "sql-user@sql.example",
+			"password": test_password(),
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["valid"], true);
+}
+
+/// A key confined to the account's own domain still relies on the
+/// static+dynamic listing (a SQL row is not projected into it), so the
+/// post-auth check fails closed. The response stays `valid: false` and
+/// `admin: false`, matching the ordinary rejection shape and the limit
+/// documented in `docs/api.md`.
+#[tokio::test]
+async fn verify_rejects_sql_account_with_a_key_confined_to_its_domain() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let secret = "own-tenant-secret";
+	let app = router(sql_account_state(
+		dir.path(),
+		Some(verify_key(secret, vec!["sql.example".to_string()])),
+	));
+
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(secret),
+		Some(json!({
+			"name": "sql-user@sql.example",
+			"password": test_password(),
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		body["valid"], false,
+		"a confined key must not confirm a SQL account the static+dynamic listing cannot resolve"
+	);
+}
+
+/// A wrong password against a real SQL account answers identically to a
+/// nonexistent login, matching the no-user-enumeration oracle the mail
+/// protocols already give and the behaviour for static accounts.
+#[tokio::test]
+async fn verify_rejects_wrong_password_and_unknown_sql_account_identically() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(sql_account_state(dir.path(), None));
+
+	let (_, wrong) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(TOKEN.as_str()),
+		Some(json!({
+			"name": "sql-user@sql.example",
+			"password": fixtures::wrong_password(),
+		})),
+	)
+	.await;
+	assert_eq!(wrong["valid"], false);
+	assert_eq!(wrong["admin"], false);
+
+	let (_, unknown) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/auth/verify",
+		Some(TOKEN.as_str()),
+		Some(json!({
+			"name": "ghost@sql.example",
+			"password": test_password(),
+		})),
+	)
+	.await;
+	assert_eq!(unknown, wrong);
 }

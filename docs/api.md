@@ -135,6 +135,23 @@ If the static token's hash in `[api] token_hash` is an old argon2id string
 and not `sha256:`, each request that is not a key costs an argon2 check: 2
 run at a time, 64 may wait, and the next gets `429`. Use the `sha256:` form.
 
+### Limit of `/api/v1/auth/verify` under a confined key
+
+`POST /api/v1/auth/verify` answers `valid: true` only for an account the
+bearer could legitimately verify. The configured token and every key without
+`domains` (= `DomainScope::All`) skip the post-auth membership check: the
+mail listeners accept any account the directory knows, including SQL and
+LDAP ones, and the verify route must agree.
+
+A key confined to some domains narrows the post-auth check to the
+`accounts()` listing (static + dynamic accounts). An account the listing
+cannot resolve, such as a SQL or LDAP row without a static or dynamic shadow,
+is answered `valid: false`, even with the correct password, and the
+password is never tried: the password would have answered "the other
+tenant exists with that password". The fail-closed answer is identical
+to a wrong password, so a confined key cannot enumerate another
+tenant's account names through this route.
+
 ## Errors
 
 A failure the API decides is JSON:
