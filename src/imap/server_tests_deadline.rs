@@ -237,6 +237,30 @@ async fn the_deadline_does_not_restart_after_the_starttls_handshake() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn audit_preauth_deadline_also_bounds_blocked_output() {
+	let (mut client, task, _dir, _cert) = start_server(TlsMode::StartTls);
+	greeting(&mut client).await;
+	client
+		.write_all("a CAPABILITY\r\n".repeat(200).as_bytes())
+		.await
+		.expect("write");
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	tokio::time::advance(PREAUTH * 3).await;
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	let ended = task.is_finished();
+	task.abort();
+	let _ = task.await;
+	assert!(
+		ended,
+		"preauth session remains alive after 3 deadlines while output is blocked"
+	);
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_tail_of_a_rejected_command_with_a_chained_literal_keeps_the_deadline() {
 	let (client, task, _dir, cert) = start_server(TlsMode::Implicit);
 	let mut tls = sign_in_screen(client, cert).await;
@@ -248,4 +272,107 @@ async fn the_tail_of_a_rejected_command_with_a_chained_literal_keeps_the_deadlin
 	assert!(lived <= PREAUTH.as_secs() + 1, "lived {lived}s");
 	assert!(reply.ends_with("* BYE read timeout\r\n"), "{reply}");
 	task.await.expect("server task").expect("server result");
+}
+
+/// Build a plaintext IMAP listener that speaks on the test-supplied
+/// transport. The listener is built without the directory's password
+/// hashes because none of the audit paths reach authentication: a
+/// preauth command that should be rejected is enough to drive the
+/// discard helpers under test.
+fn start_audit_server() -> (tempfile::TempDir, crate::imap::server::Server) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[],
+	));
+	let (tls, _) = crate::tls::test_support::acceptor_and_cert();
+	let server = crate::imap::server::Server::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		directory,
+		tls,
+		TlsMode::StartTls,
+	)
+	.with_preauth_timeout(PREAUTH)
+	.with_read_timeout(IDLE)
+	.with_append_limit(1024);
+	(dir, server)
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_discard_timeout_write_is_bounded() {
+	let (_dir, server) = start_audit_server();
+	let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+	let task = tokio::spawn(async move { server.handle(stream, None).await });
+	crate::net::audit_support::greeting(&mut client).await;
+	client
+		.write_all(b"a APPEND INBOX {1+}\r\n")
+		.await
+		.expect("announcement");
+	let mut reply = [0u8; 1024];
+	let n = client.read(&mut reply).await.expect("reject");
+	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+	ctl.block(1);
+	tokio::time::advance(PREAUTH).await;
+	crate::net::audit_support::settle().await;
+	let ended = task.is_finished();
+	if !ended {
+		task.abort();
+	}
+	let _ = task.await;
+	assert!(
+		ended,
+		"discard timeout BYE write holds the transport beyond the deadline"
+	);
+	assert!(ctl.was_dropped());
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_discard_timeout_flush_is_bounded() {
+	let (_dir, server) = start_audit_server();
+	let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+	let task = tokio::spawn(async move { server.handle(stream, None).await });
+	crate::net::audit_support::greeting(&mut client).await;
+	client
+		.write_all(b"a APPEND INBOX {1+}\r\n")
+		.await
+		.expect("announcement");
+	let mut reply = [0u8; 1024];
+	let n = client.read(&mut reply).await.expect("reject");
+	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+	crate::net::audit_support::settle().await;
+	ctl.block(2);
+	tokio::time::advance(PREAUTH).await;
+	crate::net::audit_support::settle().await;
+	let ended = task.is_finished();
+	if !ended {
+		task.abort();
+	}
+	let _ = task.await;
+	assert!(
+		ended,
+		"discard timeout BYE flush holds the transport beyond the deadline"
+	);
+	assert!(ctl.was_dropped());
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_rejected_tail_write_and_flush_are_bounded() {
+	for mode in [1u8, 2u8] {
+		let (_dir, server) = start_audit_server();
+		let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+		let task = tokio::spawn(async move { server.handle(stream, None).await });
+		crate::net::audit_support::greeting(&mut client).await;
+		client
+			.write_all(b"a APPEND INBOX {1+}\r\nx")
+			.await
+			.expect("announcement");
+		let mut reply = [0u8; 1024];
+		let n = client.read(&mut reply).await.expect("reject");
+		assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+		crate::net::audit_support::settle().await;
+		ctl.block(mode);
+		client.write_all(b" {2048+}\r\n").await.expect("tail");
+		crate::net::audit_support::cut(task, ctl, PREAUTH).await;
+	}
 }

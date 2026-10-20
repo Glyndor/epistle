@@ -18,11 +18,14 @@
 //! future Rust upgrade cannot silently regress this invariant.
 
 pub mod accept;
+#[cfg(test)]
+pub mod audit_support;
 pub mod conn_limit;
 pub mod deadline;
 pub mod http_serve;
 mod https_url;
 pub mod per_account_conn;
+pub mod response_writer;
 
 pub use https_url::{HttpsUrl, HttpsUrlError};
 

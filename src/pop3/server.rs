@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -16,6 +17,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::directory_store::DirectoryHandle;
 use crate::net::conn_limit::{Admission, Refusal, refuse};
 use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
+use crate::net::response_writer;
 use crate::smtp::line::LineDecoder;
 
 use super::backend::MailboxBackend;
@@ -184,7 +186,8 @@ where
 	if let Some(counter) = per_account_counter {
 		session = session.with_per_account_counter(counter);
 	}
-	stream.write_all(&session.greeting().encode()).await?;
+	response_writer::write_response(&mut stream, &session.greeting().encode(), &clock, false)
+		.await?;
 
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
@@ -211,7 +214,13 @@ where
 			}
 			Err(_) => {
 				let reply = Response::Err("line too long".to_string());
-				stream.write_all(&reply.encode()).await?;
+				response_writer::write_response(
+					&mut stream,
+					&reply.encode(),
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				return Ok(());
 			}
 		};
@@ -226,7 +235,13 @@ where
 			error_streak += 1;
 			if error_streak >= MAX_ERROR_STREAK {
 				let reply = Response::Err("too many errors".to_string());
-				let _ = stream.write_all(&reply.encode()).await;
+				let _ = response_writer::write_response(
+					&mut stream,
+					&reply.encode(),
+					&clock,
+					session.is_authenticated(),
+				)
+				.await;
 				return Ok(());
 			}
 		} else {
@@ -234,7 +249,13 @@ where
 		}
 
 		let is_final = response.is_final();
-		stream.write_all(&response.encode()).await?;
+		response_writer::write_response(
+			&mut stream,
+			&response.encode(),
+			&clock,
+			session.is_authenticated(),
+		)
+		.await?;
 		if is_final {
 			return Ok(());
 		}

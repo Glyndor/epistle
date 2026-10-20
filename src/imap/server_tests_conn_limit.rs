@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::net::conn_limit::test_support::{Outcome, connect, connect_when_a_place_frees};
+use tokio::net::TcpListener;
 
 async fn listening(per_ip: usize, listener_cap: usize) -> std::net::SocketAddr {
 	let dir = tempfile::tempdir().expect("tempdir");
