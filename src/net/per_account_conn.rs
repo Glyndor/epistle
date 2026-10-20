@@ -1,18 +1,19 @@
 //! Per-account connection counter for the post-authentication phase.
 //!
-//! Once the listener has accepted a TCP connection and the IMAP, POP3 or
-//! JMAP path has authenticated the principal, the server knows the local
+//! Once the listener has accepted a TCP connection and the IMAP or POP3
+//! path has authenticated the principal, the server knows the local
 //! account the connection belongs to. From that moment on, two caps
 //! apply: one per (account, client IP) and one per account in aggregate.
 //! Both defaults come from `[server] max_connections_per_account`; the
 //! defaults are 10 per (account, IP) and 50 per account, which matches
 //! Dovecot's `mail_max_userip_connections` (10) and a sensible total.
 //!
-//! The counter is shared across IMAP, POP3 and JMAP so a single account
-//! cannot keep more than the configured number of authenticated
-//! connections across the three protocols combined. A connection over the
+//! The counter is shared across IMAP and POP3 so a single account cannot
+//! keep more than the configured number of authenticated connections
+//! across the two protocols combined. JMAP event sources are not wired to
+//! it yet and keep their own limit per credential. A connection over the
 //! cap is refused with the protocol's "user is busy" code: IMAP `NO
-//! [LIMIT]`, POP3 `-ERR [IN-USE]`, JMAP HTTP 429. The slot is released
+//! [LIMIT]`, POP3 `-ERR [IN-USE]`. The slot is released
 //! on every disconnect path (success, error, panic) because the
 //! [`PerAccountSlot`] guard drops it.
 //!
@@ -124,8 +125,8 @@ impl State {
 }
 
 /// A shared per-account connection counter. One instance lives in the
-/// shared state and is queried after authentication on every IMAP, POP3
-/// and JMAP connection.
+/// shared state and is queried after authentication on every IMAP and
+/// POP3 connection.
 pub struct PerAccountCounter {
 	state: Arc<State>,
 }

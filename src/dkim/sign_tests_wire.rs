@@ -86,6 +86,20 @@ async fn unsafe_resent_names_are_excluded_without_malformed_signatures() {
 }
 
 #[tokio::test]
+async fn a_line_of_the_body_does_not_change_what_the_signature_covers() {
+	let (signer, dns) = fixture(true);
+	let raw = "From: alice@example.org\r\nResent-From: relay@example.org\r\n\r\nResent-From : this is body text\r\n";
+	let signature = signer.sign("example.org", raw.as_bytes()).expect("sign");
+	check(&dns, &signature, raw, DkimOutcome::Pass).await;
+	for field in signature_headers(signature.as_bytes()) {
+		assert!(
+			names(&field).iter().any(|name| name == "resent-from"),
+			"a valid Resent-From of the header block was dropped because of a line of the body"
+		);
+	}
+}
+
+#[tokio::test]
 async fn a_folded_continuation_is_not_read_as_a_field_name() {
 	let (signer, dns) = fixture(true);
 	for fold in [" ", "\t"] {
