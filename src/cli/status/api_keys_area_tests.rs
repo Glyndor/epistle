@@ -13,6 +13,32 @@ fn key(label: &str, expiry: &str, scopes: &str, domains: &str) -> String {
 	)
 }
 
+/// The compose file `epistle init` would leave, with the `network_mode` the
+/// `mail` service ends up on.
+fn compose(data_dir: &std::path::Path, mode: &str) {
+	let path = crate::cli::init::compose_file_path(data_dir);
+	std::fs::create_dir_all(path.parent().expect("a parent")).expect("create dir");
+	std::fs::write(
+		&path,
+		format!("{{\"services\": {{\"mail\": {{\"network_mode\": {mode:?}}}}}}}"),
+	)
+	.expect("write compose");
+}
+
+/// A key with an `--ip-cidr` and an expiry, so the only advisory it can carry
+/// is the one about the network.
+fn pinned(expiry: bool) -> String {
+	let expiry = if expiry {
+		"expires_at = 4102444800\n"
+	} else {
+		""
+	};
+	format!(
+		"[[keys]]\nlabel = \"ci\"\nhash = \"sha256:stored-hash-must-not-leak\"\n{expiry}\
+		 scopes = [\"read\"]\nip_cidr = \"10.0.0.0/24\"\n"
+	)
+}
+
 #[tokio::test]
 async fn a_missing_key_file_is_an_empty_healthy_store() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -79,6 +105,43 @@ async fn expiring_keys_and_scim_keys_with_domains_are_healthy() {
 		)
 	);
 	keys_file(&dir.path().join("data"), &body);
+	let report = check(&context).await;
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+	assert!(report.items.is_empty());
+}
+
+#[tokio::test]
+async fn a_pinned_key_warns_when_the_network_hides_the_client_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let context = ctx(dir.path(), "");
+	let data = dir.path().join("data");
+	keys_file(&data, &pinned(true));
+	compose(&data, "bridge");
+	let report = check(&context).await;
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	assert_eq!(report.items.len(), 1, "{report:?}");
+	assert!(report.items[0].name.contains("ci"));
+	assert!(report.items[0].detail.contains("10.0.0.0/24"));
+	assert!(report.items[0].detail.contains("bridge"));
+}
+
+#[tokio::test]
+async fn a_pinned_key_is_healthy_when_pasta_keeps_the_client_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let context = ctx(dir.path(), "");
+	let data = dir.path().join("data");
+	keys_file(&data, &pinned(true));
+	compose(&data, "pasta");
+	let report = check(&context).await;
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+	assert!(report.items.is_empty());
+}
+
+#[tokio::test]
+async fn a_pinned_key_says_nothing_without_a_container_stack() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let context = ctx(dir.path(), "");
+	keys_file(&dir.path().join("data"), &pinned(true));
 	let report = check(&context).await;
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 	assert!(report.items.is_empty());

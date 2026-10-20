@@ -34,7 +34,8 @@ fn create_list_revoke_roundtrip() {
 				class: None,
 			},
 			false,
-			&mut out
+			&mut out,
+			&mut Vec::new()
 		),
 		ExitCode::SUCCESS
 	);
@@ -44,7 +45,10 @@ fn create_list_revoke_roundtrip() {
 	assert_eq!(ApiKeyStore::open(dir.path()).expect("open").keys().len(), 1);
 
 	let mut out = Vec::new();
-	assert_eq!(list(&config, false, &mut out), ExitCode::SUCCESS);
+	assert_eq!(
+		list(&config, false, &mut out, &mut Vec::new()),
+		ExitCode::SUCCESS
+	);
 	let listed = String::from_utf8(out).expect("utf8");
 	assert!(listed.contains("ci"));
 	assert!(listed.contains("scopes=read"), "{listed}");
@@ -76,7 +80,8 @@ fn create_with_expiry_and_cidr_is_stored() {
 				class: None,
 			},
 			false,
-			&mut out
+			&mut out,
+			&mut Vec::new()
 		),
 		ExitCode::SUCCESS
 	);
@@ -106,7 +111,8 @@ fn create_without_scope_is_rejected() {
 				class: None,
 			},
 			false,
-			&mut out
+			&mut out,
+			&mut Vec::new()
 		),
 		ExitCode::from(2),
 		"--scope must be required"
@@ -131,7 +137,8 @@ fn create_rejects_bad_cidr() {
 				class: None,
 			},
 			false,
-			&mut out
+			&mut out,
+			&mut Vec::new()
 		),
 		ExitCode::from(2)
 	);

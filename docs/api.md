@@ -51,6 +51,105 @@ speaks plain HTTP only. Bind it to loopback, or put a TLS proxy in front of
 it, before it carries a key across a network. A browser cannot call it
 cross-origin: CORS is denied.
 
+### Exposing the API on a private interface
+
+Keeping the management API on a WireGuard (or any private) network is two
+decisions, and they are not the same one. The listener says which address the
+server binds. The published port on the host says how much of that host the
+bind reaches.
+
+```toml
+[[listeners]]
+kind = "api"
+addr = "10.0.0.1"   # the host's private address
+```
+
+`addr` is resolved inside the container, in the network namespace `serve`
+runs in, so it has to be an address the container owns. `10.0.0.1` is the
+host's address and the container does not have it: the bind fails with
+`EADDRNOTAVAIL` and `serve` stops starting, because every address other than
+`::` goes straight to `TcpListener::bind` with no other address to fall back
+to. What bounds the exposure is therefore the published port, and there the
+two forms are not equivalent:
+
+```
+10.0.0.1:8025:8025    # the API answers on the private address only
+0.0.0.0:8025:8025     # the API answers on every address the host has
+```
+
+Today `epistle init` derives the `ports:` array of the `mail` service from the
+listeners: every non-loopback listener is published as `<port>:<port>`, and a
+loopback listener gets no `ports:` entry at all. An `api` listener on
+`10.0.0.1` is published as `8025:8025`, which the engine publishes on every
+host address, so binding the listener to a private address does not by itself
+keep the API off the public interfaces. Both files are regenerated, by `init`
+on a rerun and by `stack update`, which takes the published ports from the
+listeners in the config, so an edit to `compose.yaml` does not survive. The supported place for the pinned form is
+`<data_dir>/compose/compose.override.yaml`, the file every stack invocation
+passes after `compose.yaml`. Its lists are merged with the generated ones, so a
+plain `ports:` entry there is added to `8025:8025`, not put in its place, and
+the engine refuses to bind both. Replace the list with the `!override` tag and
+repeat every port the stack publishes:
+
+```yaml
+services:
+  mail:
+    ports: !override
+      - "25:25"
+      - "143:143"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "10.0.0.1:8025:8025"
+```
+
+Set the listener itself to `addr = "0.0.0.0"` (the container side). With this
+the API answers on `10.0.0.1:8025` and not on any other host address. `epistle
+stack update` and `epistle probe` check the API on the loopback of the host,
+so they report `5 of 6 listeners answer` while the stack is running as
+intended. See [the container stack](container.md#bringing-up-the-stack) and the
+notes on customizations in [`epistle stack`](cli.md).
+
+Two things stay true whichever way the port is published:
+
+- **Cleartext without TLS is a warning, not a refusal.** `api`, `web-dav`,
+  `autoconfig` and `metrics` (and `submission`) bind outside loopback with no
+  `[tls]` section without being rejected: validation logs `no-TLS listener
+  bound externally; configure [tls] or front with a TLS proxy` and the server
+  starts. Nothing refuses the configuration. Hardening follows (an opt-in flag,
+  then a rejection), so until then a private network is carrying the bearer key
+  in clear: put a TLS proxy in front, or accept the exposure only inside the
+  tunnel. [Listeners](configuration.md#listeners) has the whole list.
+- **The key, not the address, is what an attacker needs.** Pin every key with
+  `--ip-cidr` and `--expires-at`, and give each program its own key with only
+  the scopes it uses. The allowlist is a second gate, not a replacement for
+  the scopes.
+
+### What `--ip-cidr` sees, and what a bridge takes away
+
+`--ip-cidr` is matched against the address the server sees on the socket,
+which is the peer of the connection, or the first untrusted address in
+`X-Forwarded-For` when the peer is in `[api] trusted_proxies`. That is the one
+place where the container network matters directly.
+
+The `mail` service runs with `network_mode: "pasta"`, which is what
+`epistle init` writes and what keeps the client's address intact. A bridge
+does not: rootless Podman on a bridge funnels every connection through
+`rootlessport` and the listener sees one internal address for everyone. A key
+pinned to the client's real network then refuses the clients it was meant to
+admit, and admits every client the container's own network holds instead.
+`epistle api-key create` and `epistle api-key list` print a warning naming
+the compose `network_mode` whenever that is the case, and `epistle status`
+reports one item per pinned key. None of them changes the exit code, and on
+`create --json` the advisory arrives in a `warnings` array that the result
+object carries only when there is something to say, the same way `reload` is
+optional.
+`epistle app-password create --ip-cidr` matches the address the same way and
+carries no such warning. Two ways out: keep `network_mode: "pasta"` on
+`mail`, or front the API with a proxy, list it in
+[`[api] trusted_proxies`](configuration.md#api) and have it set
+`X-Forwarded-For` with the real client address.
+
 ## Keys and scopes
 
 ```sh

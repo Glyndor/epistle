@@ -340,7 +340,13 @@ fn api_key_revoke_asks_with_the_key_scopes() {
 				scopes: vec!["read".to_string()],
 				..api_keys::NewKey::default()
 			};
-			let created = api_keys::create(&load(cfg.path()), key, false, &mut Vec::new());
+			let created = api_keys::create(
+				&load(cfg.path()),
+				key,
+				false,
+				&mut Vec::new(),
+				&mut Vec::new(),
+			);
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},

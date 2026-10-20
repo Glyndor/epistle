@@ -26,7 +26,8 @@ fn create_key(config: &Config, label: &str) -> String {
 				class: None,
 			},
 			false,
-			&mut out
+			&mut out,
+			&mut Vec::new()
 		),
 		ExitCode::SUCCESS
 	);
@@ -117,6 +118,7 @@ fn a_class_bound_at_creation_follows_the_key_through_a_rotation() {
 		},
 		false,
 		&mut out,
+		&mut Vec::new(),
 	);
 	assert_eq!(created, ExitCode::SUCCESS);
 	let first = secret_in(&out);

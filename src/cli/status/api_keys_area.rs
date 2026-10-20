@@ -14,13 +14,15 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		}
 	};
 	match ApiKeyStore::open(&config.data_dir) {
-		Ok(store) => evaluate(&store),
+		Ok(store) => evaluate(&store, &config.data_dir),
 		Err(_) => AreaReport::single(Level::Warn, "cannot read or parse the API key store"),
 	}
 }
 
-/// Report each missing expiry and each SCIM key without a domain.
-fn evaluate(store: &ApiKeyStore) -> AreaReport {
+/// Report each missing expiry, each SCIM key without a domain, and each key
+/// whose `--ip-cidr` the container network cannot decide.
+fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path) -> AreaReport {
+	let clause = super::super::client_address::hidden_clause(data_dir);
 	let mut items = Vec::new();
 	for key in store.keys() {
 		let scopes = if key.scopes.is_empty() {
@@ -34,9 +36,19 @@ fn evaluate(store: &ApiKeyStore) -> AreaReport {
 		}
 		if key.scopes.iter().any(|scope| scope == "scim") && key.domains.is_empty() {
 			items.push(Item::new(
-				name,
+				&name,
 				Level::Warn,
 				"scim key has no associated domain",
+			));
+		}
+		if let (Some(cidr), Some(clause)) = (&key.ip_cidr, &clause) {
+			items.push(Item::new(
+				&name,
+				Level::Warn,
+				format!(
+					"pinned to {cidr}, which is matched against the address the server sees, \
+					 and {clause}: it does not see the client address"
+				),
 			));
 		}
 	}
