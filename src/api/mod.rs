@@ -13,6 +13,7 @@ mod error;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
+pub(crate) mod openapi;
 mod principal;
 mod quota;
 pub mod scim;
@@ -149,6 +150,10 @@ mod jmap_tests;
 mod jmap_tests_author;
 
 #[cfg(test)]
+#[path = "send_as_tests.rs"]
+mod send_as_tests;
+
+#[cfg(test)]
 #[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
 
@@ -183,6 +188,10 @@ mod jmap_tests_f;
 #[cfg(test)]
 #[path = "jmap_tests_g.rs"]
 mod jmap_tests_g;
+
+#[cfg(test)]
+#[path = "recipients_tests.rs"]
+mod recipients_tests;
 
 #[cfg(test)]
 #[path = "jmap_tests_principal.rs"]
@@ -327,6 +336,22 @@ mod jmap_tests_limits_backref;
 mod tenancy_tests;
 
 #[cfg(test)]
+#[path = "tenancy_tests_routes.rs"]
+mod tenancy_tests_routes;
+
+#[cfg(test)]
+#[path = "route_rules_tests.rs"]
+mod route_rules_tests;
+
+#[cfg(test)]
+#[path = "auth_guessing_tests.rs"]
+mod auth_guessing_tests;
+
+#[cfg(test)]
+#[path = "auth_limiter_clients_tests.rs"]
+mod auth_limiter_clients_tests;
+
+#[cfg(test)]
 #[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
 
@@ -367,9 +392,65 @@ mod jmap_tests_vacation;
 mod jmap_tests_vacation_b;
 
 #[cfg(test)]
+#[path = "jmap_tests_sieve_capability.rs"]
+mod jmap_tests_sieve_capability;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_support.rs"]
+mod jmap_tests_sieve_support;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_get.rs"]
+mod jmap_tests_sieve_get;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_query.rs"]
+mod jmap_tests_sieve_query;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_validate.rs"]
+mod jmap_tests_sieve_validate;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_set.rs"]
+mod jmap_tests_sieve_set;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_activate.rs"]
+mod jmap_tests_sieve_activate;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_authz.rs"]
+mod jmap_tests_sieve_authz;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_vacation.rs"]
+mod jmap_tests_sieve_vacation;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_atomic.rs"]
+mod jmap_tests_sieve_atomic;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_scope.rs"]
+mod jmap_tests_sieve_scope;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_cost.rs"]
+mod jmap_tests_sieve_cost;
+
+#[cfg(test)]
+#[path = "jmap_tests_sieve_padding.rs"]
+mod jmap_tests_sieve_padding;
+
+#[cfg(test)]
 #[path = "api_tests_addresses.rs"]
 mod tests_addresses;
 
 #[cfg(test)]
 #[path = "api_tests_display_name.rs"]
 mod tests_display_name;
+
+#[cfg(test)]
+#[path = "api_tests_queue.rs"]
+mod tests_queue;

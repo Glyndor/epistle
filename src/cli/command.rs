@@ -355,6 +355,19 @@ pub enum Command {
 		#[command(subcommand)]
 		action: ban::BanCli,
 	},
+	/// What each account's corpus learned from its user.
+	///
+	/// A message moved into Junk, or out of it, teaches the account's
+	/// corpus (needs `[database]`). Changes apply to the running server at
+	/// its next lesson, with no restart.
+	Learning {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Learning action (`status`, `enable`, `disable`, `reset`).
+		#[command(subcommand)]
+		action: learning::LearningCli,
+	},
 	/// Manage an account's masked addresses.
 	///
 	/// Changes apply to the running server within a couple of seconds, with no

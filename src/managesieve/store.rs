@@ -1,15 +1,63 @@
-//! Per-account Sieve script storage for ManageSieve (RFC 5804).
+//! Per-account Sieve script storage, shared by ManageSieve (RFC 5804) and JMAP
+//! (RFC 9661).
 //!
 //! Scripts live at `<data_dir>/accounts/<account>/sieve/<name>.sieve`. The
 //! active script's name is recorded in `sieve/.active`, and its content is
 //! mirrored to `<account>/filter.sieve` — the path the delivery pipeline reads
 //! — so activating a script through ManageSieve takes effect immediately.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::store_index::Index;
+use crate::storage::lock::FileLock;
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::{contained, contained_child, contained_subdir};
+
+/// The most octets one script may hold. It is the same number the ManageSieve
+/// listener allows for a literal, and the one JMAP advertises as
+/// `maxSizeScript`, so a script one protocol accepts the other accepts too.
+pub const MAX_SCRIPT_BYTES: usize = 1 << 20;
+
+/// The most scripts one account may store (`maxNumberScripts`). Every script
+/// is a file, and `list` reads them all, so the count is bounded.
+pub const MAX_SCRIPTS: usize = 50;
+
+/// The longest script name, in Unicode scalar values (RFC 5804 section 1.6).
+pub const MAX_NAME_CHARS: usize = 128;
+
+/// The longest script name, in octets. The name is the file name, and the
+/// atomic write stages a `.<name>.sieve.<uuid>.tmp` file next to it, which
+/// must stay under the 255 octets a file name may have on common
+/// filesystems. 200 leaves room for that staging name.
+pub const MAX_NAME_BYTES: usize = 200;
+
+/// Whether `name` is an acceptable script name: 1 to [`MAX_NAME_CHARS`]
+/// characters and [`MAX_NAME_BYTES`] octets, none of them a control
+/// character, a path separator, or U+2028 / U+2029 (RFC 9661 section 2.1
+/// lists the controls U+0000-U+001F, U+007F-U+009F, U+2028 and U+2029), and
+/// not `.` or `..`. A name does not start or end with white space and has
+/// no bidirectional formatting character, since either makes it look like
+/// another name, and it is in Unicode normal form C, the form Net-Unicode
+/// (RFC 5198) names a client sends are in, so two spellings of one name are
+/// not two scripts.
+pub fn is_valid_name(name: &str) -> bool {
+	use unicode_normalization::UnicodeNormalization;
+	!name.is_empty()
+		&& name.len() <= MAX_NAME_BYTES
+		&& name.chars().count() <= MAX_NAME_CHARS
+		&& name != "."
+		&& name != ".."
+		&& !name.starts_with(char::is_whitespace)
+		&& !name.ends_with(char::is_whitespace)
+		&& !name.chars().any(|c| {
+			c.is_control()
+				|| matches!(c, '/' | '\\' | '\u{2028}' | '\u{2029}')
+				|| matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+		})
+		&& (name.is_ascii() || name.nfc().eq(name.chars()))
+}
 
 /// A ManageSieve operation that failed in a way the protocol must report.
 #[derive(Debug, PartialEq, Eq)]
@@ -24,6 +72,12 @@ pub enum StoreError {
 	ActiveScript,
 	/// The script text does not parse as Sieve. Carries a human reason.
 	InvalidScript(String),
+	/// The script is over [`MAX_SCRIPT_BYTES`].
+	TooLarge,
+	/// The account already holds [`MAX_SCRIPTS`] scripts.
+	TooManyScripts,
+	/// The store is not at the state the caller expected: it changed since.
+	StateMismatch,
 	/// An underlying filesystem error.
 	Io,
 }
@@ -34,10 +88,17 @@ pub struct ScriptInfo {
 	pub name: String,
 	/// Whether this is the active script.
 	pub active: bool,
+	/// The script's id: opaque, 32 hex digits, minted once and kept through
+	/// rewrites and renames, so a client can follow a script across them.
+	pub id: String,
+	/// How many times the content has been written, from 1. Together with
+	/// the id it names one version of the content (JMAP blob ids).
+	pub rev: u64,
 }
 
 /// Storage for one account's named Sieve scripts.
 pub struct ScriptStore {
+	account: String,
 	dirs: Option<Dirs>,
 }
 
@@ -68,6 +129,7 @@ impl ScriptStore {
 	/// [`StoreError::Io`].
 	pub fn new(accounts_root: &Path, account: &str) -> Self {
 		Self {
+			account: account.to_string(),
 			dirs: Dirs::open(accounts_root, account).ok(),
 		}
 	}
@@ -80,28 +142,34 @@ impl ScriptStore {
 	/// over-long, control-character and path-separator names so a name can
 	/// never escape the script directory (RFC 5804 §1.6, plus path safety).
 	fn script_path(&self, name: &str) -> Result<PathBuf, StoreError> {
-		if name.is_empty()
-			|| name.len() > 128
-			|| name == "."
-			|| name == ".."
-			|| name
-				.chars()
-				.any(|c| c.is_control() || c == '/' || c == '\\')
-		{
+		if !is_valid_name(name) {
 			return Err(StoreError::InvalidName);
 		}
 		contained_child(&self.dirs()?.sieve_dir, &format!("{name}.sieve"))
 			.map_err(|_| StoreError::InvalidName)
 	}
 
-	/// Parse `script` as Sieve, returning a human-readable reason on failure.
+	/// Check `script` as every protocol does before storing it or reporting
+	/// it valid: within [`MAX_SCRIPT_BYTES`], valid Sieve, and only requiring
+	/// extensions the interpreter runs. A failure carries a reason that names
+	/// the line and never repeats the script's own text.
 	pub fn validate(script: &str) -> Result<(), StoreError> {
-		let tokens = crate::sieve::lexer::tokenize(script)
-			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
-		let commands = crate::sieve::parser::parse(&tokens)
-			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
-		enforce_mailbox_require(&commands)?;
-		Ok(())
+		super::store_check::check(script)
+	}
+
+	/// Whether a script called `name` of `size` octets could be stored now
+	/// (RFC 5804 section 2.5, HAVESPACE).
+	pub fn have_space(&self, name: &str, size: u64) -> Result<(), StoreError> {
+		self.script_path(name)?;
+		if size > MAX_SCRIPT_BYTES as u64 {
+			return Err(StoreError::TooLarge);
+		}
+		let scripts = self.list()?;
+		if scripts.len() < MAX_SCRIPTS || scripts.iter().any(|s| s.name == name) {
+			Ok(())
+		} else {
+			Err(StoreError::TooManyScripts)
+		}
 	}
 
 	/// The active script's name, if any.
@@ -109,34 +177,38 @@ impl ScriptStore {
 		let marker = contained_child(&self.dirs.as_ref()?.sieve_dir, ".active").ok()?;
 		fs::read_to_string(marker)
 			.ok()
-			.map(|name| name.trim().to_string())
 			.filter(|name| !name.is_empty())
 	}
 
-	/// List every stored script with its active flag.
+	/// List every stored script with its active flag, id and revision.
 	pub fn list(&self) -> Result<Vec<ScriptInfo>, StoreError> {
-		let active = self.active_name();
-		let mut scripts = Vec::new();
-		let entries = match crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir) {
-			Ok(entries) => entries,
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scripts),
-			Err(_) => return Err(StoreError::Io),
+		self.snapshot().map(|(_, scripts)| scripts)
+	}
+
+	/// The store's change counter: it moves whenever the set of scripts,
+	/// their content, their names or the active one changes, by whichever
+	/// protocol, and at no other time.
+	pub fn state(&self) -> Result<u64, StoreError> {
+		self.snapshot().map(|(state, _)| state)
+	}
+
+	/// The change counter and the scripts it counts, read together: the
+	/// listing is exactly what the counter says it is.
+	pub fn snapshot(&self) -> Result<(u64, Vec<ScriptInfo>), StoreError> {
+		let Some(mut txn) = self.read_txn()? else {
+			return Ok((0, Vec::new()));
 		};
-		for entry in entries.flatten() {
-			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-				continue;
-			}
-			let file_name = entry.file_name();
-			let name = file_name.to_string_lossy();
-			if let Some(stripped) = name.strip_suffix(".sieve") {
-				scripts.push(ScriptInfo {
-					name: stripped.to_string(),
-					active: active.as_deref() == Some(stripped),
-				});
-			}
-		}
-		scripts.sort_by(|a, b| a.name.cmp(&b.name));
-		Ok(scripts)
+		let active = self.active_name();
+		let scripts = txn
+			.index
+			.scripts
+			.keys()
+			.filter_map(|name| txn.info(name, active.as_deref()))
+			.collect();
+		// A reconcile that changed the index is a change, and is counted
+		// before the listing is reported.
+		txn.commit_in_place()?;
+		Ok((txn.index.state, scripts))
 	}
 
 	/// Read a script's contents.
@@ -155,34 +227,74 @@ impl ScriptStore {
 	/// The script must parse. If it is the active script, the live copy is
 	/// refreshed too.
 	pub fn put(&self, name: &str, content: &str) -> Result<(), StoreError> {
-		let path = self.script_path(name)?;
 		Self::validate(content)?;
-		fs::create_dir_all(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
-		fs::write(&path, content).map_err(|_| StoreError::Io)?;
+		let mut txn = self.write_txn()?;
+		let outcome = self.write_in(&mut txn, name, content, false);
+		txn.finish(outcome)
+	}
+
+	/// Delete a script. Refuses to delete the active script (RFC 5804 §2.10).
+	pub fn delete(&self, name: &str) -> Result<(), StoreError> {
+		let mut txn = self.write_txn()?;
+		let outcome = self.remove_in(&mut txn, name);
+		txn.finish(outcome)
+	}
+
+	/// Rename `old` to `new`. `new` must not already exist; if `old` was
+	/// active, the active marker follows the rename. The script keeps its id.
+	pub fn rename(&self, old: &str, new: &str) -> Result<(), StoreError> {
+		let mut txn = self.write_txn()?;
+		let outcome = self.rename_in(&mut txn, old, new);
+		txn.finish(outcome)
+	}
+
+	/// Write `content` as the script `name` inside `txn`. With `exclusive`, a
+	/// script of that name already there is an error. A new name needs a free
+	/// slot; a rewrite does not.
+	fn write_in(
+		&self,
+		txn: &mut Txn,
+		name: &str,
+		content: &str,
+		exclusive: bool,
+	) -> Result<(), StoreError> {
+		let path = self.script_path(name)?;
+		let exists = txn.index.scripts.contains_key(name);
+		if exists && exclusive {
+			return Err(StoreError::AlreadyExists);
+		}
+		if !exists && txn.index.scripts.len() >= MAX_SCRIPTS {
+			return Err(StoreError::TooManyScripts);
+		}
+		crate::storage::write_secret(&path, content.as_bytes()).map_err(|_| StoreError::Io)?;
+		txn.index.wrote(name);
+		txn.changed = true;
 		if self.active_name().as_deref() == Some(name) {
 			self.write_live(content)?;
 		}
 		Ok(())
 	}
 
-	/// Delete a script. Refuses to delete the active script (RFC 5804 §2.10).
-	pub fn delete(&self, name: &str) -> Result<(), StoreError> {
+	/// Remove the script `name` inside `txn`, unless it is the active one.
+	fn remove_in(&self, txn: &mut Txn, name: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
 		if self.active_name().as_deref() == Some(name) {
 			return Err(StoreError::ActiveScript);
 		}
 		match fs::remove_file(&path) {
-			Ok(()) => Ok(()),
+			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				Err(StoreError::NoSuchScript)
+				return Err(StoreError::NoSuchScript);
 			}
-			Err(_) => Err(StoreError::Io),
+			Err(_) => return Err(StoreError::Io),
 		}
+		txn.index.scripts.remove(name);
+		txn.changed = true;
+		Ok(())
 	}
 
-	/// Rename `old` to `new`. `new` must not already exist; if `old` was
-	/// active, the active marker follows the rename.
-	pub fn rename(&self, old: &str, new: &str) -> Result<(), StoreError> {
+	/// Rename `old` to `new` inside `txn`, the active marker following.
+	fn rename_in(&self, txn: &mut Txn, old: &str, new: &str) -> Result<(), StoreError> {
 		let old_path = self.script_path(old)?;
 		let new_path = self.script_path(new)?;
 		if !old_path.exists() {
@@ -192,6 +304,8 @@ impl ScriptStore {
 			return Err(StoreError::AlreadyExists);
 		}
 		fs::rename(&old_path, &new_path).map_err(|_| StoreError::Io)?;
+		txn.index.renamed(old, new);
+		txn.changed = true;
 		if self.active_name().as_deref() == Some(old) {
 			self.set_active_marker(Some(new))?;
 		}
@@ -201,25 +315,37 @@ impl ScriptStore {
 	/// Make `name` the active script, or deactivate all when `None`
 	/// (RFC 5804 §2.8: SETACTIVE with the empty string).
 	pub fn set_active(&self, name: Option<&str>) -> Result<(), StoreError> {
-		match name {
-			Some(name) => {
-				let content = self.get(name)?;
+		let mut txn = self.write_txn()?;
+		let outcome = self.set_active_in(&mut txn, name);
+		txn.finish(outcome)
+	}
+
+	/// Make `name` the active script inside `txn`, or deactivate all. Moving
+	/// from one script to another writes the new live filter over the old one
+	/// and then the marker: delivery finds a filter at every moment.
+	fn set_active_in(&self, txn: &mut Txn, name: Option<&str>) -> Result<(), StoreError> {
+		let was = self.active_name();
+		let outcome = match name {
+			Some(name) => self.get(name).and_then(|content| {
 				self.write_live(&content)?;
 				self.set_active_marker(Some(name))
-			}
+			}),
 			None => {
 				if let Ok(live) = self.live_path() {
 					let _ = fs::remove_file(live);
 				}
 				self.set_active_marker(None)
 			}
-		}
+		};
+		txn.changed |= outcome.is_ok() && was.as_deref() != name;
+		outcome
 	}
 
 	/// Write the active script's content to the live `filter.sieve` path.
 	fn write_live(&self, content: &str) -> Result<(), StoreError> {
 		fs::create_dir_all(&self.dirs()?.account_dir).map_err(|_| StoreError::Io)?;
-		fs::write(self.live_path()?, content).map_err(|_| StoreError::Io)
+		crate::storage::write_secret(&self.live_path()?, content.as_bytes())
+			.map_err(|_| StoreError::Io)
 	}
 
 	/// The live `filter.sieve` the delivery pipeline reads.
@@ -229,12 +355,11 @@ impl ScriptStore {
 
 	/// Record (or clear) the active script name.
 	fn set_active_marker(&self, name: Option<&str>) -> Result<(), StoreError> {
-		let sieve_dir = &self.dirs()?.sieve_dir;
-		let marker = contained_child(sieve_dir, ".active").map_err(|_| StoreError::Io)?;
+		let marker =
+			contained_child(&self.dirs()?.sieve_dir, ".active").map_err(|_| StoreError::Io)?;
 		match name {
 			Some(name) => {
-				fs::create_dir_all(sieve_dir).map_err(|_| StoreError::Io)?;
-				fs::write(&marker, name).map_err(|_| StoreError::Io)
+				crate::storage::write_secret(&marker, name.as_bytes()).map_err(|_| StoreError::Io)
 			}
 			None => {
 				let _ = fs::remove_file(&marker);
@@ -242,86 +367,176 @@ impl ScriptStore {
 			}
 		}
 	}
-}
 
-/// Walk a parsed script and reject it if it uses a feature of the
-/// `mailbox` extension (RFC 5490) without first declaring it. The
-/// `mailboxexists` test and the `:create` tag of `fileinto` only exist
-/// when the extension is required, so a script that names them without
-/// `require "mailbox"` cannot run anywhere it is uploaded; refusing it
-/// here keeps the on-disk filter honest.
-fn enforce_mailbox_require(commands: &[crate::sieve::ast::Command]) -> Result<(), StoreError> {
-	if !uses_mailbox_feature(commands) {
-		return Ok(());
+	/// The scripts' directory, held under the account's lock with the index
+	/// reconciled against it. `None` when the account has no scripts yet.
+	fn read_txn(&self) -> Result<Option<Txn>, StoreError> {
+		if !self.dirs()?.sieve_dir.is_dir() {
+			return Ok(None);
+		}
+		self.write_txn().map(Some)
 	}
-	if declares_mailbox_require(commands) {
-		return Ok(());
-	}
-	Err(StoreError::InvalidScript(
-		"mailboxexists or fileinto :create requires `require \"mailbox\"`".into(),
-	))
-}
 
-/// Whether the script uses any of the `mailbox` extension's features.
-fn uses_mailbox_feature(commands: &[crate::sieve::ast::Command]) -> bool {
-	fn in_command(command: &crate::sieve::ast::Command) -> bool {
-		match command {
-			crate::sieve::ast::Command::Action { name, args } => {
-				if name == "fileinto" {
-					// `fileinto :create` only exists with the extension.
-					if args.iter().any(
-						|arg| matches!(arg, crate::sieve::ast::Argument::Tag(t) if t == "create"),
-					) {
-						return true;
-					}
-				}
-				false
+	/// As [`Self::read_txn`], creating the directory when it is missing.
+	fn write_txn(&self) -> Result<Txn, StoreError> {
+		let dirs = self.dirs()?;
+		fs::create_dir_all(&dirs.sieve_dir).map_err(|_| StoreError::Io)?;
+		let lock = contained_child(&dirs.sieve_dir, ".lock").map_err(|_| StoreError::Io)?;
+		crate::storage::lock::create_private(&lock).map_err(|_| StoreError::Io)?;
+		let lock = crate::util::blocking::may_block(|| FileLock::acquire(&lock))
+			.map_err(|_| StoreError::Io)?;
+		let path = contained_child(&dirs.sieve_dir, ".index.json").map_err(|_| StoreError::Io)?;
+		let mut index = Index::read(&path);
+		let changed = index.reconcile(&self.names_on_disk()?);
+		Ok(Txn {
+			_lock: lock,
+			path,
+			index,
+			changed,
+		})
+	}
+
+	/// The names of the scripts present as files. A file whose name could
+	/// not have been stored (it fails [`is_valid_name`]) is not a script.
+	fn names_on_disk(&self) -> Result<BTreeSet<String>, StoreError> {
+		let entries =
+			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
+		let mut names = BTreeSet::new();
+		let active = self.active_name();
+		let mut left_out = 0usize;
+		let mut active_left_out = false;
+		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
 			}
-			crate::sieve::ast::Command::If(conditional) => {
-				in_test(&conditional.branches[0].test)
-					|| conditional.branches.iter().any(|b| in_test(&b.test))
-					|| conditional
-						.branches
-						.iter()
-						.any(|b| b.body.iter().any(in_command))
-					|| conditional
-						.otherwise
-						.as_ref()
-						.is_some_and(|body| body.iter().any(in_command))
+			let Ok(file) = entry.file_name().into_string() else {
+				continue;
+			};
+			let Some(name) = file.strip_suffix(".sieve") else {
+				continue;
+			};
+			if is_valid_name(name) {
+				names.insert(name.to_string());
+			} else {
+				left_out += 1;
+				active_left_out |= active.as_deref() == Some(name);
 			}
 		}
-	}
-	fn in_test(test: &crate::sieve::ast::Test) -> bool {
-		if test.name == "mailboxexists" {
-			return true;
+		if left_out > 0 {
+			self.warn_once("names", || {
+				tracing::warn!(
+					account = %self.account,
+					left_out,
+					active_left_out,
+					"scripts whose names are not valid since a stricter name check are not listed; \
+					 rename the files, or delete them. If the active script is one of them \
+					 (active_left_out), it keeps running and can be switched off or replaced \
+					 by activating another"
+				);
+			});
 		}
-		test.children.iter().any(in_test)
+		if names.len() > MAX_SCRIPTS {
+			self.warn_once("count", || {
+				tracing::warn!(
+					account = %self.account,
+					scripts = names.len(),
+					limit = MAX_SCRIPTS,
+					"the account holds more scripts than the limit; none can be added until some are deleted"
+				);
+			});
+		}
+		Ok(names)
 	}
-	commands.iter().any(in_command)
+
+	/// Run `warn` the first time this process sees `kind` for this account's
+	/// scripts: the store is read on every call, and a log line is for a
+	/// change, not for each look.
+	fn warn_once(&self, kind: &str, warn: impl FnOnce()) {
+		static SEEN: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+		let Ok(dirs) = self.dirs() else { return };
+		let key = format!("{kind}:{}", dirs.sieve_dir.display());
+		let first = SEEN
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.insert(key);
+		if first {
+			warn();
+		}
+	}
 }
 
-/// Whether the script has a `require "mailbox"` (or a list including
-/// `"mailbox"`) anywhere in its top-level commands. Per RFC 5228 §3.3
-/// the `require` must precede the first use, but for the validator's
-/// purpose the presence anywhere in the script is enough; a client
-/// that splits `require` from the action is malformed Sieve anyway.
-fn declares_mailbox_require(commands: &[crate::sieve::ast::Command]) -> bool {
-	use crate::sieve::ast::{Argument, Command};
-	fn arg_names(arg: &Argument) -> Vec<&str> {
-		match arg {
-			Argument::Str(name) => vec![name.as_str()],
-			Argument::StrList(list) => list.iter().map(String::as_str).collect(),
-			_ => Vec::new(),
-		}
-	}
-	commands.iter().any(|command| match command {
-		Command::Action { name, args } => {
-			name == "require" && args.iter().flat_map(arg_names).any(|s| s == "mailbox")
-		}
-		Command::If(_) => false,
-	})
+/// An operation in progress on an account's scripts: the account's lock,
+/// held until [`Txn::commit`] or the drop, and the index as it will be
+/// written.
+struct Txn {
+	_lock: FileLock,
+	path: PathBuf,
+	index: Index,
+	/// Whether the operation changed anything the counter counts.
+	changed: bool,
 }
+
+impl Txn {
+	/// Write the index, then report `outcome`. The index is written even
+	/// when a later step of the operation failed, so it describes what is on
+	/// disk.
+	fn finish(self, outcome: Result<(), StoreError>) -> Result<(), StoreError> {
+		let committed = self.commit();
+		outcome.and(committed)
+	}
+
+	/// Write the index, with the counter moved when something changed.
+	fn commit(mut self) -> Result<(), StoreError> {
+		self.commit_in_place()
+	}
+
+	/// As [`Self::commit`], keeping the transaction (and its lock) so the
+	/// caller can read the counter it wrote.
+	fn commit_in_place(&mut self) -> Result<(), StoreError> {
+		if self.changed {
+			self.index.state += 1;
+			self.changed = false;
+			self.index.save(&self.path).map_err(|_| StoreError::Io)?;
+		}
+		Ok(())
+	}
+}
+
+#[path = "store_by_id.rs"]
+mod by_id;
+pub use super::store_check::Validated;
+#[cfg(test)]
+pub(crate) use super::store_check::counted;
+pub use by_id::Tx;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "store_tests_limits.rs"]
+mod limits_tests;
+
+#[cfg(test)]
+#[path = "store_tests_check.rs"]
+mod check_tests;
+
+#[cfg(test)]
+#[path = "store_tests_index.rs"]
+mod index_tests;
+
+#[cfg(test)]
+#[path = "store_tests_by_id.rs"]
+mod by_id_tests;
+
+#[cfg(test)]
+#[path = "store_tests_names.rs"]
+mod names_tests;
+
+#[cfg(test)]
+#[path = "store_tests_tx.rs"]
+mod tx_tests;
+
+#[cfg(test)]
+#[path = "store_tests_async.rs"]
+mod async_tests;

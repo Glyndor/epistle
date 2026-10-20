@@ -78,8 +78,63 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths. The
   secret is encrypted at rest only when at-rest encryption is on (see "Data at
   rest").
+- **One set of account rules for every way in.** PLAIN, LOGIN, SCRAM, OAUTHBEARER,
+  XOAUTH2, SASL EXTERNAL, app passwords, POP3, ManageSieve, WebDAV and the API
+  credential check all end in the same decision (`Directory::admit_login`): a
+  disabled account never signs in, the account's `allowed_protocols` list must
+  include the protocol, and a login by an address in a switched-off domain
+  fails because the address no longer resolves. The account name still works in
+  a switched-off domain, as `domain disable` documents. SCRAM is refused for an
+  account with a TOTP secret, because the SCRAM proof is derived from the
+  password alone and cannot carry the code; such an account uses PLAIN or LOGIN
+  with the code appended. A refused exchange runs on decoy credentials and ends
+  at the final step as a wrong password, so nothing tells a refusal from a bad
+  proof. Bearer tokens and client certificates are not asked for a TOTP code
+  (the issuer or the certificate is the factor) but are asked for everything
+  else. Before 0.12.2 SCRAM skipped the TOTP code and the disabled flag, and a
+  bearer token or client certificate skipped the disabled flag.
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
-  password, and repeated failures close the connection.
+  password, and repeated failures close the connection. For a password
+  mechanism that includes the time: a login with no password of its own
+  (unknown, disabled, receive-only, or a TOTP code that is missing) checks the
+  candidate against an argon2id hash made for the purpose, so the refusal costs
+  what a wrong password on a real account costs. For SCRAM, a login nobody
+  holds, an account without a verifier and an account the rules refuse get the
+  same server-first message as a real account: the salt is a keyed hash of the
+  login (stable for that login, not computable by the client) and the iteration
+  count is the current one, and the exchange ends at the proof like a wrong
+  password. Before 0.12.2 an unknown login was refused at the first message,
+  instantly, while a real one was challenged, and a failed IMAP or SMTP password
+  check for an unknown login returned in microseconds.
+  A right password, or a right app password, for an account whose
+  `allowed_protocols` leaves this protocol out is refused after the same hashes
+  as a wrong one.
+- **Password checks are bounded.** The sessions run the argon2id check on the
+  async worker that drives them, so a burst of sign-in attempts could hold every
+  worker and keep a hash in memory per connection. Every password check now
+  goes through one gate shared by the process: it hands the worker over for the
+  duration of the check and lets only half the cores run at once (two at least,
+  eight at most), with a line of sixteen per place behind them. An attempt that
+  finds the line full is not tried at all: it gets the temporary failure of its
+  protocol (IMAP `NO [UNAVAILABLE]`, SMTP `454 4.7.0`, POP3 `-ERR [SYS/TEMP]`),
+  moves no strike in the ban store and does not count as a failed login. It is
+  counted in `mail_auth_hash_gate_rejected_total` and the log says so at most
+  every 30 seconds (`auth.hash_gate_full`). The answer depends on the load and
+  never on the login, so it tells nothing about an account. The REST API keeps
+  its own gate for bearer tokens. What is left:
+  - While a burst lasts, a legitimate sign-in waits behind it, and with the
+    line full it is told to try again. A distributed flood of about
+    `17 x places` simultaneous attempts keeps the line full; a client that
+    retries gets in between them, and clients that stop after one temporary
+    failure do not.
+  - The wait cannot be cut short by the session's own deadlines or by the
+    client hanging up, and it grows with the largest number of app passwords
+    any account holds, because every refusal does that much work.
+  - The memory held live is bounded by the places (about 19 MiB each). The
+    published builds use musl, where a busy server measured 210 MB at eight
+    places and 87 MB at two. A build from source against glibc may keep the
+    memory of freed hashes (glibc raises its mmap threshold after the first
+    one), so its resident size stays well above that.
 
 ## Authorization
 
@@ -88,6 +143,19 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - The message itself must carry exactly one `From` field naming one address the
   account owns, on SMTP submission and on JMAP `EmailSubmission/set`. That is
   the field the DKIM signature covers and the one DMARC judges at the receiver.
+- "Owns" is one rule for SMTP submission, `POST /api/v1/send` and JMAP
+  (`Directory::owns_address`), in any letter case. An account owns the
+  addresses stored for it (a dot in the local part, such as
+  `name.surname@example.org`, is an ordinary address), and an enabled alias
+  or list it may send as: any member when the alias names no senders, only
+  the named senders when it does. An alias in another served domain works the
+  same way. It does **not** own what only delivers to it: a `+tag` sub-address
+  of its own address, the unknown local parts a catch-all receives, or an
+  address on a domain alias (`alias.example.org`). Those are refused with
+  `553` at `MAIL FROM`, `550 5.7.1` at the `From` header, `forbiddenFrom` in
+  JMAP and `forbidden_from` in the API, as is any address of another account
+  or of another domain. Loosening any of them is a decision about spoofing,
+  not a fix. The table of cases lives in `src/smtp/directory_send_as_fixture.rs`.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
@@ -100,6 +168,10 @@ control, its test and the residual risks, see the [threat model](threat-model.md
     Reaches that one account, and only through JMAP and `/api/v1/send`:
     every other route (`/api/v1/accounts`, `domains`, `queue`, SCIM, ...)
     refuses it with `403 forbidden`.
+  Every route with per-tenant data applies the key's domains, not only the
+  accounts routes (see "Domain-confined API keys" in the configuration
+  reference for the list). A route is added together with its rule in
+  `src/api/route_rules_tests.rs`, or that test fails.
   A credential that matches no key reaches nothing. Every JMAP method, upload,
   download and the WebSocket check the account against the principal; a
   refused account gets the same `accountNotFound` (HTTP 404 on upload and
@@ -197,18 +269,171 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   before doing any password hashing. The product context's defaults:
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
-  then an hour, ...), capped at 24 hours. A successful authentication
-  clears both the ban and the rolling failure history for the subject.
-  Bans are scoped to the peer IP (`ip:<addr>`) and the resolved account
-  name (`account:<login>`), so a brute-force attempt against one
-  account from a botnet still trips the IP half, and a credential
-  stuffing wave against one IP still trips the account half. The wire
-  response to a banned subject is identical to a wrong password (no
+  then an hour, ...), capped at 24 hours. Failures are counted on three
+  subjects. The client (`ip:<addr>`) is the peer address, or its /64 for
+  IPv6, because one host there owns a whole /64 and rotating inside it is
+  free. The pair (`pair:<login>|<client>`) is one account seen from one
+  client. The account (`account:<login>`) counts every failure too, but it
+  fires at four times the threshold (20 in 15 minutes): a guess spread over
+  many clients, each too few to be banned, still ends in a ban, while a
+  single client cannot lock an account out for its owner, because its own
+  counters stop it after five. A successful authentication clears the ban
+  and the failure history of the account and of that pair, and never of the
+  client, so an attacker with an account of its own cannot reset its count by
+  logging in between guesses at others. A shared address (a NAT, a proxy)
+  therefore accumulates the typos of everyone behind it: allow-list it
+  (`epistle ban allow add`) if that is a problem. An allow-listed client is
+  never banned on its address or /64 (and for IPv6 the /64 it shares with
+  others is not asked about for it, so a neighbour's ban does not reach it),
+  but its failures still count on the account (not on the pair, so typos
+  behind a shared proxy cannot lock one account's owner out of it), or a
+  trusted network could guess without limit. A route that has no client address
+  (WebDAV now passes one) counts every attempt on an account as one client,
+  `unknown`, so the pair still stops guessing at five. Residual risk,
+  left to the owner: counting is per /64, so a client with a whole IPv6
+  allocation can spread guesses over its /64s (300 /64s of one /48 with four
+  failures each never reach a ban); the account ceiling above is what stops it
+  for one account, and spraying across many accounts is not banned. The owner
+  decides between two readings of the same trade-off: (a) no ban on the /48,
+  today's choice, which lets one attacker with an allocation rotate through its
+  /64s; (b) a /48 counter at a high factor, which bans every user of a shared
+  /48 (hosting, ISP, office, campus) because of one attacker. A middle point,
+  not built: a /48 counter at a high factor that applies only to /64s that have
+  already failed themselves, so a /64 without failures of its own is never
+  blocked for its neighbours, at the price of a more intricate rule and of
+  not stopping a rotation that spends one failure per /64. The owner of an
+  account that many clients are guessing at is locked out for the length of the
+  account ban as well. A credential stuffing wave from one client trips
+  that client's counters. The wire response to a banned subject is identical to a wrong password (no
   oracle); the audit log records the rule that fired under the
   `auth.banned` event. The store is fail-open on database errors: a
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Banned account, known network** (requires `[database]`). When an
+  account is banned, the right credentials let it in only from a
+  network the account has signed in from successfully within the
+  configured window (`known-network-window`, 30 days by default;
+  the per-account cap of 32 networks keeps the list bounded, the
+  oldest non-current row is dropped on each insert past the cap).
+  The decision lives in one place (`Directory::check_ban` /
+  `authenticate_verdict`), so every listener that goes through the
+  shared gate inherits the policy: SMTP submission, IMAP, POP3,
+  ManageSieve, the API (with the trusted-proxy-resolved client IP)
+  and WebDAV. A ban an operator placed by hand (`epistle ban add`) is
+  never bypassed, and neither is an IP ban: the exception is for the
+  ban that failed sign-ins cause on the account, not for a decision
+  somebody took. From the unknown network the response to a banned
+  account is identical to today's: same message, same hash work,
+  same outcome for a wrong password as for a right one, so the
+  ban cannot be used as an oracle for guessing passwords from
+  elsewhere. A successful sign-in writes the network onto the
+  bypass list; a wrong sign-in from a known network still records
+  the strike. An attempt cannot insert itself onto the list: the
+  write only happens through the success path of
+  `record_ban_outcome`, so a guessed password does not register
+  itself. The write is throttled inside SQL to at most one row
+  per (account, network) per hour, and the cap eviction runs in
+  the same transaction, so the latency-sensitive sign-in path
+  never grows the table without bound. A `/64` is the unit for
+  IPv6 clients, the same keying the ban store already uses for the
+  client counter, so a roaming client does not have to re-auth
+  every time its host half changes. The `is_known_network` lookup
+  fails closed on a database error (a missing row must not let a
+  banned account in), and the audit log emits the same `auth.banned`
+  event it would for any other ban check. The bypass only lifts bans
+  placed on the account. A ban placed on the client address (by the
+  threshold counter or by the operator) is not lifted from a known
+  network: that address stays refused for the whole ban, so lifting it
+  for the account would also lift it for everyone else behind the same
+  address. A ban placed on the `(account, client)` pair is also not
+  lifted from a known network: that pair is what caps repeated failures
+  from one client, and a known network (a NAT, a corporate VPN) still
+  needs it, otherwise an attacker on the same network could guess
+  without limit while the owner is admitted. The `check_ban` loop
+  only evaluates the bypass when the ban subject is the account, so a
+  pair ban in force refuses the request even from the owner's known
+  network; the pair counter keeps rising for wrong-password attempts
+  from the known network, so the pair ban can fire from that network
+  itself. A successful sign-in via the bypass does not call
+  `clear_success`: the ban row stays in force for any other client,
+  and only the bypass list `(account, network)` is refreshed.
+- **Trusted reverse proxies.** `[api] trusted_proxies` defaults to `[]`, so
+  forwarded headers have no authority by default. Only a peer in a configured
+  IPv4 or IPv6 CIDR may supply `X-Forwarded-For`. The entire header must be a
+  valid IP chain; Epistle selects the first untrusted address from right to
+  left. Missing, malformed and wholly trusted chains use the TCP peer. Trust
+  only controlled proxies that append the real connecting address or replace
+  the header. API failure limits, credential IP restrictions, audit events,
+  OAuth password bans and device grant counters use this effective IP, with
+  the existing IPv6 /64 grouping. Invalid CIDRs prevent startup. Changes need
+  a restart. See [configuration](configuration.md#api).
+  API authentication-window `429` responses carry `Retry-After` with the
+  remaining seconds rounded up. OAuth `429 slow_down` responses report the
+  remaining grant expiry or polling wait; password bans keep their ordinary
+  authentication failure response.
+- **REST bearer token guesses.** Wrong tokens are counted per client (an IPv4
+  address or an IPv6 /64) and a client over 20 failures a minute is refused
+  before its token is looked at; a valid call does not give the failures back.
+  An IPv6 /48 (eight times a client's budget) and the whole server (2000
+  failures) only turn the `401` of a request that already failed into `429`;
+  they are never asked of a valid token, because a budget anyone can fill would
+  let an attacker refuse the operator. API keys are matched first by SHA-256.
+  With a legacy argon2id `token_hash` the verification runs off the async
+  workers, two at a time (the turn is held until the argon2 ends, even if the
+  client hangs up), behind a queue of 64; the next request is told `429`, and
+  every request reserves its failure under the same lock as the limit check
+  and gives it back if the token is valid, so requests arriving together
+  cannot all pass a client's limit. After the real token has been seen once a
+  wrong one is rejected by digest with no argon2. One client holds at most two
+  places in the queue and an IPv6 /48 four, so a single origin cannot fill it.
+  A sustained flood from some 300 distinct clients (about 105 requests a
+  second, the rate two cores verify at) can still keep the queue full: until
+  the real token has been seen once since start-up, its first use is then told
+  `429` and a retry gets the same answer for as long as the flood lasts. That
+  only concerns a legacy argon2id `token_hash` and never API keys; store the
+  token as `sha256:` (what `epistle token-hash` writes) and the exposure
+  disappears. Two consequences of the places per origin, both only before the
+  first successful use of an argon2 `token_hash` since start-up: an operator
+  who shares an IPv6 /48 with an attacker is told `429` for as long as the
+  flood lasts (measured: from another /48 the real token got in within 38 ms,
+  from the same /48 1250 answers in a row were `429` over 20 seconds), and a
+  panel that opens three or more requests in parallel on its first use gets
+  `429` on the surplus ones, because one client holds two places, until the
+  first of them verifies the token.
+
+  Known limits, measured by the second review and not changed: a ban on a real
+  account answers in under a millisecond where an unknown login pays for its
+  hashing, which tells that the name exists to someone who first spends twenty
+  failures from five clients on it (not verified against the fix); the device
+  grant pool scans its entries under one lock, about 0.45 ms a request when
+  full; each attempt on an unknown login writes three rows to the ban tables
+  where it used to write one, and they expire with the 24-hour sweep; every
+  refusal costs one hash plus as many as the account with the most app
+  passwords has, and nothing caps the app passwords an account can hold; the
+  HTTP clients of the antispam hook and the LLM scanner, and the ACME and S3
+  clients, still follow redirects. The /48 question above is also still open,
+  and was not re-measured after the revert. Residual risk: guesses spread over
+  many clients are not capped as a whole, so the defence is the entropy of the
+  token (use a long random one, or a `sha256:` hash of one).
+- **Device authorization grants are bounded** (`POST /oauth/device_authorization`
+  needs no credentials). A client (an IPv4 address or an IPv6 /64) may hold 10
+  grants, an IPv6 /48 100, the server 10000; expired ones are dropped at the
+  caps, and a client or /48 over its cap gets `429 slow_down`. With the pool
+  full, the oldest *pending* grant of the group holding the most pending grants
+  (an IPv6 /32, or an IPv4 address) is evicted, but only if that group holds
+  strictly more than the requester's own; a requester who is itself the
+  heaviest group, or a pool with nothing pending, is refused. An approved grant
+  is never evicted. So a newcomer gets in while anyone is above it and a heavy
+  group can only displace itself. Residual risk: an attacker with many
+  distinct /32s (or IPv4 addresses) can fill the pool with groups no heavier
+  than a newcomer, for the ten minutes the grants live. Two refinements were
+  considered and left out because each trades one weakness for another:
+  grouping IPv4 by /24 (a botnet inside one /24 would then count as one group,
+  but a shared office or carrier NAT would be evicted as one) and a hierarchy
+  /32 to /48 for eviction (it catches an attacker who stays under one /48's
+  cap in many /48s of different /32s, at the price of a rule that is harder to
+  state and test).
 - **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
   default through `scan_authenticated`). A compromised account must not
   relay malware, so what local accounts submit over SMTP, the REST API and

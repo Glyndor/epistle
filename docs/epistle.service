@@ -36,6 +36,12 @@ ExecStart=/usr/bin/epistle serve --config /etc/glyndor/epistle/epistle.toml
 Restart=on-failure
 RestartSec=5s
 
+# Every connection is a file descriptor. The default soft limit (1024) is
+# reached around a thousand idle connections, after which the listeners stop
+# greeting. The listener caps together (SMTP 1000, IMAP and POP3 500,
+# ManageSieve 100, HTTP 1024) plus the spool and the logs fit well under this.
+LimitNOFILE=65536
+
 # Run as the persistent, unprivileged account the package creates, with its own
 # state dir. UMask + StateDirectoryMode keep the mailbox and the credential/TOTP
 # stores owner-only (0700): the server writes secrets 0600, and nothing above

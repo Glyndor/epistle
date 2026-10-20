@@ -20,6 +20,143 @@ use super::{
 use crate::api::ApiState;
 use crate::util::constant_time;
 
+/// Grants alive at once, over all clients. A pending grant is a few hundred
+/// bytes, so this bounds the memory an unauthenticated caller can pin, and the
+/// linear scan `device_approve` does under the same lock.
+pub(super) const MAX_DEVICE_GRANTS: usize = 10_000;
+/// Grants alive at once for one client (an IPv4 address or an IPv6 /64).
+pub(super) const MAX_GRANTS_PER_CLIENT: usize = 10;
+/// Grants alive at once for one IPv6 /48.
+pub(super) const MAX_GRANTS_PER_NET: usize = 100;
+
+/// What a client is for the per-client cap: the address for IPv4, the /64 for
+/// IPv6 (one host there owns the whole /64).
+pub(super) fn client_bucket(ip: std::net::IpAddr) -> (bool, u64) {
+	match ip {
+		std::net::IpAddr::V4(v4) => (false, u64::from(u32::from(v4))),
+		std::net::IpAddr::V6(v6) => (true, (u128::from(v6) >> 64) as u64),
+	}
+}
+
+/// The /48 of an IPv6 client (the cap on one allocation); an IPv4 address is
+/// its own.
+fn net48_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
+	client.map(|(v6, bits)| {
+		if v6 {
+			(true, bits >> 16)
+		} else {
+			(false, bits)
+		}
+	})
+}
+
+/// The group a client is counted in when the pool is full: an IPv6 /32 (an
+/// attacker spreading grants over many /48s of one allocation stays one
+/// group), or the address for IPv4.
+fn group_of(client: Option<(bool, u64)>) -> Option<(bool, u64)> {
+	client.map(|(v6, bits)| {
+		if v6 {
+			(true, bits >> 32)
+		} else {
+			(false, bits)
+		}
+	})
+}
+
+/// Store `grant`, or return seconds until the blocking grants expire.
+///
+/// The policy, whole:
+/// 1. A client, and an IPv6 /48, may hold only so many grants, and the pool
+///    only [`MAX_DEVICE_GRANTS`]. Expired grants are dropped first.
+/// 2. A client or /48 over its cap is refused.
+/// 3. With the pool full, the oldest pending grant of the group (an IPv6 /32,
+///    or an IPv4 address) holding the most pending grants is evicted, provided
+///    that group holds strictly more than the requester's own. If the
+///    requester's group is itself the heaviest, or nothing is pending, it is
+///    refused.
+/// 4. An approved grant is never evicted and is not counted in 3.
+///
+/// So a newcomer always gets in while anyone is above it, a heavy group can
+/// only ever displace itself, and the endpoint's request rate stays limited
+/// per origin. Residual risk: an attacker with many distinct /32s (or IPv4
+/// addresses) each holding a little can fill the pool with groups no heavier
+/// than a legitimate newcomer; the grants expire after ten minutes.
+fn admit(
+	devices: &std::sync::Mutex<std::collections::HashMap<String, DeviceGrant>>,
+	device_code: String,
+	grant: DeviceGrant,
+	now: u64,
+) -> Result<(), u64> {
+	let mut devices = devices.lock().unwrap_or_else(|p| p.into_inner());
+	let client = grant.client;
+	let net = net48_of(client);
+	let over_cap = |devices: &std::collections::HashMap<String, DeviceGrant>| {
+		devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT
+			|| (net.is_some_and(|n| n.0)
+				&& devices
+					.values()
+					.filter(|g| net48_of(g.client) == net)
+					.count() >= MAX_GRANTS_PER_NET)
+	};
+	if devices.len() >= MAX_DEVICE_GRANTS || over_cap(&devices) {
+		// Expired grants nobody polled for would otherwise count forever.
+		devices.retain(|_, g| g.expires_at > now);
+	}
+	if over_cap(&devices) {
+		let client_wait = devices
+			.values()
+			.filter(|g| g.client == client)
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
+		let net_wait = devices
+			.values()
+			.filter(|g| net48_of(g.client) == net)
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
+		let client_full =
+			devices.values().filter(|g| g.client == client).count() >= MAX_GRANTS_PER_CLIENT;
+		let net_full = net.is_some_and(|n| n.0)
+			&& devices
+				.values()
+				.filter(|g| net48_of(g.client) == net)
+				.count() >= MAX_GRANTS_PER_NET;
+		return Err(
+			(if client_full { client_wait } else { 0 }).max(if net_full { net_wait } else { 0 }),
+		);
+	}
+	if devices.len() >= MAX_DEVICE_GRANTS {
+		let mut pending: std::collections::HashMap<Option<(bool, u64)>, usize> =
+			std::collections::HashMap::new();
+		for g in devices.values().filter(|g| g.approved_account.is_none()) {
+			*pending.entry(group_of(g.client)).or_default() += 1;
+		}
+		let mine = pending.get(&group_of(client)).copied().unwrap_or(0);
+		let pool_wait = devices
+			.values()
+			.map(|g| g.expires_at - now)
+			.min()
+			.unwrap_or(1);
+		let Some((heaviest, count)) = pending.into_iter().max_by_key(|(_, n)| *n) else {
+			return Err(pool_wait);
+		};
+		if count <= mine {
+			return Err(pool_wait);
+		}
+		let oldest = devices
+			.iter()
+			.filter(|(_, g)| g.approved_account.is_none() && group_of(g.client) == heaviest)
+			.min_by_key(|(_, g)| g.expires_at)
+			.map(|(code, _)| code.clone());
+		if let Some(code) = oldest {
+			devices.remove(&code);
+		}
+	}
+	devices.insert(device_code, grant);
+	Ok(())
+}
+
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
 	SystemTime::now()
@@ -34,6 +171,7 @@ fn now_secs() -> u64 {
 /// are the only credential.
 pub async fn device_authorization(
 	State(state): State<ApiState>,
+	peer: Option<axum::Extension<ConnectInfo<std::net::SocketAddr>>>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
@@ -56,17 +194,22 @@ pub async fn device_authorization(
 		return oauth_error("server_error");
 	};
 	let now = now_secs();
+	let client = state
+		.effective_client_ip(
+			peer.map(|axum::Extension(ConnectInfo(addr))| addr),
+			&headers,
+		)
+		.map(client_bucket);
 	let grant = DeviceGrant {
 		user_code: user_code.clone(),
 		approved_account: None,
 		expires_at: now + CODE_TTL_SECS,
 		next_poll_at: now,
+		client,
 	};
-	authz
-		.devices
-		.lock()
-		.unwrap_or_else(|p| p.into_inner())
-		.insert(device_code.clone(), grant);
+	if let Err(seconds) = admit(&authz.devices, device_code.clone(), grant, now) {
+		return super::oauth_rate_limited(seconds);
+	}
 	// epistle is headless: the verification URI is the approval endpoint a user
 	// (or CLI) posts the user_code and credentials to.
 	let verification_uri = "/oauth/device/approve";
@@ -102,31 +245,24 @@ pub async fn device_approve(
 	let user_code = fields.get("user_code").cloned().unwrap_or_default();
 	let credentials = account_credentials(&headers, &fields);
 
-	// Authenticate first, unconditionally, so the work done is the same whether or
-	// not the user_code exists (no timing oracle on code existence). The OAuth
-	// grant endpoints sit outside `require_bearer_token`, so the peer IP is
-	// sourced from `ConnectInfo` here; wired in by the listener's
-	// `into_make_service_with_connect_info`; and forwarded to the ban-aware
-	// authentication path. A dual-stack `::` listener reports an IPv4 peer as
-	// `::ffff:a.b.c.d`; canonicalize so the ban / audit pipeline sees a plain
-	// `IpAddr::V4`.
-	let peer = crate::net::canonical_peer(peer);
+	// Authenticate before looking up the code to avoid a code-existence oracle.
+	// Use the same effective IP as bearer authentication for bans and auditing.
+	let client_ip = state.effective_client_ip(Some(peer), &headers);
 	let account = credentials.and_then(|(login, password)| {
 		// The OAuth approval flow is a user-facing API authentication: the
 		// account must opt into `api` in its `allowed_protocols` to bind a
 		// grant, matching how `/api/v1/auth/verify` tags its callers.
-		state.authenticate_with_ip(
-			&login,
-			&password,
-			Some(peer.ip()),
-			crate::config::Protocol::Api,
-		)
+		state.authenticate_with_ip(&login, &password, client_ip, crate::config::Protocol::Api)
 	});
 
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let grant = devices.values_mut().find(|g| {
-		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
+		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes())
+			&& g.expires_at > now
+			// An approval stands: a second account knowing the code must not
+			// replace the first, or the device would be handed its token.
+			&& g.approved_account.is_none()
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
@@ -192,7 +328,7 @@ pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
 	if now < grant.next_poll_at {
 		// Polling too fast: tell the client to back off (RFC 8628 §3.5).
 		grant.next_poll_at = now + POLL_INTERVAL_SECS;
-		return oauth_error("slow_down");
+		return super::oauth_rate_limited(grant.next_poll_at - now);
 	}
 	grant.next_poll_at = now + POLL_INTERVAL_SECS;
 	let Some(account) = grant.approved_account.clone() else {

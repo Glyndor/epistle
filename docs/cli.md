@@ -42,6 +42,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `db` | `upgrade`, `status` | |
 | `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
+| `learning` | `status`, `enable`, `disable`, `reset` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Shell completion and man pages
@@ -232,10 +233,12 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `tls` | 21 days or more left, hostname in the certificate, the TLSA record (when DNSSEC publishes one) matches it | under 21 days, under 14 days with nothing renewing it (no `[acme]`), the TLSA lookup failed | under 7 days, expired, or hostname not in the certificate; unreadable file; a TLSA record that does not match the certificate in use |
 | `dns` | published records match | a lookup was inconclusive, or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
+| `api_keys` | every key has an expiry, and each `scim` key has an associated domain | a key has no expiry or a `scim` key has no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
+| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused) | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed | |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
@@ -372,6 +375,10 @@ stack.
 | `data-rate-grace` | Time from the start of a message before `min-data-rate` applies, once per transaction, default 120 seconds, between 1 second and 1 hour. |
 | `junk-command-limit` | Commands without progress (`NOOP`, `RSET`, `VRFY`, unknown commands, a repeated `EHLO`, an empty `BDAT` chunk, `AUTH` response lines) one SMTP session may send before `421 4.7.0` and a disconnect, default 100, never reset during the session; refused commands count against the same limit since the last accepted message. `0` turns it off and shows as `disabled`; otherwise between 10 and 10000. |
 | `max-session-time` | How long one SMTP session may last before `421 4.4.2` at the next command boundary, default 1800 seconds; a message body being received is never cut. `0` turns it off and shows as `disabled`; otherwise between 1 minute and 1 day. |
+| `preauth-timeout` | How long an IMAP, POP3 or ManageSieve client gets, from the start of the connection, to sign in, default 60 seconds, between 5 seconds and 1 hour. One deadline covers the TLS handshake and everything before authentication; slow bytes and repeated cheap commands do not extend it. A signed-in session is not held to it. It acts as at most 600 seconds on POP3 and 1800 on IMAP, their idle timeouts. |
+| `max-mailbox-connections-per-ip` | Concurrent connections one client (IPv6: per /64) may hold on each IMAP, POP3 and ManageSieve listener, default 200 (ManageSieve 40, whose listener holds 100). Extra ones get `* BYE`, `-ERR` or `BYE` and are closed. Behind a proxy or a bridge network every client shares one address, so raise it there. `0` is the default, not "no limit", and `limits set` says so. |
+| `max-http-connections` | Concurrent connections each plain-HTTP listener (API and JMAP, WebDAV, autoconfig without TLS, ACME, metrics) serves, default 1024. Extra ones get `503` and are closed. `0` is the default, not "no limit", and `limits set` says so. |
+| `max-http-connections-per-ip` | Concurrent connections one client (IPv6: per /64) may hold on each plain-HTTP listener, default 256, over the same `503`. `0` is the default, not "no limit", and `limits set` says so. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |
@@ -1170,6 +1177,8 @@ scope here):
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
+The API keys made with `epistle api-key` open the HTTP API, described in the [HTTP API guide](api.md).
+
 ## Rotations (`epistle dkim`, `epistle tls`, `epistle api-key`)
 
 | Command | What it does |
@@ -1200,6 +1209,25 @@ server within seconds, no restart. A static account (`[[accounts]]` in
 `mail.toml`) is refused with a hint to edit the config file.
 
 Addresses, domains and account names are stored in lowercase whatever you type: `account add Alice` creates `alice`, with a note on stderr to use the lowercase form from now on.
+
+### Account names and addresses are two rules
+
+An account name and a mail address are checked by different rules, and they stay different.
+
+- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule.rs`) serves every command and endpoint that creates an account.
+- **The address** follows RFC 5322 and 5321: a dot inside the local part is fine (`torre.control@example.org`), not at its start or end, not twice in a row. Stored in lowercase.
+
+Only `epistle init` turns one into the other: it derives the name from the address, with dots becoming hyphens (`torre.control@example.org` gives the account `torre-control` and keeps the address as typed). Nothing else derives a name. `account add torre.control --address torre.control@example.org` is refused, naming the `'.'`, before the password is asked; `account add torre-control --address torre.control@example.org` works and the account sends and receives as `torre.control@example.org`.
+
+| Where | Account name | Address, alias or member |
+|---|---|---|
+| `epistle init` | derived from the address (dots to hyphens); refused when the local part cannot give a name | as typed, lowercase, must be in a served domain |
+| `epistle account add N --address A` | `N` must obey the name rule, refused naming the character, nothing derived | any RFC 5322 address in a served domain, dots allowed |
+| `epistle account address add N A` | `N` must exist | same as above |
+| `epistle alias add`, `alias member\|sender add` | an alias has no name | any RFC 5322 address; the alias address must be in a served domain and unused |
+| `POST /api/v1/accounts` | `name` obeys the name rule, `400` naming the character | `addresses` as above, dots allowed |
+| SCIM `POST /scim/v2/Users` | `userName` obeys the name rule, `400` naming the character, never derived from `emails` | `emails` as above, dots allowed |
+| `[[accounts]]` in `mail.toml` | the loader refuses a name that breaks the rule | `addresses` as above |
 
 | Command | What it does |
 |---|---|
@@ -1305,9 +1333,9 @@ memory by the running server and are not manageable from the CLI, and exits 1.
 
 | Command | What it does |
 |---|---|
-| `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, `cidr:<net>/<prefix>` or `account:<login>`), reason, and the epoch second each one ends. |
+| `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, where an IPv6 client appears as its /64, `cidr:<net>/<prefix>`, `pair:<login>|<client>` or `account:<login>`), reason, and the epoch second each one ends. |
 | `epistle ban add <ip\|cidr> [--for 24h]` | Ban an address or network by hand. `--for` takes a number and a unit (`s`, `m`, `h`, `d`, `w`); the default is 24h. Refused for an address on the allow list. |
-| `epistle ban remove <ip\|cidr>` | Lift the ban now and clear the address's failure counter, so the next failure starts from zero. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban remove <ip\|cidr>` | Lift the ban now and clear the address's failure counter (for IPv6, the /64's), so the next failure starts from zero. Exits 1 if there was neither a ban nor a failure record. |
 | `epistle ban allow list [--json]` | Addresses and networks that are never banned. |
 | `epistle ban allow add <ip\|cidr>` | Never ban this address or network. |
 | `epistle ban allow remove <ip\|cidr>` | Take it off the allow list. |
@@ -1319,6 +1347,31 @@ a ban. It does not change the per-connection limit that SMTP applies to one
 connection (three failed attempts close it), which keeps no state between
 connections. A network ban (`add 203.0.113.0/24`) covers every address in it;
 `add 203.0.113.9/32` is the same ban as `add 203.0.113.9`.
+
+## Learning from the user's moves (`epistle learning`)
+
+An account's Bayesian corpus learns from what its user does: a message moved
+or copied into Junk is spam, a message moved out of Junk to anywhere but Trash
+is ham, and `$Junk` / `$NotJunk` say the same (the rules and the limits are in
+`docs/configuration.md`). `epistle learning` shows what each corpus has learned
+and switches it. It needs `[database]`, because the counters and the switch live
+in PostgreSQL; without it the command exits 3. A change reaches the running
+server at its next lesson, with no restart. With the container stack it runs
+inside `mail` like `ban`.
+
+| Command | What it does |
+|---|---|
+| `epistle learning status [ACCOUNT] [--json]` | Per account: `learning` on or off, `spam` and `ham` learned (a message counts again when its verdict changed), `unlearned` (earlier verdicts taken back), `repeated` (decisions that changed nothing), `refused` (the account holds as many token rows as it may), `throttled` (it spent the day's tokens), `messages` (rows in the record), `token-rows`, `unrecorded` (messages the corpus holds that the record does not: taught before the record existed or by the server itself, they count again if the user moves them and cannot be taken back) and the `corpus-spam` and `corpus-ham` the corpus holds from any source. Without an account, every account that has learned or been switched off, at most 10000 (a note on stderr says when the list was cut); an account that never learned reads as on with zero counters. |
+| `epistle learning enable ACCOUNT [--dry-run] [--json]` | Let the account's decisions teach its corpus (the default). |
+| `epistle learning disable ACCOUNT [--dry-run] [--json]` | Stop them. What the corpus already learned stays. |
+| `epistle learning reset ACCOUNT [--dry-run] [--yes] [--json]` | Drop the corpus and the record of the account and zero its counters; the on/off switch stays as it was, so an account switched off remains off. It scores with the shared corpus again until it holds 200 ham and 200 spam of its own. Needs `--yes` off a terminal. |
+
+The account must exist (exit 2 otherwise), for `status` too only in the sense that
+an unknown name reads as zero. Lessons dropped by the per-command, per-account queue
+share, per-minute, per-day or worker-time limits are counted by the server in
+`mail_bayes_training_dropped_total`, and lessons lost for another reason in
+`mail_bayes_learning_unreadable_total`, `mail_bayes_learning_failed_total` and
+`mail_bayes_learning_refused_total`; none of these is per account.
 
 ## Expunged-message archive
 

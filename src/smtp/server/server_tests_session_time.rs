@@ -10,6 +10,7 @@ use tokio::time::Instant;
 use super::tests_data_rate::{Client, FLOOR, OPEN, body, pass, reply_codes, test_directory};
 use super::tests_session_limits::{listen, one_slot_server, the_address_delivers_again};
 use super::*;
+use crate::smtp::line::filler;
 use crate::smtp::sink::MemorySink;
 
 /// The line a session past its lifetime is closed with.
@@ -99,7 +100,7 @@ async fn a_bdat_transaction_crossing_the_limit_may_finish() {
 	pass(Duration::from_secs(50)).await;
 	client.send(transaction()).await;
 	client.send(b"BDAT 2048\r\n").await;
-	client.send(&[b'x'; 2048]).await;
+	client.send(&filler(2048)).await;
 	pass(Duration::from_secs(20)).await;
 	client.send(b"NOOP\r\n").await;
 	client.send(b"BDAT 5 LAST\r\nhelloNOOP\r\n").await;

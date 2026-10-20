@@ -3,6 +3,8 @@
 //! Mail trace headers want `Day, DD Mon YYYY HH:MM:SS +0000`. The server
 //! always stamps UTC, so no zone database is needed.
 
+pub mod sync;
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::metrics::Metrics;

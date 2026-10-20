@@ -7,7 +7,7 @@ use crate::evidence::test_support::at;
 #[test]
 fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
 	let (dir, old, tsa, _chain) = short_lived();
-	crate::evidence::rotation::rotate_at(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
+	crate::evidence::rotation::rotate_at(dir.path(), at(DAY + 5, 1)).expect("rotate");
 	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
 	assert_ne!(new.id(), old.id());
 	// The same purge, statement signed by the key that handed over: the
@@ -35,7 +35,7 @@ fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
 #[test]
 fn a_purge_after_a_rotation_signed_by_the_key_in_force_verifies() {
 	let (dir, _old, tsa, _chain) = short_lived();
-	crate::evidence::rotation::rotate_at(dir.path(), true, at(DAY + 5, 1)).expect("rotate");
+	crate::evidence::rotation::rotate_at(dir.path(), at(DAY + 5, 1)).expect("rotate");
 	let new = EvidenceKey::load_or_create(dir.path()).expect("current key");
 	let swept = sweep(dir.path(), &new, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
 	assert_eq!(swept.days, 3, "the sweep did not take the old days");

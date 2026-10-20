@@ -10,7 +10,8 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use serde::{Deserialize, Serialize};
 
-use crate::api::state::{ApiState, ClientIp};
+use crate::api::domain_scope::DomainScope;
+use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 
 /// A credential-verification request.
 #[derive(Deserialize)]
@@ -40,21 +41,64 @@ pub struct VerifyResponse {
 pub async fn verify(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<VerifyRequest>,
 ) -> Json<VerifyResponse> {
+	let refused = Json(VerifyResponse {
+		valid: false,
+		admin: false,
+	});
+	// A key confined to some domains checks the passwords of its own
+	// tenant's accounts only. For any other login the password is never
+	// tried: the answer would tell the key whether another tenant's account
+	// has that password, and the attempt would count against the account.
+	let scope = state.domain_scope(&auth);
+	if !login_in_scope(&state, &scope, &request.name) {
+		return refused;
+	}
 	match state.authenticate_with_ip(
 		&request.name,
 		&request.password,
 		client_ip.0,
 		crate::config::Protocol::Api,
 	) {
-		Some(resolved) => Json(VerifyResponse {
+		Some(resolved) if account_in_scope(&state, &scope, &resolved) => Json(VerifyResponse {
 			valid: true,
 			admin: state.is_admin(&resolved),
 		}),
-		None => Json(VerifyResponse {
-			valid: false,
-			admin: false,
-		}),
+		_ => refused,
 	}
+}
+
+/// Whether `login` (an account name or one of its addresses) names an account
+/// the scope covers. Everything is covered by an unconfined key.
+fn login_in_scope(state: &ApiState, scope: &DomainScope, login: &str) -> bool {
+	if matches!(scope, DomainScope::All) {
+		return true;
+	}
+	let login = crate::util::address::normalize(login);
+	state.accounts().iter().any(|account| {
+		(account.name == login
+			|| account
+				.addresses
+				.iter()
+				.any(|address| crate::util::address::normalize(address) == login))
+			&& scope.admits_account(account.addresses.iter().map(String::as_str))
+	})
+}
+
+/// Whether the account named `name` is covered by the scope. An unconfined key
+/// (the configured token and any API key without `domains`) never filters by
+/// account: the post-auth check exists to keep a confined key from confirming
+/// the password of another tenant's account, and that risk only exists for
+/// scoped keys.
+fn account_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> bool {
+	if matches!(scope, DomainScope::All) {
+		return true;
+	}
+	state
+		.accounts()
+		.iter()
+		.find(|account| account.name == name)
+		.is_some_and(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
 }

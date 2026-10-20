@@ -1,0 +1,236 @@
+//! Text a person reads that is not plain UTF-8 in the bytes: another charset,
+//! and encoded words in the headers.
+
+use super::*;
+use crate::antispam::bayes::tokenize;
+
+fn has(raw: &[u8], word: &str) -> bool {
+	tokenize(&scoring_text(raw).text).iter().any(|t| t == word)
+}
+
+fn base64_of(bytes: &[u8]) -> String {
+	use base64::Engine as _;
+	base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn multipart(parts: &str) -> Vec<u8> {
+	format!("Subject: x\r\nContent-Type: multipart/mixed; boundary=\"bb\"\r\n\r\n{parts}--bb--\r\n")
+		.into_bytes()
+}
+
+/// Text in a charset whose bytes are not UTF-8: UTF-16 with or without a mark,
+/// and Latin-1.
+#[test]
+fn text_in_another_charset_is_read() {
+	let utf16le: Vec<u8> = "hiddenword is here"
+		.encode_utf16()
+		.flat_map(u16::to_le_bytes)
+		.collect();
+	let utf16be: Vec<u8> = "hiddenword is here"
+		.encode_utf16()
+		.flat_map(u16::to_be_bytes)
+		.collect();
+	let mut marked = vec![0xff, 0xfe];
+	marked.extend(&utf16le);
+	for (name, bytes) in [("le", utf16le), ("be", utf16be), ("bom", marked)] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; charset=utf-16\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&bytes)
+		));
+		assert!(has(&raw, "hiddenword"), "utf-16 {name}");
+	}
+	// A word with a letter outside ASCII, in Latin-1, would otherwise be cut
+	// in two at the byte.
+	let raw = b"Content-Type: text/plain; charset=iso-8859-1\r\n\r\nthe caf\xe9s hiddenword\r\n";
+	assert!(has(raw, "cafés"));
+	assert!(has(raw, "hiddenword"));
+}
+
+/// A subject or a name sent as an RFC 2047 encoded word is what a person
+/// reads, not the base64 or the `=XX` it travels in.
+#[test]
+fn an_encoded_word_in_a_header_is_read_decoded() {
+	let raw = b"Subject: =?utf-8?B?aGlkZGVud29yZCBpcyBoZXJl?=\r\n\
+		From: =?utf-8?q?other=77ord?= <a@example.org>\r\n\r\nbody\r\n";
+	assert!(has(raw, "hiddenword"));
+	assert!(has(raw, "otherword"));
+}
+
+/// Characters that take no room on the screen are not a space between two
+/// halves of a word: a person reads `viagra`.
+#[test]
+fn invisible_characters_do_not_split_a_word() {
+	for invisible in [
+		'\u{200b}',
+		'\u{200c}',
+		'\u{200d}',
+		'\u{00ad}',
+		'\u{2060}',
+		'\u{feff}',
+		'\u{034f}',
+		'\u{180e}',
+		'\u{fe0f}',
+		'\u{e0020}',
+	] {
+		let raw = format!(
+			"Subject: x\r\n\r\ncheap vi{invisible}agra n{invisible}ow café{invisible}s\r\n"
+		);
+		assert!(has(raw.as_bytes(), "viagra"), "U+{:04X}", invisible as u32);
+		assert!(has(raw.as_bytes(), "cafés"));
+	}
+	// Plain accented text is read as before.
+	assert!(has("Subject: x\r\n\r\nñandú comió\r\n".as_bytes(), "ñandú"));
+}
+
+/// The same in the readings that go through [`read::push_chars`]: UTF-16 in
+/// both orders and with a mark, and Latin-1 where 0xAD is a soft hyphen.
+#[test]
+fn invisible_characters_do_not_split_a_word_in_utf16_or_latin1() {
+	let text = "cheap f\u{200b}ree v\u{00ad}iagra now";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let be: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+	let mut marked = vec![0xfe, 0xff];
+	marked.extend(&be);
+	for (name, bytes) in [("le", le), ("be", be), ("bom", marked)] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; charset=utf-16\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&bytes)
+		));
+		assert!(has(&raw, "free"), "utf-16 {name}");
+		assert!(has(&raw, "viagra"), "utf-16 {name}");
+	}
+	let raw = b"Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncheap fr\xadee vi\xadagra caf\xe9\r\n";
+	assert!(has(raw, "free"));
+	assert!(has(raw, "viagra"));
+}
+
+/// UTF-16 with no byte order mark and no zero byte to give it away (Cyrillic,
+/// Arabic, Persian) is read in the order the part declares.
+#[test]
+fn utf16_in_a_non_latin_script_is_read_by_its_declared_charset() {
+	let text = "быстрый кредит бесплатно";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let be: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+	for (charset, bytes) in [
+		("utf-16le", &le),
+		("UTF-16LE", &le),
+		("utf-16be", &be),
+		("utf-16", &be),
+		("ucs-2le", &le),
+	] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; charset=\"{charset}\"\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(bytes)
+		));
+		assert!(has(&raw, "кредит"), "{charset}");
+	}
+	// The same bytes under a charset that says something else are not UTF-16.
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-8\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&le)
+	));
+	assert!(!has(&raw, "кредит"));
+}
+
+/// A charset that says UTF-16 adds a reading; it does not take the others
+/// away. Text a person reads as 8 bits stays readable under a false claim.
+#[test]
+fn a_false_utf16_claim_does_not_hide_8_bit_text() {
+	for charset in ["utf-16le", "utf-16be", "utf-16"] {
+		let mut bytes = format!("Content-Type: text/plain; charset={charset}\r\n\r\n").into_bytes();
+		bytes.extend(b"the caf\xe9s hiddenword\r\n");
+		assert!(has(&bytes, "cafés"), "{charset}");
+		assert!(has(&bytes, "hiddenword"), "{charset}");
+	}
+}
+
+/// Every charset a part declares is a reading: a first one that is harmless
+/// does not hide a second that is UTF-16, nor the reverse.
+#[test]
+fn every_declared_charset_is_a_reading() {
+	let text = "быстрый кредит бесплатно";
+	let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Type: text/plain; charset=utf-16le\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&le)
+	));
+	assert!(has(&raw, "кредит"));
+	let mut raw = b"Content-Type: text/plain; charset=utf-16le\r\n\
+		Content-Type: text/plain; charset=iso-8859-1\r\n\r\nthe caf"
+		.to_vec();
+	raw.extend(b"\xe9s\r\n");
+	assert!(has(&raw, "cafés"));
+}
+
+fn cyrillic_le() -> Vec<u8> {
+	"быстрый кредит бесплатно"
+		.encode_utf16()
+		.flat_map(u16::to_le_bytes)
+		.collect()
+}
+
+/// Charsets made up before the one that matters do not push it out.
+#[test]
+fn junk_charsets_before_utf16_do_not_hide_it() {
+	for junk in [0, 3, 4, 8, 40, 400] {
+		let types: String = (0..junk)
+			.map(|n| format!("Content-Type: text/plain; charset=junk{n}\r\n"))
+			.collect();
+		let raw = multipart(&format!(
+			"--bb\r\n{types}Content-Type: text/plain; charset=utf-16le\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&cyrillic_le())
+		));
+		assert!(has(&raw, "кредит"), "{junk} junk charsets");
+	}
+}
+
+/// The names a client takes for UTF-16, and the ways to write the parameter.
+#[test]
+fn every_way_to_say_utf16_is_one() {
+	for parameter in [
+		"charset=unicode",
+		"charset=UNICODE",
+		"charset=utf_16le",
+		"charset='utf-16le'",
+		"charset*=utf-16le''x",
+		"charset*=\"UTF-16LE\"",
+		"charset=\" utf-16le \"",
+		"charset=utf-16-le",
+		"charset=ucs-2le",
+	] {
+		let raw = multipart(&format!(
+			"--bb\r\nContent-Type: text/plain; {parameter}\r\n\
+			 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+			base64_of(&cyrillic_le())
+		));
+		assert!(has(&raw, "кредит"), "{parameter}");
+	}
+	let be: Vec<u8> = "быстрый кредит"
+		.encode_utf16()
+		.flat_map(u16::to_be_bytes)
+		.collect();
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=unicodeFFFE\r\n\
+		 Content-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&be)
+	));
+	assert!(has(&raw, "кредит"), "unicodeFFFE");
+}
+
+/// The reading a part gets under its second transfer encoding is in the same
+/// charset as the first.
+#[test]
+fn the_second_encoding_of_a_part_is_read_in_its_charset() {
+	let raw = multipart(&format!(
+		"--bb\r\nContent-Type: text/plain; charset=utf-16le\r\n\
+		 Content-Transfer-Encoding: 7bit\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+		base64_of(&cyrillic_le())
+	));
+	assert!(has(&raw, "кредит"));
+}

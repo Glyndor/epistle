@@ -12,3 +12,5 @@ pub mod command;
 pub mod server;
 pub mod session;
 pub mod store;
+mod store_check;
+mod store_index;

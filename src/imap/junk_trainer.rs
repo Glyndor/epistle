@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::antispam::training_queue::{TrainingJob, TrainingQueue};
+use crate::antispam::training_queue::{LessonBudget, TrainingJob, TrainingQueue};
 use crate::imap::mailbox::Flag;
 
 /// The side of the corpus a keyword change trains.
@@ -62,14 +62,37 @@ pub fn enqueue_junk_transition(
 	updated: &[Flag],
 	path: PathBuf,
 ) -> bool {
+	enqueue_junk_transition_within(
+		queue,
+		account,
+		previous,
+		updated,
+		path,
+		&mut LessonBudget::new(),
+	)
+}
+
+/// [`enqueue_junk_transition`] spending the lessons of one command's
+/// `budget`, for a command that changes the keywords of many messages.
+pub fn enqueue_junk_transition_within(
+	queue: &TrainingQueue,
+	account: &str,
+	previous: &[Flag],
+	updated: &[Flag],
+	path: PathBuf,
+	budget: &mut LessonBudget,
+) -> bool {
 	let Some(signal) = junk_signal(previous, updated) else {
 		return false;
 	};
-	queue.submit(TrainingJob {
-		account: account.to_string(),
-		path,
-		spam: signal == JunkSignal::Spam,
-	})
+	queue.submit_within(
+		TrainingJob {
+			account: account.to_string(),
+			path,
+			spam: signal == JunkSignal::Spam,
+		},
+		budget,
+	)
 }
 
 #[cfg(test)]

@@ -361,6 +361,51 @@ pub struct Config {
 	/// from 60 to 86400.
 	#[serde(default)]
 	pub max_session_time: Option<u64>,
+	/// Seconds an IMAP, POP3 or ManageSieve client gets, from the start of
+	/// the connection, to sign in. One deadline covers the TLS handshake,
+	/// every command and every literal before authentication, and nothing
+	/// the client sends moves it; a signed-in session is not held to it.
+	/// Absent uses 60; from 5 to 3600.
+	#[serde(default)]
+	pub preauth_timeout: Option<u64>,
+	/// Max concurrent connections one client may hold on each IMAP, POP3 and
+	/// ManageSieve listener; a client over the cap gets the protocol's
+	/// `BYE` or `-ERR` and is closed. Absent (or `0`) uses 200. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_mailbox_connections_per_ip: Option<usize>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined. Two caps apply
+	/// together: at most `max_connections_per_account_per_ip` per
+	/// (account, client IP) and at most `max_connections_per_account_total`
+	/// per account. Absent (or `0`) uses the built-in defaults of 10 per
+	/// (account, IP) and 50 per account, matching Dovecot's
+	/// `mail_max_userip_connections`. Applied after authentication: a
+	/// connection over the cap is answered with the protocol's
+	/// "user is busy" reply (`NO [LIMIT]` on IMAP, `-ERR [IN-USE]` on
+	/// POP3, HTTP 429 on JMAP) and closed.
+	#[serde(default)]
+	pub max_connections_per_account: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined per (account, client IP).
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 10.
+	#[serde(default)]
+	pub max_connections_per_account_per_ip: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined across every client IP.
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 50.
+	#[serde(default)]
+	pub max_connections_per_account_total: Option<u32>,
+	/// Max concurrent connections each plain-HTTP listener (API and JMAP,
+	/// WebDAV, autoconfig without TLS, ACME, metrics) serves; a connection
+	/// over the cap gets `503` and is closed. Absent (or `0`) uses 1024.
+	#[serde(default)]
+	pub max_http_connections: Option<usize>,
+	/// Max concurrent connections one client may hold on each plain-HTTP
+	/// listener, over the same `503`. Absent (or `0`) uses 256. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_http_connections_per_ip: Option<usize>,
 	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
@@ -400,6 +445,12 @@ pub struct Config {
 	/// the same value.
 	#[serde(default)]
 	pub max_message_size: Option<u64>,
+	/// Recipients one message may name, on SMTP (`RCPT TO`, advertised as
+	/// `LIMITS RCPTMAX`), `POST /api/v1/send` and JMAP `EmailSubmission/set`.
+	/// Absent keeps 100. RFC 5321 §4.5.3.1.8 says a server MUST accept at
+	/// least 100, so a lower value is refused; at most 10000.
+	#[serde(default)]
+	pub max_recipients: Option<usize>,
 	/// Tenant definitions: named groups of domains with optional aggregate
 	/// caps on accounts, domains, storage and submission rate. Absent or
 	/// empty means no tenancy is in effect and the server behaves exactly as
@@ -430,6 +481,14 @@ pub struct Config {
 	/// alert engine entirely (the default).
 	#[serde(default)]
 	pub alerts: Vec<Alert>,
+	/// Seconds a successful authentication keeps an (account, network)
+	/// pair on the bypass list that lets a banned account sign in from
+	/// a network the owner has used before. Absent uses the 30-day
+	/// default. The row ages out of the list after this many seconds
+	/// during the daily sweep, and a network the owner has not used
+	/// within the window falls back to the no-bypass refusal.
+	#[serde(default)]
+	pub known_network_window_secs: Option<u64>,
 	/// When `true`, the outbound queue worker is not started: mail submitted
 	/// for a recipient outside a configured domain stays in the spool, and
 	/// no outbound SMTP connection is ever opened. Only `epistle local`
@@ -505,11 +564,34 @@ impl std::fmt::Debug for Config {
 				&self.max_connections_per_listener,
 			)
 			.field("max_connections_per_ip", &self.max_connections_per_ip)
+			.field("max_recipients", &self.max_recipients)
 			.field("message_memory_budget", &self.message_memory_budget)
 			.field("min_data_rate", &self.min_data_rate)
 			.field("data_rate_grace", &self.data_rate_grace)
 			.field("junk_command_limit", &self.junk_command_limit)
 			.field("max_session_time", &self.max_session_time)
+			.field("preauth_timeout", &self.preauth_timeout)
+			.field(
+				"max_mailbox_connections_per_ip",
+				&self.max_mailbox_connections_per_ip,
+			)
+			.field(
+				"max_connections_per_account",
+				&self.max_connections_per_account,
+			)
+			.field(
+				"max_connections_per_account_per_ip",
+				&self.max_connections_per_account_per_ip,
+			)
+			.field(
+				"max_connections_per_account_total",
+				&self.max_connections_per_account_total,
+			)
+			.field("max_http_connections", &self.max_http_connections)
+			.field(
+				"max_http_connections_per_ip",
+				&self.max_http_connections_per_ip,
+			)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)

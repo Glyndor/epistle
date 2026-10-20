@@ -26,10 +26,13 @@ impl Session {
 		// commands they are resolved through the snapshot to current
 		// sequence numbers (expunged entries drop out, per RFC 5182 §2.1).
 		let saved_search = self.saved_search.clone();
+		// Cloned before `self.state` is borrowed mutably below.
+		let training = self.training.clone();
 		let State::Selected {
 			account,
 			snapshot,
 			read_only,
+			mailbox: source_mailbox,
 			..
 		} = &mut self.state
 		else {
@@ -39,6 +42,7 @@ impl Session {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
 		let account = account.clone();
+		let source_mailbox = source_mailbox.clone();
 		if !mailbox::exists(&data_dir, &account, target) {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
@@ -135,6 +139,23 @@ impl Session {
 					super::codes::uid_set(&source_uids)
 				));
 			}
+		}
+		// A message that goes into Junk, or a move out of it, teaches the
+		// account corpus. The queue never waits, so the reply does not
+		// depend on it.
+		if let Some(queue) = &training
+			&& let Some(signal) =
+				super::super::junk_moves::move_signal(&source_mailbox, target, remove_source)
+			&& let Some(dir) = mailbox::mailbox_dir(&data_dir, &account, target)
+		{
+			super::super::junk_moves::enqueue_move(
+				queue,
+				&account,
+				signal,
+				&dir,
+				&dest_ids,
+				&mut queue.command_budget(),
+			);
 		}
 		// A copy into the selected mailbox, or a change another session
 		// made meanwhile, reaches the client before the tagged reply.

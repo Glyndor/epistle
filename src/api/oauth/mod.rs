@@ -74,6 +74,9 @@ struct DeviceGrant {
 	expires_at: u64,
 	/// Earliest Unix second the client may poll the token endpoint again.
 	next_poll_at: u64,
+	/// Who started the flow (an IPv4 address or an IPv6 /64), for the
+	/// per-client cap; `None` when the peer address was not available.
+	client: Option<(bool, u64)>,
 }
 
 /// An issued authorization code bound to an account and a PKCE challenge.
@@ -256,6 +259,15 @@ pub(crate) fn oauth_error(code: &'static str) -> Response {
 	(status, Json(serde_json::json!({ "error": code }))).into_response()
 }
 
+/// OAuth throttling response with the remaining wait in whole seconds.
+fn oauth_rate_limited(seconds: u64) -> Response {
+	let mut response = oauth_error("slow_down");
+	response
+		.headers_mut()
+		.insert(header::RETRY_AFTER, seconds.into());
+	response
+}
+
 /// Build the public OAuth router (the `token` and `device_authorization`
 /// endpoints; no auth — the codes are the credential). Mounted only when the
 /// authorization server is configured.
@@ -276,3 +288,10 @@ pub fn authenticated_router() -> Router<super::ApiState> {
 #[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "device_limits_tests.rs"]
+mod device_limits_tests;
+
+#[cfg(test)]
+mod proxy_tests;

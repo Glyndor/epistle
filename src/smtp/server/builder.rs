@@ -57,12 +57,26 @@ impl Server {
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
+			max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			data_rate: super::DataRate::default(),
 			junk_command_limit: crate::smtp::session::DEFAULT_JUNK_COMMAND_LIMIT,
 			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
+			#[cfg(test)]
+			strip_for_test: None,
 		}
+	}
+
+	/// Swap the trust-field stripper for one that does not fold the
+	/// leader byte the production stripper mirrors from mail-parser
+	/// (`inbound_headers::strip_buggy`). Used by the safety-net test
+	/// to confirm that the second pass refuses the message when the
+	/// first one misses.
+	#[cfg(test)]
+	pub fn with_strip_for_test(mut self, strip: fn(&mut Vec<u8>, &str)) -> Self {
+		self.strip_for_test = Some(strip);
+		self
 	}
 
 	/// Tag every password authentication attempt through this server with
@@ -215,6 +229,17 @@ impl Server {
 	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
 		if bytes > 0 {
 			self.max_message_size = bytes;
+		}
+		self
+	}
+
+	/// Set how many recipients one transaction on this listener may name:
+	/// advertised as `LIMITS RCPTMAX` and enforced at `RCPT TO`. `0` keeps
+	/// the built-in default
+	/// ([`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`]).
+	pub fn with_max_recipients(mut self, count: usize) -> Self {
+		if count > 0 {
+			self.max_recipients = count;
 		}
 		self
 	}

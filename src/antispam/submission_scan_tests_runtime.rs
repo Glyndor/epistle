@@ -4,6 +4,7 @@
 //! plain thread. None of them may crash on the inspection, and a panic in
 //! it is a temporary failure, never a dead session.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
@@ -11,10 +12,15 @@ use crate::antispam::attachments::corpus;
 use crate::config::{AttachmentMode, Attachments};
 use crate::smtp::sink::MemorySink;
 
-static INSPECTED: AtomicUsize = AtomicUsize::new(0);
-
-fn count() {
-	INSPECTED.fetch_add(1, Ordering::SeqCst);
+/// A hook that counts the inspections it sees, and the count: one per test,
+/// so another test's inspections never move it.
+fn counting() -> (impl Fn() + Send + Sync + 'static, Arc<AtomicUsize>) {
+	let inspected = Arc::new(AtomicUsize::new(0));
+	let seen = Arc::clone(&inspected);
+	let hook = move || {
+		seen.fetch_add(1, Ordering::SeqCst);
+	};
+	(hook, inspected)
 }
 
 fn explode() {
@@ -134,12 +140,13 @@ fn flag_mode_never_inspects_a_submission() {
 	// Under `flag` no finding can stop a submission, and nothing is
 	// stamped on outgoing mail: an inspection would only cost time and,
 	// at the gate's cap, a 451 an upgrade never asked for.
-	let before = INSPECTED.load(Ordering::SeqCst);
+	let (count, inspected) = counting();
 	let (sink, inner) = make(policy(AttachmentMode::Flag).with_check_hook(count));
 	submit(&sink).expect("sent");
 	assert_eq!(inner.messages().len(), 1);
-	assert_eq!(INSPECTED.load(Ordering::SeqCst), before, "not inspected");
+	assert_eq!(inspected.load(Ordering::SeqCst), 0, "not inspected");
+	let (count, inspected) = counting();
 	let (sink, _) = make(policy(AttachmentMode::Quarantine).with_check_hook(count));
 	assert!(refused(submit(&sink)));
-	assert_eq!(INSPECTED.load(Ordering::SeqCst), before + 1);
+	assert_eq!(inspected.load(Ordering::SeqCst), 1);
 }

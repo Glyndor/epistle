@@ -198,3 +198,14 @@ fn push_header(headers: &mut Vec<(String, String)>, line: &str) {
 		headers.push((name, value));
 	}
 }
+
+/// Names this parser reads out of a raw message, with the `trim_end` it
+/// applies on each header name. Tests use it to confirm the real ARC-AMS
+/// parser agrees with the inbound trust-field stripper about whether a
+/// reserved name survived.
+#[cfg(test)]
+pub(crate) fn header_names(raw: &[u8]) -> Vec<String> {
+	split_message(raw)
+		.map(|(headers, _)| headers.into_iter().map(|(name, _)| name).collect())
+		.unwrap_or_default()
+}

@@ -4,15 +4,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::line::{LineDecoder, LineError};
 
 use super::session::Session;
+use crate::net::conn_limit::Refusal;
+use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
+use crate::net::response_writer;
+use server_literal::{Taken, take_exact};
 
 /// How a listener negotiates TLS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +42,14 @@ const IDLE_POLL: Duration = Duration::from_secs(30);
 
 /// Consecutive `BAD` responses before the connection is dropped (abuse guard).
 const MAX_ERROR_STREAK: u32 = 20;
+
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"* BYE too many connections, try again later\r\n",
+		Refusal::ClientFull => b"* BYE too many connections from your address\r\n",
+	}
+}
 
 /// Whether a server response is a `BAD` protocol error (abuse signal).
 fn is_bad_response(bytes: &[u8]) -> bool {
@@ -66,12 +78,17 @@ pub struct Server {
 	scram_enabled: bool,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// Max concurrent connections one client may hold on this listener.
+	max_per_ip: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
 	crypto: crate::storage::MessageCrypto,
 	/// Idle / command read timeout: how long a single read (including the
 	/// literal read for APPEND/REPLACE) may stall before the connection is
 	/// dropped. Configurable so tests can drive a short deadline.
 	read_timeout: Duration,
+	/// Deadline for the whole phase before authentication, counted from the
+	/// start of the connection. Never longer than `read_timeout`.
+	preauth_timeout: Duration,
 	/// The graceful stop this listener follows.
 	drain: Option<Arc<crate::shutdown::Drain>>,
 	/// Days to keep expunged messages in `<account>/.archive/` before the
@@ -87,6 +104,15 @@ pub struct Server {
 	/// The bounded queue to the per-account Bayesian trainer, handed to
 	/// every session. `None` disables training and STORE answers the same.
 	training: Option<crate::antispam::training_queue::TrainingQueue>,
+	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
+	/// command may carry. Follows `[server] max_message_size`, the same
+	/// cap the SMTP, REST and JMAP submission paths enforce. Default is
+	/// [`super::command::DEFAULT_APPEND_LIMIT`].
+	append_limit: usize,
+	/// Shared per-account counter applied after authentication. A
+	/// session over the cap answers `NO [LIMIT]` and closes; the slot
+	/// is released on every disconnect path.
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 }
 
 impl Server {
@@ -110,156 +136,16 @@ impl Server {
 			cbind_data: None,
 			scram_enabled: true,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			read_timeout: DEFAULT_READ_TIMEOUT,
+			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 			drain: None,
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
-		}
-	}
-
-	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
-	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
-		self.crypto = crypto;
-		self
-	}
-
-	/// Days to keep expunged messages in `<account>/.archive/` before the
-	/// hourly sweeper removes them. `0` keeps the legacy behaviour.
-	pub fn with_retention_days(mut self, days: u64) -> Self {
-		self.retention_days = days;
-		self
-	}
-
-	/// Cap concurrent connections for this listener (0 keeps the default).
-	pub fn with_max_connections(mut self, max: usize) -> Self {
-		if max > 0 {
-			self.max_connections = max;
-		}
-		self
-	}
-
-	/// Set the per-account storage quota applied to sessions.
-	pub fn with_quota(mut self, bytes: u64) -> Self {
-		self.quota_bytes = bytes;
-		self
-	}
-
-	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
-	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
-		self.oauth = Some(verifier);
-		self
-	}
-
-	/// Follow `drain`: stop accepting when it starts and close each
-	/// session with `* BYE` once its current command is done.
-	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
-		self.drain = Some(drain);
-		self
-	}
-
-	/// Cap the idle / literal-read deadline. The default is 30 minutes
-	/// (RFC 9051 §5.4); production callers leave it alone, but the test
-	/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
-	/// a test for half an hour.
-	pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
-		self.read_timeout = timeout;
-		self
-	}
-
-	/// Provide the `tls-server-end-point` certificate hash, enabling
-	/// AUTH=SCRAM-SHA-256-PLUS.
-	pub fn with_channel_binding(mut self, cert_hash: crate::tls::EndPoint) -> Self {
-		self.cbind_data = Some(cert_hash);
-		self
-	}
-
-	/// Toggle the `[auth] scram` knob for this listener. `false` hides
-	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS in `CAPABILITY AUTH=` and
-	/// refuses an explicit `AUTHENTICATE` against them; PLAIN/LOGIN stay in.
-	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
-		self.scram_enabled = enabled;
-		self
-	}
-
-	/// Tag every password authentication attempt through this server with
-	/// `protocol` so the directory's per-account `allowed_protocols` set
-	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
-	/// listener kind (`Protocol::Imaps` for implicit-TLS port 993,
-	/// `Protocol::Imap` for the STARTTLS port 143).
-	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
-		self.auth_protocol = protocol;
-		self
-	}
-
-	/// Attach the training queue, shared with the JMAP state so both
-	/// protocols feed the one worker of the process.
-	pub fn with_training(mut self, queue: crate::antispam::training_queue::TrainingQueue) -> Self {
-		self.training = Some(queue);
-		self
-	}
-
-	/// Build a session with this server's quota, OAuth and channel-binding.
-	fn new_session(&self) -> Session {
-		let mut session = Session::new(
-			&self.hostname,
-			self.data_dir.clone(),
-			self.directory.current(),
-		)
-		.with_quota_limit(self.quota_bytes)
-		.with_crypto(self.crypto.clone())
-		.with_oauth(self.oauth.clone())
-		.with_retention_days(self.retention_days)
-		.with_auth_protocol(self.auth_protocol)
-		.with_scram_enabled(self.scram_enabled);
-		if let Some(cbind) = &self.cbind_data {
-			session = session.with_channel_binding(cbind.current());
-		}
-		if let Some(queue) = &self.training {
-			session = session.with_training(queue.clone());
-		}
-		session
-	}
-
-	/// Accept connections forever.
-	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		self.serve_on(listener).await
-	}
-
-	/// [`Self::serve`] over any source of connections.
-	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
-		self: Arc<Self>,
-		listener: A,
-	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
-		let mut accepting = crate::net::accept::Accepting::new(listener);
-		loop {
-			let (stream, peer) = match &self.drain {
-				Some(drain) => tokio::select! {
-					accepted = accepting.next() => accepted,
-					() = drain.started() => return Ok(()),
-				},
-				None => accepting.next().await,
-			};
-			// A dual-stack `::` listener reports an IPv4 peer as
-			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
-			// session consults at authentication sees a plain `IpAddr::V4`.
-			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "IMAP connection limit reached, dropping");
-				continue;
-			};
-			let server = Arc::clone(&self);
-			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
-			tokio::spawn(async move {
-				let _permit = permit;
-				let _tracked = tracked;
-				tracing::debug!(%peer, "imap connection accepted");
-				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
-					tracing::debug!(%peer, %error, "imap connection ended with error");
-				}
-			});
+			append_limit: super::command::DEFAULT_APPEND_LIMIT,
+			per_account_counter: None,
 		}
 	}
 
@@ -270,9 +156,11 @@ impl Server {
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 	{
+		let mut clock = SessionClock::start(self.preauth_timeout, self.read_timeout);
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
-				let tls = crate::tls::accept_within(&self.tls, stream).await?;
+				let tls =
+					crate::tls::accept_until(&self.tls, stream, clock.preauth_until()).await?;
 				let identity = tls
 					.get_ref()
 					.1
@@ -288,8 +176,7 @@ impl Server {
 		session.set_peer_ip(peer);
 
 		let greeting = session.greeting();
-		stream.write_all(&greeting.bytes).await?;
-		stream.flush().await?;
+		response_writer::write_response(&mut *stream, &greeting.bytes, &clock, false).await?;
 
 		let mut decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 		let mut buffer = [0u8; 4096];
@@ -300,41 +187,62 @@ impl Server {
 		let mut rejected_tail = false;
 		loop {
 			let line = match decoder.next_line() {
-				Ok(Some(line)) => line,
+				Ok(Some(line)) => {
+					clock.line_done();
+					line
+				}
 				Ok(None) => {
 					// With NOTIFY active (RFC 5465), poll the selected mailbox at
 					// IDLE_POLL intervals while waiting for the next command and
-					// push unsolicited EXISTS/EXPUNGE, bounded by self.read_timeout.
-					let wait_start = tokio::time::Instant::now();
+					// push unsolicited EXISTS/EXPUNGE, bounded by the line's
+					// deadline: absolute, so trickled bytes do not move it.
+					let deadline = clock.line(session.is_authenticated());
 					let read = loop {
+						let remaining = deadline.saturating_duration_since(Instant::now());
 						let poll = if session.notify_active() {
-							IDLE_POLL.min(self.read_timeout)
+							IDLE_POLL.min(remaining)
 						} else {
-							self.read_timeout
+							remaining
 						};
 						let reading = stream.read(&mut buffer);
 						let Some(waited) =
 							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
 						else {
-							let _ = stream.write_all(SHUTTING_DOWN).await;
+							let _ = response_writer::write_response(
+								&mut *stream,
+								SHUTTING_DOWN,
+								&clock,
+								session.is_authenticated(),
+							)
+							.await;
 							return Ok(());
 						};
 						match waited {
 							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
-								if !session.notify_active()
-									|| wait_start.elapsed() >= self.read_timeout
-								{
+								if !session.notify_active() || Instant::now() >= deadline {
 									tracing::debug!("IMAP idle timeout, closing connection");
-									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										b"* BYE idle timeout\r\n",
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								}
-								if let Some(notification) = session.check_notify() {
-									if stream.write_all(&notification.bytes).await.is_err() {
-										return Ok(());
-									}
-									let _ = stream.flush().await;
+								if let Some(notification) = session.check_notify()
+									&& response_writer::write_response(
+										&mut *stream,
+										&notification.bytes,
+										&clock,
+										session.is_authenticated(),
+									)
+									.await
+									.is_err()
+								{
+									return Ok(());
 								}
 							}
 						}
@@ -352,8 +260,13 @@ impl Server {
 							b"* BYE protocol error\r\n"
 						}
 					};
-					stream.write_all(message).await?;
-					stream.flush().await?;
+					response_writer::write_response(
+						&mut *stream,
+						message,
+						&clock,
+						session.is_authenticated(),
+					)
+					.await?;
 					return Ok(());
 				}
 			};
@@ -362,8 +275,15 @@ impl Server {
 				// What follows a drained literal belongs to the rejected
 				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
 				// message), not to a new one.
-				match discard::rejected_tail(&mut *stream, &mut decoder, &line, self.read_timeout)
-					.await?
+				let deadline = clock.step(session.is_authenticated());
+				match discard::rejected_tail(
+					&mut *stream,
+					&mut decoder,
+					&line,
+					deadline,
+					self.append_limit,
+				)
+				.await?
 				{
 					Some(more) => rejected_tail = more,
 					None => return Ok(()),
@@ -372,19 +292,35 @@ impl Server {
 			}
 
 			let Ok(line) = String::from_utf8(line) else {
-				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
-				stream.flush().await?;
+				response_writer::write_response(
+					&mut *stream,
+					b"* BAD non-ASCII command\r\n",
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				error_streak += 1;
 				if error_streak >= MAX_ERROR_STREAK {
-					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					let _ = response_writer::write_response(
+						&mut *stream,
+						b"* BYE too many errors\r\n",
+						&clock,
+						session.is_authenticated(),
+					)
+					.await;
 					return Ok(());
 				}
 				continue;
 			};
 
-			if discard::oversized_sent_literal(&line) {
-				stream.write_all(b"* BYE literal too large\r\n").await?;
-				stream.flush().await?;
+			if discard::oversized_sent_literal(&line, self.append_limit) {
+				response_writer::write_response(
+					&mut *stream,
+					b"* BYE literal too large\r\n",
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				return Ok(());
 			}
 
@@ -393,15 +329,26 @@ impl Server {
 			if is_bad_response(&output.bytes) {
 				error_streak += 1;
 				if error_streak >= MAX_ERROR_STREAK {
-					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					let _ = response_writer::write_response(
+						&mut *stream,
+						b"* BYE too many errors\r\n",
+						&clock,
+						session.is_authenticated(),
+					)
+					.await;
 					return Ok(());
 				}
 			} else {
 				error_streak = 0;
 			}
 			loop {
-				stream.write_all(&output.bytes).await?;
-				stream.flush().await?;
+				response_writer::write_response(
+					&mut *stream,
+					&output.bytes,
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				if output.close {
 					return Ok(());
 				}
@@ -412,13 +359,9 @@ impl Server {
 					// command, and drop the rest of the command's line
 					// (`rejected_tail`). The rejection has already been
 					// written; return to the command loop.
-					if !discard::literal_or_close(
-						&mut *stream,
-						&mut decoder,
-						size,
-						self.read_timeout,
-					)
-					.await?
+					let deadline = clock.step(session.is_authenticated());
+					if !discard::literal_or_close(&mut *stream, &mut decoder, size, deadline)
+						.await?
 					{
 						return Ok(());
 					}
@@ -434,61 +377,45 @@ impl Server {
 					// sending any two non-CRLF bytes after the literal.
 					// Both reads are bounded by the same idle/command
 					// deadline as any other read.
-					let mut literal = decoder.take_buffered(size);
-					let mut chunk = [0u8; 4096];
-					while literal.len() < size {
-						let read =
-							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
-								.await
-							{
-								Ok(Ok(n)) => n,
-								Ok(Err(e)) => return Err(e),
-								Err(_) => {
-									tracing::debug!("IMAP literal read timeout, closing");
-									let _ = stream.write_all(b"* BYE read timeout\r\n").await;
-									return Ok(());
-								}
-							};
-						if read == 0 {
-							return Ok(());
-						}
-						let needed = size - literal.len();
-						if read <= needed {
-							literal.extend_from_slice(&chunk[..read]);
-						} else {
-							literal.extend_from_slice(&chunk[..needed]);
-							decoder.feed(&chunk[needed..read]);
-						}
-					}
+					let deadline = clock.step(session.is_authenticated());
+					let literal =
+						match take_exact(&mut *stream, &mut decoder, size, deadline).await? {
+							Taken::Done(bytes) => bytes,
+							Taken::Closed => return Ok(()),
+							Taken::TimedOut => {
+								tracing::debug!("IMAP literal read timeout, closing");
+								let _ = response_writer::write_response(
+									&mut *stream,
+									b"* BYE read timeout\r\n",
+									&clock,
+									session.is_authenticated(),
+								)
+								.await;
+								return Ok(());
+							}
+						};
 					// Now consume exactly the trailer (CRLF, or `)` CRLF after
 					// a UTF8 APPEND literal). The decoder keeps any surplus
 					// for the next command line.
 					let expected = output.literal_trailer;
-					let mut trailer = decoder.take_buffered(expected.len());
-					while trailer.len() < expected.len() {
-						let read =
-							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
-								.await
-							{
-								Ok(Ok(n)) => n,
-								Ok(Err(e)) => return Err(e),
-								Err(_) => {
-									tracing::debug!("IMAP literal trailer timeout, closing");
-									let _ = stream.write_all(b"* BYE read timeout\r\n").await;
-									return Ok(());
-								}
-							};
-						if read == 0 {
-							return Ok(());
-						}
-						let needed = expected.len() - trailer.len();
-						if read <= needed {
-							trailer.extend_from_slice(&chunk[..read]);
-						} else {
-							trailer.extend_from_slice(&chunk[..needed]);
-							decoder.feed(&chunk[needed..read]);
-						}
-					}
+					let trailer =
+						match take_exact(&mut *stream, &mut decoder, expected.len(), deadline)
+							.await?
+						{
+							Taken::Done(bytes) => bytes,
+							Taken::Closed => return Ok(()),
+							Taken::TimedOut => {
+								tracing::debug!("IMAP literal trailer timeout, closing");
+								let _ = response_writer::write_response(
+									&mut *stream,
+									b"* BYE read timeout\r\n",
+									&clock,
+									session.is_authenticated(),
+								)
+								.await;
+								return Ok(());
+							}
+						};
 					if trailer == expected {
 						output = session.literal_done(&literal);
 					} else {
@@ -502,12 +429,13 @@ impl Server {
 				}
 				if output.collect_auth {
 					// Read one SASL continuation line and feed it back.
+					let deadline = clock.step(session.is_authenticated());
 					let response = loop {
 						match decoder.next_line() {
 							Ok(Some(line)) => break line,
 							Ok(None) => {
-								let read = match tokio::time::timeout(
-									self.read_timeout,
+								let read = match tokio::time::timeout_at(
+									deadline,
 									stream.read(&mut buffer),
 								)
 								.await
@@ -545,7 +473,8 @@ impl Server {
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
-					let tls = crate::tls::accept_within(&self.tls, stream).await?;
+					let tls =
+						crate::tls::accept_until(&self.tls, stream, clock.preauth_until()).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls
 						.get_ref()
@@ -573,7 +502,13 @@ impl Server {
 							Ok(None) => {
 								if idle_start.elapsed() >= self.read_timeout {
 									tracing::debug!("IMAP idle timeout during IDLE, closing");
-									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										b"* BYE idle timeout\r\n",
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								}
 								let reading = stream.read(&mut buffer);
@@ -581,7 +516,13 @@ impl Server {
 								let Some(waited) =
 									crate::shutdown::or_drain(drain, IDLE_POLL, reading).await
 								else {
-									let _ = stream.write_all(SHUTTING_DOWN).await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										SHUTTING_DOWN,
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								};
 								let read = match waited {
@@ -589,12 +530,17 @@ impl Server {
 									Ok(Err(e)) => return Err(e),
 									Err(_) => {
 										// Poll interval expired; check for new messages.
-										if let Some(notification) = session.check_idle() {
-											if stream.write_all(&notification.bytes).await.is_err()
-											{
-												return Ok(());
-											}
-											let _ = stream.flush().await;
+										if let Some(notification) = session.check_idle()
+											&& response_writer::write_response(
+												&mut *stream,
+												&notification.bytes,
+												&clock,
+												session.is_authenticated(),
+											)
+											.await
+											.is_err()
+										{
+											return Ok(());
 										}
 										continue;
 									}
@@ -616,6 +562,9 @@ impl Server {
 	}
 }
 
+#[path = "server_builder.rs"]
+mod builder;
+
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
@@ -636,8 +585,25 @@ mod tests_literals;
 #[path = "server_tests_utf8_append.rs"]
 mod tests_utf8_append;
 
+#[path = "server_accept.rs"]
+mod accept;
+
 #[path = "server_discard.rs"]
 mod discard;
+
+#[path = "server_literal.rs"]
+mod server_literal;
+
+#[path = "server_session_factory.rs"]
+mod session_factory;
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod tests_conn_limit;
+
+#[cfg(test)]
+#[path = "server_tests_deadline.rs"]
+mod tests_deadline;
 
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]

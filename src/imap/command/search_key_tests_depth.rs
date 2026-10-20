@@ -1,10 +1,10 @@
 //! Search keys nest at most `MAX_SEARCH_DEPTH` levels.
 
-use super::super::{Command, ParseError, parse};
+use super::super::{Command, DEFAULT_APPEND_LIMIT, ParseError, parse};
 use super::MAX_SEARCH_DEPTH;
 
 fn search(criteria: &str) -> Result<Command, ParseError> {
-	parse(&format!("a1 SEARCH {criteria}")).map(|tagged| tagged.command)
+	parse(&format!("a1 SEARCH {criteria}"), DEFAULT_APPEND_LIMIT).map(|tagged| tagged.command)
 }
 
 fn parens(levels: usize) -> String {

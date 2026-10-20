@@ -15,6 +15,14 @@ impl Config {
 	/// every entry that changed.
 	pub(super) fn normalize_identifiers(&mut self) -> Vec<String> {
 		let mut changed = Vec::new();
+		let stored = config_hostname(&self.hostname);
+		if stored != self.hostname {
+			changed.push(format!(
+				"hostname: \"{}\" (used as \"{}\")",
+				self.hostname, stored
+			));
+			self.hostname = stored;
+		}
 		for domain in &mut self.domains {
 			let stored = config_domain(domain);
 			note(&mut changed, "domains: ", domain, stored);
@@ -91,6 +99,18 @@ fn config_domain(raw: &str) -> String {
 	} else {
 		raw.to_string()
 	}
+}
+
+/// Canonicalize the configured hostname so the inbound trust-field stripper
+/// and the authserv-id it emits share one identity: trim surrounding ASCII
+/// whitespace, lowercase, and drop every trailing dot. Anything else
+/// (internal whitespace, multiple trailing dots, non-ASCII) is left to the
+/// validator to refuse.
+fn config_hostname(raw: &str) -> String {
+	raw.trim()
+		.to_ascii_lowercase()
+		.trim_end_matches('.')
+		.to_string()
 }
 
 /// Replace `value` with `stored`, recording the entry when they differ.

@@ -66,6 +66,15 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a route the calling credential may not use at all.
+	pub fn forbidden(message: &str) -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: message.to_string(),
+		}
+	}
+
 	/// `403` for a submission whose envelope sender the acting account does
 	/// not own. One answer for every such sender, owned by another account
 	/// or by none, so the refusal says nothing about which addresses exist.
@@ -160,6 +169,16 @@ impl ApiError {
 			status: StatusCode::PAYLOAD_TOO_LARGE,
 			code: "scan_too_large",
 			message: "The message is too large for the content scan and was not sent.".to_string(),
+		}
+	}
+
+	/// `422` for a message with more header fields than a filter reads:
+	/// sending it again unchanged is refused again, nothing was sent.
+	pub fn too_many_header_fields() -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "too_many_header_fields",
+			message: "The message has too many header fields and was not sent.".to_string(),
 		}
 	}
 

@@ -58,15 +58,19 @@ a connection URL.
 | `domain_submission_limits` | table | `{}` | `domain → recipients/min`: per-domain override for `submission_rate_limit_per_min`, counted and refused the same way. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain; an account with addresses in several limited domains gets the strictest entry. Edited through `epistle limits set submission-rate --domain <NAME> <N>`. |
 | `inbound_rate_limit_per_ip_per_min` | int | unset | Max messages an unauthenticated client IP may start per minute. Sessions that authenticate are charged against the submission limiters instead; bounces (null sender) are not charged against the per-sender limit. A send over the cap is deferred with `450 4.7.1 too many messages from this client; retry later`; the temporary code lets a real burst (a mailing list, a resend after an outage) retry rather than bounce. Absent disables the per-IP limit. |
 | `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
-| `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
+| `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` means no cap; the request that would go above it returns `409 conflict`. |
 | `max_message_size` | int | 25 MiB | Per-instance message-size cap; `0` means the default. It may not exceed the effective `message_memory_budget` unless the budget is `0`: the server refuses to start (and `epistle limits set` refuses the change) rather than accept a size it could never receive. The same number is the SMTP `SIZE` extension value, the `MAIL FROM` SIZE parameter cap, the per-line running size check, the end-of-DATA check, the per-chunk BDAT cap, the JMAP upload route's body limit, the JMAP `Email/set` create builder cap, and the REST `POST /api/v1/send` body limit. The cap is advertised in EHLO `SIZE` and the JMAP Session resource (`maxSizeUpload`, `maxSizeAttachmentsPerEmail`). Oversize is refused with `552 5.3.4 message exceeds maximum size` (SMTP), the JMAP `limit` problem (`maxSizeUpload`), or the REST `413 message_too_large`. |
-| `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
-| `max_connections_per_ip` | int | 20 | Max concurrent connections from a single client IP per SMTP listener. A peer over the cap is answered `421 4.7.0 too many connections from your address` and closed; the per-listener semaphore still bounds the total. An IPv6 client is counted by its /64, and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the built-in default. Behind a proxy or NAT that hides the client address (Podman rootless bridge networking reports every client as one gateway address) every client shares one count. |
+| `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener, at most 1000000; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
+| `max_connections_per_ip` | int | 20 | Max concurrent connections from a single client IP per SMTP listener (IMAP, POP3, ManageSieve and plain HTTP have their own, below). A peer over the cap is answered `421 4.7.0 too many connections from your address` and closed; the per-listener semaphore still bounds the total. An IPv6 client is counted by its /64, and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the built-in default. Behind a proxy or NAT that hides the client address (Podman rootless bridge networking reports every client as one gateway address) every client shares one count. |
 | `message_memory_budget` | int | derived | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from. When the cap is exhausted a new transaction is refused with `452 4.3.1 insufficient system resources; try again later` (a refused `BDAT` chunk is still read and discarded). A `BDAT` chunk is charged as its octets arrive, like a `DATA` body, never for the size it announces, so a client that announces a large chunk and sends it slowly holds only what it has sent. One client (an IPv4 address or an IPv6 /64) may hold at most a quarter of the budget, and never less than one message of `max_message_size`. An accepted body stays counted until its delivery is over; reservations are released on every path that drops the body (reply, `RSET`, `EHLO`, disconnect, timeout, panic). Must be at least `max_message_size`. `0` disables the cap (every reservation succeeds, the historical unbounded behaviour). Unset, it is a fifth, in whole MiB, of the memory the `mail` container may use (its cgroup v2 `memory.max`, else the `mem_limit` of `mail` in the generated `compose.yaml`, else 1 GiB), at least `max_message_size` and at most 1 GiB: a message in flight peaks at about 2.9 times its body, so a full budget costs about three times its size, 60% of the limit. A set budget whose triple is more than 70% of that limit is kept, with a warning at start-up and in `epistle status` (area `resources`). See [Sizing](container.md#sizing). |
 | `min_data_rate` | int | 10240 | Minimum average transfer rate of one inbound message, in bytes per second. The clock runs over the whole transaction: from the `354` of `DATA`, or from the first `BDAT` chunk, until the final dot or the `LAST` chunk. The time between chunks counts, commands sent in it and replies the client leaves unread included, and octets past `max_message_size` buy no time. Once `data_rate_grace` is over, a client whose average since that start is below the floor gets `421 4.4.2 transfer too slow, closing connection` and is disconnected; its memory reservation is released at once and its per-IP slot when the connection closes (a client that does not read the 421 is dropped when the 300 s write timeout runs out). At the default a 25 MiB message has about 43 minutes. `0` turns the check off (only the 300 s idle timeout per read remains). At most 1 GiB/s. |
 | `data_rate_grace` | int | 120 | Seconds from the start of a message transaction before `min_data_rate` applies, given once per transaction, not per chunk. Between 1 and 3600. |
 | `junk_command_limit` | int | 100 | Commands without progress one SMTP session may send before it gets `421 4.7.0 too many commands without progress, closing connection` and is disconnected (the same default as Postfix). Two counts share the limit. Commands that never move a message count for the whole session: `NOOP`, `RSET` and `VRFY` whatever their reply, unknown commands (`EXPN`, `HELP`, `ETRN`), a repeated `EHLO` or `HELO` (the one after the banner and the one after `STARTTLS` are free), a `BDAT 0` chunk that is not `LAST`, and every `AUTH` response line; a delivered message or a successful login does not reset them, and a logged-in session has the same limit, so a client that sends `RSET` before each message reconnects after about a hundred. Refused commands (syntax errors, refused `MAIL` and `RCPT`, commands out of sequence) count only since the last message the server accepted (after every check on its body), as Postfix forgives earlier errors once a message is received: a relay delivering a list with many recipients that no longer exist keeps its connection while its messages are accepted, and a client that only collects refusals is cut. Runs of consecutive refusals are bounded separately (20). `0` turns it off; otherwise between 10 and 10000. |
 | `max_session_time` | int | 1800 | Seconds one SMTP session may last. Past it the client gets `421 4.4.2 session time limit reached` and is disconnected at the next command boundary: while the server waits for a command or an `AUTH` response line, or before it runs one. A message body being received (`DATA`, or the chunks of a `BDAT` transaction) is never cut, since `min_data_rate` bounds it; the command after it is, except `QUIT`, and a client whose body ended past the limit has one 300 s idle timeout to send it. `0` turns it off; otherwise between 60 and 86400. |
+| `preauth_timeout` | int | 60 | Seconds an IMAP, POP3 or ManageSieve client gets, from the start of the connection, to sign in. One deadline covers the TLS handshake, every command and every literal (or `AUTHENTICATE` response) before authentication; bytes arriving slowly and a stream of harmless commands (`NOOP`, `CAPABILITY`) do not move it. At the deadline IMAP answers `* BYE idle timeout` and ManageSieve `BYE`, POP3 closes. A signed-in session is not held to it: it gets the idle timeout of its protocol (30 minutes IMAP and ManageSieve, 10 minutes POP3) for each command, counted from the moment the server starts waiting for it, and `IDLE` keeps its own limit. A client that signs in with a very slow password hash or over a very slow link needs a longer value. From 5 to 3600, but on IMAP and POP3 the phase never outlasts the idle timeout of the protocol, so a value above 600 acts as 600 on POP3 and above 1800 acts as 1800 on IMAP. ManageSieve uses the configured pre-authentication deadline without this idle-timeout cap. |
+| `max_mailbox_connections_per_ip` | int | 200 (ManageSieve 40) | Max concurrent connections one client may hold on each IMAP, POP3 and ManageSieve listener. A client over the cap is answered `* BYE too many connections from your address` (IMAP), `-ERR too many connections from your address` (POP3) or `BYE "too many connections from your address"` (ManageSieve) and closed before any handshake or session is set up; a listener that is full gets `... too many connections, try again later`. On the implicit-TLS ports (993, 995) the line arrives in clear, ahead of a TLS handshake that never starts. An IPv6 client is counted by its /64, an IPv4-mapped address as the IPv4 address, and no peer is exempt. The count is released when the connection ends, however it ends. `0` uses the default. A mail client keeps several connections open (three to six, one per folder it watches with `IDLE`), so at four per device and two devices a user holds about eight: 200 serves about 25 active users behind one address, and an office or a mobile carrier sharing one address with more people needs a higher value. 200 is also 40% of the IMAP and POP3 listener (500), so three such addresses can fill it. ManageSieve defaults to 40 because its listener holds 100 and a script editor keeps one or two connections: a cap above the listener's would never act. A value you set applies to the three protocols alike. Behind a proxy or NAT that hides the client address, and with a bridge network or `rootlessport` instead of `pasta` (Podman rootless reports every client as one gateway address), every client shares one count and the ceiling of the listener falls from 500 connections to this value, about 25 users: raise it to about the listener's `max_connections_per_listener`. |
+| `max_http_connections` | int | 1024 | Max concurrent connections each plain-HTTP listener serves, at most 1000000: the API and JMAP, WebDAV, autoconfig without TLS, the ACME responder and metrics. A connection over the cap gets `503 Service Unavailable` with `Connection: close` and is closed without reading its request. `0` uses the default. A JMAP push (WebSocket) connection keeps its place in both this cap and `max_http_connections_per_ip` for as long as the socket is open, not only until the upgrade. A panel or proxy that carries the sockets of many users from one address needs `max_http_connections_per_ip` raised to match. |
+| `max_http_connections_per_ip` | int | 256 | Max concurrent connections one client may hold on each plain-HTTP listener (API, JMAP, WebDAV, autoconfig without TLS, ACME, metrics), answered with the same `503`, and on each listener that terminates TLS in the server (autoconfig over HTTPS, MTA-STS), where the connection is closed before any TLS handshake so no `503`/`BYE`/`-ERR` is ever written. The cap uses the TCP peer address from the socket, never a forwarded header, so the server never reads `X-Forwarded-For` before admission and `[api].trusted_proxies` does not affect it: the only way to share it is to actually be the same source address. An IPv6 client is counted by its /64 (the /48 a single subscriber receives usually lives in the same /64) and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the default. The plain-HTTP and TLS caps share this key and value. A reverse proxy or the panel in front of the API is one client for all its users, so raise this to the listener cap (`max_http_connections` for plain HTTP, `max_connections_per_listener` for the autoconfig listener over HTTPS and MTA-STS) when the listener only talks to it; behind a proxy every connection looks like the proxy, so a small default (256) is one user per proxy connection and a single proxy saturating the cap is a denial of service for everyone behind it. The MTA-STS default of 32 (one eighth of the listener default of 256) covers a single resolver fleet refetching at the same time; raise it for a fleet. |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at `queue_delay_warning_secs`. |
 | `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. |
 | `queue_retry_cap_secs` | int | 3600 | Longest wait between attempts for one recipient. Not below `queue_retry_base_secs`. |
@@ -90,7 +94,7 @@ a connection URL.
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26279936` (25 MiB + 64 KiB) | Messages above this size are not sent to clamd. With `clamd_on_error = "accept"` they are accepted unscanned; with `defer` they are refused with `552 5.3.4 message too large for the content scan`. The size counts the trace and authentication headers the server adds, so `defer` requires at least `max_message_size` + 64 KiB (the configuration is refused otherwise). A message exactly at the limit is scanned. |
 | `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
-| `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus. |
+| `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
 ```toml
@@ -302,7 +306,42 @@ Management API (consumed by `epistle-panel`). Closed by default.
 | Key | Meaning |
 |---|---|
 | `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
+| `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
+
+`trusted_proxies` is an optional list of IPv4 and IPv6 CIDR networks, empty by
+default. Invalid CIDRs stop configuration loading. For example:
+
+```toml
+[api]
+token_hash = "${API_TOKEN_HASH}"
+trusted_proxies = ["192.0.2.10/32", "2001:db8:100::/48"]
+```
+
+Trust only the addresses of reverse proxies under your control. The proxy must
+append the address it connected from to `X-Forwarded-For`, or replace the header
+with the actual client address. When the TCP peer is trusted, Epistle validates
+the whole header and scans its addresses from right to left, taking the first
+address outside `trusted_proxies`. A missing or malformed header, or a chain
+containing only trusted addresses, uses the TCP peer. An untrusted peer's header
+is ignored. IPv4-mapped IPv6 client addresses are canonicalized to IPv4.
+
+A universal prefix (`0.0.0.0/0` or `::/0`) is refused at load time: a `/0`
+tricks the server into treating every direct peer as a trusted proxy, so a peer
+that sets its own `X-Forwarded-For` would pick the address the server uses for
+limits, audit and credential IP checks. Duplicates are dropped, and the list is
+capped at 1024 entries to bound the cost of the linear lookup on every
+forwarded address.
+
+This address is used for API authentication limits, credential IP restrictions,
+audit events, OAuth password bans and device grant counters. IPv6 clients still
+share their /64 budget. The default empty list preserves socket-based attribution.
+Restart the server after changing `trusted_proxies`.
+
+Authentication-window `429` responses include `Retry-After`, the remaining
+seconds rounded up. OAuth `429 slow_down` responses include the wait until
+blocking grants expire or the next allowed poll. Password bans retain their
+ordinary authentication failure response.
 
 ### Domain-confined API keys (multi-tenancy)
 
@@ -335,13 +374,38 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+SCIM obeys the same confinement. A key with `scim` and `domains` lists, reads,
+creates, replaces, patches (including `active` and `password`) and deletes only
+the accounts that sit entirely inside its domains. An account outside them
+answers `404` on every `/scim/v2/Users` route, and a `POST` or `PUT` that names
+an address outside them is refused with `400`. A `userName` that is malformed or already held by an account outside the key's domains answers the same `400` (`userName is not available`), so a tenant cannot probe the other tenants' names; a name held inside its own domains still answers `409`. Moving an account to a domain of another tenant at its `max_accounts` cap answers `409`. Before 0.12.2 SCIM ignored
+`domains`, so a key meant for one tenant reached all of them: if you issued
+`scim` keys with `--domain`, rotate them and review the accounts they changed.
+
+A confined key holds to the same rule on every route that has per-tenant
+data, not only on the accounts routes:
+
+| Route | For a key confined to some domains |
+|---|---|
+| `GET /api/v1/status` | `domains` and `accounts` count only what the key covers; `queue_size` is left out because the queue is shared |
+| `GET /api/v1/queue`, `DELETE /api/v1/queue/{id}` | only entries whose sender is in the key's domains; an entry with an empty sender (a bounce) is for unconfined keys; any other entry answers `404` |
+| `GET /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
+| `/api/v1/accounts/{name}/masked`, `.../archive` | `404` unless the account is covered, unknown accounts included |
+| `POST /api/v1/auth/verify` | checks only the passwords of covered accounts; any other login answers `valid: false` without the password being tried |
+| `POST /api/v1/accounts`, `POST /scim/v2/Users` | a name that is malformed or held outside the key's domains gives the same `400`, so the answer does not reveal other tenants' names |
+
+Before 0.12.2 these routes ignored the key's domains. If you handed out keys
+with `domains`, treat them as having had access to the whole server and rotate
+them. `src/api/route_rules_tests.rs` lists every route with the rule it
+follows, and fails when a route is added without one.
+
 ### What each key scope reaches
 
 Scopes are independent: holding one does not grant another.
 
 - `read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`), downloads, the WebSocket and the event source, and the
+  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event source, and the
   `GET` routes of the management API.
 - `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
   of the management API.
@@ -524,6 +588,11 @@ create, read, replace, patch, delete). `Groups` returns `501` — the
 directory has no group membership yet, so provisioning groups would be
 a no-op pretending to be a feature.
 
+`GET /Users` reports `totalResults` for all resources matching the filter
+within the caller's domain scope, independent of pagination. `startIndex` is
+1-based, and `itemsPerPage` is the number of resources returned in that page.
+Use `count=0` to return the total without resources.
+
 `active: false` is honoured: the account stays on disk and keeps its
 mailboxes, but `authenticate` rejects every password before any
 hashing. `PUT` and `PATCH` refuse to change `userName` (renames are
@@ -531,6 +600,11 @@ not supported — the account name is the directory primary key).
 `PATCH` accepts only `replace` of `active` and `password`. Every
 response carries `Content-Type: application/scim+json`; errors follow
 RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
+
+A key confined to domains (`api-key create --domain`) sees and changes only
+the accounts inside them (see [Domain-confined API keys](#domain-confined-api-keys-multi-tenancy)),
+and `POST /Users` honours a tenant's `max_accounts` cap with `409`, as
+`POST /api/v1/accounts` does.
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes). The server
@@ -581,7 +655,10 @@ counters each listener already maintains are the only defence.
 The Bayesian corpus is keyed by scope. Two scopes are in play:
 
 - The **shared** scope (`""`) is the server's own accept/reject learning.
-  SMTP accept/reject decisions (`train_in_background`) feed it.
+  SMTP accept/reject decisions feed it: mail the server rejects or
+  quarantines is learned as spam, mail it accepts as ham from a sender it
+  verified. That mail comes from anyone, so the learning is bounded (see
+  below).
 - The **account** scope (the local account name) is the per-user learning.
   IMAP STORE and JMAP `Email/set` train it on a `$Junk` / `$NotJunk`
   transition. Adding `$Junk` trains spam; adding `$NotJunk` or removing
@@ -589,11 +666,185 @@ The Bayesian corpus is keyed by scope. Two scopes are in play:
   train (the equality skip in `Snapshot::store_flags` keeps the
   no-op out of the trainer).
 
+  Moving mail teaches the same corpus. A message copied or moved into the
+  account's Junk mailbox (`Junk`, `Spam` or `Rejects`, the name the server
+  lists with the `\Junk` special use) trains spam. A message moved out of
+  Junk into any mailbox but Trash trains ham: Junk to Trash is the user
+  throwing spam away, and a copy out of Junk leaves the message in Junk, so
+  neither says the message is not junk. A folder that only ends in `Junk`
+  (`Archive/Junk`) has no role. IMAP COPY and MOVE and the mailbox change of
+  JMAP `Email/set` all take this decision, and when an update also sets
+  `$Junk` or `$NotJunk` the move is the last word. IMAP APPEND into Junk
+  does not train, because a migration tool appends whole folders.
+
+  The server records what each account has learned, one row per message in
+  `bayes_learned`, keyed by a keyed hash of the first 256 KiB of the message
+  (the same window and the same key file as the token hashes). That makes the
+  lessons idempotent however many ways a message reaches the same verdict:
+  moved into Junk, then marked `$Junk`, then copied again counts once. When
+  the user decides the other way (a message goes back to the inbox), the
+  earlier lesson is taken back token by token and the new verdict added, so a
+  message that goes back and forth leaves the corpus where the last move put
+  it. The row, the token counts and the message totals change in one
+  transaction: when the record cannot be written nothing is trained, and a
+  transaction PostgreSQL abandons (a deadlock) is run again up to four times.
+  The locks are always taken in the same order, so the server and
+  `epistle learning reset` can run at the same time. What an account taught
+  before the ledger existed (through `$Junk`, or by the server's own
+  decisions) is in the corpus but not in the ledger: it counts again if the
+  user moves it and cannot be taken back. `epistle learning status` shows
+  that number as `unrecorded`.
+
+  Learning is bounded, per command, per account and in the worker:
+  - Each IMAP COPY or MOVE, each IMAP STORE and each JMAP `Email/set` call
+    queues at most 100 lessons; the rest are dropped and counted in
+    `mail_bayes_training_dropped_total`. The queue to the worker holds 256,
+    and one account may have 32 of those places at a time, so one account (or
+    any seven) cannot take them all. Eight accounts at their share fill it
+    (8 x 32 = 256): another account's lesson is then dropped, counted, and one
+    that is accepted waits behind up to 256 others, which at a few hundred
+    milliseconds each is about a minute. The queue is served in order, not
+    account by account, so this is a limit of a deployment with many accounts
+    sending at once, for instance several of one tenant.
+  - One account may teach 200 lessons a minute and 5000 a day, and may keep
+    the single worker busy for 10 seconds in a minute, measured from the work
+    of its own lessons (reading the message and writing the corpus, every
+    attempt of a lesson that fails or is retried included), not from the time
+    they waited behind other jobs. Lessons over a limit are dropped and
+    counted.
+  - A message is read the way the SMTP path reads it: its headers and its text
+    parts, decoded and in the charset they declare, without attachments, cut to
+    a window of the first and the last half of 256 KiB of words. A lesson
+    touches at most 5000 distinct tokens of it, the same cap and the same keyed
+    sample the server's own training takes, written with two statements
+    whatever their number. The worker reads the stored file whole, up to
+    32 MiB, because the structure is what tells text from an attachment; a
+    larger file, or one that cannot be read, teaches nothing, spends none of
+    the day's tokens and gives back its place in the minute and day counts
+    (`mail_bayes_learning_unreadable_total`); the time spent reading it is
+    still charged to the account. The message is reduced on the worker's own
+    task, as the SMTP path does, so one lesson of a large message holds one
+    runtime thread for about a second.
+  - One account holds at most 250000 token rows (about 100 MB with the index)
+    and spends at most 1000000 tokens a day. A lesson past either is refused
+    or held back, and counted per account as `refused` and `throttled`. A
+    lesson that only reuses words the account already has pays for the rows it
+    adds. Taking a lesson back writes the same rows and spends the same.
+  - The ledger keeps at most 100000 messages; at the limit the oldest tenth is
+    forgotten, so those can no longer be taken back and count again if moved.
+  - Lessons lost for another reason are counted in the server's metrics:
+    `mail_bayes_learning_unreadable_total` (the file was gone when the worker
+    came to it, which is normal after emptying Junk),
+    `mail_bayes_learning_failed_total` (the database refused the lesson) and
+    `mail_bayes_learning_refused_total` (a ceiling or the day's budget). They
+    are warnings, not a guarantee that every move taught something.
+  - The shared scope is never taught by a user, and an account only ever
+    teaches its own scope. The message is named by the file the server wrote
+    and the mailbox by the server's own special-use table: a header or a
+    flag a client invents decides nothing.
+  - A message with several local recipients is scored with the corpus of the
+    first of them. That is the existing behaviour of the SMTP path and is not
+    changed here.
+
+  Training never sends mail. `epistle learning` shows the counters per
+  account and switches learning off or on; see `docs/cli.md`. Without
+  `[database]` there is no corpus and nothing is learned.
+
 The LLM-assisted uncertain band uses `BayesStore::score_for_account`,
 which falls back to the shared scope for any account whose own scope
 has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
 the threshold the per-account classifier is not trustworthy, so the
 user gets the server's general training rather than a coin-flip.
+
+What a message is read as. The filter reads what a person reads: the header
+block and the `text/*` parts, decoded (base64 and quoted-printable text is
+read for what it says), as a stream of words. Attachments, images and any
+other part that is not text are skipped and cost nothing, so a message with a
+PDF or a photo scores as the message without it. Whitespace, punctuation and
+one-letter words are not words and cost nothing either. A message that two
+readers could split into parts differently is read as raw bytes as well. A message whose
+structure cannot be followed (nested more than 32 levels deep, more than
+10 000 parts, or a text part
+larger than 2 MiB once decoded, or a message inside it that size) is read as
+raw bytes, as the filter always did, and counts as not read in full (see the
+floor of 0.5 below), since text that travels encoded is not decoded that way.
+Files that no client could show as text do not use up the 2 MiB. A part that
+declares two transfer encodings is read under each. Text in UTF-16, or in an
+8-bit charset such as Latin-1 or Windows-1251, is also read as its bytes would
+be shown; RFC 2047 encoded words in the headers are read decoded; zero width
+characters and soft hyphens do not split a word; and letters outside ASCII are
+lowercased. A token with a capital outside ASCII ("Привет", "École") that the
+corpus learned before 0.12.2 is looked up now under its lower case form and is
+learned again; the old rows stay in the table, unused, because the corpus
+holds keyed hashes and cannot convert them. UTF-32, UTF-7 and the tags and
+entities of HTML are not read.
+
+What a message costs. Learning from, and scoring, one message costs a fixed
+amount whatever its size. Of the words, the first and the last 128 KiB are
+read; of those, at most 5000 distinct words. A message under both bounds is
+scored on all of it, exactly as before. A message over either is not read in
+full: its first and last 1000 distinct words are read, the rest of the 5000
+are chosen by a keyed hash of the word (the sender does not hold the key, so
+it cannot choose which of them are read by where it puts them), and it is
+scored on that and never below 0.5, because filler is what a sender hiding
+spam would send. A score of 0.5 is not Junk with the default `bayes_junk_at`
+(0.95), and only `[antispam_llm]` turns it into a second opinion; so on a
+server without it, spam padded with more than 256 KiB of words or 5000
+distinct words, with the spam in the middle, can still reach the inbox. That
+is the detection lost to the bound; the 0.12.1 read the whole message at a cost
+of hundreds of MiB per message. Every figure is a constant, not a setting.
+
+Training is written in one statement, and the transactions of a training and
+of an account removal take their locks in the same order (the totals row, then
+the token rows in ascending order), so they cannot deadlock. A message of 5000
+new words adds 5000 rows, about 1.7 MB of table and 3.5 MB of write-ahead log;
+nothing prunes the shared corpus yet, so the limits below are also the growth of
+the disk: one address can add 30 such messages an hour.
+
+The SMTP server hands each message to a queue of 64 jobs served by 2
+workers, so no more than 2 trainings run at once and the queue holds about
+16 MiB. Ham and spam are counted apart. A client address counts under its
+own block and under the wider one around it (IPv4 /32 and /24, IPv6 /64 and
+/48), and a sender domain counts only when the server verified it, because
+the envelope sender is written by the client. A single address or domain
+may have 4 jobs waiting or running and add 30 per hour; a wider block, 8
+waiting and 120 per hour; a whole network (an IPv4 /16, an IPv6 /32), 16
+waiting over ham and spam together and 125 per hour; the whole server, 2000
+per hour, of which the last quarter is kept for networks that have used 31 or
+fewer. A job with no client address is one network of its own with 4 waiting.
+The tables of keys hold 8192 addresses, 8192 domains and 8192 networks and
+drop the least recently used entry when full, so a flood of new addresses
+forgets old ones and never shuts a new sender out. A job over a limit, or that
+finds the queue full, is dropped and counted in
+`mail_bayes_training_dropped_total`; the reply to the client never waits for
+it, and a job the queue has no room for spends none of the budget. Behind a
+container network that hides the client address (rootless Podman with a
+bridge), every message comes from one address and the whole server learns at
+the rate of one: 30 jobs per hour per kind.
+
+What can be taught. Ham is learned only from a sender the server verified (SPF
+or DKIM passed): a bounce, a SubjectPass resend or any mail from a sender with
+neither teaches nothing. Spam is learned from what the server rejects or
+quarantines, and a sender that fails the checks can make that happen on
+purpose, so within its budget it can have text of its choosing learned as
+spam: about 30 copies of a message are enough to make that message score as
+spam. The limits are what one anonymous sender can do per hour, not a
+guarantee that it can do nothing. A great many distinct networks can still
+move the corpus, which is why a corpus below `MIN_TRUSTED_MESSAGES` is only a
+fallback.
+
+Who scores. An account's scope scores a message only when that account is the
+single local recipient, was addressed as itself and has enough of its own
+(`MIN_TRUSTED_MESSAGES`). Every other message is scored by the shared scope
+when that has enough: one with two or more local recipients, one addressed to
+an alias or a list, and one for an account without enough of its own. The
+verdict (Junk, or a `550` at DATA) applies to every recipient, and what one
+user taught their own corpus must not decide what another user receives. The
+envelope order does not matter, and an alias with a single member counts as
+an alias. Mail to aliases, lists and accounts that have not trained their own
+corpus is therefore subject to `bayes_junk_at` and `bayes_reject_at` through
+the shared corpus, where before it was not scored unless its first member had a
+trained corpus.
 
 Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
 on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
@@ -697,6 +948,10 @@ Each request is a JSON object whose `event` field names the event:
 `outbound_virus` (the antivirus refused a message one of your accounts sent;
 it carries `account` and `signature`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
+
+The events for each recipient of outbound mail (`delivered`, `delayed`,
+`suppressed`, `canceled`), the warm-up events, how to verify the signature and
+what is and is not retried are in the [HTTP API guide](api.md#webhooks).
 
 `delivery_failed` is sent per recipient when outbound delivery fails for good
 (refused, or expired in the queue). `reason` is the remote reply as one line, or
@@ -834,8 +1089,8 @@ cooldown_secs = 900
 The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
 are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
-`rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
-`relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
+`rejected_header_fields`, `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
+`relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
 
@@ -1346,7 +1601,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 
 | Key | Meaning |
 |---|---|
-| `name` | Lowercase alphanumeric/hyphen; becomes the mailbox directory name. |
+| `name` | Lowercase letters, digits and hyphens, no hyphen first, 64 characters at most; becomes the mailbox directory name. |
 | `addresses` | One or more addresses (each in a configured domain). |
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
@@ -1508,6 +1763,212 @@ VacationResponse is enabled it is the account's vacation, and the Sieve
 action is ignored, including outside the JMAP date window, when no reply
 is sent at all. With the JMAP setting disabled, the Sieve action answers
 as before.
+
+## JMAP Sieve scripts
+
+The JMAP session advertises `urn:ietf:params:jmap:sieve` (RFC 9661). Its
+session value names the implementation and version. Each account's value
+carries the limits below and the extension list, and the Sieve account is a
+primary account. The methods are `SieveScript/get`, `SieveScript/query`,
+`SieveScript/set` and `SieveScript/validate`. `/get`, `/query` and
+`/validate` need the `read` scope and `/set` the `write` scope, and `/set`
+also the `send` scope for a script that sends mail (below). The account check
+is the one every JMAP method uses. There is no `SieveScript/changes` (the RFC
+defines none): a client re-reads with `/get`, which an account can always
+answer in full because it holds at most 50 scripts.
+
+**One store, two protocols.** JMAP and ManageSieve (RFC 5804) read and write
+the same scripts under `<data_dir>/accounts/<account>/sieve/`, with the same
+checks, so a script written by either is listed, valid and active in the
+other. Each script has an id of 32 hex digits that survives a rewrite and a
+rename through either protocol. `state` (and `queryState`) is a counter that
+moves on every change by either protocol and at no other time. Every
+operation runs under a lock per account, and a whole `/set` is one step under
+it: `ifInState` is compared where the changes are made, so of several calls
+carrying one state exactly one runs. Waiting for the lock does not hold a
+runtime worker.
+
+| Limit | Value | Advertised as |
+|---|---|---|
+| Script size | 1 MiB (1048576 octets), also the ManageSieve literal limit | `maxSizeScript` |
+| Scripts per account | 50 | `maxNumberScripts` |
+| Script name | 128 characters and 200 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (200) |
+| `redirect` actions per run of a script | 4, each address once | `maxNumberRedirects` |
+| `sieveExtensions` | `fileinto envelope vacation imap4flags relational variables reject ereject copy body date mailbox subaddress comparator-i;octet comparator-i;ascii-casemap comparator-i;ascii-numeric`, the list ManageSieve puts in `SIEVE` | `sieveExtensions` |
+
+`notificationMethods` and `externalLists` are `null`: `enotify` and
+`extlists` are not run. **Known deviations from RFC 9661:** `maxSizeScriptName`
+is 200 and not the 512 octets the RFC asks for, because a script name is a
+file name and 200 octets is what fits next to the staging file of an atomic
+write; and an empty script is accepted, as ManageSieve accepts it (the RFC
+asks for at least one character), so that the one check is the same for both
+protocols.
+
+**Content is a blob.** A client uploads the script (`POST
+/jmap/upload/{accountId}`) and names the blob in `blobId` on `create` or
+`update`. A script's own `blobId` is `sieve-<id>-<revision>` and the
+download URL serves that version as `application/sieve`. A script rewritten
+since is a new blob id and the old one is a 404. `Blob/upload` and
+`Blob/get` (RFC 9404) are not implemented.
+
+**Checks, the same for `/set`, `/validate`, PUTSCRIPT and CHECKSCRIPT.**
+UTF-8, at most 1 MiB, valid Sieve (at most 64 levels of blocks, test lists
+and `not` chains; a literal `:matches` key of at most 256 characters and 32
+wildcards), and `require` only of the extensions listed above. A refusal is
+`invalidSieve` with a description that names the line and the kind of mistake
+(`line 3: expected '{'`, `extension "enotify" is not supported`) and never
+repeats the script. `/validate` answers `error: null` or that SetError,
+`tooLarge` or a `blobNotFound` method error, and stores nothing. The check
+runs when a script is stored; a script stored before this check and still
+active keeps running as it is, but cannot be saved again while it requires an
+extension that is not listed.
+
+**`/set`.** `create` takes `name` (or none, and the server picks
+`script-<8 hex>`) and `blobId`; `id` and `isActive` are the server's and
+are `invalidProperties` if sent. `update` takes `name`, `blobId` or both and
+changes nothing if either is refused. SetErrors: `alreadyExists` with the
+`existingId` (a name is never overwritten), `tooLarge`, `overQuota` (the
+script count), `invalidSieve`, `blobNotFound`, `invalidProperties` with the
+property names, `invalidPatch`, `notFound`, `forbidden` (the `send` scope,
+below) and `sieveIsActive` for the active script. `ifInState` mismatch is
+`stateMismatch`. `#cid` names a creation of the same call in `destroy` and
+in `onSuccessActivateScript`; as a key of `update` the dispatcher reads it as
+a result reference (RFC 8620 section 3.7), so an update names the id the
+server returned.
+
+Exactly one script is active. `onSuccessActivateScript` and
+`onSuccessDeactivateScript` run last and only if every create, update and
+destroy succeeded, and they are one change: the script that ends up active
+is the one named, or none when asked to deactivate, and it is reported as
+`isActive` in `created` or `updated`, with the one that was active reported
+inactive. An id that names no script is ignored. Activating copies the script
+to `<data_dir>/accounts/<account>/filter.sieve`, which delivery reads, and
+replaces the previous copy, so delivery always finds a filter; deactivating
+removes it. The active script cannot be destroyed: deactivate it in a call of
+its own first.
+
+**Scopes.** A script that redirects, replies (`vacation`) or rejects (`reject`,
+`ereject`) makes the server send mail when mail arrives, and `write` does not
+originate mail. Creating such a script, replacing the content of one, or
+activating one that exists takes the `send` scope as well; without it the
+answer is `forbidden`, and an activation is refused before the call changes
+anything. Renaming and deactivating need only `write`. The action names are
+read without regard to case, as Sieve does. The same rule holds for the JMAP
+`VacationResponse`, which also answers mail: `VacationResponse/set` that
+switches the reply on, or changes one that is on, needs `send` as well
+(`notUpdated` `forbidden` without it); switching it off, or editing one that
+stays off, needs only `write`. Upgrading: a key with `read` and `write` only
+that used to switch the reply on now gets `forbidden`. ManageSieve is reached
+with the account's password and has no scopes.
+
+**Vacation.** The JMAP `VacationResponse` is not a Sieve script (it lives
+in `.vacation.json`), so a script cannot be confused with it. Both can
+exist: while the `VacationResponse` is enabled it is the account's vacation
+and the `vacation` action of the active script is ignored, including outside
+its date window; with it disabled the script's `vacation` answers, under the
+same rules as in the section above.
+
+**What one run of a script may spend.** A script is text its owner wrote,
+run against mail anyone can send, so a run is bounded by the server and not
+by the script:
+
+- 20000 commands and tests, and 256 MiB of work (octets read and compared).
+  The ceiling is fixed: it does not grow with the size of the message, which
+  is the sender's choice. A run that passes either stops where it is, as a
+  `stop` would, and the log says what happened (once an hour per account).
+  What it had decided about where the message goes (`discard`, `fileinto`,
+  `keep`, flags) stands, so a big message cannot undo a `discard`. What it had
+  asked to send outward (`redirect`, `reject`, `ereject`, `vacation`) is
+  dropped, because a run that did not finish never originates mail; and if
+  anything outward was dropped, no `discard` stands and the message is kept,
+  since a run cannot both lose the forward and suppress the delivery. A
+  message nothing local was decided about is kept in INBOX. A string that
+  could not be built within the budget does not give its action: the action
+  does not happen.
+- **What a filter sees of a big message.** A test reads a window, not the
+  whole message: the first 1 MiB of the body (the `body` test), and, for a
+  `header`, `address` or `date` lookup, the first 1000 values and 64 KiB of
+  the headers called each name it lists (a longer value is cut), for at most
+  16 names. Every name has its own quota, so a thousand `Received` headers or
+  a huge `X-` header cannot hide the `From` or `Subject` listed with them.
+  Only the first 10 000 headers of a message are read at all. Mail with more
+  than 9 900 header fields is refused before any filter reads it, whatever the
+  way in, with one check: `554 5.6.0` at `DATA` and `BDAT`, `422
+  too_many_header_fields` on `POST /api/v1/send`, `forbiddenToSend` on JMAP
+  `EmailSubmission/set`; every refusal is counted in `rejected_header_fields`
+  and logged once an hour. For a local recipient the fields the server adds
+  (about a dozen) count too, so the limit there is that many fewer. So no
+  sender can hide a `From` or a `Subject` behind padding. (A message stored by
+  IMAP `APPEND` or JMAP `Email/import` is not read by a filter until it is
+  sent.) The header block ends at the first `CRLF CRLF`, the longest block any reader
+  of a message takes (IMAP and POP3 also end it at a bare `LF LF`), so that the
+  count never sees fewer fields than a reader does; a message with bare `LF`
+  line ends is counted whole, and one with more than 9 900 lines is refused as
+  having too many fields.
+  A header's value is read as follows: the blanks at its ends are dropped
+  (space, tab, VT, FF, CR, NEL, NBSP and the other Unicode white space), every
+  run of blanks inside it, folding included, is one space (so `:contains
+  "a  b"`, two spaces, and `:contains "a<TAB>b"` no longer match `a  b` or
+  `a<TAB>b`, and `:is "a b"` now matches `a  b`), an octet that is not UTF-8 is
+  a `?`, and only its first 64 KiB are kept. A header name is at most 998
+  octets: a line with a longer one is not a header, and the inspection is
+  marked truncated. If a message with more fields got to a filter anyway it
+  would be cut, every test that looks at headers (`exists` included) would say
+  so as a truncated inspection, and `:count` would count the headers read.
+  Text a sender
+  puts past a window is not seen by the test, so a rule that must catch
+  something should not depend on where in a huge message it is. The run goes
+  on with what it saw, and a window that cut something is never silent: the
+  log says so once an hour per account, and the counter
+  `mail_sieve_inspection_truncated_total` (alert metric
+  `sieve_inspection_truncated`) counts the messages for which a test did not
+  see everything. Each value is paid for once per lookup, and a key that
+  makes a pass over it (`:contains`, `:matches`) costs a quarter of its length
+  more. A `:contains` test with 8 or more keys (up to 64 KiB of keys) finds
+  them all in one pass, so a block-list of a thousand words costs what reading
+  the text twice does, not a thousand passes; a `:matches` list, or a
+  `:contains` list over 64 KiB, still costs a pass per key, and a list long
+  enough to pass the ceiling on a mebibyte makes the run stop and skips the
+  rules after it. 200 ordinary rules never reach the ceiling on a 25 MiB
+  message.
+- A variable is cut to 4096 octets, a run holds 64 KiB in at most 128 of them,
+  and a string built with `${...}` is at most as long as the larger of what
+  the script wrote and 4096 octets.
+- `:matches` never looks at the length of the text it is given (a sender can
+  make a Subject as long as the message allows, and the filter still sees
+  it); its cost is counted in the run's budget. A key over 256 characters or
+  32 wildcards is never run: saving a script that holds one is refused, and a
+  script stored earlier that does treats that test as false and goes on, but
+  from that test on the run does not `discard` or `reject`: it keeps the
+  message instead, because `not` or `else` can turn that false into the branch
+  that loses mail (what the run decided before the test stands; the log says
+  so once an hour per account; shorten the key). Upgrading: a
+  `:matches` key longer than that, which used to match, now never does.
+- `fileinto` files into a folder once however often the script names it, and
+  into at most 8 different folders. A folder the filter would make is made
+  only while the account stays within 200 folders (INBOX included, every level
+  of a deep name counted, at most 4 levels, a name of at most 128 characters
+  and without bidirectional controls); past that the message is kept in INBOX
+  and the log says so. The count and the creation are under one lock.
+- A `redirect` is forwarded at most 4 times per message and to an address
+  once, and only if the strict address parser accepts the target (it is
+  written into an `RCPT TO` line, so a line break in it would have been an
+  SMTP command). A redirect that names something that is not an address is a
+  run-time error: the message is kept. Redirects past the limit are not
+  forwarded and the log says so. Known gap: the forwards a script
+  makes are not charged to the sending limits of
+  `submission_rate_limit_per_min`, and a message forwarded to another local
+  account is filtered again there. The loop check stops a message that comes
+  back to an address it went through, but a chain across different accounts
+  that each redirect is bounded only by the number of accounts.
+- A filter file over 1 MiB (the store never writes one) is not run, and nor is
+  one the parser refuses today (a script stored before a stricter check): mail
+  goes to INBOX and the log says so. Every warning a filter causes (a run that
+  stopped, a window that cut something, a key over the caps, redirects or
+  folders past the limit, a filter that is not run) is logged once an hour per
+  account, not once per message.
+- `fileinto` past 8 different folders is counted and logged like `redirect`
+  past 4. The `.flags` of a message hold at most 32 different flags.
 
 ## Example
 

@@ -21,6 +21,8 @@ fn policy() -> BanPolicy {
 		threshold: 5,
 		base_secs: 60,
 		max_secs: 600,
+		known_network_window_secs: 60 * 60,
+		known_network_max_per_account: 32,
 	}
 }
 
@@ -40,6 +42,17 @@ pub struct FakeBanStore {
 	/// listener tests to assert the ban store is consulted on every
 	/// authentication attempt from every listener.
 	calls: Arc<Mutex<HashMap<&'static str, usize>>>,
+	/// Allow-list entries (`network/prefix` or a bare address).
+	allowed: Arc<Mutex<Vec<String>>>,
+	/// Known-network bypass list: `(account, network) -> last_seen`.
+	/// The fake mirrors the SQL store's throttling and eviction so a
+	/// test that wires the fake to a real listener exercises the same
+	/// contract the production store serves.
+	known_networks: Arc<Mutex<HashMap<(String, String), u64>>>,
+	/// The "next is_known_network call returns false" arming flag,
+	/// mirroring `next_is_banned_fails` for the ban check. Used by the
+	/// fail-closed tests.
+	next_is_known_network_fails: Arc<Mutex<bool>>,
 }
 
 impl std::fmt::Debug for FakeBanStore {
@@ -61,7 +74,15 @@ impl FakeBanStore {
 			strikes: Arc::new(Mutex::new(HashMap::new())),
 			next_is_banned_fails: Arc::new(Mutex::new(false)),
 			calls: Arc::new(Mutex::new(HashMap::new())),
+			allowed: Arc::new(Mutex::new(Vec::new())),
+			known_networks: Arc::new(Mutex::new(HashMap::new())),
+			next_is_known_network_fails: Arc::new(Mutex::new(false)),
 		}
+	}
+
+	/// Put an address or network on the fake's allow list.
+	pub fn allow(&self, entry: &str) {
+		self.allowed.lock().expect("lock").push(entry.to_string());
 	}
 
 	/// Arm the next `is_banned` call to return `None` and then clear the
@@ -81,6 +102,49 @@ impl FakeBanStore {
 			.lock()
 			.expect("lock")
 			.insert(subject.to_string(), info);
+	}
+
+	/// Inject a (account, network) entry into the bypass list at
+	/// `last_seen` so the listener tests can assert the banned-but-known
+	/// path without driving a full successful sign-in. The row ages
+	/// out under the policy's window like a real one would.
+	pub fn arm_known_network(&self, account: &str, network: &str, last_seen: u64) {
+		self.known_networks
+			.lock()
+			.expect("lock")
+			.insert((account.to_string(), network.to_string()), last_seen);
+	}
+
+	/// Arm the next `is_known_network` call to return `false` (the
+	/// fail-closed posture a database error triggers) and then clear
+	/// the arming. The lookup happens on every banned check, so the
+	/// fail-closed contract is testable end-to-end.
+	pub fn fail_next_is_known_network(self) -> Self {
+		*self.next_is_known_network_fails.lock().expect("lock") = true;
+		self
+	}
+
+	/// How many rows are held for this account in the bypass list. The
+	/// listener tests use this to assert the cap eviction ran when a
+	/// new row pushed the count past the ceiling.
+	pub fn known_network_count(&self, account: &str) -> usize {
+		self.known_networks
+			.lock()
+			.expect("lock")
+			.keys()
+			.filter(|(stored, _)| stored == account)
+			.count()
+	}
+
+	/// The most-recent `last_seen` for the given (account, network).
+	/// The tests assert the throttle skipped the write when it should
+	/// have, and rewrote the row when the window had elapsed.
+	pub fn known_network_last_seen(&self, account: &str, network: &str) -> Option<u64> {
+		self.known_networks
+			.lock()
+			.expect("lock")
+			.get(&(account.to_string(), network.to_string()))
+			.copied()
 	}
 
 	/// How many times `method` has been called so far. The listener
@@ -108,13 +172,6 @@ impl FakeBanStore {
 			.map(|entries| entries.iter().filter(|t| **t >= since).count())
 			.unwrap_or(0)
 	}
-
-	fn reason(&self) -> String {
-		format!(
-			"{} failed authentications in {} seconds",
-			self.policy.threshold, self.policy.window_secs
-		)
-	}
 }
 
 impl BanStore for FakeBanStore {
@@ -141,7 +198,8 @@ impl BanStore for FakeBanStore {
 			let in_window = failures.get(&subject).map(|v| v.len()).unwrap_or(0);
 			drop(failures);
 
-			if in_window >= self.policy.threshold as usize {
+			let threshold = self.policy.threshold_for(&subject) as usize;
+			if in_window >= threshold {
 				let mut strikes = self.strikes.lock().expect("lock");
 				let current = strikes.get(&subject).copied().unwrap_or(0);
 				let next = current.saturating_add(1);
@@ -151,7 +209,10 @@ impl BanStore for FakeBanStore {
 				let duration = self.policy.duration_for(next);
 				let info = BanInfo {
 					until_secs: now_secs.saturating_add(duration.as_secs()),
-					reason: self.reason(),
+					reason: format!(
+						"{threshold} failed authentications in {} seconds",
+						self.policy.window_secs
+					),
 				};
 				self.bans.lock().expect("lock").insert(subject, info);
 			}
@@ -189,6 +250,20 @@ impl BanStore for FakeBanStore {
 		})
 	}
 
+	fn is_allow_listed(
+		&self,
+		ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async move {
+			self.allowed
+				.lock()
+				.expect("lock")
+				.iter()
+				.filter_map(|entry| crate::cidr::Cidr::parse(entry))
+				.any(|cidr| cidr.contains(ip))
+		})
+	}
+
 	fn sweep(
 		&self,
 		now_secs: u64,
@@ -204,6 +279,13 @@ impl BanStore for FakeBanStore {
 			drop(failures);
 			let mut bans = self.bans.lock().expect("lock");
 			bans.retain(|_, info| info.until_secs >= horizon);
+			// The bypass list ages by the policy's known-network window,
+			// not the 24h failure-log horizon. A row past its window no
+			// longer lifts the ban on its (account, network); drop it so
+			// the table does not grow without bound.
+			let bypass_horizon = now_secs.saturating_sub(self.policy.known_network_window_secs);
+			let mut known = self.known_networks.lock().expect("lock");
+			known.retain(|_, last_seen| *last_seen >= bypass_horizon);
 		})
 	}
 
@@ -215,9 +297,85 @@ impl BanStore for FakeBanStore {
 		self.record_call("remove_account");
 		Box::pin(async move {
 			let subject = super::subject_account(&account);
-			self.failures.lock().expect("lock").remove(&subject);
-			self.bans.lock().expect("lock").remove(&subject);
-			self.strikes.lock().expect("lock").remove(&subject);
+			let pair_prefix = format!("pair:{}|", account.to_ascii_lowercase());
+			let ours = |key: &String| *key == subject || key.starts_with(&pair_prefix);
+			self.failures
+				.lock()
+				.expect("lock")
+				.retain(|key, _| !ours(key));
+			self.bans.lock().expect("lock").retain(|key, _| !ours(key));
+			self.strikes
+				.lock()
+				.expect("lock")
+				.retain(|key, _| !ours(key));
+			self.known_networks
+				.lock()
+				.expect("lock")
+				.retain(|(stored, _), _| stored != &account);
+		})
+	}
+
+	fn is_known_network(
+		&self,
+		account: &str,
+		ip: IpAddr,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		let account = account.to_string();
+		self.record_call("is_known_network");
+		Box::pin(async move {
+			if std::mem::take(&mut *self.next_is_known_network_fails.lock().expect("lock")) {
+				return false;
+			}
+			let network = super::known_network_key(ip);
+			let horizon = now_secs.saturating_sub(self.policy.known_network_window_secs);
+			let map = self.known_networks.lock().expect("lock");
+			map.get(&(account, network))
+				.is_some_and(|last_seen| *last_seen >= horizon)
+		})
+	}
+
+	fn record_known_network(
+		&self,
+		account: &str,
+		ip: IpAddr,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let account = account.to_string();
+		let network = super::known_network_key(ip);
+		self.record_call("record_known_network");
+		Box::pin(async move {
+			let mut map = self.known_networks.lock().expect("lock");
+			let key = (account.clone(), network.clone());
+			// Throttle: skip the write when the prior row is fresher
+			// than the throttle window. Mirrors the SQL `WHERE` on the
+			// UPDATE side, so a hot sign-in pattern costs one lock
+			// acquisition per request and zero writes.
+			if let Some(prior) = map.get(&key)
+				&& now_secs.saturating_sub(*prior) < super::KNOWN_NETWORK_WRITE_THROTTLE_SECS
+			{
+				return;
+			}
+			map.insert(key, now_secs);
+			drop(map);
+			// Cap eviction: keep at most `known_network_max_per_account`
+			// rows per account, evicting the oldest one when the count
+			// is past the ceiling. The just-written row has the highest
+			// `last_seen`, so once the list is sorted ascending the rows
+			// past rank `cap` are exactly the oldest ones (those that
+			// have not been used most recently).
+			let cap = self.policy.known_network_max_per_account as usize;
+			let mut map = self.known_networks.lock().expect("lock");
+			let mut entries: Vec<(String, String, u64)> = map
+				.iter()
+				.filter(|((stored, _), _)| stored == &account)
+				.map(|((stored, network), last_seen)| (stored.clone(), network.clone(), *last_seen))
+				.collect();
+			entries.sort_by_key(|(_, _, last_seen)| std::cmp::Reverse(*last_seen));
+			// Rows past rank `cap` (the oldest) get removed.
+			for (stored, network, _) in entries.into_iter().skip(cap) {
+				map.remove(&(stored, network));
+			}
 		})
 	}
 }

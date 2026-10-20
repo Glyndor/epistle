@@ -1,7 +1,6 @@
 //! Tests for Sieve match types, comparators and positional-argument parsing.
 
 use super::*;
-use std::collections::HashMap;
 
 fn tag(name: &str) -> Argument {
 	Argument::Tag(name.to_string())
@@ -95,8 +94,8 @@ fn positional_groups_skip_tag_arguments() {
 fn matches_captures_into_vars() {
 	let args = [tag("matches")];
 	let spec = match_spec(&args);
-	let mut vars = HashMap::new();
-	assert!(spec.test("bob@example.net", "*@*", &mut vars));
-	assert_eq!(vars.get("1").map(String::as_str), Some("bob"));
-	assert_eq!(vars.get("2").map(String::as_str), Some("example.net"));
+	let mut env = Env::default();
+	assert!(spec.test("bob@example.net", "*@*", &mut env));
+	assert_eq!(env.get("1"), Some("bob"));
+	assert_eq!(env.get("2"), Some("example.net"));
 }

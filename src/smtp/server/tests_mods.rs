@@ -114,8 +114,20 @@ mod tests_tls_drip;
 mod tests_bdat_growth;
 
 #[cfg(test)]
+#[path = "server_tests_bdat_framing.rs"]
+mod tests_bdat_framing;
+
+#[cfg(test)]
 #[path = "server_tests_session_limits.rs"]
 mod tests_session_limits;
+
+#[cfg(test)]
+#[path = "server_tests_header_fields.rs"]
+mod tests_header_fields;
+
+#[cfg(test)]
+#[path = "server_tests_recipients.rs"]
+mod tests_recipients;
 
 #[cfg(test)]
 #[path = "server_tests_session_time.rs"]
@@ -132,3 +144,15 @@ mod tests_bdat_share;
 #[cfg(test)]
 #[path = "server_tests_attachments_flood.rs"]
 mod tests_attachments_flood;
+
+#[cfg(test)]
+#[path = "server_tests_inbound_headers.rs"]
+mod tests_inbound_headers;
+
+#[cfg(test)]
+#[path = "server_tests_inbound_headers_unicode.rs"]
+mod tests_inbound_headers_unicode;
+
+#[cfg(test)]
+#[path = "server_tests_inbound_order.rs"]
+mod tests_inbound_order;

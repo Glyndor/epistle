@@ -1,8 +1,9 @@
 //! Drain rejected IMAP literals while preserving the following command.
 
+use crate::net::deadline;
 use crate::smtp::line::LineDecoder;
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::time::Instant;
 
 pub(super) struct Drain {
 	pub complete: bool,
@@ -14,14 +15,14 @@ pub(super) async fn literal<S: AsyncRead + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
 	size: usize,
-	deadline: Duration,
+	deadline: Instant,
 ) -> std::io::Result<Drain> {
 	let mut remaining = size - decoder.discard_buffered(size);
 	let mut chunk = [0u8; 4096];
 	#[cfg(test)]
 	let mut peak_storage = decoder.buffer_capacity() + chunk.len();
 	while remaining > 0 {
-		let read = tokio::time::timeout(deadline, stream.read(&mut chunk))
+		let read = tokio::time::timeout_at(deadline, stream.read(&mut chunk))
 			.await
 			.map_err(|_| {
 				std::io::Error::new(std::io::ErrorKind::TimedOut, "literal read timeout")
@@ -50,18 +51,19 @@ pub(super) async fn literal<S: AsyncRead + Unpin + ?Sized>(
 
 /// Drain a rejected literal and report whether the connection stays open.
 /// A timeout answers `* BYE read timeout`; a peer that closes mid-literal
-/// ends the connection quietly.
+/// ends the connection quietly. The BYE travels under the same shared
+/// pre-auth deadline as every other write before sign-in, so a peer that
+/// stops reading cannot keep the listener slot alive past the bound.
 pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
 	size: usize,
-	deadline: Duration,
+	deadline: Instant,
 ) -> std::io::Result<bool> {
 	match literal(stream, decoder, size, deadline).await {
 		Ok(drained) => Ok(drained.complete),
 		Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-			stream.write_all(b"* BYE read timeout\r\n").await?;
-			stream.flush().await?;
+			deadline::write_all(stream, b"* BYE read timeout\r\n", deadline).await?;
 			Ok(false)
 		}
 		Err(error) => Err(error),
@@ -69,14 +71,13 @@ pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>
 }
 
 /// Whether a command line announces a non-synchronizing literal above the
-/// APPEND limit, which ends the connection. Its payload is already on the
-/// wire and draining an arbitrary announced size is not worth it. A
-/// synchronizing one goes on to the session, which answers NO [TOOBIG]
-/// (RFC 7889 §3) before the client sends any of it.
-pub(super) fn oversized_sent_literal(line: &str) -> bool {
-	crate::imap::command::literal_announcement_in_line(line).is_some_and(|literal| {
-		literal.size > crate::imap::command::MAX_APPEND_SIZE && !literal.synchronizing
-	})
+/// per-listener APPENDLIMIT, which ends the connection. Its payload is
+/// already on the wire and draining an arbitrary announced size is not
+/// worth it. A synchronizing one goes on to the session, which answers
+/// `NO [TOOBIG]` (RFC 7889 §3) before the client sends any of it.
+pub(super) fn oversized_sent_literal(line: &str, append_limit: usize) -> bool {
+	crate::imap::command::literal_announcement_in_line(line)
+		.is_some_and(|literal| literal.size > append_limit && !literal.synchronizing)
 }
 
 /// Drop a line that follows a drained literal of a rejected command: its
@@ -85,19 +86,21 @@ pub(super) fn oversized_sent_literal(line: &str) -> bool {
 /// empty line. A further non-synchronizing literal it announces is drained
 /// too. `Some(true)` means the next line is still part of that command,
 /// `Some(false)` that the command is over, `None` that the connection ends.
+/// The literal-too-large BYE travels under the same shared pre-auth
+/// deadline as every other write before sign-in.
 pub(super) async fn rejected_tail<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
 	line: &[u8],
-	deadline: Duration,
+	deadline: Instant,
+	append_limit: usize,
 ) -> std::io::Result<Option<bool>> {
 	let tail = String::from_utf8_lossy(line);
 	let Some(literal) = crate::imap::command::literal_announcement_in_tail(&tail) else {
 		return Ok(Some(false));
 	};
-	if literal.size > crate::imap::command::MAX_APPEND_SIZE {
-		stream.write_all(b"* BYE literal too large\r\n").await?;
-		stream.flush().await?;
+	if literal.size > append_limit {
+		deadline::write_all(stream, b"* BYE literal too large\r\n", deadline).await?;
 		return Ok(None);
 	}
 	if literal.synchronizing {

@@ -212,3 +212,44 @@ fn a_fifo_for_a_compose_file_does_not_hang_status() {
 		"status blocked on a FIFO"
 	);
 }
+
+#[test]
+fn the_remedy_lowers_as_many_as_it_takes_to_get_under_the_line() {
+	// 7 GiB of limits on a 5.8 GiB host (what an install made before the
+	// limits followed the host keeps): lowering clamav alone leaves 88%.
+	let host = Some(6_080_000);
+	let (level, detail) = containers(&TODAY, host);
+	assert_eq!(level, Level::Warn);
+	assert!(
+		detail.ends_with(
+			"lower them with `epistle stack resources set clamav --memory 1152m` and \
+			 `epistle stack resources set freshclam --memory 1792m`"
+		),
+		"{detail}"
+	);
+	// Running what it says ends the warning.
+	let adopted = [
+		("mail", "1g"),
+		("db", "1g"),
+		("clamav", "1152m"),
+		("freshclam", "1792m"),
+	];
+	assert_eq!(containers(&adopted, host).0, Level::Ok);
+}
+
+#[test]
+fn a_remedy_that_cannot_reach_the_line_says_the_host_needs_more_memory() {
+	// The floors of the four add up to more than 85% of a 3 GiB host.
+	let (level, detail) = containers(
+		&[
+			("mail", "3g"),
+			("db", "1g"),
+			("clamav", "1152m"),
+			("freshclam", "896m"),
+		],
+		Some(3 * 1024 * 1024),
+	);
+	assert_eq!(level, Level::Warn);
+	assert!(detail.contains("so the host needs more memory"), "{detail}");
+	assert!(detail.contains("that leaves"), "{detail}");
+}

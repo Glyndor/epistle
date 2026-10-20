@@ -5,7 +5,10 @@
 //! credential verification, the message snapshot taken at login, and deletion
 //! at QUIT — all injectable, so the protocol is fully unit-testable.
 
+use std::sync::Arc;
+
 use super::command::Command;
+use crate::smtp::directory::hash_gate::Verdict;
 
 /// Storage backing a POP3 session. Implementations talk to the real mailbox;
 /// tests supply an in-memory fake.
@@ -16,6 +19,17 @@ pub trait Backend {
 	/// handles `unknown` as "not banned"). The audit log and the per-IP
 	/// ban row are keyed on this address.
 	fn verify(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Option<String>;
+	/// Like [`Backend::verify`], but tells a refusal from a sign-in the server
+	/// had no room to check. A backend with no such limit keeps the default.
+	fn verify_checked(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Verdict {
+		match self.verify(user, pass, peer_ip) {
+			Some(account) => Verdict::Admitted {
+				account,
+				label: None,
+			},
+			None => Verdict::Refused,
+		}
+	}
 	/// The messages in the account's inbox at login: `(unique-id, bytes)`.
 	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
@@ -117,9 +131,20 @@ pub struct Session<B: Backend> {
 	/// loop starts. Drives the per-IP ban store check on every
 	/// `USER`/`PASS`/`AUTH PLAIN` attempt.
 	peer_ip: Option<std::net::IpAddr>,
+	/// Shared per-account counter applied after authentication. `None`
+	/// keeps the historical behaviour (no per-account cap).
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
+	/// The slot the session holds on [`Session::per_account_counter`].
+	/// Dropping the session releases the slot.
+	per_account_slot: Option<crate::net::per_account_conn::PerAccountSlot>,
 }
 
 impl<B: Backend> Session<B> {
+	/// Whether the client has signed in (the TRANSACTION state).
+	pub fn is_authenticated(&self) -> bool {
+		self.state == State::Transaction
+	}
+
 	/// Start a session in the AUTHORIZATION state.
 	pub fn new(backend: B) -> Self {
 		Self {
@@ -130,6 +155,8 @@ impl<B: Backend> Session<B> {
 			account: None,
 			messages: Vec::new(),
 			peer_ip: None,
+			per_account_counter: None,
+			per_account_slot: None,
 		}
 	}
 
@@ -137,6 +164,15 @@ impl<B: Backend> Session<B> {
 	/// network layer after `accept()`; `None` for in-memory tests.
 	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
 		self.peer_ip = ip;
+	}
+
+	/// Attach the shared per-account counter this listener enforces.
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
 	}
 
 	/// The greeting sent on connect.
@@ -266,32 +302,55 @@ impl<B: Backend> Session<B> {
 			return Response::Continuation;
 		};
 		self.pending_plain = false;
-		let account = crate::smtp::auth::parse_plain(&initial)
-			.ok()
-			.and_then(|creds| {
-				self.backend
-					.verify(&creds.authcid, &creds.password, self.peer_ip)
-			});
-		match account {
-			Some(account) => self.complete_login(account),
-			None => Response::Err("authentication failed".to_string()),
-		}
+		let verdict = match crate::smtp::auth::parse_plain(&initial) {
+			Ok(creds) => self
+				.backend
+				.verify_checked(&creds.authcid, &creds.password, self.peer_ip),
+			Err(_) => Verdict::Refused,
+		};
+		self.finish_login(verdict)
 	}
 
 	/// Verify a USER/PASS login and, on success, open the mailbox.
 	fn login(&mut self, user: &str, pass: &str) -> Response {
-		match self.backend.verify(user, pass, self.peer_ip) {
-			Some(account) => self.complete_login(account),
-			None => {
+		let verdict = self.backend.verify_checked(user, pass, self.peer_ip);
+		self.finish_login(verdict)
+	}
+
+	/// End a login: open the mailbox, refuse with one message whatever was
+	/// wrong, or ask to try again when the server had no room to check.
+	fn finish_login(&mut self, verdict: Verdict) -> Response {
+		match verdict {
+			Verdict::Admitted { account, .. } => self.complete_login(account),
+			Verdict::Refused => {
 				// No oracle: same message whether user or pass was wrong.
 				self.user = None;
 				Response::Err("authentication failed".to_string())
+			}
+			Verdict::Busy => {
+				self.user = None;
+				Response::Err("[SYS/TEMP] try again later".to_string())
 			}
 		}
 	}
 
 	/// Load `account`'s mailbox and enter the transaction state.
 	fn complete_login(&mut self, account: String) -> Response {
+		// `[server] max_connections_per_account` (default 10 per
+		// (account, IP) and 50 in total). Applied after the backend
+		// admits the credentials but before the mailbox is loaded so a
+		// refused connection does not touch the mail store. The slot
+		// lives on the session; dropping the session releases it.
+		if let (Some(counter), Some(peer)) = (&self.per_account_counter, self.peer_ip) {
+			match counter.try_acquire(&account, peer) {
+				Ok(slot) => self.per_account_slot = Some(slot),
+				Err(_) => {
+					return Response::Err(
+						"[IN-USE] Too many concurrent connections for this account".into(),
+					);
+				}
+			}
+		}
 		self.messages = self
 			.backend
 			.load(&account)
@@ -386,3 +445,17 @@ fn find_header_end(data: &[u8]) -> usize {
 #[cfg(test)]
 #[path = "session_tests_continuation.rs"]
 mod continuation_tests;
+
+#[cfg(test)]
+mod header_count_tests {
+	use super::top_of;
+	use crate::util::header_block::{cases, field_count};
+
+	#[test]
+	fn the_field_count_is_never_below_the_headers_top_shows() {
+		for raw in cases::messages() {
+			let headers = top_of(&raw, 0);
+			assert!(field_count(&raw) >= cases::fields_in(&headers), "{raw:?}");
+		}
+	}
+}

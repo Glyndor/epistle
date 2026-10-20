@@ -128,7 +128,7 @@ async fn a_client_that_leaves_its_replies_unread_is_cut_when_the_window_runs_out
 	let mut stalled = opened().await;
 	let started = Instant::now();
 	stalled.write(b"BDAT 4096\r\n").await;
-	stalled.write(&[b'x'; 4096]).await;
+	stalled.write(&crate::smtp::line::filler(4096)).await;
 	assert_eq!(
 		stalled.budget.used(),
 		4096,
@@ -199,7 +199,11 @@ async fn an_unread_reply_to_a_garbled_line_is_held_to_the_window_too() {
 	// is then left unread, a few octets every 250 s.
 	let mut stalled = opened().await;
 	let started = Instant::now();
-	let chunk = [b"BDAT 4096\r\n".as_slice(), &[b'x'; 4096]].concat();
+	let chunk = [
+		b"BDAT 4096\r\n".as_slice(),
+		&crate::smtp::line::filler(4096),
+	]
+	.concat();
 	stalled.converse(&chunk, 1).await;
 	stalled.write(b"\xff\r\n").await;
 	let (freed, ended) = stalled.watch(started, Duration::from_secs(3000), 25).await;

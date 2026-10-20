@@ -141,10 +141,10 @@ fn compose_size(bytes: u64) -> String {
 }
 
 /// The containers finding: the sum of the compose memory limits against the
-/// host's `MemTotal`, naming the largest and the command to lower one when
-/// they add up to more than [`HOST_SHARE_PERCENT`]. A service is never
-/// suggested less than it [`needs`]; when the largest cannot go lower, the
-/// next one is named.
+/// host's `MemTotal`, naming the largest and the commands to lower enough of
+/// them when they add up to more than [`HOST_SHARE_PERCENT`]. A service is
+/// never suggested less than it [`needs`]; when the largest cannot go lower,
+/// the next one is lowered too.
 fn containers_item(compose: &Path, meminfo: &Path, largest: u64) -> Item {
 	const NAME: &str = "containers";
 	let Some(document) = read_bounded(compose).and_then(|text| serde_json::from_str(&text).ok())
@@ -188,22 +188,52 @@ fn containers_item(compose: &Path, meminfo: &Path, largest: u64) -> Item {
 		.map(|(service, _, memory)| format!("{} ({})", sanitize(service), sanitize(memory)))
 		.collect();
 	// Lower the largest that can go lower by the excess, rounded down to
-	// the step, but not under what it needs.
-	let excess = (u128::from(sum) * 100 - allowed).div_ceil(100);
-	let lowered = limits.iter().find_map(|(service, bytes, _)| {
-		let target = u128::from(*bytes).saturating_sub(excess) as u64;
-		let suggested = (target / SUGGESTION_STEP * SUGGESTION_STEP).max(needs(service, largest));
-		(suggested < *bytes).then_some((service, suggested))
-	});
-	let remedy = match lowered {
-		Some((service, suggested)) => format!(
-			"lower one with `epistle stack resources set {} --memory {}`",
-			sanitize(service),
-			compose_size(suggested)
-		),
-		None => {
+	// the step, but not under what it needs; when one is not enough, the
+	// next largest, until the sum is under the line or none can go lower.
+	let mut lowered: Vec<(&str, u64)> = Vec::new();
+	let mut now = u128::from(sum);
+	while now * 100 > allowed {
+		let excess = (now * 100 - allowed).div_ceil(100);
+		let next = limits.iter().find_map(|(service, bytes, _)| {
+			if lowered.iter().any(|(done, _)| done == service) {
+				return None;
+			}
+			let target = u128::from(*bytes).saturating_sub(excess) as u64;
+			let suggested =
+				(target / SUGGESTION_STEP * SUGGESTION_STEP).max(needs(service, largest));
+			(suggested < *bytes).then_some((service.as_str(), suggested, *bytes))
+		});
+		let Some((service, suggested, bytes)) = next else {
+			break;
+		};
+		now -= u128::from(bytes - suggested);
+		lowered.push((service, suggested));
+	}
+	let commands: Vec<String> = lowered
+		.iter()
+		.map(|(service, suggested)| {
+			format!(
+				"`epistle stack resources set {} --memory {}`",
+				sanitize(service),
+				compose_size(*suggested)
+			)
+		})
+		.collect();
+	let enough = now * 100 <= allowed;
+	let remedy = match (commands.split_last(), enough) {
+		(None, _) => {
 			"none can be lowered under what it needs, so the host needs more memory".to_string()
 		}
+		(Some((only, [])), true) => format!("lower one with {only}"),
+		(Some((last, rest)), true) => {
+			format!("lower them with {} and {last}", rest.join(", "))
+		}
+		(Some(_), false) => format!(
+			"lower them with {}; that leaves {}% and none can go lower under what it needs, \
+			 so the host needs more memory",
+			commands.join(", "),
+			now * 100 / u128::from(total)
+		),
 	};
 	Item::new(
 		NAME,

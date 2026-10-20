@@ -2,6 +2,7 @@
 //! that override them.
 
 use super::render;
+use super::services::{host_hard_nofile, mail_nofile};
 use super::*;
 use crate::cli::init::resources::ServiceResources;
 use serde_json::json;
@@ -42,4 +43,89 @@ fn an_answer_overrides_one_value_of_one_service() {
 		json!({"clamav": {"memory": "4g"}}),
 		"stack update reads the override back from here; init does not keep its answers"
 	);
+}
+
+fn nofile_in(nofile: Option<u64>) -> serde_json::Value {
+	let answers = stack_answers();
+	let file = ComposeFile::build_with_nofile(&answers, Vec::new(), true, nofile);
+	let value: serde_json::Value =
+		serde_json::from_str(&render_document(&file).expect("render")).expect("parse");
+	value["services"]["mail"]["ulimits"].clone()
+}
+
+#[test]
+fn the_mail_service_raises_its_open_file_limit() {
+	let value = render(&stack_answers(), true);
+	let expected = mail_nofile(host_hard_nofile());
+	assert_eq!(
+		value["services"]["mail"].get("ulimits").is_some(),
+		expected.is_some()
+	);
+	assert_eq!(nofile_in(Some(65536)), json!({"nofile": 65536}));
+	for name in ["db", "clamav", "freshclam"] {
+		assert!(
+			value["services"][name].get("ulimits").is_none(),
+			"{name} opens few files and keeps the default"
+		);
+	}
+}
+
+#[test]
+fn the_request_follows_the_hard_limit_of_the_host() {
+	// Podman cannot start a container above the hard limit of its user.
+	assert_eq!(mail_nofile(None), Some(65_536));
+	assert_eq!(mail_nofile(Some(524_288)), Some(65_536));
+	assert_eq!(mail_nofile(Some(65_536)), Some(65_536));
+	assert_eq!(mail_nofile(Some(4_096)), Some(4_096));
+	assert_eq!(mail_nofile(Some(1_024)), None);
+	assert_eq!(nofile_in(mail_nofile(Some(4_096))), json!({"nofile": 4096}));
+	assert!(nofile_in(mail_nofile(Some(1_024))).is_null());
+}
+
+#[test]
+fn low_nofile_warns_with_the_host_limit_and_how_to_raise_it() {
+	// `mail_nofile` asks for `hard` when `hard > 1024`. The warning
+	// describes the value the container ends up with.
+	for hard in [1025, 2048, 4096, 8191] {
+		let mut out = Vec::new();
+		services::warn_low_nofile(Some(hard), &mut out);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(text.contains(&format!("nofile limit is {hard}")), "{text}");
+		assert!(
+			text.contains(&format!("RLIMIT_NOFILE hard limit is {hard}")),
+			"{text}"
+		);
+		assert!(
+			text.contains("LimitNOFILE") && text.contains("limits.conf"),
+			"{text}"
+		);
+		assert!(text.contains("run epistle init again"), "{text}");
+	}
+	// `mail_nofile` declines to ask when `hard <= 1024`. The warning
+	// names the host hard limit and the kernel soft limit the container
+	// then inherits; covered here for 1024 itself and a smaller 512.
+	for hard in [512u64, 1024u64] {
+		let mut out = Vec::new();
+		services::warn_low_nofile(Some(hard), &mut out);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(
+			text.contains(&format!("host RLIMIT_NOFILE hard limit is {hard}")),
+			"{text}"
+		);
+		assert!(
+			text.contains("kernel soft limit"),
+			"hard={hard}: warning must explain why no request was made, got: {text}"
+		);
+		assert!(
+			text.contains("LimitNOFILE") && text.contains("limits.conf"),
+			"{text}"
+		);
+		assert!(text.contains("run epistle init again"), "{text}");
+	}
+	// Above the warn floor (8192) or unknown host hard limit, stay silent.
+	for hard in [None, Some(8192), Some(65536)] {
+		let mut out = Vec::new();
+		services::warn_low_nofile(hard, &mut out);
+		assert!(out.is_empty(), "{hard:?}");
+	}
 }

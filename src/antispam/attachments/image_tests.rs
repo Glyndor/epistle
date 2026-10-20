@@ -89,10 +89,21 @@ fn a_clean_image_or_harmless_trailing_bytes_are_not_a_payload() {
 
 #[test]
 fn the_tail_scan_stays_linear() {
+	// Counted in bytes looked at, not in seconds: a slow machine cannot fail
+	// it, and a scan that looks again at what it already saw always does.
 	let tail = b"MZ".repeat(4 << 20);
-	let started = std::time::Instant::now();
-	assert!(!facts(RealType::Png, &png_then(&tail)).payload);
-	assert!(started.elapsed() < std::time::Duration::from_secs(5));
+	let bytes = png_then(&tail);
+	super::PROBED.with(|probed| probed.set(0));
+	assert!(!facts(RealType::Png, &bytes).payload);
+	let probed = super::PROBED.with(std::cell::Cell::get);
+	// 4 bytes compared per position plus 8 in `is_pe`, see `probe`.
+	let worst = 4 + 8;
+	assert!(probed >= tail.len(), "the scan did not look at the tail");
+	assert!(
+		probed <= worst * bytes.len(),
+		"{probed} bytes looked at for {} bytes of image",
+		bytes.len()
+	);
 }
 
 #[test]

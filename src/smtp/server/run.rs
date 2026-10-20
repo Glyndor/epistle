@@ -10,6 +10,7 @@ use crate::smtp::session::{Action, Session};
 use crate::smtp::submission_budget::PendingCharge;
 use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, line_error_reply, received_header, received_hop_count,
+	refuse_padded_headers,
 };
 
 use super::data_rate::{Cut, RateWindow, send_within};
@@ -229,6 +230,14 @@ impl Server {
 						.await?;
 						continue;
 					}
+					// A message with thousands of header fields has fields a
+					// Sieve filter would not read: refused, so none can be
+					// hidden from the filters by padding.
+					if let Err(refused) = refuse_padded_headers(&message.data, Some(&self.metrics))
+					{
+						send(&mut stream, &refused.smtp_reply()).await?;
+						continue;
+					}
 					// DNSBL screening: reject an unauthenticated client whose
 					// IP, envelope sender domain, or URL host in the body is
 					// listed. All three lists fail open on `Unavailable`, so a
@@ -307,6 +316,37 @@ impl Server {
 						message.tlsrpt_verified =
 							crate::dkim::verify_tlsrpt(dns.as_ref(), &message.data).await;
 					}
+					// Verify signatures first, then remove outside authority before
+					// adding our own fields or handing the message to filters.
+					if session.authenticated().is_none() {
+						self.strip_inbound(&mut message.data);
+						// Defence in depth: re-parse the header section with
+						// the same parser downstream readers use, and refuse
+						// the message if any reserved field strip missed.
+						// A line whose name mail-parser folds but the
+						// stripper does not would otherwise survive as a
+						// forged trust header; the safety net turns every
+						// such leak into a permanent refusal. One extra
+						// linear pass over the header section only.
+						if let Some(leak) = crate::smtp::inbound_headers::reserved_remaining(
+							&message.data,
+							&self.hostname,
+						) {
+							tracing::warn!(
+								name = %leak,
+								"refusing inbound: trust field survived strip"
+							);
+							send(
+								&mut stream,
+								&Reply::single(
+									550,
+									"5.7.1 trust field could not be removed before delivery",
+								),
+							)
+							.await?;
+							continue;
+						}
+					}
 					let header = received_header(
 						session.helo_domain(),
 						peer,
@@ -372,7 +412,7 @@ impl Server {
 								// is a heuristic, so keep the mail recoverable in the
 								// Rejects mailbox instead of losing it.
 								tracing::info!(%domain, "quarantining poor-reputation sender to Rejects");
-								self.train_corpus(&message.data, true);
+								self.train_corpus(&message, peer, true);
 								self.metrics.quarantined();
 								message.mailbox = Some("Rejects".to_string());
 							}
@@ -390,7 +430,7 @@ impl Server {
 						match hook.scan(&message.data).await {
 							crate::antispam::hook::HookVerdict::Reject => {
 								self.metrics.rejected(crate::metrics::RejectReason::Scanner);
-								self.train_corpus(&message.data, true);
+								self.train_corpus(&message, peer, true);
 								send(
 									&mut stream,
 									&Reply::single(550, "5.7.1 rejected by scanner"),
@@ -400,7 +440,7 @@ impl Server {
 							}
 							crate::antispam::hook::HookVerdict::Quarantine => {
 								self.metrics.quarantined();
-								self.train_corpus(&message.data, true);
+								self.train_corpus(&message, peer, true);
 								message.mailbox = Some("Rejects".to_string());
 							}
 							crate::antispam::hook::HookVerdict::Defer => {
@@ -464,6 +504,7 @@ impl Server {
 					if matches!(
 						self.handle_uncertain_band(
 							&mut message,
+							peer,
 							session.authenticated().is_some(),
 							&mut stream
 						)
@@ -476,7 +517,7 @@ impl Server {
 					// Accepted unauthenticated mail trains the ham corpus —
 					// unless it was quarantined (already trained as spam).
 					if session.authenticated().is_none() && message.mailbox.is_none() {
-						self.train_corpus(&message.data, false);
+						self.train_corpus(&message, peer, false);
 					}
 					// Mail an account submits goes through the submission
 					// path, which applies what holds for our own senders

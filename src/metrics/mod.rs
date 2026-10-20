@@ -29,6 +29,9 @@ pub enum RejectReason {
 	/// the configured per-IP or per-sender rate limit. The reply is `450`,
 	/// so the rejection is temporary and the peer is expected to retry.
 	RateLimit,
+	/// Rejected because the message has more header fields than a Sieve
+	/// filter reads (`554 5.6.0`).
+	HeaderFields,
 }
 
 impl RejectReason {
@@ -41,11 +44,12 @@ impl RejectReason {
 			RejectReason::Scanner => "scanner",
 			RejectReason::Loop => "loop",
 			RejectReason::RateLimit => "rate_limit",
+			RejectReason::HeaderFields => "header_fields",
 		}
 	}
 }
 
-const REASONS: [RejectReason; 7] = [
+const REASONS: [RejectReason; 8] = [
 	RejectReason::Dnsbl,
 	RejectReason::Spf,
 	RejectReason::Dmarc,
@@ -53,6 +57,7 @@ const REASONS: [RejectReason; 7] = [
 	RejectReason::Scanner,
 	RejectReason::Loop,
 	RejectReason::RateLimit,
+	RejectReason::HeaderFields,
 ];
 
 /// Canonical short names of every counter, paired with the matching field.
@@ -71,8 +76,10 @@ const COUNTERS: &[(&str, &str)] = &[
 	("rejected_scanner", "rejected_scanner"),
 	("rejected_loop", "rejected_loop"),
 	("rejected_rate_limit", "rejected_rate_limit"),
+	("rejected_header_fields", "rejected_header_fields"),
 	("abuse_dropped", "abuse_dropped"),
 	("sieve_rejected", "sieve_rejected"),
+	("sieve_inspection_truncated", "sieve_inspection_truncated"),
 	("vacation_sent", "vacation_sent"),
 	("forwarded", "forwarded"),
 	("relayed", "relayed"),
@@ -88,8 +95,12 @@ const COUNTERS: &[(&str, &str)] = &[
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
+	("auth_hash_gate_rejected", "auth_hash_gate_rejected"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
 	("bayes_training_dropped", "bayes_training_dropped"),
+	("bayes_learning_unreadable", "bayes_learning_unreadable"),
+	("bayes_learning_failed", "bayes_learning_failed"),
+	("bayes_learning_refused", "bayes_learning_refused"),
 	("subjectpass_passed", "subjectpass_passed"),
 	("subjectpass_challenged", "subjectpass_challenged"),
 	("dmarc_reports_ingested", "dmarc_reports_ingested"),
@@ -133,8 +144,10 @@ pub struct Metrics {
 	rejected_scanner: AtomicU64,
 	rejected_loop: AtomicU64,
 	rejected_rate_limit: AtomicU64,
+	rejected_header_fields: AtomicU64,
 	abuse_dropped: AtomicU64,
 	sieve_rejected: AtomicU64,
+	sieve_inspection_truncated: AtomicU64,
 	vacation_sent: AtomicU64,
 	forwarded: AtomicU64,
 	relayed: AtomicU64,
@@ -150,8 +163,12 @@ pub struct Metrics {
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
+	auth_hash_gate_rejected: AtomicU64,
 	send_limited_new_recipients: AtomicU64,
 	bayes_training_dropped: AtomicU64,
+	bayes_learning_unreadable: AtomicU64,
+	bayes_learning_failed: AtomicU64,
+	bayes_learning_refused: AtomicU64,
 	dmarc_reports_ingested: AtomicU64,
 	dmarc_report_rows_failing: AtomicU64,
 	tlsrpt_reports_ingested: AtomicU64,
@@ -211,6 +228,13 @@ impl Metrics {
 	/// Count a message refused by a Sieve `reject`/`ereject`.
 	pub fn sieve_rejected(&self) {
 		self.sieve_rejected.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message a Sieve test could not look at whole (a body past its
+	/// window, more headers of a name than a lookup visits).
+	pub fn sieve_inspection_truncated(&self) {
+		self.sieve_inspection_truncated
+			.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a Sieve `vacation` autoresponse sent.
@@ -283,6 +307,13 @@ impl Metrics {
 		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a password sign-in turned away because the password-check gate
+	/// had no place and no room in line. No credential was tried, so it is
+	/// not an `auth_login_failed`.
+	pub fn auth_hash_gate_rejected(&self) {
+		self.auth_hash_gate_rejected.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a submission refused because the account would exceed the
 	/// rolling 24h cap on first-time recipients (`Config::new_recipients_per_day`).
 	/// Distinct from the per-minute `submission_rate_limit_per_min`:
@@ -301,6 +332,29 @@ impl Metrics {
 	/// the operator should widen the queue or scale training.
 	pub fn bayes_training_dropped(&self) {
 		self.bayes_training_dropped.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a lesson the worker could not read: the message was gone when
+	/// it came to it, which is normal after emptying Junk.
+	pub fn bayes_learning_unreadable(&self) {
+		self.bayes_learning_unreadable
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a lesson the database refused. Nothing was recorded.
+	pub fn bayes_learning_failed(&self) {
+		self.bayes_learning_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a lesson an account's ceiling or day budget refused.
+	pub fn bayes_learning_refused(&self) {
+		self.bayes_learning_refused.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count `jobs` lessons dropped at once.
+	pub fn bayes_training_dropped_by(&self, jobs: u64) {
+		self.bayes_training_dropped
+			.fetch_add(jobs, Ordering::Relaxed);
 	}
 
 	/// Count one ingested DMARC aggregate or TLS-RPT report.
@@ -394,6 +448,7 @@ impl Metrics {
 			RejectReason::Scanner => &self.rejected_scanner,
 			RejectReason::Loop => &self.rejected_loop,
 			RejectReason::RateLimit => &self.rejected_rate_limit,
+			RejectReason::HeaderFields => &self.rejected_header_fields,
 		}
 	}
 
@@ -423,8 +478,10 @@ impl Metrics {
 			"rejected_scanner" => &self.rejected_scanner,
 			"rejected_loop" => &self.rejected_loop,
 			"rejected_rate_limit" => &self.rejected_rate_limit,
+			"rejected_header_fields" => &self.rejected_header_fields,
 			"abuse_dropped" => &self.abuse_dropped,
 			"sieve_rejected" => &self.sieve_rejected,
+			"sieve_inspection_truncated" => &self.sieve_inspection_truncated,
 			"vacation_sent" => &self.vacation_sent,
 			"forwarded" => &self.forwarded,
 			"relayed" => &self.relayed,
@@ -440,8 +497,12 @@ impl Metrics {
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
+			"auth_hash_gate_rejected" => &self.auth_hash_gate_rejected,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
 			"bayes_training_dropped" => &self.bayes_training_dropped,
+			"bayes_learning_unreadable" => &self.bayes_learning_unreadable,
+			"bayes_learning_failed" => &self.bayes_learning_failed,
+			"bayes_learning_refused" => &self.bayes_learning_refused,
 			"subjectpass_passed" => &self.subjectpass_passed,
 			"subjectpass_challenged" => &self.subjectpass_challenged,
 			"dmarc_reports_ingested" => &self.dmarc_reports_ingested,

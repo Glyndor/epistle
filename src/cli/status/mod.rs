@@ -7,8 +7,10 @@
 //! runs one and lists its findings.
 
 mod antispam_area;
+mod api_keys_area;
 mod av_area;
 mod clock;
+mod clock_area;
 mod config_area;
 mod db_area;
 mod disk_area;
@@ -63,6 +65,9 @@ pub enum CheckArea {
 	Dns,
 	/// The configured database answers `SELECT 1`.
 	Db,
+	/// API keys have explicit expiry and SCIM domain associations.
+	#[value(name = "api_keys")]
+	ApiKeys,
 	/// The configured clamd answers `PING`.
 	Antivirus,
 	/// Antispam engine state: which features are on, which are off and why.
@@ -80,6 +85,8 @@ pub enum CheckArea {
 	/// The containers' memory limits fit the host, and the message memory
 	/// budget fits the mail container's.
 	Resources,
+	/// The host's clock is synchronised with a time source.
+	Clock,
 	/// The evidence verifies; transactional mail is not held.
 	Evidence,
 }
@@ -92,6 +99,7 @@ impl CheckArea {
 		CheckArea::Tls,
 		CheckArea::Dns,
 		CheckArea::Db,
+		CheckArea::ApiKeys,
 		CheckArea::Antivirus,
 		CheckArea::Antispam,
 		CheckArea::Queue,
@@ -100,6 +108,7 @@ impl CheckArea {
 		CheckArea::Subid,
 		CheckArea::Warmup,
 		CheckArea::Resources,
+		CheckArea::Clock,
 		CheckArea::Evidence,
 	];
 
@@ -111,6 +120,7 @@ impl CheckArea {
 			CheckArea::Tls => "tls",
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
+			CheckArea::ApiKeys => "api_keys",
 			CheckArea::Antivirus => "antivirus",
 			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
@@ -119,6 +129,7 @@ impl CheckArea {
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
 			CheckArea::Resources => "resources",
+			CheckArea::Clock => "clock",
 			CheckArea::Evidence => "evidence",
 		}
 	}
@@ -257,6 +268,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Tls => tls_area::check(ctx).await,
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
+		CheckArea::ApiKeys => api_keys_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
 		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
@@ -265,6 +277,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
 		CheckArea::Resources => resources_area::check(ctx).await,
+		CheckArea::Clock => clock_area::check(ctx).await,
 		CheckArea::Evidence => evidence_area::check(ctx).await,
 	}
 }

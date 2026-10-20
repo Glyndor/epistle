@@ -114,6 +114,13 @@ impl BanStore for PgBanStore {
 		Box::pin(async move { self.clear_success_inner(&subject).await })
 	}
 
+	fn is_allow_listed(
+		&self,
+		ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async move { self.ip_allowed(ip).await })
+	}
+
 	fn sweep(
 		&self,
 		now_secs: u64,
@@ -127,6 +134,29 @@ impl BanStore for PgBanStore {
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let account = account.to_string();
 		Box::pin(async move { self.remove_account_inner(&account).await })
+	}
+
+	fn is_known_network(
+		&self,
+		account: &str,
+		ip: IpAddr,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		let account = account.to_string();
+		Box::pin(async move { self.is_known_network_inner(&account, ip, now_secs).await })
+	}
+
+	fn record_known_network(
+		&self,
+		account: &str,
+		ip: IpAddr,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let account = account.to_string();
+		Box::pin(async move {
+			self.record_known_network_inner(&account, ip, now_secs)
+				.await
+		})
 	}
 }
 
@@ -161,10 +191,11 @@ impl PgBanStore {
 			.bind(window_start_secs as i64)
 			.fetch_one(&mut *tx)
 			.await?;
-			if count >= self.policy.threshold as i64 {
+			let threshold = self.policy.threshold_for(subject);
+			if count >= threshold as i64 {
 				let reason = format!(
-					"{} failed authentications in {} seconds",
-					self.policy.threshold, self.policy.window_secs
+					"{threshold} failed authentications in {} seconds",
+					self.policy.window_secs
 				);
 				let existing: Option<(i32,)> =
 					sqlx::query_as("SELECT strikes FROM auth_ban WHERE subject = $1 FOR UPDATE")
@@ -292,6 +323,12 @@ impl PgBanStore {
 
 	async fn sweep_inner(&self, now_secs: u64) {
 		let horizon = now_secs.saturating_sub(24 * 60 * 60);
+		// The bypass list uses its own window: a network the owner has
+		// not signed in from for `known_network_window_secs` (30 days by
+		// default) is no longer trusted, and the row is dropped here. The
+		// 24h horizon above is for the failure log and the ban row, and
+		// does not apply to the bypass list.
+		let bypass_horizon = now_secs.saturating_sub(self.policy.known_network_window_secs);
 		let result = async {
 			sqlx::query("DELETE FROM auth_failure WHERE seen_at < to_timestamp($1)")
 				.bind(horizon as i64)
@@ -299,6 +336,10 @@ impl PgBanStore {
 				.await?;
 			sqlx::query("DELETE FROM auth_ban WHERE until < to_timestamp($1)")
 				.bind(horizon as i64)
+				.execute(&self.pool)
+				.await?;
+			sqlx::query("DELETE FROM auth_known_network WHERE last_seen < $1")
+				.bind(bypass_horizon as i64)
 				.execute(&self.pool)
 				.await?;
 			Ok::<(), sqlx::Error>(())
@@ -311,16 +352,118 @@ impl PgBanStore {
 
 	async fn remove_account_inner(&self, account: &str) {
 		let subject = subject_account(account);
+		// The pairs of this account go too. Account names are lowercase
+		// letters, digits and hyphens, so the prefix holds no LIKE wildcard.
+		let pairs = format!("pair:{}|%", account.to_ascii_lowercase());
 		let result = async {
 			let mut tx = self.pool.begin().await?;
-			sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_ban WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
-			sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
+			sqlx::query("DELETE FROM auth_failure WHERE subject = $1 OR subject LIKE $2")
 				.bind(&subject)
+				.bind(&pairs)
 				.execute(&mut *tx)
 				.await?;
+			sqlx::query("DELETE FROM auth_known_network WHERE account = $1")
+				.bind(account.to_ascii_lowercase())
+				.execute(&mut *tx)
+				.await?;
+			tx.commit().await?;
+			Ok::<(), sqlx::Error>(())
+		}
+		.await;
+		if let Err(error) = result {
+			self.record_db_error(&error).await;
+		}
+	}
+
+	/// Whether the bypass list has a fresh row for `(account, network)`.
+	/// Fail closed on database error: a missing row must not let a banned
+	/// account in. The lookup is one round trip and the index on
+	/// `(account, network)` covers it.
+	async fn is_known_network_inner(&self, account: &str, ip: IpAddr, now_secs: u64) -> bool {
+		let network = known_network_key(ip);
+		let horizon = now_secs.saturating_sub(self.policy.known_network_window_secs);
+		let row: Result<Option<(i64,)>, sqlx::Error> = sqlx::query_as(
+			"SELECT last_seen FROM auth_known_network \
+			 WHERE account = $1 AND network = $2 AND last_seen >= $3",
+		)
+		.bind(account.to_ascii_lowercase())
+		.bind(&network)
+		.bind(horizon as i64)
+		.fetch_optional(&self.pool)
+		.await;
+		match row {
+			Ok(Some(_)) => true,
+			Ok(None) => false,
+			Err(error) => {
+				self.record_db_error(&error).await;
+				// Fail closed: a database hiccup during a ban must not
+				// become a pass. The pre-bypass-list behaviour is exactly
+				// this refusal.
+				false
+			}
+		}
+	}
+
+	/// Write `(account, network)` to the bypass list, throttled to one
+	/// row per account per network per hour and capped per account at
+	/// [`BanPolicy::known_network_max_per_account`]. The throttle lives
+	/// in SQL: the `ON CONFLICT` UPDATE only fires when the prior row is
+	/// older than the throttle, so a hot sign-in pattern does not keep
+	/// writing. The cap eviction runs in the same transaction so the
+	/// per-account row count never exceeds the ceiling.
+	async fn record_known_network_inner(&self, account: &str, ip: IpAddr, now_secs: u64) {
+		let network = known_network_key(ip);
+		let account_lc = account.to_ascii_lowercase();
+		let result = async {
+			let mut tx = self.pool.begin().await?;
+			// Throttled upsert: a sign-in inside the throttle window does
+			// not write, so the latency-sensitive path stays at one
+			// round trip per write. The WHERE clause on the UPDATE side
+			// is what the throttle hangs on.
+			sqlx::query(
+				"INSERT INTO auth_known_network (account, network, last_seen, updated_at) \
+				 VALUES ($1, $2, $3, to_timestamp($3)) \
+				 ON CONFLICT (account, network) DO UPDATE SET \
+				     last_seen = EXCLUDED.last_seen, \
+				     updated_at = EXCLUDED.updated_at \
+				 WHERE auth_known_network.last_seen <= $3 - $4",
+			)
+			.bind(&account_lc)
+			.bind(&network)
+			.bind(now_secs as i64)
+			.bind(KNOWN_NETWORK_WRITE_THROTTLE_SECS as i64)
+			.execute(&mut *tx)
+			.await?;
+			// Cap eviction: keep at most `known_network_max_per_account`
+			// rows per account, evicting the oldest one when the count
+			// is past the ceiling. The just-written row has the highest
+			// `last_seen`, so once it gets rank 1 in a DESC ordering it
+			// is guaranteed to survive; any row with rank above the cap
+			// (the oldest) is dropped.
+			let cap = self.policy.known_network_max_per_account as i64;
+			sqlx::query(
+				"DELETE FROM auth_known_network \
+				 WHERE (account, network) IN ( \
+				   SELECT account, network FROM ( \
+				     SELECT account, network, \
+				            row_number() OVER ( \
+				              ORDER BY last_seen DESC \
+				            ) AS rn \
+				     FROM auth_known_network \
+				     WHERE account = $1 \
+				   ) ranked \
+				   WHERE ranked.rn > $2 \
+				 )",
+			)
+			.bind(&account_lc)
+			.bind(cap)
+			.execute(&mut *tx)
+			.await?;
 			tx.commit().await?;
 			Ok::<(), sqlx::Error>(())
 		}

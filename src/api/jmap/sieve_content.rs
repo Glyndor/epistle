@@ -1,0 +1,94 @@
+//! What becomes of the blob a client names as a script's content, and how
+//! the store's refusals are reported as JMAP errors (RFC 9661 section 2.4).
+//!
+//! A reason in an error is the store's: it names the line and the kind of
+//! mistake and never repeats the script.
+
+use serde_json::{Value, json};
+
+use super::uploads::Found;
+use crate::managesieve::store::{MAX_SCRIPT_BYTES, StoreError, Validated};
+
+/// Why a blob cannot be used as a script.
+pub(crate) enum Unusable {
+	/// No such blob in the account: a method error where there is no object
+	/// to attach a SetError to, a `blobNotFound` SetError where there is.
+	NotFound,
+	/// The blob is not a script this server stores: a SetError.
+	Error(Value),
+}
+
+impl Unusable {
+	/// The SetError for `blob_id`.
+	pub(crate) fn set_error_for(&self, blob_id: &str) -> Value {
+		match self {
+			Self::NotFound => json!({"type": "blobNotFound", "notFound": [blob_id]}),
+			Self::Error(error) => error.clone(),
+		}
+	}
+}
+
+fn invalid_sieve(description: &str) -> Unusable {
+	Unusable::Error(json!({"type": "invalidSieve", "description": description}))
+}
+
+/// What a blob came to as a script: the text if it passes the check every
+/// protocol makes, and whether the script sends mail. It is worked out once
+/// per blob per request, however many objects or calls name the blob, so a
+/// request pays for the bytes it brought and not for how often it points at
+/// them.
+pub(crate) struct Verdict {
+	pub(crate) script: Result<Validated, Unusable>,
+	/// The script redirects, replies or rejects (false when it is unusable).
+	pub(crate) sends: bool,
+}
+
+impl Verdict {
+	/// The verdict on a prefetched blob. The checks that depend on the store
+	/// (names, counts) are the store's, made when the script is stored.
+	pub(crate) fn of(found: Found<'_>) -> Self {
+		let script = script_text(found).and_then(|text| {
+			Validated::new(text).map_err(|refusal| Unusable::Error(set_error(&refusal)))
+		});
+		let sends = script
+			.as_ref()
+			.is_ok_and(|text| crate::sieve::analysis::sends_mail(text.as_str()));
+		Self { script, sends }
+	}
+}
+
+/// The script text in a prefetched blob.
+fn script_text(found: Found<'_>) -> Result<String, Unusable> {
+	let upload = match found {
+		Found::Blob(upload) => upload,
+		Found::OverBudget => return Err(Unusable::Error(json!({"type": "tooLarge"}))),
+		Found::Missing => return Err(Unusable::NotFound),
+	};
+	if upload.data.len() > MAX_SCRIPT_BYTES {
+		return Err(Unusable::Error(json!({"type": "tooLarge"})));
+	}
+	// RFC 9661 section 2.2: a script is UTF-8. It also asks for at least one
+	// character, and an empty script is accepted all the same: ManageSieve
+	// stores one, and the two protocols have one check.
+	let text = std::str::from_utf8(&upload.data)
+		.map_err(|_| invalid_sieve("script is not valid UTF-8"))?;
+	Ok(text.to_string())
+}
+
+/// A store refusal as a SetError. `AlreadyExists` has no `existingId` here:
+/// only the caller can look it up.
+pub(super) fn set_error(error: &StoreError) -> Value {
+	match error {
+		StoreError::InvalidName => json!({"type": "invalidProperties", "properties": ["name"]}),
+		StoreError::NoSuchScript => json!({"type": "notFound"}),
+		StoreError::AlreadyExists => json!({"type": "alreadyExists"}),
+		StoreError::ActiveScript => json!({"type": "sieveIsActive"}),
+		StoreError::InvalidScript(reason) => {
+			json!({"type": "invalidSieve", "description": reason})
+		}
+		StoreError::TooLarge => json!({"type": "tooLarge"}),
+		StoreError::TooManyScripts => json!({"type": "overQuota"}),
+		StoreError::StateMismatch => json!({"type": "stateMismatch"}),
+		StoreError::Io => json!({"type": "serverFail"}),
+	}
+}

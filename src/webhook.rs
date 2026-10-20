@@ -173,6 +173,10 @@ impl Webhook {
 	pub fn new(url: &str, secret: Option<String>) -> Result<Self, reqwest::Error> {
 		let client = reqwest::Client::builder()
 			.timeout(Duration::from_secs(15))
+			// Never follow a redirect: the POST carries the signature and the
+			// event, and a 307 would resend both wherever the endpoint (or
+			// whoever took it over) points, an internal address included.
+			.redirect(reqwest::redirect::Policy::none())
 			.build()?;
 		Ok(Webhook {
 			client,
@@ -211,6 +215,12 @@ impl Webhook {
 			}
 		};
 		match self.request(body).send().await {
+			Ok(response) if response.status().is_redirection() => {
+				tracing::warn!(status = %response.status(), "webhook endpoint answered with a redirect, which is not followed");
+				if let Some(metrics) = &self.metrics {
+					metrics.webhook_failed();
+				}
+			}
 			Ok(_) => {
 				if let Some(metrics) = &self.metrics {
 					metrics.webhook_sent();
@@ -252,3 +262,7 @@ fn sign(secret: &str, body: &[u8]) -> String {
 #[cfg(test)]
 #[path = "webhook_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "webhook_redirect_tests.rs"]
+mod redirect_tests;

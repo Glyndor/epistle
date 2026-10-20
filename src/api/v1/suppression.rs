@@ -4,12 +4,14 @@
 //! operation targets that sending account's per-account list; without it, the
 //! global list.
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::error::ApiError;
-use crate::api::state::ApiState;
+use crate::api::state::{ApiState, MatchedAuth};
+
+use super::scope::{account_in_scope, require_unconfined};
 use crate::queue::SuppressionList;
 
 /// Hard ceiling on page size: list endpoints are never unbounded.
@@ -39,8 +41,14 @@ fn open(state: &ApiState) -> Result<SuppressionList, ApiError> {
 /// List suppressed addresses (global, or per-account with `?account=`).
 pub async fn list(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Query(params): Query<ListParams>,
 ) -> Result<Json<SuppressionPage>, ApiError> {
+	let scope = state.domain_scope(&auth);
+	match &params.account {
+		Some(account) => account_in_scope(&state, &scope, account)?,
+		None => require_unconfined(&scope, "The global suppression list")?,
+	}
 	let limit = params.limit.unwrap_or(50).min(MAX_LIMIT);
 	if limit == 0 {
 		return Err(ApiError::invalid_input("limit must be at least 1"));
@@ -79,9 +87,15 @@ pub struct Removed {
 /// Remove an address from the global list, or an account's with `?account=`.
 pub async fn remove(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(address): Path<String>,
 	Query(params): Query<RemoveParams>,
 ) -> Result<Json<Removed>, ApiError> {
+	let scope = state.domain_scope(&auth);
+	match &params.account {
+		Some(account) => account_in_scope(&state, &scope, account)?,
+		None => require_unconfined(&scope, "The global suppression list")?,
+	}
 	let suppression = open(&state)?;
 	let result = match &params.account {
 		Some(account) => suppression.remove_for(account, &address),

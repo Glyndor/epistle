@@ -29,8 +29,23 @@ use time::unix_now;
 /// operators who want to be conservative.
 pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 
-/// Maximum number of accepted recipients per transaction (RFC 5321 minimum).
-pub const MAX_RECIPIENTS: usize = 100;
+/// Recipients per transaction a server accepts unless `max_recipients` says
+/// otherwise. RFC 5321 §4.5.3.1.8 makes 100 the least a server may offer.
+pub const DEFAULT_MAX_RECIPIENTS: usize = 100;
+
+/// The fewest recipients per transaction `max_recipients` may allow: RFC 5321
+/// §4.5.3.1.8 says a server MUST accept at least 100.
+pub const MIN_MAX_RECIPIENTS: usize = 100;
+
+/// Why [`MIN_MAX_RECIPIENTS`] cannot be crossed, as `max_recipients` and
+/// `epistle limits set max-recipients` word the refusal.
+pub const MIN_MAX_RECIPIENTS_REASON: &str =
+	"RFC 5321 §4.5.3.1.8 requires accepting at least 100 recipients";
+
+/// The most recipients per transaction `max_recipients` may allow. Every
+/// recipient costs a directory lookup, a spool entry and a delivery, so the
+/// cap keeps one message from asking for unbounded work.
+pub const MAX_MAX_RECIPIENTS: usize = 10_000;
 
 mod auth_dispatch;
 mod transaction_policy;
@@ -50,6 +65,10 @@ pub struct Session {
 	/// [`MAX_MESSAGE_SIZE`]; raised or lowered by
 	/// [`Session::with_max_message_size`].
 	max_message_size: usize,
+	/// Recipients one transaction may name, advertised as `LIMITS RCPTMAX`
+	/// and enforced at `RCPT TO`. Default is [`DEFAULT_MAX_RECIPIENTS`];
+	/// changed by [`Session::with_max_recipients`].
+	max_recipients: usize,
 	state: State,
 	/// Whether STARTTLS can be offered (configured, not yet active).
 	tls_available: bool,
@@ -143,6 +162,7 @@ impl Session {
 		Session {
 			hostname: hostname.to_string(),
 			max_message_size: MAX_MESSAGE_SIZE,
+			max_recipients: DEFAULT_MAX_RECIPIENTS,
 			state: State::Connected,
 			tls_available: false,
 			tls_active: false,
@@ -181,6 +201,22 @@ impl Session {
 	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
 		self.max_message_size = bytes;
 		self
+	}
+
+	/// Set how many recipients one transaction may name. `0` keeps
+	/// [`DEFAULT_MAX_RECIPIENTS`]; any other value is taken as given, the
+	/// configuration having kept it within [`MIN_MAX_RECIPIENTS`] and
+	/// [`MAX_MAX_RECIPIENTS`].
+	pub fn with_max_recipients(mut self, count: usize) -> Self {
+		if count > 0 {
+			self.max_recipients = count;
+		}
+		self
+	}
+
+	/// How many recipients one transaction may name.
+	pub fn max_recipients(&self) -> usize {
+		self.max_recipients
 	}
 
 	/// The per-instance message-size cap. Useful for tests and for
@@ -459,7 +495,7 @@ impl Session {
 			"DSN".to_string(),
 			format!("SIZE {size}"),
 			// RFC 9422: advertise the per-message recipient ceiling we enforce.
-			format!("LIMITS RCPTMAX={MAX_RECIPIENTS}"),
+			format!("LIMITS RCPTMAX={cap}", cap = self.max_recipients),
 		];
 		if self.tls_available {
 			lines.push("STARTTLS".to_string());
@@ -638,6 +674,7 @@ impl Session {
 					body: Vec::new(),
 					require_tls,
 					chunking: false,
+					line_check: crate::smtp::line::LineCheck::stored(),
 					reserved: Reservation::none(),
 					budget_exhausted: false,
 				};
@@ -652,7 +689,7 @@ impl Session {
 				chunking,
 				..
 			} if body.is_empty() && !*chunking => {
-				if recipients.len() >= MAX_RECIPIENTS {
+				if recipients.len() >= self.max_recipients {
 					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
 				}
 				if suppresses_dsn {

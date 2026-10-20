@@ -10,12 +10,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
+use crate::net::conn_limit::{Admission, Refusal, refuse};
+use crate::net::deadline::SessionClock;
+use crate::net::response_writer;
 use crate::smtp::line::LineDecoder;
 
 use super::command;
@@ -25,15 +29,19 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
-/// Pre-authentication read deadline. An unauthenticated client must
-/// not be able to hold a connection slot forever, so the deadline is
-/// much shorter than the post-auth one.
-const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default maximum script literal size (1 MiB). Configurable per server
 /// so the test suite can drive a small bound.
-const DEFAULT_MAX_LITERAL: usize = 1 << 20;
+const DEFAULT_MAX_LITERAL: usize = super::store::MAX_SCRIPT_BYTES;
 /// Default max concurrent connections for a ManageSieve listener.
 const MAX_CONNECTIONS: usize = 100;
+
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"BYE \"too many connections, try again later\"\r\n",
+		Refusal::ClientFull => b"BYE \"too many connections from your address\"\r\n",
+	}
+}
 
 /// Storage/auth backend backed by the live directory and the accounts tree.
 struct DirectoryBackend {
@@ -71,6 +79,7 @@ pub struct Server {
 	accounts_root: PathBuf,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_per_ip: usize,
 	max_literal: usize,
 	preauth_timeout: Duration,
 }
@@ -83,8 +92,9 @@ impl Server {
 			accounts_root: data_dir.join("accounts"),
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
 			max_literal: DEFAULT_MAX_LITERAL,
-			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
+			preauth_timeout: crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT,
 		}
 	}
 
@@ -92,6 +102,15 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Cap the connections one client may hold on this listener (0 keeps the
+	/// default). An IPv6 client is counted by its /64.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_per_ip = max;
 		}
 		self
 	}
@@ -125,7 +144,7 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let admission = Admission::new(self.max_connections, self.max_per_ip);
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = accepting.next().await;
@@ -133,14 +152,18 @@ impl Server {
 			// `::ffff:a.b.c.d`; canonicalize so the audit channel and the
 			// ban-aware authentication path see a plain `IpAddr::V4`.
 			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "ManageSieve connection limit reached, dropping");
-				continue;
+			let admitted = match admission.admit(peer.ip()) {
+				Ok(admitted) => admitted,
+				Err(why) => {
+					tracing::warn!(%peer, ?why, "ManageSieve connection limit reached, refusing");
+					refuse(stream, refusal(why));
+					continue;
+				}
 			};
 			let server = Arc::clone(&self);
 			let peer_ip = peer.ip();
 			tokio::spawn(async move {
-				let _permit = permit;
+				let _admitted = admitted;
 				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "ManageSieve connection closed");
 				}
@@ -187,6 +210,7 @@ impl Server {
 			stream,
 			session,
 			self.max_literal,
+			SessionClock::start(self.preauth_timeout, TIMEOUT),
 			self.preauth_timeout,
 			None,
 		)
@@ -207,6 +231,7 @@ impl Server {
 			stream,
 			session,
 			self.max_literal,
+			SessionClock::start(self.preauth_timeout, TIMEOUT),
 			self.preauth_timeout,
 			Some(&self.tls),
 		)
@@ -221,6 +246,7 @@ async fn run_command_loop<S, B>(
 	stream: S,
 	mut session: Session<B>,
 	max_literal: usize,
+	mut clock: SessionClock,
 	preauth_timeout: Duration,
 	tls_acceptor: Option<&tokio_rustls::TlsAcceptor>,
 ) -> std::io::Result<()>
@@ -229,30 +255,47 @@ where
 	B: Backend,
 {
 	let mut stream: Box<dyn Connection> = Box::new(stream);
-	stream.write_all(&session.greeting().encode()).await?;
-	stream.flush().await?;
+	let greeting = session.greeting();
+	write_response(&mut stream, &greeting, &clock, session.account_is_some()).await?;
 
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
+	// Before authentication the whole phase shares one deadline counted
+	// from the start of the session, so neither a slow trickle of bytes
+	// nor a stream of cheap commands can hold the connection past it.
+	// The bound covers every write and flush the server tries to put
+	// on the wire too, otherwise a peer that stops reading would keep
+	// the listener slot alive. After signing in each command gets the
+	// idle timeout for its line, and a fresh one for its literal from
+	// the moment the line is complete. A session that signs out
+	// (UNAUTHENTICATE) starts a new pre-authentication phase, with a
+	// new window.
+	let mut was_signed_in = session.account_is_some();
 	loop {
-		let read_deadline = if session.account_is_some() {
-			TIMEOUT
-		} else {
-			preauth_timeout
-		};
-		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		let signed_in = session.account_is_some();
+		if was_signed_in && !signed_in {
+			clock.restart_preauth_from_now(preauth_timeout);
+		}
+		was_signed_in = signed_in;
+		let line_deadline = clock.step(signed_in);
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, line_deadline).await?
 		else {
-			write(
+			write_response(
 				&mut stream,
 				&Response::Bye("Pre-authentication timeout.".into()),
+				&clock,
+				session.account_is_some(),
 			)
 			.await?;
 			return Ok(());
 		};
+		let read_deadline = clock.step(session.account_is_some());
 		let Ok(line) = String::from_utf8(line) else {
-			write(
+			write_response(
 				&mut stream,
 				&Response::No(Some("Non-UTF-8 command.".into())),
+				&clock,
+				session.account_is_some(),
 			)
 			.await?;
 			continue;
@@ -264,7 +307,13 @@ where
 		// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
 		let literal = match command::trailing_literal(&line) {
 			Some(literal) if literal.len > max_literal => {
-				write(&mut stream, &Response::Bye("literal too large".into())).await?;
+				write_response(
+					&mut stream,
+					&Response::Bye("literal too large".into()),
+					&clock,
+					session.account_is_some(),
+				)
+				.await?;
 				return Ok(());
 			}
 			Some(literal) => {
@@ -279,7 +328,13 @@ where
 					Ok(_) => None,
 				};
 				if let Some(message) = rejection {
-					write(&mut stream, &Response::No(Some(message.into()))).await?;
+					write_response(
+						&mut stream,
+						&Response::No(Some(message.into())),
+						&clock,
+						session.account_is_some(),
+					)
+					.await?;
 					if !literal.synchronizing {
 						match discard::literal(
 							&mut *stream,
@@ -292,7 +347,13 @@ where
 							Ok(drained) if drained.complete => {}
 							Ok(_) => return Ok(()),
 							Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-								write(&mut stream, &Response::Bye("read timeout".into())).await?;
+								write_response(
+									&mut stream,
+									&Response::Bye("read timeout".into()),
+									&clock,
+									session.account_is_some(),
+								)
+								.await?;
 								return Ok(());
 							}
 							Err(error) => return Err(error),
@@ -300,15 +361,36 @@ where
 					}
 					continue;
 				}
-				match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
-					Some(bytes) => Some(bytes),
-					None => {
+				let read = read_literal(
+					&mut stream,
+					&mut decoder,
+					&mut buffer,
+					literal.len,
+					read_deadline,
+				)
+				.await;
+				match read {
+					Ok(Some(bytes)) => Some(bytes),
+					Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+						write_response(
+							&mut stream,
+							&Response::Bye("read timeout".into()),
+							&clock,
+							session.account_is_some(),
+						)
+						.await?;
+						return Ok(());
+					}
+					Err(error) => return Err(error),
+					Ok(None) => {
 						// The connection closed before the announced
 						// literal size arrived: drop the partial payload
 						// instead of parsing it as a complete script.
-						write(
+						write_response(
 							&mut stream,
 							&Response::No(Some("Literal truncated by connection close.".into())),
+							&clock,
+							session.account_is_some(),
 						)
 						.await?;
 						continue;
@@ -319,9 +401,20 @@ where
 		};
 
 		let response = session.handle_line(&line, literal);
+		// UNAUTHENTICATE clears the account inside `handle_line`. The
+		// loop-top check catches it on the next iteration, but only after
+		// the OK response has already gone out under the previous (and
+		// possibly expired) preauth deadline. Open a fresh window here,
+		// before the write, so a peer that stops reading cannot use the
+		// old clock to close a session that has just signed out.
+		let signed_in = session.account_is_some();
+		if was_signed_in && !signed_in {
+			clock.restart_preauth_from_now(preauth_timeout);
+			was_signed_in = signed_in;
+		}
 		let upgrade = response.starts_tls();
 		let close = response.is_final();
-		write(&mut stream, &response).await?;
+		write_response(&mut stream, &response, &clock, session.account_is_some()).await?;
 		if close {
 			return Ok(());
 		}
@@ -329,25 +422,25 @@ where
 			let Some(tls) = tls_acceptor else {
 				return Ok(());
 			};
-			let upgraded = crate::tls::accept_within(tls, stream).await?;
+			let upgraded = crate::tls::accept_until(tls, stream, read_deadline).await?;
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();
-			stream.write_all(&session.greeting().encode()).await?;
-			stream.flush().await?;
+			let greeting = session.greeting();
+			write_response(&mut stream, &greeting, &clock, session.account_is_some()).await?;
 		}
 	}
 }
 
-/// Read one command line, or `None` on clean EOF/timeout. `deadline`
-/// is the per-read timeout the caller wants to enforce; the post-auth
-/// deadline is generous (30 minutes), the pre-auth deadline is tight
-/// so an idle attacker cannot exhaust the listener's connection slots.
+/// Read one command line, or `None` on clean EOF/timeout. `deadline` is an
+/// absolute instant that incoming bytes do not move; the post-auth one is
+/// generous (30 minutes), the pre-auth one is tight so an idle or dripping
+/// attacker cannot exhaust the listener's connection slots.
 async fn read_line(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
-	deadline: Duration,
+	deadline: Instant,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	loop {
 		match decoder.next_line() {
@@ -355,7 +448,7 @@ async fn read_line(
 			Ok(None) => {}
 			Err(_) => return Ok(None),
 		}
-		let read = match tokio::time::timeout(deadline, stream.read(buffer)).await {
+		let read = match tokio::time::timeout_at(deadline, stream.read(buffer)).await {
 			Ok(Ok(n)) => n,
 			Ok(Err(error)) => return Err(error),
 			Err(_) => return Ok(None),
@@ -370,16 +463,21 @@ async fn read_line(
 /// Read exactly `size` literal octets, or detect a truncated connection
 /// and return `None` so the caller can reject the command. The trailing
 /// CRLF after the literal is left for the next `read_line`, which skips
-/// it as a blank line.
+/// it as a blank line. Running past `deadline` is a `TimedOut` error.
 async fn read_literal(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
 	size: usize,
+	deadline: Instant,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	let mut literal = decoder.take_buffered(size);
 	while literal.len() < size {
-		let read = stream.read(buffer).await?;
+		let read = tokio::time::timeout_at(deadline, stream.read(buffer))
+			.await
+			.map_err(|_| {
+				std::io::Error::new(std::io::ErrorKind::TimedOut, "literal read timeout")
+			})??;
 		if read == 0 {
 			return Ok(None);
 		}
@@ -394,10 +492,18 @@ async fn read_literal(
 	Ok(Some(literal))
 }
 
-/// Write a response and flush.
-async fn write(stream: &mut Box<dyn Connection>, response: &Response) -> std::io::Result<()> {
-	stream.write_all(&response.encode()).await?;
-	stream.flush().await
+/// Write a response and flush. Before sign-in the absolute pre-auth
+/// deadline covers both operations so a peer that stops reading cannot
+/// keep the connection alive past it; the post-auth clock is untouched.
+/// Wrapper around [`response_writer::write_response`] that takes a
+/// [`Response`] and threads it through the shared writer.
+async fn write_response(
+	stream: &mut Box<dyn Connection>,
+	response: &Response,
+	clock: &SessionClock,
+	authenticated: bool,
+) -> std::io::Result<()> {
+	response_writer::write_response(stream, &response.encode(), clock, authenticated).await
 }
 
 /// A boxable bidirectional stream (plain or TLS).
@@ -414,6 +520,14 @@ mod tests_starttls;
 
 #[path = "server_discard.rs"]
 mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod conn_limit_tests;
+
+#[cfg(test)]
+#[path = "server_tests_deadline.rs"]
+mod tests_deadline;
 
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]

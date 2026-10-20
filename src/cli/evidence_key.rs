@@ -83,10 +83,7 @@ fn rotate(root: &Path, yes: bool, now: u64, as_json: bool, out: &mut impl Write)
 	{
 		return code;
 	}
-	let timestamp = crate::evidence::tsa::settings::load(root)
-		.map(|settings| settings.enabled)
-		.unwrap_or(true);
-	let new = match rotation::rotate(root, timestamp, now) {
+	let new = match rotation::rotate(root, now) {
 		Ok(new) => new,
 		Err(error) => {
 			super::style::error(format_args!(

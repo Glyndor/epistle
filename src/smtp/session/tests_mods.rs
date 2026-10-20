@@ -27,17 +27,26 @@ mod tests_auth;
 #[path = "../session_tests_author.rs"]
 mod tests_author;
 #[cfg(test)]
+#[path = "../session_tests_bdat_framing.rs"]
+mod tests_bdat_framing;
+#[cfg(test)]
 #[path = "../session_tests_budget_leaks.rs"]
 mod tests_budget_leaks;
 #[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
 #[cfg(test)]
+#[path = "../session_tests_gate_busy.rs"]
+mod tests_gate_busy;
+#[cfg(test)]
 #[path = "../session_tests_junk.rs"]
 mod tests_junk;
 #[cfg(test)]
 #[path = "../session_tests_junk_progress.rs"]
 mod tests_junk_progress;
+#[cfg(test)]
+#[path = "../session_tests_login_gate.rs"]
+mod tests_login_gate;
 #[cfg(test)]
 #[path = "../session_tests_memory_budget.rs"]
 mod tests_memory_budget;
@@ -51,14 +60,30 @@ mod tests_oauth;
 #[path = "../session_tests_ratelimit.rs"]
 mod tests_ratelimit;
 #[cfg(test)]
+#[path = "../session_tests_recipients.rs"]
+mod tests_recipients;
+#[cfg(test)]
 #[path = "../session_tests_scram.rs"]
 mod tests_scram;
 #[cfg(test)]
 #[path = "../session_tests_scram_ban_lifecycle.rs"]
 mod tests_scram_ban_lifecycle;
+
+#[cfg(test)]
+#[path = "../session_tests_scram_ban_owner_known_network.rs"]
+mod tests_scram_ban_owner_known_network;
+#[cfg(test)]
+#[path = "../session_tests_scram_ban_toctou.rs"]
+mod tests_scram_ban_toctou;
 #[cfg(test)]
 #[path = "../session_tests_scram_bans.rs"]
 mod tests_scram_bans;
 #[cfg(test)]
+#[path = "../session_tests_scram_decoy.rs"]
+mod tests_scram_decoy;
+#[cfg(test)]
 #[path = "../session_tests_scram_off.rs"]
 mod tests_scram_off;
+#[cfg(test)]
+#[path = "../session_tests_send_as.rs"]
+mod tests_send_as;

@@ -4,6 +4,7 @@ use super::command::{
 	Command, FetchItem, Line, ParseError, SearchKey, StoreMode, Tagged, ThreadAlgorithm,
 };
 use super::mailbox;
+use crate::smtp::directory::hash_gate::Verdict;
 
 mod acl;
 mod auth;
@@ -62,7 +63,7 @@ impl Session {
 
 	/// Feed one command line (CRLF stripped).
 	pub fn command_line(&mut self, line: &str) -> Output {
-		let tagged = match super::command::parse_line(line) {
+		let tagged = match super::command::parse_line(line, self.append_limit) {
 			Ok(Line::Command(tagged)) => tagged,
 			Ok(Line::Login(request)) => {
 				return self.login(&request.tag, request.username(), request.password());
@@ -165,10 +166,7 @@ impl Session {
 					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
 				))
 			}
-			Command::Id => Output::text(format!(
-				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
-				env!("CARGO_PKG_VERSION"),
-			)),
+			Command::Id => Output::text(format!("* ID NIL\r\n{tag} OK ID completed\r\n")),
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
@@ -316,15 +314,16 @@ impl Session {
 		let State::NotAuthenticated { login_failures } = &mut self.state else {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		};
-		let verified = self.directory.authenticate_with_ip(
+		let verdict = self.directory.authenticate_verdict(
 			username,
 			password,
 			self.peer_ip,
 			self.auth_protocol,
 		);
-		match verified {
-			Some(account) => self.auth_success(tag, account, "LOGIN completed"),
-			None => {
+		match verdict {
+			Verdict::Admitted { account, .. } => self.auth_success(tag, account, "LOGIN completed"),
+			Verdict::Busy => Output::text(format!("{tag} NO [UNAVAILABLE] Try again later\r\n")),
+			Verdict::Refused => {
 				*login_failures += 1;
 				let response = format!("{tag} NO LOGIN failed\r\n");
 				if *login_failures >= 3 {
@@ -334,6 +333,11 @@ impl Session {
 				}
 			}
 		}
+	}
+
+	/// Whether the client has signed in.
+	pub fn is_authenticated(&self) -> bool {
+		self.account().is_some()
 	}
 
 	fn account(&self) -> Option<&str> {

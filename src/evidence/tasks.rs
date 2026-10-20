@@ -186,14 +186,13 @@ impl Tasks {
 			errors.push(warning);
 		}
 		let root = self.service.root().to_path_buf();
-		let enabled = current.enabled;
 		let trusted = anchors(&current);
 		// Sealing closes a day and purging deletes for good: neither runs on
 		// a clock nobody agrees with.
 		if reading.sound {
 			let sealed = tokio::task::spawn_blocking({
 				let root = root.clone();
-				move || seal_and_sweep(&root, enabled, &trusted, now)
+				move || seal_and_sweep(&root, &trusted, now)
 			})
 			.await;
 			match sealed {
@@ -370,12 +369,7 @@ async fn probe(settings: &Settings) -> Option<u64> {
 		.map(|obtained| obtained.stamp.gen_time)
 }
 
-fn seal_and_sweep(
-	root: &Path,
-	timestamp: bool,
-	anchors: &[[u8; 32]],
-	now: u64,
-) -> Result<Option<String>, String> {
+fn seal_and_sweep(root: &Path, anchors: &[[u8; 32]], now: u64) -> Result<Option<String>, String> {
 	let key =
 		EvidenceKey::load_or_create(root).map_err(|error| format!("evidence key: {error}"))?;
 	// A day is sealed a margin after midnight, so a believed clock that is a
@@ -383,7 +377,12 @@ fn seal_and_sweep(
 	super::checkpoint::seal_closed_days(
 		root,
 		&key,
-		timestamp,
+		// The mode of the first day the chain ever sealed is the chain's
+		// default, enabled, and a setting record moves it from there. The
+		// settings file must not seed it: it was seeded from there until a
+		// `timestamp disable` before the first seal sealed that day as
+		// disabled, and the audit refused it as a downgrade.
+		true,
 		now.saturating_sub(super::timeref::SEAL_MARGIN_SECS),
 	)
 	.map_err(|error| format!("sealing: {error}"))?;

@@ -9,7 +9,10 @@ mod domains;
 mod mailboxes;
 mod masked;
 mod queue;
+mod scope;
 mod send;
+#[cfg(test)]
+pub(crate) use send::sink_refusal;
 mod send_from;
 mod send_message;
 mod send_request;
@@ -26,6 +29,7 @@ use super::state::ApiState;
 pub fn router(max_message_size: usize) -> Router<ApiState> {
 	Router::new()
 		.route("/status", get(status::get))
+		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
 		.route("/domains", get(domains::list))
 		.route("/accounts", get(accounts::list).post(accounts::create))

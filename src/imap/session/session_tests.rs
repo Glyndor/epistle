@@ -64,6 +64,10 @@ mod acl;
 mod auth;
 #[path = "session_tests_auth_ban_lifecycle.rs"]
 mod auth_ban_lifecycle;
+#[path = "session_tests_auth_ban_owner_known_network.rs"]
+mod auth_ban_owner_known_network;
+#[path = "session_tests_auth_ban_toctou.rs"]
+mod auth_ban_toctou;
 #[path = "session_tests_auth_bans.rs"]
 mod auth_bans;
 #[path = "session_tests_basic.rs"]
@@ -76,8 +80,16 @@ mod condstore_search;
 mod encoded_search;
 #[path = "session_tests_esearch_sets.rs"]
 mod esearch_sets;
+#[path = "session_tests_gate_busy.rs"]
+mod gate_busy;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
+#[path = "session_tests_learn_e2e.rs"]
+mod learn_e2e;
+#[path = "session_tests_learn_moves.rs"]
+mod learn_moves;
+#[path = "session_tests_login_gate.rs"]
+mod login_gate;
 #[path = "session_tests_metadata.rs"]
 mod metadata;
 #[path = "session_tests_misc.rs"]
@@ -86,6 +98,8 @@ mod misc;
 mod paths;
 #[path = "session_tests_quota_zero.rs"]
 mod quota_zero;
+#[path = "session_tests_scram_decoy.rs"]
+mod scram_decoy;
 #[path = "session_tests_search.rs"]
 mod search;
 #[path = "session_tests_search_headers.rs"]
@@ -189,6 +203,9 @@ mod thread_references;
 
 #[path = "session_tests_appendlimit.rs"]
 mod appendlimit;
+
+#[path = "session_tests_per_account.rs"]
+mod per_account;
 
 #[path = "session_tests_notify_status.rs"]
 mod notify_status;

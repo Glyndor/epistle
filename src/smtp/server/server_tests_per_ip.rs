@@ -261,3 +261,19 @@ async fn a_failed_tls_handshake_gives_the_per_ip_slot_back() {
 		"admitted after failed handshakes"
 	);
 }
+
+#[tokio::test]
+async fn excessive_listener_cap_still_sends_the_smtp_greeting() {
+	let (server, accept, mut clients) = server_with_caps(usize::MAX, 20);
+	let task = spawn_serve(server, accept);
+	let mut greeting = [0; 512];
+	let n = tokio::time::timeout(
+		std::time::Duration::from_secs(5),
+		clients[0].read(&mut greeting),
+	)
+	.await
+	.expect("greeting deadline")
+	.expect("greeting");
+	assert!(String::from_utf8_lossy(&greeting[..n]).starts_with("220 "));
+	task.abort();
+}

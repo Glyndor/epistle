@@ -98,7 +98,7 @@ podman run --rm \
   -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.1
+  ghcr.io/glyndor/epistle:0.12.2
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -127,7 +127,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.1
+    image: ghcr.io/glyndor/epistle:0.12.2
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -276,6 +276,58 @@ defaults above.
 | Quota | the default 5 GiB per account fills after about 370 of them; the rest get `452 4.2.2` and wait in the sender's queue. Raise it with `epistle account quota alice 100G`, `epistle limits set quota --domain example.org 100G` or `epistle limits set quota 100G` |
 | Time | the link is the bound: 67 GiB is about 10 minutes at 1 Gbit/s and about 1 h 40 min at 100 Mbit/s. 29 parallel transfers share the link, and `min_data_rate` only cuts a client below 10 KiB/s |
 
+### The host clock
+
+The containers share the host kernel's clock, and epistle does not set it.
+DKIM signatures, certificate validity, token and key expiry, the timestamp
+authority's seals and the [evidence log](evidence.md#the-clock) all depend on
+it. `epistle status` has a `clock` area that warns when the host is not
+synchronised with a time source, and `epistle init` warns about the same;
+neither changes anything. The `.deb` recommends `systemd-timesyncd` or
+`chrony`. To fix it on a host with systemd, run one of these:
+
+```sh
+sudo timedatectl set-ntp true
+# or point systemd-timesyncd at one provider: set NTP=time.cloudflare.com
+# in /etc/systemd/timesyncd.conf, then
+sudo systemctl restart systemd-timesyncd
+```
+
+Or install `chrony`. Use the servers of one provider only: Google smears leap
+seconds and Cloudflare steps them, so a client given both sees them disagree.
+
+### Open files and connection caps
+
+Every connection is a file descriptor. A rootless container starts with the
+soft limit of the user that runs Podman, often 1024, and around a thousand idle
+connections the SMTP and submission listeners stopped greeting. The generated
+`mail` service therefore sets `ulimits: {nofile: 65536}`; the other services
+keep the default. The listener caps together (SMTP 1000, IMAP and POP3 500,
+ManageSieve 100, plain HTTP 1024 each) plus the spool, the database socket and
+the logs fit well under it. A stack generated before this was added gets the
+limit on the next `epistle init` that regenerates the compose file. The sample
+unit in `docs/epistle.service` sets `LimitNOFILE=65536` for the same reason.
+
+Podman refuses to start a container whose open-file limit is above the hard
+limit of the user that runs it (`setrlimit RLIMIT_NOFILE: Operation not
+permitted`), which happens on hosts with a hard limit of 4096 such as
+CentOS 7 or a session without systemd. `epistle init` therefore reads its own
+hard limit and asks for the lower of it and 65536, and asks for nothing when
+the hard limit is 1024. It reads the limit of the process that runs `init`,
+which can differ from that of the account that runs the stack; if the `mail`
+container fails to start with that error, lower `nofile` in the compose file
+or raise the hard limit of that account (`LimitNOFILE` in its user manager).
+
+Each listener also caps what one client can hold of it: `max_connections_per_ip`
+for SMTP (20), `max_mailbox_connections_per_ip` for IMAP, POP3 and ManageSieve
+(200) and `max_http_connections_per_ip` for plain HTTP (256), all adjustable
+with `epistle limits set`. The count is per client address, so it only means
+something when the listener sees the real one. The `mail` service uses `pasta`
+for that; a bridge network or a proxy in front shows every client as one
+address, and then that address holds the whole listener's share: raise the
+caps, or set them next to the listener caps, instead of letting one gateway
+address be refused for everyone behind it.
+
 ### Keys outside data_dir
 
 `mail` mounts data_dir read-write, and `epistle backup` archives it. The at-rest
@@ -291,6 +343,22 @@ On an install from before this layout, `epistle stack update` (and a rerun of
 `init`) moves both keys out of `<data_dir>/keys`, rewrites a `mail.toml` that
 named the old path, and leaves both copies in place, with an error, if they
 differ. Backups do not carry these keys: save `secrets/` separately.
+
+### DNS provider token
+
+I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
+with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
+moves an existing inline or environment token there, updates the generated
+Compose file to mount it read-only only in `mail`, and recreates that service.
+Supply any other settings required by your provider. For `init`, point
+`dns.token_file` in the answers at this file. See [DNS token storage](dns.md#dns-provider-token-storage).
+
+An environment token is passed to the container and can be exposed through
+`podman inspect` in `Config.Env`. A token stored inline in `mail.toml` remains
+in the mounted configuration file. A token file mount exposes its path in
+container metadata rather than its contents. Remove old environment entries
+from Compose overrides and service configuration after migration, and save
+`secrets/` separately from data backups.
 
 ### The database roles
 
@@ -353,15 +421,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.1-amd64`, `…:0.12.1-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.12.2-amd64`, `…:0.12.2-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.1` the full release.
+- `ghcr.io/glyndor/epistle:0.12.2` the full release.
 - `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.1 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.2 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -373,7 +441,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.1 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.2 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -383,7 +451,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.1`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.2`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

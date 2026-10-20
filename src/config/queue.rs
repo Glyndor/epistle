@@ -164,6 +164,36 @@ impl super::Config {
 		}
 		self.validate_queue_limits()
 	}
+
+	/// SHOULD warnings: a value the RFC recommends but does not require.
+	/// The validation above refuses values that break the protocol
+	/// invariants; the warnings here flag values that still work but
+	/// deviate from the recommendation. `epistle limits set` and the
+	/// start-up banner print the same lines.
+	pub fn retry_schedule_warnings(&self) -> Vec<&'static str> {
+		use crate::queue::schedule::{
+			DEFAULT_BASE_SECS, DEFAULT_GIVE_UP_SECS, SHOULD_GIVE_UP_SECS, SHOULD_RETRY_BASE_SECS,
+		};
+		let give_up = self
+			.queue_give_up_secs
+			.filter(|secs| *secs != 0)
+			.unwrap_or(DEFAULT_GIVE_UP_SECS);
+		let base = self.queue_retry_base_secs.unwrap_or(DEFAULT_BASE_SECS);
+		let mut warnings = Vec::new();
+		if give_up < SHOULD_GIVE_UP_SECS {
+			warnings.push(
+				"queue_give_up_secs is below the 4 days RFC 5321 §4.5.4.1 recommends; \
+				 recipients will bounce sooner than the standard expects",
+			);
+		}
+		if base < SHOULD_RETRY_BASE_SECS {
+			warnings.push(
+				"queue_retry_base_secs is below the 30 minutes the RFC recommends; \
+				 the first retry is sooner than receivers expect",
+			);
+		}
+		warnings
+	}
 }
 
 #[cfg(test)]

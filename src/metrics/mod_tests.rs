@@ -14,6 +14,7 @@ fn renders_zero_counters() {
 		"scanner",
 		"loop",
 		"rate_limit",
+		"header_fields",
 	] {
 		assert!(rendered.contains(&format!("reason=\"{label}\"")), "{label}");
 	}
@@ -131,8 +132,10 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"rejected_scanner",
 		"rejected_loop",
 		"rejected_rate_limit",
+		"rejected_header_fields",
 		"abuse_dropped",
 		"sieve_rejected",
+		"sieve_inspection_truncated",
 		"vacation_sent",
 		"forwarded",
 		"relayed",
@@ -148,8 +151,12 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"clock_drift_exceeded",
 		"auth_login_succeeded",
 		"auth_login_failed",
+		"auth_hash_gate_rejected",
 		"send_limited_new_recipients",
 		"bayes_training_dropped",
+		"bayes_learning_unreadable",
+		"bayes_learning_failed",
+		"bayes_learning_refused",
 		"subjectpass_passed",
 		"subjectpass_challenged",
 		"dmarc_reports_ingested",

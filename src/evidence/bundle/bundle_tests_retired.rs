@@ -51,7 +51,7 @@ fn rotated() -> (Fixture, String, String, Vec<u8>) {
 		.expect("chain")
 		.append_at(at(DAY + 3, 2), delivered(7))
 		.expect("outcome");
-	let k2 = rotate_at(fixture.root(), true, at(DAY + 3, 5)).expect("rotate");
+	let k2 = rotate_at(fixture.root(), at(DAY + 3, 5)).expect("rotate");
 	let current = EvidenceKey::load_or_create(fixture.root()).expect("k2");
 	let Fixture { dir, tsa, .. } = &mut fixture;
 	stamp(dir.path(), tsa, &current, at(DAY + 4, 0));
@@ -279,7 +279,7 @@ fn a_day_sealed_by_an_intermediate_key_after_its_period_fails() {
 	let (mut server, k1, k2, _) = rotated();
 	// K2 leaks, then hands over to K3 on the next day.
 	let leaked_k2 = std::fs::read(server.root().join("key.pk8")).expect("k2");
-	let k3 = rotate_at(server.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	let k3 = rotate_at(server.root(), at(DAY + 4, 5)).expect("second rotation");
 	let current = EvidenceKey::load_or_create(server.root()).expect("k3");
 	let Fixture { dir, tsa, .. } = &mut server;
 	stamp(dir.path(), tsa, &current, at(DAY + 5, 0));
@@ -304,7 +304,7 @@ fn a_day_sealed_by_an_intermediate_key_after_its_period_fails() {
 fn an_old_publication_and_the_current_key_validate_the_current_keys_days_without_the_ones_between()
 {
 	let (mut server, k1, _k2, _) = rotated();
-	let k3 = rotate_at(server.root(), true, at(DAY + 4, 5)).expect("second rotation");
+	let k3 = rotate_at(server.root(), at(DAY + 4, 5)).expect("second rotation");
 	let chain = Chain::open(server.root()).expect("chain");
 	chain
 		.append_at(at(DAY + 5, 1), accepted(8))

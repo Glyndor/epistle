@@ -56,6 +56,11 @@ impl Metrics {
 				&self.sieve_rejected,
 			),
 			(
+				"mail_sieve_inspection_truncated_total",
+				"Messages a Sieve test could not look at whole (body past 1 MiB, more headers than a lookup visits).",
+				&self.sieve_inspection_truncated,
+			),
+			(
 				"mail_vacation_sent_total",
 				"Sieve vacation autoresponses sent.",
 				&self.vacation_sent,
@@ -131,6 +136,11 @@ impl Metrics {
 				&self.auth_login_failed,
 			),
 			(
+				"mail_auth_hash_gate_rejected_total",
+				"Password sign-ins turned away with a temporary failure because too many password checks were already waiting.",
+				&self.auth_hash_gate_rejected,
+			),
+			(
 				"mail_dmarc_reports_ingested_total",
 				"DMARC aggregate reports successfully ingested from a receiver.",
 				&self.dmarc_reports_ingested,
@@ -197,8 +207,23 @@ impl Metrics {
 			),
 			(
 				"mail_bayes_training_dropped_total",
-				"Per-account Bayesian training jobs dropped because the bounded hand-off queue was full.",
+				"Bayesian training jobs dropped: a bounded hand-off queue was full, or the source had used its share of the shared corpus.",
 				&self.bayes_training_dropped,
+			),
+			(
+				"mail_bayes_learning_unreadable_total",
+				"Lessons from a user's decisions that the worker could not read because the message was gone.",
+				&self.bayes_learning_unreadable,
+			),
+			(
+				"mail_bayes_learning_failed_total",
+				"Lessons from a user's decisions that the database refused; nothing was recorded.",
+				&self.bayes_learning_failed,
+			),
+			(
+				"mail_bayes_learning_refused_total",
+				"Lessons from a user's decisions refused by an account's ceiling or day budget.",
+				&self.bayes_learning_refused,
 			),
 			(
 				"mail_subjectpass_passed_total",

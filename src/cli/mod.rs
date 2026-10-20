@@ -45,6 +45,7 @@ mod export;
 mod import;
 mod init;
 mod json_out;
+mod learning;
 mod legacy;
 mod limits;
 mod local;
@@ -62,9 +63,11 @@ mod reports;
 mod resource;
 mod role_addresses;
 mod serve;
+mod serve_connection_limits;
 mod serve_dkim;
 mod serve_evidence;
 mod serve_listeners;
+mod serve_metrics;
 mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;
@@ -79,6 +82,7 @@ mod stack;
 mod stack_dumps;
 mod stack_health;
 mod stack_resources;
+mod stack_retry;
 mod stack_rollback;
 mod stack_socket;
 mod stack_started;
@@ -104,6 +108,12 @@ mod webhook_admin;
 /// deserialise the `epistle init --print-answers` output without
 /// depending on the otherwise-private `init` module.
 pub use {init::Answers, pick::run_from_env};
+
+/// Re-export of the catalog snapshot so integration tests can keep
+/// `docs/limits.md` in lockstep with the in-process catalog without
+/// pulling the catalog module into its public surface.
+#[doc(hidden)]
+pub use limits::catalog::docs_snapshot;
 
 use {std::path::PathBuf, util::generate_secret};
 

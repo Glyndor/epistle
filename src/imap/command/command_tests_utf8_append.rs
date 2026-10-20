@@ -3,7 +3,7 @@
 use super::*;
 
 fn append(line: &str) -> (usize, bool, Vec<String>) {
-	match parse(line).expect("parses").command {
+	match parse(line, DEFAULT_APPEND_LIMIT).expect("parses").command {
 		Command::Append {
 			size, utf8, flags, ..
 		} => (size, utf8, flags),

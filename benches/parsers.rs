@@ -39,13 +39,19 @@ fn address(c: &mut Criterion) {
 fn imap_command(c: &mut Criterion) {
 	c.bench_function("imap_parse_fetch", |b| {
 		b.iter(|| {
-			imap_parse(black_box(
-				"a1 UID FETCH 1:* (FLAGS BODY[HEADER.FIELDS (FROM TO)])",
-			))
+			imap_parse(
+				black_box("a1 UID FETCH 1:* (FLAGS BODY[HEADER.FIELDS (FROM TO)])"),
+				black_box(usize::MAX),
+			)
 		})
 	});
 	c.bench_function("imap_parse_search", |b| {
-		b.iter(|| imap_parse(black_box("a2 SEARCH OR FROM alice SINCE 1-Jan-2026 UNSEEN")))
+		b.iter(|| {
+			imap_parse(
+				black_box("a2 SEARCH OR FROM alice SINCE 1-Jan-2026 UNSEEN"),
+				black_box(usize::MAX),
+			)
+		})
 	});
 }
 

@@ -439,3 +439,12 @@ fn fewer_copies_in_post_data_stamping_path_avoids_full_body_copies() {
 	assert!(stamped.ends_with(b"xxxxxxxx"));
 	assert!(stamped.starts_with(b"Received: from x\r\n"));
 }
+
+#[test]
+fn the_field_count_is_never_below_the_headers_the_trace_helpers_take() {
+	use crate::util::header_block::{cases, field_count};
+	for raw in cases::messages() {
+		let headers = &raw[..header_block_end(&raw)];
+		assert!(field_count(&raw) >= cases::fields_in(headers), "{raw:?}");
+	}
+}

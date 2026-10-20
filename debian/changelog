@@ -1,3 +1,499 @@
+epistle (0.12.2) unstable; urgency=medium
+
+  * Improve DNS provider inspection safety and accuracy.
+  * Security: a banned account signs in with the right credentials from a network
+    it has used before; from any other network the response stays the same and
+    the ban cannot be probed for valid credentials.
+  * Security: the known-network bypass lifts the account ban only, not the
+    pair ban or operator-placed bans, and a successful sign-in via the
+    bypass refreshes the bypass list without clearing the ban row.
+  * Security: the SCRAM ban check at client-final re-reads the ban store
+    instead of trusting the value computed at client-first, so a ban that
+    fires or lapses between the two messages is enforced or lifted by the
+    server that actually completes the proof.
+  * Security: the hourly purge of the known-network rows now respects the
+    window the operator set, so a row past the configured horizon is dropped
+    and one inside it stays.
+  * Queue: record API cancellations in the delivery log and notify webhooks.
+  * Security: keep DNS provider tokens in private secret files and warn about
+    legacy credential sources.
+  * Security: improve API client attribution and retry guidance.
+  * Security: tighten the `trusted_proxies` allowlist (reject `/0`, deduplicate, cap).
+  * DKIM: sign more message headers and protect important fields from additions.
+  * DKIM: long signature fields fold within the line limit and unsafe field names
+    are not signed; dual-signed recipients carry one ed25519 and one RSA signature.
+  * Add advisory DNS provider credential checks.
+  * `epistle status` and `init` no longer wait for a host clock probe that does
+    not answer, and a line of the message body no longer changes which
+    `Resent-*` headers a DKIM signature covers.
+  * Security: sanitize trust headers on inbound mail, closing the gaps
+    left when mail-parser 0.11.9 and the local DKIM/ARC readers disagree
+    about how a reserved header name folds.
+  * Security: IMAP ID no longer discloses the server version.
+  * Status reports API key configuration warnings.
+  * Security: restore the /api/v1/auth/verify reach the panel had before the
+    tenant-boundary change, so a server-supplied account the mail listeners
+    accept cannot be silently dropped from the panel sign-in path; a
+    domain-confined key still fails closed on every account the static +
+    dynamic listing cannot resolve, and the limit is documented.
+  * Validate listener connection caps and warn when the host open-file limit
+    leaves little room for the generated mail service.
+  * Security: cap the TLS connections one client address may hold open at once
+    on every listener that terminates TLS in the server (the autoconfig
+    listener over HTTPS, MTA-STS). A connection over the cap is closed before
+    the handshake, the same `503`/`BYE`/`-ERR` is answered over plain text as
+    the peer sees, and the place is released however the connection ends.
+  * Security: ManageSieve now holds an unauthenticated connection to one
+    deadline for the whole phase, counted from the start of the session and
+    covering every read, including the data of a command. Bytes arriving
+    slowly no longer extend it.
+  * Security: IMAP and POP3 hold an unauthenticated connection to the same
+    kind of deadline: one for the whole phase before sign-in, counted from the
+    start of the session, covering the TLS handshake, every command and
+    every literal, which neither the bytes that arrive nor a stream of cheap
+    commands extend. Before, each read had its own timeout of 30 minutes
+    (IMAP) or 10 minutes (POP3), so one byte just before it ran out kept a
+    connection open for as long as the client liked. A signed-in session is
+    not held to it. The deadline is 60 seconds by default and is set for the
+    three protocols with `preauth_timeout` or `epistle limits set
+    preauth-timeout`.
+  * Security: the same pre-authentication deadline also bounds every byte the
+    server tries to write or flush before sign-in (greeting, responses, error
+    BYE/-ERR, post-STARTTLS re-greeting) on IMAP, POP3 and ManageSieve. A
+    peer that stops reading is cut off at the deadline, releasing the
+    admission slot; before, a blocked output kept the connection alive past
+    the bound.
+  * Security: close the gaps the previous deadline left in the IMAP helpers
+    that drain a rejected literal and a chained literal announced after it,
+    and in the ManageSieve UNAUTHENTICATE response that left the session
+    signed out under the expired pre-auth clock of the original sign-in.
+  * Security: one client address can no longer hold every connection of a
+    listener. IMAP, POP3 and ManageSieve cap the connections one client holds
+    (200 by default, 40 for ManageSieve, `max_mailbox_connections_per_ip`), and the plain-HTTP
+    listeners cap both their connections (1024, `max_http_connections`) and
+    what one client holds (256, `max_http_connections_per_ip`); an IPv6 client
+    is counted by its /64, as for SMTP. A connection over a cap gets the
+    protocol's `BYE`, `-ERR` or `503` and is closed before any handshake, and
+    its place is released however the connection ends. All three are set with
+    `epistle limits`. Behind a proxy or NAT that hides the client address every
+    client shares one count, so raise them there.
+  * The generated `mail` service raises its open-file limit to 65536 (and the
+    sample systemd unit sets `LimitNOFILE=65536`). A rootless container
+    started with the default soft limit of 1024 stopped greeting on ports 25
+    and 587 at around a thousand idle connections. The request is lowered to
+    the hard limit of the host when that is smaller, because Podman refuses to
+    start a container above it. Run `epistle init` again to regenerate an
+    existing stack's compose file.
+  * Limits follow the standards: every adjustable limit has an industry-standard
+    default and the operator may change it; rules the standards make mandatory
+    (MUST) cannot be crossed, and rules they only recommend (SHOULD) print a
+    warning. `epistle limits show` and `--json` carry the kind (`adjustable`,
+    `recommended`, `fixed`) and the RFC reference for every limit, and the
+    same table backs `docs/limits.md` so the operator-facing page stays in
+    step with the code.
+  * Security: tighten the SPF §4.6.4 budget enforcement, the catalog's
+    metadata for the limits the standards only recommend, and the
+    rejection of misconfigured connection-cap keys; the operator-facing
+    table in `docs/limits.md` now mirrors the in-process catalog exactly.
+  * An autoconfig listener with TLS and no `max_connections_per_listener` set
+    refused every connection, because the unset cap reached it as 0. It now
+    uses the default of 1024.
+  * Security: the Bayesian filter no longer lets one account decide what
+    another receives. A message with more than one local recipient, or
+    addressed to an alias or a list, used to be scored by the corpus of the
+    first local account of the envelope (the first member of an alias), and
+    that verdict (Junk, or a `550` at DATA) applied to every recipient, so an
+    account that taught its own corpus a spammer's text as ham could let that
+    spam through to anyone addressed alongside it. An account's own corpus now
+    scores a message only when that account is the single local recipient,
+    was addressed as itself and has at least 200 ham and 200 spam of its own.
+    Everything else is scored by the shared corpus when that has as much,
+    which changes delivery: mail to aliases, lists and accounts that have not
+    trained their own corpus is now subject to `bayes_junk_at` and
+    `bayes_reject_at` through the shared corpus, where before it was scored
+    only when the first member had a trained corpus of its own.
+  * Security: training the Bayesian corpus on a message is bounded. The shared
+    corpus learns from every message the server accepts or rejects, whoever
+    sent it, and it tokenized the whole message (up to 25 MiB, a few million
+    words) and wrote one row per word, one statement each, holding a lock
+    that the lessons of the accounts waited for. A message now teaches the
+    corpus from at most 5000 distinct words of the first and last 128 KiB of
+    what it says, in one statement; when it has more, the first and last 1000
+    are kept and the rest chosen by a keyed hash of the word, so where the
+    sender puts the others decides nothing. The transactions of a training and
+    of `epistle account remove` now take their locks in one order, which ends
+    the deadlocks between them. The shared corpus is not pruned: a message of
+    5000 new words adds about 1.7 MB of table and 3.5 MB of log, and one
+    address may teach 30 such messages an hour.
+  * Security: the Bayesian filter follows a deeper message structure, up to 32
+    levels and 10 000 parts where it was 10 and 1000. The cost of reading
+    stays linear in the size of the message, and a message past either limit
+    is still read as raw bytes and still counts as not read in full.
+  * Security: scoring a message with the Bayesian corpus is bounded the same
+    way. It tokenized, hashed and looked up every word of a message of up to
+    25 MiB inside the session of an unauthenticated sender (338 MiB of heap
+    for one message). The filter now reads what a person reads: the headers
+    and the text parts, decoded, not attachments or images, and whitespace and
+    one-letter words cost nothing; a message that two readers could split
+    into parts differently is read as raw bytes as well. A message under 128 KiB + 128 KiB of
+    words and 5000 distinct words scores on all of it, as before; one with an
+    attachment now scores as the message without it (before, any attachment of
+    more than about 125 KiB gave the message a score of 0.5). A message over
+    either bound is scored on part of it and never below 0.5, which is not
+    Junk with the default `bayes_junk_at` of 0.95 and only reaches a second
+    opinion with `[antispam_llm]`: spam padded with more than 256 KiB of words,
+    or with more than 5000 distinct words, with the spam in the middle, can
+    escape the filter. That is the detection lost to the bound.
+  * Security: the shared Bayesian corpus no longer starts a task per message,
+    and a sender cannot decide it alone. The server queues what it learns
+    (64 jobs, 2 workers) instead of spawning a task for each message. Ham and
+    spam are budgeted apart: a client address and the wider block around it
+    (IPv4 /32 and /24, IPv6 /64 and /48) may add 30 and 120 jobs per hour,
+    a sender domain 30 but only when the server verified it (the envelope
+    sender is written by the client, so a forged domain spends nothing of the
+    real one), a whole network (IPv4 /16, IPv6 /32) 125 and 16 in flight,
+    and the whole server 2000, the last quarter of them kept for networks that
+    have used few. The tables of keys drop the least recently used entry when
+    full instead of refusing new senders. A job over its budget or that finds
+    the queue full is dropped, without spending any budget when it was the
+    queue that had no room, and counted in `mail_bayes_training_dropped_total`.
+    The server also learns ham only from a sender whose SPF or DKIM passed,
+    so an unverified sender cannot teach the corpus that its text is ham;
+    bounces, SubjectPass resends and mail from a sender with neither teach
+    nothing. A sender that fails the checks can still have text of its
+    choosing learned as spam within its budget. Behind a container network
+    that hides the client address (rootless Podman with a bridge) the server
+    sees one address and learns at the rate of one.
+  * Security: the Bayesian filter reads mail the way a client shows it, in
+    more cases. Attachments no longer use up the budget for decoding text, so
+    text sent as base64 or quoted-printable after a large file is read; a part
+    that declares two transfer encodings is read under each; text in UTF-16 or
+    an 8-bit charset, and RFC 2047 encoded words in the headers, are read as a
+    person sees them; zero width characters and soft hyphens no longer split a
+    word; and a message the filter could not follow (too deep, too many parts,
+    a text part or a message inside it past the 2 MiB decoding budget) counts
+    as not read in full, so it scores at least 0.5. Letters outside ASCII are
+    now lowercased as well: a token with a capital outside ASCII ("Привет",
+    "École") that the corpus learned before this release is not found under
+    its new lower case form and is learned again; the old rows stay in the
+    table, unused, because the corpus keeps keyed hashes and cannot convert
+    them. Tokens in ASCII are unchanged. A message that cannot be reduced at all
+    teaches nothing and spends none of the sender's budget.
+  * JMAP: Sieve scripts (RFC 9661). The session advertises
+    `urn:ietf:params:jmap:sieve`, and `SieveScript/get`, `/query`, `/set` and
+    `/validate` manage the same scripts ManageSieve does: a script written
+    over either is listed, valid and active in the other, with an id that
+    survives a rename. Exactly one script is active, switched with
+    `onSuccessActivateScript` and `onSuccessDeactivateScript`. The limits
+    apply to both protocols: 1 MiB per script, 50 scripts, names of 128
+    characters and 200 octets, and a `require` of an extension the
+    interpreter does not run is refused (ManageSieve answers
+    `NO (QUOTA/MAXSIZE)` and `NO (QUOTA/MAXSCRIPTS)`, and HAVESPACE checks
+    them). A refusal names the line and never repeats the script. See
+    docs/configuration.md.
+  * Sieve: a script is now bounded in what one run may spend. `:matches` no
+    longer overflows the stack or takes exponential time on a pattern of many
+    wildcards (a 100 KB script aborted the server), and a text of any length
+    still matches; `set "a" "${a}${a}"` repeated no longer builds gigabytes
+    (variables are cut to 4096 octets, 64 KiB per run); a run is stopped past
+    20000 steps or 256 MiB of work (what it decided about where the
+    message goes stands, what it would have sent is dropped); `fileinto` files
+    into a folder once and into at most 8 folders; no chain of `not` nests past
+    64 levels (about 200000 of them overflowed the stack). A filter that files
+    by a header (`fileinto "${1}"`) makes no folder past 200 in the account,
+    counting every level, and keeps the message in INBOX instead.
+  * Sieve `redirect`: at most 4 addresses per message and an address once, and
+    the target must be a valid address (a line break in it was written into
+    the outbound `RCPT TO` command). A redirect to something that is not an
+    address keeps the message instead of dropping it behind a redirect that
+    never happened. Upgrading: an active script that redirects to more than 4
+    different addresses now forwards to the first 4 and the log says how many
+    it ignored; a script that relied on `redirect` of a malformed address now
+    leaves the message in INBOX.
+  * Sieve scripts (ManageSieve and JMAP, one check): a `require` of an extension
+    the interpreter does not run is refused when saving, and the list now
+    includes `subaddress`, `comparator-i;octet` and `comparator-i;ascii-casemap`.
+    Upgrading: a stored script that requires an unsupported extension keeps
+    running but cannot be saved again until it is fixed; names with U+2028 or
+    U+2029, with white space at either end, with a bidirectional control or not
+    in normal form C are no longer listed (the log names the account once;
+    rename the files in `<data_dir>/accounts/<account>/sieve/`); an account
+    with more than 50 scripts keeps them all and cannot add one until it is
+    under the limit. The active marker is no longer trimmed.
+  * Sieve: what a test reads of a message is a fixed window: the first 1 MiB
+    of the body, and per header name of a lookup the first 1000 values and
+    64 KiB (16 names at most), so no header hides the others listed with it.
+    Only the first 10 000 headers of a message are read, and mail with more
+    than 9 900 header fields is refused before a filter reads it (554 5.6.0 at
+    DATA and BDAT, 422 on /api/v1/send, forbiddenToSend on JMAP
+    EmailSubmission/set, counted in rejected_header_fields) so that none can
+    hide behind padding. Upgrading: a header value is read with the blanks at
+    its ends dropped (space, tab, VT, FF, CR, NEL, NBSP and the other Unicode
+    white space) and every run of blanks inside it as one space, so a key with
+    two spaces or a tab inside no longer matches; an octet that is not UTF-8
+    is a "?". The interpreter keeps no more than that, 64 KiB of each header
+    and the first 1 MiB of the body in memory: a
+    message of two million headers took 620 MiB per recipient with a filter.
+    A `:contains` test with eight or more keys reads the text once, not once
+    per key: a block-list of a thousand words over a mebibyte of body used to
+    make the run give up and skip the rules after it.
+    Upgrading: a stored script with a `:matches` key over 256 characters or 32
+    wildcards no longer matches (the test is false, the rest of the script
+    runs but from that test on it keeps the message instead of discarding or
+    rejecting it, so a `not` around such a key cannot lose mail, and the log
+    names the account once an hour); it used to match. A
+    message bigger than that no longer makes a script run out of work, and a rule that matches text past the
+    window does not see it: the log says so once an hour per account and the
+    new counter `mail_sieve_inspection_truncated_total` (alert metric
+    `sieve_inspection_truncated`) counts the messages. A run that does run
+    out keeps its `discard`, `fileinto` and flags, drops its `redirect`,
+    `reject` and `vacation`, and keeps the message if anything outward was
+    dropped. A `set` that does not fit now stops the run instead of being
+    ignored, and the numbered match variables no longer share the 64 KiB of
+    the script's own variables. See docs/configuration.md.
+  * JMAP: `VacationResponse/set` that switches the reply on, or changes one
+    that is on, takes the `send` scope as well as `write`, like a Sieve script
+    that replies; a key with `read` and `write` only gets `forbidden`.
+    Switching it off needs only `write`.
+  * JMAP: storing or activating a Sieve script that redirects, replies or
+    rejects takes the `send` scope as well as `write`. `SieveScript/set` is one
+    step under the account lock (`ifInState` is exact, the active script changes
+    without a moment of no filter), and waiting for that lock no longer holds a
+    runtime worker.
+  * Security: every way of signing in now applies the same account rules.
+    Until now SCRAM-SHA-256 (SMTP AUTH and IMAP AUTHENTICATE, only when
+    `[auth] scram` is on) skipped the account's second factor and its
+    `disabled` flag, and an OAUTHBEARER/XOAUTH2 token or a TLS client
+    certificate (SASL EXTERNAL) skipped `disabled`, so a disabled account
+    could still sign in, read its mail and send. That was present in 0.12.0 and
+    0.12.1. A disabled account is refused by every mechanism, an account with a
+    TOTP secret is refused by SCRAM (the proof is derived from the password
+    alone and cannot carry the code; it signs in with PLAIN or LOGIN and the
+    code appended to the password, as before), and the per-account protocol
+    list applies to all of them. A refused SCRAM exchange ends as an ordinary
+    wrong password. If you rely on SCRAM for an account with two-factor
+    authentication, that account now uses PLAIN or LOGIN.
+  * Security: SCIM now honours the domains of the API key. A key created with
+    `--domain` and the `scim` scope used to list, read, change the password of,
+    deactivate, create and delete accounts of every tenant. It now reaches only
+    the accounts that sit entirely inside its domains (the others answer 404),
+    and a user created or replaced with an address outside them is refused
+    with 400. `POST /scim/v2/Users` also stops at the tenant's `max_accounts`
+    with 409, which SCIM used to skip, and so does a `PUT` that moves an
+    account into a tenant at its cap. A `userName` already held by another
+    tenant answers like an unusable one. The `startIndex` query parameter
+    is honoured now (only `start_index` was). This was present in 0.12.0 and 0.12.1:
+    if you issued `scim` keys with `--domain`, rotate them.
+  * SCIM user lists now report the total number of matching resources independently
+    of the current page.
+
+  * Security: an API key confined to some domains (`--domain`) now stays inside
+    them on every route, not only on the accounts routes. It could list and
+    remove the queue entries of every tenant, read and clear the shared
+    suppression list, mint, change and remove masked addresses and read and
+    restore the archive of another tenant's account, read server-wide counters,
+    and use `POST /api/v1/auth/verify` to check whether a password is right for
+    any account. Such a key now sees and touches only its own tenant (`404` for
+    anything else), the shared suppression list answers `403`, `status` leaves
+    out `queue_size`, and `auth/verify` answers `valid: false` for accounts
+    outside the key's domains without trying the password. Creating an account
+    whose name another tenant holds answers like an unusable name. This was
+    present in 0.12.0 and 0.12.1: if you issued keys with `--domain`, rotate
+    them. A test now lists every route with its domain rule and fails when a
+    route is added without one.
+  * Security: an unknown login can no longer be told from a real one. SCRAM
+    refused an unknown user at the first message and challenged a real one, and
+    a failed PLAIN, LOGIN, POP3 or ManageSieve check for an unknown, disabled or
+    receive-only login returned in microseconds while a real account took a
+    full password hash. SCRAM now answers every login with a challenge (a
+    refused or unknown login gets decoy credentials with a salt that is stable
+    per login and that a client cannot recompute) and ends at the proof, and
+    the password check does the same hashing work in every case. A refused
+    SCRAM attempt counts as a failed attempt when the exchange ends instead of
+    at the first message.
+  * Security: the shared authentication ban counts failures harder to dodge.
+    A correct login used to clear the failure count of the client address, so
+    someone with an account of their own could log in between guesses at
+    others and never reach the ban; a success now clears only the account and
+    the account-from-this-client pair. An IPv6 client is counted as its /64
+    (rotating addresses inside it no longer resets the count). And five
+    failures from anywhere used to lock the victim's account for its owner:
+    failures are now counted per account and client (`pair:` in `ban list`),
+    and the account itself is locked at 20 failures in 15 minutes, which one
+    client cannot reach but a guess spread over many clients does. An
+    allow-listed client is never banned on its address or /64 (a neighbour's
+    ban of the /64 does not apply to it), but its failures still count on the
+    account (not on the pair, so typos behind a shared proxy do not lock one
+    account's owner out of it), so a trusted network cannot guess without limit. A
+    route with no client address counts as one client `unknown`, and WebDAV
+    now passes the client address. A NAT or proxy address shares one count
+    among everyone behind it; allow-list it if that hurts.
+  * Security: the REST API counts wrong bearer tokens per client (an IPv4
+    address or an IPv6 /64) instead of one count for everyone, so one client
+    cannot lock the rest out with wrong tokens, and a valid token from another
+    client does not give it back its attempts. An IPv6 /48 has eight times a
+    client's budget and there is a ceiling of 2000 failures from anyone in a
+    window; once either is spent, a request with a wrong token answers `429`
+    instead of `401`. Neither is ever asked of a request with a valid token,
+    so other people's failures cannot keep it out. A client's own budget still
+    applies before its token is looked at, and the tables are bounded.
+  * Security: wrong bearer tokens are cheaper to refuse and a right one no
+    longer gives a client its failures back. A call with a valid token used to
+    clear that client's count, so someone holding one key could guess, call
+    and guess again; the count now only ages out with the window. A token
+    that is empty or over 1024 bytes is refused before any hashing. With a
+    legacy argon2id `token_hash`, every wrong token cost an argon2 on the
+    request's own thread. API keys are now looked up first (SHA-256) and never
+    touch the configured hash; the argon2 verification runs off the async
+    workers, two at a time at most (up to 64 more wait their turn; past that a
+    request is told `429`), and a request's failure is counted before it
+    waits, so requests arriving together cannot all pass a client's limit. Once the real token has been seen a wrong bearer is told
+    apart by a SHA-256 digest and costs no argon2. Guesses from many clients
+    are still not capped as a whole: the protection is the entropy of the
+    token, so use a long random one.
+  * Security: a refused password check now costs the same whatever the login
+    holds. An account with app passwords paid one hash per app password on top
+    of the primary one (3.2 times an unknown login with two of them), which
+    told an attacker which accounts exist and which have app passwords. Every
+    refusal now runs the hashes of the account with the most, real ones and
+    stand-ins alike.
+  * Security: the ban store is asked the same questions and written the same
+    way for a login that does not exist as for a real one (it used to make one
+    call where a real account made three, which with PostgreSQL behind it and
+    SCRAM, where no password hash hides it, took a third as long), so the time
+    of a refusal no longer says which logins exist. Each unknown login is
+    counted under a stand-in of its own (a keyed hash of the login), so it
+    reaches the same bans as a real account and a ban on one is not visible
+    from another.
+  * Security: a device grant that has been approved can no longer be approved
+    again. A second account that knew the `user_code` replaced the first
+    approval, and the device that was polling received the second account's
+    token. This was present in 0.12.0 and 0.12.1.
+  * Security: `POST /oauth/device_authorization`, which needs no credentials,
+    kept every grant it created in memory until someone polled for it, so an
+    unauthenticated caller could grow the server's memory without limit. A
+    client (an IPv4 address or an IPv6 /64) may now hold 10 pending grants,
+    an IPv6 /48 100, and the server 10000. At a cap the expired grants are
+    dropped first; a client or /48 still over its cap gets `429 slow_down`,
+    and when only the server's total is full the oldest pending grant of the
+    group holding the most is evicted, but only if that group holds more than
+    the requester does (an approved grant never is, and with no group above
+    its share the call is refused), so a flood from a few prefixes cannot keep
+    everyone else from starting a flow, nor push out the grants of light ones.
+  * Security: the webhook no longer follows redirects. A `307` from the
+    endpoint used to resend the event, with its `X-Webhook-Signature`, to
+    wherever it pointed, an internal address included. A redirect now counts
+    as a failed delivery, and `epistle webhook test` reports its status.
+  * CLI: the help of `epistle attachments check --strict` said it exits with 1
+    when the verdict is quarantine or reject; it exits with 3, as
+    docs/cli.md says.
+  * CLI: `epistle evidence export` run as root printed the staging directory
+    of the delegated run (text and the `bundle` field of `--json`); it now
+    prints the path given to `--out`.
+  * Evidence: `epistle evidence timestamp disable` run while the first day the
+    log ever had was closed and not yet sealed made the server seal that day
+    as untimestamped, which the next check refused as a downgrade and held
+    `transactional` mail until it was acknowledged. A day is now sealed in the
+    mode the log has for it, whatever the settings file says at that moment;
+    `epistle evidence key rotate`, which seals the closed days too, had the
+    same defect and no longer reads the settings file either.
+  * Status: the `resources` warning that the containers may use more than 85%
+    of the host's memory named one `epistle stack resources set` command, and
+    on an install that kept the limits of an older release (7 GiB of limits on
+    a 5.8 GiB host) running it left the warning in place. It now lists the
+    commands that bring the sum under the line together, and says the host
+    needs more memory when the floors of the services do not get there.
+  * The outbound suppression markers and their directories are created with
+    explicit modes (0600 and 0700), like the rest of the spool, and no longer
+    with whatever umask the process that wrote the first one had. Markers
+    and directories written by earlier releases keep the mode they have.
+  * Docs and tests: the rule for who may send as which address is written
+    down and pinned on SMTP submission, the API and JMAP (dotted and
+    upper-case addresses, lists, a list in another served domain; a sub-address,
+    the catch-all and a domain alias are refused), and the difference between
+    the account-name rule and the address rule is tabled per command in
+    `docs/cli.md`. No behaviour changes.
+  * `epistle status` has a new `clock` area that reports whether the host
+    keeps its clock synchronised with a time source, read from the kernel
+    (`adjtimex`, no root needed) with `timedatectl` as the fallback. A clock
+    that is not synchronised, or that cannot be read, is a warning with the
+    commands that fix it; nothing is changed on the host. `epistle init`
+    prints the same warning and carries on. The package now recommends
+    `systemd-timesyncd | chrony`, and no longer suggests `postgresql`, which
+    runs in a container of the stack.
+  * Security: message data sent with BDAT is held to the same line framing as
+    DATA. A bare CR, a bare LF, a NUL or a line over 998 octets now ends the
+    connection with `554` (`500` for the length), whichever way the data is cut
+    into chunks, and the same message gets the same verdict over either
+    command. A final chunk that ends in a CR is refused too, and so is a last
+    line left without a CRLF that the sender would put over the line limit.
+    A line that begins with a dot is held to the same length as DATA holds
+    it. A message whose last line has no CRLF is otherwise still accepted and
+    stored as sent.
+  * Antispam: an account's corpus learns from where its user puts mail. A
+    message copied or moved into Junk (`Junk`, `Spam` or `Rejects`) trains
+    spam; a message moved out of Junk to any mailbox but Trash trains ham.
+    IMAP COPY and MOVE and the mailbox change of JMAP `Email/set` take the
+    decision; `$Junk` and `$NotJunk` keep working and agree with it. Each
+    message counts once whatever route it took (the server keeps a keyed hash
+    of what each account learned, in the new `bayes_learned` table), and a
+    message the user moves back takes the earlier lesson back before the new
+    one is added. What an account learned before this release is in the
+    corpus but not in that record: it counts again if the user moves it and
+    cannot be taken back (`learning status` shows it as `unrecorded`).
+    Learning is bounded. A command queues at most 100 lessons, an account has
+    32 places of the 256 in the queue, 200 lessons a minute and 5000 a day,
+    and may keep the one worker busy for 10 seconds a minute, counted from the
+    work of its own lessons, failed ones included, and not from the time they
+    waited. A message is
+    read as the SMTP path reads it (headers and text parts, no attachments, in
+    the charset it declares), and a lesson touches at most 5000 tokens of it,
+    the cap the server's own training uses; a message that cannot be read
+    teaches nothing and spends none of the lessons or tokens of the account,
+    though the time spent trying to read it is charged to it. An account holds at most 250000 token rows
+    and spends at most 1000000 tokens a day, and its record keeps 100000
+    messages, forgetting the oldest tenth when full. Lessons over a limit are
+    dropped and counted in `mail_bayes_training_dropped_total`, and the ones
+    lost for another reason in `mail_bayes_learning_unreadable_total`,
+    `mail_bayes_learning_failed_total` and `mail_bayes_learning_refused_total`.
+    The record and the counts change in one transaction, so a lesson that
+    cannot be recorded is not trained. Migration 0008 adds two tables and no
+    destructive statement.
+  * CLI: `epistle learning status|enable|disable|reset`. `status` prints what
+    each account's corpus learned (spam, ham, taken back, repeated, refused,
+    throttled, messages recorded, token rows, unrecorded, corpus size);
+    `disable` and `enable` switch learning per account without a restart;
+    `reset` drops an account's corpus and its record and keeps the switch, so
+    an account switched off stays off, and needs `--yes` off a terminal. It
+    needs `[database]` and exits 3 without it.
+  * API: `GET /api/v1/openapi.json` serves an OpenAPI 3.1 description of
+    every HTTP route (the `read` scope, like `status`), and `docs/api.md` and
+    `docs/headers.md` describe the API and the headers of the mail it sends.
+    Tests fail when a route, a scope, a header name, an error code name or a
+    number quoted in the guide changes and the description does not.
+  * Security: signing in with a password (SMTP, IMAP, POP3, ManageSieve,
+    WebDAV and the API) takes the same time and does the same work whatever
+    the login is. A right password, or a right app password, for an account
+    that may not sign in through that protocol was refused sooner than a
+    wrong one; it now costs the same. The password checks also run a few at a
+    time and off the threads that serve the connections, so a burst of
+    sign-in attempts no longer holds up the other listeners or grows the
+    memory with the number of connections. While the line of checks is full,
+    a sign-in is answered with the temporary failure of its protocol (IMAP
+    `NO [UNAVAILABLE]`, SMTP `454 4.7.0`, POP3 `-ERR [SYS/TEMP]`) and not as
+    a wrong password; it counts against nobody and shows in
+    `mail_auth_hash_gate_rejected_total`.
+  * `epistle stack update`, which the package runs when it upgrades, waits for
+    Podman's API to answer before it changes anything, and runs a podup step
+    again, up to four times, when podup reports that its connection to Podman
+    dropped (`connection closed before message completed`), waiting for the
+    API between runs. Before, one such drop during the upgrade ended with the
+    warning that the stack did not come back healthy, and the operator had to
+    run `epistle stack update` by hand. Any other podup failure is still
+    reported at the first attempt.
+
+ -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 05:39:47 +0000
+
 epistle (0.12.1) unstable; urgency=medium
 
   * Security: Namecheap sent its API key in the query of the `getHosts` GET,

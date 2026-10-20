@@ -3,6 +3,12 @@
 #[path = "limits_values.rs"]
 pub(super) mod values;
 
+#[path = "limits_catalog.rs"]
+pub(super) mod catalog;
+
+#[path = "limits_show.rs"]
+mod show;
+
 #[cfg(test)]
 #[path = "limits_tests_values.rs"]
 mod tests_values;
@@ -33,12 +39,17 @@ pub(super) fn parse_override(key: Key, input: &str) -> Result<u64, String> {
 		.map_err(|error| format!("{}: {error}", key.name()))
 }
 
+/// Starts the error of a value an Internet standard does not allow, so
+/// `run` prints it as the whole line.
+const REFUSED_PREFIX: &str = "refused: ";
+
 fn edit_document(
 	path: &Path,
 	key: Key,
 	domain: Option<&str>,
 	tenant: Option<&str>,
 	value: Option<&str>,
+	status_stream: &mut impl Write,
 ) -> Result<super::config_edit::ConfigDocument, String> {
 	if let Some(table) = key.table() {
 		if domain.is_some() {
@@ -52,7 +63,26 @@ fn edit_document(
 	let value = value
 		.map(|input| values::parse_value(input, key.unit(), key.max()))
 		.transpose()
-		.map_err(|error| format!("{}: {error}", key.name()))?;
+		.map_err(|error| match key {
+			Key::MaxConnectionsPerListener | Key::MaxHttpConnections => {
+				format!("{}: {error}; maximum {} connections", key.name(), key.max())
+			}
+			_ => format!("{}: {error}", key.name()),
+		})?;
+	if let (Some(value), Some((floor, reason))) = (value, key.must_floor())
+		&& value < floor
+	{
+		return Err(format!("{REFUSED_PREFIX}{reason}"));
+	}
+	// SHOULD violations are accepted with a warning: the operator can
+	// shorten the queue's give-up window or first retry below what the
+	// RFC recommends, but the change is announced so the deviation is
+	// visible in the audit trail alongside the saved value.
+	if let (Some(value), Some((floor, warning))) = (value, key.should_floor())
+		&& value < floor
+	{
+		let _ = writeln!(status_stream, "warning: {warning}");
+	}
 	// The limiter reads a zero cap as no limit at all, the opposite of what
 	// `set submission-rate 0` looks like it asks for. Removing the limit is
 	// `unset`; a cap of zero is refused rather than silently lifting it.
@@ -159,7 +189,8 @@ fn edit_tenant(
 
 #[cfg(test)]
 fn change_config(path: &Path, key: Key, value: Option<&str>) -> Result<Option<Config>, String> {
-	let document = edit_document(path, key, None, None, value)?;
+	let mut sink = Vec::new();
+	let document = edit_document(path, key, None, None, value, &mut sink)?;
 	let config = document.config()?;
 	Ok((document.commit()? == super::config_edit::Outcome::Changed).then_some(config))
 }
@@ -188,128 +219,11 @@ fn derived_budget(config: &Config) -> Option<(u64, String)> {
 	Some((bytes, text))
 }
 
-fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
-	for key in Key::ALL {
-		if let Some((values, default)) = key.list(config) {
-			let joined: Vec<String> = values.iter().map(u64::to_string).collect();
-			let source = if default { "default" } else { "configured" };
-			writeln!(
-				out,
-				"{}\t{} seconds\t{source}",
-				key.name(),
-				joined.join(",")
-			)?;
-			continue;
-		}
-		if matches!(key, Key::MessageMemoryBudget)
-			&& let Some((_, text)) = derived_budget(config)
-		{
-			writeln!(out, "{}\t{text}\tderived", key.name())?;
-			continue;
-		}
-		let configured = key.value(config);
-		let default = configured.is_none() || configured == key.default_value();
-		let value = match configured.or(key.default_value()) {
-			Some(0) if matches!(key, Key::Quota) => "unlimited".into(),
-			Some(0) if key.zero_turns_off() => "disabled".into(),
-			Some(value) => match key.unit() {
-				values::Unit::Size => format!("{value} bytes"),
-				values::Unit::Rate => format!("{value} bytes per second"),
-				values::Unit::Duration => format!("{value} seconds"),
-				values::Unit::Count => value.to_string(),
-			},
-			None if matches!(key, Key::MaxConnectionsPerListener) => "protocol defaults".into(),
-			None => "disabled".into(),
-		};
-		let source = if default { "default" } else { "configured" };
-		writeln!(out, "{}\t{value}\t{source}", key.name())?;
-	}
-	Ok(())
-}
-
-/// `limits show --json`: `{"<limit>": {"value", "unit", "source"}, "domain-overrides":
-/// {"<domain>": {"submission-rate": N, "quota": N}}, "tenants": {"<name>": {"submission-rate": N}}}`,
-/// where `value` is the effective number (`null` when the limit is off or left to
-/// the protocol, an array for `queue-backoff`) and `unit` is `bytes`, `bytes-per-second`,
-/// `seconds` or `count`. `source` is `default`, `configured`, or `derived` for a
-/// `message-memory-budget` the server derives from the mail container's limit.
-pub(super) fn show_json(config: &Config) -> serde_json::Value {
-	let mut limits = serde_json::Map::new();
-	for key in Key::ALL {
-		if let Some((values, default)) = key.list(config) {
-			limits.insert(
-				key.name().to_string(),
-				serde_json::json!({
-					"value": values,
-					"unit": "seconds",
-					"source": if default { "default" } else { "configured" },
-				}),
-			);
-			continue;
-		}
-		if matches!(key, Key::MessageMemoryBudget)
-			&& let Some((bytes, _)) = derived_budget(config)
-		{
-			limits.insert(
-				key.name().to_string(),
-				serde_json::json!({"value": bytes, "unit": "bytes", "source": "derived"}),
-			);
-			continue;
-		}
-		let configured = key.value(config);
-		let default = configured.is_none() || configured == key.default_value();
-		let unit = match key.unit() {
-			values::Unit::Size => "bytes",
-			values::Unit::Rate => "bytes-per-second",
-			values::Unit::Duration => "seconds",
-			values::Unit::Count => "count",
-		};
-		limits.insert(
-			key.name().to_string(),
-			serde_json::json!({
-				"value": configured
-					.or(key.default_value())
-					.filter(|value| !((matches!(key, Key::Quota) || key.zero_turns_off()) && *value == 0)),
-				"unit": unit,
-				"source": if default { "default" } else { "configured" },
-			}),
-		);
-	}
-	// Per-domain overrides for quota and submission-rate.
-	let mut domain_overrides = serde_json::Map::new();
-	for domain in config
-		.domains
-		.iter()
-		.chain(config.domain_quotas.keys())
-		.chain(config.domain_submission_limits.keys())
-	{
-		let entry = serde_json::json!({
-			"quota": config.domain_quotas.get(domain).copied(),
-			"submission-rate": config.domain_submission_limits.get(domain).copied(),
-		});
-		domain_overrides.insert(domain.clone(), entry);
-	}
-	limits.insert(
-		"domain-overrides".to_string(),
-		serde_json::Value::Object(domain_overrides),
-	);
-	// Per-tenant aggregate submission-rate. Other per-tenant limits (quota,
-	// max_accounts, max_domains) are accounted for under `[[tenant]]` in the
-	// config itself; the CLI surfaces only the operator-editable dial here.
-	let mut tenants = serde_json::Map::new();
-	for tenant in &config.tenants {
-		if let Some(name) = &tenant.name {
-			tenants.insert(
-				name.clone(),
-				serde_json::json!({
-					"submission-rate": tenant.submission_rate_limit_per_min,
-				}),
-			);
-		}
-	}
-	limits.insert("tenants".to_string(), serde_json::Value::Object(tenants));
-	serde_json::Value::Object(limits)
-}
+/// `limits show` and `limits show --json`: see `limits_show::show` and
+/// `limits_show::show_json` for the row shape. These are the thin
+/// re-exports so the rest of the CLI keeps the same call site.
+pub(super) use show::show;
+pub(super) use show::show_json;
 
 /// Operations on the server-wide limits.
 #[derive(Debug, clap::Subcommand)]
@@ -372,7 +286,7 @@ fn run_with_restart(
 	action: Action,
 	dry_run: bool,
 	out: &mut impl Write,
-	status: &mut impl Write,
+	status_stream: &mut impl Write,
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let (key, domain, tenant, value, json) = match action {
@@ -389,7 +303,7 @@ fn run_with_restart(
 			return match result {
 				Ok(()) => ExitCode::SUCCESS,
 				Err(error) => {
-					let _ = writeln!(status, "cannot show limits: {error}");
+					let _ = writeln!(status_stream, "cannot show limits: {error}");
 					ExitCode::FAILURE
 				}
 			};
@@ -415,6 +329,7 @@ fn run_with_restart(
 			domain.as_deref(),
 			tenant.as_deref(),
 			value.as_deref(),
+			status_stream,
 		)?;
 		let kind = match &value {
 			Some(_) => "set",
@@ -452,10 +367,16 @@ fn run_with_restart(
 			// The running server applies the change the same way with or
 			// without `--json`; its notices go to the status stream, so
 			// stdout stays one JSON object.
-			return super::config_edit::after_change_with(&config, outcome, true, status, restart);
+			return super::config_edit::after_change_with(
+				&config,
+				outcome,
+				true,
+				status_stream,
+				restart,
+			);
 		}
 		writeln!(
-			status,
+			status_stream,
 			"limits {}",
 			if outcome == super::config_edit::Outcome::Changed {
 				"saved"
@@ -464,12 +385,28 @@ fn run_with_restart(
 			}
 		)
 		.map_err(|error| error.to_string())?;
-		super::config_edit::after_change_with(&config, outcome, true, status, restart)
+		if key.zero_is_default()
+			&& let Some(Ok(0)) = value
+				.as_deref()
+				.map(|raw| values::parse_value(raw, key.unit(), key.max()))
+		{
+			let default = key.default_value().unwrap_or(0);
+			writeln!(
+				status_stream,
+				"note: 0 means the default ({default}), not unlimited"
+			)
+			.map_err(|error| error.to_string())?;
+		}
+		super::config_edit::after_change_with(&config, outcome, true, status_stream, restart)
 	})();
 	match result {
 		Ok(code) => code,
+		Err(error) if error.to_string().starts_with(REFUSED_PREFIX) => {
+			let _ = writeln!(status_stream, "{error}");
+			ExitCode::from(super::exit::REFUSED)
+		}
 		Err(error) => {
-			let _ = writeln!(status, "cannot update limits: {error}");
+			let _ = writeln!(status_stream, "cannot update limits: {error}");
 			ExitCode::FAILURE
 		}
 	}
@@ -492,6 +429,10 @@ mod tests_data_rate;
 mod tests_session_limits;
 
 #[cfg(test)]
+#[path = "limits_tests_connection.rs"]
+mod tests_connection;
+
+#[cfg(test)]
 #[path = "limits_tests_schedule.rs"]
 mod tests_schedule;
 
@@ -506,3 +447,15 @@ mod tests_tenants;
 #[cfg(test)]
 #[path = "limits_tests_budget.rs"]
 mod tests_budget;
+
+#[cfg(test)]
+#[path = "limits_tests_recipients.rs"]
+mod tests_recipients;
+
+#[cfg(test)]
+#[path = "limits_tests_should_warn.rs"]
+mod tests_should_warn;
+
+#[cfg(test)]
+#[path = "limits_tests_catalog.rs"]
+mod tests_catalog;

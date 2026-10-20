@@ -28,6 +28,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Queue { config, .. }
 		| Command::Warmup { config, .. }
 		| Command::Ban { config, .. }
+		| Command::Learning { config, .. }
 		| Command::Evidence { config, .. } => Some(config),
 		Command::Delivery(args) => Some(&args.config),
 		Command::Masked { config, .. }

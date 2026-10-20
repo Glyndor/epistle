@@ -68,7 +68,8 @@ pub fn parse_allow(spec: &str) -> Result<Cidr, String> {
 /// One active ban, as `ban list` prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BanRow {
-	/// `ip:<addr>`, `cidr:<net>/<prefix>` or `account:<login>`.
+	/// `ip:<addr>` (the /64 for IPv6 clients), `cidr:<net>/<prefix>`,
+	/// `pair:<login>|<client>` or `account:<login>`.
 	pub subject: String,
 	/// The rule that fired the ban, or [`MANUAL_REASON`].
 	pub reason: String,
@@ -144,17 +145,22 @@ impl PgBanStore {
 	}
 
 	/// Lift the ban on `target` and forget its failure counter, so the next
-	/// failure starts from zero. Returns `(bans removed, failures cleared)`.
+	/// failure starts from zero. For an IPv6 address that includes the /64 its
+	/// failures are counted under (see [`subject_client`]). Returns
+	/// `(bans removed, failures cleared)`.
 	pub async fn remove_ban(&self, target: BanTarget) -> Result<(u64, u64), sqlx::Error> {
-		let subject = target.subject();
+		let mut subjects = vec![target.subject()];
+		if let BanTarget::Ip(ip) = target {
+			subjects.push(subject_client(ip));
+		}
 		let mut tx = self.pool.begin().await?;
-		let bans = sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
-			.bind(&subject)
+		let bans = sqlx::query("DELETE FROM auth_ban WHERE subject = ANY($1)")
+			.bind(&subjects)
 			.execute(&mut *tx)
 			.await?
 			.rows_affected();
-		let failures = sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
-			.bind(&subject)
+		let failures = sqlx::query("DELETE FROM auth_failure WHERE subject = ANY($1)")
+			.bind(&subjects)
 			.execute(&mut *tx)
 			.await?
 			.rows_affected();

@@ -96,3 +96,45 @@ fn base64_decode_roundtrip() {
 fn base64_decode_rejects_invalid_char() {
 	assert!(base64_decode("!!!!").is_none());
 }
+
+fn basic(login: &str, password: &str) -> HeaderMap {
+	header(&format!(
+		"Basic {}",
+		base64_encode(format!("{login}:{password}").as_bytes())
+	))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_basic_logins_are_counted_against_the_client_address() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::smtp::directory::gate_fixture::{OPEN, gate_directory};
+	use crate::test_fixtures as fixtures;
+
+	let store = FakeBanStore::new(BanPolicy::default());
+	let handle =
+		DirectoryHandle::new(gate_directory().with_ban_store(std::sync::Arc::new(store.clone())));
+	let guesser: Option<std::net::IpAddr> = Some("203.0.113.5".parse().expect("address"));
+	let owner: Option<std::net::IpAddr> = Some("198.51.100.9".parse().expect("address"));
+	for _ in 0..5 {
+		assert_eq!(
+			authenticate(&basic(OPEN, fixtures::wrong_password()), &handle, guesser),
+			None
+		);
+	}
+	assert_eq!(
+		store.failure_count("ip:203.0.113.5", 0),
+		5,
+		"the failures were attributed to the client"
+	);
+	assert_eq!(
+		authenticate(&basic(OPEN, fixtures::password()), &handle, guesser),
+		None,
+		"the guessing client is banned"
+	);
+	assert_eq!(
+		authenticate(&basic(OPEN, fixtures::password()), &handle, owner),
+		Some(OPEN.to_string()),
+		"the owner, from elsewhere, is not"
+	);
+}

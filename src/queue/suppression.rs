@@ -15,6 +15,14 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+/// Mode of a marker file, as the spool's files: owner read and write.
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// Mode of the marker directories, as the spool's: owner only.
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+
 /// A filesystem-backed set of suppressed recipient addresses.
 pub struct SuppressionList {
 	dir: PathBuf,
@@ -36,7 +44,7 @@ impl SuppressionList {
 	/// Open (creating if needed) the suppression list under `data_dir`.
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
 		let dir = data_dir.join("suppression");
-		fs::create_dir_all(&dir)?;
+		make_dir(&dir)?;
 		Ok(Self { dir })
 	}
 
@@ -53,16 +61,16 @@ impl SuppressionList {
 	/// Add an address to the global suppression list (idempotent). The marker
 	/// stores the address so it can be listed back.
 	pub fn suppress(&self, address: &str) {
-		let _ = fs::write(
-			self.path(address),
-			crate::util::address::normalize(address).as_bytes(),
+		let _ = write_marker(
+			&self.path(address),
+			crate::util::address::normalize(address),
 		);
 	}
 
 	/// Add an address to the global list, recording when (epoch seconds) and
 	/// why: the remote reply that proved the address bad.
 	pub fn suppress_because(&self, address: &str, reason: &str, now: u64) {
-		let _ = fs::write(self.path(address), marker(address, reason, now));
+		let _ = write_marker(&self.path(address), marker(address, reason, now));
 	}
 
 	/// [`SuppressionList::suppress_because`] that reports a marker it could
@@ -73,7 +81,7 @@ impl SuppressionList {
 		reason: &str,
 		now: u64,
 	) -> std::io::Result<()> {
-		fs::write(self.path(address), marker(address, reason, now))
+		write_marker(&self.path(address), marker(address, reason, now))
 	}
 
 	/// The global entry for `address`, if it is suppressed.
@@ -107,10 +115,10 @@ impl SuppressionList {
 	/// Suppress an address for one sending account only (idempotent).
 	pub fn suppress_for(&self, account: &str, address: &str) {
 		let dir = self.account_dir(account);
-		if fs::create_dir_all(&dir).is_ok() {
-			let _ = fs::write(
-				dir.join(digest_name(address)),
-				crate::util::address::normalize(address).as_bytes(),
+		if make_dir(&dir).is_ok() {
+			let _ = write_marker(
+				&dir.join(digest_name(address)),
+				crate::util::address::normalize(address),
 			);
 		}
 	}
@@ -118,8 +126,11 @@ impl SuppressionList {
 	/// Suppress an address for one sending account, recording when and why.
 	pub fn suppress_for_because(&self, account: &str, address: &str, reason: &str, now: u64) {
 		let dir = self.account_dir(account);
-		if fs::create_dir_all(&dir).is_ok() {
-			let _ = fs::write(dir.join(digest_name(address)), marker(address, reason, now));
+		if make_dir(&dir).is_ok() {
+			let _ = write_marker(
+				&dir.join(digest_name(address)),
+				marker(address, reason, now),
+			);
 		}
 	}
 
@@ -133,8 +144,11 @@ impl SuppressionList {
 		now: u64,
 	) -> std::io::Result<()> {
 		let dir = self.account_dir(account);
-		fs::create_dir_all(&dir)?;
-		fs::write(dir.join(digest_name(address)), marker(address, reason, now))
+		make_dir(&dir)?;
+		write_marker(
+			&dir.join(digest_name(address)),
+			marker(address, reason, now),
+		)
 	}
 
 	/// The entry for `address` in `account`'s list, if it is suppressed there.
@@ -203,6 +217,27 @@ impl SuppressionList {
 	pub fn list_for(&self, account: &str) -> Vec<String> {
 		read_addresses(&self.account_dir(account))
 	}
+}
+
+/// Create `dir` and the parents it lacks at mode 0700, whatever the umask,
+/// like the rest of the spool: the markers name recipients that bounced.
+fn make_dir(dir: &Path) -> std::io::Result<()> {
+	let mut builder = fs::DirBuilder::new();
+	builder.recursive(true);
+	#[cfg(unix)]
+	std::os::unix::fs::DirBuilderExt::mode(&mut builder, DIR_MODE);
+	builder.create(dir)
+}
+
+/// Write a marker, created at mode 0600 whatever the umask; one that exists
+/// is rewritten and keeps the mode it has.
+fn write_marker(path: &Path, content: impl AsRef<[u8]>) -> std::io::Result<()> {
+	use std::io::Write;
+	let mut options = fs::OpenOptions::new();
+	options.write(true).create(true).truncate(true);
+	#[cfg(unix)]
+	std::os::unix::fs::OpenOptionsExt::mode(&mut options, FILE_MODE);
+	options.open(path)?.write_all(content.as_ref())
 }
 
 /// Remove a marker file, treating "not found" as success.

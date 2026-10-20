@@ -26,7 +26,7 @@ const TRUNCATED_PREFIX: usize = super::sniff::SNIFF_WINDOW;
 // see each other.
 #[cfg(test)]
 thread_local! {
-	pub(super) static STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+	pub(crate) static STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -80,8 +80,14 @@ pub struct Leaf {
 	pub attachment: bool,
 	/// Nesting depth; the top-level entity is 0.
 	pub depth: usize,
-	/// The decoded content (empty for a container nobody decodes).
+	/// The decoded content (empty for a container nobody decodes, and for a
+	/// part [`walk_text`] has no use for).
 	pub content: Vec<u8>,
+	/// The charsets the part declares, lower case.
+	pub charsets: Vec<String>,
+	/// The content decoded under each other transfer encoding the part's
+	/// headers declare, which a client may have used instead.
+	pub alternates: Vec<Vec<u8>>,
 	/// `content` holds only a prefix because the decode budget ran out.
 	pub truncated: bool,
 	/// Two readers could see this part differently.
@@ -114,8 +120,21 @@ pub struct Walked {
 /// recursion, so an attachment cannot hide one encoding layer down. A
 /// uuencoded file pasted into a text body is handed over as a leaf of its
 /// own, since clients show it as an attachment.
-pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Walked {
+pub fn walk(raw: &[u8], limits: &Limits, visit: impl FnMut(Leaf)) -> Walked {
+	walk_with(raw, limits, false, visit)
+}
+
+/// [`walk`] for a reader of text: a part no client could show as text (a
+/// photo, a PDF, an archive) is handed over with no content, and costs nothing
+/// of [`Limits::max_decoded`], so attachments cannot use up the budget the
+/// text after them needs.
+pub fn walk_text(raw: &[u8], limits: &Limits, visit: impl FnMut(Leaf)) -> Walked {
+	walk_with(raw, limits, true, visit)
+}
+
+fn walk_with(raw: &[u8], limits: &Limits, text_only: bool, mut visit: impl FnMut(Leaf)) -> Walked {
 	let mut shared = Shared {
+		text_only,
 		walked: Walked {
 			parts: 1,
 			..Walked::default()
@@ -136,6 +155,8 @@ pub fn walk(raw: &[u8], limits: &Limits, mut visit: impl FnMut(Leaf)) -> Walked 
 
 /// What every buffer of one walk draws from.
 struct Shared {
+	/// Parts no client could show as text are not decoded.
+	text_only: bool,
 	walked: Walked,
 	decoded: usize,
 	lines: usize,
@@ -337,11 +358,22 @@ impl<'a> Walker<'a> {
 		body = body.strip_suffix(b"\n").unwrap_or(body);
 		body = body.strip_suffix(b"\r").unwrap_or(body);
 		let text = header.declared_type.starts_with("text/") && !header.attachment;
-		let (content, truncated, garbled) = if header.attachment || text {
+		let wanted =
+			(header.attachment || text) && (!self.shared.text_only || header.could_be_text());
+		let (content, truncated, garbled) = if wanted {
 			self.decode(body, header.encoding)
 		} else {
 			(Vec::new(), false, false)
 		};
+		let mut alternates = Vec::new();
+		let mut truncated = truncated;
+		if wanted {
+			for encoding in &header.other_encodings {
+				let (other, cut, _) = self.decode(body, *encoding);
+				truncated |= cut;
+				alternates.push(other);
+			}
+		}
 		if header.declared_type == "message/rfc822" && !truncated {
 			if depth + 1 > self.limits.max_depth {
 				return Err(Stop::TooDeep);
@@ -351,7 +383,6 @@ impl<'a> Walker<'a> {
 			self.shared.pending.push((content, depth + 1));
 			return Ok(());
 		}
-		let mut truncated = truncated;
 		if text {
 			let (blocks, capped) = decode::embedded_uuencode(&content);
 			truncated |= capped;
@@ -364,6 +395,8 @@ impl<'a> Walker<'a> {
 					attachment: true,
 					depth: depth + 1,
 					content: embedded.content,
+					alternates: Vec::new(),
+					charsets: Vec::new(),
 					truncated,
 					ambiguous: false,
 				});
@@ -376,6 +409,8 @@ impl<'a> Walker<'a> {
 			attachment: header.attachment,
 			depth,
 			content,
+			alternates,
+			charsets: header.charsets,
 			truncated,
 			ambiguous: header.ambiguous || garbled,
 		});

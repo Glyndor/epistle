@@ -7,7 +7,19 @@
 //! drive the policy: 5 failed authentications in 15 minutes trigger a ban;
 //! the first ban lasts 15 minutes, the next on the same subject 30 minutes,
 //! then an hour, ... capped at 24 hours. A successful authentication
-//! clears both the ban and the failure history for the subject.
+//! clears the ban and the failure history of the account and of the
+//! (account, client) pair it came from, never of the client address: an
+//! attacker who owns one account must not be able to reset its own counter
+//! by logging in between guesses at others.
+//!
+//! Failures are counted on three subjects. The client (`ip:`) is the
+//! address, or the /64 for IPv6, since one host there controls a whole /64
+//! and rotating inside it costs nothing. The pair (`pair:`) is one account
+//! as seen from one client. The account (`account:`) counts every failure
+//! against a threshold [`ACCOUNT_THRESHOLD_FACTOR`] times higher, so a
+//! guess spread over many clients, each too few to be banned, still ends in
+//! a ban, while one client alone cannot lock an account out for everyone: it
+//! is stopped by its own counters long before.
 //!
 //! The store is **fail open on database errors**: a connection hiccup must
 //! never block mail, so every public method returns the safe answer (`None`
@@ -34,7 +46,10 @@ pub struct BanInfo {
 }
 
 /// The ban policy. Holds the four numbers that drive the backoff so the
-/// unit tests can shrink the rolling window and the 24-hour cap to seconds.
+/// unit tests can shrink the rolling window and the 24-hour cap to seconds,
+/// plus the two numbers that drive the known-network window: the lifetime
+/// of a row in the known-networks store and the per-account ceiling on the
+/// number of distinct networks kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BanPolicy {
 	/// The rolling window (seconds) used to count failures: failures
@@ -47,7 +62,28 @@ pub struct BanPolicy {
 	pub base_secs: u64,
 	/// The maximum ban duration, regardless of how many bans have stacked.
 	pub max_secs: u64,
+	/// How long a successful authentication keeps the (account, network)
+	/// pair in the bypass list. The product default is 30 days; the
+	/// window can be shrunk by the tests and shrunk by the operator
+	/// through `epistle limits set known-network-window`. A network that
+	/// has not signed in within the window falls out of the list, and the
+	/// next sign-in attempt from there is treated as unknown.
+	pub known_network_window_secs: u64,
+	/// How many distinct networks the bypass list keeps per account.
+	/// Older networks are evicted when a new one is added past the cap
+	/// (the row with the smallest `last_seen` is dropped). 32 covers the
+	/// usual mobile / home / office / cafe combinations without the table
+	/// growing without bound.
+	pub known_network_max_per_account: u32,
 }
+
+/// How long the success path throttles its row writes. One row per
+/// (account, network) per hour keeps the bypass list current without
+/// adding a database round trip to every successful sign-in. The
+/// throttling lives in SQL (`ON CONFLICT ... WHERE`) so the failure
+/// to write (a connection blip) leaves the prior row in place and a
+/// later sign-in will retry the update on the next round trip.
+pub const KNOWN_NETWORK_WRITE_THROTTLE_SECS: u64 = 60 * 60;
 
 impl Default for BanPolicy {
 	fn default() -> Self {
@@ -58,11 +94,35 @@ impl Default for BanPolicy {
 			threshold: 5,
 			base_secs: 15 * 60,
 			max_secs: 24 * 60 * 60,
+			// 30 days for the known-network window. The cap on distinct
+			// networks per account is 32; both are sized for a person who
+			// uses the same account from a handful of devices and networks
+			// and not for any kind of fleet use.
+			known_network_window_secs: 30 * 24 * 60 * 60,
+			known_network_max_per_account: 32,
 		}
 	}
 }
 
+/// How many times the client threshold the account subject needs. An account
+/// is attacked from many clients at once, and one client alone must not be able
+/// to fire its ban: a single client is stopped by its own counters after
+/// `threshold` failures, so it can never reach `ACCOUNT_THRESHOLD_FACTOR`
+/// times as many inside one window.
+pub const ACCOUNT_THRESHOLD_FACTOR: u32 = 4;
+
 impl BanPolicy {
+	/// The failures within the window that fire a ban for `subject`: the plain
+	/// threshold for a client or a pair, [`ACCOUNT_THRESHOLD_FACTOR`] times it
+	/// for an account.
+	pub fn threshold_for(&self, subject: &str) -> u32 {
+		if subject.starts_with("account:") {
+			self.threshold.saturating_mul(ACCOUNT_THRESHOLD_FACTOR)
+		} else {
+			self.threshold
+		}
+	}
+
 	/// How long the next ban lasts given the current `strikes` count. The
 	/// first ban (strikes = 1) is `base_secs`; each subsequent ban doubles
 	/// it, capped at `max_secs`. Saturates the exponent at 20 so the
@@ -107,6 +167,16 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		subject: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
+	/// Whether the operator's allow list covers `ip`. An allow-listed client
+	/// is never counted and never banned. The default is "not listed", which
+	/// is right for a store that has no allow list.
+	fn is_allow_listed(
+		&self,
+		_ip: IpAddr,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async { false })
+	}
+
 	/// Drop failures older than 24 hours and bans whose `until` is older
 	/// than 24 hours ago.
 	fn sweep(
@@ -120,11 +190,81 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		&self,
 		account: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
+
+	/// Whether `account` has signed in successfully from `ip`'s network
+	/// within the policy's known-network window. `false` when the store has
+	/// no row, when the row is past its window, or when the lookup failed
+	/// (fail closed: a database hiccup must not let a banned account in).
+	/// The default is "never known", which is right for a store that has
+	/// no known-network table.
+	fn is_known_network(
+		&self,
+		_account: &str,
+		_ip: IpAddr,
+		_now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+		Box::pin(async { false })
+	}
+
+	/// Write `(account, network)` to the known-networks store at `now_secs`.
+	/// The implementation throttles writes (at most one per account per
+	/// network per hour) so the latency-sensitive sign-in path does not
+	/// pay a round trip on every request, and caps the per-account row
+	/// count (oldest non-current row is evicted) so the table cannot grow
+	/// without bound. The default is a no-op, which is right for a store
+	/// without a known-network table; the directory falls back to the
+	/// pre-table behaviour when no store is attached.
+	fn record_known_network(
+		&self,
+		_account: &str,
+		_ip: IpAddr,
+		_now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		Box::pin(async {})
+	}
 }
 
 /// Build the canonical `'ip:<addr>'` subject for `ip`.
 pub fn subject_ip(ip: IpAddr) -> String {
 	format!("ip:{ip}")
+}
+
+/// The part of a client address that identifies the client for counting: the
+/// address itself for IPv4, the /64 network for IPv6.
+fn client_key(ip: IpAddr) -> String {
+	match ip {
+		IpAddr::V4(v4) => v4.to_string(),
+		IpAddr::V6(v6) => {
+			let mut octets = v6.octets();
+			octets[8..].fill(0);
+			std::net::Ipv6Addr::from(octets).to_string()
+		}
+	}
+}
+
+/// The `ip:` subject failures from `ip` are counted on: the address for IPv4,
+/// the /64 for IPv6.
+pub fn subject_client(ip: IpAddr) -> String {
+	format!("ip:{}", client_key(ip))
+}
+
+/// The network key used by the known-network bypass list: identical to
+/// what `client_key` returns, exposed separately so the lookup and the
+/// write use the same spelling and a future change to one stays in lock
+/// step with the other. The IPv6 case keeps the lower 64 bits zeroed so
+/// a roaming client (the host half of the address changes between
+/// connections) does not have to re-auth.
+pub fn known_network_key(ip: IpAddr) -> String {
+	client_key(ip)
+}
+
+/// The `pair:<login>|<client>` subject for one account seen from one client
+/// (see [`subject_client`] for what a client is). Without a client address
+/// every attempt on the account shares the client `unknown`, so the pair still
+/// stops guessing at the base threshold.
+pub fn subject_pair(account: &str, ip: Option<IpAddr>) -> String {
+	let client = ip.map_or_else(|| "unknown".to_string(), client_key);
+	format!("pair:{}|{client}", account.to_ascii_lowercase())
 }
 
 /// Build the canonical `'account:<login>'` subject for `account`.
@@ -139,3 +279,7 @@ pub use sql::{BanRow, BanTarget, MANUAL_REASON, PgBanStore, parse_allow};
 #[cfg(test)]
 #[path = "bans_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "bans_known_network_tests.rs"]
+mod known_network_tests;

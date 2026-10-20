@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::audit::{self, AuditEvent};
 use crate::api::error::ApiError;
-use crate::api::state::{ApiState, ClientIp};
+use crate::api::state::{ApiState, ClientIp, MatchedAuth};
+
+use super::scope::account_in_scope;
 use crate::directory_store::{MaskedAddressView, StoreError};
 
 /// One row of [`list`]'s response, plus `created` for symmetry with the
@@ -25,8 +27,10 @@ pub struct ListResponse {
 /// account owns. Sorted by creation time so the listing is stable.
 pub async fn list(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<ListResponse>, ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	Ok(Json(ListResponse {
 		addresses: state.store().list_masked(&name),
 	}))
@@ -51,9 +55,11 @@ pub struct CreatedResponse {
 pub async fn create(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 	Json(request): Json<CreateRequest>,
 ) -> Result<(axum::http::StatusCode, Json<CreatedResponse>), ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	let domain = pick_domain(&state, &name)?;
 	let now = unix_now();
 	let entry = state
@@ -86,9 +92,11 @@ pub struct UpdatedResponse {
 pub async fn update(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path((name, address)): Path<(String, String)>,
 	Json(request): Json<UpdateRequest>,
 ) -> Result<Json<UpdatedResponse>, ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	state
 		.store()
 		.set_masked_enabled(&name, &address, request.enabled)
@@ -111,8 +119,10 @@ pub struct RemovedResponse {
 pub async fn remove(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path((name, address)): Path<(String, String)>,
 ) -> Result<Json<RemovedResponse>, ApiError> {
+	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	state
 		.store()
 		.remove_masked(&name, &address)

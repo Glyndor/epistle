@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
+mod check;
 mod list;
 mod tags;
 use crate::dns::provider::{
@@ -527,6 +528,21 @@ impl CloudflareProvider {
 }
 
 impl DnsProvider for CloudflareProvider {
+	fn check_access<'a>(
+		&'a self,
+		_: &'a str,
+		names: &'a [String],
+	) -> crate::dns::providers::check::CheckOp<'a> {
+		Box::pin(async move {
+			crate::dns::providers::within(self.check_inner(names))
+				.await
+				.unwrap_or_else(|error| {
+					crate::dns::providers::check::AccessReport::failed(
+						crate::dns::providers::check::failure_cause(&error),
+					)
+				})
+		})
+	}
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
 		Box::pin(crate::dns::providers::within(async move {

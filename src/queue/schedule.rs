@@ -13,8 +13,22 @@ pub const DEFAULT_BASE_SECS: u64 = 60;
 pub const DEFAULT_CAP_SECS: u64 = 3600;
 /// Default age of the one "delivery delayed" warning: four hours.
 pub const DEFAULT_DELAY_WARNING_SECS: u64 = 4 * 3600;
+/// Default give-up window (RFC 5321 §4.5.4.1 says "at least 4 or 5
+/// days"; five is the historical setting).
+pub const DEFAULT_GIVE_UP_SECS: u64 = 5 * 86_400;
 /// Shortest first wait accepted in the configuration.
 pub const MIN_BASE_SECS: u64 = 60;
+/// RFC 5321 §4.5.4.1 recommends giving up after at least 4 days (the
+/// standard says the retry period should be "at least 4 or 5 days"). A
+/// `queue_give_up_secs` below this is accepted with a warning, never
+/// refused, so an operator can shorten it for a test mailbox without
+/// breaking start-up.
+pub const SHOULD_GIVE_UP_SECS: u64 = 4 * 86_400;
+/// The first retry should wait at least half an hour (RFC 5321 §4.5.4
+/// talks in days, but RFC 1123 §5.3.1 lets the receiver decline further
+/// delivery attempts after a shorter wait). A `queue_retry_base_secs`
+/// below 30 minutes is accepted with a warning.
+pub const SHOULD_RETRY_BASE_SECS: u64 = 30 * 60;
 /// How far each wait is spread around its computed value (20%).
 pub const JITTER: f64 = 0.2;
 

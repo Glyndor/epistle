@@ -9,6 +9,9 @@ use crate::cli::config_edit::FieldChange;
 /// referenced by environment variable or file, never given inline.
 #[derive(Debug, Clone, Default, Args)]
 pub struct ProviderArgs {
+	/// Move the current or supplied token into secrets/dns_provider_token.
+	#[arg(long)]
+	pub store_token: bool,
 	/// The DNS zone the credentials are scoped to.
 	#[arg(long)]
 	pub zone: Option<String>,

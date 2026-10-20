@@ -47,6 +47,8 @@ jobs:
             imap_command,
             sieve_message,
             sieve_script,
+            sieve_run,
+            sieve_validate,
             pop3_command,
             managesieve_command,
             smtp_data,

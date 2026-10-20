@@ -23,12 +23,12 @@ const LOGIN: &str = "alice@example.org";
 
 /// An ES256 key pair: the base64 PKCS#8 private key for the signer and the
 /// base64 public point for the verifier (they are a matching pair).
-struct Keys {
+pub(super) struct Keys {
 	private_b64: String,
 	public_b64: String,
 }
 
-fn keys() -> Keys {
+pub(super) fn keys() -> Keys {
 	let rng = SystemRandom::new();
 	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).expect("gen");
 	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
@@ -41,7 +41,7 @@ fn keys() -> Keys {
 
 /// Build an API state with one known account (`alice`, password known) and the
 /// authorization server wired to `keys`.
-fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
+pub(super) fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 	let spool = crate::storage::FsSpool::open(dir).expect("spool");
 	let accounts = vec![crate::config::Account {
 		display_name: None,
@@ -316,6 +316,7 @@ fn expired_device_grant_redeems_as_expired_token() {
 			approved_account: Some("alice".to_string()),
 			expires_at: 1, // long past
 			next_poll_at: 0,
+			client: None,
 		},
 	);
 	let response = super::device::redeem_device_code(&authz, &device_code);
@@ -338,6 +339,7 @@ fn polling_too_fast_yields_slow_down() {
 			approved_account: None,
 			expires_at: now + 600,
 			next_poll_at: now + 5, // not yet allowed to poll
+			client: None,
 		},
 	);
 	let response = super::device::redeem_device_code(&authz, "dc");

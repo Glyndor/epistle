@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 
 pub use super::directory::Directory;
 pub use super::diskspace::DiskGuard;
@@ -201,6 +200,10 @@ pub struct Server {
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; raise or lower
 	/// with [`Server::with_max_message_size`].
 	max_message_size: usize,
+	/// Recipients one transaction on this listener may name. The default is
+	/// [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`]; change it with
+	/// [`Server::with_max_recipients`].
+	max_recipients: usize,
 	/// The minimum average rate of one DATA body or one BDAT chunk once
 	/// its grace period is over (see [`DataRate`]).
 	data_rate: DataRate,
@@ -217,18 +220,64 @@ pub struct Server {
 	/// `Protocol::Submission` matches the historical behaviour (SMTP AUTH
 	/// is client submission regardless of the listener's port).
 	auth_protocol: crate::config::Protocol,
+	/// Test-only override of the trust-field stripper. `None` in
+	/// production, where the server uses
+	/// [`crate::smtp::inbound_headers::strip`]; `Some` swaps in an
+	/// alternative so the safety net can be exercised with a strip that
+	/// deliberately fails the leading-byte fold.
+	#[cfg(test)]
+	strip_for_test: Option<fn(&mut Vec<u8>, &str)>,
 }
 
 impl Server {
-	/// Train the Bayesian corpus on a message in the background, when a
-	/// reputation/corpus database is configured. Accepted mail trains ham,
-	/// rejected mail trains spam, so the classifier learns from the server's
-	/// own accept/reject decisions. The no-op default on the trait keeps a
-	/// fake scorer (test-only) cheap to wire in.
-	fn train_corpus(&self, data: &[u8], spam: bool) {
-		if let Some(bayes) = &self.bayes {
-			let text = String::from_utf8_lossy(data).into_owned();
-			bayes.train(crate::antispam::corpus::SHARED, &text, spam);
+	/// Teach the shared Bayesian corpus from the server's own decisions, when
+	/// a reputation/corpus database is configured: mail it rejects or
+	/// quarantines is spam, mail it accepts is ham. The mail comes from
+	/// anyone, so three rules keep one sender from deciding the corpus:
+	/// ham is learned only from a sender the server verified (SPF or DKIM
+	/// passed, `message.sender_verified`); each client address block, and
+	/// each sender domain the server verified, has a bounded share of the
+	/// learning for ham and for spam apart, and a job over it, or
+	/// that the bounded queue cannot take, is dropped and counted in
+	/// `mail_bayes_training_dropped_total`; and the job never waits, so the
+	/// reply to the client does not depend on it. The no-op default on the
+	/// trait keeps a fake scorer (test-only) cheap to wire in.
+	/// Remove sender-supplied trust fields from one inbound message. In
+	/// production this is the canonical stripper; tests can swap it for
+	/// one with a deliberate hole (the safety net check in `run` is what
+	/// the swap exercises).
+	fn strip_inbound(&self, data: &mut Vec<u8>) {
+		#[cfg(test)]
+		if let Some(strip) = self.strip_for_test {
+			strip(data, &self.hostname);
+			return;
+		}
+		crate::smtp::inbound_headers::strip(data, &self.hostname);
+	}
+
+	fn train_corpus(
+		&self,
+		message: &crate::smtp::session::AcceptedMessage,
+		peer: Option<IpAddr>,
+		spam: bool,
+	) {
+		let Some(bayes) = &self.bayes else {
+			return;
+		};
+		if !spam && !message.sender_verified {
+			return;
+		}
+		// The envelope sender is whatever the client wrote. Its domain is a key
+		// of the budget only once the server verified it; otherwise a client
+		// could use up the budget of a domain it does not own.
+		let domain = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, d)| d)
+			.filter(|_| message.sender_verified);
+		let source = crate::antispam::shared_training::TrainSource::new(peer, domain);
+		if !bayes.train_from(&source, &message.data, spam) {
+			self.metrics.bayes_training_dropped();
 		}
 	}
 
@@ -338,6 +387,7 @@ impl Server {
 			.with_metrics(Arc::clone(&self.metrics))
 			.with_scram_enabled(self.scram_enabled)
 			.with_max_message_size(self.max_message_size)
+			.with_max_recipients(self.max_recipients)
 			.with_junk_command_limit(self.junk_command_limit);
 		if let Some(budget) = &self.memory_budget {
 			session = session.with_memory_budget(Arc::clone(budget));
@@ -396,7 +446,9 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let semaphore = Arc::new(crate::net::conn_limit::connection_semaphore(
+			self.max_connections,
+		));
 		let per_ip = Arc::new(crate::smtp::per_ip::PerIpCounter::new(
 			self.max_connections_per_ip,
 		));
@@ -646,3 +698,7 @@ async fn end_cut(
 #[cfg(test)]
 #[path = "tests_mods.rs"]
 mod tests_mods;
+
+#[cfg(test)]
+#[path = "train_corpus_tests.rs"]
+mod train_corpus_tests;

@@ -48,6 +48,30 @@ impl Config {
 		self.validate_data_rate()
 	}
 
+	/// `max_recipients` stays within what RFC 5321 §4.5.3.1.8 demands of a
+	/// server (at least 100 recipients per message) and what one message
+	/// may ask of the server (at most [`MAX_MAX_RECIPIENTS`]).
+	pub(super) fn validate_max_recipients(&self) -> Result<(), ConfigError> {
+		use crate::smtp::session::{
+			MAX_MAX_RECIPIENTS, MIN_MAX_RECIPIENTS, MIN_MAX_RECIPIENTS_REASON,
+		};
+		let Some(count) = self.max_recipients else {
+			return Ok(());
+		};
+		if count < MIN_MAX_RECIPIENTS {
+			return Err(ConfigError::Invalid(format!(
+				"max_recipients ({count}) is below {MIN_MAX_RECIPIENTS}: {MIN_MAX_RECIPIENTS_REASON}"
+			)));
+		}
+		if count > MAX_MAX_RECIPIENTS {
+			return Err(ConfigError::Invalid(format!(
+				"max_recipients ({count}) is above {MAX_MAX_RECIPIENTS}, the most one message \
+				 may name"
+			)));
+		}
+		Ok(())
+	}
+
 	/// The rate floor is off at `0` and cannot ask for more than any real
 	/// client link gives; its grace must leave a client time to start and
 	/// must not hand a slow client its reservation for more than an hour.
@@ -93,9 +117,62 @@ impl Config {
 				"max_session_time must be 0 (off) or between 60 and {MAX_SESSION_TIME_SECS} seconds"
 			)));
 		}
+		self.validate_connection_caps()?;
+		self.validate_preauth_timeout()
+	}
+
+	fn validate_connection_caps(&self) -> Result<(), ConfigError> {
+		for (name, cap) in [
+			(
+				"max_connections_per_listener",
+				self.max_connections_per_listener,
+			),
+			("max_http_connections", self.max_http_connections),
+		] {
+			if cap.is_some_and(|cap| cap > crate::net::conn_limit::MAX_CONNECTIONS) {
+				return Err(ConfigError::Invalid(format!(
+					"{name} must be at most {} connections",
+					crate::net::conn_limit::MAX_CONNECTIONS
+				)));
+			}
+		}
+		Ok(())
+	}
+
+	/// A deadline under five seconds cuts a client still on its TLS
+	/// handshake over a slow link; over an hour it bounds nothing.
+	fn validate_preauth_timeout(&self) -> Result<(), ConfigError> {
+		if self
+			.preauth_timeout
+			.is_some_and(|secs| !(5..=MAX_PREAUTH_TIMEOUT_SECS).contains(&secs))
+		{
+			return Err(ConfigError::Invalid(format!(
+				"preauth_timeout must be between 5 and {MAX_PREAUTH_TIMEOUT_SECS} seconds"
+			)));
+		}
+		self.validate_per_account_caps()
+	}
+
+	/// The singular `max_connections_per_account` is not wired to any
+	/// guard: `MailboxLimits::from_config` only reads `_per_ip` and
+	/// `_total`. Reject it up front so an operator who set the singular
+	/// key does not silently keep the 10/50 defaults they meant to
+	/// override.
+	fn validate_per_account_caps(&self) -> Result<(), ConfigError> {
+		if self.max_connections_per_account.is_some() {
+			return Err(ConfigError::Invalid(
+				"max_connections_per_account is not configurable; use \
+				 max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
+					.into(),
+			));
+		}
 		Ok(())
 	}
 }
+
+/// The longest `preauth_timeout` accepted, in seconds: an hour.
+const MAX_PREAUTH_TIMEOUT_SECS: u64 = 3_600;
 
 /// The highest `junk_command_limit` accepted.
 const MAX_JUNK_COMMAND_LIMIT: u64 = 10_000;
@@ -119,6 +196,19 @@ mod tests {
 		))
 		.expect("parse");
 		config.validate().map_err(|error| error.to_string())
+	}
+
+	#[test]
+	fn excessive_listener_caps_are_rejected_by_configuration_validation() {
+		for key in ["max_connections_per_listener", "max_http_connections"] {
+			for value in [1_000_001_u64, 9_223_372_036_854_775_807] {
+				let error = validate(&format!("{key} = {value}")).expect_err("excessive cap");
+				assert!(error.contains(key) && error.contains("1000000"), "{error}");
+			}
+			for value in [0, 1, 1_000_000] {
+				assert_eq!(validate(&format!("{key} = {value}")), Ok(()));
+			}
+		}
 	}
 
 	#[test]
@@ -242,11 +332,85 @@ mod tests {
 	}
 
 	#[test]
+	fn a_preauth_timeout_outside_five_seconds_to_an_hour_is_refused() {
+		for settings in [
+			"preauth_timeout = 0",
+			"preauth_timeout = 4",
+			"preauth_timeout = 3601",
+		] {
+			assert_eq!(
+				validate(settings),
+				Err(
+					"invalid configuration: preauth_timeout must be between 5 and 3600 seconds"
+						.to_string()
+				),
+				"{settings}"
+			);
+		}
+		for settings in ["preauth_timeout = 5", "preauth_timeout = 3600"] {
+			assert_eq!(validate(settings), Ok(()), "{settings}");
+		}
+	}
+
+	#[test]
 	fn a_floor_above_one_gib_per_second_is_refused() {
 		assert_eq!(
 			validate("min_data_rate = 1073741825"),
 			Err("invalid configuration: min_data_rate must be at most 1073741824 bytes per second (0 turns it off)"
 				.to_string())
+		);
+	}
+	#[test]
+	fn a_recipient_cap_below_one_hundred_is_refused_with_the_standard() {
+		for count in [0, 1, 99] {
+			assert_eq!(
+				validate(&format!("max_recipients = {count}")),
+				Err(format!(
+					"invalid configuration: max_recipients ({count}) is below 100: RFC 5321 \
+					 §4.5.3.1.8 requires accepting at least 100 recipients"
+				)),
+				"{count}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_recipient_cap_from_one_hundred_to_ten_thousand_is_accepted() {
+		for settings in [
+			"",
+			"max_recipients = 100",
+			"max_recipients = 500",
+			"max_recipients = 10000",
+		] {
+			assert_eq!(validate(settings), Ok(()), "{settings}");
+		}
+		assert_eq!(
+			validate("max_recipients = 10001"),
+			Err(
+				"invalid configuration: max_recipients (10001) is above 10000, the most one \
+				 message may name"
+					.to_string()
+			)
+		);
+	}
+
+	#[test]
+	fn the_singular_max_connections_per_account_is_rejected() {
+		// The implementation has only `_per_ip` and `_total`. The singular
+		// `max_connections_per_account` is accepted by the TOML parser
+		// but never read by `MailboxLimits::from_config`, so an operator
+		// who set `max_connections_per_account = 1` would see no effect
+		// at all: the second connection from alice on the same IP is
+		// admitted with the cap at 50 per `default`. The key is rejected
+		// up front so the failure is loud.
+		assert_eq!(
+			validate("max_connections_per_account = 1"),
+			Err(
+				"invalid configuration: max_connections_per_account is not configurable; \
+				 use max_connections_per_account_per_ip (per (account, client IP)) and \
+				 max_connections_per_account_total (per account)"
+					.to_string()
+			)
 		);
 	}
 }

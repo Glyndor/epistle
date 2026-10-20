@@ -88,9 +88,9 @@ fn show_gives_today_schedule_as_the_default() {
 	let (code, printed) = limits(file.path(), &["show"]);
 	assert_eq!(code, ExitCode::SUCCESS);
 	for line in [
-		"queue-retry-base\t60 seconds\tdefault",
-		"queue-retry-cap\t3600 seconds\tdefault",
-		"queue-delay-warning\t14400 seconds\tdefault",
+		"queue-retry-base\t60 seconds\tdefault\trecommended\tRFC 5321 §4.5.4.1 (30 minutes recommended)",
+		"queue-retry-cap\t3600 seconds\tdefault\tadjustable\tno standard mandate",
+		"queue-delay-warning\t14400 seconds\tdefault\tadjustable\tno standard mandate",
 	] {
 		assert!(
 			printed.lines().any(|l| l == line),

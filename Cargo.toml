@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.12.1"
+version = "0.12.2"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from sqlx 0.9's own `rust-version` (1.94), so it is a derived floor rather
@@ -85,6 +85,9 @@ serde_json = "1.0.150"
 tempfile = "3.27.0"
 tokio = { version = "1.52.3", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
+# Reads src/api/openapi/openapi.yaml in the tests, as an independent check on
+# the YAML subset the server itself reads. Not part of the shipped binary.
+yaml-rust2 = { version = "0.13", default-features = false }
 
 [[bench]]
 name = "parsers"

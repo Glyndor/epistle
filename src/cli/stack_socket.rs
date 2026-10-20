@@ -32,8 +32,9 @@ fn ensure_with(
 	}
 }
 
-pub(super) fn ensure() -> io::Result<()> {
-	let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+/// Where the current user's libpod socket lives.
+fn runtime_dir() -> PathBuf {
+	std::env::var_os("XDG_RUNTIME_DIR")
 		.filter(|value| !value.is_empty())
 		.map(PathBuf::from)
 		.unwrap_or_else(|| {
@@ -43,7 +44,16 @@ pub(super) fn ensure() -> io::Result<()> {
 			#[cfg(not(unix))]
 			let uid = 0;
 			PathBuf::from(format!("/run/user/{uid}"))
-		});
+		})
+}
+
+/// The path of the current user's libpod API socket.
+pub(super) fn socket_path() -> PathBuf {
+	runtime_dir().join("podman/podman.sock")
+}
+
+pub(super) fn ensure() -> io::Result<()> {
+	let runtime = runtime_dir();
 	ensure_with(&runtime, Path::exists, |command| {
 		command.stdout(super::json_out::child_stdout()).status()
 	})

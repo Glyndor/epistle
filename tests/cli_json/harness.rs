@@ -75,12 +75,19 @@ pub fn epistle_in(args: &[&str], stdin: &[u8], path_first: Option<&Path>) -> Out
 		command.env("XDG_RUNTIME_DIR", runtime);
 	}
 	let mut child = command.spawn().expect("spawn epistle");
-	child
-		.stdin
-		.take()
-		.expect("stdin")
-		.write_all(stdin)
-		.expect("write stdin");
+	// A command that refuses, or has no use for input, exits without reading
+	// it, and then the write fails with a broken pipe whenever it loses the
+	// race against the exit. That is the command's answer, not a failure of
+	// the harness: any other write error still stops the test.
+	let mut input = child.stdin.take().expect("stdin");
+	if let Err(error) = input.write_all(stdin) {
+		assert_eq!(
+			error.kind(),
+			std::io::ErrorKind::BrokenPipe,
+			"write stdin: {error}"
+		);
+	}
+	drop(input);
 	child.wait_with_output().expect("wait epistle")
 }
 
@@ -143,4 +150,12 @@ pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
 	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
 	std::fs::write(&compose, b"# compose fixture\n").expect("write compose");
 	bin
+}
+
+/// More than a pipe holds, to a command that never reads it: the write has
+/// to fail with a broken pipe, every time, and the harness has to carry on.
+#[test]
+fn input_a_command_never_reads_is_not_a_failure() {
+	let output = epistle(&["--version"], &vec![b'x'; 1 << 20]);
+	assert!(output.status.success());
 }

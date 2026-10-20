@@ -335,3 +335,16 @@ fn the_session_limits_config_threads_through_smtp_shared_state() {
 		"0 is forwarded as is and turns each limit off"
 	);
 }
+
+#[test]
+fn the_recipient_cap_config_threads_through_smtp_shared_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = Arc::new(Metrics::new());
+	let cap = |settings: &str| {
+		build_smtp_shared_state(&build_config(dir.path(), settings), &metrics)
+			.expect("state")
+			.max_recipients
+	};
+	assert_eq!(cap(""), 100, "absent: the 100 RFC 5321 asks of a server");
+	assert_eq!(cap("max_recipients = 500"), 500, "a configured cap is kept");
+}

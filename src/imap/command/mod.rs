@@ -701,8 +701,7 @@ mod select_params;
 pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
-pub(crate) use parse::MAX_APPEND_SIZE;
-pub use parse::parse;
+pub use parse::{DEFAULT_APPEND_LIMIT, parse};
 
 #[cfg(test)]
 #[path = "command_tests.rs"]

@@ -51,6 +51,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// visible before any listener binds. The wording is the shared helper
 	// reused by `config-check` and `verify-dns`.
 	super::serve_tasks::log_single_signature_dkim_warning(&config);
+	super::serve_connection_limits::log_retry_schedule_warnings(&config);
 	if config.listeners.is_empty() {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());
@@ -94,12 +95,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// When `[database]` is configured the shared ban store is built and
 	// attached to every rebuilt directory. Without a database, the ban
 	// store is absent and the per-connection three-strikes counters are
-	// the only defence; exactly the pre-table behaviour.
+	// the only defence; exactly the pre-table behaviour. The policy is
+	// bound here so the periodic sweeper spawned below reads the same
+	// `known_network_window_secs` the operator set.
+	let policy = ban_policy::ban_policy_for(&config);
 	if let Some(pool) = &reputation_pool {
-		let ban_store: Arc<dyn crate::antispam::bans::BanStore> = Arc::new(
-			crate::antispam::bans::PgBanStore::new(pool.clone(), Some(metrics.clone())),
-		);
-		store = store.with_ban_store(ban_store);
+		store = store.with_ban_store(ban_policy::pg_ban_store(pool, &metrics, policy));
 	}
 	// `into_shared` wires the live store as the SCRAM upgrader, so a
 	// successful cleartext login rewrites a low-iteration verifier.
@@ -166,6 +167,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		max_conn,
 		max_connections_per_ip,
 		max_message_size,
+		max_recipients,
 		memory_budget,
 		data_rate,
 		session_limits,
@@ -174,6 +176,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		llm_hook,
 		attachment_policy,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	let mailbox_limits = super::serve_connection_limits::MailboxLimits::from_config(&config);
+	let http_limits = super::serve_connection_limits::http_limits(&config);
 	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
 	// sink through `submit`; the antivirus scan wraps it there.
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
@@ -266,8 +270,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
 	// the tables stay bounded. No-op when no database is configured: the
-	// ban store is absent in that case.
-	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
+	// ban store is absent in that case. The bypass list is purged with the
+	// same window the operator set under `[limits] known-network-window`,
+	// so the sweeper does not fall back to the built-in default.
+	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 
 	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
 	// renewal task. Loaded here so every listener picks the same acceptor up
@@ -318,8 +324,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_delivery_log_days(config.delivery_log_days())
+				.with_webhook(webhook.clone())
 				.with_disabled_domains(config.disabled_domains.clone())
 				.with_max_message_size(max_message_size)
+				.with_max_recipients(max_recipients)
 				.with_quota(
 					config
 						.quota_bytes
@@ -327,6 +335,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)
 				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
+				.with_trusted_proxies(api.trusted_proxies.clone())
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)
@@ -351,40 +360,31 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::api::router(state);
-				tasks.push(tokio::spawn(async move {
-					// Serve with the peer address attached so API-key CIDR
-					// allowlists can be enforced from `ConnectInfo`.
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				// Serve with the peer address attached so API-key CIDR
+				// allowlists can be enforced from `ConnectInfo`.
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Acme => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
-				tasks.push(tokio::spawn(async move {
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Metrics => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let metrics = Arc::clone(&metrics);
-				let router = axum::Router::new().route(
-					"/metrics",
-					axum::routing::get(move || {
-						let metrics = Arc::clone(&metrics);
-						async move {
-							(
-								[(
-									axum::http::header::CONTENT_TYPE,
-									"text/plain; version=0.0.4",
-								)],
-								metrics.render(),
-							)
-						}
-					}),
-				);
-				tasks.push(tokio::spawn(async move {
-					crate::net::http_serve::serve(listener, router).await
-				}));
+				let router = super::serve_metrics::router(Arc::clone(&metrics));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::Imaps | ListenerKind::Imap => {
 				let Some(acceptor) = &tls_acceptor else {
@@ -419,7 +419,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
 				imap_server = imap_server.with_scram_enabled(config.auth.scram);
-				imap_server = imap_server.with_max_connections(max_conn);
+				imap_server = imap_server
+					.with_max_connections(max_conn)
+					.with_max_connections_per_ip(mailbox_limits.per_ip)
+					.with_preauth_timeout(mailbox_limits.preauth_timeout)
+					.with_append_limit(max_message_size)
+					.with_per_account_counter(Arc::clone(&mailbox_limits.per_account_counter));
 				imap_server = imap_server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
@@ -434,6 +439,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					acceptor,
 					crypto.clone(),
 					max_conn,
+					&mailbox_limits,
 				)?);
 			}
 			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
@@ -449,13 +455,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::autodiscovery::router_for(&config);
-				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
+				let serve =
+					crate::autodiscovery::serve(listener, router, tls, max_conn, http_limits);
 				tasks.push(tokio::spawn(serve));
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
-				tasks.push(super::serve_tasks::serve_http(listener, router));
+				tasks.push(super::serve_tasks::serve_http(
+					listener,
+					router,
+					http_limits,
+				));
 			}
 			ListenerKind::ManageSieve => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -467,6 +478,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					directory.clone(),
 					acceptor,
 					max_conn,
+					&mailbox_limits,
 				)?);
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
@@ -487,6 +499,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_max_connections(max_conn)
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
+					.with_max_recipients(max_recipients)
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
@@ -630,9 +643,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 #[path = "serve_wait.rs"]
 mod wait;
 
+#[path = "serve_ban_policy.rs"]
+mod ban_policy;
+
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "serve_tests_limits.rs"]
+mod tests_limits;
 
 #[cfg(test)]
 #[path = "serve_tests_mta_sts.rs"]

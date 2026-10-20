@@ -1,6 +1,7 @@
 //! Resource bounds for rejected non-synchronizing IMAP literals.
 
 use super::*;
+use tokio::time::Instant;
 
 fn start_server(
 	timeout: Duration,
@@ -69,7 +70,7 @@ async fn above_cap_synchronizing_literal_is_refused_with_toobig() {
 	greeting(&mut client).await;
 	// RFC 7889 §3: the client waits for a continuation that never comes,
 	// so the server answers TOOBIG and the connection carries on.
-	let over = crate::imap::command::MAX_APPEND_SIZE + 1;
+	let over = crate::imap::command::DEFAULT_APPEND_LIMIT + 1;
 	client
 		.write_all(format!("a2 APPEND INBOX {{{over}}}\r\na3 NOOP\r\na4 LOGOUT\r\n").as_bytes())
 		.await
@@ -113,9 +114,14 @@ async fn discarded_literal_storage_stays_below_one_mib() {
 	let mut stream = std::io::Cursor::new(bytes);
 	let mut decoder = LineDecoder::new();
 	decoder.feed(b"xxx");
-	let drained = discard::literal(&mut stream, &mut decoder, size, Duration::from_secs(2))
-		.await
-		.expect("drain");
+	let drained = discard::literal(
+		&mut stream,
+		&mut decoder,
+		size,
+		Instant::now() + Duration::from_secs(2),
+	)
+	.await
+	.expect("drain");
 	assert!(
 		drained.peak_storage < 1024 * 1024,
 		"discarded IMAP bytes must retain less than 1 MiB, retained {} bytes",

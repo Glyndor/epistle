@@ -158,14 +158,18 @@ fn scram_malformed_client_first_is_rejected() {
 		reply_code(&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,x=y")))),
 		535
 	);
-	// Unknown user (no oracle: same 535 as a bad password).
+	// Unknown user (no oracle): challenged like a real account, then refused
+	// at the proof with the same 535 as a bad password.
 	let mut session = scram_session(true);
 	assert_eq!(
 		reply_code(
 			&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=ghost,r=CN")))
 		),
-		535
+		334
 	);
+	let nonce = fixtures::nonce();
+	let client_final = format!("c=biws,r=CN{nonce},p={}", b64_bytes(&[0u8; 32]));
+	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 }
 
 #[test]

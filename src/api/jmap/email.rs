@@ -135,9 +135,14 @@ pub(super) fn email_set(
 	}
 	let mut updated = serde_json::Map::new();
 	let mut not_updated = serde_json::Map::new();
+	// One Email/set teaches at most one command's worth of lessons.
+	let mut lessons = state
+		.training()
+		.map(crate::antispam::training_queue::TrainingQueue::command_budget)
+		.unwrap_or_default();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in update {
-			match apply_email_update(state, account, id, patch) {
+			match apply_email_update(state, account, id, patch, &mut lessons) {
 				Ok(()) => {
 					updated.insert(id.clone(), Value::Null);
 				}
@@ -237,6 +242,7 @@ fn apply_email_update(
 	account: &str,
 	id: &str,
 	patch: &Value,
+	lessons: &mut crate::antispam::training_queue::LessonBudget,
 ) -> Result<(), &'static str> {
 	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
@@ -301,24 +307,32 @@ fn apply_email_update(
 			// A combined "mark as junk" + "move to Junk" is the natural
 			// operation the JMAP client issues, and the source message
 			// has already been removed by the time we get here. Replay
-			// the same transition the STORE-only branch runs, against
-			// the destination message so the training worker reads the
-			// copy that actually carries the new flag set. The path is
-			// derived from the new id rather than looked up through the
-			// mailbox snapshot (which would race with the rename).
-			if patch.get("keywords").is_some()
-				&& let Some(queue) = state.training()
+			// the transitions against the destination message so the
+			// training worker reads the copy that actually carries the new
+			// flag set. The path is derived from the new id rather than
+			// looked up through the mailbox snapshot (which would race
+			// with the rename).
+			if let Some(queue) = state.training()
+				&& result.is_ok()
 			{
-				let new_path = mailbox::mailbox_dir(data_dir, account, target)
-					.map(|dir| dir.join(format!("{new_id}.eml")))
-					.unwrap_or_else(|| message_path.clone());
-				crate::imap::junk_trainer::enqueue_junk_transition(
-					queue,
-					account,
-					&current_flags,
-					&flags,
-					new_path,
-				);
+				let keyword = patch
+					.get("keywords")
+					.and_then(|_| crate::imap::junk_trainer::junk_signal(&current_flags, &flags));
+				let moved = crate::imap::junk_moves::move_signal(&source, target, true);
+				// One message teaches one verdict: the move wins when the
+				// two disagree, and nothing is queued twice when they agree.
+				if let Some(signal) = moved.or(keyword)
+					&& let Some(dir) = mailbox::mailbox_dir(data_dir, account, target)
+				{
+					crate::imap::junk_moves::enqueue_move(
+						queue,
+						account,
+						signal,
+						&dir,
+						&[new_id],
+						lessons,
+					);
+				}
 			}
 			return result;
 		}
@@ -330,12 +344,13 @@ fn apply_email_update(
 			// change. The queue never waits, so the reply does not depend
 			// on it.
 			if let Some(queue) = state.training() {
-				crate::imap::junk_trainer::enqueue_junk_transition(
+				crate::imap::junk_trainer::enqueue_junk_transition_within(
 					queue,
 					account,
 					&current_flags,
 					updated,
 					message_path,
+					lessons,
 				);
 			}
 			return Ok(());

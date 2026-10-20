@@ -8,7 +8,6 @@
 use std::io::Write;
 
 use super::term::table::Table;
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -19,7 +18,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::Storage;
-use crate::storage::{DeliveryLog, DeliveryOutcome, DeliveryRecord, Envelope, FsSpool};
+use crate::storage::{Envelope, FsSpool};
 
 #[path = "queue_destinations.rs"]
 mod destinations;
@@ -90,27 +89,6 @@ pub(super) fn webhook_for(config: &crate::config::Config) -> Option<Arc<crate::w
 	})
 }
 
-/// Post `event` to the webhook. Inside a runtime the post is spawned; the
-/// command line has none, so it gets a short-lived one and waits for the
-/// answer (at most ten seconds) before the process can exit.
-fn notify(webhook: &Arc<crate::webhook::Webhook>, event: crate::webhook::WebhookEvent) {
-	let webhook = Arc::clone(webhook);
-	if let Ok(handle) = tokio::runtime::Handle::try_current() {
-		handle.spawn(async move { webhook.notify(&event).await });
-		return;
-	}
-	match tokio::runtime::Builder::new_current_thread()
-		.enable_all()
-		.build()
-	{
-		Ok(runtime) => runtime.block_on(async {
-			let wait = std::time::Duration::from_secs(10);
-			let _ = tokio::time::timeout(wait, webhook.notify(&event)).await;
-		}),
-		Err(error) => tracing::warn!(%error, "no runtime to post the webhook event"),
-	}
-}
-
 /// Run one queue action against the spool under `data_dir`, writing data to
 /// `out`. `now` is the current epoch second (injectable for tests).
 /// `delivery_log_days` is the operator's configured retention for the
@@ -134,7 +112,6 @@ pub(super) fn run(
 		Ok(spool) => spool,
 		Err(error) => return fail(format_args!("opening spool: {error}")),
 	};
-	let log = DeliveryLog::open(data_dir, delivery_log_days);
 	match action {
 		QueueCli::List { json: leaf } if leaf || json => list_json(&spool, out),
 		QueueCli::List { .. } => list(data_dir, storage, out),
@@ -171,49 +148,16 @@ pub(super) fn run(
 			}
 			// An entry that kept evidence ends on record, not by vanishing: the
 			// cancellation is recorded and the entry removed as one step.
-			match crate::evidence::cancel::remove(
+			match crate::queue::cancel::remove(
 				&spool,
 				&crate::evidence::service::root_of(data_dir),
+				data_dir,
+				delivery_log_days,
 				id,
+				now,
+				webhook,
 			) {
-				Ok(envelope) => {
-					// Record the cancel for every recipient that was still
-					// pending. Already-delivered recipients are not touched
-					// (their `delivered` record is the only thing the log
-					// needs to know about); a recipient that was already
-					// failed is past the cancel and the spool removal is a
-					// no-op for them.
-					if log.is_enabled() {
-						for recipient in &envelope.recipients {
-							let state = envelope.recipient_state(recipient);
-							if state.status == crate::storage::RecipientStatus::Pending {
-								let record = DeliveryRecord {
-									time: now,
-									spool_id: id,
-									account: envelope.account.clone(),
-									from: envelope.reverse_path.clone(),
-									recipient: recipient.clone(),
-									outcome: DeliveryOutcome::Canceled,
-									remote: state.remote.clone(),
-									reply: state.last_error.clone(),
-									attempt: state.attempts,
-									extra: BTreeMap::new(),
-									class: envelope.class,
-								};
-								if let Err(error) = log.append(&record) {
-									tracing::warn!(%id, %error, "delivery log write failed");
-								}
-								if let Some(webhook) = webhook {
-									let event = crate::webhook::WebhookEvent::Canceled {
-										spool_id: id,
-										recipient: recipient.clone(),
-										extra: BTreeMap::new(),
-									};
-									notify(webhook, event);
-								}
-							}
-						}
-					}
+				Ok(_envelope) => {
 					let mut report = super::json_out::Report::new(out, json);
 					report.line(format_args!("removed {id}"));
 					let fields = serde_json::json!({ "id": id.to_string() });
@@ -500,6 +444,10 @@ mod tests_destinations;
 #[cfg(test)]
 #[path = "queue_tests_webhook.rs"]
 mod tests_webhook;
+
+#[cfg(test)]
+#[path = "queue_tests_extra.rs"]
+mod tests_extra;
 
 #[cfg(test)]
 #[path = "queue_tests_evidence.rs"]

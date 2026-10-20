@@ -327,6 +327,7 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 mod services;
 use services::ComposeService;
 pub(crate) use services::MAIL_STOP_GRACE_SECS;
+pub(super) use services::{host_hard_nofile, warn_low_nofile};
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {
@@ -373,11 +374,22 @@ pub(super) struct ComposeFile {
 
 impl ComposeFile {
 	pub(super) fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
+		let nofile = services::mail_nofile(services::host_hard_nofile());
+		Self::build_with_nofile(answers, published_ports, database, nofile)
+	}
+
+	/// [`Self::build`] asking for `nofile` open files in the `mail` service.
+	pub(super) fn build_with_nofile(
+		answers: &Answers,
+		published_ports: Vec<String>,
+		database: bool,
+		nofile: Option<u64>,
+	) -> Self {
 		let image = resolve_image(answers.image.as_deref());
 		let mut services = BTreeMap::new();
 		services.insert(
 			"mail".to_string(),
-			ComposeService::new_mail(&image, answers, database, published_ports),
+			ComposeService::new_mail(&image, answers, database, published_ports, nofile),
 		);
 		// Off only when the answers or the host's memory said so.
 		let antivirus = answers.services.antivirus != Some(false);

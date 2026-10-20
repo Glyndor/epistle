@@ -116,13 +116,14 @@ fn submit_email(
 	// points at) gives the per-message recipient count; JMAP callers
 	// must hit the same wall so no protocol can carry a 101-recipient
 	// message while the others refuse the 101st.
-	if recipients.len() > crate::smtp::session::MAX_RECIPIENTS {
+	let max_recipients = state.max_recipients();
+	if recipients.len() > max_recipients {
 		return Err(Refusal {
 			kind: "tooManyRecipients",
 			description: Some(format!(
 				"too many recipients ({} > {})",
 				recipients.len(),
-				crate::smtp::session::MAX_RECIPIENTS,
+				max_recipients,
 			)),
 		});
 	}
@@ -318,6 +319,10 @@ fn submit_email(
 				crate::smtp::sink::SinkError::ScanTooLarge => Refusal {
 					kind: "forbiddenToSend",
 					description: Some("message too large for the content scan".into()),
+				},
+				crate::smtp::sink::SinkError::TooManyHeaderFields => Refusal {
+					kind: "forbiddenToSend",
+					description: Some("message has too many header fields".into()),
 				},
 				crate::smtp::sink::SinkError::ScanUnavailable => Refusal {
 					kind: "serverFail",

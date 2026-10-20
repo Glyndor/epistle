@@ -34,6 +34,7 @@ fn limits_set_unset_round_trip_preserves_every_other_key() {
 		(Key::MaxMessageSize, "10M", 10 * 1024 * 1024),
 		(Key::MessageMemoryBudget, "128M", 128 * 1024 * 1024),
 		(Key::MaxConnectionsPerIp, "5", 5),
+		(Key::KnownNetworkWindow, "7d", 7 * 86400),
 	] {
 		let result = change_config(file.path(), key, Some(input));
 		assert!(
@@ -144,11 +145,23 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 	let config = Config::load(file.path()).unwrap();
 	let mut out = Vec::new();
 	show(&config, &mut out).unwrap();
-	assert_eq!(
-		String::from_utf8(out).unwrap(),
-		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\nqueue-concurrency\t8\tdefault\nqueue-per-domain-concurrency\t2\tdefault\nqueue-backoff\t60,300,900,3600 seconds\tdefault\nmax-message-size\t26214400 bytes\tdefault\nmessage-memory-budget\tauto (204 MiB, no mail container limit found, 1g assumed)\tderived\nmax-connections-per-ip\t20\tdefault\nmin-data-rate\t10240 bytes per second\tdefault\ndata-rate-grace\t120 seconds\tdefault\njunk-command-limit\t100\tdefault\nmax-session-time\t1800 seconds\tdefault\n",
-		"limits show must print each effective value and mark built-in defaults"
-	);
+	let printed = String::from_utf8(out).unwrap();
+	for line in [
+		"quota\t5368709120 bytes\tdefault\tadjustable\tno standard mandate",
+		"submission-rate\tdisabled\tdefault\tadjustable\tno standard mandate",
+		"queue-give-up\t432000 seconds\tdefault\trecommended\tRFC 5321 §4.5.4.1 (4-5 days recommended)",
+		"queue-retry-base\t60 seconds\tdefault\trecommended\tRFC 5321 §4.5.4.1 (30 minutes recommended)",
+		"max-recipients\t100\tdefault\trecommended\tRFC 5321 §4.5.3.1.8 (at least 100)",
+		"message-memory-budget\tauto (204 MiB, no mail container limit found, 1g assumed)\tderived\tadjustable\tno standard mandate",
+		"smtp-line-length\t998 octets\tfixed\tfixed\tRFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)",
+		"spf-max-dns-lookups\t10 count\tfixed\tfixed\tRFC 7208 §4.6.4 (max 10 DNS-querying terms)",
+		"tls-minimum-version\t1.2 version\tfixed\tfixed\tRFC 8996 (TLS 1.0/1.1 prohibited)",
+	] {
+		assert!(
+			printed.lines().any(|row| row == line),
+			"limits show must include the row `{line}`; printed:\n{printed}"
+		);
+	}
 	change_config(file.path(), Key::SubmissionRate, Some("120")).unwrap();
 	let config = Config::load(file.path()).unwrap();
 	let mut out = Vec::new();
@@ -157,7 +170,7 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 		String::from_utf8(out)
 			.unwrap()
 			.lines()
-			.any(|line| line == "submission-rate\t120\tconfigured"),
+			.any(|line| line.starts_with("submission-rate\t120\tconfigured\tadjustable\t")),
 		"limits show must mark a changed value as configured"
 	);
 }
@@ -169,9 +182,15 @@ fn a_zero_quota_shows_as_unlimited() {
 	let config = Config::load(file.path()).unwrap();
 	let mut out = Vec::new();
 	show(&config, &mut out).unwrap();
-	assert_eq!(
-		String::from_utf8(out).unwrap().lines().next(),
-		Some("quota\tunlimited\tconfigured")
+	let first = String::from_utf8(out)
+		.unwrap()
+		.lines()
+		.next()
+		.unwrap()
+		.to_string();
+	assert!(
+		first.starts_with("quota\tunlimited\tconfigured\tadjustable\t"),
+		"first row: {first}"
 	);
 }
 
@@ -207,6 +226,12 @@ fn limits_show_json_lists_every_domain_override_and_every_tenant_entry() {
 	let submission = &json["submission-rate"];
 	assert_eq!(submission["unit"], "count");
 	assert_eq!(submission["source"], "default");
+	// The known-network window is a duration key the operator can
+	// override through the same CLI surface; absent keeps the
+	// 30-day default the policy ships with.
+	let known_network = &json["known-network-window"];
+	assert_eq!(known_network["unit"], "seconds");
+	assert_eq!(known_network["value"], 30 * 24 * 60 * 60_u64);
 }
 
 /// `epistle limits set --json` emits a single JSON object on stdout and

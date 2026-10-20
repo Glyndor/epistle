@@ -26,8 +26,9 @@ pub(super) async fn bind(
 pub(super) fn serve_http(
 	listener: TcpListener,
 	router: axum::Router,
+	limits: crate::net::http_serve::Limits,
 ) -> tokio::task::JoinHandle<std::io::Result<()>> {
-	tokio::spawn(crate::net::http_serve::serve(listener, router))
+	tokio::spawn(crate::net::http_serve::serve_with(listener, router, limits))
 }
 
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
@@ -518,8 +519,10 @@ pub(super) fn spawn_storage_maintenance(config: &Config) {
 /// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and
 /// `auth_ban` rows whose `until` is older than 24 hours ago, so the ban
 /// tables stay bounded. No-op when no database is configured; the ban
-/// store is absent in that case.
-pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
+/// store is absent in that case. The `known_network_window_secs` from
+/// `[limits] known-network-window` is plumbed in so the bypass list ages
+/// by what the operator configured, not by the 30-day default.
+pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>, known_network_window_secs: u64) {
 	let Some(pool) = pool else {
 		return;
 	};
@@ -532,10 +535,26 @@ pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|d| d.as_secs())
 				.unwrap_or(0);
-			let store = crate::antispam::bans::PgBanStore::new(pool.clone(), None);
-			store.sweep(now).await;
+			run_ban_sweep_once(&pool, known_network_window_secs, now).await;
 		}
 	});
+}
+
+/// One pass of the ban sweep, with the configured `known_network_window_secs`.
+/// Extracted from [`spawn_ban_sweep`] so a test can drive a sweep with a
+/// controlled `now_secs` and observe the configured window without waiting
+/// on the hourly ticker.
+pub(super) async fn run_ban_sweep_once(
+	pool: &sqlx::PgPool,
+	known_network_window_secs: u64,
+	now_secs: u64,
+) {
+	let policy = crate::antispam::bans::BanPolicy {
+		known_network_window_secs,
+		..crate::antispam::bans::BanPolicy::default()
+	};
+	let store = crate::antispam::bans::PgBanStore::with_policy(pool.clone(), None, policy);
+	store.sweep(now_secs).await;
 }
 
 #[cfg(test)]

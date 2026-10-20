@@ -59,6 +59,22 @@ const SKIPPED: &[(&str, &str)] = &[
 		"needs PostgreSQL; tests/cli_json/ban.rs",
 	),
 	(
+		"learning status",
+		"needs PostgreSQL; tests/cli_json/learning.rs",
+	),
+	(
+		"learning enable",
+		"needs PostgreSQL; tests/cli_json/learning.rs",
+	),
+	(
+		"learning disable",
+		"needs PostgreSQL; tests/cli_json/learning.rs",
+	),
+	(
+		"learning reset",
+		"needs PostgreSQL; tests/cli_json/learning.rs",
+	),
+	(
 		"evidence key rotate",
 		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence_tests_key.rs",
 	),
@@ -207,6 +223,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 		&["manual", "--zone", "example.org"],
 		Done,
 	),
+	("dns provider check", &[], Done),
 	("dns provider unset", &[], Done),
 	("storage blobs show", &[], Done),
 	("storage blobs set fs", &[], Done),

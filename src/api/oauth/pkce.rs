@@ -54,9 +54,7 @@ pub async fn authorize(
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
-	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
-	// canonicalize so the ban / audit pipeline sees a plain `IpAddr::V4`.
-	let peer = crate::net::canonical_peer(peer);
+	let client_ip = state.effective_client_ip(Some(peer), &headers);
 	let Some(authz) = state.authz() else {
 		return oauth_error("invalid_request");
 	};
@@ -80,17 +78,11 @@ pub async fn authorize(
 	let Some((login, password)) = super::device::account_credentials_pub(&headers, &fields) else {
 		return oauth_error("invalid_grant");
 	};
-	// The OAuth grant endpoints sit outside `require_bearer_token`, so the
-	// peer IP is sourced from `ConnectInfo` here (wired in by the listener's
-	// `into_make_service_with_connect_info`) and forwarded to the ban-aware
-	// authentication path. The peer IP participates in the audit log and the
-	// shared ban table.
-	let Some(account) = state.authenticate_with_ip(
-		&login,
-		&password,
-		Some(peer.ip()),
-		crate::config::Protocol::Api,
-	) else {
+	// OAuth bypasses bearer authentication, so resolve the same effective IP
+	// explicitly for credential restrictions, bans and audit events.
+	let Some(account) =
+		state.authenticate_with_ip(&login, &password, client_ip, crate::config::Protocol::Api)
+	else {
 		return oauth_error("invalid_grant");
 	};
 

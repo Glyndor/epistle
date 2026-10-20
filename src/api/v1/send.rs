@@ -43,7 +43,8 @@ pub async fn send(
 		));
 	}
 	// Bound the recipient list to the same ceiling the SMTP path enforces.
-	if recipients.len() > crate::smtp::session::MAX_RECIPIENTS {
+	let max_recipients = state.max_recipients();
+	if recipients.len() > max_recipients {
 		return Err(ApiError::invalid_input("Too many recipients."));
 	}
 	// Header-injection guard (mandatory), before anything is built: no CR,
@@ -205,14 +206,7 @@ pub async fn send(
 		Ok(id) => id,
 		Err(error) => {
 			charge.refund();
-			return Err(match error {
-				SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
-				SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
-				SinkError::ScanUnavailable => ApiError::scan_unavailable(),
-				SinkError::ScanTooLarge => ApiError::scan_too_large(),
-				SinkError::Unavailable(_) => ApiError::internal(),
-				SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
-			});
+			return Err(sink_refusal(error));
 		}
 	};
 	// Save a copy of what the account sent into its `Sent` folder
@@ -254,4 +248,18 @@ fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option
 		})
 		.filter(|view| principal.admits_account(&view.name, &view.addresses))
 		.map(|view| view.name)
+}
+
+/// The API error for a submission the sink refused.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn sink_refusal(error: SinkError) -> ApiError {
+	match error {
+		SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
+		SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
+		SinkError::ScanUnavailable => ApiError::scan_unavailable(),
+		SinkError::ScanTooLarge => ApiError::scan_too_large(),
+		SinkError::Unavailable(_) => ApiError::internal(),
+		SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
+		SinkError::TooManyHeaderFields => ApiError::too_many_header_fields(),
+	}
 }

@@ -8,7 +8,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
-fn directory() -> DirectoryHandle {
+pub(super) fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(
 		crate::smtp::directory::Directory::new(
 			["example.org".to_string()],
@@ -22,7 +22,7 @@ fn directory() -> DirectoryHandle {
 }
 
 /// Read from `tls` until `needle` appears in the accumulated output.
-async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
+pub(super) async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
 	let mut got = String::new();
 	let mut chunk = [0u8; 4096];
 	while !got.contains(needle) {

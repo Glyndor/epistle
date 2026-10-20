@@ -9,12 +9,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
+use crate::net::conn_limit::{Admission, Refusal, refuse};
+use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
+use crate::net::response_writer;
 use crate::smtp::line::LineDecoder;
 
 use super::backend::MailboxBackend;
@@ -28,13 +31,26 @@ const MAX_ERROR_STREAK: u32 = 20;
 /// Default max concurrent connections for a POP3 listener.
 const MAX_CONNECTIONS: usize = 500;
 
+/// What a connection over a cap is told before it is closed.
+fn refusal(why: Refusal) -> &'static [u8] {
+	match why {
+		Refusal::ListenerFull => b"-ERR too many connections, try again later\r\n",
+		Refusal::ClientFull => b"-ERR too many connections from your address\r\n",
+	}
+}
+
 /// A TLS-only POP3 server bound to one listener.
 pub struct Server {
 	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_per_ip: usize,
 	crypto: crate::storage::MessageCrypto,
+	preauth_timeout: Duration,
+	/// Shared per-account counter applied after authentication. `None`
+	/// keeps the historical behaviour (no per-account cap).
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 }
 
 impl Server {
@@ -46,8 +62,22 @@ impl Server {
 			directory,
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_per_ip: crate::net::conn_limit::DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
 			crypto: crate::storage::MessageCrypto::disabled(),
+			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
+			per_account_counter: None,
 		}
+	}
+
+	/// Apply the shared per-account counter after authentication.
+	/// `None` keeps the listener free of any per-account cap (the
+	/// historical behaviour).
+	pub fn with_per_account_counter(
+		mut self,
+		counter: Arc<crate::net::per_account_conn::PerAccountCounter>,
+	) -> Self {
+		self.per_account_counter = Some(counter);
+		self
 	}
 
 	/// Decode stored message bodies through `crypto` when serving RETR/TOP.
@@ -64,6 +94,22 @@ impl Server {
 		self
 	}
 
+	/// Cap the connections one client may hold on this listener (0 keeps the
+	/// default). An IPv6 client is counted by its /64.
+	pub fn with_max_connections_per_ip(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_per_ip = max;
+		}
+		self
+	}
+
+	/// Set the deadline for the whole phase before sign-in, counted from the
+	/// start of the connection.
+	pub fn with_preauth_timeout(mut self, timeout: Duration) -> Self {
+		self.preauth_timeout = timeout;
+		self
+	}
+
 	/// Accept connections forever, one bounded task per connection.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
 		self.serve_on(listener).await
@@ -74,7 +120,7 @@ impl Server {
 		self: Arc<Self>,
 		listener: A,
 	) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let admission = Admission::new(self.max_connections, self.max_per_ip);
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
 			let (stream, peer) = accepting.next().await;
@@ -82,14 +128,18 @@ impl Server {
 			// `::ffff:a.b.c.d`; canonicalize so the IP survives every
 			// downstream consumer (auth, audit) as a plain `IpAddr::V4`.
 			let peer = crate::net::canonical_peer(peer);
-			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
-				tracing::warn!(%peer, "POP3 connection limit reached, dropping");
-				continue;
+			let admitted = match admission.admit(peer.ip()) {
+				Ok(admitted) => admitted,
+				Err(why) => {
+					tracing::warn!(%peer, ?why, "POP3 connection limit reached, refusing");
+					refuse(stream, refusal(why));
+					continue;
+				}
 			};
 			let server = Arc::clone(&self);
 			let peer_ip = peer.ip();
 			tokio::spawn(async move {
-				let _permit = permit;
+				let _admitted = admitted;
 				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "POP3 connection closed");
 				}
@@ -101,13 +151,21 @@ impl Server {
 	where
 		S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 	{
-		let stream = crate::tls::accept_within(&self.tls, stream).await?;
+		let clock = SessionClock::start(self.preauth_timeout, TIMEOUT);
+		let stream = crate::tls::accept_until(&self.tls, stream, clock.preauth_until()).await?;
 		let backend = MailboxBackend::new_with_crypto(
 			self.directory.clone(),
 			self.data_dir.clone(),
 			self.crypto.clone(),
 		);
-		run(stream, backend, Some(peer_ip)).await
+		run(
+			stream,
+			backend,
+			Some(peer_ip),
+			clock,
+			self.per_account_counter.clone(),
+		)
+		.await
 	}
 }
 
@@ -117,13 +175,19 @@ async fn run<S>(
 	mut stream: S,
 	backend: MailboxBackend,
 	peer_ip: Option<std::net::IpAddr>,
+	mut clock: SessionClock,
+	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
 ) -> std::io::Result<()>
 where
 	S: AsyncRead + AsyncWrite + Unpin,
 {
 	let mut session = Session::new(backend);
 	session.set_peer_ip(peer_ip);
-	stream.write_all(&session.greeting().encode()).await?;
+	if let Some(counter) = per_account_counter {
+		session = session.with_per_account_counter(counter);
+	}
+	response_writer::write_response(&mut stream, &session.greeting().encode(), &clock, false)
+		.await?;
 
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
@@ -131,9 +195,13 @@ where
 	let mut error_streak = 0u32;
 	loop {
 		let line = match decoder.next_line() {
-			Ok(Some(line)) => line,
+			Ok(Some(line)) => {
+				clock.line_done();
+				line
+			}
 			Ok(None) => {
-				let read = match tokio::time::timeout(TIMEOUT, stream.read(&mut buffer)).await {
+				let deadline = clock.line(session.is_authenticated());
+				let read = match tokio::time::timeout_at(deadline, stream.read(&mut buffer)).await {
 					Ok(Ok(n)) => n,
 					Ok(Err(error)) => return Err(error),
 					Err(_) => return Ok(()),
@@ -146,7 +214,13 @@ where
 			}
 			Err(_) => {
 				let reply = Response::Err("line too long".to_string());
-				stream.write_all(&reply.encode()).await?;
+				response_writer::write_response(
+					&mut stream,
+					&reply.encode(),
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				return Ok(());
 			}
 		};
@@ -161,7 +235,13 @@ where
 			error_streak += 1;
 			if error_streak >= MAX_ERROR_STREAK {
 				let reply = Response::Err("too many errors".to_string());
-				let _ = stream.write_all(&reply.encode()).await;
+				let _ = response_writer::write_response(
+					&mut stream,
+					&reply.encode(),
+					&clock,
+					session.is_authenticated(),
+				)
+				.await;
 				return Ok(());
 			}
 		} else {
@@ -169,7 +249,13 @@ where
 		}
 
 		let is_final = response.is_final();
-		stream.write_all(&response.encode()).await?;
+		response_writer::write_response(
+			&mut stream,
+			&response.encode(),
+			&clock,
+			session.is_authenticated(),
+		)
+		.await?;
 		if is_final {
 			return Ok(());
 		}
@@ -180,6 +266,10 @@ where
 mod tests {
 	use super::*;
 	use tokio::io::duplex;
+
+	fn clock() -> SessionClock {
+		SessionClock::start(DEFAULT_PREAUTH_TIMEOUT, TIMEOUT)
+	}
 
 	fn backend() -> MailboxBackend {
 		let dir = tempfile::tempdir().expect("tempdir");
@@ -193,7 +283,7 @@ mod tests {
 	#[tokio::test]
 	async fn too_many_errors_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		// Drain the greeting, then spam invalid commands.
 		let mut chunk = [0u8; 4096];
 		let _ = client.read(&mut chunk).await;
@@ -222,7 +312,7 @@ mod tests {
 	#[tokio::test]
 	async fn quit_after_greeting_closes_cleanly() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let greeting = read_chunk(&mut client).await;
 		assert!(greeting.starts_with("+OK"), "{greeting}");
 		client.write_all(b"QUIT\r\n").await.expect("write");
@@ -237,7 +327,7 @@ mod tests {
 	#[tokio::test]
 	async fn eof_ends_the_session() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		drop(client); // client hangs up before any command.
 		assert!(task.await.expect("join").is_ok());
@@ -246,7 +336,7 @@ mod tests {
 	#[tokio::test]
 	async fn overlong_line_is_rejected() {
 		let (mut client, server) = duplex(256 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		// A line far longer than the protocol allows.
 		let huge = vec![b'A'; 100 * 1024];
@@ -260,7 +350,7 @@ mod tests {
 	#[tokio::test]
 	async fn non_ascii_command_is_rejected() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await;
 		client.write_all(&[0xff, 0xfe]).await.expect("write");
 		client.write_all(b"\r\n").await.expect("write");
@@ -274,7 +364,7 @@ mod tests {
 	#[tokio::test(start_paused = true)]
 	async fn idle_timeout_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend(), None).await });
+		let task = tokio::spawn(async move { run(server, backend(), None, clock(), None).await });
 		let _ = read_chunk(&mut client).await; // greeting
 		// Send nothing: the read timeout (paused clock) fires and closes.
 		let mut chunk = [0u8; 16];
@@ -282,6 +372,14 @@ mod tests {
 		assert!(task.await.expect("join").is_ok());
 	}
 }
+
+#[cfg(test)]
+#[path = "server_tests_conn_limit.rs"]
+mod conn_limit_tests;
+
+#[cfg(test)]
+#[path = "server_tests_deadline.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 #[path = "server_tests_continuation.rs"]
