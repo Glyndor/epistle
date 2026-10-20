@@ -401,6 +401,17 @@ where
 		};
 
 		let response = session.handle_line(&line, literal);
+		// UNAUTHENTICATE clears the account inside `handle_line`. The
+		// loop-top check catches it on the next iteration, but only after
+		// the OK response has already gone out under the previous (and
+		// possibly expired) preauth deadline. Open a fresh window here,
+		// before the write, so a peer that stops reading cannot use the
+		// old clock to close a session that has just signed out.
+		let signed_in = session.account_is_some();
+		if was_signed_in && !signed_in {
+			clock.restart_preauth_from_now(preauth_timeout);
+			was_signed_in = signed_in;
+		}
 		let upgrade = response.starts_tls();
 		let close = response.is_final();
 		write_response(&mut stream, &response, &clock, session.account_is_some()).await?;

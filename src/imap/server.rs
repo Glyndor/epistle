@@ -6,7 +6,6 @@ use std::time::Duration;
 
 #[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 
@@ -14,7 +13,7 @@ use crate::directory_store::DirectoryHandle;
 use crate::smtp::line::{LineDecoder, LineError};
 
 use super::session::Session;
-use crate::net::conn_limit::{Admission, Refusal, refuse};
+use crate::net::conn_limit::Refusal;
 use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
 use crate::net::response_writer;
 use server_literal::{Taken, take_exact};
@@ -147,77 +146,6 @@ impl Server {
 			training: None,
 			append_limit: super::command::DEFAULT_APPEND_LIMIT,
 			per_account_counter: None,
-		}
-	}
-
-	/// Build a session with this server's quota, OAuth and channel-binding.
-	fn new_session(&self) -> Session {
-		let mut session = Session::new(
-			&self.hostname,
-			self.data_dir.clone(),
-			self.directory.current(),
-		)
-		.with_quota_limit(self.quota_bytes)
-		.with_crypto(self.crypto.clone())
-		.with_oauth(self.oauth.clone())
-		.with_retention_days(self.retention_days)
-		.with_auth_protocol(self.auth_protocol)
-		.with_scram_enabled(self.scram_enabled)
-		.with_append_limit(self.append_limit);
-		if let Some(counter) = &self.per_account_counter {
-			session = session.with_per_account_counter(Arc::clone(counter));
-		}
-		if let Some(cbind) = &self.cbind_data {
-			session = session.with_channel_binding(cbind.current());
-		}
-		if let Some(queue) = &self.training {
-			session = session.with_training(queue.clone());
-		}
-		session
-	}
-
-	/// Accept connections forever.
-	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		self.serve_on(listener).await
-	}
-
-	/// [`Self::serve`] over any source of connections.
-	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
-		self: Arc<Self>,
-		listener: A,
-	) -> std::io::Result<()> {
-		let admission = Admission::new(self.max_connections, self.max_per_ip);
-		let mut accepting = crate::net::accept::Accepting::new(listener);
-		loop {
-			let (stream, peer) = match &self.drain {
-				Some(drain) => tokio::select! {
-					accepted = accepting.next() => accepted,
-					() = drain.started() => return Ok(()),
-				},
-				None => accepting.next().await,
-			};
-			// A dual-stack `::` listener reports an IPv4 peer as
-			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
-			// session consults at authentication sees a plain `IpAddr::V4`.
-			let peer = crate::net::canonical_peer(peer);
-			let admitted = match admission.admit(peer.ip()) {
-				Ok(admitted) => admitted,
-				Err(why) => {
-					tracing::warn!(%peer, ?why, "IMAP connection limit reached, refusing");
-					refuse(stream, refusal(why));
-					continue;
-				}
-			};
-			let server = Arc::clone(&self);
-			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
-			tokio::spawn(async move {
-				let _admitted = admitted;
-				let _tracked = tracked;
-				tracing::debug!(%peer, "imap connection accepted");
-				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
-					tracing::debug!(%peer, %error, "imap connection ended with error");
-				}
-			});
 		}
 	}
 
@@ -657,11 +585,17 @@ mod tests_literals;
 #[path = "server_tests_utf8_append.rs"]
 mod tests_utf8_append;
 
+#[path = "server_accept.rs"]
+mod accept;
+
 #[path = "server_discard.rs"]
 mod discard;
 
 #[path = "server_literal.rs"]
 mod server_literal;
+
+#[path = "server_session_factory.rs"]
+mod session_factory;
 
 #[cfg(test)]
 #[path = "server_tests_conn_limit.rs"]

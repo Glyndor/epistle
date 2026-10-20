@@ -289,3 +289,61 @@ async fn the_tls_handshake_shares_the_pre_auth_deadline() {
 	);
 	let _ = task.await;
 }
+
+/// Build a ManageSieve listener for the audit tests. The audit path is
+/// driven through the in-memory `handle_preauth_for_test`, which adopts
+/// the account without a STARTTLS handshake so the test can stall the
+/// underlying transport without negotiating TLS first.
+fn start_audit_server() -> (tempfile::TempDir, crate::managesieve::server::Server) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	));
+	let (tls, _) = crate::tls::test_support::acceptor_and_cert();
+	let server = crate::managesieve::server::Server::new(dir.path().to_path_buf(), directory, tls)
+		.with_max_literal(4096)
+		.with_preauth_timeout(PREAUTH);
+	(dir, server)
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_unauthenticate_slow_flush_gets_a_fresh_window() {
+	let (_dir, server) = start_audit_server();
+	let (mut client, transport, ctl) = crate::net::audit_support::Gate::pair();
+	let task =
+		tokio::spawn(async move { server.handle_preauth_for_test(transport, "alice").await });
+	crate::net::audit_support::greeting(&mut client).await;
+	tokio::time::advance(PREAUTH * 3).await;
+	crate::net::audit_support::settle().await;
+	ctl.block(2);
+	client
+		.write_all(b"UNAUTHENTICATE\r\n")
+		.await
+		.expect("write");
+	crate::net::audit_support::settle().await;
+	let prematurely_ended = task.is_finished();
+	tokio::time::advance(Duration::from_secs(1)).await;
+	ctl.release();
+	crate::net::audit_support::settle().await;
+	if !prematurely_ended {
+		let mut reply = [0u8; 64];
+		let n = client.read(&mut reply).await.expect("ok");
+		assert_eq!(&reply[..n], b"OK\r\n");
+		client.write_all(b"LOGOUT\r\n").await.expect("logout");
+		let mut rest = Vec::new();
+		tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut rest))
+			.await
+			.expect("bye")
+			.expect("bye read");
+		assert_eq!(rest, b"BYE \"Goodbye.\"\r\n");
+	}
+	drop(client);
+	let result = task.await.expect("join");
+	assert!(
+		!prematurely_ended,
+		"UNAUTHENTICATE closes on its expired old preauth clock: {result:?}"
+	);
+	assert!(result.is_ok(), "{result:?}");
+}

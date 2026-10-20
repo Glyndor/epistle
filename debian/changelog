@@ -58,6 +58,10 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     peer that stops reading is cut off at the deadline, releasing the
     admission slot; before, a blocked output kept the connection alive past
     the bound.
+  * Security: close the gaps the previous deadline left in the IMAP helpers
+    that drain a rejected literal and a chained literal announced after it,
+    and in the ManageSieve UNAUTHENTICATE response that left the session
+    signed out under the expired pre-auth clock of the original sign-in.
   * Security: one client address can no longer hold every connection of a
     listener. IMAP, POP3 and ManageSieve cap the connections one client holds
     (200 by default, 40 for ManageSieve, `max_mailbox_connections_per_ip`), and the plain-HTTP

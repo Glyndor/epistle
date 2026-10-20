@@ -1,7 +1,8 @@
 //! Drain rejected IMAP literals while preserving the following command.
 
+use crate::net::deadline;
 use crate::smtp::line::LineDecoder;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::time::Instant;
 
 pub(super) struct Drain {
@@ -50,7 +51,9 @@ pub(super) async fn literal<S: AsyncRead + Unpin + ?Sized>(
 
 /// Drain a rejected literal and report whether the connection stays open.
 /// A timeout answers `* BYE read timeout`; a peer that closes mid-literal
-/// ends the connection quietly.
+/// ends the connection quietly. The BYE travels under the same shared
+/// pre-auth deadline as every other write before sign-in, so a peer that
+/// stops reading cannot keep the listener slot alive past the bound.
 pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
@@ -60,8 +63,7 @@ pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>
 	match literal(stream, decoder, size, deadline).await {
 		Ok(drained) => Ok(drained.complete),
 		Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-			stream.write_all(b"* BYE read timeout\r\n").await?;
-			stream.flush().await?;
+			deadline::write_all(stream, b"* BYE read timeout\r\n", deadline).await?;
 			Ok(false)
 		}
 		Err(error) => Err(error),
@@ -84,6 +86,8 @@ pub(super) fn oversized_sent_literal(line: &str, append_limit: usize) -> bool {
 /// empty line. A further non-synchronizing literal it announces is drained
 /// too. `Some(true)` means the next line is still part of that command,
 /// `Some(false)` that the command is over, `None` that the connection ends.
+/// The literal-too-large BYE travels under the same shared pre-auth
+/// deadline as every other write before sign-in.
 pub(super) async fn rejected_tail<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 	stream: &mut S,
 	decoder: &mut LineDecoder,
@@ -96,8 +100,7 @@ pub(super) async fn rejected_tail<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
 		return Ok(Some(false));
 	};
 	if literal.size > append_limit {
-		stream.write_all(b"* BYE literal too large\r\n").await?;
-		stream.flush().await?;
+		deadline::write_all(stream, b"* BYE literal too large\r\n", deadline).await?;
 		return Ok(None);
 	}
 	if literal.synchronizing {

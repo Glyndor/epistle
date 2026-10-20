@@ -18,6 +18,8 @@
 //! future Rust upgrade cannot silently regress this invariant.
 
 pub mod accept;
+#[cfg(test)]
+pub mod audit_support;
 pub mod conn_limit;
 pub mod deadline;
 pub mod http_serve;
