@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::Instant;
@@ -15,6 +16,7 @@ use crate::smtp::line::{LineDecoder, LineError};
 use super::session::Session;
 use crate::net::conn_limit::{Admission, Refusal, refuse};
 use crate::net::deadline::{DEFAULT_PREAUTH_TIMEOUT, SessionClock};
+use crate::net::response_writer;
 use server_literal::{Taken, take_exact};
 
 /// How a listener negotiates TLS.
@@ -246,8 +248,7 @@ impl Server {
 		session.set_peer_ip(peer);
 
 		let greeting = session.greeting();
-		stream.write_all(&greeting.bytes).await?;
-		stream.flush().await?;
+		response_writer::write_response(&mut *stream, &greeting.bytes, &clock, false).await?;
 
 		let mut decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 		let mut buffer = [0u8; 4096];
@@ -279,7 +280,13 @@ impl Server {
 						let Some(waited) =
 							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
 						else {
-							let _ = stream.write_all(SHUTTING_DOWN).await;
+							let _ = response_writer::write_response(
+								&mut *stream,
+								SHUTTING_DOWN,
+								&clock,
+								session.is_authenticated(),
+							)
+							.await;
 							return Ok(());
 						};
 						match waited {
@@ -288,14 +295,26 @@ impl Server {
 							Err(_) => {
 								if !session.notify_active() || Instant::now() >= deadline {
 									tracing::debug!("IMAP idle timeout, closing connection");
-									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										b"* BYE idle timeout\r\n",
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								}
-								if let Some(notification) = session.check_notify() {
-									if stream.write_all(&notification.bytes).await.is_err() {
-										return Ok(());
-									}
-									let _ = stream.flush().await;
+								if let Some(notification) = session.check_notify()
+									&& response_writer::write_response(
+										&mut *stream,
+										&notification.bytes,
+										&clock,
+										session.is_authenticated(),
+									)
+									.await
+									.is_err()
+								{
+									return Ok(());
 								}
 							}
 						}
@@ -313,8 +332,13 @@ impl Server {
 							b"* BYE protocol error\r\n"
 						}
 					};
-					stream.write_all(message).await?;
-					stream.flush().await?;
+					response_writer::write_response(
+						&mut *stream,
+						message,
+						&clock,
+						session.is_authenticated(),
+					)
+					.await?;
 					return Ok(());
 				}
 			};
@@ -340,19 +364,35 @@ impl Server {
 			}
 
 			let Ok(line) = String::from_utf8(line) else {
-				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
-				stream.flush().await?;
+				response_writer::write_response(
+					&mut *stream,
+					b"* BAD non-ASCII command\r\n",
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				error_streak += 1;
 				if error_streak >= MAX_ERROR_STREAK {
-					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					let _ = response_writer::write_response(
+						&mut *stream,
+						b"* BYE too many errors\r\n",
+						&clock,
+						session.is_authenticated(),
+					)
+					.await;
 					return Ok(());
 				}
 				continue;
 			};
 
 			if discard::oversized_sent_literal(&line, self.append_limit) {
-				stream.write_all(b"* BYE literal too large\r\n").await?;
-				stream.flush().await?;
+				response_writer::write_response(
+					&mut *stream,
+					b"* BYE literal too large\r\n",
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				return Ok(());
 			}
 
@@ -361,15 +401,26 @@ impl Server {
 			if is_bad_response(&output.bytes) {
 				error_streak += 1;
 				if error_streak >= MAX_ERROR_STREAK {
-					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					let _ = response_writer::write_response(
+						&mut *stream,
+						b"* BYE too many errors\r\n",
+						&clock,
+						session.is_authenticated(),
+					)
+					.await;
 					return Ok(());
 				}
 			} else {
 				error_streak = 0;
 			}
 			loop {
-				stream.write_all(&output.bytes).await?;
-				stream.flush().await?;
+				response_writer::write_response(
+					&mut *stream,
+					&output.bytes,
+					&clock,
+					session.is_authenticated(),
+				)
+				.await?;
 				if output.close {
 					return Ok(());
 				}
@@ -405,7 +456,13 @@ impl Server {
 							Taken::Closed => return Ok(()),
 							Taken::TimedOut => {
 								tracing::debug!("IMAP literal read timeout, closing");
-								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+								let _ = response_writer::write_response(
+									&mut *stream,
+									b"* BYE read timeout\r\n",
+									&clock,
+									session.is_authenticated(),
+								)
+								.await;
 								return Ok(());
 							}
 						};
@@ -421,7 +478,13 @@ impl Server {
 							Taken::Closed => return Ok(()),
 							Taken::TimedOut => {
 								tracing::debug!("IMAP literal trailer timeout, closing");
-								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+								let _ = response_writer::write_response(
+									&mut *stream,
+									b"* BYE read timeout\r\n",
+									&clock,
+									session.is_authenticated(),
+								)
+								.await;
 								return Ok(());
 							}
 						};
@@ -511,7 +574,13 @@ impl Server {
 							Ok(None) => {
 								if idle_start.elapsed() >= self.read_timeout {
 									tracing::debug!("IMAP idle timeout during IDLE, closing");
-									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										b"* BYE idle timeout\r\n",
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								}
 								let reading = stream.read(&mut buffer);
@@ -519,7 +588,13 @@ impl Server {
 								let Some(waited) =
 									crate::shutdown::or_drain(drain, IDLE_POLL, reading).await
 								else {
-									let _ = stream.write_all(SHUTTING_DOWN).await;
+									let _ = response_writer::write_response(
+										&mut *stream,
+										SHUTTING_DOWN,
+										&clock,
+										session.is_authenticated(),
+									)
+									.await;
 									return Ok(());
 								};
 								let read = match waited {
@@ -527,12 +602,17 @@ impl Server {
 									Ok(Err(e)) => return Err(e),
 									Err(_) => {
 										// Poll interval expired; check for new messages.
-										if let Some(notification) = session.check_idle() {
-											if stream.write_all(&notification.bytes).await.is_err()
-											{
-												return Ok(());
-											}
-											let _ = stream.flush().await;
+										if let Some(notification) = session.check_idle()
+											&& response_writer::write_response(
+												&mut *stream,
+												&notification.bytes,
+												&clock,
+												session.is_authenticated(),
+											)
+											.await
+											.is_err()
+										{
+											return Ok(());
 										}
 										continue;
 									}

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::Instant;
@@ -17,6 +18,8 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
 use crate::net::conn_limit::{Admission, Refusal, refuse};
+use crate::net::deadline::SessionClock;
+use crate::net::response_writer;
 use crate::smtp::line::LineDecoder;
 
 use super::command;
@@ -207,6 +210,7 @@ impl Server {
 			stream,
 			session,
 			self.max_literal,
+			SessionClock::start(self.preauth_timeout, TIMEOUT),
 			self.preauth_timeout,
 			None,
 		)
@@ -227,6 +231,7 @@ impl Server {
 			stream,
 			session,
 			self.max_literal,
+			SessionClock::start(self.preauth_timeout, TIMEOUT),
 			self.preauth_timeout,
 			Some(&self.tls),
 		)
@@ -241,6 +246,7 @@ async fn run_command_loop<S, B>(
 	stream: S,
 	mut session: Session<B>,
 	max_literal: usize,
+	mut clock: SessionClock,
 	preauth_timeout: Duration,
 	tls_acceptor: Option<&tokio_rustls::TlsAcceptor>,
 ) -> std::io::Result<()>
@@ -249,48 +255,47 @@ where
 	B: Backend,
 {
 	let mut stream: Box<dyn Connection> = Box::new(stream);
-	stream.write_all(&session.greeting().encode()).await?;
-	stream.flush().await?;
+	let greeting = session.greeting();
+	write_response(&mut stream, &greeting, &clock, session.account_is_some()).await?;
 
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
-	// Before authentication the whole phase shares one deadline counted from
-	// the start of the session, so neither a slow trickle of bytes nor a
-	// stream of cheap commands can hold the connection past it. Afterwards
-	// each command gets the idle timeout for its line, and a fresh one for its
-	// literal from the moment the line is complete. A session that signs out
-	// (UNAUTHENTICATE) starts a new pre-authentication phase, with a new window.
-	let mut preauth_until = Instant::now() + preauth_timeout;
+	// Before authentication the whole phase shares one deadline counted
+	// from the start of the session, so neither a slow trickle of bytes
+	// nor a stream of cheap commands can hold the connection past it.
+	// The bound covers every write and flush the server tries to put
+	// on the wire too, otherwise a peer that stops reading would keep
+	// the listener slot alive. After signing in each command gets the
+	// idle timeout for its line, and a fresh one for its literal from
+	// the moment the line is complete. A session that signs out
+	// (UNAUTHENTICATE) starts a new pre-authentication phase, with a
+	// new window.
 	let mut was_signed_in = session.account_is_some();
 	loop {
 		let signed_in = session.account_is_some();
 		if was_signed_in && !signed_in {
-			preauth_until = Instant::now() + preauth_timeout;
+			clock.restart_preauth_from_now(preauth_timeout);
 		}
 		was_signed_in = signed_in;
-		let line_deadline = if signed_in {
-			Instant::now() + TIMEOUT
-		} else {
-			preauth_until
-		};
+		let line_deadline = clock.step(signed_in);
 		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, line_deadline).await?
 		else {
-			write(
+			write_response(
 				&mut stream,
 				&Response::Bye("Pre-authentication timeout.".into()),
+				&clock,
+				session.account_is_some(),
 			)
 			.await?;
 			return Ok(());
 		};
-		let read_deadline = if signed_in {
-			Instant::now() + TIMEOUT
-		} else {
-			preauth_until
-		};
+		let read_deadline = clock.step(session.account_is_some());
 		let Ok(line) = String::from_utf8(line) else {
-			write(
+			write_response(
 				&mut stream,
 				&Response::No(Some("Non-UTF-8 command.".into())),
+				&clock,
+				session.account_is_some(),
 			)
 			.await?;
 			continue;
@@ -302,7 +307,13 @@ where
 		// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
 		let literal = match command::trailing_literal(&line) {
 			Some(literal) if literal.len > max_literal => {
-				write(&mut stream, &Response::Bye("literal too large".into())).await?;
+				write_response(
+					&mut stream,
+					&Response::Bye("literal too large".into()),
+					&clock,
+					session.account_is_some(),
+				)
+				.await?;
 				return Ok(());
 			}
 			Some(literal) => {
@@ -317,7 +328,13 @@ where
 					Ok(_) => None,
 				};
 				if let Some(message) = rejection {
-					write(&mut stream, &Response::No(Some(message.into()))).await?;
+					write_response(
+						&mut stream,
+						&Response::No(Some(message.into())),
+						&clock,
+						session.account_is_some(),
+					)
+					.await?;
 					if !literal.synchronizing {
 						match discard::literal(
 							&mut *stream,
@@ -330,7 +347,13 @@ where
 							Ok(drained) if drained.complete => {}
 							Ok(_) => return Ok(()),
 							Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-								write(&mut stream, &Response::Bye("read timeout".into())).await?;
+								write_response(
+									&mut stream,
+									&Response::Bye("read timeout".into()),
+									&clock,
+									session.account_is_some(),
+								)
+								.await?;
 								return Ok(());
 							}
 							Err(error) => return Err(error),
@@ -349,7 +372,13 @@ where
 				match read {
 					Ok(Some(bytes)) => Some(bytes),
 					Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-						write(&mut stream, &Response::Bye("read timeout".into())).await?;
+						write_response(
+							&mut stream,
+							&Response::Bye("read timeout".into()),
+							&clock,
+							session.account_is_some(),
+						)
+						.await?;
 						return Ok(());
 					}
 					Err(error) => return Err(error),
@@ -357,9 +386,11 @@ where
 						// The connection closed before the announced
 						// literal size arrived: drop the partial payload
 						// instead of parsing it as a complete script.
-						write(
+						write_response(
 							&mut stream,
 							&Response::No(Some("Literal truncated by connection close.".into())),
+							&clock,
+							session.account_is_some(),
 						)
 						.await?;
 						continue;
@@ -372,7 +403,7 @@ where
 		let response = session.handle_line(&line, literal);
 		let upgrade = response.starts_tls();
 		let close = response.is_final();
-		write(&mut stream, &response).await?;
+		write_response(&mut stream, &response, &clock, session.account_is_some()).await?;
 		if close {
 			return Ok(());
 		}
@@ -384,8 +415,8 @@ where
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();
-			stream.write_all(&session.greeting().encode()).await?;
-			stream.flush().await?;
+			let greeting = session.greeting();
+			write_response(&mut stream, &greeting, &clock, session.account_is_some()).await?;
 		}
 	}
 }
@@ -450,10 +481,18 @@ async fn read_literal(
 	Ok(Some(literal))
 }
 
-/// Write a response and flush.
-async fn write(stream: &mut Box<dyn Connection>, response: &Response) -> std::io::Result<()> {
-	stream.write_all(&response.encode()).await?;
-	stream.flush().await
+/// Write a response and flush. Before sign-in the absolute pre-auth
+/// deadline covers both operations so a peer that stops reading cannot
+/// keep the connection alive past it; the post-auth clock is untouched.
+/// Wrapper around [`response_writer::write_response`] that takes a
+/// [`Response`] and threads it through the shared writer.
+async fn write_response(
+	stream: &mut Box<dyn Connection>,
+	response: &Response,
+	clock: &SessionClock,
+	authenticated: bool,
+) -> std::io::Result<()> {
+	response_writer::write_response(stream, &response.encode(), clock, authenticated).await
 }
 
 /// A boxable bidirectional stream (plain or TLS).

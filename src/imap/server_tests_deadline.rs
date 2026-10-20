@@ -237,6 +237,30 @@ async fn the_deadline_does_not_restart_after_the_starttls_handshake() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn audit_preauth_deadline_also_bounds_blocked_output() {
+	let (mut client, task, _dir, _cert) = start_server(TlsMode::StartTls);
+	greeting(&mut client).await;
+	client
+		.write_all("a CAPABILITY\r\n".repeat(200).as_bytes())
+		.await
+		.expect("write");
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	tokio::time::advance(PREAUTH * 3).await;
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	let ended = task.is_finished();
+	task.abort();
+	let _ = task.await;
+	assert!(
+		ended,
+		"preauth session remains alive after 3 deadlines while output is blocked"
+	);
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_tail_of_a_rejected_command_with_a_chained_literal_keeps_the_deadline() {
 	let (client, task, _dir, cert) = start_server(TlsMode::Implicit);
 	let mut tls = sign_in_screen(client, cert).await;

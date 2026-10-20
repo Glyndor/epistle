@@ -52,6 +52,12 @@ epistle (0.12.2) UNRELEASED; urgency=medium
     not held to it. The deadline is 60 seconds by default and is set for the
     three protocols with `preauth_timeout` or `epistle limits set
     preauth-timeout`.
+  * Security: the same pre-authentication deadline also bounds every byte the
+    server tries to write or flush before sign-in (greeting, responses, error
+    BYE/-ERR, post-STARTTLS re-greeting) on IMAP, POP3 and ManageSieve. A
+    peer that stops reading is cut off at the deadline, releasing the
+    admission slot; before, a blocked output kept the connection alive past
+    the bound.
   * Security: one client address can no longer hold every connection of a
     listener. IMAP, POP3 and ManageSieve cap the connections one client holds
     (200 by default, 40 for ManageSieve, `max_mailbox_connections_per_ip`), and the plain-HTTP

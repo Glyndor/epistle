@@ -249,6 +249,30 @@ async fn signing_out_opens_a_fresh_pre_auth_window() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn audit_preauth_deadline_also_bounds_blocked_output() {
+	let (mut client, task, _dir) = start_server();
+	greeting(&mut client).await;
+	client
+		.write_all("CAPABILITY\r\n".repeat(200).as_bytes())
+		.await
+		.expect("write");
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	tokio::time::advance(PREAUTH * 3).await;
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	let ended = task.is_finished();
+	task.abort();
+	let _ = task.await;
+	assert!(
+		ended,
+		"preauth session remains alive after 3 deadlines while output is blocked"
+	);
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_tls_handshake_shares_the_pre_auth_deadline() {
 	let (mut client, task, _dir) = start_server();
 	greeting(&mut client).await;

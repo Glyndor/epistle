@@ -140,3 +140,27 @@ async fn a_stalled_tls_handshake_is_cut_at_the_deadline() {
 	assert_eq!(start.elapsed(), PREAUTH);
 	assert!(task.await.expect("server task").is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn audit_preauth_deadline_also_bounds_blocked_output() {
+	let (mut client, task, _dir) = start();
+	let _ = read_chunk(&mut client).await;
+	client
+		.write_all("CAPA\r\n".repeat(200).as_bytes())
+		.await
+		.expect("write");
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	tokio::time::advance(PREAUTH * 3).await;
+	for _ in 0..100 {
+		tokio::task::yield_now().await;
+	}
+	let ended = task.is_finished();
+	task.abort();
+	let _ = task.await;
+	assert!(
+		ended,
+		"preauth session remains alive after 3 deadlines while output is blocked"
+	);
+}
