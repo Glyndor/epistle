@@ -138,10 +138,11 @@ run at a time, 64 may wait, and the next gets `429`. Use the `sha256:` form.
 ### Limit of `/api/v1/auth/verify` under a confined key
 
 `POST /api/v1/auth/verify` answers `valid: true` only for an account the
-bearer could legitimately verify. The configured token and every key without
-`domains` (= `DomainScope::All`) skip the post-auth membership check: the
-mail listeners accept any account the directory knows, including SQL and
-LDAP ones, and the verify route must agree.
+bearer could legitimately verify. The configured token and administrative keys
+without `account` or `domains` (= `DomainScope::All`), authorized for this route,
+skip the post-auth membership check: the mail listeners accept any account the
+directory knows, including SQL and LDAP ones, and the verify route must agree.
+Account-bound keys cannot access `/api/v1/auth/verify`, even without `domains`.
 
 A key confined to some domains narrows the post-auth check to the
 `accounts()` listing (static + dynamic accounts). An account the listing

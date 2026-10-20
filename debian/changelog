@@ -1,3 +1,9 @@
+epistle (0.12.3) UNRELEASED; urgency=medium
+
+  * Expose per-account connection limits in the operator limits catalog.
+
+ -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
+
 epistle (0.12.2) unstable; urgency=medium
 
   * Improve DNS provider inspection safety and accuracy.

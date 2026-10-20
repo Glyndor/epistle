@@ -475,3 +475,32 @@ fn reserved_remaining_flags_an_empty_authentication_results_value_in_lowercase()
 		Some("Authentication-Results"),
 	);
 }
+
+/// Body amplification exposes repeated suffix shifts without move instrumentation.
+#[test]
+fn repeated_fields_compaction_cost_does_not_multiply_the_body() {
+	fn elapsed(body_len: usize) -> std::time::Duration {
+		let mut original = b"X-Spam-Status: forged\r\n".repeat(8_192);
+		original.extend_from_slice(b"Subject: kept\r\n\r\n");
+		original.resize(original.len() + body_len, 0xff);
+		(0..3)
+			.map(|_| {
+				let mut data = original.clone();
+				let start = std::time::Instant::now();
+				strip(std::hint::black_box(&mut data), HOST);
+				let elapsed = start.elapsed();
+				assert_eq!(data.len(), b"Subject: kept\r\n\r\n".len() + body_len);
+				std::hint::black_box(data);
+				elapsed
+			})
+			.min()
+			.unwrap()
+	}
+	let small = elapsed(64 * 1024);
+	let large = elapsed(8 * 1024 * 1024);
+	// Parsing is identical; one body copy permits a generous fixed margin.
+	assert!(
+		large < small * 12 + std::time::Duration::from_millis(50),
+		"body amplification suggests repeated suffix moves: small={small:?}, large={large:?}"
+	);
+}

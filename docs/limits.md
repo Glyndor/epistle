@@ -41,6 +41,8 @@ rule comes from.
 | `inbound-rate-per-sender` | | count | adjustable | | no standard mandate |
 | `max-connections-per-listener` | protocol defaults | count | adjustable | | no standard mandate |
 | `max-connections-per-ip` | 20 | count | adjustable | | no standard mandate |
+| `max-connections-per-account-per-ip` | 10 | count | adjustable | | no standard mandate |
+| `max-connections-per-account-total` | 50 | count | adjustable | | no standard mandate |
 | `masked-addresses-max` | 100 | count | adjustable | | no standard mandate |
 | `first-time-sender-delay` | 0 | seconds | adjustable | | no standard mandate |
 | `greylist-delay` | 0 | seconds | adjustable | | no standard mandate |
