@@ -54,6 +54,22 @@ pub struct WebDavState {
 	pub directory: DirectoryHandle,
 	/// Server data directory; account trees live beneath `accounts/<n>/dav`.
 	pub data_dir: PathBuf,
+	/// Reverse-proxy networks the listener trusts to forward `X-Forwarded-For`
+	/// truthfully. Empty trusts no proxy. The `[api] trusted_proxies` value
+	/// from the operator's configuration is wired in by the `serve` command
+	/// so the audit log and ban store see the client behind a trusted proxy
+	/// under the address the proxy reports, never the proxy's own socket.
+	pub trusted_proxies: Vec<crate::cidr::Cidr>,
+}
+
+impl WebDavState {
+	/// Attach the trusted-proxy network list. The `serve` command passes the
+	/// `[api] trusted_proxies` value through so the WebDAV listener shares the
+	/// same proxy configuration as the API listener.
+	pub fn with_trusted_proxies(mut self, proxies: Vec<crate::cidr::Cidr>) -> Self {
+		self.trusted_proxies = proxies;
+		self
+	}
 }
 
 /// Build the WebDAV router. A single catch-all route forwards every method and
@@ -61,9 +77,21 @@ pub struct WebDavState {
 /// method — necessary because axum's `MethodFilter` does not cover the WebDAV
 /// verbs (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`).
 pub fn router(directory: DirectoryHandle, data_dir: PathBuf) -> Router {
+	router_with_trusted(directory, data_dir, Vec::new())
+}
+
+/// Build the WebDAV router with the trusted-proxy network list. Production
+/// uses this so the failure log and ban store see a peer's real address
+/// when the request reached the listener through a trusted reverse proxy.
+pub fn router_with_trusted(
+	directory: DirectoryHandle,
+	data_dir: PathBuf,
+	trusted_proxies: Vec<crate::cidr::Cidr>,
+) -> Router {
 	let state = WebDavState {
 		directory,
 		data_dir,
+		trusted_proxies,
 	};
 	Router::new()
 		.fallback(any(handler::dispatch))

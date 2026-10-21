@@ -461,10 +461,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
-				tasks.push(super::serve_tasks::serve_http(
+				tasks.push(super::serve_webdav::spawn(
 					listener,
-					router,
+					&config,
+					directory.clone(),
 					http_limits,
 				));
 			}

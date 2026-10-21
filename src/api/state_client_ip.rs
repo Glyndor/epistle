@@ -1,4 +1,6 @@
-//! Trusted proxy client address resolution shared by bearer and OAuth paths.
+//! API state's trusted proxy wiring. The shared resolution lives in
+//! [`crate::net::trusted_ip`]; this module owns the storage and the
+//! pre-share setter.
 
 use super::ApiState;
 use axum::http::HeaderMap;
@@ -20,34 +22,7 @@ impl ApiState {
 		peer: Option<SocketAddr>,
 		headers: &HeaderMap,
 	) -> Option<IpAddr> {
-		let peer = peer?.ip().to_canonical();
-		let trusted = |ip| {
-			self.inner
-				.trusted_proxies
-				.iter()
-				.any(|net| net.contains(ip))
-		};
-		if !trusted(peer) {
-			return Some(peer);
-		}
-		let mut selected = None;
-		// Visit all entries, including those left of the trust boundary, so any
-		// malformed value makes the entire header unusable. No chain allocation.
-		for value in headers.get_all("x-forwarded-for").iter().rev() {
-			let Ok(value) = value.to_str() else {
-				return Some(peer);
-			};
-			for entry in value.rsplit(',') {
-				let Ok(ip) = entry.trim().parse::<IpAddr>() else {
-					return Some(peer);
-				};
-				let ip = ip.to_canonical();
-				if selected.is_none() && !trusted(ip) {
-					selected = Some(ip);
-				}
-			}
-		}
-		Some(selected.unwrap_or(peer))
+		crate::net::trusted_ip::effective(&self.inner.trusted_proxies, peer, headers)
 	}
 }
 

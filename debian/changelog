@@ -4,6 +4,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Document how to expose the management API on a private interface, and warn
     when an API key pinned to a network sits behind a bridge that hides the
     address of the client.
+  * WebDAV logs a failed sign-in with the client address behind a trusted reverse proxy and counts it against that address, as the API listeners do.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
