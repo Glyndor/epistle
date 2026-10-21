@@ -75,7 +75,7 @@ fn only_trusted_hops_keep_the_socket_address() {
 }
 
 #[test]
-fn malformed_forwarded_discards_the_whole_header() {
+fn malformed_entry_next_to_the_proxy_keeps_the_socket_address() {
 	let trusted = trusted();
 	assert_eq!(
 		effective(
@@ -83,7 +83,15 @@ fn malformed_forwarded_discards_the_whole_header() {
 			Some(peer("10.0.0.1:80")),
 			&headers(Some("garbage, 198.51.100.1"))
 		),
-		Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+		Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)))
+	);
+	assert_eq!(
+		effective(
+			&trusted,
+			Some(peer("10.0.0.1:80")),
+			&headers(Some("garbage, 198.51.100.1, 10.0.0.2"))
+		),
+		Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)))
 	);
 	assert_eq!(
 		effective(

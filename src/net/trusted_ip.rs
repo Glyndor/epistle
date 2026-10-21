@@ -7,11 +7,13 @@
 //! empty trusts no proxy and the socket address is always the answer. When
 //! the socket address belongs to a trusted CIDR, `X-Forwarded-For` is
 //! walked from the right (the closest hop is the most recent addition), so
-//! the leftmost untrusted address on the chain is the client. A malformed
-//! entry -- non-ASCII, an invalid IP, a non-numeric port, or a trailing
-//! comma with nothing after it -- invalidates the whole header and the
-//! socket address is kept, so a peer cannot craft a header that escapes
-//! the limiter.
+//! the first untrusted address from the right is the client, and entries
+//! to its left, which the client wrote itself, are never read. A malformed
+//! entry met before that address -- non-ASCII, an invalid IP, a
+//! non-numeric port, or a trailing comma with nothing after it -- was
+//! written by a trusted hop, so the header is unusable and the socket
+//! address is kept. Garbage to the left of the client address cannot move
+//! its failures onto the proxy, which every other user shares.
 //!
 //! IPv4 clients over a dual-stack listener that arrived as v4-mapped IPv6
 //! (`::ffff:a.b.c.d`) are folded back to `IpAddr::V4` before any of the
@@ -35,9 +37,12 @@ pub fn effective(
 	if !trusts(peer) {
 		return Some(peer);
 	}
-	let mut selected = None;
-	// Visit all entries, including those left of the trust boundary, so any
-	// malformed value makes the entire header unusable. No chain allocation.
+	// Walk from the right and stop at the first untrusted address: everything
+	// to its left was written by that client, so it must not be read, and a
+	// malformed value there must not push the failure onto the proxy's own
+	// address, which every other user behind the proxy shares. Only a
+	// malformed entry at or right of the boundary, written by a trusted hop,
+	// leaves the socket address in charge. No chain allocation.
 	for value in headers.get_all("x-forwarded-for").iter().rev() {
 		let Ok(value) = value.to_str() else {
 			return Some(peer);
@@ -47,12 +52,12 @@ pub fn effective(
 				return Some(peer);
 			};
 			let ip = ip.to_canonical();
-			if selected.is_none() && !trusts(ip) {
-				selected = Some(ip);
+			if !trusts(ip) {
+				return Some(ip);
 			}
 		}
 	}
-	Some(selected.unwrap_or(peer))
+	Some(peer)
 }
 
 #[cfg(test)]
