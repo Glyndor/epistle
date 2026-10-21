@@ -17,6 +17,7 @@ mod autoconfig;
 mod autodiscover;
 mod backup;
 mod ban;
+mod client_address;
 mod completions;
 mod config_check;
 pub mod config_edit;

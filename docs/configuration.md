@@ -191,6 +191,52 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 
 Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent. Operators exposing any of these externally should either configure `[tls]` itself or front the listener with a TLS proxy.
 
+### A listener on a private interface
+
+`addr` is resolved in the network namespace `serve` runs in. On the
+container stack that is the container's namespace, so `addr = "10.0.0.1"` (a
+WireGuard address of the host, say) names an address the container does not
+own: the bind fails with `EADDRNOTAVAIL` and `serve` stops starting. Only `::`
+gets a fallback to another address, and it does not need one.
+
+What keeps a listener off the public interfaces is the **published port** on
+the host, and a private `addr` does not do it. `epistle init` publishes every
+non-loopback listener as `<port>:<port>` (`api` becomes `8025:8025`, reachable
+on every host address) and gives a loopback listener no `ports:` entry at all.
+Set the listener to `addr = "0.0.0.0"` (the container side) and pin the host
+side in `<data_dir>/compose/compose.override.yaml`, which survives both an
+`init` rerun and `stack update`. A plain `ports:` list there is **merged** with
+the one `init` writes, so `8025:8025` and `10.0.0.1:8025:8025` would both be
+requested and the engine fails with "Address already in use". The `!override`
+tag replaces the list, so it has to carry every port the stack publishes, the
+mail ones included:
+
+```yaml
+services:
+  mail:
+    ports: !override
+      - "25:25"
+      - "143:143"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "10.0.0.1:8025:8025"
+```
+
+After this the API answers on `10.0.0.1:8025` and nowhere else. `epistle stack
+update` and `epistle probe` check the API on the loopback of the host, so they
+report `5 of 6 listeners answer` even though the stack is running as intended.
+
+Keys meant for that listener should carry `--ip-cidr` and `--expires-at`, and
+each key should hold only the scopes its program uses. `--ip-cidr` is matched
+against the address the server sees on the socket, so a `mail` service that is
+not on `network_mode: "pasta"` (a bridge, and rootless Podman on a bridge
+funnels every connection through `rootlessport`) filters on the container's
+address instead of the client's. `epistle api-key create`, `epistle api-key
+list` and `epistle status` say so when they see it.
+[Exposing the API on a private interface](api.md#exposing-the-api-on-a-private-interface)
+has the whole case.
+
 ### Public-install firewall
 
 A public install has to let inbound TCP through the host firewall (or fronting load balancer) on every port a real client has to reach. The defaults `init` ships on a public hostname:

@@ -191,6 +191,43 @@ non-loopback address; a `127.0.0.1:<p>:<p>` publish on the
 compose side is the operator's own addition to the generated
 file (or a follow-up edit after `init` runs).
 
+### Publishing a port on one host address
+
+The `ports:` array of `mail` is derived from the listeners: every non-loopback
+listener is published as `<port>:<port>`, and a loopback listener gets no
+entry. With no host address in the mapping the engine publishes on every
+address the host has, so an `api` listener arrives as `8025:8025` and answers
+on the public interfaces too. Binding the listener to a private address does
+not change that, and inside the container the bind address has to be one the
+container owns, or `serve` fails to start with `EADDRNOTAVAIL`.
+
+To keep a listener on one address, set the listener to `addr = "0.0.0.0"` (the
+container side) and name the host side of the mapping in
+`compose.override.yaml`, which every stack invocation passes after
+`compose.yaml`. `init` regenerates the base file on a rerun and `stack update`
+regenerates it too, taking the published ports from the listeners, so an edit
+to `compose.yaml` is replaced and the override is what survives. Lists in the
+override are merged with the generated ones, so a plain `ports:` entry would be
+added to `8025:8025` and the engine would refuse to bind both; the `!override`
+tag replaces the list, and then it has to carry every port the stack
+publishes, the mail ones included:
+
+```yaml
+services:
+  mail:
+    ports: !override
+      - "25:25"
+      - "143:143"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "10.0.0.1:8025:8025"
+```
+
+[Exposing the API on a private interface](api.md#exposing-the-api-on-a-private-interface)
+covers the API case, including what `--ip-cidr` sees when the container
+network does not carry the client's address.
+
 ### What each container may do
 
 Every service starts from `cap_drop: [ALL]` with `no-new-privileges`, and
