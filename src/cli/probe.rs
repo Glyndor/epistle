@@ -1,8 +1,9 @@
 //! The `probe` subcommand: a quick, local healthcheck for the listeners
-//! the running server has bound. TCP connects to loopback addresses with a
+//! the running server has bound. TCP connects to published host addresses,
+//! or local bind addresses inside the container, with a
 //! short timeout, the greeting line read back and checked against
-//! the protocol the listener advertises. Exit 0 if every listener
-//! responded with a recognisable greeting, 1 if any failed.
+//! the protocol the listener advertises. Exit 1 if any listener failed.
+//! Listeners whose host publication cannot be determined produce warnings.
 //!
 //! The probe runs as the same user the listeners bound on; it does not
 //! escalate privileges, ask for credentials, or send any mail. It
@@ -60,16 +61,19 @@ pub(super) struct ProbeLine {
 	pub(super) ok: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) error: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) warning: Option<String>,
 }
 
 /// Run the `probe` command. Loads the configuration file, dials each
-/// configured listener on its loopback equivalent, and reports.
+/// configured listener at its published or local address, and reports.
 /// Returns the exit code the dispatcher should propagate: SUCCESS
-/// when every listener answered, FAILURE when at least one did not.
+/// when no listener failed, FAILURE when at least one did. An unchecked
+/// host publication produces a warning rather than a failure.
 pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	ensure_crypto_provider();
 	let cert_path = pinned_cert_path(config);
-	let results = match execute(&config.listeners, cert_path.as_deref()) {
+	let results = match execute(config, cert_path.as_deref()) {
 		Ok(results) => results,
 		Err(error) => {
 			super::style::error(format_args!("probe: {error}"));
@@ -77,7 +81,11 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 		}
 	};
 	render(&results, json, out);
-	if results.iter().all(|line| line.ok) {
+	result_code(&results)
+}
+
+fn result_code(results: &[ProbeLine]) -> ExitCode {
+	if results.iter().all(|line| line.ok || line.warning.is_some()) {
 		ExitCode::SUCCESS
 	} else {
 		ExitCode::FAILURE
@@ -93,15 +101,12 @@ pub(super) fn pinned_cert_path(config: &Config) -> Option<PathBuf> {
 /// runtime is required because the production call site (the CLI
 /// subcommand) is synchronous; tests run the [`probe_all`] async
 /// function directly on the `#[tokio::test]` runtime instead.
-fn execute(
-	listeners: &[Listener],
-	tls_cert_path: Option<&Path>,
-) -> std::io::Result<Vec<ProbeLine>> {
+fn execute(config: &Config, tls_cert_path: Option<&Path>) -> std::io::Result<Vec<ProbeLine>> {
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
 		.map_err(|error| std::io::Error::other(format!("build probe runtime: {error}")))?;
-	runtime.block_on(probe_all(listeners, tls_cert_path))
+	runtime.block_on(published::probe(config, tls_cert_path, "podup"))
 }
 
 /// Probe every listener sequentially, returning one entry per listener
@@ -149,12 +154,14 @@ async fn probe_one(
 			addr: addr.to_string(),
 			ok: true,
 			error: None,
+			warning: None,
 		},
 		Err(reason) => ProbeLine {
 			kind,
 			addr: addr.to_string(),
 			ok: false,
 			error: Some(reason),
+			warning: None,
 		},
 	}
 }
@@ -581,8 +588,19 @@ pub(super) fn render(lines: &[ProbeLine], json: bool, out: &mut impl std::io::Wr
 	if let Some(decor) = super::term::stdout(json) {
 		let mut table = Table::new(&["STATE", "SERVICE", "ADDRESS", "DETAIL"]).state_col(0);
 		for line in lines {
-			let state = if line.error.is_none() { "ok" } else { "fail" };
-			let detail = line.error.clone().unwrap_or_default();
+			let state = if line.warning.is_some() {
+				"warn"
+			} else if line.ok {
+				"ok"
+			} else {
+				"fail"
+			};
+			let detail = line
+				.warning
+				.as_ref()
+				.or(line.error.as_ref())
+				.cloned()
+				.unwrap_or_default();
 			table.push(vec![
 				state.into(),
 				line.kind.into(),
@@ -594,9 +612,10 @@ pub(super) fn render(lines: &[ProbeLine], json: bool, out: &mut impl std::io::Wr
 		return;
 	}
 	for line in lines {
-		let _ = match &line.error {
-			None => writeln!(out, "ok {} {}", line.kind, line.addr),
-			Some(reason) => writeln!(out, "fail {} {}: {reason}", line.kind, line.addr),
+		let _ = match (&line.warning, &line.error) {
+			(Some(reason), _) => writeln!(out, "warn {} {}: {reason}", line.kind, line.addr),
+			(None, None) => writeln!(out, "ok {} {}", line.kind, line.addr),
+			(None, Some(reason)) => writeln!(out, "fail {} {}: {reason}", line.kind, line.addr),
 		};
 	}
 }
@@ -612,3 +631,6 @@ mod tests_pinning;
 #[cfg(test)]
 #[path = "probe_tests_host.rs"]
 mod tests_host;
+
+#[path = "probe_published.rs"]
+pub(super) mod published;

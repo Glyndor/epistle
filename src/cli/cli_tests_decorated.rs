@@ -220,12 +220,14 @@ fn probe_marks_each_listener_and_keeps_the_plain_lines_off_a_terminal() {
 			addr: "127.0.0.1:25".into(),
 			ok: true,
 			error: None,
+			warning: None,
 		},
 		ProbeLine {
 			kind: "imaps",
 			addr: "127.0.0.1:993".into(),
 			ok: false,
 			error: Some("connect: connection refused".into()),
+			warning: None,
 		},
 	];
 	let mut plain = Vec::new();
@@ -246,4 +248,19 @@ fn probe_marks_each_listener_and_keeps_the_plain_lines_off_a_terminal() {
 	assert!(drawn[2].contains("\x1b[31m✘ fail"), "{drawn:#?}");
 	let json = on_terminal(120, |out| render(&lines, true, out));
 	assert!(json.iter().all(|line| !line.contains('\x1b')), "{json:#?}");
+}
+
+#[test]
+fn probe_draws_an_uncheckable_listener_as_a_warning() {
+	let lines = [super::probe::ProbeLine {
+		kind: "api",
+		addr: "0.0.0.0:8025".into(),
+		ok: false,
+		error: None,
+		warning: Some("not checkable from here".into()),
+	}];
+	let drawn = on_terminal(120, |out| super::probe::render(&lines, false, out));
+	assert!(visible(&drawn[1]).contains("warn"), "{drawn:?}");
+	assert!(visible(&drawn[1]).contains("not checkable from here"));
+	assert!(!visible(&drawn[1]).contains("fail"));
 }

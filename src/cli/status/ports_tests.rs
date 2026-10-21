@@ -143,3 +143,60 @@ async fn no_listeners_is_a_warning() {
 	assert_eq!(report.status, Level::Warn);
 	assert_eq!(report.detail, "no listeners are enabled");
 }
+
+#[test]
+fn unchecked_publications_warn_and_do_not_fail_the_restart_check() {
+	let line = |ok, warning, error| crate::cli::probe::ProbeLine {
+		kind: "api",
+		addr: "10.0.0.1:8025".to_string(),
+		ok,
+		warning,
+		error,
+	};
+	let report = super::report(
+		vec![line(
+			false,
+			Some("not checkable from here".to_string()),
+			None,
+		)],
+		1,
+	);
+	assert_eq!(report.status, Level::Warn);
+	assert!(
+		report
+			.detail
+			.contains("0 of 1 listeners answer; 1 not checkable from here")
+	);
+	assert!(!crate::cli::status::report::any_failed(&[(
+		crate::cli::status::CheckArea::Ports,
+		report
+	)]));
+	let report = super::report(
+		vec![line(false, None, Some("connect: refused".to_string()))],
+		1,
+	);
+	assert_eq!(report.status, Level::Fail);
+	let report = super::report(vec![line(true, None, None)], 1);
+	assert_eq!(report.status, Level::Ok);
+	assert_eq!(report.detail, "1 of 1 listeners answer");
+}
+
+#[test]
+fn restart_prints_uncheckable_listeners_and_retains_real_failures() {
+	use crate::cli::status::CheckArea;
+	use crate::cli::status::report::{AreaReport, Item};
+	let warning = Item::new("api", Level::Warn, "not checkable from here");
+	for failed in [false, true] {
+		let mut items = vec![warning.clone()];
+		if failed {
+			items.push(Item::new("smtp", Level::Fail, "connect: refused"));
+		}
+		let report = AreaReport::from_items(items, "summary");
+		let mut output = Vec::new();
+		let failures =
+			super::super::restart_failures(vec![(CheckArea::Ports, report)], &mut output);
+		assert_eq!(failures.len(), usize::from(failed));
+		let text = String::from_utf8(output).unwrap();
+		assert!(text.contains("api: not checkable from here"), "{text}");
+	}
+}
