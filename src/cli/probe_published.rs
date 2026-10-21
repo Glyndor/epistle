@@ -39,8 +39,19 @@ pub(in crate::cli) async fn probe(
 	cert: Option<&Path>,
 	podup: &str,
 ) -> std::io::Result<Vec<ProbeLine>> {
-	let compose = crate::cli::stack::compose_path(&config.data_dir);
 	let container = Path::new("/run/.containerenv").exists() || Path::new("/.dockerenv").exists();
+	probe_in(config, cert, podup, container).await
+}
+
+/// `probe` with the container marker given, so a test does not depend on the
+/// environment it runs in (a CI job inside a container has the marker).
+pub(in crate::cli) async fn probe_in(
+	config: &Config,
+	cert: Option<&Path>,
+	podup: &str,
+	container: bool,
+) -> std::io::Result<Vec<ProbeLine>> {
+	let compose = crate::cli::stack::compose_path(&config.data_dir);
 	if local(&compose, container) {
 		return probe_all(&config.listeners, cert).await;
 	}

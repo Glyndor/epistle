@@ -175,7 +175,9 @@ async fn host_discovery_passes_the_override_and_reports_unknown_metadata() {
 	// Paths are passed as argv, never interpolated into the script.
 	std::fs::write(&stub, "#!/bin/sh\n[ \"$1\" = -f ] && [ \"$3\" = -f ] && [ \"$5\" = ps ] && [ \"$6\" = --format ] && [ \"$7\" = json ] || exit 1\nprintf '[]'\n").unwrap();
 	std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
-	let lines = probe(&config, None, stub.to_str().unwrap()).await.unwrap();
+	let lines = probe_in(&config, None, stub.to_str().unwrap(), false)
+		.await
+		.unwrap();
 	assert_eq!(lines.len(), 1);
 	assert!(
 		lines[0]
