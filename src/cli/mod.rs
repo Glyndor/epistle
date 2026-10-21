@@ -76,6 +76,7 @@ mod serve_store;
 mod serve_tasks;
 mod serve_tasks_delivery;
 mod serve_tls;
+mod serve_webdav;
 mod service;
 mod service_edit;
 mod srv;

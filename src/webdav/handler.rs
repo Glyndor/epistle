@@ -63,7 +63,15 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	let peer = request
 		.extensions()
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| crate::net::canonical_peer(info.0).ip());
+		.map(|info| crate::net::canonical_peer(info.0));
+	// Resolve the client address through the same trusted-proxy chain the
+	// API listeners use (`X-Forwarded-For`, walking from the right, fails
+	// closed on a malformed entry). Behind a trusted reverse proxy the
+	// failure audit log and the per-IP ban counters key on the real
+	// client; without one they key on the socket peer like the API does.
+	let peer = peer.and_then(|socket| {
+		crate::net::trusted_ip::effective(&state.trusted_proxies, Some(socket), request.headers())
+	});
 	let Some(account) = auth::authenticate(request.headers(), &state.directory, peer) else {
 		return challenge();
 	};
@@ -612,3 +620,7 @@ mod tests;
 #[cfg(test)]
 #[path = "handler_bounds_tests.rs"]
 mod bounds_tests;
+
+#[cfg(test)]
+#[path = "handler_trusted_proxy_tests.rs"]
+mod trusted_proxy_tests;
