@@ -1,28 +1,99 @@
 #!/bin/sh
-# Pre-installation script for the epistle package.
-#
-# On an upgrade, keep the binary that is about to be replaced, so `epistle
-# stack rollback` can put it back when the new release does not come up
-# healthy. Only the two highest versions are kept. A copy that cannot be made
-# only warns: it costs the rollback, never the upgrade.
+# Keep the replaced package binary in an administrator-owned store.
+# A failed copy costs rollback availability, never the package upgrade.
 
 set -e
 
+# Reject replaceable parents before creating the private executable store.
+epistle_rollback_dir() {
+	for parent in / /var /var/lib; do
+		[ ! -L "$parent" ] && [ -d "$parent" ] \
+			&& [ "$(stat -c '%u:%g' -- "$parent")" = 0:0 ] || return 1
+		mode=$(stat -c '%a' -- "$parent") || return 1
+		[ "$((0$mode & 022))" -eq 0 ] || return 1
+	done
+	rollback=/var/lib/epistle-rollback
+	[ ! -L "$rollback" ] || return 1
+	if [ ! -e "$rollback" ]; then
+		(umask 077; mkdir -- "$rollback") || return 1
+	fi
+	[ -d "$rollback" ] && [ "$(stat -c '%u:%g' -- "$rollback")" = 0:0 ] || return 1
+	mode=$(stat -c '%a' -- "$rollback") || return 1
+	[ "$((0$mode & 022))" -eq 0 ] || return 1
+	chmod 0700 -- "$rollback"
+}
+
+# Keep one generation per saved version: the binary and its digest are staged
+# together in an exclusive random directory and published by a single rename,
+# so an interrupted copy leaves the generation already saved selectable.
+epistle_keep_binary() (
+	# The staged files must stay unreadable and unwritable by group or other
+	# whatever umask the caller left behind.
+	umask 077
+	# Keep the class tight: `pick` splits the name on dots and reads every
+	# part as an integer, so only digits and dots reach the store. A name like
+	# `0.12.3-1`, `0.12.3~rc1` or `1:0.12+1` would publish bytes the rollback
+	# command cannot read back, and an empty name, a leading or trailing dot,
+	# or two dots in a row would take a slot `sort -V` keeps but no listing
+	# can choose. dpkg itself surfaces those upstream via ${2}; refusing here
+	# is what keeps the store selectable.
+	case "$1" in
+		''|.*|*.|*[!0-9.]*|*..*) return 1 ;;
+	esac
+	for parent in /usr /usr/bin; do
+		[ ! -L "$parent" ] && [ -d "$parent" ] \
+			&& [ "$(stat -c '%u:%g' -- "$parent")" = 0:0 ] || return 1
+		mode=$(stat -c '%a' -- "$parent") || return 1
+		[ "$((0$mode & 022))" -eq 0 ] || return 1
+	done
+	[ ! -L /usr/bin/epistle ] && [ -f /usr/bin/epistle ] \
+		&& [ "$(stat -c '%u' -- /usr/bin/epistle)" = 0 ] || return 1
+	mode=$(stat -c '%a' -- /usr/bin/epistle) || return 1
+	[ "$((0$mode & 022))" -eq 0 ] || return 1
+	# The copy already saved under this version is the one rollback installs.
+	# Replacing it would publish a binary and a digest in two steps again, so
+	# keep what is there and let the next version take the new slot.
+	if [ -d "$rollback/epistle-$1" ] && [ ! -L "$rollback/epistle-$1" ]; then
+		return 0
+	fi
+	# dpkg holds the maintainer script lock, so any leftover staging directory
+	# belongs to an interrupted earlier run.
+	find "$rollback" -mindepth 1 -maxdepth 1 -type d -name '.stage-*' \
+		| while IFS= read -r old; do rm -rf -- "$old"; done
+	stage=
+	trap 'rm -rf -- "$stage"' 0
+	trap 'exit 1' 1 2 15
+	stage=$(mktemp -d "$rollback/.stage-XXXXXXXXXX") || return 1
+	cat /usr/bin/epistle > "$stage/epistle" \
+		&& chmod 0755 "$stage/epistle" || return 1
+	sha256sum "$stage/epistle" | cut -d ' ' -f 1 > "$stage/epistle.sha256"
+	[ "$(wc -c < "$stage/epistle.sha256")" -eq 65 ] || return 1
+	[ "$(sha256sum < "$stage/epistle" | cut -d ' ' -f 1)" \
+		= "$(cat "$stage/epistle.sha256")" ] || return 1
+	# Anything else under that name is not a generation the rollback command can
+	# read. It goes only now, with the new one complete and checked.
+	rm -f -- "$rollback/epistle-$1.sha256"
+	[ ! -e "$rollback/epistle-$1" ] \
+		|| rm -rf -- "$rollback/epistle-$1" || return 1
+	mv -T -- "$stage" "$rollback/epistle-$1" || return 1
+	stage=
+	# -mindepth 1 keeps the store itself out of the entries it prunes.
+	find "$rollback" -mindepth 1 -maxdepth 1 -type d -name 'epistle-*' \
+		| sort -V | head -n -2 \
+		| while IFS= read -r old; do rm -rf -- "$old"; done
+)
+
 case "$1" in
-upgrade)
-	if [ -n "${2:-}" ] && [ -x /usr/bin/epistle ] && [ -d /var/lib/glyndor/epistle ]; then
-		rollback=/var/lib/glyndor/epistle/rollback
-		if mkdir -p "$rollback" && chmod 0700 "$rollback" \
-			&& cp -p /usr/bin/epistle "$rollback/epistle-$2.partial" \
-			&& mv -f "$rollback/epistle-$2.partial" "$rollback/epistle-$2"; then
-			# sort -V orders 0.10.10 after 0.10.1; plain text order would not.
-			find "$rollback" -maxdepth 1 -type f -name 'epistle-*' ! -name '*.partial' \
-				| sort -V | head -n -2 | while IFS= read -r old; do
-					rm -f -- "$old"
-				done
-		else
+install|upgrade)
+	if ! epistle_rollback_dir; then
+		echo "epistle: could not prepare the root-owned rollback store; rollback is unavailable" >&2
+	elif [ "$1" = upgrade ] && [ -n "${2:-}" ]; then
+		if ! epistle_keep_binary "$2"; then
 			echo "epistle: could not keep a copy of the $2 binary; epistle stack rollback will not be able to go back to it" >&2
 		fi
+	fi
+	if [ -e /var/lib/glyndor/epistle/rollback ] || [ -L /var/lib/glyndor/epistle/rollback ]; then
+		echo "epistle: legacy rollback copies are ignored; versions not saved in the root-owned store are unavailable until a later upgrade saves them" >&2
 	fi
 	;;
 esac

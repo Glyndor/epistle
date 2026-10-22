@@ -87,6 +87,15 @@ thin wrapper around podup and is not a replacement: every other
 the same data dir, the same config file, the same `glyndor-epistle`
 account.
 
+The package keeps replaced host binaries for `sudo epistle stack rollback` in
+`/var/lib/epistle-rollback` (root:root, mode 0700), outside the service account
+home and container mounts. Rollback validates ownership, permissions, file type
+and the saved SHA-256 digest before stopping mail. Legacy copies under the
+service account home are ignored. An upgrade must save a trusted copy in the
+new store before it can be used. Database dumps stay in `<data_dir>/backups`;
+see [Rolling back an upgrade](cli.md#rolling-back-an-upgrade). Purge removes the
+host binary store.
+
 The minimum a Podman or Docker compose unit needs is:
 
 ```sh

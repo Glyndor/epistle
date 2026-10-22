@@ -53,6 +53,7 @@ fn configure(subuid: Option<&str>, subgid: Option<&str>, login_defs: Option<&str
 		("/etc/subgid", "subgid"),
 		("/etc/login.defs", "login.defs"),
 		("/var/lib/glyndor/epistle", "state"),
+		("/var/lib/epistle-rollback", "rollback"),
 		("/etc/epistle", "config"),
 		("/run/systemd/system", "no-systemd"),
 		("/proc/sys", "missing-sys"),

@@ -51,4 +51,4 @@ jobs:
       # compile C without being -sys crates; the same package covers all three.
       # Measured by .github/workflows/probe-musl.yml (epistle#757, closed):
       # without it the build fails at aws-lc-sys and the floor survives.
-      apt-packages: "musl-tools"
+      apt-packages: "musl-tools fakeroot"

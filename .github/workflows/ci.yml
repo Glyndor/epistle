@@ -31,6 +31,14 @@ jobs:
       # implied), and was the one this input promised until sqlx 0.9 widened the
       # dep graph.
       msrv: "1.94"
+      # fakeroot is what lets the packaging tests run the maintainer scripts.
+      # Those scripts stat the owner and mode of every path they touch, and the
+      # tests assert that a root-owned store is accepted and a writable one is
+      # refused. Without fakeroot the scripts refuse to copy anything, so the
+      # tests would fail for a reason that has nothing to do with the code under
+      # test. The runner image carries it today; naming it makes the dependency
+      # survive a different image rather than being rediscovered there.
+      apt-packages: "fakeroot"
       # The `Doc warnings` job is gated on this input and this repository never
       # passed it, so the job has been skipping since it existed. It had ten
       # findings waiting when I turned it on: three unresolved intra-doc links,

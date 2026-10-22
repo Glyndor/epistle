@@ -10,6 +10,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * migrate imap: the progress file no longer follows links, every command and the whole run have a deadline, and the memory kept per mailbox is bounded, so a hostile or slow source server cannot hold the process or its memory, and an interrupted copy resumes without losing or duplicating messages.
   * Backup: a database dump that stops part way is no longer kept as a backup, the SQL staged for a restore is written with owner-only permissions and removed once the restore finishes, and restored secrets and data directories are never readable by other users.
   * Security: webpki-roots and rustls-webpki are updated so certificate paths through the distrusted emSign roots are rejected (RUSTSEC-2026-0381, RUSTSEC-2026-0382 and RUSTSEC-2026-0383).
+  * Security: stack rollback keeps its saved binaries in a store owned by root outside the directory of the service account, writes each copy through an exclusive temporary file, checks type, owner and digest before installing, ignores the store of earlier versions, and purge removes it.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

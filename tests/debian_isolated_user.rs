@@ -314,3 +314,12 @@ mod subid_move;
 
 #[path = "debian/preinst.rs"]
 mod preinst;
+
+#[path = "debian/preinst_publish.rs"]
+mod preinst_publish;
+
+#[path = "debian/store_paths.rs"]
+mod store_paths;
+
+#[path = "debian/preinst_mutants.rs"]
+mod preinst_mutants;

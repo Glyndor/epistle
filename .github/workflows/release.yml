@@ -133,7 +133,7 @@ jobs:
           # musl-tools provides musl-gcc, which `ring` needs to compile its C
           # against a musl target. It is not a Rust dependency, so it cannot be
           # declared in Cargo.toml and has to be installed here.
-          apt-get install -y --no-install-recommends dpkg-dev debhelper musl-tools
+          apt-get install -y --no-install-recommends dpkg-dev debhelper musl-tools fakeroot
 
       - name: Install the musl target debian/rules builds for
         env:

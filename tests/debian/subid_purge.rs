@@ -14,6 +14,8 @@ fn purge(subuid: &str, subgid: &str) -> String {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path();
 	std::fs::create_dir_all(root.join("state")).unwrap();
+	std::fs::create_dir(root.join("rollback")).unwrap();
+	std::fs::write(root.join("rollback/epistle-0.12.1"), "saved").unwrap();
 	std::fs::write(root.join("subuid"), subuid).unwrap();
 	std::fs::write(root.join("subgid"), subgid).unwrap();
 	let bin = root.join("bin");
@@ -30,6 +32,7 @@ fn purge(subuid: &str, subgid: &str) -> String {
 		("/etc/subuid", "subuid"),
 		("/etc/subgid", "subgid"),
 		("/var/lib/glyndor/epistle", "state"),
+		("/var/lib/epistle-rollback", "rollback"),
 		("/run/systemd/system", "no-systemd"),
 	] {
 		script = script.replace(from, root.join(to).to_str().unwrap());
@@ -41,6 +44,14 @@ fn purge(subuid: &str, subgid: &str) -> String {
 	let script_path = root.join("postrm");
 	std::fs::write(&script_path, script).unwrap();
 	let log = root.join("usermod.log");
+	let remove = Command::new("sh")
+		.arg(&script_path)
+		.arg("remove")
+		.env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+		.output()
+		.unwrap();
+	assert!(remove.status.success());
+	assert!(root.join("rollback/epistle-0.12.1").exists());
 	let output = Command::new("sh")
 		.arg(&script_path)
 		.arg("purge")
@@ -49,6 +60,10 @@ fn purge(subuid: &str, subgid: &str) -> String {
 		.output()
 		.unwrap();
 	assert_eq!(output.status.code(), Some(0), "purge must not fail");
+	assert!(
+		!root.join("rollback").exists(),
+		"purge must remove the executable store"
+	);
 	std::fs::read_to_string(log).unwrap_or_default()
 }
 
