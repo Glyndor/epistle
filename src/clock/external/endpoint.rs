@@ -33,17 +33,13 @@ pub(super) fn validate_host(
 }
 
 fn validate_ip(ip: IpAddr, allow_private: bool) -> Result<(), String> {
+	// A destination that carries an IPv4 payload is checked as that IPv4
+	// address. The forms live in one place, the one the `public_ipv6`
+	// classifier uses, so the two policies cannot drift apart.
 	let ip = match ip {
-		IpAddr::V6(ip) => {
-			let segments = ip.segments();
-			let embedded = ip.to_ipv4().or_else(|| match segments {
-				[0x64, 0xff9b, 0, 0, 0, 0, a, b] | [0x2002, a, b, ..] => {
-					Some(Ipv4Addr::from(((a as u32) << 16) | b as u32))
-				}
-				_ => None,
-			});
-			embedded.map(IpAddr::V4).unwrap_or(IpAddr::V6(ip))
-		}
+		IpAddr::V6(ip) => crate::config::embedded_ipv4(ip)
+			.map(IpAddr::V4)
+			.unwrap_or(IpAddr::V6(ip)),
 		ip => ip,
 	};
 	let forbidden = ip.is_multicast()

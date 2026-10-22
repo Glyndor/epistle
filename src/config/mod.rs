@@ -30,7 +30,9 @@ mod tls;
 mod transport;
 mod validate;
 mod validate_limits;
-pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
+pub(crate) use validate::validate_addresses::{
+	embedded_ipv4, non_global_ipv4_reason, non_global_ipv6_reason,
+};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
 

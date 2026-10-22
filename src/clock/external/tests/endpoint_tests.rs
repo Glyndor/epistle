@@ -231,6 +231,34 @@ fn review_embedded_ipv4_obeys_both_destination_policies() {
 	}
 }
 
+/// The clock refuses a non-global destination with the same classifier the
+/// `public_ipv6` validation uses, and the two must agree on every form that
+/// carries an IPv4 payload: the clock took the forms from its own list and the
+/// list in the classifier could grow without it.
+#[test]
+fn review_destination_policy_follows_the_shared_classifier_on_every_form() {
+	for text in [
+		"64:ff9b::7f00:1",
+		"64:ff9b::a00:1",
+		"64:ff9b::a9fe:a9fe",
+		"2002:7f00:1::1",
+		"2002:c000:201::1",
+		"::127.0.0.1",
+		"::ffff:10.0.0.1",
+		"64:ff9b:1::1",
+		"64:ff9b::808:808",
+		"::ffff:1.1.1.1",
+		"2606:4700:4700::1111",
+	] {
+		let ip: Ipv6Addr = text.parse().unwrap();
+		assert_eq!(
+			validate_ip(ip.into(), false).is_err(),
+			crate::config::non_global_ipv6_reason(ip).is_some(),
+			"{text}: the clock destination and the classifier disagree"
+		);
+	}
+}
+
 #[tokio::test]
 async fn review_unusual_numeric_names_cannot_bypass_resolved_address_policy() {
 	for host in [

@@ -239,3 +239,81 @@ fn review_registry_relay_anycast_is_not_global() {
 fn review_registry_global_nat64_prefix_remains_public() {
 	assert!(non_global_ipv6_reason("64:ff9b::1.1.1.1".parse().unwrap()).is_none());
 }
+
+#[test]
+fn embedded_ipv4_payload_decides_the_verdict_in_every_form() {
+	// NAT64 (64:ff9b::/96), 6to4 (2002::/16), IPv4-compatible (::a.b.c.d) and
+	// IPv4-mapped (::ffff:a.b.c.d) all carry an IPv4 payload. Each one used to
+	// pass the range check without that payload ever being read.
+	for text in [
+		// NAT64.
+		"64:ff9b::7f00:1",
+		"64:ff9b::a00:1",
+		"64:ff9b::ac10:1",
+		"64:ff9b::c0a8:1",
+		"64:ff9b::6440:1",
+		"64:ff9b::a9fe:a9fe",
+		"64:ff9b::c000:201",
+		"64:ff9b::e000:1",
+		"64:ff9b::ffff:ffff",
+		"64:ff9b::",
+		// 6to4.
+		"2002:7f00:1::1",
+		"2002:a00:1::1",
+		"2002:c000:201::1",
+		"2002:e000:1::1",
+		"2002:ffff:ffff::1",
+		// IPv4-compatible and IPv4-mapped.
+		"::7f00:1",
+		"::10.0.0.1",
+		"::ffff:192.168.1.10",
+		"::ffff:100.64.0.1",
+		"::ffff:224.0.0.1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	// A global payload keeps the verdict the form already had: the mapped form
+	// and the public NAT64 prefix are global addresses, while the deprecated
+	// compatible form and 6to4 are refused on their own.
+	for text in ["64:ff9b::808:808", "64:ff9b::1.1.1.1", "::ffff:1.1.1.1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+	for text in ["::1.1.1.1", "2002:101:101::1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn embedded_ipv4_reason_names_the_form_and_the_payload() {
+	let cases: &[(Ipv6Addr, &[&str])] = &[
+		("64:ff9b::7f00:1".parse().unwrap(), &["NAT64", "loopback"]),
+		("64:ff9b::a00:1".parse().unwrap(), &["NAT64", "private"]),
+		("2002:7f00:1::1".parse().unwrap(), &["6to4", "loopback"]),
+		("::10.0.0.1".parse().unwrap(), &["compatible", "private"]),
+		(
+			"::ffff:192.168.1.10".parse().unwrap(),
+			&["IPv4-mapped", "private"],
+		),
+	];
+	for (ip, expected) in cases {
+		let reason = non_global_ipv6_reason(*ip).unwrap_or_else(|| panic!("{ip} accepted"));
+		for part in *expected {
+			assert!(reason.contains(part), "{ip}: {reason} lacks {part}");
+		}
+	}
+	// The unspecified address is an address of its own, not a payload of
+	// 0.0.0.0, so it keeps its own message.
+	assert_eq!(
+		non_global_ipv6_reason("::".parse().unwrap()),
+		Some("the unspecified address (::)")
+	);
+}
