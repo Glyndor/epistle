@@ -52,12 +52,21 @@ fn read(path: &Path) -> Result<(Vec<u8>, Metadata), String> {
 		// so the link is followed here and only a fifo or a device is
 		// refused.
 		Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-			let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+			// One open, following the link, then everything is read from that
+			// descriptor: a path checked first and opened afterwards could be
+			// swapped between the two.
+			let mut followed = OpenOptions::new();
+			followed.read(true);
+			{
+				use std::os::unix::fs::OpenOptionsExt;
+				followed.custom_flags(libc::O_NONBLOCK);
+			}
+			let mut link = followed.open(path).map_err(|e| e.to_string())?;
+			let metadata = link.metadata().map_err(|e| e.to_string())?;
 			if !metadata.is_file() {
 				return Err(format!("{} must be a regular file", path.display()));
 			}
 			let mut bytes = Vec::new();
-			let mut link = File::open(path).map_err(|e| e.to_string())?;
 			link.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
 			return Ok((bytes, metadata));
 		}
