@@ -238,9 +238,10 @@ fn names(fields: &str, address: &str) -> bool {
 	})
 }
 
-/// A byte that can sit in an unquoted local part (RFC 5322 `atext`, dot).
+/// A byte that can sit in an unquoted local part: RFC 5322 `atext`, plus the
+/// dot that separates the atoms.
 fn is_local_part_byte(byte: u8) -> bool {
-	byte.is_ascii_alphanumeric() || b"!#$%&'*+-/=?^_`{|}~.".contains(&byte)
+	crate::util::validation::is_atext_byte(byte) || byte == b'.'
 }
 
 /// A byte that can sit in a domain name.
