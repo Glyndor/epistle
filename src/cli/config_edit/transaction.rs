@@ -40,33 +40,14 @@ struct Replacement {
 	replaced: bool,
 }
 
-/// What one opening of a service file gives: its bytes, the metadata of the
-/// file behind them, and where that file really lives when the path is a
-/// symlink into another directory of the installation.
+/// What one opening of a service file gives: its bytes and the metadata of
+/// the file behind them. When the path is a symlink the file is read through
+/// it, and the write replaces the link itself with a regular file: the
+/// destination is never named by a path that could change between the read
+/// and the rename.
 struct Opened {
 	bytes: Vec<u8>,
 	metadata: Metadata,
-	/// The path the descriptor resolved to, so the rename replaces the file
-	/// the operator points at and not the link. `None` when the path is not a
-	/// link or the platform can not name the file behind it.
-	destination: Option<PathBuf>,
-}
-
-/// The path a descriptor really opened, which for a link is where it points.
-/// The descriptor itself answers it, so a link swapped between the open and
-/// the rename can not redirect the write.
-#[cfg(target_os = "linux")]
-fn through(file: &File) -> Option<PathBuf> {
-	use std::os::unix::io::AsRawFd;
-	fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
-}
-
-/// Where the file behind a link lives. This platform can not name it from the
-/// descriptor, so a link is read through and replaced by a regular file, which
-/// is what every writer of the pair did before the link was followed.
-#[cfg(not(target_os = "linux"))]
-fn through(_file: &File) -> Option<PathBuf> {
-	None
 }
 
 fn read(path: &Path) -> Result<Opened, String> {
@@ -102,12 +83,7 @@ fn read(path: &Path) -> Result<Opened, String> {
 			}
 			let mut bytes = Vec::new();
 			link.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-			let destination = through(&link);
-			return Ok(Opened {
-				bytes,
-				metadata,
-				destination,
-			});
+			return Ok(Opened { bytes, metadata });
 		}
 		Err(error) => return Err(error.to_string()),
 	};
@@ -117,11 +93,7 @@ fn read(path: &Path) -> Result<Opened, String> {
 	}
 	let mut bytes = Vec::new();
 	file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-	Ok(Opened {
-		bytes,
-		metadata,
-		destination: None,
-	})
+	Ok(Opened { bytes, metadata })
 }
 
 fn parent(path: &Path) -> &Path {
@@ -170,7 +142,7 @@ impl Replacement {
 				path.display()
 			));
 		}
-		let target = opened.destination.unwrap_or_else(|| path.into());
+		let target: PathBuf = path.into();
 		let candidate = stage(&target, candidate, &opened.metadata)?;
 		let backup = stage(&target, original, &opened.metadata)?;
 		sync_parent(&target)?;

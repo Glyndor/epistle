@@ -256,10 +256,7 @@ without the address one `set` wrote, or an `addr` an operator edited by hand,
 puts it on loopback rather than on every address of the host.
 
 `set`, `enable` and `disable` validate and stage both files before replacing
-either, and a `compose.yaml` that is a symlink is written through the link, the
-way it was before that transaction existed: the destination is taken from the
-same opening that reads the file, and the staged copy is renamed in the
-directory the link points at, so the link and the file behind it both survive.
+either, and a `compose.yaml` that is a symlink is read through the link and then replaced by a regular file: the file behind the link is left as it was, and the link is not followed for the write, so a path that changes between the read and the rename cannot redirect it. Keep the generated file where the command expects it, or put the symlink on the directory instead.
 That write needs write access to that directory. A write error restores the
 previous files and verifies their contents and permissions. If restoration
 fails, the error names a retained recovery copy, which takes its own

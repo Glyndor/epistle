@@ -149,13 +149,13 @@ fn a_wide_publication_of_a_listener_without_tls_is_narrowed_out_loud() {
 	);
 }
 
-/// `compose.yaml` is often a symlink into another directory of the
-/// installation. The generated file is written through the link, so the
-/// operator's directory keeps the file the stack runs on and the link is not
-/// swapped for a regular file behind their back.
+/// `compose.yaml` is sometimes a symlink into another directory. The file is
+/// read through the link, and the write replaces the link itself with a
+/// regular file; the file behind the link is never named by a path that could
+/// change between the read and the rename, so it is left as it was.
 #[cfg(unix)]
 #[test]
-fn a_generated_file_that_is_a_symlink_is_written_through_the_link() {
+fn a_generated_file_that_is_a_symlink_is_read_through_it_and_replaced_by_a_regular_file() {
 	let (_dir, file) = fixture();
 	let mut text = std::fs::read_to_string(file.path()).unwrap();
 	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
@@ -184,22 +184,26 @@ fn a_generated_file_that_is_a_symlink_is_written_through_the_link() {
 	)
 	.unwrap();
 	assert!(
-		std::fs::symlink_metadata(&compose)
+		!std::fs::symlink_metadata(&compose)
 			.unwrap()
 			.file_type()
 			.is_symlink(),
-		"a link the operator placed must survive: the file behind it is the one \
-		 the stack reads, and replacing the link leaves their file behind"
+		"the link is replaced by a regular file, never followed for the write"
+	);
+	assert_eq!(
+		std::fs::read_to_string(elsewhere.join("compose.yaml")).unwrap(),
+		r#"{"services":{"mail":{"ports":["25:25"]}}}"#,
+		"the file behind the link is left exactly as it was"
 	);
 	assert_eq!(
 		ports_of(&compose),
 		serde_json::json!(["25:25", "143:143"]),
-		"the file behind the link carries the map this command wrote"
+		"the new regular file carries the map this command wrote, built from what the link showed"
 	);
 	assert_eq!(
 		std::fs::read_dir(&elsewhere).unwrap().count(),
 		1,
-		"the staged copies are renamed away in the directory of the destination"
+		"nothing is staged in the directory the link points at"
 	);
 }
 
