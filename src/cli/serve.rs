@@ -269,9 +269,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	super::serve_tasks::spawn_storage_maintenance(&config);
 
 	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
-	// the tables stay bounded. No-op without a database (no ban store), and
-	// it purges the bypass list with the window the operator set under
-	// `[limits] known-network-window`, never the built-in default.
+	// the tables stay bounded. No-op when no database is configured: the
+	// ban store is absent in that case. The bypass list is purged with the
+	// same window the operator set under `[limits] known-network-window`,
+	// so the sweeper does not fall back to the built-in default.
 	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 
 	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
@@ -283,9 +284,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		channel_binding,
 	} = super::serve_tls::build_tls(&config, challenge_store.clone())?;
 
-	// Pre-pass: every port with a `0.0.0.0` listener, so the `[::]:P`
-	// bind path can switch that socket to `only_v6(true)` and coexist
-	// with the explicit IPv4 bind instead of failing with `EADDRINUSE`.
+	// Pre-pass: collect every port that has a `0.0.0.0` listener so the
+	// `[::]:P` bind path knows whether to switch the socket to
+	// `only_v6(true)` and coexist with the explicit IPv4 bind
+	// instead of failing with `EADDRINUSE`. The set is read once
+	// here so the loop below can hand it to every bind call without
+	// re-walking the listener list.
 	let ipv4_any_ports: std::collections::HashSet<u16> = config
 		.listeners
 		.iter()

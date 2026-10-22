@@ -45,7 +45,7 @@ without regard to case.
 | `Action`, `Diagnostic-Code`, `Final-Recipient`, `Remote-MTA`, `Reporting-MTA`, `Status` | Inside the `message/delivery-status` part of a failure or delay notice | RFC 3464 fields, not top-level headers. One block per recipient |
 | `Arrival-Date`, `Feedback-Type`, `Original-Mail-From`, `Reported-Domain`, `Source-IP`, `User-Agent`, `Version` | Inside the `message/feedback-report` part of an abuse report | RFC 5965 fields, not top-level headers. `User-Agent` is the mail hostname in the report epistle sends on its own, and `epistle/<version>` in the report `epistle report-abuse` prints |
 | `Authentication-Results` | Inbound mail from a peer that did not log in, when a resolver is configured and the peer address is known. Never on a submission: no check of ours happens on one, so a field naming one would be a claim about a hop that did not take place, and the client's is dropped on all three paths | Authserv-id is the mail hostname. Lists `spf`, one `dkim` entry per signature (`dkim=none` without one) and `dmarc`. On unauthenticated SMTP, fields naming our hostname (case-insensitively) or with an unparseable authserv-id are removed before ours is added. Parseable foreign ids are kept below ours as untrusted information. The preamble reader accepts MIME tokens and quoted values, comments, folding and an optional numeric version |
-| `Auto-Submitted` | REST `auto_submitted` field; every system message (`auto-generated`) except the vacation reply (`auto-replied (vacation)`) | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). The server writes `auto-generated` on the mail it generates itself, bounces included, whatever the original sender asked for; `system_auto_submitted` (`true`) turns that off. A vacation reply stays `auto-replied (vacation)`: it is an answer, not a generated message |
+| `Auto-Submitted` | REST `auto_submitted` field; every system message (`auto-generated`) except the vacation reply (`auto-replied (vacation)`) | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). The server writes `auto-generated` on the mail it generates itself, bounces included, whatever the original sender asked for; `system_auto_submitted` (`true`) turns that off, and with it off every generated message leaves without the field, failure notices and delay warnings among them, so nothing stops a bounce loop by that field alone and the null return path is what prevents it. A vacation reply stays `auto-replied (vacation)`: it is an answer, not a generated message |
 | `Bcc`, `Resent-Bcc` | Removed at SMTP submission and at JMAP `EmailSubmission/set`; never written by the REST API | The recipients stay on the envelope. A JMAP draft keeps `Bcc`. Inbound mail keeps whatever the sender wrote |
 | `Cc`, `Sender`, `Reply-To` | REST fields `cc`, `sender`, `reply_to`; JMAP Email properties | Written only when given |
 | `Content-Disposition`, `Content-ID`, `Content-Transfer-Encoding`, `Content-Type`, `MIME-Version` | The MIME builder behind REST, JMAP, replies and reports | `Content-Transfer-Encoding` is `7bit`, `quoted-printable` or `base64` as the content needs. `Content-ID` only on inline parts |
@@ -88,26 +88,54 @@ so every one of them is covered by the signature. Each has a switch in the
 | Field | When the server writes it | Switch (default) |
 |---|---|---|
 | `Feedback-ID` | A submission with no `Feedback-ID` of its own. `epistle:<class>:<domain>`, where the class is the one the server granted and the domain is the one the message is sent for. No account name and no other personal data goes in it | `default_feedback_id` (`true`) |
-| `List-Unsubscribe` | A `transactional` submission with more recipients than `bulk_recipients`. One `mailto:` URI naming the sender with `?subject=unsubscribe`. A submission that already has a `List-Unsubscribe` is left alone | `default_list_unsubscribe` (`true`) and `bulk_recipients` (`1`) |
-| `List-Id`, `List-Post`, `List-Unsubscribe` | A submission whose envelope sender is a `[[alias]]` with a `list_id`. The same block local delivery prepends to the copies a list receives, and it replaces whatever the client wrote for those three fields | `default_list_id` (`true`) |
+| `List-Unsubscribe` | A `transactional` submission with more recipients than `bulk_recipients`. One `mailto:` URI naming the sender with `?subject=unsubscribe`, percent-encoded per RFC 6068 so a `?`, an `&` or a `%` in the address cannot read as a query. A submission that already has a `List-Unsubscribe` is left alone, whatever wrote it | `default_list_unsubscribe` (`true`) and `bulk_recipients` (`20`) |
+| `List-Id`, `List-Post`, `List-Unsubscribe` | A submission whose envelope sender is a `[[alias]]` with a `list_id`. The same block local delivery prepends, minus the `List-Unsubscribe` when the client already sent one. The two fields that say what the list is replace whatever the client wrote for them; the unsubscribe the client chose is kept, one-click included, because RFC 8058 posts to it | `default_list_id` (`true`) |
 | `X-Epistle` | Nothing, unless asked for: the fixed value `1`, with no version in it and no version field beside it. It says the message left an epistle server and nothing more | `x_epistle_header` (`false`) |
 | `Organization` | A submission whose sending domain has an entry in `domain_organization`. That value replaces whatever the client wrote for the field; with no entry configured the client's own claim is left alone, because the server has no opinion to overrule it with | `organization_header` (`true`) |
 
 What counts as bulk for the `mailto` unsubscribe: a `transactional` class with
-more than `bulk_recipients` recipients. Marketing mail is left alone, because
-it already has to carry a one-click unsubscribe the sender controls (see
-the `List-Unsubscribe` row above); personal mail is correspondence between
-people, where an unsubscribe address would be a stranger's mailbox offered to
-everyone. A submission that already carries a `List-Unsubscribe`, from the
-client or from the list block, keeps it: the server never replaces an address
-the sender chose.
+more than `bulk_recipients` recipients, twenty-one with the default setting.
+Marketing mail is left alone, because it already has to carry a one-click
+unsubscribe the sender controls (see the `List-Unsubscribe` row above); personal
+mail is correspondence between people, where an unsubscribe address would be a
+stranger's mailbox offered to everyone. A submission that already carries a
+`List-Unsubscribe`, from the client or from the list block, keeps it, and only
+one ever goes out: the server never replaces an address the sender chose, and
+never adds a second one.
 
-A client cannot forge any of these: they land before signing, they are inside
-the signature, `Auto-Submitted` is oversigned so a second copy added later
-breaks both signatures, and the API and JMAP accept a submission of these
-fields only as the named request fields documented in the [API guide](api.md).
-The `X-Epistle-*` namespace is stripped on unauthenticated inbound mail and
-`X-Epistle-Attachment-Warning` on every submission, as the tables above say.
+Nothing on the server answers that `mailto:` URI. It names the sender's own
+mailbox and the subject the sender's own tooling has to recognise, so the
+unsubscribe is the sender's to honour and not the server's: set
+`default_list_unsubscribe = false` when no such tooling reads the subject, and
+raise `bulk_recipients` for a submission list that is large but not a campaign.
+An empty envelope sender gets no `mailto:` and no `Feedback-ID`, and a domain
+outside ASCII leaves the `Feedback-ID` out with a line in the log, since
+RFC 2919 has no room for one.
+
+### What a client can and cannot say
+
+A client over SMTP authenticates and then writes the message, so it can send
+any header it likes. What reaches a receiver is what the server does with it:
+
+- Rewritten by the server: every `X-Epistle-*` field is removed by name prefix
+  before the server writes its own, `Authentication-Results` is removed because
+  a submission had no check of ours to report, and `Organization` is replaced
+  by the domain's configured value when one is configured.
+- Left as the client wrote it: `Feedback-ID`, and `Organization` when no value
+  is configured for the domain. A sender with two `Feedback-ID` fields keeps
+  both.
+- Written once by the server: `List-Id`, `List-Post`, `List-Unsubscribe` and
+  `X-Epistle`, each at most one.
+
+What limits a forged claim is the signature, not the parser. Every field above
+lands before the message is DKIM-signed, so it is inside the signature, and
+`Auto-Submitted` is oversigned so a second copy added later breaks both
+signatures. A receiver that trusts the signature over the bytes sees the
+server's claim; one that only reads the bytes sees the client's. The REST API
+and JMAP cannot submit these fields as custom headers: a REST custom header has
+to be named `X-`, and a JMAP draft's `X-Epistle-*` and `Authentication-Results`
+are stripped, though a draft may still carry a `Feedback-ID` or an
+`Organization` of its own.
 
 ## System mail
 
@@ -136,6 +164,10 @@ Notes:
   delay notice has an empty envelope sender, so it is signed only when the mail
   hostname is itself one of the hosted domains, and is otherwise sent unsigned
   (read from the routing code, not observed end to end).
+- With `system_auto_submitted = false` the generated messages in the table above
+  go out without `Auto-Submitted`, so the table of names no longer matches a
+  server so configured. Nothing here reads that field back; what keeps a bounce
+  from looping is the null return path.
 
 ## DKIM
 

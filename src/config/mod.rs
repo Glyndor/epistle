@@ -157,9 +157,10 @@ fn default_yes() -> bool {
 	true
 }
 
-/// Default for [`Config::bulk_recipients`]: two or more recipients is bulk.
+/// Default for [`Config::bulk_recipients`]: twenty-one recipients or more
+/// is bulk, the threshold [`crate::smtp::identification::Policy`] ships.
 fn default_bulk_recipients() -> usize {
-	1
+	crate::smtp::identification::DEFAULT_BULK_RECIPIENTS
 }
 
 /// Top-level server configuration.
@@ -292,12 +293,15 @@ pub struct Config {
 	pub default_feedback_id: bool,
 	/// Give a bulk `transactional` submission a `mailto` `List-Unsubscribe`
 	/// pointing at the sender. `false` leaves every submission without one.
+	/// Nothing on the server answers the address it points at: it is the
+	/// sender's own mailbox, and the sender's own tooling has to act on it.
 	#[serde(default = "default_yes")]
 	pub default_list_unsubscribe: bool,
 	/// Recipients above which a `transactional` submission counts as bulk
-	/// for `default_list_unsubscribe`. `1`, the default, means two or more.
-	/// Personal mail never counts and marketing mail already has to carry a
-	/// one-click unsubscribe.
+	/// for `default_list_unsubscribe`. `20`, the default, means twenty-one or
+	/// more: a notice to a handful of people is correspondence, not bulk
+	/// mail. Personal mail never counts and marketing mail already has to
+	/// carry a one-click unsubscribe.
 	#[serde(default = "default_bulk_recipients")]
 	pub bulk_recipients: usize,
 	/// Write the `List-Id` of the list a sender speaks for when the envelope

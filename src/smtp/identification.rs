@@ -9,9 +9,11 @@
 //! it writes lands before the message is DKIM-signed, so a receiver can
 //! tell the server's fields from a client's.
 //!
-//! Nothing here overwrites a field the client already wrote except the
-//! list block of a list address, which is the same block local delivery
-//! prepends.
+//! Nothing here overwrites a field the client already wrote, with two
+//! exceptions the [`Policy`] documents: `Organization`, when the domain has
+//! a configured value, and the `List-Id`/`List-Post` pair of a list
+//! address, which is the same block local delivery prepends. A
+//! `List-Unsubscribe` the client chose, one-click included, is always kept.
 
 use std::collections::BTreeMap;
 
@@ -27,6 +29,12 @@ pub const X_EPISTLE_VALUE: &str = "1";
 
 /// The `Auto-Submitted` value for mail the server generates itself.
 pub const SYSTEM_AUTO_SUBMITTED: &str = "auto-generated";
+
+/// Recipients above which a `transactional` submission counts as bulk by
+/// default: twenty-one. Two recipients is an ordinary notice to two people,
+/// not bulk mail, and an unsubscribe address on it would be the sender's
+/// mailbox offered to a recipient who never asked to leave anything.
+pub const DEFAULT_BULK_RECIPIENTS: usize = 20;
 
 /// One switch per header, read from the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +63,7 @@ impl Default for Policy {
 		Self {
 			feedback_id: true,
 			bulk_unsubscribe: true,
-			bulk_recipients: 1,
+			bulk_recipients: DEFAULT_BULK_RECIPIENTS,
 			list_id: true,
 			system_auto_submitted: true,
 			x_epistle: false,
@@ -89,9 +97,12 @@ impl Policy {
 /// [`Policy`] documents: the vendor marker, then `Organization`, then
 /// `Feedback-ID`, then the list block, then the bulk unsubscribe.
 ///
-/// A field the client already wrote is left alone, except `Organization`,
-/// which the domain's configured value replaces, and the list block of a
-/// list address, which is the same block local delivery prepends.
+/// A field the client already wrote is left alone, with the two exceptions
+/// the module says: `Organization`, which the domain's configured value
+/// replaces, and the `List-Id`/`List-Post` of a list address, which is the
+/// same block local delivery prepends. Exactly one `List-Unsubscribe` ever
+/// goes out: whichever came first, the client's, the list's or the bulk
+/// one, wins and the others are not written.
 pub fn apply(
 	message: &mut AcceptedMessage,
 	class: MailClass,
@@ -114,6 +125,7 @@ pub fn apply(
 	if policy.x_epistle {
 		push(
 			&mut lines,
+			"X-Epistle",
 			compose::unstructured("X-Epistle", X_EPISTLE_VALUE),
 		);
 	}
@@ -125,40 +137,89 @@ pub fn apply(
 		&& let Some(name) = policy.domain_organization.get(&domain)
 	{
 		strip_headers(&mut message.data, &["organization"]);
-		push(&mut lines, compose::structured("Organization", name));
+		push(
+			&mut lines,
+			"Organization",
+			compose::structured("Organization", name),
+		);
 	}
-	if policy.feedback_id && !carries(&message.data, "feedback-id") {
+	// An empty reverse path says nothing about who to write back to, so the
+	// field is left out rather than written with an empty domain after the
+	// class. A domain outside ASCII is refused by the composer and said once
+	// an hour, never dropped without a word.
+	if policy.feedback_id && !sender.is_empty() && !carries(&message.data, "feedback-id") {
 		// The class and the domain, never the local part: the field exists
 		// to tie a feedback loop to the sender, not to name the account.
 		push(
 			&mut lines,
+			"Feedback-ID",
 			compose::structured("Feedback-ID", &format!("epistle:{class}:{domain}")),
 		);
 	}
+	// The list block claims the fields that say what the list is, and the
+	// unsubscribe only when the client left none: a sender that already
+	// published a one-click URL keeps it, and RFC 8058 wants it signed and
+	// answered rather than replaced by an address nobody posts to.
+	let mut unsubscribed = carries(&message.data, "list-unsubscribe");
 	if policy.list_id
 		&& let Some(directory) = directory
-		&& let Some(block) = directory.list_headers(&sender)
+		&& let Some(identity) = directory.list_identity(&sender)
 	{
-		strip_headers(
-			&mut message.data,
-			&["list-id", "list-post", "list-unsubscribe"],
-		);
-		lines.push_str(&block);
+		strip_headers(&mut message.data, &["list-id", "list-post"]);
+		lines.push_str(&identity);
+		if !unsubscribed && let Some(unsubscribe) = directory.list_unsubscribe(&sender) {
+			lines.push_str(&unsubscribe);
+			unsubscribed = true;
+		}
 	}
 	if policy.bulk_unsubscribe
+		&& !unsubscribed
 		&& bulk(class, message.recipients.len(), policy.bulk_recipients)
-		&& !carries(&message.data, "list-unsubscribe")
+		&& let Some(uri) = unsubscribe_uri(&sender)
 	{
 		push(
 			&mut lines,
-			compose::structured(
-				"List-Unsubscribe",
-				&format!("<mailto:{sender}?subject=unsubscribe>"),
-			),
+			"List-Unsubscribe",
+			compose::structured("List-Unsubscribe", &uri),
 		);
 	}
 	prepend(&mut message.data, &lines);
 }
+
+/// The `mailto:` `List-Unsubscribe` for `sender`, percent-encoded per
+/// RFC 6068 so a `?`, an `&` or a `%` in the address cannot read as a query
+/// separator, and `None` for an empty reverse path, which names nobody to
+/// write to.
+fn unsubscribe_uri(sender: &str) -> Option<String> {
+	if sender.is_empty() {
+		return None;
+	}
+	Some(format!(
+		"<mailto:{}?subject=unsubscribe>",
+		percent_encoding::utf8_percent_encode(sender, MAILTO_TEXT)
+	))
+}
+
+/// The characters RFC 6068 leaves alone in a `mailto` address: the unreserved
+/// set and the delimiters an address spec may carry. Everything else, `%`
+/// and `?` and `&` included, is percent-encoded.
+const MAILTO_TEXT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+	.remove(b'-')
+	.remove(b'.')
+	.remove(b'_')
+	.remove(b'~')
+	.remove(b'!')
+	.remove(b'$')
+	.remove(b'\'')
+	.remove(b'(')
+	.remove(b')')
+	.remove(b'*')
+	.remove(b'+')
+	.remove(b',')
+	.remove(b';')
+	.remove(b':')
+	.remove(b'@')
+	.remove(b'/');
 
 /// Whether a submission counts as bulk for the `mailto` unsubscribe.
 ///
@@ -190,9 +251,18 @@ fn carries(data: &[u8], name: &str) -> bool {
 	!header_values(data, name).is_empty()
 }
 
-fn push(lines: &mut String, header: Result<String, compose::ComposeError>) {
-	if let Ok(header) = header {
-		lines.push_str(&header);
+/// Append a composed header, or say once an hour that it was left out. A
+/// value the composer refuses is a message that goes without the field, and
+/// an operator looking at a receiver's headers has to be able to find out
+/// why, so the refusal is never swallowed.
+fn push(lines: &mut String, name: &str, header: Result<String, compose::ComposeError>) {
+	match header {
+		Ok(header) => lines.push_str(&header),
+		Err(error) => {
+			if crate::util::warn_limited::allow(&format!("identification:{name}")) {
+				tracing::warn!(%name, %error, "identification header left out of the message");
+			}
+		}
 	}
 }
 

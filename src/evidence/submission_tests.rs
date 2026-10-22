@@ -51,6 +51,40 @@ fn marketing_without_one_click_is_refused() {
 	);
 }
 
+/// A list address sending marketing mail it already published a one-click
+/// unsubscribe for: the list block must not replace that URL with a mailto
+/// and refuse the message over it.
+#[test]
+fn marketing_from_a_list_keeps_the_one_click_the_client_chose() {
+	let directory = crate::smtp::directory::Directory::default().with_aliases([(
+		"news@example.org".to_string(),
+		crate::smtp::directory::AliasSpec {
+			members: vec!["alice@example.org".to_string()],
+			senders: Vec::new(),
+			hidden: false,
+			list_id: Some("news.example.org".to_string()),
+		},
+	)]);
+	let mut submitted = message(ONE_CLICK, &["a@example.net"]);
+	prepare(
+		&mut submitted,
+		marketing(),
+		None,
+		&Policy::default(),
+		Some(&directory),
+	)
+	.expect("a list that honours one-click is not refused");
+	assert_eq!(
+		crate::smtp::trace::header_values(&submitted.data, "list-unsubscribe"),
+		vec!["<https://example.org/u>".to_string()]
+	);
+	assert_eq!(
+		crate::smtp::trace::header_values(&submitted.data, "list-post"),
+		vec!["<mailto:news@example.org>".to_string()],
+		"the list block still says what the list is"
+	);
+}
+
 #[test]
 fn marketing_is_marked_bulk_and_suppressed_recipients_are_dropped() {
 	let dir = tempfile::tempdir().expect("tempdir");

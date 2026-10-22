@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::router;
-use super::send_tests_class::{send, state};
+use super::send_tests_class::send;
 use super::tests::{TOKEN, request_with_body};
 use crate::evidence::MailClass;
 use crate::evidence::bindings::{BindingSet, update};
@@ -58,65 +58,11 @@ fn identification(data: &[u8]) -> BTreeMap<&str, Vec<String>> {
 #[tokio::test]
 async fn the_same_message_carries_the_same_fields_by_all_three_paths() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let policy = policy();
-	update(dir.path(), |bindings| {
-		bindings
-			.accounts
-			.insert("alice".to_string(), MailClass::Transactional);
-	})
-	.expect("bind the account class");
-
-	// SMTP after AUTH: the server's own hook, with the policy the server
-	// was configured with.
-	let smtp = {
-		let server = Server::new(
-			"mail.example.org",
-			Arc::new(crate::storage::FsSpool::open(dir.path()).expect("spool"))
-				as Arc<dyn MessageSink>,
-		)
-		.with_directory(directory())
-		.with_identification(policy.clone())
-		.with_class_bindings(Arc::new(BindingSet::open(dir.path()).expect("bindings")));
-		let mut session = crate::smtp::session::Session::new("mail.example.org");
-		session.mark_authenticated_for_test("alice");
-		let mut message = AcceptedMessage {
-			reverse_path: "alice@example.org".to_string(),
-			recipients: vec![
-				"bob@elsewhere.example".to_string(),
-				"carol@elsewhere.example".to_string(),
-			],
-			data: b"From: alice@example.org\r\nSubject: s\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			sender_verified: true,
-			no_dsn: Vec::new(),
-		};
-		server
-			.prepare_submission(&session, "alice", &mut message)
-			.expect("prepared");
-		message.data
-	};
-
-	// The same message through the REST endpoint and through JMAP.
-	let (api, _) = state(dir.path());
-	let app = router(api.with_identification(policy.clone()));
-	let (status, body) = send(
-		&app,
-		json!({
-			"class": "transactional",
-			"cc": ["carol@elsewhere.example"],
-		}),
-	)
-	.await;
-	assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-	let api_data = queued(dir.path(), &body);
-
-	let jmap_data = jmap(dir.path(), &app).await;
+	let paths = by_all_three_paths(dir.path(), &policy(), "alice@example.org").await;
 
 	// The forged fields of the draft are gone, and the marker is the
 	// server's own, on every path.
-	for (field, data) in [("api", &api_data), ("jmap", &jmap_data)] {
+	for (field, data) in [("api", &paths.api), ("jmap", &paths.jmap)] {
 		assert_eq!(
 			header_values(data, "x-epistle"),
 			vec!["1".to_string()],
@@ -128,23 +74,23 @@ async fn the_same_message_carries_the_same_fields_by_all_three_paths() {
 		);
 	}
 	assert!(
-		header_values(&api_data, "received").is_empty(),
+		header_values(&paths.api, "received").is_empty(),
 		"the API path carried a client trace header"
 	);
 	assert!(
-		header_values(&jmap_data, "received").is_empty(),
+		header_values(&paths.jmap, "received").is_empty(),
 		"the JMAP path carried the draft's trace header"
 	);
 
-	let from_smtp = identification(&smtp);
+	let from_smtp = identification(&paths.smtp);
 	assert_eq!(
 		from_smtp["feedback-id"],
 		vec!["epistle:transactional:example.org".to_string()],
 		"the SMTP path wrote no Feedback-ID: {from_smtp:?}"
 	);
 	for (field, values) in [
-		("api", identification(&api_data)),
-		("jmap", identification(&jmap_data)),
+		("api", identification(&paths.api)),
+		("jmap", identification(&paths.jmap)),
 	] {
 		assert_eq!(
 			values, from_smtp,
@@ -168,6 +114,168 @@ async fn the_same_message_carries_the_same_fields_by_all_three_paths() {
 	);
 }
 
+/// The same comparison for a sender that speaks for a list, where the fields
+/// are not empty on any path and the list block also decides the
+/// unsubscribe. A path that resolved senders against a directory without the
+/// list, or dropped the block, shows up as an empty or different field here.
+#[tokio::test]
+async fn a_list_sender_carries_the_list_fields_on_all_three_paths() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let paths = by_all_three_paths(dir.path(), &policy(), "team@example.org").await;
+
+	let from_smtp = identification(&paths.smtp);
+	assert_eq!(
+		from_smtp["list-id"],
+		vec!["<team.example.org>".to_string()],
+		"the SMTP path wrote no List-Id: {from_smtp:?}"
+	);
+	assert_eq!(
+		from_smtp["list-post"],
+		vec!["<mailto:team@example.org>".to_string()],
+		"{from_smtp:?}"
+	);
+	assert_eq!(
+		from_smtp["list-unsubscribe"],
+		vec!["<mailto:team@example.org?subject=unsubscribe>".to_string()],
+		"the list block and the bulk rule both wrote one: {from_smtp:?}"
+	);
+	for (field, values) in [
+		("api", identification(&paths.api)),
+		("jmap", identification(&paths.jmap)),
+	] {
+		assert_eq!(
+			values, from_smtp,
+			"the {field} path carries different identification headers than SMTP"
+		);
+	}
+}
+
+/// An API state whose account alice owns her own address and the list
+/// address she speaks for, so the REST send-as guard admits a send as the
+/// list. The directory is the one the SMTP path resolves senders against, so
+/// the list is a list on all three.
+fn list_state(dir: &std::path::Path) -> crate::api::ApiState {
+	let domains = vec!["example.org".to_string()];
+	let accounts = vec![crate::config::Account {
+		display_name: None,
+		name: "alice".to_string(),
+		addresses: vec![
+			"alice@example.org".to_string(),
+			"team@example.org".to_string(),
+		],
+		password_hash: Some("$argon2id$secret".to_string()),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+		allowed_protocols: None,
+	}];
+	let store = std::sync::Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir,
+			domains.clone(),
+			std::collections::HashMap::new(),
+			accounts,
+		)
+		.expect("open store"),
+	);
+	let service = Arc::new(
+		crate::evidence::service::EvidenceService::open(
+			dir,
+			Vec::new(),
+			crate::storage::MessageCrypto::disabled(),
+		)
+		.expect("evidence"),
+	);
+	service.set_gate(None);
+	let split = crate::storage::SplitDelivery::new(dir, store.handle())
+		.expect("sink")
+		.with_evidence(Arc::clone(&service));
+	crate::api::ApiState::new(
+		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		dir.to_path_buf(),
+		domains,
+		store,
+		FsSpool::open(dir).expect("spool"),
+	)
+	.with_outbound(Arc::new(split))
+	.with_class_bindings(Arc::new(BindingSet::open(dir).expect("bindings")))
+	.with_directory(directory())
+}
+
+/// The queued bytes each of the three paths produced for one message.
+struct Paths {
+	smtp: Vec<u8>,
+	api: Vec<u8>,
+	jmap: Vec<u8>,
+}
+
+/// The same message sent by SMTP after AUTH, by `POST /api/v1/send` and by
+/// JMAP `EmailSubmission/set`, all with `sender` as the envelope sender, and
+/// all three resolved against the same directory.
+async fn by_all_three_paths(dir: &std::path::Path, policy: &Policy, sender: &str) -> Paths {
+	update(dir, |bindings| {
+		bindings
+			.accounts
+			.insert("alice".to_string(), MailClass::Transactional);
+	})
+	.expect("bind the account class");
+
+	// SMTP after AUTH: the server's own hook, with the policy the server
+	// was configured with.
+	let smtp = {
+		let server = Server::new(
+			"mail.example.org",
+			Arc::new(FsSpool::open(dir).expect("spool")) as Arc<dyn MessageSink>,
+		)
+		.with_directory(directory())
+		.with_identification(policy.clone())
+		.with_class_bindings(Arc::new(BindingSet::open(dir).expect("bindings")));
+		let mut session = crate::smtp::session::Session::new("mail.example.org");
+		session.mark_authenticated_for_test("alice");
+		let mut message = AcceptedMessage {
+			reverse_path: sender.to_string(),
+			recipients: vec![
+				"bob@elsewhere.example".to_string(),
+				"carol@elsewhere.example".to_string(),
+			],
+			data: format!("From: {sender}\r\nSubject: s\r\n\r\nbody\r\n").into_bytes(),
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			sender_verified: true,
+			no_dsn: Vec::new(),
+		};
+		server
+			.prepare_submission(&session, "alice", &mut message)
+			.expect("prepared");
+		message.data
+	};
+
+	// The same message through the REST endpoint and through JMAP. An
+	// account that owns the list address is what a real list sender looks
+	// like, so the send-as guard on the REST path admits it.
+	let app = router(list_state(dir).with_identification(policy.clone()));
+	let (status, body) = send(
+		&app,
+		json!({
+			"from": sender,
+			"class": "transactional",
+			"cc": ["carol@elsewhere.example"],
+		}),
+	)
+	.await;
+	assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+	let api_data = queued(dir, &body);
+
+	let jmap_data = jmap(dir, &app, sender).await;
+	Paths {
+		smtp,
+		api: api_data,
+		jmap: jmap_data,
+	}
+}
+
 /// The queued bytes of the message a `POST /api/v1/send` queued.
 fn queued(dir: &std::path::Path, body: &Value) -> Vec<u8> {
 	let id = uuid::Uuid::parse_str(body["queued"].as_str().expect("id")).expect("uuid");
@@ -180,7 +288,7 @@ fn queued(dir: &std::path::Path, body: &Value) -> Vec<u8> {
 
 /// Submit the same message through JMAP `EmailSubmission/set` and return
 /// the queued bytes.
-async fn jmap(dir: &std::path::Path, app: &axum::Router) -> Vec<u8> {
+async fn jmap(dir: &std::path::Path, app: &axum::Router, sender: &str) -> Vec<u8> {
 	let inbox = dir.join("accounts").join("alice").join("new");
 	std::fs::create_dir_all(&inbox).expect("mkdir");
 	let email = uuid::Uuid::now_v7();
@@ -188,11 +296,13 @@ async fn jmap(dir: &std::path::Path, app: &axum::Router) -> Vec<u8> {
 	// likes, including fields that speak for the server.
 	std::fs::write(
 		inbox.join(format!("{email}.eml")),
-		b"From: alice@example.org\r\n\
-		  X-Epistle: 9\r\n\
-		  Received: from forged.example\r\n\
-		  Authentication-Results: forged.example; spf=pass\r\n\
-		  Subject: s\r\n\r\nbody\r\n",
+		format!(
+			"From: {sender}\r\n\
+			 X-Epistle: 9\r\n\
+			 Received: from forged.example\r\n\
+			 Authentication-Results: forged.example; spf=pass\r\n\
+			 Subject: s\r\n\r\nbody\r\n"
+		),
 	)
 	.expect("write draft");
 	let req = json!({
@@ -200,7 +310,7 @@ async fn jmap(dir: &std::path::Path, app: &axum::Router) -> Vec<u8> {
 		"methodCalls": [["EmailSubmission/set", {"accountId": "alice", "create": {"s1": {
 			"emailId": email.to_string(),
 			"envelope": {
-				"mailFrom": {"email": "alice@example.org"},
+				"mailFrom": {"email": sender},
 				"rcptTo": [
 					{"email": "bob@elsewhere.example"},
 					{"email": "carol@elsewhere.example"},

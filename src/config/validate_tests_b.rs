@@ -68,6 +68,17 @@ fn the_identification_switches_are_read_from_the_file() {
 }
 
 #[test]
+fn without_the_keys_the_bulk_threshold_is_twenty_recipients() {
+	let config: Config = toml::from_str(BASE).expect("parse");
+	config.validate().expect("valid");
+	assert_eq!(
+		crate::smtp::identification::Policy::from_config(&config).bulk_recipients,
+		20,
+		"a handful of recipients is correspondence, not bulk mail"
+	);
+}
+
+#[test]
 fn a_domain_organization_value_has_to_be_a_header_safe_ascii_name() {
 	// A key that is not a DNS name, an empty value, and a value carrying a
 	// line break are all refused: the value reaches an `Organization`

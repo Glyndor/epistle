@@ -302,11 +302,28 @@ impl Directory {
 	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
 	/// to delivered copies so clients can identify and leave the list (RFC 2369).
 	pub fn list_headers(&self, address: &str) -> Option<String> {
+		let identity = self.list_identity(address)?;
+		let unsubscribe = self.list_unsubscribe(address)?;
+		Some(format!("{identity}{unsubscribe}"))
+	}
+
+	/// The `List-Id` and `List-Post` of a list address, each with a trailing
+	/// CRLF, or `None` when it is not a list. Kept apart from the
+	/// `List-Unsubscribe` so a caller that already has one keeps it.
+	pub fn list_identity(&self, address: &str) -> Option<String> {
 		let spec = self.aliases.get(&normalize(address))?;
 		let list_id = spec.list_id.as_ref()?;
 		Some(format!(
-			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
-			 List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
+			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n"
+		))
+	}
+
+	/// The `List-Unsubscribe` of a list address, a `mailto:` URI with the
+	/// unsubscribe subject, or `None` when it is not a list.
+	pub fn list_unsubscribe(&self, address: &str) -> Option<String> {
+		self.aliases.get(&normalize(address))?.list_id.as_ref()?;
+		Some(format!(
+			"List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
 		))
 	}
 
