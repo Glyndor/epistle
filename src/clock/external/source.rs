@@ -1,5 +1,5 @@
 //! Configuration for the external clock probe: the three independent
-//! sources and the thresholds the area applies to the median signed offset.
+//! sources and thresholds applied to the largest absolute valid offset.
 
 use std::fmt;
 
@@ -20,7 +20,7 @@ pub(super) const EXPECTED_SOURCES: usize = 3;
 /// answers the whole NTS exchange; `time.google.com` publishes no NTS-KE
 /// endpoint, so it is plain NTPv4.
 ///
-/// The median of three readings rejects any one source that drifts. The
+/// The median is diagnostic; every valid offset affects the verdict. The
 /// list is a default, not a rule: an operator can change the hosts and
 /// the protocol per source, and a host that answers NTS on their network
 /// can be configured as `nts`.
@@ -126,7 +126,7 @@ pub struct ClockExternal {
 	pub allow_private_networks: bool,
 	/// Inclusive warn threshold (seconds), applied to the largest absolute
 	/// valid offset. Missing readings produce at least `Warn`. The median
-	/// and smear exclusion remain diagnostic values.
+	/// and smear candidate remain diagnostic values.
 	#[serde(default = "default_warn_seconds")]
 	pub warn_seconds: f64,
 	/// Inclusive fail threshold (seconds).
@@ -283,7 +283,7 @@ pub struct ProbeSummary {
 	pub outcome: Outcome,
 	/// Median of three valid readings, when available.
 	pub median: Option<SignedOffset>,
-	/// The reading the smear policy excluded, when it did.
+	/// Potential smear reading, retained in the verdict despite the field name.
 	pub smear_excluded: Option<usize>,
 	/// Effective warn threshold (seconds, inclusive).
 	pub warn_seconds: f64,

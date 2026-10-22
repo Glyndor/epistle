@@ -159,3 +159,161 @@ async fn review_default_adapter_entry_points_refuse_internal_destinations() {
 		}
 	}
 }
+
+#[test]
+fn review_scoped_ipv6_is_rejected_clearly_even_with_opt_in() {
+	for host in ["fe80::1%1", "fe80::1%eth0", "[fe80::1%1]"] {
+		for allow in [false, true] {
+			let result = validate_host(host, 123, 123, allow);
+			assert!(result.is_err(), "accepted unsupported zone {host}");
+			let error = result.unwrap_err();
+			assert!(
+				error.contains("IPv6 zone identifiers are not supported"),
+				"{error}"
+			);
+		}
+	}
+}
+
+#[test]
+fn review_non_global_destinations_require_opt_in() {
+	for text in [
+		"100.64.0.1",
+		"100.127.255.255",
+		"0.1.2.3",
+		"192.0.0.9",
+		"192.0.2.1",
+		"198.51.100.1",
+		"203.0.113.1",
+		"198.18.0.1",
+		"198.19.255.255",
+		"240.0.0.1",
+		"2001:db8::1",
+		"fec0::1",
+		"100::1",
+		"2001:2::1",
+		"3fff::1",
+	] {
+		let ip = text.parse().unwrap();
+		assert!(validate_ip(ip, false).is_err(), "accepted {text}");
+		assert!(validate_ip(ip, true).is_ok(), "opt-in rejected {text}");
+	}
+}
+
+#[test]
+fn review_embedded_ipv4_obeys_both_destination_policies() {
+	for prefix in ["::ffff:", "::", "64:ff9b::"] {
+		for (payload, allowed_with_opt_in) in [
+			("127.0.0.1", true),
+			("100.64.0.1", true),
+			("192.0.2.1", true),
+			("224.0.0.1", false),
+			("255.255.255.255", false),
+			("0.0.0.0", false),
+		] {
+			let text = format!("{prefix}{payload}");
+			let ip = text.parse().unwrap();
+			assert!(validate_ip(ip, false).is_err(), "accepted {text}");
+			assert_eq!(validate_ip(ip, true).is_ok(), allowed_with_opt_in, "{text}");
+		}
+	}
+	for (text, allowed_with_opt_in) in [
+		("2002:7f00:1::1", true),
+		("2002:6440:1::1", true),
+		("2002:c000:201::1", true),
+		("2002:e000:1::1", false),
+		("2002:ffff:ffff::1", false),
+		("2002:0:0::1", false),
+	] {
+		let ip = text.parse().unwrap();
+		assert!(validate_ip(ip, false).is_err(), "accepted {text}");
+		assert_eq!(validate_ip(ip, true).is_ok(), allowed_with_opt_in, "{text}");
+	}
+}
+
+#[tokio::test]
+async fn review_unusual_numeric_names_cannot_bypass_resolved_address_policy() {
+	for host in [
+		"0x7f.1",
+		"2130706433",
+		"127.1",
+		"0177.0.0.1",
+		"127.000.000.001",
+	] {
+		let result = resolve_with(
+			host,
+			123,
+			123,
+			false,
+			Instant::now() + Duration::from_secs(1),
+			async { Ok(vec!["127.0.0.1".parse().unwrap()]) },
+		)
+		.await;
+		assert!(
+			matches!(result, Err(ProbeError::Dial(_))),
+			"{host}: {result:?}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn review_special_ranges_in_mixed_dns_answers_are_rejected_in_both_orders() {
+	for text in [
+		"100.64.0.1",
+		"198.18.0.1",
+		"2001:db8::1",
+		"64:ff9b::192.0.2.1",
+		"2002:6440:1::1",
+	] {
+		for reverse in [false, true] {
+			let mut addresses = vec!["1.1.1.1".parse().unwrap(), text.parse().unwrap()];
+			if reverse {
+				addresses.reverse();
+			}
+			let result = resolve_with(
+				"clock.example",
+				123,
+				123,
+				false,
+				Instant::now() + Duration::from_secs(1),
+				async { Ok(addresses) },
+			)
+			.await;
+			assert!(result.is_err(), "accepted {text}, reverse={reverse}");
+		}
+	}
+}
+
+#[test]
+fn review_global_destinations_and_embedded_global_ipv4_remain_allowed() {
+	for text in [
+		"1.1.1.1",
+		"2606:4700:4700::1111",
+		"::ffff:1.1.1.1",
+		"::1.1.1.1",
+		"64:ff9b::1.1.1.1",
+		"2002:101:101::1",
+	] {
+		for allow in [false, true] {
+			assert!(validate_ip(text.parse().unwrap(), allow).is_ok(), "{text}");
+		}
+	}
+}
+
+#[tokio::test]
+async fn review_scoped_ipv6_is_rejected_before_lookup() {
+	let result = resolve_with(
+		"fe80::1%eth0",
+		123,
+		123,
+		true,
+		Instant::now() + Duration::from_secs(1),
+		async {
+			panic!("unsupported zone must not reach DNS");
+		},
+	)
+	.await;
+	assert!(
+		matches!(result, Err(ProbeError::Dial(why)) if why.contains("IPv6 zone identifiers are not supported"))
+	);
+}

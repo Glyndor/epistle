@@ -1182,17 +1182,23 @@ source deadline. Both A and AAAA results are checked before connecting;
 if any returned address is forbidden, the whole answer is rejected. The
 probe connects to the selected validated address without resolving again.
 By default, sources and NTS-KE Server/Port referrals must use
-unicast addresses outside loopback, private and link-local networks,
+global unicast addresses, excluding shared, documentation, benchmarking,
+reserved, loopback, private and link-local networks,
 and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP).
 Set `allow_private_networks = true` only when I intend to contact internal
 servers or custom ports. Even then, multicast, unspecified and limited
-broadcast addresses are rejected, including IPv4-mapped IPv6 forms.
+broadcast addresses are rejected. IPv4-mapped, IPv4-compatible, NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are classified using their
+embedded IPv4 address. IPv6 zone identifiers such as `fe80::1%eth0` or
+`fe80::1%1` are not supported and are rejected with a configuration error,
+even with the opt-in; I must use a destination that needs no zone.
 Directed broadcast addresses cannot be identified without the destination
 network's prefix; my routing and egress policy must block those networks.
 
 The verdict currently uses the largest absolute offset among all valid
 readings. The median and `smear_excluded` are diagnostic values only: an
-outlier or a reading labelled as excluded can still cause `Warn` or `Fail`.
+outlier or a reading identified by the smear diagnostic can still cause
+`Warn` or `Fail`.
 They do not currently protect the verdict from a single incorrect peer.
 With one or two valid readings, a healthy offset still gives `Warn`; any
 valid offset at or above the fail threshold gives `Fail`. No valid readings
@@ -1217,7 +1223,8 @@ measured on 2026-10-22, over the real `2 s` budget:
   development host it took between 1.37 s and 1.82 s across eight
   consecutive runs. The `2 s` per-source budget is a constant in the
   binary, not a key here. A miss is reported as a timeout, the run loses
-  its median, and the area says `Warn`.
+  its diagnostic median, and the area gives at least `Warn`; no valid
+  readings or a valid offset at the fail threshold gives `Fail`.
 - `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
   attempt measured. Its NTS-KE endpoint answers the key exchange and
   returns cookies, then never answers the authenticated poll, on every run

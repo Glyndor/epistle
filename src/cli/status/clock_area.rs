@@ -2,7 +2,7 @@
 //!
 //! Two checks share the area:
 //! - Host synchronisation: read-only via `adjtimex` or `timedatectl`.
-//! - External clock probe: three independent NTP/NTS sources, real median,
+//! - External clock probe: three independent NTP/NTS sources, diagnostic median,
 //!   warn/fail thresholds. Run only when the area is reached.
 
 use super::Ctx;
@@ -73,12 +73,12 @@ fn compose(host: HostClock, external: Option<&Run>, external_config: &ClockExter
 	let summary = match external {
 		Some(run) => match run.median {
 			Some(median) => format!(
-				"offset median: {:.3} s; warn at {:.3} s, fail at {:.3} s",
+				"diagnostic median: {:.3} s; verdict uses the largest absolute offset; warn at {:.3} s, fail at {:.3} s",
 				median.abs_seconds(),
 				external_config.effective_warn(),
 				external_config.effective_fail(),
 			),
-			None => "median not available (one or more sources failed)".to_string(),
+			None => "diagnostic median not available (fewer than three valid readings); verdict uses all valid offsets".to_string(),
 		},
 		None => "external clock probe not run".to_string(),
 	};
@@ -96,36 +96,32 @@ fn external_items(run: &Run) -> Vec<Item> {
 		&& let Some(reading) = run.readings.get(index)
 	{
 		items.push(Item::new(
-			"smear policy",
+			"smear diagnostic",
 			Level::Warn,
 			format!(
-				"{} excluded: the two authenticated readings agreed within 100 ms but this source differs from their midpoint by more than 250 ms",
+				"{} differs from the authenticated pair midpoint by more than 250 ms; the pair agreed within 100 ms; diagnostic only, this reading still affects the verdict",
 				reading.source.label(),
 			),
 		));
 	}
-	match run.median {
-		Some(median) => {
-			let level = match run.outcome {
-				Outcome::Ok => Level::Ok,
-				Outcome::Warn => Level::Warn,
-				Outcome::Fail => Level::Fail,
-			};
-			items.push(Item::new(
-				"median",
-				level,
-				format!("{:.3} s", median.abs_seconds()),
-			));
-		}
-		None => {
-			let any_failed = run.readings.iter().any(|r| r.error.is_some());
-			items.push(Item::new(
-				"median",
-				if any_failed { Level::Warn } else { Level::Ok },
-				"not available (one or more sources failed)",
-			));
-		}
-	}
+	let level = match run.outcome {
+		Outcome::Ok => Level::Ok,
+		Outcome::Warn => Level::Warn,
+		Outcome::Fail => Level::Fail,
+	};
+	items.push(Item::new(
+		"external verdict",
+		level,
+		"largest absolute valid offset; fewer than three valid readings gives at least Warn; no valid readings gives Fail",
+	));
+	let median = match run.median {
+		Some(median) => format!(
+			"{:.3} s; does not determine the verdict",
+			median.abs_seconds()
+		),
+		None => "not available (fewer than three valid readings)".to_string(),
+	};
+	items.push(Item::new("diagnostic median", Level::Ok, median));
 	items
 }
 

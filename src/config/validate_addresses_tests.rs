@@ -140,3 +140,102 @@ fn documentation_v6_range_edges() {
 	let boundary_out = "2001:db9::1".parse::<Ipv6Addr>().unwrap();
 	assert!(!is_documentation_v6(boundary_out));
 }
+
+#[test]
+fn review_special_ranges_are_not_public_addresses() {
+	for text in [
+		"0.1.2.3",
+		"192.0.0.9",
+		"198.18.0.1",
+		"198.19.255.255",
+		"240.0.0.1",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in ["fec0::1", "100::1", "2001:2::1", "3fff::1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_special_range_boundaries_and_global_controls() {
+	for text in [
+		"0.255.255.255",
+		"192.0.0.0",
+		"192.0.0.255",
+		"198.18.0.0",
+		"198.19.255.255",
+		"240.0.0.0",
+		"255.255.255.254",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in [
+		"1.0.0.0",
+		"192.0.1.0",
+		"198.17.255.255",
+		"198.20.0.0",
+		"223.255.255.255",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+	for text in [
+		"64:ff9b:1::1",
+		"2001::1",
+		"2001:10::1",
+		"2001:1ff::1",
+		"2002::1",
+		"3fff:fff:ffff::1",
+		"5f00::1",
+		"4000::1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in [
+		"2001:1::1",
+		"2001:1::2",
+		"2001:1::3",
+		"2001:3::1",
+		"2001:4:112::1",
+		"2001:20::1",
+		"2001:30::1",
+		"2001:200::1",
+		"3fff:1000::1",
+		"::ffff:1.1.1.1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_registry_relay_anycast_is_not_global() {
+	for text in ["192.88.99.0", "192.88.99.2", "192.88.99.255"] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_registry_global_nat64_prefix_remains_public() {
+	assert!(non_global_ipv6_reason("64:ff9b::1.1.1.1".parse().unwrap()).is_none());
+}

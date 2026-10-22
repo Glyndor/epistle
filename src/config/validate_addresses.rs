@@ -65,6 +65,16 @@ pub(crate) fn non_global_ipv4_reason(ip: Ipv4Addr) -> Option<&'static str> {
 		Some("a shared address (CGNAT, RFC 6598: 100.64.0.0/10)")
 	} else if ip.is_documentation() {
 		Some("a documentation address (RFC 5737 / 3068: 192.0.2/24, 198.51.100/24, 203.0.113/24)")
+	} else if matches!(ip.octets(), [192, 88, 99, _]) {
+		Some("a deprecated relay address (192.88.99.0/24)")
+	} else if ip.octets()[0] == 0 {
+		Some("the current network (0.0.0.0/8)")
+	} else if matches!(ip.octets(), [192, 0, 0, _]) {
+		Some("a protocol assignment address (192.0.0.0/24)")
+	} else if matches!(ip.octets(), [198, 18..=19, _, _]) {
+		Some("a benchmarking address (198.18.0.0/15)")
+	} else if ip.octets()[0] >= 240 {
+		Some("a reserved address (240.0.0.0/4)")
 	} else {
 		None
 	}
@@ -94,6 +104,9 @@ pub(crate) fn non_global_ipv6_reason(ip: Ipv6Addr) -> Option<&'static str> {
 			_ => "an IPv4-mapped IPv6 carrying a non-global address",
 		});
 	}
+	if ip.to_ipv4_mapped().is_some() {
+		return None;
+	}
 	if ip.is_unspecified() {
 		Some("the unspecified address (::)")
 	} else if ip.is_loopback() {
@@ -109,6 +122,23 @@ pub(crate) fn non_global_ipv6_reason(ip: Ipv6Addr) -> Option<&'static str> {
 		// has no stable `is_documentation` for IPv6, so check the prefix
 		// manually.
 		Some("a documentation address (RFC 3849: 2001:db8::/32)")
+	} else if (ip.segments()[0] & 0xe000) != 0x2000
+		&& !matches!(ip.segments(), [0x64, 0xff9b, 0, 0, 0, 0, _, _])
+	{
+		Some("an address outside global IPv6 unicast space (2000::/3)")
+	} else if matches!(ip.segments(), [0x2001, b, ..] if b < 0x200)
+		&& !matches!(
+			ip.segments(),
+			[0x2001, 1, 0, 0, 0, 0, 0, 1..=3]
+				| [0x2001, 3, ..]
+				| [0x2001, 4, 0x112, ..]
+				| [0x2001, 0x20..=0x3f, ..]
+		) {
+		Some("a non-global IETF protocol assignment (2001::/23)")
+	} else if ip.segments()[0] == 0x2002 {
+		Some("a transition address (6to4, 2002::/16)")
+	} else if ip.segments()[0] == 0x3fff && ip.segments()[1] < 0x1000 {
+		Some("a documentation address (3fff::/20)")
 	} else {
 		None
 	}

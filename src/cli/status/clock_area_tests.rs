@@ -61,11 +61,9 @@ fn run_over(sources: Vec<Source>) -> Run {
 }
 
 fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
-	report
-		.items
-		.iter()
-		.find(|item| item.name == name)
-		.unwrap_or_else(|| panic!("the area must report {name}: {report:?}"))
+	let found = report.items.iter().find(|item| item.name == name);
+	assert!(found.is_some(), "the area must report {name}: {report:?}");
+	found.unwrap()
 }
 
 /// The default list carries one authenticated source, so the area must say
@@ -108,4 +106,85 @@ fn a_run_without_an_authenticated_source_warns_instead_of_claiming_authenticatio
 			.contains("no source in this run is NTS-authenticated"),
 		"{note:?}"
 	);
+}
+
+fn assessed_run(offsets: &[Option<f64>]) -> Run {
+	let external = ClockExternal::default();
+	let mut run = run_over(external.effective_sources());
+	run.readings = offsets
+		.iter()
+		.zip(&run.sources)
+		.map(|(offset, source)| match offset {
+			Some(offset) => ProbeReading::ok(source.clone(), *offset, 0.01),
+			None => ProbeReading::failed(source.clone(), "timeout"),
+		})
+		.collect();
+	let assessment = crate::clock::external::assessment::assessment(&external, &run.readings);
+	run.outcome = assessment.outcome;
+	run.median = assessment.median;
+	run.smear_excluded = assessment.smear_excluded;
+	run
+}
+
+fn assert_missing_median_fails(offsets: &[Option<f64>]) {
+	let run = assessed_run(offsets);
+	assert!(run.median.is_none());
+	assert_eq!(run.outcome, Outcome::Fail);
+	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	assert_eq!(report.status, Level::Fail, "{report:?}");
+	assert!(crate::cli::status::report::any_failed(&[(
+		crate::cli::status::CheckArea::Clock,
+		report
+	)]));
+}
+
+#[test]
+fn review_no_valid_readings_preserves_failure() {
+	assert_missing_median_fails(&[None, None, None]);
+	assert_missing_median_fails(&[]);
+}
+
+#[test]
+fn review_one_drifting_reading_preserves_failure() {
+	assert_missing_median_fails(&[Some(10.0), None, None]);
+}
+
+#[test]
+fn review_two_readings_with_drift_preserve_failure() {
+	assert_missing_median_fails(&[Some(0.01), Some(10.0), None]);
+}
+
+#[test]
+fn review_diagnostic_median_does_not_claim_the_worst_offset_verdict() {
+	let run = assessed_run(&[Some(0.0), Some(0.05), Some(10.0)]);
+	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	assert_eq!(report.status, Level::Fail);
+	assert_eq!(item(&report, "external verdict").status, Level::Fail);
+	let median = item(&report, "diagnostic median");
+	assert_eq!(median.status, Level::Ok);
+	assert!(median.detail.contains("0.050"));
+	assert!(median.detail.contains("does not determine the verdict"));
+}
+
+#[test]
+fn review_smear_candidate_remains_in_the_verdict() {
+	let mut run = assessed_run(&[Some(0.0), Some(0.05), Some(10.0)]);
+	run.sources[0] = Source::nts("first.example");
+	run.sources[1] = Source::nts("second.example");
+	for (reading, source) in run.readings.iter_mut().zip(&run.sources) {
+		reading.source = source.clone();
+	}
+	let assessed =
+		crate::clock::external::assessment::assessment(&Default::default(), &run.readings);
+	run.smear_excluded = assessed.smear_excluded;
+	assert_eq!(run.smear_excluded, Some(2));
+	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	assert_eq!(report.status, Level::Fail);
+	let diagnostic = item(&report, "smear diagnostic");
+	assert!(
+		diagnostic
+			.detail
+			.contains("this reading still affects the verdict")
+	);
+	assert!(!diagnostic.detail.contains("excluded"));
 }

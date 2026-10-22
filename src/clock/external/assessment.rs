@@ -1,11 +1,8 @@
 //! The median and the verdict.
 //!
-//! Three signed offsets give the median in O(n): sort, take the middle.
-//! One reading may be wrong (the NTP source during a leap-second smear,
-//! a misconfigured NTS responder), the median rejects it. When the two
-//! authenticated readings agree and the third differs by more than the
-//! smear limit we exclude the third and surface the disagreement as a
-//! warning, never as a failure on its own.
+//! The verdict uses the largest absolute valid offset. The median and
+//! the potential smear reading are diagnostics only; neither removes
+//! a valid reading from the verdict.
 
 use crate::clock::external::source::{ClockExternal, ProbeReading, SourceKind};
 
@@ -35,15 +32,12 @@ impl From<SignedOffset> for f64 {
 /// The verdict the area reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Outcome {
-	/// All three readings close to the host's true UTC, or the smear policy
-	/// kept the authenticated pair within the warn bound.
+	/// All three readings are below the warn threshold.
 	Ok,
-	/// Median outside the warn threshold but inside the fail threshold, or
-	/// one reading failed and the others disagreed, or the smear policy
-	/// surfaced a leap-second event.
+	/// A valid offset reaches the warn threshold, or fewer than three
+	/// readings are valid without reaching the fail threshold.
 	Warn,
-	/// Median outside the fail threshold, or only one reading valid and
-	/// outside it.
+	/// A valid offset reaches the fail threshold, or no readings are valid.
 	Fail,
 }
 
@@ -57,7 +51,7 @@ const SMEAR_THRESHOLD_SECONDS: f64 = 0.250;
 /// Decide the verdict from the three readings. The classifier respects:
 /// - thresholds `0 < warn < fail` (the caller has validated)
 /// - missing or failing readings are skipped, never substituted
-/// - the leap-second smear policy when exactly three readings exist
+/// - every valid reading affects the verdict, including a smear candidate
 pub fn decide(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome {
 	let warn = external.effective_warn();
 	let fail = external.effective_fail();
@@ -91,7 +85,7 @@ pub fn decide(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome {
 	Outcome::Ok
 }
 
-/// Compute the median signed offset and the optional smear exclusion. The
+/// Compute the diagnostic median and optional smear candidate. The
 /// caller decides the verdict from [`decide`].
 pub fn assessment(external: &ClockExternal, readings: &[ProbeReading]) -> Assessment {
 	let warn = external.effective_warn();
@@ -138,12 +132,12 @@ pub struct Assessment {
 	pub warn_seconds: f64,
 	/// Effective fail threshold (seconds, inclusive).
 	pub fail_seconds: f64,
-	/// The reading the smear policy excluded, when it did.
+	/// Potential smear reading, retained in the verdict despite the field name.
 	pub smear_excluded: Option<usize>,
 }
 
-/// Return the index of the unauthenticated reading the smear policy
-/// excludes, when both authenticated readings agree and the third is
+/// Identify an unauthenticated smear candidate without excluding it from
+/// the verdict, when both authenticated readings agree and the third is
 /// more than [`SMEAR_THRESHOLD_SECONDS`] off their midpoint.
 fn detect_smear(readings: &[ProbeReading], valid: &[(usize, f64)]) -> Option<usize> {
 	if valid.len() != 3 {

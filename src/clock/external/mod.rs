@@ -31,10 +31,10 @@ pub struct Run {
 	/// The rolled-up verdict for the area.
 	pub outcome: Outcome,
 	/// Median signed offset (remote minus local), when three readings are
-	/// valid. `None` for a missing-readings run that the area surfaces as
-	/// a Warn and the CLI renders as "median: not available".
+	/// valid. `None` with fewer than three valid readings; the verdict
+	/// remains independent of this diagnostic value.
 	pub median: Option<SignedOffset>,
-	/// Reading the smear policy excluded, when it did.
+	/// Potential smear reading, retained in the verdict despite the field name.
 	pub smear_excluded: Option<usize>,
 	/// Effective warn threshold in seconds, inclusive.
 	pub warn_seconds: f64,

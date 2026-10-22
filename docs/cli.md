@@ -246,10 +246,12 @@ kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
 the syscall is refused; the area is `ok` when the kernel reports a
 disciplined clock, `warn` when it does not or when neither probe can
 tell. The external probe is the [clock_external] block: three
-independent sources, real median of the three valid readings,
+independent sources, a diagnostic median of the three valid readings,
 configurable warn/fail thresholds (defaults 1 s / 5 s). The area
 surfaces one line naming how many sources were authenticated over NTS,
-then one line per source plus the median offset, and the smear policy
+then one line per source, the external verdict, and the diagnostic median.
+The verdict uses the largest absolute valid offset, so any drifting peer
+can cause `Warn` or `Fail`. The smear diagnostic
 surfaces a `warn` when two authenticated sources agree within 100 ms and
 a plain one differs from their midpoint by more than 250 ms (a typical
 operator-visible signature of a leap-second smear on the plain server).
@@ -258,8 +260,8 @@ clock, and uses no state between runs.
 
 The three defaults, `time.cloudflare.com` (plain NTP), `nts.netnod.se`
 (NTS) and `time.google.com` (plain NTP), are three independent ASes,
-which is why three and not two: the median rejects any single host
-that drifts without the other two raising a false alarm. Each source
+with a diagnostic median that is insensitive to one drifting source.
+This median does not exclude that source from the verdict. Each source
 carries the protocol it was measured answering: Netnod answers the whole
 NTS exchange inside the budget (1.37 s to 1.82 s of the 2 s, across eight
 consecutive runs), Cloudflare answers plain NTPv4 in 82 ms to 106 ms but
@@ -279,9 +281,10 @@ a dial, a TLS handshake, a key exchange and the authenticated poll, so
 it comes close to the `2 s` per-source budget: on the development host
 the NTS source took between 1.37 s and 1.82 s across eight consecutive
 runs. A source that misses
-the budget is reported as a timeout, the run loses its median and the
-area says `warn`; the budget itself is a constant in the binary, not a
-setting.
+the budget is reported as a timeout and the run loses its diagnostic
+median. One or two healthy readings give `warn`; no valid readings or any
+valid offset at or above the fail threshold gives `fail`. The budget
+itself is a constant in the binary, not a setting.
 
 The probe is read-only: nothing writes the host clock, and a Warn or
 Fail from this area never produces a `clock_drift_exceeded` event
@@ -290,8 +293,9 @@ which the kernel's existing time source catches). Configure chrony or
 systemd-timesyncd for the host, and point that daemon at the servers of
 one provider: a host daemon fed by two providers that smear differently
 disagrees every night. The external probe is the opposite case on
-purpose. It takes one host per provider and reduces them with the
-median, which is why it can hold three at once.
+purpose. It takes one host per provider, reports a diagnostic median,
+and uses the largest absolute valid offset for its verdict. Smear
+detection is diagnostic too; every valid reading still affects the verdict.
 
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).

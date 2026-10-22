@@ -19,6 +19,9 @@ pub(super) fn validate_host(
 	if port == 0 || (!allow_private && port != expected_port) {
 		return Err("clock destination port is not allowed".into());
 	}
+	if host.contains('%') {
+		return Err("clock destination IPv6 zone identifiers are not supported; use a destination without a zone".into());
+	}
 	let name = host.trim_end_matches('.').to_ascii_lowercase();
 	if !allow_private && (name == "localhost" || name.ends_with(".localhost")) {
 		return Err("clock destination is local".into());
@@ -31,25 +34,26 @@ pub(super) fn validate_host(
 
 fn validate_ip(ip: IpAddr, allow_private: bool) -> Result<(), String> {
 	let ip = match ip {
-		IpAddr::V6(ip) => ip
-			.to_ipv4_mapped()
-			.map(IpAddr::V4)
-			.unwrap_or(IpAddr::V6(ip)),
+		IpAddr::V6(ip) => {
+			let segments = ip.segments();
+			let embedded = ip.to_ipv4().or_else(|| match segments {
+				[0x64, 0xff9b, 0, 0, 0, 0, a, b] | [0x2002, a, b, ..] => {
+					Some(Ipv4Addr::from(((a as u32) << 16) | b as u32))
+				}
+				_ => None,
+			});
+			embedded.map(IpAddr::V4).unwrap_or(IpAddr::V6(ip))
+		}
 		ip => ip,
 	};
 	let forbidden = ip.is_multicast()
 		|| ip.is_unspecified()
 		|| matches!(ip, IpAddr::V4(ip) if ip.is_broadcast());
-	let private = match ip {
-		IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-		IpAddr::V6(ip) => {
-			ip.is_loopback()
-				|| ip.is_unique_local()
-				|| ip.is_unicast_link_local()
-				|| (ip.segments()[0] & 0xffc0 == 0xfec0)
-		}
+	let non_global = match ip {
+		IpAddr::V4(ip) => crate::config::non_global_ipv4_reason(ip),
+		IpAddr::V6(ip) => crate::config::non_global_ipv6_reason(ip),
 	};
-	if forbidden || (!allow_private && private) {
+	if forbidden || (!allow_private && non_global.is_some()) {
 		return Err("clock destination address is not allowed".into());
 	}
 	Ok(())
