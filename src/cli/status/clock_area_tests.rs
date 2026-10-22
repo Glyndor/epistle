@@ -3,13 +3,13 @@
 
 use std::time::Instant;
 
-use super::{HostClock, check, compose};
+use super::{HostClock, NoRun, check, compose, compose_joined};
 use crate::cli::status::report::{AreaReport, Item, Level};
 use crate::clock::external::{ClockExternal, Outcome, ProbeReading, Run, SignedOffset, Source};
 
 #[test]
 fn a_synchronised_host_renders_ok_without_fix_suggestions() {
-	let report = compose(HostClock::Synced, None, &Default::default());
+	let report = compose(HostClock::Synced, None, &Default::default(), None);
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 	assert_eq!(report.detail, "external clock probe not run");
 	assert!(
@@ -20,7 +20,7 @@ fn a_synchronised_host_renders_ok_without_fix_suggestions() {
 
 #[test]
 fn an_unsynchronised_host_warns_and_names_the_fixes() {
-	let report = compose(HostClock::Unsynced, None, &Default::default());
+	let report = compose(HostClock::Unsynced, None, &Default::default(), None);
 	assert_eq!(report.status, Level::Warn, "{report:?}");
 	let fix = report.items.iter().find(|item| item.name == "to fix");
 	assert!(fix.is_some(), "{report:?}");
@@ -32,6 +32,7 @@ fn a_clock_that_cannot_be_read_warns_with_the_reason_instead_of_guessing() {
 		HostClock::Unknown("no adjtimex".to_string()),
 		None,
 		&Default::default(),
+		None,
 	);
 	assert_eq!(report.status, Level::Warn, "{report:?}");
 	let host = report
@@ -72,7 +73,7 @@ fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
 fn the_area_names_how_many_sources_were_authenticated() {
 	let external = ClockExternal::default();
 	let run = run_over(external.effective_sources());
-	let report = compose(HostClock::Synced, Some(&run), &external);
+	let report = compose(HostClock::Synced, Some(&run), &external, None);
 	let note = item(&report, "authentication");
 	assert_eq!(note.status, Level::Ok, "{note:?}");
 	assert!(
@@ -98,7 +99,7 @@ fn a_run_without_an_authenticated_source_warns_instead_of_claiming_authenticatio
 		Source::ntp("pool.ntp.example"),
 	];
 	let run = run_over(sources);
-	let report = compose(HostClock::Synced, Some(&run), &external);
+	let report = compose(HostClock::Synced, Some(&run), &external, None);
 	let note = item(&report, "authentication");
 	assert_eq!(note.status, Level::Warn, "{note:?}");
 	assert!(
@@ -106,6 +107,97 @@ fn a_run_without_an_authenticated_source_warns_instead_of_claiming_authenticatio
 			.contains("no source in this run is NTS-authenticated"),
 		"{note:?}"
 	);
+}
+
+/// The default list names one NTS source whether or not it answered, and a
+/// source that never completed its key exchange authenticated nothing. Counting
+/// the configuration instead of the reading reported an authentication that
+/// never happened next to a failed source.
+#[test]
+fn a_configured_nts_source_that_never_answered_is_not_counted_as_authenticated() {
+	let external = ClockExternal::default();
+	let run = assessed_run(&[None, None, None]);
+	let report = compose(HostClock::Synced, Some(&run), &external, None);
+	let note = item(&report, "authentication");
+	assert_eq!(note.status, Level::Warn, "{note:?}");
+	assert!(
+		!note.detail.contains("sources authenticated over NTS"),
+		"nothing came over NTS, so the line must not say it did: {note:?}"
+	);
+	assert!(
+		note.detail.contains("configured for NTS"),
+		"the line must still name what the operator configured: {note:?}"
+	);
+	assert!(note.detail.contains("nts.netnod.se"), "{note:?}");
+}
+
+/// Two plain sources answering and the NTS source failing is the case a
+/// configured count gets wrong: the offsets are real, they are plain NTPv4,
+/// and the authentication line must not stand in for them.
+#[test]
+fn nts_configured_but_failed_leaves_the_other_offsets_plain() {
+	let external = ClockExternal::default();
+	let run = assessed_run(&[Some(0.01), None, Some(0.01)]);
+	let report = compose(HostClock::Synced, Some(&run), &external, None);
+	let note = item(&report, "authentication");
+	assert_eq!(note.status, Level::Warn, "{note:?}");
+	assert!(
+		!note.detail.contains("sources authenticated over NTS"),
+		"{note:?}"
+	);
+	assert!(
+		note.detail.contains("returned no authenticated reading"),
+		"{note:?}"
+	);
+}
+
+/// A probe task that failed on its own is not a probe that was never asked, and
+/// it is not the operator switching it off either. Both absences were rendered
+/// as a healthy area with no warning at all, so the area names the cause.
+#[tokio::test(flavor = "current_thread")]
+async fn a_probe_task_that_fails_is_named_instead_of_reading_as_no_probe() {
+	let joined = tokio::task::spawn_blocking(|| panic!("the probe thread died")).await;
+	let error = joined.expect_err("the task panicked, so the join carries the reason");
+	let report = compose_joined(HostClock::Synced, Err(error), &Default::default());
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	let note = item(&report, "external probe");
+	assert!(note.detail.contains("the probe task failed"), "{note:?}");
+	assert!(
+		note.detail.contains("the probe thread died"),
+		"the cause tokio reports has to reach the operator: {note:?}"
+	);
+	assert_eq!(report.detail, "external clock probe not run", "{report:?}");
+}
+
+/// No runtime to await the probe on is a third absence: not a failure of the
+/// thread and not the voluntary switch-off, and it is told apart by name.
+#[test]
+fn a_probe_task_without_a_runtime_is_named_as_such() {
+	let report = compose_joined(
+		HostClock::Synced,
+		Ok(Err(NoRun::Runtime)),
+		&Default::default(),
+	);
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	let note = item(&report, "external probe");
+	assert!(note.detail.contains("no async runtime"), "{note:?}");
+}
+
+/// A run that came back is rendered as it was, with no failure finding bolted on
+/// top of it.
+#[test]
+fn a_run_that_came_back_carries_no_probe_failure() {
+	let external = ClockExternal::default();
+	let run = run_over(external.effective_sources());
+	let report = compose_joined(HostClock::Synced, Ok(Ok(run)), &external);
+	assert!(
+		report
+			.items
+			.iter()
+			.all(|item| item.name != "external probe"),
+		"{report:?}"
+	);
+	assert!(report.detail.contains("diagnostic median"), "{report:?}");
 }
 
 fn assessed_run(offsets: &[Option<f64>]) -> Run {
@@ -130,7 +222,7 @@ fn assert_missing_median_fails(offsets: &[Option<f64>]) {
 	let run = assessed_run(offsets);
 	assert!(run.median.is_none());
 	assert_eq!(run.outcome, Outcome::Fail);
-	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	let report = compose(HostClock::Synced, Some(&run), &Default::default(), None);
 	assert_eq!(report.status, Level::Fail, "{report:?}");
 	assert!(crate::cli::status::report::any_failed(&[(
 		crate::cli::status::CheckArea::Clock,
@@ -157,7 +249,7 @@ fn review_two_readings_with_drift_preserve_failure() {
 #[test]
 fn review_diagnostic_median_does_not_claim_the_worst_offset_verdict() {
 	let run = assessed_run(&[Some(0.0), Some(0.05), Some(10.0)]);
-	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	let report = compose(HostClock::Synced, Some(&run), &Default::default(), None);
 	assert_eq!(report.status, Level::Fail);
 	assert_eq!(item(&report, "external verdict").status, Level::Fail);
 	let median = item(&report, "diagnostic median");
@@ -178,7 +270,7 @@ fn review_smear_candidate_remains_in_the_verdict() {
 		crate::clock::external::assessment::assessment(&Default::default(), &run.readings);
 	run.smear_excluded = assessed.smear_excluded;
 	assert_eq!(run.smear_excluded, Some(2));
-	let report = compose(HostClock::Synced, Some(&run), &Default::default());
+	let report = compose(HostClock::Synced, Some(&run), &Default::default(), None);
 	assert_eq!(report.status, Level::Fail);
 	let diagnostic = item(&report, "smear diagnostic");
 	assert!(
@@ -198,7 +290,7 @@ fn review_a_source_without_a_reading_is_reported_rather_than_dropped() {
 	let mut run = run_over(external.effective_sources());
 	run.readings.pop();
 	run.outcome = Outcome::Warn;
-	let report = compose(HostClock::Synced, Some(&run), &external);
+	let report = compose(HostClock::Synced, Some(&run), &external, None);
 	let missing = item(&report, &run.sources[2].label());
 	assert_eq!(missing.status, Level::Warn, "{missing:?}");
 	assert!(missing.detail.contains("no reading"), "{missing:?}");

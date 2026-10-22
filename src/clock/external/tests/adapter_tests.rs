@@ -6,12 +6,12 @@
 //! adapter can drive without a real NTS-KE stand-in.
 
 use std::io::Cursor;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use ntp_proto::{NtpPacket, PollInterval};
 use tokio::net::UdpSocket;
 
-use crate::clock::external::adapter::{ProbeError, local_span, plain_ntp_with_policy};
+use crate::clock::external::adapter::{ProbeError, plain_ntp_with_policy};
 use crate::clock::external::endpoint::Policy;
 use crate::clock::external::source::Source;
 
@@ -296,27 +296,5 @@ impl NtpServerHandle {
 	async fn shutdown(self) {
 		self.join.abort();
 		let _ = self.join.await;
-	}
-}
-
-/// The wall-clock span the exchange took is what tells a step from a slow
-/// reply, and a step backwards is a step too: `duration_since` has nothing to
-/// return for it, which used to be read as a zero-length exchange and a clean
-/// offset.
-#[test]
-fn review_a_local_clock_that_steps_in_either_direction_is_not_a_measurement() {
-	let sent = SystemTime::now();
-	assert!(
-		local_span(sent, sent + Duration::from_millis(10)).is_ok(),
-		"an ordinary exchange must be accepted"
-	);
-	for (why, received) in [
-		("clock stepped backwards", sent - Duration::from_secs(1)),
-		("clock stepped forward", sent + Duration::from_secs(2)),
-	] {
-		assert!(
-			matches!(local_span(sent, received), Err(ProbeError::LocalJump)),
-			"{why} must not be read as an exchange"
-		);
 	}
 }

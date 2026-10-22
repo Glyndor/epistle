@@ -30,21 +30,64 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	let external_run = tokio::task::spawn_blocking({
 		let external = external.clone();
 		move || match tokio::runtime::Handle::try_current() {
-			Ok(handle) => Some(handle.block_on(crate::clock::external::run(&external))),
-			Err(_) => None,
+			Ok(handle) => Ok(handle.block_on(crate::clock::external::run(&external))),
+			Err(_) => Err(NoRun::Runtime),
 		}
 	})
-	.await
-	.ok()
-	.flatten();
-	compose(host_probe, external_run.as_ref(), &external)
+	.await;
+	compose_joined(host_probe, external_run, &external)
+}
+
+/// Why the external probe handed back no run, so the area names the reason
+/// instead of reading the absence as a probe that was never asked to run. The
+/// voluntary switch-off is not one of these: it is answered before the task is
+/// ever spawned, in [`compose_disabled`].
+enum NoRun {
+	/// The blocking task found no async runtime to await the probe on.
+	Runtime,
+	/// The blocking task itself failed before it returned a run, with the cause
+	/// tokio reports for it.
+	Task(String),
+}
+
+impl NoRun {
+	fn item(&self) -> Item {
+		match self {
+			NoRun::Runtime => Item::new(
+				"external probe",
+				Level::Warn,
+				"the probe task found no async runtime to run on; no time source was queried",
+			),
+			NoRun::Task(why) => Item::new(
+				"external probe",
+				Level::Warn,
+				format!("the probe task failed before it returned a run: {why}"),
+			),
+		}
+	}
+}
+
+/// Reduce what the blocking task returned to the area report. A `JoinError` is
+/// kept as a readable cause: dropping it read a failed probe as a probe that
+/// never ran, and the operator was told the area was fine.
+fn compose_joined(
+	host: HostClock,
+	joined: Result<Result<Run, NoRun>, tokio::task::JoinError>,
+	external_config: &ClockExternal,
+) -> AreaReport {
+	let no_run = match joined {
+		Ok(Ok(run)) => return compose(host, Some(&run), external_config, None),
+		Ok(Err(reason)) => reason,
+		Err(error) => NoRun::Task(error.to_string()),
+	};
+	compose(host, None, external_config, Some(no_run.item()))
 }
 
 /// The area with the probe switched off: no network is touched and the report
 /// says so, so a host that cannot reach 123/udp or 4460/tcp is not told its
 /// clock is broken every time it asks.
 fn compose_disabled(host: HostClock, external_config: &ClockExternal) -> AreaReport {
-	let mut report = compose(host, None, external_config);
+	let mut report = compose(host, None, external_config, None);
 	report.detail =
 		"external clock probe switched off with [clock_external] enabled = false".to_string();
 	report.items.push(Item::new(
@@ -55,8 +98,14 @@ fn compose_disabled(host: HostClock, external_config: &ClockExternal) -> AreaRep
 	report
 }
 
-/// Reduce a (host probe, optional external run) pair to the area report.
-fn compose(host: HostClock, external: Option<&Run>, external_config: &ClockExternal) -> AreaReport {
+/// Reduce a (host probe, optional external run, optional reason for its absence)
+/// triple to the area report.
+fn compose(
+	host: HostClock,
+	external: Option<&Run>,
+	external_config: &ClockExternal,
+	no_run: Option<Item>,
+) -> AreaReport {
 	let mut items = Vec::new();
 	match &host {
 		HostClock::Synced => items.push(Item::new(
@@ -85,6 +134,7 @@ fn compose(host: HostClock, external: Option<&Run>, external_config: &ClockExter
 	if matches!(host, HostClock::Unsynced | HostClock::Unknown(_)) {
 		items.push(Item::new("to fix", Level::Warn, FIX));
 	}
+	items.extend(no_run);
 	if let Some(run) = external {
 		items.extend(external_items(run));
 	}
@@ -106,7 +156,7 @@ fn compose(host: HostClock, external: Option<&Run>, external_config: &ClockExter
 /// Per-source render of an external run.
 fn external_items(run: &Run) -> Vec<Item> {
 	let mut items = Vec::with_capacity(run.readings.len() + run.sources.len() + 3);
-	items.push(authentication_item(&run.sources));
+	items.push(authentication_item(run));
 	for reading in &run.readings {
 		items.push(render_reading(reading));
 	}
@@ -166,21 +216,41 @@ fn missing_sources(run: &Run) -> Vec<&Source> {
 		.collect()
 }
 
-/// State how much of the run was authenticated. NTS-KE covers the
-/// sources configured as `nts` and nothing else, so a plain source is
-/// unauthenticated by construction. Saying so keeps a run with one
-/// authenticated source from reading as three.
-fn authentication_item(sources: &[Source]) -> Item {
-	let authenticated: Vec<&str> = sources
+/// State how much of the run was authenticated. NTS-KE covers the sources
+/// configured as `nts` and nothing else, so a plain source is unauthenticated
+/// by construction. What counts as authenticated is the reading the exchange
+/// brought back: a source configured for NTS whose probe failed authenticated
+/// nothing, and saying it did told the operator more than the run knows.
+fn authentication_item(run: &Run) -> Item {
+	let configured: Vec<&str> = run
+		.sources
 		.iter()
 		.filter(|source| source.is_nts())
 		.map(|source| source.host.as_str())
+		.collect();
+	if configured.is_empty() {
+		return Item::new(
+			"authentication",
+			Level::Warn,
+			"no source in this run is NTS-authenticated; every offset here is plain NTPv4",
+		);
+	}
+	let authenticated: Vec<&str> = run
+		.readings
+		.iter()
+		.filter(|reading| reading.error.is_none() && reading.source.is_nts())
+		.map(|reading| reading.source.host.as_str())
 		.collect();
 	if authenticated.is_empty() {
 		return Item::new(
 			"authentication",
 			Level::Warn,
-			"no source in this run is NTS-authenticated; every offset here is plain NTPv4",
+			format!(
+				"{} of {} sources is configured for NTS ({}) and returned no authenticated reading; no offset in this run came over NTS",
+				configured.len(),
+				run.sources.len(),
+				configured.join(", ")
+			),
 		);
 	}
 	Item::new(
@@ -189,7 +259,7 @@ fn authentication_item(sources: &[Source]) -> Item {
 		format!(
 			"{} of {} sources authenticated over NTS ({}); the rest are plain NTPv4",
 			authenticated.len(),
-			sources.len(),
+			run.sources.len(),
 			authenticated.join(", ")
 		),
 	)

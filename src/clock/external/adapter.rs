@@ -202,7 +202,7 @@ async fn exchange_via_nts(
 		.await
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
-	let t1_wall = SystemTime::now();
+	let sent = Edge::now();
 	timeout_at(stop.into(), bind.send(&buf[..length]))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
@@ -212,8 +212,8 @@ async fn exchange_via_nts(
 		.await
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
-	let t4_wall = SystemTime::now();
-	local_span(t1_wall, t4_wall)?;
+	let received = Edge::now();
+	local_span(sent, received)?;
 	let reply_cipher: Option<&dyn ntp_proto::Cipher> = Some(s2c_box.as_ref());
 	let (response, _cookie) =
 		NtpPacket::deserialize(&reply[..size], &reply_cipher).map_err(|error| match error {
@@ -231,10 +231,9 @@ async fn exchange_via_nts(
 		));
 	}
 	validate_measurement(&response)?;
-	let t1 = unix_seconds(t1_wall);
-	let t4 = unix_seconds(t4_wall);
-	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), t4_wall);
-	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), t4_wall);
+	let (t1, t4) = (unix_seconds(sent.wall), unix_seconds(received.wall));
+	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), received.wall);
+	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), received.wall);
 	let offset = (t2 - t1 + t3 - t4) / 2.0;
 	let delay = (t4 - t1) - (t3 - t2);
 	Ok(OneShot {
@@ -279,7 +278,7 @@ pub(super) async fn plain_ntp_with_policy(
 	if length == 0 {
 		return Err(ProbeError::Malformed("serialized request empty".into()));
 	}
-	let t1_wall = SystemTime::now();
+	let sent = Edge::now();
 	timeout_at(stop.into(), bind.send(&buf[..length]))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
@@ -289,8 +288,8 @@ pub(super) async fn plain_ntp_with_policy(
 		.await
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
-	let t4_wall = SystemTime::now();
-	local_span(t1_wall, t4_wall)?;
+	let received = Edge::now();
+	local_span(sent, received)?;
 	if size > UDP_RECV_BUFFER {
 		return Err(ProbeError::Malformed("datagram oversize".into()));
 	}
@@ -305,10 +304,9 @@ pub(super) async fn plain_ntp_with_policy(
 		));
 	}
 	validate_measurement(&response)?;
-	let t1 = unix_seconds(t1_wall);
-	let t4 = unix_seconds(t4_wall);
-	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), t4_wall);
-	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), t4_wall);
+	let (t1, t4) = (unix_seconds(sent.wall), unix_seconds(received.wall));
+	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), received.wall);
+	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), received.wall);
 	let offset = (t2 - t1 + t3 - t4) / 2.0;
 	let delay = (t4 - t1) - (t3 - t2);
 	Ok(OneShot {
@@ -348,26 +346,63 @@ fn unix_seconds(time: SystemTime) -> f64 {
 		.unwrap_or(0.0)
 }
 
-/// The wall-clock span the exchange took, refused when the local clock cannot
-/// be trusted to measure it. A forward step over [`LOCAL_SPAN_LIMIT`] is the
-/// clock being stepped under the probe; a backward step leaves
-/// `duration_since` with nothing to return, which is the same failure and is
-/// reported rather than read as a zero-length exchange.
-fn local_span(sent: SystemTime, received: SystemTime) -> Result<f64, ProbeError> {
+/// One end of the NTP exchange, stamped twice: the wall clock the
+/// measurement is built from, and the monotonic clock that says how long the
+/// exchange really took. The pair is what lets a step be told from a slow
+/// reply, because the two clocks only disagree when the host clock moved.
+#[derive(Clone, Copy)]
+struct Edge {
+	wall: SystemTime,
+	monotonic: Instant,
+}
+
+impl Edge {
+	/// Take both stamps. The monotonic reading comes first so the two ends of
+	/// an exchange skew in the same direction and cancel out.
+	fn now() -> Self {
+		Edge {
+			monotonic: Instant::now(),
+			wall: SystemTime::now(),
+		}
+	}
+}
+
+/// The wall-clock span the exchange took, refused when it cannot be believed to
+/// measure it.
+///
+/// Two failures are told apart. A disagreement over [`LOCAL_SPAN_SKEW`] is a
+/// jump: the wall clock moved by a different amount than the time that really
+/// passed, and any span hidden inside that step is not a measurement, even when
+/// it stays positive and small. A backward step leaves `duration_since` with
+/// nothing to return, which is the same failure and is reported rather than
+/// read as a zero-length exchange. [`LOCAL_SPAN_LIMIT`] is not a jump: it is
+/// the quality policy that no source this probe dials deserves to hold the
+/// exchange longer than one second.
+fn local_span(sent: Edge, received: Edge) -> Result<f64, ProbeError> {
 	let span = received
-		.duration_since(sent)
-		.map_err(|_| ProbeError::LocalJump)?
-		.as_secs_f64();
+		.wall
+		.duration_since(sent.wall)
+		.map_err(|_| ProbeError::LocalJump)?;
+	let elapsed = received.monotonic.saturating_duration_since(sent.monotonic);
+	if span.abs_diff(elapsed) > LOCAL_SPAN_SKEW {
+		return Err(ProbeError::LocalJump);
+	}
 	if span > LOCAL_SPAN_LIMIT {
 		return Err(ProbeError::LocalJump);
 	}
-	Ok(span)
+	Ok(span.as_secs_f64())
 }
 
-/// Longest span between sending the request and receiving the reply that a
-/// local clock can still be believed to have measured. One second is far
-/// above any legitimate exchange and far below a clock step.
-const LOCAL_SPAN_LIMIT: f64 = 1.0;
+/// How far the wall clock may drift from the monotonic clock across one
+/// exchange before the exchange is refused as a measurement. A quarter of a
+/// second is far above the noise two `now()` calls a microsecond apart
+/// produce, and far below a step a machine would report as ordinary time.
+const LOCAL_SPAN_SKEW: Duration = Duration::from_millis(250);
+
+/// Longest span between sending the request and receiving the reply that the
+/// area will read as a measurement. One second is far above any legitimate
+/// exchange and far below a source worth waiting a whole second for.
+const LOCAL_SPAN_LIMIT: Duration = Duration::from_secs(1);
 
 /// Unfold the closest NTP era relative to the local wall clock. Wrapped
 /// timestamp subtraction is unambiguous within 68 years of the reference.
@@ -384,6 +419,10 @@ fn ntp_to_unix_seconds(ts: ntp_proto::NtpTimestamp, reference: SystemTime) -> f6
 #[cfg(test)]
 #[path = "tests/adapter_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/local_span_tests.rs"]
+mod local_span_tests;
 
 #[cfg(test)]
 #[path = "tests/nts_ke_tests.rs"]
