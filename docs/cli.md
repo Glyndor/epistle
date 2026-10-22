@@ -883,6 +883,9 @@ The package creates the store on install or configure and saves the replaced
 and its digest. It stages that pair in an exclusive random temporary directory,
 checks it, and moves it into the store with a single rename, so a copy that
 fails never replaces the one already saved. It keeps the two newest versions.
+The version it saves has to be digits and dots, the only shape `stack rollback`
+can select, so a name carrying a Debian revision, a tilde or a colon is
+refused with a warning instead of taking a slot no listing can choose.
 Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
 never installed, including when owned by root. If only legacy copies exist,
 rollback remains unavailable until an upgrade saves a trusted copy in the new

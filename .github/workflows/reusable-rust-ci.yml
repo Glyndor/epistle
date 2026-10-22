@@ -251,6 +251,21 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal --component llvm-tools
           rustup default "$TOOLCHAIN"
 
+      # The same dependency the test job names, because this job runs the
+      # same workspace tests under `cargo llvm-cov`: without `fakeroot` the
+      # packaging tests in tests/debian/ panic at launch, and the coverage
+      # gate would go red for a reason that has nothing to do with coverage.
+      - name: Install test tooling
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APT_PACKAGES" ]; then
+            sudo apt-get update -qq
+            # shellcheck disable=SC2086 # intentional word-splitting of the list
+            sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          fi
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

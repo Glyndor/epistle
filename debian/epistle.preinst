@@ -30,13 +30,15 @@ epistle_keep_binary() (
 	# The staged files must stay unreadable and unwritable by group or other
 	# whatever umask the caller left behind.
 	umask 077
-	# Keep the class tight: `pick` parses each part as an integer, so a saved
-	# name like `0.12.3~rc1`, `1:0.12+1`, or `0.12.3:backport` would publish
-	# bytes that the rollback command cannot read back. dpkg itself surfaces
-	# those upstream via ${2}; refusing here is what keeps the store
-	# selectable.
+	# Keep the class tight: `pick` splits the name on dots and reads every
+	# part as an integer, so only digits and dots reach the store. A name like
+	# `0.12.3-1`, `0.12.3~rc1` or `1:0.12+1` would publish bytes the rollback
+	# command cannot read back, and an empty name, a leading or trailing dot,
+	# or two dots in a row would take a slot `sort -V` keeps but no listing
+	# can choose. dpkg itself surfaces those upstream via ${2}; refusing here
+	# is what keeps the store selectable.
 	case "$1" in
-		''|*[!a-zA-Z0-9._-]*) return 1 ;;
+		''|.*|*.|*[!0-9.]*|*..*) return 1 ;;
 	esac
 	for parent in /usr /usr/bin; do
 		[ ! -L "$parent" ] && [ -d "$parent" ] \
