@@ -52,6 +52,8 @@ const SMEAR_THRESHOLD_SECONDS: f64 = 0.250;
 /// - thresholds `0 < warn < fail` (the caller has validated)
 /// - missing or failing readings are skipped, never substituted
 /// - every valid reading affects the verdict, including a smear candidate
+/// - an offset that is not a finite number is a failure, never a measurement:
+///   it is ordered against nothing and would pass every comparison
 pub fn decide(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome {
 	let warn = external.effective_warn();
 	let fail = external.effective_fail();
@@ -67,6 +69,9 @@ pub fn decide(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome {
 		})
 		.collect();
 	if valid.is_empty() {
+		return Outcome::Fail;
+	}
+	if valid.iter().any(|(_, value)| !value.is_finite()) {
 		return Outcome::Fail;
 	}
 	let max_abs = valid

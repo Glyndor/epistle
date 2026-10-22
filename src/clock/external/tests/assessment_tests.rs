@@ -198,3 +198,24 @@ fn offsets_between_warn_and_fail_threshold_returns_warn() {
 	let summary = assessment(&external, &readings);
 	assert_eq!(summary.outcome, Outcome::Warn);
 }
+
+/// An offset that is not a finite number is ordered against nothing, so the
+/// classifier would read it as zero and call the run healthy. `ProbeReading::ok`
+/// is public and accepts it, so it is refused instead.
+#[test]
+fn review_a_non_finite_offset_is_a_failure_and_never_a_healthy_reading() {
+	let external = ClockExternal::default();
+	for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+		let readings = vec![
+			reading("a", SourceKind::Nts, 0.01),
+			reading("b", SourceKind::Nts, 0.02),
+			reading("c", SourceKind::Ntp, bad),
+		];
+		assert_eq!(
+			decide(&external, &readings),
+			Outcome::Fail,
+			"an offset of {bad} must not pass as a measurement"
+		);
+		assert_eq!(assessment(&external, &readings).outcome, Outcome::Fail);
+	}
+}

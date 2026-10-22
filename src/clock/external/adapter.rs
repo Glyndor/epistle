@@ -122,31 +122,30 @@ impl std::error::Error for ProbeError {}
 /// instant, so a server that accepts the connection and then stalls
 /// costs the operator one `deadline` and not one per stage.
 pub async fn ke_then_ntp(source: &Source, deadline: Duration) -> Result<OneShot, ProbeError> {
-	ke_then_ntp_with_policy(source, deadline, false).await
+	ke_then_ntp_with_policy(source, deadline, endpoint::Policy::default()).await
 }
 
-pub(crate) async fn ke_then_ntp_with_policy(
+pub(super) async fn ke_then_ntp_with_policy(
 	source: &Source,
 	deadline: Duration,
-	allow_private: bool,
+	policy: endpoint::Policy,
 ) -> Result<OneShot, ProbeError> {
-	ke_then_ntp_with_roots(source, deadline, &[], allow_private).await
+	ke_then_ntp_with_roots(source, deadline, &[], policy).await
 }
 
 /// [`ke_then_ntp`] with certificate roots the operating system trust
 /// store does not carry. Production passes none; the fake-server test
 /// under `tests/` injects the root of its own throwaway certificate.
-pub(crate) async fn ke_then_ntp_with_roots(
+pub(super) async fn ke_then_ntp_with_roots(
 	source: &Source,
 	deadline: Duration,
 	extra_roots: &[CertificateDer<'static>],
-	allow_private: bool,
+	policy: endpoint::Policy,
 ) -> Result<OneShot, ProbeError> {
 	crate::tls::ensure_crypto_provider();
 	let stop = Instant::now() + deadline;
 	let host = source.host.clone();
-	let remote =
-		endpoint::resolve(&host, source.dial_port(), NTS_KE_PORT, allow_private, stop).await?;
+	let remote = endpoint::resolve(&host, source.dial_port(), NTS_KE_PORT, &policy, stop).await?;
 	let tcp = timeout_at(stop.into(), tokio::net::TcpStream::connect(remote))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
@@ -164,7 +163,7 @@ pub(crate) async fn ke_then_ntp_with_roots(
 	.await
 	.map_err(|_| ProbeError::Timeout)?
 	.map_err(|error| ProbeError::Ke(error.to_string()))?;
-	exchange_via_nts(result.remote, result.port, *result.nts, stop, allow_private).await
+	exchange_via_nts(result.remote, result.port, *result.nts, stop, policy).await
 }
 
 /// One authenticated NTP exchange using cookies and keys from a prior
@@ -174,9 +173,9 @@ async fn exchange_via_nts(
 	remote_port: u16,
 	mut nts_data: ntp_proto::SourceNtsData,
 	stop: Instant,
-	allow_private: bool,
+	policy: endpoint::Policy,
 ) -> Result<OneShot, ProbeError> {
-	let remote = endpoint::resolve(&remote, remote_port, NTP_PORT, allow_private, stop).await?;
+	let remote = endpoint::resolve(&remote, remote_port, NTP_PORT, &policy, stop).await?;
 	let cookie = nts_data
 		.get_cookie()
 		.ok_or_else(|| ProbeError::Ke("no cookie to send".into()))?;
@@ -214,13 +213,7 @@ async fn exchange_via_nts(
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
 	let t4_wall = SystemTime::now();
-	let round_trip = t4_wall
-		.duration_since(t1_wall)
-		.map(|d| d.as_secs_f64())
-		.unwrap_or(0.0);
-	if round_trip > 1.0 {
-		return Err(ProbeError::LocalJump);
-	}
+	local_span(t1_wall, t4_wall)?;
 	let reply_cipher: Option<&dyn ntp_proto::Cipher> = Some(s2c_box.as_ref());
 	let (response, _cookie) =
 		NtpPacket::deserialize(&reply[..size], &reply_cipher).map_err(|error| match error {
@@ -254,18 +247,17 @@ async fn exchange_via_nts(
 /// round-trip delay. `deadline` bounds the whole exchange the same way
 /// [`ke_then_ntp`] bounds the authenticated one.
 pub async fn plain_ntp(source: &Source, deadline: Duration) -> Result<OneShot, ProbeError> {
-	plain_ntp_with_policy(source, deadline, false).await
+	plain_ntp_with_policy(source, deadline, endpoint::Policy::default()).await
 }
 
-pub(crate) async fn plain_ntp_with_policy(
+pub(super) async fn plain_ntp_with_policy(
 	source: &Source,
 	deadline: Duration,
-	allow_private: bool,
+	policy: endpoint::Policy,
 ) -> Result<OneShot, ProbeError> {
 	let stop = Instant::now() + deadline;
 	let host = source.host.clone();
-	let remote =
-		endpoint::resolve(&host, source.dial_port(), NTP_PORT, allow_private, stop).await?;
+	let remote = endpoint::resolve(&host, source.dial_port(), NTP_PORT, &policy, stop).await?;
 	let bind = timeout_at(stop.into(), UdpSocket::bind(endpoint::bind_address(remote)))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
@@ -298,14 +290,7 @@ pub(crate) async fn plain_ntp_with_policy(
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
 	let t4_wall = SystemTime::now();
-	if t4_wall
-		.duration_since(t1_wall)
-		.map(|d| d.as_secs_f64())
-		.unwrap_or(0.0)
-		> 1.0
-	{
-		return Err(ProbeError::LocalJump);
-	}
+	local_span(t1_wall, t4_wall)?;
 	if size > UDP_RECV_BUFFER {
 		return Err(ProbeError::Malformed("datagram oversize".into()));
 	}
@@ -362,6 +347,27 @@ fn unix_seconds(time: SystemTime) -> f64 {
 		.map(|d| d.as_secs_f64())
 		.unwrap_or(0.0)
 }
+
+/// The wall-clock span the exchange took, refused when the local clock cannot
+/// be trusted to measure it. A forward step over [`LOCAL_SPAN_LIMIT`] is the
+/// clock being stepped under the probe; a backward step leaves
+/// `duration_since` with nothing to return, which is the same failure and is
+/// reported rather than read as a zero-length exchange.
+fn local_span(sent: SystemTime, received: SystemTime) -> Result<f64, ProbeError> {
+	let span = received
+		.duration_since(sent)
+		.map_err(|_| ProbeError::LocalJump)?
+		.as_secs_f64();
+	if span > LOCAL_SPAN_LIMIT {
+		return Err(ProbeError::LocalJump);
+	}
+	Ok(span)
+}
+
+/// Longest span between sending the request and receiving the reply that a
+/// local clock can still be believed to have measured. One second is far
+/// above any legitimate exchange and far below a clock step.
+const LOCAL_SPAN_LIMIT: f64 = 1.0;
 
 /// Unfold the closest NTP era relative to the local wall clock. Wrapped
 /// timestamp subtraction is unambiguous within 68 years of the reference.

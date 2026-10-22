@@ -120,10 +120,21 @@ impl fmt::Display for SourceKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClockExternal {
-	/// Permit internal destinations and nonzero custom ports. Multicast,
-	/// unspecified and limited broadcast destinations remain forbidden.
+	/// Run the probe at all. `false` turns it off: `epistle status` says the
+	/// probe is switched off and makes no network call, for a host with no
+	/// route to 123/udp or 4460/tcp. The rest of the block is still validated.
+	#[serde(default = "default_enabled")]
+	pub enabled: bool,
+	/// Permit internal destinations: private, loopback and link-local
+	/// addresses. Multicast, unspecified and limited broadcast destinations
+	/// remain forbidden. It grants no permission over ports.
 	#[serde(default)]
 	pub allow_private_networks: bool,
+	/// Ports the probe may dial besides the standard one for the protocol
+	/// (NTS-KE 4460/tcp, NTP 123/udp). Each entry is a port number; none may
+	/// be zero and none may repeat.
+	#[serde(default)]
+	pub allowed_ports: Vec<u16>,
 	/// Inclusive warn threshold (seconds), applied to the largest absolute
 	/// valid offset. Missing readings produce at least `Warn`. The median
 	/// and smear candidate remain diagnostic values.
@@ -142,12 +153,18 @@ pub struct ClockExternal {
 impl Default for ClockExternal {
 	fn default() -> Self {
 		Self {
+			enabled: true,
 			allow_private_networks: false,
+			allowed_ports: Vec::new(),
 			warn_seconds: DEFAULT_WARN_SECONDS,
 			fail_seconds: DEFAULT_FAIL_SECONDS,
 			sources: default_sources(),
 		}
 	}
+}
+
+fn default_enabled() -> bool {
+	true
 }
 
 fn default_warn_seconds() -> f64 {
@@ -189,6 +206,8 @@ impl ClockExternal {
 		if self.sources.len() != EXPECTED_SOURCES {
 			return Err("[clock_external] sources must hold exactly three entries".to_string());
 		}
+		self.validate_allowed_ports()?;
+		let policy = self.policy();
 		let mut nts = 0usize;
 		let mut hosts: Vec<String> = Vec::with_capacity(self.sources.len());
 		for source in &self.sources {
@@ -219,7 +238,7 @@ impl ClockExternal {
 				} else {
 					NTP_PORT
 				},
-				self.allow_private_networks,
+				&policy,
 			)
 			.map_err(|why| format!("[clock_external] {why}"))?;
 			hosts.push(source.host.to_ascii_lowercase());
@@ -250,6 +269,29 @@ impl ClockExternal {
 		} else {
 			self.sources.clone()
 		}
+	}
+
+	/// The destination policy the probe applies to every address and port it
+	/// dials, built from the two independent opt-ins.
+	pub(super) fn policy(&self) -> super::endpoint::Policy {
+		super::endpoint::Policy::from_config(self.allow_private_networks, &self.allowed_ports)
+	}
+
+	/// A port number is never zero, and a repeated entry widens nothing.
+	fn validate_allowed_ports(&self) -> Result<(), String> {
+		let mut seen: Vec<u16> = Vec::with_capacity(self.allowed_ports.len());
+		for port in &self.allowed_ports {
+			if *port == 0 {
+				return Err("[clock_external] allowed_ports must not contain port 0".to_string());
+			}
+			if seen.contains(port) {
+				return Err(format!(
+					"[clock_external] allowed_ports lists port {port} more than once"
+				));
+			}
+			seen.push(*port);
+		}
+		Ok(())
 	}
 
 	/// Effective warn threshold (the configured value when valid, otherwise

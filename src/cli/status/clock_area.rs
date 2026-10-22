@@ -24,6 +24,9 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		.and_then(|config| config.clock_external.as_ref())
 		.cloned()
 		.unwrap_or_default();
+	if !external.enabled {
+		return compose_disabled(host_probe, &external);
+	}
 	let external_run = tokio::task::spawn_blocking({
 		let external = external.clone();
 		move || match tokio::runtime::Handle::try_current() {
@@ -35,6 +38,21 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	.ok()
 	.flatten();
 	compose(host_probe, external_run.as_ref(), &external)
+}
+
+/// The area with the probe switched off: no network is touched and the report
+/// says so, so a host that cannot reach 123/udp or 4460/tcp is not told its
+/// clock is broken every time it asks.
+fn compose_disabled(host: HostClock, external_config: &ClockExternal) -> AreaReport {
+	let mut report = compose(host, None, external_config);
+	report.detail =
+		"external clock probe switched off with [clock_external] enabled = false".to_string();
+	report.items.push(Item::new(
+		"external probe",
+		Level::Ok,
+		"switched off with enabled = false; no time source was queried",
+	));
+	report
 }
 
 /// Reduce a (host probe, optional external run) pair to the area report.
@@ -87,10 +105,20 @@ fn compose(host: HostClock, external: Option<&Run>, external_config: &ClockExter
 
 /// Per-source render of an external run.
 fn external_items(run: &Run) -> Vec<Item> {
-	let mut items = Vec::with_capacity(run.readings.len() + 3);
+	let mut items = Vec::with_capacity(run.readings.len() + run.sources.len() + 3);
 	items.push(authentication_item(&run.sources));
 	for reading in &run.readings {
 		items.push(render_reading(reading));
+	}
+	// A probe task that failed before producing a reading leaves the source
+	// with no line above, so the gap is named here instead of passing as a
+	// source that was never asked.
+	for missing in missing_sources(run) {
+		items.push(Item::new(
+			missing.label(),
+			Level::Warn,
+			"the probe task reported no reading for this source",
+		));
 	}
 	if let Some(index) = run.smear_excluded
 		&& let Some(reading) = run.readings.get(index)
@@ -123,6 +151,19 @@ fn external_items(run: &Run) -> Vec<Item> {
 	};
 	items.push(Item::new("diagnostic median", Level::Ok, median));
 	items
+}
+
+/// The configured sources no reading belongs to: the probe never reported
+/// them, either because its task failed or because the run hit its cap.
+fn missing_sources(run: &Run) -> Vec<&Source> {
+	run.sources
+		.iter()
+		.filter(|source| {
+			!run.readings
+				.iter()
+				.any(|reading| reading.source == **source)
+		})
+		.collect()
 }
 
 /// State how much of the run was authenticated. NTS-KE covers the

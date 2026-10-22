@@ -260,7 +260,8 @@ fn review_rejects_arbitrary_and_zero_ports_by_default() {
 
 #[test]
 fn review_private_networks_require_explicit_operator_consent() {
-	let mut config: ClockExternal = toml::from_str("allow_private_networks = true").unwrap();
+	let mut config: ClockExternal =
+		toml::from_str("allow_private_networks = true\nallowed_ports = [6379]").unwrap();
 	for host in [
 		"localhost",
 		"127.0.0.1",
@@ -285,4 +286,53 @@ fn review_private_networks_require_explicit_operator_consent() {
 		..Source::ntp("127.0.0.1")
 	};
 	assert!(config.validate().is_err());
+}
+
+/// A public NTS-KE that hands out a port other than the standard one, or a
+/// plain NTP source on a port of its own, needs the port named. Allowing
+/// internal addresses is a different decision and does not carry it.
+#[test]
+fn review_a_custom_port_needs_its_own_opt_in() {
+	let mut config = ClockExternal::default();
+	config.sources[0] = Source {
+		host: "time.example".into(),
+		kind: SourceKind::Ntp,
+		port: Some(6379),
+	};
+	assert!(config.validate().is_err(), "a custom port needs a name");
+	config.allow_private_networks = true;
+	assert!(
+		config.validate().is_err(),
+		"the internal-address opt-in must not open ports"
+	);
+	config.allowed_ports = vec![6379];
+	assert!(config.validate().is_ok(), "the listed port is allowed");
+	// The list names ports, not addresses: an internal destination still
+	// needs its own opt-in.
+	config.sources[0] = Source {
+		host: "10.0.0.1".into(),
+		kind: SourceKind::Ntp,
+		port: Some(6379),
+	};
+	config.allow_private_networks = false;
+	assert!(
+		config.validate().is_err(),
+		"an internal address stays refused"
+	);
+	config.allow_private_networks = true;
+	assert!(config.validate().is_ok());
+}
+
+#[test]
+fn review_the_allowed_port_list_refuses_zero_and_repeats() {
+	for ports in [vec![0], vec![123, 123], vec![4460, 0]] {
+		let config = ClockExternal {
+			allowed_ports: ports.clone(),
+			..ClockExternal::default()
+		};
+		assert!(
+			config.validate().is_err(),
+			"allowed_ports = {ports:?} must be refused"
+		);
+	}
 }

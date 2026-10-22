@@ -164,6 +164,17 @@ fn embedded_reason(ip: Ipv6Addr, why: &'static str) -> &'static str {
 /// Human-readable reason an IPv6 address is not a valid public address.
 /// `None` when the address is a global unicast and is accepted.
 pub(crate) fn non_global_ipv6_reason(ip: Ipv6Addr) -> Option<&'static str> {
+	// The unspecified and the loopback address are answers in their own right,
+	// not containers for an IPv4 payload: ::1 unfolds to 0.0.0.1 and :: to
+	// 0.0.0.0, and naming the payload instead of the address would send an
+	// operator looking for a translation problem where the value is simply
+	// ::1.
+	if ip.is_unspecified() {
+		return Some("the unspecified address (::)");
+	}
+	if ip.is_loopback() {
+		return Some("a loopback address (::1)");
+	}
 	// Any form that carries an IPv4 payload hides it from a naive range check,
 	// so unwrap every one of them and classify the IPv4 inside: a v6 address
 	// must not be a way in for a loopback, private or reserved IPv4.
@@ -179,11 +190,7 @@ pub(crate) fn non_global_ipv6_reason(ip: Ipv6Addr) -> Option<&'static str> {
 	if ip.to_ipv4_mapped().is_some() || is_nat64(ip) {
 		return None;
 	}
-	if ip.is_unspecified() {
-		Some("the unspecified address (::)")
-	} else if ip.is_loopback() {
-		Some("a loopback address (::1)")
-	} else if ip.is_unicast_link_local() {
+	if ip.is_unicast_link_local() {
 		Some("a link-local address (fe80::/10)")
 	} else if ip.is_multicast() {
 		Some("a multicast address (ff00::/8)")

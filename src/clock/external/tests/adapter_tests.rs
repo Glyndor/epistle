@@ -6,12 +6,13 @@
 //! adapter can drive without a real NTS-KE stand-in.
 
 use std::io::Cursor;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ntp_proto::{NtpPacket, PollInterval};
 use tokio::net::UdpSocket;
 
-use crate::clock::external::adapter::{ProbeError, plain_ntp_with_policy};
+use crate::clock::external::adapter::{ProbeError, local_span, plain_ntp_with_policy};
+use crate::clock::external::endpoint::Policy;
 use crate::clock::external::source::Source;
 
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
@@ -22,7 +23,7 @@ async fn plain_ntp_against_loopback_returns_a_signed_offset() {
 	let server = spawn_ntp_server(NtpPlan::Offset(0.25)).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let reading = plain_ntp_with_policy(&source, TEST_DEADLINE, true)
+	let reading = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port))
 		.await
 		.expect("plain ntp");
 	assert!(
@@ -38,7 +39,7 @@ async fn plain_ntp_reports_bad_origin_when_origin_does_not_match() {
 	let server = spawn_ntp_server(NtpPlan::WrongOrigin).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port)).await;
 	assert!(matches!(result, Err(ProbeError::BadReply(_))), "{result:?}");
 	server.shutdown().await;
 }
@@ -48,7 +49,7 @@ async fn plain_ntp_reports_malformed_when_response_truncated() {
 	let server = spawn_truncated_ntp_server().await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port)).await;
 	assert!(
 		matches!(result, Err(ProbeError::Malformed(_))),
 		"{result:?}"
@@ -61,7 +62,7 @@ async fn plain_ntp_reports_malformed_on_kiss_deny() {
 	let server = spawn_ntp_server(NtpPlan::KissDeny).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port)).await;
 	assert!(matches!(result, Err(ProbeError::Kiss(_))), "{result:?}");
 	server.shutdown().await;
 }
@@ -71,7 +72,7 @@ async fn a_kiss_code_that_does_not_echo_the_request_cannot_fail_the_probe_as_a_k
 	let server = spawn_ntp_server(NtpPlan::KissDenyWrongOrigin).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port)).await;
 	// Validated first, so it is an invalid reply and not a DENY from the server.
 	assert!(matches!(result, Err(ProbeError::BadReply(_))), "{result:?}");
 	server.shutdown().await;
@@ -82,9 +83,19 @@ async fn any_kiss_code_is_an_error_and_never_a_measurement() {
 	let server = spawn_ntp_server(NtpPlan::KissRstr).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, local_policy(port)).await;
 	assert!(matches!(result, Err(ProbeError::Kiss(_))), "{result:?}");
 	server.shutdown().await;
+}
+
+/// A local test server is a private address on a port of its own, so the test
+/// carries both opt-ins explicitly: the destination policy grants one at a
+/// time and neither follows from the other.
+fn local_policy(port: u16) -> Policy {
+	Policy {
+		allow_private: true,
+		allowed_ports: vec![port],
+	}
 }
 
 fn source_for_port(host: &str, port: u16) -> Source {
@@ -285,5 +296,27 @@ impl NtpServerHandle {
 	async fn shutdown(self) {
 		self.join.abort();
 		let _ = self.join.await;
+	}
+}
+
+/// The wall-clock span the exchange took is what tells a step from a slow
+/// reply, and a step backwards is a step too: `duration_since` has nothing to
+/// return for it, which used to be read as a zero-length exchange and a clean
+/// offset.
+#[test]
+fn review_a_local_clock_that_steps_in_either_direction_is_not_a_measurement() {
+	let sent = SystemTime::now();
+	assert!(
+		local_span(sent, sent + Duration::from_millis(10)).is_ok(),
+		"an ordinary exchange must be accepted"
+	);
+	for (why, received) in [
+		("clock stepped backwards", sent - Duration::from_secs(1)),
+		("clock stepped forward", sent + Duration::from_secs(2)),
+	] {
+		assert!(
+			matches!(local_span(sent, received), Err(ProbeError::LocalJump)),
+			"{why} must not be read as an exchange"
+		);
 	}
 }

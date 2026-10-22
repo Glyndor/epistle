@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use super::{HostClock, compose};
+use super::{HostClock, check, compose};
 use crate::cli::status::report::{AreaReport, Item, Level};
 use crate::clock::external::{ClockExternal, Outcome, ProbeReading, Run, SignedOffset, Source};
 
@@ -187,4 +187,62 @@ fn review_smear_candidate_remains_in_the_verdict() {
 			.contains("this reading still affects the verdict")
 	);
 	assert!(!diagnostic.detail.contains("excluded"));
+}
+
+/// A probe task that fails before it reports leaves its source with no
+/// reading. The source was asked, so the area names the gap instead of
+/// rendering a run that silently omits it.
+#[test]
+fn review_a_source_without_a_reading_is_reported_rather_than_dropped() {
+	let external = ClockExternal::default();
+	let mut run = run_over(external.effective_sources());
+	run.readings.pop();
+	run.outcome = Outcome::Warn;
+	let report = compose(HostClock::Synced, Some(&run), &external);
+	let missing = item(&report, &run.sources[2].label());
+	assert_eq!(missing.status, Level::Warn, "{missing:?}");
+	assert!(missing.detail.contains("no reading"), "{missing:?}");
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+}
+
+/// The probe can be switched off for a host with no route to 123/udp or
+/// 4460/tcp. The area then says so, at `ok`, and never queries a source.
+#[tokio::test(flavor = "current_thread")]
+async fn review_a_disabled_probe_reports_itself_without_touching_the_network() {
+	let dir = tempfile::tempdir().expect("temp dir");
+	let ctx = super::super::test_support::ctx(dir.path(), "[clock_external]\nenabled = false\n");
+	let config = ctx.config.as_ref().expect("the file must load");
+	assert!(!config.clock_external.as_ref().expect("block").enabled);
+	let report = check(&ctx).await;
+	assert_ne!(report.status, Level::Fail, "{report:?}");
+	let note = item(&report, "external probe");
+	assert_eq!(note.status, Level::Ok, "{note:?}");
+	assert!(
+		report.detail.contains("switched off"),
+		"the summary must name the switch: {report:?}"
+	);
+	assert!(
+		report
+			.items
+			.iter()
+			.all(|item| item.name != "external verdict"),
+		"a probe that never ran has no verdict to render: {report:?}"
+	);
+}
+
+/// The default is on: a configuration file that never mentions the block, and
+/// one that sets it, are both accepted and mean what they say.
+#[test]
+fn review_the_probe_runs_unless_the_block_says_otherwise() {
+	let absent: ClockExternal = toml::from_str("").expect("empty block");
+	assert!(absent.enabled);
+	assert!(absent.validate().is_ok());
+	let on: ClockExternal = toml::from_str("enabled = true").expect("enabled");
+	assert!(on.enabled);
+	let off: ClockExternal = toml::from_str("enabled = false").expect("disabled");
+	assert!(!off.enabled);
+	assert!(
+		off.validate().is_ok(),
+		"a disabled probe still has to be a valid block"
+	);
 }

@@ -28,6 +28,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::ServerConfig;
 
 use crate::clock::external::adapter::{ProbeError, ke_then_ntp_with_roots};
+use crate::clock::external::endpoint::Policy;
 use crate::clock::external::source::Source;
 
 /// Record type numbers from RFC 8915 section 6. The high bit marks a
@@ -165,6 +166,16 @@ impl KeServer {
 	}
 }
 
+/// The stand-in answers on two ports of its own, over loopback, so the test
+/// grants the address opt-in and both ports by hand: the destination policy
+/// keeps the two permissions apart.
+fn local_policy(source: &Source, poll_port: u16) -> Policy {
+	Policy {
+		allow_private: true,
+		allowed_ports: vec![source.port.expect("the stand-in names its port"), poll_port],
+	}
+}
+
 /// Bind a UDP socket that receives the NTS-NTS poll and never answers,
 /// which is what a silent server looks like from here. The oneshot
 /// fires as soon as the datagram lands, so a test can tell "the key
@@ -202,7 +213,7 @@ async fn key_exchange_completes_when_the_server_keeps_the_connection_open() {
 		&server.source(),
 		DEADLINE,
 		std::slice::from_ref(&server.root),
-		true,
+		local_policy(&server.source(), port),
 	)
 	.await;
 	let elapsed = started.elapsed();
@@ -245,7 +256,7 @@ async fn the_deadline_bounds_the_whole_probe_not_each_stage() {
 		&server.source(),
 		DEADLINE,
 		std::slice::from_ref(&server.root),
-		true,
+		local_policy(&server.source(), port),
 	)
 	.await;
 	let elapsed = started.elapsed();

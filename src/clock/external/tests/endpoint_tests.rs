@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// Global destinations on the standard port: what the probe uses unless the
+/// operator opts in.
+const POLICY_GLOBAL: Policy = Policy {
+	allow_private: false,
+	allowed_ports: Vec::new(),
+};
+
+/// The private-network opt-in on its own. It grants addresses, never ports.
+fn private(allowed_ports: &[u16]) -> Policy {
+	Policy {
+		allow_private: true,
+		allowed_ports: allowed_ports.to_vec(),
+	}
+}
+
 #[tokio::test]
 async fn review_rejects_the_whole_dns_answer_before_selecting_an_address() {
 	for bad in [
@@ -25,7 +40,7 @@ async fn review_rejects_the_whole_dns_answer_before_selecting_an_address() {
 				"clock.example",
 				123,
 				123,
-				false,
+				&POLICY_GLOBAL,
 				Instant::now() + Duration::from_secs(2),
 				async { Ok(answer) },
 			)
@@ -52,7 +67,7 @@ async fn review_private_opt_in_preserves_the_validated_socket_address() {
 			"internal.example",
 			6379,
 			123,
-			true,
+			&private(&[6379]),
 			Instant::now() + Duration::from_secs(2),
 			async { Ok(vec![ip.parse().unwrap()]) },
 		)
@@ -74,7 +89,7 @@ async fn review_private_opt_in_preserves_the_validated_socket_address() {
 			"internal.example",
 			123,
 			123,
-			true,
+			&private(&[]),
 			Instant::now() + Duration::from_secs(2),
 			async { Ok(vec![ip.parse().unwrap()]) },
 		)
@@ -91,7 +106,7 @@ fn review_slow_async_dns_does_not_survive_runtime_shutdown() {
 		"slow.example",
 		123,
 		123,
-		false,
+		&POLICY_GLOBAL,
 		Instant::now() + Duration::from_millis(40),
 		async {
 			tokio::time::sleep(Duration::from_secs(1)).await;
@@ -113,7 +128,7 @@ async fn review_dns_has_its_own_deadline_and_rejects_an_empty_answer() {
 		"slow.example",
 		123,
 		123,
-		false,
+		&POLICY_GLOBAL,
 		Instant::now() + Duration::from_secs(2),
 		async {
 			tokio::time::sleep(Duration::from_secs(1)).await;
@@ -126,7 +141,7 @@ async fn review_dns_has_its_own_deadline_and_rejects_an_empty_answer() {
 		"empty.example",
 		123,
 		123,
-		false,
+		&POLICY_GLOBAL,
 		Instant::now() + Duration::from_secs(2),
 		async { Ok(vec![]) },
 	)
@@ -164,7 +179,12 @@ async fn review_default_adapter_entry_points_refuse_internal_destinations() {
 fn review_scoped_ipv6_is_rejected_clearly_even_with_opt_in() {
 	for host in ["fe80::1%1", "fe80::1%eth0", "[fe80::1%1]"] {
 		for allow in [false, true] {
-			let result = validate_host(host, 123, 123, allow);
+			let policy = if allow {
+				private(&[])
+			} else {
+				POLICY_GLOBAL.clone()
+			};
+			let result = validate_host(host, 123, 123, &policy);
 			assert!(result.is_err(), "accepted unsupported zone {host}");
 			let error = result.unwrap_err();
 			assert!(
@@ -195,8 +215,11 @@ fn review_non_global_destinations_require_opt_in() {
 		"3fff::1",
 	] {
 		let ip = text.parse().unwrap();
-		assert!(validate_ip(ip, false).is_err(), "accepted {text}");
-		assert!(validate_ip(ip, true).is_ok(), "opt-in rejected {text}");
+		assert!(validate_ip(ip, &POLICY_GLOBAL).is_err(), "accepted {text}");
+		assert!(
+			validate_ip(ip, &private(&[])).is_ok(),
+			"opt-in rejected {text}"
+		);
 	}
 }
 
@@ -213,8 +236,12 @@ fn review_embedded_ipv4_obeys_both_destination_policies() {
 		] {
 			let text = format!("{prefix}{payload}");
 			let ip = text.parse().unwrap();
-			assert!(validate_ip(ip, false).is_err(), "accepted {text}");
-			assert_eq!(validate_ip(ip, true).is_ok(), allowed_with_opt_in, "{text}");
+			assert!(validate_ip(ip, &POLICY_GLOBAL).is_err(), "accepted {text}");
+			assert_eq!(
+				validate_ip(ip, &private(&[])).is_ok(),
+				allowed_with_opt_in,
+				"{text}"
+			);
 		}
 	}
 	for (text, allowed_with_opt_in) in [
@@ -226,8 +253,12 @@ fn review_embedded_ipv4_obeys_both_destination_policies() {
 		("2002:0:0::1", false),
 	] {
 		let ip = text.parse().unwrap();
-		assert!(validate_ip(ip, false).is_err(), "accepted {text}");
-		assert_eq!(validate_ip(ip, true).is_ok(), allowed_with_opt_in, "{text}");
+		assert!(validate_ip(ip, &POLICY_GLOBAL).is_err(), "accepted {text}");
+		assert_eq!(
+			validate_ip(ip, &private(&[])).is_ok(),
+			allowed_with_opt_in,
+			"{text}"
+		);
 	}
 }
 
@@ -252,7 +283,7 @@ fn review_destination_policy_follows_the_shared_classifier_on_every_form() {
 	] {
 		let ip: Ipv6Addr = text.parse().unwrap();
 		assert_eq!(
-			validate_ip(ip.into(), false).is_err(),
+			validate_ip(ip.into(), &POLICY_GLOBAL).is_err(),
 			crate::config::non_global_ipv6_reason(ip).is_some(),
 			"{text}: the clock destination and the classifier disagree"
 		);
@@ -272,7 +303,7 @@ async fn review_unusual_numeric_names_cannot_bypass_resolved_address_policy() {
 			host,
 			123,
 			123,
-			false,
+			&POLICY_GLOBAL,
 			Instant::now() + Duration::from_secs(1),
 			async { Ok(vec!["127.0.0.1".parse().unwrap()]) },
 		)
@@ -302,7 +333,7 @@ async fn review_special_ranges_in_mixed_dns_answers_are_rejected_in_both_orders(
 				"clock.example",
 				123,
 				123,
-				false,
+				&POLICY_GLOBAL,
 				Instant::now() + Duration::from_secs(1),
 				async { Ok(addresses) },
 			)
@@ -318,13 +349,42 @@ fn review_global_destinations_and_embedded_global_ipv4_remain_allowed() {
 		"1.1.1.1",
 		"2606:4700:4700::1111",
 		"::ffff:1.1.1.1",
-		"::1.1.1.1",
 		"64:ff9b::1.1.1.1",
-		"2002:101:101::1",
 	] {
-		for allow in [false, true] {
-			assert!(validate_ip(text.parse().unwrap(), allow).is_ok(), "{text}");
-		}
+		assert!(
+			validate_ip(text.parse().unwrap(), &POLICY_GLOBAL).is_ok(),
+			"{text}"
+		);
+		assert!(
+			validate_ip(text.parse().unwrap(), &private(&[])).is_ok(),
+			"{text}"
+		);
+	}
+}
+
+/// One classification decides, so a transition address is judged as the IPv6
+/// address it is: 6to4 and the deprecated compatible form are refused by
+/// default even when the payload they carry is a global IPv4, because that is
+/// what the `public_ipv6` classifier says about them.
+#[test]
+fn review_transition_destinations_follow_the_shared_classifier_without_the_opt_in() {
+	for text in [
+		"2002:808:808::",
+		"2002:101:101::1",
+		"::8.8.8.8",
+		"::1.1.1.1",
+	] {
+		let ip: Ipv6Addr = text.parse().unwrap();
+		assert_eq!(
+			validate_ip(ip.into(), &POLICY_GLOBAL).is_err(),
+			crate::config::non_global_ipv6_reason(ip).is_some(),
+			"{text}: the clock and the classifier disagree"
+		);
+		assert!(
+			validate_ip(ip.into(), &POLICY_GLOBAL).is_err(),
+			"{text} carries a global payload but is still a transition address"
+		);
+		assert!(validate_ip(ip.into(), &private(&[])).is_ok(), "{text}");
 	}
 }
 
@@ -334,7 +394,7 @@ async fn review_scoped_ipv6_is_rejected_before_lookup() {
 		"fe80::1%eth0",
 		123,
 		123,
-		true,
+		&private(&[]),
 		Instant::now() + Duration::from_secs(1),
 		async {
 			panic!("unsupported zone must not reach DNS");

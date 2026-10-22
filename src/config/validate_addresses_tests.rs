@@ -293,6 +293,40 @@ fn embedded_ipv4_payload_decides_the_verdict_in_every_form() {
 }
 
 #[test]
+fn review_loopback_and_unspecified_keep_their_own_message() {
+	// ::1 unfolds to the IPv4-compatible payload 0.0.0.1, and :: to 0.0.0.0.
+	// Both are refused either way, but the caller (mail.toml, init, tlsrpt)
+	// must still be told which address it was, not which payload it carries.
+	assert_eq!(
+		non_global_ipv6_reason("::1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	assert_eq!(
+		non_global_ipv6_reason("::".parse().unwrap()),
+		Some("the unspecified address (::)")
+	);
+	assert_eq!(
+		non_global_ipv6_reason("0:0:0:0:0:0:0:1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	// `::0.0.0.1` spells the same address as `::1`, so it is named the same
+	// way rather than read as a payload.
+	assert_eq!(
+		non_global_ipv6_reason("::0.0.0.1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	// The rest of the deprecated compatible space keeps the payload reading,
+	// which is the only thing there is to say about it.
+	for text in ["::2", "::0.1.2.3"] {
+		assert_eq!(
+			non_global_ipv6_reason(text.parse().unwrap()),
+			Some("an IPv4-compatible IPv6 carrying a non-global address"),
+			"{text}"
+		);
+	}
+}
+
+#[test]
 fn embedded_ipv4_reason_names_the_form_and_the_payload() {
 	let cases: &[(Ipv6Addr, &[&str])] = &[
 		("64:ff9b::7f00:1".parse().unwrap(), &["NAT64", "loopback"]),

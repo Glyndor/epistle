@@ -26,7 +26,9 @@ pub use crate::clock::external::adapter::ProbeError;
 pub struct Run {
 	/// The three configured sources, in the order they were probed.
 	pub sources: Vec<Source>,
-	/// The reading for every probe, in the same order as `sources`.
+	/// The reading for every probe that reported one, in the same order as
+	/// `sources`. A source whose task failed before it reported has no entry;
+	/// `sources` is what says the source was asked.
 	pub readings: Vec<ProbeReading>,
 	/// The rolled-up verdict for the area.
 	pub outcome: Outcome,
@@ -67,15 +69,20 @@ pub async fn run(external: &ClockExternal) -> Run {
 	let deadline = started + RUN_DEADLINE;
 	let sources = external.effective_sources();
 	let mut set = JoinSet::new();
-	let allow_private = external.allow_private_networks;
+	let policy = external.policy();
 	for source in sources.iter().cloned() {
-		set.spawn(async move { probe_one(source, SOURCE_DEADLINE, allow_private).await });
+		set.spawn({
+			let policy = policy.clone();
+			async move { probe_one(source, SOURCE_DEADLINE, policy).await }
+		});
 	}
 	let mut readings = Vec::with_capacity(sources.len());
 	let collect = async {
 		while let Some(joined) = set.join_next().await {
 			match joined {
 				Ok(reading) => readings.push(reading),
+				// The source has no reading now; the caller names it as a gap
+				// between `sources` and `readings`.
 				Err(error) => {
 					tracing::warn!(%error, "clock probe task failed");
 				}
@@ -93,6 +100,8 @@ pub async fn run(external: &ClockExternal) -> Run {
 			"truncated"
 		}
 	};
+	// `join_next` hands back the readings in the order the sources answered.
+	order_readings(&sources, &mut readings);
 	let outcome = assessment::decide(external, &readings);
 	let summary = assessment::assessment(external, &readings);
 	let _ = outcome_kind;
@@ -115,11 +124,24 @@ pub async fn run(external: &ClockExternal) -> Run {
 	}
 }
 
+/// Put the readings back in the order the sources were configured in, so a
+/// rendering reads the same way on every run and a caller can pair
+/// `readings[i]` with `sources[i]`. A reading for a source that is not in the
+/// list keeps its place at the end rather than being dropped.
+fn order_readings(sources: &[Source], readings: &mut [ProbeReading]) {
+	readings.sort_by_key(|reading| {
+		sources
+			.iter()
+			.position(|source| *source == reading.source)
+			.unwrap_or(usize::MAX)
+	});
+}
+
 /// Probe one source under the operator's destination policy.
-async fn probe_one(source: Source, deadline: Duration, allow_private: bool) -> ProbeReading {
+async fn probe_one(source: Source, deadline: Duration, policy: endpoint::Policy) -> ProbeReading {
 	let result = match source.kind {
-		SourceKind::Nts => adapter::ke_then_ntp_with_policy(&source, deadline, allow_private).await,
-		SourceKind::Ntp => adapter::plain_ntp_with_policy(&source, deadline, allow_private).await,
+		SourceKind::Nts => adapter::ke_then_ntp_with_policy(&source, deadline, policy).await,
+		SourceKind::Ntp => adapter::plain_ntp_with_policy(&source, deadline, policy).await,
 	};
 	match result {
 		Ok(value) => ProbeReading::ok(source, value.offset_seconds, value.delay_seconds),

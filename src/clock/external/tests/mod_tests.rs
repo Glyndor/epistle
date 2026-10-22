@@ -3,7 +3,7 @@
 
 use crate::clock::external::assessment::{Outcome, SignedOffset};
 use crate::clock::external::source::{ProbeReading, Source, SourceKind};
-use crate::clock::external::{ClockExternal, Run};
+use crate::clock::external::{ClockExternal, Run, order_readings};
 
 fn reading(label: &str, kind: SourceKind, offset: f64) -> ProbeReading {
 	let source = match kind {
@@ -120,6 +120,7 @@ fn mock_outcome(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome 
 async fn review_run_forwards_private_network_consent_to_both_protocols() {
 	let mut external = ClockExternal {
 		allow_private_networks: true,
+		allowed_ports: vec![1],
 		sources: vec![
 			Source::nts("localhost"),
 			Source::ntp("127.0.0.1"),
@@ -142,4 +143,36 @@ async fn review_run_forwards_private_network_consent_to_both_protocols() {
 			);
 		}
 	}
+}
+
+/// The probes answer in whatever order the network lets them, so the readings
+/// come back shuffled. The run hands them over in the configured order, which
+/// is the order the area and every reader of `Run` assume.
+#[test]
+fn review_readings_are_ordered_by_the_configured_sources() {
+	let external = ClockExternal::default();
+	let sources = external.effective_sources();
+	let mut readings = vec![
+		reading(&sources[2].host, sources[2].kind, 0.03),
+		reading(&sources[0].host, sources[0].kind, 0.01),
+		reading(&sources[1].host, sources[1].kind, 0.02),
+	];
+	order_readings(&sources, &mut readings);
+	let order: Vec<&str> = readings
+		.iter()
+		.map(|reading| reading.source.host.as_str())
+		.collect();
+	let expected: Vec<&str> = sources.iter().map(|source| source.host.as_str()).collect();
+	assert_eq!(order, expected);
+	// A source the run never asked about stays at the end rather than
+	// displacing a reading that does belong to the list.
+	let mut with_stray = readings.clone();
+	with_stray.push(reading("stray.example", SourceKind::Ntp, 0.04));
+	order_readings(&sources, &mut with_stray);
+	assert_eq!(
+		with_stray
+			.last()
+			.map(|reading| reading.source.host.as_str()),
+		Some("stray.example")
+	);
 }

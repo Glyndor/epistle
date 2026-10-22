@@ -1143,12 +1143,16 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 ### `[clock_external]`
 
 Read-only external-clock probe `epistle status` and `epistle check clock`
-run when the area is reached. Three independent sources, real median,
-warn/fail thresholds. The probe runs once per `status` call and never
-writes the host clock; it is a probe for the operator, not a discipliner.
+run when the area is reached. Three independent sources, diagnostic
+median, warn/fail thresholds. The probe runs once per `status` call and
+never writes the host clock; it is a probe for the operator, not a
+discipliner. A host with no route to the sources can switch it off with
+`enabled = false`: the area then says the probe is switched off, at `ok`,
+and makes no network call.
 
 ```toml
 [clock_external]
+enabled = true      # false turns the probe off entirely
 warn_seconds = 1.0   # an offset at or above this reading is a Warn
 fail_seconds = 5.0   # an offset at or above this reading is a Fail
 sources = [
@@ -1160,16 +1164,19 @@ sources = [
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `enabled` | bool | `true` | Run the probe. `false` switches it off: `epistle status` reports the switch at `ok` and queries nothing. The rest of the block is still validated, so a disabled probe cannot hide a broken file. |
 | `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). Below it all valid offsets are `Ok`; at or above it and below `fail_seconds` the largest absolute offset is `Warn`; at or above `fail_seconds` it is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
 | `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
-| `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations and nonzero custom ports for internal deployments, including NTS-KE referrals. |
-| `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
+| `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations for internal deployments, including NTS-KE referrals. It grants nothing over ports. |
+| `allowed_ports` | array | `[]` | Ports the probe may dial besides the standard one for the protocol (TCP 4460 for NTS-KE, UDP 123 for NTP), for a peer that answers elsewhere. Each entry is a port number; none may be `0` and none may repeat. |
+| `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set and has to be the standard port for the protocol or one listed in `allowed_ports`. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
 
 Validation rules `Config::validate` enforces: exactly three sources; at
 least one NTS source; no duplicate hosts (case-insensitive); no empty
-hosts; no non-ASCII hosts; no whitespace or control characters in hosts.
-The split between `nts` and `ntp` is otherwise the operator's. A
-`[clock_external]` that fails these checks refuses to load.
+hosts; no non-ASCII hosts; no whitespace or control characters in hosts;
+no `0` and no repeated entry in `allowed_ports`. The split between `nts`
+and `ntp` is otherwise the operator's. A `[clock_external]` that fails
+these checks refuses to load.
 
 The probe bounds: each source gets a `2 s` per-source deadline
 (`SOURCE_DEADLINE`) covering the whole probe, dial, TLS handshake,
@@ -1185,15 +1192,20 @@ By default, sources and NTS-KE Server/Port referrals must use
 global unicast addresses, excluding shared, documentation, benchmarking,
 reserved, loopback, private and link-local networks,
 and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP).
-Set `allow_private_networks = true` only when I intend to contact internal
-servers or custom ports. Even then, multicast, unspecified and limited
+`allow_private_networks = true` is for deployments that dial internal
+servers, and `allowed_ports` is for a public peer that answers somewhere
+other than its standard port: neither one turns the other on. Even with
+`allow_private_networks = true`, multicast, unspecified and limited
 broadcast addresses are rejected. IPv4-mapped, IPv4-compatible, NAT64
 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are classified using their
-embedded IPv4 address. IPv6 zone identifiers such as `fe80::1%eth0` or
-`fe80::1%1` are not supported and are rejected with a configuration error,
-even with the opt-in; I must use a destination that needs no zone.
-Directed broadcast addresses cannot be identified without the destination
-network's prefix; my routing and egress policy must block those networks.
+embedded IPv4 address, and a transition address is refused on its own even
+when that payload is global, so the clock refuses exactly what a
+`public_ipv6` value is refused for. IPv6 zone identifiers such as `fe80::1%eth0` or `fe80::1%1`
+are not supported and are rejected with a configuration error, even with
+the opt-in, so the destination has to be one that needs no zone. Directed
+broadcast addresses cannot be identified without the destination
+network's prefix; blocking those networks is the job of the routing and
+egress policy of the network.
 
 The verdict currently uses the largest absolute offset among all valid
 readings. The median and `smear_excluded` are diagnostic values only: an

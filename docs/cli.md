@@ -238,7 +238,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
-| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused) | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed | |
+| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 
 The `clock` area adds two read-only probes. The host probe asks the
@@ -262,13 +262,12 @@ The three defaults, `time.cloudflare.com` (plain NTP), `nts.netnod.se`
 (NTS) and `time.google.com` (plain NTP), are three independent ASes,
 with a diagnostic median that is insensitive to one drifting source.
 This median does not exclude that source from the verdict. Each source
-carries the protocol it was measured answering: Netnod answers the whole
-NTS exchange inside the budget (1.37 s to 1.82 s of the 2 s, across eight
-consecutive runs), Cloudflare answers plain NTPv4 in 82 ms to 106 ms but
-never answers the authenticated poll on any run recorded for this branch
-(its key exchange returns cookies and then the poll is dropped, at
-budgets up to 15 s), and Google publishes no NTS-KE
-endpoint. Replace them when the chosen peers change; the list and the
+carries the protocol that peer answered when the list was chosen:
+Netnod answers the whole NTS exchange inside the budget, Cloudflare
+answers plain NTPv4 but its key exchange returns cookies and the
+authenticated poll then goes unanswered on the networks measured, so it
+ships as plain NTPv4, and Google publishes no NTS-KE endpoint. Replace
+them when the chosen peers change; the list and the
 protocol per source are both yours to set, and a host that answers NTS
 on your network can be configured as `nts`. The two ports the probes
 dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
@@ -276,15 +275,15 @@ dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
 from the host that runs `epistle status`. The full run is capped at
 `2.1 s` and each source at `2 s` for the whole probe, so a server that
 answers the key exchange slowly cannot buy a second budget; a hung
-server is reported, never retried. Note that a whole NTS exchange costs
-a dial, a TLS handshake, a key exchange and the authenticated poll, so
-it comes close to the `2 s` per-source budget: on the development host
-the NTS source took between 1.37 s and 1.82 s across eight consecutive
-runs. A source that misses
+server is reported, never retried. A whole NTS exchange costs a dial, a
+TLS handshake, a key exchange and the authenticated poll, so it comes
+close to the `2 s` per-source budget. A source that misses
 the budget is reported as a timeout and the run loses its diagnostic
 median. One or two healthy readings give `warn`; no valid readings or any
 valid offset at or above the fail threshold gives `fail`. The budget
-itself is a constant in the binary, not a setting.
+itself is a constant in the binary, not a setting. With no route to those
+ports the probe stays red, and `enabled = false` in `[clock_external]`
+turns it off so the area reports the switch instead.
 
 The probe is read-only: nothing writes the host clock, and a Warn or
 Fail from this area never produces a `clock_drift_exceeded` event
