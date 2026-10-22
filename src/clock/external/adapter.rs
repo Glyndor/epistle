@@ -246,6 +246,11 @@ async fn exchange_via_nts(
 	if response.is_kiss_rate(PollInterval::default()) {
 		return Err(ProbeError::Kiss("RATE".into()));
 	}
+	// Any other kiss code (RSTR, the NTS-NAK, an unknown one) carries no time:
+	// its timestamps must never be read as a measurement.
+	if response.is_kiss() {
+		return Err(ProbeError::Kiss("other".into()));
+	}
 	let t1 = unix_seconds(t1_wall);
 	let t4 = unix_seconds(t4_wall);
 	let t2 = ntp_to_unix_seconds(response.receive_timestamp());
@@ -326,6 +331,11 @@ pub async fn plain_ntp(source: &Source, deadline: Duration) -> Result<OneShot, P
 	}
 	if response.is_kiss_rate(PollInterval::default()) {
 		return Err(ProbeError::Kiss("RATE".into()));
+	}
+	// Any other kiss code (RSTR, the NTS-NAK, an unknown one) carries no time:
+	// its timestamps must never be read as a measurement.
+	if response.is_kiss() {
+		return Err(ProbeError::Kiss("other".into()));
 	}
 	let t1 = unix_seconds(t1_wall);
 	let t4 = unix_seconds(t4_wall);

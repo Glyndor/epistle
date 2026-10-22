@@ -75,6 +75,16 @@ async fn a_kiss_code_that_does_not_echo_the_request_cannot_fail_the_probe_as_a_k
 	server.shutdown().await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn any_kiss_code_is_an_error_and_never_a_measurement() {
+	let server = spawn_ntp_server(NtpPlan::KissRstr).await;
+	let port = server.local_addr().port();
+	let source = source_for_port("127.0.0.1", port);
+	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	assert!(matches!(result, Err(ProbeError::Kiss(_))), "{result:?}");
+	server.shutdown().await;
+}
+
 fn source_for_port(host: &str, port: u16) -> Source {
 	let mut source = Source::ntp(host);
 	source.port = Some(port);
@@ -184,6 +194,7 @@ enum NtpPlan {
 	WrongOrigin,
 	KissDeny,
 	KissDenyWrongOrigin,
+	KissRstr,
 }
 
 fn build_reply(request: &[u8], plan: NtpPlan) -> Vec<u8> {
@@ -217,6 +228,16 @@ fn build_reply(request: &[u8], plan: NtpPlan) -> Vec<u8> {
 			header[24..28].copy_from_slice(&[0x99, 0x99, 0x99, 0x99]);
 			header[32..40].copy_from_slice(&[0u8; 8]);
 			header[40..48].copy_from_slice(&[0u8; 8]);
+			header.to_vec()
+		}
+		NtpPlan::KissRstr => {
+			header[0] = 0x24;
+			header[1] = 0x00;
+			header[2] = 0;
+			header[12..16].copy_from_slice(b"RSTR");
+			// Plausible timestamps a careless client could read as a measurement.
+			write_ntp_timestamp(&mut header[32..40], 3_900_000_000.0);
+			write_ntp_timestamp(&mut header[40..48], 3_900_000_000.0);
 			header.to_vec()
 		}
 		NtpPlan::KissDenyWrongOrigin => {
