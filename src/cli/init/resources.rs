@@ -101,13 +101,11 @@ pub(crate) fn problems(
 }
 
 /// Whether `value` is a memory size podup and Podman read the same way: a
-/// whole number above zero and one of the units `k`, `m` or `g`.
+/// whole number above zero and one of the units `k`, `m` or `g`. The shape is
+/// stated once in [`crate::util::validation::is_memory_size_shape`]; reading
+/// the number out of it is
+/// [`crate::smtp::memory_fit::parse_memory`], which is what says whether a
+/// value of the right shape still fits in 64 bits.
 fn is_memory(value: &str) -> bool {
-	let Some((digits, unit)) = value.split_at_checked(value.len().saturating_sub(1)) else {
-		return false;
-	};
-	matches!(unit, "k" | "K" | "m" | "M" | "g" | "G")
-		&& !digits.is_empty()
-		&& digits.bytes().all(|byte| byte.is_ascii_digit())
-		&& digits.bytes().any(|byte| byte != b'0')
+	crate::util::validation::is_memory_size_shape(value)
 }

@@ -13,6 +13,7 @@
 //! A-label, and re-validates the wire shape on the result. Any caller that
 //! stores a domain stores the returned string verbatim.
 
+use crate::util::validation::{MAX_DOMAIN, MAX_LABEL};
 use unicode_security::confusable_detection::skeleton;
 use unicode_security::mixed_script::MixedScript;
 
@@ -28,14 +29,6 @@ pub enum DomainError {
 	Confusable,
 }
 
-/// Maximum presentation-form length (RFC 1035 section 2.3.4: the wire form is
-/// at most 255 octets, the trailing root label takes one, and each label
-/// carries a length byte; the longest dot-separated presentation string is
-/// therefore 253 octets).
-const MAX_DOMAIN: usize = 253;
-/// Per-label length cap (RFC 1035 section 2.3.4).
-const MAX_LABEL: usize = 63;
-
 /// Normalise a domain to its lowercase ASCII A-label form, rejecting names
 /// that cannot resolve and names built to look like another one.
 ///
@@ -46,9 +39,9 @@ const MAX_LABEL: usize = 63;
 /// 3. convert to ASCII with UTS 46 (`idna::domain_to_ascii_strict`,
 ///    which also applies DNS length checks and the STD3 hyphen rules);
 /// 4. lowercase again (cheap, and it makes the guarantee local);
-/// 5. apply the DNS shape rules on the result: total length at most 253,
-///    at least one dot, every label 1..=63 of `[a-z0-9-]` not starting or
-///    ending with `-`.
+/// 5. apply the DNS shape rules on the result: total length at most
+///    [`MAX_DOMAIN`], at least one dot, every label 1..=[`MAX_LABEL`] of
+///    `[a-z0-9-]` not starting or ending with `-`.
 pub fn normalize(raw: &str) -> Result<String, DomainError> {
 	if raw.is_empty()
 		|| raw.bytes().any(|b| b.is_ascii_whitespace())

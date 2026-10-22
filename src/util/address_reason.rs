@@ -9,20 +9,11 @@
 //! 500-character paste does not come back as a 500-character error.
 
 use crate::smtp::address::Address;
+use crate::util::validation::{MAX_ADDRESS, MAX_DOMAIN, MAX_LABEL, MAX_LOCAL_PART, is_atext};
 
 /// How many characters of a refused value a message quotes before cutting
 /// it with an ellipsis.
 pub const ECHO_LIMIT: usize = 40;
-
-/// RFC 5321 section 4.5.3.1.3: the longest path is 256 octets including the
-/// angle brackets, so 254 for the address itself.
-const MAX_ADDRESS: usize = 254;
-/// RFC 5321 section 4.5.3.1.1.
-const MAX_LOCAL_PART: usize = 64;
-/// RFC 1035 section 2.3.4, presentation form without the root dot.
-const MAX_DOMAIN: usize = 253;
-/// RFC 1035 section 2.3.4.
-const MAX_LABEL: usize = 63;
 
 /// Parse an address, or say why it is not one.
 pub fn parse(raw: &str) -> Result<Address, String> {
@@ -98,11 +89,8 @@ fn local_part_reason(local: &str) -> Option<String> {
 	if local.contains("..") {
 		return Some("consecutive dots in the local part".to_string());
 	}
-	let allowed = |c: char| {
-		c.is_ascii_alphanumeric()
-			|| "!#$%&'*+-/=?^_`{|}~.".contains(c)
-			|| (!c.is_ascii() && !c.is_control())
-	};
+	// `atext` plus the dot that separates the atoms of a dot-string.
+	let allowed = |c: char| is_atext(c) || c == '.';
 	local
 		.chars()
 		.find(|c| !allowed(*c))

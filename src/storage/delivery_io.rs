@@ -58,7 +58,11 @@ pub(super) fn sieve_mailbox(name: &str) -> Option<String> {
 	// The name is what a script built, perhaps from a header a sender wrote:
 	// not longer than a person would name a folder, and nothing that changes
 	// the direction text is shown in.
-	if name.chars().count() > MAX_FOLDER_NAME_CHARS || name.chars().any(is_bidi_control) {
+	if name.chars().count() > MAX_FOLDER_NAME_CHARS
+		|| name
+			.chars()
+			.any(crate::util::validation::is_bidi_or_invisible)
+	{
 		return None;
 	}
 	let stored = crate::util::mutf7::encode(name);
@@ -70,13 +74,6 @@ pub(super) fn sieve_mailbox(name: &str) -> Option<String> {
 
 /// The longest folder name, in characters, a Sieve `fileinto` may use.
 const MAX_FOLDER_NAME_CHARS: usize = 128;
-
-/// The characters that reorder or isolate the text around them (Unicode
-/// bidirectional formatting): in a folder name they make one look like
-/// another.
-fn is_bidi_control(c: char) -> bool {
-	matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-}
 
 /// The most levels a folder made by a Sieve `fileinto` may have.
 const MAX_AUTO_DEPTH: usize = 4;

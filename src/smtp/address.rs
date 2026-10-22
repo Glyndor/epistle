@@ -5,11 +5,7 @@
 //! mail rarely needs them. Strictness here is a feature.
 
 use crate::domain::{DomainError, normalize};
-
-/// Maximum total address length (RFC 5321 section 4.5.3.1.3).
-const MAX_ADDRESS: usize = 254;
-/// Maximum local-part length (RFC 5321 section 4.5.3.1.1).
-const MAX_LOCAL_PART: usize = 64;
+use crate::util::validation::{MAX_ADDRESS, MAX_LOCAL_PART, is_atext};
 
 /// A validated `local-part@domain` address.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,20 +75,15 @@ impl std::fmt::Display for Address {
 	}
 }
 
-/// Dot-string per RFC 5321: atoms separated by single dots.
+/// Dot-string per RFC 5321: atoms separated by single dots. Each atom is
+/// `atext` ([`crate::util::validation::ATEXT`]) and, under SMTPUTF8
+/// (RFC 6531), any non-control non-ASCII character.
 fn validate_local_part(local_part: &str) -> Result<(), AddressError> {
 	if local_part.is_empty() || local_part.len() > MAX_LOCAL_PART {
 		return Err(AddressError::InvalidLocalPart);
 	}
-	// Internationalized local parts (RFC 6531/SMTPUTF8): atom characters plus
-	// any non-ASCII, non-control UTF-8 (control characters stay forbidden).
-	let valid_atom_char = |c: char| {
-		c.is_ascii_alphanumeric()
-			|| "!#$%&'*+-/=?^_`{|}~".contains(c)
-			|| (!c.is_ascii() && !c.is_control())
-	};
 	for atom in local_part.split('.') {
-		if atom.is_empty() || !atom.chars().all(valid_atom_char) {
+		if atom.is_empty() || !atom.chars().all(is_atext) {
 			return Err(AddressError::InvalidLocalPart);
 		}
 	}
