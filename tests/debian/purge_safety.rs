@@ -8,9 +8,7 @@
 //!
 //! These tests run the purge case with `loginctl`, `usermod`, `deluser` and `id`
 //! stubbed and every path pointed at a fixture tree. The writers check reads
-//! the real /proc, so the account under test is either a uid nothing runs as
-//! (nothing to stop) or the uid of the test process itself (a writer that will
-//! not go away).
+//! a private proc fixture, so no host process is signalled by these tests.
 
 use super::{read, stubs::write_stub};
 use std::fs;
@@ -18,14 +16,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A uid no process on this machine runs as, so the writers check finds
-/// nothing and the purge proceeds.
-const UNUSED_UID: &str = "4294967";
+/// A system UID with no process in the private proc fixture.
+const UNUSED_UID: &str = "901";
 
 /// How the account resolves and how each command behaves in one run.
 struct Fixture {
-	/// `id -u glyndor-epistle` output. The test's own uid means "a writer is
-	/// running", which is what the refusal has to catch.
+	/// `id -u glyndor-epistle` output. UID 900 has a simulated writer.
 	uid: &'static str,
 	/// `deluser` exit code.
 	deluser_exit: i32,
@@ -77,7 +73,24 @@ fn purge(fixture: Fixture) -> Outcome {
 	let bin = root.join("bin");
 	fs::create_dir(&bin).unwrap();
 	let calls = root.join("calls.log");
+	fs::create_dir_all(root.join("proc/123")).unwrap();
+	if fixture.uid == own_uid() {
+		fs::write(root.join("proc/123/status"), "Uid:\t900\t900\t900\t900\n").unwrap();
+	}
 	for (name, body) in [
+		(
+			"getent",
+			format!(
+				"echo 'glyndor-epistle:x:{}:900::{}:/usr/sbin/nologin'",
+				fixture.uid,
+				state.display()
+			),
+		),
+		(
+			"systemctl",
+			"printf 'systemctl %s\\n' \"$*\" >> \"$CALLS_LOG\"".to_owned(),
+		),
+		("start-stop-daemon", "exit 0".to_owned()),
 		("id", format!("printf '%s\\n' {}", fixture.uid)),
 		(
 			"loginctl",
@@ -106,6 +119,8 @@ fn purge(fixture: Fixture) -> Outcome {
 	for (from, to) in [
 		("/var/lib/glyndor/epistle", state.to_str().unwrap()),
 		("/etc/epistle", config.to_str().unwrap()),
+		("/etc/glyndor", root.join("legacy-parent").to_str().unwrap()),
+		("/proc/", root.join("proc/").to_str().unwrap()),
 		("/run/systemd/system", systemd.to_str().unwrap()),
 		("/etc/subuid", root.join("subuid").to_str().unwrap()),
 		("/etc/subgid", root.join("subgid").to_str().unwrap()),
@@ -139,12 +154,9 @@ fn purge(fixture: Fixture) -> Outcome {
 	}
 }
 
-/// The uid of this process, which is by construction a uid with a running
-/// process behind it.
+/// The system UID with a writer in the private proc fixture.
 fn own_uid() -> &'static str {
-	let printed = String::from_utf8_lossy(&Command::new("id").arg("-u").output().unwrap().stdout)
-		.into_owned();
-	Box::leak(printed.trim().to_owned().into_boxed_str())
+	"900"
 }
 
 /// Assert the fixture tree still carries the operator's mail.
@@ -219,6 +231,10 @@ fn purge_stops_the_account_before_it_removes_the_footprint() {
 	assert_eq!(
 		lines,
 		vec![
+			"systemctl stop epistle.socket",
+			"systemctl disable epistle.socket",
+			"systemctl stop epistle.service",
+			"systemctl disable epistle.service",
 			"loginctl disable-linger glyndor-epistle",
 			"loginctl terminate-user glyndor-epistle",
 			"deluser --system --quiet glyndor-epistle",
@@ -278,6 +294,7 @@ fn purge_completes_when_the_account_is_already_gone() {
 	for (from, to) in [
 		("/var/lib/glyndor/epistle", state.to_str().unwrap()),
 		("/etc/epistle", root.join("config").to_str().unwrap()),
+		("/etc/glyndor", root.join("legacy-parent").to_str().unwrap()),
 		(
 			"/run/systemd/system",
 			root.join("no-systemd").to_str().unwrap(),

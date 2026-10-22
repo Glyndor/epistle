@@ -106,7 +106,8 @@ fn run(writable: bool, sysctl_exit: i32, overrides: &[Override]) -> Run {
 
 	let postinst = read("debian/epistle.postinst");
 	let mut block = format!(
-		"{}\n{}\n{}",
+		"{}\n{}\n{}\n{}",
+		extract_function(&postinst, "epistle_read_sysctl"),
 		extract_function(&postinst, "epistle_admin_sysctl_value"),
 		extract_function(&postinst, "epistle_sysctl_masked"),
 		extract_block(&postinst, "# 5. The port floor", "# Only an enabled stack",),
@@ -117,6 +118,10 @@ fn run(writable: bool, sysctl_exit: i32, overrides: &[Override]) -> Run {
 		// absolute path it replaces, which is what lets the guard below tell
 		// "never rewritten" from "already rewritten".
 		("/run/sysctl.d", root.join("run-sysctl.d").to_str().unwrap()),
+		(
+			"/usr/lib/sysctl.d",
+			root.join("vendor-sysctl.d").to_str().unwrap(),
+		),
 		("/etc/sysctl.d", root.join("sysctl.d").to_str().unwrap()),
 		(
 			"/etc/sysctl.conf",
@@ -142,8 +147,14 @@ fn run(writable: bool, sysctl_exit: i32, overrides: &[Override]) -> Run {
 		.unwrap();
 	Run {
 		code: output.status.code(),
-		argv: std::fs::read_to_string(&log).unwrap_or_default(),
-		stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+		argv: std::fs::read_to_string(&log).unwrap_or_default().replace(
+			root.join("vendor-sysctl.d").to_str().unwrap(),
+			"/usr/lib/sysctl.d",
+		),
+		stderr: String::from_utf8_lossy(&output.stderr).replace(
+			root.join("vendor-sysctl.d").to_str().unwrap(),
+			"/usr/lib/sysctl.d",
+		),
 		root: root.to_str().unwrap().to_owned(),
 	}
 }

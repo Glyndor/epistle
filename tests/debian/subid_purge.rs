@@ -21,6 +21,7 @@ fn purge(subuid: &str, subgid: &str) -> String {
 	let bin = root.join("bin");
 	std::fs::create_dir(&bin).unwrap();
 	for (name, body) in [
+		("id", "exit 1"),
 		("loginctl", "exit 0"),
 		("deluser", "exit 0"),
 		("usermod", "printf '%s\\n' \"$@\" > \"$USERMOD_LOG\""),
@@ -35,6 +36,7 @@ fn purge(subuid: &str, subgid: &str) -> String {
 		("/var/lib/glyndor/epistle", "state"),
 		("/var/lib/epistle-rollback", "rollback"),
 		("/etc/epistle", "config"),
+		("/etc/glyndor", "legacy-parent"),
 		("/run/systemd/system", "no-systemd"),
 	] {
 		script = script.replace(from, root.join(to).to_str().unwrap());

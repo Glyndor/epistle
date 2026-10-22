@@ -415,3 +415,9 @@ mod preinst_mutants;
 
 #[path = "debian/purge_safety.rs"]
 mod purge_safety;
+
+#[path = "debian/configure_sysctl.rs"]
+mod configure_sysctl;
+
+#[path = "debian/purge_lifecycle.rs"]
+mod purge_lifecycle;

@@ -49,22 +49,33 @@ jobs:
             *) echo "::error::$TAG is not a release tag of the form vMAJOR.MINOR.PATCH"; exit 1 ;;
           esac
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The tag, not the ref that launched the workflow. On a dispatch
-          # the default checkout is the dispatch commit, so the version
-          # check, the changelog check and the audit below all read a
-          # different tree from the one the build jobs package.
-          ref: ${{ env.TAG }}
-          fetch-depth: 0
-
       - name: Resolve the commit this release names
         id: resolve
         run: |
           set -euo pipefail
-          commit="$(git rev-parse --verify "${TAG}^{commit}")"
+          git check-ref-format "refs/tags/$TAG"
+          tag_repo="$(mktemp -d "$RUNNER_TEMP/release-tag.XXXXXX")"
+          trap 'rm -rf "$tag_repo"' EXIT
+          git -C "$tag_repo" init --quiet
+          git -C "$tag_repo" fetch --no-tags --depth=1 \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          commit="$(git -C "$tag_repo" rev-parse --verify "refs/tags/${TAG}^{commit}")"
           echo "Releasing ${TAG} at ${commit}"
           echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Verify the same immutable commit that every build receives.
+          ref: ${{ steps.resolve.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Check the verified checkout
+        env:
+          RELEASE_COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 
       - name: Install toolchain
         run: |
@@ -86,10 +97,12 @@ jobs:
           fi
 
       - name: Tagged commit is on origin/main
+        env:
+          RELEASE_COMMIT: ${{ steps.resolve.outputs.commit }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "${TAG}^{commit}" origin/main; then
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
             echo "::error::$TAG is not reachable from origin/main; only promoted code is released"
             exit 1
           fi

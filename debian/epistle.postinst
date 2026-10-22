@@ -79,24 +79,66 @@ epistle_login_def() {
 		END { print (value == "" ? def : value) }'
 }
 
-# Print the value the operator's own sysctl configuration gives key $1, or
-# nothing when none of those files mentions it. The files are read in the
-# order sysctl itself uses, so the last one that names the key is the one that
-# wins, which is what `sysctl --system` would apply. The package's own file
-# lives in /usr/lib/sysctl.d, the lowest precedence location, so any file here
-# overrides it.
+# Read only regular, bounded configuration. A nonblocking open and a deadline
+# also cover a file replaced after the metadata check. Ignore unusable input
+# with a warning rather than blocking or failing package configuration.
+epistle_read_sysctl() {
+	LC_ALL=C
+	export LC_ALL
+	sysctl_file=$1
+	if [ ! -f "$sysctl_file" ] || [ ! -r "$sysctl_file" ] ||
+		! sysctl_size=$(timeout -k 1 2 stat -Lc %s -- "$sysctl_file" 2>/dev/null) ||
+		[ "$sysctl_size" -gt 65536 ]; then
+		echo "epistle: ignoring unusable sysctl configuration $sysctl_file" >&2
+		return 0
+	fi
+	if ! sysctl_text=$(timeout -k 1 2 dd if="$sysctl_file" iflag=nonblock,count_bytes count=65537 status=none 2>/dev/null) ||
+		[ "${#sysctl_text}" -gt 65536 ]; then
+		echo "epistle: ignoring unreadable or oversized sysctl configuration $sysctl_file" >&2
+		return 0
+	fi
+	printf '%s\n' "$sysctl_text"
+}
+
+# Select each basename from the highest priority directory, then read the
+# selected files in global filename order. procps reads sysctl.conf last.
+# Skip only our own vendor file when looking for an administrative choice.
 epistle_admin_sysctl_value() {
-	cat -- /etc/sysctl.conf /run/sysctl.d/* /etc/sysctl.d/* 2>/dev/null | awk -F= -v key="$1" '
-		/^[[:space:]]*#/ { next }
-		{
+	(
+		for sysctl_dir in /etc/sysctl.d /run/sysctl.d /usr/lib/sysctl.d; do
+			for sysctl_path in "$sysctl_dir"/*.conf; do
+				[ -e "$sysctl_path" ] || [ -L "$sysctl_path" ] || continue
+				printf '%s\n' "${sysctl_path##*/}"
+			done
+		done | LC_ALL=C sort -u | while IFS= read -r sysctl_name; do
+			for sysctl_dir in /etc/sysctl.d /run/sysctl.d /usr/lib/sysctl.d; do
+				sysctl_path=$sysctl_dir/$sysctl_name
+				[ -e "$sysctl_path" ] || [ -L "$sysctl_path" ] || continue
+				if [ "$sysctl_path" != /usr/lib/sysctl.d/30-glyndor-epistle.conf ] &&
+					[ "$(readlink -f -- "$sysctl_path" 2>/dev/null)" != /dev/null ]; then
+					epistle_read_sysctl "$sysctl_path"
+				fi
+				break
+			done
+		done
+		if [ -e /etc/sysctl.conf ] || [ -L /etc/sysctl.conf ]; then
+			epistle_read_sysctl /etc/sysctl.conf
+		fi
+	) | awk -F= '
+		/^[[:space:]]*[#;]/ { next }
+		NF >= 2 {
 			name = $1
 			value = $2
-			gsub(/^[[:space:]]+/, "", name)
-			gsub(/[[:space:]]+$/, "", name)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+			sub(/^-/, "", name)
+			gsub(/\//, ".", name)
 			gsub(/[[:space:]]/, "", value)
-			if (name == key) chosen = value
-		}
-		END { if (chosen != "") print chosen }'
+			if (name != "" && value != "") print name, value
+		}' | while read -r sysctl_key sysctl_value; do
+		# sysctl accepts glob keys as well as exact names.
+		# shellcheck disable=SC2254
+		case "$1" in $sysctl_key) printf '%s\n' "$sysctl_value" ;; esac
+	done | tail -n 1
 }
 
 # Succeed when a file in the operator's directories replaces the package file
@@ -105,7 +147,9 @@ epistle_admin_sysctl_value() {
 # this package must not apply the file that is no longer in effect.
 epistle_sysctl_masked() {
 	[ -e /run/sysctl.d/30-glyndor-epistle.conf ] ||
-		[ -e /etc/sysctl.d/30-glyndor-epistle.conf ]
+		[ -L /run/sysctl.d/30-glyndor-epistle.conf ] ||
+		[ -e /etc/sysctl.d/30-glyndor-epistle.conf ] ||
+		[ -L /etc/sysctl.d/30-glyndor-epistle.conf ]
 }
 
 # Print "<uid start> <gid start>" for a new block of $4 subordinate ids

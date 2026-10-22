@@ -144,44 +144,47 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 		verify_steps.iter().map(Step::name).collect::<Vec<_>>()
 	);
 	let reference = checkouts[0].key("ref").unwrap_or_default();
-	assert!(
-		reference.contains("env.TAG"),
-		"verify must check out the tag it was asked to release, not the ref that launched the \
-		 workflow: on a dispatch those are two different trees. Its checkout reads ref: \
-		 {reference:?}"
+	assert_eq!(
+		reference, "${{ steps.resolve.outputs.commit }}",
+		"verify must inspect the resolved SHA, just like every build"
 	);
-
-	// The merge-base check also names `${TAG}^{commit}`; what makes a step
-	// the resolver is that it turns that into a value other jobs read.
 	let resolvers: Vec<&Step> = verify_steps
 		.iter()
-		.filter(|step| {
-			let resolves = step
-				.lines
-				.iter()
-				.any(|line| line.contains("${TAG}^{commit}"));
-			let publishes = step.lines.iter().any(|line| line.contains("GITHUB_OUTPUT"));
-			resolves && publishes
-		})
+		.filter(|step| step.key("id") == Some("resolve"))
 		.collect();
-	assert_eq!(
-		resolvers.len(),
-		1,
-		"exactly one step resolves the tag to a commit, and every build job takes its output. \
-		 The steps were: {:?}",
-		verify_steps.iter().map(Step::name).collect::<Vec<_>>()
-	);
+	assert_eq!(resolvers.len(), 1, "resolve the tag once");
 	let resolver = resolvers[0];
-	let id = resolver.key("id").unwrap_or_default();
+	let id = resolver.key("id").unwrap();
+	let resolve_index = verify_steps
+		.iter()
+		.position(|s| s.key("id") == Some("resolve"))
+		.unwrap();
+	let checkout_index = verify_steps
+		.iter()
+		.position(|s| s.uses().is_some_and(|u| u.starts_with("actions/checkout")))
+		.unwrap();
 	assert!(
-		!id.is_empty(),
-		"the resolving step needs an `id:` for its output to be reachable"
+		resolve_index < checkout_index,
+		"resolve before checking out content"
 	);
+
+	let guard_index = verify_steps
+		.iter()
+		.position(|s| s.name() == "Check the verified checkout")
+		.unwrap();
+	let first_content_check = verify_steps
+		.iter()
+		.position(|s| s.name() == "Tag matches the crate version")
+		.unwrap();
 	assert!(
-		resolver.lines.iter().any(|line| line.contains("commit=")),
-		"the resolving step must write the commit to $GITHUB_OUTPUT: {:?}",
-		resolver.lines
+		checkout_index < guard_index && guard_index < first_content_check,
+		"check HEAD before reading release content"
 	);
+	assert_eq!(
+		verify_steps[guard_index].key("RELEASE_COMMIT"),
+		Some("${{ steps.resolve.outputs.commit }}")
+	);
+
 	let outputs = job(&jobs, "verify");
 	assert!(
 		outputs.contains(&format!("commit: ${{{{ steps.{id}.outputs.commit }}}}")),
@@ -224,7 +227,7 @@ fn the_release_tag_is_validated_before_it_reaches_a_ref() {
 	let steps = steps(job(&jobs(&workflow()), "verify"));
 	let validation = steps
 		.iter()
-		.find(|step| step.lines.iter().any(|line| line.contains("case \"$TAG\"")))
+		.position(|step| step.lines.iter().any(|line| line.contains("case \"$TAG\"")))
 		.unwrap_or_else(|| {
 			panic!(
 				"the dispatch tag is free text and every later step reads it as a ref, so verify \
@@ -233,9 +236,23 @@ fn the_release_tag_is_validated_before_it_reaches_a_ref() {
 			)
 		});
 	assert!(
-		validation.lines.iter().any(|line| line.contains("v[0-9]*")),
+		steps[validation]
+			.lines
+			.iter()
+			.any(|line| line.contains("v[0-9]*")),
 		"the validation must state the shape a release tag has, or it accepts anything: {:?}",
-		validation.lines
+		steps[validation].lines
+	);
+	let first_ref = steps
+		.iter()
+		.position(|s| {
+			s.uses().is_some_and(|u| u.starts_with("actions/checkout"))
+				|| s.key("id") == Some("resolve")
+		})
+		.unwrap();
+	assert!(
+		validation < first_ref,
+		"validate before the first ref operation"
 	);
 }
 
@@ -277,3 +294,6 @@ fn images_only_needs_a_published_release_instead_of_forbidding_one() {
 		required.lines
 	);
 }
+
+#[path = "workflows/release_identity_exec.rs"]
+mod release_identity_exec;
