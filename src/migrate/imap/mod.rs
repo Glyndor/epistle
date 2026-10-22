@@ -13,9 +13,11 @@ mod dedupe;
 mod durability;
 mod folders;
 mod insecure;
+mod ledger;
 mod metadata;
 mod parse;
 mod state;
+mod state_files;
 mod token;
 mod transport;
 mod wire;
@@ -105,7 +107,7 @@ pub(crate) struct FolderReport {
 	pub(crate) remote: String,
 	/// The local mailbox.
 	pub(crate) local: String,
-	/// Messages found to copy this run.
+	/// Messages the source listed for this run, confirmed ones included.
 	pub(crate) messages: u64,
 	/// Their total size as the server reported it.
 	pub(crate) planned_bytes: u64,
@@ -117,6 +119,9 @@ pub(crate) struct FolderReport {
 	pub(crate) deleted: u64,
 	/// Messages already stored locally, not stored again.
 	pub(crate) duplicates: u64,
+	/// Messages an earlier run already confirmed for this folder, not
+	/// downloaded again.
+	pub(crate) confirmed: u64,
 	/// Messages over the local size limit, not carried over.
 	pub(crate) too_large: u64,
 	/// Messages that disappeared between listing and fetching.
@@ -341,3 +346,7 @@ mod run_tests_security;
 #[cfg(test)]
 #[path = "run_tests_memory.rs"]
 mod run_tests_memory;
+
+#[cfg(test)]
+#[path = "ledger_resume_tests.rs"]
+mod ledger_resume_tests;

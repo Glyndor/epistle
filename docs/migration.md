@@ -111,10 +111,16 @@ The local account must exist. The remote password comes from `--password-file`
   the local size limit (25 MiB); the summary counts both.
 - **Resuming.** Progress is kept per local account, remote user and host, and
   remote folder, in `data_dir/migrate/<account>/`. A run copies only messages
-  newer than the last one copied. If the old server renumbers a folder (its
-  UIDVALIDITY changes), the folder is read again and each message is checked
-  against the mailbox by Message-ID and size, so nothing is stored twice. Keep
-  `--host` and `--user` the same between runs: they name the progress files.
+  newer than the last one copied. After an interruption the folder is replayed
+  from its first UID, but only the messages a previous run confirmed are
+  downloaded again: a ledger next to the progress file records the identity of
+  every confirmed message, and a replay skips them and matches only the rest
+  against the mailbox. A message you deleted or moved while the run was
+  interrupted is not brought back. If the old server renumbers a folder (its
+  UIDVALIDITY changes), the ledger is discarded and the folder is read again,
+  with each message checked against the mailbox by Message-ID and size, so
+  nothing is stored twice. Keep `--host` and `--user` the same between runs:
+  they name the progress files and the ledgers.
 - **Limits.** The run stops with an error when the next message would exceed
   the account's quota; raise it and run again to continue.
 - **Output.** One line per folder with messages, bytes and rate; `--dry-run`

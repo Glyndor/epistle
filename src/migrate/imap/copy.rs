@@ -1,18 +1,20 @@
 //! Copying one remote folder into one local mailbox, a batch at a time.
 //!
 //! The order of a batch is: fetch it whole, mark the folder's state as
-//! "batch in progress", store the messages in UID order, then record the
-//! last UID handled. A server that fails mid-batch therefore leaves nothing
-//! of that batch stored and the state untouched. A local storage failure or
-//! an interrupted write leaves the in-progress mark. Recovery replays the
-//! confirmed prefix before matching pending copies and stays active until
-//! the whole folder has been replayed.
+//! "batch in progress", store the messages in UID order, record what the batch
+//! confirmed in the folder's ledger, then record the last UID handled. A server
+//! that fails mid-batch therefore leaves nothing of that batch stored and the
+//! state untouched. A local storage failure or an interrupted write leaves the
+//! in-progress mark. Recovery replays the confirmed prefix, skipping what the
+//! ledger already confirms and matching the rest against pending copies, and
+//! stays active until the whole folder has been replayed.
 
 use std::time::Instant;
 
 use super::client::Client;
 use super::dedupe::{self, Index};
 use super::folders::Plan;
+use super::ledger::{self, Fingerprint};
 use super::parse::{Fetched, Listed};
 use super::state::{FolderState, StateDir};
 use super::{FolderReport, MigrateError, Progress, Settings, Target};
@@ -35,6 +37,13 @@ pub(super) async fn folder(
 	let local = local.as_str();
 	let examined = client.examine(&plan.remote).await?;
 	let saved = states.load(&plan.remote).map_err(MigrateError::State)?;
+	// What earlier runs already confirmed for this folder. It is the only
+	// record of a message that no longer is in the local mailbox, so it is
+	// never downloaded or stored again.
+	let mut ledger = states
+		.ledger(&plan.remote, examined.uid_validity, !settings.dry_run)
+		.map_err(MigrateError::State)?;
+	ledger::charge(&mut client.metadata)?;
 	let resumable = |state: &FolderState| {
 		examined.uid_validity != 0 && state.uid_validity == examined.uid_validity
 	};
@@ -133,7 +142,24 @@ pub(super) async fn folder(
 				initialized = true;
 				progress.folder_start(report);
 			}
-			for batch in batches(&listed, settings) {
+			// What the ledger confirms is not downloaded again, and consumes
+			// the local copy it would have matched, so that two identical
+			// messages in the source still end up as two here.
+			let mut pending = Vec::with_capacity(listed.len());
+			for item in listed.iter().copied() {
+				match ledger.fingerprint(item.uid).map_err(MigrateError::State)? {
+					Some(fingerprint) => {
+						report.confirmed += 1;
+						if let Some(index) = index.as_mut() {
+							index
+								.claim_fingerprint(&fingerprint)
+								.map_err(MigrateError::Storage)?;
+						}
+					}
+					None => pending.push(item),
+				}
+			}
+			for batch in batches(&pending, settings) {
 				let wanted: Vec<Listed> = batch
 					.iter()
 					.filter(|item| item.size <= settings.limits.literal as u64)
@@ -157,18 +183,26 @@ pub(super) async fn folder(
 				states
 					.save(&plan.remote, &state)
 					.map_err(MigrateError::State)?;
+				let mut settled: Vec<(u32, Fingerprint)> = Vec::new();
 				for item in fetched {
 					let uid = item.uid;
-					if let Err(error) = store(item, local, target, &mut index, report) {
-						state.in_progress = dedupe || matches!(error, MigrateError::Storage(_));
-						state.copied = state.copied.saturating_add(report.copied);
-						states
-							.save(&plan.remote, &state)
-							.map_err(MigrateError::State)?;
-						return Err(error);
+					match store(item, local, target, &mut index, report) {
+						Ok(Some(fingerprint)) => settled.push((uid, fingerprint)),
+						Ok(None) => {}
+						Err(error) => {
+							state.in_progress = dedupe || matches!(error, MigrateError::Storage(_));
+							state.copied = state.copied.saturating_add(report.copied);
+							states
+								.save(&plan.remote, &state)
+								.map_err(MigrateError::State)?;
+							return Err(error);
+						}
 					}
 					state.last_uid = uid;
 				}
+				// The messages of this batch are stored and synchronized, so
+				// record them before the checkpoint that confirms it.
+				ledger.confirm(&settled).map_err(MigrateError::State)?;
 				state.last_uid = state.last_uid.max(batch.last().map_or(0, |item| item.uid));
 				// Keep replay active across checkpoints until every old copy
 				// has been accounted for, including after another interruption.
@@ -210,17 +244,19 @@ pub(super) async fn folder(
 }
 
 /// Store one fetched message, unless it is marked for deletion or already
-/// stored. Refuses it when the account quota would be exceeded.
+/// stored. Refuses it when the account quota would be exceeded. Returns the
+/// identity fingerprint when the message settled as present locally, stored or
+/// already here, and `None` when it was left out.
 fn store(
 	item: Fetched,
 	local: &str,
 	target: &mut Target,
 	index: &mut Option<Index>,
 	report: &mut FolderReport,
-) -> Result<(), MigrateError> {
+) -> Result<Option<Fingerprint>, MigrateError> {
 	let Some(body) = item.body else {
 		report.vanished += 1;
-		return Ok(());
+		return Ok(None);
 	};
 	let mut flags = Vec::new();
 	for raw in &item.flags {
@@ -228,7 +264,7 @@ fn store(
 			// A message waiting to be expunged is not carried over.
 			Some(Flag::Deleted) => {
 				report.deleted += 1;
-				return Ok(());
+				return Ok(None);
 			}
 			Some(flag) => flags.push(flag),
 			// `\Recent` and unknown system flags cannot be set by a client.
@@ -241,13 +277,13 @@ fn store(
 		keywords += usize::from(flag.is_keyword());
 		!flag.is_keyword() || keywords <= crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE
 	});
+	let key = dedupe::key(&body);
+	let fingerprint = dedupe::fingerprint(&key);
 	if let Some(index) = index
-		&& index
-			.claim(&dedupe::key(&body))
-			.map_err(MigrateError::Storage)?
+		&& index.claim(&key).map_err(MigrateError::Storage)?
 	{
 		report.duplicates += 1;
-		return Ok(());
+		return Ok(Some(fingerprint));
 	}
 	let size = body.len() as u64;
 	if let Some(limit) = target.quota
@@ -275,7 +311,7 @@ fn store(
 	target.usage = target.usage.saturating_add(size);
 	report.copied += 1;
 	report.bytes += size;
-	Ok(())
+	Ok(Some(fingerprint))
 }
 
 /// Split `listed` into batches of at most `settings.batch_messages`

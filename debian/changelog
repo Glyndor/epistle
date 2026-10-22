@@ -15,6 +15,10 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Packaging and release checks: an upgrade leaves the port floor the operator
     configured alone, purge stops the service before it removes anything, and
     the audit and release workflows verify and build the commit they publish.
+  * migrate imap: a folder keeps a ledger of the messages it has confirmed, so a
+    run resumed after an interruption does not bring back a message the user
+    deleted or moved in the local mailbox, and an unreadable ledger stops the
+    run with a message instead of importing anything again.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

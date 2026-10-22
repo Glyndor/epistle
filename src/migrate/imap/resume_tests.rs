@@ -400,12 +400,8 @@ async fn message_durability_precedes_each_confirmed_checkpoint() {
 		.iter()
 		.position(|event| *event == "state-file")
 		.expect("state sync");
-	assert_eq!(
-		events[..first]
-			.iter()
-			.filter(|event| **event == "state-parent")
-			.count(),
-		2,
+	assert!(
+		events[first.saturating_sub(2)..first] == ["state-parent", "state-parent"],
 		"make both state directory entries durable before publishing state: {events:?}"
 	);
 	let positions: Vec<_> = events
@@ -431,6 +427,10 @@ async fn message_durability_precedes_each_confirmed_checkpoint() {
 		assert!(
 			events[position..checkpoint].contains(&"mailbox-parent"),
 			"persist the mailbox hierarchy before checkpointing"
+		);
+		assert!(
+			events[position..checkpoint].contains(&"ledger-file"),
+			"record what the batch confirmed before the checkpoint: {events:?}"
 		);
 	}
 }

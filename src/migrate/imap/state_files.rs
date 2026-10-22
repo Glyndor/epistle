@@ -107,7 +107,7 @@ pub(super) fn directory(root: &File, account: &str, create: bool) -> io::Result<
 			if result < 0 && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists {
 				return Err(io::Error::last_os_error());
 			}
-			super::super::durability::sync(&dir, "state-parent")?;
+			super::durability::sync(&dir, "state-parent")?;
 		}
 		dir = open_at(&dir, &child, libc::O_RDONLY | libc::O_DIRECTORY)?;
 		owned(&dir, true)?;
@@ -119,6 +119,15 @@ pub(super) fn directory(root: &File, account: &str, create: bool) -> io::Result<
 pub(super) fn read(dir: &File, path: &Path) -> io::Result<File> {
 	let child = name(path.file_name().ok_or(io::ErrorKind::InvalidInput)?)?;
 	let file = open_at(dir, &child, libc::O_RDONLY)?;
+	owned(&file, false)?;
+	Ok(file)
+}
+
+/// Open an existing regular state file for appending records, without
+/// following links.
+pub(super) fn appendable(dir: &File, path: &Path) -> io::Result<File> {
+	let child = name(path.file_name().ok_or(io::ErrorKind::InvalidInput)?)?;
+	let file = open_at(dir, &child, libc::O_RDWR)?;
 	owned(&file, false)?;
 	Ok(file)
 }
@@ -138,7 +147,14 @@ impl Drop for Temporary<'_> {
 }
 
 /// Replace state using an exclusive private temporary in the open directory.
-pub(super) fn replace(dir: &File, path: &Path, body: &[u8]) -> io::Result<()> {
+/// The two names the durability hooks see let the caller tell which file it is.
+pub(super) fn replace(
+	dir: &File,
+	path: &Path,
+	body: &[u8],
+	file_kind: &'static str,
+	dir_kind: &'static str,
+) -> io::Result<()> {
 	match read(dir, path) {
 		Ok(_) => {}
 		Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -156,7 +172,7 @@ pub(super) fn replace(dir: &File, path: &Path, body: &[u8]) -> io::Result<()> {
 	};
 	owned(&file, false)?;
 	file.write_all(body)?;
-	super::super::durability::sync(&file, "state-file")?;
+	super::durability::sync(&file, file_kind)?;
 	let child = name(path.file_name().ok_or(io::ErrorKind::InvalidInput)?)?;
 	// SAFETY: both names are live C strings relative to the same open directory.
 	let result = unsafe {
@@ -170,7 +186,7 @@ pub(super) fn replace(dir: &File, path: &Path, body: &[u8]) -> io::Result<()> {
 	if result < 0 {
 		return Err(io::Error::last_os_error());
 	}
-	super::super::durability::sync(dir, "state-directory")
+	super::durability::sync(dir, dir_kind)
 }
 
 #[cfg(test)]

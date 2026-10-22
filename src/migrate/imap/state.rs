@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::contained_child;
 
-#[path = "state_files.rs"]
-mod files;
+use super::ledger::Ledger;
+use super::state_files;
 
 /// The largest state file read back. A real one is under 300 bytes.
 const MAX_STATE_BYTES: u64 = 64 * 1024;
@@ -57,8 +57,8 @@ impl StateDir {
 		let account = AccountName::new(account)?;
 		let base = contained_child(data_dir, "migrate")?;
 		let dir = contained_child(&base, account.as_str())?;
-		let root = std::sync::Arc::new(files::root(data_dir)?);
-		match files::directory(&root, account.as_str(), false) {
+		let root = std::sync::Arc::new(state_files::root(data_dir)?);
+		match state_files::directory(&root, account.as_str(), false) {
 			Ok(_) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error),
@@ -72,6 +72,11 @@ impl StateDir {
 	}
 
 	fn path(&self, folder: &[u8]) -> std::io::Result<PathBuf> {
+		self.file(folder, "json")
+	}
+
+	/// The progress file of `folder`, or its ledger of confirmed messages.
+	fn file(&self, folder: &[u8], kind: &str) -> std::io::Result<PathBuf> {
 		let mut key = self.source.as_bytes().to_vec();
 		key.push(0);
 		key.extend_from_slice(folder);
@@ -81,7 +86,31 @@ impl StateDir {
 			.iter()
 			.map(|byte| format!("{byte:02x}"))
 			.collect();
-		contained_child(&self.dir, &format!("{hex}.json"))
+		contained_child(&self.dir, &format!("{hex}.{kind}"))
+	}
+
+	/// The ledger of confirmed messages of `folder`. It is created, appended
+	/// to and discarded only when `writable`.
+	pub(super) fn ledger(
+		&self,
+		folder: &[u8],
+		uid_validity: u32,
+		writable: bool,
+	) -> std::io::Result<Ledger> {
+		let path = self.file(folder, "ledger")?;
+		super::ledger::open(
+			self.root.as_ref(),
+			&self.account,
+			path,
+			uid_validity,
+			writable,
+		)
+	}
+
+	/// Where the ledger of `folder` is kept, for a test that reads it.
+	#[cfg(test)]
+	pub(super) fn ledger_path(&self, folder: &[u8]) -> std::io::Result<PathBuf> {
+		self.file(folder, "ledger")
 	}
 
 	/// The saved progress of `folder`, `None` when it was never copied. A
@@ -89,8 +118,8 @@ impl StateDir {
 	/// would copy everything again.
 	pub(crate) fn load(&self, folder: &[u8]) -> std::io::Result<Option<FolderState>> {
 		let path = self.path(folder)?;
-		let file = match files::directory(&self.root, &self.account, false)
-			.and_then(|dir| files::read(&dir, &path))
+		let file = match state_files::directory(&self.root, &self.account, false)
+			.and_then(|dir| state_files::read(&dir, &path))
 		{
 			Ok(file) => file,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -116,10 +145,10 @@ impl StateDir {
 
 	/// Replace the saved progress of `folder` atomically.
 	pub(crate) fn save(&self, folder: &[u8], state: &FolderState) -> std::io::Result<()> {
-		let dir = files::directory(&self.root, &self.account, true)?;
+		let dir = state_files::directory(&self.root, &self.account, true)?;
 		let path = self.path(folder)?;
 		let body = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		files::replace(&dir, &path, &body)
+		state_files::replace(&dir, &path, &body, "state-file", "state-directory")
 	}
 }
 
@@ -129,5 +158,5 @@ mod tests;
 
 /// Open disposable recovery storage below the validated data directory.
 pub(super) fn scratch(data_dir: &Path) -> std::io::Result<std::fs::File> {
-	files::scratch(&files::root(data_dir)?)
+	state_files::scratch(&state_files::root(data_dir)?)
 }
