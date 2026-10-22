@@ -136,7 +136,7 @@ fn audited_reports(lockfile: &str) -> Vec<String> {
 	fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
 	let block = extract_run_block(&extract_step(&reusable(), "extra lockfiles"));
 	let log = root.join("cargo.log");
-	let output = Command::new("/bin/sh")
+	let output = Command::new("bash")
 		.args(["-c", &block])
 		.current_dir(root)
 		.env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
