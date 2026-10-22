@@ -50,27 +50,50 @@ fn open_at(dir: &File, child: &CString, flags: i32) -> io::Result<File> {
 	Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-/// Walk the configured root one component at a time, refusing links even in parents.
+/// Resolve parent links once, then open the root without following links.
 pub(super) fn root(path: &Path) -> io::Result<File> {
-	let mut dir = std::fs::OpenOptions::new()
-		.read(true)
-		.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
-		.open(if path.is_absolute() { "/" } else { "." })?;
-	for component in path.components() {
-		match component {
-			Component::RootDir | Component::CurDir => {}
-			Component::Normal(child) => {
+	let open = || -> io::Result<File> {
+		if path
+			.components()
+			.any(|part| matches!(part, Component::ParentDir))
+		{
+			return Err(io::Error::other(
+				"migration root must not contain parent components",
+			));
+		}
+		// Components remove trailing separators and dots before checking the final name.
+		let normalized: std::path::PathBuf = path.components().collect();
+		if std::fs::symlink_metadata(&normalized)?
+			.file_type()
+			.is_symlink()
+		{
+			return Err(io::Error::other(
+				"migration data_dir must not be a symbolic link",
+			));
+		}
+		// Resolve parents, keeping the final name for the O_NOFOLLOW open below.
+		let resolved = match normalized.file_name() {
+			Some(child) => normalized
+				.parent()
+				.filter(|parent| !parent.as_os_str().is_empty())
+				.unwrap_or(Path::new("."))
+				.canonicalize()?
+				.join(child),
+			None => normalized.canonicalize()?,
+		};
+		let mut dir = std::fs::OpenOptions::new()
+			.read(true)
+			.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+			.open("/")?;
+		for component in resolved.components() {
+			if let Component::Normal(child) = component {
 				dir = open_at(&dir, &name(child)?, libc::O_RDONLY | libc::O_DIRECTORY)?;
 			}
-			_ => {
-				return Err(io::Error::other(
-					"migration root must not contain parent components",
-				));
-			}
 		}
-	}
-	owned(&dir, true)?;
-	Ok(dir)
+		owned(&dir, true)?;
+		Ok(dir)
+	};
+	open().map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", path.display())))
 }
 
 /// Open every state directory without following links. Create private children only for a save.

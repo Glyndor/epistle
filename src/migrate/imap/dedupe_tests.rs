@@ -143,10 +143,20 @@ fn recovery_accepts_seventy_thousand_messages_with_bounded_metadata() {
 	let id = crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], b"a", &crypto)
 		.expect("message");
 	let mailbox = crate::imap::mailbox::mailbox_dir(dir.path(), "alice", "INBOX").unwrap();
-	let first = mailbox.join(format!("{id}.eml"));
-	for _ in 1..70_000 {
+	let mut source = mailbox.join(format!("{id}.eml"));
+	for entry in 1..70_000 {
+		// A file system caps the links to one file (about 65000 on ext4), so a
+		// new source is made every 30000 entries instead of linking one file
+		// 70000 times, which fails on the file system of some runners.
+		if entry % 30_000 == 0 {
+			let next = mailbox.join(format!("{}.eml", uuid::Uuid::now_v7()));
+			std::fs::copy(&source, &next).expect("new source");
+			source = next;
+			// The copy is itself one of the 70000 entries.
+			continue;
+		}
 		std::fs::hard_link(
-			&first,
+			&source,
 			mailbox.join(format!("{}.eml", uuid::Uuid::now_v7())),
 		)
 		.expect("message entry");

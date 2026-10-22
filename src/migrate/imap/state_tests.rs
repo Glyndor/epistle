@@ -178,14 +178,14 @@ fn state_files_must_be_regular_single_link_and_size_bounded() {
 }
 
 #[test]
-fn root_components_refuse_links_even_with_trailing_separators() {
+fn data_dir_itself_refuses_links_even_with_trailing_separators() {
 	use std::os::unix::fs::symlink;
 	let dir = tempfile::tempdir().expect("dir");
 	let outside = tempfile::tempdir().expect("outside");
 	let link = dir.path().join("link");
 	symlink(outside.path(), &link).expect("link");
 	std::fs::create_dir(outside.path().join("child")).expect("child");
-	for suffix in ["/", "/.", "/child"] {
+	for suffix in ["", "/", "/."] {
 		let root = PathBuf::from(format!("{}{suffix}", link.display()));
 		assert!(
 			StateDir::open(&root, "alice", "source").is_err(),
@@ -220,4 +220,34 @@ fn state_access_keeps_the_opened_root_after_its_name_is_replaced() {
 	);
 	let original = StateDir::open(&moved, "alice", "source").expect("original");
 	assert_eq!(original.load(b"INBOX").expect("load"), Some(state(1)));
+}
+
+#[test]
+fn a_linked_parent_of_data_dir_allows_state_and_scratch_access() {
+	let dir = tempfile::tempdir().unwrap();
+	let real = dir.path().join("real");
+	std::fs::create_dir_all(real.join("data")).unwrap();
+	let link = dir.path().join("link");
+	std::os::unix::fs::symlink(&real, &link).unwrap();
+	let data = link.join("data");
+	let result = StateDir::open(&data, "alice", "source");
+	assert!(result.is_ok(), "allow a linked parent: {result:?}");
+	let states = result.unwrap();
+	states.save(b"INBOX", &state(2)).unwrap();
+	assert_eq!(states.load(b"INBOX").unwrap(), Some(state(2)));
+	assert!(scratch(&data).is_ok(), "recovery uses the same root policy");
+}
+
+#[test]
+fn a_rejected_data_dir_names_the_path_and_reason() {
+	let dir = tempfile::tempdir().unwrap();
+	let link = dir.path().join("link");
+	std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+	let error = StateDir::open(&link, "alice", "source")
+		.unwrap_err()
+		.to_string();
+	assert!(
+		error.contains(&link.display().to_string()) && error.contains("symbolic link"),
+		"actionable root error: {error}"
+	);
 }

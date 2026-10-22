@@ -56,6 +56,8 @@ pub(crate) struct Target {
 	pub(crate) quota: Option<u64>,
 	/// Bytes the account already stores; grows as messages are copied.
 	pub(crate) usage: u64,
+	/// Maximum decoded size of an existing local message during recovery.
+	pub(crate) max_message_size: usize,
 }
 
 /// How the copy runs.

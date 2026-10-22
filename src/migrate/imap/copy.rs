@@ -63,13 +63,17 @@ pub(super) async fn folder(
 	let mut initialized = false;
 	let mut windows = 0u64;
 	let mut width = 10_000u32;
+	let mut tail = false;
 	let window_limit = 32 * (u64::from(examined.exists) + 1);
 	loop {
 		let to = examined
 			.uid_next
 			.checked_sub(1)
+			.filter(|_| !tail)
 			.map(|last| from.saturating_add(width - 1).min(last));
-		let listed = if examined.exists == 0 || to.is_some_and(|last| from > last) {
+		let listed = if (examined.exists == 0 && examined.uid_next != 0)
+			|| to.is_some_and(|last| from > last)
+		{
 			Vec::new()
 		} else {
 			if windows >= window_limit {
@@ -82,12 +86,22 @@ pub(super) async fn folder(
 				.list_uids(from, to, (examined.exists as usize).saturating_add(16))
 				.await?
 		};
-		if report.messages.saturating_add(listed.len() as u64) > u64::from(examined.exists) {
+		let count = report.messages.saturating_add(listed.len() as u64);
+		let allowance = if examined.uid_next == 0 { 16 } else { 0 };
+		if count > u64::from(examined.exists) + allowance {
 			return Err(super::ClientError::Protocol(
 				"IMAP listing exceeds EXISTS; saved progress is retained; run again to resume"
 					.into(),
 			)
 			.into());
+		}
+		if count > u64::from(examined.exists) {
+			tracing::warn!(
+				folder = %plan.display,
+				exists = examined.exists,
+				listed = count,
+				"IMAP mailbox grew after EXAMINE without UIDNEXT"
+			);
 		}
 		// Widen empty gaps without collecting an unbounded UID list.
 		width = if listed.is_empty() {
@@ -112,7 +126,7 @@ pub(super) async fn folder(
 						local,
 						&target.crypto,
 						&mut client.metadata,
-						settings.limits.literal,
+						target.max_message_size,
 						saved.as_ref().is_some_and(|state| state.in_progress),
 					)?);
 				}
@@ -174,6 +188,11 @@ pub(super) async fn folder(
 		}
 		match to {
 			Some(end) if examined.exists > 0 && end < examined.uid_next - 1 => from = end + 1,
+			Some(_) if examined.exists > 0 => {
+				// UIDNEXT is a hint from the source, so inspect its remaining UIDs too.
+				from = from.max(examined.uid_next);
+				tail = true;
+			}
 			_ => break,
 		}
 	}

@@ -107,6 +107,7 @@ pub(super) fn target(dir: &std::path::Path) -> Target {
 		crypto: MessageCrypto::disabled(),
 		quota: None,
 		usage: 0,
+		max_message_size: crate::imap::command::DEFAULT_APPEND_LIMIT,
 	}
 }
 

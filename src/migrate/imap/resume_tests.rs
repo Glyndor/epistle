@@ -511,3 +511,6 @@ async fn recovery_sync_failure_precedes_any_checkpoint_write() {
 
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
+
+#[path = "final_review_tests.rs"]
+mod final_review_tests;
