@@ -1110,9 +1110,37 @@ The command shapes are:
 | `epistle init --answers FILE --dry-run` | Print the plan, write nothing. |
 | `epistle init --print-answers` | Print the answers template on stdout. |
 
-The TOML fields the file accepts and the assistant asks for are the same. Every
-field is a key with the same name as the question, and a missing key fails the
-validator before any side effect runs. Exit codes are `0` (done or nothing to
+On a terminal, setup asks inline questions in seven numbered steps. Each question
+explains its purpose and what Enter selects. Options accept a number or the option
+name. Invalid entries show the rejected value, the rule and a valid example, then
+ask the same question again. The proposed paths are the package defaults,
+`/var/lib/glyndor/epistle/data` and `/etc/epistle/mail.toml`. A review of the selected
+settings and the file plan precedes an explicit confirmation. The final report
+lists created or reused files, their locations and the next commands.
+
+Accepted ordinary answers are checkpointed in
+`$XDG_STATE_HOME/epistle/init-draft.json`, or
+`$HOME/.local/state/epistle/init-draft.json` when the state variable is absent.
+The directory is private (`0700`) and the file is `0600`. After Ctrl+C, run
+`epistle init` again to accept the offer to resume. Resumed answers are validated
+again, and confirmation is always asked again. Passwords are requested after
+confirmation, never written into the draft or printed, and must be entered again
+when resuming. Guided automatic mode accepts a DNS credential file or environment
+variable reference instead of an inline token. Credential references are requested
+again after interruption and are not saved in the draft. DNS publishing is still not
+implemented in this build.
+
+Without `--answers`, only a run whose stdin and stderr are both terminals and that
+carries no `--json` gets the guided steps. Every other run, a pipe, a redirected
+stderr or `--json`, keeps the plain questions this command shipped with: they go to
+stderr and are read from stdin until it ends, so a script can still answer them and
+the machine result still goes to stdout. `--answers FILE` remains the way to supply
+every value up front; that path keeps its existing validation and output.
+`NO_COLOR` and `TERM=dumb` suppress question colours while keeping terminal
+input available. The answers file uses the TOML field names from `--print-answers`;
+a missing required key fails validation before setup files are written.
+
+Exit codes are `0` (done or nothing to
 do), `1` (a step failed after effects were applied; the report names which
 step), and `2` (nothing was touched, either because the answers were invalid or
 because a precondition stopped the run before any effect: the existing config
