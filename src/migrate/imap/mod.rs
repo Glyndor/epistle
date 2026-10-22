@@ -10,8 +10,10 @@
 mod client;
 mod copy;
 mod dedupe;
+mod durability;
 mod folders;
 mod insecure;
+mod metadata;
 mod parse;
 mod state;
 mod token;
@@ -54,6 +56,8 @@ pub(crate) struct Target {
 	pub(crate) quota: Option<u64>,
 	/// Bytes the account already stores; grows as messages are copied.
 	pub(crate) usage: u64,
+	/// Maximum decoded size of an existing local message during recovery.
+	pub(crate) max_message_size: usize,
 }
 
 /// How the copy runs.
@@ -69,11 +73,13 @@ pub(crate) struct Settings {
 	pub(crate) batch_messages: usize,
 	/// Most octets fetched in one command (one larger message still goes).
 	pub(crate) batch_bytes: u64,
+	/// Total time allowed for one resumable migration run.
+	pub(crate) total_timeout: Duration,
 }
 
 impl Settings {
 	/// The defaults: 64 KiB lines, literals up to the largest message the
-	/// server accepts, 60 s without data, 10 minutes per response, batches of
+	/// server accepts, 60 s without data, 10 minutes per command, 24 hours per run, batches of
 	/// 100 messages or 32 MiB.
 	pub(crate) fn new(filter: Filter, dry_run: bool) -> Self {
 		Settings {
@@ -87,6 +93,7 @@ impl Settings {
 			},
 			batch_messages: 100,
 			batch_bytes: 32 * 1024 * 1024,
+			total_timeout: Duration::from_secs(24 * 60 * 60),
 		}
 	}
 }
@@ -178,6 +185,11 @@ pub(crate) enum MigrateError {
 	/// Storing a message failed.
 	#[error("storing mail: {0}")]
 	Storage(std::io::Error),
+	/// The migration reached its total time allowance.
+	#[error(
+		"IMAP migration total deadline exceeded; saved progress is retained, run again to resume"
+	)]
+	Timeout,
 	/// Reading or writing the progress files failed.
 	#[error("migration state: {0}")]
 	State(std::io::Error),
@@ -203,13 +215,36 @@ pub(crate) async fn run(
 	settings: &Settings,
 	progress: &mut dyn Progress,
 ) -> (Summary, Option<MigrateError>) {
+	run_with_connection(
+		source,
+		target,
+		settings,
+		progress,
+		Client::connect(&source.endpoint, settings.limits),
+	)
+	.await
+}
+
+async fn run_with_connection(
+	source: &Source,
+	target: &mut Target,
+	settings: &Settings,
+	progress: &mut dyn Progress,
+	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
+) -> (Summary, Option<MigrateError>) {
 	let mut summary = Summary {
 		dry_run: settings.dry_run,
 		..Summary::default()
 	};
-	let error = copy_all(source, target, settings, progress, &mut summary)
-		.await
-		.err();
+	let error = match tokio::time::timeout(
+		settings.total_timeout,
+		copy_all(source, target, settings, progress, &mut summary, connection),
+	)
+	.await
+	{
+		Ok(result) => result.err(),
+		Err(_) => Some(MigrateError::Timeout),
+	};
 	summary.copied = summary.folders.iter().map(|f| f.copied).sum();
 	summary.bytes = summary.folders.iter().map(|f| f.bytes).sum();
 	(summary, error)
@@ -221,8 +256,9 @@ async fn copy_all(
 	settings: &Settings,
 	progress: &mut dyn Progress,
 	summary: &mut Summary,
+	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
 ) -> Result<(), MigrateError> {
-	let mut client = Client::connect(&source.endpoint, settings.limits).await?;
+	let mut client = connection.await?;
 	client.login(&source.user, &source.password).await?;
 	let namespace = client.namespace().await?;
 	let entries = client.list().await?;
@@ -249,11 +285,14 @@ async fn copy_all(
 				continue;
 			}
 		};
-		let mut report = FolderReport::new(&plan.display, local);
+		summary
+			.folders
+			.push(FolderReport::new(&plan.display, local));
+		let report = summary.folders.last_mut().expect("current folder");
 		let copied = copy::folder(
 			&mut client,
 			plan,
-			&mut report,
+			report,
 			&states,
 			target,
 			settings,
@@ -262,11 +301,11 @@ async fn copy_all(
 		.await;
 		match copied {
 			Ok(()) => {
-				progress.folder_done(&report);
-				summary.folders.push(report);
+				progress.folder_done(report);
 			}
 			// The folder went away or cannot be opened: report it, go on.
 			Err(MigrateError::Client(ClientError::Refused { text, .. })) => {
+				summary.folders.pop();
 				let skipped = Skipped {
 					folder: plan.display.clone(),
 					reason: format!("the server refused to open it: {text}"),
@@ -276,8 +315,8 @@ async fn copy_all(
 			}
 			Err(error) => {
 				// What was stored before the stop is part of the summary.
-				if report.copied > 0 {
-					summary.folders.push(report);
+				if report.copied == 0 {
+					summary.folders.pop();
 				}
 				return Err(error);
 			}

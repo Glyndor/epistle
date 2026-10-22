@@ -32,7 +32,7 @@ pub(crate) struct Limits {
 	pub(crate) literal: usize,
 	/// Longest wait for the next octets of a response.
 	pub(crate) idle: Duration,
-	/// Longest time one whole response may take to arrive.
+	/// Longest time one response or complete client command may take.
 	pub(crate) response: Duration,
 }
 

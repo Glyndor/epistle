@@ -1278,6 +1278,33 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
+For `migrate imap`, `data_dir` and its migration state must be owned by the
+process's effective user, including during `--dry-run`. Run the migration as the
+account that owns the data directory; group write permission alone is insufficient.
+Parents of `data_dir` may be symbolic links. The final `data_dir` component and
+entries under `migrate/<account>` must not be symbolic links.
+Recovery uses a private temporary disk index with a fixed metadata workspace, so
+large local mailboxes do not require an in-memory identity set. Free disk space is
+still required; an index failure retains the saved progress. Recovery bounds each
+decoded local message by the configured `max_message_size`, independently of the
+source response literal limit.
+
+An interrupted batch replays the confirmed prefix before matching pending copies.
+This downloads confirmed messages again on each interrupted recovery attempt and
+preserves distinct copies of identical messages. A change in UIDVALIDITY also
+requires a full replay. Already confirmed local messages do not need fresh durability
+barriers unless the saved state marks a batch in progress.
+
+UID windows start at 10000 and double across empty ranges, keeping sparse UIDNEXT
+values from causing a long sequence of empty queries. Each folder/run permits at
+most `32 * (EXISTS + 1)` listing commands. A final bounded query checks UIDs at
+and above UIDNEXT in case the source underestimated it. Without UIDNEXT, up to 16
+messages arriving after EXAMINE are accepted and the discrepancy is logged;
+larger counts are refused.
+A limit or inconsistent-count error retains completed window checkpoints; run the
+same command again to resume. A pending recovery replays its confirmed prefix again.
+A dry run saves no checkpoints.
+
 ## Outbound queue
 
 `epistle queue <action>` inspects and steers the outbound spool in
