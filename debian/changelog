@@ -19,6 +19,11 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     run resumed after an interruption does not bring back a message the user
     deleted or moved in the local mailbox, and an unreadable ledger stops the
     run with a message instead of importing anything again.
+  * Clock: `epistle status` gains an external clock probe that compares
+    three independent time sources, reports how many of them answered over
+    NTS, and reduces the valid readings with a median. The source list and
+    the protocol per source are configurable, the probe is read-only, and
+    per-source and per-run deadlines bound the call.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

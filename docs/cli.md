@@ -241,6 +241,58 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused) | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed | |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 
+The `clock` area adds two read-only probes. The host probe asks the
+kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
+the syscall is refused; the area is `ok` when the kernel reports a
+disciplined clock, `warn` when it does not or when neither probe can
+tell. The external probe is the [clock_external] block: three
+independent sources, real median of the three valid readings,
+configurable warn/fail thresholds (defaults 1 s / 5 s). The area
+surfaces one line naming how many sources were authenticated over NTS,
+then one line per source plus the median offset, and the smear policy
+surfaces a `warn` when two authenticated sources agree within 100 ms and
+a plain one differs from their midpoint by more than 250 ms (a typical
+operator-visible signature of a leap-second smear on the plain server).
+The probe runs only when the area is reached, never writes the host
+clock, and uses no state between runs.
+
+The three defaults, `time.cloudflare.com` (plain NTP), `nts.netnod.se`
+(NTS) and `time.google.com` (plain NTP), are three independent ASes,
+which is why three and not two: the median rejects any single host
+that drifts without the other two raising a false alarm. Each source
+carries the protocol it was measured answering: Netnod answers the whole
+NTS exchange inside the budget (1.37 s to 1.82 s of the 2 s, across eight
+consecutive runs), Cloudflare answers plain NTPv4 in 82 ms to 106 ms but
+never answers the authenticated poll on any run recorded for this branch
+(its key exchange returns cookies and then the poll is dropped, at
+budgets up to 15 s), and Google publishes no NTS-KE
+endpoint. Replace them when the chosen peers change; the list and the
+protocol per source are both yours to set, and a host that answers NTS
+on your network can be configured as `nts`. The two ports the probes
+dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
+`123/udp` (NTPv4, RFC 5905) for the plain ones; both must be reachable
+from the host that runs `epistle status`. The full run is capped at
+`2.1 s` and each source at `2 s` for the whole probe, so a server that
+answers the key exchange slowly cannot buy a second budget; a hung
+server is reported, never retried. Note that a whole NTS exchange costs
+a dial, a TLS handshake, a key exchange and the authenticated poll, so
+it comes close to the `2 s` per-source budget: on the development host
+the NTS source took between 1.37 s and 1.82 s across eight consecutive
+runs. A source that misses
+the budget is reported as a timeout, the run loses its median and the
+area says `warn`; the budget itself is a constant in the binary, not a
+setting.
+
+The probe is read-only: nothing writes the host clock, and a Warn or
+Fail from this area never produces a `clock_drift_exceeded` event
+(`metrics.clock_drift_exceeded` only ticks on the host-jump probe,
+which the kernel's existing time source catches). Configure chrony or
+systemd-timesyncd for the host, and point that daemon at the servers of
+one provider: a host daemon fed by two providers that smear differently
+disagrees every night. The external probe is the opposite case on
+purpose. It takes one host per provider and reduces them with the
+median, which is why it can hold three at once.
+
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).
 

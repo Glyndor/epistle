@@ -1,0 +1,215 @@
+//! Tests for the source configuration: defaults, validation rules and
+//! the effective resolution.
+
+use crate::clock::external::source::{
+	ClockExternal, DEFAULT_FAIL_SECONDS, DEFAULT_WARN_SECONDS, Source, SourceKind, default_sources,
+};
+
+#[test]
+fn default_source_list_is_three_independent_providers() {
+	let sources = default_sources();
+	assert_eq!(sources.len(), 3);
+	assert_eq!(sources[0].kind, SourceKind::Ntp);
+	assert_eq!(sources[0].host, "time.cloudflare.com");
+	assert_eq!(sources[1].kind, SourceKind::Nts);
+	assert_eq!(sources[1].host, "nts.netnod.se");
+	assert_eq!(sources[2].kind, SourceKind::Ntp);
+	assert_eq!(sources[2].host, "time.google.com");
+}
+
+/// The shipped list carries exactly one authenticated source, the one whose
+/// NTS-KE exchange answers. An operator can change the protocol per source,
+/// so a list with two or three NTS entries is a valid choice too and the
+/// defaults must not be the only shape that loads.
+#[test]
+fn default_source_list_carries_one_authenticated_source() {
+	let sources = default_sources();
+	let nts = sources.iter().filter(|source| source.is_nts()).count();
+	assert_eq!(
+		nts, 1,
+		"only nts.netnod.se answers the authenticated exchange"
+	);
+	assert!(ClockExternal::default().validate().is_ok());
+}
+
+#[test]
+fn default_thresholds_match_design() {
+	assert!((DEFAULT_WARN_SECONDS - 1.0).abs() < f64::EPSILON);
+	assert!((DEFAULT_FAIL_SECONDS - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn validate_rejects_zero_warn() {
+	let external = ClockExternal {
+		warn_seconds: 0.0,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_warn_at_or_above_fail() {
+	let external = ClockExternal {
+		warn_seconds: 5.0,
+		fail_seconds: 5.0,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+	let external = ClockExternal {
+		warn_seconds: 6.0,
+		fail_seconds: 5.0,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_non_finite_thresholds() {
+	let external = ClockExternal {
+		warn_seconds: f64::NAN,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+	let external = ClockExternal {
+		warn_seconds: 1.0,
+		fail_seconds: f64::INFINITY,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_wrong_source_count() {
+	let mut sources = default_sources();
+	sources.pop();
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_a_list_without_an_authenticated_source() {
+	let sources = vec![
+		Source::ntp("time.cloudflare.com"),
+		Source::ntp("time.google.com"),
+		Source::ntp("pool.ntp.example"),
+	];
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_accepts_one_nts_and_two_ntp() {
+	let sources = vec![
+		Source::ntp("time.cloudflare.com"),
+		Source::nts("nts.netnod.se"),
+		Source::ntp("time.google.com"),
+	];
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(
+		external.validate().is_ok(),
+		"the operator picks the protocol per source; one NTS with two plain \
+		 sources must load; got {:?}",
+		external.validate()
+	);
+}
+
+#[test]
+fn validate_accepts_three_nts_sources() {
+	let sources = vec![
+		Source::nts("nts.netnod.se"),
+		Source::nts("nts.time.nl"),
+		Source::nts("ntp.3eck.net"),
+	];
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(
+		external.validate().is_ok(),
+		"an all-authenticated list is a legitimate choice; got {:?}",
+		external.validate()
+	);
+}
+
+#[test]
+fn validate_rejects_duplicate_hosts_case_insensitively() {
+	let sources = vec![
+		Source::nts("time.cloudflare.com"),
+		Source::nts("Time.Cloudflare.com"),
+		Source::ntp("time.google.com"),
+	];
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_empty_host() {
+	let sources = vec![
+		Source::nts(""),
+		Source::nts("nts.netnod.se"),
+		Source::ntp("time.google.com"),
+	];
+	let external = ClockExternal {
+		sources,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}
+
+#[test]
+fn validate_accepts_a_well_formed_list() {
+	let external = ClockExternal::default();
+	assert!(external.validate().is_ok());
+}
+
+#[test]
+fn dial_port_returns_the_default_when_unset() {
+	let nts = Source::nts("a.example");
+	let ntp = Source::ntp("a.example");
+	assert_eq!(nts.dial_port(), 4460);
+	assert_eq!(ntp.dial_port(), 123);
+}
+
+#[test]
+fn dial_port_returns_the_override_when_set() {
+	let nts = Source {
+		port: Some(12345),
+		..Source::nts("a.example")
+	};
+	assert_eq!(nts.dial_port(), 12345);
+}
+
+#[test]
+fn effective_falls_back_to_defaults_when_zero() {
+	let external = ClockExternal {
+		warn_seconds: 0.0,
+		fail_seconds: 0.0,
+		sources: vec![],
+	};
+	let resolved = external.effective_sources();
+	assert_eq!(resolved.len(), 3);
+	assert!((external.effective_warn() - DEFAULT_WARN_SECONDS).abs() < f64::EPSILON);
+	assert!((external.effective_fail() - DEFAULT_FAIL_SECONDS).abs() < f64::EPSILON);
+}
+
+#[test]
+fn sabotage_warn_equals_fail_still_fails() {
+	let external = ClockExternal {
+		warn_seconds: 5.0,
+		fail_seconds: 5.0,
+		..ClockExternal::default()
+	};
+	assert!(external.validate().is_err());
+}

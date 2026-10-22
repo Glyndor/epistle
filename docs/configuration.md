@@ -1140,6 +1140,83 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
 
+### `[clock_external]`
+
+Read-only external-clock probe `epistle status` and `epistle check clock`
+run when the area is reached. Three independent sources, real median,
+warn/fail thresholds. The probe runs once per `status` call and never
+writes the host clock; it is a probe for the operator, not a discipliner.
+
+```toml
+[clock_external]
+warn_seconds = 1.0   # an offset at or above this reading is a Warn
+fail_seconds = 5.0   # an offset at or above this reading is a Fail
+sources = [
+  { host = "time.cloudflare.com", kind = "ntp" },
+  { host = "nts.netnod.se",       kind = "nts" },
+  { host = "time.google.com",     kind = "ntp" },
+]
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). At or below it the median is `Ok`; between it and `fail_seconds` the median is `Warn`; at or above `fail_seconds` the median is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
+| `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
+| `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
+
+Validation rules `Config::validate` enforces: exactly three sources; at
+least one NTS source; no duplicate hosts (case-insensitive); no empty
+hosts; no non-ASCII hosts; no whitespace or control characters in hosts.
+The split between `nts` and `ntp` is otherwise the operator's. A
+`[clock_external]` that fails these checks refuses to load.
+
+The probe bounds: each source gets a `2 s` per-source deadline
+(`SOURCE_DEADLINE`) covering the whole probe, dial, TLS handshake,
+key exchange and authenticated exchange included rather than each of
+those separately; the whole run gets a `2.1 s` cap (`RUN_DEADLINE`).
+A hung server is reported, never retried.
+
+The shipped sources are `ntp:time.cloudflare.com`, `nts:nts.netnod.se`
+and `ntp:time.google.com`: one provider each, three independent
+autonomous systems, so the median rejects a single host that drifts. The
+protocol on each one is what that provider answered when the list was
+measured on 2026-10-22, over the real `2 s` budget:
+
+- `nts.netnod.se` answers the whole NTS exchange (key exchange, cookies,
+  authenticated poll) inside the budget on every attempt measured, and it
+  is the one authenticated source in the default list. A whole NTS exchange
+  costs a dial, a TLS handshake, the key exchange and the authenticated
+  poll, so on a slow link it comes close to the `2 s` budget: on the
+  development host it took between 1.37 s and 1.82 s across eight
+  consecutive runs. The `2 s` per-source budget is a constant in the
+  binary, not a key here. A miss is reported as a timeout, the run loses
+  its median, and the area says `Warn`.
+- `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
+  attempt measured. Its NTS-KE endpoint answers the key exchange and
+  returns cookies, then never answers the authenticated poll, on every run
+  recorded for this branch and at budgets up to 15 s. It ships as plain
+  NTPv4. On a network where Cloudflare's authenticated exchange does
+  answer, set `kind = "nts"` for it and nothing else needs to change.
+- `time.google.com` publishes no NTS-KE endpoint, so it is plain NTPv4.
+
+Replace any of them when the chosen peers change; keep one provider per
+autonomous system, and set `kind` per source to what that source actually
+answers.
+
+Two notes an operator should have. The area renders one line saying how
+many of the sources were authenticated over NTS and names them, because a
+run with one authenticated source and two plain ones must not read as
+three equally trusted offsets. And the leap-second smear policy needs
+two authenticated readings that agree within 100 ms, so on the shipped
+list it stays dormant; it fires when an operator configures two or more
+`nts` sources.
+
+The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
+design that drove the first delivery. They are the same numbers
+`docs/limits.md` would expose as adjustable limits if a catalog entry
+were added later. Until then they live in `[clock_external]` and
+`Config::validate` enforces the strict-less relation.
+
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
 

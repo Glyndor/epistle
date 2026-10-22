@@ -12,18 +12,19 @@ use tokio_rustls::rustls::ServerConfig;
 
 use crate::config::Tls;
 
-/// Install the ring `CryptoProvider` as the process default, once.
+/// Install the ring `CryptoProvider` as the process default.
 ///
-/// Some dependencies (sqlx, reqwest) pull rustls with the aws-lc-rs provider
-/// enabled too; with two providers compiled in, rustls cannot pick one
-/// automatically and its config builders panic. Installing ring explicitly
-/// makes the choice deterministic across the whole process.
+/// Some dependencies (`sqlx`, `reqwest`, ...) pull rustls with the
+/// aws-lc-rs provider enabled too; with two providers compiled in,
+/// rustls cannot pick one automatically and its config builders
+/// panic. Installing ring explicitly makes the choice deterministic
+/// across the whole process. We skip silently when another provider
+/// is already installed because the `crypto_provider()` method reads
+/// the running default, not what we just installed.
 pub fn ensure_crypto_provider() {
-	use std::sync::Once;
-	static INIT: Once = Once::new();
-	INIT.call_once(|| {
+	if tokio_rustls::rustls::crypto::CryptoProvider::get_default().is_none() {
 		let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-	});
+	}
 }
 
 /// Errors while loading TLS material. Always fatal: the server refuses to
