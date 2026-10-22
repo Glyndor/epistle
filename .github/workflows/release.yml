@@ -29,12 +29,42 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # The one commit this release names. Every build job checks out this
+      # SHA rather than resolving the tag again, so nothing can be built from
+      # a tree the gate did not look at.
+      commit: ${{ steps.resolve.outputs.commit }}
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Reject a tag that is not a release name
+        # A dispatch carries the tag as free text and every later step reads
+        # it as a ref, so the shape is checked before it reaches git. Nothing
+        # here is interpolated into the shell: TAG arrives in the environment
+        # and the pattern is spelled out here.
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::$TAG is not a release tag of the form vMAJOR.MINOR.PATCH"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The tag, not the ref that launched the workflow. On a dispatch
+          # the default checkout is the dispatch commit, so the version
+          # check, the changelog check and the audit below all read a
+          # different tree from the one the build jobs package.
+          ref: ${{ env.TAG }}
           fetch-depth: 0
+
+      - name: Resolve the commit this release names
+        id: resolve
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify "${TAG}^{commit}")"
+          echo "Releasing ${TAG} at ${commit}"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
 
       - name: Install toolchain
         run: |
@@ -89,6 +119,11 @@ jobs:
           cargo audit
 
       - name: Tag has no published release yet
+        # An images-only dispatch exists to finish the images of a release
+        # that is already published, so this gate is the full release path
+        # only. It used to run for both, which made images-only unusable:
+        # verify failed, image-build needs verify to succeed, and nothing ran.
+        if: ${{ !inputs.images-only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -97,6 +132,22 @@ jobs:
           # workflow_dispatch path may only re-run a tag whose release failed.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::a release for $TAG already exists; releases are immutable, cut a new patch instead"
+            exit 1
+          fi
+
+      - name: The release images-only completes is published
+        if: ${{ inputs.images-only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The mirror of the gate above: an images-only dispatch must point
+          # at a published release for the tag this job just verified, or it
+          # would push images for a version no release carries.
+          published="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName --jq '.tagName' 2>/dev/null || true)"
+          if [ "$published" != "$TAG" ]; then
+            echo "::error::no release is published for $TAG; images-only completes the images of a published release, it does not publish one"
             exit 1
           fi
 
@@ -158,7 +209,9 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          # The commit `verify` resolved, so the package is built from the
+          # tree that was audited and version-checked.
+          ref: ${{ needs.verify.outputs.commit }}
 
       - name: Build the package
         env:
@@ -216,7 +269,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          # The commit `verify` resolved, not the tag name again.
+          ref: ${{ needs.verify.outputs.commit }}
 
       - name: Install toolchain
         run: |
@@ -331,7 +385,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          # The commit `verify` resolved, so the image carries the same tree
+          # the gate audited.
+          ref: ${{ needs.verify.outputs.commit }}
 
       - name: Build the image for ${{ matrix.arch }}
         env:
@@ -377,7 +433,7 @@ jobs:
 
   image-manifest:
     name: Publish multi-arch image manifest
-    needs: image-build
+    needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -414,7 +470,9 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.VERSION }}
+          # The commit `verify` resolved. This job only reads the tag gate
+          # script from the tree, and it reads it from the released one.
+          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
 
       - name: Build and push the multi-arch manifest list
