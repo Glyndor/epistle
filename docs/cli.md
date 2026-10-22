@@ -1350,6 +1350,10 @@ process's effective user, including during `--dry-run`. Run the migration as the
 account that owns the data directory; group write permission alone is insufficient.
 Parents of `data_dir` may be symbolic links. The final `data_dir` component and
 entries under `migrate/<account>` must not be symbolic links.
+One migration per account runs at a time: the run holds
+`migrate/<account>/.lock` and a second run waits 30 seconds for it before it
+stops with the name of that file. A dry run writes nothing, so it takes no lock
+and never waits.
 Recovery uses a private temporary disk index with a fixed metadata workspace, so
 large local mailboxes do not require an in-memory identity set. Free disk space is
 still required; an index failure retains the saved progress. Recovery bounds each
@@ -1369,10 +1373,17 @@ and synchronized before the checkpoint that confirms the batch, so it never
 claims a message that is not stored locally, and a copy left behind by a cut is
 dropped on the next run. A change in UIDVALIDITY discards the ledger with a
 warning and reads the folder again from the start. A ledger that cannot be read
-stops that folder without importing anything and without removing anything, and
-the message names the file to delete to copy the folder again. Already confirmed
-local messages do not need fresh durability barriers unless the saved state marks
-a batch in progress.
+stops that folder without removing anything, and the message names the file to
+delete to copy the folder again. Already confirmed local messages do not need
+fresh durability barriers unless the saved state marks a batch in progress.
+
+A migration a version without a ledger started carries on with it: that version
+kept only the progress file, so the new ledger starts empty and confirms nothing
+about what was already copied. A later run that is cut and then replayed
+downloads that prefix once more and matches it against the local mailbox, so a
+message deleted there in the meantime can come back once. Deleting
+`migrate/<account>` discards the progress and the ledgers of every folder, which
+is how a full copy of the account is forced.
 
 UID windows start at 10000 and double across empty ranges, keeping sparse UIDNEXT
 values from causing a long sequence of empty queries. Each folder/run permits at

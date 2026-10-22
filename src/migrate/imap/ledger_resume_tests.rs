@@ -8,20 +8,20 @@ use super::run_tests::{DATE_1, DATE_2, local, mail, migrate, settings};
 use super::state::StateDir;
 
 /// One INBOX with `messages`, and no other folder.
-fn inbox(messages: Vec<Message>) -> Vec<super::fake_server::Folder> {
+pub(super) fn inbox(messages: Vec<Message>) -> Vec<super::fake_server::Folder> {
 	let mut all = run_tests::folders();
 	all[0].messages = messages;
 	all.truncate(1);
 	all
 }
 
-fn states(dir: &std::path::Path) -> StateDir {
+pub(super) fn states(dir: &std::path::Path) -> StateDir {
 	StateDir::open(dir, "alice", &format!("{USER}@mail.example.org")).expect("state")
 }
 
 /// What a kill between storing a message and recording it leaves: the state
 /// still points before the batch and asks for the folder to be replayed.
-fn replay_from_the_start(dir: &std::path::Path) {
+pub(super) fn replay_from_the_start(dir: &std::path::Path) {
 	let states = states(dir);
 	let mut saved = states.load(b"INBOX").expect("load").expect("saved");
 	saved.last_uid = 0;

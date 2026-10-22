@@ -7,7 +7,9 @@
 //! names a file. Each file is replaced atomically (written to a temporary
 //! file, synced, renamed over the old one) with mode 0600.
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +21,9 @@ use super::state_files;
 
 /// The largest state file read back. A real one is under 300 bytes.
 const MAX_STATE_BYTES: u64 = 64 * 1024;
+
+/// How often a run asks again for a lock another run holds.
+const LOCK_POLL: Duration = Duration::from_millis(100);
 
 /// The progress of one remote folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +155,56 @@ impl StateDir {
 		let body = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
 		state_files::replace(&dir, &path, &body, "state-file", "state-directory")
 	}
+
+	/// Hold this account's migration lock, waiting up to `wait` for a run that
+	/// has it. It is taken once per run instead of once per folder, because two
+	/// runs of the same account would append to the same ledgers from a length
+	/// each one read for itself, and neither would learn about the records of
+	/// the other.
+	pub(super) async fn lock(&self, wait: Duration) -> std::io::Result<AccountLock> {
+		let file = state_files::lock_file(self.root.as_ref(), &self.account, true)?;
+		let deadline = tokio::time::Instant::now() + wait;
+		loop {
+			if try_lock(&file)? {
+				return Ok(AccountLock { file });
+			}
+			if tokio::time::Instant::now() >= deadline {
+				return Err(std::io::Error::other(format!(
+					"another migration of the account {} holds {}: wait for it to finish and run again",
+					self.account,
+					self.dir.join(state_files::LOCK).display()
+				)));
+			}
+			tokio::time::sleep(LOCK_POLL).await;
+		}
+	}
+}
+
+/// The lock of one account's migration directory, held from here until the
+/// guard is dropped.
+#[derive(Debug)]
+pub(super) struct AccountLock {
+	file: std::fs::File,
+}
+
+impl Drop for AccountLock {
+	fn drop(&mut self) {
+		// SAFETY: the descriptor is open and owned by this guard.
+		unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+	}
+}
+
+/// Whether the lock is free, waiting for no one.
+fn try_lock(file: &std::fs::File) -> std::io::Result<bool> {
+	// SAFETY: flock reads the descriptor, which is open for the whole call.
+	if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+		return Ok(true);
+	}
+	let error = std::io::Error::last_os_error();
+	if error.kind() == std::io::ErrorKind::WouldBlock {
+		return Ok(false);
+	}
+	Err(error)
 }
 
 #[cfg(test)]

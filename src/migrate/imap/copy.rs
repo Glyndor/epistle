@@ -4,10 +4,11 @@
 //! "batch in progress", store the messages in UID order, record what the batch
 //! confirmed in the folder's ledger, then record the last UID handled. A server
 //! that fails mid-batch therefore leaves nothing of that batch stored and the
-//! state untouched. A local storage failure or an interrupted write leaves the
-//! in-progress mark. Recovery replays the confirmed prefix, skipping what the
-//! ledger already confirms and matching the rest against pending copies, and
-//! stays active until the whole folder has been replayed.
+//! state untouched. A local storage failure or an interrupted write records
+//! what the batch had already stored and leaves the in-progress mark. Recovery
+//! replays the confirmed prefix, skipping what the ledger already confirms and
+//! matching the rest against pending copies, and stays active until the whole
+//! folder has been replayed.
 
 use std::time::Instant;
 
@@ -190,6 +191,18 @@ pub(super) async fn folder(
 						Ok(Some(fingerprint)) => settled.push((uid, fingerprint)),
 						Ok(None) => {}
 						Err(error) => {
+							// What the batch stored before the stop is in the
+							// local mailbox, so it is recorded now, as a batch
+							// that completes records it: a folder that has to
+							// be replayed skips those messages instead of
+							// fetching them again.
+							if let Err(refused) = ledger.confirm(&settled) {
+								tracing::warn!(
+									folder = %plan.display,
+									error = %refused,
+									"the messages stored before the stop are not recorded: the next run matches them against the local mailbox again"
+								);
+							}
 							state.in_progress = dedupe || matches!(error, MigrateError::Storage(_));
 							state.copied = state.copied.saturating_add(report.copied);
 							states

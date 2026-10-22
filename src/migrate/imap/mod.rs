@@ -77,12 +77,15 @@ pub(crate) struct Settings {
 	pub(crate) batch_bytes: u64,
 	/// Total time allowed for one resumable migration run.
 	pub(crate) total_timeout: Duration,
+	/// How long a run waits for another run of the same account to release the
+	/// migration lock before it refuses to start.
+	pub(crate) lock_wait: Duration,
 }
 
 impl Settings {
 	/// The defaults: 64 KiB lines, literals up to the largest message the
 	/// server accepts, 60 s without data, 10 minutes per command, 24 hours per run, batches of
-	/// 100 messages or 32 MiB.
+	/// 100 messages or 32 MiB, 30 s waiting for the migration lock of the account.
 	pub(crate) fn new(filter: Filter, dry_run: bool) -> Self {
 		Settings {
 			filter,
@@ -96,6 +99,7 @@ impl Settings {
 			batch_messages: 100,
 			batch_bytes: 32 * 1024 * 1024,
 			total_timeout: Duration::from_secs(24 * 60 * 60),
+			lock_wait: Duration::from_secs(30),
 		}
 	}
 }
@@ -263,11 +267,6 @@ async fn copy_all(
 	summary: &mut Summary,
 	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
 ) -> Result<(), MigrateError> {
-	let mut client = connection.await?;
-	client.login(&source.user, &source.password).await?;
-	let namespace = client.namespace().await?;
-	let entries = client.list().await?;
-	let plans = folders::plan(&entries, namespace.as_deref(), &settings.filter);
 	// The port is left out on purpose: the same account reached over 993
 	// one day and STARTTLS on 143 the next is still the same mail.
 	let key = format!(
@@ -277,6 +276,25 @@ async fn copy_all(
 	);
 	let states =
 		StateDir::open(&target.data_dir, &target.account, &key).map_err(MigrateError::State)?;
+	// One migration of an account at a time: a second run would append to the
+	// same ledgers. The lock is taken before the server is contacted, so a run
+	// that has to wait says so without logging in. A dry run writes nothing, so
+	// it takes no lock.
+	let _account_lock = if settings.dry_run {
+		None
+	} else {
+		Some(
+			states
+				.lock(settings.lock_wait)
+				.await
+				.map_err(MigrateError::State)?,
+		)
+	};
+	let mut client = connection.await?;
+	client.login(&source.user, &source.password).await?;
+	let namespace = client.namespace().await?;
+	let entries = client.list().await?;
+	let plans = folders::plan(&entries, namespace.as_deref(), &settings.filter);
 	for plan in &plans {
 		let local = match &plan.local {
 			Ok(local) => local,
@@ -350,3 +368,7 @@ mod run_tests_memory;
 #[cfg(test)]
 #[path = "ledger_resume_tests.rs"]
 mod ledger_resume_tests;
+
+#[cfg(test)]
+#[path = "ledger_rerun_tests.rs"]
+mod ledger_rerun_tests;

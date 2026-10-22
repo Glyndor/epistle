@@ -1,12 +1,15 @@
 //! Descriptor-relative access to private migration progress files.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path};
+
+/// The name of the lock file inside one account's state directory.
+pub(super) const LOCK: &str = ".lock";
 
 fn name(value: &std::ffi::OsStr) -> io::Result<CString> {
 	CString::new(value.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput.into())
@@ -128,6 +131,16 @@ pub(super) fn read(dir: &File, path: &Path) -> io::Result<File> {
 pub(super) fn appendable(dir: &File, path: &Path) -> io::Result<File> {
 	let child = name(path.file_name().ok_or(io::ErrorKind::InvalidInput)?)?;
 	let file = open_at(dir, &child, libc::O_RDWR)?;
+	owned(&file, false)?;
+	Ok(file)
+}
+
+/// Open the lock file of one account's state directory, creating the
+/// directory and the file when `create`. The descriptor is what holds the
+/// lock: closing it releases the flock.
+pub(super) fn lock_file(root: &File, account: &str, create: bool) -> io::Result<File> {
+	let dir = directory(root, account, create)?;
+	let file = open_at(&dir, &name(OsStr::new(LOCK))?, libc::O_RDWR | libc::O_CREAT)?;
 	owned(&file, false)?;
 	Ok(file)
 }

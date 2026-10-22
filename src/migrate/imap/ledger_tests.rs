@@ -17,6 +17,23 @@ fn fingerprint(seed: u8) -> Fingerprint {
 	[seed; 32]
 }
 
+/// Where the ledger of `INBOX` lives in `dir`.
+fn path_of(dir: &std::path::Path) -> std::path::PathBuf {
+	StateDir::open(dir, "alice", "alice@old.example")
+		.expect("state")
+		.ledger_path(b"INBOX")
+		.expect("path")
+}
+
+/// One record as it lies on disk.
+fn record_of(uid: u32) -> Vec<u8> {
+	let mut bytes = Vec::new();
+	bytes.extend_from_slice(&uid.to_le_bytes());
+	bytes.extend_from_slice(&fingerprint(uid as u8));
+	bytes.extend_from_slice(&checksum(uid, &fingerprint(uid as u8)).to_le_bytes());
+	bytes
+}
+
 #[test]
 fn records_are_read_back_in_order_and_unknown_uids_are_not_confirmed() {
 	let dir = tempfile::tempdir().expect("dir");
@@ -71,21 +88,146 @@ fn a_rerun_reads_what_the_last_one_confirmed() {
 }
 
 #[test]
-fn records_out_of_uid_order_are_refused() {
+fn records_below_the_last_one_are_left_out_and_a_batch_that_does_not_rise_is_refused() {
 	let dir = tempfile::tempdir().expect("dir");
+	let path = path_of(dir.path());
 	let mut ledger = at(dir.path(), 7, true);
 	ledger.confirm(&[(5, fingerprint(5))]).expect("confirm");
-	for records in [
-		vec![(5, fingerprint(5))],
-		vec![(4, fingerprint(4))],
-		vec![(7, fingerprint(7)), (6, fingerprint(6))],
+
+	// What a folder that has to be replayed from the start confirms: messages
+	// below what an earlier batch already reached. They are left out, so that
+	// folder can finish.
+	ledger.confirm(&[(3, fingerprint(3))]).expect("confirm");
+	ledger
+		.confirm(&[(5, fingerprint(5)), (6, fingerprint(6))])
+		.expect("confirm");
+	assert_eq!(
+		(ledger.count(), ledger.last_uid()),
+		(2, 6),
+		"only the records above the UID the file reaches are appended"
+	);
+	for (uid, confirmed) in [
+		(3, None),
+		(5, Some(fingerprint(5))),
+		(6, Some(fingerprint(6))),
 	] {
-		assert!(
-			ledger.confirm(&records).is_err(),
-			"a record below or equal to the last one would break the scan: {records:?}"
+		assert_eq!(
+			ledger.fingerprint(uid).expect("fingerprint"),
+			confirmed,
+			"uid {uid}"
 		);
 	}
+
+	// A batch that does not rise cannot be told apart from the one that
+	// follows it, so it is refused by name, before anything is written.
+	for records in [
+		vec![(9, fingerprint(9)), (8, fingerprint(8))],
+		vec![(7, fingerprint(7)), (7, fingerprint(7))],
+	] {
+		let message = ledger
+			.confirm(&records)
+			.expect_err("a batch that does not rise")
+			.to_string();
+		assert!(
+			message.contains("UID order")
+				&& message.contains(&path.display().to_string())
+				&& message.contains("delete that file"),
+			"the refusal names the file and how to start over: {message}"
+		);
+	}
+	assert_eq!(
+		(ledger.count(), ledger.last_uid()),
+		(2, 6),
+		"a refused batch writes nothing"
+	);
+}
+
+#[test]
+fn a_file_that_no_longer_holds_what_was_read_is_refused_before_anything_is_written() {
+	let dir = tempfile::tempdir().expect("dir");
+	let path = path_of(dir.path());
+	let mut ledger = at(dir.path(), 7, true);
+	ledger.confirm(&[(5, fingerprint(5))]).expect("confirm");
+
+	// Another run of the same account appends a record of its own while this
+	// handle is open. The offset this run computed no longer names the end of
+	// the file, so the record of the other run would be written over.
+	let other = std::fs::OpenOptions::new()
+		.write(true)
+		.open(&path)
+		.expect("open");
+	other
+		.write_all_at(&record_of(9), HEADER + RECORD)
+		.expect("append");
+	let message = ledger
+		.confirm(&[(10, fingerprint(10))])
+		.expect_err("another writer")
+		.to_string();
+	assert!(
+		message.contains("another run is writing")
+			&& message.contains(&path.display().to_string())
+			&& message.contains("one migration of this account at a time"),
+		"the refusal says what to do: {message}"
+	);
+	assert_eq!(
+		(ledger.count(), ledger.last_uid()),
+		(1, 5),
+		"nothing is written over the other run's record"
+	);
+
+	// The same when the file lost records instead of gaining them.
+	other.set_len(HEADER).expect("truncate");
+	let message = ledger
+		.confirm(&[(10, fingerprint(10))])
+		.expect_err("a file that lost records")
+		.to_string();
+	assert!(message.contains("another run is writing"), "{message}");
 	assert_eq!(ledger.count(), 1);
+}
+
+#[test]
+fn a_ledger_whose_records_repeat_or_go_backwards_is_refused_when_it_is_read() {
+	let dir = tempfile::tempdir().expect("dir");
+	let path = path_of(dir.path());
+	at(dir.path(), 7, true)
+		.confirm(&[(4, fingerprint(4))])
+		.expect("confirm");
+
+	// A ledger written by this code and then rewritten by hand: the same
+	// marker, the same UIDVALIDITY, every checksum in order, and records that
+	// do not rise. Answering from it would silently skip or invent messages.
+	for uids in [vec![5u32, 5], vec![10, 5], vec![4, 9, 4], vec![9, 8, 9, 10]] {
+		let mut body = header(7);
+		for uid in uids {
+			body.extend_from_slice(&record_of(uid));
+		}
+		std::fs::write(&path, body).expect("write");
+		let message = try_at(dir.path(), 7, true)
+			.expect_err("records that do not rise")
+			.to_string();
+		assert!(
+			message.contains("UID order") && message.contains(&path.display().to_string()),
+			"a ledger that does not rise is named: {message}"
+		);
+	}
+
+	// The same records in order are read, and so is a record in the middle of
+	// them.
+	let mut body = header(7);
+	for uid in [4, 9, 40] {
+		body.extend_from_slice(&record_of(uid));
+	}
+	std::fs::write(&path, body).expect("write");
+	let mut ledger = at(dir.path(), 7, false);
+	assert_eq!(
+		(ledger.count(), ledger.last_uid()),
+		(3, 40),
+		"records that rise are read"
+	);
+	assert_eq!(
+		ledger.fingerprint(9).expect("fingerprint"),
+		Some(fingerprint(9))
+	);
 }
 
 #[test]

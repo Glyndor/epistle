@@ -5,7 +5,9 @@
 //! record per confirmed message: its UID, the fingerprint of the identity the
 //! deduplication index uses, and a checksum over the two. Records are appended
 //! in UID order, so the UIDs of a listing window are answered by a forward scan
-//! and nothing is held in memory beyond one record.
+//! and nothing is held in memory beyond one record. A file whose records do not
+//! rise in UID order is refused when it is opened: nothing but this code
+//! appends them, and it only appends them in that order.
 //!
 //! A run appends the messages of a batch once they are stored and
 //! synchronized, and before the checkpoint that confirms that batch, so the
@@ -31,7 +33,8 @@ pub(super) type Fingerprint = [u8; 32];
 /// What marks the file as ours, and the version of the record layout.
 const MAGIC: &[u8; 8] = b"EPSTLG1\0";
 
-/// Magic, UIDVALIDITY and the record count the file was written with.
+/// Magic, UIDVALIDITY, and four octets left at zero. How many records the file
+/// holds is read from its length, not from the header.
 const HEADER: u64 = 16;
 
 /// UID, fingerprint and checksum.
@@ -100,8 +103,9 @@ impl Ledger {
 	}
 
 	/// The fingerprint held for `uid`, `None` when it is not confirmed. Calls
-	/// in ascending UID order walk the file forward; a UID below the current
-	/// position seeks to it again.
+	/// in ascending UID order walk the file forward; a UID below the cursor is
+	/// answered where the cursor already is, so it is one an earlier call in the
+	/// same window asked for or one the file does not hold.
 	pub(super) fn fingerprint(&mut self, uid: u32) -> io::Result<Option<Fingerprint>> {
 		if self.count == 0 {
 			return Ok(None);
@@ -164,15 +168,7 @@ impl Ledger {
 				}
 				_ => error,
 			})?;
-		let mut fingerprint = [0u8; 32];
-		fingerprint.copy_from_slice(&bytes[4..36]);
-		let uid = u32::from_le_bytes(bytes[..4].try_into().expect("uid"));
-		if u32::from_le_bytes(bytes[36..40].try_into().expect("checksum"))
-			!= checksum(uid, &fingerprint)
-		{
-			return Err(corrupt(&self.path, "a record does not match its checksum"));
-		}
-		Ok((uid, fingerprint))
+		decode(&bytes).map_err(|_| corrupt(&self.path, "a record does not match its checksum"))
 	}
 
 	fn handle(&self) -> io::Result<&File> {
@@ -218,6 +214,44 @@ impl Ledger {
 		Ok(())
 	}
 
+	/// Read the whole file once, in a fixed workspace, checking every checksum
+	/// and that its UIDs rise strictly. Records are only ever appended in UID
+	/// order, so a file whose records repeat or go backwards was not written by
+	/// this code: answering from it would silently skip messages or claim
+	/// messages that are not stored.
+	fn verify(&mut self) -> io::Result<()> {
+		if self.count == 0 {
+			return Ok(());
+		}
+		let file = self.handle()?;
+		let chunk = WORKSPACE / RECORD as usize * RECORD as usize;
+		let mut buffer = vec![0u8; chunk];
+		let mut previous = None;
+		let mut offset = HEADER;
+		let mut left = self.count * RECORD;
+		while left > 0 {
+			let take = (left as usize).min(chunk);
+			file.read_exact_at(&mut buffer[..take], offset)
+				.map_err(|error| match error.kind() {
+					io::ErrorKind::UnexpectedEof => {
+						corrupt(&self.path, "it is shorter than it was read as")
+					}
+					_ => error,
+				})?;
+			for at in (0..take).step_by(RECORD as usize) {
+				let (uid, _) = decode(&buffer[at..at + RECORD as usize])
+					.map_err(|_| corrupt(&self.path, "a record does not match its checksum"))?;
+				if previous.is_some_and(|last| uid <= last) {
+					return Err(corrupt(&self.path, "its records are not in UID order"));
+				}
+				previous = Some(uid);
+			}
+			offset += take as u64;
+			left -= take as u64;
+		}
+		Ok(())
+	}
+
 	/// Cut the file back to `length` octets.
 	fn trim(&mut self, length: u64) -> io::Result<()> {
 		if !self.writable {
@@ -231,20 +265,26 @@ impl Ledger {
 		durability::sync(file, "ledger-file")
 	}
 
-	/// Record `records` as confirmed. They must arrive in ascending UID order
-	/// above everything the file holds, which is what keeps a window lookup to
-	/// a forward scan. A ledger that can only be read, and one for a source
-	/// that announces no UIDVALIDITY, records nothing: there are no UIDs to name.
+	/// Record `records` as confirmed. They must arrive in ascending UID order,
+	/// which is what keeps a window lookup to a forward scan. A record at or
+	/// below the UID the file already reaches is left out rather than refused:
+	/// a folder that has to be replayed from the start confirms messages below
+	/// what an earlier batch reached, and refusing them would leave that folder
+	/// unable to finish. A batch that does not arrive in ascending order is a
+	/// caller that cannot be trusted with the file, so it is refused by name. A
+	/// ledger that can only be read, and one for a source that announces no
+	/// UIDVALIDITY, records nothing: there are no UIDs to name.
 	pub(super) fn confirm(&mut self, records: &[(u32, Fingerprint)]) -> io::Result<()> {
 		if records.is_empty() || !self.writable {
 			return Ok(());
 		}
-		if records.iter().any(|&(uid, _)| uid <= self.last)
-			|| records.windows(2).any(|pair| pair[1].0 <= pair[0].0)
-		{
-			return Err(io::Error::other(
-				"migration ledger records are out of UID order",
-			));
+		if records.windows(2).any(|pair| pair[1].0 <= pair[0].0) {
+			return Err(out_of_order(&self.path));
+		}
+		let reached = self.last;
+		let records = &records[records.partition_point(|&(uid, _)| uid <= reached)..];
+		if records.is_empty() {
+			return Ok(());
 		}
 		let end = self
 			.count
@@ -264,6 +304,12 @@ impl Ledger {
 		let offset = HEADER + self.count * RECORD;
 		{
 			let file = self.writer()?;
+			// The offset comes from the length read when the file was opened,
+			// so what the file holds is checked before anything is written over
+			// it.
+			if file.metadata()?.len() != offset {
+				return Err(rewritten(&self.path));
+			}
 			file.write_all_at(&body, offset)?;
 			durability::sync(file, "ledger-file")?;
 		}
@@ -375,6 +421,9 @@ pub(super) fn open(
 		ledger.discard()?;
 		ledger.uid_validity = uid_validity;
 	}
+	// Once the records are known to belong to this UIDVALIDITY, read them all:
+	// a discarded ledger holds nothing and there is nothing to check.
+	ledger.verify()?;
 	Ok(ledger)
 }
 
@@ -396,6 +445,19 @@ fn checksum(uid: u32, fingerprint: &Fingerprint) -> u32 {
 	)
 }
 
+/// The UID and fingerprint of one record, when its checksum holds.
+fn decode(bytes: &[u8]) -> io::Result<(u32, Fingerprint)> {
+	let mut fingerprint = [0u8; 32];
+	fingerprint.copy_from_slice(&bytes[4..36]);
+	let uid = u32::from_le_bytes(bytes[..4].try_into().expect("uid"));
+	if u32::from_le_bytes(bytes[36..40].try_into().expect("checksum"))
+		!= checksum(uid, &fingerprint)
+	{
+		return Err(io::Error::other("record checksum"));
+	}
+	Ok((uid, fingerprint))
+}
+
 /// The header bytes of a ledger that holds no records yet.
 fn header(uid_validity: u32) -> Vec<u8> {
 	let mut bytes = Vec::with_capacity(HEADER as usize);
@@ -405,13 +467,13 @@ fn header(uid_validity: u32) -> Vec<u8> {
 	bytes
 }
 
-/// A ledger that cannot be read stops the folder instead of importing
-/// anything: the message names the file and how to start over.
+/// A ledger that cannot be read stops the folder where it is: the message
+/// names the file, what the run had already imported, and how to start over.
 fn corrupt(path: &Path, detail: &str) -> io::Error {
 	io::Error::new(
 		io::ErrorKind::InvalidData,
 		format!(
-			"the migration ledger {} cannot be read, {detail}; nothing was imported and nothing was removed: delete that file to copy this folder again",
+			"the migration ledger {} cannot be read, {detail}; the messages imported up to this point stay imported and nothing is removed: delete that file to copy this folder again",
 			path.display()
 		),
 	)
@@ -422,7 +484,31 @@ fn too_large(path: &Path) -> io::Error {
 	io::Error::new(
 		io::ErrorKind::InvalidData,
 		format!(
-			"the migration ledger {} holds more than {MAX_LEDGER_BYTES} bytes of confirmed messages; nothing was imported and nothing was removed: delete that file to copy this folder again",
+			"the migration ledger {} holds more than {MAX_LEDGER_BYTES} bytes of confirmed messages; the messages imported up to this point stay imported and nothing is removed: delete that file to copy this folder again",
+			path.display()
+		),
+	)
+}
+
+/// A batch whose UIDs do not rise, refused before anything is written: the
+/// scan that reads the file would not find them afterwards.
+fn out_of_order(path: &Path) -> io::Error {
+	io::Error::new(
+		io::ErrorKind::InvalidData,
+		format!(
+			"the migration ledger {} was handed records that do not rise in UID order; nothing was written and nothing is removed: delete that file to copy this folder again",
+			path.display()
+		),
+	)
+}
+
+/// A file that no longer holds what this run read from it, so another run is
+/// appending to it: refuse before overwriting what is there.
+fn rewritten(path: &Path) -> io::Error {
+	io::Error::new(
+		io::ErrorKind::InvalidData,
+		format!(
+			"the migration ledger {} no longer holds what this run read from it, so another run is writing it; nothing was written and nothing is removed: wait for that run to finish and run one migration of this account at a time",
 			path.display()
 		),
 	)
