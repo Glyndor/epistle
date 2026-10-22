@@ -2,8 +2,15 @@
 #
 # Install:
 #   install -Dm644 docs/epistle.service /etc/systemd/system/epistle.service
-#   install -Dm600 epistle.toml         /etc/glyndor/epistle/epistle.toml   # owner-only
+#   install -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle
+#   install -m 0600 -o glyndor-epistle -g glyndor-epistle epistle.toml /etc/epistle/mail.toml
 #   systemctl daemon-reload && systemctl enable --now epistle
+#
+# The config is owned by the account the service runs as, on purpose. The
+# service has only CAP_NET_BIND_SERVICE and no CAP_DAC_OVERRIDE, so an
+# `install -Dm600` from a root shell leaves it 0600 root:root and the server
+# cannot read the file it was told to serve. /etc/epistle is the directory the
+# package's postinst prepares and the path `epistle` reads by default.
 #
 # The unit runs epistle as the persistent, unprivileged `glyndor-epistle`
 # account that the .deb creates from its postinst, with the filesystem locked
@@ -17,8 +24,8 @@
 # without root; drop the capability lines if you only use high ports.
 # ReadWritePaths must match the config's data_dir.
 #
-# The Glyndor prefix is on the whole footprint: the account, /etc/glyndor/epistle
-# and the StateDirectory under /var/lib/glyndor/epistle.
+# The Glyndor prefix is on the whole footprint: the account, /etc/epistle and
+# the StateDirectory under /var/lib/glyndor/epistle.
 #
 # Running `epistle serve` straight from the package like this is for a
 # single-host, non-container deployment; the supported production shape is the
@@ -32,7 +39,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/epistle serve --config /etc/glyndor/epistle/epistle.toml
+ExecStart=/usr/bin/epistle serve --config /etc/epistle/mail.toml
 Restart=on-failure
 RestartSec=5s
 

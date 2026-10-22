@@ -268,22 +268,34 @@ def failure_issue(reports_dir: Path, run_url: str) -> dict:
 
 
 def _read_reports_from_dir(directory: Path) -> list[dict]:
-	"""Find every `audit-json-<ref>/audit.json` in `directory` and
-	normalize it via `parse_audit_json`. The ref is taken from the
-	directory name (`audit-json-develop` -> `develop`).
+	"""Find every JSON report in an `audit-json-<ref>/` subdirectory of
+	`directory` and normalize each one via `parse_audit_json`.
+
+	The ref is taken from the directory name (`audit-json-develop` ->
+	`develop`). Inside it, `audit.json` is the ref's own workspace and a
+	report named after another one (`audit-fuzz-Cargo.json`) is a second
+	workspace of the same ref, which the label carries as
+	`<ref>/<workspace>` so the issue says which graph the advisory came
+	from.
 	"""
 	if not directory.exists():
 		raise ValueError(f"{directory} does not exist; the artifact download is stale")
 	if not directory.is_dir():
 		raise ValueError(f"{directory} is not a directory")
 	reports: list[dict] = []
-	for path in sorted(directory.glob("audit-json-*/audit.json")):
-		ref = path.parent.name[len("audit-json-"):]
-		try:
-			text = path.read_text(encoding="utf-8")
-		except OSError as exc:
-			raise ValueError(f"cannot read {path}: {exc}") from exc
-		reports.append(parse_audit_json(text, ref))
+	for ref_dir in sorted(directory.glob("audit-json-*")):
+		ref = ref_dir.name[len("audit-json-"):]
+		for path in sorted(ref_dir.glob("*.json")):
+			label = ref
+			if path.name != "audit.json":
+				stem = path.stem
+				workspace = stem[len("audit-"):] if stem.startswith("audit-") else stem
+				label = f"{ref}/{workspace}" if ref else workspace
+			try:
+				text = path.read_text(encoding="utf-8")
+			except OSError as exc:
+				raise ValueError(f"cannot read {path}: {exc}") from exc
+			reports.append(parse_audit_json(text, label))
 	return reports
 
 

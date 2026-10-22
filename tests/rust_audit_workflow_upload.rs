@@ -11,8 +11,11 @@
 //! step block, then asserts:
 //!
 //! 1. The step carries `if: always()` so a failed audit still uploads.
-//! 2. The `path:` lists `audit-fuzz.json` so fuzz's JSON travels with
-//!    the same artifact.
+//! 2. The `path:` globs `audit-*.json`, which covers the name the
+//!    extra-lockfile step derives from its input path
+//!    (`audit-fuzz-Cargo.json` for `fuzz/Cargo.lock`). The name has to be
+//!    derived from the whole path, not from the file's base name, so two
+//!    workspaces cannot land on the same report.
 
 use std::fs;
 use std::path::Path;
@@ -73,12 +76,13 @@ fn reusable_audit_uploads_json_unconditionally_and_includes_fuzz() {
 	);
 
 	assert!(
-		step.contains("audit-fuzz.json"),
-		"reusable-rust-audit.yml `Upload cargo audit JSON` step does not list `audit-fuzz.json` \
-         in its `path:`.\n\
-         The fuzz (or any extra-lockfile) audit emits JSON to `audit-fuzz.json`; \
-         without including it in the same artifact, the report job sees only the \
-         root audit's findings and the fuzz graph's advisories are invisible.\n\
+		step.contains("audit-*.json"),
+		"reusable-rust-audit.yml `Upload cargo audit JSON` step does not list the \
+         `audit-*.json` glob in its `path:`.\n\
+         The extra-lockfile audit writes one report per workspace, named after the \
+         lockfile path (`fuzz/Cargo.lock` -> `audit-fuzz-Cargo.json`); without a glob \
+         the upload lists one hardcoded name and a second workspace is invisible to \
+         the report job.\n\
          Step block was:\n{step}",
 	);
 }

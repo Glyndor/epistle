@@ -21,28 +21,37 @@ fn purge(subuid: &str, subgid: &str) -> String {
 	let bin = root.join("bin");
 	std::fs::create_dir(&bin).unwrap();
 	for (name, body) in [
+		("id", "exit 1"),
 		("loginctl", "exit 0"),
 		("deluser", "exit 0"),
 		("usermod", "printf '%s\\n' \"$@\" > \"$USERMOD_LOG\""),
 	] {
 		write_stub(&bin.join(name), body);
 	}
+	std::fs::create_dir_all(root.join("config")).unwrap();
 	let mut script = read("debian/epistle.postrm");
 	for (from, to) in [
 		("/etc/subuid", "subuid"),
 		("/etc/subgid", "subgid"),
 		("/var/lib/glyndor/epistle", "state"),
 		("/var/lib/epistle-rollback", "rollback"),
+		("/etc/epistle", "config"),
+		("/etc/glyndor", "legacy-parent"),
 		("/run/systemd/system", "no-systemd"),
 	] {
 		script = script.replace(from, root.join(to).to_str().unwrap());
 	}
-	assert!(
-		!script.contains("/var/lib/glyndor") && !script.contains("/etc/sub"),
-		"the purge under test must only touch the fixture directory"
-	);
+	// Nothing runs as the account in these tests, so the writers check has
+	// nothing to wait for; the wait itself is pinned in `purge_safety`.
+	script = script.replace("EPISTLE_STOP_WAIT=30", "EPISTLE_STOP_WAIT=0");
+	for untouched in ["/var/lib/glyndor", "/etc/sub", "/etc/epistle"] {
+		assert!(
+			!script.contains(untouched),
+			"the purge under test must only touch the fixture directory, but {untouched} survived"
+		);
+	}
 	let script_path = root.join("postrm");
-	std::fs::write(&script_path, script).unwrap();
+	std::fs::write(&script_path, &script).unwrap();
 	let log = root.join("usermod.log");
 	let remove = Command::new("sh")
 		.arg(&script_path)
