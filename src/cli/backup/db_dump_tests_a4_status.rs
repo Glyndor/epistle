@@ -8,6 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::ExitCode;
 
+use super::db_dump_marker::output_ends_with_pg_dump_complete;
 use super::{BackupError, Database, collect_dump_with};
 
 /// Write an executable `/bin/sh` stub at `dest` that prints `body` on
@@ -170,4 +171,36 @@ fn failed_dump_leaves_the_backup_stream_untouched() {
 		"a failed dump must not reach the archive stream ({} bytes)",
 		archive.len()
 	);
+}
+
+/// What pg_dump 18 prints at the end of a plain dump: the marker, a bare
+/// comment line, a blank line and the `\unrestrict` line added in 2025.
+const REAL_TAIL: &[u8] =
+	b"CREATE TABLE t (id int);\n\n--\n-- PostgreSQL database dump complete\n--\n\n\\unrestrict kP3xQ9\n";
+
+#[test]
+fn closing_of_a_real_pg_dump_is_a_complete_dump() {
+	assert!(output_ends_with_pg_dump_complete(REAL_TAIL));
+	assert!(output_ends_with_pg_dump_complete(
+		b"x\n--\n-- PostgreSQL database dump complete\n--\n\n"
+	));
+	assert!(output_ends_with_pg_dump_complete(
+		b"x\n-- PostgreSQL database dump complete"
+	));
+}
+
+#[test]
+fn a_cut_dump_is_not_a_complete_dump() {
+	assert!(!output_ends_with_pg_dump_complete(
+		b"CREATE TABLE t (id int);\nCOPY t FROM stdin;\n1\n"
+	));
+	assert!(!output_ends_with_pg_dump_complete(b""));
+	// The marker with more dump after it: a second dump glued on, or noise.
+	assert!(!output_ends_with_pg_dump_complete(
+		b"-- PostgreSQL database dump complete\nCOPY t FROM stdin;\n1\n"
+	));
+	// The marker inside another line is not the closing line.
+	assert!(!output_ends_with_pg_dump_complete(
+		b"INSERT INTO t VALUES ('-- PostgreSQL database dump complete');\n"
+	));
 }

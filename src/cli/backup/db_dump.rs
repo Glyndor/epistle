@@ -36,8 +36,11 @@ use crate::config::Database;
 
 #[path = "db_dump_host_temp.rs"]
 mod db_dump_host_temp;
+#[path = "db_dump_marker.rs"]
+mod db_dump_marker;
 
 use db_dump_host_temp::RestoreHostTemp;
+use db_dump_marker::output_ends_with_pg_dump_complete;
 
 #[cfg(test)]
 #[path = "db_dump_tests_debug.rs"]
@@ -260,22 +263,6 @@ pub(crate) fn collect_dump_with(
 		}
 		Ok(output.stdout)
 	})
-}
-
-/// True when the trimmed tail of `stdout` carries pg_dump's closing
-/// marker. `trim_end` only strips trailing whitespace; the line break pg_dump
-/// emits at the very end stays out of the comparison so a dump saved with
-/// `printf` in a stub (no trailing newline) still matches the recorded
-/// marker line.
-fn output_ends_with_pg_dump_complete(stdout: &[u8]) -> bool {
-	let end = stdout
-		.iter()
-		.rposition(|byte| !byte.is_ascii_whitespace())
-		.map(|position| position + 1)
-		.unwrap_or(0);
-	std::str::from_utf8(&stdout[..end])
-		.map(|tail| tail.ends_with("-- PostgreSQL database dump complete"))
-		.unwrap_or(false)
 }
 
 /// Run the SQL bytes from the archive into the configured database.
