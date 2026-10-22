@@ -184,7 +184,7 @@ fn remove(field: &[u8], hostname: &str, skip_leader: bool) -> bool {
 /// SMTP accept as part of the header name. Such bytes may appear at the start
 /// of the name, between characters, or at the end. `-` in `name` is treated as
 /// a separator so a stray dash never blocks an otherwise-clean match.
-fn name_matches(name: &[u8], reserved: &[u8]) -> bool {
+pub(crate) fn name_matches(name: &[u8], reserved: &[u8]) -> bool {
 	let (mut i, j) = align(name, reserved);
 	if j != reserved.len() {
 		return false;
@@ -197,7 +197,7 @@ fn name_matches(name: &[u8], reserved: &[u8]) -> bool {
 
 /// Whether `name` starts with `prefix` under the same rules, ignoring anything
 /// after the matched prefix.
-fn name_starts_with(name: &[u8], prefix: &[u8]) -> bool {
+pub(crate) fn name_starts_with(name: &[u8], prefix: &[u8]) -> bool {
 	let (_, j) = align(name, prefix);
 	j == prefix.len()
 }

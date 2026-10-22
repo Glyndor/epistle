@@ -458,6 +458,8 @@ X-Epistle : 2\r\n\
 X-Spam-Status: Yes\r\n\
 X-Epistol: not ours\r\n\
 X-Epistlefoo: not ours either\r\n\
+X-Epistle-: bare\r\n\
+X-Epistle -Spaced: odd\r\n\
 \r\nX-Epistle: body\r\n";
 	let kept = strip_headers_with_namespace(data, "X-Epistle");
 	let text = String::from_utf8(kept.clone()).expect("utf8");
@@ -465,6 +467,9 @@ X-Epistlefoo: not ours either\r\n\
 	assert!(!text.contains("x-epistle-future"), "{text}");
 	// A trailing space in the name still matches.
 	assert!(!text.contains("X-Epistle : 2"), "{text}");
+	// The bare namespace and a spaced spelling are read as ours downstream.
+	assert!(!text.contains("X-Epistle-: bare"), "{text}");
+	assert!(!text.contains("Spaced: odd"), "{text}");
 	// A different field, a name that merely starts the same and the body
 	// are all kept.
 	assert!(text.contains("X-Spam-Status: Yes"), "{text}");

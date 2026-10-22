@@ -313,13 +313,16 @@ pub fn strip_headers_with_namespace(data: &[u8], name: &str) -> Vec<u8> {
 	rewrite_header_block(data, |field| !in_namespace(field, name.as_bytes()))
 }
 
-/// Whether the field name `field` is `namespace` itself or a name inside
-/// it, the hyphen included.
+/// Whether the field name `field` is `namespace` itself or a name inside it,
+/// the hyphen included, read the way a downstream reader reads it: case
+/// folded, with the same tolerance for whitespace and separators inside the
+/// name that the inbound strip applies, so `X-Epistle-` alone and a spaced
+/// spelling are covered too. `X-Epistlefoo` is a different name and stays.
 fn in_namespace(field: &[u8], namespace: &[u8]) -> bool {
-	field.len() == namespace.len() && field.eq_ignore_ascii_case(namespace)
-		|| field.len() > namespace.len() + 1
-			&& field[namespace.len()] == b'-'
-			&& field[..namespace.len()].eq_ignore_ascii_case(namespace)
+	use super::inbound_headers::{name_matches, name_starts_with};
+	let mut dashed = namespace.to_vec();
+	dashed.push(b'-');
+	name_matches(field, namespace) || name_starts_with(field, &dashed)
 }
 
 /// In-place header strip: rewrite `data` in place to remove every
