@@ -79,6 +79,14 @@ fn without_the_keys_the_bulk_threshold_is_twenty_recipients() {
 }
 
 #[test]
+fn a_bulk_threshold_of_zero_is_refused() {
+	// Zero would make every transactional submission with a recipient bulk,
+	// and a notice to one person is correspondence.
+	assert!(invalid(&format!("{BASE}\nbulk_recipients = 0\n")));
+	assert!(!invalid(&format!("{BASE}\nbulk_recipients = 1\n")));
+}
+
+#[test]
 fn a_domain_organization_value_has_to_be_a_header_safe_ascii_name() {
 	// A key that is not a DNS name, an empty value, and a value carrying a
 	// line break are all refused: the value reaches an `Organization`

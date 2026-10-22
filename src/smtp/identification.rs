@@ -14,6 +14,9 @@
 //! a configured value, and the `List-Id`/`List-Post` pair of a list
 //! address, which is the same block local delivery prepends. A
 //! `List-Unsubscribe` the client chose, one-click included, is always kept.
+//! A client that sends one of these fields twice keeps the first copy: RFC
+//! 2369 lets the field appear more than once and does not say which one a
+//! receiver should act on.
 
 use std::collections::BTreeMap;
 
@@ -93,6 +96,19 @@ impl Policy {
 	}
 }
 
+/// The fields of a submission that say who sent it and how to leave it. A
+/// client may send them, one copy of each: the server then decides each in
+/// its own way, replacing the client's copy, adding one where there is none,
+/// or leaving the one it sent.
+const IDENTIFICATION_FIELDS: &[&str] = &[
+	"feedback-id",
+	"list-id",
+	"list-post",
+	"list-unsubscribe",
+	"list-unsubscribe-post",
+	"organization",
+];
+
 /// Write the headers `policy` asks for onto `message`, in the order
 /// [`Policy`] documents: the vendor marker, then `Organization`, then
 /// `Feedback-ID`, then the list block, then the bulk unsubscribe.
@@ -100,9 +116,9 @@ impl Policy {
 /// A field the client already wrote is left alone, with the two exceptions
 /// the module says: `Organization`, which the domain's configured value
 /// replaces, and the `List-Id`/`List-Post` of a list address, which is the
-/// same block local delivery prepends. Exactly one `List-Unsubscribe` ever
-/// goes out: whichever came first, the client's, the list's or the bulk
-/// one, wins and the others are not written.
+/// same block local delivery prepends. Exactly one of each field above ever
+/// goes out: whichever came first, the client's, the list's or the bulk one,
+/// wins and the others are not written.
 pub fn apply(
 	message: &mut AcceptedMessage,
 	class: MailClass,
@@ -119,8 +135,12 @@ pub fn apply(
 	// because this step sees the server's own trace header on the SMTP
 	// path already.
 	let client = std::mem::take(&mut message.data);
-	message.data = crate::smtp::trace::strip_headers_with_prefix(&client, "X-Epistle");
+	message.data = crate::smtp::trace::strip_headers_with_namespace(&client, "X-Epistle");
 	strip_headers(&mut message.data, &["authentication-results"]);
+	// Two of one field are two claims about the same thing and no reason to
+	// read both, so what the client wrote twice is reduced to what it wrote
+	// first.
+	crate::smtp::trace::keep_first_of_each_in_place(&mut message.data, IDENTIFICATION_FIELDS);
 	let mut lines = String::new();
 	if policy.x_epistle {
 		push(
@@ -169,6 +189,10 @@ pub fn apply(
 		lines.push_str(&identity);
 		if !unsubscribed && let Some(unsubscribe) = directory.list_unsubscribe(&sender) {
 			lines.push_str(&unsubscribe);
+			// RFC 8058 posts to an `https` URL, and the mailto the list
+			// block just wrote is not one, so a post the client left
+			// behind now names something the message does not carry.
+			strip_headers(&mut message.data, &["list-unsubscribe-post"]);
 			unsubscribed = true;
 		}
 	}
@@ -177,6 +201,7 @@ pub fn apply(
 		&& bulk(class, message.recipients.len(), policy.bulk_recipients)
 		&& let Some(uri) = unsubscribe_uri(&sender)
 	{
+		strip_headers(&mut message.data, &["list-unsubscribe-post"]);
 		push(
 			&mut lines,
 			"List-Unsubscribe",

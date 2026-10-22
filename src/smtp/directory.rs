@@ -308,10 +308,12 @@ impl Directory {
 	}
 
 	/// The `List-Id` and `List-Post` of a list address, each with a trailing
-	/// CRLF, or `None` when it is not a list. Kept apart from the
-	/// `List-Unsubscribe` so a caller that already has one keeps it.
+	/// CRLF, or `None` when it is not a list. The address is the canonical
+	/// spelling of the alias, not the one the caller passed in. Kept apart
+	/// from the `List-Unsubscribe` so a caller that already has one keeps it.
 	pub fn list_identity(&self, address: &str) -> Option<String> {
-		let spec = self.aliases.get(&normalize(address))?;
+		let address = &normalize(address);
+		let spec = self.aliases.get(address)?;
 		let list_id = spec.list_id.as_ref()?;
 		Some(format!(
 			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n"
@@ -319,9 +321,11 @@ impl Directory {
 	}
 
 	/// The `List-Unsubscribe` of a list address, a `mailto:` URI with the
-	/// unsubscribe subject, or `None` when it is not a list.
+	/// unsubscribe subject, or `None` when it is not a list. The address is
+	/// the canonical spelling of the alias, not the one the caller passed in.
 	pub fn list_unsubscribe(&self, address: &str) -> Option<String> {
-		self.aliases.get(&normalize(address))?.list_id.as_ref()?;
+		let address = &normalize(address);
+		self.aliases.get(address)?.list_id.as_ref()?;
 		Some(format!(
 			"List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
 		))

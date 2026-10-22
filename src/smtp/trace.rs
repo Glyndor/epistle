@@ -250,17 +250,47 @@ pub fn strip_bcc_in_place(data: &mut Vec<u8>) {
 /// case-insensitively), folded continuation lines included. The body and
 /// every other field are kept byte for byte.
 pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
+	rewrite_header_block(data, |name| !named(name, names))
+}
+
+/// `data` rewritten to keep only the first field of each name in `names`
+/// (compared case-insensitively), folded continuation lines included. A
+/// second copy of a field the client wrote twice is a second claim about the
+/// same thing, and RFC 2369 leaves a receiver to work out which one to act on.
+/// The body and every other field are kept byte for byte.
+pub fn keep_first_of_each_in_place(data: &mut Vec<u8>, names: &[&str]) {
+	let mut seen = vec![false; names.len()];
+	rewrite_header_block_in_place(data, |name| {
+		let Some(index) = names
+			.iter()
+			.position(|wanted| named(name, std::slice::from_ref(wanted)))
+		else {
+			return true;
+		};
+		let first = !seen[index];
+		seen[index] = true;
+		first
+	});
+}
+
+/// Whether `name` is one of `names`, compared case-insensitively.
+fn named(name: &[u8], names: &[&str]) -> bool {
+	names
+		.iter()
+		.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
+}
+
+/// `data` without the header fields `keep` does not want, folded
+/// continuation lines included: a continuation is kept or dropped with the
+/// field above it. The body and every other line are kept byte for byte.
+fn rewrite_header_block(data: &[u8], mut keep: impl FnMut(&[u8]) -> bool) -> Vec<u8> {
 	let header_end = header_block_end(data);
 	let mut out = Vec::with_capacity(data.len());
 	let mut dropping = false;
 	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
 		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
 		if !continuation {
-			dropping = field_name(line).is_some_and(|name| {
-				names
-					.iter()
-					.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
-			});
+			dropping = field_name(line).is_some_and(|name| !keep(name));
 		}
 		if !dropping {
 			out.extend_from_slice(line);
@@ -270,43 +300,49 @@ pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
 	out
 }
 
-/// `data` without any header field whose name starts with `prefix`
-/// (compared case-insensitively), folded continuation lines included. The
-/// body and every other field are kept byte for byte. Used to reserve a
-/// namespace (`X-Epistle`): one field cannot be named in a list that a
-/// future field would have to be added to.
-pub fn strip_headers_with_prefix(data: &[u8], prefix: &str) -> Vec<u8> {
-	let header_end = header_block_end(data);
-	let mut out = Vec::with_capacity(data.len());
-	let mut dropping = false;
-	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
-		if !matches!(line.first(), Some(b' ' | b'\t')) {
-			dropping = field_name(line).is_some_and(|name| {
-				name.len() >= prefix.len()
-					&& name[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
-			});
-		}
-		if !dropping {
-			out.extend_from_slice(line);
-		}
-	}
-	out.extend_from_slice(&data[header_end..]);
-	out
+/// `data` without any header field in the namespace `name` (compared
+/// case-insensitively), folded continuation lines included. The body and
+/// every other field are kept byte for byte. Used to reserve a namespace
+/// (`X-Epistle`): one field cannot be named in a list that a future field
+/// would have to be added to.
+///
+/// The namespace is the exact field name and that name followed by a
+/// hyphen, not a text prefix: `X-Epistle` and `X-Epistle-Future` are ours,
+/// `X-Epistlefoo` belongs to whoever sent it.
+pub fn strip_headers_with_namespace(data: &[u8], name: &str) -> Vec<u8> {
+	rewrite_header_block(data, |field| !in_namespace(field, name.as_bytes()))
+}
+
+/// Whether the field name `field` is `namespace` itself or a name inside
+/// it, the hyphen included.
+fn in_namespace(field: &[u8], namespace: &[u8]) -> bool {
+	field.len() == namespace.len() && field.eq_ignore_ascii_case(namespace)
+		|| field.len() > namespace.len() + 1
+			&& field[namespace.len()] == b'-'
+			&& field[..namespace.len()].eq_ignore_ascii_case(namespace)
 }
 
 /// In-place header strip: rewrite `data` in place to remove every
 /// header field whose name is one of `names`, folded continuation
-/// lines included. Saves the body copy the slice-returning variant
-/// forces. The buffer grows up to `data.len()` once; nothing is
-/// reallocated when no field matches.
+/// lines included.
 pub fn strip_headers_in_place(data: &mut Vec<u8>, names: &[&str]) {
+	rewrite_header_block_in_place(data, |name| !named(name, names))
+}
+
+/// In-place header rewrite: keep the field when `keep` wants its name, drop
+/// it otherwise, and move the body up over the space the dropped fields
+/// leave. Saves the body copy the slice-returning variants force. The buffer
+/// grows up to `data.len()` once; nothing is reallocated when no field is
+/// dropped.
+fn rewrite_header_block_in_place(data: &mut Vec<u8>, mut keep: impl FnMut(&[u8]) -> bool) {
 	let header_end = header_block_end(data);
 	// Pre-compute the kept lines' (original start, length) so the
 	// in-place copy can read from the right place in the original
 	// buffer even after earlier lines have been moved down. The
-	// structure mirrors the slice-returning `strip_headers`: walk
-	// the header block line by line, drop the right ones, and keep
-	// a list of (kept_offset, kept_length) pairs to copy afterwards.
+	// structure mirrors the slice-returning `rewrite_header_block`:
+	// walk the header block line by line, drop the right ones, and
+	// keep a list of (kept_offset, kept_length) pairs to copy
+	// afterwards.
 	struct Kept {
 		offset: usize,
 		length: usize,
@@ -326,11 +362,7 @@ pub fn strip_headers_in_place(data: &mut Vec<u8>, names: &[&str]) {
 		let line = &data[line_start..line_end];
 		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
 		if !continuation {
-			dropping = field_name(line).is_some_and(|name| {
-				names
-					.iter()
-					.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
-			});
+			dropping = field_name(line).is_some_and(|name| !keep(name));
 		}
 		if !dropping {
 			kept.push(Kept {

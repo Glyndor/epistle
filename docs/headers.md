@@ -58,7 +58,7 @@ without regard to case.
 | `Importance`, `X-Priority` | REST `importance` field | `high` writes `Importance: high` and `X-Priority: 1 (Highest)`, `normal` writes `3 (Normal)`, `low` writes `5 (Lowest)` |
 | `In-Reply-To`, `References` | REST fields; JMAP properties; vacation replies when the original had a `Message-ID` | |
 | `List-Id`, `List-Post` | Local delivery to a list address (an alias with a list id); a submission whose envelope sender is that list address | Delivery adds them above `Received`, together with a `List-Unsubscribe`. Submission adds the same three fields, replacing whatever the client wrote for them; `default_list_id` (`true`) turns that off |
-| `List-Unsubscribe`, `List-Unsubscribe-Post` | REST `list_unsubscribe` and `list_unsubscribe_post`; local delivery to a list address and a submission from one (`List-Unsubscribe` only); bulk `transactional` submissions (`List-Unsubscribe` only) | REST: at most four URLs, `mailto:` or `https://`, and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` needs an `https://` URL. Marketing mail is refused without both. A list address gets a `mailto:` URL with `?subject=unsubscribe`, which is also what a bulk `transactional` submission gets when it has none |
+| `List-Unsubscribe`, `List-Unsubscribe-Post` | REST `list_unsubscribe` and `list_unsubscribe_post`; local delivery to a list address and a submission from one (`List-Unsubscribe` only); bulk `transactional` submissions (`List-Unsubscribe` only) | REST: at most four URLs, `mailto:` or `https://`, and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` needs an `https://` URL. Marketing mail is refused without both. A list address gets a `mailto:` URL with `?subject=unsubscribe`, which is also what a bulk `transactional` submission gets when it has none; a client's `List-Unsubscribe-Post` is removed with it, since it would name an `https` URL the message no longer carries |
 | `Message-ID` | REST always; SMTP submission and JMAP when missing; alert emails; DMARC and TLS-RPT reports | `<uuid-v7@domain>`. REST uses the first configured domain, not the sender's. SMTP submission uses the domain of the envelope sender (the hostname when there is none). Failure notices, vacation replies and abuse reports get none from epistle |
 | `Organization` | A submission whose sending domain has an entry in `domain_organization` | The configured value of the domain, and it replaces what the client wrote. With no entry for the domain the client's own value stays. See [Identification headers](#identification-headers) |
 | `Precedence` | `bulk` on marketing mail | Any `Precedence` the client wrote is removed first. Other classes are left alone |
@@ -71,7 +71,7 @@ without regard to case.
 | `To` | REST (empty `to` is allowed when `cc` or `bcc` has someone); JMAP; system messages | |
 | `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, not `X-Priority`. Written after the other optional headers, before `MIME-Version`. The name keeps the case you gave it |
 | `X-Epistle` | Nothing by default; every submission when `x_epistle_header` is on | The fixed value `1`. No version rides in it and no version field sits beside it |
-| `X-Epistle-*` | Reserved for local verdicts | All fields in this namespace are removed on unauthenticated SMTP ingress and on every submission, by name prefix, before the server writes any of its own |
+| `X-Epistle-*` | Reserved for local verdicts | `X-Epistle` and every name under it with a hyphen are removed on every submission, and `X-Epistle-*` on unauthenticated SMTP ingress, before the server writes any of its own. The namespace is the name and the names under it, not a text prefix, so `X-Epistlefoo` is the sender's and survives |
 | `X-Epistle-Attachment-Warning` | Inbound mail the `[attachments]` policy flags or quarantines | Comma-separated reason codes only, never text from the message. Removed first from inbound and from every submission, so only the server's own verdict is ever in it |
 | `X-Mailbox` | Written by `epistle export` and read by `epistle import` in an mbox file | A marker of the mbox format, not a header of any message in transit |
 | `X-Spam-Score`, `X-Spam-Status` | Inbound mail from a peer that did not log in whose Bayesian score reaches `bayes_junk_at` | `X-Spam-Status: Yes` and the probability with six decimals, above `Received`. All sender-supplied `X-Spam-*` fields are removed on unauthenticated SMTP ingress before local verdicts are added |
@@ -88,8 +88,8 @@ so every one of them is covered by the signature. Each has a switch in the
 | Field | When the server writes it | Switch (default) |
 |---|---|---|
 | `Feedback-ID` | A submission with no `Feedback-ID` of its own. `epistle:<class>:<domain>`, where the class is the one the server granted and the domain is the one the message is sent for. No account name and no other personal data goes in it | `default_feedback_id` (`true`) |
-| `List-Unsubscribe` | A `transactional` submission with more recipients than `bulk_recipients`. One `mailto:` URI naming the sender with `?subject=unsubscribe`, percent-encoded per RFC 6068 so a `?`, an `&` or a `%` in the address cannot read as a query. A submission that already has a `List-Unsubscribe` is left alone, whatever wrote it | `default_list_unsubscribe` (`true`) and `bulk_recipients` (`20`) |
-| `List-Id`, `List-Post`, `List-Unsubscribe` | A submission whose envelope sender is a `[[alias]]` with a `list_id`. The same block local delivery prepends, minus the `List-Unsubscribe` when the client already sent one. The two fields that say what the list is replace whatever the client wrote for them; the unsubscribe the client chose is kept, one-click included, because RFC 8058 posts to it | `default_list_id` (`true`) |
+| `List-Unsubscribe` | A `transactional` submission with more recipients than `bulk_recipients`. One `mailto:` URI naming the sender with `?subject=unsubscribe`, percent-encoded per RFC 6068 so a `?`, an `&` or a `%` in the address cannot read as a query. A submission that already has a `List-Unsubscribe` is left alone, whatever wrote it. When the server writes one and the client left none, the client's `List-Unsubscribe-Post` goes with it: RFC 8058 posts to an `https` URL, and a `mailto:` is not one | `default_list_unsubscribe` (`true`) and `bulk_recipients` (`20`) |
+| `List-Id`, `List-Post`, `List-Unsubscribe` | A submission whose envelope sender is a `[[alias]]` with a `list_id`. The same block local delivery prepends, minus the `List-Unsubscribe` when the client already sent one. The two fields that say what the list is replace whatever the client wrote for them and name the alias in its canonical form; the unsubscribe the client chose is kept, one-click included, because RFC 8058 posts to it | `default_list_id` (`true`) |
 | `X-Epistle` | Nothing, unless asked for: the fixed value `1`, with no version in it and no version field beside it. It says the message left an epistle server and nothing more | `x_epistle_header` (`false`) |
 | `Organization` | A submission whose sending domain has an entry in `domain_organization`. That value replaces whatever the client wrote for the field; with no entry configured the client's own claim is left alone, because the server has no opinion to overrule it with | `organization_header` (`true`) |
 
@@ -100,8 +100,8 @@ unsubscribe the sender controls (see the `List-Unsubscribe` row above); personal
 mail is correspondence between people, where an unsubscribe address would be a
 stranger's mailbox offered to everyone. A submission that already carries a
 `List-Unsubscribe`, from the client or from the list block, keeps it, and only
-one ever goes out: the server never replaces an address the sender chose, and
-never adds a second one.
+one ever goes out: the server never replaces an address the sender chose, never
+adds a second one, and a sender who wrote two of its own keeps the first.
 
 Nothing on the server answers that `mailto:` URI. It names the sender's own
 mailbox and the subject the sender's own tooling has to recognise, so the
@@ -117,13 +117,18 @@ RFC 2919 has no room for one.
 A client over SMTP authenticates and then writes the message, so it can send
 any header it likes. What reaches a receiver is what the server does with it:
 
-- Rewritten by the server: every `X-Epistle-*` field is removed by name prefix
-  before the server writes its own, `Authentication-Results` is removed because
-  a submission had no check of ours to report, and `Organization` is replaced
-  by the domain's configured value when one is configured.
-- Left as the client wrote it: `Feedback-ID`, and `Organization` when no value
-  is configured for the domain. A sender with two `Feedback-ID` fields keeps
-  both.
+- Rewritten by the server: `X-Epistle` and every name under it with a hyphen
+  are removed before the server writes its own, `Authentication-Results` is
+  removed because a submission had no check of ours to report, and
+  `Organization` is replaced by the domain's configured value when one is
+  configured.
+- Left as the client wrote it: `Feedback-ID`, `List-Unsubscribe` with its
+  `List-Unsubscribe-Post`, and `Organization` when no value is configured for
+  the domain.
+- One copy of each: a sender that writes one of these fields twice keeps the
+  first and loses the second. RFC 2369 lets `List-Unsubscribe` appear more
+  than once, but a receiver is then left to guess which one it should act on,
+  and the copy it does not pick is a copy the sender wanted followed.
 - Written once by the server: `List-Id`, `List-Post`, `List-Unsubscribe` and
   `X-Epistle`, each at most one.
 

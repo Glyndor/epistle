@@ -50,6 +50,7 @@ impl Config {
 		self.validate_max_recipients()?;
 		self.validate_message_limits()?;
 		self.validate_clock_external()?;
+		self.validate_bulk_recipients()?;
 		self.validate_domain_organization()
 	}
 

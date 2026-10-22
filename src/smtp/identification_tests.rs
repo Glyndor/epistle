@@ -463,6 +463,9 @@ fn a_client_cannot_write_our_namespace_even_when_the_marker_is_off() {
 	);
 }
 
+#[path = "identification_client_tests.rs"]
+mod client;
+
 #[test]
 fn every_field_lands_above_the_headers_the_client_wrote() {
 	let mut message = submitted("team@example.org", &["bob@elsewhere.example"], "");
