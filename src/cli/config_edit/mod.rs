@@ -10,7 +10,7 @@ mod restart;
 mod rules;
 mod tables;
 mod transaction;
-pub(crate) use transaction::{Companion, commit_pair};
+pub(crate) use transaction::{Companion, announce_swept, commit_pair, sweep_orphans};
 
 pub(crate) use restart::{after_change_reporting, after_change_with, after_ports_change_reporting};
 pub use rules::FieldChange;

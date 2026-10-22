@@ -51,6 +51,7 @@ fn a_port_another_listener_answers_on_is_refused() {
 				ListenerKind::Imap,
 				&narrow,
 				address.parse().unwrap(),
+				address.parse().unwrap(),
 				25,
 				false
 			)),
@@ -64,6 +65,7 @@ fn a_port_another_listener_answers_on_is_refused() {
 			ListenerKind::Imap,
 			&narrow,
 			"0.0.0.0".parse().unwrap(),
+			"0.0.0.0".parse().unwrap(),
 			143,
 			false
 		)
@@ -75,6 +77,7 @@ fn a_port_another_listener_answers_on_is_refused() {
 			&two,
 			ListenerKind::Imap,
 			&narrow,
+			"127.0.0.1".parse().unwrap(),
 			"127.0.0.1".parse().unwrap(),
 			1143,
 			false
@@ -102,6 +105,7 @@ fn in_a_stack_the_published_host_address_is_what_two_mappings_share() {
 			ListenerKind::Imap,
 			&BTreeMap::new(),
 			"127.0.0.1".parse().unwrap(),
+			"0.0.0.0".parse().unwrap(),
 			143,
 			true
 		)),
@@ -122,6 +126,7 @@ fn in_a_stack_the_published_host_address_is_what_two_mappings_share() {
 			ListenerKind::Imap,
 			&BTreeMap::new(),
 			"127.0.0.1".parse().unwrap(),
+			"0.0.0.0".parse().unwrap(),
 			143,
 			true
 		)
@@ -133,6 +138,7 @@ fn in_a_stack_the_published_host_address_is_what_two_mappings_share() {
 			&host,
 			ListenerKind::Imap,
 			&BTreeMap::new(),
+			"127.0.0.1".parse().unwrap(),
 			"127.0.0.1".parse().unwrap(),
 			1143,
 			false
@@ -170,60 +176,58 @@ fn fixture(listener: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
-fn invalid_compose_leaves_the_config_unchanged() {
-	for bytes in ["{invalid", r#"{"services":{"mail":[]}}"#] {
-		let (dir, path) = fixture("imaps");
-		let compose = dir.path().join("compose/compose.yaml");
-		std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
-		std::fs::write(&compose, bytes).unwrap();
-		let before = std::fs::read(&path).unwrap();
-		let result = run(
-			&path,
-			Request {
-				name: ServiceName::Imaps,
-				bind: None,
-				port: Some(19994),
-			},
+fn a_mapping_can_not_take_a_port_a_loopback_listener_holds_inside_the_container() {
+	let two = config(
+		"",
+		&[
+			(ListenerKind::Smtp, "::", None),
+			(ListenerKind::Api, "127.0.0.1", Some(8025)),
+		],
+	);
+	// The api listener holds 8025 on the container loopback and publishes
+	// nothing, but the container binds the new mapping on every address, so
+	// the engine can not start with both.
+	let error = refusal(free_port(
+		&two,
+		ListenerKind::Imaps,
+		&BTreeMap::new(),
+		"203.0.113.5".parse().unwrap(),
+		"0.0.0.0".parse().unwrap(),
+		8025,
+		true,
+	))
+	.unwrap();
+	assert!(
+		error.contains("already bound inside the container by api"),
+		"{error}"
+	);
+	// A different port is still free.
+	assert!(
+		free_port(
+			&two,
+			ListenerKind::Imaps,
+			&BTreeMap::new(),
+			"203.0.113.5".parse().unwrap(),
+			"0.0.0.0".parse().unwrap(),
+			993,
+			true,
+		)
+		.is_ok()
+	);
+	// On a host install the two binds are the ones the config names.
+	assert!(
+		free_port(
+			&two,
+			ListenerKind::Imaps,
+			&BTreeMap::new(),
+			"203.0.113.5".parse().unwrap(),
+			"203.0.113.5".parse().unwrap(),
+			8025,
 			false,
-			false,
-			&mut Vec::new(),
-			&mut Vec::new(),
-			|_, _| panic!("failed writes must not reload"),
-		);
-		assert!(result.is_err());
-		assert_eq!(
-			std::fs::read(&path).unwrap(),
-			before,
-			"Compose validation must precede the TOML replacement"
-		);
-		assert_eq!(std::fs::read_to_string(&compose).unwrap(), bytes);
-	}
+		)
+		.is_ok()
+	);
 }
 
-#[test]
-fn http_services_refuse_external_binds_even_with_mail_certificates() {
-	for (listener, name) in [("api", ServiceName::Api), ("web-dav", ServiceName::Webdav)] {
-		for address in ["0.0.0.0", "::", "10.0.0.5", "::ffff:10.0.0.5"] {
-			let (_dir, path) = fixture(listener);
-			let before = std::fs::read(&path).unwrap();
-			let result = run(
-				&path,
-				Request {
-					name,
-					bind: Some(address.parse().unwrap()),
-					port: None,
-				},
-				false,
-				false,
-				&mut Vec::new(),
-				&mut Vec::new(),
-				|_, _| panic!("refused changes must not reload"),
-			);
-			assert!(
-				matches!(result, Err(ResourceError::Refusal(_))),
-				"{listener} on {address}: {result:?}"
-			);
-			assert_eq!(std::fs::read(&path).unwrap(), before);
-		}
-	}
-}
+#[path = "service_tests_set_stack.rs"]
+mod stack;

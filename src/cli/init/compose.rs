@@ -30,7 +30,6 @@ use serde::Serialize;
 use super::answers::Answers;
 use super::apply::{ApplyError, Report, ReportStep, listeners_to_write};
 use super::compose_publish;
-use crate::config::Listener;
 
 #[path = "host_binary.rs"]
 mod host_binary;
@@ -575,17 +574,6 @@ pub(super) fn render_document(document: &impl Serialize) -> Result<String, Apply
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	bytes.push('\n');
 	Ok(bytes)
-}
-
-/// Update the generated mail port map, returning whether a stack exists.
-/// Every listener the container publishes keeps the host address the map
-/// already names for its port, so a change to one service never widens
-/// another one back to every host address.
-pub(crate) fn update_listener_ports(
-	data_dir: &Path,
-	listeners: &[Listener],
-) -> Result<bool, ApplyError> {
-	Ok(super::compose_publish::update(data_dir, listeners, None)?.is_some())
 }
 
 #[cfg(test)]

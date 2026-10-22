@@ -21,6 +21,14 @@ pub(super) fn run(
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, ResourceError> {
 	let (provider, args) = selection;
+	// This command rewrites `mail.toml` and the generated compose file, so it
+	// reads both under the same lock every other writer of them takes, and it
+	// stages the compose file before either is replaced.
+	let _held = if dry_run {
+		None
+	} else {
+		Some(super::super::service_lock::acquire(path)?)
+	};
 	let mut document = ConfigDocument::open(path)?;
 	let current = document.config()?;
 	let destination =
@@ -32,7 +40,7 @@ pub(super) fn run(
 	document.set_table_fields(&["dns"], &fields)?;
 	let config = document.config()?;
 	let token = token(&current, args)?;
-	let compose = updated_compose(&current, args, &destination)?;
+	let compose = companion_compose(&current, args, &destination)?;
 	let edit = resource::Edit {
 		label: "dns provider",
 		action: "provider set",
@@ -43,31 +51,11 @@ pub(super) fn run(
 		return resource::finish(document, true, edit, out, status, restart);
 	}
 	store(&destination, &token)?;
-	// Write the mount before committing the config. If that commit is refused,
-	// restore the previous Compose file and keep the running container intact.
-	if let Some((path, _, updated)) = &compose {
-		crate::storage::write_secret(path, updated)
-			.map_err(|_| "cannot update compose.yaml; configuration was not changed".to_string())?;
-	}
-	let outcome = match document.commit() {
-		Ok(outcome) => outcome,
-		Err(error) => {
-			if let Some((path, original, _)) = &compose {
-				crate::storage::write_secret(path, original).map_err(|_| {
-					"config commit failed and compose.yaml could not be restored; restore its DNS forwarding before starting mail".to_string()
-				})?;
-			}
-			return Err(error.into());
-		}
-	};
-	let compose_changed = compose
-		.as_ref()
-		.is_some_and(|(_, before, after)| before != after);
-	let outcome = if compose_changed {
-		Outcome::Changed
-	} else {
-		outcome
-	};
+	// The compose file is staged and validated before the config is replaced,
+	// and a refused replacement restores the one that was there: the running
+	// container keeps the forwarding it had.
+	let outcome =
+		crate::cli::config_edit::commit_pair(document, compose).map_err(ResourceError::from)?;
 	let changed = outcome == Outcome::Changed;
 	writeln!(
 		status,
@@ -153,6 +141,28 @@ fn store(path: &Path, token: &str) -> Result<(), String> {
 }
 
 type ComposeUpdate = (PathBuf, Vec<u8>, Vec<u8>);
+
+/// The staged compose file with the DNS token mount, ready to be committed
+/// together with `mail.toml`. `None` when the install has no generated
+/// compose file, and `None` when the file already carries the mount: a
+/// candidate identical to the file on disk is not a change.
+fn companion_compose(
+	config: &Config,
+	args: &super::ProviderArgs,
+	token_path: &Path,
+) -> Result<Option<crate::cli::config_edit::Companion>, String> {
+	let Some((path, original, updated)) = updated_compose(config, args, token_path)? else {
+		return Ok(None);
+	};
+	if original == updated {
+		return Ok(None);
+	}
+	Ok(Some(crate::cli::config_edit::Companion {
+		path,
+		original,
+		candidate: updated,
+	}))
+}
 
 fn updated_compose(
 	config: &Config,

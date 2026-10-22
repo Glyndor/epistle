@@ -23,10 +23,10 @@ use super::config_edit::{ConfigDocument, Outcome};
 use super::resource::ResourceError;
 use super::service::ServiceName;
 use super::{init, json_out, stack};
-use crate::config::{Config, ListenerKind};
+use crate::config::{Config, Listener, ListenerKind};
 
 /// Any address of the IPv4 family, standing for "every address" when the
-/// question is whether two listeners can answer on the same port.
+/// question is whether two mappings on the host can answer on the same port.
 const ANY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 /// A socket as the operator reads it: an IPv6 address in brackets, so the port
@@ -35,6 +35,16 @@ fn host_port(address: IpAddr, port: u16) -> String {
 	match address {
 		IpAddr::V6(_) => format!("[{address}]:{port}"),
 		IpAddr::V4(_) => format!("{address}:{port}"),
+	}
+}
+
+/// The same socket, for the wildcard: every address of the host owns that
+/// port, so naming one family would claim more than the map publishes.
+fn socket_label(address: IpAddr, port: u16) -> String {
+	if address.is_unspecified() {
+		format!("every address on port {port}")
+	} else {
+		host_port(address, port)
 	}
 }
 
@@ -73,6 +83,10 @@ pub(super) fn run(
 	} else {
 		Some(super::service_lock::acquire(path).map_err(text)?)
 	};
+	let bind = match bind {
+		Some(requested) => Some(host_address(requested)?),
+		None => None,
+	};
 	let mut document = ConfigDocument::open(path).map_err(text)?;
 	let config = document.config().map_err(text)?;
 	let kind = name.kind();
@@ -108,15 +122,22 @@ pub(super) fn run(
 		false => bind,
 	};
 	let host = published_host.unwrap_or(current.addr);
-	free_port(&config, kind, &narrow, host, port, stack)?;
 	http_prerequisites(kind, host)?;
+	// The bind to write in `mail.toml`: the container side of a published
+	// mapping, or the requested address on a host install.
+	let container_field = match (stack, bind) {
+		(true, Some(requested)) => container_bind(current.addr, requested),
+		(false, Some(address)) => Some(address),
+		_ => None,
+	};
+	// The bind the listener answers on once the change is in, which is what
+	// a loopback listener inside the container has: it publishes nothing, so
+	// the command must not describe it as published.
+	let container = container_field.unwrap_or(current.addr);
+	free_port(&config, kind, &narrow, host, container, port, stack)?;
 	let mut fields: Vec<(&str, toml_edit::Value)> = Vec::new();
-	match (stack, bind) {
-		// A published mapping needs an address the container owns inside;
-		// everywhere else the bind is what the operator asked for.
-		(true, Some(_)) => fields.push(("addr", init::CONTAINER_BIND.to_string().into())),
-		(false, Some(address)) => fields.push(("addr", address.to_string().into())),
-		_ => {}
+	if let Some(address) = container_field {
+		fields.push(("addr", address.to_string().into()));
 	}
 	if let Some(port) = requested_port {
 		fields.push(("port", toml_edit::Value::from(i64::from(port))));
@@ -129,34 +150,40 @@ pub(super) fn run(
 		"bind": host.to_string(),
 		"port": port,
 	});
-	// A bind in the config is set to an address; a mapping on a stack is
-	// published on one, because the address the host uses is not the one the
-	// container binds.
-	let (verb, place) = if stack {
+	// A published listener reaches the host through a mapping and one on
+	// loopback does not, so only the first is a publication.
+	let (verb, place) = if stack && !container.to_canonical().is_loopback() {
 		("published", "on")
 	} else {
 		("set", "to")
 	};
-	let socket = host_port(host, port);
+	let socket = socket_label(host, port);
 	if dry_run {
 		let diff = document.dry_run().map_err(text)?;
+		// The mapping that moves is the part of a stack change the config
+		// diff does not carry, and a dry run that printed nothing for it
+		// would read as "this does nothing".
+		let candidate = document.config().map_err(text)?;
+		let mapping = init::preview_published_ports(
+			&candidate.data_dir,
+			&candidate.listeners,
+			Some((kind, published_host)),
+		)
+		.map_err(|error| ResourceError::Failure(error.to_string()))?;
 		if json {
+			let mut fields = fields.clone();
+			if let Some((current, wanted)) = &mapping
+				&& current != wanted
+			{
+				fields["ports"] = serde_json::json!({"current": current, "wanted": wanted});
+			}
 			let object = json_out::dry_run_object("set", fields, diff);
 			return writeln!(out, "{object}")
 				.map(|()| ExitCode::SUCCESS)
 				.map_err(text);
 		}
 		write!(out, "{diff}").map_err(text)?;
-		// The mapping that moves is the part of a stack change the config
-		// diff does not carry, and a dry run that printed nothing for it
-		// would read as "this does nothing".
-		let candidate = document.config().map_err(text)?;
-		if let Some((current, wanted)) = init::preview_published_ports(
-			&candidate.data_dir,
-			&candidate.listeners,
-			Some((kind, published_host)),
-		)
-		.map_err(|error| ResourceError::Failure(error.to_string()))?
+		if let Some((current, wanted)) = mapping
 			&& current != wanted
 		{
 			writeln!(out, "compose.yaml ports:").map_err(text)?;
@@ -184,6 +211,7 @@ pub(super) fn run(
 			name.as_str()
 		)
 		.map_err(text)?;
+		override_notice(stack, &config, port, current.socket_addr().port(), err)?;
 		if json {
 			let object =
 				json_out::change_object("set", false, fields, Some(json_out::Reload::None));
@@ -192,17 +220,7 @@ pub(super) fn run(
 		return Ok(ExitCode::SUCCESS);
 	}
 	writeln!(err, "{} {verb} {place} {socket}.", name.as_str()).map_err(text)?;
-	if stack
-		&& init::operator_override_publishes(
-			&config.data_dir,
-			&[port, current.socket_addr().port()],
-		) {
-		writeln!(
-			err,
-			"compose.override.yaml publishes a port for mail, and it wins over the generated map."
-		)
-		.map_err(text)?;
-	}
+	override_notice(stack, &config, port, current.socket_addr().port(), err)?;
 	let (code, reload) =
 		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
 	if json {
@@ -212,14 +230,40 @@ pub(super) fn run(
 	Ok(code)
 }
 
-/// Refuse a host-visible socket another enabled listener already answers on.
-/// A wildcard address covers every address of its family, so it conflicts with
-/// a specific one on the same port, the same way the bind itself would.
+/// Say that the operator's override also publishes a port for `mail`, and how
+/// the two combine. It does not depend on whether this change moved anything:
+/// an override that is there publishes the same way before and after, and the
+/// operator ran the command to hear what answers.
+fn override_notice(
+	stack: bool,
+	config: &Config,
+	port: u16,
+	previous: u16,
+	err: &mut impl Write,
+) -> Result<(), ResourceError> {
+	if stack && init::operator_override_publishes(&config.data_dir, &[port, previous]) {
+		writeln!(
+			err,
+			"compose.override.yaml publishes a port for mail: it merges with the generated map, or replaces it where it carries !override."
+		)
+		.map_err(text)?;
+	}
+	Ok(())
+}
+
+/// Refuse a host-visible socket another enabled listener already answers on,
+/// on the host and inside the container. A wildcard address covers every
+/// address of its family, so it conflicts with a specific one on the same
+/// port, the same way the bind itself would. On a stack the container binds
+/// one socket per listener too, and the engine refuses to start when two of
+/// them collide there, so a loopback listener counts against a mapping that
+/// takes the whole container.
 fn free_port(
 	config: &Config,
 	kind: ListenerKind,
 	narrow: &BTreeMap<u16, IpAddr>,
 	address: IpAddr,
+	container: IpAddr,
 	port: u16,
 	stack: bool,
 ) -> Result<(), ResourceError> {
@@ -239,8 +283,73 @@ fn free_port(
 				host_port(their, their_port)
 			)));
 		}
+		if stack {
+			let theirs = their_container_bind(listener);
+			let ours = container.to_canonical();
+			if theirs == ours || theirs.is_unspecified() || ours.is_unspecified() {
+				return Err(ResourceError::Refusal(format!(
+					"port {port} is already bound inside the container by {} on {}",
+					listener.kind.as_str(),
+					host_port(theirs, their_port)
+				)));
+			}
+		}
 	}
 	Ok(())
+}
+
+/// The bind another listener has inside a container, and the one it would get
+/// if it were published on a host address: a listener already outside loopback
+/// can not stay on the address it has, so it holds the container wildcard.
+fn their_container_bind(listener: &Listener) -> IpAddr {
+	if listener.addr.to_canonical().is_loopback() {
+		listener.addr.to_canonical()
+	} else {
+		init::CONTAINER_BIND
+	}
+}
+
+/// The bind a listener published on a host address uses inside the container,
+/// or `None` when it keeps the one it has. The engine reaches a mapping only
+/// through what the container binds, so a listener that leaves loopback moves
+/// to the unspecified bind of the family the operator asked for: the IPv6 one
+/// is dual-stack and answers on both. A container bind that is already
+/// unspecified and covers that family stays, so the family `init` chose
+/// survives a move to the other family's host address.
+fn container_bind(current: IpAddr, requested: IpAddr) -> Option<IpAddr> {
+	let (current, requested) = (current.to_canonical(), requested.to_canonical());
+	let covers =
+		current.is_unspecified() && (current.is_ipv6() || current.is_ipv4() == requested.is_ipv4());
+	if covers {
+		return None;
+	}
+	let wanted = if requested.is_ipv4() {
+		init::CONTAINER_BIND
+	} else {
+		init::CONTAINER_BIND_DUAL
+	};
+	(current != wanted).then_some(wanted)
+}
+
+/// An address the host can be reached on, in the form the map and the report
+/// use. An IPv4-mapped IPv6 address collapses to the IPv4 address it names,
+/// so `::ffff:10.0.0.5` is not a second form of `10.0.0.5` in the file and in
+/// the port check. The two wildcards are addresses a host owns, and the rest
+/// that pass are the operator's own interfaces.
+fn host_address(requested: IpAddr) -> Result<IpAddr, ResourceError> {
+	let address = requested.to_canonical();
+	let unusable = address.is_multicast()
+		|| address == IpAddr::V4(Ipv4Addr::BROADCAST)
+		// A link-local IPv6 address names one link through a scope id, and
+		// an address parsed from the command line carries none, so the engine
+		// has nothing to bind it on.
+		|| matches!(address, IpAddr::V6(six) if six.is_unicast_link_local());
+	if unusable {
+		return Err(ResourceError::Refusal(format!(
+			"{address} is not an address of this host: pass an address of one of its interfaces, or a wildcard"
+		)));
+	}
+	Ok(address)
 }
 
 /// Mail certificates do not change the transport of these HTTP listeners.

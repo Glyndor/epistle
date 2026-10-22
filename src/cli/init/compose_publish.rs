@@ -14,7 +14,7 @@
 //! address the operator took away from it.
 
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use super::apply::ApplyError;
@@ -27,16 +27,27 @@ use crate::config::{Listener, ListenerKind};
 /// mapping.
 pub(crate) const CONTAINER_BIND: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
-/// Render one mapping. An absent host address keeps the
-/// `<port>:<port>` form every other writer of the map uses, so a stack nobody
-/// narrowed renders the bytes `init` wrote. An IPv6 address goes in brackets:
-/// the engine reads the colons in a bare `::1:143:143` as the port separator.
+/// The unspecified bind of the IPv6 family, which is also dual-stack: the
+/// container side of a mapping published on an IPv6 host address, and what
+/// `init` writes for a listener that inherits SMTP's bind.
+pub(crate) const CONTAINER_BIND_DUAL: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+
+/// Render one mapping. An absent host address, and an unspecified one, keep
+/// the `<port>:<port>` form every other writer of the map uses, so a stack
+/// nobody narrowed renders the bytes `init` wrote. A wildcard publishes on
+/// every address the host owns either way, and the explicit
+/// `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms were measured to be refused
+/// by pasta on Podman 5.4.2, so neither is written. An IPv6 address goes in
+/// brackets: the engine reads the colons in a bare `::1:143:143` as the port
+/// separator.
 pub(super) fn entry(host: Option<IpAddr>, port: u16) -> String {
 	match host {
-		Some(IpAddr::V6(address)) => {
+		Some(IpAddr::V6(address)) if !address.is_unspecified() => {
 			format!("[{address}]:{port}:{port}")
 		}
-		Some(address) => format!("{address}:{port}:{port}"),
+		Some(IpAddr::V4(address)) if !address.is_unspecified() => {
+			format!("{address}:{port}:{port}")
+		}
 		_ => format!("{port}:{port}"),
 	}
 }
@@ -194,39 +205,19 @@ pub(crate) fn preview(
 	Ok(read_map(data_dir, listeners, publish)?.map(|map| (map.current, map.wanted)))
 }
 
-/// Write the `ports:` map the listeners ask for. `None` means the install has
-/// no compose file; `Some(changed)` says whether the file was rewritten.
-pub(crate) fn update(
-	data_dir: &Path,
-	listeners: &[Listener],
-	publish: Option<(ListenerKind, Option<IpAddr>)>,
-) -> Result<Option<bool>, ApplyError> {
-	let Some(Map {
-		path,
-		mut document,
-		current,
-		wanted,
-		..
-	}) = read_map(data_dir, listeners, publish)?
-	else {
-		return Ok(None);
-	};
-	if current == wanted {
-		return Ok(Some(false));
-	}
-	mail_mut(&mut document)?.insert("ports".into(), serde_json::json!(wanted));
-	let bytes = render_document(&document)?;
-	crate::storage::write_secret(&path, bytes.as_bytes())
-		.map_err(|error| ApplyError::ConfigWrite(path, error))?;
-	Ok(Some(true))
-}
-
 /// Render and validate a companion before the TOML can be replaced.
 pub(crate) fn prepare(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
 ) -> Result<Option<crate::cli::config_edit::Companion>, ApplyError> {
+	// A command killed between its two renames leaves its staged copies of
+	// this file here. The caller holds the common lock, so whatever is left
+	// belongs to a command that is not running.
+	let generated = compose_file_path(data_dir);
+	crate::cli::config_edit::announce_swept(&crate::cli::config_edit::sweep_orphans(
+		generated.parent().unwrap_or(data_dir),
+	));
 	let Some(mut map) = read_map(data_dir, listeners, publish)? else {
 		return Ok(None);
 	};
@@ -244,15 +235,20 @@ pub(crate) fn prepare(
 
 /// Whether the operator's override already publishes one of `ports` for `mail`.
 /// Every stack invocation passes `compose.override.yaml` after
-/// `compose.yaml` (`epistle stack` builds that argv), so a mapping in it wins
-/// over the generated one and the operator has to hear that.
+/// `compose.yaml` (`epistle stack` builds that argv), so a mapping in it is
+/// merged with the generated one, or replaces it, and the operator has to hear
+/// that.
 ///
 /// The override is YAML and no YAML parser ships in the binary, so this scans
 /// the `mail` block for the numbers a `ports:` item carries. A mapping
 /// publishes `[ADDRESS:]PORT:PORT`, so `143` in an item names the port; other
 /// values in the block (a memory limit, an image tag) are not ports and do not
-/// match. A file this scan cannot make sense of reports `false`: the warning is
-/// advice, and refusing a valid change over it would be worse.
+/// match. The block is found in the block form (`mail:` on its own line), in
+/// flow style (`mail: {ports: [...]}`) and with the key quoted. A file this
+/// scan cannot make sense of reports `false`: the warning is advice, and
+/// refusing a valid change over it would be worse. What the scan can not see is
+/// a `ports` key it does not reach: one behind an anchor, an alias, or a value
+/// a template fills in at run time.
 pub(crate) fn override_publishes(data_dir: &Path, ports: &[u16]) -> bool {
 	let path = compose_file_path(data_dir).with_file_name("compose.override.yaml");
 	let Ok(text) = std::fs::read_to_string(path) else {
@@ -279,35 +275,98 @@ pub(crate) fn override_publishes(data_dir: &Path, ports: &[u16]) -> bool {
 			continue;
 		}
 		if mail_at.is_none() {
-			mail_at = body
-				.strip_suffix(':')
-				.filter(|key| *key == "mail")
-				.map(|_| indent);
+			let Some(value) = value_of(body, "mail") else {
+				continue;
+			};
+			// `mail: {ports: [...]}` carries the block on one line, so there
+			// is nothing to indent into: the answer comes from the line.
+			match value.trim().strip_prefix('{') {
+				Some(flow) => {
+					if flow_publishes(flow, ports) {
+						return true;
+					}
+				}
+				None => {
+					if value.trim().is_empty() {
+						mail_at = Some(indent);
+					}
+				}
+			}
 			continue;
 		}
-		let (key, rest) = body.split_once(':').unwrap_or((body, ""));
-		if key.trim() == "ports" {
-			// The list can sit on this line (`ports: ["143:143"]`) or on
-			// the lines below it, indented (`ports: !override` plus items).
-			if publishes(rest, ports) {
-				return true;
-			}
-			list_at = Some(indent);
+		// The list can sit on this line (`ports: ["143:143"]`) or on
+		// the lines below it, indented (`ports: !override` plus items).
+		let Some(value) = value_of(body, "ports") else {
+			continue;
+		};
+		if publishes(value, ports) {
+			return true;
 		}
+		list_at = Some(indent);
 	}
 	false
 }
 
+/// The value of `key: value` in one line of the override, with the key
+/// unquoted. `None` when the line does not open that key.
+fn value_of<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+	let (name, value) = line.split_once(':')?;
+	(name.trim().trim_matches(['"', '\'']) == key).then_some(value)
+}
+
+/// Whether a flow-style block names one of `ports` in a `ports` key. The
+/// braces are already off the value, so each item is one mapping entry and
+/// only the one that opens `ports` carries the numbers.
+fn flow_publishes(block: &str, ports: &[u16]) -> bool {
+	flow_items(block)
+		.into_iter()
+		.filter_map(|item| value_of(item.trim(), "ports"))
+		.any(|value| publishes(value, ports))
+}
+
+/// The comma-separated items of a flow block. A comma inside a nested list or
+/// mapping separates values, not entries, so only the ones at the outermost
+/// level end an item.
+fn flow_items(block: &str) -> Vec<&str> {
+	let (mut items, mut start, mut depth) = (Vec::new(), 0, 0usize);
+	for (at, character) in block.char_indices() {
+		match character {
+			'[' | '{' => depth += 1,
+			']' | '}' => depth = depth.saturating_sub(1),
+			',' if depth == 0 => {
+				items.push(&block[start..at]);
+				start = at + character.len_utf8();
+			}
+			_ => {}
+		}
+	}
+	items.push(&block[start..]);
+	items
+}
+
 /// Whether a `ports:` value names one of `ports`. A mapping is
-/// `[ADDRESS:]PORT:PORT`, so the numbers are the ports; `!override`, a
-/// comment and an empty value carry none and never match.
+/// `[ADDRESS:]PORT:PORT` and an item may be a range of them, so the numbers
+/// and the ranges are the ports; `!override`, a comment, a key and an empty
+/// value carry none and never match.
 fn publishes(value: &str, ports: &[u16]) -> bool {
 	value
 		.split(|c: char| {
 			c.is_whitespace() || matches!(c, ':' | ',' | '[' | ']' | '{' | '}' | '"' | '\'')
 		})
 		.map(|field| field.trim().trim_matches(['"', '\'']))
-		.any(|field| ports.iter().any(|port| *field == port.to_string()))
+		.any(|field| ports.iter().any(|port| names(field, *port)))
+}
+
+/// Whether one item of a `ports:` list names `port`, either as the number
+/// itself or as a range of numbers that carries it.
+fn names(item: &str, port: u16) -> bool {
+	match item.split_once('-') {
+		Some((from, to)) => match (from.parse::<u16>(), to.parse::<u16>()) {
+			(Ok(from), Ok(to)) => (from..=to).contains(&port),
+			_ => false,
+		},
+		None => item.parse::<u16>().is_ok_and(|named| named == port),
+	}
 }
 
 /// The column a line is indented by.

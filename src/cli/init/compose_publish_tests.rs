@@ -51,11 +51,17 @@ fn a_mapping_renders_and_reads_back_the_host_address_it_fixes() {
 		"25:25",
 		"an unspecified host address keeps the form init writes"
 	);
-	assert_eq!(
-		entry(Some(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)), 25),
-		"0.0.0.0:25:25",
-		"an explicit wildcard preserves the requested address family"
-	);
+	// pasta on Podman 5.4.2 refuses an explicit wildcard, and a wildcard
+	// publishes on every address of the host either way, so the family it
+	// names is kept in the container bind instead of in the mapping.
+	for wildcard in ["0.0.0.0", "::"] {
+		assert_eq!(entry(Some(wildcard.parse().unwrap()), 25), "25:25");
+		assert_eq!(
+			parse(&format!("{wildcard}:25:25")),
+			Some((Some(wildcard.parse().unwrap()), 25)),
+			"an older file with the explicit form still reads back its address"
+		);
+	}
 }
 
 #[test]
@@ -143,22 +149,20 @@ fn the_override_is_recognised_only_inside_the_mail_service() {
 }
 
 #[test]
-fn the_map_is_rewritten_only_when_it_moves() {
+fn the_map_is_staged_only_when_it_moves() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = super::super::compose::compose_file_path(dir.path());
 	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-	std::fs::write(&path, serde_json::to_vec(&compose(&["25:25"])).unwrap()).unwrap();
+	let original = br#"{"services":{"mail":{"image":"keep","ports":["25:25"]}}}"#;
+	std::fs::write(&path, original).unwrap();
 	let rows = listeners(&[
 		(ListenerKind::Smtp, "::", None),
 		(ListenerKind::Imap, "0.0.0.0", None),
 	]);
 	let narrow = Some((ListenerKind::Imap, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))));
-	assert_eq!(
-		update(dir.path(), &rows, narrow).expect("a readable generated file"),
-		Some(true)
-	);
-	let written: serde_json::Value =
-		serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+	let staged = prepare(dir.path(), &rows, narrow).expect("a readable generated file");
+	let candidate = staged.as_ref().expect("the map moves").candidate.clone();
+	let written: serde_json::Value = serde_json::from_slice(&candidate).unwrap();
 	assert_eq!(
 		written["services"]["mail"]["ports"],
 		serde_json::json!(["25:25", "127.0.0.1:143:143"])
@@ -167,15 +171,17 @@ fn the_map_is_rewritten_only_when_it_moves() {
 		written["services"]["mail"]["image"], "keep",
 		"the map is the only key this touches"
 	);
-	let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
 	assert_eq!(
-		update(dir.path(), &rows, narrow).expect("a readable generated file"),
-		Some(false),
-		"the same request must not rewrite the file"
+		std::fs::read(&path).unwrap(),
+		original,
+		"staging a candidate must not write the file"
 	);
-	assert_eq!(
-		std::fs::metadata(&path).unwrap().modified().unwrap(),
-		modified
+	std::fs::write(&path, &candidate).unwrap();
+	assert!(
+		prepare(dir.path(), &rows, narrow)
+			.expect("a readable generated file")
+			.is_none(),
+		"a map that does not move must not be staged again"
 	);
 
 	// Moving the listener takes its host address with it: `set` names the
@@ -184,19 +190,17 @@ fn the_map_is_rewritten_only_when_it_moves() {
 		(ListenerKind::Smtp, "::", None),
 		(ListenerKind::Imap, "0.0.0.0", Some(1143)),
 	]);
-	assert_eq!(
-		update(dir.path(), &moved, narrow).expect("a readable generated file"),
-		Some(true)
-	);
+	let staged = prepare(dir.path(), &moved, narrow).expect("a readable generated file");
 	let written: serde_json::Value =
-		serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+		serde_json::from_slice(&staged.expect("the map moves").candidate).unwrap();
 	assert_eq!(
 		written["services"]["mail"]["ports"],
 		serde_json::json!(["25:25", "127.0.0.1:1143:1143"])
 	);
-	assert_eq!(
-		update(&dir.path().join("absent"), &rows, None).expect("an absent stack is not an error"),
-		None,
+	assert!(
+		prepare(&dir.path().join("absent"), &rows, None)
+			.expect("an absent stack is not an error")
+			.is_none(),
 		"a host install has no map to write"
 	);
 }
@@ -252,18 +256,61 @@ fn an_unreadable_or_foreign_file_names_no_host_address() {
 }
 
 #[test]
-fn explicit_wildcards_keep_the_requested_address_family() {
-	for (address, mapping) in [("0.0.0.0", "0.0.0.0:993:993"), ("::", "[::]:993:993")] {
+fn an_explicit_wildcard_renders_as_the_form_the_engine_accepts() {
+	// The family the operator asked for lives in the bind the container
+	// uses (`service set`), so the mapping itself is the plain form for a
+	// wildcard, and reading the map back keeps it there on every rewrite.
+	for address in ["0.0.0.0", "::"] {
 		let address = address.parse().unwrap();
-		let rows = listeners(&[(ListenerKind::Imaps, "0.0.0.0", None)]);
+		let rows = listeners(&[(ListenerKind::Imaps, "::", None)]);
 		let rendered = published(
 			&rows,
 			&BTreeMap::new(),
 			Some((ListenerKind::Imaps, Some(address))),
 		);
-		assert_eq!(rendered, [mapping]);
-		let recovered = hosts(&compose(&[mapping]));
-		assert_eq!(published(&rows, &recovered, None), [mapping]);
+		assert_eq!(rendered, ["993:993"]);
+		let recovered = hosts(&compose(&["993:993"]));
+		assert_eq!(published(&rows, &recovered, None), ["993:993"]);
+	}
+}
+
+#[test]
+fn an_override_written_in_flow_style_or_with_ranges_is_still_reported() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("compose/compose.override.yaml");
+	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+	for (text, expected) in [
+		(
+			"services:\n  mail: {image: keep, ports: [\"25:25\", \"143:143\"]}\n",
+			true,
+		),
+		(
+			"services:\n  mail: {image: keep, ports: [\"25:25\"]}\n",
+			false,
+		),
+		(
+			"services:\n  \"mail\":\n    ports:\n      - \"143:143\"\n",
+			true,
+		),
+		(
+			"services:\n  mail:\n    ports:\n      - \"990-999:990-999\"\n",
+			true,
+		),
+		(
+			"services:\n  mail:\n    ports:\n      - \"900-902:900-902\"\n",
+			false,
+		),
+		(
+			"services:\n  mail:\n    ports:\n      - \"990-995:990-995\"\n",
+			true,
+		),
+	] {
+		std::fs::write(&path, text).unwrap();
+		assert_eq!(
+			override_publishes(dir.path(), &[993, 143]),
+			expected,
+			"{text:?}"
+		);
 	}
 }
 

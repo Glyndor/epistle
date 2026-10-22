@@ -5,6 +5,16 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::{ConfigDocument, Outcome, file};
+use std::time::{Duration, SystemTime};
+
+/// The prefix and suffix every staged copy carries, so a reader can tell a
+/// staged candidate from an operator's file.
+const STAGING: (&str, &str) = (".service.", ".tmp");
+
+/// A staged copy older than this belongs to a command that died: a command
+/// still running holds the configuration lock this sweep runs under, and its
+/// own copies are younger than any plausible edit.
+const ORPHAN_AGE: Duration = Duration::from_secs(3600);
 
 /// A validated generated file, tied to the bytes used to render it.
 pub(crate) struct Companion {
@@ -64,7 +74,12 @@ fn sync_parent(path: &Path) -> Result<(), String> {
 
 fn stage(path: &Path, bytes: &[u8], metadata: &Metadata) -> Result<Staged, String> {
 	let staging = Staged(
-		parent(path).join(format!(".service.{}.tmp", uuid::Uuid::now_v7())),
+		parent(path).join(format!(
+			"{}{}{}",
+			STAGING.0,
+			uuid::Uuid::now_v7(),
+			STAGING.1
+		)),
 		false,
 	);
 	let mut options = OpenOptions::new();
@@ -161,6 +176,68 @@ fn same_permissions(a: &Metadata, b: &Metadata) -> bool {
 	{
 		a.permissions().readonly() == b.permissions().readonly()
 	}
+}
+
+/// Remove the staged copies a killed command left in `dir` and name the ones
+/// that went. A command that dies between its two renames can not restore
+/// anything, so the copies stay until the next command finds them; without
+/// this sweep they pile up one pair per death, and each holds a whole copy of
+/// `mail.toml` or of the generated Compose file.
+///
+/// Only files this module stages are touched: the name has to carry the
+/// staging prefix and suffix, and the copy has to be older than
+/// [`ORPHAN_AGE`]. Anything else in the directory is the operator's.
+pub(crate) fn sweep_orphans(dir: &Path) -> Vec<PathBuf> {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return Vec::new();
+	};
+	let now = SystemTime::now();
+	let mut swept = Vec::new();
+	for entry in entries.flatten() {
+		let name = entry.file_name();
+		let name = name.to_string_lossy();
+		if !name.starts_with(STAGING.0) || !name.ends_with(STAGING.1) {
+			continue;
+		}
+		let Ok(metadata) = entry.metadata() else {
+			continue;
+		};
+		if !metadata.is_file() {
+			continue;
+		}
+		if metadata
+			.modified()
+			.is_ok_and(|written| now.duration_since(written).unwrap_or_default() < ORPHAN_AGE)
+		{
+			continue;
+		}
+		if std::fs::remove_file(entry.path()).is_ok() {
+			swept.push(entry.path());
+		}
+	}
+	swept
+}
+
+/// Say on stderr which staged copies a sweep removed, so the operator hears
+/// that a command died there instead of finding the files later.
+pub(crate) fn announce_swept(swept: &[PathBuf]) {
+	if swept.is_empty() {
+		return;
+	}
+	let where_ = swept[0]
+		.parent()
+		.map(|dir| dir.display().to_string())
+		.unwrap_or_default();
+	crate::cli::style::warn(format!(
+		"removed {} staged cop{} left by an interrupted command in {where_}: {}",
+		swept.len(),
+		if swept.len() == 1 { "y" } else { "ies" },
+		swept
+			.iter()
+			.map(|path| path.display().to_string())
+			.collect::<Vec<_>>()
+			.join(", ")
+	));
 }
 
 /// Validate and stage both candidates before any replacement. Callers hold
@@ -310,5 +387,46 @@ mod tests {
 		for path in copies {
 			assert!(error.contains(&path.display().to_string()), "{error}");
 		}
+	}
+
+	/// A command killed between its two renames leaves its staged copies
+	/// behind. The next command under the lock sweeps them, and only them:
+	/// the operator's own files and the copy of a command still running stay.
+	#[test]
+	fn a_sweep_takes_the_staged_copies_of_a_dead_command_and_nothing_else() {
+		let dir = tempfile::tempdir().unwrap();
+		let old = dir
+			.path()
+			.join(format!(".service.{}.tmp", uuid::Uuid::now_v7()));
+		let young = dir
+			.path()
+			.join(format!(".service.{}.tmp", uuid::Uuid::now_v7()));
+		let foreign = dir.path().join("mail.toml");
+		for path in [&old, &young, &foreign] {
+			fs::write(path, b"copy of a config").unwrap();
+		}
+		age(&old);
+		assert_eq!(sweep_orphans(dir.path()), vec![old.clone()]);
+		assert!(!old.exists());
+		assert!(
+			young.is_file(),
+			"a copy younger than an hour belongs to a command that still runs"
+		);
+		assert_eq!(fs::read(&foreign).unwrap(), b"copy of a config");
+		assert!(
+			sweep_orphans(&dir.path().join("absent")).is_empty(),
+			"a directory that is not there has nothing to sweep"
+		);
+	}
+
+	/// Backdate a staged copy so the sweep takes it as an orphan.
+	fn age(path: &Path) {
+		let when = SystemTime::now() - ORPHAN_AGE - Duration::from_secs(60);
+		fs::File::options()
+			.write(true)
+			.open(path)
+			.unwrap()
+			.set_times(fs::FileTimes::new().set_modified(when))
+			.unwrap();
 	}
 }

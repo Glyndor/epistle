@@ -218,24 +218,60 @@ mapping for one listener and leaves the rest of the file alone:
 sudo epistle service set imap --bind 127.0.0.1
 ```
 
-It writes `0.0.0.0` as the bind the container uses (a loopback or private
-address inside the container is not one the published mapping can reach) and
-publishes `127.0.0.1:143:143` on the host. Every writer of the generated map
-reads the host address back before rendering it, so enabling another service,
-an `init` rerun or `stack update` keeps the address on the listener that has
-it. Explicit wildcard binds retain `0.0.0.0:PORT:PORT` or `[::]:PORT:PORT`,
-so the requested address family survives regeneration. `epistle service list`
-shows the address in a `HOST` column.
+It moves the bind the container uses to the unspecified address of the family
+the operator asked for, `0.0.0.0` for IPv4 and `::` for IPv6, and publishes
+`127.0.0.1:143:143` on the host. A loopback or private address inside the
+container is not one the published mapping can reach, so a listener that leaves
+loopback moves to that wildcard; a container bind that is already unspecified
+and answers the requested family stays, which keeps the dual-stack `::` that
+`init` writes. Asking for an IPv6 address with a container bound on `0.0.0.0`
+is therefore not a publication on every host address: the container moves to
+`::` and the mapping is `[ADDRESS]:PORT:PORT`.
+
+Every writer of the generated map reads the host address back before rendering
+it, so enabling another service, an `init` rerun or `stack update` keeps the
+address on the listener that has it. A wildcard renders as `PORT:PORT` in both
+families and publishes on every address the host owns either way; the family
+stays in the container bind, which is where the engine needs it.
+`epistle service list` shows the address in a `HOST` column.
+
+The address has to be one of the host's own: `epistle service set` refuses a
+multicast group, `255.255.255.255` and a link-local IPv6 address, and it writes
+`::ffff:10.0.0.5` as the `10.0.0.5` it names. Both wildcards are accepted. What
+it can not know from the outside is whether the host actually owns a unicast
+address it names; that surfaces as a bind refusal from the engine.
+
+A listener the container holds on loopback, an `api` one for example, is
+reported as `set` and not as `published`, because a loopback bind inside the
+container gets no mapping. Naming an address for it does widen that bind to the
+container wildcard, which publishes the listener on the host address named; the
+reach is still only what the operator asked for, and `api` and `web-dav` only
+accept loopback.
+
+#### What was measured for the mapping form
+
+pasta, the rootless network mode the stack uses, refuses a port mapping that
+names an explicit address on Podman 5.4.2 (Debian 13): `"[::]:25:25"`, alone or
+next to `"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`,
+and `"25:25"` is the form that publishes on both families. That is why a
+wildcard is never written as an explicit address. Podman 5.7.0 accepts the
+explicit forms, so this is a floor and not a rule of the format.
+
+Not measured: an explicit IPv6 host address (`[ADDR]:PORT:PORT`) under pasta on
+Podman 5.4.2, a rootless bridge instead of pasta, and a client connecting from
+another host. Those shapes are written by the operator in
+`compose.override.yaml`, where the generated map can not reach them.
 
 The override stays the place for a mapping that has to carry every port, or
 one that changes shape: `init` regenerates the base file on a rerun and `stack
 update` regenerates it too, taking the published ports from the listeners. An
 operator override in `compose.override.yaml`, which every stack invocation
-passes after `compose.yaml`, wins over the generated map and is never written.
-Lists in the override are merged with the generated ones, so a plain `ports:`
-entry would be added to `8025:8025` and the engine would refuse to bind both;
-the `!override` tag replaces the list, and then it has to carry every port the
-stack publishes, the mail ones included:
+passes after `compose.yaml`, is merged with the generated map, or replaces it
+where it carries `!override`, and is never written. Lists in the override are
+merged with the generated ones, so a plain `ports:` entry would be added to
+`8025:8025` and the engine would refuse to bind both; the `!override` tag
+replaces the list, and then it has to carry every port the stack publishes, the
+mail ones included:
 
 ```yaml
 services:

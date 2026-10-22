@@ -222,23 +222,48 @@ loopback for these listeners, even when mail certificates are configured in
 Without a container stack the bind in `mail.toml` is the address the server
 binds, so `set` writes the requested one there. With
 `<data_dir>/compose/compose.yaml` the two sides split: inside the container the
-listener keeps an unspecified bind, because a loopback or private address there
-is not one the published mapping can reach, and the requested address becomes
-the host side of the generated mapping as `ADDRESS:PORT:PORT`. `list` then shows
-that address in a `HOST` column, `-` where the mapping still answers on every
-host address. Explicit wildcard addresses retain their family as
-`0.0.0.0:PORT:PORT` or `[::]:PORT:PORT`. A generated mapping with no explicit
-address stays `PORT:PORT`, and the
+listener binds the unspecified address of the family the operator named
+(`0.0.0.0` for IPv4, `::` for IPv6), because a loopback or private address
+there is not one the published mapping can reach, and the requested address
+becomes the host side of the generated mapping as `ADDRESS:PORT:PORT`. A
+container bind that already answers that family is left alone, so the dual-stack
+`::` survives a move to an IPv4 host address. `list` then shows that address in
+a `HOST` column, `-` where the mapping still answers on every host address. A
+wildcard renders as `PORT:PORT` in both families, because a wildcard publishes
+on every address the host owns either way, and pasta on Podman 5.4.2 refuses the
+explicit `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms. A generated mapping
+with no explicit address stays `PORT:PORT`, and the
 host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
 or `stack update`, since every writer of the map reads it back first. If
 `compose.override.yaml` already publishes a port for the same service, `set`
-leaves it alone and says that the override wins over the generated map.
+leaves it alone and says that the override merges with the generated map, or
+replaces it where it carries `!override`. That notice is read out of the file
+rather than parsed, so it sees the block form, the flow form (`mail: {ports:
+[...]}`) and ranges of ports, in block or inline; it does not see a `ports` key
+behind an anchor, an alias or a value a template fills in at run time, and a
+file it cannot make sense of reports nothing.
 
-`set` validates and stages both files before replacing either. A write error
-restores the previous files and verifies their contents and permissions. If
-restoration fails, the error names retained recovery copies. Service
-edits, init reruns and stack writers share a configuration-directory lock through
-the write and reload.
+The address has to be one of the host's own: a multicast group, `255.255.255.255`
+and a link-local IPv6 address are refused before anything is written, both
+wildcards are accepted, and an IPv4-mapped address is written as the IPv4
+address it names. A listener the container holds on loopback publishes nothing
+and is reported as `set` rather than as `published`.
+
+`set`, `enable` and `disable` validate and stage both files before replacing
+either. A write error restores the previous files and verifies their contents
+and permissions. If restoration fails, the error names retained recovery
+copies. A command killed between its two renames leaves staged copies behind,
+which the next command under the lock sweeps and names. Service edits,
+`dns provider set`, init reruns and stack writers share a configuration-directory
+lock through the write and reload; the wait has a deadline and names the command
+that holds it. The lock file is created `0600` and taken as it is at `0600` or
+`0644`, so a lock root created can also be taken by the service user; any other
+mode, and a lock file another user owns, is refused with the mode it has.
+
+`--dry-run` prints the diff of `mail.toml`, and on a container stack the
+`ports:` change that comes with it. With `--json` the result object carries the
+same diff and the map as `ports` with its `current` and `wanted` lists, so a
+consumer does not read a stack change as an empty one.
 
 When `<data_dir>/compose/compose.yaml` exists, the generated mail port map is
 updated and the mail service is restarted through `epistle stack`. The operator

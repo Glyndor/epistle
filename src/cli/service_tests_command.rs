@@ -209,3 +209,45 @@ fn service_writers_wait_and_read_the_latest_config_under_the_common_lock() {
 		);
 	}
 }
+
+/// A generated file that does not parse must leave the configuration as it
+/// was: `enable` and `disable` stage both files before replacing either, the
+/// same way `set` does.
+#[test]
+fn enable_and_disable_leave_the_config_alone_when_the_generated_file_is_broken() {
+	for bytes in ["{invalid", r#"{"services":{"mail":[]}}"#] {
+		for action in [
+			ServiceCli::Enable {
+				name: ServiceName::Webdav,
+			},
+			ServiceCli::Disable {
+				name: ServiceName::Webdav,
+			},
+		] {
+			let (_dir, file) = fixture();
+			let config = Config::load(file.path()).unwrap();
+			let compose = super::super::init::compose_file_path(&config.data_dir);
+			std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+			std::fs::write(&compose, bytes).unwrap();
+			let before = std::fs::read(file.path()).unwrap();
+			let label = format!("{action:?}");
+			let error = execute_with(
+				file.path(),
+				action,
+				false,
+				false,
+				&mut Vec::new(),
+				&mut Vec::new(),
+				|_, _| panic!("a refused change must not restart"),
+			)
+			.unwrap_err();
+			assert!(error.to_string().len() > 4, "{error:?}");
+			assert_eq!(
+				std::fs::read(file.path()).unwrap(),
+				before,
+				"{label} must not leave the listener in the config"
+			);
+			assert_eq!(std::fs::read_to_string(compose).unwrap(), bytes);
+		}
+	}
+}

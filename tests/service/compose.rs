@@ -156,8 +156,8 @@ fn service_set_publishes_on_the_address_the_operator_asked_for() {
 	let imaps = &cfg.listeners[1];
 	assert_eq!(
 		imaps.addr.to_string(),
-		"0.0.0.0",
-		"inside the container the listener binds every address, or the mapping cannot reach it"
+		"::",
+		"the container already binds the unspecified address that answers the mapping, and `::` is dual-stack, so it stays"
 	);
 	assert_eq!(imaps.socket_addr().port(), 19993, "the port does not move");
 	assert!(
@@ -273,7 +273,7 @@ fn service_set_takes_the_pinned_address_with_the_port() {
 }
 
 #[test]
-fn service_set_says_the_operator_override_wins_and_touches_nothing() {
+fn service_set_says_how_the_operator_override_combines_and_touches_nothing() {
 	let (dir, config) = fixture();
 	let (compose, override_bytes) = stack(
 		dir.path(),
@@ -300,7 +300,9 @@ fn service_set_says_the_operator_override_wins_and_touches_nothing() {
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(
 		stderr.contains("imaps published on 127.0.0.1:19993.")
-			&& stderr.contains("compose.override.yaml publishes a port for mail, and it wins"),
+			&& stderr.contains(
+				"compose.override.yaml publishes a port for mail: it merges with the generated map, or replaces it where it carries !override."
+			),
 		"the operator has to hear which mapping answers: {stderr}"
 	);
 	assert_eq!(
@@ -363,7 +365,7 @@ fn service_list_names_the_host_address_the_map_pins() {
 		lines
 			.iter()
 			.any(|line| line.split_whitespace().collect::<Vec<_>>()
-				== ["imaps", "enabled", "19993", "0.0.0.0", "127.0.0.1"]),
+				== ["imaps", "enabled", "19993", "::", "127.0.0.1"]),
 		"the row names the host address: {lines:?}"
 	);
 	assert!(
@@ -395,8 +397,8 @@ fn service_list_names_the_host_address_the_map_pins() {
 		.unwrap();
 	assert_eq!(imaps["host"], "127.0.0.1");
 	assert_eq!(
-		imaps["bind"], "0.0.0.0",
-		"the bind is the container-side one"
+		imaps["bind"], "::",
+		"the bind is the container-side one, left where it answers the mapping"
 	);
 	assert!(
 		json.as_array()

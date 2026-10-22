@@ -103,3 +103,107 @@ fn store_environment_token_and_remove_container_environment() {
 	unsafe { std::env::set_var("DNS_MIGRATION_TEST_TOKEN", TOKEN) };
 	migrate("token_env = 'DNS_MIGRATION_TEST_TOKEN'", false, true);
 }
+
+/// `dns provider set` writes `mail.toml` and the generated compose file, so
+/// it waits for the common lock like every other writer of them, and it reads
+/// the configuration only after it has the lock. A command that edits the file
+/// in the meantime must not be overwritten by a compose rollback.
+#[test]
+fn the_token_migration_waits_for_the_common_lock_and_reads_the_latest_config() {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	let dir = tempfile::tempdir().unwrap();
+	let data = dir.path().join("data");
+	std::fs::create_dir(&data).unwrap();
+	let path = dir.path().join("mail.toml");
+	let original = format!(
+		"hostname = 'mail.example.org'\ndata_dir = {data:?}\n[dns]\nprovider = 'desec'\nzone = 'example.org'\ntoken = '{TOKEN}'\n"
+	);
+	std::fs::write(&path, &original).unwrap();
+	let compose = crate::cli::init::compose_file_path(&data);
+	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	std::fs::write(
+		&compose,
+		r#"{"services":{"mail":{"environment":{},"volumes":[]}}}"#,
+	)
+	.unwrap();
+	let action = || {
+		let crate::cli::Command::Dns { action, .. } = crate::cli::Cli::try_parse_from([
+			"epistle",
+			"dns",
+			"provider",
+			"set",
+			"desec",
+			"--zone",
+			"example.org",
+			"--store-token",
+		])
+		.unwrap()
+		.command
+		else {
+			unreachable!()
+		};
+		action
+	};
+	let held = crate::cli::service_lock::acquire(&path).unwrap();
+	std::thread::scope(|scope| {
+		let (started, starting) = mpsc::channel();
+		let (done, result) = mpsc::channel();
+		let config = &path;
+		scope.spawn(move || {
+			started.send(()).unwrap();
+			let code = execute_with(
+				config,
+				action(),
+				false,
+				false,
+				&mut Vec::new(),
+				&mut Vec::new(),
+				|_, _| ExitCode::SUCCESS,
+			);
+			done.send(code).unwrap();
+		});
+		starting.recv().unwrap();
+		assert!(
+			matches!(
+				result.recv_timeout(Duration::from_millis(200)),
+				Err(mpsc::RecvTimeoutError::Timeout)
+			),
+			"the command escaped the shared lock"
+		);
+		// This edit has to be the one the command reads: without the lock it
+		// would load the file before this write and its rollback would put
+		// the compose file it read back over this one.
+		let edited = format!("{original}\n# edited by another command\n");
+		std::fs::write(config, &edited).unwrap();
+		std::fs::set_permissions(config, std::fs::Permissions::from_mode(0o600)).unwrap();
+		drop(held);
+		assert_eq!(
+			result
+				.recv_timeout(Duration::from_secs(10))
+				.unwrap()
+				.unwrap(),
+			ExitCode::SUCCESS
+		);
+		let left = std::fs::read_to_string(&path).unwrap();
+		assert!(
+			left.contains("# edited by another command") && left.contains("token_file"),
+			"the command must keep the other command's edit: {left}"
+		);
+		let compose = std::fs::read_to_string(&compose).unwrap();
+		assert!(
+			!compose.contains("DNS_MIGRATION_TEST_TOKEN"),
+			"the mount is added once: {compose}"
+		);
+		let secret = dir.path().join("secrets/dns_provider_token");
+		let document: serde_json::Value = serde_json::from_str(&compose).unwrap();
+		assert!(
+			document["services"]["mail"]["volumes"]
+				.as_array()
+				.unwrap()
+				.iter()
+				.any(|mount| mount["source"] == secret.display().to_string()),
+			"the mount that carries the token has to reach the generated file: {compose}"
+		);
+	});
+}

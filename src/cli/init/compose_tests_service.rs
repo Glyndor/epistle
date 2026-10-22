@@ -1,8 +1,8 @@
 use super::*;
-use crate::config::ListenerKind;
+use crate::config::{Listener, ListenerKind};
 
 #[test]
-fn service_compose_updates_only_mail_ports() {
+fn the_staged_map_touches_only_the_mail_ports() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = compose_file_path(dir.path());
 	fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -30,26 +30,40 @@ fn service_compose_updates_only_mail_ports() {
 			port: None,
 		},
 	];
-	assert!(update_listener_ports(dir.path(), &listeners).unwrap());
-	let after: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+	let staged = super::compose_publish::prepare(dir.path(), &listeners, None)
+		.expect("a readable generated file")
+		.expect("the map moves");
+	assert_eq!(staged.path, path);
+	let after: serde_json::Value = serde_json::from_slice(&staged.candidate).unwrap();
 	assert_eq!(
 		after["services"]["mail"]["ports"],
 		serde_json::json!(["25:25", "19993:19993"]),
 		"compose ports must match current listeners independently"
 	);
-	let mut expected = before;
+	let mut expected = before.clone();
 	expected["services"]["mail"]["ports"] = serde_json::json!(["25:25", "19993:19993"]);
 	assert_eq!(
 		after, expected,
-		"compose updates must preserve all other fields"
+		"the staged map must preserve all other fields"
 	);
 	assert!(
 		fs::read(override_path).unwrap() == override_bytes,
 		"operator override must stay byte-for-byte unchanged"
 	);
+	assert!(
+		fs::read(&path).unwrap() == serde_json::to_vec(&before).unwrap(),
+		"staging a map must not write the generated file"
+	);
+	// Once the staged candidate is the file, the same listeners move nothing.
+	fs::write(&path, &staged.candidate).unwrap();
 	let bytes = fs::read(&path).unwrap();
 	let mtime = fs::metadata(&path).unwrap().modified().unwrap();
-	assert!(update_listener_ports(dir.path(), &listeners).unwrap());
+	assert!(
+		super::compose_publish::prepare(dir.path(), &listeners, None)
+			.expect("a readable generated file")
+			.is_none(),
+		"identical ports must not stage a rewrite"
+	);
 	assert!(fs::read(&path).unwrap() == bytes);
 	assert_eq!(
 		fs::metadata(&path).unwrap().modified().unwrap(),
@@ -59,9 +73,13 @@ fn service_compose_updates_only_mail_ports() {
 }
 
 #[test]
-fn service_compose_absent_is_a_host_install() {
+fn an_absent_generated_file_is_a_host_install() {
 	let dir = tempfile::tempdir().unwrap();
-	assert!(!update_listener_ports(dir.path(), &[]).unwrap());
+	assert!(
+		super::compose_publish::prepare(dir.path(), &[], None)
+			.expect("an absent stack is not an error")
+			.is_none()
+	);
 	assert!(
 		!compose_file_path(dir.path()).exists(),
 		"host edits must not create a container stack"

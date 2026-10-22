@@ -105,12 +105,12 @@ fn concurrent_commands_share_the_config_lock_and_preserve_the_previous_update() 
 	}
 }
 
+/// A wildcard publishes on every address the host owns either way, so the map
+/// keeps the plain form pasta accepts on Podman 5.4.2 in both families, and the
+/// family the operator named stays in the bind the container uses.
 #[test]
-fn explicit_wildcard_families_and_single_inline_override_reach_the_cli() {
-	for (address, expected) in [
-		("0.0.0.0", "0.0.0.0:19993:19993"),
-		("::", "[::]:19993:19993"),
-	] {
+fn a_wildcard_publishes_every_address_and_single_inline_override_reaches_the_cli() {
+	for address in ["0.0.0.0", "::"] {
 		let (dir, config) = fixture();
 		let compose = dir.path().join("compose/compose.yaml");
 		fs::create_dir_all(compose.parent().unwrap()).unwrap();
@@ -141,7 +141,18 @@ fn explicit_wildcard_families_and_single_inline_override_reach_the_cli() {
 			"{}",
 			String::from_utf8_lossy(&output.stderr)
 		);
-		assert_eq!(ports(&compose)[1], expected);
+		assert_eq!(
+			ports(&compose)[1],
+			"19993:19993",
+			"a wildcard is never written as an explicit address"
+		);
+		assert_eq!(
+			epistle::config::Config::load(&config).unwrap().listeners[1]
+				.addr
+				.to_string(),
+			"::",
+			"the container bind that answers {address} is left alone"
+		);
 		assert!(
 			String::from_utf8_lossy(&output.stderr)
 				.contains("compose.override.yaml publishes a port")

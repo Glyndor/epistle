@@ -335,7 +335,12 @@ fn execute_with(
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config()?;
-	let outcome = document.commit()?;
+	// Both files are staged and validated before either is replaced, the same
+	// way `set` does it: a generated file that does not parse must not leave a
+	// listener enabled in `mail.toml` and a port published nowhere.
+	let companion = super::init::prepare_published_ports(&config.data_dir, &config.listeners, None)
+		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
+	let outcome = super::config_edit::commit_pair(document, companion)?;
 	let state = if enabled { "enabled" } else { "disabled" };
 	if outcome == super::config_edit::Outcome::Unchanged {
 		writeln!(
@@ -357,8 +362,6 @@ fn execute_with(
 	}
 	writeln!(err, "{} {state}.", name.as_str())
 		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
-	super::init::update_listener_ports(&config.data_dir, &config.listeners)
-		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
 	let (code, reload) =
 		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
 	if json {
