@@ -13,7 +13,11 @@ mod assistant;
 mod compose;
 pub(crate) mod db_roles;
 mod detect;
+mod draft;
 mod first_account;
+mod guided;
+mod guided_rules;
+mod guided_session;
 pub(crate) mod host_secrets;
 pub(crate) mod host_sizing;
 pub(crate) mod images;
@@ -21,6 +25,7 @@ mod plan;
 mod ptr;
 mod regenerate;
 pub(crate) mod resources;
+mod review;
 
 pub use answers::Answers;
 pub(crate) use apply::prepare_keys_for_update;
@@ -102,6 +107,10 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		return ExitCode::from(EXIT_OK);
 	}
 	let mut first_password = None;
+	// The guided flow, with its steps, colours and draft, needs a terminal
+	// to answer on. Any other invocation keeps the piped assistant this
+	// command shipped with.
+	let mut guided = false;
 	let mut answers = match args.answers.as_ref() {
 		Some(path) => match read_answers(path) {
 			Ok((mut answers, declined)) => {
@@ -113,9 +122,10 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 				return ExitCode::from(EXIT_INVALID);
 			}
 		},
-		None => match read_interactive(detector) {
+		None => match read_interactive(detector, args.json) {
 			Ok(filled) => {
 				first_password = filled.first_password;
+				guided = filled.guided;
 				filled.answers
 			}
 			Err(()) => return ExitCode::from(EXIT_INVALID),
@@ -158,6 +168,9 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			return ExitCode::from(EXIT_INVALID);
 		}
 	};
+	if guided {
+		let _ = review::render(&answers, out);
+	}
 	render_plan(&plan);
 	let plan_lines = lines(|text| plan.write_to(&mut StringWriter::new(text)).is_ok());
 	let result = |result: &str, report: &[String]| {
@@ -175,15 +188,23 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		report_ptr(&answers, probes, out);
 		return result("dry-run", &[]);
 	}
-	if args.answers.is_none() && !confirm(std::io::stdin().lock(), crate::cli::style::stderr()) {
+	if args.answers.is_none()
+		&& !confirm(std::io::stdin().lock(), crate::cli::style::stderr(), guided)
+	{
 		let mut out = crate::cli::style::stderr();
 		let _ = writeln!(out, "aborted: nothing was written");
 		return result("unchanged", &[]);
 	}
 	// From an answers file the password is read now, after the plan and
 	// before anything is written, so a refused one leaves nothing behind.
+	// The assistant already asked for it while filling the answers; the
+	// guided flow defers it to here.
 	if let (Some(first), None) = (&answers.first_account, &first_password) {
-		match first_account::read_password(first) {
+		match if guided {
+			guided_session::password(&first.name()).map_err(|error| error.to_string())
+		} else {
+			first_account::read_password(first)
+		} {
 			Ok(password) => first_password = Some(password),
 			Err(why) => {
 				crate::cli::style::error(format_args!("first_account: {why}"));
@@ -204,6 +225,9 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	}
 	match outcome.error {
 		None => {
+			if guided {
+				guided_session::finished(&answers, out);
+			}
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
 			let report = lines(|text| outcome.report.write_to(text).is_ok());
@@ -252,15 +276,47 @@ fn read_answers(path: &PathBuf) -> Result<(Answers, Declined), ApplyError> {
 	Ok((answers, answers_none::declined(&raw)))
 }
 
-fn read_interactive(detector: &dyn detect::Detector) -> Result<assistant::Filled, ()> {
-	let mut stdin = std::io::stdin().lock();
-	let mut stderr = crate::cli::style::stderr();
-	assistant::run(&mut stdin, &mut stderr, detector)
+/// The answers a run collected by asking, and how they were asked.
+struct Filled {
+	answers: Answers,
+	/// The first account's password. The assistant asks for it while it
+	/// fills the answers; the guided flow leaves it `None` and reads it
+	/// after the confirmation.
+	first_password: Option<first_account::Password>,
+	/// Whether the guided terminal flow asked.
+	guided: bool,
 }
 
-fn confirm<R: std::io::BufRead>(reader: R, out: impl std::io::Write) -> bool {
-	let mut reader = reader;
-	let mut out = out;
+/// Ask for the answers. A terminal without `--json` gets the guided flow,
+/// which needs somewhere to type. Every other invocation, a pipe, a
+/// redirected stderr or `--json`, keeps the assistant this command shipped
+/// with: it reads the same `BufRead` and never requires a terminal.
+fn read_interactive(detector: &dyn detect::Detector, json: bool) -> Result<Filled, ()> {
+	let policy = guided_session::policy(json);
+	if policy.interactive {
+		return guided_session::run(detector, policy)
+			.map(|answers| Filled {
+				answers,
+				first_password: None,
+				guided: true,
+			})
+			.map_err(|error| {
+				let _ = writeln!(std::io::stderr(), "error: {error}");
+			});
+	}
+	let mut stdin = std::io::stdin().lock();
+	let mut out = crate::cli::style::stderr();
+	assistant::run(&mut stdin, &mut out, detector).map(|filled| Filled {
+		answers: filled.answers,
+		first_password: filled.first_password,
+		guided: false,
+	})
+}
+
+fn confirm<R: std::io::BufRead>(mut reader: R, mut out: impl std::io::Write, guided: bool) -> bool {
+	if guided {
+		return guided_session::confirm(&mut reader, &mut out, guided_session::policy(false));
+	}
 	assistant::confirm(&mut reader, &mut out).unwrap_or(false)
 }
 
@@ -306,15 +362,29 @@ fn render_warnings(warnings: &[Warning]) {
 }
 
 fn render_plan(plan: &Plan) {
+	let mut rendered = String::new();
+	let _ = plan.write_to(&mut rendered);
 	let mut out = crate::cli::style::stderr();
-	let _ = writeln!(out, "plan:");
-	let _ = plan.write_to(&mut StringWriter::new(&mut out));
+	escaped(&mut out, "plan:", &rendered);
 }
 
 fn render_report(report: &apply::Report) {
+	let mut rendered = Vec::new();
+	let _ = report.write_to(&mut rendered);
 	let mut out = crate::cli::style::stderr();
-	let _ = writeln!(out, "report:");
-	let _ = report.write_to(&mut out);
+	escaped(&mut out, "report:", &String::from_utf8_lossy(&rendered));
+}
+
+/// Write a rendered block to the terminal with every control and invisible
+/// formatting character escaped. The plan and the report carry values that
+/// came from the answers or from a saved draft, and a terminal executes the
+/// escape sequence it finds there. The serialized values keep the original
+/// bytes.
+fn escaped(out: &mut impl Write, title: &str, body: &str) {
+	let _ = writeln!(out, "{title}");
+	for line in body.lines() {
+		let _ = writeln!(out, "{}", crate::cli::term::sanitize(line));
+	}
 }
 
 /// The non-empty lines `write` renders into a buffer, trimmed, for the

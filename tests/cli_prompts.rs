@@ -1,7 +1,8 @@
 //! The CLI run from a script, with no terminal: a destructive command without
 //! `--yes` exits 2 with a message naming `--yes`, writes nothing to stdout
 //! and changes nothing, and `-y` lets it through; a password is still read
-//! from a pipe; an unknown account and a static one get different errors.
+//! from a pipe; an unknown account and a static one get different errors;
+//! `init` without `--answers` keeps asking its piped questions.
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -141,4 +142,51 @@ fn a_missing_account_without_a_terminal_is_still_a_usage_error() {
 		"{stderr}"
 	);
 	assert!(!stderr.contains("Pick"), "nothing is offered: {stderr}");
+}
+
+#[test]
+fn init_without_a_terminal_keeps_the_piped_questions_and_the_json_result() {
+	// A pipe is not a terminal, so the guided flow does not apply: the
+	// questions are the ones this command shipped with, they go to stderr
+	// as before, and `--json` still writes the machine result to stdout.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let answers = format!(
+		"manual\nmail.example.org\nexample.org\n\n\n\n\n{}\n{}\n{}\n\n\n\n\n\n\n",
+		dir.path().join("data").display(),
+		dir.path().join("etc/mail.toml").display(),
+		"\n".repeat(7),
+	);
+	let output = epistle(&["init", "--dry-run", "--json"], answers.as_bytes());
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert_eq!(output.status.code(), Some(0), "{stderr}");
+	for question in [
+		"mode [manual/automatic]",
+		"hostname> ",
+		"domains:",
+		"data_dir> ",
+	] {
+		assert!(stderr.contains(question), "missing {question}: {stderr}");
+	}
+	assert!(!stderr.contains("Step 1 of 7"), "{stderr}");
+	assert!(!stderr.contains("Resume"), "{stderr}");
+	assert!(!stderr.contains('\u{1b}'), "{stderr}");
+	let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json on stdout");
+	assert_eq!(json["result"], "dry-run");
+	assert!(json["plan"].as_array().is_some_and(|plan| !plan.is_empty()));
+	assert!(!dir.path().join("data").exists());
+}
+
+#[test]
+fn init_without_answers_stops_at_the_end_of_the_pipe() {
+	// The assistant reads until the pipe ends and exits 2 without asking
+	// for `--answers`.
+	let output = epistle(&["init", "--dry-run"], b"manual\n");
+	assert_eq!(output.status.code(), Some(2));
+	assert!(output.stdout.is_empty());
+	let stderr = String::from_utf8(output.stderr).expect("utf-8");
+	assert!(stderr.contains("mode [manual/automatic]"), "{stderr}");
+	assert!(stderr.contains("hostname> "), "{stderr}");
+	assert!(!stderr.contains("Step 1 of 7"), "{stderr}");
+	assert!(!stderr.contains("Resume"), "{stderr}");
+	assert!(!stderr.contains('\u{1b}'), "{stderr}");
 }

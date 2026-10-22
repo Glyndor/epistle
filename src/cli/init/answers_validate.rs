@@ -189,6 +189,14 @@ fn check_dns(
 	}
 }
 
+/// A character that must never reach a terminal as itself: a control
+/// character moves the cursor or repaints the screen, and an invisible
+/// formatting character reorders or hides the text around it. Both are
+/// what [`crate::cli::term::sanitize`] escapes before printing.
+fn control_or_invisible(c: char) -> bool {
+	c.is_control() || crate::cli::term::is_invisible_format(c)
+}
+
 fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<Invalid>) {
 	// Compose interpolates `$VAR` (and `${VAR}`) inside any value
 	// it parses, including path-shaped strings. The compose file
@@ -212,6 +220,21 @@ fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<In
 			value: text.to_string(),
 		});
 		return;
+	}
+	// The plan and the report print both paths on the terminal, so a
+	// control or invisible formatting character in one would move the
+	// cursor, clear the screen or hide text in what the operator is
+	// reading. A path never needs one, so the validator refuses the
+	// shape before any effect instead of escaping it at print time.
+	for (field, path) in [("data_dir", data_dir), ("config_path", config_path)] {
+		if let Some(text) = path.to_str()
+			&& text.chars().any(control_or_invisible)
+		{
+			errors.push(Invalid::PathControl {
+				field: field.to_string(),
+				value: text.to_string(),
+			});
+		}
 	}
 	if let Some(text) = config_path.to_str()
 		&& text.contains('$')

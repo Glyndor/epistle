@@ -161,3 +161,34 @@ fn config_path_with_dollar_is_rejected_as_compose_interpolation() {
 		"interpolated `config_path` must surface as PathInterpolated, got {errors:?}"
 	);
 }
+
+/// A control or invisible formatting character inside `data_dir`
+/// or `config_path` reaches the plan the operator confirms and
+/// the report it reads afterwards. An escape sequence found
+/// there would clear the screen or hide text. The validator
+/// refuses the shape as `PathControl` before any effect.
+#[test]
+fn control_characters_in_a_path_are_rejected_by_the_validator() {
+	let mut answers = minimal(Manual);
+	answers.config_path = PathBuf::from("/etc/epistle/\u{1b}[2Jmail.toml");
+	let errors = answers
+		.validate()
+		.expect_err("a `config_path` carrying an escape must be rejected");
+	assert!(
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::PathControl { field, .. } if field == "config_path")),
+		"control in `config_path` must surface as PathControl, got {errors:?}"
+	);
+	answers.config_path = PathBuf::from("/etc/epistle/mail.toml");
+	answers.data_dir = PathBuf::from("/var/lib/epistle/\u{202e}data");
+	let errors = answers
+		.validate()
+		.expect_err("a `data_dir` carrying an override must be rejected");
+	assert!(
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::PathControl { field, .. } if field == "data_dir")),
+		"invisible character in `data_dir` must surface as PathControl, got {errors:?}"
+	);
+}

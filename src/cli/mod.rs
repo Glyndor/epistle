@@ -100,6 +100,7 @@ mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
 mod tracing_setup;
+mod ui;
 mod util;
 mod verify;
 mod verify_dns;
