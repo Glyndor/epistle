@@ -450,3 +450,14 @@ fn the_ledger_is_private_and_refuses_links() {
 		"a linked ledger is not followed"
 	);
 }
+
+#[test]
+fn a_thousand_empty_folders_never_add_up_to_the_total() {
+	// Each folder holds its workspace only while it is open, so the number of
+	// folders cannot exhaust the total the whole run is allowed.
+	let mut budget = Budget::default();
+	for _ in 0..4000 {
+		budget.next_mailbox();
+		charge(&mut budget).expect("a folder's workspace is not part of the total");
+	}
+}

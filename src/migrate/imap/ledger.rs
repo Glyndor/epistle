@@ -429,7 +429,7 @@ pub(super) fn open(
 
 /// Charge the workspace of one folder's ledger.
 pub(super) fn charge(budget: &mut Budget) -> Result<(), ClientError> {
-	budget.charge(WORKSPACE)
+	budget.charge_transient(WORKSPACE)
 }
 
 /// The first 32 bits of the SHA-256 over a record, so a torn or altered
