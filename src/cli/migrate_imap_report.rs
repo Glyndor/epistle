@@ -112,6 +112,7 @@ fn facts(report: &FolderReport) -> String {
 	}
 	for (count, what) in [
 		(report.duplicates, "already here"),
+		(report.confirmed, "confirmed earlier"),
 		(report.deleted, "marked deleted"),
 		(report.too_large, "too large"),
 		(report.vanished, "gone before fetching"),

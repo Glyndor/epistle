@@ -29,6 +29,20 @@ impl Budget {
 		self.mailbox = 0;
 	}
 
+	/// Charge a buffer that is freed when the folder ends: it counts against
+	/// the folder's limit while it is held, but never against the total, so
+	/// a long list of folders does not add up to a total nobody holds.
+	pub(super) fn charge_transient(&mut self, bytes: usize) -> Result<(), ClientError> {
+		if bytes > self.mailbox_limit.saturating_sub(self.mailbox) {
+			return Err(ClientError::Metadata {
+				scope: "mailbox",
+				limit: self.mailbox_limit,
+			});
+		}
+		self.mailbox += bytes;
+		Ok(())
+	}
+
 	pub(super) fn charge(&mut self, bytes: usize) -> Result<(), ClientError> {
 		for (scope, used, limit) in [
 			("mailbox", self.mailbox, self.mailbox_limit),

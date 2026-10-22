@@ -31,7 +31,7 @@ impl Table {
 		})
 	}
 
-	fn digest(key: &Key) -> [u8; 32] {
+	pub(super) fn digest(key: &Key) -> [u8; 32] {
 		let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
 		let size = match key {
 			Key::MessageId(id, size) => {
@@ -91,8 +91,14 @@ impl Table {
 	}
 
 	pub(super) fn claim(&mut self, key: &Key) -> io::Result<bool> {
-		let hash = Self::digest(key);
-		let mut link = self.bucket(&hash);
+		self.claim_hash(&Self::digest(key))
+	}
+
+	/// Whether a stored identity equal to `hash` is still unclaimed; claims
+	/// it. The same search by fingerprint the ledger uses, for a confirmed
+	/// message that is not downloaded again.
+	pub(super) fn claim_hash(&mut self, hash: &[u8; 32]) -> io::Result<bool> {
+		let mut link = self.bucket(hash);
 		let mut entry = self.pointer(link)?;
 		while entry != 0 {
 			let offset = self.offset(entry)?;
@@ -100,7 +106,7 @@ impl Table {
 			let mut stored = [0; 32];
 			self.file.read_exact(&mut stored)?;
 			let next = self.pointer(offset + 32)?;
-			if stored == hash {
+			if stored == *hash {
 				self.set_pointer(link, next)?;
 				return Ok(true);
 			}

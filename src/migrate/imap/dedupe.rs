@@ -42,6 +42,13 @@ pub(crate) fn key(message: &[u8]) -> Key {
 #[path = "dedupe_disk.rs"]
 mod disk;
 
+/// The 32-byte identity fingerprint the index compares. The ledger of
+/// confirmed messages keeps one per message, so a message that is not
+/// downloaded again can still consume its copy of the local mailbox.
+pub(crate) fn fingerprint(key: &Key) -> [u8; 32] {
+	disk::Table::digest(key)
+}
+
 /// The messages already in a local mailbox, indexed without retaining their identities in memory.
 #[derive(Debug)]
 pub(crate) struct Index {
@@ -146,6 +153,11 @@ impl Index {
 	/// Whether a stored copy of `key` is still unclaimed; claims it.
 	pub(crate) fn claim(&mut self, key: &Key) -> std::io::Result<bool> {
 		self.table.claim(key)
+	}
+
+	/// Whether a stored copy of `fingerprint` is still unclaimed; claims it.
+	pub(crate) fn claim_fingerprint(&mut self, fingerprint: &[u8; 32]) -> std::io::Result<bool> {
+		self.table.claim_hash(fingerprint)
 	}
 }
 

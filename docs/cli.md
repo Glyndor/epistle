@@ -1350,17 +1350,40 @@ process's effective user, including during `--dry-run`. Run the migration as the
 account that owns the data directory; group write permission alone is insufficient.
 Parents of `data_dir` may be symbolic links. The final `data_dir` component and
 entries under `migrate/<account>` must not be symbolic links.
+One migration per account runs at a time: the run holds
+`migrate/<account>/.lock` and a second run waits 30 seconds for it before it
+stops with the name of that file. A dry run writes nothing, so it takes no lock
+and never waits.
 Recovery uses a private temporary disk index with a fixed metadata workspace, so
 large local mailboxes do not require an in-memory identity set. Free disk space is
 still required; an index failure retains the saved progress. Recovery bounds each
 decoded local message by the configured `max_message_size`, independently of the
 source response literal limit.
 
-An interrupted batch replays the confirmed prefix before matching pending copies.
-This downloads confirmed messages again on each interrupted recovery attempt and
-preserves distinct copies of identical messages. A change in UIDVALIDITY also
-requires a full replay. Already confirmed local messages do not need fresh durability
-barriers unless the saved state marks a batch in progress.
+An interrupted batch is replayed from the first UID the folder listed, matching
+pending copies against the local mailbox.
+What an earlier run already confirmed is not downloaded again: every remote
+folder keeps a ledger of the messages it has handed over next to its progress
+file in `data_dir/migrate/<account>`, the replay skips whatever the ledger
+confirms, and only the rest is matched against the local mailbox. A message you
+deleted or moved after an interruption therefore does not come back. The ledger
+holds the identity of each confirmed message, 40 bytes per message, so two
+identical messages in the source still end up as two copies here. It is written
+and synchronized before the checkpoint that confirms the batch, so it never
+claims a message that is not stored locally, and a copy left behind by a cut is
+dropped on the next run. A change in UIDVALIDITY discards the ledger with a
+warning and reads the folder again from the start. A ledger that cannot be read
+stops that folder without removing anything, and the message names the file to
+delete to copy the folder again. Already confirmed local messages do not need
+fresh durability barriers unless the saved state marks a batch in progress.
+
+A migration a version without a ledger started carries on with it: that version
+kept only the progress file, so the new ledger starts empty and confirms nothing
+about what was already copied. A later run that is cut and then replayed
+downloads that prefix once more and matches it against the local mailbox, so a
+message deleted there in the meantime can come back once. Deleting
+`migrate/<account>` discards the progress and the ledgers of every folder, which
+is how a full copy of the account is forced.
 
 UID windows start at 10000 and double across empty ranges, keeping sparse UIDNEXT
 values from causing a long sequence of empty queries. Each folder/run permits at
@@ -1369,7 +1392,8 @@ and above UIDNEXT in case the source underestimated it. Without UIDNEXT, up to 1
 messages arriving after EXAMINE are accepted and the discrepancy is logged;
 larger counts are refused.
 A limit or inconsistent-count error retains completed window checkpoints; run the
-same command again to resume. A pending recovery replays its confirmed prefix again.
+same command again to resume. While a batch is in progress every local message
+stays a candidate for matching, not only the ones newer than the checkpoint.
 A dry run saves no checkpoints.
 
 ## Outbound queue
