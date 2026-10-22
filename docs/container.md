@@ -436,8 +436,8 @@ The scripts below are passed as one argument to `sh -c`:
 ```sh
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
-# Restore script, after podup cp <host-sql> db:/tmp/epistle-restore.sql
-PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/epistle-restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
+# Restore script, after podup cp <host-sql> db:/tmp/<staged-name>
+PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
 `POSTGRES_PASSWORD_FILE` is consumed by the image entrypoint during
@@ -445,8 +445,10 @@ initialization. libpq does not read it, so it cannot authenticate the
 clients against `local all all scram-sha-256` without `PGPASSWORD`.
 The password value stays inside the container and never enters the
 host argv or environment. Restore uses the copied SQL file, stops on
-the first SQL error and runs in one transaction. Its host temp file
-is removed when replay finishes.
+the first SQL error and runs in one transaction. The host temp file is
+removed when the replay finishes, and the copy inside `db` is removed
+afterwards with `podup exec -T db sh -c "rm -f '/tmp/<staged-name>'"`,
+whether the replay succeeded or failed.
 
 The `pg_dump`/`psql` host binaries are not required on the host
 in this path; the database step runs entirely inside the `db`

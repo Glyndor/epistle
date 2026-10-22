@@ -186,9 +186,11 @@ fn backup_with_database_writes_the_dump_bytes_into_the_archive() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let bin = dir.path().join("bin");
 	let pg_dump_stub = bin.join("pg_dump");
+	// The stub ends with pg_dump's closing marker, because a dump whose
+	// stdout does not carry it is refused as truncated.
 	write_shell_stub(
 		&pg_dump_stub,
-		b"#!/bin/sh\nprintf 'CREATE TABLE accounts (id int);\\n'\n",
+		b"#!/bin/sh\nprintf 'CREATE TABLE accounts (id int);\\n-- PostgreSQL database dump complete\\n'\n",
 	);
 	let data_dir = dir.path().join("data");
 	std::fs::create_dir_all(&data_dir).expect("data dir");
