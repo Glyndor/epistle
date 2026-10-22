@@ -270,6 +270,30 @@ pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
 	out
 }
 
+/// `data` without any header field whose name starts with `prefix`
+/// (compared case-insensitively), folded continuation lines included. The
+/// body and every other field are kept byte for byte. Used to reserve a
+/// namespace (`X-Epistle`): one field cannot be named in a list that a
+/// future field would have to be added to.
+pub fn strip_headers_with_prefix(data: &[u8], prefix: &str) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let mut out = Vec::with_capacity(data.len());
+	let mut dropping = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		if !matches!(line.first(), Some(b' ' | b'\t')) {
+			dropping = field_name(line).is_some_and(|name| {
+				name.len() >= prefix.len()
+					&& name[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+			});
+		}
+		if !dropping {
+			out.extend_from_slice(line);
+		}
+	}
+	out.extend_from_slice(&data[header_end..]);
+	out
+}
+
 /// In-place header strip: rewrite `data` in place to remove every
 /// header field whose name is one of `names`, folded continuation
 /// lines included. Saves the body copy the slice-returning variant

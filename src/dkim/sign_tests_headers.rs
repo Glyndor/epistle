@@ -32,6 +32,9 @@ const FIELDS: &[(&str, &str, bool)] = &[
 	("List-Owner", "<mailto:owner@example.org>", false),
 	("List-Archive", "<https://example.org/archive>", false),
 	("Feedback-ID", "campaign:sender", false),
+	("Auto-Submitted", "auto-generated", true),
+	("Organization", "Example Org", false),
+	("X-Epistle", "1", false),
 ];
 
 fn fixture(dual: bool) -> (Signer, KeyDns) {
@@ -135,7 +138,7 @@ async fn signs_every_documented_field_with_both_algorithms() {
 					"{name}"
 				);
 			}
-			assert_eq!(list.len(), FIELDS.len() + 10);
+			assert_eq!(list.len(), FIELDS.len() + 11);
 		}
 		assert!(lists.windows(2).all(|pair| pair[0] == pair[1]));
 		check(&dns, &signature, &raw, DkimOutcome::Pass).await;
@@ -280,6 +283,9 @@ async fn repeated_fields_and_all_resent_names_are_signed_bottom_up() {
 #[tokio::test]
 async fn transit_headers_are_excluded_and_can_change() {
 	let (signer, dns) = fixture(true);
+	// `X-Epistle` is the one `X-` field in the signature: it is one of ours
+	// (see `smtp::identification`), so it is signed like any other field the
+	// server writes. A custom `X-` header from a client still is not.
 	let raw = format!(
 		"Received: old hop\r\nReturn-Path: <old@example.org>\r\nAuthentication-Results: old\r\nX-Custom: old\r\nReceived-SPF: old\r\n{}",
 		message()
@@ -290,7 +296,7 @@ async fn transit_headers_are_excluded_and_can_change() {
 		.map(|field| names(field))
 	{
 		assert!(!list.iter().any(|name| {
-			name.starts_with("x-")
+			(name.starts_with("x-") && name != "x-epistle")
 				|| [
 					"received",
 					"return-path",

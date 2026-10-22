@@ -197,6 +197,7 @@ fn build_email_has_correct_structure() {
 		1_700_086_400,
 		"reporter.example",
 		&attachment,
+		true,
 	);
 	let email_str = String::from_utf8_lossy(&email);
 	assert!(

@@ -150,6 +150,18 @@ fn default_masked_addresses_max() -> usize {
 	100
 }
 
+/// Default for the identification switches that are on unless the operator
+/// turns them off: a `Feedback-ID`, the bulk unsubscribe address, the list
+/// id, `Auto-Submitted` on server-generated mail and `Organization`.
+fn default_yes() -> bool {
+	true
+}
+
+/// Default for [`Config::bulk_recipients`]: two or more recipients is bulk.
+fn default_bulk_recipients() -> usize {
+	1
+}
+
 /// Top-level server configuration.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,6 +286,41 @@ pub struct Config {
 	/// domain that have no quota of their own.
 	#[serde(default)]
 	pub domain_quotas: std::collections::HashMap<String, u64>,
+	/// Write a `Feedback-ID` of the sending domain and the class on a
+	/// submission that has none. `false` leaves the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_feedback_id: bool,
+	/// Give a bulk `transactional` submission a `mailto` `List-Unsubscribe`
+	/// pointing at the sender. `false` leaves every submission without one.
+	#[serde(default = "default_yes")]
+	pub default_list_unsubscribe: bool,
+	/// Recipients above which a `transactional` submission counts as bulk
+	/// for `default_list_unsubscribe`. `1`, the default, means two or more.
+	/// Personal mail never counts and marketing mail already has to carry a
+	/// one-click unsubscribe.
+	#[serde(default = "default_bulk_recipients")]
+	pub bulk_recipients: usize,
+	/// Write the `List-Id` of the list a sender speaks for when the envelope
+	/// sender is a configured `[[alias]]` with a `list_id`. `false` leaves
+	/// the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_list_id: bool,
+	/// Write `Auto-Submitted: auto-generated` on the mail the server builds
+	/// itself (bounces, alerts, DMARC and TLS-RPT reports). `false` leaves
+	/// the field out of that mail.
+	#[serde(default = "default_yes")]
+	pub system_auto_submitted: bool,
+	/// Write `X-Epistle: 1` on every submission. Off by default: the field
+	/// says nothing a receiver acts on, and no version rides in it.
+	#[serde(default)]
+	pub x_epistle_header: bool,
+	/// Write `Organization` on a submission whose domain has an entry in
+	/// `domain_organization`. `false` leaves the field out.
+	#[serde(default = "default_yes")]
+	pub organization_header: bool,
+	/// The `Organization` value of each domain, lowercase keys.
+	#[serde(default)]
+	pub domain_organization: std::collections::HashMap<String, String>,
 	/// Max messages an authenticated account may submit per minute. Absent
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
@@ -553,6 +600,14 @@ impl std::fmt::Debug for Config {
 			.field("acme", &self.acme)
 			.field("dns", &self.dns)
 			.field("domain_quotas", &self.domain_quotas)
+			.field("default_feedback_id", &self.default_feedback_id)
+			.field("default_list_unsubscribe", &self.default_list_unsubscribe)
+			.field("bulk_recipients", &self.bulk_recipients)
+			.field("default_list_id", &self.default_list_id)
+			.field("system_auto_submitted", &self.system_auto_submitted)
+			.field("x_epistle_header", &self.x_epistle_header)
+			.field("organization_header", &self.organization_header)
+			.field("domain_organization", &self.domain_organization)
 			.field(
 				"submission_rate_limit_per_min",
 				&self.submission_rate_limit_per_min,

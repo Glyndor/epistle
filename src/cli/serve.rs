@@ -269,10 +269,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	super::serve_tasks::spawn_storage_maintenance(&config);
 
 	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
-	// the tables stay bounded. No-op when no database is configured: the
-	// ban store is absent in that case. The bypass list is purged with the
-	// same window the operator set under `[limits] known-network-window`,
-	// so the sweeper does not fall back to the built-in default.
+	// the tables stay bounded. No-op without a database (no ban store), and
+	// it purges the bypass list with the window the operator set under
+	// `[limits] known-network-window`, never the built-in default.
 	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 
 	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
@@ -284,12 +283,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		channel_binding,
 	} = super::serve_tls::build_tls(&config, challenge_store.clone())?;
 
-	// Pre-pass: collect every port that has a `0.0.0.0` listener so the
-	// `[::]:P` bind path knows whether to switch the socket to
-	// `only_v6(true)` and coexist with the explicit IPv4 bind
-	// instead of failing with `EADDRINUSE`. The set is read once
-	// here so the loop below can hand it to every bind call without
-	// re-walking the listener list.
+	// Pre-pass: every port with a `0.0.0.0` listener, so the `[::]:P`
+	// bind path can switch that socket to `only_v6(true)` and coexist
+	// with the explicit IPv4 bind instead of failing with `EADDRINUSE`.
 	let ipv4_any_ports: std::collections::HashSet<u16> = config
 		.listeners
 		.iter()
@@ -341,6 +337,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_blob_backend(blob_backend)
 				.with_correspondents((*correspondents).clone())
 				.with_class_bindings(Arc::clone(&evidence.bindings))
+				.with_identification(crate::smtp::identification::Policy::from_config(&config))
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
 				state = super::serve_ratelimit::wire_api_submission_limits(
@@ -500,6 +497,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
 					.with_max_recipients(max_recipients)
+					.with_identification(crate::smtp::identification::Policy::from_config(&config))
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
@@ -510,9 +508,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {
-						let store: Arc<dyn crate::antispam::corpus::BayesScorer> =
-							Arc::new(store.clone());
-						server = server.with_bayes(store);
+						server = server.with_bayes(Arc::new(store.clone()));
 					}
 				}
 				if let Some(hook) = &scanner_hook {

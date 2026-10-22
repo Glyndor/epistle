@@ -36,6 +36,9 @@ const SIGNED_HEADERS: &[&str] = &[
 	"list-owner",
 	"list-archive",
 	"feedback-id",
+	"auto-submitted",
+	"organization",
+	"x-epistle",
 ];
 
 /// List each name once beyond its present count, even when absent (RFC 6376 section 5.4).
@@ -50,6 +53,11 @@ const OVERSIGNED_HEADERS: &[&str] = &[
 	"list-unsubscribe",
 	"list-unsubscribe-post",
 	"content-type",
+	// The server writes this one; a client that adds a second copy of it
+	// has to keep both, or the signature breaks. Nothing in the path
+	// legitimately writes `Auto-Submitted`, so oversigning it costs
+	// nothing at delivery and stops a forged "this was automatic" claim.
+	"auto-submitted",
 ];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.

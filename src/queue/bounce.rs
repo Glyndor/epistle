@@ -2,6 +2,7 @@
 
 use crate::clock;
 use crate::queue::reply::parse_enhanced;
+use crate::smtp::identification::SYSTEM_AUTO_SUBMITTED as SYSTEM;
 use crate::smtp::session::AcceptedMessage;
 
 /// Whether the report is a permanent failure or a transient-delay warning.
@@ -48,6 +49,9 @@ impl ReportRecipient {
 /// null reverse-path so a failing DSN can never generate another (loop
 /// prevention, RFC 5321 §4.5.5). Returns `None` when the original was itself a
 /// bounce.
+/// `auto_submitted` writes the `Auto-Submitted: auto-generated` field RFC
+/// 3834 asks for on a machine-generated message; `false` leaves it out
+/// (the `system_auto_submitted` switch).
 pub fn build(
 	hostname: &str,
 	original_reverse_path: &str,
@@ -55,6 +59,7 @@ pub fn build(
 	reason: &str,
 	original_data: &[u8],
 	now: std::time::SystemTime,
+	auto_submitted: bool,
 ) -> Option<AcceptedMessage> {
 	let recipients: Vec<ReportRecipient> = failed_recipients
 		.iter()
@@ -66,6 +71,7 @@ pub fn build(
 		&recipients,
 		original_data,
 		now,
+		auto_submitted,
 	)
 }
 
@@ -78,6 +84,7 @@ pub fn build_failed(
 	recipients: &[ReportRecipient],
 	original_data: &[u8],
 	now: std::time::SystemTime,
+	auto_submitted: bool,
 ) -> Option<AcceptedMessage> {
 	build_report(
 		Kind::Failed,
@@ -86,6 +93,7 @@ pub fn build_failed(
 		recipients,
 		original_data,
 		now,
+		auto_submitted,
 	)
 }
 
@@ -99,6 +107,7 @@ pub fn build_delay_warning(
 	recipients: &[ReportRecipient],
 	original_data: &[u8],
 	now: std::time::SystemTime,
+	auto_submitted: bool,
 ) -> Option<AcceptedMessage> {
 	build_report(
 		Kind::Delayed,
@@ -107,6 +116,7 @@ pub fn build_delay_warning(
 		recipients,
 		original_data,
 		now,
+		auto_submitted,
 	)
 }
 
@@ -162,6 +172,7 @@ fn build_report(
 	recipients: &[ReportRecipient],
 	original_data: &[u8],
 	now: std::time::SystemTime,
+	auto_submitted: bool,
 ) -> Option<AcceptedMessage> {
 	if original_reverse_path.is_empty() {
 		// Never bounce a bounce.
@@ -203,13 +214,21 @@ fn build_report(
 	}
 
 	let original_headers = original_header_block(original_data);
+	// The server writes this notice, so it is `auto-generated`: a DSN that
+	// claims to be a reply invites an auto-responder to answer a bounce
+	// (RFC 3834 section 5).
+	let auto = if auto_submitted {
+		format!("Auto-Submitted: {SYSTEM}\r\n")
+	} else {
+		String::new()
+	};
 
 	let body = format!(
 		"From: Mail Delivery System <MAILER-DAEMON@{hostname}>\r\n\
 To: <{original_reverse_path}>\r\n\
 Subject: {subject}\r\n\
 Date: {date}\r\n\
-Auto-Submitted: auto-replied\r\n\
+{auto}\
 MIME-Version: 1.0\r\n\
 Content-Type: multipart/report; report-type=delivery-status;\r\n\
 \tboundary=\"{boundary}\"\r\n\
@@ -294,6 +313,7 @@ mod tests {
 			"550 5.1.1 no such user",
 			original(),
 			UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			true,
 		)
 		.expect("bounce built");
 
@@ -306,7 +326,7 @@ mod tests {
 		assert!(body.contains("Subject: hi"), "{body}");
 		// The original body must not leak into the bounce.
 		assert!(!body.contains("secret body"), "{body}");
-		assert!(body.contains("Auto-Submitted: auto-replied"), "{body}");
+		assert!(body.contains("Auto-Submitted: auto-generated"), "{body}");
 	}
 
 	#[test]
@@ -318,6 +338,7 @@ mod tests {
 			"550 5.1.1 no such user",
 			original(),
 			UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			true,
 		)
 		.expect("bounce built");
 		let body = String::from_utf8(bounce.data).expect("ascii");
@@ -362,6 +383,7 @@ mod tests {
 			"connection timed out",
 			original(),
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("bounce built");
 		let body = String::from_utf8(bounce.data).expect("ascii");
@@ -377,6 +399,7 @@ mod tests {
 			"550 5.2.1 mailbox disabled",
 			original(),
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("bounce built");
 		let body = String::from_utf8(bounce.data).expect("ascii");
@@ -398,6 +421,7 @@ mod tests {
 			)],
 			original(),
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("warning built");
 		assert_eq!(warning.reverse_path, "");
@@ -416,7 +440,8 @@ mod tests {
 				"",
 				&[ReportRecipient::new("x@y.example", "r")],
 				original(),
-				UNIX_EPOCH
+				UNIX_EPOCH,
+				true,
 			)
 			.is_none()
 		);
@@ -434,6 +459,7 @@ mod tests {
 			"550 rejected\r\nBcc: attacker@evil.example\r\nX-Injected: yes",
 			original(),
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("bounce built");
 		let body = String::from_utf8(bounce.data).expect("ascii");
@@ -457,6 +483,7 @@ mod tests {
 			&"x".repeat(5_000),
 			original(),
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("bounce built");
 		let body = String::from_utf8(bounce.data).expect("ascii");
@@ -474,6 +501,7 @@ mod tests {
 				"reason",
 				original(),
 				UNIX_EPOCH,
+				true,
 			)
 			.is_none()
 		);
@@ -490,6 +518,7 @@ mod tests {
 			"reason",
 			&huge,
 			UNIX_EPOCH,
+			true,
 		)
 		.expect("bounce built");
 		assert!(bounce.data.len() < 10_000);

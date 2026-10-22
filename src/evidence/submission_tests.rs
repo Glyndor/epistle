@@ -26,7 +26,14 @@ fn marketing() -> ClassSources {
 #[test]
 fn the_class_comes_from_the_server_and_the_header_is_removed() {
 	let mut submitted = message("Epistle-Class: transactional\r\n", &["a@example.net"]);
-	let prepared = prepare(&mut submitted, ClassSources::default(), None).expect("prepared");
+	let prepared = prepare(
+		&mut submitted,
+		ClassSources::default(),
+		None,
+		&Policy::default(),
+		None,
+	)
+	.expect("prepared");
 	assert_eq!(prepared.class, MailClass::Personal);
 	let text = String::from_utf8(submitted.data).expect("utf8");
 	assert!(
@@ -39,7 +46,7 @@ fn the_class_comes_from_the_server_and_the_header_is_removed() {
 fn marketing_without_one_click_is_refused() {
 	let mut submitted = message("", &["a@example.net"]);
 	assert_eq!(
-		prepare(&mut submitted, marketing(), None),
+		prepare(&mut submitted, marketing(), None, &Policy::default(), None),
 		Err(MarketingRefusal::NoUnsubscribeUri)
 	);
 }
@@ -63,7 +70,14 @@ fn marketing_is_marked_bulk_and_suppressed_recipients_are_dropped() {
 			"unsubscribed@example.net",
 		],
 	);
-	let prepared = prepare(&mut submitted, marketing(), Some(dir.path())).expect("prepared");
+	let prepared = prepare(
+		&mut submitted,
+		marketing(),
+		Some(dir.path()),
+		&Policy::default(),
+		None,
+	)
+	.expect("prepared");
 	assert_eq!(prepared.class, MailClass::Marketing);
 	assert_eq!(
 		prepared.suppressed,
@@ -87,7 +101,14 @@ fn other_classes_keep_suppressed_recipients_for_the_worker() {
 		explicit: Some(MailClass::Transactional),
 		..ClassSources::default()
 	};
-	let prepared = prepare(&mut submitted, sources, Some(dir.path())).expect("prepared");
+	let prepared = prepare(
+		&mut submitted,
+		sources,
+		Some(dir.path()),
+		&Policy::default(),
+		None,
+	)
+	.expect("prepared");
 	assert!(prepared.suppressed.is_empty());
 	assert_eq!(submitted.recipients, vec!["gone@example.net"]);
 }

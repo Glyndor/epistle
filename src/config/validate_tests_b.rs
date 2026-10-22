@@ -36,6 +36,61 @@ fn validates_api_token_hash_format() {
 }
 
 #[test]
+fn the_identification_switches_are_read_from_the_file() {
+	let file = format!(
+		"{BASE}{}",
+		"default_feedback_id = false\n\
+		 default_list_unsubscribe = false\n\
+		 bulk_recipients = 5\n\
+		 default_list_id = false\n\
+		 system_auto_submitted = false\n\
+		 x_epistle_header = true\n\
+		 organization_header = false\n\
+		 [domain_organization]\n\"example.org\" = \"Example Org\"\n"
+	);
+	let config: Config = toml::from_str(&file).expect("parse");
+	config.validate().expect("valid");
+	let policy = crate::smtp::identification::Policy::from_config(&config);
+	assert!(!policy.feedback_id);
+	assert!(!policy.bulk_unsubscribe);
+	assert_eq!(policy.bulk_recipients, 5);
+	assert!(!policy.list_id);
+	assert!(!policy.system_auto_submitted);
+	assert!(policy.x_epistle);
+	assert!(!policy.organization);
+	assert_eq!(
+		policy
+			.domain_organization
+			.get("example.org")
+			.map(String::as_str),
+		Some("Example Org")
+	);
+}
+
+#[test]
+fn a_domain_organization_value_has_to_be_a_header_safe_ascii_name() {
+	// A key that is not a DNS name, an empty value, and a value carrying a
+	// line break are all refused: the value reaches an `Organization`
+	// field of a message that leaves the server.
+	assert!(invalid(&format!(
+		"{BASE}\n[domain_organization]\n\"not a domain\" = \"X\"\n"
+	)));
+	assert!(invalid(&format!(
+		"{BASE}\n[domain_organization]\n\"example.org\" = \"  \"\n"
+	)));
+	assert!(invalid(&format!(
+		"{BASE}\n[domain_organization]\n\"example.org\" = \"Example\r\nBcc: victim@example.net\"\n"
+	)));
+	assert!(invalid(&format!(
+		"{BASE}\n[domain_organization]\n\"example.org\" = \"Example\u{7f}\"\n"
+	)));
+	// A plain name is accepted.
+	assert!(!invalid(&format!(
+		"{BASE}\n[domain_organization]\n\"example.org\" = \"Example Org\"\n"
+	)));
+}
+
+#[test]
 fn rejects_non_argon2id_account_password() {
 	// account password_hash must be argon2id.
 	assert!(invalid(&format!(

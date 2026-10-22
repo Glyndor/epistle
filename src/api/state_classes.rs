@@ -15,6 +15,20 @@ impl ApiState {
 		self
 	}
 
+	/// Attach the identification header policy. Must be set before the
+	/// state is shared, like every other builder here.
+	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.identification = policy;
+		}
+		self
+	}
+
+	/// The identification header policy submissions get.
+	pub fn identification(&self) -> &crate::smtp::identification::Policy {
+		&self.inner.identification
+	}
+
 	/// Where the class of a submission by `account` comes from: `explicit`
 	/// (the request), then the class bound to the API key that authenticated
 	/// `auth`, then the account default.

@@ -198,7 +198,10 @@ fn xml_escape(s: &str) -> String {
 /// Returns raw RFC 5322 bytes ready for [`crate::smtp::sink::MessageSink`].
 /// `reporting_hostname` is the host part of the `Message-ID:` (RFC 7489
 /// §7.2.1.1 wants a unique `Message-ID` in the reporting hostname), and
-/// `now` is the `Date:` value.
+/// `now` is the `Date:` value. `auto_submitted` writes
+/// `Auto-Submitted: auto-generated`, as RFC 3834 section 5 asks of a
+/// machine-generated report; `false` leaves the field out (the
+/// `system_auto_submitted` switch).
 #[allow(clippy::too_many_arguments)]
 pub fn build_email(
 	from_domain: &str,
@@ -210,6 +213,7 @@ pub fn build_email(
 	reporting_hostname: &str,
 	now: std::time::SystemTime,
 	attachment: &[u8],
+	auto_submitted: bool,
 ) -> Vec<u8> {
 	use base64::Engine;
 	let b64 = base64::engine::general_purpose::STANDARD.encode(attachment);
@@ -226,6 +230,9 @@ pub fn build_email(
 	email.push_str(&format!(
 		"Subject: Report Domain: {from_domain} Submitter: {reporting_domain} Report-ID: <{report_id}>\r\n"
 	));
+	if auto_submitted {
+		email.push_str("Auto-Submitted: auto-generated\r\n");
+	}
 	email.push_str("MIME-Version: 1.0\r\n");
 	email.push_str(&format!(
 		"Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n"
@@ -363,6 +370,7 @@ mod tests {
 			"mail.reporter.example",
 			now,
 			&attachment,
+			true,
 		);
 		let email_str = String::from_utf8_lossy(&email);
 		assert!(

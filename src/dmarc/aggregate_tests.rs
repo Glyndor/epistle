@@ -83,6 +83,7 @@ fn build_sender<'a>(
 		dns,
 		sink,
 		now: fixed_now(),
+		auto_submitted: true,
 	}
 }
 

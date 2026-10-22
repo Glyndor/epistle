@@ -13,6 +13,9 @@ mod validate_database;
 #[path = "validate_disabled_domains.rs"]
 mod validate_disabled_domains;
 
+#[path = "validate_identification.rs"]
+mod validate_identification;
+
 #[path = "validate_addresses.rs"]
 pub(crate) mod validate_addresses;
 
@@ -46,7 +49,8 @@ impl Config {
 		self.validate_dkim()?;
 		self.validate_max_recipients()?;
 		self.validate_message_limits()?;
-		self.validate_clock_external()
+		self.validate_clock_external()?;
+		self.validate_domain_organization()
 	}
 
 	fn validate_clock_external(&self) -> Result<(), ConfigError> {

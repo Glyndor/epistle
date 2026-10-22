@@ -28,6 +28,11 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them.
   * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them. The static alias table and the structured addresses of a JMAP Email/set refuse them too.
   * `epistle init` compares the domain of the first account with the configured domains in the form the system stores, so an internationalised domain typed as a U-label matches its A-label.
+  * Outgoing mail carries identification headers on every path: a Feedback-ID
+    built from the domain and the mail class, List-Unsubscribe on bulk mail
+    outside the marketing class, List-Id on list mail, Auto-Submitted on system
+    mail, and optional Organization and X-Epistle values; each can be turned
+    off, and the ones that identify or control replies are signed.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

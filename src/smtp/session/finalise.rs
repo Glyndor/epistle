@@ -80,6 +80,7 @@ fn split_over_quota(
 			"552 5.2.2 mailbox full",
 			&message.data,
 			std::time::SystemTime::now(),
+			session.identification.system_auto_submitted,
 		) {
 		session.policy.push_quota_report(report);
 	}

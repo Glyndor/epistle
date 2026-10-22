@@ -448,3 +448,26 @@ fn the_field_count_is_never_below_the_headers_the_trace_helpers_take() {
 		assert!(field_count(&raw) >= cases::fields_in(headers), "{raw:?}");
 	}
 }
+
+#[test]
+fn a_prefix_strip_drops_the_whole_namespace_case_insensitively() {
+	let data = b"X-Epistle: 1\r\n\
+Subject: hi\r\n\
+x-epistle-future: no\r\n\
+X-Epistle : 2\r\n\
+X-Spam-Status: Yes\r\n\
+X-Epistol: not ours\r\n\
+\r\nX-Epistle: body\r\n";
+	let kept = strip_headers_with_prefix(data, "X-Epistle");
+	let text = String::from_utf8(kept.clone()).expect("utf8");
+	assert!(!text.contains("X-Epistle: 1"), "{text}");
+	assert!(!text.contains("x-epistle-future"), "{text}");
+	// A trailing space in the name still matches.
+	assert!(!text.contains("X-Epistle : 2"), "{text}");
+	// A different field, a name that merely starts the same and the body
+	// are all kept.
+	assert!(text.contains("X-Spam-Status: Yes"), "{text}");
+	assert!(text.contains("X-Epistol: not ours"), "{text}");
+	assert!(text.contains("Subject: hi"), "{text}");
+	assert!(text.ends_with("\r\nX-Epistle: body\r\n"), "{text}");
+}
