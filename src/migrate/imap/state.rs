@@ -7,13 +7,15 @@
 //! names a file. Each file is replaced atomically (written to a temporary
 //! file, synced, renamed over the old one) with mode 0600.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::contained_child;
+
+#[path = "state_files.rs"]
+mod files;
 
 /// The largest state file read back. A real one is under 300 bytes.
 const MAX_STATE_BYTES: u64 = 64 * 1024;
@@ -29,7 +31,8 @@ pub(crate) struct FolderState {
 	pub(crate) last_uid: u32,
 	/// A batch was being written when this file was saved. If the process
 	/// died there, some of its messages may already be stored, so the next
-	/// run checks each message against what is already there.
+	/// run replays the confirmed prefix before matching pending copies.
+	/// Recovery stays active until the folder has been replayed.
 	#[serde(default)]
 	pub(crate) in_progress: bool,
 	/// Messages stored by every run so far.
@@ -40,7 +43,8 @@ pub(crate) struct FolderState {
 /// The state files of one local account and one source.
 #[derive(Debug, Clone)]
 pub(crate) struct StateDir {
-	base: PathBuf,
+	root: std::sync::Arc<std::fs::File>,
+	account: String,
 	dir: PathBuf,
 	source: String,
 }
@@ -53,8 +57,15 @@ impl StateDir {
 		let account = AccountName::new(account)?;
 		let base = contained_child(data_dir, "migrate")?;
 		let dir = contained_child(&base, account.as_str())?;
+		let root = std::sync::Arc::new(files::root(data_dir)?);
+		match files::directory(&root, account.as_str(), false) {
+			Ok(_) => {}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error),
+		}
 		Ok(StateDir {
-			base,
+			root,
+			account: account.as_str().to_string(),
 			dir,
 			source: source.to_string(),
 		})
@@ -78,13 +89,23 @@ impl StateDir {
 	/// would copy everything again.
 	pub(crate) fn load(&self, folder: &[u8]) -> std::io::Result<Option<FolderState>> {
 		let path = self.path(folder)?;
-		let file = match std::fs::File::open(&path) {
+		let file = match files::directory(&self.root, &self.account, false)
+			.and_then(|dir| files::read(&dir, &path))
+		{
 			Ok(file) => file,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 			Err(error) => return Err(error),
 		};
 		let mut text = String::new();
-		std::io::Read::read_to_string(&mut std::io::Read::take(file, MAX_STATE_BYTES), &mut text)?;
+		std::io::Read::read_to_string(
+			&mut std::io::Read::take(file, MAX_STATE_BYTES + 1),
+			&mut text,
+		)?;
+		if text.len() as u64 > MAX_STATE_BYTES {
+			return Err(std::io::Error::other(
+				"migration state exceeds its size limit",
+			));
+		}
 		serde_json::from_str(&text).map(Some).map_err(|error| {
 			std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
@@ -95,40 +116,18 @@ impl StateDir {
 
 	/// Replace the saved progress of `folder` atomically.
 	pub(crate) fn save(&self, folder: &[u8], state: &FolderState) -> std::io::Result<()> {
-		create_private_dir(&self.base)?;
-		create_private_dir(&self.dir)?;
+		let dir = files::directory(&self.root, &self.account, true)?;
 		let path = self.path(folder)?;
-		let tmp = path.with_extension("json.tmp");
 		let body = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		let mut options = std::fs::OpenOptions::new();
-		options.write(true).create(true).truncate(true);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
-		let mut file = options.open(&tmp)?;
-		file.write_all(&body)?;
-		file.sync_all()?;
-		drop(file);
-		std::fs::rename(&tmp, &path)?;
-		std::fs::File::open(&self.dir)?.sync_all()
-	}
-}
-
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-	let mut builder = std::fs::DirBuilder::new();
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::DirBuilderExt;
-		builder.mode(0o700);
-	}
-	match builder.create(dir) {
-		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-		other => other,
+		files::replace(&dir, &path, &body)
 	}
 }
 
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+/// Open disposable recovery storage below the validated data directory.
+pub(super) fn scratch(data_dir: &Path) -> std::io::Result<std::fs::File> {
+	files::scratch(&files::root(data_dir)?)
+}

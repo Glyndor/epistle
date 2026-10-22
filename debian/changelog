@@ -7,6 +7,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * WebDAV logs a failed sign-in with the client address behind a trusted reverse proxy and counts it against that address, as the API listeners do.
   * `epistle probe`, `status` and `stack update` check each listener on the host address it is really published on, so a management API pinned to a private address no longer counts as down.
   * Validation: one definition for each input rule that was copied (RFC 5321 atext, address and domain length limits, memory sizes and the invisible-formatting set), and a table of boundary cases that the entry paths must agree on.
+  * migrate imap: the progress file no longer follows links, every command and the whole run have a deadline, and the memory kept per mailbox is bounded, so a hostile or slow source server cannot hold the process or its memory, and an interrupted copy resumes without losing or duplicating messages.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

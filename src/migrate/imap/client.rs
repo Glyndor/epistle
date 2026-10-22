@@ -6,13 +6,17 @@
 //! else: no command line that carries one is logged, kept, or put in an
 //! error message.
 
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
+use super::metadata::{Budget, MAX_NAME_BYTES};
 use super::parse::{self, Fetched, Kind, ListEntry, Listed, Status};
 use super::transport::{Endpoint, Io, Security, handshake, resolve};
-use super::wire::{Limits, Response, WireError, read_response};
+use super::wire::{Limits, Response, WireError};
+
+#[path = "client_io.rs"]
+mod io;
 
 /// Why talking to the server failed.
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +65,14 @@ pub(crate) enum ClientError {
 		/// The most one batch may hold.
 		budget: u64,
 	},
+	/// One command used all of its time allowance.
+	#[error("IMAP command {command} timed out; saved progress is retained, run again to resume")]
+	CommandTimeout { command: &'static str },
+	/// Metadata exceeded a bound independent of the server's message count.
+	#[error(
+		"IMAP {scope} metadata exceeds {limit} bytes; saved progress is retained, reduce the selected folders and run again to resume"
+	)]
+	Metadata { scope: &'static str, limit: usize },
 	/// A name or credential cannot be sent safely.
 	#[error("{0}")]
 	Unsendable(&'static str),
@@ -72,6 +84,10 @@ pub(crate) struct Client {
 	limits: Limits,
 	tag: u32,
 	capabilities: Vec<String>,
+	deadline: Option<(tokio::time::Instant, &'static str)>,
+	read_literal: usize,
+	pub(super) metadata: Budget,
+	response_budget: usize,
 }
 
 /// What EXAMINE reported about a mailbox.
@@ -81,6 +97,8 @@ pub(crate) struct Examined {
 	pub(crate) exists: u32,
 	/// UIDVALIDITY, `0` when the server sent none.
 	pub(crate) uid_validity: u32,
+	/// The first UID not yet assigned, zero when omitted.
+	pub(crate) uid_next: u32,
 }
 
 impl Client {
@@ -104,6 +122,10 @@ impl Client {
 			limits,
 			tag: 0,
 			capabilities: Vec::new(),
+			deadline: None,
+			read_literal: MAX_NAME_BYTES.min(limits.literal),
+			metadata: Budget::default(),
+			response_budget: 128 * 1024 * 1024,
 		};
 		client.greeting().await?;
 		if endpoint.security == Security::StartTls {
@@ -232,7 +254,7 @@ impl Client {
 			line.extend_from_slice(encoded.as_bytes());
 			return self.command("AUTHENTICATE", &line, |_| Ok(())).await;
 		}
-		let tag = self.next_tag();
+		let tag = self.next_tag("AUTHENTICATE");
 		self.send(&tag, b"AUTHENTICATE PLAIN").await?;
 		let response = self.read().await?;
 		if parse::kind(&response) != Kind::Continuation {
@@ -275,18 +297,35 @@ impl Client {
 			b"LIST \"\" \"*\""
 		};
 		let mut entries = Vec::new();
-		self.command("LIST", line, |response| {
-			if let Some(entry) = parse::list_entry(&response)
-				.map_err(|error| ClientError::Protocol(error.to_string()))?
-			{
-				if entries.len() >= MAX_MAILBOXES {
-					return Err(ClientError::Protocol("too many mailboxes".into()));
+		let mut metadata = std::mem::take(&mut self.metadata);
+		let result = self
+			.command("LIST", line, |response| {
+				if let Some(entry) = parse::list_entry(&response)
+					.map_err(|error| ClientError::Protocol(error.to_string()))?
+				{
+					if entries.len() >= MAX_MAILBOXES {
+						return Err(ClientError::Protocol("too many mailboxes".into()));
+					}
+					if entry.name.len() > MAX_NAME_BYTES {
+						return Err(ClientError::Metadata {
+							scope: "mailbox name",
+							limit: MAX_NAME_BYTES,
+						});
+					}
+					// Include vector growth and the names copied into folder plans and reports.
+					metadata.charge(
+						4 * (std::mem::size_of::<ListEntry>()
+							+ entry.name.capacity()
+							+ entry.attributes.capacity() * std::mem::size_of::<String>()
+							+ entry.attributes.iter().map(String::capacity).sum::<usize>()),
+					)?;
+					entries.push(entry);
 				}
-				entries.push(entry);
-			}
-			Ok(())
-		})
-		.await?;
+				Ok(())
+			})
+			.await;
+		self.metadata = metadata;
+		result?;
 		Ok(entries)
 	}
 
@@ -308,11 +347,13 @@ impl Client {
 
 	/// Open `name` read-only.
 	pub(crate) async fn examine(&mut self, name: &[u8]) -> Result<Examined, ClientError> {
+		self.metadata.next_mailbox();
 		let mut line = b"EXAMINE ".to_vec();
 		line.extend_from_slice(&quote_mailbox(name)?);
 		let mut examined = Examined {
 			exists: 0,
 			uid_validity: 0,
+			uid_next: 0,
 		};
 		self.command("EXAMINE", &line, |response| {
 			let words = parse::data_words(&response);
@@ -324,9 +365,13 @@ impl Client {
 			}
 			if let Kind::UntaggedStatus { text, .. } = parse::kind(&response)
 				&& let [code, value, ..] = parse::response_code(&text).as_slice()
-				&& code.eq_ignore_ascii_case("UIDVALIDITY")
 			{
-				examined.uid_validity = value.parse().unwrap_or(0);
+				if code.eq_ignore_ascii_case("UIDVALIDITY") {
+					examined.uid_validity = value.parse().unwrap_or(0);
+				}
+				if code.eq_ignore_ascii_case("UIDNEXT") {
+					examined.uid_next = value.parse().unwrap_or(0);
+				}
 			}
 			Ok(())
 		})
@@ -335,30 +380,42 @@ impl Client {
 	}
 
 	/// The UID and size of every message with a UID of `from` or more, at
-	/// most `cap` of them.
+	/// most `cap` of them. `to` bounds a UID window when UIDNEXT is known.
 	pub(crate) async fn list_uids(
 		&mut self,
 		from: u32,
+		to: Option<u32>,
 		cap: usize,
 	) -> Result<Vec<Listed>, ClientError> {
-		let line = format!("UID FETCH {from}:* (UID RFC822.SIZE)");
+		let end = to.map_or_else(|| "*".into(), |to| to.to_string());
+		let line = format!("UID FETCH {from}:{end} (UID RFC822.SIZE)");
 		let mut listed = Vec::new();
-		self.command("FETCH", line.as_bytes(), |response| {
-			if let Some(item) =
-				parse::listed(response).map_err(|error| ClientError::Protocol(error.to_string()))?
-			{
-				if listed.len() >= cap {
-					return Err(ClientError::Protocol(
-						"the server listed more messages than the mailbox holds".into(),
-					));
+		let mut metadata = std::mem::take(&mut self.metadata);
+		let result = self
+			.command("FETCH", line.as_bytes(), |response| {
+				if let Some(item) = parse::listed(response)
+					.map_err(|error| ClientError::Protocol(error.to_string()))?
+				{
+					if listed.len() >= cap {
+						return Err(ClientError::Protocol(
+							"the server listed more messages than the mailbox holds".into(),
+						));
+					}
+					if item.uid >= from {
+						if to.is_some_and(|end| item.uid > end) {
+							return Err(ClientError::Protocol(
+								"the server listed a UID outside the requested window".into(),
+							));
+						}
+						metadata.charge(2 * std::mem::size_of::<Listed>())?;
+						listed.push(item);
+					}
 				}
-				if item.uid >= from {
-					listed.push(item);
-				}
-			}
-			Ok(())
-		})
-		.await?;
+				Ok(())
+			})
+			.await;
+		self.metadata = metadata;
+		result?;
 		listed.sort_by_key(|item| item.uid);
 		listed.dedup_by_key(|item| item.uid);
 		Ok(listed)
@@ -386,129 +443,53 @@ impl Client {
 		let mut held = 0u64;
 		let mut responses = 0usize;
 		let most_responses = uids.len().saturating_mul(4).saturating_add(64);
-		self.command("FETCH", line.as_bytes(), |response| {
-			responses += 1;
-			if responses > most_responses {
-				return Err(ClientError::Protocol(
-					"the server sent far more responses than messages asked for".into(),
-				));
-			}
-			let Some(item) =
-				parse::fetch(response).map_err(|error| ClientError::Protocol(error.to_string()))?
-			else {
-				return Ok(());
-			};
-			let (Some(body), Ok(at)) = (&item.body, uids.binary_search(&item.uid)) else {
-				return Ok(());
-			};
-			let declared = batch[at].size;
-			let actual = body.len() as u64;
-			if !size_fits(declared, actual) {
-				return Err(ClientError::SizeMismatch {
-					uid: item.uid,
-					declared,
-					actual,
-				});
-			}
-			held = held.saturating_add(actual);
-			if held > budget || fetched.len() >= uids.len() {
-				return Err(ClientError::BatchTooLarge { budget });
-			}
-			fetched.push(item);
-			Ok(())
-		})
-		.await?;
+		let mut metadata = std::mem::take(&mut self.metadata);
+		let result = self
+			.command_with_limit("FETCH", line.as_bytes(), self.limits.literal, |response| {
+				responses += 1;
+				if responses > most_responses {
+					return Err(ClientError::Protocol(
+						"the server sent far more responses than messages asked for".into(),
+					));
+				}
+				let Some(item) = parse::fetch(response)
+					.map_err(|error| ClientError::Protocol(error.to_string()))?
+				else {
+					return Ok(());
+				};
+				let (Some(body), Ok(at)) = (&item.body, uids.binary_search(&item.uid)) else {
+					return Ok(());
+				};
+				let declared = batch[at].size;
+				let actual = body.len() as u64;
+				if !size_fits(declared, actual) {
+					return Err(ClientError::SizeMismatch {
+						uid: item.uid,
+						declared,
+						actual,
+					});
+				}
+				held = held.saturating_add(actual);
+				if held > budget || fetched.len() >= uids.len() {
+					return Err(ClientError::BatchTooLarge { budget });
+				}
+				metadata.charge(
+					2 * std::mem::size_of::<Fetched>()
+						+ item.flags.capacity() * std::mem::size_of::<String>()
+						+ item.flags.iter().map(String::capacity).sum::<usize>(),
+				)?;
+				fetched.push(item);
+				Ok(())
+			})
+			.await;
+		self.metadata = metadata;
+		result?;
 		Ok(fetched)
 	}
 
 	/// Say goodbye; errors are ignored, the work is already done.
 	pub(crate) async fn logout(mut self) {
 		let _ = self.command("LOGOUT", b"LOGOUT", |_| Ok(())).await;
-	}
-
-	fn next_tag(&mut self) -> Vec<u8> {
-		self.tag += 1;
-		format!("M{}", self.tag).into_bytes()
-	}
-
-	/// Send `line` under a fresh tag and hand every untagged data response
-	/// to `on_data` until the tagged completion.
-	async fn command(
-		&mut self,
-		name: &'static str,
-		line: &[u8],
-		on_data: impl FnMut(Response) -> Result<(), ClientError>,
-	) -> Result<(), ClientError> {
-		let tag = self.next_tag();
-		self.send(&tag, line).await?;
-		self.collect(&tag, name, on_data).await
-	}
-
-	async fn collect(
-		&mut self,
-		tag: &[u8],
-		name: &'static str,
-		mut on_data: impl FnMut(Response) -> Result<(), ClientError>,
-	) -> Result<(), ClientError> {
-		loop {
-			let response = self.read().await?;
-			match parse::kind(&response) {
-				Kind::Tagged {
-					tag: got,
-					status,
-					text,
-				} if got == tag => {
-					return match status {
-						Status::Ok => {
-							self.note_code(&text);
-							Ok(())
-						}
-						_ => Err(ClientError::Refused {
-							command: name,
-							text: sanitize(&text),
-						}),
-					};
-				}
-				Kind::Tagged { .. } => {
-					return Err(ClientError::Protocol("answer to an unknown tag".into()));
-				}
-				Kind::UntaggedStatus {
-					status: Status::Bye,
-					text,
-				} => return Err(ClientError::Bye(sanitize(&text))),
-				Kind::UntaggedStatus { .. } | Kind::Data => on_data(response)?,
-				Kind::Continuation => {
-					return Err(ClientError::Protocol(format!(
-						"unexpected continuation during {name}"
-					)));
-				}
-			}
-		}
-	}
-
-	async fn send(&mut self, tag: &[u8], line: &[u8]) -> Result<(), ClientError> {
-		let mut full = Zeroizing::new(Vec::with_capacity(tag.len() + line.len() + 3));
-		full.extend_from_slice(tag);
-		full.push(b' ');
-		full.extend_from_slice(line);
-		full.extend_from_slice(b"\r\n");
-		self.write(&full).await
-	}
-
-	async fn write(&mut self, bytes: &[u8]) -> Result<(), ClientError> {
-		let stream = self.conn.get_mut();
-		tokio::time::timeout(self.limits.idle, async {
-			stream.write_all(bytes).await?;
-			stream.flush().await
-		})
-		.await
-		.map_err(|_| WireError::Timeout)?
-		.map_err(WireError::Io)?;
-		Ok(())
-	}
-
-	async fn read(&mut self) -> Result<Response, ClientError> {
-		Ok(read_response(&mut self.conn, &self.limits).await?)
 	}
 }
 
@@ -589,3 +570,7 @@ pub(crate) fn sanitize(text: &[u8]) -> String {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod resume_tests;
