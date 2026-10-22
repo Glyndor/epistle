@@ -34,6 +34,10 @@ on:
         description: JSON array of extra runner images to also run tests on (e.g. '["macos-latest"]')
         type: string
         default: "[]"
+      apt-packages:
+        description: Space-separated apt packages the test job installs before running the suite
+        type: string
+        default: ""
       podman:
         description: Start rootless Podman socket before running the coverage job (ubuntu-latest only)
         type: boolean
@@ -127,6 +131,24 @@ jobs:
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
+
+      # Some tests need a program the runner image does not carry. `fakeroot`
+      # is one: the packaging tests in tests/debian/ run the maintainer scripts
+      # under it, because those scripts read root ownership off every path they
+      # touch and an unprivileged run cannot exercise that without it. Ubuntu's
+      # runner has it today, which is exactly why its absence would go unnoticed
+      # until a different image, a minimal container, or a developer box broke
+      # the suite. Naming it here makes the dependency explicit.
+      - name: Install test tooling
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APT_PACKAGES" ]; then
+            sudo apt-get update -qq
+            # shellcheck disable=SC2086 # intentional word-splitting of the list
+            sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+          fi
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

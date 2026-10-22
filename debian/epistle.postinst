@@ -108,8 +108,31 @@ epistle_subid_starts() {
 	echo "$uid_start $gid_start"
 }
 
+# Reject replaceable parents before creating the private executable store.
+epistle_rollback_dir() {
+	for parent in / /var /var/lib; do
+		[ ! -L "$parent" ] && [ -d "$parent" ] \
+			&& [ "$(stat -c '%u:%g' -- "$parent")" = 0:0 ] || return 1
+		mode=$(stat -c '%a' -- "$parent") || return 1
+		[ "$((0$mode & 022))" -eq 0 ] || return 1
+	done
+	rollback=/var/lib/epistle-rollback
+	[ ! -L "$rollback" ] || return 1
+	if [ ! -e "$rollback" ]; then
+		(umask 077; mkdir -- "$rollback") || return 1
+	fi
+	[ -d "$rollback" ] && [ "$(stat -c '%u:%g' -- "$rollback")" = 0:0 ] || return 1
+	mode=$(stat -c '%a' -- "$rollback") || return 1
+	[ "$((0$mode & 022))" -eq 0 ] || return 1
+	chmod 0700 -- "$rollback"
+}
+
 case "$1" in
 configure)
+	if ! epistle_rollback_dir; then
+		echo "epistle: could not prepare the root-owned rollback store; rollback is unavailable" >&2
+	fi
+
 	# 1. The account. --no-create-home because the state directory is created
 	# below with the mode the server needs rather than the skeleton's.
 	if ! getent passwd glyndor-epistle >/dev/null 2>&1; then

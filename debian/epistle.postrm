@@ -48,6 +48,7 @@ purge)
 		echo "epistle: could not remove the glyndor-epistle account" >&2
 	fi
 
+	rm -rf /var/lib/epistle-rollback
 	rm -rf /var/lib/glyndor/epistle
 	;;
 esac
