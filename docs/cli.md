@@ -938,24 +938,34 @@ works on the host and inside the container deployment:
   environment variable (read from `[database] url` or `[database]
   password_file`), never through argv, so the secret is never visible
   through `/proc/<pid>/cmdline`. A missing or empty `password_file`,
-  a non-zero exit, or empty output is a hard error: the run exits
-  non-zero with a one-line stderr message that names the cause.
+  a non-zero exit, empty output, or output that does not end with
+  pg_dump's closing marker (`-- PostgreSQL database dump complete`) is
+  a hard error: the run exits non-zero with a one-line stderr message
+  that names the cause. A dump cut short with a clean exit status is
+  refused too, so a truncated `database.sql` never reaches the archive.
 - **container** (compose file present): the dump runs through
-  `podup -f <compose> exec -T db sh -c <script>`. Restore copies the SQL
-  with `podup cp <host> db:/tmp/epistle-restore.sql`, then runs `psql`
-  through the same container shell with `-v ON_ERROR_STOP=1 -1 -X -f
-  /tmp/epistle-restore.sql`. Each script reads
-  `/run/secrets/epistle_db_password` into `PGPASSWORD` inside `db`
-  before executing the client. `POSTGRES_PASSWORD_FILE` is read by
-  the image entrypoint during initialization, not by libpq. The host
-  argv contains the shell script and secret path, never the password
+  `podup -f <compose> exec -T db sh -c <script>`. Restore writes the SQL
+  to a host temp file and copies it in with `podup cp <host>
+  db:/tmp/<staged-name>`, then runs `psql` through the same container
+  shell with `-v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>'`. Each
+  script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
+  inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
+  read by the image entrypoint during initialization, not by libpq. The
+  host argv contains the shell script and secret path, never the password
   value, and the host process does not load the password. Restore
   stops at the first SQL error and rolls back the single transaction.
+  The replay script runs `exec psql`, so a `SIGTERM` sent to the exec
+  (Ctrl-C, a timeout, an aborted `podman exec`) reaches `psql` and
+  aborts the transaction instead of the idle wrapper shell. The staged
+  copy is then removed from the host with `podup exec -T db sh -c "rm -f
+  '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
 
 `podup exec` does not forward stdin (measured against `podup 5.10.13`),
 which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
-file on the host is created in `$TMPDIR` and removed after the copy.
+file on the host is created in `$TMPDIR` at `0600` under a name unique
+to that restore, and a guard removes it on every exit path, error and
+panic included.
 
 ### What lives in the tar
 
@@ -967,12 +977,20 @@ treat the keys themselves: store it offline, encrypt it at rest, restrict
 who can read it, and never leave a copy on a shared host. Delete the
 archive file once `restore` has been verified.
 
-Restore writes every private-key file at `0600` regardless of what the
-archive recorded: an archive that captured a permissive umask (or that
-was tampered with) cannot bring a key back group- or world-readable.
-Every other file lands at the mode the archive recorded (always masked
-to the lower 9 bits, so `setuid` / `setgid` / sticky bits never survive
-a round-trip).
+Restore writes every credential at `0600` regardless of what the
+archive recorded: the private-key material, everything under `secrets/`,
+`accounts.toml`, and the per-account credential stores. An archive that
+captured a permissive umask (or that was tampered with) cannot bring
+one back group- or world-readable. The root `config.toml` keeps its
+owner bits and loses every group and other bit, so a co-tenant on a
+shared host cannot read or edit the live config. Every other file lands
+at the mode the archive recorded (always masked to the lower 9 bits, so
+`setuid` / `setgid` / sticky bits never survive a round-trip).
+
+Every directory the restore creates lands at `0700`, whatever umask the
+host runs with, and so does `data_dir` itself when the restore is the
+one that created it. A `data_dir` the operator already had keeps the
+mode they gave it.
 
 ## `epistle mta-sts-serve`
 

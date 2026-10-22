@@ -34,6 +34,11 @@ use std::process::{Command, Stdio};
 use crate::cli::init::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, compose_file_path};
 use crate::config::Database;
 
+#[path = "db_dump_host_temp.rs"]
+mod db_dump_host_temp;
+
+use db_dump_host_temp::RestoreHostTemp;
+
 #[cfg(test)]
 #[path = "db_dump_tests_debug.rs"]
 mod tests_debug;
@@ -41,6 +46,14 @@ mod tests_debug;
 #[cfg(test)]
 #[path = "db_dump_tests_clean.rs"]
 mod tests_clean;
+
+#[cfg(test)]
+#[path = "db_dump_tests_a4_status.rs"]
+mod tests_a4_status;
+
+#[cfg(test)]
+#[path = "db_dump_tests_a4_tempfile.rs"]
+mod tests_a4_tempfile;
 
 /// The path of `database.sql` inside the backup archive.
 pub(crate) const DATABASE_SQL_NAME: &str = "database.sql";
@@ -72,6 +85,14 @@ pub enum BackupError {
 	/// payload is a clear sign the dump was cut short: the connection
 	/// dropped, the timeout fired, or the binary was wrong.
 	EmptyOutput,
+	/// The dump tool exited with status 0 but its output is missing the
+	/// closing marker pg_dump writes on a successful run. The capture
+	/// itself may have failed (a dropped `podman exec` pipe, a truncated
+	/// file on a shared mount), or pg_dump was substituted by something
+	/// that does not emit the marker. Either way, the bytes are not a
+	/// complete dump and would only be discovered as missing rows at
+	/// restore time, so the run refuses the archive.
+	TruncatedDump,
 	/// The compose file is missing for the container path. Reported only
 	/// when a database is configured and the call site chose the container
 	/// path because the file existed at decision time and disappeared by
@@ -101,6 +122,10 @@ impl std::fmt::Display for BackupError {
 			BackupError::EmptyOutput => write!(
 				f,
 				"the dump tool produced no output; the connection may have dropped mid-stream or the database is empty and the tool refused to dump it"
+			),
+			BackupError::TruncatedDump => write!(
+				f,
+				"the dump tool exited cleanly but its output does not end with the pg_dump closing marker; the dump was cut short (truncated pipe, partial copy) and was refused"
 			),
 			BackupError::ComposeFileMissing(path) => write!(
 				f,
@@ -198,6 +223,22 @@ pub(crate) fn collect_dump(db: &Database, data_dir: &Path) -> Result<Vec<u8>, Ba
 /// decides what absolute path `argv[0]` resolves to, which is the only
 /// way to swap the binary in a parallel-test environment without
 /// racing other tests that share the process `PATH`.
+///
+/// The exit status is read before stdout is accepted. A dump tool that
+/// printed the head of the SQL and then errored (a dropped connection, a
+/// mid-stream error, any non-zero exit) did not produce a dump, so the
+/// partial bytes are refused even when stdout is non-empty: a truncated
+/// archive that lands in the backups directory and reads as good is worse
+/// than no archive at all, because the operator only finds out at restore
+/// time that the database is missing rows.
+///
+/// On a clean run the stdout is also checked for the closing marker
+/// pg_dump writes at the end of a successful run
+/// (`-- PostgreSQL database dump complete`). A capture that lost the tail
+/// of the dump (a `podman exec` pipe closing on the operator's end, a
+/// host filesystem out of space, a stub that `printf`'d some bytes and
+/// exited zero) returns 0 and would pass the status gate otherwise; the
+/// marker gate is what catches them.
 pub(crate) fn collect_dump_with(
 	db: &Database,
 	data_dir: &Path,
@@ -205,12 +246,36 @@ pub(crate) fn collect_dump_with(
 ) -> Result<Vec<u8>, BackupError> {
 	let spec = pg_dump_spec(db, data_dir)?;
 	run_command_capturing_stdout_with(&spec, resolver).and_then(|output| {
-		if output.stdout.is_empty() {
-			Err(BackupError::EmptyOutput)
-		} else {
-			Ok(output.stdout)
+		if !output.status_ok {
+			return Err(BackupError::CommandFailed {
+				stderr: output.stderr.trim().to_string(),
+				code: output.code,
+			});
 		}
+		if output.stdout.is_empty() {
+			return Err(BackupError::EmptyOutput);
+		}
+		if !output_ends_with_pg_dump_complete(&output.stdout) {
+			return Err(BackupError::TruncatedDump);
+		}
+		Ok(output.stdout)
 	})
+}
+
+/// True when the trimmed tail of `stdout` carries pg_dump's closing
+/// marker. `trim_end` only strips trailing whitespace; the line break pg_dump
+/// emits at the very end stays out of the comparison so a dump saved with
+/// `printf` in a stub (no trailing newline) still matches the recorded
+/// marker line.
+fn output_ends_with_pg_dump_complete(stdout: &[u8]) -> bool {
+	let end = stdout
+		.iter()
+		.rposition(|byte| !byte.is_ascii_whitespace())
+		.map(|position| position + 1)
+		.unwrap_or(0);
+	std::str::from_utf8(&stdout[..end])
+		.map(|tail| tail.ends_with("-- PostgreSQL database dump complete"))
+		.unwrap_or(false)
 }
 
 /// Run the SQL bytes from the archive into the configured database.
@@ -263,16 +328,19 @@ pub(crate) fn pg_dump_spec(db: &Database, data_dir: &Path) -> Result<CommandSpec
 /// The host path runs `psql` directly with the SQL on stdin; the
 /// container path `podup cp`s the SQL into the `db` service (because
 /// `podup exec` does not forward stdin) and then runs `psql -f` against
-/// the copied path.
+/// the copied path. `in_container_path` names the SQL file inside the
+/// `db` service when the container path is selected; the host path
+/// ignores it.
 #[allow(dead_code)]
 pub(crate) fn psql_load_spec(
 	db: &Database,
 	data_dir: &Path,
 	sql: &[u8],
+	in_container_path: &str,
 ) -> Result<CommandSpec, BackupError> {
 	let compose = compose_file_path(data_dir);
 	if compose.exists() {
-		container_psql_load_spec(&compose, sql)
+		container_psql_load_spec(&compose, in_container_path, sql)
 	} else {
 		host_psql_load_spec(db, sql)
 	}
@@ -365,15 +433,19 @@ pub(crate) fn container_pg_dump_spec(compose: &Path) -> Result<CommandSpec, Back
 
 /// The container-side `psql` invocation. `podup exec` does not forward
 /// stdin (measured against `podup 5.10.13`), so the SQL is copied in
-/// first through `podup cp <host> <svc>:/tmp/epistle-restore.sql`, and
-/// then a shell reads the secret into `PGPASSWORD` and runs `psql -1 -f`
-/// against that path. The transaction and `ON_ERROR_STOP` make replay
-/// atomic when a SQL statement fails. The `podup cp` is
-/// run as a separate spawn in `run_command_capturing_stdout` flow
-/// before the `psql` exec: the caller of `load_dump` runs both
-/// commands in sequence (see [`load_dump_container`]).
+/// first through `podup cp <host> <svc>:<in_container_path>`, and then a
+/// shell reads the secret into `PGPASSWORD` and execs `psql -1 -f` against
+/// that path. The transaction and `ON_ERROR_STOP` make replay atomic when
+/// a SQL statement fails. The shell uses `exec psql` so a `SIGTERM` sent
+/// to the container's exec process (an operator hitting Ctrl-C, a
+/// timeout, an aborted `podman exec`) reaches `psql` itself and aborts
+/// the transaction. Cleanup of the in-container copy lives in
+/// [`container_rm_temp_spec`] (host-side, since the wrapper shell is
+/// gone), invoked from [`load_dump_container_with`] on both success and
+/// error.
 pub(crate) fn container_psql_load_spec(
 	compose: &Path,
+	in_container_path: &str,
 	_sql: &[u8],
 ) -> Result<CommandSpec, BackupError> {
 	if !compose.exists() {
@@ -381,8 +453,37 @@ pub(crate) fn container_psql_load_spec(
 	}
 	let compose_str = compose.to_string_lossy().into_owned();
 	let script = format!(
-		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/epistle-restore.sql' -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#
+		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#,
+		path = in_container_path,
 	);
+	let spec = CommandSpec::new(vec![
+		"podup".to_string(),
+		"-f".to_string(),
+		compose_str,
+		"exec".to_string(),
+		"-T".to_string(),
+		"db".to_string(),
+		"sh".to_string(),
+		"-c".to_string(),
+		script,
+	]);
+	Ok(spec)
+}
+
+/// `podup -f <compose> exec -T db sh -c "rm -f <in_container_path>"`.
+/// Removes the staged SQL file from the `db` service after the restore
+/// returns, whether the replay succeeded or failed. Must run from the
+/// host (`podup exec`) because the in-container shell that exec'd
+/// `psql` is no longer around to trap a `rm -f` on its own exit.
+pub(crate) fn container_rm_temp_spec(
+	compose: &Path,
+	in_container_path: &str,
+) -> Result<CommandSpec, BackupError> {
+	if !compose.exists() {
+		return Err(BackupError::ComposeFileMissing(compose.to_path_buf()));
+	}
+	let compose_str = compose.to_string_lossy().into_owned();
+	let script = format!(r#"rm -f '{path}'"#, path = in_container_path);
 	let spec = CommandSpec::new(vec![
 		"podup".to_string(),
 		"-f".to_string(),
@@ -409,26 +510,26 @@ pub(crate) fn load_dump_container(compose: &Path, sql: &[u8]) -> Result<(), Back
 /// Same as [`load_dump_container`] with a custom program resolver. The
 /// host-temp write happens before any spawn, so it stays unchanged
 /// between the production path and the test path.
+///
+/// The SQL is staged to a host temp file created `0600` under a name unique
+/// to this call, so nothing but its owner can read the credential hashes it
+/// carries and two simultaneous restores cannot clobber each other. The
+/// [`RestoreHostTemp`] guard removes it on every exit path, including the
+/// error path and a panic. Inside the container the file lands on a name
+/// derived from the same unique file name, is tightened to `0600` by the
+/// `psql` shell, and is removed by a host-side `podup exec` once the
+/// replay completes (success or error); see
+/// [`container_psql_load_spec`] and [`container_rm_temp_spec`].
 fn load_dump_container_with(
 	compose: &Path,
 	sql: &[u8],
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Result<(), BackupError> {
-	let tmp = std::env::temp_dir().join(format!(
-		"epistle-restore-{}-{}.sql",
-		std::process::id(),
-		// nanosecond timestamp keeps parallel restores from clobbering.
-		std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_nanos())
-			.unwrap_or(0)
-	));
-	std::fs::write(&tmp, sql).map_err(|error| BackupError::CommandFailed {
-		stderr: format!("cannot write {}: {error}", tmp.display()),
-		code: None,
-	})?;
+	let mut host_temp = RestoreHostTemp::create()?;
+	host_temp.write_all(sql)?;
+	let in_container_path = format!("/tmp/{}", host_temp.file_name());
 	let result = (|| -> Result<(), BackupError> {
-		let cp = container_cp_into_spec(compose, &tmp, "/tmp/epistle-restore.sql")?;
+		let cp = container_cp_into_spec(compose, host_temp.path(), &in_container_path)?;
 		run_command_capturing_stdout_with(&cp, resolver).and_then(|output| {
 			if output.status_ok {
 				Ok(())
@@ -439,7 +540,7 @@ fn load_dump_container_with(
 				})
 			}
 		})?;
-		let psql = container_psql_load_spec(compose, sql)?;
+		let psql = container_psql_load_spec(compose, &in_container_path, sql)?;
 		run_command_capturing_stdout_with(&psql, resolver).and_then(|output| {
 			if output.status_ok {
 				Ok(())
@@ -451,7 +552,16 @@ fn load_dump_container_with(
 			}
 		})
 	})();
-	let _ = std::fs::remove_file(&tmp);
+	// Drop runs even when the closure returned `Err`, removing the host
+	// temp. The in-container file is removed by the host-side `podup exec`
+	// below regardless of the replay outcome: with `exec psql` in the
+	// replay shell, the wrapper shell is replaced by psql and any trap
+	// would never fire on the psql exit path. The cleanup is best-effort:
+	// a leftover `rm -f` failure does not override the restore outcome.
+	if let Ok(cleanup) = container_rm_temp_spec(compose, &in_container_path) {
+		let _ = run_command_capturing_stdout_with(&cleanup, resolver);
+	}
+	drop(host_temp);
 	result
 }
 

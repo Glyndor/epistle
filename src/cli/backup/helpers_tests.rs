@@ -3,6 +3,35 @@
 
 use std::path::Path;
 
+use super::BackupError;
+
+/// How many extra attempts a spawn gets when the kernel refuses the exec
+/// of a stub the test wrote moments earlier.
+const TEXT_FILE_BUSY_ATTEMPTS: usize = 4;
+
+/// Run `attempt`, and run it again only while it keeps failing with
+/// `ETXTBSY`. Writing a shell stub and exec'ing it back to back loses that
+/// race in about one spawn in twenty when the test binary runs its tests in
+/// parallel: this host's `/tmp` is a tmpfs and the kernel still sees a
+/// writer on the inode at exec time. The refusal belongs to the harness, not
+/// to the code under test, so every other outcome is returned untouched.
+pub(super) fn retry_on_text_file_busy<T>(
+	mut attempt: impl FnMut() -> Result<T, BackupError>,
+) -> Result<T, BackupError> {
+	for _ in 0..TEXT_FILE_BUSY_ATTEMPTS {
+		let result = attempt();
+		let refused = matches!(
+			&result,
+			Err(BackupError::CommandFailed { stderr, code: None }) if stderr.contains("Text file busy")
+		);
+		if !refused {
+			return result;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(25));
+	}
+	attempt()
+}
+
 /// Gunzip an archive and return its raw tar bytes. Kept under
 /// `helpers` so the existing `use super::helpers::*;` glob in the
 /// sibling test files picks it up unchanged.
