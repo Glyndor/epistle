@@ -440,13 +440,7 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => stack::run_reporting(&config, action, json),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => stack::run_from_path(&config, action, json),
 			Command::Dkim {
 				config,
 				json,

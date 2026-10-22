@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::answers::{DnsAnswers, Mode, Services};
-use super::compose::{ComposeFile, published_ports_for_listeners, render_document};
+use super::compose::{ComposeFile, render_document};
+use super::compose_publish::{hosts, published};
 use crate::cli::init::Answers;
 use crate::config::Listener;
 
@@ -94,7 +95,12 @@ pub(crate) fn regenerate(
 		first_account: None,
 		resources,
 	};
-	let composed = ComposeFile::build(&answers, published_ports_for_listeners(listeners), database);
+	// The host address `epistle service set` narrowed one mapping to is the
+	// operator's decision, not a function of the listeners, so the existing
+	// file is the only place it lives. Regenerating without it would put
+	// that listener back on every host address of the machine.
+	let narrow = hosts(&document);
+	let composed = ComposeFile::build(&answers, published(listeners, &narrow, None), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
 	let mut notes = Vec::new();
 	if let Some(running) = document["services"]["db"]["image"].as_str() {

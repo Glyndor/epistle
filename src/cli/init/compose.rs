@@ -29,6 +29,7 @@ use serde::Serialize;
 
 use super::answers::Answers;
 use super::apply::{ApplyError, Report, ReportStep, listeners_to_write};
+use super::compose_publish;
 use crate::config::Listener;
 
 #[path = "host_binary.rs"]
@@ -159,7 +160,7 @@ pub(super) fn write_compose_step_with_host_binary(
 /// not match; identical means untouched. The `database` flag
 /// switches the `db` service and the secrets/volumes blocks in
 /// or out. The published-port list is derived from the listeners
-/// init writes into the config (see [`published_ports_for_listeners`])
+/// init writes into the config (see [`compose_publish::published`])
 /// so a published port always matches a listener that is actually
 /// bound.
 pub(super) fn ensure_compose_file(
@@ -177,7 +178,8 @@ pub(super) fn ensure_compose_file(
 	}
 	let path = compose_file_path(&answers.data_dir);
 	let listeners = listeners_to_write(answers)?;
-	let published_ports = published_ports_for_listeners(&listeners);
+	let narrow = compose_publish::hosts_in_file(&path);
+	let published_ports = compose_publish::published(&listeners, &narrow, None);
 	let composed = ComposeFile::build(answers, published_ports, database);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
 	// the tests pin on: the rendered file carries a trailing
@@ -217,7 +219,8 @@ pub(super) fn ensure_compose_file(
 /// listener set the apply phase will write.
 pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, ApplyError> {
 	let listeners = listeners_to_write(answers)?;
-	let published_ports = published_ports_for_listeners(&listeners);
+	let narrow = compose_publish::hosts_in_file(&compose_file_path(&answers.data_dir));
+	let published_ports = compose_publish::published(&listeners, &narrow, None);
 	let composed = ComposeFile::build(answers, published_ports, database);
 	render_document(&composed)
 }
@@ -289,38 +292,6 @@ fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
 			Ok(())
 		}
 	}
-}
-
-/// Map the listeners `init` writes into the config to the
-/// `ports:` array of the `mail` service. Every non-loopback
-/// listener is published as `<port>:<port>` so the host port is
-/// the same number the listener binds inside the container.
-/// Loopback listeners (a `127.0.0.1` API, for example) are
-/// reachable inside the container through the pasta mapping but
-/// not from the host network, so they do not get a `ports:`
-/// entry. The list is returned in the same order the listeners
-/// appear in the config; the operator reads it in that order in
-/// the rendered file.
-///
-/// `IpAddr::is_loopback` recognises `127.0.0.0/8` and `::1` only.
-/// An IPv4-mapped IPv6 form (`::ffff:127.0.0.1`) would otherwise
-/// slip past the loopback check and produce a `19123:19123`
-/// publish for a listener that only ever sees loopback packets.
-/// `to_canonical` collapses the IPv4-mapped form to its IPv4
-/// representation first, so the loopback check sees the address
-/// the operator actually bound.
-pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<String> {
-	let mut ports = Vec::with_capacity(listeners.len());
-	for listener in listeners {
-		if listener.addr.to_canonical().is_loopback() {
-			continue;
-		}
-		let port = listener
-			.port
-			.unwrap_or_else(|| listener.kind.default_port());
-		ports.push(format!("{port}:{port}"));
-	}
-	ports
 }
 
 #[path = "compose_services.rs"]
@@ -607,34 +578,14 @@ pub(super) fn render_document(document: &impl Serialize) -> Result<String, Apply
 }
 
 /// Update the generated mail port map, returning whether a stack exists.
+/// Every listener the container publishes keeps the host address the map
+/// already names for its port, so a change to one service never widens
+/// another one back to every host address.
 pub(crate) fn update_listener_ports(
 	data_dir: &Path,
 	listeners: &[Listener],
 ) -> Result<bool, ApplyError> {
-	let path = compose_file_path(data_dir);
-	let existing = match fs::read(&path) {
-		Ok(bytes) => bytes,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-		Err(error) => return Err(ApplyError::ConfigRead(path, error)),
-	};
-	let mut document: serde_json::Value = serde_json::from_slice(&existing)
-		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
-	let mail = document
-		.get_mut("services")
-		.and_then(|services| services.get_mut("mail"))
-		.and_then(serde_json::Value::as_object_mut)
-		.ok_or_else(|| {
-			ApplyError::ConfigEncode("compose services.mail must be an object".into())
-		})?;
-	let ports = serde_json::json!(published_ports_for_listeners(listeners));
-	if mail.get("ports") == Some(&ports) {
-		return Ok(true);
-	}
-	mail.insert("ports".into(), ports);
-	let bytes = render_document(&document)?;
-	crate::storage::write_secret(&path, bytes.as_bytes())
-		.map_err(|error| ApplyError::ConfigWrite(path, error))?;
-	Ok(true)
+	Ok(super::compose_publish::update(data_dir, listeners, None)?.is_some())
 }
 
 #[cfg(test)]

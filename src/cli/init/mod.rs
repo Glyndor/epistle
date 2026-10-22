@@ -11,6 +11,7 @@ mod answers_none;
 mod apply;
 mod assistant;
 mod compose;
+mod compose_publish;
 pub(crate) mod db_roles;
 mod detect;
 mod draft;
@@ -32,6 +33,11 @@ pub(crate) use apply::prepare_keys_for_update;
 pub use compose::compose_file_path;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
 pub(crate) use compose::{MAIL_STOP_GRACE_SECS, update_listener_ports};
+pub(crate) use compose_publish::{
+	CONTAINER_BIND, hosts_in_file as published_host_addresses,
+	override_publishes as operator_override_publishes, prepare as prepare_published_ports,
+	preview as preview_published_ports,
+};
 pub(crate) use regenerate::regenerate;
 #[cfg(test)]
 pub(crate) use regenerate::rendered_for_tests;

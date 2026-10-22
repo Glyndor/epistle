@@ -485,6 +485,18 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
+	let _held = match crate::cli::service_lock::acquire(&answers.config_path) {
+		Ok(held) => held,
+		Err(error) => {
+			return ApplyOutcome {
+				report,
+				error: Some(ApplyError::ConfigRead(
+					answers.config_path.clone(),
+					std::io::Error::other(error),
+				)),
+			};
+		}
+	};
 	// Lay down the database password before the config: `Config::load`
 	// opens `[database] password_file` to validate the URL.
 	if answers.services.database

@@ -1,5 +1,6 @@
 //! Listener administration without regenerating the installation configuration.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::term::table::Table;
@@ -33,6 +34,19 @@ pub enum ServiceCli {
 		#[arg(value_enum)]
 		name: ServiceName,
 	},
+	/// Move one enabled service listener to another address, port, or both.
+	Set {
+		/// Service to move. It has to be enabled already.
+		#[arg(value_enum)]
+		name: ServiceName,
+		/// Address the host reaches the service on. On a stack install this
+		/// is the host side of the generated compose mapping.
+		#[arg(long, value_name = "ADDRESS")]
+		bind: Option<IpAddr>,
+		/// Port the service answers on.
+		#[arg(long, value_name = "PORT")]
+		port: Option<u16>,
+	},
 }
 
 /// Operator names for independently managed listeners.
@@ -59,7 +73,7 @@ pub enum ServiceName {
 }
 
 impl ServiceName {
-	fn kind(self) -> ListenerKind {
+	pub(super) fn kind(self) -> ListenerKind {
 		match self {
 			Self::Smtp => ListenerKind::Smtp,
 			Self::Imap => ListenerKind::Imap,
@@ -73,7 +87,7 @@ impl ServiceName {
 		}
 	}
 
-	fn as_str(self) -> &'static str {
+	pub(super) fn as_str(self) -> &'static str {
 		match self {
 			Self::Pop3 => "pop3",
 			Self::Managesieve => "managesieve",
@@ -89,6 +103,29 @@ struct Row {
 	enabled: bool,
 	port: u16,
 	bind: IpAddr,
+	/// Host address the generated compose map publishes this service on.
+	/// Left out of the JSON when no stack fixes one, so a host install and a
+	/// stack nobody narrowed still print the records they printed before.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	host: Option<IpAddr>,
+}
+
+impl Row {
+	fn new(
+		name: &'static str,
+		enabled: bool,
+		port: u16,
+		bind: IpAddr,
+		hosts: &BTreeMap<u16, IpAddr>,
+	) -> Self {
+		Self {
+			name,
+			enabled,
+			port,
+			bind,
+			host: enabled.then(|| hosts.get(&port).copied()).flatten(),
+		}
+	}
 }
 
 pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
@@ -105,6 +142,8 @@ pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
 }
 
 pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
+	let hosts =
+		super::init::published_host_addresses(&super::init::compose_file_path(&config.data_dir));
 	let mut rows = Vec::new();
 	let names = ServiceName::value_variants();
 	for &name in names {
@@ -115,63 +154,113 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<
 			.filter(|listener| listener.kind == kind)
 			.collect();
 		if matches.is_empty() {
-			rows.push(Row {
-				name: name.as_str(),
-				enabled: false,
-				port: kind.default_port(),
-				bind: default_bind(config, kind),
-			});
+			rows.push(Row::new(
+				name.as_str(),
+				false,
+				kind.default_port(),
+				default_bind(config, kind),
+				&hosts,
+			));
 		} else {
 			for listener in matches {
-				rows.push(Row {
-					name: name.as_str(),
-					enabled: true,
-					port: listener.socket_addr().port(),
-					bind: listener.addr,
-				});
+				rows.push(Row::new(
+					name.as_str(),
+					true,
+					listener.socket_addr().port(),
+					listener.addr,
+					&hosts,
+				));
 			}
 		}
 	}
 	for listener in &config.listeners {
 		if !names.iter().any(|name| name.kind() == listener.kind) {
-			rows.push(Row {
-				name: listener.kind.as_str(),
-				enabled: true,
-				port: listener.socket_addr().port(),
-				bind: listener.addr,
-			});
+			rows.push(Row::new(
+				listener.kind.as_str(),
+				true,
+				listener.socket_addr().port(),
+				listener.addr,
+				&hosts,
+			));
 		}
 	}
+	// The host column earns its place only where a stack pins the host side
+	// of a mapping; without one the listing is the four columns it always was.
+	let host_column = rows.iter().any(|row| row.host.is_some());
 	if json {
 		serde_json::to_writer(&mut *out, &rows).map_err(|e| e.to_string())?;
 		writeln!(out).map_err(|e| e.to_string())?;
 	} else if let Some(decor) = super::term::stdout(json) {
-		let mut table = Table::new(&["SERVICE", "STATE", "PORT", "BIND"]).state_col(1);
+		let mut table = Table::new(headers(host_column)).state_col(1);
 		for row in rows {
-			let state = if row.enabled { "enabled" } else { "disabled" };
-			table.push(vec![
-				row.name.to_string(),
-				state.into(),
-				row.port.to_string(),
-				row.bind.to_string(),
-			]);
+			let mut cells = cells(&row, host_column);
+			cells[1] = if row.enabled { "enabled" } else { "disabled" }.into();
+			table.push(cells);
 		}
 		table.write(decor, out).map_err(|e| e.to_string())?;
 	} else {
-		writeln!(out, "SERVICE       STATE     PORT   BIND").map_err(|e| e.to_string())?;
+		writeln!(out, "{}", line_head(host_column)).map_err(|e| e.to_string())?;
 		for row in rows {
-			writeln!(
-				out,
-				"{:<13} {:<9} {:<6} {}",
-				row.name,
-				if row.enabled { "enabled" } else { "disabled" },
-				row.port,
-				row.bind
-			)
+			let state = if row.enabled { "enabled" } else { "disabled" };
+			let host = row
+				.host
+				.map_or_else(|| "-".to_string(), |host| host.to_string());
+			if host_column {
+				writeln!(
+					out,
+					"{:<13} {:<9} {:<6} {:<20} {}",
+					row.name, state, row.port, row.bind, host
+				)
+			} else {
+				writeln!(
+					out,
+					"{:<13} {:<9} {:<6} {}",
+					row.name, state, row.port, row.bind
+				)
+			}
 			.map_err(|e| e.to_string())?;
 		}
 	}
 	Ok(())
+}
+
+/// The column names of the listing, with the host address only where the
+/// generated compose map pins one.
+fn headers(host_column: bool) -> &'static [&'static str] {
+	if host_column {
+		&["SERVICE", "STATE", "PORT", "BIND", "HOST"]
+	} else {
+		&["SERVICE", "STATE", "PORT", "BIND"]
+	}
+}
+
+/// One listing row, unpadded: the table measures its own columns.
+fn cells(row: &Row, host_column: bool) -> Vec<String> {
+	let mut cells = vec![
+		row.name.to_string(),
+		String::new(),
+		row.port.to_string(),
+		row.bind.to_string(),
+	];
+	if host_column {
+		cells.push(
+			row.host
+				.map_or_else(|| "-".to_string(), |host| host.to_string()),
+		);
+	}
+	cells
+}
+
+/// The header of the plain listing, padded the way the rows below it are.
+fn line_head(host_column: bool) -> String {
+	if host_column {
+		format!(
+			"{:<13} {:<9} {:<6} {:<20} {}",
+			"SERVICE", "STATE", "PORT", "BIND", "HOST"
+		)
+	} else {
+		format!("{:<13} {:<9} {:<6} {}", "SERVICE", "STATE", "PORT", "BIND")
+	}
 }
 
 pub(super) fn run(path: &Path, action: ServiceCli, dry_run: bool, json: bool) -> ExitCode {
@@ -219,6 +308,15 @@ fn execute_with(
 		}
 		ServiceCli::Enable { name } => (name, true),
 		ServiceCli::Disable { name } => (name, false),
+		ServiceCli::Set { name, bind, port } => {
+			let request = super::service_set::Request { name, bind, port };
+			return super::service_set::run(path, request, dry_run, json, out, err, restart);
+		}
+	};
+	let _held = if dry_run {
+		None
+	} else {
+		Some(super::service_lock::acquire(path)?)
 	};
 	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
 	let action = if enabled { "enable" } else { "disable" };

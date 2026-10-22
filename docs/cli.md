@@ -188,12 +188,15 @@ epistle service list
 epistle service list --json
 epistle service enable imaps
 epistle service disable imap
+epistle service set imap --bind 127.0.0.1
+epistle service set api --bind 127.0.0.1 --port 8025
 epistle service --config /path/to/mail.toml enable submission
 ```
 
 `list` shows enabled or disabled state, port, and bind address. Enabled rows use
 actual configured sockets, including custom ports; disabled rows show the defaults
-that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`.
+that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`,
+plus `host` on a container stack where the generated map pins one.
 
 Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 `pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
@@ -204,7 +207,38 @@ Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
 `/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must
 be valid. New mail listeners inherit SMTP's bind address; API uses loopback.
-An already enabled or disabled service reports no change and exits successfully.
+An already enabled or disabled service reports no change and exits successfully,
+and so does `set` asked for the socket the listener already has.
+
+`set NAME [--bind ADDRESS] [--port PORT]` moves a listener that is already
+enabled, so `enable` is what adds one. It refuses a port another enabled
+listener answers on, a port 0, and an address the parser does not read; a value
+of `--port 70000` is a usage error. The API keeps the token requirement the loader
+enforces. API, WebDAV and
+plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
+loopback for these listeners, even when mail certificates are configured in
+`[tls]`. I keep them behind a TLS reverse proxy on loopback.
+
+Without a container stack the bind in `mail.toml` is the address the server
+binds, so `set` writes the requested one there. With
+`<data_dir>/compose/compose.yaml` the two sides split: inside the container the
+listener keeps an unspecified bind, because a loopback or private address there
+is not one the published mapping can reach, and the requested address becomes
+the host side of the generated mapping as `ADDRESS:PORT:PORT`. `list` then shows
+that address in a `HOST` column, `-` where the mapping still answers on every
+host address. Explicit wildcard addresses retain their family as
+`0.0.0.0:PORT:PORT` or `[::]:PORT:PORT`. A generated mapping with no explicit
+address stays `PORT:PORT`, and the
+host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
+or `stack update`, since every writer of the map reads it back first. If
+`compose.override.yaml` already publishes a port for the same service, `set`
+leaves it alone and says that the override wins over the generated map.
+
+`set` validates and stages both files before replacing either. A write error
+restores the previous files and verifies their contents and permissions. If
+restoration fails, the error names retained recovery copies. Service
+edits, init reruns and stack writers share a configuration-directory lock through
+the write and reload.
 
 When `<data_dir>/compose/compose.yaml` exists, the generated mail port map is
 updated and the mail service is restarted through `epistle stack`. The operator

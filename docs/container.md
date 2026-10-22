@@ -196,9 +196,10 @@ listener is not reachable through the pasta mapping, so the
 host-side reach is the operator's responsibility, not the
 init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
-non-loopback address; a `127.0.0.1:<p>:<p>` publish on the
-compose side is the operator's own addition to the generated
-file (or a follow-up edit after `init` runs).
+non-loopback address; where the host reaches it is the
+operator's decision, made with `epistle service set
+<name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
+reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
 
 ### Publishing a port on one host address
 
@@ -210,16 +211,31 @@ on the public interfaces too. Binding the listener to a private address does
 not change that, and inside the container the bind address has to be one the
 container owns, or `serve` fails to start with `EADDRNOTAVAIL`.
 
-To keep a listener on one address, set the listener to `addr = "0.0.0.0"` (the
-container side) and name the host side of the mapping in
-`compose.override.yaml`, which every stack invocation passes after
-`compose.yaml`. `init` regenerates the base file on a rerun and `stack update`
-regenerates it too, taking the published ports from the listeners, so an edit
-to `compose.yaml` is replaced and the override is what survives. Lists in the
-override are merged with the generated ones, so a plain `ports:` entry would be
-added to `8025:8025` and the engine would refuse to bind both; the `!override`
-tag replaces the list, and then it has to carry every port the stack
-publishes, the mail ones included:
+`epistle service set <name> --bind <address>` writes the host side of the
+mapping for one listener and leaves the rest of the file alone:
+
+```sh
+sudo epistle service set imap --bind 127.0.0.1
+```
+
+It writes `0.0.0.0` as the bind the container uses (a loopback or private
+address inside the container is not one the published mapping can reach) and
+publishes `127.0.0.1:143:143` on the host. Every writer of the generated map
+reads the host address back before rendering it, so enabling another service,
+an `init` rerun or `stack update` keeps the address on the listener that has
+it. Explicit wildcard binds retain `0.0.0.0:PORT:PORT` or `[::]:PORT:PORT`,
+so the requested address family survives regeneration. `epistle service list`
+shows the address in a `HOST` column.
+
+The override stays the place for a mapping that has to carry every port, or
+one that changes shape: `init` regenerates the base file on a rerun and `stack
+update` regenerates it too, taking the published ports from the listeners. An
+operator override in `compose.override.yaml`, which every stack invocation
+passes after `compose.yaml`, wins over the generated map and is never written.
+Lists in the override are merged with the generated ones, so a plain `ports:`
+entry would be added to `8025:8025` and the engine would refuse to bind both;
+the `!override` tag replaces the list, and then it has to carry every port the
+stack publishes, the mail ones included:
 
 ```yaml
 services:

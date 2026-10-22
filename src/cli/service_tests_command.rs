@@ -135,3 +135,77 @@ fn service_command_updates_ports_and_recreates_mail() {
 	);
 	assert_eq!(compose["services"]["mail"]["image"], "keep");
 }
+
+#[test]
+fn service_writers_wait_and_read_the_latest_config_under_the_common_lock() {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	for action in [
+		ServiceCli::Set {
+			name: ServiceName::Smtp,
+			bind: None,
+			port: Some(2525),
+		},
+		ServiceCli::Enable {
+			name: ServiceName::Webdav,
+		},
+		ServiceCli::Disable {
+			name: ServiceName::Webdav,
+		},
+	] {
+		let (dir, file) = fixture();
+		let lock_path = dir.path().join(".epistle-config.lock");
+		crate::storage::lock::create_private(&lock_path).unwrap();
+		let held = crate::storage::lock::FileLock::acquire(&lock_path).unwrap();
+		std::thread::scope(|scope| {
+			let (started, starting) = mpsc::channel();
+			let (done, result) = mpsc::channel();
+			let path = file.path();
+			scope.spawn(move || {
+				started.send(()).unwrap();
+				let code = execute_with(
+					path,
+					action,
+					false,
+					false,
+					&mut Vec::new(),
+					&mut Vec::new(),
+					|_, _| ExitCode::SUCCESS,
+				);
+				done.send(code).unwrap();
+			});
+			starting.recv().unwrap();
+			let early = result.recv_timeout(Duration::from_millis(200));
+			if !matches!(early, Err(mpsc::RecvTimeoutError::Timeout)) {
+				drop(held);
+				assert!(
+					matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
+					"the writer escaped the shared lock: {early:?}"
+				);
+				return;
+			}
+			let mut edit = super::super::config_edit::ConfigDocument::open(path).unwrap();
+			edit.upsert_element("listeners", "kind", "smtp", &[("addr", "127.0.0.2".into())])
+				.unwrap();
+			edit.commit().unwrap();
+			drop(held);
+			assert!(
+				matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
+				"the writer escaped the shared lock: {early:?}"
+			);
+			assert_eq!(
+				result
+					.recv_timeout(Duration::from_secs(10))
+					.unwrap()
+					.unwrap(),
+				ExitCode::SUCCESS
+			);
+		});
+		assert_eq!(
+			Config::load(file.path()).unwrap().listeners[0]
+				.addr
+				.to_string(),
+			"127.0.0.2"
+		);
+	}
+}

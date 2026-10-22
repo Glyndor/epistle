@@ -79,6 +79,8 @@ mod serve_tls;
 mod serve_webdav;
 mod service;
 mod service_edit;
+mod service_lock;
+mod service_set;
 mod srv;
 mod stack;
 mod stack_dumps;

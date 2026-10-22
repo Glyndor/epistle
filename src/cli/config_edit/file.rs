@@ -94,7 +94,7 @@ pub(super) fn replace(
 }
 
 #[cfg(unix)]
-fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
+pub(super) fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
 	use std::os::fd::AsRawFd;
 	use std::os::unix::fs::MetadataExt;
 	let current = file.metadata()?;
@@ -109,7 +109,7 @@ fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn same_file(a: &Metadata, b: &Metadata) -> bool {
+pub(super) fn same_file(a: &Metadata, b: &Metadata) -> bool {
 	use std::os::unix::fs::MetadataExt;
 	a.dev() == b.dev()
 		&& a.ino() == b.ino()
@@ -119,11 +119,11 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
 }
 
 #[cfg(not(unix))]
-fn preserve_owner(_file: &File, _metadata: &Metadata) -> std::io::Result<()> {
+pub(super) fn preserve_owner(_file: &File, _metadata: &Metadata) -> std::io::Result<()> {
 	Ok(())
 }
 
 #[cfg(not(unix))]
-fn same_file(_a: &Metadata, _b: &Metadata) -> bool {
+pub(super) fn same_file(_a: &Metadata, _b: &Metadata) -> bool {
 	true
 }
