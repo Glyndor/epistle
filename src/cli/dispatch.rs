@@ -494,9 +494,13 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => with_config(&config, |config| {
-				super::db_upgrade::run(config, action, json)
-			}),
+			} => match Config::load(&config) {
+				Ok(loaded) => super::db_upgrade::run(&loaded, &config, action, json),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
 }

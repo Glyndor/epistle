@@ -11,15 +11,18 @@
 //! A narrow address lives in the generated file only, so every writer reads
 //! the map back before rendering it: enabling another service, an `init` rerun
 //! or `stack update` must not quietly put a listener back on every host
-//! address the operator took away from it.
+//! address the operator took away from it. A listener that serves HTTP without
+//! TLS does not need the map to remember anything: it stays on loopback
+//! whenever the map has no address for it.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use super::apply::ApplyError;
 use super::compose::{compose_file_path, render_document};
-use crate::config::{Listener, ListenerKind};
+use crate::config::{Config, Listener, ListenerKind};
 
 /// The bind a listener published on a host address uses inside the container.
 /// The container side and the address the host reaches can not be the same
@@ -31,6 +34,26 @@ pub(crate) const CONTAINER_BIND: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 /// container side of a mapping published on an IPv6 host address, and what
 /// `init` writes for a listener that inherits SMTP's bind.
 pub(crate) const CONTAINER_BIND_DUAL: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+
+/// Whether a listener answers HTTP that no TLS transport protects. Mail
+/// certificates do not encrypt these, so they belong behind a TLS terminator
+/// on loopback, and one definition of that rule decides both what `epistle
+/// service set` accepts and what the generated map publishes.
+pub(crate) fn plain_http(kind: ListenerKind) -> bool {
+	matches!(
+		kind,
+		ListenerKind::Api | ListenerKind::WebDav | ListenerKind::Autoconfig
+	)
+}
+
+/// The address a listener that serves HTTP without TLS is published on when
+/// nothing has narrowed it. The bind in `mail.toml` is the one inside the
+/// container, so it can not carry the decision the operator made on the host,
+/// and a regeneration that lost the map would otherwise put these listeners on
+/// every address of the machine.
+fn plain_http_host(kind: ListenerKind) -> Option<IpAddr> {
+	plain_http(kind).then_some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
 
 /// Render one mapping. An absent host address, and an unspecified one, keep
 /// the `<port>:<port>` form every other writer of the map uses, so a stack
@@ -143,8 +166,14 @@ pub(super) fn published(
 			.port
 			.unwrap_or_else(|| listener.kind.default_port());
 		let host = match publish {
-			Some((kind, host)) if kind == listener.kind => host,
-			_ => narrow.get(&port).copied(),
+			Some((kind, Some(address))) if kind == listener.kind => Some(address),
+			// No address asked for and none in the map: every listener keeps
+			// the form `init` wrote, except one that serves HTTP without TLS,
+			// which stays on loopback behind the operator's proxy.
+			_ => narrow
+				.get(&port)
+				.copied()
+				.or_else(|| plain_http_host(listener.kind)),
 		};
 		ports.push(entry(host, port));
 	}
@@ -203,6 +232,29 @@ pub(crate) fn preview(
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
 ) -> Result<Mappings, ApplyError> {
 	Ok(read_map(data_dir, listeners, publish)?.map(|map| (map.current, map.wanted)))
+}
+
+/// Say on stderr when the generated map and the configuration the command read
+/// describe different stacks, which is what a command killed between its two
+/// renames leaves behind. The caller holds the common lock and is about to
+/// bring the two together, so this is where the operator hears about it.
+pub(crate) fn announce_mixed_state(config: &Config, status: &mut impl Write) {
+	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None) else {
+		return;
+	};
+	if current == wanted {
+		return;
+	}
+	crate::cli::style::warn_to(
+		status,
+		format_args!(
+			"the generated compose.yaml and mail.toml publish different ports \
+		 (compose.yaml: [{}]; mail.toml: [{}]); a command interrupted between its two writes leaves \
+		 this behind, and this command brings the two together",
+			current.join(", "),
+			wanted.join(", ")
+		),
+	);
 }
 
 /// Render and validate a companion before the TOML can be replaced.
@@ -399,3 +451,7 @@ fn mail_mut(
 #[cfg(test)]
 #[path = "compose_publish_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compose_publish_http_tests.rs"]
+mod tests_http;

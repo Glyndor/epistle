@@ -201,15 +201,26 @@ operator's decision, made with `epistle service set
 <name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
 reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
 
+`epistle service enable` starts those two on loopback instead of on SMTP's
+bind, which is what keeps a port they serve in plaintext off the public
+interfaces, and it publishes no mapping for them: a loopback bind inside the
+container is not one the pasta mapping reaches. Opening one is `epistle service
+set <name> --bind 127.0.0.1`, which moves the container bind to the wildcard
+and publishes that single host address.
+
 ### Publishing a port on one host address
 
 The `ports:` array of `mail` is derived from the listeners: every non-loopback
 listener is published as `<port>:<port>`, and a loopback listener gets no
 entry. With no host address in the mapping the engine publishes on every
-address the host has, so an `api` listener arrives as `8025:8025` and answers
-on the public interfaces too. Binding the listener to a private address does
-not change that, and inside the container the bind address has to be one the
-container owns, or `serve` fails to start with `EADDRNOTAVAIL`.
+address the host has, so a listener nobody narrowed answers on the public
+interfaces too. Binding the listener to a private address does not change that,
+and inside the container the bind address has to be one the container owns, or
+`serve` fails to start with `EADDRNOTAVAIL`. The three listeners whose transport
+is HTTP without TLS (`api`, `web-dav`, plain `autoconfig`) are the exception:
+they are published on `127.0.0.1` when the file names no address for them, so a
+map that lost the address a `set` wrote, or an `addr` an operator edited by hand,
+leaves them on loopback.
 
 `epistle service set <name> --bind <address>` writes the host side of the
 mapping for one listener and leaves the rest of the file alone:
@@ -246,7 +257,9 @@ reported as `set` and not as `published`, because a loopback bind inside the
 container gets no mapping. Naming an address for it does widen that bind to the
 container wildcard, which publishes the listener on the host address named; the
 reach is still only what the operator asked for, and `api` and `web-dav` only
-accept loopback.
+accept loopback. When the two files describe different stacks, which is what a
+command killed between its writes leaves behind, the next service command says
+which ports each one published before it brings them together.
 
 #### What was measured for the mapping form
 

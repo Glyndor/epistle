@@ -89,6 +89,12 @@ pub(super) fn run(
 	};
 	let mut document = ConfigDocument::open(path).map_err(text)?;
 	let config = document.config().map_err(text)?;
+	// A command killed between its two renames leaves the configuration and
+	// the generated map describing different stacks. This one reconciles
+	// them, so it is where the operator hears about it.
+	if !dry_run {
+		init::announce_mixed_state(&config, err);
+	}
 	let kind = name.kind();
 	let current = config
 		.listeners
@@ -355,11 +361,7 @@ fn host_address(requested: IpAddr) -> Result<IpAddr, ResourceError> {
 /// Mail certificates do not change the transport of these HTTP listeners.
 /// Keep their host-visible address on loopback behind a TLS terminator.
 fn http_prerequisites(kind: ListenerKind, address: IpAddr) -> Result<(), ResourceError> {
-	if matches!(
-		kind,
-		ListenerKind::Api | ListenerKind::WebDav | ListenerKind::Autoconfig
-	) && !address.to_canonical().is_loopback()
-	{
+	if init::serves_plain_http(kind) && !address.to_canonical().is_loopback() {
 		return Err(ResourceError::Refusal(format!(
 			"the {} listener serves HTTP without TLS; keep {address} on loopback behind a TLS reverse proxy, [tls] does not encrypt this listener",
 			kind.as_str()

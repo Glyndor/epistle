@@ -300,3 +300,34 @@ fn a_published_listener_with_an_override_says_how_the_two_combine() {
 	);
 	assert_eq!(ports_of(dir.path()), ["127.0.0.1:993:993"]);
 }
+
+/// A listener that serves HTTP without TLS keeps its host mapping on loopback
+/// when nothing in the file says otherwise. The bind in `mail.toml` is the one
+/// inside the container, so the narrow address only lives in the map; an
+/// operator who edits a port by hand and then runs a command that renders the
+/// map again would otherwise publish that listener on every host address.
+#[test]
+fn a_listener_without_tls_keeps_its_mapping_on_loopback_when_the_file_forgets_it() {
+	let (dir, path) = stack(
+		&[("api", "0.0.0.0", 8025), ("imaps", "::", 993)],
+		&["127.0.0.1:8025:8025", "993:993"],
+	);
+	let mut text = std::fs::read_to_string(&path).unwrap();
+	text = text.replace("port = 8025", "port = 9999");
+	crate::storage::write_secret(&path, text.as_bytes()).unwrap();
+	set_to(
+		&path,
+		ServiceName::Imaps,
+		None,
+		Some(1465),
+		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+	)
+	.unwrap();
+	assert_eq!(
+		ports_of(dir.path()),
+		["127.0.0.1:9999:9999", "1465:1465"],
+		"a listener with no TLS transport is never published on every host address"
+	);
+}

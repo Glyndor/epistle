@@ -206,7 +206,9 @@ Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
 `/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must
-be valid. New mail listeners inherit SMTP's bind address; API uses loopback.
+be valid. New mail listeners inherit SMTP's bind address; the listeners with no
+TLS transport of their own (`api`, `webdav`) start on loopback, so enabling one
+publishes nothing until `set --bind` opens it.
 An already enabled or disabled service reports no change and exits successfully,
 and so does `set` asked for the socket the listener already has.
 
@@ -247,18 +249,30 @@ The address has to be one of the host's own: a multicast group, `255.255.255.255
 and a link-local IPv6 address are refused before anything is written, both
 wildcards are accepted, and an IPv4-mapped address is written as the IPv4
 address it names. A listener the container holds on loopback publishes nothing
-and is reported as `set` rather than as `published`.
+and is reported as `set` rather than as `published`. A listener with no TLS
+transport of its own (`api`, `webdav`, plain `autoconfig`) is published on
+`127.0.0.1` when the generated file names no address for it, so a map rebuilt
+without the address one `set` wrote, or an `addr` an operator edited by hand,
+puts it on loopback rather than on every address of the host.
 
 `set`, `enable` and `disable` validate and stage both files before replacing
-either. A write error restores the previous files and verifies their contents
-and permissions. If restoration fails, the error names retained recovery
-copies. A command killed between its two renames leaves staged copies behind,
-which the next command under the lock sweeps and names. Service edits,
-`dns provider set`, init reruns and stack writers share a configuration-directory
-lock through the write and reload; the wait has a deadline and names the command
-that holds it. The lock file is created `0600` and taken as it is at `0600` or
-`0644`, so a lock root created can also be taken by the service user; any other
-mode, and a lock file another user owns, is refused with the mode it has.
+either, and a `compose.yaml` that is a symlink is written through the link, the
+way it was before that transaction existed. A write error restores the previous
+files and verifies their contents and permissions. If restoration fails, the
+error names a retained recovery copy, which takes its own `.service-recovery.*`
+name and is kept for a week instead of the hour a staged copy is kept. A
+command killed between its two renames leaves staged copies behind, which the
+next command under the lock sweeps and names; when the generated map and
+`mail.toml` describe different stacks, which is what that kill leaves behind,
+the command that reconciles them says so before it writes. Service edits,
+`dns provider set`, init reruns, stack writers and `db upgrade` share a
+configuration-directory lock through the write and reload; the wait has a
+deadline and names the command that holds it. The lock file is created `0600`
+and belongs to the service user or to root, who creates it from the package; a
+lock this command owns is put back to `0600`, and one it can only read is still
+a lock, so a lock root created at `0644` keeps two commands apart. A mode that
+lets other users write it, and a lock file a third user owns, are refused with
+the mode it has and the `chmod` that fixes it.
 
 `--dry-run` prints the diff of `mail.toml`, and on a container stack the
 `ports:` change that comes with it. With `--json` the result object carries the

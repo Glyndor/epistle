@@ -106,7 +106,15 @@ fn service_cli_lists_real_sockets_and_every_name() {
 			"list must resolve configured and default ports"
 		);
 		assert_eq!(row["enabled"], name == "smtp" || name == "imaps");
-		assert_eq!(row["bind"], if name == "api" { "127.0.0.1" } else { "::" });
+		assert_eq!(
+			row["bind"],
+			if name == "api" || name == "webdav" {
+				"127.0.0.1"
+			} else {
+				"::"
+			},
+			"a listener with no TLS transport is listed on loopback"
+		);
 	}
 	let table = run(&config, &["list"]);
 	assert_eq!(table.status.code(), Some(0));

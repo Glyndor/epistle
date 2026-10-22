@@ -6,10 +6,10 @@
 //! holding the lock: a `podup` restart under the lock is normal, and an
 //! operator watching a silent hang has no way to tell it from a crash.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -36,19 +36,19 @@ pub(super) fn acquire_within(config: &Path, within: Duration) -> Result<File, St
 		.filter(|p| !p.as_os_str().is_empty())
 		.unwrap_or(Path::new("."));
 	let path = parent.join(".epistle-config.lock");
-	let file = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.create(true)
-		.truncate(false)
-		.mode(0o600)
-		.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-		.open(&path)
-		.map_err(|e| format!("cannot lock {}: {e}", path.display()))?;
+	let file = open(&path)?;
 	let metadata = file.metadata().map_err(|e| e.to_string())?;
 	if !metadata.is_file() {
 		return Err(format!("{} must be a regular lock file", path.display()));
 	}
+	// A lock this user owns is put back to the mode the writers create, so a
+	// file another tool left wide (a `touch` under umask 002) does not refuse
+	// every command from then on.
+	if metadata.uid() == unsafe { libc::geteuid() } {
+		file.set_permissions(fs::Permissions::from_mode(0o600))
+			.map_err(|error| format!("cannot set the mode of {}: {error}", path.display()))?;
+	}
+	let metadata = file.metadata().map_err(|e| e.to_string())?;
 	usable(&path, metadata.mode() & 0o7777, metadata.uid())?;
 	wait_for(&file, &path, within)?;
 	note_holder(&file);
@@ -56,23 +56,54 @@ pub(super) fn acquire_within(config: &Path, within: Duration) -> Result<File, St
 	Ok(file)
 }
 
-/// Whether a lock file is one this process may hold: a regular file of this
-/// user, in one of the two modes the writers agree on. `0644` is accepted
-/// because a lock file carries no secret and the service user has to be able
-/// to take a lock root created; anything wider is refused, with the mode the
-/// file has, so the operator knows what to change.
+/// Open the lock file, creating it when it is not there. A lock this user does
+/// not own and can not write is opened read-only: `flock` serialises writers
+/// through the descriptor alone, so a lock root created still excludes a second
+/// command, and the holder record is then left to the owner to write.
+fn open(path: &Path) -> Result<File, String> {
+	let denied = |error: &std::io::Error| error.kind() == std::io::ErrorKind::PermissionDenied;
+	let mut options = OpenOptions::new();
+	options.read(true).write(true).create(true).truncate(false);
+	#[cfg(unix)]
+	{
+		options
+			.mode(0o600)
+			.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+	}
+	match options.open(path) {
+		Ok(file) => Ok(file),
+		Err(error) if denied(&error) => {
+			let mut read_only = OpenOptions::new();
+			read_only.read(true);
+			#[cfg(unix)]
+			{
+				read_only.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+			}
+			read_only
+				.open(path)
+				.map_err(|error| format!("cannot lock {}: {error}", path.display()))
+		}
+		Err(error) => Err(format!("cannot lock {}: {error}", path.display())),
+	}
+}
+
+/// Whether a lock file is one this process may hold. The two owners an
+/// installation has are the service user and root, who creates it from
+/// `postinst` and takes it from the commands an operator runs under sudo; a
+/// third one can not be taken over. The file carries no secret, so the only
+/// mode refused is one that lets other users write it, where a third writer
+/// could step in between the flock and the record.
 fn usable(path: &Path, mode: u32, owner: u32) -> Result<(), String> {
-	if !matches!(mode, 0o600 | 0o644) {
+	if owner != unsafe { libc::geteuid() } && owner != 0 {
 		return Err(format!(
-			"{} must be mode 0600 or 0644, not {mode:04o}",
+			"{} belongs to another user; remove it or run this command as its owner",
 			path.display()
 		));
 	}
-	// Another owner can not be taken over: writing our own record into a
-	// file we do not own would fail later, in the middle of the lock.
-	if owner != unsafe { libc::geteuid() } {
+	if mode & 0o002 != 0 {
 		return Err(format!(
-			"{} belongs to another user; remove it or run this command as its owner",
+			"{} is writable by other users ({mode:04o}); run `chmod 600 {}`",
+			path.display(),
 			path.display()
 		));
 	}

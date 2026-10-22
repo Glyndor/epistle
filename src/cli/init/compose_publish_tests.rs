@@ -75,7 +75,9 @@ fn something_that_is_not_a_mapping_of_ours_is_not_a_mapping() {
 fn a_second_change_keeps_the_host_address_the_first_one_fixed() {
 	// IMAP was narrowed to loopback, then another service was enabled. The
 	// renderer has to carry the narrow address over or the second change puts
-	// IMAP back on every host address of the machine.
+	// IMAP back on every host address of the machine. WebDAV, which the map
+	// says nothing about, stays on loopback because its transport is HTTP
+	// without TLS.
 	let narrow = hosts(&compose(&["25:25", "127.0.0.1:143:143", "8090:8090"]));
 	assert_eq!(
 		narrow.get(&143).map(IpAddr::to_string),
@@ -96,7 +98,7 @@ fn a_second_change_keeps_the_host_address_the_first_one_fixed() {
 			&narrow,
 			None,
 		),
-		["25:25", "127.0.0.1:143:143", "8090:8090"],
+		["25:25", "127.0.0.1:143:143", "127.0.0.1:8090:8090"],
 		"a mapping nobody narrowed keeps the form init writes"
 	);
 }

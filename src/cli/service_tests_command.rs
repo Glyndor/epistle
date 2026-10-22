@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> (tempfile::TempDir, tempfile::NamedTempFile) {
+pub(super) fn fixture() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let dir = tempfile::tempdir_in(".").unwrap();
 	let file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	std::fs::write(file.path(), format!("# deployment\nhostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['example.org']\n\n# public socket\n[[listeners]]\nkind = 'smtp'\naddr = '0.0.0.0'\n", dir.path().canonicalize().unwrap())).unwrap();
@@ -61,7 +61,7 @@ fn service_command_dry_run_then_change_and_no_op() {
 	);
 	assert!(
 		std::fs::read_to_string(file.path()).unwrap()
-			== format!("{before}\n[[listeners]]\nkind = \"web-dav\"\naddr = \"0.0.0.0\"\n"),
+			== format!("{before}\n[[listeners]]\nkind = \"web-dav\"\naddr = \"127.0.0.1\"\n"),
 		"service command must preserve exact commented text"
 	);
 	status.clear();
@@ -95,6 +95,11 @@ fn service_command_dry_run_then_change_and_no_op() {
 /// reachable. The stack is brought up again, which recreates mail.
 fn service_command_updates_ports_and_recreates_mail() {
 	let (_dir, file) = fixture();
+	// IMAP is a STARTTLS listener, so the loader wants certificates before it
+	// binds one outside loopback.
+	let mut text = std::fs::read_to_string(file.path()).unwrap();
+	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
+	std::fs::write(file.path(), text).unwrap();
 	let config = Config::load(file.path()).unwrap();
 	let compose = super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
@@ -106,7 +111,7 @@ fn service_command_updates_ports_and_recreates_mail() {
 	let code = execute_with(
 		file.path(),
 		ServiceCli::Enable {
-			name: ServiceName::Webdav,
+			name: ServiceName::Imap,
 		},
 		false,
 		false,
@@ -131,7 +136,7 @@ fn service_command_updates_ports_and_recreates_mail() {
 		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
 	assert_eq!(
 		compose["services"]["mail"]["ports"],
-		serde_json::json!(["25:25", "8090:8090"])
+		serde_json::json!(["25:25", "143:143"])
 	);
 	assert_eq!(compose["services"]["mail"]["image"], "keep");
 }

@@ -87,3 +87,32 @@ fn ensure_compose_file_refuses_to_overwrite_with_different_answers() {
 		unreachable!()
 	}
 }
+
+/// A host address `epistle service set` narrowed one mapping to lives only in
+/// the generated file, so an `init` rerun has to read it back: without that
+/// the rerun puts the listener back on every address of the host.
+#[test]
+fn ensure_compose_file_keeps_the_address_a_mapping_was_narrowed_to() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path();
+	let mut answers = stack_answers();
+	answers.data_dir = data_dir.to_path_buf();
+	answers.config_path = data_dir.join("etc").join("mail.toml");
+	fs::create_dir_all(data_dir.join("etc")).expect("etc dir");
+	let mut report = crate::cli::init::apply::Report::default();
+	let path = ensure_compose_file(&answers, true, &mut report).expect("first run");
+	let narrowed = fs::read_to_string(&path)
+		.expect("read")
+		.replace("\"25:25\"", "\"127.0.0.1:25:25\"");
+	assert_ne!(narrowed, fs::read_to_string(&path).unwrap(), "the fixture");
+	fs::write(&path, &narrowed).expect("write the narrowed map");
+	let mut report = crate::cli::init::apply::Report::default();
+	ensure_compose_file(&answers, true, &mut report).expect("second run");
+	let document: serde_json::Value =
+		serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+	assert_eq!(
+		document["services"]["mail"]["ports"][0],
+		serde_json::json!("127.0.0.1:25:25"),
+		"an init rerun must not widen a mapping back to every host address"
+	);
+}

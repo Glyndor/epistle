@@ -128,8 +128,12 @@ impl Row {
 	}
 }
 
+/// The bind a listener gets when a command enables it: the one SMTP already
+/// answers on, except for the listeners that serve HTTP without TLS. Mail
+/// certificates do not encrypt those, so they start closed and the operator
+/// opens them with `epistle service set <name> --bind 127.0.0.1`.
 pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
-	if kind == ListenerKind::Api {
+	if super::init::serves_plain_http(kind) {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)
 	} else {
 		config
@@ -318,6 +322,12 @@ fn execute_with(
 	} else {
 		Some(super::service_lock::acquire(path)?)
 	};
+	// A command killed between its two renames leaves the configuration and
+	// the generated map describing different stacks. This one reconciles
+	// them, so it is where the operator hears about it.
+	if !dry_run && let Ok(current) = Config::load(path) {
+		super::init::announce_mixed_state(&current, err);
+	}
 	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
 	let action = if enabled { "enable" } else { "disable" };
 	let fields = serde_json::json!({ "service": name.as_str(), "enabled": enabled });
@@ -374,3 +384,7 @@ fn execute_with(
 #[cfg(test)]
 #[path = "service_tests_command.rs"]
 mod tests_command;
+
+#[cfg(test)]
+#[path = "service_tests_http.rs"]
+mod tests_http;

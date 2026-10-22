@@ -38,7 +38,7 @@ fn service_listener_edits_each_kind_independently() {
 		assert_eq!(listener.socket_addr().port(), kind.default_port());
 		assert_eq!(
 			listener.addr.to_string(),
-			if kind == ListenerKind::Api {
+			if matches!(kind, ListenerKind::Api | ListenerKind::WebDav) {
 				"127.0.0.1"
 			} else {
 				"0.0.0.0"
@@ -175,7 +175,7 @@ fn service_inline_listener_array_keeps_comments_and_exact_text() {
 	);
 	let expected = original.replace(
 		"}] # sockets",
-		"}, { kind = \"web-dav\", addr = \"0.0.0.0\" }] # sockets",
+		"}, { kind = \"web-dav\", addr = \"127.0.0.1\" }] # sockets",
 	);
 	assert!(
 		fs::read_to_string(file.path()).unwrap() == expected,

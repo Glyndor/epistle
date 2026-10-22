@@ -143,3 +143,23 @@ fn a_compose_file_from_before_the_limits_gets_the_defaults() {
 	let again = regenerate(&answers.data_dir, &listeners, &old.to_string()).expect("regenerate");
 	assert_eq!(again.text, written);
 }
+
+/// The host address `epistle service set` narrowed one mapping to is the
+/// operator's decision, and the file is the only place it lives. A `stack
+/// update` re-renders the map from the listeners, so it has to read that
+/// address back or the listener returns to every host address.
+#[test]
+fn a_narrow_published_address_survives_a_regeneration() {
+	let answers = stack_answers();
+	let written = render_for(&answers, true).expect("render");
+	let narrowed = written.replace("\"25:25\"", "\"127.0.0.1:25:25\"");
+	assert_ne!(narrowed, written, "the fixture has to carry the mapping");
+	let listeners = listeners_to_write(&answers).unwrap();
+	let again = regenerate(&answers.data_dir, &listeners, &narrowed).expect("regenerate");
+	let value: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+	assert_eq!(
+		value["services"]["mail"]["ports"][0],
+		serde_json::json!("127.0.0.1:25:25"),
+		"a regeneration must not widen a mapping back to every host address"
+	);
+}

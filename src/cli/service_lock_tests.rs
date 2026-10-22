@@ -62,46 +62,54 @@ fn a_wait_times_out_naming_the_holder() {
 	);
 }
 
+/// The lock belongs to the service user or to root, who creates it from
+/// `postinst` and takes it from the commands an operator runs under sudo. It
+/// carries no secret, so the only mode that is refused is one other users may
+/// write, and the refusal names the command that fixes it.
 #[test]
-fn a_lock_file_of_another_user_or_of_another_mode_is_refused_with_its_shape() {
+fn a_lock_file_is_taken_from_either_owner_and_refused_only_when_others_can_write() {
+	let path = Path::new("/etc/epistle/.epistle-config.lock");
+	let euid = unsafe { libc::geteuid() };
+	for mode in [0o600, 0o640, 0o644, 0o660, 0o664] {
+		assert_eq!(usable(path, mode, euid), Ok(()), "{mode:04o}");
+	}
 	assert_eq!(
-		usable(Path::new("/etc/epistle/.epistle-config.lock"), 0o600, 1000),
-		Ok(())
-	);
-	assert_eq!(
-		usable(Path::new("/etc/epistle/.epistle-config.lock"), 0o644, 1000),
+		usable(path, 0o644, 0),
 		Ok(()),
-		"0644 carries no secret and lets the service user take a root lock"
+		"a lock root created is one the service user may take"
 	);
-	let error = usable(Path::new("/etc/epistle/.epistle-config.lock"), 0o666, 1000).unwrap_err();
+	let error = usable(path, 0o666, euid).unwrap_err();
 	assert!(
-		error.contains("0600 or 0644") && error.contains("0666"),
+		error.contains("writable by other users")
+			&& error.contains("0666")
+			&& error.contains("chmod 600"),
 		"{error}"
 	);
-	let error = usable(Path::new("/etc/epistle/.epistle-config.lock"), 0o600, 1001).unwrap_err();
+	assert!(
+		usable(path, 0o666, 0).unwrap_err().contains("0666"),
+		"a lock root created wide open is refused too"
+	);
+	let error = usable(path, 0o600, 1001).unwrap_err();
 	assert!(error.contains("another user"), "{error}");
 }
 
 #[test]
-fn a_lock_file_left_wide_open_is_refused_rather_than_taken() {
+fn a_lock_file_left_wide_open_is_put_back_rather_than_refused() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = config(dir.path());
 	let lock = dir.path().join(".epistle-config.lock");
 	std::fs::write(&lock, b"").unwrap();
 	{
 		use std::os::unix::fs::PermissionsExt;
-		std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
-	}
-	assert!(
-		acquire_within(&path, Duration::from_secs(1)).is_ok(),
-		"a lock file at 0644 is one this command may hold"
-	);
-	{
-		use std::os::unix::fs::PermissionsExt;
 		std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o666)).unwrap();
 	}
-	let error = acquire_within(&path, Duration::from_secs(1)).unwrap_err();
-	assert!(error.contains("0600 or 0644"), "{error}");
+	let held = acquire_within(&path, Duration::from_secs(1)).unwrap();
+	assert_eq!(
+		held.metadata().unwrap().permissions().mode() & 0o777,
+		0o600,
+		"a lock this command owns is put back to the mode it creates"
+	);
+	drop(held);
 }
 
 /// A symlink is never followed and a fifo is never read: the lock file has to
@@ -124,4 +132,30 @@ fn a_lock_file_that_is_not_a_regular_file_is_refused() {
 	assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
 	let error = acquire_within(&path, Duration::from_secs(1)).unwrap_err();
 	assert!(error.contains("regular lock file"), "{error}");
+}
+
+/// A lock this command can not write is still a lock: `flock` serialises
+/// writers through the descriptor alone, so a lock root created at `0644` in
+/// `/etc/epistle` keeps two commands apart instead of failing both of them.
+#[test]
+fn a_lock_file_this_user_can_not_write_still_excludes_a_second_writer() {
+	use std::sync::mpsc;
+	let dir = tempfile::tempdir().unwrap();
+	let path = config(dir.path());
+	let lock = dir.path().join(".epistle-config.lock");
+	std::fs::write(&lock, b"").unwrap();
+	std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o444)).unwrap();
+	let held = acquire_within(&path, Duration::from_secs(1)).unwrap();
+	let (done, waited) = mpsc::channel();
+	let waiting = path.clone();
+	std::thread::spawn(move || {
+		done.send(acquire_within(&waiting, Duration::from_millis(200)))
+			.unwrap();
+	});
+	let error = waited
+		.recv_timeout(Duration::from_secs(10))
+		.expect("a read-only lock must still be waited for")
+		.unwrap_err();
+	assert!(error.contains("has held"), "{error}");
+	drop(held);
 }
