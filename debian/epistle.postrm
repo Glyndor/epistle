@@ -6,12 +6,36 @@
 # still find the mailboxes afterwards. Purge is the explicit request for the
 # whole footprint to go, which is what `apt purge` promises across Glyndor
 # packages, so it is the only case that deletes the linger flag, the
-# subordinate id ranges, the account and its state directory.
+# subordinate id ranges, the account, its state directory and the
+# configuration directory the postinst created.
 #
-# Every step here is tolerated: a purge that aborts halfway leaves dpkg with a
-# package it cannot finish removing.
+# Purge removes the footprint in one order only: nothing may be holding the
+# data, then the ranges and the account, then the data and the configuration
+# directory. Each step that cannot be completed stops the purge with a non-zero
+# exit and leaves the rest in place, because a purge that destroyed the mail
+# while a writer was still running, or left an account behind with its mail
+# already gone, is not a recoverable state. dpkg reports the failure and
+# `dpkg --purge epistle` repeats the whole case once the cause is gone.
 
 set -e
+
+# Seconds to wait for the account's processes to go away before refusing to
+# remove anything. Long enough for a container to stop cleanly, short enough
+# that a stuck process is reported rather than waited out.
+EPISTLE_STOP_WAIT=30
+
+# Print the pids of the processes whose real uid is $1. Read from /proc so the
+# check does not depend on procps being installed.
+epistle_pids_for_uid() {
+	awk -v uid="$1" '
+		/^Uid:/ {
+			if ($2 != uid) next
+			path = FILENAME
+			sub("/status$", "", path)
+			sub("^/proc/", "", path)
+			print path
+		}' /proc/[0-9]*/status 2>/dev/null || true
+}
 
 # Print "$1 <first>-<last>" for each subordinate id range file $2 lists for
 # glyndor-epistle.
@@ -24,13 +48,35 @@ epistle_account_subids() {
 
 case "$1" in
 purge)
-	if [ -d /run/systemd/system ]; then
-		if ! loginctl disable-linger glyndor-epistle; then
-			echo "epistle: loginctl disable-linger glyndor-epistle failed" >&2
+	# 1. Nothing may still be writing when the data goes. The account's own
+	# processes are the rootless stack, its containers and any server started
+	# from the sample unit, and terminate-user reaches all of them at once
+	# without needing the user manager to answer. Linger goes first so the
+	# manager does not come back behind it.
+	service_uid=
+	if service_uid=$(id -u glyndor-epistle 2>/dev/null); then
+		if [ -d /run/systemd/system ]; then
+			if ! loginctl disable-linger glyndor-epistle; then
+				echo "epistle: loginctl disable-linger glyndor-epistle failed" >&2
+			fi
+			if ! loginctl terminate-user glyndor-epistle; then
+				echo "epistle: loginctl terminate-user glyndor-epistle failed" >&2
+			fi
 		fi
+		waited=0
+		while [ "$waited" -lt "$EPISTLE_STOP_WAIT" ] && [ -n "$(epistle_pids_for_uid "$service_uid")" ]; do
+			sleep 1
+			waited=$((waited + 1))
+		done
+		if writers=$(epistle_pids_for_uid "$service_uid") && [ -n "$writers" ]; then
+			echo "epistle: glyndor-epistle still has processes running (pids $(echo "$writers" | tr '\n' ' ')); nothing was removed. Stop them and run dpkg --purge epistle again." >&2
+			exit 1
+		fi
+	else
+		echo "epistle: the glyndor-epistle account does not exist, so there was nothing to stop" >&2
 	fi
 
-	# The postinst picks a free block per host, so the ranges to remove are
+	# 2. The postinst picks a free block per host, so the ranges to remove are
 	# the ones listed for the account, not a fixed pair. A missing table
 	# simply contributes nothing.
 	subid_args=$(
@@ -44,12 +90,27 @@ purge)
 		echo "epistle: could not remove the subuid/subgid ranges for glyndor-epistle" >&2
 	fi
 
+	# 3. The account, before the data. deluser refuses while processes are
+	# running, and a failed removal leaves an account that still owns a uid
+	# with no home behind it, so its mail stays where it is until the removal
+	# works.
 	if ! deluser --system --quiet glyndor-epistle; then
-		echo "epistle: could not remove the glyndor-epistle account" >&2
+		echo "epistle: could not remove the glyndor-epistle account, so its data was left in place; stop whatever is still using it and run dpkg --purge epistle again" >&2
+		exit 1
 	fi
 
 	rm -rf /var/lib/epistle-rollback
 	rm -rf /var/lib/glyndor/epistle
+
+	# 4. The configuration directory the postinst created, once nothing can
+	# read it as the service and the account that owned it is gone. A symlink
+	# there is not what the postinst creates, so it is reported rather than
+	# followed.
+	if [ -L /etc/epistle ]; then
+		echo "epistle: /etc/epistle is a symlink and was left in place; remove it yourself if it is yours" >&2
+	elif [ -d /etc/epistle ]; then
+		rm -rf /etc/epistle
+	fi
 	;;
 esac
 

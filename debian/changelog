@@ -12,6 +12,9 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Security: webpki-roots and rustls-webpki are updated so certificate paths through the distrusted emSign roots are rejected (RUSTSEC-2026-0381, RUSTSEC-2026-0382 and RUSTSEC-2026-0383).
   * Security: stack rollback keeps its saved binaries in a store owned by root outside the directory of the service account, writes each copy through an exclusive temporary file, checks type, owner and digest before installing, ignores the store of earlier versions, and purge removes it.
   * `epistle init` asks its questions step by step with colour, an explanation and the default for each, shows a summary and asks for confirmation before it writes anything, and keeps what was answered when it is interrupted; with `--json`, without a terminal, with `NO_COLOR` or with `TERM=dumb` it behaves as before.
+  * Packaging and release checks: an upgrade leaves the port floor the operator
+    configured alone, purge stops the service before it removes anything, and
+    the audit and release workflows verify and build the commit they publish.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

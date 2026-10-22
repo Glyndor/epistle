@@ -285,6 +285,95 @@ fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 	);
 }
 
+#[test]
+fn the_sample_unit_recipe_installs_a_config_the_service_can_read() {
+	let unit = read("docs/epistle.service");
+
+	// The file the unit tells the server to serve.
+	let exec_start = unit
+		.lines()
+		.find_map(|line| line.strip_prefix("ExecStart="))
+		.expect("docs/epistle.service has an ExecStart line");
+	let config_path = exec_start
+		.split("--config ")
+		.nth(1)
+		.unwrap_or_default()
+		.trim()
+		.to_owned();
+	assert!(
+		config_path.ends_with(".toml"),
+		"the sample unit must name the config file it serves; ExecStart was: {exec_start}"
+	);
+
+	// The recipe, one `install` line per command, each ending on its target.
+	let recipe: Vec<(&str, &str)> = unit
+		.lines()
+		.map(|line| {
+			// The recipe lives in the header comment, so each command sits
+			// behind the comment marker and its indentation.
+			let commented = line
+				.trim_start()
+				.strip_prefix('#')
+				.unwrap_or(line.trim_start());
+			commented.trim_start()
+		})
+		.filter_map(|line| line.strip_prefix("install "))
+		.filter_map(|line| line.split_whitespace().last().map(|path| (line, path)))
+		.collect();
+	let config_line = recipe
+		.iter()
+		.find(|(_, path)| *path == config_path)
+		.unwrap_or_else(|| {
+			panic!(
+				"the recipe must install {config_path}, the file the unit serves; it was: {recipe:?}"
+			)
+		})
+		.0;
+	for needle in ["-o glyndor-epistle", "-g glyndor-epistle", "-m 0600"] {
+		assert!(
+			config_line.contains(needle),
+			"the config install line must carry {needle:?}: the service runs unprivileged with no \
+			 CAP_DAC_OVERRIDE, so a file that is not readable by glyndor-epistle is a file the \
+			 server cannot open. The line was: {config_line}"
+		);
+	}
+	assert!(
+		!config_line.contains("-D"),
+		"install -D creates the parent directories root-owned and 0755 whatever -m and -o say for \
+		 the file, so the directory holding the config has to be prepared by its own line. The \
+		 line was: {config_line}"
+	);
+
+	let config_dir = Path::new(&config_path)
+		.parent()
+		.expect("the config path has a directory")
+		.to_str()
+		.unwrap()
+		.to_owned();
+	let dir_line = recipe
+		.iter()
+		.find(|(_, path)| *path == config_dir)
+		.unwrap_or_else(|| {
+			panic!("the recipe must create {config_dir}, the directory it installs the config into")
+		})
+		.0;
+	for needle in ["-d", "-m 0750", "-o glyndor-epistle", "-g glyndor-epistle"] {
+		assert!(
+			dir_line.contains(needle),
+			"the {config_dir} line must carry {needle:?}: the directory holds the credential and \
+			 key material and nothing above it may be readable by others. The line was: {dir_line}"
+		);
+	}
+
+	assert!(
+		read("debian/epistle.postinst").contains(&format!(
+			"install -d -m 0750 -o glyndor-epistle -g glyndor-epistle {config_dir}\n"
+		)),
+		"the unit must point at the directory the package's postinst prepares ({config_dir}), not \
+		 at a path no script creates"
+	);
+}
+
 #[path = "stack_service/docs.rs"]
 mod stack_service_docs;
 
@@ -323,3 +412,6 @@ mod store_paths;
 
 #[path = "debian/preinst_mutants.rs"]
 mod preinst_mutants;
+
+#[path = "debian/purge_safety.rs"]
+mod purge_safety;

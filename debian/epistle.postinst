@@ -79,6 +79,35 @@ epistle_login_def() {
 		END { print (value == "" ? def : value) }'
 }
 
+# Print the value the operator's own sysctl configuration gives key $1, or
+# nothing when none of those files mentions it. The files are read in the
+# order sysctl itself uses, so the last one that names the key is the one that
+# wins, which is what `sysctl --system` would apply. The package's own file
+# lives in /usr/lib/sysctl.d, the lowest precedence location, so any file here
+# overrides it.
+epistle_admin_sysctl_value() {
+	cat -- /etc/sysctl.conf /run/sysctl.d/* /etc/sysctl.d/* 2>/dev/null | awk -F= -v key="$1" '
+		/^[[:space:]]*#/ { next }
+		{
+			name = $1
+			value = $2
+			gsub(/^[[:space:]]+/, "", name)
+			gsub(/[[:space:]]+$/, "", name)
+			gsub(/[[:space:]]/, "", value)
+			if (name == key) chosen = value
+		}
+		END { if (chosen != "") print chosen }'
+}
+
+# Succeed when a file in the operator's directories replaces the package file
+# by name, which is how sysctl masks one: /etc/sysctl.d/30-glyndor-epistle.conf
+# takes the place of /usr/lib/sysctl.d/30-glyndor-epistle.conf outright, and
+# this package must not apply the file that is no longer in effect.
+epistle_sysctl_masked() {
+	[ -e /run/sysctl.d/30-glyndor-epistle.conf ] ||
+		[ -e /etc/sysctl.d/30-glyndor-epistle.conf ]
+}
+
 # Print "<uid start> <gid start>" for a new block of $4 subordinate ids
 # (65536 when $4 is absent), given login.defs ($1), the subuid table ($2) and
 # the subgid table ($3). The block honours SUB_UID_MIN/MAX and SUB_GID_MIN/MAX
@@ -220,8 +249,16 @@ configure)
 	fi
 
 	# 5. The port floor shipped in /usr/lib/sysctl.d/30-glyndor-epistle.conf.
+	# Applying that file with `sysctl -p` sets 25 on every configure, whether
+	# or not the administrator kept a different floor in /etc/sysctl.d, and
+	# every upgrade would undo their choice. The value is therefore applied
+	# only while the operator's configuration says nothing about the key.
 	if [ -w /proc/sys/net/ipv4/ip_unprivileged_port_start ] && command -v sysctl >/dev/null 2>&1; then
-		if ! sysctl -p /usr/lib/sysctl.d/30-glyndor-epistle.conf >/dev/null; then
+		if epistle_sysctl_masked; then
+			echo "epistle: /etc/sysctl.d/30-glyndor-epistle.conf replaces the packaged file, so the port floor was left as configured there" >&2
+		elif override=$(epistle_admin_sysctl_value net.ipv4.ip_unprivileged_port_start) && [ -n "$override" ]; then
+			echo "epistle: the local sysctl configuration sets net.ipv4.ip_unprivileged_port_start to $override, so the packaged floor was not applied; epistle init will check the unprivileged port floor" >&2
+		elif ! sysctl -p /usr/lib/sysctl.d/30-glyndor-epistle.conf >/dev/null; then
 			echo "epistle: sysctl -p /usr/lib/sysctl.d/30-glyndor-epistle.conf failed, so the unprivileged port floor may still be above 25; epistle init will check it" >&2
 		fi
 	else
