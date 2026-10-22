@@ -78,13 +78,84 @@ fn a_listener_without_tls_is_enabled_on_loopback_and_keeps_a_port_move() {
 	assert_eq!(ports_of(&compose), serde_json::json!(["25:25"]));
 }
 
+/// A stack written before the loopback rule carries web-dav on every host
+/// address. Any command that re-renders the map takes that publication away,
+/// and the operator has to read which port moved and where it went, instead of
+/// being told the two files disagree when they do not.
+#[test]
+fn a_wide_publication_of_a_listener_without_tls_is_narrowed_out_loud() {
+	let (_dir, file) = fixture();
+	let mut text = std::fs::read_to_string(file.path()).unwrap();
+	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
+	std::fs::write(file.path(), text).unwrap();
+	execute_with(
+		file.path(),
+		ServiceCli::Enable {
+			name: ServiceName::Webdav,
+		},
+		false,
+		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+		|_, _| ExitCode::SUCCESS,
+	)
+	.unwrap();
+	let config = Config::load(file.path()).unwrap();
+	let compose = super::super::init::compose_file_path(&config.data_dir);
+	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	// What such an install carries: the port of a listener that has no TLS
+	// transport published on every address of the host.
+	std::fs::write(
+		&compose,
+		r#"{"services":{"mail":{"ports":["25:25","8090:8090"]}}}"#,
+	)
+	.unwrap();
+	let text = std::fs::read_to_string(file.path()).unwrap();
+	let wide = text
+		.replace("addr = '127.0.0.1'", "addr = '::'")
+		.replace("addr = \"127.0.0.1\"", "addr = \"::\"");
+	assert_ne!(
+		wide, text,
+		"the fixture has to publish web-dav on the network"
+	);
+	std::fs::write(file.path(), wide).unwrap();
+	let mut status = Vec::new();
+	execute_with(
+		file.path(),
+		ServiceCli::Enable {
+			name: ServiceName::Pop3,
+		},
+		false,
+		false,
+		&mut Vec::new(),
+		&mut status,
+		|_, _| ExitCode::SUCCESS,
+	)
+	.unwrap();
+	let said = String::from_utf8(status).unwrap();
+	assert!(
+		said.contains("was published on 8090:8090 on every address of the host")
+			&& said.contains("now published on 127.0.0.1:8090:8090"),
+		"the command has to say which publication it took away: {said}"
+	);
+	assert!(
+		!said.contains("publish different ports"),
+		"what moved is the notice; the two files do not disagree about anything else: {said}"
+	);
+	assert_eq!(
+		ports_of(&compose),
+		serde_json::json!(["25:25", "127.0.0.1:8090:8090", "995:995"]),
+		"the map carries the narrowed publication once the command is done"
+	);
+}
+
 /// `compose.yaml` is often a symlink into another directory of the
-/// installation. Every writer of the pair reads and replaces it through the
-/// link, the way it did before the staged transaction, instead of refusing it
-/// as a file it must not follow.
+/// installation. The generated file is written through the link, so the
+/// operator's directory keeps the file the stack runs on and the link is not
+/// swapped for a regular file behind their back.
 #[cfg(unix)]
 #[test]
-fn a_generated_file_that_is_a_symlink_is_still_written() {
+fn a_generated_file_that_is_a_symlink_is_written_through_the_link() {
 	let (_dir, file) = fixture();
 	let mut text = std::fs::read_to_string(file.path()).unwrap();
 	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
@@ -92,9 +163,14 @@ fn a_generated_file_that_is_a_symlink_is_still_written() {
 	let config = Config::load(file.path()).unwrap();
 	let compose = super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
-	let target = compose.with_file_name("generated.yaml");
-	std::fs::write(&target, r#"{"services":{"mail":{"ports":["25:25"]}}}"#).unwrap();
-	std::os::unix::fs::symlink(&target, &compose).unwrap();
+	let elsewhere = config.data_dir.join("generated");
+	std::fs::create_dir_all(&elsewhere).unwrap();
+	std::fs::write(
+		elsewhere.join("compose.yaml"),
+		r#"{"services":{"mail":{"ports":["25:25"]}}}"#,
+	)
+	.unwrap();
+	std::os::unix::fs::symlink("../generated/compose.yaml", &compose).unwrap();
 	execute_with(
 		file.path(),
 		ServiceCli::Enable {
@@ -107,10 +183,23 @@ fn a_generated_file_that_is_a_symlink_is_still_written() {
 		|_, _| ExitCode::SUCCESS,
 	)
 	.unwrap();
+	assert!(
+		std::fs::symlink_metadata(&compose)
+			.unwrap()
+			.file_type()
+			.is_symlink(),
+		"a link the operator placed must survive: the file behind it is the one \
+		 the stack reads, and replacing the link leaves their file behind"
+	);
 	assert_eq!(
 		ports_of(&compose),
 		serde_json::json!(["25:25", "143:143"]),
-		"a symlinked generated file must be written like any other"
+		"the file behind the link carries the map this command wrote"
+	);
+	assert_eq!(
+		std::fs::read_dir(&elsewhere).unwrap().count(),
+		1,
+		"the staged copies are renamed away in the directory of the destination"
 	);
 }
 
@@ -152,6 +241,11 @@ fn a_generated_map_that_contradicts_the_config_is_reported_and_reconciled() {
 			&& said.contains("993:993")
 			&& said.contains("1465:1465"),
 		"the operator has to hear what the two files disagreed about: {said}"
+	);
+	assert!(
+		!said.contains("interrupted between its two writes"),
+		"the warning must not name a cause it can not know: a port edited by hand \
+		 leaves the same difference: {said}"
 	);
 	assert_eq!(
 		ports_of(&compose),

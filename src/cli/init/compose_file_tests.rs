@@ -116,3 +116,46 @@ fn ensure_compose_file_keeps_the_address_a_mapping_was_narrowed_to() {
 		"an init rerun must not widen a mapping back to every host address"
 	);
 }
+
+/// A file from a release that published the listeners with no TLS transport on
+/// every address of the host loses that reachability on the next `init`, and
+/// the report is where the operator reads which port went and where it went.
+#[test]
+fn a_rewritten_map_reports_the_publication_it_took_off_every_host_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path();
+	let mut answers = stack_answers();
+	answers.data_dir = data_dir.to_path_buf();
+	answers.config_path = data_dir.join("etc").join("mail.toml");
+	answers.services.webdav = true;
+	fs::create_dir_all(data_dir.join("etc")).expect("etc dir");
+	let mut report = crate::cli::init::apply::Report::default();
+	let path = ensure_compose_file(&answers, true, &mut report).expect("first run");
+	let wide = fs::read_to_string(&path)
+		.expect("read")
+		.replace("\"127.0.0.1:8090:8090\"", "\"8090:8090\"");
+	assert_ne!(wide, fs::read_to_string(&path).unwrap(), "the fixture");
+	fs::write(&path, &wide).expect("write the wide map");
+	let mut report = crate::cli::init::apply::Report::default();
+	ensure_compose_file(&answers, true, &mut report).expect("second run");
+	let said = String::from_utf8({
+		let mut rendered = Vec::new();
+		report.write_to(&mut rendered).expect("report");
+		rendered
+	})
+	.unwrap();
+	assert!(
+		said.contains("was published on 8090:8090 on every address of the host")
+			&& said.contains("now published on 127.0.0.1:8090:8090"),
+		"the report has to name the publication the rewrite took away: {said}"
+	);
+	let document: serde_json::Value =
+		serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+	assert!(
+		document["services"]["mail"]["ports"]
+			.as_array()
+			.expect("ports")
+			.contains(&serde_json::json!("127.0.0.1:8090:8090")),
+		"the map the rewrite left carries the narrowed publication"
+	);
+}

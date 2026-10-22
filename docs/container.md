@@ -246,6 +246,16 @@ families and publishes on every address the host owns either way; the family
 stays in the container bind, which is where the engine needs it.
 `epistle service list` shows the address in a `HOST` column.
 
+A file from a release that published the listeners with no TLS transport wide
+is different: `8090:8090`, `0.0.0.0:8090:8090` and `[::]:8090:8090` all name the
+same thing, every address of the host, so any command that re-renders the map
+takes them to `127.0.0.1`. That means an upgrade can be what stops WebDAV
+answering on the public interface, which is why the command that does it says
+so on stderr, naming the service and the port and pointing at
+`compose.override.yaml`; `init` says it in its report and `stack update` in its
+notes. A concrete address in the map is not a wildcard and stays where the
+operator put it.
+
 The address has to be one of the host's own: `epistle service set` refuses a
 multicast group, `255.255.255.255` and a link-local IPv6 address, and it writes
 `::ffff:10.0.0.5` as the `10.0.0.5` it names. Both wildcards are accepted. What

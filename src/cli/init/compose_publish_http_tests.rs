@@ -58,3 +58,27 @@ fn only_a_listener_without_tls_inherits_loopback() {
 		"a TLS listener or a metrics socket is not this rule"
 	);
 }
+
+/// The three forms the file can name the same wide publication in are one
+/// rule: the bare `PORT:PORT` and both wildcards all leave every address of
+/// the host, so all of them go to loopback. An address the operator chose for
+/// the port is not a wildcard and stays.
+#[test]
+fn every_wide_publication_of_a_listener_without_tls_narrows_to_loopback() {
+	let listeners = listeners(&[(ListenerKind::WebDav, "0.0.0.0", Some(8090))]);
+	for wide in ["8090:8090", "0.0.0.0:8090:8090", "[::]:8090:8090"] {
+		let document = serde_json::json!({"services": {"mail": {"ports": ["25:25", wide]}}});
+		assert_eq!(
+			published(&listeners, &hosts(&document), None),
+			vec!["127.0.0.1:8090:8090"],
+			"{wide} publishes on every address of the host"
+		);
+	}
+	let document =
+		serde_json::json!({"services": {"mail": {"ports": ["25:25", "203.0.113.5:8090:8090"]}}});
+	assert_eq!(
+		published(&listeners, &hosts(&document), None),
+		vec!["203.0.113.5:8090:8090"],
+		"an address the operator chose for the port is not a wildcard"
+	);
+}

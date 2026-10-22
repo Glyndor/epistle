@@ -57,13 +57,34 @@ pub(super) fn recovery_path(next_to: &Path) -> PathBuf {
 
 /// Whether a name is a recovery copy rather than a staged one.
 pub(super) fn is_recovery(name: &str) -> bool {
-	name.starts_with(RECOVERY.0) && name.ends_with(RECOVERY.1)
+	is_copy(name) == Some(true)
+}
+
+/// Which of our copies a name is, and only that: both writers put a UUID
+/// between the prefix and the suffix, so a file of the operator's that happens
+/// to share the two ends is not one of ours and the sweep leaves it alone.
+/// `Some(false)` is a staged copy, `Some(true)` a recovery copy.
+fn is_copy(name: &str) -> Option<bool> {
+	if between(name, RECOVERY).is_some() {
+		Some(true)
+	} else if between(name, STAGING).is_some() {
+		Some(false)
+	} else {
+		None
+	}
+}
+
+/// The UUID between the prefix and the suffix of `name`, when the name is
+/// exactly a prefix, a UUID and a suffix and nothing else.
+fn between(name: &str, (prefix, suffix): (&str, &str)) -> Option<uuid::Uuid> {
+	uuid::Uuid::parse_str(name.strip_prefix(prefix)?.strip_suffix(suffix)?).ok()
 }
 
 /// Remove the copies a dead command left in `dir` and name the ones that went.
 /// A staged copy is taken an hour after it was written; a recovery copy, which
 /// is the only original of a file a failed rollback could not put back, waits a
-/// week. Anything else in the directory is the operator's.
+/// week. Only the names our writers build are taken, so an operator's file
+/// that shares the prefix and the suffix stays.
 pub(crate) fn sweep_orphans(dir: &Path) -> Vec<PathBuf> {
 	let Ok(entries) = fs::read_dir(dir) else {
 		return Vec::new();
@@ -73,11 +94,9 @@ pub(crate) fn sweep_orphans(dir: &Path) -> Vec<PathBuf> {
 	for entry in entries.flatten() {
 		let name = entry.file_name();
 		let name = name.to_string_lossy();
-		let recovery = is_recovery(&name);
-		let staged = name.starts_with(STAGING.0) && name.ends_with(STAGING.1);
-		if !recovery && !staged {
+		let Some(recovery) = is_copy(&name) else {
 			continue;
-		}
+		};
 		let Ok(metadata) = entry.metadata() else {
 			continue;
 		};

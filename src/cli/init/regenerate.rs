@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::answers::{DnsAnswers, Mode, Services};
 use super::compose::{ComposeFile, render_document};
-use super::compose_publish::{hosts, published};
+use super::compose_publish::{hosts, narrowed, ports, published};
 use crate::cli::init::Answers;
 use crate::config::Listener;
 
@@ -100,9 +100,16 @@ pub(crate) fn regenerate(
 	// file is the only place it lives. Regenerating without it would put
 	// that listener back on every host address of the machine.
 	let narrow = hosts(&document);
-	let composed = ComposeFile::build(&answers, published(listeners, &narrow, None), database);
+	let published_ports = published(listeners, &narrow, None);
+	let composed = ComposeFile::build(&answers, published_ports.clone(), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
 	let mut notes = Vec::new();
+	// A publication this release takes off every address of the host is named
+	// in the notes: the operator loses reachability on this upgrade and the
+	// note is where they read which port went.
+	for one in narrowed(listeners, &ports(&document), &published_ports) {
+		notes.push(one.to_string());
+	}
 	if let Some(running) = document["services"]["db"]["image"].as_str() {
 		let pinned = super::images::postgres();
 		let (from, to) = (super::images::major(running), super::images::major(pinned));

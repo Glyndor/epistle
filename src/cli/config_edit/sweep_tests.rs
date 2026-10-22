@@ -95,3 +95,26 @@ fn a_name_tells_a_recovery_copy_from_anything_else() {
 		assert!(!is_recovery(&name), "{name}");
 	}
 }
+
+/// A file of the operator's that shares the prefix and the suffix of our
+/// copies is not one of them. The two names below are what a hand-written
+/// backup or a note in the configuration directory looks like, and both are
+/// older than any age the sweep works at.
+#[test]
+fn a_file_that_only_shares_the_prefix_and_the_suffix_survives_the_sweep() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut operator = Vec::new();
+	for name in [".service.notes.tmp", ".service-recovery.mine.bak"] {
+		let path = dir.path().join(name);
+		fs::write(&path, b"operator file").unwrap();
+		age(&path, RECOVERY_AGE + ORPHAN_AGE + Duration::from_secs(60));
+		operator.push(path);
+	}
+	assert!(
+		sweep_orphans(dir.path()).is_empty(),
+		"only the names our writers build are debris"
+	);
+	for path in &operator {
+		assert_eq!(fs::read(path).unwrap(), b"operator file");
+	}
+}

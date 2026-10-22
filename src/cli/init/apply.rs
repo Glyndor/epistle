@@ -86,6 +86,9 @@ pub enum ReportStep {
 		/// Operator-facing reason it was skipped.
 		reason: String,
 	},
+	/// A published listener was moved off every address of the host by the
+	/// generated file this run wrote.
+	Narrowed(crate::cli::init::Narrowed),
 }
 
 impl Report {
@@ -106,6 +109,7 @@ impl Report {
 				ReportStep::Skipped { name, reason } => {
 					writeln!(out, "  skipped: {name} ({reason})")?
 				}
+				ReportStep::Narrowed(one) => writeln!(out, "  narrowed: {one}")?,
 				ReportStep::AccountCreated { name, address } => {
 					writeln!(out, "  account: {name} <{address}>")?
 				}

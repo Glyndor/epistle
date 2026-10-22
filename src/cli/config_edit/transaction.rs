@@ -27,7 +27,12 @@ impl Drop for Staged {
 }
 
 struct Replacement {
+	/// The path the operator knows, which is where a diagnostic names the file.
 	path: PathBuf,
+	/// The file the rename replaces: the path itself, or the file a symlink at
+	/// that path points at. The staged copies live in its own directory, so the
+	/// rename stays inside one filesystem and the link survives.
+	target: PathBuf,
 	original: Vec<u8>,
 	metadata: Metadata,
 	candidate: Staged,
@@ -35,7 +40,36 @@ struct Replacement {
 	replaced: bool,
 }
 
-fn read(path: &Path) -> Result<(Vec<u8>, Metadata), String> {
+/// What one opening of a service file gives: its bytes, the metadata of the
+/// file behind them, and where that file really lives when the path is a
+/// symlink into another directory of the installation.
+struct Opened {
+	bytes: Vec<u8>,
+	metadata: Metadata,
+	/// The path the descriptor resolved to, so the rename replaces the file
+	/// the operator points at and not the link. `None` when the path is not a
+	/// link or the platform can not name the file behind it.
+	destination: Option<PathBuf>,
+}
+
+/// The path a descriptor really opened, which for a link is where it points.
+/// The descriptor itself answers it, so a link swapped between the open and
+/// the rename can not redirect the write.
+#[cfg(target_os = "linux")]
+fn through(file: &File) -> Option<PathBuf> {
+	use std::os::unix::io::AsRawFd;
+	fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+/// Where the file behind a link lives. This platform can not name it from the
+/// descriptor, so a link is read through and replaced by a regular file, which
+/// is what every writer of the pair did before the link was followed.
+#[cfg(not(target_os = "linux"))]
+fn through(_file: &File) -> Option<PathBuf> {
+	None
+}
+
+fn read(path: &Path) -> Result<Opened, String> {
 	let mut options = OpenOptions::new();
 	options.read(true);
 	#[cfg(unix)]
@@ -68,7 +102,12 @@ fn read(path: &Path) -> Result<(Vec<u8>, Metadata), String> {
 			}
 			let mut bytes = Vec::new();
 			link.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-			return Ok((bytes, metadata));
+			let destination = through(&link);
+			return Ok(Opened {
+				bytes,
+				metadata,
+				destination,
+			});
 		}
 		Err(error) => return Err(error.to_string()),
 	};
@@ -78,7 +117,11 @@ fn read(path: &Path) -> Result<(Vec<u8>, Metadata), String> {
 	}
 	let mut bytes = Vec::new();
 	file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-	Ok((bytes, metadata))
+	Ok(Opened {
+		bytes,
+		metadata,
+		destination: None,
+	})
 }
 
 fn parent(path: &Path) -> &Path {
@@ -118,20 +161,24 @@ impl Replacement {
 		candidate: &[u8],
 		expected: Option<&Metadata>,
 	) -> Result<Self, String> {
-		let (current, metadata) = read(path)?;
-		if current != original || expected.is_some_and(|old| !file::same_file(old, &metadata)) {
+		let opened = read(path)?;
+		if opened.bytes != original
+			|| expected.is_some_and(|old| !file::same_file(old, &opened.metadata))
+		{
 			return Err(format!(
 				"{} changed while editing; retry the command",
 				path.display()
 			));
 		}
-		let candidate = stage(path, candidate, &metadata)?;
-		let backup = stage(path, original, &metadata)?;
-		sync_parent(path)?;
+		let target = opened.destination.unwrap_or_else(|| path.into());
+		let candidate = stage(&target, candidate, &opened.metadata)?;
+		let backup = stage(&target, original, &opened.metadata)?;
+		sync_parent(&target)?;
 		Ok(Self {
 			path: path.into(),
+			target,
 			original: original.into(),
-			metadata,
+			metadata: opened.metadata,
 			candidate,
 			backup,
 			replaced: false,
@@ -139,16 +186,16 @@ impl Replacement {
 	}
 
 	fn apply(&mut self) -> Result<(), String> {
-		let (current, metadata) = read(&self.path)?;
-		if current != self.original || !file::same_file(&self.metadata, &metadata) {
+		let opened = read(&self.path)?;
+		if opened.bytes != self.original || !file::same_file(&self.metadata, &opened.metadata) {
 			return Err(format!(
 				"{} changed while editing; retry the command",
 				self.path.display()
 			));
 		}
-		fs::rename(&self.candidate.0, &self.path).map_err(|e| e.to_string())?;
+		fs::rename(&self.candidate.0, &self.target).map_err(|e| e.to_string())?;
 		self.replaced = true;
-		sync_parent(&self.path)
+		sync_parent(&self.target)
 	}
 
 	fn restore(&mut self) -> Result<(), String> {
@@ -156,11 +203,12 @@ impl Replacement {
 			return Ok(());
 		}
 		let result = (|| {
-			let restore = stage(&self.path, &self.original, &self.metadata)?;
-			fs::rename(&restore.0, &self.path).map_err(|e| e.to_string())?;
-			sync_parent(&self.path)?;
-			let (bytes, metadata) = read(&self.path)?;
-			if bytes != self.original || !same_permissions(&self.metadata, &metadata) {
+			let restore = stage(&self.target, &self.original, &self.metadata)?;
+			fs::rename(&restore.0, &self.target).map_err(|e| e.to_string())?;
+			sync_parent(&self.target)?;
+			let opened = read(&self.path)?;
+			if opened.bytes != self.original || !same_permissions(&self.metadata, &opened.metadata)
+			{
 				return Err("restored file verification failed".into());
 			}
 			Ok(())
@@ -171,7 +219,7 @@ impl Replacement {
 			// does not take: it is the only original of the file left, and
 			// the operator is being told to put it back.
 			self.backup.1 = true;
-			let recovery = recovery_path(parent(&self.path));
+			let recovery = recovery_path(parent(&self.target));
 			if fs::rename(&self.backup.0, &recovery).is_ok() {
 				self.backup.0 = recovery;
 			}

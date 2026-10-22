@@ -163,7 +163,12 @@ fn the_map_is_staged_only_when_it_moves() {
 	]);
 	let narrow = Some((ListenerKind::Imap, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))));
 	let staged = prepare(dir.path(), &rows, narrow).expect("a readable generated file");
-	let candidate = staged.as_ref().expect("the map moves").candidate.clone();
+	let candidate = staged
+		.companion
+		.as_ref()
+		.expect("the map moves")
+		.candidate
+		.clone();
 	let written: serde_json::Value = serde_json::from_slice(&candidate).unwrap();
 	assert_eq!(
 		written["services"]["mail"]["ports"],
@@ -182,6 +187,7 @@ fn the_map_is_staged_only_when_it_moves() {
 	assert!(
 		prepare(dir.path(), &rows, narrow)
 			.expect("a readable generated file")
+			.companion
 			.is_none(),
 		"a map that does not move must not be staged again"
 	);
@@ -194,7 +200,7 @@ fn the_map_is_staged_only_when_it_moves() {
 	]);
 	let staged = prepare(dir.path(), &moved, narrow).expect("a readable generated file");
 	let written: serde_json::Value =
-		serde_json::from_slice(&staged.expect("the map moves").candidate).unwrap();
+		serde_json::from_slice(&staged.companion.expect("the map moves").candidate).unwrap();
 	assert_eq!(
 		written["services"]["mail"]["ports"],
 		serde_json::json!(["25:25", "127.0.0.1:1143:1143"])
@@ -202,6 +208,7 @@ fn the_map_is_staged_only_when_it_moves() {
 	assert!(
 		prepare(&dir.path().join("absent"), &rows, None)
 			.expect("an absent stack is not an error")
+			.companion
 			.is_none(),
 		"a host install has no map to write"
 	);

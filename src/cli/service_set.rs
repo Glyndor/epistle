@@ -203,13 +203,14 @@ pub(super) fn run(
 		return Ok(ExitCode::SUCCESS);
 	}
 	let config = document.config().map_err(text)?;
-	let companion = init::prepare_published_ports(
+	let prepared = init::prepare_published_ports(
 		&config.data_dir,
 		&config.listeners,
 		Some((kind, published_host)),
 	)
 	.map_err(text)?;
-	let outcome = super::config_edit::commit_pair(document, companion).map_err(text)?;
+	let narrowed = prepared.narrowed;
+	let outcome = super::config_edit::commit_pair(document, prepared.companion).map_err(text)?;
 	if outcome == Outcome::Unchanged {
 		writeln!(
 			err,
@@ -226,6 +227,9 @@ pub(super) fn run(
 		return Ok(ExitCode::SUCCESS);
 	}
 	writeln!(err, "{} {verb} {place} {socket}.", name.as_str()).map_err(text)?;
+	// A publication this change takes off every address of the host is said
+	// once the map carries it, so the note and the file agree.
+	init::announce_narrowed(&narrowed, err);
 	override_notice(stack, &config, port, current.socket_addr().port(), err)?;
 	let (code, reload) =
 		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;

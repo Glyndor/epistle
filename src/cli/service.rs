@@ -348,9 +348,10 @@ fn execute_with(
 	// Both files are staged and validated before either is replaced, the same
 	// way `set` does it: a generated file that does not parse must not leave a
 	// listener enabled in `mail.toml` and a port published nowhere.
-	let companion = super::init::prepare_published_ports(&config.data_dir, &config.listeners, None)
+	let prepared = super::init::prepare_published_ports(&config.data_dir, &config.listeners, None)
 		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
-	let outcome = super::config_edit::commit_pair(document, companion)?;
+	let narrowed = prepared.narrowed;
+	let outcome = super::config_edit::commit_pair(document, prepared.companion)?;
 	let state = if enabled { "enabled" } else { "disabled" };
 	if outcome == super::config_edit::Outcome::Unchanged {
 		writeln!(
@@ -372,6 +373,9 @@ fn execute_with(
 	}
 	writeln!(err, "{} {state}.", name.as_str())
 		.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
+	// A publication this change takes off every address of the host is said
+	// once the map carries it, so the note and the file agree.
+	super::init::announce_narrowed(&narrowed, err);
 	let (code, reload) =
 		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
 	if json {

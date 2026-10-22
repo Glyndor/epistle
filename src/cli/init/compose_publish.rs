@@ -13,7 +13,8 @@
 //! or `stack update` must not quietly put a listener back on every host
 //! address the operator took away from it. A listener that serves HTTP without
 //! TLS does not need the map to remember anything: it stays on loopback
-//! whenever the map has no address for it.
+//! whenever the map has no address for it, and a wildcard in the map is the
+//! same wide publication as the bare form, so it narrows with it.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -123,13 +124,33 @@ pub(super) fn hosts(document: &serde_json::Value) -> BTreeMap<u16, IpAddr> {
 /// re-rendering a map, and failing a listing over an unreadable stack file
 /// would be worse than showing no host column.
 pub(crate) fn hosts_in_file(path: &Path) -> BTreeMap<u16, IpAddr> {
-	match std::fs::read(path) {
-		Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-			Ok(document) => hosts(&document),
-			Err(_) => BTreeMap::new(),
-		},
-		Err(_) => BTreeMap::new(),
-	}
+	document_in_file(path)
+		.map(|document| hosts(&document))
+		.unwrap_or_default()
+}
+
+/// The generated file as a document, `None` when it is not there or does not
+/// parse.
+fn document_in_file(path: &Path) -> Option<serde_json::Value> {
+	let bytes = std::fs::read(path).ok()?;
+	serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+}
+
+/// The `ports:` list `document` carries, in the order it lists them.
+pub(super) fn ports(document: &serde_json::Value) -> Vec<String> {
+	mail_ports(document)
+		.iter()
+		.filter_map(serde_json::Value::as_str)
+		.map(str::to_string)
+		.collect()
+}
+
+/// The `ports:` list the generated file carries now, empty when it is not there
+/// or does not parse.
+pub(crate) fn ports_in_file(path: &Path) -> Vec<String> {
+	document_in_file(path)
+		.map(|document| ports(&document))
+		.unwrap_or_default()
 }
 
 /// Map the listeners to the `ports:` array of the `mail` service. Every
@@ -169,10 +190,16 @@ pub(super) fn published(
 			Some((kind, Some(address))) if kind == listener.kind => Some(address),
 			// No address asked for and none in the map: every listener keeps
 			// the form `init` wrote, except one that serves HTTP without TLS,
-			// which stays on loopback behind the operator's proxy.
+			// which stays on loopback behind the operator's proxy. Both
+			// wildcards in the map are that same wide publication as the bare
+			// form, so they narrow with it; an address the operator chose for
+			// one of these listeners is their decision and stays.
 			_ => narrow
 				.get(&port)
 				.copied()
+				.filter(|address| {
+					!plain_http(listener.kind) || !address.to_canonical().is_unspecified()
+				})
 				.or_else(|| plain_http_host(listener.kind)),
 		};
 		ports.push(entry(host, port));
@@ -183,6 +210,106 @@ pub(super) fn published(
 /// The mapping the generated file carries now, next to the one a change would
 /// leave in it. A pair of the two, or `None` when there is no compose file.
 type Mappings = Option<(Vec<String>, Vec<String>)>;
+
+/// A publication a change takes off every address of the host, because the
+/// listener behind it carries HTTP without TLS and belongs behind a TLS
+/// terminator on loopback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Narrowed {
+	/// The listener behind the publication, as the operator names it.
+	pub(crate) service: &'static str,
+	/// The port it answers on.
+	pub(crate) port: u16,
+	/// The mapping the file carries now, on every address of the host.
+	pub(crate) before: String,
+	/// The mapping the change writes.
+	pub(crate) after: String,
+}
+
+impl std::fmt::Display for Narrowed {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(
+			f,
+			"{} ({}) was published on {} on every address of the host; it carries HTTP without TLS, \
+			 so it is now published on {}. To reach it from another host, publish its port in \
+			 compose.override.yaml behind a TLS reverse proxy.",
+			self.service, self.port, self.before, self.after
+		)
+	}
+}
+
+/// The publications that move off every address of the host between the two
+/// maps. The bare `PORT:PORT` form and both wildcards are that same wide
+/// publication, and a concrete address is not this rule: it belongs to the
+/// operator.
+pub(crate) fn narrowed(
+	listeners: &[Listener],
+	current: &[String],
+	wanted: &[String],
+) -> Vec<Narrowed> {
+	let mut moved = Vec::new();
+	for listener in listeners {
+		if !plain_http(listener.kind) || listener.addr.to_canonical().is_loopback() {
+			continue;
+		}
+		let port = listener
+			.port
+			.unwrap_or_else(|| listener.kind.default_port());
+		let before = current.iter().find(|line| wide(line, port)).cloned();
+		let after = wanted.iter().find(|line| on_loopback(line, port)).cloned();
+		if let (Some(before), Some(after)) = (before, after) {
+			moved.push(Narrowed {
+				service: listener.kind.as_str(),
+				port,
+				before,
+				after,
+			});
+		}
+	}
+	moved
+}
+
+/// Whether the two maps differ by nothing but those publications leaving every
+/// address of the host. The command that writes them says what moved, so a
+/// warning that the two files disagree would only repeat it wrongly.
+fn only_narrowed(listeners: &[Listener], current: &[String], wanted: &[String]) -> bool {
+	let moved = narrowed(listeners, current, wanted);
+	let mut left: Vec<&str> = current
+		.iter()
+		.map(String::as_str)
+		.filter(|line| !moved.iter().any(|one| one.before == **line))
+		.collect();
+	let mut right: Vec<&str> = wanted
+		.iter()
+		.map(String::as_str)
+		.filter(|line| !moved.iter().any(|one| one.after == **line))
+		.collect();
+	left.sort_unstable();
+	right.sort_unstable();
+	left == right
+}
+
+/// Whether `line` publishes `port` on every address of the host, which the bare
+/// form and both wildcards do.
+fn wide(line: &str, port: u16) -> bool {
+	matches!(parse(line), Some((host, published)) if published == port
+		&& host.is_none_or(|address| address.to_canonical().is_unspecified()))
+}
+
+/// Whether `line` publishes `port` on loopback.
+fn on_loopback(line: &str, port: u16) -> bool {
+	matches!(parse(line), Some((Some(address), published))
+		if published == port && address.to_canonical().is_loopback())
+}
+
+/// Say on stderr which publications a change takes off every address of the
+/// host. Cutting a service off the public interfaces is not something to do
+/// quietly, and the note is the only place the operator hears it.
+pub(crate) fn announce_narrowed(moved: &[Narrowed], status: &mut impl Write) {
+	for one in moved {
+		crate::cli::style::warn_to(status, format_args!("{one}"));
+	}
+}
 
 /// The generated file, its current mapping and the one the listeners ask for.
 struct Map {
@@ -209,11 +336,7 @@ fn read_map(
 	let mut document: serde_json::Value = serde_json::from_slice(&existing)
 		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
 	mail_mut(&mut document)?;
-	let current = mail_ports(&document)
-		.iter()
-		.filter_map(serde_json::Value::as_str)
-		.map(str::to_string)
-		.collect();
+	let current = ports(&document);
 	let wanted = published(listeners, &hosts(&document), publish);
 	Ok(Some(Map {
 		path,
@@ -235,9 +358,10 @@ pub(crate) fn preview(
 }
 
 /// Say on stderr when the generated map and the configuration the command read
-/// describe different stacks, which is what a command killed between its two
-/// renames leaves behind. The caller holds the common lock and is about to
-/// bring the two together, so this is where the operator hears about it.
+/// describe different ports. A hand edit of a port or a publication leaves one
+/// behind, and so does a command killed between its two renames. The caller
+/// holds the common lock and is about to bring the two together, so this is
+/// where the operator hears about it.
 pub(crate) fn announce_mixed_state(config: &Config, status: &mut impl Write) {
 	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None) else {
 		return;
@@ -245,16 +369,30 @@ pub(crate) fn announce_mixed_state(config: &Config, status: &mut impl Write) {
 	if current == wanted {
 		return;
 	}
+	// A publication leaving every address of the host is named as what it is by
+	// the command that writes it, so nothing is said about the two files
+	// disagreeing when that is all they disagree about.
+	if only_narrowed(&config.listeners, &current, &wanted) {
+		return;
+	}
 	crate::cli::style::warn_to(
 		status,
 		format_args!(
 			"the generated compose.yaml and mail.toml publish different ports \
-		 (compose.yaml: [{}]; mail.toml: [{}]); a command interrupted between its two writes leaves \
-		 this behind, and this command brings the two together",
+		 (compose.yaml: [{}]; mail.toml: [{}]); this command brings the two together",
 			current.join(", "),
 			wanted.join(", ")
 		),
 	);
+}
+
+/// What a change to the generated map stages: the companion file, and the
+/// publications the write takes off every address of the host.
+pub(crate) struct Prepared {
+	/// The staged file, `None` when the map does not move.
+	pub(crate) companion: Option<crate::cli::config_edit::Companion>,
+	/// The publications this write takes off every address of the host.
+	pub(crate) narrowed: Vec<Narrowed>,
 }
 
 /// Render and validate a companion before the TOML can be replaced.
@@ -262,7 +400,7 @@ pub(crate) fn prepare(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
-) -> Result<Option<crate::cli::config_edit::Companion>, ApplyError> {
+) -> Result<Prepared, ApplyError> {
 	// A command killed between its two renames leaves its staged copies of
 	// this file here. The caller holds the common lock, so whatever is left
 	// belongs to a command that is not running.
@@ -271,18 +409,28 @@ pub(crate) fn prepare(
 		generated.parent().unwrap_or(data_dir),
 	));
 	let Some(mut map) = read_map(data_dir, listeners, publish)? else {
-		return Ok(None);
+		return Ok(Prepared {
+			companion: None,
+			narrowed: Vec::new(),
+		});
 	};
 	if map.current == map.wanted {
-		return Ok(None);
+		return Ok(Prepared {
+			companion: None,
+			narrowed: Vec::new(),
+		});
 	}
+	let moved = narrowed(listeners, &map.current, &map.wanted);
 	mail_mut(&mut map.document)?.insert("ports".into(), serde_json::json!(map.wanted));
 	let candidate = render_document(&map.document)?.into_bytes();
-	Ok(Some(crate::cli::config_edit::Companion {
-		path: map.path,
-		original: map.original,
-		candidate,
-	}))
+	Ok(Prepared {
+		companion: Some(crate::cli::config_edit::Companion {
+			path: map.path,
+			original: map.original,
+			candidate,
+		}),
+		narrowed: moved,
+	})
 }
 
 /// Whether the operator's override already publishes one of `ports` for `mail`.

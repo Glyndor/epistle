@@ -32,6 +32,7 @@ fn the_staged_map_touches_only_the_mail_ports() {
 	];
 	let staged = super::compose_publish::prepare(dir.path(), &listeners, None)
 		.expect("a readable generated file")
+		.companion
 		.expect("the map moves");
 	assert_eq!(staged.path, path);
 	let after: serde_json::Value = serde_json::from_slice(&staged.candidate).unwrap();
@@ -61,6 +62,7 @@ fn the_staged_map_touches_only_the_mail_ports() {
 	assert!(
 		super::compose_publish::prepare(dir.path(), &listeners, None)
 			.expect("a readable generated file")
+			.companion
 			.is_none(),
 		"identical ports must not stage a rewrite"
 	);
@@ -78,6 +80,7 @@ fn an_absent_generated_file_is_a_host_install() {
 	assert!(
 		super::compose_publish::prepare(dir.path(), &[], None)
 			.expect("an absent stack is not an error")
+			.companion
 			.is_none()
 	);
 	assert!(

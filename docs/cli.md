@@ -257,22 +257,27 @@ puts it on loopback rather than on every address of the host.
 
 `set`, `enable` and `disable` validate and stage both files before replacing
 either, and a `compose.yaml` that is a symlink is written through the link, the
-way it was before that transaction existed. A write error restores the previous
-files and verifies their contents and permissions. If restoration fails, the
-error names a retained recovery copy, which takes its own `.service-recovery.*`
-name and is kept for a week instead of the hour a staged copy is kept. A
-command killed between its two renames leaves staged copies behind, which the
-next command under the lock sweeps and names; when the generated map and
-`mail.toml` describe different stacks, which is what that kill leaves behind,
-the command that reconciles them says so before it writes. Service edits,
-`dns provider set`, init reruns, stack writers and `db upgrade` share a
+way it was before that transaction existed: the destination is taken from the
+same opening that reads the file, and the staged copy is renamed in the
+directory the link points at, so the link and the file behind it both survive.
+That write needs write access to that directory. A write error restores the
+previous files and verifies their contents and permissions. If restoration
+fails, the error names a retained recovery copy, which takes its own
+`.service-recovery.*` name and is kept for a week instead of the hour a staged
+copy is kept. A command killed between its two renames leaves its
+staged copies in the directory of the file it was writing, and the next command
+under the lock sweeps and names the ones the configuration directory holds; when
+the generated map and `mail.toml` describe different ports, which is what that
+kill leaves behind and what a port edited by hand also leaves behind, the
+command that reconciles them says so before it writes. Service edits, `dns
+provider set`, init reruns, stack writers and `db upgrade` share a
 configuration-directory lock through the write and reload; the wait has a
 deadline and names the command that holds it. The lock file is created `0600`
-and belongs to the service user or to root, who creates it from the package; a
-lock this command owns is put back to `0600`, and one it can only read is still
-a lock, so a lock root created at `0644` keeps two commands apart. A mode that
-lets other users write it, and a lock file a third user owns, are refused with
-the mode it has and the `chmod` that fixes it.
+by the first command that takes it, so it belongs to the service user or to
+root; a lock this command owns is put back to `0600`, and one it can only read
+is still a lock, so a lock root created at `0644` keeps two commands apart. A
+mode that lets other users write it, and a lock file a third user owns, are
+refused with the mode it has and the `chmod` that fixes it.
 
 `--dry-run` prints the diff of `mail.toml`, and on a container stack the
 `ports:` change that comes with it. With `--json` the result object carries the

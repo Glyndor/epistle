@@ -179,21 +179,31 @@ pub(super) fn ensure_compose_file(
 	let listeners = listeners_to_write(answers)?;
 	let narrow = compose_publish::hosts_in_file(&path);
 	let published_ports = compose_publish::published(&listeners, &narrow, None);
-	let composed = ComposeFile::build(answers, published_ports, database);
+	let composed = ComposeFile::build(answers, published_ports.clone(), database);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
 	// the tests pin on: the rendered file carries a trailing
 	// newline, two-space indentation, and the field order of the
 	// struct definition above.
 	let bytes = render_document(&composed)?;
-	match fs::read(&path) {
-		Ok(existing) if existing == bytes.as_bytes() => {
-			report.steps.push(ReportStep::ConfigIdentical(path.clone()));
+	let existing = fs::read(&path).ok();
+	if existing.as_deref() == Some(bytes.as_bytes()) {
+		report.steps.push(ReportStep::ConfigIdentical(path.clone()));
+	} else {
+		// A publication this write takes off every address of the host is a
+		// line in the report: the operator loses reachability, and has to hear
+		// which port went and where it went instead.
+		if existing.is_some() {
+			for one in compose_publish::narrowed(
+				&listeners,
+				&compose_publish::ports_in_file(&path),
+				&published_ports,
+			) {
+				report.steps.push(ReportStep::Narrowed(one));
+			}
 		}
-		_ => {
-			crate::storage::write_secret(&path, bytes.as_bytes())
-				.map_err(|error| ApplyError::ConfigWrite(path.clone(), error))?;
-			report.steps.push(ReportStep::Wrote(path.clone()));
-		}
+		crate::storage::write_secret(&path, bytes.as_bytes())
+			.map_err(|error| ApplyError::ConfigWrite(path.clone(), error))?;
+		report.steps.push(ReportStep::Wrote(path.clone()));
 	}
 	let clamd_config = dir.join("clamd.conf");
 	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nUser clamav\nForeground yes\n";
