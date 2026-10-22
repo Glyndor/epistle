@@ -202,6 +202,7 @@ async fn key_exchange_completes_when_the_server_keeps_the_connection_open() {
 		&server.source(),
 		DEADLINE,
 		std::slice::from_ref(&server.root),
+		true,
 	)
 	.await;
 	let elapsed = started.elapsed();
@@ -244,6 +245,7 @@ async fn the_deadline_bounds_the_whole_probe_not_each_stage() {
 		&server.source(),
 		DEADLINE,
 		std::slice::from_ref(&server.root),
+		true,
 	)
 	.await;
 	let elapsed = started.elapsed();

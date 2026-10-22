@@ -1160,8 +1160,9 @@ sources = [
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). At or below it the median is `Ok`; between it and `fail_seconds` the median is `Warn`; at or above `fail_seconds` the median is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
+| `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). Below it all valid offsets are `Ok`; at or above it and below `fail_seconds` the largest absolute offset is `Warn`; at or above `fail_seconds` it is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
 | `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
+| `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations and nonzero custom ports for internal deployments, including NTS-KE referrals. |
 | `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
 
 Validation rules `Config::validate` enforces: exactly three sources; at
@@ -1176,9 +1177,35 @@ key exchange and authenticated exchange included rather than each of
 those separately; the whole run gets a `2.1 s` cap (`RUN_DEADLINE`).
 A hung server is reported, never retried.
 
+DNS uses asynchronous resolution with a separate 500 ms cap inside the
+source deadline. Both A and AAAA results are checked before connecting;
+if any returned address is forbidden, the whole answer is rejected. The
+probe connects to the selected validated address without resolving again.
+By default, sources and NTS-KE Server/Port referrals must use
+unicast addresses outside loopback, private and link-local networks,
+and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP).
+Set `allow_private_networks = true` only when I intend to contact internal
+servers or custom ports. Even then, multicast, unspecified and limited
+broadcast addresses are rejected, including IPv4-mapped IPv6 forms.
+Directed broadcast addresses cannot be identified without the destination
+network's prefix; my routing and egress policy must block those networks.
+
+The verdict currently uses the largest absolute offset among all valid
+readings. The median and `smear_excluded` are diagnostic values only: an
+outlier or a reading labelled as excluded can still cause `Warn` or `Fail`.
+They do not currently protect the verdict from a single incorrect peer.
+With one or two valid readings, a healthy offset still gives `Warn`; any
+valid offset at or above the fail threshold gives `Fail`. No valid readings
+gives `Fail`. The area also retains individual source and smear warnings.
+
+NTP eras are unfolded relative to the local wall clock. This handles the
+2036 rollover while the local clock is within 68 years of the remote time;
+it cannot establish an era independently of a severely incorrect host clock.
+
 The shipped sources are `ntp:time.cloudflare.com`, `nts:nts.netnod.se`
 and `ntp:time.google.com`: one provider each, three independent
-autonomous systems, so the median rejects a single host that drifts. The
+autonomous systems. The diagnostic median is insensitive to one drifting
+source, subject to the verdict limitation above. The
 protocol on each one is what that provider answered when the list was
 measured on 2026-10-22, over the real `2 s` budget:
 

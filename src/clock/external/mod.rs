@@ -8,6 +8,7 @@
 
 pub mod adapter;
 pub mod assessment;
+mod endpoint;
 pub mod source;
 
 pub use assessment::{Assessment, Outcome, SignedOffset};
@@ -66,8 +67,9 @@ pub async fn run(external: &ClockExternal) -> Run {
 	let deadline = started + RUN_DEADLINE;
 	let sources = external.effective_sources();
 	let mut set = JoinSet::new();
+	let allow_private = external.allow_private_networks;
 	for source in sources.iter().cloned() {
-		set.spawn(async move { probe_one(source, SOURCE_DEADLINE).await });
+		set.spawn(async move { probe_one(source, SOURCE_DEADLINE, allow_private).await });
 	}
 	let mut readings = Vec::with_capacity(sources.len());
 	let collect = async {
@@ -113,11 +115,11 @@ pub async fn run(external: &ClockExternal) -> Run {
 	}
 }
 
-/// Public entry point for tests: take a [`Source`] and return the reading.
-pub(crate) async fn probe_one(source: Source, deadline: Duration) -> ProbeReading {
+/// Probe one source under the operator's destination policy.
+async fn probe_one(source: Source, deadline: Duration, allow_private: bool) -> ProbeReading {
 	let result = match source.kind {
-		SourceKind::Nts => adapter::ke_then_ntp(&source, deadline).await,
-		SourceKind::Ntp => adapter::plain_ntp(&source, deadline).await,
+		SourceKind::Nts => adapter::ke_then_ntp_with_policy(&source, deadline, allow_private).await,
+		SourceKind::Ntp => adapter::plain_ntp_with_policy(&source, deadline, allow_private).await,
 	};
 	match result {
 		Ok(value) => ProbeReading::ok(source, value.offset_seconds, value.delay_seconds),

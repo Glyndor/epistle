@@ -197,6 +197,7 @@ fn effective_falls_back_to_defaults_when_zero() {
 		warn_seconds: 0.0,
 		fail_seconds: 0.0,
 		sources: vec![],
+		..ClockExternal::default()
 	};
 	let resolved = external.effective_sources();
 	assert_eq!(resolved.len(), 3);
@@ -212,4 +213,76 @@ fn sabotage_warn_equals_fail_still_fails() {
 		..ClockExternal::default()
 	};
 	assert!(external.validate().is_err());
+}
+
+#[test]
+fn review_rejects_internal_and_non_unicast_sources_by_default() {
+	for host in [
+		"localhost",
+		"LOCALHOST.",
+		"127.0.0.1",
+		"10.0.0.1",
+		"172.16.0.1",
+		"192.168.0.1",
+		"169.254.169.254",
+		"224.0.0.1",
+		"255.255.255.255",
+		"0.0.0.0",
+		"::",
+		"::1",
+		"fc00::1",
+		"fe80::1",
+		"ff02::1",
+		"::ffff:127.0.0.1",
+	] {
+		let mut config = ClockExternal::default();
+		config.sources[0] = Source::ntp(host);
+		assert!(config.validate().is_err(), "accepted {host}");
+	}
+}
+
+#[test]
+fn review_rejects_arbitrary_and_zero_ports_by_default() {
+	for (kind, port) in [
+		(SourceKind::Ntp, 0),
+		(SourceKind::Ntp, 6379),
+		(SourceKind::Nts, 123),
+	] {
+		let mut config = ClockExternal::default();
+		config.sources[0] = Source {
+			host: "time.example".into(),
+			kind,
+			port: Some(port),
+		};
+		assert!(config.validate().is_err(), "accepted {kind}:{port}");
+	}
+}
+
+#[test]
+fn review_private_networks_require_explicit_operator_consent() {
+	let mut config: ClockExternal = toml::from_str("allow_private_networks = true").unwrap();
+	for host in [
+		"localhost",
+		"127.0.0.1",
+		"10.0.0.1",
+		"169.254.0.1",
+		"::1",
+		"fc00::1",
+		"fe80::1",
+	] {
+		config.sources[0] = Source {
+			port: Some(6379),
+			..Source::ntp(host)
+		};
+		assert!(config.validate().is_ok(), "{host}");
+	}
+	for host in ["224.0.0.1", "255.255.255.255", "0.0.0.0", "ff02::1", "::"] {
+		config.sources[0] = Source::ntp(host);
+		assert!(config.validate().is_err(), "{host}");
+	}
+	config.sources[0] = Source {
+		port: Some(0),
+		..Source::ntp("127.0.0.1")
+	};
+	assert!(config.validate().is_err());
 }

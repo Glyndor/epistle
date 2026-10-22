@@ -11,7 +11,7 @@ use std::time::Duration;
 use ntp_proto::{NtpPacket, PollInterval};
 use tokio::net::UdpSocket;
 
-use crate::clock::external::adapter::{ProbeError, plain_ntp};
+use crate::clock::external::adapter::{ProbeError, plain_ntp_with_policy};
 use crate::clock::external::source::Source;
 
 const TEST_DEADLINE: Duration = Duration::from_secs(2);
@@ -22,7 +22,9 @@ async fn plain_ntp_against_loopback_returns_a_signed_offset() {
 	let server = spawn_ntp_server(NtpPlan::Offset(0.25)).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let reading = plain_ntp(&source, TEST_DEADLINE).await.expect("plain ntp");
+	let reading = plain_ntp_with_policy(&source, TEST_DEADLINE, true)
+		.await
+		.expect("plain ntp");
 	assert!(
 		(reading.offset_seconds - 0.25).abs() < 0.10,
 		"offset should track the simulated wire-time; got {}",
@@ -36,7 +38,7 @@ async fn plain_ntp_reports_bad_origin_when_origin_does_not_match() {
 	let server = spawn_ntp_server(NtpPlan::WrongOrigin).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
 	assert!(matches!(result, Err(ProbeError::BadReply(_))), "{result:?}");
 	server.shutdown().await;
 }
@@ -46,7 +48,7 @@ async fn plain_ntp_reports_malformed_when_response_truncated() {
 	let server = spawn_truncated_ntp_server().await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
 	assert!(
 		matches!(result, Err(ProbeError::Malformed(_))),
 		"{result:?}"
@@ -59,7 +61,7 @@ async fn plain_ntp_reports_malformed_on_kiss_deny() {
 	let server = spawn_ntp_server(NtpPlan::KissDeny).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
 	assert!(matches!(result, Err(ProbeError::Kiss(_))), "{result:?}");
 	server.shutdown().await;
 }
@@ -69,7 +71,7 @@ async fn a_kiss_code_that_does_not_echo_the_request_cannot_fail_the_probe_as_a_k
 	let server = spawn_ntp_server(NtpPlan::KissDenyWrongOrigin).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
 	// Validated first, so it is an invalid reply and not a DENY from the server.
 	assert!(matches!(result, Err(ProbeError::BadReply(_))), "{result:?}");
 	server.shutdown().await;
@@ -80,7 +82,7 @@ async fn any_kiss_code_is_an_error_and_never_a_measurement() {
 	let server = spawn_ntp_server(NtpPlan::KissRstr).await;
 	let port = server.local_addr().port();
 	let source = source_for_port("127.0.0.1", port);
-	let result = plain_ntp(&source, TEST_DEADLINE).await;
+	let result = plain_ntp_with_policy(&source, TEST_DEADLINE, true).await;
 	assert!(matches!(result, Err(ProbeError::Kiss(_))), "{result:?}");
 	server.shutdown().await;
 }

@@ -120,9 +120,13 @@ impl fmt::Display for SourceKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClockExternal {
-	/// Inclusive warn threshold (seconds). A median absolute offset at or
-	/// below this is `Ok`; above and at or below the fail threshold is
-	/// `Warn`; above the fail threshold is `Fail`.
+	/// Permit internal destinations and nonzero custom ports. Multicast,
+	/// unspecified and limited broadcast destinations remain forbidden.
+	#[serde(default)]
+	pub allow_private_networks: bool,
+	/// Inclusive warn threshold (seconds), applied to the largest absolute
+	/// valid offset. Missing readings produce at least `Warn`. The median
+	/// and smear exclusion remain diagnostic values.
 	#[serde(default = "default_warn_seconds")]
 	pub warn_seconds: f64,
 	/// Inclusive fail threshold (seconds).
@@ -138,6 +142,7 @@ pub struct ClockExternal {
 impl Default for ClockExternal {
 	fn default() -> Self {
 		Self {
+			allow_private_networks: false,
 			warn_seconds: DEFAULT_WARN_SECONDS,
 			fail_seconds: DEFAULT_FAIL_SECONDS,
 			sources: default_sources(),
@@ -206,6 +211,17 @@ impl ClockExternal {
 						.to_string(),
 				);
 			}
+			super::endpoint::validate_host(
+				&source.host,
+				source.dial_port(),
+				if source.is_nts() {
+					NTS_KE_PORT
+				} else {
+					NTP_PORT
+				},
+				self.allow_private_networks,
+			)
+			.map_err(|why| format!("[clock_external] {why}"))?;
 			hosts.push(source.host.to_ascii_lowercase());
 			match source.kind {
 				SourceKind::Nts => nts += 1,

@@ -115,3 +115,31 @@ fn mock_outcome(external: &ClockExternal, readings: &[ProbeReading]) -> Outcome 
 	};
 	crate::clock::external::assessment::decide(external, readings)
 }
+
+#[tokio::test]
+async fn review_run_forwards_private_network_consent_to_both_protocols() {
+	let mut external = ClockExternal {
+		allow_private_networks: true,
+		sources: vec![
+			Source::nts("localhost"),
+			Source::ntp("127.0.0.1"),
+			Source::ntp("::1"),
+		],
+		..ClockExternal::default()
+	};
+	for source in &mut external.sources {
+		source.port = Some(1);
+	}
+	external.validate().unwrap();
+	let result = crate::clock::external::run(&external).await;
+	assert_eq!(result.readings.len(), 3);
+	for reading in &result.readings {
+		if let Some(error) = &reading.error {
+			assert!(
+				!error.contains("clock destination"),
+				"operator consent was not forwarded for {}: {error}",
+				reading.source.label()
+			);
+		}
+	}
+}

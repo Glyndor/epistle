@@ -36,7 +36,9 @@ use tokio::time::timeout_at;
 
 use ntp_proto::{KeyExchangeClient, NtpPacket, NtsClientConfig, PollInterval, ProtocolVersion};
 
-use crate::clock::external::source::{NTP_PORT, NTS_KE_PORT, Source, SourceKind};
+use super::endpoint;
+
+use crate::clock::external::source::{NTP_PORT, NTS_KE_PORT, Source};
 
 /// Time the whole probe is allowed to spend (DNS + dial + handshake +
 /// KE + receive).
@@ -52,7 +54,7 @@ const REQUEST_BUFFER: usize = 1024;
 
 /// Seconds between the Unix epoch (1970-01-01) and the NTP epoch
 /// (1900-01-01). Used to align `SystemTime` with NTP timestamps.
-const NTP_UNIX_OFFSET: f64 = 2_208_988_800.0;
+const NTP_UNIX_OFFSET: u64 = 2_208_988_800;
 
 /// What a successful probe reports.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -120,7 +122,15 @@ impl std::error::Error for ProbeError {}
 /// instant, so a server that accepts the connection and then stalls
 /// costs the operator one `deadline` and not one per stage.
 pub async fn ke_then_ntp(source: &Source, deadline: Duration) -> Result<OneShot, ProbeError> {
-	ke_then_ntp_with_roots(source, deadline, &[]).await
+	ke_then_ntp_with_policy(source, deadline, false).await
+}
+
+pub(crate) async fn ke_then_ntp_with_policy(
+	source: &Source,
+	deadline: Duration,
+	allow_private: bool,
+) -> Result<OneShot, ProbeError> {
+	ke_then_ntp_with_roots(source, deadline, &[], allow_private).await
 }
 
 /// [`ke_then_ntp`] with certificate roots the operating system trust
@@ -130,18 +140,17 @@ pub(crate) async fn ke_then_ntp_with_roots(
 	source: &Source,
 	deadline: Duration,
 	extra_roots: &[CertificateDer<'static>],
+	allow_private: bool,
 ) -> Result<OneShot, ProbeError> {
 	crate::tls::ensure_crypto_provider();
 	let stop = Instant::now() + deadline;
 	let host = source.host.clone();
-	let port = source.dial_port();
-	let tcp = timeout_at(
-		stop.into(),
-		tokio::net::TcpStream::connect((host.as_str(), port)),
-	)
-	.await
-	.map_err(|_| ProbeError::Timeout)?
-	.map_err(|error| ProbeError::Dial(error.to_string()))?;
+	let remote =
+		endpoint::resolve(&host, source.dial_port(), NTS_KE_PORT, allow_private, stop).await?;
+	let tcp = timeout_at(stop.into(), tokio::net::TcpStream::connect(remote))
+		.await
+		.map_err(|_| ProbeError::Timeout)?
+		.map_err(|error| ProbeError::Dial(error.to_string()))?;
 	let config = NtsClientConfig {
 		certificates: Arc::from(extra_roots.to_vec()),
 		protocol_version: ProtocolVersion::V4,
@@ -155,7 +164,7 @@ pub(crate) async fn ke_then_ntp_with_roots(
 	.await
 	.map_err(|_| ProbeError::Timeout)?
 	.map_err(|error| ProbeError::Ke(error.to_string()))?;
-	exchange_via_nts(result.remote, result.port, *result.nts, source, stop).await
+	exchange_via_nts(result.remote, result.port, *result.nts, stop, allow_private).await
 }
 
 /// One authenticated NTP exchange using cookies and keys from a prior
@@ -164,23 +173,14 @@ async fn exchange_via_nts(
 	remote: String,
 	remote_port: u16,
 	mut nts_data: ntp_proto::SourceNtsData,
-	source: &Source,
 	stop: Instant,
+	allow_private: bool,
 ) -> Result<OneShot, ProbeError> {
-	let port = if remote_port != 0 {
-		remote_port
-	} else {
-		source.dial_port()
-	};
+	let remote = endpoint::resolve(&remote, remote_port, NTP_PORT, allow_private, stop).await?;
 	let cookie = nts_data
 		.get_cookie()
 		.ok_or_else(|| ProbeError::Ke("no cookie to send".into()))?;
 	let (c2s_box, s2c_box) = nts_data.get_keys();
-	let ntp_port = if source.kind == SourceKind::Nts && port == NTS_KE_PORT {
-		NTP_PORT
-	} else {
-		port
-	};
 	let poll = PollInterval::default();
 	let (packet, identifier) = NtpPacket::nts_poll_message(&cookie, 0, poll);
 	let mut buf = vec![0u8; REQUEST_BUFFER];
@@ -195,14 +195,11 @@ async fn exchange_via_nts(
 	if length == 0 {
 		return Err(ProbeError::Malformed("serialized request empty".into()));
 	}
-	let bind = timeout_at(
-		stop.into(),
-		UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)),
-	)
-	.await
-	.map_err(|_| ProbeError::Timeout)?
-	.map_err(|error| ProbeError::Dial(error.to_string()))?;
-	timeout_at(stop.into(), bind.connect((remote.as_str(), ntp_port)))
+	let bind = timeout_at(stop.into(), UdpSocket::bind(endpoint::bind_address(remote)))
+		.await
+		.map_err(|_| ProbeError::Timeout)?
+		.map_err(|error| ProbeError::Dial(error.to_string()))?;
+	timeout_at(stop.into(), bind.connect(remote))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
@@ -240,21 +237,11 @@ async fn exchange_via_nts(
 			"origin/uid does not match the request".into(),
 		));
 	}
-	if response.is_kiss_deny() {
-		return Err(ProbeError::Kiss("DENY".into()));
-	}
-	if response.is_kiss_rate(PollInterval::default()) {
-		return Err(ProbeError::Kiss("RATE".into()));
-	}
-	// Any other kiss code (RSTR, the NTS-NAK, an unknown one) carries no time:
-	// its timestamps must never be read as a measurement.
-	if response.is_kiss() {
-		return Err(ProbeError::Kiss("other".into()));
-	}
+	validate_measurement(&response)?;
 	let t1 = unix_seconds(t1_wall);
 	let t4 = unix_seconds(t4_wall);
-	let t2 = ntp_to_unix_seconds(response.receive_timestamp());
-	let t3 = ntp_to_unix_seconds(response.transmit_timestamp());
+	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), t4_wall);
+	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), t4_wall);
 	let offset = (t2 - t1 + t3 - t4) / 2.0;
 	let delay = (t4 - t1) - (t3 - t2);
 	Ok(OneShot {
@@ -267,17 +254,23 @@ async fn exchange_via_nts(
 /// round-trip delay. `deadline` bounds the whole exchange the same way
 /// [`ke_then_ntp`] bounds the authenticated one.
 pub async fn plain_ntp(source: &Source, deadline: Duration) -> Result<OneShot, ProbeError> {
+	plain_ntp_with_policy(source, deadline, false).await
+}
+
+pub(crate) async fn plain_ntp_with_policy(
+	source: &Source,
+	deadline: Duration,
+	allow_private: bool,
+) -> Result<OneShot, ProbeError> {
 	let stop = Instant::now() + deadline;
 	let host = source.host.clone();
-	let port = source.dial_port();
-	let bind = timeout_at(
-		stop.into(),
-		UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)),
-	)
-	.await
-	.map_err(|_| ProbeError::Timeout)?
-	.map_err(|error| ProbeError::Dial(error.to_string()))?;
-	timeout_at(stop.into(), bind.connect((host.as_str(), port)))
+	let remote =
+		endpoint::resolve(&host, source.dial_port(), NTP_PORT, allow_private, stop).await?;
+	let bind = timeout_at(stop.into(), UdpSocket::bind(endpoint::bind_address(remote)))
+		.await
+		.map_err(|_| ProbeError::Timeout)?
+		.map_err(|error| ProbeError::Dial(error.to_string()))?;
+	timeout_at(stop.into(), bind.connect(remote))
 		.await
 		.map_err(|_| ProbeError::Timeout)?
 		.map_err(|error| ProbeError::Dial(error.to_string()))?;
@@ -326,6 +319,21 @@ pub async fn plain_ntp(source: &Source, deadline: Duration) -> Result<OneShot, P
 			"origin does not match the request".into(),
 		));
 	}
+	validate_measurement(&response)?;
+	let t1 = unix_seconds(t1_wall);
+	let t4 = unix_seconds(t4_wall);
+	let t2 = ntp_to_unix_seconds(response.receive_timestamp(), t4_wall);
+	let t3 = ntp_to_unix_seconds(response.transmit_timestamp(), t4_wall);
+	let offset = (t2 - t1 + t3 - t4) / 2.0;
+	let delay = (t4 - t1) - (t3 - t2);
+	Ok(OneShot {
+		offset_seconds: offset,
+		delay_seconds: delay.abs(),
+	})
+}
+
+/// Reject replies that carry no usable server time.
+fn validate_measurement(response: &NtpPacket<'_>) -> Result<(), ProbeError> {
 	if response.is_kiss_deny() {
 		return Err(ProbeError::Kiss("DENY".into()));
 	}
@@ -337,16 +345,15 @@ pub async fn plain_ntp(source: &Source, deadline: Duration) -> Result<OneShot, P
 	if response.is_kiss() {
 		return Err(ProbeError::Kiss("other".into()));
 	}
-	let t1 = unix_seconds(t1_wall);
-	let t4 = unix_seconds(t4_wall);
-	let t2 = ntp_to_unix_seconds(response.receive_timestamp());
-	let t3 = ntp_to_unix_seconds(response.transmit_timestamp());
-	let offset = (t2 - t1 + t3 - t4) / 2.0;
-	let delay = (t4 - t1) - (t3 - t2);
-	Ok(OneShot {
-		offset_seconds: offset,
-		delay_seconds: delay.abs(),
-	})
+	if response.mode() != ntp_proto::NtpAssociationMode::Server
+		|| response.leap() == ntp_proto::NtpLeapIndicator::Unsynchronized
+		|| !(1..=15).contains(&response.stratum())
+	{
+		return Err(ProbeError::BadReply(
+			"server time is not synchronized or has invalid metadata".into(),
+		));
+	}
+	Ok(())
 }
 
 /// Convert a `SystemTime` to Unix seconds (f64).
@@ -356,22 +363,16 @@ fn unix_seconds(time: SystemTime) -> f64 {
 		.unwrap_or(0.0)
 }
 
-/// Convert an `NtpTimestamp` to Unix seconds (f64). NTP timestamps
-/// are seconds since the NTP epoch (1900-01-01); we subtract the
-/// 70-year offset to land in Unix seconds. The `ntp-proto` crate
-/// exposes the timestamp bits only via its `Debug` impl; the public
-/// subtraction + `to_seconds` path wraps for era 0 timestamps past
-/// the 2036 boundary, so we read the bits through `{:?}` instead.
-fn ntp_to_unix_seconds(ts: ntp_proto::NtpTimestamp) -> f64 {
-	let raw_str = format!("{ts:?}");
-	let raw: u64 = raw_str
-		.strip_prefix("NtpTimestamp(")
-		.and_then(|s| s.strip_suffix(")"))
-		.and_then(|s| s.trim().parse().ok())
-		.unwrap_or(0);
-	let seconds = (raw >> 32) as f64;
-	let fraction = (raw & 0xFFFF_FFFF) as f64 / 4_294_967_296.0;
-	seconds + fraction - NTP_UNIX_OFFSET
+/// Unfold the closest NTP era relative to the local wall clock. Wrapped
+/// timestamp subtraction is unambiguous within 68 years of the reference.
+fn ntp_to_unix_seconds(ts: ntp_proto::NtpTimestamp, reference: SystemTime) -> f64 {
+	let elapsed = reference.duration_since(UNIX_EPOCH).unwrap_or_default();
+	let reference_ntp = ntp_proto::NtpTimestamp::from_seconds_nanos_since_ntp_era(
+		elapsed.as_secs().wrapping_add(NTP_UNIX_OFFSET) as u32,
+		elapsed.subsec_nanos(),
+	);
+	let (seconds, nanos) = (ts - reference_ntp).as_seconds_nanos();
+	elapsed.as_secs_f64() + f64::from(seconds) + f64::from(nanos) / 1_000_000_000.0
 }
 
 #[cfg(test)]
@@ -381,3 +382,11 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/nts_ke_tests.rs"]
 mod nts_ke_tests;
+
+#[cfg(test)]
+#[path = "tests/review_tests.rs"]
+mod review_tests;
+
+#[cfg(test)]
+#[path = "tests/dns_deadline_tests.rs"]
+mod dns_deadline_tests;
