@@ -26,11 +26,21 @@ pub(in crate::cli) fn run_from_path(path: &Path, cli: StackCli, json: bool) -> E
 	} else {
 		None
 	};
-	match Config::load(path) {
+	match load(path) {
 		Ok(config) => run_reporting(&config, cli, json),
 		Err(error) => {
 			crate::cli::style::error(error);
 			ExitCode::FAILURE
 		}
 	}
+}
+
+/// The configuration as the loader reads it, from a read that never waits.
+/// The common lock is already held, so a fifo at the path, or behind a
+/// symlink, has to be refused by name instead of parking the command on a
+/// writer that may never come, with every other writer of the directory kept
+/// out behind it.
+fn load(path: &Path) -> Result<Config, String> {
+	let text = crate::cli::config_edit::read_through_link(path)?;
+	Config::parse_text(&text, path).map_err(|error| error.to_string())
 }

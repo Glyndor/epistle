@@ -19,6 +19,7 @@ mod backup;
 mod ban;
 mod client_address;
 mod completions;
+mod compose_lock;
 mod config_check;
 pub mod config_edit;
 mod container_db;

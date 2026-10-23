@@ -15,11 +15,13 @@ use std::time::{Duration, Instant};
 
 /// How long a writer waits for the lock before it gives up. Longer than the
 /// slowest thing that holds it (a `podup` recreate of the mail service), so a
-/// slow neighbour is not reported as a stuck one.
-const WAIT: Duration = Duration::from_secs(30);
+/// slow neighbour is not reported as a stuck one. The lock that guards the
+/// generated compose file waits with it, so a command is never kept out of
+/// the configuration directory longer than it waits for one file.
+pub(super) const WAIT: Duration = Duration::from_secs(30);
 
 /// Pause between attempts while a neighbour holds the lock.
-const POLL: Duration = Duration::from_millis(100);
+pub(super) const POLL: Duration = Duration::from_millis(100);
 
 /// Lock the configuration directory before reading either service file.
 /// The sibling stays in place when mail.toml is atomically replaced.

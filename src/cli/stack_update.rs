@@ -158,12 +158,15 @@ fn changes(path: &str, old: &Value, new: &Value) -> Vec<String> {
 pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	// `stack resources set` rewrites the same file under the same lock. It
 	// is held from the read to the last step, so a limit set meanwhile is
-	// neither lost under the new file nor written over the update.
+	// neither lost under the new file nor written over the update. The wait
+	// for it ends at the common lock's deadline, so a holder elsewhere can
+	// not keep this command out of the configuration directory for as long
+	// as it lasts.
 	let lock = crate::storage::locked::lock_path(compose);
-	let _held = match crate::storage::lock::FileLock::acquire(&lock) {
+	let _held = match crate::cli::compose_lock::acquire(&lock) {
 		Ok(held) => held,
 		Err(error) => {
-			super::style::error(format_args!("cannot lock {}: {error}", lock.display()));
+			super::style::error(error);
 			return ExitCode::FAILURE;
 		}
 	};
