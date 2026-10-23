@@ -29,33 +29,54 @@ const SELF: &str = "the_target_passes_with_several_copies_at_once";
 /// inheritable descriptor is inherited by whichever child the next test spawns,
 /// and that child then holds the slave of a terminal whose master is waiting
 /// for the end of its stream: the end never arrives, the owner waits out its
-/// deadline, and the two tests wait on each other for good. `openpty` leaves
-/// both descriptors inheritable, so the flag is set here. `Command` puts the
-/// slave on the child's standard descriptors with `dup2`, which clears it
-/// there, so the child still reads from the terminal.
+/// deadline, and the two tests wait on each other for good.
+///
+/// So each end is asked for with `O_CLOEXEC` in the call that creates it, which
+/// is the only shape with no window in it: `openpty` leaves both descriptors
+/// inheritable, and a `fcntl` after it lands while another thread may already
+/// have forked a child, which keeps that child's copy of the table with the old
+/// flags. `Command` puts the slave on the child's standard descriptors with
+/// `dup2`, and `dup2` clears the flag on the new descriptor, so the child still
+/// reads from the terminal.
 fn pseudo_terminal() -> (File, File) {
-	let (mut master, mut slave) = (-1, -1);
-	// SAFETY: openpty receives valid descriptor out pointers; optional settings are null.
-	assert_eq!(
-		unsafe {
-			libc::openpty(
-				&mut master,
-				&mut slave,
-				std::ptr::null_mut(),
-				std::ptr::null(),
-				std::ptr::null(),
-			)
-		},
-		0
+	// SAFETY: posix_openpt takes only the flags to open the master with, so no
+	// pointer of ours is left to read after it returns.
+	let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+	assert!(
+		master >= 0,
+		"posix_openpt: {}",
+		std::io::Error::last_os_error()
 	);
-	for descriptor in [master, slave] {
-		// SAFETY: F_SETFD takes a live descriptor and a flag set to install.
-		assert_eq!(
-			unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) },
-			0
-		);
+	// SAFETY: both calls take the master descriptor this function owns.
+	unsafe {
+		assert_eq!(libc::grantpt(master), 0, "grantpt");
+		assert_eq!(libc::unlockpt(master), 0, "unlockpt");
 	}
-	// SAFETY: openpty returned fresh descriptors owned by these File values.
+	let mut name = [0 as libc::c_char; 256];
+	assert_eq!(
+		// SAFETY: ptsname_r writes a NUL-terminated path into `name` and reads
+		// nothing else.
+		unsafe { libc::ptsname_r(master, name.as_mut_ptr(), name.len()) },
+		0,
+		"ptsname_r: {}",
+		std::io::Error::last_os_error()
+	);
+	// SAFETY: ptsname_r returned 0, so `name` holds the path in the operating
+	// system's own buffer, and these flags ask for a private terminal that
+	// closes across `exec`.
+	let slave = unsafe {
+		libc::open(
+			name.as_ptr(),
+			libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+		)
+	};
+	assert!(
+		slave >= 0,
+		"open the pseudo-terminal slave: {}",
+		std::io::Error::last_os_error()
+	);
+	// SAFETY: both calls returned fresh descriptors, and these two File values
+	// are their only owners from here on.
 	(unsafe { File::from_raw_fd(master) }, unsafe {
 		File::from_raw_fd(slave)
 	})
@@ -398,21 +419,42 @@ fn a_pasted_dns_credential_is_never_echoed_by_the_terminal() {
 /// deadline for a child that already exited.
 #[test]
 fn a_pseudo_terminal_does_not_reach_another_process() {
+	let dir = tempfile::tempdir().unwrap();
+	// The child opens this file on descriptor 9 before it lists anything, so
+	// the listing has to carry a descriptor this test arranged. An empty
+	// listing is then not read as the absence of a leak: a shell with no
+	// `readlink`, or a machine with no `/proc`, prints nothing either way, and
+	// that has to fail instead of pass.
+	let marker = dir.path().join("descriptor-nine");
+	std::fs::write(&marker, b"nine").unwrap();
 	let (_master, _slave) = pseudo_terminal();
 	let listing = Command::new("/bin/sh")
 		.arg("-c")
-		.arg("for f in /proc/self/fd/*; do readlink \"$f\" || true; done")
+		.arg(
+			// A descriptor the glob hands the shell to walk /proc is closed
+			// again before readlink reaches it, so one entry may fail to read
+			// without meaning the listing failed.
+			"exec 9<\"$1\" || exit 1; for f in /proc/self/fd/*; do readlink \"$f\" || true; done",
+		)
+		.arg("sh")
+		.arg(&marker)
 		.stdin(Stdio::null())
 		.stdout(Stdio::piped())
-		.stderr(Stdio::null())
+		.stderr(Stdio::piped())
 		.output()
 		.expect("list the descriptors the child was given");
+	let seen = String::from_utf8_lossy(&listing.stdout);
+	assert!(
+		seen.contains("descriptor-nine"),
+		"the child was never inspected, so this run cannot tell that a pseudo-terminal stayed behind: status {:?}, stderr {}",
+		listing.status,
+		String::from_utf8_lossy(&listing.stderr)
+	);
 	assert!(
 		listing.status.success(),
 		"listing the descriptors failed: {}",
 		String::from_utf8_lossy(&listing.stderr)
 	);
-	let seen = String::from_utf8_lossy(&listing.stdout);
 	assert!(
 		!seen.contains("/dev/pts"),
 		"a pseudo-terminal reached a process that was given none: {seen}"
@@ -421,6 +463,73 @@ fn a_pseudo_terminal_does_not_reach_another_process() {
 
 /// How many copies of this target run at once.
 const COPIES: usize = 4;
+
+/// The copies of this target a launcher still holds.
+///
+/// Dropping a `Child` neither stops nor reaps the process behind it, so a
+/// launcher that asserts, panics or fails to spawn with copies still running
+/// would leave them behind with nobody left to read them. Dropping this kills
+/// every copy still held and waits for each one.
+#[derive(Default)]
+struct PendingCopies(Vec<Option<Child>>);
+
+impl PendingCopies {
+	fn push(&mut self, copy: Child) {
+		self.0.push(Some(copy));
+	}
+
+	/// The copy at `index`, given up so its output can be read. This launcher
+	/// stops holding it from here on.
+	fn take(&mut self, index: usize) -> Child {
+		self.0[index].take().expect("a copy was already taken")
+	}
+
+	fn ids(&self) -> Vec<u32> {
+		self.0.iter().flatten().map(Child::id).collect()
+	}
+}
+
+impl Drop for PendingCopies {
+	fn drop(&mut self) {
+		for copy in self.0.iter_mut().flatten() {
+			let _ = copy.kill();
+			let _ = copy.wait();
+		}
+	}
+}
+
+/// Whether `pid` is still running as the command this test started, so a
+/// process that has taken the number over is not mistaken for one left behind.
+fn still_running_as(pid: u32, command: &[u8]) -> bool {
+	std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmd| cmd.starts_with(command))
+}
+
+/// A launcher that gives up with copies still running has to take them with
+/// it. `Child` does neither, so this is what stops a copy left behind from
+/// outliving the test that started it.
+#[test]
+fn a_launcher_that_gives_up_reaps_the_copies_it_still_holds() {
+	let mut copies = PendingCopies::default();
+	for _ in 0..2 {
+		copies.push(
+			Command::new("/bin/sleep")
+				.arg("600")
+				.stdin(Stdio::null())
+				.stdout(Stdio::null())
+				.stderr(Stdio::null())
+				.spawn()
+				.expect("a copy that outlives its launcher"),
+		);
+	}
+	let ids = copies.ids();
+	drop(copies);
+	for id in ids {
+		assert!(
+			!still_running_as(id, b"/bin/sleep\0"),
+			"copy {id} was still running after the launcher that started it gave up"
+		);
+	}
+}
 
 /// Run this target against itself, several copies at once, and require every
 /// copy to pass.
@@ -433,10 +542,13 @@ const COPIES: usize = 4;
 /// copies at once also multiplies what each copy asks of the machine, which is
 /// what turned a leaked pseudo-terminal into a run that never finished. A copy
 /// runs the whole target with this test skipped, so nothing recurses.
+///
+/// Every output is collected before anything is asserted on, so a copy that
+/// fails still leaves the rest to be read and reaped instead of stranding them.
 #[test]
 fn the_target_passes_with_several_copies_at_once() {
 	let program = std::env::current_exe().expect("path of this test binary");
-	let mut copies = Vec::new();
+	let mut copies = PendingCopies::default();
 	for _ in 0..COPIES {
 		copies.push(
 			Command::new("/bin/sh")
@@ -453,12 +565,19 @@ fn the_target_passes_with_several_copies_at_once() {
 				.expect("copy of this test binary"),
 		);
 	}
-	for (index, copy) in copies.into_iter().enumerate() {
-		let output = copy.wait_with_output().expect("output of a copy");
+	let mut outputs = Vec::new();
+	for index in 0..COPIES {
+		outputs.push(
+			copies
+				.take(index)
+				.wait_with_output()
+				.unwrap_or_else(|error| panic!("output of copy {index} of {COPIES}: {error}")),
+		);
+	}
+	for (index, output) in outputs.iter().enumerate() {
 		assert!(
 			output.status.success(),
-			"copy {index} of {} failed with {:?}: {}",
-			COPIES,
+			"copy {index} of {COPIES} failed with {:?}: {}",
 			output.status,
 			String::from_utf8_lossy(&output.stdout)
 		);

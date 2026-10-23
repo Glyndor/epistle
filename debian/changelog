@@ -31,6 +31,9 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * `epistle service set NAME --bind ADDRESS --port PORT` moves a listener that is already enabled, publishes the address on the host without touching the operator override, and `service list` shows where each service is published.
   * The guided setup test target no longer hangs when the whole suite runs, and
     no longer depends on how the run was started.
+  * The guided setup tests create their terminals already private to themselves,
+    take down every process they started when they give up, and fail when they
+    could not check what they meant to check.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
