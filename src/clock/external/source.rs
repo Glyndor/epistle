@@ -14,7 +14,7 @@ pub(super) const EXPECTED_SOURCES: usize = 3;
 /// one measured to complete the whole NTS exchange, so every offset in the
 /// default run is authenticated.
 ///
-/// `nts.netnod.se` is Netnod (Sweden), `nts.time.nl` is NLnet Labs
+/// `nts.netnod.se` is Netnod (Sweden), `nts.time.nl` is SIDN Labs
 /// (Netherlands) and `ptbtime2.ptb.de` is the Physikalisch-Technische
 /// Bundesanstalt (Germany). `time.cloudflare.com` answers plain NTPv4 but
 /// its key exchange returns cookies the authenticated poll never answers

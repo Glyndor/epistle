@@ -19,9 +19,9 @@ fn run_defaults_to_three_independent_default_sources() {
 	assert_eq!(external.effective_sources().len(), 3);
 }
 
-/// The smear policy needs two authenticated readings that agree, so the
-/// readings carry their own sources rather than the default list, whose
-/// shipped mix is one NTS and two plain.
+/// The smear policy needs two authenticated readings that agree and a plain
+/// one apart from them, so the readings carry their own sources rather than
+/// the default list, which has no plain source.
 #[test]
 fn run_full_smear_path_returns_ok_outcome_when_offsets_within_warn() {
 	let external = ClockExternal::default();
@@ -36,17 +36,34 @@ fn run_full_smear_path_returns_ok_outcome_when_offsets_within_warn() {
 	assert_eq!(summary.smear_excluded, Some(2));
 }
 
-/// The shipped list has one authenticated source, so the smear policy
-/// cannot fire on a default run. Pinning it here so the absence of a
-/// smear warning there is a known state and not a silently missing check.
+/// The shipped list is three NTS sources, so there is no plain reading for
+/// the smear policy to flag. Pinning it here so the absence of a smear warning
+/// on a default run is a known state and not a silently missing check.
 #[test]
-fn the_smear_policy_stays_dormant_with_one_authenticated_source() {
+fn the_smear_policy_stays_dormant_without_a_plain_source() {
 	let external = ClockExternal::default();
 	let sources = external.effective_sources();
 	let readings = vec![
 		ProbeReading::ok(sources[0].clone(), 0.0, 0.005),
 		ProbeReading::ok(sources[1].clone(), 0.05, 0.005),
 		ProbeReading::ok(sources[2].clone(), 0.5, 0.005),
+	];
+	let summary = crate::clock::external::assessment::assessment(&external, &readings);
+	assert_eq!(
+		summary.smear_excluded, None,
+		"all three readings are authenticated, so none is a plain candidate"
+	);
+}
+
+/// One authenticated source and two plain ones cannot make a pair of
+/// authenticated readings, so the policy stays dormant there too.
+#[test]
+fn the_smear_policy_stays_dormant_with_one_authenticated_source() {
+	let external = ClockExternal::default();
+	let readings = vec![
+		ProbeReading::ok(Source::ntp("time.cloudflare.com"), 0.0, 0.005),
+		ProbeReading::ok(Source::nts("nts.netnod.se"), 0.05, 0.005),
+		ProbeReading::ok(Source::ntp("time.google.com"), 0.5, 0.005),
 	];
 	let summary = crate::clock::external::assessment::assessment(&external, &readings);
 	assert_eq!(

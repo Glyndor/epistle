@@ -1156,9 +1156,9 @@ enabled = true      # false turns the probe off entirely
 warn_seconds = 1.0   # an offset at or above this reading is a Warn
 fail_seconds = 5.0   # an offset at or above this reading is a Fail
 sources = [
-  { host = "time.cloudflare.com", kind = "ntp" },
-  { host = "nts.netnod.se",       kind = "nts" },
-  { host = "time.google.com",     kind = "ntp" },
+  { host = "nts.netnod.se",    kind = "nts" },
+  { host = "nts.time.nl",      kind = "nts" },
+  { host = "ptbtime2.ptb.de",  kind = "nts" },
 ]
 ```
 
@@ -1221,7 +1221,7 @@ NTP eras are unfolded relative to the local wall clock. This handles the
 it cannot establish an era independently of a severely incorrect host clock.
 
 The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
-`nts:ptbtime2.ptb.de`: Netnod (Sweden), NLnet Labs (Netherlands) and the
+`nts:ptbtime2.ptb.de`: Netnod (Sweden), SIDN Labs (Netherlands) and the
 Physikalisch-Technische Bundesanstalt (Germany), three independent
 operators, every offset authenticated. The diagnostic median is
 insensitive to one drifting source, subject to the verdict limitation
@@ -1258,7 +1258,7 @@ many of the sources were authenticated over NTS and names them, so a run
 with a plain source among them does not read as equally trusted offsets.
 And the leap-second smear check compares one plain reading against two
 authenticated readings that agree within 100 ms, so on the shipped list,
-which has no plain source, it stays dormant; it fires when an operator
+which has no plain source, it stays dormant; it can fire when an operator
 replaces one `nts` source with a plain `ntp` one.
 
 The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the

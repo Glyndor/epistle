@@ -138,7 +138,7 @@ fn a_run_without_an_authenticated_source_warns_instead_of_claiming_authenticatio
 	);
 }
 
-/// The default list names one NTS source whether or not it answered, and a
+/// A list names its NTS sources whether or not they answered, and a
 /// source that never completed its key exchange authenticated nothing. Counting
 /// the configuration instead of the reading reported an authentication that
 /// never happened next to a failed source.
