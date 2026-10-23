@@ -118,7 +118,8 @@ pub(super) fn run(
 		None => current.socket_addr().port(),
 	};
 	let stack = init::compose_file_path(&config.data_dir).exists();
-	let narrow = init::published_host_addresses(&init::compose_file_path(&config.data_dir));
+	let narrow =
+		init::published_host_addresses(&init::compose_file_path(&config.data_dir)).map_err(text)?;
 	// The host-visible address after the change: the one asked for, else the
 	// one the generated map already pins for this port, else the bind the
 	// listener has today. On a host install there is no map, so it is the

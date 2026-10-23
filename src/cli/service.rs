@@ -147,7 +147,7 @@ pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
 
 pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
 	let hosts =
-		super::init::published_host_addresses(&super::init::compose_file_path(&config.data_dir));
+		super::init::published_host_addresses(&super::init::compose_file_path(&config.data_dir))?;
 	let mut rows = Vec::new();
 	let names = ServiceName::value_variants();
 	for &name in names {

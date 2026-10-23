@@ -177,7 +177,8 @@ pub(super) fn ensure_compose_file(
 	}
 	let path = compose_file_path(&answers.data_dir);
 	let listeners = listeners_to_write(answers)?;
-	let narrow = compose_publish::hosts_in_file(&path);
+	let narrow = compose_publish::hosts_in_file(&path)
+		.map_err(|error| compose_publish::apply_read(&path, error))?;
 	let published_ports = compose_publish::published(&listeners, &narrow, None);
 	let composed = ComposeFile::build(answers, published_ports.clone(), database);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
@@ -195,7 +196,8 @@ pub(super) fn ensure_compose_file(
 		if existing.is_some() {
 			for one in compose_publish::narrowed(
 				&listeners,
-				&compose_publish::ports_in_file(&path),
+				&compose_publish::ports_in_file(&path)
+					.map_err(|error| compose_publish::apply_read(&path, error))?,
 				&published_ports,
 			) {
 				report.steps.push(ReportStep::Narrowed(one));
@@ -228,7 +230,9 @@ pub(super) fn ensure_compose_file(
 /// listener set the apply phase will write.
 pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, ApplyError> {
 	let listeners = listeners_to_write(answers)?;
-	let narrow = compose_publish::hosts_in_file(&compose_file_path(&answers.data_dir));
+	let path = compose_file_path(&answers.data_dir);
+	let narrow = compose_publish::hosts_in_file(&path)
+		.map_err(|error| compose_publish::apply_read(&path, error))?;
 	let published_ports = compose_publish::published(&listeners, &narrow, None);
 	let composed = ComposeFile::build(answers, published_ports, database);
 	render_document(&composed)

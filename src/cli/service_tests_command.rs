@@ -256,3 +256,36 @@ fn enable_and_disable_leave_the_config_alone_when_the_generated_file_is_broken()
 		}
 	}
 }
+
+/// A fifo where the generated compose file belongs would turn the listing into
+/// a command that waits for a writer that may never come. It has to say which
+/// file is in the way instead, and say it inside a second.
+#[test]
+#[cfg(unix)]
+fn a_fifo_at_the_generated_compose_path_stops_the_listing() {
+	fn mkfifo(path: &std::path::Path) {
+		let c_path = std::ffi::CString::new(path.to_str().expect("utf-8 path")).expect("nul-free");
+		// SAFETY: `c_path` is a NUL-terminated string valid for the call.
+		let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+		assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
+	}
+	let (_dir, file) = fixture();
+	let config = Config::load(file.path()).unwrap();
+	let compose = super::super::init::compose_file_path(&config.data_dir);
+	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	mkfifo(&compose);
+	let (sender, receiver) = std::sync::mpsc::channel();
+	let listed = std::thread::spawn(move || {
+		let _ = sender.send(list(&config, false, &mut Vec::new()));
+	});
+	let value = receiver.recv_timeout(std::time::Duration::from_secs(5));
+	if value.is_err() {
+		drop(std::fs::OpenOptions::new().write(true).open(&compose));
+	}
+	drop(listed);
+	let error = value
+		.unwrap_or_else(|_| panic!("service list waited for a fifo writer"))
+		.expect_err("a fifo is not a file to read");
+	assert!(error.contains("must be a regular file"), "{error}");
+	assert!(error.contains(&compose.display().to_string()), "{error}");
+}

@@ -248,18 +248,18 @@ fn an_unreadable_or_foreign_file_names_no_host_address() {
 	let path = super::super::compose::compose_file_path(dir.path());
 	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 	assert!(
-		hosts_in_file(&path).is_empty(),
+		hosts_in_file(&path).unwrap().is_empty(),
 		"no compose file at all: a host install"
 	);
 	std::fs::write(&path, b"not the JSON epistle init writes").unwrap();
-	assert!(hosts_in_file(&path).is_empty());
+	assert!(hosts_in_file(&path).unwrap().is_empty());
 	std::fs::write(
 		&path,
 		serde_json::to_vec(&serde_json::json!({"services": {"db": {}}})).unwrap(),
 	)
 	.unwrap();
 	assert!(
-		hosts_in_file(&path).is_empty(),
+		hosts_in_file(&path).unwrap().is_empty(),
 		"a file with no mail service pins nothing"
 	);
 }

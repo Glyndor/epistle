@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use super::apply::ApplyError;
 use super::compose::{compose_file_path, render_document};
+use super::compose_read;
 use crate::config::{Config, Listener, ListenerKind};
 
 /// The bind a listener published on a host address uses inside the container.
@@ -119,21 +120,26 @@ pub(super) fn hosts(document: &serde_json::Value) -> BTreeMap<u16, IpAddr> {
 	map
 }
 
-/// The narrow addresses the generated file already fixes. A file that cannot
-/// be read or parsed yields nothing: the callers are displaying a listing or
-/// re-rendering a map, and failing a listing over an unreadable stack file
-/// would be worse than showing no host column.
-pub(crate) fn hosts_in_file(path: &Path) -> BTreeMap<u16, IpAddr> {
-	document_in_file(path)
-		.map(|document| hosts(&document))
-		.unwrap_or_default()
+/// The narrow addresses the generated file already fixes. A file that does
+/// not parse yields nothing: the callers are re-rendering a map, and a
+/// generated file no parser can read is one the next write replaces whole.
+/// A file that can not be read at all is an error: it is a FIFO or a device at
+/// the path, and a listing that hid it would leave a command with no way to
+/// tell the operator that the stack file is not a file.
+pub(crate) fn hosts_in_file(path: &Path) -> Result<BTreeMap<u16, IpAddr>, String> {
+	Ok(document_in_file(path)?
+		.as_ref()
+		.map(hosts)
+		.unwrap_or_default())
 }
 
 /// The generated file as a document, `None` when it is not there or does not
 /// parse.
-fn document_in_file(path: &Path) -> Option<serde_json::Value> {
-	let bytes = std::fs::read(path).ok()?;
-	serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+fn document_in_file(path: &Path) -> Result<Option<serde_json::Value>, String> {
+	let Some(bytes) = compose_read::read(path)? else {
+		return Ok(None);
+	};
+	Ok(serde_json::from_slice::<serde_json::Value>(&bytes).ok())
 }
 
 /// The `ports:` list `document` carries, in the order it lists them.
@@ -147,10 +153,11 @@ pub(super) fn ports(document: &serde_json::Value) -> Vec<String> {
 
 /// The `ports:` list the generated file carries now, empty when it is not there
 /// or does not parse.
-pub(crate) fn ports_in_file(path: &Path) -> Vec<String> {
-	document_in_file(path)
-		.map(|document| ports(&document))
-		.unwrap_or_default()
+pub(crate) fn ports_in_file(path: &Path) -> Result<Vec<String>, String> {
+	Ok(document_in_file(path)?
+		.as_ref()
+		.map(ports)
+		.unwrap_or_default())
 }
 
 /// Map the listeners to the `ports:` array of the `mail` service. Every
@@ -320,6 +327,12 @@ struct Map {
 	wanted: Vec<String>,
 }
 
+/// A read that failed, in the shape every other config read of this command
+/// reports: the path it could not read and the reason.
+pub(super) fn apply_read(path: &Path, error: String) -> ApplyError {
+	ApplyError::ConfigRead(path.into(), std::io::Error::other(error))
+}
+
 /// Read the generated map once. `None` means the install has no compose file,
 /// so there is no map to compare and none to write.
 fn read_map(
@@ -328,10 +341,10 @@ fn read_map(
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
 ) -> Result<Option<Map>, ApplyError> {
 	let path = compose_file_path(data_dir);
-	let existing = match std::fs::read(&path) {
-		Ok(bytes) => bytes,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-		Err(error) => return Err(ApplyError::ConfigRead(path, error)),
+	let existing = match compose_read::read(&path) {
+		Ok(Some(bytes)) => bytes,
+		Ok(None) => return Ok(None),
+		Err(error) => return Err(apply_read(&path, error)),
 	};
 	let mut document: serde_json::Value = serde_json::from_slice(&existing)
 		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
@@ -451,7 +464,10 @@ pub(crate) fn prepare(
 /// a template fills in at run time.
 pub(crate) fn override_publishes(data_dir: &Path, ports: &[u16]) -> bool {
 	let path = compose_file_path(data_dir).with_file_name("compose.override.yaml");
-	let Ok(text) = std::fs::read_to_string(path) else {
+	let Ok(text) = compose_read::read(&path).map(|read| read.unwrap_or_default()) else {
+		return false;
+	};
+	let Ok(text) = String::from_utf8(text) else {
 		return false;
 	};
 	let mut mail_at: Option<usize> = None;
