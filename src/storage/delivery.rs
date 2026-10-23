@@ -2,6 +2,8 @@
 
 #[path = "delivery_io.rs"]
 mod io;
+#[path = "delivery_list.rs"]
+mod list;
 #[path = "delivery_policy.rs"]
 mod policy;
 #[path = "delivery_reports.rs"]
@@ -210,8 +212,10 @@ impl LocalDelivery {
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
-		// Mailing list: prepend List-* headers to the copies members receive.
-		let listed = self.list_message(message);
+		// Mailing list: the copy members receive, with the `List-*` fields
+		// this copy owns resolved on it.
+		let directory = self.directory.current();
+		let listed = list::list_copy(&directory, message);
 		let message = listed.as_ref().unwrap_or(message);
 		let mut delivered = Delivered::default();
 		// (Kind, domain) pairs already ingested for this message, so the report
@@ -236,23 +240,6 @@ impl LocalDelivery {
 			&mut ingested,
 		);
 		Ok(delivered)
-	}
-
-	/// If any recipient is a mailing list, a copy of the message with the list's
-	/// `List-*` headers prepended; otherwise `None` (deliver the original).
-	fn list_message(&self, message: &AcceptedMessage) -> Option<AcceptedMessage> {
-		let directory = self.directory.current();
-		let headers = message
-			.recipients
-			.iter()
-			.filter_map(|recipient| Address::parse(recipient).ok())
-			.find_map(|address| directory.list_headers(&address.to_string()))?;
-		let mut data = headers.into_bytes();
-		data.extend_from_slice(&message.data);
-		Some(AcceptedMessage {
-			data,
-			..message.clone()
-		})
 	}
 
 	/// Deliver one message to one account. An explicit `hint` mailbox (an
@@ -601,6 +588,10 @@ mod tests {
 #[cfg(test)]
 #[path = "delivery_forward_tests.rs"]
 mod forward_tests;
+
+#[cfg(test)]
+#[path = "delivery_list_tests.rs"]
+mod list_tests;
 
 #[cfg(test)]
 #[path = "delivery_tests_default_mailboxes.rs"]

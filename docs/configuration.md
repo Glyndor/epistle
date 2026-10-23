@@ -1801,7 +1801,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | `members` | Member addresses it delivers to (each a local account address). |
 | `senders` | Addresses allowed to send *as* the alias (From / MAIL FROM). Empty means any member may; a non-member is always refused. |
 | `hidden` | Keep the membership private — not disclosed through directory queries (default `true`). |
-| `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. |
+| `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. The value is written between angle brackets as it stands, so a `>` or a control character in it is refused at load |
 
 ### Masked email addresses
 Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.

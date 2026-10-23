@@ -9,6 +9,7 @@ pub mod encoded_word;
 pub mod header;
 pub mod header_block;
 pub mod mailbox_path;
+pub mod mailto;
 pub mod mutf7;
 pub mod path_component;
 pub mod path_containment;

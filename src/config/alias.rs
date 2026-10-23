@@ -21,6 +21,9 @@ pub struct Alias {
 	/// Treat this alias as a mailing list: when set, delivered copies carry
 	/// `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers
 	/// (RFC 2369/2919). Absent means a plain alias with no list headers.
+	/// The value is written between angle brackets as it stands, so it may
+	/// not carry a `>` or a control character; the alias is refused at load
+	/// when it does.
 	#[serde(default)]
 	pub list_id: Option<String>,
 }
@@ -49,10 +52,34 @@ impl Alias {
 				self.address
 			));
 		}
+		if let Some(list_id) = &self.list_id
+			&& !usable_list_id(list_id)
+		{
+			return Err(format!(
+				"alias {} has a list_id the list headers cannot carry",
+				self.address
+			));
+		}
 		Ok(())
 	}
+}
+
+/// A `list_id` has to survive the `List-Id` field it is written into: RFC 2919
+/// puts the phrase between angle brackets the server writes, so a `>` closes
+/// those brackets early and leaves the rest of the phrase outside the
+/// identifier, and a control character ends the line and lets the rest of the
+/// value read as further headers. Neither reaches a message: the configuration
+/// refuses the alias at load and the composer refuses the value afterwards.
+fn usable_list_id(list_id: &str) -> bool {
+	!list_id.is_empty()
+		&& list_id.is_ascii()
+		&& !list_id.chars().any(|c| c.is_control() || c == '>')
 }
 
 #[cfg(test)]
 #[path = "alias_separator_tests.rs"]
 mod separator_tests;
+
+#[cfg(test)]
+#[path = "alias_tests.rs"]
+mod tests;

@@ -142,26 +142,18 @@ fn line_end(data: &[u8], start: usize) -> usize {
 }
 
 fn remove(field: &[u8], hostname: &str, skip_leader: bool) -> bool {
-	let mut i = 0;
-	// Mirror mail-parser 0.11.9 (`src/parsers/header.rs::parse_header_name`):
-	// while the name has not started, fold `:` and every ASCII whitespace
-	// byte. The first byte that is neither starts the name; the first `:`
-	// after that ends it. Without this, `:Authentication-Results: x` parses
-	// to an empty name and no reserved-name branch fires.
-	if skip_leader {
-		while i < field.len() && (field[i] == b':' || field[i].is_ascii_whitespace()) {
-			i += 1;
-		}
-	}
-	if i >= field.len() {
-		return false;
-	}
-	let Some(rel) = field[i..].iter().position(|&byte| byte == b':') else {
+	use super::trace::{name_start, split_field_from};
+	// One extraction for the name of a field, shared with the submission
+	// strip: `name_start` folds the `:` and ASCII whitespace bytes mail-parser
+	// folds while the name has not started, and `split_field_from` folds the
+	// trailing whitespace DKIM and ARC-AMS fold. Without the first, `:X: x`
+	// parses to an empty name and no reserved-name branch fires.
+	let offset = if skip_leader { name_start(field) } else { 0 };
+	let Some((name, value)) = split_field_from(field, offset) else {
 		return false;
 	};
-	let name = trim_trailing_whitespace(field[i..i + rel].trim_ascii_end());
 	if name_matches(name, b"Authentication-Results") {
-		return authserv_id(&field[i + rel + 1..]).is_none_or(|id| {
+		return authserv_id(value).is_none_or(|id| {
 			id.trim_end_matches('.')
 				.eq_ignore_ascii_case(hostname.trim_end_matches('.'))
 		});
@@ -308,20 +300,6 @@ fn authserv_id(value: &[u8]) -> Option<String> {
 
 fn token(byte: u8) -> bool {
 	byte.is_ascii_graphic() && !b"()<>@,;:\\\"/[]?=".contains(&byte)
-}
-
-/// Fold trailing Unicode whitespace, matching DKIM and ARC-AMS which
-/// apply `name.trim_end()` on each header. RFC 5322 §3.6.8 limits field
-/// names to printable ASCII, so any non-ASCII byte at the end is already
-/// invalid; folding the 19 code points of `char::is_whitespace` closes
-/// the gap that let `Authentication-Results\u{00A0}` reach the sink as
-/// a canonical reserved name. Invalid UTF-8 is left untouched (mail-parser
-/// itself rejects it).
-fn trim_trailing_whitespace(name: &[u8]) -> &[u8] {
-	let Ok(s) = std::str::from_utf8(name) else {
-		return name;
-	};
-	s.trim_end().as_bytes()
 }
 
 /// Skip whitespace and nested comments without recursion or backtracking.

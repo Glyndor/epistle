@@ -199,52 +199,20 @@ pub fn apply(
 	if policy.bulk_unsubscribe
 		&& !unsubscribed
 		&& bulk(class, message.recipients.len(), policy.bulk_recipients)
-		&& let Some(uri) = unsubscribe_uri(&sender)
+		&& !sender.is_empty()
 	{
 		strip_headers(&mut message.data, &["list-unsubscribe-post"]);
 		push(
 			&mut lines,
 			"List-Unsubscribe",
-			compose::structured("List-Unsubscribe", &uri),
+			compose::structured(
+				"List-Unsubscribe",
+				&crate::util::mailto::unsubscribe(&sender),
+			),
 		);
 	}
-	prepend(&mut message.data, &lines);
+	crate::smtp::trace::prepend_header_block(&mut message.data, &lines);
 }
-
-/// The `mailto:` `List-Unsubscribe` for `sender`, percent-encoded per
-/// RFC 6068 so a `?`, an `&` or a `%` in the address cannot read as a query
-/// separator, and `None` for an empty reverse path, which names nobody to
-/// write to.
-fn unsubscribe_uri(sender: &str) -> Option<String> {
-	if sender.is_empty() {
-		return None;
-	}
-	Some(format!(
-		"<mailto:{}?subject=unsubscribe>",
-		percent_encoding::utf8_percent_encode(sender, MAILTO_TEXT)
-	))
-}
-
-/// The characters RFC 6068 leaves alone in a `mailto` address: the unreserved
-/// set and the delimiters an address spec may carry. Everything else, `%`
-/// and `?` and `&` included, is percent-encoded.
-const MAILTO_TEXT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-	.remove(b'-')
-	.remove(b'.')
-	.remove(b'_')
-	.remove(b'~')
-	.remove(b'!')
-	.remove(b'$')
-	.remove(b'\'')
-	.remove(b'(')
-	.remove(b')')
-	.remove(b'*')
-	.remove(b'+')
-	.remove(b',')
-	.remove(b';')
-	.remove(b':')
-	.remove(b'@')
-	.remove(b'/');
 
 /// Whether a submission counts as bulk for the `mailto` unsubscribe.
 ///
@@ -293,19 +261,6 @@ fn push(lines: &mut String, name: &str, header: Result<String, compose::ComposeE
 
 fn strip_headers(data: &mut Vec<u8>, names: &[&str]) {
 	crate::smtp::trace::strip_headers_in_place(data, names);
-}
-
-/// Put `lines` at the top of the header block, shifting the message up
-/// inside the same buffer when there is something to add.
-fn prepend(data: &mut Vec<u8>, lines: &str) {
-	if lines.is_empty() {
-		return;
-	}
-	let len = data.len();
-	data.reserve_exact(lines.len());
-	data.resize(len + lines.len(), 0);
-	data.copy_within(..len, lines.len());
-	data[..lines.len()].copy_from_slice(lines.as_bytes());
 }
 
 #[cfg(test)]
