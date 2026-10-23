@@ -142,3 +142,46 @@ fn an_inline_password_in_the_answers_file_is_refused() {
 		toml::from_str("address = \"alice@example.org\"\npassword = \"Zq8!vT3#mL0@pW6$\"\n");
 	assert!(parsed.is_err(), "an inline password must not deserialise");
 }
+
+/// The typed domain of the first account is compared in the form the system
+/// stores, so a U-label and an A-label of the same domain are one domain.
+#[test]
+fn an_internationalised_domain_matches_whichever_form_is_typed_or_configured() {
+	let a_label = vec!["xn--bcher-kva.example".to_string()];
+	let u_label = vec!["b\u{fc}cher.example".to_string()];
+	for typed in ["alice@b\u{fc}cher.example", "alice@xn--bcher-kva.example"] {
+		for configured in [&a_label, &u_label] {
+			let first = account(typed);
+			assert_eq!(
+				first.check(configured),
+				Ok(()),
+				"{typed} against {configured:?}"
+			);
+			assert_eq!(first.stored_address(), "alice@xn--bcher-kva.example");
+		}
+	}
+	let other = account("alice@b\u{fc}cher.example").check(&domains());
+	assert!(
+		other
+			.as_ref()
+			.is_err_and(|why| why.contains("not one of the configured domains")),
+		"{other:?}"
+	);
+}
+
+/// The account that already holds the name may spell its domain as a U-label
+/// in a configuration the full loader rejects, and the first account may be
+/// typed either way: it is still the same address, not a collision.
+#[test]
+fn an_existing_account_spelled_as_a_u_label_is_the_same_address() {
+	let holder = vec!["Alice@B\u{fc}cher.Example".to_string()];
+	for typed in ["alice@b\u{fc}cher.example", "alice@xn--bcher-kva.example"] {
+		let stored = account(typed).stored_address();
+		assert_eq!(name_holder("alice", &stored, &holder), Ok(true), "{typed}");
+	}
+	let other = vec!["alice@elsewhere.example".to_string()];
+	assert!(
+		name_holder("alice", "alice@xn--bcher-kva.example", &other).is_err(),
+		"a different domain is still a collision"
+	);
+}
