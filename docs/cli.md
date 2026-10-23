@@ -238,8 +238,63 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
-| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused) | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed | |
+| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
+
+The `clock` area adds two read-only probes. The host probe asks the
+kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
+the syscall is refused; the area is `ok` when the kernel reports a
+disciplined clock, `warn` when it does not or when neither probe can
+tell. The external probe is the [clock_external] block: three
+independent sources, a diagnostic median of the three valid readings,
+configurable warn/fail thresholds (defaults 1 s / 5 s). The area
+surfaces one line naming how many sources were authenticated over NTS,
+then one line per source, the external verdict, and the diagnostic median.
+The verdict uses the largest absolute valid offset, so any drifting peer
+can cause `Warn` or `Fail`. The smear diagnostic
+surfaces a `warn` when two authenticated sources agree within 100 ms and
+a plain one differs from their midpoint by more than 250 ms (a typical
+operator-visible signature of a leap-second smear on the plain server).
+The probe runs only when the area is reached, never writes the host
+clock, and uses no state between runs.
+
+The three defaults, `nts.netnod.se`, `nts.time.nl` and `ptbtime2.ptb.de`
+(all NTS), are three operators in three countries, so every offset of a
+default run is authenticated, with a diagnostic median that is insensitive
+to one drifting source. This median does not exclude that source from the
+verdict. Each answered the whole NTS exchange inside the budget when the
+list was chosen. `time.cloudflare.com` answers plain NTPv4 but its key
+exchange returns cookies and the authenticated poll then goes unanswered
+on the networks measured, and `time.google.com` publishes no NTS-KE
+endpoint, so neither is in the default list; either can replace a source
+as a plain `ntp` entry. Replace them when the chosen peers change; the
+list and the protocol per source are both yours to set, and a host that
+answers NTS on your network can be configured as `nts`. The two ports the probes
+dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
+`123/udp` (NTPv4, RFC 5905) for the plain ones; both must be reachable
+from the host that runs `epistle status`. The full run is capped at
+`2.1 s` and each source at `2 s` for the whole probe, so a server that
+answers the key exchange slowly cannot buy a second budget; a hung
+server is reported, never retried. A whole NTS exchange costs a dial, a
+TLS handshake, a key exchange and the authenticated poll, so it comes
+close to the `2 s` per-source budget. A source that misses
+the budget is reported as a timeout and the run loses its diagnostic
+median. One or two healthy readings give `warn`; no valid readings or any
+valid offset at or above the fail threshold gives `fail`. The budget
+itself is a constant in the binary, not a setting. With no route to those
+ports the probe stays red, and `enabled = false` in `[clock_external]`
+turns it off so the area reports the switch instead.
+
+The probe is read-only: nothing writes the host clock, and a Warn or
+Fail from this area never produces a `clock_drift_exceeded` event
+(`metrics.clock_drift_exceeded` only ticks on the host-jump probe,
+which the kernel's existing time source catches). Configure chrony or
+systemd-timesyncd for the host, and point that daemon at the servers of
+one provider: a host daemon fed by two providers that smear differently
+disagrees every night. The external probe is the opposite case on
+purpose. It takes one host per provider, reports a diagnostic median,
+and uses the largest absolute valid offset for its verdict. Smear
+detection is diagnostic too; every valid reading still affects the verdict.
 
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).

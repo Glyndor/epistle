@@ -38,6 +38,27 @@ hyper-util = { version = "=0.1.21", features = ["tokio", "service"] }
 idna = "1.1"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 libc = "0.2.186"
+# `ntp-proto` is pinned with `=` because every line below rides on an
+# `__internal` feature whose set of exports changes between releases.
+#
+# `rustcrypto`: the crate ships two TLS stacks and its `aws-lc` default
+# would link a second crypto provider next to the `ring` one we already
+# install through `src/tls`.
+#
+# `__internal-api`: ntp-proto 1.9.0's public API exports neither the
+# NTS-KE client nor the NTP packet, so `KeyExchangeClient`,
+# `NtsClientConfig`, `NtpPacket`, `PollInterval`, `ProtocolVersion`,
+# `SourceNtsData`, `Cipher`/`NoCipher` and `NtpTimestamp` only reach us
+# through this feature.
+#
+# `__internal-test`: `SourceNtsData` keeps its fields private and gates
+# the only accessors we need, `get_cookie` and `get_keys`, behind this
+# feature, and production reads the cookie and the two ciphers, so it
+# cannot move to `[dev-dependencies]`.
+#
+# `__internal-test` is the first of the two to go when ntp-proto exposes
+# a stable accessor pair on `SourceNtsData`.
+ntp-proto = { version = "=1.9.0", default-features = false, features = ["rustcrypto", "__internal-api", "__internal-test"] }
 psl = "2.1.212"
 rcgen = "0.14.8"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }

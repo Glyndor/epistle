@@ -30,7 +30,9 @@ mod tls;
 mod transport;
 mod validate;
 mod validate_limits;
-pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
+pub(crate) use validate::validate_addresses::{
+	embedded_ipv4, non_global_ipv4_reason, non_global_ipv6_reason,
+};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
 
@@ -502,6 +504,12 @@ pub struct Config {
 	/// Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub mixed_case: Vec<String>,
+	/// External-clock probe: three independent NTP/NTS sources and the
+	/// offsets `epistle status` and `epistle check clock` report. Absent
+	/// uses the design defaults (Cloudflare NTS, Netnod NTS, Google NTP,
+	/// warn 1 s, fail 5 s).
+	#[serde(default)]
+	pub clock_external: Option<crate::clock::external::ClockExternal>,
 }
 
 impl std::fmt::Debug for Config {
@@ -606,6 +614,7 @@ impl std::fmt::Debug for Config {
 			.field("auth", &self.auth)
 			.field("alerts", &self.alerts)
 			.field("hold_outbound", &self.hold_outbound)
+			.field("clock_external", &self.clock_external)
 			.finish()
 	}
 }

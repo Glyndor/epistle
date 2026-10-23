@@ -140,3 +140,214 @@ fn documentation_v6_range_edges() {
 	let boundary_out = "2001:db9::1".parse::<Ipv6Addr>().unwrap();
 	assert!(!is_documentation_v6(boundary_out));
 }
+
+#[test]
+fn review_special_ranges_are_not_public_addresses() {
+	for text in [
+		"0.1.2.3",
+		"192.0.0.9",
+		"198.18.0.1",
+		"198.19.255.255",
+		"240.0.0.1",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in ["fec0::1", "100::1", "2001:2::1", "3fff::1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_special_range_boundaries_and_global_controls() {
+	for text in [
+		"0.255.255.255",
+		"192.0.0.0",
+		"192.0.0.255",
+		"198.18.0.0",
+		"198.19.255.255",
+		"240.0.0.0",
+		"255.255.255.254",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in [
+		"1.0.0.0",
+		"192.0.1.0",
+		"198.17.255.255",
+		"198.20.0.0",
+		"223.255.255.255",
+	] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+	for text in [
+		"64:ff9b:1::1",
+		"2001::1",
+		"2001:10::1",
+		"2001:1ff::1",
+		"2002::1",
+		"3fff:fff:ffff::1",
+		"5f00::1",
+		"4000::1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	for text in [
+		"2001:1::1",
+		"2001:1::2",
+		"2001:1::3",
+		"2001:3::1",
+		"2001:4:112::1",
+		"2001:20::1",
+		"2001:30::1",
+		"2001:200::1",
+		"3fff:1000::1",
+		"::ffff:1.1.1.1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_registry_relay_anycast_is_not_global() {
+	for text in ["192.88.99.0", "192.88.99.2", "192.88.99.255"] {
+		assert!(
+			non_global_ipv4_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_registry_global_nat64_prefix_remains_public() {
+	assert!(non_global_ipv6_reason("64:ff9b::1.1.1.1".parse().unwrap()).is_none());
+}
+
+#[test]
+fn embedded_ipv4_payload_decides_the_verdict_in_every_form() {
+	// NAT64 (64:ff9b::/96), 6to4 (2002::/16), IPv4-compatible (::a.b.c.d) and
+	// IPv4-mapped (::ffff:a.b.c.d) all carry an IPv4 payload. Each one used to
+	// pass the range check without that payload ever being read.
+	for text in [
+		// NAT64.
+		"64:ff9b::7f00:1",
+		"64:ff9b::a00:1",
+		"64:ff9b::ac10:1",
+		"64:ff9b::c0a8:1",
+		"64:ff9b::6440:1",
+		"64:ff9b::a9fe:a9fe",
+		"64:ff9b::c000:201",
+		"64:ff9b::e000:1",
+		"64:ff9b::ffff:ffff",
+		"64:ff9b::",
+		// 6to4.
+		"2002:7f00:1::1",
+		"2002:a00:1::1",
+		"2002:c000:201::1",
+		"2002:e000:1::1",
+		"2002:ffff:ffff::1",
+		// IPv4-compatible and IPv4-mapped.
+		"::7f00:1",
+		"::10.0.0.1",
+		"::ffff:192.168.1.10",
+		"::ffff:100.64.0.1",
+		"::ffff:224.0.0.1",
+	] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+	// A global payload keeps the verdict the form already had: the mapped form
+	// and the public NAT64 prefix are global addresses, while the deprecated
+	// compatible form and 6to4 are refused on their own.
+	for text in ["64:ff9b::808:808", "64:ff9b::1.1.1.1", "::ffff:1.1.1.1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_none(),
+			"{text}"
+		);
+	}
+	for text in ["::1.1.1.1", "2002:101:101::1"] {
+		assert!(
+			non_global_ipv6_reason(text.parse().unwrap()).is_some(),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn review_loopback_and_unspecified_keep_their_own_message() {
+	// ::1 unfolds to the IPv4-compatible payload 0.0.0.1, and :: to 0.0.0.0.
+	// Both are refused either way, but the caller (mail.toml, init, tlsrpt)
+	// must still be told which address it was, not which payload it carries.
+	assert_eq!(
+		non_global_ipv6_reason("::1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	assert_eq!(
+		non_global_ipv6_reason("::".parse().unwrap()),
+		Some("the unspecified address (::)")
+	);
+	assert_eq!(
+		non_global_ipv6_reason("0:0:0:0:0:0:0:1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	// `::0.0.0.1` spells the same address as `::1`, so it is named the same
+	// way rather than read as a payload.
+	assert_eq!(
+		non_global_ipv6_reason("::0.0.0.1".parse().unwrap()),
+		Some("a loopback address (::1)")
+	);
+	// The rest of the deprecated compatible space keeps the payload reading,
+	// which is the only thing there is to say about it.
+	for text in ["::2", "::0.1.2.3"] {
+		assert_eq!(
+			non_global_ipv6_reason(text.parse().unwrap()),
+			Some("an IPv4-compatible IPv6 carrying a non-global address"),
+			"{text}"
+		);
+	}
+}
+
+#[test]
+fn embedded_ipv4_reason_names_the_form_and_the_payload() {
+	let cases: &[(Ipv6Addr, &[&str])] = &[
+		("64:ff9b::7f00:1".parse().unwrap(), &["NAT64", "loopback"]),
+		("64:ff9b::a00:1".parse().unwrap(), &["NAT64", "private"]),
+		("2002:7f00:1::1".parse().unwrap(), &["6to4", "loopback"]),
+		("::10.0.0.1".parse().unwrap(), &["compatible", "private"]),
+		(
+			"::ffff:192.168.1.10".parse().unwrap(),
+			&["IPv4-mapped", "private"],
+		),
+	];
+	for (ip, expected) in cases {
+		let reason = non_global_ipv6_reason(*ip).unwrap_or_else(|| panic!("{ip} accepted"));
+		for part in *expected {
+			assert!(reason.contains(part), "{ip}: {reason} lacks {part}");
+		}
+	}
+	// The unspecified address is an address of its own, not a payload of
+	// 0.0.0.0, so it keeps its own message.
+	assert_eq!(
+		non_global_ipv6_reason("::".parse().unwrap()),
+		Some("the unspecified address (::)")
+	);
+}

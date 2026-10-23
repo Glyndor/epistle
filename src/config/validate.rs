@@ -45,7 +45,16 @@ impl Config {
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
 		self.validate_max_recipients()?;
-		self.validate_message_limits()
+		self.validate_message_limits()?;
+		self.validate_clock_external()
+	}
+
+	fn validate_clock_external(&self) -> Result<(), ConfigError> {
+		let Some(external) = &self.clock_external else {
+			return Ok(());
+		};
+		external.validate().map_err(ConfigError::Invalid)?;
+		Ok(())
 	}
 
 	fn validate_dkim(&self) -> Result<(), ConfigError> {

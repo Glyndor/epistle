@@ -1140,6 +1140,133 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
 
+### `[clock_external]`
+
+Read-only external-clock probe `epistle status` and `epistle check clock`
+run when the area is reached. Three independent sources, diagnostic
+median, warn/fail thresholds. The probe runs once per `status` call and
+never writes the host clock; it is a probe for the operator, not a
+discipliner. A host with no route to the sources can switch it off with
+`enabled = false`: the area then says the probe is switched off, at `ok`,
+and makes no network call.
+
+```toml
+[clock_external]
+enabled = true      # false turns the probe off entirely
+warn_seconds = 1.0   # an offset at or above this reading is a Warn
+fail_seconds = 5.0   # an offset at or above this reading is a Fail
+sources = [
+  { host = "nts.netnod.se",    kind = "nts" },
+  { host = "nts.time.nl",      kind = "nts" },
+  { host = "ptbtime2.ptb.de",  kind = "nts" },
+]
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Run the probe. `false` switches it off: `epistle status` reports the switch at `ok` and queries nothing. The rest of the block is still validated, so a disabled probe cannot hide a broken file. |
+| `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). Below it all valid offsets are `Ok`; at or above it and below `fail_seconds` the largest absolute offset is `Warn`; at or above `fail_seconds` it is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
+| `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
+| `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations for internal deployments, including NTS-KE referrals. It grants nothing over ports. |
+| `allowed_ports` | array | `[]` | Ports the probe may dial besides the standard one for the protocol (TCP 4460 for NTS-KE, UDP 123 for NTP), for a peer that answers elsewhere. Each entry is a port number; none may be `0` and none may repeat. |
+| `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set and has to be the standard port for the protocol or one listed in `allowed_ports`. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
+
+Validation rules `Config::validate` enforces: exactly three sources; at
+least one NTS source; no duplicate hosts (case-insensitive); no empty
+hosts; no non-ASCII hosts; no whitespace or control characters in hosts;
+no `0` and no repeated entry in `allowed_ports`. The split between `nts`
+and `ntp` is otherwise the operator's. A `[clock_external]` that fails
+these checks refuses to load.
+
+The probe bounds: each source gets a `2 s` per-source deadline
+(`SOURCE_DEADLINE`) covering the whole probe, dial, TLS handshake,
+key exchange and authenticated exchange included rather than each of
+those separately; the whole run gets a `2.1 s` cap (`RUN_DEADLINE`).
+A hung server is reported, never retried.
+
+DNS uses asynchronous resolution with a separate 500 ms cap inside the
+source deadline. Both A and AAAA results are checked before connecting;
+if any returned address is forbidden, the whole answer is rejected. The
+probe connects to the selected validated address without resolving again.
+By default, sources and NTS-KE Server/Port referrals must use
+global unicast addresses, excluding shared, documentation, benchmarking,
+reserved, loopback, private and link-local networks,
+and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP).
+`allow_private_networks = true` is for deployments that dial internal
+servers, and `allowed_ports` is for a public peer that answers somewhere
+other than its standard port: neither one turns the other on. Even with
+`allow_private_networks = true`, multicast, unspecified and limited
+broadcast addresses are rejected. IPv4-mapped, IPv4-compatible, NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are classified using their
+embedded IPv4 address, and a transition address is refused on its own even
+when that payload is global, so the clock refuses exactly what a
+`public_ipv6` value is refused for. IPv6 zone identifiers such as `fe80::1%eth0` or `fe80::1%1`
+are not supported and are rejected with a configuration error, even with
+the opt-in, so the destination has to be one that needs no zone. Directed
+broadcast addresses cannot be identified without the destination
+network's prefix; blocking those networks is the job of the routing and
+egress policy of the network.
+
+The verdict currently uses the largest absolute offset among all valid
+readings. The median and `smear_excluded` are diagnostic values only: an
+outlier or a reading identified by the smear diagnostic can still cause
+`Warn` or `Fail`.
+They do not currently protect the verdict from a single incorrect peer.
+With one or two valid readings, a healthy offset still gives `Warn`; any
+valid offset at or above the fail threshold gives `Fail`. No valid readings
+gives `Fail`. The area also retains individual source and smear warnings.
+
+NTP eras are unfolded relative to the local wall clock. This handles the
+2036 rollover while the local clock is within 68 years of the remote time;
+it cannot establish an era independently of a severely incorrect host clock.
+
+The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
+`nts:ptbtime2.ptb.de`: Netnod (Sweden), SIDN Labs (Netherlands) and the
+Physikalisch-Technische Bundesanstalt (Germany), three independent
+operators, every offset authenticated. The diagnostic median is
+insensitive to one drifting source, subject to the verdict limitation
+above. All three answered the whole NTS exchange (key exchange, cookies,
+authenticated poll) from the development host when the list was measured
+on 2026-10-22. A whole NTS exchange costs a dial, a TLS handshake, the
+key exchange and the authenticated poll, so on a slow link it comes close
+to the `2 s` budget: `nts.netnod.se` took between 1.37 s and 1.82 s on
+the development host across eight consecutive runs. The `2 s` per-source
+budget is a constant in the binary, not a key here. A miss is reported as
+a timeout, the run loses its diagnostic median, and the area gives at
+least `Warn`; no valid readings or a valid offset at the fail threshold
+gives `Fail`. Measure the three from the host that will run
+`epistle status`, because a network can answer one operator and not
+another.
+
+Two other providers are not in the list because of what they answered:
+
+- `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
+  attempt measured. Its NTS-KE endpoint answers the key exchange and
+  returns cookies, then never answers the authenticated poll, on every run
+  recorded for this branch and at budgets up to 15 s. Use it as
+  `kind = "ntp"`, or set `kind = "nts"` on a network where its
+  authenticated exchange does answer.
+- `time.google.com` publishes no NTS-KE endpoint, so it can only be a plain
+  NTPv4 source.
+
+Replace any of them when the chosen peers change; keep one provider per
+autonomous system, and set `kind` per source to what that source actually
+answers.
+
+Two notes an operator should have. The area renders one line saying how
+many of the sources were authenticated over NTS and names them, so a run
+with a plain source among them does not read as equally trusted offsets.
+And the leap-second smear check compares one plain reading against two
+authenticated readings that agree within 100 ms, so on the shipped list,
+which has no plain source, it stays dormant; it can fire when an operator
+replaces one `nts` source with a plain `ntp` one.
+
+The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
+design that drove the first delivery. They are the same numbers
+`docs/limits.md` would expose as adjustable limits if a catalog entry
+were added later. Until then they live in `[clock_external]` and
+`Config::validate` enforces the strict-less relation.
+
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
 

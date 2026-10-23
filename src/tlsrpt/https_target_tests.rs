@@ -109,6 +109,34 @@ async fn plain_http_and_unresolvable_names_are_refused() {
 	assert!(reason.contains("no address"), "{reason}");
 }
 
+/// The recipient domain chooses where the report goes, so an IPv6 literal
+/// that carries an IPv4 payload is checked as that IPv4: NAT64
+/// (64:ff9b::/96) and 6to4 (2002::/16) reach loopback and RFC 1918 without the
+/// IPv6 range ever being looked at.
+#[tokio::test]
+async fn ip_literals_carrying_a_non_global_ipv4_are_refused() {
+	for host in [
+		"[64:ff9b::7f00:1]",
+		"[64:ff9b::10.0.0.1]",
+		"[64:ff9b::169.254.169.254]",
+		"[2002:7f00:1::1]",
+		"[2002:c000:201::1]",
+		"[::127.0.0.1]",
+		"[::ffff:192.168.1.10]",
+	] {
+		let never = |_host: String, _port: u16| async {
+			panic!("an IP literal must not be resolved");
+			#[allow(unreachable_code)]
+			Ok::<Vec<SocketAddr>, std::io::Error>(Vec::new())
+		};
+		let reason = refused(check(&format!("https://{host}/v1/tlsrpt"), never).await);
+		assert!(
+			reason.contains("carrying"),
+			"{host}: the refusal must name the payload it carries, got: {reason}"
+		);
+	}
+}
+
 /// The production poster runs the check before any connection: a loopback
 /// destination fails with the refusal, not with a connection error.
 #[tokio::test]
