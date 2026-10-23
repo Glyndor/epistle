@@ -5,12 +5,35 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitStatus, String) {
+/// The whole budget one guided run may take.
+const DEADLINE: Duration = Duration::from_secs(120);
+
+/// How much longer the master is read once the child is gone. The child
+/// exiting does not close the terminal while another process still holds its
+/// slave open, and that process is nobody this test can wait for.
+const DRAIN: Duration = Duration::from_secs(10);
+
+/// This test, by name, for the copies it starts. Each copy skips it so a copy
+/// never starts copies of its own.
+const SELF: &str = "the_target_passes_with_several_copies_at_once";
+
+/// The two ends of a pseudo-terminal, both closed across `exec`.
+///
+/// The tests of this target run in parallel threads, and each one spawns
+/// `epistle init` while the others still hold their own pair open. An
+/// inheritable descriptor is inherited by whichever child the next test spawns,
+/// and that child then holds the slave of a terminal whose master is waiting
+/// for the end of its stream: the end never arrives, the owner waits out its
+/// deadline, and the two tests wait on each other for good. `openpty` leaves
+/// both descriptors inheritable, so the flag is set here. `Command` puts the
+/// slave on the child's standard descriptors with `dup2`, which clears it
+/// there, so the child still reads from the terminal.
+fn pseudo_terminal() -> (File, File) {
 	let (mut master, mut slave) = (-1, -1);
 	// SAFETY: openpty receives valid descriptor out pointers; optional settings are null.
 	assert_eq!(
@@ -25,8 +48,23 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 		},
 		0
 	);
+	for descriptor in [master, slave] {
+		// SAFETY: F_SETFD takes a live descriptor and a flag set to install.
+		assert_eq!(
+			unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) },
+			0
+		);
+	}
 	// SAFETY: openpty returned fresh descriptors owned by these File values.
-	let (mut master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
+	(unsafe { File::from_raw_fd(master) }, unsafe {
+		File::from_raw_fd(slave)
+	})
+}
+
+/// Start `epistle init` on its own pseudo-terminal. `root` holds the state
+/// directory, so no run reads or writes the draft of another one.
+fn spawn_on_terminal(root: &Path, colour: bool) -> (File, Child) {
+	let (master, slave) = pseudo_terminal();
 	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
 	command
 		.arg("init")
@@ -40,10 +78,40 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 		.stdin(slave.try_clone().unwrap())
 		.stdout(Stdio::piped())
 		.stderr(slave);
-	let mut child = command.spawn().unwrap();
-	drop(command);
+	// An ignored disposition survives `exec`. A background job of a shell, a
+	// service manager and a container runtime all start a process with SIGINT
+	// ignored, and that process would hand `epistle init` a Ctrl-C that stops
+	// nothing, so the guided setup would wait out its deadline. The child
+	// starts from the default disposition, which is what a terminal session
+	// gives it, and the two tests that interrupt a run expect that.
+	// SAFETY: the closure runs between `fork` and `exec`, where the only work
+	// allowed is async-signal-safe. It calls `signal` and returns.
+	unsafe {
+		command.pre_exec(|| {
+			libc::signal(libc::SIGINT, libc::SIG_DFL);
+			Ok(())
+		});
+	}
+	let child = command.spawn().expect("spawn epistle init");
+	(master, child)
+}
+
+/// Whether the child is gone and the master has been waiting for the end of
+/// its stream for [`DRAIN`], which means nobody this test owns is going to
+/// close the terminal. `since` carries the moment the child was first seen
+/// gone, so the caller only starts counting once.
+fn orphaned_terminal(child: &mut Child, since: &mut Option<Instant>) -> bool {
+	if since.is_none() && child.try_wait().expect("child status").is_some() {
+		*since = Some(Instant::now());
+	}
+	since.is_some_and(|gone| gone.elapsed() > DRAIN)
+}
+
+fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitStatus, String) {
+	let (mut master, mut child) = spawn_on_terminal(root, colour);
 	master.write_all(input.as_bytes()).unwrap();
-	let deadline = Instant::now() + Duration::from_secs(120);
+	let deadline = Instant::now() + DEADLINE;
+	let mut gone = None;
 	let mut screen = Vec::new();
 	let mut signalled = false;
 	loop {
@@ -51,6 +119,11 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 			let _ = child.kill();
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline");
+		}
+		if orphaned_terminal(&mut child, &mut gone) {
+			panic!(
+				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
+			);
 		}
 		let mut poll = libc::pollfd {
 			fd: master.as_raw_fd(),
@@ -227,35 +300,10 @@ fn terminal_stepwise(
 	steps: &[(&str, &str)],
 	interrupt_at: &str,
 ) -> (ExitStatus, String) {
-	let (mut master, mut slave) = (-1, -1);
-	// SAFETY: openpty receives valid descriptor out pointers; optional settings are null.
-	assert_eq!(
-		unsafe {
-			libc::openpty(
-				&mut master,
-				&mut slave,
-				std::ptr::null_mut(),
-				std::ptr::null(),
-				std::ptr::null(),
-			)
-		},
-		0
-	);
-	// SAFETY: openpty returned fresh descriptors owned by these File values.
-	let (mut master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
-	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
-	command
-		.arg("init")
-		.env("XDG_STATE_HOME", root.join("state"))
-		.env("NO_COLOR", "1")
-		.env("TERM", "dumb")
-		.stdin(slave.try_clone().unwrap())
-		.stdout(Stdio::piped())
-		.stderr(slave);
-	let mut child = command.spawn().unwrap();
-	drop(command);
-	let deadline = Instant::now() + Duration::from_secs(120);
+	let (mut master, mut child) = spawn_on_terminal(root, false);
+	let deadline = Instant::now() + DEADLINE;
 	let mut screen = Vec::new();
+	let mut gone = None;
 	let mut answered = 0;
 	let mut signalled = false;
 	loop {
@@ -263,6 +311,11 @@ fn terminal_stepwise(
 			let _ = child.kill();
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline: {screen:?}");
+		}
+		if orphaned_terminal(&mut child, &mut gone) {
+			panic!(
+				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
+			);
 		}
 		let mut poll = libc::pollfd {
 			fd: master.as_raw_fd(),
@@ -333,4 +386,81 @@ fn a_pasted_dns_credential_is_never_echoed_by_the_terminal() {
 	assert!(text.contains("EPISTLE_DNS_TOKEN"), "{text}");
 	assert!(!root.join("etc").exists(), "{text}");
 	println!("{text}");
+}
+
+/// A pseudo-terminal must not reach a process this test did not give it to.
+///
+/// The tests of this target run in parallel and each spawns `epistle init`
+/// while the others still hold their own pair open, so a descriptor left
+/// inheritable is inherited by whichever child the next test spawns. That
+/// child then holds the slave of a terminal whose master is waiting for the end
+/// of its stream: the end never arrives and the owning test waits out its
+/// deadline for a child that already exited.
+#[test]
+fn a_pseudo_terminal_does_not_reach_another_process() {
+	let (_master, _slave) = pseudo_terminal();
+	let listing = Command::new("/bin/sh")
+		.arg("-c")
+		.arg("for f in /proc/self/fd/*; do readlink \"$f\" || true; done")
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::null())
+		.output()
+		.expect("list the descriptors the child was given");
+	assert!(
+		listing.status.success(),
+		"listing the descriptors failed: {}",
+		String::from_utf8_lossy(&listing.stderr)
+	);
+	let seen = String::from_utf8_lossy(&listing.stdout);
+	assert!(
+		!seen.contains("/dev/pts"),
+		"a pseudo-terminal reached a process that was given none: {seen}"
+	);
+}
+
+/// How many copies of this target run at once.
+const COPIES: usize = 4;
+
+/// Run this target against itself, several copies at once, and require every
+/// copy to pass.
+///
+/// The copies stand for the rest of a test run, and the launcher that starts
+/// each of them stands for the supervisor it runs under: a background job of a
+/// shell, a service manager and a container runtime all start a process with
+/// SIGINT ignored, and an ignored disposition survives `exec`, so a copy that
+/// inherited it could not be interrupted at all. Between them, running several
+/// copies at once also multiplies what each copy asks of the machine, which is
+/// what turned a leaked pseudo-terminal into a run that never finished. A copy
+/// runs the whole target with this test skipped, so nothing recurses.
+#[test]
+fn the_target_passes_with_several_copies_at_once() {
+	let program = std::env::current_exe().expect("path of this test binary");
+	let mut copies = Vec::new();
+	for _ in 0..COPIES {
+		copies.push(
+			Command::new("/bin/sh")
+				.arg("-c")
+				.arg("trap '' INT; exec \"$0\" \"$@\"")
+				.arg(&program)
+				.arg("--skip")
+				.arg(SELF)
+				.env_remove("RUST_TEST_THREADS")
+				.stdin(Stdio::null())
+				.stdout(Stdio::piped())
+				.stderr(Stdio::piped())
+				.spawn()
+				.expect("copy of this test binary"),
+		);
+	}
+	for (index, copy) in copies.into_iter().enumerate() {
+		let output = copy.wait_with_output().expect("output of a copy");
+		assert!(
+			output.status.success(),
+			"copy {index} of {} failed with {:?}: {}",
+			COPIES,
+			output.status,
+			String::from_utf8_lossy(&output.stdout)
+		);
+	}
 }

@@ -29,6 +29,8 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them. The static alias table and the structured addresses of a JMAP Email/set refuse them too.
   * `epistle init` compares the domain of the first account with the configured domains in the form the system stores, so an internationalised domain typed as a U-label matches its A-label.
   * `epistle service set NAME --bind ADDRESS --port PORT` moves a listener that is already enabled, publishes the address on the host without touching the operator override, and `service list` shows where each service is published.
+  * The guided setup test target no longer hangs when the whole suite runs, and
+    no longer depends on how the run was started.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
