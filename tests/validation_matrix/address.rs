@@ -68,6 +68,14 @@ fn an_address_answers_the_same_through_the_parser_and_the_store() {
 			"torre\r\u{00e9}@example.org".to_string(),
 		),
 		(
+			"SMTPUTF8 local part with a line separator",
+			"torre\u{2028}control@example.org".to_string(),
+		),
+		(
+			"SMTPUTF8 local part with a paragraph separator",
+			"torre\u{2029}control@example.org".to_string(),
+		),
+		(
 			"an internationalised address",
 			"torre@b\u{fc}cher.example".to_string(),
 		),
@@ -132,6 +140,8 @@ fn an_address_answers_the_same_through_the_parser_and_the_store() {
 		("plus tag", true),
 		("SMTPUTF8 local part", true),
 		("SMTPUTF8 local part with a control", false),
+		("SMTPUTF8 local part with a line separator", false),
+		("SMTPUTF8 local part with a paragraph separator", false),
 		("an internationalised address", true),
 		("local at 64 octets", true),
 		("local at 65 octets", false),

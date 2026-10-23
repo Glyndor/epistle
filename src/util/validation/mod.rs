@@ -24,9 +24,15 @@ pub const ATEXT: &str = "!#$%&'*+-/=?^_`{|}~";
 
 /// Whether `c` may appear in an RFC 5321 dot-atom: an ASCII letter or digit,
 /// one of [`ATEXT`], or, for a server that advertises SMTPUTF8 (RFC 6531),
-/// any non-ASCII character that is not a control.
+/// any non-ASCII character that is not a control and not a Unicode line or
+/// paragraph separator. `char::is_control` covers the C0 and C1 ranges only,
+/// and U+2028 and U+2029 break a log line and some clients the way a newline
+/// does, so they are refused here, as the Sieve script name and mailbox name
+/// rules already refuse them.
 pub fn is_atext(c: char) -> bool {
-	c.is_ascii_alphanumeric() || ATEXT.contains(c) || (!c.is_ascii() && !c.is_control())
+	c.is_ascii_alphanumeric()
+		|| ATEXT.contains(c)
+		|| (!c.is_ascii() && !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
 }
 
 /// [`is_atext`] over octets, for the callers that walk raw bytes. A byte is

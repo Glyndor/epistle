@@ -53,14 +53,17 @@ fn smtputf8_local_parts_are_at_ext_plus_non_ascii() {
 	assert!(!is_atext('\n'));
 	assert!(!is_atext('\0'));
 	assert!(!is_atext('\u{7f}'), "DEL is a control character");
-	// The SMTPUTF8 branch keys on `char::is_control`, which is the C0 and C1
-	// ranges only. U+2028 and U+2029 are Unicode separators, not controls, so
-	// an internationalised local part carries them. The Sieve script-name and
-	// mailbox-folder rules name them explicitly instead, which is why they do
-	// not share this function. Pinned here so the difference is a decision
-	// rather than a drift.
-	assert!(is_atext('\u{2028}'));
-	assert!(is_atext('\u{2029}'));
+	// `char::is_control` is the C0 and C1 ranges only, so the Unicode line and
+	// paragraph separators need their own refusal: they break a log line and
+	// some clients the way a newline does, and the Sieve script-name and
+	// mailbox-folder rules refuse them too.
+	assert!(!is_atext('\u{2028}'), "line separator");
+	assert!(!is_atext('\u{2029}'), "paragraph separator");
+	assert!(is_atext('\u{2027}'), "the code point before the separators");
+	assert!(
+		is_atext('\u{202a}'),
+		"the code point after them stays a character"
+	);
 }
 
 #[test]
