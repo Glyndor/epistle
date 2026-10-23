@@ -324,11 +324,14 @@ fn execute_with(
 	};
 	// A command killed between its two renames leaves the configuration and
 	// the generated map describing different stacks. This one reconciles
-	// them, so it is where the operator hears about it.
-	if !dry_run && let Ok(current) = Config::load(path) {
-		super::init::announce_mixed_state(&current, err);
+	// them, so it is where the operator hears about it. The state it compares
+	// comes from the verified read that opens the document, so a fifo where
+	// the configuration belongs is refused here instead of waited on with the
+	// lock in hand.
+	let (document, previous) = super::service_edit::listener_document(path, name.kind(), enabled)?;
+	if !dry_run {
+		super::init::announce_mixed_state(&previous, err);
 	}
-	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
 	let action = if enabled { "enable" } else { "disable" };
 	let fields = serde_json::json!({ "service": name.as_str(), "enabled": enabled });
 	let failure =

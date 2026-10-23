@@ -12,7 +12,7 @@ mod apply;
 mod assistant;
 mod compose;
 mod compose_publish;
-mod compose_read;
+pub(crate) mod compose_read;
 pub(crate) mod db_roles;
 mod detect;
 mod draft;

@@ -9,13 +9,6 @@ use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
-fn mkfifo(path: &Path) {
-	let c_path = std::ffi::CString::new(path.to_str().expect("utf-8 path")).expect("nul-free");
-	// SAFETY: `c_path` is a NUL-terminated string valid for the call.
-	let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-	assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-}
-
 /// The addresses `hosts_in_file` reads at `path` if it comes back inside five
 /// seconds. A fifo with no writer releases the reader only when a writer
 /// appears, so the deadline is the assertion, and the writer opened afterwards
@@ -58,7 +51,7 @@ fn generated(dir: &Path) -> std::path::PathBuf {
 fn a_fifo_at_the_generated_compose_path_is_refused_instead_of_waited_on() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = generated(dir.path());
-	mkfifo(&path);
+	fifo_at(&path);
 	let error = within(&path).expect_err("a fifo is not a file to read");
 	assert!(error.contains("must be a regular file"), "{error}");
 	assert!(error.contains(&path.display().to_string()), "{error}");
@@ -72,7 +65,7 @@ fn a_link_to_a_fifo_is_refused_instead_of_waited_on() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = generated(dir.path());
 	let pipe = dir.path().join("pipe");
-	mkfifo(&pipe);
+	fifo_at(&pipe);
 	std::os::unix::fs::symlink(&pipe, &path).unwrap();
 	let error = within(&path).expect_err("a link to a fifo is not a file to read");
 	assert!(error.contains("must be a regular file"), "{error}");
@@ -119,7 +112,7 @@ fn a_fifo_at_the_generated_compose_path_stops_the_map_readers_too() {
 	use super::super::compose_publish;
 	use crate::config::{Listener, ListenerKind};
 	let dir = tempfile::tempdir().unwrap();
-	mkfifo(&generated(dir.path()));
+	fifo_at(&generated(dir.path()));
 	let listeners = [Listener {
 		kind: ListenerKind::Imaps,
 		addr: "0.0.0.0".parse().unwrap(),

@@ -43,6 +43,15 @@ pub(super) struct UpdatePlan {
 	pub(super) config_path: std::path::PathBuf,
 }
 
+/// The generated file as text. Every writer of it holds the common lock while
+/// it reads, so this goes through the reader that refuses a fifo instead of
+/// waiting for a writer that may never come and holding the lock while it does.
+fn compose_text(compose: &Path) -> Result<String, String> {
+	let bytes = crate::cli::init::compose_read::read(compose)?
+		.ok_or_else(|| format!("cannot read {}: there is no such file", compose.display()))?;
+	String::from_utf8(bytes).map_err(|_| format!("{} is not valid UTF-8", compose.display()))
+}
+
 /// Read the compose file at `compose`, render it again for an install
 /// whose config has `data_dir` and `listeners`, and decide the podup steps.
 /// `Err` names what could not be read or understood; nothing is written.
@@ -51,8 +60,7 @@ pub(super) fn plan_update(
 	data_dir: &Path,
 	listeners: &[Listener],
 ) -> Result<UpdatePlan, String> {
-	let existing = std::fs::read_to_string(compose)
-		.map_err(|error| format!("cannot read {}: {error}", compose.display()))?;
+	let existing = compose_text(compose)?;
 	let regenerated = crate::cli::init::regenerate(data_dir, listeners, &existing)?;
 	let old: Value = serde_json::from_str(&existing).map_err(|error| error.to_string())?;
 	let new: Value = serde_json::from_str(&regenerated.text).map_err(|error| error.to_string())?;
@@ -210,10 +218,12 @@ const RESTART_AREAS: [super::status::CheckArea; 3] = [
 	super::status::CheckArea::Db,
 ];
 
-/// Whether the compose file on disk has a `db` service.
+/// Whether the compose file on disk has a `db` service. Read the same way, so
+/// a fifo at the path is skipped over instead of waited on with the lock held.
 fn plan_has_database(compose: &Path) -> bool {
-	std::fs::read(compose)
+	crate::cli::init::compose_read::read(compose)
 		.ok()
+		.flatten()
 		.and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
 		.is_some_and(|value| value["services"].get("db").is_some())
 }

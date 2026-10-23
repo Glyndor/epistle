@@ -170,10 +170,11 @@ fn updated_compose(
 	token_path: &Path,
 ) -> Result<Option<ComposeUpdate>, String> {
 	let path = super::super::init::compose_file_path(&config.data_dir);
-	let bytes = match fs::read(&path) {
-		Ok(bytes) => bytes,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-		Err(_) => return Err("cannot read compose.yaml".into()),
+	// The read happens with the common lock in hand, so it goes through the
+	// reader that refuses a fifo instead of waiting for a writer that may
+	// never come and holding the lock while it does.
+	let Some(bytes) = super::super::init::compose_read::read(&path)? else {
+		return Ok(None);
 	};
 	let mut document: serde_json::Value = serde_json::from_slice(&bytes)
 		.map_err(|_| "compose.yaml must be generated Compose JSON")?;

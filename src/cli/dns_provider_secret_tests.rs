@@ -1,8 +1,115 @@
 use super::*;
+use crate::cli::init::compose_read::fifo_at;
 use clap::Parser;
 use std::os::unix::fs::PermissionsExt;
 
 const TOKEN: &str = "private-dns-token";
+
+/// The command's own answer if it comes back inside five seconds. A fifo with
+/// no writer releases its reader only when a writer appears, so the deadline is
+/// the assertion, and the writer opened afterwards is what lets a run that
+/// waited finish instead of holding this thread for the rest of the suite.
+/// `config` is where `mail.toml` lives, `fifo` the pipe standing in for the
+/// generated file this command reads under the lock.
+fn within(config: &Path, fifo: &Path) -> Result<ExitCode, String> {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	let crate::cli::Command::Dns { action, .. } = crate::cli::Cli::try_parse_from([
+		"epistle",
+		"dns",
+		"provider",
+		"set",
+		"desec",
+		"--zone",
+		"example.org",
+		"--store-token",
+	])
+	.unwrap()
+	.command
+	else {
+		unreachable!()
+	};
+	let (sender, receiver) = mpsc::channel();
+	let reading = config.to_path_buf();
+	let release = fifo.to_path_buf();
+	let running = std::thread::spawn(move || {
+		sender
+			.send(
+				execute_with(
+					&reading,
+					action,
+					false,
+					false,
+					&mut Vec::new(),
+					&mut Vec::new(),
+					|_, _| panic!("a refused generated file must not reach the stack"),
+				)
+				.map_err(|error| error.to_string()),
+			)
+			.ok();
+	});
+	let value = receiver.recv_timeout(Duration::from_secs(5));
+	if value.is_err() {
+		drop(std::fs::OpenOptions::new().write(true).open(&release));
+	}
+	let result = value.unwrap_or_else(|_| {
+		panic!(
+			"dns provider set waited for a writer of {} that never came",
+			release.display()
+		)
+	});
+	running.join().expect("the command thread panicked");
+	result
+}
+
+/// A fifo where the generated compose file belongs would turn `dns provider set
+/// --store-token` into a command that waits for a writer that may never come,
+/// and it reads that file with the common lock in hand, so the wait would hold
+/// the lock with it. Both shapes have to be refused with the path in the
+/// message, the token has to stay where it was, and the lock has to come back.
+#[test]
+fn a_fifo_at_the_generated_compose_path_stops_the_token_migration_and_frees_the_lock() {
+	for linked in [false, true] {
+		let dir = tempfile::tempdir().unwrap();
+		let data = dir.path().join("data");
+		std::fs::create_dir(&data).unwrap();
+		let path = dir.path().join("mail.toml");
+		std::fs::write(
+			&path,
+			format!(
+				"hostname = 'mail.example.org'\ndata_dir = {data:?}\n[dns]\nprovider = 'desec'\nzone = 'example.org'\ntoken = '{TOKEN}'\n"
+			),
+		)
+		.unwrap();
+		std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+		let compose = crate::cli::init::compose_file_path(&data);
+		std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+		let fifo = dir.path().join("compose.fifo");
+		fifo_at(&fifo);
+		if linked {
+			std::os::unix::fs::symlink(&fifo, &compose).unwrap();
+		} else {
+			std::fs::rename(&fifo, &compose).unwrap();
+		}
+		let label = format!("a {} fifo", if linked { "linked" } else { "direct" });
+		let error = within(&path, &fifo).expect_err(&label);
+		assert!(error.contains("must be a regular file"), "{label}: {error}");
+		assert!(
+			error.contains(&compose.display().to_string()),
+			"{label}: {error}"
+		);
+		assert!(
+			!dir.path().join("secrets/dns_provider_token").exists(),
+			"{label}: the token it could not mount must not be stored"
+		);
+		assert!(
+			crate::storage::lock::FileLock::try_acquire(&dir.path().join(".epistle-config.lock"))
+				.unwrap()
+				.is_some(),
+			"{label}: the common lock must come back"
+		);
+	}
+}
 
 fn migrate(source: &str, dry_run: bool, stack: bool) {
 	let dir = tempfile::tempdir().unwrap();

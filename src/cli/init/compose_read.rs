@@ -18,7 +18,7 @@ use std::path::Path;
 
 /// The bytes of the generated compose file, or `None` when the install has
 /// none. The reason a read failed, naming the path it could not read.
-pub(super) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
 	let mut options = std::fs::OpenOptions::new();
 	options.read(true);
 	#[cfg(unix)]
@@ -41,6 +41,17 @@ pub(super) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
 	file.read_to_end(&mut bytes)
 		.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
 	Ok(Some(bytes))
+}
+
+/// A named pipe at `path`, the shape that turns a blocking read into a wait.
+/// Shared by the tests of every reader, so each of them stands the same case
+/// up the same way.
+#[cfg(all(test, unix))]
+pub(crate) fn fifo_at(path: &Path) {
+	let c_path = std::ffi::CString::new(path.to_str().expect("utf-8 path")).expect("nul-free");
+	// SAFETY: `c_path` is a NUL-terminated string valid for the call.
+	let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+	assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
 }
 
 #[cfg(all(test, unix))]

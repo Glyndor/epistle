@@ -1,10 +1,51 @@
 use super::*;
 
+#[cfg(unix)]
+use crate::cli::init::compose_read::fifo_at;
+
 pub(super) fn fixture() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let dir = tempfile::tempdir_in(".").unwrap();
 	let file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	std::fs::write(file.path(), format!("# deployment\nhostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['example.org']\n\n# public socket\n[[listeners]]\nkind = 'smtp'\naddr = '0.0.0.0'\n", dir.path().canonicalize().unwrap())).unwrap();
 	(dir, file)
+}
+
+/// `execute_with(path, action)` if it comes back inside five seconds. A fifo
+/// with no writer releases its reader only when a writer appears, so the
+/// deadline is the assertion, and the writer opened afterwards is what lets a
+/// run that waited finish instead of holding this thread for the rest of the
+/// suite.
+#[cfg(unix)]
+fn within(path: &Path, fifo: &Path, action: ServiceCli) -> Result<ExitCode, String> {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	let (sender, receiver) = mpsc::channel();
+	let reading = path.to_path_buf();
+	let release = fifo.to_path_buf();
+	let running = std::thread::spawn(move || {
+		sender
+			.send(
+				execute_with(
+					&reading,
+					action,
+					false,
+					false,
+					&mut Vec::new(),
+					&mut Vec::new(),
+					|_, _| panic!("a refused configuration must not reach the stack"),
+				)
+				.map_err(|error| error.to_string()),
+			)
+			.ok();
+	});
+	let value = receiver.recv_timeout(Duration::from_secs(5));
+	if value.is_err() {
+		drop(std::fs::OpenOptions::new().write(true).open(&release));
+	}
+	let result =
+		value.unwrap_or_else(|_| panic!("{} waited for a writer that never came", path.display()));
+	running.join().expect("the command thread panicked");
+	result
 }
 
 #[test]
@@ -29,6 +70,7 @@ fn service_command_dry_run_then_change_and_no_op() {
 	let expected =
 		super::super::service_edit::listener_document(file.path(), ListenerKind::WebDav, true)
 			.unwrap()
+			.0
 			.dry_run()
 			.unwrap();
 	assert_eq!(
@@ -263,17 +305,11 @@ fn enable_and_disable_leave_the_config_alone_when_the_generated_file_is_broken()
 #[test]
 #[cfg(unix)]
 fn a_fifo_at_the_generated_compose_path_stops_the_listing() {
-	fn mkfifo(path: &std::path::Path) {
-		let c_path = std::ffi::CString::new(path.to_str().expect("utf-8 path")).expect("nul-free");
-		// SAFETY: `c_path` is a NUL-terminated string valid for the call.
-		let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-		assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-	}
 	let (_dir, file) = fixture();
 	let config = Config::load(file.path()).unwrap();
 	let compose = super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
-	mkfifo(&compose);
+	fifo_at(&compose);
 	let (sender, receiver) = std::sync::mpsc::channel();
 	let listed = std::thread::spawn(move || {
 		let _ = sender.send(list(&config, false, &mut Vec::new()));
@@ -288,4 +324,53 @@ fn a_fifo_at_the_generated_compose_path_stops_the_listing() {
 		.expect_err("a fifo is not a file to read");
 	assert!(error.contains("must be a regular file"), "{error}");
 	assert!(error.contains(&compose.display().to_string()), "{error}");
+}
+
+/// A fifo where `mail.toml` belongs would turn `enable` and `disable` into
+/// commands that wait for a writer that may never come, and each one reads the
+/// file with the common lock in hand, so the wait would hold the lock with it.
+/// Both have to name the file that is in the way instead, inside a few seconds,
+/// and leave the lock free for the next writer.
+#[test]
+#[cfg(unix)]
+fn a_fifo_at_the_config_path_stops_enable_and_disable_and_frees_the_lock() {
+	// A link is how a fifo gets past a check of the path itself, so it is the
+	// case a reader that follows it has to refuse on its own.
+	for (linked, refusal) in [
+		(false, "config must be a regular file"),
+		(true, "is a symlink"),
+	] {
+		for action in [
+			ServiceCli::Enable {
+				name: ServiceName::Imap,
+			},
+			ServiceCli::Disable {
+				name: ServiceName::Imap,
+			},
+		] {
+			let dir = tempfile::tempdir_in(".").unwrap();
+			let path = dir.path().join("mail.toml");
+			let fifo = dir.path().join("mail.toml.fifo");
+			fifo_at(&fifo);
+			if linked {
+				std::os::unix::fs::symlink(&fifo, &path).unwrap();
+			} else {
+				std::fs::rename(&fifo, &path).unwrap();
+			}
+			let label = format!(
+				"{action:?} on a {} configuration",
+				if linked { "linked" } else { "direct" }
+			);
+			let error = within(&path, &fifo, action).expect_err(&label);
+			assert!(error.contains(refusal), "{label}: {error}");
+			assert!(
+				crate::storage::lock::FileLock::try_acquire(
+					&dir.path().join(".epistle-config.lock")
+				)
+				.unwrap()
+				.is_some(),
+				"{label} must leave the common lock free"
+			);
+		}
+	}
 }
