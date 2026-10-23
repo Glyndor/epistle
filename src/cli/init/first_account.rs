@@ -72,9 +72,19 @@ impl fmt::Debug for Password {
 }
 
 impl FirstAccount {
-	/// The address as it is stored: lowercase.
+	/// The address as it is stored: lowercase, with the domain in the form the
+	/// rest of the system keeps (`bücher.example` is `xn--bcher-kva.example`).
+	/// A domain that cannot be normalised stays as typed, in lowercase, and
+	/// [`FirstAccount::check`] refuses it for not being a configured one.
 	pub fn stored_address(&self) -> String {
-		self.address.trim().to_ascii_lowercase()
+		let typed = self.address.trim().to_ascii_lowercase();
+		match typed.rsplit_once('@') {
+			Some((local, domain)) => match crate::domain::normalize(domain) {
+				Ok(stored) => format!("{local}@{stored}"),
+				Err(_) => typed,
+			},
+			None => typed,
+		}
 	}
 
 	/// The account name the address gives: its local part in lowercase,
@@ -126,10 +136,12 @@ impl FirstAccount {
 		if local.is_empty() || domain.is_empty() {
 			return Err(format!("{:?} is not a mail address", self.address));
 		}
-		if !domains
-			.iter()
-			.any(|served| served.eq_ignore_ascii_case(domain))
-		{
+		if !domains.iter().any(|served| {
+			crate::domain::normalize(served).map_or_else(
+				|_| served.eq_ignore_ascii_case(domain),
+				|stored| stored == domain,
+			)
+		}) {
 			return Err(format!(
 				"{domain} is not one of the configured domains ({})",
 				domains.join(", ")
