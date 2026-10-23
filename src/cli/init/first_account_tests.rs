@@ -168,3 +168,20 @@ fn an_internationalised_domain_matches_whichever_form_is_typed_or_configured() {
 		"{other:?}"
 	);
 }
+
+/// The account that already holds the name may spell its domain as a U-label
+/// in a configuration the full loader rejects, and the first account may be
+/// typed either way: it is still the same address, not a collision.
+#[test]
+fn an_existing_account_spelled_as_a_u_label_is_the_same_address() {
+	let holder = vec!["Alice@B\u{fc}cher.Example".to_string()];
+	for typed in ["alice@b\u{fc}cher.example", "alice@xn--bcher-kva.example"] {
+		let stored = account(typed).stored_address();
+		assert_eq!(name_holder("alice", &stored, &holder), Ok(true), "{typed}");
+	}
+	let other = vec!["alice@elsewhere.example".to_string()];
+	assert!(
+		name_holder("alice", "alice@xn--bcher-kva.example", &other).is_err(),
+		"a different domain is still a collision"
+	);
+}

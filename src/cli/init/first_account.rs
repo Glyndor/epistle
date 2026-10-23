@@ -71,20 +71,28 @@ impl fmt::Debug for Password {
 	}
 }
 
+/// `address` in the form the system stores: trimmed, lowercase, with the
+/// domain normalised when it can be. Used for the typed address and for the
+/// addresses of accounts that already exist, so both sides of a comparison
+/// are spelled the same way.
+fn stored_form(address: &str) -> String {
+	let typed = address.trim().to_ascii_lowercase();
+	match typed.rsplit_once('@') {
+		Some((local, domain)) => match crate::domain::normalize(domain) {
+			Ok(stored) => format!("{local}@{stored}"),
+			Err(_) => typed,
+		},
+		None => typed,
+	}
+}
+
 impl FirstAccount {
 	/// The address as it is stored: lowercase, with the domain in the form the
 	/// rest of the system keeps (`bücher.example` is `xn--bcher-kva.example`).
 	/// A domain that cannot be normalised stays as typed, in lowercase, and
 	/// [`FirstAccount::check`] refuses it for not being a configured one.
 	pub fn stored_address(&self) -> String {
-		let typed = self.address.trim().to_ascii_lowercase();
-		match typed.rsplit_once('@') {
-			Some((local, domain)) => match crate::domain::normalize(domain) {
-				Ok(stored) => format!("{local}@{stored}"),
-				Err(_) => typed,
-			},
-			None => typed,
-		}
+		stored_form(&self.address)
 	}
 
 	/// The account name the address gives: its local part in lowercase,
@@ -357,7 +365,7 @@ fn static_pairs(config: &Config) -> Vec<(String, Vec<String>)> {
 fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result<bool, String> {
 	if holder_addresses
 		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(address))
+		.any(|existing| stored_form(existing) == stored_form(address))
 	{
 		return Ok(true);
 	}
