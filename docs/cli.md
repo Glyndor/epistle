@@ -258,18 +258,18 @@ operator-visible signature of a leap-second smear on the plain server).
 The probe runs only when the area is reached, never writes the host
 clock, and uses no state between runs.
 
-The three defaults, `time.cloudflare.com` (plain NTP), `nts.netnod.se`
-(NTS) and `time.google.com` (plain NTP), are three independent ASes,
-with a diagnostic median that is insensitive to one drifting source.
-This median does not exclude that source from the verdict. Each source
-carries the protocol that peer answered when the list was chosen:
-Netnod answers the whole NTS exchange inside the budget, Cloudflare
-answers plain NTPv4 but its key exchange returns cookies and the
-authenticated poll then goes unanswered on the networks measured, so it
-ships as plain NTPv4, and Google publishes no NTS-KE endpoint. Replace
-them when the chosen peers change; the list and the
-protocol per source are both yours to set, and a host that answers NTS
-on your network can be configured as `nts`. The two ports the probes
+The three defaults, `nts.netnod.se`, `nts.time.nl` and `ptbtime2.ptb.de`
+(all NTS), are three operators in three countries, so every offset of a
+default run is authenticated, with a diagnostic median that is insensitive
+to one drifting source. This median does not exclude that source from the
+verdict. Each answered the whole NTS exchange inside the budget when the
+list was chosen. `time.cloudflare.com` answers plain NTPv4 but its key
+exchange returns cookies and the authenticated poll then goes unanswered
+on the networks measured, and `time.google.com` publishes no NTS-KE
+endpoint, so neither is in the default list; either can replace a source
+as a plain `ntp` entry. Replace them when the chosen peers change; the
+list and the protocol per source are both yours to set, and a host that
+answers NTS on your network can be configured as `nts`. The two ports the probes
 dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
 `123/udp` (NTPv4, RFC 5905) for the plain ones; both must be reachable
 from the host that runs `epistle status`. The full run is capped at

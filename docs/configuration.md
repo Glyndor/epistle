@@ -1220,42 +1220,46 @@ NTP eras are unfolded relative to the local wall clock. This handles the
 2036 rollover while the local clock is within 68 years of the remote time;
 it cannot establish an era independently of a severely incorrect host clock.
 
-The shipped sources are `ntp:time.cloudflare.com`, `nts:nts.netnod.se`
-and `ntp:time.google.com`: one provider each, three independent
-autonomous systems. The diagnostic median is insensitive to one drifting
-source, subject to the verdict limitation above. The
-protocol on each one is what that provider answered when the list was
-measured on 2026-10-22, over the real `2 s` budget:
+The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
+`nts:ptbtime2.ptb.de`: Netnod (Sweden), NLnet Labs (Netherlands) and the
+Physikalisch-Technische Bundesanstalt (Germany), three independent
+operators, every offset authenticated. The diagnostic median is
+insensitive to one drifting source, subject to the verdict limitation
+above. All three answered the whole NTS exchange (key exchange, cookies,
+authenticated poll) from the development host when the list was measured
+on 2026-10-22. A whole NTS exchange costs a dial, a TLS handshake, the
+key exchange and the authenticated poll, so on a slow link it comes close
+to the `2 s` budget: `nts.netnod.se` took between 1.37 s and 1.82 s on
+the development host across eight consecutive runs. The `2 s` per-source
+budget is a constant in the binary, not a key here. A miss is reported as
+a timeout, the run loses its diagnostic median, and the area gives at
+least `Warn`; no valid readings or a valid offset at the fail threshold
+gives `Fail`. Measure the three from the host that will run
+`epistle status`, because a network can answer one operator and not
+another.
 
-- `nts.netnod.se` answers the whole NTS exchange (key exchange, cookies,
-  authenticated poll) inside the budget on every attempt measured, and it
-  is the one authenticated source in the default list. A whole NTS exchange
-  costs a dial, a TLS handshake, the key exchange and the authenticated
-  poll, so on a slow link it comes close to the `2 s` budget: on the
-  development host it took between 1.37 s and 1.82 s across eight
-  consecutive runs. The `2 s` per-source budget is a constant in the
-  binary, not a key here. A miss is reported as a timeout, the run loses
-  its diagnostic median, and the area gives at least `Warn`; no valid
-  readings or a valid offset at the fail threshold gives `Fail`.
+Two other providers are not in the list because of what they answered:
+
 - `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
   attempt measured. Its NTS-KE endpoint answers the key exchange and
   returns cookies, then never answers the authenticated poll, on every run
-  recorded for this branch and at budgets up to 15 s. It ships as plain
-  NTPv4. On a network where Cloudflare's authenticated exchange does
-  answer, set `kind = "nts"` for it and nothing else needs to change.
-- `time.google.com` publishes no NTS-KE endpoint, so it is plain NTPv4.
+  recorded for this branch and at budgets up to 15 s. Use it as
+  `kind = "ntp"`, or set `kind = "nts"` on a network where its
+  authenticated exchange does answer.
+- `time.google.com` publishes no NTS-KE endpoint, so it can only be a plain
+  NTPv4 source.
 
 Replace any of them when the chosen peers change; keep one provider per
 autonomous system, and set `kind` per source to what that source actually
 answers.
 
 Two notes an operator should have. The area renders one line saying how
-many of the sources were authenticated over NTS and names them, because a
-run with one authenticated source and two plain ones must not read as
-three equally trusted offsets. And the leap-second smear policy needs
-two authenticated readings that agree within 100 ms, so on the shipped
-list it stays dormant; it fires when an operator configures two or more
-`nts` sources.
+many of the sources were authenticated over NTS and names them, so a run
+with a plain source among them does not read as equally trusted offsets.
+And the leap-second smear check compares one plain reading against two
+authenticated readings that agree within 100 ms, so on the shipped list,
+which has no plain source, it stays dormant; it fires when an operator
+replaces one `nts` source with a plain `ntp` one.
 
 The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
 design that drove the first delivery. They are the same numbers

@@ -253,15 +253,20 @@ fn authentication_item(run: &Run) -> Item {
 			),
 		);
 	}
+	let gap = run.sources.len() - authenticated.len();
+	let tail = if gap == 0 {
+		String::new()
+	} else {
+		format!("; the other {gap} did not authenticate over NTS")
+	};
 	Item::new(
 		"authentication",
 		Level::Ok,
 		format!(
-			"{} of {} sources authenticated over NTS ({}); the other {} did not authenticate over NTS",
+			"{} of {} sources authenticated over NTS ({}){tail}",
 			authenticated.len(),
 			run.sources.len(),
-			authenticated.join(", "),
-			run.sources.len() - authenticated.len()
+			authenticated.join(", ")
 		),
 	)
 }

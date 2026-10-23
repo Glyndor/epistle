@@ -9,25 +9,20 @@ use crate::clock::external::source::{
 fn default_source_list_is_three_independent_providers() {
 	let sources = default_sources();
 	assert_eq!(sources.len(), 3);
-	assert_eq!(sources[0].kind, SourceKind::Ntp);
-	assert_eq!(sources[0].host, "time.cloudflare.com");
-	assert_eq!(sources[1].kind, SourceKind::Nts);
-	assert_eq!(sources[1].host, "nts.netnod.se");
-	assert_eq!(sources[2].kind, SourceKind::Ntp);
-	assert_eq!(sources[2].host, "time.google.com");
+	let hosts: Vec<&str> = sources.iter().map(|source| source.host.as_str()).collect();
+	assert_eq!(hosts, ["nts.netnod.se", "nts.time.nl", "ptbtime2.ptb.de"]);
 }
 
-/// The shipped list carries exactly one authenticated source, the one whose
-/// NTS-KE exchange answers. An operator can change the protocol per source,
-/// so a list with two or three NTS entries is a valid choice too and the
-/// defaults must not be the only shape that loads.
+/// The shipped list is three NTS sources from three operators, so every
+/// offset of a default run is authenticated. An operator can change the
+/// protocol per source, so a list with plain entries is a valid choice too
+/// and the defaults must not be the only shape that loads.
 #[test]
-fn default_source_list_carries_one_authenticated_source() {
+fn default_source_list_is_all_authenticated() {
 	let sources = default_sources();
-	let nts = sources.iter().filter(|source| source.is_nts()).count();
-	assert_eq!(
-		nts, 1,
-		"only nts.netnod.se answers the authenticated exchange"
+	assert!(
+		sources.iter().all(|source| source.kind == SourceKind::Nts),
+		"the default list must not carry an unauthenticated source"
 	);
 	assert!(ClockExternal::default().validate().is_ok());
 }

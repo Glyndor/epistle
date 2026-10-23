@@ -10,15 +10,17 @@ use super::assessment::{Outcome, SignedOffset};
 pub(super) const EXPECTED_SOURCES: usize = 3;
 
 /// Default source list the area uses when nothing else is configured: three
-/// independent autonomous systems, one per provider, with the protocol each
-/// one answered on when the list was measured.
+/// NTS sources run by three different operators in three countries, each
+/// one measured to complete the whole NTS exchange, so every offset in the
+/// default run is authenticated.
 ///
-/// The provider choice is Cloudflare, Netnod and Google. The protocol is
-/// what each answered: `time.cloudflare.com` completes the NTS key
-/// exchange and then never answers the authenticated poll from the
-/// networks measured, so it ships as plain NTPv4; `nts.netnod.se`
-/// answers the whole NTS exchange; `time.google.com` publishes no NTS-KE
-/// endpoint, so it is plain NTPv4.
+/// `nts.netnod.se` is Netnod (Sweden), `nts.time.nl` is NLnet Labs
+/// (Netherlands) and `ptbtime2.ptb.de` is the Physikalisch-Technische
+/// Bundesanstalt (Germany). `time.cloudflare.com` answers plain NTPv4 but
+/// its key exchange returns cookies the authenticated poll never answers
+/// from the networks measured, and `time.google.com` publishes no NTS-KE
+/// endpoint, so neither is in the default list; either can be added as a
+/// plain `ntp` source.
 ///
 /// The median is diagnostic; every valid offset affects the verdict. The
 /// list is a default, not a rule: an operator can change the hosts and
@@ -26,9 +28,9 @@ pub(super) const EXPECTED_SOURCES: usize = 3;
 /// can be configured as `nts`.
 pub fn default_sources() -> Vec<Source> {
 	vec![
-		Source::ntp("time.cloudflare.com"),
 		Source::nts("nts.netnod.se"),
-		Source::ntp("time.google.com"),
+		Source::nts("nts.time.nl"),
+		Source::nts("ptbtime2.ptb.de"),
 	]
 }
 

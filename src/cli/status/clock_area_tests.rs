@@ -67,8 +67,8 @@ fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
 	found.unwrap()
 }
 
-/// The default list carries one authenticated source, so the area must say
-/// so instead of rendering three offsets that read as equally trusted.
+/// The default list authenticates all three sources, and the area says so by
+/// name instead of leaving the operator to infer it from three offsets.
 #[test]
 fn the_area_names_how_many_sources_were_authenticated() {
 	let external = ClockExternal::default();
@@ -78,14 +78,14 @@ fn the_area_names_how_many_sources_were_authenticated() {
 	assert_eq!(note.status, Level::Ok, "{note:?}");
 	assert!(
 		note.detail
-			.contains("1 of 3 sources authenticated over NTS"),
+			.contains("3 of 3 sources authenticated over NTS"),
 		"{note:?}"
 	);
 	assert!(note.detail.contains("nts.netnod.se"), "{note:?}");
+	assert!(note.detail.contains("ptbtime2.ptb.de"), "{note:?}");
 	assert!(
-		note.detail
-			.contains("the other 2 did not authenticate over NTS"),
-		"the line must say how many did not authenticate; {note:?}"
+		!note.detail.contains("did not authenticate"),
+		"every default source authenticates, so the line names no gap; {note:?}"
 	);
 }
 
@@ -166,7 +166,7 @@ fn a_configured_nts_source_that_never_answered_is_not_counted_as_authenticated()
 #[test]
 fn nts_configured_but_failed_leaves_the_other_offsets_plain() {
 	let external = ClockExternal::default();
-	let run = assessed_run(&[Some(0.01), None, Some(0.01)]);
+	let run = assessed_run_over(mixed_sources(), &[Some(0.01), None, Some(0.01)]);
 	let report = compose(HostClock::Synced, Some(&run), &external, None);
 	let note = item(&report, "authentication");
 	assert_eq!(note.status, Level::Warn, "{note:?}");
@@ -230,8 +230,21 @@ fn a_run_that_came_back_carries_no_probe_failure() {
 }
 
 fn assessed_run(offsets: &[Option<f64>]) -> Run {
+	assessed_run_over(ClockExternal::default().effective_sources(), offsets)
+}
+
+/// The list an operator gets by keeping one NTS source and two plain ones.
+fn mixed_sources() -> Vec<Source> {
+	vec![
+		Source::ntp("time.cloudflare.com"),
+		Source::nts("nts.netnod.se"),
+		Source::ntp("time.google.com"),
+	]
+}
+
+fn assessed_run_over(sources: Vec<Source>, offsets: &[Option<f64>]) -> Run {
 	let external = ClockExternal::default();
-	let mut run = run_over(external.effective_sources());
+	let mut run = run_over(sources);
 	run.readings = offsets
 		.iter()
 		.zip(&run.sources)
@@ -292,6 +305,7 @@ fn review_smear_candidate_remains_in_the_verdict() {
 	let mut run = assessed_run(&[Some(0.0), Some(0.05), Some(10.0)]);
 	run.sources[0] = Source::nts("first.example");
 	run.sources[1] = Source::nts("second.example");
+	run.sources[2] = Source::ntp("time.google.com");
 	for (reading, source) in run.readings.iter_mut().zip(&run.sources) {
 		reading.source = source.clone();
 	}
