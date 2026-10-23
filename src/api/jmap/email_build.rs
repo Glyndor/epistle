@@ -65,13 +65,23 @@ fn headers(spec: &Value) -> Result<Vec<String>, Value> {
 		("bcc", "Bcc"),
 		("replyTo", "Reply-To"),
 	] {
-		let addresses: Vec<String> = spec
+		let listed: Vec<&Value> = spec
 			.get(property)
 			.and_then(Value::as_array)
 			.into_iter()
 			.flatten()
-			.filter_map(render_address)
 			.collect();
+		// `render_address` only strips controls, and the Unicode line and
+		// paragraph separators are not controls, so the address parser's
+		// refusal of them is repeated here for the structured addresses.
+		if listed.iter().any(|addr| {
+			addr.get("email")
+				.and_then(Value::as_str)
+				.is_some_and(crate::util::validation::has_line_separator)
+		}) {
+			return Err(invalid(&[property]));
+		}
+		let addresses: Vec<String> = listed.into_iter().filter_map(render_address).collect();
 		if !addresses.is_empty() {
 			let line = compose::address_list(name, &addresses).map_err(|_| invalid(&[property]))?;
 			lines.push(line);
@@ -140,3 +150,7 @@ fn is_content_header(name: &str) -> bool {
 pub(super) fn invalid(properties: &[&str]) -> Value {
 	json!({"type": "invalidProperties", "properties": properties})
 }
+
+#[cfg(test)]
+#[path = "email_build_tests.rs"]
+mod tests;

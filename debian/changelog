@@ -25,6 +25,8 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     median. The source list and the protocol per source are configurable, the
     probe is read-only, per-source and per-run deadlines bound the call, and
     `enabled = false` turns it off on a host with no route to the time sources.
+  * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them.
+  * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them. The static alias table and the structured addresses of a JMAP Email/set refuse them too.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
