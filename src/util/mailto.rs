@@ -4,7 +4,7 @@
 
 /// The characters RFC 6068 leaves alone in a `mailto` address: the unreserved
 /// set and the delimiters an address spec may carry. Everything else, `%`
-/// and `?` and `&` included, is percent-encoded.
+/// and `?` and `&` and `/` included, is percent-encoded.
 const MAILTO_TEXT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
 	.remove(b'-')
 	.remove(b'.')
@@ -20,8 +20,7 @@ const MAILTO_TEXT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUM
 	.remove(b',')
 	.remove(b';')
 	.remove(b':')
-	.remove(b'@')
-	.remove(b'/');
+	.remove(b'@');
 
 /// A `mailto:` URI naming `address`, percent-encoded per RFC 6068 so a `?`,
 /// an `&` or a `%` in the address cannot read as a query separator.

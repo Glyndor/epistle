@@ -96,6 +96,25 @@ fn submitted_to_the_list(client_headers: &str) -> AcceptedMessage {
 	message
 }
 
+/// Mail to the list address from a sender outside it, delivered without the
+/// submission pass: the path unauthenticated inbound mail takes, where
+/// nothing has deduplicated the fields a sender wrote twice.
+fn inbound_to_the_list(client_headers: &str) -> AcceptedMessage {
+	AcceptedMessage {
+		reverse_path: "someone@remote.example".into(),
+		recipients: vec!["team@example.org".to_string()],
+		data: format!(
+			"From: Someone <someone@remote.example>\r\n{client_headers}Subject: hi\r\n\r\nbody\r\n"
+		)
+		.into_bytes(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: false,
+		no_dsn: Vec::new(),
+	}
+}
+
 #[test]
 fn a_member_receives_one_copy_of_each_list_field() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -144,5 +163,42 @@ fn a_one_click_unsubscribe_the_sender_published_is_the_one_that_stays() {
 	assert!(
 		text.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"),
 		"the post lost the URL it names:\n{text}"
+	);
+}
+
+/// Inbound mail carries no submission pass, so a sender that published the
+/// unsubscribe fields twice reached the member twice. The stored copy keeps
+/// one of each: the first, which is the pair RFC 8058 posts to when the sender
+/// published it first.
+#[test]
+fn an_inbound_message_with_two_unsubscribes_leaves_one_in_the_copy() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = LocalDelivery::new(dir.path(), directory_handle()).expect("delivery");
+	delivery
+		.deliver(inbound_to_the_list(
+			"List-Unsubscribe: <https://remote.example/u/one>\r\n\
+			 List-Unsubscribe: <https://remote.example/u/two>\r\n\
+			 List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\
+			 List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n",
+		))
+		.expect("deliver to the list");
+	let raw = stored(dir.path(), "alice");
+	one_field_each(
+		&raw,
+		&[
+			"List-Id",
+			"List-Post",
+			"List-Unsubscribe",
+			"List-Unsubscribe-Post",
+		],
+	);
+	let text = String::from_utf8_lossy(&raw);
+	assert!(
+		text.contains("List-Unsubscribe: <https://remote.example/u/one>\r\n"),
+		"the second copy is not the one that went:\n{text}"
+	);
+	assert!(
+		!text.contains("List-Unsubscribe: <https://remote.example/u/two>\r\n"),
+		"the member received the sender's second claim:\n{text}"
 	);
 }

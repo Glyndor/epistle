@@ -45,7 +45,7 @@ without regard to case.
 | `Action`, `Diagnostic-Code`, `Final-Recipient`, `Remote-MTA`, `Reporting-MTA`, `Status` | Inside the `message/delivery-status` part of a failure or delay notice | RFC 3464 fields, not top-level headers. One block per recipient |
 | `Arrival-Date`, `Feedback-Type`, `Original-Mail-From`, `Reported-Domain`, `Source-IP`, `User-Agent`, `Version` | Inside the `message/feedback-report` part of an abuse report | RFC 5965 fields, not top-level headers. `User-Agent` is the mail hostname in the report epistle sends on its own, and `epistle/<version>` in the report `epistle report-abuse` prints |
 | `Authentication-Results` | Inbound mail from a peer that did not log in, when a resolver is configured and the peer address is known. Never on a submission: no check of ours happens on one, so a field naming one would be a claim about a hop that did not take place, and the client's is dropped on all three paths | Authserv-id is the mail hostname. Lists `spf`, one `dkim` entry per signature (`dkim=none` without one) and `dmarc`. On unauthenticated SMTP, fields naming our hostname (case-insensitively) or with an unparseable authserv-id are removed before ours is added. Parseable foreign ids are kept below ours as untrusted information. The preamble reader accepts MIME tokens and quoted values, comments, folding and an optional numeric version |
-| `Auto-Submitted` | REST `auto_submitted` field; every system message (`auto-generated`) except the vacation reply (`auto-replied (vacation)`) | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). The server writes `auto-generated` on the mail it generates itself, bounces included, whatever the original sender asked for; `system_auto_submitted` (`true`) turns that off, and with it off every generated message leaves without the field, failure notices and delay warnings among them, so nothing stops a bounce loop by that field alone and the null return path is what prevents it. A vacation reply stays `auto-replied (vacation)`: it is an answer, not a generated message |
+| `Auto-Submitted` | REST `auto_submitted` field; every system message (`auto-generated`) except the vacation reply (`auto-replied (vacation)`) and the report `epistle report-abuse` prints, which carries none | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). The server writes `auto-generated` on the mail it generates itself, bounces included, whatever the original sender asked for; `system_auto_submitted` (`true`) turns that off on every builder that reads it: the failure notice, the delay warning, alert emails, and the DMARC and TLS-RPT reports. With it off none of those leaves with the field, so nothing stops a bounce loop by that field alone and the null return path is what prevents it. The abuse report builder does not read the switch and always writes `auto-generated`, and the report `epistle report-abuse` prints carries no `Auto-Submitted` at all. A vacation reply stays `auto-replied (vacation)`: it is an answer, not a generated message |
 | `Bcc`, `Resent-Bcc` | Removed at SMTP submission and at JMAP `EmailSubmission/set`; never written by the REST API | The recipients stay on the envelope. A JMAP draft keeps `Bcc`. Inbound mail keeps whatever the sender wrote |
 | `Cc`, `Sender`, `Reply-To` | REST fields `cc`, `sender`, `reply_to`; JMAP Email properties | Written only when given |
 | `Content-Disposition`, `Content-ID`, `Content-Transfer-Encoding`, `Content-Type`, `MIME-Version` | The MIME builder behind REST, JMAP, replies and reports | `Content-Transfer-Encoding` is `7bit`, `quoted-printable` or `base64` as the content needs. `Content-ID` only on inline parts |
@@ -57,8 +57,8 @@ without regard to case.
 | `From` | REST (with the `from_name` or the account's display name as phrase); JMAP; system messages | On SMTP submission the client's `From` is kept as is. The send-as rule decides which addresses an account may use |
 | `Importance`, `X-Priority` | REST `importance` field | `high` writes `Importance: high` and `X-Priority: 1 (Highest)`, `normal` writes `3 (Normal)`, `low` writes `5 (Lowest)` |
 | `In-Reply-To`, `References` | REST fields; JMAP properties; vacation replies when the original had a `Message-ID` | |
-| `List-Id`, `List-Post` | Local delivery to a list address (an alias with a list id); a submission whose envelope sender is that list address | Delivery writes them onto each stored copy above `Received`, replacing whatever that copy carried for them, together with a `List-Unsubscribe` when the copy has none. Submission writes the same block onto the queued copy with the same rule: the two fields that say what the list is replace whatever the client wrote, and the unsubscribe the client chose is kept. `default_list_id` (`true`) turns that off |
-| `List-Unsubscribe`, `List-Unsubscribe-Post` | REST `list_unsubscribe` and `list_unsubscribe_post`; local delivery to a list address and a submission from one (`List-Unsubscribe` only); bulk `transactional` submissions (`List-Unsubscribe` only) | REST: at most four URLs, `mailto:` or `https://`, and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` needs an `https://` URL. Marketing mail is refused without both. A list address gets a `mailto:` URL with `?subject=unsubscribe`, which is also what a bulk `transactional` submission gets when it has none; a client's `List-Unsubscribe-Post` is removed with it, since it would name an `https` URL the message no longer carries |
+| `List-Id`, `List-Post` | Local delivery to a list address (an alias with a list id); a submission whose envelope sender is that list address | Delivery writes them onto each stored copy above `Received`, replacing whatever that copy carried for them, together with a `List-Unsubscribe` when the copy has none. Submission writes the same block onto the queued copy with the same rule: the two fields that say what the list is replace whatever the client wrote, and the unsubscribe the client chose is kept. `default_list_id` (`true`) turns that off on the submission path only; local delivery writes them on every copy the list receives, whatever the switch says |
+| `List-Unsubscribe`, `List-Unsubscribe-Post` | REST `list_unsubscribe` and `list_unsubscribe_post`; local delivery to a list address and a submission from one (`List-Unsubscribe` only); bulk `transactional` submissions (`List-Unsubscribe` only) | REST: at most four URLs, `mailto:` or `https://`, and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` needs an `https://` URL. Marketing mail is refused without both. A list address gets a `mailto:` URL with `?subject=unsubscribe`, which is also what a bulk `transactional` submission gets when it has none; a client's `List-Unsubscribe-Post` is removed with it, since it would name an `https` URL the message no longer carries. Both writers keep one copy of each field: a message that reached a list with two of them, as inbound mail can, leaves the member with the first, which is the pair RFC 8058 posts to when the sender published it first |
 | `Message-ID` | REST always; SMTP submission and JMAP when missing; alert emails; DMARC and TLS-RPT reports | `<uuid-v7@domain>`. REST uses the first configured domain, not the sender's. SMTP submission uses the domain of the envelope sender (the hostname when there is none). Failure notices, vacation replies and abuse reports get none from epistle |
 | `Organization` | A submission whose sending domain has an entry in `domain_organization` | The configured value of the domain, and it replaces what the client wrote. With no entry for the domain the client's own value stays. See [Identification headers](#identification-headers) |
 | `Precedence` | `bulk` on marketing mail | Any `Precedence` the client wrote is removed first. Other classes are left alone |
@@ -126,9 +126,14 @@ any header it likes. What reaches a receiver is what the server does with it:
   `List-Unsubscribe-Post`, and `Organization` when no value is configured for
   the domain.
 - One copy of each: a sender that writes one of these fields twice keeps the
-  first and loses the second. RFC 2369 lets `List-Unsubscribe` appear more
-  than once, but a receiver is then left to guess which one it should act on,
-  and the copy it does not pick is a copy the sender wanted followed.
+  first and loses the second. RFC 2369 and RFC 8058 let a single
+  `List-Unsubscribe` carry several URLs in one field, which is one claim about
+  how to leave, while a second field of the same name is a second claim about
+  the same header and nothing says which one a receiver acts on, so the copy it
+  does not pick is a copy the sender wanted followed. Two spellings of one name
+  count as one field here, the way a reader counts them: the server folds the
+  ASCII whitespace a name may carry inside it, so `List -Id` is the `List-Id`
+  every reader sees.
 - Written once by the server: `List-Id`, `List-Post`, `List-Unsubscribe` and
   `X-Epistle`, each at most one.
 
@@ -175,13 +180,15 @@ Notes:
   (read from the routing code, not observed end to end).
 - With `system_auto_submitted = false` the messages in the table above that take
   the switch go out without `Auto-Submitted`: the failure notice, the delay
-  warning, and the DMARC and TLS-RPT reports. A vacation reply is
+  warning, alert emails, and the DMARC and TLS-RPT reports. A vacation reply is
   `auto-replied (vacation)` whatever the switch says, the abuse report does not
   read the switch and always writes `auto-generated`, and the report
-  `epistle report-abuse` prints carries no `Auto-Submitted` at all, so for a
-  server so configured the table no longer matches the abuse report row. Nothing
-  here reads that field back; what keeps a bounce from looping is the null return
-  path.
+  `epistle report-abuse` prints carries no `Auto-Submitted` at all. The table
+  and the builder test beside it describe builders with their default settings,
+  so for a server so configured the rows that stop matching are the ones those
+  builders take the switch from; the abuse report row still matches, because
+  that builder writes the field either way. Nothing here reads that field back;
+  what keeps a bounce from looping is the null return path.
 
 ## DKIM
 

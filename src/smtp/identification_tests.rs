@@ -325,6 +325,20 @@ fn the_mailto_unsubscribe_is_percent_encoded() {
 		vec!["<mailto:a%3Fb%26c%25d@example.org?subject=unsubscribe>".to_string()],
 		"RFC 6068: `?`, `&` and `%` in an address cannot read as a query"
 	);
+
+	// A slash is atext, so it is one more character a client may put in its
+	// own local part, and one more delimiter a URI would read it as.
+	let mut slashed = submitted(
+		"a/b@example.org",
+		&["bob@elsewhere.example", "carol@elsewhere.example"],
+		"",
+	);
+	apply_to(&mut slashed, MailClass::Transactional, &policy());
+	assert_eq!(
+		values(&slashed, "list-unsubscribe"),
+		vec!["<mailto:a%2Fb@example.org?subject=unsubscribe>".to_string()],
+		"RFC 6068: a slash in an address is a path delimiter unless it is encoded"
+	);
 }
 
 #[test]

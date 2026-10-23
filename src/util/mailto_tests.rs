@@ -1,7 +1,8 @@
 //! The two spellings of the address a `mailto` URI names. An alias local part
-//! may legally carry `?`, `&` and `%` (RFC 5321 `sub-addresses`, SMTPUTF8),
-//! and each of them means something else inside a URI: left alone they turn
-//! `a?b&c%d@example.org` into a query the unsubscribe reader never gets to.
+//! may legally carry `?`, `&`, `%` and `/` (RFC 5321 `sub-addresses`,
+//! SMTPUTF8), and each of them means something else inside a URI: left alone
+//! they turn `a?b&c%d@example.org` into a query the unsubscribe reader never
+//! gets to, and `a/b@example.org` into a path.
 
 use super::*;
 
@@ -16,6 +17,17 @@ fn a_local_part_that_carries_uri_characters_is_percent_encoded() {
 	assert_eq!(
 		unsubscribe("a?b&c%d@example.org"),
 		"<mailto:a%3Fb%26c%25d@example.org?subject=unsubscribe>"
+	);
+}
+
+#[test]
+fn a_slash_in_the_local_part_is_percent_encoded() {
+	// `/` is atext, so the address is one a client may submit, and it is a
+	// path delimiter in a URI: RFC 6068 spells that address `a%2Fb@`.
+	assert_eq!(uri("a/b@example.org"), "<mailto:a%2Fb@example.org>");
+	assert_eq!(
+		unsubscribe("a/b@example.org"),
+		"<mailto:a%2Fb@example.org?subject=unsubscribe>"
 	);
 }
 

@@ -21,9 +21,10 @@ pub struct Alias {
 	/// Treat this alias as a mailing list: when set, delivered copies carry
 	/// `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers
 	/// (RFC 2369/2919). Absent means a plain alias with no list headers.
-	/// The value is written between angle brackets as it stands, so it may
-	/// not carry a `>` or a control character; the alias is refused at load
-	/// when it does.
+	/// The value is written between the angle brackets the server adds, so it
+	/// has to be an identifier those brackets can carry: a dot-atom of
+	/// non-empty `atext` atoms joined by single dots. Anything else is
+	/// refused at load.
 	#[serde(default)]
 	pub list_id: Option<String>,
 }
@@ -64,16 +65,31 @@ impl Alias {
 	}
 }
 
-/// A `list_id` has to survive the `List-Id` field it is written into: RFC 2919
-/// puts the phrase between angle brackets the server writes, so a `>` closes
-/// those brackets early and leaves the rest of the phrase outside the
-/// identifier, and a control character ends the line and lets the rest of the
-/// value read as further headers. Neither reaches a message: the configuration
-/// refuses the alias at load and the composer refuses the value afterwards.
+/// A `list_id` has to be an identifier the `List-Id` field can carry between
+/// the angle brackets the server writes: RFC 2919 puts an identifier there, so
+/// the value is read as a dot-atom, `atext` atoms joined by single dots.
+///
+/// A `>` would close those brackets early and leave the rest of the value
+/// outside the identifier, a `<` would open a second pair inside them, a space
+/// would split the identifier into two words, and a control character would end
+/// the line and let the rest of the value read as further headers. A phrase
+/// such as `Team List team.example.org` is none of those, but it is not an
+/// identifier either: RFC 2919 spells a phrase as `Team List <id>`, with the
+/// description outside the brackets, and this server does not compose one.
+/// Neither case reaches a message: the configuration refuses the alias at load
+/// and the composer refuses the value afterwards.
 fn usable_list_id(list_id: &str) -> bool {
-	!list_id.is_empty()
-		&& list_id.is_ascii()
-		&& !list_id.chars().any(|c| c.is_control() || c == '>')
+	let identifier = list_id.trim();
+	!identifier.is_empty()
+		&& identifier
+			.split('.')
+			.all(|atom| !atom.is_empty() && atom.chars().all(is_atext))
+}
+
+/// One character of an `atext` atom (RFC 5322 section 3.2.3): a letter, a
+/// digit or one of the specials an address local part may carry.
+fn is_atext(character: char) -> bool {
+	character.is_ascii_alphanumeric() || crate::util::validation::ATEXT.contains(character)
 }
 
 #[cfg(test)]

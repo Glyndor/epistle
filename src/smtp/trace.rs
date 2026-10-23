@@ -246,18 +246,21 @@ pub fn strip_bcc_in_place(data: &mut Vec<u8>) {
 	strip_headers_in_place(data, &["bcc", "resent-bcc"]);
 }
 
-/// `data` without any header field whose name is one of `names` (compared
-/// case-insensitively), folded continuation lines included. The body and
-/// every other field are kept byte for byte.
+/// `data` without any header field whose name is one of `names` (compared as a
+/// reader after us reads a name, `same_name` in this module), folded
+/// continuation lines included. The body and every other field are kept byte
+/// for byte.
 pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
 	rewrite_header_block(data, |name| !named(name, names))
 }
 
 /// `data` rewritten to keep only the first field of each name in `names`
-/// (compared case-insensitively), folded continuation lines included. A
-/// second copy of a field the client wrote twice is a second claim about the
-/// same thing, and RFC 2369 leaves a receiver to work out which one to act on.
-/// The body and every other field are kept byte for byte.
+/// (compared as a reader after us reads a name, `same_name` in this module),
+/// folded continuation lines included. Two fields of one name are two claims
+/// about the same header, and nothing in RFC 2369 or RFC 8058 says which of
+/// them a receiver acts on. Several URLs inside a single field are a different
+/// thing and stay: one field may carry up to four of them, and they are one
+/// claim. The body and every other field are kept byte for byte.
 pub fn keep_first_of_each_in_place(data: &mut Vec<u8>, names: &[&str]) {
 	let mut seen = vec![false; names.len()];
 	rewrite_header_block_in_place(data, |name| {
@@ -273,11 +276,40 @@ pub fn keep_first_of_each_in_place(data: &mut Vec<u8>, names: &[&str]) {
 	});
 }
 
-/// Whether `name` is one of `names`, compared case-insensitively.
+/// Whether `name` is one of `names`, the way a reader after us reads a name.
 fn named(name: &[u8], names: &[&str]) -> bool {
 	names
 		.iter()
-		.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
+		.any(|wanted| same_name(name, wanted.as_bytes()))
+}
+
+/// Whether `name` is the field name `wanted`: case folded, and with every
+/// ASCII whitespace byte dropped from either side, wherever it appears.
+///
+/// mail-parser 0.11.9 drops exactly those bytes wherever they are in a name
+/// while it looks the name up in its table of the known ones
+/// (`parsers/header.rs`, `parse_header_name`), so `List -Id` reaches that
+/// reader as `List-Id` and `Authenti cation-Results` as
+/// `Authentication-Results`. A field left here under either spelling is a
+/// second copy of the header a receiver reads, and the operations that act on
+/// a name (the strip, the deduplication and the lookup) all compare through
+/// here, so one name can never be two of them.
+fn same_name(name: &[u8], wanted: &[u8]) -> bool {
+	let mut left = name
+		.iter()
+		.copied()
+		.filter(|byte| !byte.is_ascii_whitespace());
+	let mut right = wanted
+		.iter()
+		.copied()
+		.filter(|byte| !byte.is_ascii_whitespace());
+	loop {
+		match (left.next(), right.next()) {
+			(Some(one), Some(other)) if one.eq_ignore_ascii_case(&other) => {}
+			(None, None) => return true,
+			_ => return false,
+		}
+	}
 }
 
 /// `data` without the header fields `keep` does not want, folded
@@ -457,7 +489,7 @@ pub fn header_values(data: &[u8], name: &str) -> Vec<String> {
 			continue;
 		}
 		let split = split_field(line);
-		collecting = split.is_some_and(|(field, _)| field.eq_ignore_ascii_case(name.as_bytes()));
+		collecting = split.is_some_and(|(field, _)| same_name(field, name.as_bytes()));
 		if collecting && let Some((_, value)) = split {
 			values.push(String::from_utf8_lossy(value).trim().to_string());
 		}
@@ -492,6 +524,9 @@ pub fn prepend_header_block(data: &mut Vec<u8>, lines: &str) {
 /// 0.11.9, `parse_header_name`), the ASCII tail a CR leaves behind, and the
 /// trailing whitespace of any code point `char::is_whitespace` knows (DKIM
 /// and ARC-AMS call it `name.trim_end()`). `None` for a line with no name.
+/// The name comes back as those bytes stand: the whitespace a reader also
+/// folds *inside* a name is folded by [`same_name`], which is where two
+/// names are compared.
 pub(crate) fn split_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
 	split_field_from(line, name_start(line))
 }

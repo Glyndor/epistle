@@ -14,9 +14,10 @@
 //! a configured value, and the `List-Id`/`List-Post` pair of a list
 //! address, which is the same block local delivery prepends. A
 //! `List-Unsubscribe` the client chose, one-click included, is always kept.
-//! A client that sends one of these fields twice keeps the first copy: RFC
-//! 2369 lets the field appear more than once and does not say which one a
-//! receiver should act on.
+//! A client that sends one of these fields twice keeps the first copy: one
+//! field may carry several URLs, which is one claim about how to leave, while
+//! a second field of the same name is a second claim about the same header and
+//! nothing in RFC 2369 or RFC 8058 says which one a receiver acts on.
 
 use std::collections::BTreeMap;
 
@@ -139,7 +140,7 @@ pub fn apply(
 	strip_headers(&mut message.data, &["authentication-results"]);
 	// Two of one field are two claims about the same thing and no reason to
 	// read both, so what the client wrote twice is reduced to what it wrote
-	// first.
+	// first, whichever way it spelled the name.
 	crate::smtp::trace::keep_first_of_each_in_place(&mut message.data, IDENTIFICATION_FIELDS);
 	let mut lines = String::new();
 	if policy.x_epistle {
@@ -266,3 +267,7 @@ fn strip_headers(data: &mut Vec<u8>, names: &[&str]) {
 #[cfg(test)]
 #[path = "identification_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "identification_names_tests.rs"]
+mod names_tests;

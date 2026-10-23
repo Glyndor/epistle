@@ -11,11 +11,22 @@
 //! `List-Unsubscribe` is the list's own `mailto` only when the message carries
 //! none. A one-click URL the sender published is therefore the one that stays,
 //! the same policy the submission path applies (RFC 8058).
+//!
+//! Inbound mail to a list never went through that submission pass, so the
+//! fields a sender wrote twice arrive here twice, from a peer nobody
+//! authenticated. The two fields this copy adds are therefore deduplicated
+//! before anything else is decided: one copy of each name is what the
+//! submission path leaves and what a receiver is left to act on. The first
+//! copy wins, so a sender that published its one-click pair first keeps it.
 
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::trace;
+
+/// The two fields this copy may keep from the message: what the sender
+/// published to leave the list, and how to tell the server to do it.
+const UNSUBSCRIBE_FIELDS: &[&str] = &["list-unsubscribe", "list-unsubscribe-post"];
 
 /// The copy a list member receives, or `None` when no recipient is a list and
 /// the message is delivered as it is.
@@ -37,6 +48,7 @@ pub(super) fn list_copy(
 	// What the list is, is the list's to say: whatever the message carried for
 	// these two is replaced rather than repeated.
 	trace::strip_headers_in_place(&mut copy.data, &["list-id", "list-post"]);
+	trace::keep_first_of_each_in_place(&mut copy.data, UNSUBSCRIBE_FIELDS);
 	let mut lines = identity;
 	if trace::header_values(&copy.data, "list-unsubscribe").is_empty()
 		&& let Some(unsubscribe) = directory.list_unsubscribe(&address)
