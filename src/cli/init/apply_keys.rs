@@ -315,8 +315,12 @@ pub(crate) fn prepare_keys_for_update(
 		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
 		_ => None,
 	}));
-	let text = fs::read_to_string(config_path)
-		.map_err(|error| format!("cannot read {}: {error}", config_path.display()))?;
+	// The update holds the common lock and the generated file's lock while it
+	// gets here, and the path is the one the compose file serves, which need
+	// not be the one the command was given. A plain read of a fifo there
+	// would wait for a writer with both locks held, so it goes through the
+	// reader that refuses what is not a regular file.
+	let text = crate::cli::config_edit::read_through_link(config_path)?;
 	if let Some(text) = host_secrets::repoint_config(&text, data_dir)? {
 		crate::storage::write_secret(config_path, text.as_bytes())
 			.map_err(|error| format!("cannot write {}: {error}", config_path.display()))?;
