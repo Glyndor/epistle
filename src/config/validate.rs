@@ -49,17 +49,11 @@ impl Config {
 		self.validate_dkim()?;
 		self.validate_max_recipients()?;
 		self.validate_message_limits()?;
-		self.validate_clock_external()?;
+		if let Some(external) = &self.clock_external {
+			external.validate().map_err(ConfigError::Invalid)?;
+		}
 		self.validate_bulk_recipients()?;
 		self.validate_domain_organization()
-	}
-
-	fn validate_clock_external(&self) -> Result<(), ConfigError> {
-		let Some(external) = &self.clock_external else {
-			return Ok(());
-		};
-		external.validate().map_err(ConfigError::Invalid)?;
-		Ok(())
 	}
 
 	fn validate_dkim(&self) -> Result<(), ConfigError> {
