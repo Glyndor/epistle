@@ -89,7 +89,10 @@ fn a_lock_file_is_taken_from_either_owner_and_refused_only_when_others_can_write
 		usable(path, 0o666, 0).unwrap_err().contains("0666"),
 		"a lock root created wide open is refused too"
 	);
-	let error = usable(path, 0o600, 1001).unwrap_err();
+	// A uid that is neither root nor the user running the test, whoever that is:
+	// a fixed number is the runner's own uid on some machines.
+	let stranger = euid + 1001;
+	let error = usable(path, 0o600, stranger).unwrap_err();
 	assert!(error.contains("another user"), "{error}");
 }
 
