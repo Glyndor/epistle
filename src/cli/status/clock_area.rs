@@ -257,10 +257,11 @@ fn authentication_item(run: &Run) -> Item {
 		"authentication",
 		Level::Ok,
 		format!(
-			"{} of {} sources authenticated over NTS ({}); the rest are plain NTPv4",
+			"{} of {} sources authenticated over NTS ({}); the other {} did not authenticate over NTS",
 			authenticated.len(),
 			run.sources.len(),
-			authenticated.join(", ")
+			authenticated.join(", "),
+			run.sources.len() - authenticated.len()
 		),
 	)
 }

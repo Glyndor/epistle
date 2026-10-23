@@ -83,8 +83,37 @@ fn the_area_names_how_many_sources_were_authenticated() {
 	);
 	assert!(note.detail.contains("nts.netnod.se"), "{note:?}");
 	assert!(
-		note.detail.contains("plain NTPv4"),
-		"the line must name what the other two are; {note:?}"
+		note.detail
+			.contains("the other 2 did not authenticate over NTS"),
+		"the line must say how many did not authenticate; {note:?}"
+	);
+}
+
+/// Three NTS sources with one answering: the two that failed are not plain
+/// NTPv4 sources, and the line must not call them that.
+#[test]
+fn a_failed_nts_source_is_not_described_as_plain_ntp() {
+	let sources = vec![
+		Source::nts("a.example"),
+		Source::nts("b.example"),
+		Source::nts("c.example"),
+	];
+	let mut run = run_over(sources.clone());
+	run.readings = vec![
+		ProbeReading::ok(sources[0].clone(), 0.01, 0.2),
+		ProbeReading::failed(sources[1].clone(), "key exchange failed".to_string()),
+		ProbeReading::failed(sources[2].clone(), "key exchange failed".to_string()),
+	];
+	let report = compose(HostClock::Synced, Some(&run), &Default::default(), None);
+	let note = item(&report, "authentication");
+	assert!(
+		!note.detail.contains("plain NTPv4"),
+		"a failed NTS source is not plain NTPv4: {note:?}"
+	);
+	assert!(
+		note.detail
+			.contains("the other 2 did not authenticate over NTS"),
+		"{note:?}"
 	);
 }
 
