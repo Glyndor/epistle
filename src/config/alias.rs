@@ -36,6 +36,23 @@ impl Alias {
 		if self.members.is_empty() {
 			return Err(format!("alias {} has no members", self.address));
 		}
+		// The table is loaded without running its addresses through the
+		// address parser, so the Unicode line and paragraph separators the
+		// parser refuses are refused here too.
+		let separated = std::iter::once(&self.address)
+			.chain(&self.members)
+			.chain(&self.senders)
+			.find(|address| crate::util::validation::has_line_separator(address));
+		if let Some(address) = separated {
+			return Err(format!(
+				"alias {}: {address:?} carries a Unicode line or paragraph separator",
+				self.address
+			));
+		}
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+#[path = "alias_separator_tests.rs"]
+mod separator_tests;

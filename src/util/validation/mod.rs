@@ -35,6 +35,15 @@ pub fn is_atext(c: char) -> bool {
 		|| (!c.is_ascii() && !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
 }
 
+/// Whether `text` carries the Unicode line or paragraph separator (U+2028,
+/// U+2029). They are not `char::is_control`, so the paths that take an address
+/// without running it through [`crate::smtp::address::Address::parse`] (the
+/// static alias table, the structured addresses of a JMAP `Email/set`) use
+/// this to refuse them the way the parser does.
+pub fn has_line_separator(text: &str) -> bool {
+	text.chars().any(|c| matches!(c, '\u{2028}' | '\u{2029}'))
+}
+
 /// [`is_atext`] over octets, for the callers that walk raw bytes. A byte is
 /// never non-ASCII in the UTF-8 sense (each octet of a multi-byte sequence
 /// stands for itself), so this is the ASCII half only: an RFC 6531 local part
