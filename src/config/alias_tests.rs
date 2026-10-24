@@ -40,6 +40,18 @@ fn a_list_id_that_would_end_the_field_or_is_not_an_identifier_is_refused() {
 		"",
 		// An empty value once the surrounding whitespace is gone.
 		"   ",
+		// Whitespace around the value goes out between the brackets as it
+		// stands, so it is refused rather than trimmed for this check and
+		// written as it came. The three ways it hides are a plain space
+		// (the composer folds on it), a CR and an LF (the composer refuses
+		// them, which takes the whole list block out) and a no-break space
+		// (not ASCII, so the composer refuses that too).
+		" team.example.org",
+		"team.example.org ",
+		" team.example.org ",
+		"\r\nteam.example.org\r\n",
+		"\u{00a0}team.example.org",
+		"team.example.org\u{00a0}",
 		">",
 		">other.example",
 		// A `<` opens a second pair of brackets inside the ones the server

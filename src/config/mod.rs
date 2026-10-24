@@ -30,6 +30,7 @@ mod tls;
 mod transport;
 mod validate;
 mod validate_limits;
+pub(crate) use alias::usable_list_id;
 pub(crate) use validate::validate_addresses::{
 	embedded_ipv4, non_global_ipv4_reason, non_global_ipv6_reason,
 };

@@ -24,8 +24,16 @@ impl Directory {
 	/// CRLF, or `None` when it is not a list. The address is the canonical
 	/// spelling of the alias, not the one the caller passed in. Kept apart
 	/// from the `List-Unsubscribe` so a caller that already has one keeps it.
+	///
+	/// An identifier the `List-Id` cannot carry leaves the field out instead of
+	/// going out as a phrase between the brackets. The configuration refuses
+	/// such an alias at load; this is the same rule asked again where the block
+	/// is composed, for a directory built in process rather than from a file.
 	pub fn list_identity(&self, address: &str) -> Option<String> {
 		let (address, list_id) = self.list_of(address)?;
+		if !crate::config::usable_list_id(list_id) {
+			return None;
+		}
 		let identity = field("List-Id", format!("<{list_id}>"))?;
 		let post = field("List-Post", mailto::uri(&address))?;
 		Some(identity + &post)

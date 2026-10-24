@@ -89,6 +89,34 @@ fn a_list_id_the_composer_refuses_leaves_the_list_field_out_entirely() {
 	}
 }
 
+/// An identifier surrounded by whitespace is written between the brackets as it
+/// stands, so no part of it reaches a message: the configuration refuses the
+/// alias at load and the block asks the same rule again where it is composed.
+/// The composer alone is not enough for the space case, which it folds on.
+#[test]
+fn a_list_id_padded_with_whitespace_leaves_the_list_field_out() {
+	for list_id in [
+		" team.example.org",
+		"team.example.org ",
+		" team.example.org ",
+		"\r\nteam.example.org\r\n",
+		"\u{00a0}team.example.org",
+		"team.example.org\u{00a0}",
+	] {
+		let list = with_list("team@example.org", list_id);
+		assert_eq!(
+			list.list_identity("team@example.org"),
+			None,
+			"{list_id:?} reached the message"
+		);
+		assert_eq!(
+			list.list_unsubscribe("team@example.org").as_deref(),
+			Some("List-Unsubscribe: <mailto:team@example.org?subject=unsubscribe>\r\n"),
+			"{list_id:?} took the unsubscribe with it"
+		);
+	}
+}
+
 #[test]
 fn the_canonical_address_is_the_one_the_fields_name() {
 	let list = with_list("Team@EXAMPLE.org", "team.example.org");

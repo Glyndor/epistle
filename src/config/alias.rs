@@ -65,7 +65,7 @@ impl Alias {
 	}
 }
 
-/// A `list_id` has to be an identifier the `List-Id` field can carry between
+/// Whether `list_id` is an identifier the `List-Id` field can carry between
 /// the angle brackets the server writes: RFC 2919 puts an identifier there, so
 /// the value is read as a dot-atom, `atext` atoms joined by single dots.
 ///
@@ -76,12 +76,17 @@ impl Alias {
 /// such as `Team List team.example.org` is none of those, but it is not an
 /// identifier either: RFC 2919 spells a phrase as `Team List <id>`, with the
 /// description outside the brackets, and this server does not compose one.
-/// Neither case reaches a message: the configuration refuses the alias at load
-/// and the composer refuses the value afterwards.
-fn usable_list_id(list_id: &str) -> bool {
+///
+/// The bytes checked are the bytes written: the value goes between the brackets
+/// as it stands, so whitespace around it is refused rather than trimmed for the
+/// check and written as it came. Neither such a case reaches a message: the
+/// configuration refuses the alias at load, and the writer that composes the
+/// block asks this again, so a directory built in process is held to the same
+/// rule.
+pub(crate) fn usable_list_id(list_id: &str) -> bool {
 	let identifier = list_id.trim();
 	!identifier.is_empty()
-		&& identifier
+		&& list_id
 			.split('.')
 			.all(|atom| !atom.is_empty() && atom.chars().all(is_atext))
 }
