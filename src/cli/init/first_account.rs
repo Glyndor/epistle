@@ -20,6 +20,7 @@ use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::util::account_rule;
+use crate::util::address::normalize;
 
 /// The role local parts pointed at the first account, in the order they
 /// are listed.
@@ -71,28 +72,13 @@ impl fmt::Debug for Password {
 	}
 }
 
-/// `address` in the form the system stores: trimmed, lowercase, with the
-/// domain normalised when it can be. Used for the typed address and for the
-/// addresses of accounts that already exist, so both sides of a comparison
-/// are spelled the same way.
-fn stored_form(address: &str) -> String {
-	let typed = address.trim().to_ascii_lowercase();
-	match typed.rsplit_once('@') {
-		Some((local, domain)) => match crate::domain::normalize(domain) {
-			Ok(stored) => format!("{local}@{stored}"),
-			Err(_) => typed,
-		},
-		None => typed,
-	}
-}
-
 impl FirstAccount {
 	/// The address as it is stored: lowercase, with the domain in the form the
 	/// rest of the system keeps (`bücher.example` is `xn--bcher-kva.example`).
 	/// A domain that cannot be normalised stays as typed, in lowercase, and
 	/// [`FirstAccount::check`] refuses it for not being a configured one.
 	pub fn stored_address(&self) -> String {
-		stored_form(&self.address)
+		normalize(&self.address)
 	}
 
 	/// The account name the address gives: its local part in lowercase,
@@ -296,6 +282,63 @@ fn name_is_free_or_ours(
 	}
 }
 
+/// Whether the address is free for the account `name`: no alias, masked
+/// address or other account holds it, compared in the form the system stores.
+/// The account `name` itself may already hold it, which is a re-run.
+fn address_is_free_or_ours(
+	name: &str,
+	address: &str,
+	store: &AccountStore,
+	static_accounts: &[(String, Vec<String>)],
+	aliases: &[String],
+) -> Result<(), String> {
+	let wanted = normalize(address);
+	if aliases.iter().any(|existing| normalize(existing) == wanted) {
+		return Err(format!(
+			"the address {address} is already used by an alias; use another address"
+		));
+	}
+	if store
+		.masked_handle()
+		.read()
+		.expect("masked lock")
+		.get(address)
+		.is_some()
+	{
+		return Err(format!(
+			"the address {address} is already used by a masked address; use another address"
+		));
+	}
+	let dynamic_owner = store
+		.dynamic_accounts()
+		.into_iter()
+		.find(|account| {
+			account.name != name
+				&& account
+					.addresses
+					.iter()
+					.any(|existing| normalize(existing) == wanted)
+		})
+		.map(|account| account.name);
+	let static_owner = static_accounts.iter().find_map(|(owner, addresses)| {
+		if owner != name
+			&& addresses
+				.iter()
+				.any(|existing| normalize(existing) == wanted)
+		{
+			Some(owner.clone())
+		} else {
+			None
+		}
+	});
+	if let Some(owner) = dynamic_owner.or(static_owner) {
+		return Err(format!(
+			"the address {address} is already used by the account \"{owner}\"; use another address"
+		));
+	}
+	Ok(())
+}
+
 /// The `[[accounts]]` of a configuration file as name and addresses, read
 /// from the raw TOML so a file the full loader refuses still counts.
 fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
@@ -326,9 +369,28 @@ fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
 		.collect()
 }
 
+/// The addresses of the `[[alias]]` entries of a configuration file, read from
+/// the raw TOML so a file the full loader refuses still counts.
+fn static_aliases_of(config_path: &Path) -> Vec<String> {
+	let Ok(text) = std::fs::read_to_string(config_path) else {
+		return Vec::new();
+	};
+	let Ok(table) = text.parse::<toml::Table>() else {
+		return Vec::new();
+	};
+	table
+		.get("alias")
+		.and_then(|value| value.as_array())
+		.into_iter()
+		.flatten()
+		.filter_map(|entry| entry.get("address")?.as_str().map(str::to_string))
+		.collect()
+}
+
 /// The collision check that needs no write: with a configuration already on
 /// disk, whether an account other than the one asked for holds the derived
-/// name. Run before anything is applied, so a clash stops the run (and
+/// name, or whether another account, an alias or a masked address holds the
+/// address. Run before anything is applied, so a clash stops the run (and
 /// `--dry-run`) with nothing written, and the assistant can ask again.
 pub(super) fn precheck(
 	first: &FirstAccount,
@@ -340,13 +402,28 @@ pub(super) fn precheck(
 	// accounts already on disk. A config that loads gives its accounts
 	// normalised and with `${VAR}` expanded; the raw file is only the
 	// fallback when it does not load.
-	let (aliases, statics) = match Config::load(config_path) {
-		Ok(config) => (config.domain_aliases.clone(), static_pairs(&config)),
-		Err(_) => (Default::default(), static_accounts_of(config_path)),
+	let (domain_aliases, statics, aliases) = match Config::load(config_path) {
+		Ok(config) => (
+			config.domain_aliases.clone(),
+			static_pairs(&config),
+			config
+				.alias
+				.iter()
+				.map(|alias| alias.address.clone())
+				.collect(),
+		),
+		Err(_) => (
+			Default::default(),
+			static_accounts_of(config_path),
+			static_aliases_of(config_path),
+		),
 	};
-	let store = AccountStore::open(data_dir, Vec::new(), aliases, Vec::new())
+	let store = AccountStore::open(data_dir, Vec::new(), domain_aliases, Vec::new())
 		.map_err(|error| format!("opening the account store: {error}"))?;
-	name_is_free_or_ours(&first.name(), &first.stored_address(), &store, &statics).map(|_| ())
+	let name = first.name();
+	let address = first.stored_address();
+	name_is_free_or_ours(&name, &address, &store, &statics)?;
+	address_is_free_or_ours(&name, &address, &store, &statics, &aliases)
 }
 
 /// The static accounts of a loaded configuration as name and addresses.
@@ -363,9 +440,10 @@ fn static_pairs(config: &Config) -> Vec<(String, Vec<String>)> {
 /// `torre.control` and `torre-control` both giving `torre-control`: it is
 /// refused instead of being skipped as if it were the same account.
 fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result<bool, String> {
+	let wanted = normalize(address);
 	if holder_addresses
 		.iter()
-		.any(|existing| stored_form(existing) == stored_form(address))
+		.any(|existing| normalize(existing) == wanted)
 	{
 		return Ok(true);
 	}

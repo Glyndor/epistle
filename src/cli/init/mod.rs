@@ -154,8 +154,8 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			return ExitCode::from(EXIT_INVALID);
 		}
 	}
-	// A name clash is found before any plan is shown or anything written,
-	// in a dry run too.
+	// A name or address clash is found before any plan is shown or anything
+	// written, in a dry run too.
 	if let Some(first) = &answers.first_account
 		&& let Err(why) = first_account::precheck(first, &answers.data_dir, &answers.config_path)
 	{
