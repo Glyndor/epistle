@@ -5,28 +5,111 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitStatus, String) {
-	let (mut master, mut slave) = (-1, -1);
-	// SAFETY: openpty receives valid descriptor out pointers; optional settings are null.
+#[path = "init_guided/descriptors.rs"]
+mod descriptors;
+
+/// The whole budget one guided run may take.
+const DEADLINE: Duration = Duration::from_secs(120);
+
+/// How much longer the master is read once the child is gone. The child
+/// exiting does not close the terminal while another process still holds its
+/// slave open, and that process is nobody this test can wait for.
+const DRAIN: Duration = Duration::from_secs(10);
+
+/// The two ends of a pseudo-terminal, both closed across `exec`.
+///
+/// The tests of this target run in parallel threads, and each one spawns
+/// `epistle init` while the others still hold their own pair open. An
+/// inheritable descriptor is inherited by whichever child the next test spawns,
+/// and that child then holds the slave of a terminal whose master is waiting
+/// for the end of its stream: the end never arrives, the owner waits out its
+/// deadline, and the two tests wait on each other for good.
+///
+/// So each end is asked for with `O_CLOEXEC` in the call that creates it, which
+/// is the only shape with no window in it: `openpty` leaves both descriptors
+/// inheritable, and a `fcntl` after it lands while another thread may already
+/// have forked a child, which keeps that child's copy of the table with the old
+/// flags. `Command` puts the slave on the child's standard descriptors with
+/// `dup2`, and `dup2` clears the flag on the new descriptor, so the child still
+/// reads from the terminal.
+fn pseudo_terminal() -> (File, File) {
+	// SAFETY: posix_openpt takes only the flags to open the master with, so no
+	// pointer of ours is left to read after it returns.
+	let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+	assert!(
+		master >= 0,
+		"posix_openpt: {}",
+		std::io::Error::last_os_error()
+	);
+	// SAFETY: both calls take the master descriptor this function owns.
+	unsafe {
+		assert_eq!(libc::grantpt(master), 0, "grantpt");
+		assert_eq!(libc::unlockpt(master), 0, "unlockpt");
+	}
+	let mut name = [0 as libc::c_char; 256];
 	assert_eq!(
-		unsafe {
-			libc::openpty(
-				&mut master,
-				&mut slave,
-				std::ptr::null_mut(),
-				std::ptr::null(),
-				std::ptr::null(),
-			)
-		},
+		// SAFETY: ptsname_r writes a NUL-terminated path into `name` and reads
+		// nothing else.
+		unsafe { libc::ptsname_r(master, name.as_mut_ptr(), name.len()) },
+		0,
+		"ptsname_r: {}",
+		std::io::Error::last_os_error()
+	);
+	// SAFETY: ptsname_r returned 0, so `name` holds the path in the operating
+	// system's own buffer, and these flags ask for a private terminal that
+	// closes across `exec`.
+	let slave = unsafe {
+		libc::open(
+			name.as_ptr(),
+			libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+		)
+	};
+	assert!(
+		slave >= 0,
+		"open the pseudo-terminal slave: {}",
+		std::io::Error::last_os_error()
+	);
+	// SAFETY: both calls returned fresh descriptors, and these two File values
+	// are their only owners from here on.
+	(unsafe { File::from_raw_fd(master) }, unsafe {
+		File::from_raw_fd(slave)
+	})
+}
+
+/// Give the process about to `exec` the default SIGINT disposition.
+///
+/// It runs between `fork` and `exec`, so it calls `signal` and nothing else.
+fn restore_sigint() -> std::io::Result<()> {
+	// SAFETY: `signal` is async-signal-safe and SIGINT is a valid signal.
+	unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+	Ok(())
+}
+
+/// Send SIGINT to a child this test has not collected yet. A child already
+/// collected by `try_wait` is skipped: its number is free again and may now
+/// belong to another process.
+fn send_sigint(child: &mut Child) -> bool {
+	if child.try_wait().expect("child status").is_some() {
+		return false;
+	}
+	// SAFETY: this test is the only one that collects the child, and it has
+	// not, so the number is still the child's, and SIGINT is valid.
+	assert_eq!(
+		unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
 		0
 	);
-	// SAFETY: openpty returned fresh descriptors owned by these File values.
-	let (mut master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
+	true
+}
+
+/// Start `epistle init` on its own pseudo-terminal. `root` holds the state
+/// directory, so no run reads or writes the draft of another one.
+fn spawn_on_terminal(root: &Path, colour: bool) -> (File, Child) {
+	let (master, slave) = pseudo_terminal();
 	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
 	command
 		.arg("init")
@@ -40,10 +123,37 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 		.stdin(slave.try_clone().unwrap())
 		.stdout(Stdio::piped())
 		.stderr(slave);
-	let mut child = command.spawn().unwrap();
-	drop(command);
+	// An ignored disposition survives `exec`. A background job of a shell, a
+	// service manager and a container runtime all start a process with SIGINT
+	// ignored, and that process would hand `epistle init` a Ctrl-C that stops
+	// nothing, so the guided setup would wait out its deadline. The child
+	// starts from the default disposition, which is what a terminal session
+	// gives it, and the two tests that interrupt a run expect that.
+	// SAFETY: the closure runs between `fork` and `exec`, where the only work
+	// allowed is async-signal-safe. It calls `signal` and returns.
+	unsafe {
+		command.pre_exec(restore_sigint);
+	}
+	let child = command.spawn().expect("spawn epistle init");
+	(master, child)
+}
+
+/// Whether the child is gone and the master has been waiting for the end of
+/// its stream for [`DRAIN`], which means nobody this test owns is going to
+/// close the terminal. `since` carries the moment the child was first seen
+/// gone, so the caller only starts counting once.
+fn orphaned_terminal(child: &mut Child, since: &mut Option<Instant>, drain: Duration) -> bool {
+	if since.is_none() && child.try_wait().expect("child status").is_some() {
+		*since = Some(Instant::now());
+	}
+	since.is_some_and(|gone| gone.elapsed() > drain)
+}
+
+fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitStatus, String) {
+	let (mut master, mut child) = spawn_on_terminal(root, colour);
 	master.write_all(input.as_bytes()).unwrap();
-	let deadline = Instant::now() + Duration::from_secs(120);
+	let deadline = Instant::now() + DEADLINE;
+	let mut gone = None;
 	let mut screen = Vec::new();
 	let mut signalled = false;
 	loop {
@@ -51,6 +161,11 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 			let _ = child.kill();
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline");
+		}
+		if orphaned_terminal(&mut child, &mut gone, DRAIN) {
+			panic!(
+				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
+			);
 		}
 		let mut poll = libc::pollfd {
 			fd: master.as_raw_fd(),
@@ -68,12 +183,7 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 			}
 		}
 		if interrupt && !signalled && String::from_utf8_lossy(&screen).contains("hostname []>") {
-			// SAFETY: the live child id is a process id, and SIGINT is valid.
-			assert_eq!(
-				unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-				0
-			);
-			signalled = true;
+			signalled = send_sigint(&mut child);
 		}
 	}
 	let output = child.wait_with_output().unwrap();
@@ -227,35 +337,10 @@ fn terminal_stepwise(
 	steps: &[(&str, &str)],
 	interrupt_at: &str,
 ) -> (ExitStatus, String) {
-	let (mut master, mut slave) = (-1, -1);
-	// SAFETY: openpty receives valid descriptor out pointers; optional settings are null.
-	assert_eq!(
-		unsafe {
-			libc::openpty(
-				&mut master,
-				&mut slave,
-				std::ptr::null_mut(),
-				std::ptr::null(),
-				std::ptr::null(),
-			)
-		},
-		0
-	);
-	// SAFETY: openpty returned fresh descriptors owned by these File values.
-	let (mut master, slave) = unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
-	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
-	command
-		.arg("init")
-		.env("XDG_STATE_HOME", root.join("state"))
-		.env("NO_COLOR", "1")
-		.env("TERM", "dumb")
-		.stdin(slave.try_clone().unwrap())
-		.stdout(Stdio::piped())
-		.stderr(slave);
-	let mut child = command.spawn().unwrap();
-	drop(command);
-	let deadline = Instant::now() + Duration::from_secs(120);
+	let (mut master, mut child) = spawn_on_terminal(root, false);
+	let deadline = Instant::now() + DEADLINE;
 	let mut screen = Vec::new();
+	let mut gone = None;
 	let mut answered = 0;
 	let mut signalled = false;
 	loop {
@@ -263,6 +348,11 @@ fn terminal_stepwise(
 			let _ = child.kill();
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline: {screen:?}");
+		}
+		if orphaned_terminal(&mut child, &mut gone, DRAIN) {
+			panic!(
+				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
+			);
 		}
 		let mut poll = libc::pollfd {
 			fd: master.as_raw_fd(),
@@ -287,12 +377,7 @@ fn terminal_stepwise(
 			answered += 1;
 		}
 		if !signalled && text.contains(interrupt_at) {
-			// SAFETY: the live child id is a process id, and SIGINT is valid.
-			assert_eq!(
-				unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-				0
-			);
-			signalled = true;
+			signalled = send_sigint(&mut child);
 		}
 	}
 	let output = child.wait_with_output().unwrap();
@@ -333,4 +418,51 @@ fn a_pasted_dns_credential_is_never_echoed_by_the_terminal() {
 	assert!(text.contains("EPISTLE_DNS_TOKEN"), "{text}");
 	assert!(!root.join("etc").exists(), "{text}");
 	println!("{text}");
+}
+
+#[test]
+fn a_child_inherits_an_ignored_sigint_unless_it_is_restored() {
+	let mask = |restore: bool| -> u64 {
+		let mut command = Command::new("/bin/sh");
+		command
+			.arg("-c")
+			.arg("sed -n 's/^SigIgn:\\s*//p' /proc/self/status")
+			.stdin(Stdio::null());
+		// SAFETY: both closures only call `signal` before `exec`.
+		unsafe {
+			command.pre_exec(|| {
+				libc::signal(libc::SIGINT, libc::SIG_IGN);
+				Ok(())
+			});
+			if restore {
+				command.pre_exec(restore_sigint);
+			}
+		}
+		let output = command.output().expect("run sh");
+		u64::from_str_radix(String::from_utf8_lossy(&output.stdout).trim(), 16)
+			.expect("SigIgn mask")
+	};
+	let bit = 1u64 << (libc::SIGINT - 1);
+	assert_ne!(mask(false) & bit, 0, "the control must inherit the ignore");
+	assert_eq!(mask(true) & bit, 0, "restoring must clear the ignore");
+}
+
+#[test]
+fn a_gone_child_whose_terminal_stays_open_is_reported_after_the_drain() {
+	let mut gone = Command::new("/bin/true").spawn().expect("spawn true");
+	let mut since = None;
+	let drain = Duration::from_millis(200);
+	let start = Instant::now();
+	while !orphaned_terminal(&mut gone, &mut since, drain) {
+		assert!(start.elapsed() < Duration::from_secs(10), "never reported");
+		std::thread::sleep(Duration::from_millis(20));
+	}
+	let mut running = Command::new("/bin/sleep")
+		.arg("5")
+		.spawn()
+		.expect("spawn sleep");
+	let mut since = None;
+	assert!(!orphaned_terminal(&mut running, &mut since, drain));
+	running.kill().expect("kill sleep");
+	running.wait().expect("reap sleep");
 }
