@@ -10,7 +10,7 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use serde::{Deserialize, Serialize};
 
-use crate::api::domain_scope::DomainScope;
+use crate::api::Principal;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 
 /// A credential-verification request.
@@ -52,8 +52,8 @@ pub async fn verify(
 	// tenant's accounts only. For any other login the password is never
 	// tried: the answer would tell the key whether another tenant's account
 	// has that password, and the attempt would count against the account.
-	let scope = state.domain_scope(&auth);
-	if !login_in_scope(&state, &scope, &request.name) {
+	let principal = Principal::for_token(&state, &auth);
+	if !login_in_scope(&state, &principal, &request.name) {
 		return refused;
 	}
 	match state.authenticate_with_ip(
@@ -62,7 +62,7 @@ pub async fn verify(
 		client_ip.0,
 		crate::config::Protocol::Api,
 	) {
-		Some(resolved) if account_in_scope(&state, &scope, &resolved) => Json(VerifyResponse {
+		Some(resolved) if account_in_scope(&state, &principal, &resolved) => Json(VerifyResponse {
 			valid: true,
 			admin: state.is_admin(&resolved),
 		}),
@@ -72,8 +72,8 @@ pub async fn verify(
 
 /// Whether `login` (an account name or one of its addresses) names an account
 /// the scope covers. Everything is covered by an unconfined key.
-fn login_in_scope(state: &ApiState, scope: &DomainScope, login: &str) -> bool {
-	if matches!(scope, DomainScope::All) {
+fn login_in_scope(state: &ApiState, principal: &Principal, login: &str) -> bool {
+	if principal.is_unrestricted() {
 		return true;
 	}
 	let login = crate::util::address::normalize(login);
@@ -83,7 +83,7 @@ fn login_in_scope(state: &ApiState, scope: &DomainScope, login: &str) -> bool {
 				.addresses
 				.iter()
 				.any(|address| crate::util::address::normalize(address) == login))
-			&& scope.admits_account(account.addresses.iter().map(String::as_str))
+			&& principal.admits_account(&account.name, &account.addresses)
 	})
 }
 
@@ -93,13 +93,13 @@ fn login_in_scope(state: &ApiState, scope: &DomainScope, login: &str) -> bool {
 /// account: the post-auth check exists to keep a confined key from confirming
 /// the password of another tenant's account, and that risk only exists for
 /// scoped keys.
-fn account_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> bool {
-	if matches!(scope, DomainScope::All) {
+fn account_in_scope(state: &ApiState, principal: &Principal, name: &str) -> bool {
+	if principal.is_unrestricted() {
 		return true;
 	}
 	state
 		.accounts()
 		.iter()
 		.find(|account| account.name == name)
-		.is_some_and(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+		.is_some_and(|account| principal.admits_account(&account.name, &account.addresses))
 }

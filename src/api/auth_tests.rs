@@ -192,8 +192,8 @@ fn sql_account_state_counted(
 
 /// Write-scoped key (the scope the bearer middleware assigns to
 /// `POST /api/v1/auth/verify`) the post-auth scope check must answer
-/// correctly for a SQL-sourced login. An empty `domains` list corresponds to
-/// [`DomainScope::All`]; passing a domain narrows the scope.
+/// correctly for a SQL-sourced login. An empty `domains` list leaves the key
+/// unrestricted; passing a domain narrows the reach.
 fn verify_key(secret: &str, domains: Vec<String>) -> super::api_keys::ApiKey {
 	super::api_keys::ApiKey {
 		label: "ci".to_string(),
@@ -230,8 +230,8 @@ async fn verify_accepts_sql_account_with_the_configured_token() {
 	assert_eq!(body["admin"], false);
 }
 
-/// A write-scoped administrative key without `domains` is also unconfined
-/// (`DomainScope::All`), so it must reach the SQL-backed account too.
+/// A write-scoped administrative key without `domains` is also unrestricted,
+/// so it must reach the SQL-backed account too.
 #[tokio::test]
 async fn verify_accepts_sql_account_with_a_key_without_domains() {
 	let dir = tempfile::tempdir().expect("tempdir");

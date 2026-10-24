@@ -234,8 +234,17 @@ fn rate_limited() -> ApiError {
 /// `None` when no reachable account owns `from`, the same answer whether
 /// another account owns it or none does.
 fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option<String> {
-	if let Principal::Account { name, .. } = principal {
-		return Some(name.clone());
+	if let Some(bound) = principal.bound_account() {
+		// The bound account is reachable only while it also satisfies the
+		// other restrictions the key declares.
+		let view = state
+			.accounts()
+			.into_iter()
+			.find(|view| view.name == bound)?;
+		if !principal.admits_account(&view.name, &view.addresses) {
+			return None;
+		}
+		return Some(view.name);
 	}
 	let lower = crate::util::address::normalize(from);
 	state

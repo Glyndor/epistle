@@ -49,11 +49,12 @@ impl StoredSubscription {
 /// static token is its own caller. `None` when the credential no longer maps
 /// to a key, which owns nothing.
 pub(crate) fn owner_of(state: &ApiState, principal: &Principal) -> Option<String> {
-	if let Principal::Account { name, .. } = principal {
+	if let Some(name) = principal.bound_account() {
 		return Some(format!("account:{name}"));
 	}
 	let Some(credential) = principal.credential() else {
-		return matches!(principal, Principal::Admin { .. }).then(|| "token".to_string());
+		// The configured static token is its own caller.
+		return Some("token".to_string());
 	};
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)

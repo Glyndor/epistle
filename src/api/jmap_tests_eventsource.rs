@@ -63,7 +63,7 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 	state
 }
 
-async fn open(app: &axum::Router, token: &str, query: &str) -> (StatusCode, Body) {
+pub(super) async fn open(app: &axum::Router, token: &str, query: &str) -> (StatusCode, Body) {
 	let request = Request::builder()
 		.uri(format!("/jmap/eventsource?{query}"))
 		.header(header::AUTHORIZATION, format!("Bearer {token}"))
@@ -74,7 +74,7 @@ async fn open(app: &axum::Router, token: &str, query: &str) -> (StatusCode, Body
 }
 
 /// The next event as (name, data), `None` once the stream ended.
-async fn next_event(stream: &mut BodyDataStream) -> Option<(String, Value)> {
+pub(super) async fn next_event(stream: &mut BodyDataStream) -> Option<(String, Value)> {
 	use futures_core::Stream;
 	let chunk = tokio::time::timeout(
 		Duration::from_secs(5),

@@ -10,6 +10,7 @@ use axum::{Extension, Json};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::imap::archive;
@@ -41,7 +42,8 @@ pub async fn list(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<ArchiveListing>, ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	if !account_known(&state, &name) {
 		return Err(ApiError::not_found("no such account"));
 	}
@@ -77,7 +79,8 @@ pub async fn restore(
 	Extension(auth): Extension<MatchedAuth>,
 	Path((name, id)): Path<(String, Uuid)>,
 ) -> Result<Json<Restored>, ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	if !account_known(&state, &name) {
 		return Err(ApiError::not_found("no such account"));
 	}

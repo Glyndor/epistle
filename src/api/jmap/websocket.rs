@@ -112,7 +112,7 @@ pub(super) fn credential_still_valid(
 	auth: &MatchedAuth,
 	opened_as: &Principal,
 ) -> bool {
-	if matches!(opened_as, Principal::Admin { credential: None }) {
+	if opened_as.credential().is_none() {
 		return true;
 	}
 	Principal::for_token(state, auth) == *opened_as

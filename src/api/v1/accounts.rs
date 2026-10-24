@@ -12,8 +12,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 
+use crate::api::Principal;
 use crate::api::audit::{self, AuditEvent};
-use crate::api::domain_scope::DomainScope;
 use crate::api::error::ApiError;
 use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::removal::{QueuePolicy, Removed};
@@ -28,12 +28,12 @@ pub async fn list(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 ) -> Json<Accounts> {
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	Json(Accounts {
 		accounts: state
 			.accounts()
 			.into_iter()
-			.filter(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+			.filter(|account| principal.admits_account(&account.name, &account.addresses))
 			.collect(),
 	})
 }
@@ -46,7 +46,7 @@ pub async fn list(
 /// does not exist.
 pub(super) fn require_in_scope(
 	state: &ApiState,
-	scope: &DomainScope,
+	principal: &Principal,
 	name: &str,
 ) -> Result<(), ApiError> {
 	let known = state
@@ -54,9 +54,7 @@ pub(super) fn require_in_scope(
 		.into_iter()
 		.find(|account| account.name == name);
 	match known {
-		Some(account) if scope.admits_account(account.addresses.iter().map(String::as_str)) => {
-			Ok(())
-		}
+		Some(account) if principal.admits_account(&account.name, &account.addresses) => Ok(()),
 		Some(_) => Err(ApiError::not_found("no such account")),
 		// Unknown to us: let the store produce its own error, which is what
 		// happened before scopes existed.
@@ -93,15 +91,15 @@ pub async fn create(
 ) -> Result<Json<Created>, ApiError> {
 	// Checked before the password, so a caller cannot use the password
 	// rejection to probe which addresses another tenant already has.
-	let scope = state.domain_scope(&auth);
-	if !scope.admits_account(request.addresses.iter().map(String::as_str)) {
+	let principal = Principal::for_token(&state, &auth);
+	if !principal.admits_addresses(&request.addresses) {
 		return Err(ApiError::invalid_input(
 			"address outside the domains this key may act on",
 		));
 	}
 	super::scope::name_available(
 		&state,
-		&scope,
+		&principal,
 		&crate::directory_store::account_name(&request.name),
 	)?;
 	// Per-tenant `max_accounts`: a cap waiting will not lift is a `409`, not
@@ -176,7 +174,8 @@ pub async fn remove(
 	Path(name): Path<String>,
 	Query(query): Query<RemoveQuery>,
 ) -> Result<Json<RemovedResponse>, ApiError> {
-	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_in_scope(&state, &principal, &name)?;
 	let queue = parse_queue_policy(query.queue.as_deref())?;
 	let data_dir = state.data_dir().to_path_buf();
 	let counts = crate::directory_store::removal::remove_account(
@@ -213,7 +212,8 @@ pub async fn set_password(
 	Path(name): Path<String>,
 	Json(request): Json<SetPassword>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
-	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_in_scope(&state, &principal, &name)?;
 	check_password(&request.password)?;
 	// The policy's `prepare` runs both the hash and the SCRAM derive on the
 	// same canonical bytes, so the stored argon2id PHC and the verifier
@@ -275,7 +275,8 @@ pub async fn enroll_totp(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<TotpEnrolled>, ApiError> {
-	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_in_scope(&state, &principal, &name)?;
 	use ring::rand::SecureRandom;
 	let mut bytes = [0u8; 20];
 	ring::rand::SystemRandom::new()
@@ -306,7 +307,8 @@ pub async fn disable_totp(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
-	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_in_scope(&state, &principal, &name)?;
 	state.store().set_totp(&name, None).map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::TotpDisabled, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))

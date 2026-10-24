@@ -8,13 +8,12 @@ mod account_bound;
 mod account_view;
 pub mod api_keys;
 mod audit;
-pub mod domain_scope;
+mod authorization;
 mod error;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
 pub(crate) mod openapi;
-mod principal;
 mod quota;
 pub mod scim;
 mod state;
@@ -23,8 +22,8 @@ pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
+pub use authorization::{Credential, Principal};
 pub use jmap::reclaim_blobs;
-pub use principal::{Credential, Principal};
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
 
@@ -458,3 +457,11 @@ mod tests_display_name;
 #[cfg(test)]
 #[path = "api_tests_queue.rs"]
 mod tests_queue;
+
+#[cfg(test)]
+#[path = "confinement_tests.rs"]
+mod confinement_tests;
+
+#[cfg(test)]
+#[path = "confinement_tests_jmap.rs"]
+mod confinement_tests_jmap;

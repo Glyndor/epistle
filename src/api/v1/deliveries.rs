@@ -1,11 +1,11 @@
 //! `GET /api/v1/deliveries`: stream the per-recipient delivery log.
 //!
 //! Authorisation is two-tier: an admin (or the configured static token)
-//! sees every record, a user's API key sees only the records tagged
-//! with the principal's account (`Principal::Account { name }` for an
-//! account-bound key, the account behind a domain-scoped key for any
-//! address that maps to it). Records with no account tag are visible
-//! only to admins, the same way `/api/v1/queue` treats unattributed
+//! sees every record, a restricted key sees only the records tagged with an
+//! account it may reach. The reach is the one the common authorization
+//! decides, so a key confined to a domain sees the records of the accounts
+//! inside that domain and nothing else. Records with no account tag are
+//! visible only to admins, the same way `/api/v1/queue` treats unattributed
 //! entries.
 
 use std::collections::BTreeMap;
@@ -66,11 +66,12 @@ pub async fn list(
 	let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 	let principal = crate::api::Principal::for_token(&state, &auth);
 
-	// The acting account an account-bound key may see is the key's own.
-	// A domain-scoped key has no single account; the records it sees
-	// must carry an account that is in the addresses its principal
-	// admits (so a tenant key cannot reach outside its own tenants).
-	let scope = Scope::for_principal(&principal);
+	// The acting account a restricted key may see is decided by the common
+	// authorization: the records it may read are the ones tagged with an
+	// account it may reach. A domain-confined key therefore sees the
+	// records of the accounts inside its domains, and a record tagged with
+	// no account at all belongs to nobody and stays with the admins.
+	let scope = Scope::for_principal(&state, &principal);
 
 	// Reject the call up front when the log is off: no record can be
 	// read back, the response would be empty, and the operator should
@@ -125,12 +126,12 @@ pub async fn list(
 		.filter(|value| !value.is_empty())
 		.map(str::to_string);
 
-	// The account filter, when the caller is not an admin, is read-only:
-	// we replace it with the scope's own `account` so a tenant key cannot
-	// claim a record outside its own tenant by passing `--account=other`.
-	let account_filter = match scope {
+	// The caller's own account filter narrows the page, but it cannot widen
+	// it: a restricted caller naming an account outside its reach gets the
+	// reach's own view, never the other tenant's records.
+	let account_filter = match &scope {
 		Scope::Admin => account_filter,
-		Scope::Own(own) => Some(own),
+		Scope::Tenant(reachable) => account_filter.filter(|account| reachable.contains(account)),
 	};
 
 	let log = DeliveryLog::open(state.data_dir(), retention);
@@ -140,7 +141,14 @@ pub async fn list(
 	let recipient_ref = recipient_filter.as_deref();
 	let records = log
 		.list(Some(limit), |record| {
-			match_filters(record, account_ref, recipient_ref, since_ref, outcome_ref)
+			match_filters(
+				record,
+				&scope,
+				account_ref,
+				recipient_ref,
+				since_ref,
+				outcome_ref,
+			)
 		})
 		.map_err(|_| ApiError::internal())?;
 	let entries = records
@@ -152,11 +160,23 @@ pub async fn list(
 
 fn match_filters(
 	record: &DeliveryRecord,
+	scope: &Scope,
 	account: Option<&str>,
 	recipient: Option<&str>,
 	since: Option<u64>,
 	outcome: Option<DeliveryOutcome>,
 ) -> bool {
+	// The account tag decides who may read the record. A restricted caller
+	// only sees the records of the accounts it may reach, and a record with
+	// no tag belongs to no account: it stays with the administrators.
+	if let Scope::Tenant(reachable) = scope {
+		let Some(tag) = record.account.as_deref() else {
+			return false;
+		};
+		if !reachable.contains(tag) {
+			return false;
+		}
+	}
 	if let Some(account) = account
 		&& record.account.as_deref() != Some(account)
 	{
@@ -206,25 +226,25 @@ enum Scope {
 	/// An admin or the configured static token: every record, regardless
 	/// of the account that produced it.
 	Admin,
-	/// An account-scoped principal: only the records tagged with the
-	/// account name. Built once per request so the filter does not have
-	/// to consult the principal for every record.
-	Own(String),
+	/// A restricted caller: only the records tagged with an account it may
+	/// reach. The account names are resolved against the directory once,
+	/// before the log is read, so the filter never has to walk it again.
+	Tenant(std::collections::HashSet<String>),
 }
 
 impl Scope {
-	fn for_principal(principal: &Principal) -> Self {
-		match principal {
-			Principal::Admin { .. } => Self::Admin,
-			Principal::Account { name, .. } => Self::Own(name.clone()),
-			Principal::Domains { .. } => {
-				// Domain-scoped principals do not map to a single account;
-				// the conservative read is "no account scope" — records
-				// with no `account` tag are not exposed because they may
-				// belong to any tenant.
-				Self::Own(String::new())
-			}
+	fn for_principal(state: &ApiState, principal: &Principal) -> Self {
+		if principal.is_unrestricted() {
+			return Self::Admin;
 		}
+		Self::Tenant(
+			state
+				.accounts()
+				.into_iter()
+				.filter(|account| principal.admits_account(&account.name, &account.addresses))
+				.map(|account| account.name)
+				.collect(),
+		)
 	}
 }
 

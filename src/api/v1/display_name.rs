@@ -8,6 +8,7 @@ use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
 use super::accounts::{require_in_scope, store_error};
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 
@@ -28,7 +29,8 @@ pub async fn set(
 	Path(name): Path<String>,
 	Json(request): Json<SetDisplayName>,
 ) -> Result<Json<DisplayName>, ApiError> {
-	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_in_scope(&state, &principal, &name)?;
 	let display_name = state
 		.store()
 		.set_display_name(&name, &request.display_name)

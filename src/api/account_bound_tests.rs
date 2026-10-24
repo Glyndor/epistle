@@ -76,7 +76,7 @@ async fn unbound_key_keeps_its_administrative_reach() {
 }
 
 #[test]
-fn account_bound_key_has_no_domain_scope() {
+fn account_bound_key_reaches_only_its_own_account() {
 	let key = crate::api::api_keys::ApiKey {
 		label: "alice-only".to_string(),
 		hash: crate::api::api_keys::sha256_hash("x"),
@@ -86,10 +86,14 @@ fn account_bound_key_has_no_domain_scope() {
 		domains: Vec::new(),
 		account: Some("alice".to_string()),
 	};
+	let principal = crate::api::Principal::of_key(&key, None);
 	assert!(
-		!crate::api::domain_scope::DomainScope::of_key(&key)
-			.admits_account(["alice@example.org"].into_iter()),
-		"an account-bound key must not read as server-wide in the domain scope"
+		principal.admits_account("alice", &["alice@example.org".to_string()]),
+		"an account-bound key reaches the account it is bound to"
+	);
+	assert!(
+		!principal.admits_account("bob", &["bob@example.org".to_string()]),
+		"an account-bound key must not read as server-wide"
 	);
 }
 
