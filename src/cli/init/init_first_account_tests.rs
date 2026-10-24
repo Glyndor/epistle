@@ -188,6 +188,9 @@ fn a_clash_stops_a_dry_run_and_a_real_run_before_anything_is_written() {
 	);
 }
 
+#[path = "init_first_account_address_tests.rs"]
+mod address_tests;
+
 #[test]
 fn a_clash_is_found_when_the_config_is_gone_and_only_the_data_dir_remains() {
 	let dir = tempfile::tempdir().expect("tempdir");
