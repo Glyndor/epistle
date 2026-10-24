@@ -13,9 +13,6 @@ use std::time::{Duration, Instant};
 #[path = "init_guided/descriptors.rs"]
 mod descriptors;
 
-#[path = "init_guided/copies.rs"]
-mod copies;
-
 /// The whole budget one guided run may take.
 const DEADLINE: Duration = Duration::from_secs(120);
 
@@ -23,10 +20,6 @@ const DEADLINE: Duration = Duration::from_secs(120);
 /// exiting does not close the terminal while another process still holds its
 /// slave open, and that process is nobody this test can wait for.
 const DRAIN: Duration = Duration::from_secs(10);
-
-/// This test, by name, for the copies it starts. Each copy skips it so a copy
-/// never starts copies of its own.
-const SELF: &str = "the_target_passes_with_several_copies_at_once";
 
 /// The two ends of a pseudo-terminal, both closed across `exec`.
 ///
