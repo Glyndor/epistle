@@ -42,7 +42,7 @@ a connection URL.
 | `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused at validate time: only a global unicast address is accepted. |
 | `public_ipv6` | IPv6 | unset | Same for IPv6. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
-| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
+| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
 | `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, DNS records and DKIM keys are kept. Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
@@ -1786,7 +1786,7 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
-Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`.
+Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`. An address needs a domain with at least one dot, like `domains` does, so `torre@localhost` is refused and the refusal names the rule.
 
 | Key | Meaning |
 |---|---|
@@ -1795,7 +1795,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
 | `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. `0` means no limit. |
-| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
+| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. Each target needs a domain with at least one dot. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 | `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
@@ -1806,7 +1806,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | Key | Meaning |
 |---|---|
 | `address` | The alias address (e.g. `team@example.org`). |
-| `members` | Member addresses it delivers to (each a local account address). |
+| `members` | Member addresses it delivers to (each a local account address, with a domain that has at least one dot). |
 | `senders` | Addresses allowed to send *as* the alias (From / MAIL FROM). Empty means any member may; a non-member is always refused. |
 | `hidden` | Keep the membership private — not disclosed through directory queries (default `true`). |
 | `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. |

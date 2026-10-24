@@ -124,6 +124,9 @@ fn addresses(value: &str) -> Vec<String> {
 }
 
 /// The lowercased domain of `address`, when it has one a DNS name could be.
+/// The value comes from a header, so it is data and is not held to the domain
+/// rules: a domain of one label (`localhost`) is kept as it came, and the
+/// DMARC lookup that follows finds no record for it.
 fn domain_of(address: &str) -> Option<String> {
 	let (local, domain) = address.rsplit_once('@')?;
 	let domain = domain.trim().to_ascii_lowercase();

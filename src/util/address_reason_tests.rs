@@ -112,7 +112,10 @@ fn names_an_overlong_domain() {
 
 #[test]
 fn names_domain_shape_problems() {
-	assert_eq!(refused("a@localhost"), "the domain localhost has no dot");
+	assert_eq!(
+		refused("a@localhost"),
+		"the domain localhost needs at least one dot"
+	);
 	assert_eq!(refused("a@ex..org"), "consecutive dots in the domain");
 	assert_eq!(
 		refused("a@-ex.org"),
