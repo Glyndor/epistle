@@ -28,6 +28,49 @@ pub(super) fn read(path: &Path) -> Result<(String, Metadata), String> {
 	if !metadata.is_file() {
 		return Err("config must be a regular file".into());
 	}
+	owner_only(path, &metadata)?;
+	let mut text = String::new();
+	file.read_to_string(&mut text)
+		.map_err(|error| error.to_string())?;
+	Ok((text, metadata))
+}
+
+/// The bytes of a configuration path that may be a symlink, read without
+/// waiting. `mail.toml` is routinely a link into another directory of the
+/// installation and the loader has always followed it, so this follows it
+/// too, while [`read`] refuses it because the caller is about to replace the
+/// file at the path. The open carries `O_NONBLOCK` and the file is refused
+/// unless the descriptor says it is regular, so a fifo at the path or behind
+/// the link can not turn a command that holds the common lock into a wait on
+/// a writer that never arrives. The permission rule and the wording of an
+/// I/O failure are the ones `Config::load` applies, so a path this reader
+/// takes is one the loader would have taken too.
+pub(crate) fn read_through_link(path: &Path) -> Result<String, String> {
+	let mut options = OpenOptions::new();
+	options.read(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.custom_flags(libc::O_NONBLOCK);
+	}
+	let mut file = options
+		.open(path)
+		.map_err(|source| unreadable(path, source))?;
+	let metadata = file.metadata().map_err(|source| unreadable(path, source))?;
+	if !metadata.is_file() {
+		return Err(format!("{} must be a regular file", path.display()));
+	}
+	owner_only(path, &metadata)?;
+	let mut text = String::new();
+	file.read_to_string(&mut text)
+		.map_err(|source| unreadable(path, source))?;
+	Ok(text)
+}
+
+/// Refuse a configuration file other users can reach. The mode is taken from
+/// the descriptor that was read, so a path swapped after the open does not
+/// decide what was checked.
+fn owner_only(path: &Path, metadata: &Metadata) -> Result<(), String> {
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt;
@@ -41,10 +84,20 @@ pub(super) fn read(path: &Path) -> Result<(String, Metadata), String> {
 			.to_string());
 		}
 	}
-	let mut text = String::new();
-	file.read_to_string(&mut text)
-		.map_err(|error| error.to_string())?;
-	Ok((text, metadata))
+	#[cfg(not(unix))]
+	let _ = (path, metadata);
+	Ok(())
+}
+
+/// An I/O failure at `path`, in the loader's own words: the operator reads
+/// the same message whether the read came from here or from `Config::load`.
+fn unreadable(path: &Path, source: std::io::Error) -> String {
+	crate::config::ConfigError::Read {
+		path: path.to_path_buf(),
+		source,
+		kind: "config file",
+	}
+	.to_string()
 }
 
 struct Staging(PathBuf);
@@ -94,7 +147,7 @@ pub(super) fn replace(
 }
 
 #[cfg(unix)]
-fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
+pub(super) fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
 	use std::os::fd::AsRawFd;
 	use std::os::unix::fs::MetadataExt;
 	let current = file.metadata()?;
@@ -109,7 +162,7 @@ fn preserve_owner(file: &File, metadata: &Metadata) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn same_file(a: &Metadata, b: &Metadata) -> bool {
+pub(super) fn same_file(a: &Metadata, b: &Metadata) -> bool {
 	use std::os::unix::fs::MetadataExt;
 	a.dev() == b.dev()
 		&& a.ino() == b.ino()
@@ -119,11 +172,11 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
 }
 
 #[cfg(not(unix))]
-fn preserve_owner(_file: &File, _metadata: &Metadata) -> std::io::Result<()> {
+pub(super) fn preserve_owner(_file: &File, _metadata: &Metadata) -> std::io::Result<()> {
 	Ok(())
 }
 
 #[cfg(not(unix))]
-fn same_file(_a: &Metadata, _b: &Metadata) -> bool {
+pub(super) fn same_file(_a: &Metadata, _b: &Metadata) -> bool {
 	true
 }

@@ -143,3 +143,57 @@ fn a_compose_file_from_before_the_limits_gets_the_defaults() {
 	let again = regenerate(&answers.data_dir, &listeners, &old.to_string()).expect("regenerate");
 	assert_eq!(again.text, written);
 }
+
+/// The host address `epistle service set` narrowed one mapping to is the
+/// operator's decision, and the file is the only place it lives. A `stack
+/// update` re-renders the map from the listeners, so it has to read that
+/// address back or the listener returns to every host address.
+#[test]
+fn a_narrow_published_address_survives_a_regeneration() {
+	let answers = stack_answers();
+	let written = render_for(&answers, true).expect("render");
+	let narrowed = written.replace("\"25:25\"", "\"127.0.0.1:25:25\"");
+	assert_ne!(narrowed, written, "the fixture has to carry the mapping");
+	let listeners = listeners_to_write(&answers).unwrap();
+	let again = regenerate(&answers.data_dir, &listeners, &narrowed).expect("regenerate");
+	let value: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+	assert_eq!(
+		value["services"]["mail"]["ports"][0],
+		serde_json::json!("127.0.0.1:25:25"),
+		"a regeneration must not widen a mapping back to every host address"
+	);
+}
+
+/// A stack whose file still publishes a listener with no TLS transport on
+/// every address of the host loses that reachability on the next
+/// `stack update`, and the note the update prints is where the operator reads
+/// which port went and where it went.
+#[test]
+fn a_wide_publication_of_a_listener_without_tls_is_named_in_the_notes() {
+	let mut answers = stack_answers();
+	answers.services.webdav = true;
+	let written = render_for(&answers, true).expect("render");
+	let wide = written.replace("\"127.0.0.1:8090:8090\"", "\"8090:8090\"");
+	assert_ne!(
+		wide, written,
+		"the fixture has to publish web-dav on the network"
+	);
+	let listeners = listeners_to_write(&answers).unwrap();
+	let again = regenerate(&answers.data_dir, &listeners, &wide).expect("regenerate");
+	assert!(
+		again.notes.iter().any(|note| {
+			note.contains("was published on 8090:8090 on every address of the host")
+				&& note.contains("now published on 127.0.0.1:8090:8090")
+		}),
+		"the operator is losing reachability on this upgrade and has to read it: {:?}",
+		again.notes
+	);
+	let value: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+	assert!(
+		value["services"]["mail"]["ports"]
+			.as_array()
+			.expect("ports")
+			.contains(&serde_json::json!("127.0.0.1:8090:8090")),
+		"the file the update writes carries the narrowed publication"
+	);
+}

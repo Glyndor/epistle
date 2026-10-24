@@ -93,6 +93,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 		keys.join("storage.key").display()
 	);
 	std::fs::write(&config, &text).unwrap();
+	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
 	let lines = super::prepare_keys_for_update(&data_dir, &config, true).unwrap();
 	let secrets = root.path().join("secrets");
 	assert_eq!(
@@ -160,6 +161,48 @@ fn stack_update_creates_the_keys_directory_when_an_install_has_none() {
 	std::fs::create_dir_all(&data_dir).unwrap();
 	let config = root.path().join("mail.toml");
 	std::fs::write(&config, "hostname = \"h\"\n").unwrap();
+	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
 	super::prepare_keys_for_update(&data_dir, &config, false).unwrap();
 	assert!(data_dir.join("keys/oauth_public.key").is_file());
+}
+
+/// The configuration the compose file serves is read while the update holds
+/// both locks, so a fifo there, or a link to one, has to be refused by name
+/// and not waited on.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_served_configuration_is_refused_instead_of_waited_on() {
+	use crate::cli::init::compose_read::fifo_at;
+	use std::sync::mpsc;
+	use std::time::Duration;
+	for linked in [false, true] {
+		let root = tempfile::tempdir().unwrap();
+		let data_dir = root.path().join("data");
+		std::fs::create_dir_all(data_dir.join("keys")).unwrap();
+		let fifo = root.path().join("served.fifo");
+		fifo_at(&fifo);
+		let config = root.path().join("mail.toml");
+		if linked {
+			std::os::unix::fs::symlink(&fifo, &config).unwrap();
+		} else {
+			std::fs::rename(&fifo, &config).unwrap();
+		}
+		let label = format!("a {} fifo", if linked { "linked" } else { "direct" });
+		let (sender, receiver) = mpsc::channel();
+		let (data, served) = (data_dir.clone(), config.clone());
+		let preparing = std::thread::spawn(move || {
+			sender
+				.send(super::prepare_keys_for_update(&data, &served, false))
+				.ok();
+		});
+		let value = receiver.recv_timeout(Duration::from_secs(5));
+		if value.is_err() {
+			drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+		}
+		let error = value
+			.unwrap_or_else(|_| panic!("{label}: the update waited for a fifo writer"))
+			.expect_err(&label);
+		preparing.join().expect("the preparing thread panicked");
+		assert!(error.contains("must be a regular file"), "{label}: {error}");
+	}
 }

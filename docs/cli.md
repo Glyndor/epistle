@@ -188,12 +188,15 @@ epistle service list
 epistle service list --json
 epistle service enable imaps
 epistle service disable imap
+epistle service set imap --bind 127.0.0.1
+epistle service set api --bind 127.0.0.1 --port 8025
 epistle service --config /path/to/mail.toml enable submission
 ```
 
 `list` shows enabled or disabled state, port, and bind address. Enabled rows use
 actual configured sockets, including custom ports; disabled rows show the defaults
-that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`.
+that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`,
+plus `host` on a container stack where the generated map pins one.
 
 Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 `pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
@@ -203,8 +206,80 @@ Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
 `/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must
-be valid. New mail listeners inherit SMTP's bind address; API uses loopback.
-An already enabled or disabled service reports no change and exits successfully.
+be valid. New mail listeners inherit SMTP's bind address; the listeners with no
+TLS transport of their own (`api`, `webdav`) start on loopback, so enabling one
+publishes nothing until `set --bind` opens it.
+An already enabled or disabled service reports no change and exits successfully,
+and so does `set` asked for the socket the listener already has.
+
+`set NAME [--bind ADDRESS] [--port PORT]` moves a listener that is already
+enabled, so `enable` is what adds one. It refuses a port another enabled
+listener answers on, a port 0, and an address the parser does not read; a value
+of `--port 70000` is a usage error. The API keeps the token requirement the loader
+enforces. API, WebDAV and
+plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
+loopback for these listeners, even when mail certificates are configured in
+`[tls]`. I keep them behind a TLS reverse proxy on loopback.
+
+Without a container stack the bind in `mail.toml` is the address the server
+binds, so `set` writes the requested one there. With
+`<data_dir>/compose/compose.yaml` the two sides split: inside the container the
+listener binds the unspecified address of the family the operator named
+(`0.0.0.0` for IPv4, `::` for IPv6), because a loopback or private address
+there is not one the published mapping can reach, and the requested address
+becomes the host side of the generated mapping as `ADDRESS:PORT:PORT`. A
+container bind that already answers that family is left alone, so the dual-stack
+`::` survives a move to an IPv4 host address. `list` then shows that address in
+a `HOST` column, `-` where the mapping still answers on every host address. A
+wildcard renders as `PORT:PORT` in both families, because a wildcard publishes
+on every address the host owns either way, and pasta on Podman 5.4.2 refuses the
+explicit `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms. A generated mapping
+with no explicit address stays `PORT:PORT`, and the
+host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
+or `stack update`, since every writer of the map reads it back first. If
+`compose.override.yaml` already publishes a port for the same service, `set`
+leaves it alone and says that the override merges with the generated map, or
+replaces it where it carries `!override`. That notice is read out of the file
+rather than parsed, so it sees the block form, the flow form (`mail: {ports:
+[...]}`) and ranges of ports, in block or inline; it does not see a `ports` key
+behind an anchor, an alias or a value a template fills in at run time, and a
+file it cannot make sense of reports nothing.
+
+The address has to be one of the host's own: a multicast group, `255.255.255.255`
+and a link-local IPv6 address are refused before anything is written, both
+wildcards are accepted, and an IPv4-mapped address is written as the IPv4
+address it names. A listener the container holds on loopback publishes nothing
+and is reported as `set` rather than as `published`. A listener with no TLS
+transport of its own (`api`, `webdav`, plain `autoconfig`) is published on
+`127.0.0.1` when the generated file names no address for it, so a map rebuilt
+without the address one `set` wrote, or an `addr` an operator edited by hand,
+puts it on loopback rather than on every address of the host.
+
+`set`, `enable` and `disable` validate and stage both files before replacing
+either, and a `compose.yaml` that is a symlink is read through the link and then replaced by a regular file: the file behind the link is left as it was, and the link is not followed for the write, so a path that changes between the read and the rename cannot redirect it. Keep the generated file where the command expects it, or put the symlink on the directory instead.
+That write needs write access to that directory. A write error restores the
+previous files and verifies their contents and permissions. If restoration
+fails, the error names a retained recovery copy, which takes its own
+`.service-recovery.*` name and is kept for a week instead of the hour a staged
+copy is kept. A command killed between its two renames leaves its
+staged copies in the directory of the file it was writing, and the next command
+under the lock sweeps and names the ones the configuration directory holds; when
+the generated map and `mail.toml` describe different ports, which is what that
+kill leaves behind and what a port edited by hand also leaves behind, the
+command that reconciles them says so before it writes. Service edits, `dns
+provider set`, init reruns, stack writers and `db upgrade` share a
+configuration-directory lock through the write and reload; the wait has a
+deadline and names the command that holds it. The lock file is created `0600`
+by the first command that takes it, so it belongs to the service user or to
+root; a lock this command owns is put back to `0600`, and one it can only read
+is still a lock, so a lock root created at `0644` keeps two commands apart. A
+mode that lets other users write it, and a lock file a third user owns, are
+refused with the mode it has and the `chmod` that fixes it.
+
+`--dry-run` prints the diff of `mail.toml`, and on a container stack the
+`ports:` change that comes with it. With `--json` the result object carries the
+same diff and the map as `ports` with its `current` and `wanted` lists, so a
+consumer does not read a stack change as an empty one.
 
 When `<data_dir>/compose/compose.yaml` exists, the generated mail port map is
 updated and the mail service is restarted through `epistle stack`. The operator

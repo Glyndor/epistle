@@ -189,7 +189,9 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
-Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent. Operators exposing any of these externally should either configure `[tls]` itself or front the listener with a TLS proxy.
+Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent.
+
+`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where I keep them. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
 ### A listener on a private interface
 
@@ -201,15 +203,29 @@ gets a fallback to another address, and it does not need one.
 
 What keeps a listener off the public interfaces is the **published port** on
 the host, and a private `addr` does not do it. `epistle init` publishes every
-non-loopback listener as `<port>:<port>` (`api` becomes `8025:8025`, reachable
-on every host address) and gives a loopback listener no `ports:` entry at all.
-Set the listener to `addr = "0.0.0.0"` (the container side) and pin the host
-side in `<data_dir>/compose/compose.override.yaml`, which survives both an
-`init` rerun and `stack update`. A plain `ports:` list there is **merged** with
-the one `init` writes, so `8025:8025` and `10.0.0.1:8025:8025` would both be
-requested and the engine fails with "Address already in use". The `!override`
-tag replaces the list, so it has to carry every port the stack publishes, the
-mail ones included:
+non-loopback listener as `<port>:<port>` and gives a loopback listener no
+`ports:` entry at all. The three listeners with no TLS transport are the
+exception: the map publishes them on `127.0.0.1` unless it names another
+address, so `api` arrives as `127.0.0.1:8025:8025` and not as `8025:8025` on
+every host address.
+
+An install that still carries an older map has those three published wide, and
+the next command that writes the map takes them off every address of the host:
+`epistle service enable`, `epistle service disable`, `epistle service set`, an
+`epistle init` rerun and `epistle stack update` all re-render it, so an upgrade
+can be what cuts a service off. The command that does it names the service and
+the port on stderr, or in the `init` report, so the loss of reachability is
+never silent. That is deliberate: a listener with no TLS transport reachable
+from the internet is one more thing to expose, and the way to expose it is
+`compose.override.yaml` as below, behind a TLS reverse proxy. A concrete
+address the map already names, such as `10.0.0.1:8025:8025`, is left alone: the
+rule is about a wildcard, not about a decision. Set the listener to `addr = "0.0.0.0"` (the container
+side) and pin the host side in `<data_dir>/compose/compose.override.yaml`,
+which survives both an `init` rerun and `stack update`. A plain `ports:` list
+there is **merged** with the one `init` writes, so `8025:8025` and
+`10.0.0.1:8025:8025` would both be requested and the engine fails with
+"Address already in use". The `!override` tag replaces the list, so it has to
+carry every port the stack publishes, the mail ones included:
 
 ```yaml
 services:

@@ -197,6 +197,10 @@ pub(crate) enum StackAction {
 	},
 }
 
+#[path = "stack_entry.rs"]
+mod entry;
+pub(super) use entry::run_from_path;
+
 /// Run the `stack` subcommand the operator typed. With `json`, podup's
 /// own output has gone to stderr and a success prints one object naming
 /// the verb and the service: `{"result": "done", "action", "service"}`.
@@ -674,3 +678,7 @@ mod tests_service;
 #[cfg(test)]
 #[path = "stack_tests_override.rs"]
 mod tests_override;
+
+#[cfg(test)]
+#[path = "stack_tests_lock.rs"]
+mod tests_lock;

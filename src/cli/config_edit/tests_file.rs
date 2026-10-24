@@ -152,6 +152,43 @@ fn verified_open_rejects_insecure_symlink_and_nonregular_files() {
 	);
 }
 
+/// The loader follows a link to the configuration, so the read a writer that
+/// is already holding the common lock uses has to follow one too, and it has
+/// to refuse a fifo at the path or behind the link instead of waiting for a
+/// writer that may never come.
+#[cfg(unix)]
+#[test]
+fn a_link_to_the_configuration_is_read_and_a_fifo_behind_one_is_refused() {
+	use crate::cli::init::compose_read::fifo_at;
+	use std::os::unix::fs::{PermissionsExt, symlink};
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("mail.toml");
+	fs::write(&path, TEXT).unwrap();
+	fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+	let link = dir.path().join("linked.toml");
+	symlink(&path, &link).unwrap();
+	assert!(
+		read_through_link(&link).unwrap() == TEXT,
+		"a link to the configuration is read through"
+	);
+	let direct = dir.path().join("direct.toml");
+	fifo_at(&direct);
+	let behind = dir.path().join("behind.fifo");
+	fifo_at(&behind);
+	let through_link = dir.path().join("fifo.toml");
+	symlink(&behind, &through_link).unwrap();
+	for (label, path) in [
+		("the path itself", &direct),
+		("behind a link", &through_link),
+	] {
+		let error = read_through_link(path).unwrap_err();
+		assert!(
+			error.contains("must be a regular file") && error.contains(&path.display().to_string()),
+			"a fifo at {label} must be refused by name: {error}"
+		);
+	}
+}
+
 #[test]
 fn concurrent_change_is_not_overwritten_and_temp_is_cleaned() {
 	let file = fixture();

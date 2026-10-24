@@ -251,6 +251,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("relay remove", &["--domain", "example.net"], Done),
 	("service list", &[], Done),
 	("service enable", &["webdav"], Done),
+	// Between enable and disable, so webdav is a listener `set` can move.
+	("service set", &["webdav", "--bind", "127.0.0.1"], Done),
 	("service disable", &["webdav"], Done),
 	("antispam show", &[], Done),
 	("antispam set", &["greylist-delay", "5m"], Done),

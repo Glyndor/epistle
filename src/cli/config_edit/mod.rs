@@ -8,7 +8,12 @@ mod file;
 mod lookup;
 mod restart;
 mod rules;
+mod sweep;
 mod tables;
+mod transaction;
+pub(super) use file::read_through_link;
+pub(crate) use sweep::{announce_swept, sweep_orphans};
+pub(crate) use transaction::{Companion, commit_pair};
 
 pub(crate) use restart::{after_change_reporting, after_change_with, after_ports_change_reporting};
 pub use rules::FieldChange;

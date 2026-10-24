@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use super::query_within_program;
+use super::{Podup, Stack};
 
 fn program(dir: &std::path::Path, body: &str) -> String {
 	let path = dir.join("podup");
@@ -131,4 +132,46 @@ fn what_the_stopped_query_started_is_stopped_with_it() {
 		std::thread::sleep(Duration::from_millis(50));
 	}
 	assert!(gone, "process {pid} outlived the query");
+}
+
+/// The upgrade holds the common lock from its first read to its last write,
+/// minutes apart, so a read that waits on a fifo holds the lock with it. The
+/// generated file has to be named instead, inside a few seconds.
+#[test]
+fn a_fifo_at_the_generated_compose_path_is_refused_instead_of_waited_on() {
+	use crate::cli::init::compose_read::fifo_at;
+	use std::sync::mpsc;
+	for linked in [false, true] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let fifo = dir.path().join("compose.fifo");
+		fifo_at(&fifo);
+		let compose = dir.path().join("compose.yaml");
+		if linked {
+			std::os::unix::fs::symlink(&fifo, &compose).expect("link");
+		} else {
+			std::fs::rename(&fifo, &compose).expect("move");
+		}
+		let label = format!("a {} fifo", if linked { "linked" } else { "direct" });
+		let (sender, receiver) = mpsc::channel();
+		let mut stack = Podup {
+			compose: compose.clone(),
+			data_dir: dir.path().to_path_buf(),
+			database: toml::from_str(r#"url = "postgres://epistle@localhost/epistle""#)
+				.expect("database"),
+		};
+		let reading = std::thread::spawn(move || sender.send(stack.compose()).ok());
+		let value = receiver.recv_timeout(Duration::from_secs(5));
+		if value.is_err() {
+			drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+		}
+		let error = value
+			.unwrap_or_else(|_| panic!("{label}: the upgrade waited for a fifo writer"))
+			.expect_err(&label);
+		reading.join().expect("the reading thread panicked");
+		assert!(error.contains("must be a regular file"), "{label}: {error}");
+		assert!(
+			error.contains(&compose.display().to_string()),
+			"{label}: {error}"
+		);
+	}
 }

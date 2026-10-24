@@ -86,6 +86,9 @@ pub enum ReportStep {
 		/// Operator-facing reason it was skipped.
 		reason: String,
 	},
+	/// A published listener was moved off every address of the host by the
+	/// generated file this run wrote.
+	Narrowed(crate::cli::init::Narrowed),
 }
 
 impl Report {
@@ -106,6 +109,7 @@ impl Report {
 				ReportStep::Skipped { name, reason } => {
 					writeln!(out, "  skipped: {name} ({reason})")?
 				}
+				ReportStep::Narrowed(one) => writeln!(out, "  narrowed: {one}")?,
 				ReportStep::AccountCreated { name, address } => {
 					writeln!(out, "  account: {name} <{address}>")?
 				}
@@ -485,6 +489,18 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
+	let _held = match crate::cli::service_lock::acquire(&answers.config_path) {
+		Ok(held) => held,
+		Err(error) => {
+			return ApplyOutcome {
+				report,
+				error: Some(ApplyError::ConfigRead(
+					answers.config_path.clone(),
+					std::io::Error::other(error),
+				)),
+			};
+		}
+	};
 	// Lay down the database password before the config: `Config::load`
 	// opens `[database] password_file` to validate the URL.
 	if answers.services.database
