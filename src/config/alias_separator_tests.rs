@@ -37,3 +37,19 @@ fn an_alias_without_separators_still_validates() {
 	);
 	assert_eq!(fine.validate(), Ok(()));
 }
+
+#[test]
+fn a_domain_of_one_label_is_refused_in_any_address_of_the_alias() {
+	for built in [
+		alias("team@localhost", &["alice@example.org"], &[]),
+		alias("team@example.org", &["alice@intranet"], &[]),
+		alias(
+			"team@example.org",
+			&["alice@example.org"],
+			&["bob@intranet"],
+		),
+	] {
+		let error = built.validate().expect_err("a single label is refused");
+		assert!(error.contains("needs at least one dot"), "{error}");
+	}
+}

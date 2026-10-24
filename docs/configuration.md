@@ -1795,7 +1795,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
 | `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. `0` means no limit. |
-| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
+| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. Each target needs a domain with at least one dot. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 | `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
@@ -1806,7 +1806,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | Key | Meaning |
 |---|---|
 | `address` | The alias address (e.g. `team@example.org`). |
-| `members` | Member addresses it delivers to (each a local account address). |
+| `members` | Member addresses it delivers to (each a local account address, with a domain that has at least one dot). |
 | `senders` | Addresses allowed to send *as* the alias (From / MAIL FROM). Empty means any member may; a non-member is always refused. |
 | `hidden` | Keep the membership private — not disclosed through directory queries (default `true`). |
 | `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. |

@@ -59,7 +59,10 @@ impl Alias {
 			.chain(self.senders.iter().map(|sender| ("sender", sender)))
 		{
 			if let Err(why) = crate::util::address_reason::parse(address) {
-				return Err(format!("alias {}: {label} {why}", self.address));
+				return Err(format!(
+					"alias {}: {label} {address:?}: {why}",
+					self.address
+				));
 			}
 		}
 		Ok(())
