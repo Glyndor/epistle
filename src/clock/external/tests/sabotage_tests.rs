@@ -3,19 +3,21 @@
 //! Each test commits the contract an operator relies on: the median
 //! the area reports, the warn/fail classifier, the smear exclusion, the
 //! one-failed-source behaviour, the per-source deadline, the local-clock
-//! jump rejection and the origin-timestamp check. Every entry in the
-//! file is a no-op at runtime: it imports the symbols under test and
-//! asserts the property directly. The companion manual-saboteur path
-//! that the task asks for is run on the side, with each module backed
-//! up before the edit and restored by `cmp` before the next.
+//! jump rejection and the origin-timestamp check.
+//!
+//! The three network sabotages run against a local UDP stub on the
+//! loopback address of the machine that runs the test. The destination
+//! policy of the probe refuses that address by default, so the test asks
+//! for it and for the port of the stub explicitly; the production policy
+//! is not relaxed for them, and the refusal each sabotage expects is the
+//! one the operator reads, not a dial failure.
 
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
-use crate::clock::external::adapter::{ProbeError, plain_ntp};
+use crate::clock::external::adapter::{Edge, ProbeError, local_span, plain_ntp_with_policy};
 use crate::clock::external::assessment::{Outcome, decide};
 use crate::clock::external::source::{ClockExternal, ProbeReading, Source, SourceKind};
-
-const NTP_UNIX_OFFSET: f64 = 2_208_988_800.0;
+use crate::clock::external::udp_stub::{NtpPlan, NtpStub, local_policy, source_for_port};
 
 fn reading(label: &str, kind: SourceKind, offset: f64) -> ProbeReading {
 	let source = match kind {
@@ -118,80 +120,105 @@ fn sabotage_one_failed_source_does_not_flip_the_verdict_to_fail() {
 	assert_eq!(decide(&external, &readings), Outcome::Warn);
 }
 
-/// Sabotage 5: the per-source deadline is enforced. A dial that the
-/// adapter cannot complete within `SOURCE_DEADLINE` must surface as a
-/// timeout, not hang. The test points plain_ntp at an unreachable
-/// TEST-NET-3 address on a port that nothing listens on; an
-/// implementation that ignored the deadline would still return after
-/// the socket connect eventually fails (often seconds later) or hang
-/// the test driver.
+/// Sabotage 5: the per-source deadline is enforced. A source that takes
+/// the datagram and never answers must cost the probe the deadline it
+/// was given, and the caller must read a timeout: the destination was
+/// reached, the server stayed silent, and a dial failure would say
+/// something else about what happened. The stub reads the request and
+/// keeps it.
 #[tokio::test(flavor = "current_thread")]
-async fn sabotage_per_source_deadline_returns_timeout_on_unreachable_host() {
-	let mut source = Source::ntp("198.51.100.7");
-	source.port = Some(1);
-	let started = std::time::Instant::now();
-	let result = plain_ntp(&source, Duration::from_millis(250)).await;
+async fn sabotage_per_source_deadline_expires_on_a_source_that_does_not_answer() {
+	let stub = NtpStub::spawn(NtpPlan::Silent);
+	let source = source_for_port(stub.port());
+	let started = Instant::now();
+	let result = tokio::time::timeout(
+		Duration::from_secs(5),
+		plain_ntp_with_policy(
+			&source,
+			Duration::from_millis(300),
+			local_policy(stub.port()),
+		),
+	)
+	.await
+	.expect("the per-source deadline must hold")
+	.expect_err("a source that stays silent must not produce a reading");
+	assert_eq!(
+		result,
+		ProbeError::Timeout,
+		"a silent source must be a timeout, not {result:?}"
+	);
 	let elapsed = started.elapsed();
 	assert!(
-		matches!(result, Err(ProbeError::Timeout) | Err(ProbeError::Dial(_))),
-		"unreachable host must yield Timeout or Dial; got {result:?}"
+		elapsed >= Duration::from_millis(250),
+		"the probe must wait for the deadline it was given; elapsed={elapsed:?}"
 	);
 	assert!(
 		elapsed < Duration::from_secs(2),
-		"deadline of 250 ms must hold; elapsed={elapsed:?}"
+		"the probe must not wait past the deadline; elapsed={elapsed:?}"
 	);
 }
 
-/// Sabotage 6: a local clock step during the exchange must invalidate
-/// the measurement. The probe refuses any reading whose T1/T4 span is
-/// over one second. We surface this by sending the adapter a deadline
-/// so short that any real local clock step (or simply the absence of
-/// an instant reply) will trip the rejection. A pure deadlock-style
-/// implementation would block past the budget.
+/// Sabotage 6: a local clock step during the exchange invalidates the
+/// measurement.
+///
+/// The exchange is stamped twice, with the wall clock and with the
+/// monotonic clock, and a step is what the two disagree about. Over the
+/// socket the stub answers later than the span the adapter will vouch
+/// for, so the exchange ends in the refusal the operator reads,
+/// `LocalJump`, and not in a reading. A step itself cannot be produced
+/// over a socket without moving the clock of the host, so it is
+/// produced where a step can be made: in the two stamps of the
+/// exchange. A wall clock that advanced 300 ms while 1750 ms really
+/// passed is a step hidden by the round trip, and the span it leaves is
+/// positive and small enough to pass for a measurement.
 #[tokio::test(flavor = "current_thread")]
-async fn sabotage_local_clock_step_during_probe_returns_local_jump_or_timeout() {
-	let mut source = Source::ntp("198.51.100.7");
-	source.port = Some(1);
-	let started = std::time::Instant::now();
-	let result = plain_ntp(&source, Duration::from_millis(50)).await;
-	let elapsed = started.elapsed();
-	match result {
-		Err(ProbeError::LocalJump) | Err(ProbeError::Timeout) | Err(ProbeError::Dial(_)) => {}
-		Err(other) => panic!("expected LocalJump, Timeout or Dial, got {other:?}"),
-		Ok(one_shot) => panic!(
-			"probe should not return a clean reading inside 50 ms; \
-			 got offset_seconds={} delay_seconds={}",
-			one_shot.offset_seconds, one_shot.delay_seconds
-		),
-	}
+async fn sabotage_local_clock_step_during_the_exchange_is_not_a_measurement() {
+	let stub = NtpStub::spawn(NtpPlan::Late(Duration::from_millis(1_200)));
+	let source = source_for_port(stub.port());
+	let result = tokio::time::timeout(
+		Duration::from_secs(5),
+		plain_ntp_with_policy(&source, Duration::from_secs(3), local_policy(stub.port())),
+	)
+	.await
+	.expect("the probe must answer before its own deadline")
+	.expect_err("an exchange the local span cannot vouch for must not be a reading");
+	assert_eq!(
+		result,
+		ProbeError::LocalJump,
+		"a local clock that moved during the exchange must be refused, got {result:?}"
+	);
+
+	let sent = Edge {
+		wall: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
+		monotonic: Instant::now(),
+	};
+	let received = Edge {
+		wall: sent.wall + Duration::from_millis(300),
+		monotonic: sent.monotonic + Duration::from_millis(1_750),
+	};
 	assert!(
-		elapsed < Duration::from_secs(1),
-		"a runaway probe blows the deadline; elapsed={elapsed:?}"
+		matches!(local_span(sent, received), Err(ProbeError::LocalJump)),
+		"a wall clock that advanced 300 ms while 1750 ms really passed is a step, \
+		 and the reading must be refused"
 	);
 }
 
-/// Sabotage 7: the origin timestamp must match the request. A local
-/// NTP responder that overwrites the origin field with junk must be
-/// rejected by the adapter as `BadReply`, not silently accepted. The
-/// property under test: for whatever the network hands back, an
-/// endpoint that does not respond within the deadline lands as
-/// `Timeout` or `Dial`, never as a clean reading; an implementation
-/// that skipped the origin check would accept attacker-controlled
-/// offsets. The local-responder coverage lives in
-/// `tests/adapter_tests.rs`. Here we pin the negative-control path:
-/// a probe against an unreachable host does NOT return Ok.
+/// Sabotage 7: the origin timestamp must match the request. A reply that
+/// overwrites the origin field with junk must be refused as a bad reply
+/// and not read as an offset somebody chose.
 #[tokio::test(flavor = "current_thread")]
-async fn sabotage_origin_mismatch_or_bad_endpoint_does_not_return_a_clean_reading() {
-	let mut source = Source::ntp("198.51.100.7");
-	source.port = Some(1);
-	let result = plain_ntp(&source, Duration::from_millis(50)).await;
+async fn sabotage_origin_mismatch_is_refused_as_a_bad_reply() {
+	let stub = NtpStub::spawn(NtpPlan::WrongOrigin);
+	let source = source_for_port(stub.port());
+	let result =
+		plain_ntp_with_policy(&source, Duration::from_secs(2), local_policy(stub.port())).await;
 	match result {
-		Err(_) => {}
-		Ok(one_shot) => panic!(
-			"a probe against an unreachable endpoint must fail; \
-			 got offset_seconds={} delay_seconds={}",
-			one_shot.offset_seconds, one_shot.delay_seconds
-		),
+		Err(ProbeError::BadReply(why)) => {
+			assert!(
+				why.contains("origin"),
+				"the refusal must name the origin that did not match: {why}"
+			);
+		}
+		other => panic!("expected the origin mismatch to be refused, got {other:?}"),
 	}
-	let _ = NTP_UNIX_OFFSET;
 }

@@ -421,6 +421,10 @@ fn ntp_to_unix_seconds(ts: ntp_proto::NtpTimestamp, reference: SystemTime) -> f6
 mod tests;
 
 #[cfg(test)]
+#[path = "tests/sabotage_tests.rs"]
+mod sabotage_tests;
+
+#[cfg(test)]
 #[path = "tests/local_span_tests.rs"]
 mod local_span_tests;
 

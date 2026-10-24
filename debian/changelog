@@ -39,6 +39,10 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     unreadable ledger does, when only one migration of an account runs at a time
     and which messages a replay can only match against the mailbox.
   * A domain of one label, such as `localhost`, is refused wherever an address or a domain is created or configured, and the refusal says the domain needs at least one dot. A configuration file that held such an alias or forwarding target stops loading, so run `epistle config-check` before restarting after the upgrade.
+  * Clock: the external probe tests cover the source deadline, the local
+    clock step and the origin check against a local server, and the limit of
+    the destination check with the NAT64 prefix of an operator is now written
+    down in the documentation.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
