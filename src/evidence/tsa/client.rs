@@ -131,3 +131,7 @@ fn without_url(error: &reqwest::Error) -> String {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "client_live_tests.rs"]
+mod live_tests;
