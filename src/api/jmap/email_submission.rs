@@ -157,6 +157,9 @@ fn submit_email(
 	// RFC 8621 section 7.5: the Bcc header never leaves; those recipients
 	// are on the envelope.
 	let stamped = crate::smtp::trace::strip_bcc(&stamped);
+	// The draft is the client's own message, so it may carry a trace
+	// header of its own; this submission is not that hop.
+	let stamped = crate::smtp::trace::strip_headers(&stamped, &["received"]);
 	// The class: the `epistle:class` extension property, else the account
 	// default; never the message, whose class header is removed here.
 	let explicit = match submission.get("epistle:class") {
@@ -193,12 +196,17 @@ fn submit_email(
 		account,
 		explicit,
 	);
-	let prepared =
-		crate::evidence::submission::prepare(&mut queued, sources, Some(state.data_dir()))
-			.map_err(|refusal| Refusal {
-				kind: "forbiddenToSend",
-				description: Some(refusal.message().to_string()),
-			})?;
+	let prepared = crate::evidence::submission::prepare(
+		&mut queued,
+		sources,
+		Some(state.data_dir()),
+		state.identification(),
+		state.directory_snapshot().as_deref(),
+	)
+	.map_err(|refusal| Refusal {
+		kind: "forbiddenToSend",
+		description: Some(refusal.message().to_string()),
+	})?;
 	if queued.recipients.is_empty() {
 		return Err(Refusal {
 			kind: "forbiddenToSend",

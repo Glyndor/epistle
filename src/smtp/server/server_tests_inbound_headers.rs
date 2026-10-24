@@ -237,7 +237,8 @@ async fn local_spam_and_attachment_verdicts_replace_sender_supplied_fields() {
 async fn authenticated_submission_keeps_its_existing_header_policy() {
 	let sink = Arc::new(MemorySink::new());
 	let data = format!(
-		"{FORGED}Bcc: hidden@example.net\r\n{}",
+		"{FORGED}Bcc: hidden@example.net\r\n\
+		 Received: from forged.example\r\n{}",
 		PLAIN.replace("eve@sender.example", "alice@example.org")
 	);
 	let answer = super::tests_virus::submit(sink.clone(), &data).await;
@@ -246,12 +247,10 @@ async fn authenticated_submission_keeps_its_existing_header_policy() {
 	assert_eq!(messages.len(), 1);
 	let data = &messages[0].data;
 	for name in [
-		"Authentication-Results",
 		"Received-SPF",
 		"X-Spam-Status",
 		"X-Spam-Score",
 		"X-Spam-Flag",
-		"X-Epistle-Other",
 		"Delivered-To",
 		"Return-Path",
 	] {
@@ -261,6 +260,13 @@ async fn authenticated_submission_keeps_its_existing_header_policy() {
 	assert!(header_values(data, "Bcc").is_empty());
 	assert_eq!(header_values(data, "Message-ID").len(), 1);
 	assert_eq!(header_values(data, "Date").len(), 1);
+	// The client's own view of the path does not survive: this hop wrote
+	// one trace header, one set of authentication results and no local
+	// verdicts, and none of the fields above is one of ours to speak for.
+	assert_eq!(header_values(data, "Received").len(), 1);
+	assert!(header_values(data, "Received")[0].contains("mail.example.org"));
+	assert!(header_values(data, "Authentication-Results").is_empty());
+	assert!(header_values(data, "X-Epistle-Other").is_empty());
 }
 
 #[tokio::test]

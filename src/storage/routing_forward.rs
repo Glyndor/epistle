@@ -82,6 +82,7 @@ impl SplitDelivery {
 			&recipients,
 			&message.data,
 			std::time::SystemTime::now(),
+			self.identification.system_auto_submitted,
 		) {
 			Some(bounce) => self.store_outbound(&bounce),
 			None => Ok(()),

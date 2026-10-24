@@ -441,6 +441,36 @@ To show your brand logo in supporting inboxes you need DMARC at enforce
 (`p=quarantine` or `p=reject`), an SVG Tiny PS logo hosted over HTTPS, and a
 `default._bimi.example.org` TXT record (Gmail additionally requires a paid VMC).
 
+The record and the logo are the whole of the DNS side. epistle writes no BIMI
+header and reads none, so publishing the record changes nothing about the mail
+it sends until a receiver has a reason to look.
+
+What each receiver asks for on top of the record:
+
+- **Gmail and Yahoo** require a Verified Mark Certificate (VMC) from an
+  approved CA (Entrust, DigiCert, GlobalSign or Sectigo) for the logo to be
+  shown at all, and their DMARC policy has to be at `p=reject` for the mark to
+  be shown on a failure. The VMC names the organization and the DNS name in its
+  subject, so it has to be issued for the exact domain that publishes the
+  record. Apple Mail and Fastmail need neither the VMC nor the certificate.
+- **The logo** must be an SVG Tiny Portable/Secure (SVG P/S) file served over
+  HTTPS with a valid certificate, small enough for the receiver's limit, with
+  no scripting and no external references. Gmail caches it for about a day, so
+  a fixed URL that changes in place is not noticed quickly.
+- **The DMARC policy** has to be at enforce for every receiver that shows the
+  mark. `p=none` collects the data but displays no logo anywhere.
+- **`rua=` is not enough on its own**: the receiver needs a DMARC report
+  aggregate stream to exist, which is what `rua=` is for, but the record and
+  the mark are read independently of it.
+
+The domain the record lives on is the one that must pass DMARC, and the logo
+belongs to that domain. A logo served from another domain can be recorded in
+the `l=` tag, and Gmail accepts a cross-domain `l=` only when the certificate
+covers both names.
+
+epistle does not generate or publish the record: `default._bimi` is a TXT
+record you add, and `epistle dns` does not manage BIMI records.
+
 ## DNS provider token storage
 
 I keep the provider token in an owner-only file outside `data_dir`, beside the

@@ -65,6 +65,7 @@ fn bounce_dsn(c: &mut Criterion) {
 				black_box("550 5.1.1 no such user"),
 				black_box(&msg.data),
 				std::time::UNIX_EPOCH,
+				true,
 			))
 		});
 	});

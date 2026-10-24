@@ -448,3 +448,72 @@ fn the_field_count_is_never_below_the_headers_the_trace_helpers_take() {
 		assert!(field_count(&raw) >= cases::fields_in(headers), "{raw:?}");
 	}
 }
+
+#[test]
+fn a_namespace_strip_drops_ours_case_insensitively_and_nothing_else() {
+	let data = b"X-Epistle: 1\r\n\
+Subject: hi\r\n\
+x-epistle-future: no\r\n\
+X-Epistle : 2\r\n\
+X-Spam-Status: Yes\r\n\
+X-Epistol: not ours\r\n\
+X-Epistlefoo: not ours either\r\n\
+X-Epistle-: bare\r\n\
+X-Epistle -Spaced: odd\r\n\
+\r\nX-Epistle: body\r\n";
+	let kept = strip_headers_with_namespace(data, "X-Epistle");
+	let text = String::from_utf8(kept.clone()).expect("utf8");
+	assert!(!text.contains("X-Epistle: 1"), "{text}");
+	assert!(!text.contains("x-epistle-future"), "{text}");
+	// A trailing space in the name still matches.
+	assert!(!text.contains("X-Epistle : 2"), "{text}");
+	// The bare namespace and a spaced spelling are read as ours downstream.
+	assert!(!text.contains("X-Epistle-: bare"), "{text}");
+	assert!(!text.contains("Spaced: odd"), "{text}");
+	// A different field, a name that merely starts the same and the body
+	// are all kept.
+	assert!(text.contains("X-Spam-Status: Yes"), "{text}");
+	assert!(text.contains("X-Epistol: not ours"), "{text}");
+	assert!(
+		text.contains("X-Epistlefoo: not ours either"),
+		"a name that only starts like ours was dropped: {text}"
+	);
+	assert!(text.contains("Subject: hi"), "{text}");
+	assert!(text.ends_with("\r\nX-Epistle: body\r\n"), "{text}");
+}
+
+#[test]
+fn keeping_the_first_of_each_leaves_one_copy_of_the_repeated_field() {
+	let data = b"Feedback-ID: one\r\n\
+Subject: hi\r\n\
+Feedback-ID: two\r\n\
+feedback-id : three\r\n\
+List-Unsubscribe: <mailto:a@example.org>\r\n\
+List-Unsubscribe: <https://example.org/u>\r\n\
+Organization: ours\r\n\
+X-Spam-Status: Yes\r\n\
+\r\nbody\r\n";
+	let mut data = data.to_vec();
+	keep_first_of_each_in_place(
+		&mut data,
+		&["feedback-id", "list-unsubscribe", "organization"],
+	);
+	let text = String::from_utf8(data).expect("utf8");
+	assert!(text.contains("Feedback-ID: one\r\n"), "{text}");
+	assert!(!text.contains("Feedback-ID: two"), "{text}");
+	// A trailing space in the name is the same field, so the third copy
+	// goes with the second.
+	assert!(!text.contains("feedback-id : three"), "{text}");
+	assert!(
+		text.contains("List-Unsubscribe: <mailto:a@example.org>"),
+		"{text}"
+	);
+	assert!(
+		!text.contains("List-Unsubscribe: <https://example.org/u>"),
+		"{text}"
+	);
+	assert!(text.contains("Organization: ours\r\n"), "{text}");
+	assert!(text.contains("X-Spam-Status: Yes"), "{text}");
+	assert!(text.contains("Subject: hi"), "{text}");
+	assert!(text.ends_with("\r\n\r\nbody\r\n"), "{text}");
+}

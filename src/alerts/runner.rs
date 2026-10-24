@@ -16,6 +16,7 @@ use crate::storage::FsSpool;
 use crate::webhook::{Webhook, WebhookEvent};
 
 use super::{CompiledRule, State, Verdict, evaluate, unix_now};
+use crate::smtp::identification::SYSTEM_AUTO_SUBMITTED as SYSTEM;
 
 /// Shared inputs every rule's task needs at fire time. `Arc` so the per-rule
 /// task borrows cheap clones.
@@ -24,6 +25,9 @@ pub struct DispatchContext {
 	webhook: Option<Arc<Webhook>>,
 	spool: Arc<FsSpool>,
 	hostname: String,
+	/// Whether the alert emails carry `Auto-Submitted: auto-generated`
+	/// (the `system_auto_submitted` switch).
+	auto_submitted: bool,
 }
 
 /// Handle returned by [`run`]. Drop it (or call [`stop`](EngineHandle::stop))
@@ -159,7 +163,7 @@ fn dispatch(
 		tokio::spawn(async move { poster.notify(&event).await });
 	}
 	if !rule.email.is_empty() {
-		let message = build_email(rule, &ctx.hostname, delta, now_unix)?;
+		let message = build_email(rule, &ctx.hostname, delta, now_unix, ctx.auto_submitted)?;
 		ctx.spool
 			.store(&message, None, &std::collections::BTreeMap::new())?;
 	}
@@ -177,6 +181,7 @@ fn build_email(
 	hostname: &str,
 	delta: u64,
 	_now_unix: u64,
+	auto_submitted: bool,
 ) -> Result<AcceptedMessage, super::AlertError> {
 	let from_address = format!("epistle-alerts@{hostname}");
 	let from = format!("epistle-alerts <{from_address}>");
@@ -203,13 +208,18 @@ fn build_email(
 		threshold = rule.threshold,
 		date = date,
 	);
+	let auto = if auto_submitted {
+		format!("Auto-Submitted: {SYSTEM}\r\n")
+	} else {
+		String::new()
+	};
 	let data = format!(
 		"From: {from}\r\n\
 		 To: {to}\r\n\
 		 Subject: {subject}\r\n\
 		 Date: {date}\r\n\
 		 Message-ID: {message_id}\r\n\
-		 Auto-Submitted: auto-generated\r\n\
+		 {auto}\
 		 MIME-Version: 1.0\r\n\
 		 Content-Type: text/plain; charset=utf-8\r\n\
 		 \r\n\
@@ -219,6 +229,7 @@ fn build_email(
 		subject = subject,
 		date = date,
 		message_id = message_id,
+		auto = auto,
 		body = body,
 	)
 	.into_bytes();
@@ -251,10 +262,12 @@ pub fn context(
 	webhook: Option<Arc<Webhook>>,
 	spool: Arc<FsSpool>,
 	hostname: String,
+	auto_submitted: bool,
 ) -> DispatchContext {
 	DispatchContext {
 		webhook,
 		spool,
 		hostname,
+		auto_submitted,
 	}
 }

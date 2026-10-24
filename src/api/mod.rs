@@ -241,6 +241,10 @@ mod send_tests_class_key;
 mod send_tests_class_paths;
 
 #[cfg(test)]
+#[path = "send_tests_identification.rs"]
+mod send_tests_identification;
+
+#[cfg(test)]
 #[path = "send_tests_rich.rs"]
 mod send_tests_rich;
 
