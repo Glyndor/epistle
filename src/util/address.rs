@@ -22,7 +22,11 @@
 ///
 /// This never validates: a domain [`crate::domain::normalize`] refuses is
 /// only lowercased, and input without `@` is lowercased whole, so the caller
-/// still sees (and reports) exactly why the value is invalid.
+/// still sees (and reports) exactly why the value is invalid. A domain of one
+/// label (`localhost`) is one of those: it comes back as `localhost`. A header
+/// is data and the server must not rewrite it, so the normalizer keeps it;
+/// the gate is [`crate::domain::normalize`], and every surface that creates
+/// an address or a domain goes through it.
 pub fn normalize(raw: &str) -> String {
 	let raw = raw.trim();
 	match raw.rsplit_once('@') {

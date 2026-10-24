@@ -87,3 +87,7 @@ mod tests_scram_off;
 #[cfg(test)]
 #[path = "../session_tests_send_as.rs"]
 mod tests_send_as;
+
+#[cfg(test)]
+#[path = "../session_tests_single_label.rs"]
+mod tests_single_label;

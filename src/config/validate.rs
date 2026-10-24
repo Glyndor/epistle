@@ -265,6 +265,7 @@ impl Config {
 					)));
 				}
 			}
+			account.validate_forward().map_err(ConfigError::Invalid)?;
 			for raw in &account.addresses {
 				let address = crate::util::address_reason::parse(raw)
 					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;

@@ -114,6 +114,10 @@ pub fn router(state: ApiState) -> Router {
 mod tests;
 
 #[cfg(test)]
+#[path = "single_label_tests.rs"]
+mod single_label_tests;
+
+#[cfg(test)]
 #[path = "api_tests_b.rs"]
 mod tests_b;
 

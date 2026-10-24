@@ -116,7 +116,7 @@ pub fn domain_reason(domain: &str) -> String {
 		return format!("the domain is {len} {unit}; the maximum is {MAX_DOMAIN}");
 	}
 	if !domain.contains('.') {
-		return format!("the domain {} has no dot", shorten(domain));
+		return format!("the domain {} needs at least one dot", shorten(domain));
 	}
 	for label in domain.split('.') {
 		if label.is_empty() {

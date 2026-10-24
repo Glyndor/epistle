@@ -37,6 +37,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * migrate imap: the documentation says what a resumed run really skips, what an
     unreadable ledger does, when only one migration of an account runs at a time
     and which messages a replay can only match against the mailbox.
+  * A domain of one label, such as `localhost`, is refused wherever an address or a domain is created or configured, and the refusal says the domain needs at least one dot.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

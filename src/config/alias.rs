@@ -49,6 +49,19 @@ impl Alias {
 				self.address
 			));
 		}
+		// Every address of the alias must be one epistle can act on: a
+		// well-formed local part and a domain with at least one dot. The
+		// command line refuses the same shapes when it writes the table, so
+		// a config file cannot hold an alias `epistle alias add` would not
+		// write.
+		for (label, address) in std::iter::once(("address", &self.address))
+			.chain(self.members.iter().map(|member| ("member", member)))
+			.chain(self.senders.iter().map(|sender| ("sender", sender)))
+		{
+			if let Err(why) = crate::util::address_reason::parse(address) {
+				return Err(format!("alias {}: {label} {why}", self.address));
+			}
+		}
 		Ok(())
 	}
 }

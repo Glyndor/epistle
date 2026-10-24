@@ -53,6 +53,25 @@ fn default_true() -> bool {
 	true
 }
 
+impl Account {
+	/// Every forwarding target must be an address epistle can deliver to: a
+	/// well-formed local part and a domain with at least one dot. The command
+	/// line refuses the same shapes when it writes the target, so a config
+	/// file cannot hold a target `epistle account forward add` would not
+	/// write.
+	pub(crate) fn validate_forward(&self) -> Result<(), String> {
+		for target in &self.forward {
+			if let Err(why) = crate::util::address_reason::parse(target) {
+				return Err(format!(
+					"account \"{}\": forward target {target:?}: {why}",
+					self.name
+				));
+			}
+		}
+		Ok(())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

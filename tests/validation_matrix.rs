@@ -22,6 +22,8 @@ mod address;
 mod common;
 #[path = "validation_matrix/rules_b.rs"]
 mod rules_b;
+#[path = "validation_matrix/single_label.rs"]
+mod single_label;
 
 use common::{Row, cell, matrix, store};
 use epistle::domain;
