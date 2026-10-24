@@ -1,12 +1,13 @@
 //! What a rerun of a migration does with what the ledger already confirmed: a
 //! batch that stopped half way, a source that stops marking a message deleted,
-//! a migration a version without a ledger started, and a second run that starts
-//! while the first still holds the account.
+//! a message confirmed below what the ledger reaches, a migration a version
+//! without a ledger started, and a second run that starts while the first still
+//! holds the account.
 
 use std::time::Duration;
 
 use super::fake_server::{FakeServer, Fault, Message, Mode};
-use super::ledger_resume_tests::{inbox, replay_from_the_start, states};
+use super::ledger_resume_tests::{inbox, remove_local, replay_from_the_start, states};
 use super::run_tests::{DATE_1, DATE_2, Quiet, local, mail, migrate, settings, source, target};
 use super::{MigrateError, Security, run};
 
@@ -17,6 +18,24 @@ fn three() -> Vec<super::fake_server::Folder> {
 		Message::new(2, "", DATE_2, &mail("2", "two")),
 		Message::new(3, "", DATE_1, &mail("3", "three")),
 	])
+}
+
+/// How many messages the local INBOX holds, counted from its files: a message
+/// removed with `remove_local` leaves no modseq behind, so a cached index
+/// stamped before it can still name it.
+fn stored(dir: &std::path::Path) -> usize {
+	let mailbox = crate::imap::mailbox::mailbox_dir(dir, "alice", "INBOX").expect("mailbox");
+	std::fs::read_dir(mailbox)
+		.expect("entries")
+		.filter(|entry| {
+			entry
+				.as_ref()
+				.expect("entry")
+				.path()
+				.extension()
+				.is_some_and(|extension| extension == "eml")
+		})
+		.count()
 }
 
 #[tokio::test]
@@ -110,6 +129,52 @@ async fn a_message_the_source_stops_marking_deleted_is_copied_after_a_replay() {
 		"the message that is already here is not stored again"
 	);
 	assert_eq!(local(dir.path(), "INBOX").len(), 2);
+}
+
+/// The cost of a message confirmed below the UID the ledger already reaches: it
+/// has no record of its own, because the records only rise in UID order, so it
+/// is matched against the local mailbox on every replay from then on and
+/// deleting the copy locally brings it back.
+#[tokio::test]
+async fn a_message_confirmed_below_what_the_ledger_reaches_comes_back_after_a_local_deletion() {
+	let mut all = inbox(vec![
+		Message::new(1, "\\Deleted", DATE_1, &mail("1", "one")),
+		Message::new(2, "", DATE_2, &mail("2", "two")),
+	]);
+	let server = FakeServer::start(Mode::Tls, '.', all.clone()).await;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (first, error) = migrate(&server, dir.path(), &settings()).await;
+	assert!(error.is_none(), "{error:?}");
+	assert_eq!((first.folders[0].deleted, first.folders[0].copied), (1, 1));
+
+	// The user clears the flag at the source and the folder is replayed, so
+	// UID 1 is stored below the UID the ledger already reaches. Its record is
+	// left out, as `a_message_the_source_stops_marking_deleted_is_copied_after_a_replay`
+	// shows, and from then on it is matched against the mailbox.
+	all[0].messages[0] = Message::new(1, "", DATE_1, &mail("1", "one"));
+	server.edit(|folders| folders[0].messages = all[0].messages.clone());
+	replay_from_the_start(dir.path());
+	let (second, error) = migrate(&server, dir.path(), &settings()).await;
+	assert!(error.is_none(), "the folder finishes: {error:?}");
+	assert_eq!(second.folders[0].copied, 1, "UID 1 is stored");
+	assert_eq!(stored(dir.path()), 2);
+
+	// The user deletes that copy, and the folder is replayed once more. The
+	// ledger holds nothing for UID 1, so the message is downloaded again.
+	remove_local(dir.path(), &mail("1", "one"));
+	replay_from_the_start(dir.path());
+	let (third, error) = migrate(&server, dir.path(), &settings()).await;
+	assert!(error.is_none(), "{error:?}");
+	assert_eq!(
+		(
+			third.folders[0].copied,
+			third.folders[0].duplicates,
+			third.folders[0].confirmed
+		),
+		(1, 0, 1),
+		"UID 1 is downloaded again and only UID 2 is confirmed by the ledger"
+	);
+	assert_eq!(stored(dir.path()), 2);
 }
 
 #[tokio::test]

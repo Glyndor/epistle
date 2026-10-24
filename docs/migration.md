@@ -112,15 +112,25 @@ The local account must exist. The remote password comes from `--password-file`
 - **Resuming.** Progress is kept per local account, remote user and host, and
   remote folder, in `data_dir/migrate/<account>/`. A run copies only messages
   newer than the last one copied. After an interruption the folder is replayed
-  from its first UID, but only the messages a previous run confirmed are
+  from its first UID, but the messages a previous run confirmed are not
   downloaded again: a ledger next to the progress file records the identity of
   every confirmed message, and a replay skips them and matches only the rest
   against the mailbox. A message you deleted or moved while the run was
-  interrupted is not brought back. If the old server renumbers a folder (its
-  UIDVALIDITY changes), the ledger is discarded and the folder is read again,
-  with each message checked against the mailbox by Message-ID and size, so
-  nothing is stored twice. Keep `--host` and `--user` the same between runs:
-  they name the progress files and the ledgers.
+  interrupted is not brought back, as long as the ledger holds it. A message the
+  source stops marking `\Deleted`, and the prefix of a migration a version
+  without a ledger started, are confirmed by a replay below the UID the ledger
+  already reaches, so the ledger leaves them out and only the match against the
+  mailbox protects them. If the old server renumbers a folder (its UIDVALIDITY
+  changes), the ledger is discarded and the folder is read again, with each
+  message checked against the mailbox by Message-ID and size, so nothing is
+  stored twice. Keep `--host` and `--user` the same between runs: they name the
+  progress files and the ledgers.
+- **One run at a time.** The lock is held per local account, not per source, so
+  two different old servers cannot be migrated into the same account at once:
+  the second run waits 30 seconds and then stops. One lock covers the whole run
+  because each run counts the bytes the account already stores once, at its
+  start, and two runs of the same account would each decide from their own
+  count.
 - **Limits.** The run stops with an error when the next message would exceed
   the account's quota; raise it and run again to continue.
 - **Output.** One line per folder with messages, bytes and rate; `--dry-run`

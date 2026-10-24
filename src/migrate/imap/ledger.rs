@@ -4,10 +4,10 @@
 //! `<digest>.ledger` holds the UIDVALIDITY its records belong to and one fixed
 //! record per confirmed message: its UID, the fingerprint of the identity the
 //! deduplication index uses, and a checksum over the two. Records are appended
-//! in UID order, so the UIDs of a listing window are answered by a forward scan
-//! and nothing is held in memory beyond one record. A file whose records do not
-//! rise in UID order is refused when it is opened: nothing but this code
-//! appends them, and it only appends them in that order.
+//! in UID order, so a lookup for a UID of a listing window binary searches for
+//! the record at or after it and nothing is held in memory beyond one record. A
+//! file whose records do not rise in UID order is refused when it is opened:
+//! nothing but this code appends them, and it only appends them in that order.
 //!
 //! A run appends the messages of a batch once they are stored and
 //! synchronized, and before the checkpoint that confirms that batch, so the
@@ -102,10 +102,11 @@ impl Ledger {
 		self.last
 	}
 
-	/// The fingerprint held for `uid`, `None` when it is not confirmed. Calls
-	/// in ascending UID order walk the file forward; a UID below the cursor is
-	/// answered where the cursor already is, so it is one an earlier call in the
-	/// same window asked for or one the file does not hold.
+	/// The fingerprint held for `uid`, `None` when it is not confirmed. A UID
+	/// above the cursor moves it with a binary search over the records, so a
+	/// lookup reads a few records and never the whole file; a UID below the
+	/// cursor is answered where the cursor already is, so it is one an earlier
+	/// call in the same window asked for or one the file does not hold.
 	pub(super) fn fingerprint(&mut self, uid: u32) -> io::Result<Option<Fingerprint>> {
 		if self.count == 0 {
 			return Ok(None);
@@ -266,14 +267,16 @@ impl Ledger {
 	}
 
 	/// Record `records` as confirmed. They must arrive in ascending UID order,
-	/// which is what keeps a window lookup to a forward scan. A record at or
+	/// which is what lets a lookup find them by binary search. A record at or
 	/// below the UID the file already reaches is left out rather than refused:
 	/// a folder that has to be replayed from the start confirms messages below
 	/// what an earlier batch reached, and refusing them would leave that folder
-	/// unable to finish. A batch that does not arrive in ascending order is a
-	/// caller that cannot be trusted with the file, so it is refused by name. A
-	/// ledger that can only be read, and one for a source that announces no
-	/// UIDVALIDITY, records nothing: there are no UIDs to name.
+	/// unable to finish. Such a message is then only matched against the local
+	/// mailbox, so deleting it there brings it back on a later replay. A batch
+	/// that does not arrive in ascending order is a caller that cannot be
+	/// trusted with the file, so it is refused by name. A ledger that can only
+	/// be read, and one for a source that announces no UIDVALIDITY, records
+	/// nothing: there are no UIDs to name.
 	pub(super) fn confirm(&mut self, records: &[(u32, Fingerprint)]) -> io::Result<()> {
 		if records.is_empty() || !self.writable {
 			return Ok(());
@@ -467,8 +470,8 @@ fn header(uid_validity: u32) -> Vec<u8> {
 	bytes
 }
 
-/// A ledger that cannot be read stops the folder where it is: the message
-/// names the file, what the run had already imported, and how to start over.
+/// A ledger that cannot be read stops the run where it is: the message names
+/// the file, what the run had already imported, and how to start over.
 fn corrupt(path: &Path, detail: &str) -> io::Error {
 	io::Error::new(
 		io::ErrorKind::InvalidData,

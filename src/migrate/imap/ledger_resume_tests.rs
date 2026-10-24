@@ -31,7 +31,7 @@ pub(super) fn replay_from_the_start(dir: &std::path::Path) {
 
 /// Remove the local copy whose body is `body`, the way a user deletes a
 /// message from the new mailbox.
-fn remove_local(dir: &std::path::Path, body: &[u8]) {
+pub(super) fn remove_local(dir: &std::path::Path, body: &[u8]) {
 	let mailbox = crate::imap::mailbox::mailbox_dir(dir, "alice", "INBOX").expect("mailbox");
 	let crypto = crate::storage::MessageCrypto::disabled();
 	for entry in std::fs::read_dir(&mailbox).expect("entries") {
