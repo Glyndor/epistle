@@ -81,6 +81,31 @@ fn pseudo_terminal() -> (File, File) {
 	})
 }
 
+/// Give the process about to `exec` the default SIGINT disposition.
+///
+/// It runs between `fork` and `exec`, so it calls `signal` and nothing else.
+fn restore_sigint() -> std::io::Result<()> {
+	// SAFETY: `signal` is async-signal-safe and SIGINT is a valid signal.
+	unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+	Ok(())
+}
+
+/// Send SIGINT to a child this test has not collected yet. A child already
+/// collected by `try_wait` is skipped: its number is free again and may now
+/// belong to another process.
+fn send_sigint(child: &mut Child) -> bool {
+	if child.try_wait().expect("child status").is_some() {
+		return false;
+	}
+	// SAFETY: this test is the only one that collects the child, and it has
+	// not, so the number is still the child's, and SIGINT is valid.
+	assert_eq!(
+		unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
+		0
+	);
+	true
+}
+
 /// Start `epistle init` on its own pseudo-terminal. `root` holds the state
 /// directory, so no run reads or writes the draft of another one.
 fn spawn_on_terminal(root: &Path, colour: bool) -> (File, Child) {
@@ -107,10 +132,7 @@ fn spawn_on_terminal(root: &Path, colour: bool) -> (File, Child) {
 	// SAFETY: the closure runs between `fork` and `exec`, where the only work
 	// allowed is async-signal-safe. It calls `signal` and returns.
 	unsafe {
-		command.pre_exec(|| {
-			libc::signal(libc::SIGINT, libc::SIG_DFL);
-			Ok(())
-		});
+		command.pre_exec(restore_sigint);
 	}
 	let child = command.spawn().expect("spawn epistle init");
 	(master, child)
@@ -120,11 +142,11 @@ fn spawn_on_terminal(root: &Path, colour: bool) -> (File, Child) {
 /// its stream for [`DRAIN`], which means nobody this test owns is going to
 /// close the terminal. `since` carries the moment the child was first seen
 /// gone, so the caller only starts counting once.
-fn orphaned_terminal(child: &mut Child, since: &mut Option<Instant>) -> bool {
+fn orphaned_terminal(child: &mut Child, since: &mut Option<Instant>, drain: Duration) -> bool {
 	if since.is_none() && child.try_wait().expect("child status").is_some() {
 		*since = Some(Instant::now());
 	}
-	since.is_some_and(|gone| gone.elapsed() > DRAIN)
+	since.is_some_and(|gone| gone.elapsed() > drain)
 }
 
 fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitStatus, String) {
@@ -140,7 +162,7 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline");
 		}
-		if orphaned_terminal(&mut child, &mut gone) {
+		if orphaned_terminal(&mut child, &mut gone, DRAIN) {
 			panic!(
 				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
 			);
@@ -161,12 +183,7 @@ fn terminal(root: &Path, input: &str, interrupt: bool, colour: bool) -> (ExitSta
 			}
 		}
 		if interrupt && !signalled && String::from_utf8_lossy(&screen).contains("hostname []>") {
-			// SAFETY: the live child id is a process id, and SIGINT is valid.
-			assert_eq!(
-				unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-				0
-			);
-			signalled = true;
+			signalled = send_sigint(&mut child);
 		}
 	}
 	let output = child.wait_with_output().unwrap();
@@ -332,7 +349,7 @@ fn terminal_stepwise(
 			let _ = child.wait();
 			panic!("guided setup did not finish before its test deadline: {screen:?}");
 		}
-		if orphaned_terminal(&mut child, &mut gone) {
+		if orphaned_terminal(&mut child, &mut gone, DRAIN) {
 			panic!(
 				"the pseudo-terminal stayed open after epistle init exited, so a process outside this test holds it"
 			);
@@ -360,12 +377,7 @@ fn terminal_stepwise(
 			answered += 1;
 		}
 		if !signalled && text.contains(interrupt_at) {
-			// SAFETY: the live child id is a process id, and SIGINT is valid.
-			assert_eq!(
-				unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-				0
-			);
-			signalled = true;
+			signalled = send_sigint(&mut child);
 		}
 	}
 	let output = child.wait_with_output().unwrap();
@@ -406,4 +418,51 @@ fn a_pasted_dns_credential_is_never_echoed_by_the_terminal() {
 	assert!(text.contains("EPISTLE_DNS_TOKEN"), "{text}");
 	assert!(!root.join("etc").exists(), "{text}");
 	println!("{text}");
+}
+
+#[test]
+fn a_child_inherits_an_ignored_sigint_unless_it_is_restored() {
+	let mask = |restore: bool| -> u64 {
+		let mut command = Command::new("/bin/sh");
+		command
+			.arg("-c")
+			.arg("sed -n 's/^SigIgn:\\s*//p' /proc/self/status")
+			.stdin(Stdio::null());
+		// SAFETY: both closures only call `signal` before `exec`.
+		unsafe {
+			command.pre_exec(|| {
+				libc::signal(libc::SIGINT, libc::SIG_IGN);
+				Ok(())
+			});
+			if restore {
+				command.pre_exec(restore_sigint);
+			}
+		}
+		let output = command.output().expect("run sh");
+		u64::from_str_radix(String::from_utf8_lossy(&output.stdout).trim(), 16)
+			.expect("SigIgn mask")
+	};
+	let bit = 1u64 << (libc::SIGINT - 1);
+	assert_ne!(mask(false) & bit, 0, "the control must inherit the ignore");
+	assert_eq!(mask(true) & bit, 0, "restoring must clear the ignore");
+}
+
+#[test]
+fn a_gone_child_whose_terminal_stays_open_is_reported_after_the_drain() {
+	let mut gone = Command::new("/bin/true").spawn().expect("spawn true");
+	let mut since = None;
+	let drain = Duration::from_millis(200);
+	let start = Instant::now();
+	while !orphaned_terminal(&mut gone, &mut since, drain) {
+		assert!(start.elapsed() < Duration::from_secs(10), "never reported");
+		std::thread::sleep(Duration::from_millis(20));
+	}
+	let mut running = Command::new("/bin/sleep")
+		.arg("5")
+		.spawn()
+		.expect("spawn sleep");
+	let mut since = None;
+	assert!(!orphaned_terminal(&mut running, &mut since, drain));
+	running.kill().expect("kill sleep");
+	running.wait().expect("reap sleep");
 }
