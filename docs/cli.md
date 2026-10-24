@@ -1496,16 +1496,24 @@ What an earlier run already confirmed is not downloaded again: every remote
 folder keeps a ledger of the messages it has handed over next to its progress
 file in `data_dir/migrate/<account>`, the replay skips whatever the ledger
 confirms, and only the rest is matched against the local mailbox. A message you
-deleted or moved after an interruption therefore does not come back. The ledger
-holds the identity of each confirmed message, 40 bytes per message, so two
-identical messages in the source still end up as two copies here. It is written
-and synchronized before the checkpoint that confirms the batch, so it never
-claims a message that is not stored locally, and a copy left behind by a cut is
-dropped on the next run. A change in UIDVALIDITY discards the ledger with a
-warning and reads the folder again from the start. A ledger that cannot be read
-stops that folder without removing anything, and the message names the file to
-delete to copy the folder again. Already confirmed local messages do not need
-fresh durability barriers unless the saved state marks a batch in progress.
+deleted or moved after an interruption therefore does not come back, as long as
+the ledger holds it. The ledger holds the identity of each confirmed message,
+40 bytes per message, so two identical messages in the source still end up as
+two copies here. It is written and synchronized before the checkpoint that
+confirms the batch, so it never claims a message that is not stored locally, and
+a copy left behind by a cut is dropped on the next run. A change in UIDVALIDITY
+discards the ledger with a warning and reads the folder again from the start. A
+ledger that cannot be read stops the run without removing anything, and the
+message names the file to delete to copy the folder again. Already confirmed
+local messages do not need fresh durability barriers unless the saved state
+marks a batch in progress.
+
+A record can only be appended above the UID the ledger already reaches, because
+its records rise in UID order and a lookup binary searches them. A message a
+replay confirms below that UID is therefore left out of the ledger, and from
+then on only the match against the local mailbox protects it: if you delete it
+there, a later replay brings it back. A message the source stops marking
+`\Deleted` is confirmed that way.
 
 A migration a version without a ledger started carries on with it: that version
 kept only the progress file, so the new ledger starts empty and confirms nothing
