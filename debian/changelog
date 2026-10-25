@@ -2,6 +2,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
 
   * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
   * Expose per-account connection limits in the operator limits catalog.
+  * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.
   * Document how to expose the management API on a private interface, and warn
     when an API key pinned to a network sits behind a bridge that hides the
     address of the client.

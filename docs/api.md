@@ -164,7 +164,8 @@ without a restart.
 | Flag | Effect |
 |---|---|
 | `--scope read\|write\|send\|scim` | Required, repeatable. Scopes are independent: `write` does not include `read` |
-| `--expires-at EPOCH` | Unix seconds. After it the key is refused with `401`, like an unknown one |
+| `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
+| `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
 | `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send` and `GET /api/v1/deliveries`, acting as that account, and cannot hold `scim` or `--domain` |
@@ -173,7 +174,28 @@ without a restart.
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
 the class included; `epistle api-key revoke LABEL` removes the key;
 `epistle api-key list` shows the label, expiry, network, scopes, domains and
-account, never the key.
+account, never the key. The expiry is printed as an RFC 3339 instant, with
+`(expired)` after one that has passed; `--json` keeps the epoch.
+
+### Expiry is opt-in
+
+No key expires unless it is given an expiry. There is no default lifetime: a
+key an outside client depends on should not stop working on a date nobody
+picked. Instead, `epistle status` warns, in its `api_keys` area, about
+each key that
+
+- has no expiry,
+- expires within 14 days, or has already expired,
+- holds every scope (a legacy key made before scopes existed),
+- holds `write` or `send` with no `--domain`, no `--account` and no
+  `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
+  network that hides the client address), so a leaked copy reaches every domain from any address, or
+- holds `scim` with no `--domain`.
+
+These are warnings only; nothing is refused or revoked. To clear one, give the
+key an expiry, narrow it with `--domain`, `--account` or `--ip-cidr`, or
+recreate it with an explicit `--scope`. `epistle api-key rotate` keeps the
+expiry, so extend a key by creating a new one.
 
 What each scope reaches:
 
