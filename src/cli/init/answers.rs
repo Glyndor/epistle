@@ -364,7 +364,7 @@ impl std::fmt::Display for Invalid {
 			Invalid::DnsForbidden => f.write_str("mode = \"manual\" must not have [dns]"),
 			Invalid::DnsZoneMissing => f.write_str("dns.zone must be set"),
 			Invalid::DnsZoneMalformed { value, reason } => {
-				write!(f, "dns.zone {value:?} {reason}")
+				write!(f, "dns.zone {value:?}: {reason}")
 			}
 			Invalid::DnsProviderMissing => f.write_str("dns.provider must be set"),
 			Invalid::DnsProviderUnsupported { value, supported } => write!(

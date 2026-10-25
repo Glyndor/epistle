@@ -42,8 +42,8 @@ fn assistant_rejects_invalid_hostname_with_the_same_text_as_the_file_path() {
 	assert!(result.is_ok(), "ok with retries, got {:?}", parse_out(&out));
 	let text = parse_out(&out);
 	assert!(
-		text.contains("not a valid FQDN"),
-		"missing the same rejection string the file path reports: {text}"
+		text.contains("\"not a domain\": spaces are not allowed; for example \"mail.example.org\""),
+		"the refusal must name the value, the rule and a host name to type: {text}"
 	);
 }
 
@@ -92,7 +92,10 @@ fn assistant_invalid_domain_text_is_shown() {
 	let (out, result) = harness(input);
 	assert!(result.is_ok(), "got {:?}", parse_out(&out));
 	let text = parse_out(&out);
-	assert!(text.contains("not a valid FQDN"), "got {text}");
+	assert!(
+		text.contains("\"bad name\": spaces are not allowed; for example \"example.org\""),
+		"got {text}"
+	);
 }
 
 #[test]

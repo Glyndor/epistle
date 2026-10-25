@@ -151,6 +151,24 @@ pub fn domain_reason(domain: &str) -> String {
 	}
 }
 
+/// What an operator reads when a typed domain or host name is refused: the
+/// rule `value` breaks and a name that would be accepted. Every place that
+/// refuses a name the operator typed (the first-run assistant, the answers
+/// file, the zone of a DNS provider) goes through this, so none of them says
+/// only that the name is "not valid".
+///
+/// The reason may or may not quote the value, so the caller puts the value in
+/// front of it when the message has no other place for it.
+pub fn name_refusal(value: &str, why: crate::domain::DomainError, example: &str) -> String {
+	let reason = match why {
+		crate::domain::DomainError::Invalid => domain_reason(value),
+		crate::domain::DomainError::Confusable => {
+			"it is confusable with another name because it mixes scripts or imitates one; write it in a single script".to_string()
+		}
+	};
+	format!("{reason}; for example {example:?}")
+}
+
 #[cfg(test)]
 #[path = "address_reason_tests.rs"]
 mod tests;

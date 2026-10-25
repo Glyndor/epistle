@@ -154,3 +154,15 @@ fn shorten_keeps_short_values_and_cuts_long_ones() {
 	let long = "z".repeat(41);
 	assert_eq!(shorten(&long), format!("{}\u{2026}", "z".repeat(40)));
 }
+
+#[test]
+fn a_refused_name_gets_the_rule_and_an_example() {
+	use crate::domain::DomainError;
+	assert_eq!(
+		name_refusal("mail", DomainError::Invalid, "mail.example.org"),
+		"the domain mail needs at least one dot; for example \"mail.example.org\""
+	);
+	let mixed = name_refusal("\u{435}xample.org", DomainError::Confusable, "example.org");
+	assert!(mixed.contains("mixes scripts"), "{mixed}");
+	assert!(mixed.ends_with("for example \"example.org\""), "{mixed}");
+}

@@ -77,3 +77,17 @@ fn havespace_answers_before_the_script_is_sent() {
 		"NO (QUOTA/MAXSIZE) \"Script is too large.\"\r\n"
 	);
 }
+
+/// A refused name says what a name may be and offers one that works, so the
+/// client is not left to guess at the rule.
+#[test]
+fn an_invalid_script_name_is_refused_with_the_rule_and_an_example() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = session(dir.path());
+	let Response::No(Some(text)) = put(&mut session, "a/b", "keep;\r\n".to_string()) else {
+		panic!("a slash in a name must be refused");
+	};
+	assert!(text.contains("1 to 200 bytes"), "{text}");
+	assert!(text.contains("no slash"), "{text}");
+	assert!(text.contains("for example keep-spam"), "{text}");
+}

@@ -31,8 +31,7 @@ impl BanTarget {
 	/// A zero-length prefix is refused: it would ban every client, the
 	/// operator's own session included.
 	pub fn parse(spec: &str) -> Result<Self, String> {
-		let cidr = Cidr::parse(spec)
-			.ok_or_else(|| format!("{spec:?} is not an IP address or CIDR block"))?;
+		let cidr = Cidr::parse(spec).ok_or_else(|| Cidr::refusal(spec))?;
 		if cidr.is_host() {
 			return Ok(Self::Ip(cidr.network()));
 		}
@@ -62,7 +61,7 @@ impl std::fmt::Display for BanTarget {
 
 /// Parse one allow-list entry into its canonical `network/prefix` form.
 pub fn parse_allow(spec: &str) -> Result<Cidr, String> {
-	Cidr::parse(spec).ok_or_else(|| format!("{spec:?} is not an IP address or CIDR block"))
+	Cidr::parse(spec).ok_or_else(|| Cidr::refusal(spec))
 }
 
 /// One active ban, as `ban list` prints it.

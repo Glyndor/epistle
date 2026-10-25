@@ -22,7 +22,7 @@ pub(super) fn run<R: BufRead, W: Write>(
 	};
 	ui.step(2, 7, "Mail identity")?;
 	answers.hostname = ui.validated("hostname", "This is the name used in SMTP greetings and certificates. No default, enter a fully qualified hostname.", "", "mail.example.org", |raw| {
-		crate::domain::normalize(raw).map_err(|why| match why { crate::domain::DomainError::Invalid => "must be a valid FQDN".to_string(), crate::domain::DomainError::Confusable => "must not be confusable with another domain".to_string() })
+		crate::domain::normalize(raw).map_err(|why| crate::util::address_reason::name_refusal(raw, why, "mail.example.org"))
 	})?;
 	answers.domains = ui.validated(
 		"domains",

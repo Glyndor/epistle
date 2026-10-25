@@ -163,3 +163,37 @@ fn revoke_missing_label_fails() {
 		ExitCode::from(2)
 	);
 }
+
+#[test]
+fn a_label_the_rule_refuses_creates_no_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	for label in ["", "  ", "ci\nprod", "\u{202e}ci", " ci", &"a".repeat(65)] {
+		let code = create(
+			&config,
+			NewKey {
+				label: label.to_string(),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: read_scope(),
+				domains: Vec::new(),
+				account: None,
+				class: None,
+			},
+			false,
+			&mut Vec::new(),
+			&mut Vec::new(),
+		);
+		assert_eq!(
+			code,
+			ExitCode::from(super::super::exit::REFUSED),
+			"{label:?}"
+		);
+	}
+	assert!(
+		ApiKeyStore::open(dir.path())
+			.expect("open")
+			.keys()
+			.is_empty()
+	);
+}

@@ -291,7 +291,9 @@ fn invalid_entries_retry_in_the_real_terminal_before_confirmation() {
 		);
 	let (status, text) = terminal(dir.path(), &input, false, false);
 	assert!(status.success(), "{text}");
-	assert!(text.contains("bad hostname: must be a valid FQDN"));
+	assert!(
+		text.contains("bad hostname: spaces are not allowed; for example \"mail.example.org\"")
+	);
 	assert!(text.contains("relative: must be an absolute path"));
 	assert!(dir.path().join("etc/mail.toml").is_file());
 	println!("{text}");

@@ -57,6 +57,7 @@ fn ask_continue<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<bool
 fn ask_domain<R: BufRead>(
 	reader: &mut R,
 	prompt: &str,
+	example: &str,
 	out: &mut impl Write,
 ) -> Result<String, ()> {
 	loop {
@@ -64,11 +65,8 @@ fn ask_domain<R: BufRead>(
 		match crate::domain::normalize(&raw) {
 			Ok(_) => return Ok(raw),
 			Err(why) => {
-				let reason = match why {
-					crate::domain::DomainError::Invalid => "is not a valid FQDN",
-					crate::domain::DomainError::Confusable => "is confusable with another name",
-				};
-				let _ = writeln!(out, "  {reason}; try again");
+				let reason = crate::util::address_reason::name_refusal(&raw, why, example);
+				let _ = writeln!(out, "  {raw:?}: {reason}; try again");
 			}
 		}
 	}
@@ -93,11 +91,8 @@ fn ask_domain_list<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<V
 		match crate::domain::normalize(&raw) {
 			Ok(_) => out_list.push(raw),
 			Err(why) => {
-				let reason = match why {
-					crate::domain::DomainError::Invalid => "is not a valid FQDN",
-					crate::domain::DomainError::Confusable => "is confusable with another name",
-				};
-				let _ = writeln!(out, "  {reason}; skipped");
+				let reason = crate::util::address_reason::name_refusal(&raw, why, "example.org");
+				let _ = writeln!(out, "  {raw:?}: {reason}; skipped");
 			}
 		}
 	}
@@ -254,7 +249,7 @@ pub fn run<R: BufRead>(
 ) -> Result<Filled, ()> {
 	let (detected_v4, detected_v6) = offered(detector);
 	let mode = ask_mode(reader, out)?;
-	let hostname = ask_domain(reader, "hostname> ", out)?;
+	let hostname = ask_domain(reader, "hostname> ", "mail.example.org", out)?;
 	let _ = writeln!(out, "domains:");
 	let domains = ask_domain_list(reader, out)?;
 	let (mut first_account, mut first_password) = ask_first_account(reader, out, &domains)?;
@@ -288,7 +283,7 @@ pub fn run<R: BufRead>(
 	}
 	let dns = if mode == Mode::Automatic {
 		let provider = ask_line(reader, "dns provider> ", out)?;
-		let zone = ask_domain(reader, "dns zone> ", out)?;
+		let zone = ask_domain(reader, "dns zone> ", "example.org", out)?;
 		let token = ask_line(reader, "dns token (empty to use a file or env var)> ", out)?;
 		let token_file = ask_line(reader, "dns token_file (empty to skip)> ", out)?;
 		let token_env = ask_line(reader, "dns token_env (empty to skip)> ", out)?;

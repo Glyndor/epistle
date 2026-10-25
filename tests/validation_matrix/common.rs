@@ -87,3 +87,10 @@ pub fn fixture_password(len: usize) -> String {
 	}
 	out
 }
+
+/// `text` as a TOML basic string, quotes included, with every control
+/// character escaped the way TOML spells it. `{:?}` is not that: it writes a
+/// control character as `\u{1b}`, which TOML refuses.
+pub fn toml_string(text: &str) -> String {
+	toml::Value::String(text.to_string()).to_string()
+}

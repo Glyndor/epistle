@@ -209,7 +209,9 @@ fn an_invalid_resumed_hostname_is_asked_again() {
 	saved.insert("hostname".into(), "bad hostname".into());
 	let (result, text, _) = drive("mail.example.org\n", saved);
 	assert_eq!(result.unwrap().hostname, "mail.example.org");
-	assert!(text.contains("bad hostname: must be a valid FQDN"));
+	assert!(
+		text.contains("bad hostname: spaces are not allowed; for example \"mail.example.org\"")
+	);
 }
 
 /// A draft written by another process can carry an escape sequence in a

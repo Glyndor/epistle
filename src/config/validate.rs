@@ -19,6 +19,10 @@ mod validate_identification;
 #[path = "validate_addresses.rs"]
 pub(crate) mod validate_addresses;
 
+#[path = "validate_dns_name.rs"]
+mod validate_dns_name;
+pub(crate) use validate_dns_name::validate_dns_name;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
@@ -547,40 +551,6 @@ impl Config {
 			}
 		}
 		Ok(())
-	}
-}
-
-/// Validate a fully qualified DNS name; `field` names it in errors.
-///
-/// Every value on disk is stored verbatim after this call returns `Ok`,
-/// but the caller (`Config::validate_domains` and friends) lowercases it
-/// before insertion into a domain-keyed set, so an operator who writes
-/// `Example.org` and `example.org` ends up with one entry. A U-label
-/// (any non-ASCII domain) is refused here with the A-label the operator
-/// should write instead, so configuration stays ASCII on disk and the
-/// boundary is enforced in exactly one place.
-pub(crate) fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
-	let name = name.trim();
-	if name.is_empty() {
-		return Err(ConfigError::Invalid(format!("{field} must not be empty")));
-	}
-	// ASCII input still flows through normalize so the wire-shape rules
-	// apply uniformly; a clean ASCII form comes back unchanged and is
-	// accepted as today. A non-ASCII form that successfully normalises is
-	// refused with the ASCII form the operator should write instead, so
-	// configuration stays ASCII on disk.
-	match crate::domain::normalize(name) {
-		Ok(_) if name.is_ascii() => Ok(()),
-		Ok(ascii) => Err(ConfigError::Invalid(format!(
-			"{field} \"{name}\" must be written as its ASCII form \"{ascii}\""
-		))),
-		Err(crate::domain::DomainError::Confusable) => Err(ConfigError::Invalid(format!(
-			"{field} \"{name}\" is confusable with an ASCII name and is refused"
-		))),
-		Err(crate::domain::DomainError::Invalid) => Err(ConfigError::Invalid(format!(
-			"{field}: {}",
-			crate::util::address_reason::domain_reason(name)
-		))),
 	}
 }
 

@@ -379,3 +379,27 @@ fn a_dns_token_file_with_an_environment_reference_is_refused_before_any_effect()
 		);
 	}
 }
+
+/// A zone that is not a name is refused with the value, the rule and a zone
+/// that would be taken, in the sentence the other name checks use.
+#[test]
+fn a_malformed_dns_zone_is_refused_with_the_rule_and_an_example() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudflare".to_string(),
+		zone: "no zone".to_string(),
+		token: None,
+		token_file: Some(PathBuf::from("/run/secrets/cf")),
+		token_env: None,
+	});
+	let errors = answers.validate().expect_err("a zone with a space");
+	let line = errors
+		.iter()
+		.find(|e| matches!(e, Invalid::DnsZoneMalformed { .. }))
+		.expect("the zone is reported")
+		.to_string();
+	assert_eq!(
+		line,
+		"dns.zone \"no zone\": spaces are not allowed; for example \"example.org\""
+	);
+}

@@ -20,6 +20,12 @@
 mod address;
 #[path = "validation_matrix/common.rs"]
 mod common;
+#[path = "validation_matrix/data_dir.rs"]
+mod data_dir;
+#[path = "validation_matrix/hostname.rs"]
+mod hostname;
+#[path = "validation_matrix/labels.rs"]
+mod labels;
 #[path = "validation_matrix/rules_b.rs"]
 mod rules_b;
 #[path = "validation_matrix/single_label.rs"]

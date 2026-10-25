@@ -88,7 +88,7 @@ impl Answer {
 
 /// A config file the loader accepts: owner-only permissions and a data
 /// directory that exists.
-fn write_config(dir: &Path, body: &str) -> PathBuf {
+pub(super) fn write_config(dir: &Path, body: &str) -> PathBuf {
 	let data = dir.join("data");
 	std::fs::create_dir_all(&data).expect("data dir");
 	let path = dir.join("mail.toml");
@@ -98,7 +98,7 @@ fn write_config(dir: &Path, body: &str) -> PathBuf {
 }
 
 /// The message a config file is refused with, or `None` when it loads.
-fn config_refusal(body: &str) -> Option<String> {
+pub(super) fn config_refusal(body: &str) -> Option<String> {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = write_config(dir.path(), body);
 	match Config::load(&path) {
@@ -109,7 +109,7 @@ fn config_refusal(body: &str) -> Option<String> {
 
 /// Run the binary with `args` and return whether it took the value and
 /// what it said.
-fn epistle(args: &[&str]) -> (bool, String) {
+pub(super) fn epistle(args: &[&str]) -> (bool, String) {
 	let child = Command::new(env!("CARGO_BIN_EXE_epistle"))
 		.args(args)
 		.env("NO_COLOR", "1")
@@ -124,7 +124,7 @@ fn epistle(args: &[&str]) -> (bool, String) {
 }
 
 /// A config file the command line reads.
-fn cli_config(dir: &Path) -> String {
+pub(super) fn cli_config(dir: &Path) -> String {
 	write_config(
 		dir,
 		"hostname = \"mail.example.org\"\ndata_dir = \"{data}\"\ndomains = [\"example.org\"]\n",

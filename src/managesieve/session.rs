@@ -312,7 +312,10 @@ fn result(outcome: Result<(), StoreError>) -> Response {
 /// Map a [`StoreError`] to the appropriate ManageSieve failure response.
 fn store_error(error: StoreError) -> Response {
 	match error {
-		StoreError::InvalidName => Response::No(Some("Invalid script name.".to_string())),
+		StoreError::InvalidName => Response::No(Some(
+			"Invalid script name: use 1 to 200 bytes with no slash, backslash, control or bidirectional character and no space at either end, for example keep-spam."
+				.to_string(),
+		)),
 		StoreError::NoSuchScript => Response::NoCode("NONEXISTENT", "No such script.".to_string()),
 		StoreError::AlreadyExists => {
 			Response::NoCode("ALREADYEXISTS", "Script already exists.".to_string())
