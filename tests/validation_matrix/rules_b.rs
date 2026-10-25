@@ -27,7 +27,7 @@ fn a_sieve_script_name_answers_the_same_for_manage_sieve_and_jmap() {
 	// JMAP capability advertises the same octet cap the store enforces.
 	assert_eq!(
 		sieve_store::MAX_NAME_BYTES,
-		200,
+		512,
 		"JMAP advertises maxSizeScriptName and the store enforces MAX_NAME_BYTES"
 	);
 	for (what, name, accepted) in [
@@ -68,16 +68,18 @@ fn a_sieve_script_name_answers_the_same_for_manage_sieve_and_jmap() {
 		!sieve_store::is_valid_name(&"a".repeat(sieve_store::MAX_NAME_CHARS + 1)),
 		"one over the character cap is refused"
 	);
-	// A name whose composed form is longer than the octet cap is refused even
-	// though its character count is inside it, so both caps are live.
-	let octet_over = "\u{f1}".repeat(sieve_store::MAX_NAME_BYTES / 2 + 1);
-	assert!(
-		octet_over.chars().count() <= sieve_store::MAX_NAME_CHARS,
-		"the fixture is inside the character cap"
+	// The octet cap is four times the character cap, the longest an
+	// encoded character gets, so the character cap decides first and a name
+	// of the longest characters at the character cap still fits the octets.
+	assert_eq!(
+		sieve_store::MAX_NAME_BYTES,
+		sieve_store::MAX_NAME_CHARS * 4,
+		"the octet cap holds the character cap of four-octet characters"
 	);
+	let widest = "\u{1f600}".repeat(sieve_store::MAX_NAME_CHARS);
 	assert!(
-		!sieve_store::is_valid_name(&octet_over),
-		"a name over the octet cap is refused whatever its character count is"
+		sieve_store::is_valid_name(&widest),
+		"a name of the widest characters at the character cap is accepted"
 	);
 }
 
