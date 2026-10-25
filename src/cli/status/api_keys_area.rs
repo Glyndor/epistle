@@ -48,7 +48,7 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 				}
 			}
 		}
-		if let Some(detail) = broad_reach(key) {
+		if let Some(detail) = broad_reach(key, clause.is_none()) {
 			items.push(Item::new(&name, Level::Warn, detail));
 		}
 		if key.scopes.iter().any(|scope| scope == "scim") && key.domains.is_empty() {
@@ -80,8 +80,10 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 /// Why a key reaches further than a leaked copy should: it holds every scope
 /// (a legacy key), or it can write or send for every domain from any address.
 /// A SCIM key without a domain has its own warning, and a key bound to an
-/// account reaches only that account.
-fn broad_reach(key: &ApiKey) -> Option<&'static str> {
+/// account reaches only that account. An `--ip-cidr` confines a key only
+/// when the server sees the client address (`cidr_decides`); behind a bridge
+/// it does not, and the key counts as unconfined.
+fn broad_reach(key: &ApiKey, cidr_decides: bool) -> Option<&'static str> {
 	if key.scopes.is_empty() {
 		return Some("holds every scope (legacy key); recreate it with explicit --scope");
 	}
@@ -89,10 +91,14 @@ fn broad_reach(key: &ApiKey) -> Option<&'static str> {
 		.scopes
 		.iter()
 		.any(|scope| scope == "write" || scope == "send");
-	(acts && key.domains.is_empty() && key.account.is_none() && key.ip_cidr.is_none()).then_some(
-		"can write or send for every domain from any address; confine it with --domain, \
+	(acts
+		&& key.domains.is_empty()
+		&& key.account.is_none()
+		&& !(key.ip_cidr.is_some() && cidr_decides))
+		.then_some(
+			"can write or send for every domain from any address; confine it with --domain, \
 		 --account or --ip-cidr",
-	)
+		)
 }
 
 #[cfg(test)]

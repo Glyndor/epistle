@@ -37,6 +37,50 @@ fn a_date_in_the_past_is_refused() {
 }
 
 #[test]
+fn a_bare_number_is_an_epoch_only_when_it_could_be_one() {
+	for bad in ["2027", "20270131", "999999999", "1798761600000"] {
+		let error = at(bad, NOW).unwrap_err();
+		assert!(
+			error.contains("2027-01-31") && error.contains("90d"),
+			"{error}"
+		);
+	}
+	assert_eq!(at("253402300799", NOW), Ok(253_402_300_799));
+}
+
+#[test]
+fn a_huge_duration_and_an_instant_before_1970_are_refused() {
+	assert!(
+		within("5000000000000d", NOW)
+			.unwrap_err()
+			.contains("too far")
+	);
+	assert!(at("1969-12-31", NOW).unwrap_err().contains("past"));
+	assert!(
+		at("1970-01-01T00:00:00+02:00", NOW)
+			.unwrap_err()
+			.contains("past")
+	);
+}
+
+#[test]
+fn a_leap_second_is_accepted() {
+	assert_eq!(
+		at("2027-12-31T23:59:60Z", NOW),
+		at("2028-01-01T00:00:00Z", NOW)
+	);
+}
+
+#[test]
+fn an_epoch_past_year_9999_is_shown_as_the_number() {
+	assert_eq!(describe(u64::MAX, NOW), u64::MAX.to_string());
+	assert_eq!(
+		status_warning(0, u64::MAX).as_deref(),
+		Some("expired on 1970-01-01T00:00:00Z")
+	);
+}
+
+#[test]
 fn nonsense_is_refused() {
 	for bad in [
 		"",

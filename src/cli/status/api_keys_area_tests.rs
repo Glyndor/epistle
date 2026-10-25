@@ -227,3 +227,62 @@ fn a_send_key_that_names_a_domain_or_a_network_is_quiet() {
 	let account = "account = \"bob\"\n";
 	assert!(warnings(&key("c", &later, scopes, account)).is_empty());
 }
+
+/// `check` reads the clock from the context; the other tests hand
+/// `evaluate` a time of their own.
+#[tokio::test]
+async fn check_uses_the_real_clock_for_expiry_warnings() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let context = ctx(dir.path(), "");
+	let body = format!(
+		"{}{}",
+		key(
+			"soon",
+			&format!("expires_at = {}\n", now() + 3 * 86_400),
+			"scopes = [\"read\"]\n",
+			""
+		),
+		key(
+			"gone",
+			"expires_at = 1700000000\n",
+			"scopes = [\"read\"]\n",
+			""
+		)
+	);
+	keys_file(&dir.path().join("data"), &body);
+	let report = check(&context).await;
+	let details: Vec<_> = report
+		.items
+		.iter()
+		.map(|item| item.detail.as_str())
+		.collect();
+	assert_eq!(details.len(), 2, "{details:?}");
+	assert!(details[0].starts_with("expires in 3 days"), "{details:?}");
+	assert!(details[1].starts_with("expired on"), "{details:?}");
+}
+
+#[tokio::test]
+async fn an_ip_cidr_behind_a_bridge_does_not_confine_a_send_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let context = ctx(dir.path(), "");
+	let data = dir.path().join("data");
+	let later = format!(
+		"expires_at = {}\nip_cidr = \"10.0.0.0/24\"\n",
+		now() + 90 * 86_400
+	);
+	keys_file(&data, &key("mailer", &later, "scopes = [\"send\"]\n", ""));
+	compose(&data, "bridge");
+	let report = check(&context).await;
+	let details: Vec<_> = report
+		.items
+		.iter()
+		.map(|item| item.detail.as_str())
+		.collect();
+	assert!(
+		details.iter().any(|d| d.contains("every domain")),
+		"{details:?}"
+	);
+	compose(&data, "pasta");
+	let report = check(&context).await;
+	assert!(report.items.is_empty(), "{report:?}");
+}

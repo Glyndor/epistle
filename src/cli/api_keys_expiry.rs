@@ -8,6 +8,13 @@ use crate::webdav::rrule::{civil_from_secs, days_from_civil};
 
 const UNITS: &str = "s, m, h, d or w";
 const DAY: u64 = 86_400;
+/// 9999-12-31T23:59:59Z, the last instant `YYYY` can name. An epoch above it
+/// is not a date any command here can show, so it is refused as a probable
+/// count of milliseconds.
+const LAST_INSTANT: u64 = 253_402_300_799;
+/// 2001-09-09, the earliest epoch taken at face value. A bare number below
+/// it is far more likely a year (`2027`) or a compact date (`20270131`).
+const FIRST_EPOCH: u64 = 1_000_000_000;
 
 /// The current time as epoch seconds; a clock before 1970 reads as zero.
 pub(super) fn now_secs() -> u64 {
@@ -31,7 +38,14 @@ fn at(value: &str, now: u64) -> Result<u64, String> {
 	if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
 		return value
 			.parse()
-			.map_err(|_| format!("\"{value}\" is not a valid epoch"));
+			.ok()
+			.filter(|epoch| (FIRST_EPOCH..=LAST_INSTANT).contains(epoch))
+			.ok_or_else(|| {
+				format!(
+					"\"{value}\" is not a plausible Unix epoch in seconds; \
+					 use a date such as 2027-01-31 or a duration such as 90d"
+				)
+			});
 	}
 	if value.starts_with(|c: char| c.is_ascii_digit()) && value.contains('-') {
 		let instant = instant(value).ok_or_else(|| {
@@ -40,10 +54,9 @@ fn at(value: &str, now: u64) -> Result<u64, String> {
 				 a duration such as 90d or an epoch"
 			)
 		})?;
-		return if instant > now {
-			Ok(instant)
-		} else {
-			Err(format!("\"{value}\" is already in the past"))
+		return match u64::try_from(instant) {
+			Ok(instant) if instant > now => Ok(instant),
+			_ => Err(format!("\"{value}\" is already in the past")),
 		};
 	}
 	within(value, now)
@@ -77,11 +90,12 @@ fn within(value: &str, now: u64) -> Result<u64, String> {
 		.filter(|&span| span > 0)
 		.ok_or_else(|| format!("\"{value}\" is not a usable duration"))?;
 	now.checked_add(span)
-		.ok_or_else(|| format!("\"{value}\" is too far away"))
+		.filter(|&instant| instant <= LAST_INSTANT)
+		.ok_or_else(|| format!("\"{value}\" is too far away (the last date is 9999-12-31)"))
 }
 
 /// `YYYY-MM-DD` (midnight UTC) or `YYYY-MM-DDTHH:MM:SS[.f](Z|+HH:MM)`.
-fn instant(value: &str) -> Option<u64> {
+fn instant(value: &str) -> Option<i64> {
 	let (date, rest) = match value.split_once(['T', 't']) {
 		Some((date, rest)) => (date, Some(rest)),
 		None => (value, None),
@@ -93,17 +107,17 @@ fn instant(value: &str) -> Option<u64> {
 	}
 	let (year, month, day) = (number(year)?, number(month)?, number(day)?);
 	let days = days_from_civil(year, month, day);
-	if civil_from_secs(days * 86_400) != (year, month, day) || year < 1970 {
+	if civil_from_secs(days * 86_400) != (year, month, day) {
 		return None;
 	}
 	let seconds = match rest {
 		None => 0,
 		Some(rest) => time_of_day(rest)?,
 	};
-	u64::try_from(days * 86_400 + seconds).ok()
+	Some(days * 86_400 + seconds)
 }
 
-/// `HH:MM:SS[.f]` plus a mandatory zone, as seconds since the date's midnight
+/// `HH:MM:SS[.f]` (a leap second, `:60`, counts as the next minute) plus a mandatory zone, as seconds since the date's midnight
 /// UTC.
 fn time_of_day(text: &str) -> Option<i64> {
 	let zone = text.find(['Z', 'z', '+', '-'])?;
@@ -121,7 +135,7 @@ fn time_of_day(text: &str) -> Option<i64> {
 		return None;
 	}
 	let (hour, minute, second) = (number(hour)?, number(minute)?, number(second)?);
-	if hour > 23 || minute > 59 || second > 59 {
+	if hour > 23 || minute > 59 || second > 60 {
 		return None;
 	}
 	let offset = if zone.eq_ignore_ascii_case("z") {
@@ -149,10 +163,20 @@ fn number(text: &str) -> Option<i64> {
 	}
 }
 
+/// An instant as RFC 3339, or the bare number when it is past 9999-12-31
+/// (an old key written by hand), which no date format can show.
+fn readable(epoch: u64) -> String {
+	if epoch > LAST_INSTANT {
+		epoch.to_string()
+	} else {
+		crate::clock::rfc3339(epoch)
+	}
+}
+
 /// The expiry as `api-key list` prints it: an RFC 3339 instant, marked once
 /// it has passed.
 pub(super) fn describe(expires_at: u64, now: u64) -> String {
-	let when = crate::clock::rfc3339(expires_at);
+	let when = readable(expires_at);
 	if expires_at <= now {
 		format!("{when} (expired)")
 	} else {
@@ -166,7 +190,7 @@ pub(crate) const WARN_WITHIN: u64 = 14 * DAY;
 /// The `status` warning for a key that has expired or will within
 /// [`WARN_WITHIN`]; `None` for a key that is fine.
 pub(crate) fn status_warning(expires_at: u64, now: u64) -> Option<String> {
-	let when = crate::clock::rfc3339(expires_at);
+	let when = readable(expires_at);
 	if expires_at <= now {
 		return Some(format!("expired on {when}"));
 	}
@@ -180,5 +204,5 @@ pub(crate) fn status_warning(expires_at: u64, now: u64) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "api_keys_expiry_tests.rs"]
+#[path = "api_keys_expiry_parse_tests.rs"]
 mod tests;

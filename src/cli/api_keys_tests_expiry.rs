@@ -59,6 +59,35 @@ fn the_two_flags_exclude_each_other_and_junk_is_refused() {
 	assert!(parsed(&["--expires-at", "2001-01-01"]).is_err());
 }
 
+/// `run` is where `--expires-in` has to reach the stored key.
+#[test]
+fn run_stores_the_expiry_whichever_flag_gave_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	for (label, at, within) in [
+		("a", Some(4_102_444_800), None),
+		("b", None, Some(4_102_444_801)),
+	] {
+		let action = ApiKeyCli::Create {
+			label: label.to_string(),
+			expires_at: at,
+			expires_in: within,
+			ip_cidr: None,
+			scopes: vec!["read".to_string()],
+			domains: Vec::new(),
+			account: None,
+			class: None,
+		};
+		assert_eq!(
+			run(&config, action, false, &mut Vec::new()),
+			ExitCode::SUCCESS
+		);
+	}
+	let store = ApiKeyStore::open(dir.path()).expect("open");
+	let stored: Vec<_> = store.keys().iter().map(|key| key.expires_at).collect();
+	assert_eq!(stored, [Some(4_102_444_800), Some(4_102_444_801)]);
+}
+
 #[test]
 fn list_prints_the_expiry_readable_and_json_keeps_the_epoch() {
 	let dir = tempfile::tempdir().expect("tempdir");

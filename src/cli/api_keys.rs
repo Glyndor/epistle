@@ -247,7 +247,8 @@ pub enum ApiKeyCli {
 		)]
 		expires_at: Option<u64>,
 		/// Optional expiry as a duration from now: a number and a unit
-		/// (`s`, `m`, `h`, `d`, `w`), for example `90d`.
+		/// (`s`, `m`, `h`, `d`, `w`), for example `90d`. `m` is minutes; for
+		/// months count in days.
 		#[arg(
 			long,
 			value_name = "DURATION",
