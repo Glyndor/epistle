@@ -1016,11 +1016,15 @@ fails never replaces the one already saved. It keeps the two newest versions.
 The version it saves has to be digits and dots, the only shape `stack rollback`
 can select, so a name carrying a Debian revision, a tilde or a colon is
 refused with a warning instead of taking a slot no listing can choose; so is
-a part of twenty digits or more, which does not fit the integer the command
-reads it into. A binary whose digest matches a copy already saved is not saved
-again under the next name: after a manual `stack rollback` dpkg still lists the
-newer version, and saving those older bytes under it would label them with a
-release that is gone and push a real copy out of the store.
+a part of twenty digits or more, because the command reads each part into a
+64-bit integer and a part that long may not fit (the package refuses the whole
+length rather than work out which ones do). A binary whose digest matches a
+copy already saved is not saved again under the next name: after a manual
+`stack rollback` dpkg still lists the newer version, and saving those older
+bytes under it would label them with a release that is gone and push a real
+copy out of the store. The upgrade says so on stderr. The same happens when you
+reinstall the same binary (`apt install --reinstall`, or a package that only
+changes Debian metadata): no new copy is saved and the line is the only trace.
 Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
 never installed, including when owned by root. If only legacy copies exist,
 rollback remains unavailable until an upgrade saves a trusted copy in the new
@@ -1111,7 +1115,9 @@ works on the host and inside the container deployment:
   `podup -f <compose> exec -T db sh -c <script>`. Restore writes the SQL
   to a host temp file and copies it in with `podup cp <host>
   db:/tmp/<staged-name>`, then runs `psql` through the same container
-  shell with `-v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>'`. Each
+  shell with `-v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>'`, after a
+  `chmod 600` of the copy, which holds the credential hashes of every
+  account. Each
   script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
   inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
   read by the image entrypoint during initialization, not by libpq. The
@@ -1133,9 +1139,12 @@ panic included. A `SIGINT` or `SIGTERM` ends the process without running
 the guard, so a restore killed that way leaves its host file (mode `0600`,
 owned by the operator) and its copy in the `db` container behind. The next
 `restore` removes host files left by a process that no longer exists; the
-copy inside the container sits in the `/tmp` tmpfs of the `db` service and
-goes when that container is recreated, or with `podup exec -T db sh -c "rm -f
-/tmp/epistle-restore-*.sql"`.
+copy inside the container sits in the `/tmp` tmpfs of the `db` service, mode
+`0600`, and goes the next time that container is stopped or restarted (a
+tmpfs is emptied by both), or at once with `podup exec -T db sh
+-c "rm -f /tmp/epistle-restore-*.sql"`. The host cleanup only touches files of
+the same user, so a restore killed as root is not cleared by one run as an
+operator, and the reverse.
 
 ### What lives in the tar
 

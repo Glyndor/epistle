@@ -4,7 +4,7 @@
 use std::fs;
 use std::os::unix::fs::symlink;
 
-use super::{PREFIX, RestoreHostTemp, remove_abandoned};
+use super::{PREFIX, RestoreHostTemp, removable, remove_abandoned};
 
 /// A pid that belonged to a child that has been reaped, so nothing is
 /// running under it.
@@ -74,5 +74,26 @@ fn a_file_left_by_a_dead_restore_is_removed_and_a_live_one_is_kept() {
 	assert!(
 		linked.symlink_metadata().is_ok() && target.exists(),
 		"a link is never followed or removed"
+	);
+}
+
+/// A non-root test cannot plant a file of another user, so the rule that
+/// keeps a restore from deleting somebody else's file is checked on its own:
+/// only a regular file of this user whose restore is gone may go.
+#[test]
+fn only_a_regular_file_of_this_user_with_a_dead_restore_is_removable() {
+	let me = 1000;
+	assert!(removable(true, me, me, false));
+	assert!(
+		!removable(true, 0, me, false),
+		"a file of another user stays"
+	);
+	assert!(
+		!removable(true, me, me, true),
+		"a live restore keeps its file"
+	);
+	assert!(
+		!removable(false, me, me, false),
+		"a link or directory stays"
 	);
 }

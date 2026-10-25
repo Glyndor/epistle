@@ -277,9 +277,13 @@ fn a_binary_already_saved_is_not_saved_again_under_the_next_name() {
 	// from the version dpkg still lists, 0.12.3.
 	let output = preinst(root, &["upgrade", "0.12.3"], "");
 	assert!(output.status.success(), "{output:?}");
-	assert_eq!(
-		String::from_utf8_lossy(&output.stderr),
-		"",
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("already saved under an earlier version"),
+		"the upgrade must say why nothing new was saved: {output:?}"
+	);
+	assert!(
+		!stderr.contains("could not keep"),
 		"keeping what is saved is not a failure: {output:?}"
 	);
 	assert_eq!(

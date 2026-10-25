@@ -228,6 +228,22 @@ fn container_replay_script_uses_exec_psql() {
 	);
 }
 
+/// The staged SQL carries the credential hashes of every account, so the
+/// replay shell forces the copy inside the container to `0600` before `psql`
+/// reads it, and does not start `psql` if it cannot.
+#[test]
+fn container_replay_script_restricts_the_copy_before_psql() {
+	let data_dir = tempfile::tempdir().expect("data_dir");
+	let compose = place_compose(data_dir.path());
+	let path = "/tmp/epistle-restore-1234-999.sql";
+	let spec = container_psql_load_spec(&compose, path, b"select 1;\n").expect("spec");
+	let script = spec.argv().last().expect("last argv");
+	assert!(
+		script.starts_with(&format!("chmod 600 '{path}' && ")),
+		"the copy must be restricted, and psql gated on it, got: {script}"
+	);
+}
+
 /// The host-side cleanup spec is `podup exec -T db sh -c "rm -f <path>"`,
 /// the third podup call in the restore flow (after cp and psql).
 #[test]

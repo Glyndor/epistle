@@ -123,10 +123,18 @@ fn remove_abandoned(parent: &Path) {
 		let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
 			continue;
 		};
-		if metadata.is_file() && metadata.uid() == me && !process_alive(pid) {
+		if removable(metadata.is_file(), metadata.uid(), me, process_alive(pid)) {
 			let _ = std::fs::remove_file(entry.path());
 		}
 	}
+}
+
+/// Whether a staged name found in a shared `$TMPDIR` is ours to remove: a
+/// regular file (never a link), owned by the user running this restore (a
+/// file of somebody else with a name that looks like ours is not touched),
+/// whose restore is gone.
+fn removable(is_file: bool, owner: u32, me: u32, restore_alive: bool) -> bool {
+	is_file && owner == me && !restore_alive
 }
 
 /// Whether a process with this id exists. A process of another user answers

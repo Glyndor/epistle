@@ -521,7 +521,7 @@ The scripts below are passed as one argument to `sh -c`:
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 # Restore script, after podup cp <host-sql> db:/tmp/<staged-name>
-PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
+chmod 600 '/tmp/<staged-name>' && PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
 `POSTGRES_PASSWORD_FILE` is consumed by the image entrypoint during
