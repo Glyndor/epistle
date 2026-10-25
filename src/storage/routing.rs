@@ -496,6 +496,10 @@ impl SplitDelivery {
 	/// it to the body in a single allocation sized to the combined length
 	/// so the body is moved, not copied.
 	fn sign_reply(&self, reply: &mut AcceptedMessage) {
+		if let std::borrow::Cow::Owned(data) = crate::util::header_block::outbound_crlf(&reply.data)
+		{
+			reply.data = data;
+		}
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(reply)
 			&& let Some(header) = signer.sign(&domain, &reply.data)

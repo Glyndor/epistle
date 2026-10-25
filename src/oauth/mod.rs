@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 use crate::jwt::{self, Algorithm, Validation};
 
 mod identity;
+pub use identity::Verified;
 pub mod oidc;
 
 pub use oidc::{Jwk, OidcError};
@@ -99,23 +100,37 @@ impl OauthVerifier {
 		self.policy = identity::IdentityPolicy {
 			allow_unverified_email,
 			second_factor_attested,
+			..self.policy
 		};
 		self
 	}
 
 	/// [`Self::with_identity_policy`] with what the `[oauth]` section declares.
-	pub fn declared_by(self, config: &crate::config::Oauth) -> Self {
+	/// Tokens signed with the key of epistle's own authorization server
+	/// (`signing_key` or `signing_key_file`) name an account in `sub` and
+	/// come after the second factor was asked for.
+	pub fn declared_by(mut self, config: &crate::config::Oauth) -> Self {
+		self.policy.own_tokens = config.signing_key.is_some() || config.signing_key_file.is_some();
 		self.with_identity_policy(
 			config.allow_unverified_email,
 			config.idp_enforces_second_factor,
 		)
 	}
 
-	/// Whether the operator declared that the identity provider enforces a
-	/// second factor itself. When it is not, an account with a TOTP secret
+	/// Treat every token as one of epistle's own authorization server.
+	#[cfg(test)]
+	pub(crate) fn with_own_tokens(mut self) -> Self {
+		self.policy.own_tokens = true;
+		self
+	}
+
+	/// Whether a token of this verifier stands for the second factor: the
+	/// operator declared that the identity provider enforces one, or the
+	/// tokens come from epistle's own authorization server, which asks for
+	/// it before issuing. When it does not, an account with a TOTP secret
 	/// cannot sign in with a bearer token.
 	pub fn second_factor_attested(&self) -> bool {
-		self.policy.second_factor_attested
+		self.policy.second_factor_met()
 	}
 
 	/// The shared JWKS cache, when this verifier is OIDC-backed. The background
@@ -132,24 +147,46 @@ impl OauthVerifier {
 	/// operator declared otherwise) when it is valid. Synchronous and
 	/// network-free: OIDC keys are read from the in-memory cache.
 	pub fn verify(&self, token: &str, now_secs: u64) -> Option<String> {
+		self.verify_identity(token, now_secs)
+			.map(|verified| verified.as_str().to_string())
+	}
+
+	/// Verify a bearer token and say who it names. A refusal is logged with
+	/// its reason and nothing taken from the token.
+	pub fn verify_identity(&self, token: &str, now_secs: u64) -> Option<Verified> {
+		let Some(claims) = self.validate(token, now_secs) else {
+			tracing::warn!(
+				"bearer token refused: signature, issuer, audience or expiry does not check out"
+			);
+			return None;
+		};
+		match self.policy.identity(&claims) {
+			Ok(verified) => Some(verified),
+			Err(refusal) => {
+				tracing::warn!("bearer token refused: {}", refusal.reason());
+				None
+			}
+		}
+	}
+
+	fn validate(&self, token: &str, now_secs: u64) -> Option<crate::jwt::Claims> {
 		let validation = Validation {
 			now: now_secs,
 			issuer: Some(&self.issuer),
 			audience: Some(&self.audience),
 		};
-		let claims = match &self.source {
+		match &self.source {
 			KeySource::Static {
 				algorithm,
 				public_key,
-			} => jwt::validate(token, *algorithm, public_key, &validation).ok()?,
+			} => jwt::validate(token, *algorithm, public_key, &validation).ok(),
 			KeySource::Jwks(cache) => {
 				let kid = token_kid(token);
 				let keys = cache.read().ok()?;
 				let key = select_key(&keys, kid.as_deref())?;
-				jwt::validate(token, key.algorithm, &key.key, &validation).ok()?
+				jwt::validate(token, key.algorithm, &key.key, &validation).ok()
 			}
-		};
-		self.policy.identity(&claims)
+		}
 	}
 }
 

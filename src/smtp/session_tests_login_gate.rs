@@ -174,6 +174,36 @@ fn a_bearer_token_opens_a_second_factor_account_when_the_provider_enforces_it() 
 }
 
 #[test]
+fn a_token_of_the_built_in_server_opens_a_second_factor_account() {
+	let (verifier, pair, rng) = own_verifier_and_key();
+	let response = own_bearer_response(&pair, &rng, TWO_FACTOR);
+	let session = session(gate_directory_arc()).with_oauth(verifier);
+	assert_eq!(authenticate(session, &response), 235);
+}
+
+#[test]
+fn a_token_of_the_built_in_server_for_a_disabled_or_unknown_account_opens_nothing() {
+	for account in [DISABLED, "nobody"] {
+		let (verifier, pair, rng) = own_verifier_and_key();
+		let response = own_bearer_response(&pair, &rng, account);
+		let session = session(gate_directory_arc()).with_oauth(verifier);
+		assert_eq!(authenticate(session, &response), 535, "{account}");
+	}
+}
+
+#[test]
+fn a_verified_email_that_only_a_catch_all_or_a_sub_address_matches_opens_nothing() {
+	let directory =
+		Arc::new(gate_directory().with_catch_all([("example.org".to_string(), OPEN.to_string())]));
+	for email in ["stranger@example.org", "alice+tag@example.org"] {
+		let (verifier, pair, rng) = verifier_and_key();
+		let response = bearer_response(&pair, &rng, email);
+		let session = session(directory.clone()).with_oauth(verifier);
+		assert_eq!(authenticate(session, &response), 535, "{email}");
+	}
+}
+
+#[test]
 fn a_client_certificate_for_a_disabled_account_is_refused() {
 	let mut session = session(gate_directory_arc());
 	session.set_client_identity(Some("bob@example.org".to_string()));

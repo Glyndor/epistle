@@ -25,12 +25,26 @@ fn queued(data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn a_queued_message_has_only_crlf_line_ends_and_no_nul() {
-	assert_eq!(
-		queued(b"Subject: s\r\n\r\nhello\r.\r\nbody\0\n"),
-		b"Subject: s\r\n\r\nhello\r\n.\r\nbody\r\n"
-	);
+fn a_lone_lf_is_queued_as_crlf() {
 	assert_eq!(queued(b"Subject: s\n\nbody"), b"Subject: s\r\n\r\nbody\r\n");
+}
+
+#[test]
+fn a_nul_or_a_bare_cr_is_refused_not_repaired() {
+	for data in [
+		b"Subject: s\r\n\r\nhello\r.\r\n".as_slice(),
+		b"Subject: s\r\n\r\nbo\0dy\r\n".as_slice(),
+		b"Bc\0c: x\r\n\r\nbody\r\n".as_slice(),
+		b"a\r\0\nb".as_slice(),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let spool = FsSpool::open(dir.path()).expect("open spool");
+		let error = spool
+			.store(&message(data), None, &BTreeMap::new())
+			.expect_err("refused");
+		assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+		assert!(spool.list().expect("list").is_empty());
+	}
 }
 
 #[test]
@@ -51,7 +65,7 @@ fn the_evidence_record_sees_the_bytes_that_are_queued() {
 	let extra = BTreeMap::new();
 	let id = spool
 		.store_with(
-			&message(b"Subject: s\r\n\r\na\rb\r\n"),
+			&message(b"Subject: s\r\n\r\na\nb\r\n"),
 			Uuid::now_v7(),
 			&StoreOptions {
 				account: None,

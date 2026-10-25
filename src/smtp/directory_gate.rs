@@ -95,7 +95,14 @@ impl Directory {
 		if !self.is_protocol_allowed(&account, protocol) {
 			return false;
 		}
-		!(matches!(proof, Proof::Scram | Proof::Bearer) && self.totp.contains_key(&account))
+		let needs_code =
+			matches!(proof, Proof::Scram | Proof::Bearer) && self.totp.contains_key(&account);
+		if needs_code && proof == Proof::Bearer {
+			tracing::warn!(
+				"bearer sign-in refused for an account with a TOTP secret; a token cannot carry the code (see idp_enforces_second_factor in [oauth])"
+			);
+		}
+		!needs_code
 	}
 
 	/// Plan the answer to a SCRAM client-first message for `username`. Bans

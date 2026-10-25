@@ -6,8 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::super::address::Address;
-use super::super::directory::{Resolution, bearer_proof};
+use super::super::directory::bearer_proof;
 use super::super::reply::Reply;
 use super::{Action, Session};
 
@@ -46,8 +45,8 @@ impl Session {
 		let outcome = initial
 			.as_deref()
 			.and_then(parse_bearer)
-			.and_then(|token| verifier.verify(&token, unix_now()))
-			.and_then(|email| self.resolve_account(&email))
+			.and_then(|token| verifier.verify_identity(&token, unix_now()))
+			.and_then(|verified| verified.account(&self.directory))
 			.and_then(|account| {
 				// The account rules (disabled, protocol allowlist) apply to a
 				// bearer token as to a password: the token proves who the
@@ -64,15 +63,6 @@ impl Session {
 				Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 			}
 			None => self.oauth_failure(),
-		}
-	}
-
-	/// Resolve a verified email to one of our account names.
-	fn resolve_account(&self, email: &str) -> Option<String> {
-		let address = Address::parse(email).ok()?;
-		match self.directory.resolve(&address) {
-			Resolution::Account(account) => Some(account),
-			_ => None,
 		}
 	}
 

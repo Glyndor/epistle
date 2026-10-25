@@ -735,6 +735,10 @@ mod auth_audit_tests;
 mod masked_tests;
 
 #[cfg(test)]
+#[path = "directory_exact_tests.rs"]
+mod exact_tests;
+
+#[cfg(test)]
 #[path = "directory_alias_tests.rs"]
 mod alias_tests;
 

@@ -195,6 +195,30 @@ fn a_bearer_token_does_not_skip_the_second_factor_unless_the_provider_enforces_i
 }
 
 #[test]
+fn a_token_of_the_built_in_server_opens_a_second_factor_account() {
+	let (verifier, pair, rng) = own_verifier_and_key();
+	let response = own_bearer_response(&pair, &rng, TWO_FACTOR);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = session(dir.path(), gate_directory_arc()).with_oauth(Some(verifier));
+	assert!(is_ok(&session.command_line(&format!(
+		"a AUTHENTICATE OAUTHBEARER {response}"
+	))));
+}
+
+#[test]
+fn a_verified_email_that_only_a_catch_all_matches_opens_nothing() {
+	let directory =
+		Arc::new(gate_directory().with_catch_all([("example.org".to_string(), OPEN.to_string())]));
+	let (verifier, pair, rng) = verifier_and_key();
+	let response = bearer_response(&pair, &rng, "stranger@example.org");
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = session(dir.path(), directory).with_oauth(Some(verifier));
+	assert!(!is_ok(&session.command_line(&format!(
+		"a AUTHENTICATE OAUTHBEARER {response}"
+	))));
+}
+
+#[test]
 fn a_client_certificate_for_a_disabled_account_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = session(dir.path(), gate_directory_arc());

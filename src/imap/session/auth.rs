@@ -8,9 +8,6 @@ use crate::smtp::directory::hash_gate::Verdict;
 use crate::smtp::directory::{Proof, ScramPlan, ScramRefusal};
 use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
-use crate::smtp::address::Address;
-use crate::smtp::directory::Resolution;
-
 use super::super::command::Secret;
 use super::state::State;
 use super::{Output, Session};
@@ -141,12 +138,9 @@ COMPRESS=DEFLATE",
 			.zip(initial)
 			.and_then(|(verifier, enc)| {
 				let token = parse_bearer(&enc)?;
-				let email = verifier.verify(&token, unix_now())?;
-				let address = Address::parse(&email).ok()?;
-				match self.directory.resolve(&address) {
-					Resolution::Account(account) => Some(account),
-					_ => None,
-				}
+				verifier
+					.verify_identity(&token, unix_now())?
+					.account(&self.directory)
 			})
 			.and_then(|account| {
 				// The account rules (disabled, protocol allowlist) apply to a
@@ -297,9 +291,9 @@ COMPRESS=DEFLATE",
 		// still has to be a real local account; a refusal rejects with the
 		// same wire outcome as an unknown address.
 		let account = match crate::smtp::address::Address::parse(&identity) {
-			Ok(address) => match self.directory.resolve(&address) {
-				crate::smtp::directory::Resolution::Account(account) => account,
-				_ => return self.auth_failure(tag),
+			Ok(address) => match self.directory.resolve_exact(&address) {
+				Some(account) => account,
+				None => return self.auth_failure(tag),
 			},
 			Err(_) => return self.auth_failure(tag),
 		};

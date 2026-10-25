@@ -289,8 +289,15 @@ impl FsSpool {
 		let final_message = self.entry_file(SpoolDir::New, id, MessageExt::Eml)?;
 		let final_envelope = self.entry_file(SpoolDir::New, id, MessageExt::Json)?;
 
-		// Whatever path queued it, a message leaves with CRLF line ends and
-		// no NUL, so the bytes the evidence hook records are the ones sent.
+		// Whatever path queued it, a message leaves with CRLF line ends, so
+		// the bytes the evidence hook records are the ones sent. A NUL or a
+		// bare CR is not repaired: the message is refused.
+		if crate::util::header_block::has_unframed_byte(&message.data) {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"message holds a NUL or a bare carriage return",
+			));
+		}
 		let data = crate::util::header_block::outbound_crlf(&message.data);
 		write_sync(&tmp_message, &self.crypto.encode(&data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;

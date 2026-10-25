@@ -22,6 +22,29 @@ impl Directory {
 		self.disabled_domains.contains(&domain.to_ascii_lowercase())
 	}
 
+	/// The account whose own address is `address`, and nothing else: an alias
+	/// of a hosted domain counts, but a catch-all, a masked address, a
+	/// multi-target alias and a sub-address do not. For an identity that a
+	/// foreign party vouched for, where a near match must not open a mailbox.
+	pub fn resolve_exact(&self, address: &Address) -> Option<String> {
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		if !self.domains.contains(domain) || self.disabled_domains.contains(domain) {
+			return None;
+		}
+		let key = normalize(&format!("{}@{domain}", address.local_part()));
+		self.accounts_by_address.get(&key).cloned()
+	}
+
+	/// The account called `name`, when it exists and can hold a password.
+	pub fn named_account(&self, name: &str) -> Option<String> {
+		let name = name.to_ascii_lowercase();
+		self.password_hashes.contains_key(&name).then_some(name)
+	}
+
 	/// Resolve a validated address.
 	pub fn resolve(&self, address: &Address) -> Resolution {
 		let local = address.local_part();

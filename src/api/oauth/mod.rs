@@ -112,14 +112,12 @@ impl AuthzServer {
 	}
 
 	/// Sign an access-token JWT for `account`, valid for [`ACCESS_TOKEN_TTL_SECS`]
-	/// from `now`. The account is both the `sub` and the `email` this server
-	/// vouches for, which the verifier returns as the identity. `None` only if
-	/// signing fails (fail closed).
+	/// from `now`. The `sub` is the account name, which the verifier of this
+	/// server's own tokens returns as the identity. `None` only if signing
+	/// fails (fail closed).
 	fn issue_token(&self, account: &str, now: u64) -> Option<String> {
 		let claims = serde_json::json!({
 			"sub": account,
-			"email": account,
-			"email_verified": true,
 			"iss": self.issuer,
 			"aud": self.audience,
 			"iat": now,
