@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod bounds;
 pub mod command;
+mod log_gate;
 pub mod server;
 pub mod session;
 pub mod wire;

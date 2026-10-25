@@ -134,6 +134,23 @@ async fn a_body_above_the_minimum_rate_still_ends_at_the_deadline() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_burst_followed_by_silence_is_cut_within_two_windows() {
+	let mut stream = post(serving(Duration::ZERO).await, CLAIMED).await;
+	stream
+		.write_all(&vec![b'x'; 300 * 1024])
+		.await
+		.expect("burst");
+	let started = Instant::now();
+	let text = answer(&mut stream).await;
+	assert!(cut(&text), "{text}");
+	assert!(
+		started.elapsed() <= 2 * BODY_RATE_WINDOW + Duration::from_secs(5),
+		"the burst bought {:?}",
+		started.elapsed()
+	);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_body_just_above_the_minimum_rate_is_read() {
 	let total = 60 * 2 * BODY_MIN_RATE as usize;
 	let mut stream = post(serving(Duration::ZERO).await, total).await;

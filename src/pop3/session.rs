@@ -85,6 +85,11 @@ impl Response {
 		matches!(self, Response::Bye(_))
 	}
 
+	/// Whether this is the reply for a message that cannot be read.
+	pub fn is_unavailable(&self) -> bool {
+		matches!(self, Response::Err(text) if text.starts_with("[SYS/PERM]"))
+	}
+
 	/// Whether this is the client's own protocol error (a bad command, a
 	/// failed sign-in, an unknown message), the only kind the abuse guard
 	/// counts. A `[SYS/...]` reply is a condition of the server or the store.
@@ -341,12 +346,6 @@ impl<B: Backend> Session<B> {
 		let mut index = self.backend.list(&account);
 		if index.len() > MAX_SESSION_MESSAGES {
 			// The newest stay reachable; the oldest are not listed.
-			tracing::warn!(
-				account = %account,
-				listed = MAX_SESSION_MESSAGES,
-				hidden = index.len() - MAX_SESSION_MESSAGES,
-				"POP3 inbox over the session limit, oldest messages not listed"
-			);
 			index.drain(..index.len() - MAX_SESSION_MESSAGES);
 		}
 		self.messages = index

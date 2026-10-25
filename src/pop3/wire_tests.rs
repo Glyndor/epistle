@@ -50,3 +50,29 @@ fn single_line_responses_are_one_piece() {
 		assert_eq!(response.wire().count(), 1);
 	}
 }
+
+#[test]
+fn a_dot_that_starts_a_line_at_a_chunk_boundary_is_stuffed() {
+	let mut body = vec![b'a'; WIRE_CHUNK - 1];
+	body.extend_from_slice(b"\n.x\n");
+	let pieces: Vec<Vec<u8>> = multiline(&body).wire().collect();
+	assert!(pieces.len() >= 2);
+	let text = String::from_utf8(pieces.concat()).expect("text");
+	assert!(
+		text.contains("\r\n..x\r\n.\r\n"),
+		"{:?}",
+		&text[text.len() - 12..]
+	);
+}
+
+#[test]
+fn a_dot_inside_a_line_at_a_chunk_boundary_is_left_alone() {
+	let mut body = vec![b'a'; WIRE_CHUNK];
+	body.extend_from_slice(b".x\n");
+	let text = String::from_utf8(multiline(&body).encode()).expect("text");
+	assert!(
+		text.ends_with("a.x\r\n.\r\n"),
+		"{:?}",
+		&text[text.len() - 12..]
+	);
+}

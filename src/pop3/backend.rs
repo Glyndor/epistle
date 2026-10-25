@@ -20,19 +20,8 @@ pub struct MailboxBackend {
 	directory: DirectoryHandle,
 	data_dir: PathBuf,
 	crypto: MessageCrypto,
-}
-
-/// Run blocking file work without holding up the other tasks of a
-/// multi-threaded runtime; elsewhere (a test, a current-thread runtime) run
-/// it in place.
-fn off_the_reactor<R>(work: impl FnOnce() -> R) -> R {
-	use tokio::runtime::{Handle, RuntimeFlavor};
-	match Handle::try_current() {
-		Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
-			tokio::task::block_in_place(work)
-		}
-		_ => work(),
-	}
+	/// Messages [`Backend::list`] returns; the newest when there are more.
+	listed_limit: usize,
 }
 
 impl MailboxBackend {
@@ -72,7 +61,7 @@ impl MailboxBackend {
 				newest.pop();
 			}
 		}
-		if seen > keep {
+		if seen > keep && super::log_gate::due(account, "trimmed") {
 			tracing::warn!(
 				account,
 				listed = keep,
@@ -80,9 +69,10 @@ impl MailboxBackend {
 				"POP3 inbox over the session limit, oldest messages not listed"
 			);
 		}
+		let mut too_large = 0usize;
 		let mut stems: Vec<String> = newest.into_iter().map(|Reverse(stem)| stem).collect();
 		stems.sort();
-		stems
+		let listed: Vec<(String, usize)> = stems
 			.into_iter()
 			.filter_map(|stem| {
 				let path = dir.join(format!("{stem}.eml"));
@@ -92,9 +82,22 @@ impl MailboxBackend {
 					.len();
 				let octets = self.crypto.stored_plaintext_len(&path, stored);
 				let octets = usize::try_from(octets).unwrap_or(usize::MAX);
-				(octets <= MAX_MESSAGE_OCTETS).then_some((stem, octets))
+				if octets > MAX_MESSAGE_OCTETS {
+					too_large += 1;
+					return None;
+				}
+				Some((stem, octets))
 			})
-			.collect()
+			.collect();
+		if too_large > 0 && super::log_gate::due(account, "too large") {
+			tracing::warn!(
+				account,
+				omitted = too_large,
+				limit = MAX_MESSAGE_OCTETS,
+				"POP3 messages over the size limit are not listed"
+			);
+		}
+		listed
 	}
 
 	/// Build a backend sharing the server's directory handle and data dir, with
@@ -114,7 +117,15 @@ impl MailboxBackend {
 			directory,
 			data_dir,
 			crypto,
+			listed_limit: MAX_SESSION_MESSAGES,
 		}
+	}
+
+	/// List at most `limit` messages instead of the session maximum.
+	#[cfg(test)]
+	pub(crate) fn with_listed_limit(mut self, limit: usize) -> Self {
+		self.listed_limit = limit;
+		self
 	}
 }
 
@@ -167,11 +178,11 @@ impl Backend for MailboxBackend {
 	}
 
 	fn list(&self, account: &str) -> Vec<(String, usize)> {
-		off_the_reactor(|| self.list_newest(account, MAX_SESSION_MESSAGES))
+		crate::util::blocking::may_block(|| self.list_newest(account, self.listed_limit))
 	}
 
 	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>> {
-		off_the_reactor(|| self.fetch_within(account, uid, MAX_MESSAGE_OCTETS))
+		crate::util::blocking::may_block(|| self.fetch_within(account, uid, MAX_MESSAGE_OCTETS))
 	}
 
 	fn remove(&self, account: &str, uids: &[String]) {

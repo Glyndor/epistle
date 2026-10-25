@@ -21,13 +21,17 @@ use crate::net::response_writer;
 use crate::smtp::line::LineDecoder;
 
 use super::backend::MailboxBackend;
-use super::session::{Response, Session};
+use super::session::{Backend, Response, Session};
 
 const READ_BUFFER: usize = 4096;
 /// Idle timeout per RFC 1939's recommended minimum (10 minutes).
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(600);
 /// Consecutive `-ERR` responses before the connection is dropped (abuse guard).
 pub(crate) const MAX_ERROR_STREAK: u32 = 20;
+/// Consecutive `[SYS/PERM]` replies (a message that cannot be read) before
+/// the connection is dropped. Each may cost a read of a whole message, so
+/// the count is separate from the client's own errors and much higher.
+pub(crate) const MAX_UNAVAILABLE_STREAK: u32 = 200;
 /// Default max concurrent connections for a POP3 listener.
 const MAX_CONNECTIONS: usize = 500;
 
@@ -171,9 +175,9 @@ impl Server {
 
 /// The protocol loop: greet, then read command lines and write responses until
 /// the session ends or the peer disconnects.
-async fn run<S>(
+async fn run<S, B: Backend>(
 	mut stream: S,
-	backend: MailboxBackend,
+	backend: B,
 	peer_ip: Option<std::net::IpAddr>,
 	mut clock: SessionClock,
 	per_account_counter: Option<Arc<crate::net::per_account_conn::PerAccountCounter>>,
@@ -193,6 +197,7 @@ where
 	let mut buffer = [0u8; READ_BUFFER];
 	// Consecutive error responses; too many means an abusive client.
 	let mut error_streak = 0u32;
+	let mut unavailable_streak = 0u32;
 	loop {
 		let line = match decoder.next_line() {
 			Ok(Some(line)) => {
@@ -230,22 +235,27 @@ where
 			Err(_) => Response::Err("non-ASCII command".to_string()),
 		};
 
-		// Abuse guard: drop a client that only produces errors.
+		// Abuse guard: drop a client that only produces errors, and one
+		// that keeps asking for messages that cannot be read. A `[SYS/...]`
+		// reply that is not about a message neither counts nor resets.
 		if response.is_client_error() {
 			error_streak += 1;
-			if error_streak >= MAX_ERROR_STREAK {
-				let reply = Response::Err("too many errors".to_string());
-				let _ = response_writer::write_response(
-					&mut stream,
-					&reply.encode(),
-					&clock,
-					session.is_authenticated(),
-				)
-				.await;
-				return Ok(());
-			}
+		} else if response.is_unavailable() {
+			unavailable_streak += 1;
 		} else if !matches!(response, Response::Err(_)) {
 			error_streak = 0;
+			unavailable_streak = 0;
+		}
+		if error_streak >= MAX_ERROR_STREAK || unavailable_streak >= MAX_UNAVAILABLE_STREAK {
+			let reply = Response::Err("too many errors".to_string());
+			let _ = response_writer::write_response(
+				&mut stream,
+				&reply.encode(),
+				&clock,
+				session.is_authenticated(),
+			)
+			.await;
+			return Ok(());
 		}
 
 		let is_final = response.is_final();
@@ -382,6 +392,10 @@ mod conn_limit_tests;
 #[cfg(test)]
 #[path = "server_tests_deadline.rs"]
 mod deadline_tests;
+
+#[cfg(test)]
+#[path = "server_tests_guard.rs"]
+mod guard_tests;
 
 #[cfg(test)]
 #[path = "server_tests_continuation.rs"]

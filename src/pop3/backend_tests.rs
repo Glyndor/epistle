@@ -204,3 +204,27 @@ fn list_keeps_the_newest_messages_in_arrival_order() {
 	assert_eq!(names, expected[3..].to_vec());
 	assert_eq!(backend.list_newest("alice", 100).len(), 6);
 }
+
+#[test]
+fn list_returns_no_more_than_its_limit() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let backend = backend(dir.path()).with_listed_limit(3);
+	for n in 0..6 {
+		crate::imap::mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			format!("Subject: {n}\r\n\r\nb\r\n").as_bytes(),
+			&MessageCrypto::disabled(),
+		)
+		.expect("append");
+	}
+	assert_eq!(backend.list("alice").len(), 3);
+}
+
+#[test]
+fn the_limit_of_a_backend_is_the_session_maximum() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	assert_eq!(backend(dir.path()).listed_limit, MAX_SESSION_MESSAGES);
+}
