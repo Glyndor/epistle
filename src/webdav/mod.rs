@@ -30,7 +30,9 @@ use axum::routing::any;
 use crate::directory_store::DirectoryHandle;
 
 pub mod auth;
+pub mod bounds;
 pub mod caldav;
+pub mod caldav_busy;
 pub mod caldav_filter;
 mod caldav_filter_ical;
 mod caldav_filter_xml;
@@ -41,6 +43,7 @@ pub mod handler;
 mod href;
 pub mod path;
 pub mod propfind;
+pub mod quota;
 mod reply;
 mod report_bounds;
 pub mod rrule;
@@ -63,9 +66,21 @@ pub struct WebDavState {
 	/// so the audit log and ban store see the client behind a trusted proxy
 	/// under the address the proxy reports, never the proxy's own socket.
 	pub trusted_proxies: Vec<crate::cidr::Cidr>,
+	/// The quota, in bytes, of an account that has none of its own or of its
+	/// domain (the server's `quota_bytes`). `0` is no limit.
+	pub quota_default: u64,
+	/// How stored mail is measured, so WebDAV counts it the way IMAP QUOTA does.
+	pub crypto: crate::storage::MessageCrypto,
 }
 
 impl WebDavState {
+	/// Set the default quota and the way mail is measured against it.
+	pub fn with_quota(mut self, default_bytes: u64, crypto: crate::storage::MessageCrypto) -> Self {
+		self.quota_default = default_bytes;
+		self.crypto = crypto;
+		self
+	}
+
 	/// Attach the trusted-proxy network list. The `serve` command passes the
 	/// `[api] trusted_proxies` value through so the WebDAV listener shares the
 	/// same proxy configuration as the API listener.
@@ -95,7 +110,15 @@ pub fn router_with_trusted(
 		directory,
 		data_dir,
 		trusted_proxies,
+		quota_default: crate::imap::session::DEFAULT_QUOTA_BYTES,
+		crypto: crate::storage::MessageCrypto::disabled(),
 	};
+	router_for(state)
+}
+
+/// Build the WebDAV router over a fully specified state. Production uses this
+/// to apply the server's quota and its mail encryption setting.
+pub fn router_for(state: WebDavState) -> Router {
 	Router::new()
 		.fallback(any(handler::dispatch))
 		.with_state(state)

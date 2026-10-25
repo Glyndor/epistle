@@ -4,7 +4,9 @@
 use axum::Router;
 use axum::http::StatusCode;
 
-use crate::webdav::test_support::{MKCOL_ADDRESSBOOK, MKCOL_CALENDAR, send_as_alice, test_app};
+use crate::webdav::test_support::{
+	MKCOL_ADDRESSBOOK, MKCOL_CALENDAR, send_as_alice, test_app, test_app_with_quota,
+};
 
 const EVENT: &[u8] = b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTART:20260115T090000Z\r\nDTEND:20260115T100000Z\r\nSUMMARY:One\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
@@ -13,7 +15,10 @@ const VCARD: &[u8] = b"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ada Lovelace\r\nEND:VCAR
 const ETAG_ONLY: &str = "<D:prop><D:getetag/></D:prop>";
 
 async fn calendar(dir: &std::path::Path, events: &[&str]) -> Router {
-	let app = test_app(dir);
+	calendar_on(test_app(dir), events).await
+}
+
+async fn calendar_on(app: Router, events: &[&str]) -> Router {
 	let (status, _) = send_as_alice(&app, "MKCOL", "/cal", &[], MKCOL_CALENDAR).await;
 	assert_eq!(status, StatusCode::CREATED);
 	for name in events {
@@ -179,7 +184,9 @@ async fn infinite_level_and_non_zero_depth_are_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_writes_get_distinct_sequences() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let app = calendar(dir.path(), &[]).await;
+	// No quota, so no account lock stands between the writes: only the
+	// collection's own lock keeps their log entries apart.
+	let app = calendar_on(test_app_with_quota(dir.path(), Some(0)), &[]).await;
 	let (_, before) = sync(&app, "/cal", "", ETAG_ONLY).await;
 	let mut writes = tokio::task::JoinSet::new();
 	for i in 0..16 {

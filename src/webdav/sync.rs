@@ -14,14 +14,17 @@
 //!   of the newest change dropped, so a token is valid exactly when
 //!   `base <= n <= highest`: everything after it is still in the log.
 //! - Every write rewrites the log through a sibling temp file, `fsync` and
-//!   `rename`, so a crash leaves either the old or the new log, never a torn
-//!   one. A process-wide lock serialises writers, so two concurrent PUTs
-//!   never hand out the same sequence.
+//!   `rename` and a flush of the directory, so a crash leaves either the old or the new log, never a torn
+//!   one. A lock per collection serialises the writers of one log, so two
+//!   concurrent PUTs into it never hand out the same sequence, while the
+//!   logs of other collections and accounts are not held up by its `fsync`.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 /// The change log's file name inside a collection directory.
 pub const CHANGELOG: &str = ".changelog";
@@ -36,8 +39,27 @@ const TOKEN_PREFIX: &str = "urn:epistle:sync:";
 
 const HEADER: &str = "#epistle-sync";
 
-/// Serialises every read-modify-write of a change log in this process.
-static WRITERS: Mutex<()> = Mutex::const_new(());
+/// One lock per collection directory, serialising the read-modify-write of
+/// that collection's change log in this process.
+static WRITERS: LazyLock<std::sync::Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+	LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Above this many tracked collections, locks nobody holds are dropped from
+/// the map when a new one is added, so it does not grow with every
+/// collection ever touched.
+const LOCK_MAP_PRUNE_AT: usize = 1024;
+
+/// Take the write lock of `collection`'s change log.
+async fn lock_collection(collection: &Path) -> OwnedMutexGuard<()> {
+	let lock = {
+		let mut locks = WRITERS.lock().unwrap_or_else(|poison| poison.into_inner());
+		if locks.len() >= LOCK_MAP_PRUNE_AT && !locks.contains_key(collection) {
+			locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+		}
+		Arc::clone(locks.entry(collection.to_path_buf()).or_default())
+	};
+	lock.lock_owned().await
+}
 
 /// Whether `name` is one of the log's own files, which are bookkeeping and
 /// never a member of the collection.
@@ -154,7 +176,7 @@ impl Log {
 /// yet (a collection made before the log existed, or never written to).
 /// `None` only when the log cannot be read or written.
 pub async fn load(collection: &Path) -> Option<Log> {
-	let _guard = WRITERS.lock().await;
+	let _guard = lock_collection(collection).await;
 	load_or_create(collection).await
 }
 
@@ -179,7 +201,7 @@ pub async fn record(collection: &Path, entries: &[(String, bool)]) {
 	if entries.is_empty() {
 		return;
 	}
-	let _guard = WRITERS.lock().await;
+	let _guard = lock_collection(collection).await;
 	let Some(mut log) = load_or_create(collection).await else {
 		tracing::warn!(collection = %collection.display(), "webdav change log unreadable");
 		return;
@@ -211,13 +233,20 @@ async fn save(collection: &Path, log: &Log) -> std::io::Result<()> {
 		let mut file = tokio::fs::File::create(&tmp).await?;
 		file.write_all(log.render().as_bytes()).await?;
 		file.sync_all().await?;
-		tokio::fs::rename(&tmp, collection.join(CHANGELOG)).await
+		tokio::fs::rename(&tmp, collection.join(CHANGELOG)).await?;
+		// The rename itself is only durable once the directory is flushed.
+		tokio::fs::File::open(collection).await?.sync_all().await
 	}
 	.await;
 	if result.is_err() {
 		let _ = tokio::fs::remove_file(&tmp).await;
 	}
 	result
+}
+
+#[cfg(test)]
+async fn lock_for_tests(collection: &Path) -> OwnedMutexGuard<()> {
+	lock_collection(collection).await
 }
 
 #[cfg(test)]

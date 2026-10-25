@@ -141,6 +141,13 @@ the log.
 | `sieve-variable-length` | 4096 | octets | own | RFC 5229 §4.1 (a server may keep as little as 4000 octets) |
 | `sieve-variables-total-bytes` | 65536 | octets | own | no standard mandate |
 | `sieve-variables` | 128 | count | own | no standard mandate |
+| `caldav-freebusy-window` | 34560000 | seconds | own | no standard mandate |
+| `caldav-freebusy-items` | 50000 | count | own | no standard mandate |
+| `caldav-freebusy-file-size` | 8388608 | octets | own | no standard mandate |
+| `caldav-freebusy-periods` | 10000 | count | own | no standard mandate |
+| `webdav-entry-bytes` | 4096 | octets | own | no standard mandate |
+| `webdav-collection-members` | 50000 | count | own | no standard mandate |
+| `webdav-depth` | 16 | count | own | no standard mandate |
 | `sieve-variable-name-length` | 64 | octets | own | no standard mandate |
 | `sieve-steps` | 20000 | count | own | no standard mandate |
 | `sieve-work` | 268435456 | octets | own | no standard mandate |
@@ -230,3 +237,27 @@ The warnings are printed at start-up so a configuration that was
 edited months ago still tells the operator what was crossed. The
 audit trail keeps both the saved value and the warning line so the
 deviation is visible later.
+
+## Known limits of CalDAV free-busy
+
+The free-busy answer (`free-busy-query` and the scheduling Outbox `POST`) is
+exact for events in UTC. These cases are not handled yet, and a calendar that
+uses them can be answered as free when it is busy:
+
+- Free-busy treats times with a zone (`DTSTART;TZID=...`) and floating times as
+  UTC. An event at 08:00 in Bogota or Madrid is read as 08:00 UTC, so it is
+  placed hours away from where it is, and a `UNTIL` in local time is compared
+  as UTC. Clients write most timed events this way. Resolving the zone needs a
+  time zone database, which the server does not carry.
+- A `RDATE` with a `PERIOD` value uses the length of the event, not the length
+  of the period.
+- `EXDATE`, `STATUS:CANCELLED`, `TRANSP:TRANSPARENT` and `RECURRENCE-ID`
+  overrides are ignored: an excluded, cancelled or moved occurrence still
+  counts as busy (the safe side).
+- A `UNTIL` given as a date, for an event that starts at a time of day, ends
+  the series at the start of that date.
+
+Rules the server does not evaluate (`BYSETPOS`, `BYWEEKNO`, `BYYEARDAY`, time
+parts, frequencies finer than a day, `YEARLY` with `BYDAY` and no `BYMONTH`) are
+refused with `403` when their event can reach the range asked for, never
+answered as free.

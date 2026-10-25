@@ -120,3 +120,70 @@ fn a_damaged_log_is_not_parsed() {
 	assert_eq!(log.highest(), 5);
 	assert_eq!(Log::parse(&log.render()), Some(log));
 }
+
+#[tokio::test]
+async fn one_collections_log_lock_does_not_hold_up_another() {
+	use std::time::Duration;
+	let busy = collection();
+	let other = collection();
+	let held = super::lock_for_tests(busy.path()).await;
+	tokio::time::timeout(
+		Duration::from_secs(5),
+		record(other.path(), &[("a.ics".into(), false)]),
+	)
+	.await
+	.expect("another collection's log is not blocked");
+	let same = tokio::time::timeout(
+		Duration::from_millis(150),
+		record(busy.path(), &[("a.ics".into(), false)]),
+	)
+	.await;
+	assert!(same.is_err(), "writers of one log stay serialised");
+	drop(held);
+	record(busy.path(), &[("b.ics".into(), false)]).await;
+	let log = load(busy.path()).await.expect("log");
+	assert_eq!(sequence_of(&log.token()), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_records_get_distinct_sequences() {
+	let dir = collection();
+	let path = std::sync::Arc::new(dir.path().to_path_buf());
+	let mut writes = tokio::task::JoinSet::new();
+	for n in 0..24 {
+		let path = std::sync::Arc::clone(&path);
+		writes.spawn(async move { record(&path, &[(format!("{n}.ics"), false)]).await });
+	}
+	while let Some(done) = writes.join_next().await {
+		done.expect("write task");
+	}
+	let log = load(dir.path()).await.expect("log");
+	assert_eq!(sequence_of(&log.token()), 24, "no write overwrote another");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_loads_of_a_new_log_agree_on_it() {
+	let dir = collection();
+	let path = std::sync::Arc::new(dir.path().to_path_buf());
+	let mut reads = tokio::task::JoinSet::new();
+	for _ in 0..16 {
+		let path = std::sync::Arc::clone(&path);
+		reads.spawn(async move { load(&path).await.expect("log").token() });
+	}
+	let mut tokens = std::collections::BTreeSet::new();
+	while let Some(done) = reads.join_next().await {
+		tokens.insert(done.expect("read task"));
+	}
+	assert_eq!(tokens.len(), 1, "one log was created, not one per reader");
+}
+
+#[tokio::test]
+async fn load_waits_for_a_writer_of_the_same_collection() {
+	use std::time::Duration;
+	let dir = collection();
+	let held = super::lock_for_tests(dir.path()).await;
+	let waiting = tokio::time::timeout(Duration::from_millis(150), load(dir.path())).await;
+	assert!(waiting.is_err(), "load takes the collection's lock");
+	drop(held);
+	assert!(load(dir.path()).await.is_some());
+}

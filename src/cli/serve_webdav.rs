@@ -18,7 +18,24 @@ pub(super) fn spawn(
 		.api
 		.as_ref()
 		.map_or(Vec::new(), |a| a.trusted_proxies.clone());
-	let router =
-		crate::webdav::router_with_trusted(directory, config.data_dir.clone(), trusted_proxies);
+	// Same default and same measure as IMAP QUOTA and SMTP delivery. The
+	// configuration already loaded once at start-up, so a failure here means
+	// the key went away since: the listener then fails closed.
+	let crypto = match crate::storage::MessageCrypto::from_config(config.storage.as_ref()) {
+		Ok(crypto) => crypto,
+		Err(error) => return tokio::spawn(async move { Err(std::io::Error::other(error)) }),
+	};
+	let quota_default = config
+		.quota_bytes
+		.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES);
+	let state = crate::webdav::WebDavState {
+		directory,
+		data_dir: config.data_dir.clone(),
+		trusted_proxies,
+		quota_default: 0,
+		crypto: crate::storage::MessageCrypto::disabled(),
+	}
+	.with_quota(quota_default, crypto);
+	let router = crate::webdav::router_for(state);
 	super::serve_tasks::serve_http(listener, router, http_limits)
 }

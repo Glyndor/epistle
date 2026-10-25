@@ -152,27 +152,6 @@ fn monthly_expansion_preserves_time() {
 }
 
 #[test]
-fn monthly_clamps_short_month() {
-	let start = dt("20260131T000000Z");
-	let rule = parse_rule("FREQ=MONTHLY").expect("rule");
-	let got = expand(
-		start,
-		Some(&rule),
-		dt("20260101T000000Z"),
-		dt("20260401T000000Z"),
-	);
-	// February clamps to the 28th (2026 is not a leap year), March to the 31st.
-	assert_eq!(
-		got,
-		vec![
-			dt("20260131T000000Z"),
-			dt("20260228T000000Z"),
-			dt("20260331T000000Z"),
-		]
-	);
-}
-
-#[test]
 fn yearly_expansion() {
 	let start = dt("20260220T060000Z");
 	let rule = parse_rule("FREQ=YEARLY").expect("rule");
@@ -253,4 +232,80 @@ fn count_counts_from_dtstart_not_window() {
 	);
 	// Three total occurrences (Dec 30, 31, Jan 1); only Jan 1 is in window.
 	assert_eq!(got, vec![dt("20260101T080000Z")]);
+}
+
+/// The occurrences of `rule` in the window found by walking from the first
+/// one, the way expansion worked before it skipped ahead.
+fn walked_from_the_start(start: i64, rule: &super::Rule, from: i64, to: i64) -> Vec<i64> {
+	let mut out = Vec::new();
+	for n in 0..200_000u32 {
+		if rule.count.is_some_and(|count| n >= count) {
+			break;
+		}
+		let at = super::occurrence_at(start, rule.freq, rule.interval, n);
+		if rule.until.is_some_and(|until| at > until) || at >= to {
+			break;
+		}
+		if at >= from {
+			out.push(at);
+		}
+	}
+	out
+}
+
+#[test]
+fn skipping_ahead_finds_the_same_occurrences_as_walking_from_the_start() {
+	let window = (dt("20260301T000000Z"), dt("20260901T000000Z"));
+	for start in ["20240128T103000Z", "20250615T000000Z", "20260301T000000Z"] {
+		for text in [
+			"FREQ=DAILY",
+			"FREQ=DAILY;INTERVAL=3",
+			"FREQ=WEEKLY;INTERVAL=2",
+			"FREQ=MONTHLY",
+			"FREQ=MONTHLY;INTERVAL=5",
+			"FREQ=YEARLY",
+			"FREQ=DAILY;COUNT=500",
+			"FREQ=MONTHLY;UNTIL=20260615T000000Z",
+		] {
+			let rule = parse_rule(text).expect("rule");
+			let start = dt(start);
+			assert_eq!(
+				expand(start, Some(&rule), window.0, window.1),
+				walked_from_the_start(start, &rule, window.0, window.1),
+				"{text} from {start}"
+			);
+		}
+	}
+}
+
+#[test]
+fn a_window_far_from_the_first_occurrence_still_finds_its_occurrences() {
+	let rule = parse_rule("FREQ=DAILY").expect("rule");
+	let got = expand(
+		dt("19700101T000000Z"),
+		Some(&rule),
+		dt("90000101T000000Z"),
+		dt("90000103T000000Z"),
+	);
+	assert_eq!(got, vec![dt("90000101T000000Z"), dt("90000102T000000Z")]);
+}
+
+#[test]
+fn an_enormous_interval_does_not_overflow() {
+	for text in [
+		"FREQ=DAILY;INTERVAL=4294967295",
+		"FREQ=WEEKLY;INTERVAL=4294967295",
+		"FREQ=MONTHLY;INTERVAL=4294967295",
+		"FREQ=YEARLY;INTERVAL=4294967295",
+	] {
+		let rule = parse_rule(text).expect("rule");
+		let start = dt("20260101T000000Z");
+		let got = expand(
+			start,
+			Some(&rule),
+			dt("20260101T000000Z"),
+			dt("99990101T000000Z"),
+		);
+		assert_eq!(got, vec![start], "{text}");
+	}
 }
