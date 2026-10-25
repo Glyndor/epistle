@@ -11,6 +11,8 @@ pub(super) struct Budget {
 	pub(super) total_limit: usize,
 	mailbox: usize,
 	total: usize,
+	/// When the whole run has to stop, for the steps that do not await.
+	pub(super) deadline: Option<std::time::Instant>,
 }
 
 impl Default for Budget {
@@ -20,11 +22,22 @@ impl Default for Budget {
 			total_limit: 64 * 1024 * 1024,
 			mailbox: 0,
 			total: 0,
+			deadline: None,
 		}
 	}
 }
 
 impl Budget {
+	/// Stop a synchronous step once the run's total deadline has passed. The
+	/// timeout around the run only fires where the run awaits, which a scan of
+	/// the local mailbox never does.
+	pub(super) fn check_deadline(&self) -> Result<(), super::MigrateError> {
+		match self.deadline {
+			Some(at) if std::time::Instant::now() >= at => Err(super::MigrateError::Timeout),
+			_ => Ok(()),
+		}
+	}
+
 	pub(super) fn next_mailbox(&mut self) {
 		self.mailbox = 0;
 	}

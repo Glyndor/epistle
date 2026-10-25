@@ -21,6 +21,8 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     run resumed after an interruption does not bring back a message the user
     deleted or moved in the local mailbox, and an unreadable ledger stops the
     run with a message instead of importing anything again.
+  * migrate imap: resuming a large folder does much less disk work, and the
+    total deadline also stops the scan of the local mailbox between messages.
   * Clock: `epistle status` gains an external clock probe that compares
     three independent time sources, reports how many of them answered over
     NTS, and decides the verdict from the worst of them rather than from a

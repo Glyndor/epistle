@@ -185,3 +185,75 @@ fn recovery_accepts_seventy_thousand_messages_with_bounded_metadata() {
 		assert!(!index.claim(&key(b"a")).unwrap());
 	}
 }
+
+#[test]
+fn a_recovery_scan_synchronizes_the_directories_once_not_once_per_message() {
+	use crate::migrate::imap::durability::tests;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = MessageCrypto::disabled();
+	for n in 0..40 {
+		let body = format!("Message-ID: <{n}@b>\r\n\r\none");
+		crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], body.as_bytes(), &crypto)
+			.expect("append");
+	}
+	let _guard = tests::begin(None);
+	Index::scan(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crypto,
+		&mut Budget::default(),
+		1024,
+		true,
+	)
+	.expect("scan");
+	let events = tests::events();
+	let count = |kind| events.iter().filter(|event| **event == kind).count();
+	assert_eq!(count("message"), 40, "every message body is synchronized");
+	assert_eq!(count("mailbox-directory"), 1, "{events:?}");
+	assert!(count("mailbox-parent") >= 1, "{events:?}");
+	assert!(
+		events.len() < 40 * 3 + 10,
+		"{} barriers for 40 messages",
+		events.len()
+	);
+}
+
+#[test]
+fn a_scan_stops_at_the_total_deadline_instead_of_finishing_the_mailbox() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = MessageCrypto::disabled();
+	crate::imap::mailbox::append(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&[],
+		b"Subject: x\r\n\r\none",
+		&crypto,
+	)
+	.expect("append");
+	let mut budget = Budget::default();
+	budget.deadline = Some(std::time::Instant::now());
+	let result = Index::scan(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crypto,
+		&mut budget,
+		1024,
+		false,
+	);
+	assert!(matches!(result, Err(MigrateError::Timeout)), "{result:?}");
+	let mut budget = Budget::default();
+	budget.deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(3600));
+	Index::scan(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crypto,
+		&mut budget,
+		1024,
+		false,
+	)
+	.expect("a deadline in the future lets the scan finish");
+}

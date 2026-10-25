@@ -51,3 +51,17 @@ fn scratch_storage_is_private_unlinked_and_rejects_linked_roots() {
 	std::os::unix::fs::symlink(dir.path(), &link).unwrap();
 	assert!(root(&link).is_err());
 }
+
+#[test]
+fn reading_state_for_a_dry_run_creates_nothing_but_still_checks_the_owner() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = root(dir.path()).unwrap();
+	let error = directory(&root, "alice", false).unwrap_err();
+	assert_eq!(error.kind(), io::ErrorKind::NotFound);
+	assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+	directory(&root, "alice", true).unwrap();
+	let existing = directory(&root, "alice", false).unwrap();
+	let owner = existing.metadata().unwrap().uid();
+	directory_as(&root, "alice", false, owner).unwrap();
+	assert!(directory_as(&root, "alice", false, owner.wrapping_add(1)).is_err());
+}

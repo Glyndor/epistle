@@ -65,6 +65,22 @@ pub(super) struct Ledger {
 	last: u32,
 	at: u64,
 	current: Option<(u32, Fingerprint)>,
+	/// Records read ahead of the cursor in one positional read, so walking
+	/// the file in UID order costs one read per window and not one per record.
+	window: Vec<u8>,
+	window_from: u64,
+}
+
+/// Records the cursor walks over before a lookup gives up and searches.
+const NEAR: u32 = 64;
+
+/// Records read ahead at once, which is the workspace charged at open.
+const WINDOW_RECORDS: u64 = WORKSPACE as u64 / RECORD;
+
+#[cfg(test)]
+thread_local! {
+	/// Positional reads of the ledger file by this thread, for the tests.
+	pub(super) static READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl Ledger {
@@ -81,6 +97,8 @@ impl Ledger {
 			last: 0,
 			at: 0,
 			current: None,
+			window: Vec::new(),
+			window_from: 0,
 		}
 	}
 
@@ -103,25 +121,42 @@ impl Ledger {
 	}
 
 	/// The fingerprint held for `uid`, `None` when it is not confirmed. A UID
+	/// above the last one confirmed is answered without reading. A UID
 	/// above the cursor moves it with a binary search over the records, so a
-	/// lookup reads a few records and never the whole file; a UID below the
+	/// lookup reads a few records and never the whole file, and a UID that
+	/// follows the last one answered is found by walking the records read
+	/// ahead, not by searching again; a UID below the
 	/// cursor is answered where the cursor already is, so it is one an earlier
 	/// call in the same window asked for or one the file does not hold.
 	pub(super) fn fingerprint(&mut self, uid: u32) -> io::Result<Option<Fingerprint>> {
 		if self.count == 0 {
 			return Ok(None);
 		}
-		if !self
-			.current
-			.as_ref()
-			.is_some_and(|(current, _)| *current >= uid)
-		{
-			self.at = self.lower_bound(uid)?;
-			self.load()?;
+		// Nothing above the last confirmed UID is held, which is every UID
+		// of a resume, so those answer without touching the file. The cursor
+		// ends past the records, as if it had walked there.
+		if uid > self.last {
+			self.at = self.count;
+			self.current = None;
+			return Ok(None);
 		}
-		while self.current.is_some_and(|(current, _)| current < uid) {
-			self.at += 1;
-			self.load()?;
+		if !self.current.is_some_and(|(current, _)| current >= uid) {
+			// The next UID of a replay is almost always the next record, so
+			// walk a few before paying for a binary search.
+			let mut past_end = false;
+			if self.current.is_some() {
+				let mut steps = 0;
+				while steps < NEAR && self.current.is_some_and(|(current, _)| current < uid) {
+					self.at += 1;
+					self.load()?;
+					steps += 1;
+				}
+				past_end = self.current.is_none();
+			}
+			if !past_end && !self.current.is_some_and(|(current, _)| current >= uid) {
+				self.at = self.lower_bound(uid)?;
+				self.load()?;
+			}
 		}
 		Ok(self
 			.current
@@ -133,7 +168,7 @@ impl Ledger {
 	/// Read the record the cursor is on, unless it is past the end.
 	fn load(&mut self) -> io::Result<()> {
 		self.current = if self.at < self.count {
-			Some(self.record(self.at)?)
+			Some(self.ahead(self.at)?)
 		} else {
 			None
 		};
@@ -154,22 +189,50 @@ impl Ledger {
 		Ok(low)
 	}
 
-	/// The record at `index`, whose checksum must hold.
-	fn record(&self, index: u64) -> io::Result<(u32, Fingerprint)> {
-		let offset = index
+	/// Where record `index` starts.
+	fn offset(index: u64) -> io::Result<u64> {
+		index
 			.checked_mul(RECORD)
 			.and_then(|offset| offset.checked_add(HEADER))
-			.ok_or_else(|| io::Error::other("invalid migration ledger offset"))?;
-		let mut bytes = [0u8; RECORD as usize];
+			.ok_or_else(|| io::Error::other("invalid migration ledger offset"))
+	}
+
+	/// One positional read of the file, a short file being a corrupt one.
+	fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<()> {
+		#[cfg(test)]
+		READS.with(|reads| reads.set(reads.get() + 1));
 		self.handle()?
-			.read_exact_at(&mut bytes, offset)
+			.read_exact_at(buffer, offset)
 			.map_err(|error| match error.kind() {
 				io::ErrorKind::UnexpectedEof => {
 					corrupt(&self.path, "it is shorter than it was read as")
 				}
 				_ => error,
-			})?;
+			})
+	}
+
+	/// The record at `index`, whose checksum must hold.
+	fn record(&self, index: u64) -> io::Result<(u32, Fingerprint)> {
+		let mut bytes = [0u8; RECORD as usize];
+		self.read_at(&mut bytes, Self::offset(index)?)?;
 		decode(&bytes).map_err(|_| corrupt(&self.path, "a record does not match its checksum"))
+	}
+
+	/// The record at `index` out of the read-ahead window, which a read
+	/// refills from that record on when the index lies outside it.
+	fn ahead(&mut self, index: u64) -> io::Result<(u32, Fingerprint)> {
+		let held = self.window.len() as u64 / RECORD;
+		if index < self.window_from || index >= self.window_from + held {
+			let records = (self.count - index).min(WINDOW_RECORDS);
+			let mut window = std::mem::take(&mut self.window);
+			window.resize((records * RECORD) as usize, 0);
+			self.read_at(&mut window, Self::offset(index)?)?;
+			self.window = window;
+			self.window_from = index;
+		}
+		let start = ((index - self.window_from) * RECORD) as usize;
+		decode(&self.window[start..start + RECORD as usize])
+			.map_err(|_| corrupt(&self.path, "a record does not match its checksum"))
 	}
 
 	fn handle(&self) -> io::Result<&File> {
@@ -188,6 +251,11 @@ impl Ledger {
 	fn prepare(&mut self) -> io::Result<()> {
 		let file = self.handle()?.try_clone()?;
 		let length = file.metadata()?.len();
+		// Nothing here appends past the bound, and the whole file is read
+		// next, so a larger one is refused before that read starts.
+		if length > MAX_LEDGER_BYTES {
+			return Err(too_large(&self.path));
+		}
 		let mut head = [0u8; HEADER as usize];
 		if length < HEADER || file.read_exact_at(&mut head, 0).is_err() {
 			return Err(corrupt(&self.path, "its header is incomplete"));
@@ -320,6 +388,7 @@ impl Ledger {
 		self.last = records[records.len() - 1].0;
 		self.at = self.count;
 		self.current = None;
+		self.window.clear();
 		Ok(())
 	}
 
@@ -364,6 +433,7 @@ impl Ledger {
 		self.last = 0;
 		self.at = 0;
 		self.current = None;
+		self.window.clear();
 		Ok(())
 	}
 }
@@ -409,6 +479,8 @@ pub(super) fn open(
 		last: 0,
 		at: 0,
 		current: None,
+		window: Vec::new(),
+		window_from: 0,
 	};
 	if ledger.read.is_none() {
 		return Ok(ledger);
@@ -520,3 +592,7 @@ fn rewritten(path: &Path) -> io::Error {
 #[cfg(test)]
 #[path = "ledger_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ledger_lookup_tests.rs"]
+mod lookup_tests;

@@ -101,6 +101,13 @@ pub(super) fn root(path: &Path) -> io::Result<File> {
 
 /// Open every state directory without following links. Create private children only for a save.
 pub(super) fn directory(root: &File, account: &str, create: bool) -> io::Result<File> {
+	// SAFETY: geteuid has no arguments or memory access requirements.
+	directory_as(root, account, create, unsafe { libc::geteuid() })
+}
+
+/// `directory` for an expected owner, so the owner check can be exercised
+/// without a second user.
+fn directory_as(root: &File, account: &str, create: bool, uid: u32) -> io::Result<File> {
 	let mut dir = root.try_clone()?;
 	for child in ["migrate", account] {
 		let child = name(child.as_ref())?;
@@ -113,7 +120,7 @@ pub(super) fn directory(root: &File, account: &str, create: bool) -> io::Result<
 			super::durability::sync(&dir, "state-parent")?;
 		}
 		dir = open_at(&dir, &child, libc::O_RDONLY | libc::O_DIRECTORY)?;
-		owned(&dir, true)?;
+		owned_by(&dir, true, uid)?;
 	}
 	Ok(dir)
 }
