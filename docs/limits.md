@@ -20,8 +20,11 @@ about that change:
   deviation is visible in the audit trail alongside the saved value.
 - `must` (a MUST): the standard makes the floor mandatory. The operator may
   raise the value, but `limits set` refuses anything below the floor and
-  leaves the file as it was, and a configuration file with a value below it
-  does not load.
+  leaves the file as it was (`0` is accepted and means the default). A
+  configuration file that already holds a value below it still loads: the
+  value is raised to the floor, with a warning that names the value in the
+  file and the one in use, in the log, in `epistle config-check` and in
+  `epistle status`.
 - `fixed`: the value is hard-coded in the server. `limits show` lists it so
   the operator sees what the server enforces, but `limits set` has no path
   to change it.

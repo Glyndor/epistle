@@ -46,6 +46,11 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		summary.push_str(detail);
 		items.push(Item::new("DNS token", Level::Warn, detail));
 	}
+	for line in &config.adjusted {
+		summary.push_str("; ");
+		summary.push_str(line);
+		items.push(Item::new("raised value", Level::Warn, line.clone()));
+	}
 	AreaReport::from_items(items, summary)
 }
 

@@ -52,6 +52,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// reused by `config-check` and `verify-dns`.
 	super::serve_tasks::log_single_signature_dkim_warning(&config);
 	super::serve_connection_limits::log_retry_schedule_warnings(&config);
+	super::serve_connection_limits::log_adjusted_values(&config);
 	if config.listeners.is_empty() {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());

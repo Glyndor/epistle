@@ -86,17 +86,35 @@ fn a_message_size_below_64k_is_refused_and_the_file_is_not_touched() {
 }
 
 #[test]
-fn a_configured_message_size_below_64k_does_not_load() {
+fn a_configured_message_size_below_64k_is_raised_to_it_with_a_warning() {
 	let (_dir, file) = super::tests_config::config_file();
 	let text = std::fs::read_to_string(file.path()).expect("config");
 	std::fs::write(file.path(), format!("max_message_size = 1000\n{text}")).expect("write");
-	let error = crate::config::Config::load(file.path()).expect_err("below the MUST");
-	let error = error.to_string();
-	assert!(error.contains("RFC 5321 §4.5.3.1.7"), "{error}");
+	let config = crate::config::Config::load(file.path()).expect("it still loads");
+	assert_eq!(config.max_message_size, Some(65536));
+	let [line] = config.adjusted.as_slice() else {
+		panic!("one line expected: {:?}", config.adjusted)
+	};
+	assert!(line.contains("1000 bytes"), "the value in the file: {line}");
 	assert!(
-		error.contains("epistle limits set max-message-size 64k"),
-		"the error names the fix: {error}"
+		line.contains("65536 bytes are used"),
+		"the value in use: {line}"
 	);
+	assert!(
+		line.contains("epistle limits set max-message-size 64k"),
+		"the fix: {line}"
+	);
+}
+
+#[test]
+fn a_message_size_of_zero_or_at_the_floor_is_not_adjusted() {
+	for value in ["0", "65536", "26214400"] {
+		let (_dir, file) = super::tests_config::config_file();
+		let text = std::fs::read_to_string(file.path()).expect("config");
+		std::fs::write(file.path(), format!("max_message_size = {value}\n{text}")).expect("write");
+		let config = crate::config::Config::load(file.path()).expect("loads");
+		assert!(config.adjusted.is_empty(), "{value}: {:?}", config.adjusted);
+	}
 }
 
 #[test]
