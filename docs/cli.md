@@ -1301,7 +1301,10 @@ What this build does:
   `password_file` (`-` reads it from stdin); it is never written in the
   answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
   of every domain become aliases of that account, so `config-check` no longer
-  warns about the missing `postmaster@` (RFC 5321) address;
+  warns about the missing `postmaster@` (RFC 5321) address. The alias is
+  written in the form the server stores, so a domain given with non-ASCII
+  letters appears in punycode (`postmaster@xn--...`), and an address that an
+  account or a masked address already holds is left alone;
 - prints the plan before the confirmation, and a report on stderr listing what
   was reused, what was written, and what was skipped; the report is also
   printed when a later step fails, so the operator can see what is already

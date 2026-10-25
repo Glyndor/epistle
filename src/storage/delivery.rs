@@ -192,17 +192,15 @@ impl LocalDelivery {
 		// hook fires once per matching report even when an alias fans out to
 		// several accounts.
 		let mut ingested = reports::Ingested::new();
+		let mut listed = lists::ListedCopies::new(message);
 		for (account, (delivered_to, list)) in &accounts {
 			// Mailing list: the copies of the accounts the list reaches
 			// carry that list's `List-*` headers; every other copy is the
 			// message as it came.
-			let listed = list
-				.as_ref()
-				.map(|headers| lists::listed_message(message, headers));
 			let one = self.deliver_for_account(
 				account,
 				delivered_to,
-				listed.as_ref().unwrap_or(message),
+				listed.for_list(list.as_deref()),
 				mailbox,
 				&mut ingested,
 			)?;

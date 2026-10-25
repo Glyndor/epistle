@@ -7,6 +7,11 @@ use crate::smtp::directory::AliasSpec;
 
 /// `team` reaches alice and bob, `announce` reaches carol. Both are lists.
 fn directory_with_lists() -> DirectoryHandle {
+	directory_with_announce(&["carol@example.org"])
+}
+
+/// The same two lists with `announce` reaching `members`.
+fn directory_with_announce(members: &[&str]) -> DirectoryHandle {
 	DirectoryHandle::new(
 		crate::smtp::directory::Directory::new(
 			["example.org".to_string()],
@@ -32,7 +37,7 @@ fn directory_with_lists() -> DirectoryHandle {
 			(
 				"announce@example.org".to_string(),
 				AliasSpec {
-					members: vec!["carol@example.org".to_string()],
+					members: members.iter().map(|member| member.to_string()).collect(),
 					senders: Vec::new(),
 					hidden: true,
 					list_id: Some("announce.example.org".to_string()),
@@ -116,6 +121,55 @@ fn a_member_addressed_directly_keeps_the_plain_message() {
 
 	// Bob is a member of the list and was also addressed directly: the
 	// copy he receives is his own mail, not a post of the list.
+	let bob = copy(dir.path(), "bob");
+	assert!(!bob.contains("List-Id"), "{bob}");
+	let alice = copy(dir.path(), "alice");
+	assert!(alice.contains("List-Id: <team.example.org>"), "{alice}");
+}
+
+/// Alice is a member of both lists and one envelope names both. She gets one
+/// copy, with the identity of the first list in the envelope and none of the
+/// other: the order of the recipients decides, so it is pinned in both
+/// directions.
+#[test]
+fn a_member_of_two_lists_gets_one_copy_with_the_first_list_of_the_envelope() {
+	for (order, kept, dropped) in [
+		(
+			["team@example.org", "announce@example.org"],
+			"team.example.org",
+			"announce.example.org",
+		),
+		(
+			["announce@example.org", "team@example.org"],
+			"announce.example.org",
+			"team.example.org",
+		),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let directory = directory_with_announce(&["alice@example.org", "carol@example.org"]);
+		let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
+		delivery
+			.deliver_routed(&message_to(&order), None)
+			.expect("deliver");
+
+		let alice = copy(dir.path(), "alice");
+		assert!(
+			alice.contains(&format!("List-Id: <{kept}>")),
+			"{order:?}: {alice}"
+		);
+		assert!(!alice.contains(dropped), "{order:?}: {alice}");
+	}
+}
+
+/// The direct address wins also when it comes first in the envelope.
+#[test]
+fn a_member_addressed_directly_before_the_list_keeps_the_plain_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = LocalDelivery::new(dir.path(), directory_with_lists()).expect("delivery");
+	delivery
+		.deliver_routed(&message_to(&["bob@example.org", "team@example.org"]), None)
+		.expect("deliver");
+
 	let bob = copy(dir.path(), "bob");
 	assert!(!bob.contains("List-Id"), "{bob}");
 	let alice = copy(dir.path(), "alice");
