@@ -238,9 +238,23 @@ pub enum ApiKeyCli {
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(value_name = "LABEL")]
 		label: String,
-		/// Optional expiry as Unix epoch seconds.
-		#[arg(long, value_name = "EPOCH")]
+		/// Optional expiry: Unix epoch seconds, a date (`2027-01-31`, midnight
+		/// UTC), an RFC 3339 instant or a duration from now such as `90d`.
+		#[arg(
+			long,
+			value_name = "WHEN",
+			value_parser = super::api_keys_expiry::parse_expires_at,
+		)]
 		expires_at: Option<u64>,
+		/// Optional expiry as a duration from now: a number and a unit
+		/// (`s`, `m`, `h`, `d`, `w`), for example `90d`.
+		#[arg(
+			long,
+			value_name = "DURATION",
+			conflicts_with = "expires_at",
+			value_parser = super::api_keys_expiry::parse_expires_in,
+		)]
+		expires_in: Option<u64>,
 		/// Optional single-CIDR client-IP allowlist.
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
@@ -302,6 +316,7 @@ pub(super) fn run(
 		ApiKeyCli::Create {
 			label,
 			expires_at,
+			expires_in,
 			ip_cidr,
 			scopes,
 			domains,
@@ -313,7 +328,7 @@ pub(super) fn run(
 				config,
 				NewKey {
 					label,
-					expires_at,
+					expires_at: expires_at.or(expires_in),
 					ip_cidr,
 					scopes,
 					domains,
@@ -377,10 +392,12 @@ pub(super) fn list(
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
+	let now = super::api_keys_expiry::now_secs();
 	for row in store.list() {
-		let expiry = row
-			.expires_at
-			.map_or_else(|| "never".to_string(), |e| e.to_string());
+		let expiry = row.expires_at.map_or_else(
+			|| "never".to_string(),
+			|expires| super::api_keys_expiry::describe(expires, now),
+		);
 		let cidr = row.ip_cidr.unwrap_or_else(|| "any".to_string());
 		// An empty scope list is a legacy key; show the warning verbatim so
 		// operators can spot it on `api-key list` without grepping the logs.
@@ -471,3 +488,7 @@ mod tests_rotate;
 #[cfg(test)]
 #[path = "api_keys_tests_cidr.rs"]
 mod tests_cidr;
+
+#[cfg(test)]
+#[path = "api_keys_tests_expiry.rs"]
+mod tests_expiry;

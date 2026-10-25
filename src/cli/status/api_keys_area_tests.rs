@@ -160,3 +160,70 @@ async fn malformed_store_warns_without_echoing_stored_values() {
 	let output = format!("{report:?}");
 	assert!(!output.contains("stored-hash-must-not-leak"));
 }
+
+fn now() -> u64 {
+	crate::cli::api_keys_expiry::now_secs()
+}
+
+fn warnings(body: &str) -> Vec<String> {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("api_keys.toml"), body).expect("write API key store");
+	let store = crate::api::api_keys::ApiKeyStore::open(dir.path()).expect("open");
+	super::evaluate(&store, dir.path(), now())
+		.items
+		.into_iter()
+		.map(|item| item.detail)
+		.collect()
+}
+
+#[test]
+fn a_key_that_expires_within_two_weeks_warns_with_the_days_left() {
+	let soon = format!("expires_at = {}\n", now() + 3 * 86_400);
+	let details = warnings(&key("ci", &soon, "scopes = [\"read\"]\n", ""));
+	assert_eq!(details.len(), 1, "{details:?}");
+	assert!(details[0].starts_with("expires in 3 days"), "{details:?}");
+}
+
+#[test]
+fn a_key_that_expires_after_two_weeks_is_quiet() {
+	let later = format!("expires_at = {}\n", now() + 20 * 86_400);
+	assert!(warnings(&key("ci", &later, "scopes = [\"read\"]\n", "")).is_empty());
+}
+
+#[test]
+fn a_key_that_has_expired_warns_with_its_date() {
+	let past = "expires_at = 1700000000\n";
+	let details = warnings(&key("ci", past, "scopes = [\"read\"]\n", ""));
+	assert_eq!(details.len(), 1, "{details:?}");
+	assert_eq!(details[0], "expired on 2023-11-14T22:13:20Z");
+}
+
+#[test]
+fn a_legacy_key_with_every_scope_warns_of_its_reach() {
+	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
+	let details = warnings(&key("old", &later, "", ""));
+	assert_eq!(details.len(), 1, "{details:?}");
+	assert!(details[0].contains("every scope"), "{details:?}");
+}
+
+#[test]
+fn a_send_or_write_key_without_domain_account_or_cidr_warns() {
+	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
+	for scope in ["send", "write"] {
+		let scopes = format!("scopes = [\"{scope}\"]\n");
+		let details = warnings(&key("mailer", &later, &scopes, ""));
+		assert_eq!(details.len(), 1, "{scope}: {details:?}");
+		assert!(details[0].contains("every domain"), "{details:?}");
+	}
+}
+
+#[test]
+fn a_send_key_that_names_a_domain_or_a_network_is_quiet() {
+	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
+	let scopes = "scopes = [\"send\"]\n";
+	assert!(warnings(&key("a", &later, scopes, "domains = [\"example.org\"]\n")).is_empty());
+	let cidr = format!("{later}ip_cidr = \"10.0.0.0/24\"\n");
+	assert!(warnings(&key("b", &cidr, scopes, "")).is_empty());
+	let account = "account = \"bob\"\n";
+	assert!(warnings(&key("c", &later, scopes, account)).is_empty());
+}
