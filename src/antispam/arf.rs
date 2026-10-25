@@ -115,7 +115,7 @@ Content-Type: message/rfc822\r\n\
 	AcceptedMessage {
 		reverse_path: String::new(),
 		recipients: vec![report.report_to.to_string()],
-		data: body.into_bytes(),
+		data: crate::util::header_block::frame_generated(body.into_bytes()),
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
@@ -126,7 +126,15 @@ Content-Type: message/rfc822\r\n\
 
 /// The reported message, truncated to a sane size for embedding.
 fn embed(message: &[u8]) -> String {
-	let end = message.len().min(MAX_EMBEDDED);
+	let cut = &message[..message.len().min(MAX_EMBEDDED)];
+	// Cut on a whole line unless the message fits.
+	let end = match cut.len() == message.len() {
+		true => cut.len(),
+		false => cut
+			.iter()
+			.rposition(|byte| *byte == b'\n')
+			.map_or(0, |at| at + 1),
+	};
 	String::from_utf8_lossy(&message[..end]).to_string()
 }
 
@@ -450,3 +458,7 @@ human only\r\n\
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "arf_tests_framing.rs"]
+mod tests_framing;

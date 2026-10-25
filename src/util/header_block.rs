@@ -100,6 +100,33 @@ pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 	std::borrow::Cow::Owned(normalized)
 }
 
+/// A message the server wrote itself, from parts that came from outside,
+/// made fit to queue: no NUL, every line ending a `CRLF` (a lone `CR` or
+/// `LF`, such as one a cut left at its end, becomes one) and a final one.
+/// Unlike a message a user submitted, which is refused when it holds such a
+/// byte, a generated one must not be lost over what it quotes.
+pub(crate) fn frame_generated(data: Vec<u8>) -> Vec<u8> {
+	if !has_unframed_byte(&data) {
+		return outbound_crlf(&data).into_owned();
+	}
+	let mut framed = Vec::with_capacity(data.len() + 2);
+	let mut bytes = data.into_iter().peekable();
+	while let Some(byte) = bytes.next() {
+		match byte {
+			0 => {}
+			b'\r' => {
+				framed.extend_from_slice(b"\r\n");
+				if bytes.peek() == Some(&b'\n') {
+					bytes.next();
+				}
+			}
+			b'\n' => framed.extend_from_slice(b"\r\n"),
+			other => framed.push(other),
+		}
+	}
+	outbound_crlf(&framed).into_owned()
+}
+
 /// The lines of a header block, each without its terminator.
 pub fn lines(block: &[u8]) -> impl Iterator<Item = &[u8]> {
 	block.split_inclusive(|b| *b == b'\n').map(unterminated)

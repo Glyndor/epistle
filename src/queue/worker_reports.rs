@@ -487,8 +487,12 @@ impl Worker {
 				&entry.data,
 				std::time::SystemTime::now(),
 				self.auto_submitted,
-			) {
-			self.send_report(id, message, "bounce");
+			) && !self.send_report(id, message, "bounce")
+		{
+			// Not marked reported: the next pass builds and sends it again.
+			return Err(std::io::Error::other(
+				"the failure report was not queued; it is retried",
+			));
 		}
 		self.spool.update_envelope(id, |envelope| {
 			for recipient in &unreported {
@@ -521,7 +525,8 @@ impl Worker {
 				std::time::SystemTime::now(),
 				self.auto_submitted,
 			) {
-			self.send_report(id, message, "delay warning");
+			// The warning is advisory and attempted once, whatever came of it.
+			let _ = self.send_report(id, message, "delay warning");
 		}
 		// Mark warned regardless, so it is attempted at most once.
 		if let Err(error) = self.spool.mark_delay_warned(id) {
@@ -529,20 +534,27 @@ impl Worker {
 		}
 	}
 
-	/// Hand a generated report to the bounce sink.
+	/// Hand a generated report to the bounce sink. `false` when the sink
+	/// refused it, so the caller can try again; a missing sink is a choice
+	/// of the configuration and counts as done.
 	fn send_report(
 		&self,
 		id: uuid::Uuid,
 		message: crate::smtp::session::AcceptedMessage,
 		what: &str,
-	) {
+	) -> bool {
 		match &self.bounce_sink {
-			Some(sink) => {
-				if let Err(error) = sink.deliver(message) {
+			Some(sink) => match sink.deliver(message) {
+				Ok(()) => true,
+				Err(error) => {
 					tracing::warn!(%id, %error, what, "report delivery failed");
+					false
 				}
+			},
+			None => {
+				tracing::warn!(%id, what, "dropping report: no bounce sink configured");
+				true
 			}
-			None => tracing::warn!(%id, what, "dropping report: no bounce sink configured"),
 		}
 	}
 }

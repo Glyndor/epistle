@@ -20,6 +20,7 @@ mod ldap;
 mod listener;
 mod mta_sts;
 mod oauth;
+mod oauth_pair;
 mod otel;
 mod privileges;
 mod queue;

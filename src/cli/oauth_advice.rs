@@ -4,11 +4,31 @@
 
 use crate::config::Config;
 
-/// The advisories about `[oauth]`, in the order they print. Empty without
-/// the section, and for the built-in authorization server, whose tokens carry
-/// the account and come after the second factor.
+/// Whether `[oauth]` names an external provider: the section is there and
+/// has no signing key of its own.
+fn external(config: &Config) -> Option<&crate::config::Oauth> {
+	config
+		.oauth
+		.as_ref()
+		.filter(|oauth| oauth.signing_key.is_none() && oauth.signing_key_file.is_none())
+}
+
+/// What an external provider has to do for its users to get in, as a line to
+/// read and not a fault to fix: the provider may well emit the claim.
+pub(super) fn notice(config: &Config) -> Option<String> {
+	external(config)
+		.filter(|oauth| !oauth.allow_unverified_email)
+		.map(|_| {
+			"[oauth] bearer sign-in takes the address from the email claim and needs email_verified to be true; if the provider does not emit it, the log says so on the first refused token and allow_unverified_email = true accepts it"
+				.to_string()
+		})
+}
+
+/// The warnings about `[oauth]`, in the order they print. Empty without an
+/// external provider: the built-in authorization server's tokens carry the
+/// account and come after the second factor.
 pub(super) fn advice(config: &Config) -> Vec<String> {
-	if config.oauth.is_none() {
+	if external(config).is_none() {
 		return Vec::new();
 	}
 	let store = crate::directory_store::AccountStore::open(
@@ -17,14 +37,21 @@ pub(super) fn advice(config: &Config) -> Vec<String> {
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	);
-	let two_factor = store.map_or(0, |store| {
-		store
-			.dynamic_accounts()
-			.iter()
-			.filter(|account| account.totp_secret.is_some())
-			.count()
-	});
-	advice_for(config, two_factor)
+	match store {
+		// The directory enforces a TOTP secret only for the accounts of the
+		// account store, which is where every secret lives.
+		Ok(store) => advice_for(
+			config,
+			store
+				.dynamic_accounts()
+				.iter()
+				.filter(|account| account.totp_secret.is_some())
+				.count(),
+		),
+		Err(error) => vec![format!(
+			"[oauth] the account store cannot be read ({error}), so accounts with a TOTP secret, which cannot sign in with a bearer token, are not counted"
+		)],
+	}
 }
 
 /// Build the verifier of `[oauth]` and say the advisories in the log, once
@@ -33,6 +60,9 @@ pub(super) async fn build_and_say(
 	config: &Config,
 ) -> std::io::Result<Option<std::sync::Arc<crate::oauth::OauthVerifier>>> {
 	let verifier = super::serve_tasks::build_oauth_verifier(config).await?;
+	if let Some(line) = notice(config) {
+		tracing::info!("{line}");
+	}
 	for line in advice(config) {
 		tracing::warn!("{line}");
 	}
@@ -41,25 +71,15 @@ pub(super) async fn build_and_say(
 
 /// [`advice`] for a known number of accounts with a TOTP secret.
 fn advice_for(config: &Config, two_factor: usize) -> Vec<String> {
-	let Some(oauth) = &config.oauth else {
+	let Some(oauth) = external(config) else {
 		return Vec::new();
 	};
-	if oauth.signing_key.is_some() || oauth.signing_key_file.is_some() {
-		return Vec::new();
-	}
-	let mut lines = Vec::new();
-	if !oauth.allow_unverified_email {
-		lines.push(
-			"[oauth] bearer sign-in needs a token whose email_verified claim is true; if the provider does not emit it, sign-ins fail until allow_unverified_email = true is set"
-				.to_string(),
-		);
-	}
 	if two_factor > 0 && !oauth.idp_enforces_second_factor {
-		lines.push(format!(
+		return vec![format!(
 			"[oauth] {two_factor} account(s) have a TOTP secret and cannot sign in with a bearer token; set idp_enforces_second_factor = true only if the provider enforces its own second factor"
-		));
+		)];
 	}
-	lines
+	Vec::new()
 }
 
 #[cfg(test)]

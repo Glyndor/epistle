@@ -496,10 +496,7 @@ impl SplitDelivery {
 	/// it to the body in a single allocation sized to the combined length
 	/// so the body is moved, not copied.
 	fn sign_reply(&self, reply: &mut AcceptedMessage) {
-		if let std::borrow::Cow::Owned(data) = crate::util::header_block::outbound_crlf(&reply.data)
-		{
-			reply.data = data;
-		}
+		reply.data = crate::util::header_block::frame_generated(std::mem::take(&mut reply.data));
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(reply)
 			&& let Some(header) = signer.sign(&domain, &reply.data)
@@ -577,6 +574,10 @@ mod tests_dkim_per_domain;
 #[cfg(test)]
 #[path = "routing_tests_forward.rs"]
 mod tests_forward;
+
+#[cfg(test)]
+#[path = "routing_tests_sign_reply.rs"]
+mod tests_sign_reply;
 
 #[cfg(test)]
 #[path = "routing_tests_vacation.rs"]

@@ -154,11 +154,17 @@ impl OauthVerifier {
 	/// Verify a bearer token and say who it names. A refusal is logged with
 	/// its reason and nothing taken from the token.
 	pub fn verify_identity(&self, token: &str, now_secs: u64) -> Option<Verified> {
-		let Some(claims) = self.validate(token, now_secs) else {
-			tracing::warn!(
-				"bearer token refused: signature, issuer, audience or expiry does not check out"
-			);
-			return None;
+		let claims = match self.validate(token, now_secs) {
+			Ok(claims) => claims,
+			// A client that keeps its old token is routine, not a fault.
+			Err(jwt::JwtError::Expired) => {
+				tracing::info!("bearer token refused: it has expired");
+				return None;
+			}
+			Err(error) => {
+				tracing::warn!("bearer token refused: {}", invalid_reason(&error));
+				return None;
+			}
 		};
 		match self.policy.identity(&claims) {
 			Ok(verified) => Some(verified),
@@ -169,7 +175,7 @@ impl OauthVerifier {
 		}
 	}
 
-	fn validate(&self, token: &str, now_secs: u64) -> Option<crate::jwt::Claims> {
+	fn validate(&self, token: &str, now_secs: u64) -> Result<crate::jwt::Claims, jwt::JwtError> {
 		let validation = Validation {
 			now: now_secs,
 			issuer: Some(&self.issuer),
@@ -179,14 +185,28 @@ impl OauthVerifier {
 			KeySource::Static {
 				algorithm,
 				public_key,
-			} => jwt::validate(token, *algorithm, public_key, &validation).ok(),
+			} => jwt::validate(token, *algorithm, public_key, &validation),
 			KeySource::Jwks(cache) => {
 				let kid = token_kid(token);
-				let keys = cache.read().ok()?;
-				let key = select_key(&keys, kid.as_deref())?;
-				jwt::validate(token, key.algorithm, &key.key, &validation).ok()
+				let keys = cache.read().map_err(|_| jwt::JwtError::BadSignature)?;
+				let key = select_key(&keys, kid.as_deref()).ok_or(jwt::JwtError::BadSignature)?;
+				jwt::validate(token, key.algorithm, &key.key, &validation)
 			}
 		}
+	}
+}
+
+/// Why a token does not validate, as the log states it.
+fn invalid_reason(error: &jwt::JwtError) -> &'static str {
+	use jwt::JwtError::*;
+	match error {
+		Malformed | AlgorithmMismatch => "it is not a token this verifier can read",
+		BadSignature => "its signature does not verify against a known key",
+		MissingExpiry => "it has no usable exp claim",
+		Expired => "it has expired",
+		NotYetValid => "it is not valid yet (nbf)",
+		WrongIssuer => "its issuer is not the configured one",
+		WrongAudience => "its audience is not the configured one",
 	}
 }
 

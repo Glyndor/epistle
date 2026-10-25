@@ -181,7 +181,7 @@ async fn deliver(
 			let message = AcceptedMessage {
 				reverse_path: contact.clone(),
 				recipients: vec![address.to_string()],
-				data,
+				data: crate::util::header_block::frame_generated(data),
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,

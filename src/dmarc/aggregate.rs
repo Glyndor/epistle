@@ -183,7 +183,7 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 				let message = AcceptedMessage {
 					reverse_path: format!("postmaster@{reporting}"),
 					recipients: vec![to_addr.to_string()],
-					data: email_bytes,
+					data: crate::util::header_block::frame_generated(email_bytes),
 					require_tls: false,
 					mailbox: None,
 					tlsrpt_verified: false,

@@ -588,6 +588,10 @@ mod tests_classes;
 mod tests_reports;
 
 #[cfg(test)]
+#[path = "worker_tests_reports_retry.rs"]
+mod tests_reports_retry;
+
+#[cfg(test)]
 #[path = "worker_tests_webhook.rs"]
 mod tests_webhook;
 

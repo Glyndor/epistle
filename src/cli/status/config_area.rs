@@ -46,6 +46,9 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		summary.push_str(detail);
 		items.push(Item::new("DNS token", Level::Warn, detail));
 	}
+	if let Some(line) = crate::cli::oauth_advice::notice(config) {
+		items.push(Item::new("bearer sign-in", Level::Ok, line));
+	}
 	for line in crate::cli::oauth_advice::advice(config) {
 		summary.push_str("; ");
 		summary.push_str(&line);

@@ -93,7 +93,15 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   second factor itself; a token of the built-in authorization server counts as
   having passed it, since the server asks for the code when it issues one. A
   bearer token names a mailbox only through an `email` claim with
-  `email_verified` true, matched against the exact address of an account. A refused exchange runs on decoy credentials and ends
+  `email_verified` true, matched against the exact address of an account.
+  The same exact match applies to a SASL EXTERNAL client certificate: one that
+  carries a catch-all, masked or sub-address (`user+tag@`) no longer signs in.
+  A token of the built-in authorization server lives one hour. The checks of
+  an app password (its network range, expiry and revocation) apply when the
+  token is issued, not while it lives, and a token issued before TOTP was
+  turned on for the account is good until it expires. With `signing_key` the
+  configuration is refused unless the key is the private half of
+  `public_key`. A refused exchange runs on decoy credentials and ends
   at the final step as a wrong password, so nothing tells a refusal from a bad
   proof. Client certificates are not asked for a TOTP code (the certificate is the
   factor), and bearer tokens are asked for it unless the issuer is declared to
