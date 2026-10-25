@@ -26,6 +26,11 @@ on:
     branches: ["develop"]
   pull_request:
     branches: ["main", "develop"]
+  # Required check `debian / dpkg-buildpackage`.
+  # `paths:` and `branches:` filters do not apply to merge_group, so the
+  # trigger sits at the top level. See docs/merge-queue.md.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read

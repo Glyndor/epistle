@@ -35,8 +35,13 @@ jobs:
           # commits that may exist on the PR branch itself. Those are covered
           # separately by "Detect evil merges" below, which checks
           # merge-commit tree integrity rather than sign-off trailers.
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # On merge_group these are the base of the queue and the head of the
+          # group, which is the squash commit GitHub built, so the trailer is
+          # checked on the commit that will land. Any other event leaves both
+          # empty and the guard in `run` turns the check red instead of
+          # listing an empty range.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           # A commit that reached a protected branch without its trailer
@@ -47,6 +52,10 @@ jobs:
           # commit's own author can remediate it, matched by email. The
           # message is read as one line because a squash merge copies the PR
           # body, and a wrapped body splits the sentence in two.
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "::error::dco check needs a pull_request or merge_group range; got BASE_SHA='$BASE_SHA' HEAD_SHA='$HEAD_SHA'"
+            exit 1
+          fi
           remediated=""
           for sha in $(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}"); do
             own="$(git show -s --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')"
@@ -106,10 +115,19 @@ jobs:
         #     failing closed here acceptable friction rather than a
         #     false-positive machine.
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # On merge_group these are the base of the queue and the head of the
+          # group, which is the squash commit GitHub built, so the trailer is
+          # checked on the commit that will land. Any other event leaves both
+          # empty and the guard in `run` turns the check red instead of
+          # listing an empty range.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "::error::dco check needs a pull_request or merge_group range; got BASE_SHA='$BASE_SHA' HEAD_SHA='$HEAD_SHA'"
+            exit 1
+          fi
           bad=0
           stderr_file="$(mktemp)"
           merges="$(git rev-list --merges "${BASE_SHA}..${HEAD_SHA}")" || {

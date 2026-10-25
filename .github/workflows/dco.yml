@@ -1,12 +1,20 @@
 name: DCO
 
-# PR only. This check walks `git rev-list --no-merges BASE_SHA..HEAD_SHA`
-# off the pull_request event, and a push has no such range. The question
-# is "does every commit in this PR carry a Signed-off-by trailer?", and
-# that question only exists for pull requests.
+# Pull request and merge queue. This check walks
+# `git rev-list --no-merges BASE_SHA..HEAD_SHA`, and a push has no such range.
+# The question is "does every commit that is about to land carry a
+# Signed-off-by trailer?", which exists for a pull request and for a merge
+# group, not for a push.
 
 on:
   pull_request:
+  # Required check `dco / Signed-off-by present on every commit`. The reusable
+  # reads the range off whichever event fired; on merge_group it is the squash
+  # commit GitHub builds for the group, so the trailer is checked on the commit
+  # that will land on develop. `paths:` and `branches:` filters do not apply to
+  # merge_group. See docs/merge-queue.md.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
