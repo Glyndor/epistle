@@ -24,3 +24,19 @@ fn a_quote_cut_anywhere_near_the_cap_fits_the_queue() {
 		}
 	}
 }
+
+#[test]
+fn the_quote_is_cut_on_a_whole_line_before_any_repair() {
+	let mut reported = b"From: a@example.net\r\n\r\n".to_vec();
+	reported.resize(MAX_EMBEDDED - 1, b'x');
+	reported.extend_from_slice(b"\r\nmore text after the cut\r\n");
+	let quoted = embed(&reported);
+	assert!(quoted.len() <= MAX_EMBEDDED);
+	assert!(quoted.ends_with('\n'), "{:?}", &quoted[quoted.len() - 5..]);
+	assert!(!quoted.ends_with("\r\r\n"));
+	let short = embed(b"A: b\r\n\r\nbody");
+	assert_eq!(
+		short, "A: b\r\n\r\nbody",
+		"a message that fits is quoted whole"
+	);
+}

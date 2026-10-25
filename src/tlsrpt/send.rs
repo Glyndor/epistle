@@ -161,8 +161,13 @@ async fn deliver(
 	let contact = format!("postmaster@{hostname}");
 	let gzip = build_report(hostname, &contact, &report_id, start, end, journal);
 	for uri in rua {
-		if let Some(address) = uri.strip_prefix("mailto:") {
-			let address = address.split('?').next().unwrap_or_default();
+		if uri.starts_with("mailto:") {
+			// The address comes from a record anyone can publish and goes into
+			// a header: only a plain mailbox is used.
+			let Some(address) = crate::dmarc::aggregate::report_address(uri) else {
+				tracing::debug!(%domain, "TLS-RPT rua is not a plain mailbox; skipped");
+				continue;
+			};
 			let mut data = format!(
 				"Date: {}\r\nMessage-ID: <{report_id}>\r\n",
 				crate::clock::rfc5322(SystemTime::now())

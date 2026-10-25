@@ -58,3 +58,16 @@ fn a_key_in_a_file_is_checked_too() {
 	);
 	assert!(section.check_signing_pair().is_err());
 }
+
+#[test]
+fn a_signing_key_needs_the_es256_algorithm() {
+	let (private, public) = pair();
+	let section = oauth(&public, &format!("signing_key = \"{private}\"\n"));
+	let rs256: Oauth = toml::from_str(&format!(
+		"issuer = \"i\"\naudience = \"a\"\nalgorithm = \"RS256\"\npublic_key = \"{public}\"\nsigning_key = \"{private}\"\n"
+	))
+	.expect("parse");
+	assert_eq!(section.check_signing_pair(), Ok(()));
+	let error = rs256.check_signing_pair().unwrap_err();
+	assert!(error.contains("ES256"), "{error}");
+}

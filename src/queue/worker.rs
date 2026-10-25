@@ -18,6 +18,8 @@ mod claims;
 mod conversation;
 #[path = "worker_evidence.rs"]
 mod evidence;
+#[path = "worker_report_failures.rs"]
+mod report_failures;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -528,6 +530,15 @@ impl Worker {
 		let envelope = self.spool.load_envelope(id)?;
 		let pending = envelope.pending();
 		if pending.is_empty() {
+			// A failure report the sink refused keeps the entry until it is
+			// sent or given up on (see `report_failures`).
+			if envelope
+				.recipients_in(RecipientStatus::Failed)
+				.iter()
+				.any(|recipient| !envelope.recipient_state(recipient).reported)
+			{
+				return Ok(());
+			}
 			// An outcome the log has not taken keeps the entry: it is
 			// removed when the outcome is written.
 			return match envelope.outcomes_pending.is_empty() {

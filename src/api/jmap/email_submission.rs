@@ -327,7 +327,8 @@ fn submit_email(
 					kind: "forbiddenToSend",
 					description: Some(format!("attachment type not accepted ({reasons})")),
 				},
-				crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
+				crate::smtp::sink::SinkError::Unavailable(_)
+				| crate::smtp::sink::SinkError::Gone(_) => "serverFail".into(),
 				crate::smtp::sink::SinkError::ScanTooLarge => Refusal {
 					kind: "forbiddenToSend",
 					description: Some("message too large for the content scan".into()),

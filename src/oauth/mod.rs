@@ -157,7 +157,7 @@ impl OauthVerifier {
 		let claims = match self.validate(token, now_secs) {
 			Ok(claims) => claims,
 			// A client that keeps its old token is routine, not a fault.
-			Err(jwt::JwtError::Expired) => {
+			Err(Invalid::Token(jwt::JwtError::Expired)) => {
 				tracing::info!("bearer token refused: it has expired");
 				return None;
 			}
@@ -175,7 +175,7 @@ impl OauthVerifier {
 		}
 	}
 
-	fn validate(&self, token: &str, now_secs: u64) -> Result<crate::jwt::Claims, jwt::JwtError> {
+	fn validate(&self, token: &str, now_secs: u64) -> Result<crate::jwt::Claims, Invalid> {
 		let validation = Validation {
 			now: now_secs,
 			issuer: Some(&self.issuer),
@@ -185,28 +185,47 @@ impl OauthVerifier {
 			KeySource::Static {
 				algorithm,
 				public_key,
-			} => jwt::validate(token, *algorithm, public_key, &validation),
+			} => jwt::validate(token, *algorithm, public_key, &validation).map_err(Invalid::Token),
 			KeySource::Jwks(cache) => {
 				let kid = token_kid(token);
-				let keys = cache.read().map_err(|_| jwt::JwtError::BadSignature)?;
-				let key = select_key(&keys, kid.as_deref()).ok_or(jwt::JwtError::BadSignature)?;
-				jwt::validate(token, key.algorithm, &key.key, &validation)
+				let keys = cache.read().map_err(|_| Invalid::KeysUnavailable)?;
+				if keys.is_empty() {
+					return Err(Invalid::NoKeys);
+				}
+				let key = select_key(&keys, kid.as_deref()).ok_or(Invalid::UnknownKey)?;
+				jwt::validate(token, key.algorithm, &key.key, &validation).map_err(Invalid::Token)
 			}
 		}
 	}
 }
 
+/// Why a token does not validate.
+enum Invalid {
+	/// The token itself failed a check.
+	Token(jwt::JwtError),
+	/// The provider's key set has no key yet (the first fetch gave none).
+	NoKeys,
+	/// No cached key matches the token's `kid`, or it has none and several
+	/// keys are cached.
+	UnknownKey,
+	/// The key cache could not be read.
+	KeysUnavailable,
+}
+
 /// Why a token does not validate, as the log states it.
-fn invalid_reason(error: &jwt::JwtError) -> &'static str {
+fn invalid_reason(error: &Invalid) -> &'static str {
 	use jwt::JwtError::*;
 	match error {
-		Malformed | AlgorithmMismatch => "it is not a token this verifier can read",
-		BadSignature => "its signature does not verify against a known key",
-		MissingExpiry => "it has no usable exp claim",
-		Expired => "it has expired",
-		NotYetValid => "it is not valid yet (nbf)",
-		WrongIssuer => "its issuer is not the configured one",
-		WrongAudience => "its audience is not the configured one",
+		Invalid::NoKeys => "the provider's key set is empty",
+		Invalid::UnknownKey => "no known key matches the kid of the token",
+		Invalid::KeysUnavailable => "the key cache could not be read",
+		Invalid::Token(Malformed | AlgorithmMismatch) => "it is not a token this verifier can read",
+		Invalid::Token(BadSignature) => "its signature does not verify",
+		Invalid::Token(MissingExpiry) => "it has no usable exp claim",
+		Invalid::Token(Expired) => "it has expired",
+		Invalid::Token(NotYetValid) => "it is not valid yet (nbf)",
+		Invalid::Token(WrongIssuer) => "its issuer is not the configured one",
+		Invalid::Token(WrongAudience) => "its audience is not the configured one",
 	}
 }
 
@@ -475,3 +494,7 @@ mod tests {
 		assert!(static_v.jwks_cache().is_none());
 	}
 }
+
+#[cfg(test)]
+#[path = "invalid_tests.rs"]
+mod invalid_tests;

@@ -54,6 +54,13 @@ pub struct RecipientState {
 	/// sent, or deliberately skipped, so it goes out once.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub reported: bool,
+	/// Times the sink refused the failure report covering this recipient.
+	/// At the cap the report is given up on (see `report_failures`).
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub report_attempts: u32,
+	/// Epoch seconds before which the refused report is not tried again.
+	#[serde(default, skip_serializing_if = "is_zero_u64")]
+	pub report_after: u64,
 	/// Deferrals in a row in which the destination asked the queue to slow
 	/// down (see [`crate::queue::backoff`]). It picks the next backoff step
 	/// and holds the destination while the recipient waits; any other

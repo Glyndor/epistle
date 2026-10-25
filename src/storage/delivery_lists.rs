@@ -72,7 +72,7 @@ pub(super) fn accounts_for(
 		let address = Address::parse(recipient)
 			.map_err(|_| SinkError::Unavailable(format!("unparseable recipient {recipient}")))?;
 		let finals = directory.final_recipients(&address).ok_or_else(|| {
-			SinkError::Unavailable(format!(
+			SinkError::Gone(format!(
 				"recipient {recipient} no longer resolves to an account"
 			))
 		})?;

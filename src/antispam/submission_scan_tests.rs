@@ -55,7 +55,7 @@ async fn a_submission_carrying_a_virus_is_refused_with_its_signature() {
 	let (sink, inner, metrics) = sink(true, &clamd.socket, None);
 	match submit(&sink, &eicar()) {
 		Err(SinkError::VirusDetected(signature)) => assert_eq!(signature, SIGNATURE),
-		Err(SinkError::Unavailable(_) | SinkError::EvidenceUnavailable(_)) => {
+		Err(SinkError::Unavailable(_) | SinkError::Gone(_) | SinkError::EvidenceUnavailable(_)) => {
 			panic!("expected a virus refusal, got a storage-unavailable refusal")
 		}
 		Err(SinkError::AttachmentRefused(_)) => {

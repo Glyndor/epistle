@@ -87,3 +87,23 @@ fn the_quoted_headers_end_on_a_whole_line() {
 	assert!(quoted.ends_with('\n'), "{quoted:?}");
 	assert!(!quoted.contains("\r\r"));
 }
+
+#[test]
+fn a_sender_that_would_open_a_header_gets_no_report() {
+	for sender in [
+		"alice@example.org>\r\nBcc: victim@example.net",
+		"alice@example.org\nBcc: victim@example.net",
+		"alice@exam\0ple.org",
+		"<alice@example.org>",
+	] {
+		let report = build_failed(
+			"mail.example.org",
+			sender,
+			&recipients(),
+			&original(4000, b""),
+			now(),
+			true,
+		);
+		assert!(report.is_none(), "{sender:?}");
+	}
+}

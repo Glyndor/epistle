@@ -23,6 +23,9 @@ impl Oauth {
 		let Some(public) = &self.public_key else {
 			return Ok(());
 		};
+		if !self.algorithm.eq_ignore_ascii_case("ES256") {
+			return Err("`[oauth] signing_key` signs ES256 tokens, so `algorithm` must be \"ES256\" with it".to_string());
+		}
 		let invalid = || {
 			"`[oauth] signing_key` is not a base64 PKCS#8 ES256 private key (see `epistle oauth-keygen`)".to_string()
 		};

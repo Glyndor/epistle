@@ -213,6 +213,14 @@ fn build_report(
 		per_recipient.push_str(&recipient_fields(kind, recipient, &reason));
 	}
 
+	// The sender is written into the `To:` header of the notice: one with a
+	// control character or an angle bracket would open a header of its own.
+	if original_reverse_path
+		.chars()
+		.any(|ch| ch.is_control() || ch == '<' || ch == '>')
+	{
+		return None;
+	}
 	let original_headers = original_header_block(original_data);
 	// The server writes this notice, so it is `auto-generated`: a DSN that
 	// claims to be a reply invites an auto-responder to answer a bounce

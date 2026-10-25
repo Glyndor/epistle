@@ -9,6 +9,14 @@ pub trait MessageSink: Send + Sync {
 	/// answer with a transient failure so the client retries later.
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError>;
 
+	/// Take a report the server wrote itself (a failure or delay notice).
+	/// Unlike mail from elsewhere it is never retried by a sender: a sink that
+	/// can tell must not fail it once part of the work is done, so that a
+	/// retry by the caller does not repeat that part.
+	fn deliver_report(&self, message: AcceptedMessage) -> Result<(), SinkError> {
+		self.deliver(message)
+	}
+
 	/// Take a message that `account`, one of this server's own accounts,
 	/// submitted (SMTP after AUTH, `/api/v1/send`, JMAP
 	/// `EmailSubmission/set`), where [`MessageSink::deliver`] takes mail
@@ -94,6 +102,11 @@ pub enum SinkError {
 	/// some could not be seen by the recipient's rules. Permanent.
 	#[error("too many header fields")]
 	TooManyHeaderFields,
+	/// A local recipient no longer exists (its account or domain was
+	/// removed). Permanent for a report the server wrote to it: trying again
+	/// finds the same. Inbound mail is still answered with a retry.
+	#[error("recipient gone: {0}")]
+	Gone(String),
 }
 
 impl SinkError {
@@ -101,7 +114,7 @@ impl SinkError {
 	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
 		use crate::smtp::reply::Reply;
 		match self {
-			SinkError::Unavailable(_) => {
+			SinkError::Unavailable(_) | SinkError::Gone(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}
 			SinkError::EvidenceUnavailable(_) => Reply::single(
