@@ -108,9 +108,18 @@ fn pop3_retr_returns_plaintext() {
 
 	let backend =
 		MailboxBackend::new_with_crypto(directory(), dir.path().to_path_buf(), crypto.clone());
-	let messages = backend.load("alice");
-	assert_eq!(messages.len(), 1);
-	assert_eq!(messages[0].1, BODY, "POP3 RETR must return plaintext");
+	let index = backend.list("alice");
+	assert_eq!(index.len(), 1);
+	assert_eq!(
+		index[0].1,
+		BODY.len(),
+		"POP3 LIST must report the plaintext size"
+	);
+	assert_eq!(
+		backend.fetch("alice", &index[0].0).as_deref(),
+		Some(BODY),
+		"POP3 RETR must return plaintext"
+	);
 }
 
 #[test]

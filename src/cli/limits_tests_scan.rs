@@ -68,6 +68,10 @@ const NOT_A_ROW: &[(&str, &str)] = &[
 		"the protocol default of max-connections-per-listener",
 	),
 	(
+		"pop3::log_gate::MAX_KEYS",
+		"internal: how many log notices are remembered",
+	),
+	(
 		"smtp::scram::SALT_LEN",
 		"internal: the salt of a stored SCRAM credential",
 	),

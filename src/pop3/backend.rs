@@ -11,6 +11,7 @@ use crate::directory_store::DirectoryHandle;
 use crate::imap::mailbox::mailbox_dir;
 use crate::storage::MessageCrypto;
 
+use super::bounds::{MAX_MESSAGE_OCTETS, MAX_SESSION_MESSAGES};
 use super::session::Backend;
 use crate::smtp::directory::hash_gate::Verdict;
 
@@ -19,9 +20,86 @@ pub struct MailboxBackend {
 	directory: DirectoryHandle,
 	data_dir: PathBuf,
 	crypto: MessageCrypto,
+	/// Messages [`Backend::list`] returns; the newest when there are more.
+	listed_limit: usize,
 }
 
 impl MailboxBackend {
+	/// The newest `keep` messages of the inbox in arrival order, with their
+	/// sizes. Only the names are collected for the whole directory, and only
+	/// `keep` of them are held at a time; a file is looked at once it is
+	/// known to be retained. A message over [`MAX_MESSAGE_OCTETS`] is not
+	/// listed, so no size is announced that cannot be retrieved.
+	fn list_newest(&self, account: &str, keep: usize) -> Vec<(String, usize)> {
+		use std::cmp::Reverse;
+		use std::collections::BinaryHeap;
+		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
+			return Vec::new();
+		};
+		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+			return Vec::new();
+		};
+		// UUIDv7 filenames sort lexically in arrival order; a min-heap of the
+		// largest `keep` names drops the oldest as it goes.
+		let mut newest: BinaryHeap<Reverse<String>> = BinaryHeap::new();
+		let mut seen = 0usize;
+		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
+			let Some(stem) = entry
+				.file_name()
+				.to_str()
+				.and_then(|name| name.strip_suffix(".eml"))
+				.map(str::to_string)
+			else {
+				continue;
+			};
+			seen += 1;
+			newest.push(Reverse(stem));
+			if newest.len() > keep {
+				newest.pop();
+			}
+		}
+		if seen > keep && super::log_gate::due(account, "trimmed") {
+			tracing::warn!(
+				account,
+				listed = keep,
+				hidden = seen - keep,
+				"POP3 inbox over the session limit, oldest messages not listed"
+			);
+		}
+		let mut too_large = 0usize;
+		let mut stems: Vec<String> = newest.into_iter().map(|Reverse(stem)| stem).collect();
+		stems.sort();
+		let listed: Vec<(String, usize)> = stems
+			.into_iter()
+			.filter_map(|stem| {
+				let path = dir.join(format!("{stem}.eml"));
+				let stored = std::fs::symlink_metadata(&path)
+					.ok()
+					.filter(std::fs::Metadata::is_file)?
+					.len();
+				let octets = self.crypto.stored_plaintext_len(&path, stored);
+				let octets = usize::try_from(octets).unwrap_or(usize::MAX);
+				if octets > MAX_MESSAGE_OCTETS {
+					too_large += 1;
+					return None;
+				}
+				Some((stem, octets))
+			})
+			.collect();
+		if too_large > 0 && super::log_gate::due(account, "too large") {
+			tracing::warn!(
+				account,
+				omitted = too_large,
+				limit = MAX_MESSAGE_OCTETS,
+				"POP3 messages over the size limit are not listed"
+			);
+		}
+		listed
+	}
+
 	/// Build a backend sharing the server's directory handle and data dir, with
 	/// no at-rest encryption. The encrypting variant is
 	/// [`MailboxBackend::new_with_crypto`].
@@ -39,7 +117,40 @@ impl MailboxBackend {
 			directory,
 			data_dir,
 			crypto,
+			listed_limit: MAX_SESSION_MESSAGES,
 		}
+	}
+
+	/// List at most `limit` messages instead of the session maximum.
+	#[cfg(test)]
+	pub(crate) fn with_listed_limit(mut self, limit: usize) -> Self {
+		self.listed_limit = limit;
+		self
+	}
+}
+
+impl MailboxBackend {
+	/// [`Backend::fetch`] under a cap of `cap` octets.
+	fn fetch_within(&self, account: &str, uid: &str, cap: usize) -> Option<Vec<u8>> {
+		// The id comes from the index, but keep the path inside the inbox
+		// whatever the caller passes.
+		if uid.is_empty() || uid.contains(['/', '\\', '\0']) || uid.starts_with('.') {
+			return None;
+		}
+		let path = mailbox_dir(&self.data_dir, account, "INBOX")?.join(format!("{uid}.eml"));
+		let size = std::fs::symlink_metadata(&path).ok()?.len();
+		let envelope = if self.crypto.enabled() {
+			crate::storage::OVERHEAD
+		} else {
+			0
+		};
+		if size > (cap + envelope) as u64 {
+			return None;
+		}
+		let stored = crate::util::fs_walk::read(&path).ok()?;
+		// Fail closed: refuse a message that cannot be decrypted rather than
+		// serving ciphertext as if it were the message.
+		self.crypto.decode(&stored).ok()
 	}
 }
 
@@ -66,36 +177,12 @@ impl Backend for MailboxBackend {
 		)
 	}
 
-	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)> {
-		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
-			return Vec::new();
-		};
-		let mut stems: Vec<String> = match crate::util::fs_walk::read_dir(&dir) {
-			Ok(entries) => entries
-				.flatten()
-				.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-				.filter_map(|entry| {
-					entry
-						.file_name()
-						.to_str()
-						.and_then(|name| name.strip_suffix(".eml"))
-						.map(str::to_string)
-				})
-				.collect(),
-			Err(_) => Vec::new(),
-		};
-		// UUIDv7 filenames sort lexically in arrival order.
-		stems.sort();
-		stems
-			.into_iter()
-			.filter_map(|stem| {
-				let stored = crate::util::fs_walk::read(dir.join(format!("{stem}.eml"))).ok()?;
-				// Fail closed: drop a message that cannot be decrypted rather than
-				// serving ciphertext as if it were the message.
-				let data = self.crypto.decode(&stored).ok()?;
-				Some((stem, data))
-			})
-			.collect()
+	fn list(&self, account: &str) -> Vec<(String, usize)> {
+		crate::util::blocking::may_block(|| self.list_newest(account, self.listed_limit))
+	}
+
+	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>> {
+		crate::util::blocking::may_block(|| self.fetch_within(account, uid, MAX_MESSAGE_OCTETS))
 	}
 
 	fn remove(&self, account: &str, uids: &[String]) {
@@ -124,131 +211,5 @@ impl Backend for MailboxBackend {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::test_fixtures as fixtures;
-	use std::collections::HashMap;
-
-	fn backend(dir: &std::path::Path) -> MailboxBackend {
-		let directory = DirectoryHandle::new(
-			crate::smtp::directory::Directory::new(
-				["example.org".to_string()],
-				[("alice@example.org".to_string(), "alice".to_string())],
-			)
-			.with_password_hashes(HashMap::from([(
-				"alice".to_string(),
-				crate::smtp::auth::tests::hash(fixtures::password()),
-			)])),
-		);
-		MailboxBackend::new(directory, dir.to_path_buf())
-	}
-
-	#[test]
-	fn verify_checks_credentials_without_oracle() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let backend = backend(dir.path());
-		assert_eq!(
-			backend
-				.verify("alice@example.org", fixtures::password(), None)
-				.as_deref(),
-			Some("alice")
-		);
-		// Wrong password and unknown user both fail the same way.
-		assert!(
-			backend
-				.verify("alice@example.org", fixtures::second_password(), None)
-				.is_none()
-		);
-		assert!(
-			backend
-				.verify("ghost@example.org", fixtures::password(), None)
-				.is_none()
-		);
-	}
-
-	#[test]
-	fn load_returns_messages_in_arrival_order() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let backend = backend(dir.path());
-		// No INBOX yet → empty.
-		assert!(backend.load("alice").is_empty());
-
-		crate::imap::mailbox::append(
-			dir.path(),
-			"alice",
-			"INBOX",
-			&[],
-			b"Subject: one\r\n\r\na\r\n",
-			&MessageCrypto::disabled(),
-		)
-		.expect("append one");
-		crate::imap::mailbox::append(
-			dir.path(),
-			"alice",
-			"INBOX",
-			&[],
-			b"Subject: two\r\n\r\nb\r\n",
-			&MessageCrypto::disabled(),
-		)
-		.expect("append two");
-
-		let messages = backend.load("alice");
-		assert_eq!(messages.len(), 2);
-		// UUIDv7 stems sort in arrival order.
-		assert!(messages[0].1.windows(3).any(|w| w == b"one"));
-		assert!(messages[1].1.windows(3).any(|w| w == b"two"));
-	}
-
-	#[test]
-	fn remove_deletes_named_messages() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let backend = backend(dir.path());
-		crate::imap::mailbox::append(
-			dir.path(),
-			"alice",
-			"INBOX",
-			&[],
-			b"x\r\n",
-			&MessageCrypto::disabled(),
-		)
-		.expect("append");
-		let messages = backend.load("alice");
-		assert_eq!(messages.len(), 1);
-		let uid = messages[0].0.clone();
-
-		backend.remove("alice", &[uid]);
-		assert!(backend.load("alice").is_empty());
-		// Removing from a missing account is a harmless no-op.
-		backend.remove("nobody", &["whatever".to_string()]);
-	}
-
-	/// A POP3 delete is an expunge JMAP clients must learn about.
-	#[test]
-	fn remove_records_the_destroyed_message_for_jmap() {
-		use crate::imap::changelog::{Change, Op};
-		let dir = tempfile::tempdir().expect("tempdir");
-		let backend = backend(dir.path());
-		let id = crate::imap::mailbox::append(
-			dir.path(),
-			"alice",
-			"INBOX",
-			&[],
-			b"x\r\n",
-			&MessageCrypto::disabled(),
-		)
-		.expect("append");
-		let root = dir.path().join("accounts").join("alice");
-		let before = crate::imap::changelog::current(&root).expect("current");
-		backend.remove("alice", &[id.to_string()]);
-		let (_, entries) =
-			crate::imap::changelog::since(&root, before.epoch, before.current).expect("since");
-		let changes: Vec<Change> = entries.into_iter().map(|e| e.change).collect();
-		assert_eq!(
-			changes,
-			vec![
-				Change::email(Op::Destroyed, id),
-				Change::mailbox(Op::Updated, "INBOX")
-			]
-		);
-	}
-}
+#[path = "backend_tests.rs"]
+mod tests;

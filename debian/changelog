@@ -1,5 +1,7 @@
 epistle (0.12.3) UNRELEASED; urgency=medium
 
+  * Bound the work of a plain-HTTP request: a body that arrives too slowly, or takes too long, is cut off.
+  * Bound the work and the memory of a POP3 session: it reads an index at sign-in and one message at a time, and refuses a message above a fixed size.
   * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
   * Expose per-account connection limits in the operator limits catalog.
   * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.

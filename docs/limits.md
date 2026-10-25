@@ -115,7 +115,10 @@ the log.
 | `smtp-error-streak` | 20 | count | own | no standard mandate (consecutive error replies before the connection is dropped) |
 | `pop3-command-line` | 512 | octets | must | RFC 2449 §4 (commands of at least 255 octets) |
 | `pop3-idle-timeout` | 600 | seconds | must | RFC 1939 §3 (an inactivity timer of at least 10 minutes; before sign-in preauth-timeout bounds the session) |
-| `pop3-error-streak` | 20 | count | own | no standard mandate (consecutive -ERR replies before the connection is dropped) |
+| `pop3-error-streak` | 20 | count | own | no standard mandate (consecutive -ERR replies the client earns by its own errors before the connection is dropped; a [SYS/...] reply is not counted) |
+| `pop3-unavailable-streak` | 200 | count | own | no standard mandate (consecutive replies for a message that cannot be read before the connection is dropped) |
+| `pop3-messages-per-session` | 100000 | count | own | no standard mandate (messages a session lists; the newest when the inbox holds more) |
+| `pop3-message-octets` | 67108864 | octets | own | no standard mandate (largest message a session lists and retrieves) |
 | `imap-command-line` | 32768 | octets | own | no standard mandate |
 | `imap-idle-timeout` | 1800 | seconds | must | RFC 3501 §5.4 (an autologout timer of at least 30 minutes; before sign-in preauth-timeout bounds the session) |
 | `imap-error-streak` | 20 | count | own | no standard mandate (consecutive BAD replies before the connection is dropped) |

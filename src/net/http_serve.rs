@@ -6,6 +6,7 @@
 //! client that trickles a header or simply stays connected holds a socket
 //! and a task forever (slowloris). Every plain-HTTP listener (the API and
 //! JMAP, WebDAV, autoconfig, ACME and metrics) serves through here instead.
+//! A request body is held to the bounds of [`super::body_deadline`].
 
 use std::time::Duration;
 
@@ -94,7 +95,12 @@ pub(crate) async fn serve_on_with<A: crate::net::accept::Accept>(
 				continue;
 			}
 		};
-		let router = router.clone().layer(axum::Extension(ConnectInfo(peer)));
+		let router = router
+			.clone()
+			.layer(axum::middleware::map_request(
+				super::body_deadline::bound_default,
+			))
+			.layer(axum::Extension(ConnectInfo(peer)));
 		tokio::spawn(connection(
 			Held {
 				stream,

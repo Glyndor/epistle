@@ -4,15 +4,21 @@
 //! and network layers build on it.
 
 pub mod backend;
+pub mod bounds;
 pub mod command;
+mod log_gate;
 pub mod server;
 pub mod session;
+pub mod wire;
 
 #[cfg(test)]
 mod session_tests;
 
 #[cfg(test)]
 mod session_tests_termination;
+
+#[cfg(test)]
+mod session_tests_on_demand;
 
 #[cfg(test)]
 mod session_tests_gate_busy;

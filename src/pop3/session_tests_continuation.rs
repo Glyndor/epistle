@@ -7,8 +7,11 @@ impl Backend for Login {
 	fn verify(&self, user: &str, pass: &str, _: Option<std::net::IpAddr>) -> Option<String> {
 		(user == "alice" && pass == fixture_password()).then(|| "alice".into())
 	}
-	fn load(&self, _: &str) -> Vec<(String, Vec<u8>)> {
+	fn list(&self, _: &str) -> Vec<(String, usize)> {
 		Vec::new()
+	}
+	fn fetch(&self, _: &str, _: &str) -> Option<Vec<u8>> {
+		None
 	}
 	fn remove(&self, _: &str, _: &[String]) {}
 }

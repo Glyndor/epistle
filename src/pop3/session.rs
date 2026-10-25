@@ -2,11 +2,13 @@
 //!
 //! The session owns no sockets: it consumes parsed [`Command`]s and returns a
 //! [`Response`] the network layer encodes and writes. A [`Backend`] supplies
-//! credential verification, the message snapshot taken at login, and deletion
+//! credential verification, the message index taken at login, message bytes
+//! on demand, and deletion
 //! at QUIT — all injectable, so the protocol is fully unit-testable.
 
 use std::sync::Arc;
 
+use super::bounds::{MAX_MESSAGE_OCTETS, MAX_SESSION_MESSAGES};
 use super::command::Command;
 use crate::smtp::directory::hash_gate::Verdict;
 
@@ -30,8 +32,15 @@ pub trait Backend {
 			None => Verdict::Refused,
 		}
 	}
-	/// The messages in the account's inbox at login: `(unique-id, bytes)`.
-	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)>;
+	/// The index of the account's inbox at login: `(unique-id, octets)` in
+	/// arrival order, at most [`MAX_SESSION_MESSAGES`] entries (the newest
+	/// when there are more). No message
+	/// body is read.
+	fn list(&self, account: &str) -> Vec<(String, usize)>;
+	/// The bytes of one message of the index, read when a command needs it.
+	/// `None` when it is gone, unreadable, or larger than
+	/// [`MAX_MESSAGE_OCTETS`].
+	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
 	fn remove(&self, account: &str, uids: &[String]);
 }
@@ -62,49 +71,31 @@ impl Response {
 	/// Encode to the exact bytes sent on the wire, including dot-stuffing of
 	/// the body and the terminating `.` line for multiline responses.
 	pub fn encode(&self) -> Vec<u8> {
-		match self {
-			Response::Continuation => b"+ \r\n".to_vec(),
-			Response::Ok(text) | Response::Bye(text) => format!("+OK {text}\r\n").into_bytes(),
-			Response::Err(text) => format!("-ERR {text}\r\n").into_bytes(),
-			Response::Multiline { status, body } => {
-				let mut out = format!("+OK {status}\r\n").into_bytes();
-				out.extend_from_slice(&dot_stuff(body));
-				out.extend_from_slice(b".\r\n");
-				out
-			}
-		}
+		self.wire().flatten().collect()
+	}
+
+	/// The bytes of [`Response::encode`] in pieces of bounded size, so a large
+	/// message is never held a second time in full.
+	pub fn wire(&self) -> super::wire::Wire<'_> {
+		super::wire::Wire::new(self)
 	}
 
 	/// Whether the connection should close after sending this response.
 	pub fn is_final(&self) -> bool {
 		matches!(self, Response::Bye(_))
 	}
-}
 
-/// Byte-stuff a message body: any line starting with `.` gets an extra `.`,
-/// and bare LF is normalized to CRLF so the terminator is unambiguous.
-fn dot_stuff(body: &[u8]) -> Vec<u8> {
-	let mut out = Vec::with_capacity(body.len() + 16);
-	let mut at_line_start = true;
-	let mut prev = 0u8;
-	for &byte in body {
-		if at_line_start && byte == b'.' {
-			out.push(b'.');
-		}
-		if byte == b'\n' && prev != b'\r' {
-			out.push(b'\r');
-		}
-		out.push(byte);
-		at_line_start = byte == b'\n';
-		prev = byte;
+	/// Whether this is the reply for a message that cannot be read.
+	pub fn is_unavailable(&self) -> bool {
+		matches!(self, Response::Err(text) if text.starts_with("[SYS/PERM]"))
 	}
-	if !body.is_empty() && !out.ends_with(b"\r\n") {
-		if !out.ends_with(b"\r") {
-			out.push(b'\r');
-		}
-		out.push(b'\n');
+
+	/// Whether this is the client's own protocol error (a bad command, a
+	/// failed sign-in, an unknown message), the only kind the abuse guard
+	/// counts. A `[SYS/...]` reply is a condition of the server or the store.
+	pub fn is_client_error(&self) -> bool {
+		matches!(self, Response::Err(text) if !text.starts_with("[SYS/"))
 	}
-	out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +106,8 @@ enum State {
 
 struct Message {
 	uid: String,
-	data: Vec<u8>,
+	/// The size announced by the index, in octets.
+	size: usize,
 	deleted: bool,
 }
 
@@ -229,11 +221,11 @@ impl<B: Backend> Session<B> {
 			}
 			Command::List(None) => Response::Multiline {
 				status: format!("{} messages", self.live_count()),
-				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.data.len())),
+				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.size)),
 			},
-			Command::List(Some(n)) => self.with_message(n, |i, m| {
-				Response::Ok(format!("{} {}", i + 1, m.data.len()))
-			}),
+			Command::List(Some(n)) => {
+				self.with_message(n, |i, m| Response::Ok(format!("{} {}", i + 1, m.size)))
+			}
 			Command::Uidl(None) => Response::Multiline {
 				status: "unique-id listing".to_string(),
 				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.uid)),
@@ -241,13 +233,13 @@ impl<B: Backend> Session<B> {
 			Command::Uidl(Some(n)) => {
 				self.with_message(n, |i, m| Response::Ok(format!("{} {}", i + 1, m.uid)))
 			}
-			Command::Retr(n) => self.with_message(n, |_, m| Response::Multiline {
-				status: format!("{} octets", m.data.len()),
-				body: m.data.clone(),
+			Command::Retr(n) => self.read_message(n, |data| Response::Multiline {
+				status: format!("{} octets", data.len()),
+				body: data,
 			}),
-			Command::Top(n, lines) => self.with_message(n, |_, m| Response::Multiline {
+			Command::Top(n, lines) => self.read_message(n, |data| Response::Multiline {
 				status: "top".to_string(),
-				body: top_of(&m.data, lines as usize),
+				body: top_of(&data, lines as usize),
 			}),
 			Command::Dele(n) => self.delete(n),
 			Command::Rset => {
@@ -351,13 +343,16 @@ impl<B: Backend> Session<B> {
 				}
 			}
 		}
-		self.messages = self
-			.backend
-			.load(&account)
+		let mut index = self.backend.list(&account);
+		if index.len() > MAX_SESSION_MESSAGES {
+			// The newest stay reachable; the oldest are not listed.
+			index.drain(..index.len() - MAX_SESSION_MESSAGES);
+		}
+		self.messages = index
 			.into_iter()
-			.map(|(uid, data)| Message {
+			.map(|(uid, size)| Message {
 				uid,
-				data,
+				size,
 				deleted: false,
 			})
 			.collect();
@@ -371,7 +366,7 @@ impl<B: Backend> Session<B> {
 		self.messages
 			.iter()
 			.filter(|m| !m.deleted)
-			.fold((0, 0), |(c, o), m| (c + 1, o + m.data.len()))
+			.fold((0, 0), |(c, o), m| (c + 1, o + m.size))
 	}
 
 	fn live_count(&self) -> usize {
@@ -394,6 +389,21 @@ impl<B: Backend> Session<B> {
 		match self.live_message(number) {
 			Some(index) => ok(index, &self.messages[index]),
 			None => Response::Err("no such message".to_string()),
+		}
+	}
+
+	/// Read message `number` from the backend and answer with `ok`. The
+	/// bytes live only for this command.
+	fn read_message(&self, number: u32, ok: impl FnOnce(Vec<u8>) -> Response) -> Response {
+		let Some(index) = self.live_message(number) else {
+			return Response::Err("no such message".to_string());
+		};
+		let Some(account) = &self.account else {
+			return Response::Err("no such message".to_string());
+		};
+		match self.backend.fetch(account, &self.messages[index].uid) {
+			Some(data) if data.len() <= MAX_MESSAGE_OCTETS => ok(data),
+			_ => Response::Err("[SYS/PERM] message unavailable".to_string()),
 		}
 	}
 
