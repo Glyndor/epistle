@@ -124,6 +124,9 @@ pub struct Session {
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
 	auth_protocol: crate::config::Protocol,
+	/// Which identification and reputation headers the mail this session
+	/// generates gets (the mailbox-full notice it builds at end-of-DATA).
+	identification: crate::smtp::identification::Policy,
 	/// Shared metrics handle. Optional: with no metrics wired the inbound
 	/// rate-limit rejection still returns the 450 reply, the counter just
 	/// does not move. Server sets this to its own `Arc<Metrics>` so the
@@ -184,6 +187,7 @@ impl Session {
 			peer_ip: None,
 			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
+			identification: crate::smtp::identification::Policy::default(),
 			metrics: None,
 			scram_enabled: true,
 			memory_budget: None,
@@ -247,6 +251,13 @@ impl Session {
 	/// matches the historical behaviour for SMTP AUTH.
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
+		self
+	}
+
+	/// Set which identification and reputation headers the mail this
+	/// session generates gets.
+	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
+		self.identification = policy;
 		self
 	}
 

@@ -298,18 +298,6 @@ impl Directory {
 		(!spec.hidden).then(|| spec.members.clone())
 	}
 
-	/// Mailing-list headers (`List-Id`/`List-Post`/`List-Unsubscribe`, each with
-	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
-	/// to delivered copies so clients can identify and leave the list (RFC 2369).
-	pub fn list_headers(&self, address: &str) -> Option<String> {
-		let spec = self.aliases.get(&normalize(address))?;
-		let list_id = spec.list_id.as_ref()?;
-		Some(format!(
-			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
-			 List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
-		))
-	}
-
 	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
 	pub fn with_totp(mut self, totp: impl IntoIterator<Item = (String, String)>) -> Self {
 		self.totp = totp
@@ -668,6 +656,13 @@ impl Directory {
 
 #[path = "directory_resolve.rs"]
 mod resolve;
+
+#[path = "directory_list.rs"]
+mod list_fields;
+
+#[cfg(test)]
+#[path = "directory_list_tests.rs"]
+mod list_fields_tests;
 
 #[cfg(test)]
 #[path = "directory_disabled_domain_tests.rs"]

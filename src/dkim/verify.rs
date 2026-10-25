@@ -316,17 +316,22 @@ struct Header<'a> {
 impl<'a> Message<'a> {
 	/// Split a raw RFC 5322 message. Returns `None` on malformed headers.
 	fn split(raw: &'a [u8]) -> Option<Self> {
-		let text_end = find_body_start(raw);
-		let header_block = std::str::from_utf8(&raw[..text_end.0]).ok()?;
-		let body = &raw[text_end.1..];
+		let (raw_header, body) = crate::util::header_block::split_at_blank_line(raw);
+		let header_block = std::str::from_utf8(raw_header).ok()?;
 
 		let mut headers = Vec::new();
 		let mut current: Option<(usize, usize)> = None;
 		let mut offset = 0;
-		for line in header_block.split_inclusive("\r\n") {
+		for line in header_block.split_inclusive('\n') {
 			let line_start = offset;
 			offset += line.len();
-			let content = line.strip_suffix("\r\n").unwrap_or(line);
+			let had_line_feed = line.ends_with('\n');
+			let content = line.strip_suffix('\n').unwrap_or(line);
+			let content = if had_line_feed {
+				content.strip_suffix('\r').unwrap_or(content)
+			} else {
+				content
+			};
 			if content.starts_with(' ') || content.starts_with('\t') {
 				// Folded continuation of the current header.
 				if let Some((_, end)) = &mut current {
@@ -351,25 +356,19 @@ impl<'a> Message<'a> {
 }
 
 fn parse_header(raw: &str) -> Option<Header<'_>> {
-	let raw = raw.strip_suffix("\r\n").unwrap_or(raw);
+	let had_line_feed = raw.ends_with('\n');
+	let raw = raw.strip_suffix('\n').unwrap_or(raw);
+	let raw = if had_line_feed {
+		raw.strip_suffix('\r').unwrap_or(raw)
+	} else {
+		raw
+	};
 	let colon = raw.find(':')?;
 	let (name, rest) = raw.split_at(colon);
 	Some(Header {
 		name: name.trim_end(),
 		value: &rest[1..],
 	})
-}
-
-/// Returns (end of header block, start of body).
-fn find_body_start(raw: &[u8]) -> (usize, usize) {
-	let mut index = 0;
-	while index + 3 < raw.len() {
-		if &raw[index..index + 4] == b"\r\n\r\n" {
-			return (index + 2, index + 4);
-		}
-		index += 1;
-	}
-	(raw.len(), raw.len())
 }
 
 #[cfg(test)]

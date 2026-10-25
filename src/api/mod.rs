@@ -193,6 +193,10 @@ mod jmap_tests_f;
 mod jmap_tests_g;
 
 #[cfg(test)]
+#[path = "jmap_tests_framing.rs"]
+mod jmap_tests_framing;
+
+#[cfg(test)]
 #[path = "recipients_tests.rs"]
 mod recipients_tests;
 
@@ -242,6 +246,10 @@ mod send_tests_class_key;
 #[cfg(test)]
 #[path = "send_tests_class_paths.rs"]
 mod send_tests_class_paths;
+
+#[cfg(test)]
+#[path = "send_tests_identification.rs"]
+mod send_tests_identification;
 
 #[cfg(test)]
 #[path = "send_tests_rich.rs"]

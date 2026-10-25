@@ -70,6 +70,7 @@ pub(super) fn build_split_with_companions(
 	let mut split = SplitDelivery::new_with_crypto(&config.data_dir, directory, crypto)?
 		.with_evidence(Arc::clone(&evidence.service))
 		.with_rules(config.rules.clone())
+		.with_identification(crate::smtp::identification::Policy::from_config(config))
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {

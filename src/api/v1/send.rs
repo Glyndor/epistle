@@ -180,9 +180,14 @@ pub async fn send(
 	};
 	let mut message = message;
 	let sources = state.class_sources(Some(&auth), &account, explicit_class);
-	let prepared =
-		crate::evidence::submission::prepare(&mut message, sources, Some(state.data_dir()))
-			.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
+	let prepared = crate::evidence::submission::prepare(
+		&mut message,
+		sources,
+		Some(state.data_dir()),
+		state.identification(),
+		state.directory_snapshot().as_deref(),
+	)
+	.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
 	if message.recipients.is_empty() {
 		return Err(ApiError::marketing_refused(
 			"every recipient is on the suppression list",

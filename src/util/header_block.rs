@@ -29,6 +29,66 @@ pub fn split(raw: &[u8]) -> (&[u8], &[u8]) {
 	}
 }
 
+/// The header block of `raw` and the body after it. The block ends at the
+/// first empty line, whichever way that line is ended, and without one the
+/// whole message is header and there is no body.
+///
+/// A message whose first line is empty has no header block at all: what
+/// follows is body text, so a field a reader finds there is not a field of
+/// the message. A reader that ends the block at `CRLF CRLF` alone takes a
+/// longer block for an LF-only message, which is why the header readers of
+/// the server use this one and not that one.
+pub(crate) fn split_at_blank_line(raw: &[u8]) -> (&[u8], &[u8]) {
+	let mut offset = 0;
+	while offset < raw.len() {
+		let end = raw[offset..]
+			.iter()
+			.position(|byte| *byte == b'\n')
+			.map_or(raw.len(), |index| offset + index + 1);
+		if unterminated(&raw[offset..end]).is_empty() {
+			return (&raw[..offset], &raw[end..]);
+		}
+		offset = end;
+	}
+	(raw, &[])
+}
+
+/// The line ending the message is written with: the one of its first line,
+/// and `CRLF` for a message with no line ending of its own.
+pub(crate) fn line_ending(raw: &[u8]) -> &'static [u8] {
+	match raw.iter().position(|byte| *byte == b'\n') {
+		Some(index) if index > 0 && raw[index - 1] == b'\r' => b"\r\n",
+		Some(_) => b"\n",
+		None => b"\r\n",
+	}
+}
+
+/// I borrow an SMTP-ready message, or normalize its LF and final line ending
+/// before validation, signing and queueing so DATA cannot change those bytes.
+pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+	if data.ends_with(b"\r\n")
+		&& data
+			.iter()
+			.enumerate()
+			.all(|(index, byte)| *byte != b'\n' || (index > 0 && data[index - 1] == b'\r'))
+	{
+		return std::borrow::Cow::Borrowed(data);
+	}
+	let mut normalized = Vec::with_capacity(data.len());
+	let mut previous = None;
+	for byte in data.iter().copied() {
+		if byte == b'\n' && previous != Some(b'\r') {
+			normalized.push(b'\r');
+		}
+		normalized.push(byte);
+		previous = Some(byte);
+	}
+	if !normalized.ends_with(b"\r\n") {
+		normalized.extend_from_slice(b"\r\n");
+	}
+	std::borrow::Cow::Owned(normalized)
+}
+
 /// The lines of a header block, each without its terminator.
 pub fn lines(block: &[u8]) -> impl Iterator<Item = &[u8]> {
 	block.split_inclusive(|b| *b == b'\n').map(unterminated)

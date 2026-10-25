@@ -341,6 +341,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_blob_backend(blob_backend)
 				.with_correspondents((*correspondents).clone())
 				.with_class_bindings(Arc::clone(&evidence.bindings))
+				.with_identification(crate::smtp::identification::Policy::from_config(&config))
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
 				state = super::serve_ratelimit::wire_api_submission_limits(
@@ -500,6 +501,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
 					.with_max_recipients(max_recipients)
+					.with_identification(crate::smtp::identification::Policy::from_config(&config))
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
@@ -510,9 +512,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {
-						let store: Arc<dyn crate::antispam::corpus::BayesScorer> =
-							Arc::new(store.clone());
-						server = server.with_bayes(store);
+						server = server.with_bayes(Arc::new(store.clone()));
 					}
 				}
 				if let Some(hook) = &scanner_hook {

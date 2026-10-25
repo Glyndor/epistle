@@ -10,11 +10,15 @@
 
 use super::{Address, Reply, Session};
 use crate::dmarc::author::{Author, author};
+use crate::smtp::identification::reject_ambiguous_headers;
 
 /// `None` when `data` may be sent by the authenticated account, else the
 /// refusal. Unauthenticated sessions are not submissions and pass.
 pub(super) fn check(session: &Session, data: &[u8]) -> Option<Reply> {
 	let account = session.authenticated.as_deref()?;
+	if let Err(refusal) = reject_ambiguous_headers(data) {
+		return Some(refusal.smtp_reply());
+	}
 	let owned = match author(data) {
 		Author::Addresses(addresses) => match addresses.as_slice() {
 			[address] => Address::parse(address)

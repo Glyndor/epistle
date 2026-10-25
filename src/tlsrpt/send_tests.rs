@@ -92,6 +92,7 @@ async fn pass(data_dir: &Path, dns: &Dns, sink: &MemorySink, poster: &Poster) {
 		dns,
 		sink,
 		poster,
+		auto_submitted: true,
 	};
 	send_pending(&sender, TODAY).await;
 }
@@ -254,6 +255,7 @@ async fn todays_sessions_wait_for_the_day_to_end() {
 		dns: &dns,
 		sink: &sink,
 		poster: &Poster::default(),
+		auto_submitted: true,
 	};
 	send_pending(&sender, "20240101").await;
 	assert_eq!(sink.messages().len(), 0);

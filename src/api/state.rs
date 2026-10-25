@@ -61,6 +61,10 @@ struct Inner {
 	/// so the same test tempdir is reused across handlers.
 	correspondents: Option<crate::storage::CorrespondentStore>,
 	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
+	/// Which identification and reputation headers a submission gets,
+	/// shared with the SMTP submission path so the same message carries
+	/// the same fields whichever of the three sent it.
+	identification: crate::smtp::identification::Policy,
 	/// Cap on first-time recipients per account in any rolling 24h window.
 	/// `None` disables the cap (the default). Lives on `ApiState` so
 	/// the REST and JMAP submission paths share a single source of
@@ -216,6 +220,7 @@ impl ApiState {
 				argon2_stats: Default::default(),
 				correspondents: None,
 				class_bindings: None,
+				identification: crate::smtp::identification::Policy::default(),
 				new_recipients_per_day: None,
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(

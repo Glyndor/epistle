@@ -53,6 +53,18 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Improve API authorization consistency.
   * Improve API authorization consistency: a key confined to some domains reads the delivery records of an account only while the sender is inside those domains, answers the same for another tenant's account and for one that does not exist on every route that takes an account name, and an account-bound key whose domains do not reach the account owns no push subscriptions. A secret can belong to one key only: adding a second key behind the same secret is refused, and a request whose secret matches two keys is served with the reach of neither.
   * API keys apply the same account and domain limits on every route.
+  * Outgoing mail carries identification headers on every path: a Feedback-ID
+    built from the domain and the mail class, List-Unsubscribe on bulk mail
+    outside the marketing class, List-Id on list mail, Auto-Submitted on system
+    mail, and optional Organization and X-Epistle values; each can be turned
+    off, and the ones that identify or control replies are signed.
+  * A submission with an ambiguous header name or line ending is refused before
+    any header is changed, so the fields the server checks and the fields the
+    signature covers are the ones a receiver sees.
+  * A submission whose RFC 5322 header syntax, encoding or identity field
+    counts differ between readers is refused, and outgoing line endings are
+    normalised before signing and queueing so the signature covers the
+    transmitted bytes.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 
