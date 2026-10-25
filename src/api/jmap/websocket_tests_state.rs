@@ -8,7 +8,7 @@ use crate::api::tests::test_state;
 use serde_json::{Value, json};
 
 fn principal() -> Principal {
-	Principal::Admin { credential: None }
+	Principal::unrestricted()
 }
 
 /// Run one method call over the socket and return its response triple.

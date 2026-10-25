@@ -1,6 +1,7 @@
 //! End-to-end checks that a domain-confined API key sees and touches only its
-//! own tenant. The scope logic itself is unit-tested in `domain_scope_tests`;
-//! these pin the wiring, which is the half a refactor silently drops.
+//! own tenant. The reach logic itself is unit-tested in
+//! `authorization_tests`; these pin the wiring, which is the half a refactor
+//! silently drops.
 
 use super::tests::{TOKEN, request, request_with_body};
 use super::*;

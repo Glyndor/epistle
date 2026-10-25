@@ -9,6 +9,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
+use crate::api::Principal;
 use crate::api::audit::{self, AuditEvent};
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
@@ -30,7 +31,8 @@ pub async fn list(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<ListResponse>, ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	Ok(Json(ListResponse {
 		addresses: state.store().list_masked(&name),
 	}))
@@ -59,7 +61,8 @@ pub async fn create(
 	Path(name): Path<String>,
 	Json(request): Json<CreateRequest>,
 ) -> Result<(axum::http::StatusCode, Json<CreatedResponse>), ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	let domain = pick_domain(&state, &name)?;
 	let now = unix_now();
 	let entry = state
@@ -96,7 +99,8 @@ pub async fn update(
 	Path((name, address)): Path<(String, String)>,
 	Json(request): Json<UpdateRequest>,
 ) -> Result<Json<UpdatedResponse>, ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	state
 		.store()
 		.set_masked_enabled(&name, &address, request.enabled)
@@ -122,7 +126,8 @@ pub async fn remove(
 	Extension(auth): Extension<MatchedAuth>,
 	Path((name, address)): Path<(String, String)>,
 ) -> Result<Json<RemovedResponse>, ApiError> {
-	account_in_scope(&state, &state.domain_scope(&auth), &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	account_in_scope(&state, &principal, &name)?;
 	state
 		.store()
 		.remove_masked(&name, &address)

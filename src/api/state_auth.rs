@@ -9,37 +9,12 @@
 //! checks) reads that answer and only walks the API keys, whose hashes are
 //! SHA-256.
 
-use super::{ApiState, MatchedAuth};
+use super::ApiState;
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
-use crate::api::domain_scope::DomainScope;
 use crate::api::error::ApiError;
 
 impl ApiState {
-	/// The domains the credentials in `auth` are allowed to act on.
-	///
-	/// The static token is unrestricted. A key carries whatever it declared,
-	/// and a key that declared nothing keeps the reach every key had before
-	/// the field existed. Credentials that match no key at all admit no
-	/// domain: the middleware has already authorized the request by the time
-	/// a handler asks, so failing to identify the key here means the state
-	/// changed underneath us, and that is not a reason to widen anyone.
-	pub fn domain_scope(&self, auth: &MatchedAuth) -> DomainScope {
-		let Some(token) = auth.token.as_deref() else {
-			return DomainScope::Only(Vec::new());
-		};
-		if auth.configured {
-			return DomainScope::All;
-		}
-		const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
-		self.inner
-			.api_keys
-			.snapshot()
-			.iter()
-			.find(|key| key.admits_any(token, auth.client_ip, now(), EVERY_SCOPE))
-			.map_or_else(|| DomainScope::Only(Vec::new()), DomainScope::of_key)
-	}
-
 	/// Whether any non-expired, IP-permitted API key's hash matches `token`
 	/// from `client_ip` and carries at least one of `acceptable_scopes`.
 	/// Fail-closed: an expired, IP-restricted or under-scoped key that does
@@ -97,25 +72,16 @@ impl ApiState {
 	/// The middleware never calls this; the path/method inference it does is
 	/// enough for the routes that reach it.
 	///
-	/// When the principal carries a credential (`Account` or `Domains` or a
-	/// key-shaped `Admin`), scope is decided by the API key that
-	/// authenticated, from the same peer. A principal carries a credential
-	/// only when its bearer was not the configured token, so the configured
-	/// hash is not compared again. The bare `Admin` (the configured static
-	/// token) admits every scope; any other principal without a credential
-	/// admits none.
+	/// The scopes the principal carries were read from the same API key
+	/// snapshot as the rest of its reach, so the scope check and the reach
+	/// check can never disagree about which key authenticated the request.
+	/// The configured static token carries every scope by design.
 	pub fn require_scope_for_principal(
 		&self,
 		principal: &Principal,
 		scope: Scope,
 	) -> Result<(), ApiError> {
-		let allowed = match principal.credential() {
-			Some(credential) => {
-				self.key_authorizes(&credential.token, credential.client_ip, &[scope])
-			}
-			None => matches!(principal, Principal::Admin { .. }),
-		};
-		if allowed {
+		if principal.admits_scope(scope) {
 			Ok(())
 		} else {
 			Err(ApiError::unauthenticated())

@@ -15,7 +15,7 @@ async fn frame(state: &crate::api::state::ApiState, calls: Value) -> Value {
 	let text = json!({"@type": "Request", "using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": calls})
 	.to_string();
-	let principal = Principal::Admin { credential: None };
+	let principal = Principal::unrestricted();
 	let replies = handle_frame(state, &principal, &text, &mut PushState::default()).await;
 	assert_eq!(replies.len(), 1, "{replies:?}");
 	let reply: Value = serde_json::from_str(&replies[0]).expect("json");

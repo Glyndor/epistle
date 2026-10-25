@@ -42,6 +42,25 @@ impl StoredSubscription {
 	}
 }
 
+/// Drop the subscriptions kept for the account `name`, which a removed
+/// account leaves behind under its name.
+pub(crate) fn forget_account(state: &ApiState, name: &str) {
+	state.with_push_subscriptions(|store| drop_account_subscriptions(store, name));
+}
+
+fn drop_account_subscriptions(store: &mut Vec<StoredSubscription>, name: &str) {
+	store.retain(|stored| {
+		stored
+			.owner
+			.strip_prefix("account:")
+			.is_none_or(|own| !own.eq_ignore_ascii_case(name))
+	});
+}
+
+#[cfg(test)]
+#[path = "push_subscription_tests.rs"]
+mod tests;
+
 /// The stable identity of the caller behind `principal`, the key subscriptions
 /// are stored under. A credential bound to one account is that account, so
 /// every key bound to it shares the account's subscriptions. Any other key is
@@ -49,11 +68,17 @@ impl StoredSubscription {
 /// static token is its own caller. `None` when the credential no longer maps
 /// to a key, which owns nothing.
 pub(crate) fn owner_of(state: &ApiState, principal: &Principal) -> Option<String> {
-	if let Principal::Account { name, .. } = principal {
-		return Some(format!("account:{name}"));
+	if let Some(name) = principal.bound_account() {
+		// A key bound to an account its domains do not reach owns nothing,
+		// the same reach it has everywhere else.
+		let reached = state.accounts().iter().any(|account| {
+			account.name == name && principal.admits_account(name, &account.addresses)
+		});
+		return reached.then(|| format!("account:{name}"));
 	}
 	let Some(credential) = principal.credential() else {
-		return matches!(principal, Principal::Admin { .. }).then(|| "token".to_string());
+		// The configured static token is its own caller.
+		return Some("token".to_string());
 	};
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)

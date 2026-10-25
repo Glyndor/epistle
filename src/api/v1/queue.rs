@@ -5,6 +5,7 @@ use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 
@@ -46,7 +47,7 @@ pub async fn list(
 	if limit == 0 {
 		return Err(ApiError::invalid_input("limit must be at least 1"));
 	}
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 
 	let ids = state.spool().list().map_err(|_| ApiError::internal())?;
 	let mut position = match params.cursor {
@@ -64,7 +65,7 @@ pub async fn list(
 		last_read = Some(id);
 		// An entry can vanish between list and load (worker delivered it).
 		if let Ok(entry) = state.spool().load(id)
-			&& scope.admits_account(std::iter::once(entry.envelope.reverse_path.as_str()))
+			&& principal.admits_addresses(std::slice::from_ref(&entry.envelope.reverse_path))
 		{
 			entries.push(QueueEntry {
 				id,
@@ -95,10 +96,10 @@ pub async fn remove(
 	Path(id): Path<Uuid>,
 ) -> Result<Json<Removed>, ApiError> {
 	// An entry of another tenant answers like one that is not there.
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	match state.spool().load(id) {
 		Ok(entry)
-			if scope.admits_account(std::iter::once(entry.envelope.reverse_path.as_str())) => {}
+			if principal.admits_addresses(std::slice::from_ref(&entry.envelope.reverse_path)) => {}
 		_ => return Err(ApiError::not_found("no such queue entry")),
 	}
 	// The cancellation is recorded, and the entry removed, as one step.

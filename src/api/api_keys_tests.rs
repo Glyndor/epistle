@@ -210,3 +210,90 @@ fn open_accepts_legacy_file_without_scopes() {
 		"legacy key has empty scopes"
 	);
 }
+
+/// A key may declare an account and domains at the same time. The two
+/// restrictions are not alternatives: the key is confined by both, so it is
+/// accepted and kept as it was written.
+#[test]
+fn a_key_with_an_account_and_domains_is_accepted_and_kept() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	let mut bound = key("ci", "secret1");
+	bound.account = Some("alice".to_string());
+	bound.domains = vec!["a.example".to_string()];
+	store.add(bound).expect("add");
+
+	let row = store
+		.list()
+		.into_iter()
+		.find(|row| row.label == "ci")
+		.expect("the key is listed");
+	assert_eq!(row.account.as_deref(), Some("alice"));
+	assert_eq!(row.domains, vec!["a.example".to_string()]);
+
+	let reopened = ApiKeyStore::open(dir.path()).expect("reopen");
+	let stored = reopened
+		.keys()
+		.iter()
+		.find(|key| key.label == "ci")
+		.expect("the key is stored");
+	assert_eq!(stored.account.as_deref(), Some("alice"));
+	assert_eq!(stored.domains, vec!["a.example".to_string()]);
+}
+
+/// The same key, loaded from a file the operator wrote by hand.
+#[test]
+fn a_key_with_an_account_and_domains_loads_from_a_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("api_keys.toml");
+	std::fs::write(
+		&path,
+		b"[[keys]]\n\
+		  label = \"both\"\n\
+		  hash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n\
+		  scopes = [\"read\"]\n\
+		  account = \"alice\"\n\
+		  domains = [\"a.example\"]\n",
+	)
+	.expect("write fixture");
+	let store = ApiKeyStore::open(dir.path()).expect("the file must load");
+	let stored = &store.keys()[0];
+	assert_eq!(stored.account.as_deref(), Some("alice"));
+	assert_eq!(stored.domains, vec!["a.example".to_string()]);
+}
+
+/// The same key, swapped in by the file watcher while the server runs.
+#[test]
+fn a_key_with_an_account_and_domains_survives_a_reload() {
+	let set = ApiKeySet::empty();
+	set.reload_from(
+		"[[keys]]\n\
+		  label = \"both\"\n\
+		  hash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n\
+		  scopes = [\"read\"]\n\
+		  account = \"alice\"\n\
+		  domains = [\"a.example\"]\n",
+	)
+	.expect("reload");
+	let snapshot = set.snapshot();
+	let stored = &snapshot[0];
+	assert_eq!(stored.account.as_deref(), Some("alice"));
+	assert_eq!(stored.domains, vec!["a.example".to_string()]);
+}
+
+/// A secret belongs to one key: adding a second key behind the same secret
+/// is refused and leaves the store as it was.
+#[test]
+fn a_second_key_behind_the_same_secret_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	store.add(key("first", "shared")).expect("add first");
+	let error = store
+		.add(key("second", "shared"))
+		.expect_err("same secret, other label");
+	assert!(
+		error.to_string().contains("already uses this secret"),
+		"{error}"
+	);
+	assert_eq!(store.keys().len(), 1);
+}

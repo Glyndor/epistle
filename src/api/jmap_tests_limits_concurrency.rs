@@ -187,19 +187,20 @@ async fn a_websocket_request_counts_against_max_concurrent_requests() {
 	})
 	.to_string();
 	let mut push = PushState::default();
-	let token = Principal::Admin { credential: None };
+	let token = Principal::unrestricted();
 	let replies = handle_ws_message(&state, &token, &frame, &mut push);
 	let reply: Value = serde_json::from_str(&replies[0]).expect("json");
 	assert_eq!(reply["@type"], "RequestError", "{reply}");
 	assert_eq!(reply["limit"], "maxConcurrentRequests", "{reply}");
 	assert_eq!(reply["requestId"], "w1", "{reply}");
 
-	let other = Principal::Admin {
-		credential: Some(Credential {
+	let other = Principal::of_key(
+		&key(SECRET, &[], None, None),
+		Some(Credential {
 			token: SECRET.to_string(),
 			client_ip: None,
 		}),
-	};
+	);
 	let replies = handle_ws_message(&state, &other, &frame, &mut push);
 	let reply: Value = serde_json::from_str(&replies[0]).expect("json");
 	assert_eq!(reply["@type"], "Response", "{reply}");

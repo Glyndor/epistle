@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 
@@ -44,10 +45,10 @@ pub async fn list(
 	Extension(auth): Extension<MatchedAuth>,
 	Query(params): Query<ListParams>,
 ) -> Result<Json<SuppressionPage>, ApiError> {
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	match &params.account {
-		Some(account) => account_in_scope(&state, &scope, account)?,
-		None => require_unconfined(&scope, "The global suppression list")?,
+		Some(account) => account_in_scope(&state, &principal, account)?,
+		None => require_unconfined(&principal, "The global suppression list")?,
 	}
 	let limit = params.limit.unwrap_or(50).min(MAX_LIMIT);
 	if limit == 0 {
@@ -91,10 +92,10 @@ pub async fn remove(
 	Path(address): Path<String>,
 	Query(params): Query<RemoveParams>,
 ) -> Result<Json<Removed>, ApiError> {
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	match &params.account {
-		Some(account) => account_in_scope(&state, &scope, account)?,
-		None => require_unconfined(&scope, "The global suppression list")?,
+		Some(account) => account_in_scope(&state, &principal, account)?,
+		None => require_unconfined(&principal, "The global suppression list")?,
 	}
 	let suppression = open(&state)?;
 	let result = match &params.account {

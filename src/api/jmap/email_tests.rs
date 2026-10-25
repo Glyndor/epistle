@@ -335,7 +335,7 @@ fn one_email_set_call_teaches_at_most_its_commands_budget() {
 	let args = json!({ "accountId": "alice", "update": update });
 	let reply = email_set(
 		&state,
-		&crate::api::principal::Principal::Admin { credential: None },
+		&crate::api::Principal::unrestricted(),
 		&args,
 		"c0",
 		&crate::api::jmap::Uploads::default(),

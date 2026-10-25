@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::{Extension, Json};
 use serde::Serialize;
 
+use crate::api::Principal;
 use crate::api::state::{ApiState, MatchedAuth};
 
 #[derive(Serialize)]
@@ -18,11 +19,11 @@ pub async fn list(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 ) -> Json<Domains> {
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	let visible: Vec<String> = state
 		.domains()
 		.iter()
-		.filter(|domain| scope.admits_domain(domain))
+		.filter(|domain| principal.admits_domain(domain))
 		.cloned()
 		.collect();
 	let disabled = visible
