@@ -2,11 +2,13 @@
 //!
 //! The session owns no sockets: it consumes parsed [`Command`]s and returns a
 //! [`Response`] the network layer encodes and writes. A [`Backend`] supplies
-//! credential verification, the message snapshot taken at login, and deletion
+//! credential verification, the message index taken at login, message bytes
+//! on demand, and deletion
 //! at QUIT — all injectable, so the protocol is fully unit-testable.
 
 use std::sync::Arc;
 
+use super::bounds::{MAX_MESSAGE_OCTETS, MAX_SESSION_MESSAGES};
 use super::command::Command;
 use crate::smtp::directory::hash_gate::Verdict;
 
@@ -30,8 +32,14 @@ pub trait Backend {
 			None => Verdict::Refused,
 		}
 	}
-	/// The messages in the account's inbox at login: `(unique-id, bytes)`.
-	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)>;
+	/// The index of the account's inbox at login: `(unique-id, octets)` in
+	/// arrival order, at most [`MAX_SESSION_MESSAGES`] entries. No message
+	/// body is read.
+	fn list(&self, account: &str) -> Vec<(String, usize)>;
+	/// The bytes of one message of the index, read when a command needs it.
+	/// `None` when it is gone, unreadable, or larger than
+	/// [`MAX_MESSAGE_OCTETS`].
+	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
 	fn remove(&self, account: &str, uids: &[String]);
 }
@@ -115,7 +123,8 @@ enum State {
 
 struct Message {
 	uid: String,
-	data: Vec<u8>,
+	/// The size announced by the index, in octets.
+	size: usize,
 	deleted: bool,
 }
 
@@ -229,11 +238,11 @@ impl<B: Backend> Session<B> {
 			}
 			Command::List(None) => Response::Multiline {
 				status: format!("{} messages", self.live_count()),
-				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.data.len())),
+				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.size)),
 			},
-			Command::List(Some(n)) => self.with_message(n, |i, m| {
-				Response::Ok(format!("{} {}", i + 1, m.data.len()))
-			}),
+			Command::List(Some(n)) => {
+				self.with_message(n, |i, m| Response::Ok(format!("{} {}", i + 1, m.size)))
+			}
 			Command::Uidl(None) => Response::Multiline {
 				status: "unique-id listing".to_string(),
 				body: self.scan_list(|i, m| format!("{} {}\r\n", i + 1, m.uid)),
@@ -241,13 +250,13 @@ impl<B: Backend> Session<B> {
 			Command::Uidl(Some(n)) => {
 				self.with_message(n, |i, m| Response::Ok(format!("{} {}", i + 1, m.uid)))
 			}
-			Command::Retr(n) => self.with_message(n, |_, m| Response::Multiline {
-				status: format!("{} octets", m.data.len()),
-				body: m.data.clone(),
+			Command::Retr(n) => self.read_message(n, |data| Response::Multiline {
+				status: format!("{} octets", data.len()),
+				body: data,
 			}),
-			Command::Top(n, lines) => self.with_message(n, |_, m| Response::Multiline {
+			Command::Top(n, lines) => self.read_message(n, |data| Response::Multiline {
 				status: "top".to_string(),
-				body: top_of(&m.data, lines as usize),
+				body: top_of(&data, lines as usize),
 			}),
 			Command::Dele(n) => self.delete(n),
 			Command::Rset => {
@@ -353,11 +362,12 @@ impl<B: Backend> Session<B> {
 		}
 		self.messages = self
 			.backend
-			.load(&account)
+			.list(&account)
 			.into_iter()
-			.map(|(uid, data)| Message {
+			.take(MAX_SESSION_MESSAGES)
+			.map(|(uid, size)| Message {
 				uid,
-				data,
+				size,
 				deleted: false,
 			})
 			.collect();
@@ -371,7 +381,7 @@ impl<B: Backend> Session<B> {
 		self.messages
 			.iter()
 			.filter(|m| !m.deleted)
-			.fold((0, 0), |(c, o), m| (c + 1, o + m.data.len()))
+			.fold((0, 0), |(c, o), m| (c + 1, o + m.size))
 	}
 
 	fn live_count(&self) -> usize {
@@ -394,6 +404,21 @@ impl<B: Backend> Session<B> {
 		match self.live_message(number) {
 			Some(index) => ok(index, &self.messages[index]),
 			None => Response::Err("no such message".to_string()),
+		}
+	}
+
+	/// Read message `number` from the backend and answer with `ok`. The
+	/// bytes live only for this command.
+	fn read_message(&self, number: u32, ok: impl FnOnce(Vec<u8>) -> Response) -> Response {
+		let Some(index) = self.live_message(number) else {
+			return Response::Err("no such message".to_string());
+		};
+		let Some(account) = &self.account else {
+			return Response::Err("no such message".to_string());
+		};
+		match self.backend.fetch(account, &self.messages[index].uid) {
+			Some(data) if data.len() <= MAX_MESSAGE_OCTETS => ok(data),
+			_ => Response::Err("[SYS/TEMP] message unavailable".to_string()),
 		}
 	}
 

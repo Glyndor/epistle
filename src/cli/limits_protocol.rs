@@ -144,6 +144,20 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		"no standard mandate (consecutive -ERR replies before the connection is dropped)"
 	),
 	number!(
+		"pop3-messages-per-session",
+		crate::pop3::bounds::MAX_SESSION_MESSAGES,
+		"count",
+		Own,
+		"no standard mandate (messages a session lists, oldest first)"
+	),
+	number!(
+		"pop3-message-octets",
+		crate::pop3::bounds::MAX_MESSAGE_OCTETS,
+		"octets",
+		Own,
+		"no standard mandate (largest message a session retrieves)"
+	),
+	number!(
 		"imap-command-line",
 		crate::imap::command::MAX_COMMAND_LINE,
 		"octets",
