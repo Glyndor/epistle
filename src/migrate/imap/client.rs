@@ -574,3 +574,7 @@ mod tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
+
+#[cfg(test)]
+#[path = "deadline_wiring_tests.rs"]
+mod deadline_wiring_tests;

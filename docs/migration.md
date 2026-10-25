@@ -146,9 +146,12 @@ The local account must exist. The remote password comes from `--password-file`
   interruption checks the deadline between messages itself, but the write of one
   message and the first read of a ledger do not: a ledger is read once, in 64
   KiB steps, when its folder is opened, and a file over 1 GiB is refused before
-  that read. A deadline that passes during one of those ends the run when it
-  finishes, so the overshoot is the time to read one ledger or store one batch,
-  not the size of the mailbox.
+  that read. The count of local messages that comes before the scan and the
+  final sync of the mailbox directories do not check the deadline either, and
+  take time in proportion to the number of files in the mailbox directory. A
+  deadline that passes during any of those ends the run when it finishes, so
+  the overshoot is the time to read one ledger, store one batch or walk the
+  directory once, not the time to scan the whole mailbox.
 - **Output.** One line per folder with messages, bytes and rate; `--dry-run`
   lists each folder and how many messages it would copy; `--json` prints the
   summary as one object.

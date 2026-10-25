@@ -62,5 +62,6 @@ fn reading_state_for_a_dry_run_creates_nothing_but_still_checks_the_owner() {
 	directory(&root, "alice", true).unwrap();
 	let existing = directory(&root, "alice", false).unwrap();
 	let owner = existing.metadata().unwrap().uid();
-	assert!(owned_by(&existing, true, owner.wrapping_add(1)).is_err());
+	directory_as(&root, "alice", false, owner).unwrap();
+	assert!(directory_as(&root, "alice", false, owner.wrapping_add(1)).is_err());
 }

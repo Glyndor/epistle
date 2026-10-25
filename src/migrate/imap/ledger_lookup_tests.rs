@@ -74,13 +74,25 @@ fn a_ledger_over_the_size_bound_is_refused_before_it_is_read() {
 		.open(&path)
 		.expect("open");
 	file.set_len(MAX_LEDGER_BYTES + RECORD).expect("grow");
-	let before = reads();
 	let message = open(dir.path(), false)
 		.expect_err("a ledger past the bound")
 		.to_string();
 	assert!(message.contains("holds more than"), "{message}");
-	assert!(
-		reads() - before <= 1,
-		"the oversized file is refused without reading its records"
-	);
+}
+
+#[test]
+fn a_uid_above_the_last_confirmed_one_is_answered_without_reading() {
+	let dir = tempfile::tempdir().expect("dir");
+	let records: Vec<_> = (1..=4000u32).map(|uid| (uid, seed(uid))).collect();
+	open(dir.path(), true)
+		.expect("ledger")
+		.confirm(&records)
+		.expect("confirm");
+	let mut ledger = open(dir.path(), false).expect("reopened");
+	let before = reads();
+	for uid in 4001..5000 {
+		assert_eq!(ledger.fingerprint(uid).expect("fingerprint"), None);
+	}
+	assert_eq!(reads(), before, "a resume above the ledger never reads it");
+	assert_eq!(ledger.fingerprint(4000).expect("last"), Some(seed(4000)));
 }

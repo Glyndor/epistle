@@ -121,6 +121,7 @@ impl Ledger {
 	}
 
 	/// The fingerprint held for `uid`, `None` when it is not confirmed. A UID
+	/// above the last one confirmed is answered without reading. A UID
 	/// above the cursor moves it with a binary search over the records, so a
 	/// lookup reads a few records and never the whole file, and a UID that
 	/// follows the last one answered is found by walking the records read
@@ -129,6 +130,14 @@ impl Ledger {
 	/// call in the same window asked for or one the file does not hold.
 	pub(super) fn fingerprint(&mut self, uid: u32) -> io::Result<Option<Fingerprint>> {
 		if self.count == 0 {
+			return Ok(None);
+		}
+		// Nothing above the last confirmed UID is held, which is every UID
+		// of a resume, so those answer without touching the file. The cursor
+		// ends past the records, as if it had walked there.
+		if uid > self.last {
+			self.at = self.count;
+			self.current = None;
 			return Ok(None);
 		}
 		if !self.current.is_some_and(|(current, _)| current >= uid) {
