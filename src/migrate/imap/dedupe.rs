@@ -90,6 +90,7 @@ impl Index {
 		let mut index = Index {
 			table: disk::Table::new(file, count).map_err(MigrateError::Storage)?,
 		};
+		let mut synced = false;
 		// Avoid Snapshot::open: it collects every local message and its flags
 		// before the recovery index can apply any memory limit.
 		for entry in entries()
@@ -98,6 +99,7 @@ impl Index {
 			.flatten()
 		{
 			let entry = entry.map_err(MigrateError::Storage)?;
+			budget.check_deadline()?;
 			let path = entry.path();
 			if path.extension().is_none_or(|ext| ext != "eml")
 				|| path
@@ -142,10 +144,17 @@ impl Index {
 				.and_then(|s| uuid::Uuid::parse_str(s).ok())
 				.expect("validated message UUID");
 			if sync_pending {
-				super::durability::message(data_dir, account, mailbox, id)
+				super::durability::files(data_dir, account, mailbox, id)
 					.map_err(MigrateError::Storage)?;
+				synced = true;
 			}
 			index.table.add(&key).map_err(MigrateError::Storage)?;
+		}
+		// The directories are shared by every message, so they are made durable
+		// once for the whole scan and not once for each message.
+		if synced {
+			super::durability::hierarchy(data_dir, account, mailbox)
+				.map_err(MigrateError::Storage)?;
 		}
 		Ok(index)
 	}

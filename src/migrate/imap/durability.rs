@@ -13,15 +13,14 @@ pub(super) fn sync(file: &File, _kind: &'static str) -> io::Result<()> {
 	Ok(())
 }
 
-/// Persist the body, sidecars and containing hierarchy before confirming a UID.
-pub(super) fn message(
+/// Persist the body and sidecars of one message.
+pub(super) fn files(
 	data_dir: &std::path::Path,
 	account: &str,
 	mailbox: &str,
 	id: uuid::Uuid,
 ) -> io::Result<()> {
-	let root = data_dir.canonicalize()?;
-	let dir = crate::imap::mailbox::mailbox_dir(&root, account, mailbox)
+	let dir = crate::imap::mailbox::mailbox_dir(data_dir, account, mailbox)
 		.ok_or_else(|| io::Error::other("invalid migration mailbox"))?;
 	for (extension, kind) in [("eml", "message"), ("flags", "flags"), ("zone", "zone")] {
 		let path = dir.join(format!("{id}.{extension}"));
@@ -31,6 +30,19 @@ pub(super) fn message(
 			Err(error) => return Err(error),
 		}
 	}
+	Ok(())
+}
+
+/// Persist the mailbox directory and every parent up to the data directory,
+/// which makes the names of all the files created in it durable at once.
+pub(super) fn hierarchy(
+	data_dir: &std::path::Path,
+	account: &str,
+	mailbox: &str,
+) -> io::Result<()> {
+	let root = data_dir.canonicalize()?;
+	let dir = crate::imap::mailbox::mailbox_dir(&root, account, mailbox)
+		.ok_or_else(|| io::Error::other("invalid migration mailbox"))?;
 	let mut parent = dir.as_path();
 	loop {
 		sync(
@@ -50,6 +62,18 @@ pub(super) fn message(
 			.ok_or_else(|| io::Error::other("migration mailbox is outside the data directory"))?;
 	}
 	Ok(())
+}
+
+/// Persist the body, sidecars and containing hierarchy before confirming a UID.
+pub(super) fn message(
+	data_dir: &std::path::Path,
+	account: &str,
+	mailbox: &str,
+	id: uuid::Uuid,
+) -> io::Result<()> {
+	let root = data_dir.canonicalize()?;
+	files(&root, account, mailbox, id)?;
+	hierarchy(&root, account, mailbox)
 }
 
 #[cfg(test)]

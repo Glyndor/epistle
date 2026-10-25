@@ -133,6 +133,22 @@ The local account must exist. The remote password comes from `--password-file`
   count.
 - **Limits.** The run stops with an error when the next message would exceed
   the account's quota; raise it and run again to continue.
+- **Data directory owner.** `data_dir` and the `migrate/<account>` directories
+  below it must belong to the user that runs epistle, and a dry run checks this
+  too, because it reads the same progress files and ledgers. The check applies to
+  dry runs on purpose: those files decide what a real run skips, and in a
+  directory owned by someone else that user could swap them between the two.
+  The error names `data_dir`. Run the migration as the owner
+  of the data directory, or change the owner, rather than expecting a dry run to
+  get past it.
+- **Total time.** The run stops after 24 hours. The timer only fires while the
+  run waits on the network, so the scan of the local mailbox after an
+  interruption checks the deadline between messages itself, but the write of one
+  message and the first read of a ledger do not: a ledger is read once, in 64
+  KiB steps, when its folder is opened, and a file over 1 GiB is refused before
+  that read. A deadline that passes during one of those ends the run when it
+  finishes, so the overshoot is the time to read one ledger or store one batch,
+  not the size of the mailbox.
 - **Output.** One line per folder with messages, bytes and rate; `--dry-run`
   lists each folder and how many messages it would copy; `--json` prints the
   summary as one object.

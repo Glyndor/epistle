@@ -245,9 +245,18 @@ async fn run_with_connection(
 		dry_run: settings.dry_run,
 		..Summary::default()
 	};
+	let deadline = std::time::Instant::now().checked_add(settings.total_timeout);
 	let error = match tokio::time::timeout(
 		settings.total_timeout,
-		copy_all(source, target, settings, progress, &mut summary, connection),
+		copy_all(
+			source,
+			target,
+			settings,
+			progress,
+			&mut summary,
+			connection,
+			deadline,
+		),
 	)
 	.await
 	{
@@ -266,6 +275,7 @@ async fn copy_all(
 	progress: &mut dyn Progress,
 	summary: &mut Summary,
 	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
+	deadline: Option<std::time::Instant>,
 ) -> Result<(), MigrateError> {
 	// The port is left out on purpose: the same account reached over 993
 	// one day and STARTTLS on 143 the next is still the same mail.
@@ -291,6 +301,7 @@ async fn copy_all(
 		)
 	};
 	let mut client = connection.await?;
+	client.metadata.deadline = deadline;
 	client.login(&source.user, &source.password).await?;
 	let namespace = client.namespace().await?;
 	let entries = client.list().await?;
