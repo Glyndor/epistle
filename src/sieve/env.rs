@@ -11,16 +11,16 @@ use std::collections::HashMap;
 
 /// The longest a variable's value may be, in octets (RFC 5229 section 4.1
 /// lets a server keep as little as 4000). A longer value is cut.
-pub(super) const MAX_VAR_BYTES: usize = 4096;
+pub(crate) const MAX_VAR_BYTES: usize = 4096;
 /// The most octets all of a run's variables may hold together. A `set` that
 /// would pass it is ignored.
-pub(super) const MAX_VARS_TOTAL_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_VARS_TOTAL_BYTES: usize = 64 * 1024;
 /// The most variables a run may hold, numbered captures included.
-pub(super) const MAX_VARS: usize = 128;
+pub(crate) const MAX_VARS: usize = 128;
 /// The longest a variable's name may be.
-pub(super) const MAX_VAR_NAME: usize = 64;
+pub(crate) const MAX_VAR_NAME: usize = 64;
 /// The most commands executed and tests evaluated in one run.
-pub(super) const MAX_STEPS: u32 = 20_000;
+pub(crate) const MAX_STEPS: u32 = 20_000;
 /// The work (octets compared, characters copied or built) one run may ask
 /// for: 256 MiB worth, a hard ceiling that does not move with the message.
 /// What a test reads of the body or of a header is a fixed window
@@ -28,7 +28,7 @@ pub(super) const MAX_STEPS: u32 = 20_000;
 /// the sender's choice of a bigger message does not make a test cost more,
 /// and a script runs out of work for a big message exactly when it would for a
 /// small one: when it asks for more than this many octets of reading.
-pub(super) const MAX_WORK: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_WORK: u64 = 256 * 1024 * 1024;
 /// How much of the body the `body` test reads: the first mebibyte.
 pub(super) const BODY_WINDOW: usize = 1024 * 1024;
 /// What a lookup reads of the headers called one name: the first 1000 values,
@@ -49,7 +49,7 @@ pub(super) const HEADER_NAMES_PER_LOOKUP: usize = 16;
 /// a filter. What comes after is not visible to a test. The sender gains
 /// nothing by it, since a header it hides it could have left out, and what the
 /// server itself adds comes first.
-pub(super) const MAX_HEADERS: usize = 10_000;
+pub(crate) const MAX_HEADERS: usize = 10_000;
 
 /// Variables and counters of one run.
 #[derive(Default)]

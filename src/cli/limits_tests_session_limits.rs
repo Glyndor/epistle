@@ -92,11 +92,11 @@ fn the_defaults_and_limits_turned_off_are_shown() {
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["junk-command-limit"],
-		serde_json::json!({"value": 100, "unit": "count", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": 100, "unit": "count", "source": "default", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(
 		show_json(&config)["max-session-time"],
-		serde_json::json!({"value": 1800, "unit": "seconds", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": 1800, "unit": "seconds", "source": "default", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	for key in ["junk-command-limit", "max-session-time"] {
 		let (code, _) = limits(file.path(), &["set", key, "0"]);
@@ -112,11 +112,11 @@ fn the_defaults_and_limits_turned_off_are_shown() {
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["junk-command-limit"],
-		serde_json::json!({"value": null, "unit": "count", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": null, "unit": "count", "source": "configured", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(
 		show_json(&config)["max-session-time"],
-		serde_json::json!({"value": null, "unit": "seconds", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": null, "unit": "seconds", "source": "configured", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 }
 

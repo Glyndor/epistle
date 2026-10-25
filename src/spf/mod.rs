@@ -1,7 +1,8 @@
 //! SPF evaluation (RFC 7208) for inbound mail.
 
 mod dns;
-pub(crate) mod evaluator;
+mod evaluator;
+pub(crate) use evaluator::{MAX_DNS_MECHANISMS, MAX_VOID_LOOKUPS};
 mod record;
 
 pub use dns::{DnsFailure, DnsLookup, SystemDns, system_resolver};

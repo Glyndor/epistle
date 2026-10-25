@@ -4,6 +4,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Expose per-account connection limits in the operator limits catalog.
   * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.
   * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` is shown as the RFC minimum it is, which `limits set` refuses to lower.
+  * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` and `max-message-size` are shown as the RFC minimums they are, which `limits set` refuses to lower; a ManageSieve script name may be up to 128 characters (512 octets).
   * Document how to expose the management API on a private interface, and warn
     when an API key pinned to a network sits behind a bridge that hides the
     address of the client.

@@ -8,9 +8,15 @@ use std::sync::Arc;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::{ServerConfig, SupportedProtocolVersion, version};
 
 use crate::config::Tls;
+
+/// The protocol versions a listener negotiates, newest first. `epistle limits
+/// show` reads the oldest one from here, so the minimum it reports is the one
+/// every acceptor is built with.
+pub(crate) const PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] =
+	&[&version::TLS13, &version::TLS12];
 
 /// Install the ring `CryptoProvider` as the process default.
 ///

@@ -63,7 +63,7 @@ fn the_queue_caps_and_backoff_are_set_in_the_queue_table() {
 	let json = show_json(&config);
 	assert_eq!(
 		json["queue-backoff"],
-		serde_json::json!({"value": [120, 600, 3600], "unit": "seconds", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": [120, 600, 3600], "unit": "seconds", "source": "configured", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(json["queue-per-domain-concurrency"]["value"], 4);
 

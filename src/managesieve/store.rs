@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::store_index::Index;
+use super::store_names;
 use crate::storage::lock::FileLock;
 use crate::util::path_component::AccountName;
 use crate::util::path_containment::{contained, contained_child, contained_subdir};
@@ -27,11 +28,10 @@ pub const MAX_SCRIPTS: usize = 50;
 /// The longest script name, in Unicode scalar values (RFC 5804 section 1.6).
 pub const MAX_NAME_CHARS: usize = 128;
 
-/// The longest script name, in octets. The name is the file name, and the
-/// atomic write stages a `.<name>.sieve.<uuid>.tmp` file next to it, which
-/// must stay under the 255 octets a file name may have on common
-/// filesystems. 200 leaves room for that staging name.
-pub const MAX_NAME_BYTES: usize = 200;
+/// The longest script name, in octets: 128 characters of up to four octets
+/// each (RFC 5804 section 1.6). A name past 200 octets is not the file name
+/// (see `store_names`).
+pub const MAX_NAME_BYTES: usize = 512;
 
 /// Whether `name` is an acceptable script name: 1 to [`MAX_NAME_CHARS`]
 /// characters and [`MAX_NAME_BYTES`] octets, none of them a control
@@ -49,6 +49,7 @@ pub fn is_valid_name(name: &str) -> bool {
 		&& name.chars().count() <= MAX_NAME_CHARS
 		&& name != "."
 		&& name != ".."
+		&& !store_names::is_reserved(name)
 		&& !name.starts_with(char::is_whitespace)
 		&& !name.ends_with(char::is_whitespace)
 		&& !name.chars().any(|c| {
@@ -144,8 +145,11 @@ impl ScriptStore {
 		if !is_valid_name(name) {
 			return Err(StoreError::InvalidName);
 		}
-		contained_child(&self.dirs()?.sieve_dir, &format!("{name}.sieve"))
-			.map_err(|_| StoreError::InvalidName)
+		contained_child(
+			&self.dirs()?.sieve_dir,
+			&format!("{}.sieve", store_names::stem(name)),
+		)
+		.map_err(|_| StoreError::InvalidName)
 	}
 
 	/// Check `script` as every protocol does before storing it or reporting
@@ -265,6 +269,7 @@ impl ScriptStore {
 		if !exists && txn.index.scripts.len() >= MAX_SCRIPTS {
 			return Err(StoreError::TooManyScripts);
 		}
+		store_names::record(&self.dirs()?.sieve_dir, name).map_err(|_| StoreError::Io)?;
 		crate::storage::write_secret(&path, content.as_bytes()).map_err(|_| StoreError::Io)?;
 		txn.index.wrote(name);
 		txn.changed = true;
@@ -287,6 +292,7 @@ impl ScriptStore {
 			}
 			Err(_) => return Err(StoreError::Io),
 		}
+		store_names::forget(&self.dirs()?.sieve_dir, name);
 		txn.index.scripts.remove(name);
 		txn.changed = true;
 		Ok(())
@@ -302,7 +308,10 @@ impl ScriptStore {
 		if new_path.exists() {
 			return Err(StoreError::AlreadyExists);
 		}
+		let dir = &self.dirs()?.sieve_dir;
+		store_names::record(dir, new).map_err(|_| StoreError::Io)?;
 		fs::rename(&old_path, &new_path).map_err(|_| StoreError::Io)?;
+		store_names::forget(dir, old);
 		txn.index.renamed(old, new);
 		txn.changed = true;
 		if self.active_name().as_deref() == Some(old) {
@@ -414,6 +423,8 @@ impl ScriptStore {
 			let Some(name) = file.strip_suffix(".sieve") else {
 				continue;
 			};
+			let hashed = store_names::original(&self.dirs()?.sieve_dir, name);
+			let name = hashed.as_deref().unwrap_or(name);
 			if is_valid_name(name) {
 				names.insert(name.to_string());
 			} else {

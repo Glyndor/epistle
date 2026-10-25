@@ -32,7 +32,7 @@ const MAX_CONNECTIONS: usize = 500;
 
 /// Idle read timeout. RFC 9051 §5.4 recommends the server close the connection
 /// after 30 minutes of inactivity; we enforce it to kill Slowloris sessions.
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(1800);
+pub(crate) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// What a session gets when the server drains.
 const SHUTTING_DOWN: &[u8] = b"* BYE server shutting down\r\n";

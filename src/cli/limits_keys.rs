@@ -263,6 +263,10 @@ impl Key {
 				crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
 				crate::smtp::session::MIN_MAX_RECIPIENTS_REASON,
 			)),
+			Self::MaxMessageSize => Some((
+				crate::smtp::session::MIN_MESSAGE_SIZE as u64,
+				crate::smtp::session::MIN_MESSAGE_SIZE_REASON,
+			)),
 			_ => None,
 		}
 	}
@@ -282,6 +286,11 @@ impl Key {
 				crate::queue::schedule::SHOULD_RETRY_BASE_SECS,
 				"queue-retry-base is below the 30 minutes the RFC recommends; \
 				 the first retry is sooner than receivers expect",
+			)),
+			Self::PreauthTimeout => Some((
+				crate::smtp::session::SHOULD_COMMAND_TIMEOUT_SECS,
+				"preauth-timeout is below the 5 minutes RFC 5321 §4.5.3.2.7 recommends; \
+				 a slow client is dropped before it signs in",
 			)),
 			_ => None,
 		}

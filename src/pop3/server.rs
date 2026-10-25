@@ -25,7 +25,7 @@ use super::session::{Response, Session};
 
 const READ_BUFFER: usize = 4096;
 /// Idle timeout per RFC 1939's recommended minimum (10 minutes).
-const TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(600);
 /// Consecutive `-ERR` responses before the connection is dropped (abuse guard).
 pub(crate) const MAX_ERROR_STREAK: u32 = 20;
 /// Default max concurrent connections for a POP3 listener.

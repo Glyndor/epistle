@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls::{ServerConfig, SupportedProtocolVersion, version};
+use tokio_rustls::rustls::{ServerConfig, SupportedProtocolVersion};
 
 use super::{ReloadableAcceptor, TlsError};
 use crate::config::Tls;
 
-const VERSIONS: &[&SupportedProtocolVersion] = &[&version::TLS13, &version::TLS12];
+const VERSIONS: &[&SupportedProtocolVersion] = super::PROTOCOL_VERSIONS;
 
 fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 	super::ensure_crypto_provider();

@@ -1,284 +1,434 @@
 //! The limits the server hard-codes and a client can run into: line and
-//! address lengths, the JMAP request limits the Session advertises, the
-//! script limits of ManageSieve, the abuse guards of each protocol.
+//! address lengths, idle timers, the JMAP request limits the Session
+//! advertises, the script limits of ManageSieve, the abuse guards of each
+//! protocol.
 //!
-//! Each number is read from the constant the code enforces, never copied,
-//! so the catalog cannot say one thing while the server does another. A
-//! test walks the files that hold these constants and fails on a limit
-//! with no row here, so a new one cannot slip in unlisted. `class` says
-//! how strongly a standard ties the limit: a MUST (below it the server is
-//! broken), a SHOULD (the usual minimum, which a client may rely on), or a
-//! bound of epistle's own.
+//! A number is read from the constant the code enforces, never copied, and
+//! the row remembers the path of that constant. A test walks the source of
+//! the protocol modules and fails on a limit constant that is neither a row
+//! here nor excused with a reason, so a new one cannot slip in unlisted.
+//! `class` says how strongly a standard ties the limit: a MUST (below it the
+//! server is broken), a SHOULD (the usual minimum, which a client may rely
+//! on), or a bound of epistle's own.
 
 use super::catalog::{Class, FixedEntry, FixedValue};
+
+/// A row whose value is the integer constant at `$source`.
+macro_rules! number {
+	($name:literal, $source:path, $unit:literal, $class:ident, $reference:literal) => {
+		FixedEntry {
+			name: $name,
+			value: FixedValue::Number($source as u64),
+			unit: $unit,
+			class: Class::$class,
+			reference: $reference,
+			source: stringify!($source),
+		}
+	};
+}
+
+/// A row whose value is the `Duration` constant at `$source`, in seconds.
+macro_rules! seconds {
+	($name:literal, $source:path, $unit:literal, $class:ident, $reference:literal) => {
+		FixedEntry {
+			name: $name,
+			value: FixedValue::Number($source.as_secs()),
+			unit: $unit,
+			class: Class::$class,
+			reference: $reference,
+			source: stringify!($source),
+		}
+	};
+}
 
 /// Every hard-coded limit, in the order `show` prints them after the
 /// adjustable keys. `limits set` has no path to change any of them.
 pub(super) const FIXED: &[FixedEntry] = &[
-	FixedEntry {
-		name: "smtp-line-length",
-		value: FixedValue::Number(crate::smtp::line::MAX_LINE_LENGTH as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)",
-	},
-	FixedEntry {
-		name: "smtp-command-line",
-		value: FixedValue::Number(crate::smtp::command::MAX_COMMAND_LINE as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.1.4 (512 octets incl. CRLF)",
-	},
-	FixedEntry {
-		name: "smtp-command-minimum-timeout",
-		value: FixedValue::Number(crate::smtp::server::COMMAND_TIMEOUT.as_secs()),
-		unit: "seconds",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.2 (5 minute minimum)",
-	},
+	number!(
+		"smtp-line-length",
+		crate::smtp::line::MAX_LINE_LENGTH,
+		"octets",
+		Must,
+		"RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)"
+	),
+	number!(
+		"smtp-command-line",
+		crate::smtp::command::MAX_COMMAND_LINE,
+		"octets",
+		Must,
+		"RFC 5321 §4.5.3.1.4 (at least 512 octets incl. CRLF; 512 are accepted excl. CRLF)"
+	),
+	seconds!(
+		"smtp-command-minimum-timeout",
+		crate::smtp::server::COMMAND_TIMEOUT,
+		"seconds",
+		Should,
+		"RFC 5321 §4.5.3.2.7 (a timeout of at least 5 minutes)"
+	),
 	FixedEntry {
 		name: "smtp-never-bounce-a-bounce",
 		value: FixedValue::Text("true"),
 		unit: "boolean",
 		class: Class::Must,
-		reference: "RFC 5321 §5.3.3 (no bounce of a bounce)",
+		reference: "RFC 5321 §3.6.3 (no notification about a notification)",
+		source: "",
 	},
-	FixedEntry {
-		name: "smtp-address-length",
-		value: FixedValue::Number(crate::util::validation::MAX_ADDRESS as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.1.3 (path of 256 octets with the angle brackets)",
-	},
-	FixedEntry {
-		name: "smtp-local-part-length",
-		value: FixedValue::Number(crate::util::validation::MAX_LOCAL_PART as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.1.1 (local part of 64 octets)",
-	},
-	FixedEntry {
-		name: "smtp-domain-length",
-		value: FixedValue::Number(crate::util::validation::MAX_DOMAIN as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4 (255 octets on the wire)",
-	},
-	FixedEntry {
-		name: "smtp-domain-label-length",
-		value: FixedValue::Number(crate::util::validation::MAX_LABEL as u64),
-		unit: "octets",
-		class: Class::Must,
-		reference: "RFC 1035 §2.3.4 (labels of 63 octets)",
-	},
-	FixedEntry {
-		name: "smtp-received-hop-limit",
-		value: FixedValue::Number(crate::smtp::trace::RECEIVED_HOP_LIMIT as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 5321 §6.3 (a Received count near 100 is a loop)",
-	},
-	FixedEntry {
-		name: "smtp-header-fields",
-		value: FixedValue::Number(crate::smtp::trace::MAX_HEADER_FIELDS as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "smtp-error-streak",
-		value: FixedValue::Number(crate::smtp::server::run::MAX_ERROR_STREAK as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate (consecutive error replies before the connection is dropped)",
-	},
-	FixedEntry {
-		name: "pop3-command-line",
-		value: FixedValue::Number(crate::pop3::command::MAX_COMMAND_LINE as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "RFC 1939 §3 (generous bound)",
-	},
-	FixedEntry {
-		name: "pop3-error-streak",
-		value: FixedValue::Number(crate::pop3::server::MAX_ERROR_STREAK as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate (consecutive -ERR replies before the connection is dropped)",
-	},
-	FixedEntry {
-		name: "imap-command-line",
-		value: FixedValue::Number(crate::imap::command::MAX_COMMAND_LINE as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "imap-error-streak",
-		value: FixedValue::Number(crate::imap::server::MAX_ERROR_STREAK as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate (consecutive BAD replies before the connection is dropped)",
-	},
-	FixedEntry {
-		name: "imap-keywords-per-message",
-		value: FixedValue::Number(crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "imap-keyword-length",
-		value: FixedValue::Number(crate::imap::keyword::MAX_KEYWORD_BYTES as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "imap-mailbox-depth",
-		value: FixedValue::Number(crate::util::mailbox_path::MAX_DEPTH as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "imap-mailbox-name-length",
-		value: FixedValue::Number(crate::util::mailbox_path::MAX_DISK_NAME_LEN as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate (NAME_MAX of the common filesystems)",
-	},
-	FixedEntry {
-		name: "managesieve-script-size",
-		value: FixedValue::Number(crate::managesieve::store::MAX_SCRIPT_BYTES as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "managesieve-scripts-per-account",
-		value: FixedValue::Number(crate::managesieve::store::MAX_SCRIPTS as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "RFC 9661 (maxNumberScripts capability)",
-	},
-	FixedEntry {
-		name: "managesieve-script-name-length",
-		value: FixedValue::Number(crate::managesieve::store::MAX_NAME_CHARS as u64),
-		unit: "characters",
-		class: Class::Own,
-		reference: "RFC 5804 §1.6 (script names)",
-	},
-	FixedEntry {
-		name: "managesieve-script-name-bytes",
-		value: FixedValue::Number(crate::managesieve::store::MAX_NAME_BYTES as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate (room for the staging file name)",
-	},
-	FixedEntry {
-		name: "managesieve-auth-failures",
-		value: FixedValue::Number(crate::managesieve::session::MAX_AUTH_FAILURES as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate (failed AUTHENTICATE attempts before the connection is dropped)",
-	},
-	FixedEntry {
-		name: "sieve-redirects",
-		value: FixedValue::Number(crate::sieve::interp::MAX_REDIRECTS as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "RFC 9661 (maxNumberRedirects capability)",
-	},
-	FixedEntry {
-		name: "sieve-fileinto",
-		value: FixedValue::Number(crate::sieve::interp::MAX_FILEINTO as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "sieve-flags",
-		value: FixedValue::Number(crate::sieve::interp::MAX_FLAGS as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "sieve-flag-length",
-		value: FixedValue::Number(crate::sieve::interp::MAX_FLAG_BYTES as u64),
-		unit: "octets",
-		class: Class::Own,
-		reference: "no standard mandate (the IMAP keyword limit)",
-	},
-	FixedEntry {
-		name: "sieve-nesting-depth",
-		value: FixedValue::Number(crate::sieve::parser::MAX_NESTING_DEPTH as u64),
-		unit: "count",
-		class: Class::Own,
-		reference: "no standard mandate",
-	},
-	FixedEntry {
-		name: "jmap-max-size-request",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_SIZE_REQUEST as u64),
-		unit: "octets",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxSizeRequest, at least 10000000 recommended)",
-	},
-	FixedEntry {
-		name: "jmap-max-calls-in-request",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_CALLS_IN_REQUEST as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxCallsInRequest, at least 16 recommended)",
-	},
-	FixedEntry {
-		name: "jmap-max-concurrent-requests",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_CONCURRENT_REQUESTS as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxConcurrentRequests, at least 4 recommended)",
-	},
-	FixedEntry {
-		name: "jmap-max-concurrent-upload",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_CONCURRENT_UPLOAD as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxConcurrentUpload, at least 4 recommended)",
-	},
-	FixedEntry {
-		name: "jmap-max-objects-in-get",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_OBJECTS_IN_GET as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxObjectsInGet, at least 500 recommended)",
-	},
-	FixedEntry {
-		name: "jmap-max-objects-in-set",
-		value: FixedValue::Number(crate::api::jmap::limits::MAX_OBJECTS_IN_SET as u64),
-		unit: "count",
-		class: Class::Should,
-		reference: "RFC 8620 §2 (maxObjectsInSet, at least 500 recommended)",
-	},
-	FixedEntry {
-		name: "spf-max-dns-lookups",
-		value: FixedValue::Number(crate::spf::evaluator::MAX_DNS_MECHANISMS as u64),
-		unit: "count",
-		class: Class::Must,
-		reference: "RFC 7208 §4.6.4 (max 10 DNS-querying terms)",
-	},
-	FixedEntry {
-		name: "spf-max-void-lookups",
-		value: FixedValue::Number(crate::spf::evaluator::MAX_VOID_LOOKUPS as u64),
-		unit: "count",
-		class: Class::Must,
-		reference: "RFC 7208 §4.6.4 (max 2 void lookups)",
-	},
+	number!(
+		"smtp-address-length",
+		crate::util::validation::MAX_ADDRESS,
+		"octets",
+		Must,
+		"RFC 5321 §4.5.3.1.3 (path of 256 octets with the angle brackets)"
+	),
+	number!(
+		"smtp-local-part-length",
+		crate::util::validation::MAX_LOCAL_PART,
+		"octets",
+		Must,
+		"RFC 5321 §4.5.3.1.1 (local part of 64 octets)"
+	),
+	number!(
+		"smtp-domain-length",
+		crate::util::validation::MAX_DOMAIN,
+		"octets",
+		Must,
+		"RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4 (255 octets on the wire, 253 as written)"
+	),
+	number!(
+		"smtp-domain-label-length",
+		crate::util::validation::MAX_LABEL,
+		"octets",
+		Must,
+		"RFC 1035 §2.3.4 (labels of 63 octets)"
+	),
+	number!(
+		"smtp-received-hop-limit",
+		crate::smtp::trace::RECEIVED_HOP_LIMIT,
+		"count",
+		Should,
+		"RFC 5321 §6.3 (a Received count near 100 is a loop)"
+	),
+	number!(
+		"smtp-header-fields",
+		crate::smtp::trace::MAX_HEADER_FIELDS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"smtp-error-streak",
+		crate::smtp::server::MAX_ERROR_STREAK,
+		"count",
+		Own,
+		"no standard mandate (consecutive error replies before the connection is dropped)"
+	),
+	number!(
+		"pop3-command-line",
+		crate::pop3::command::MAX_COMMAND_LINE,
+		"octets",
+		Must,
+		"RFC 2449 §4 (commands of at least 255 octets)"
+	),
+	seconds!(
+		"pop3-idle-timeout",
+		crate::pop3::server::TIMEOUT,
+		"seconds",
+		Must,
+		"RFC 1939 §3 (an inactivity timer of at least 10 minutes)"
+	),
+	number!(
+		"pop3-error-streak",
+		crate::pop3::server::MAX_ERROR_STREAK,
+		"count",
+		Own,
+		"no standard mandate (consecutive -ERR replies before the connection is dropped)"
+	),
+	number!(
+		"imap-command-line",
+		crate::imap::command::MAX_COMMAND_LINE,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	seconds!(
+		"imap-idle-timeout",
+		crate::imap::server::DEFAULT_READ_TIMEOUT,
+		"seconds",
+		Must,
+		"RFC 3501 §5.4 (an autologout timer of at least 30 minutes)"
+	),
+	number!(
+		"imap-error-streak",
+		crate::imap::server::MAX_ERROR_STREAK,
+		"count",
+		Own,
+		"no standard mandate (consecutive BAD replies before the connection is dropped)"
+	),
+	number!(
+		"imap-keywords-per-message",
+		crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"imap-keyword-length",
+		crate::imap::keyword::MAX_KEYWORD_BYTES,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"imap-mailbox-depth",
+		crate::util::mailbox_path::MAX_DEPTH,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"imap-mailbox-name-length",
+		crate::util::mailbox_path::MAX_DISK_NAME_LEN,
+		"octets",
+		Own,
+		"no standard mandate (NAME_MAX of the common filesystems)"
+	),
+	number!(
+		"imap-search-depth",
+		crate::imap::command::MAX_SEARCH_DEPTH,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"managesieve-script-size",
+		crate::managesieve::store::MAX_SCRIPT_BYTES,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"managesieve-scripts-per-account",
+		crate::managesieve::store::MAX_SCRIPTS,
+		"count",
+		Own,
+		"RFC 9661 (maxNumberScripts capability)"
+	),
+	number!(
+		"managesieve-script-name-length",
+		crate::managesieve::store::MAX_NAME_CHARS,
+		"characters",
+		Must,
+		"RFC 5804 §1.6 (names of up to 128 characters)"
+	),
+	number!(
+		"managesieve-script-name-bytes",
+		crate::managesieve::store::MAX_NAME_BYTES,
+		"octets",
+		Must,
+		"RFC 5804 §1.6 (128 characters take up to 512 octets)"
+	),
+	number!(
+		"managesieve-auth-failures",
+		crate::managesieve::session::MAX_AUTH_FAILURES,
+		"count",
+		Own,
+		"no standard mandate (failed AUTHENTICATE attempts before the connection is dropped)"
+	),
+	seconds!(
+		"managesieve-idle-timeout",
+		crate::managesieve::server::TIMEOUT,
+		"seconds",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-redirects",
+		crate::sieve::interp::MAX_REDIRECTS,
+		"count",
+		Own,
+		"RFC 9661 (maxNumberRedirects capability)"
+	),
+	number!(
+		"sieve-fileinto",
+		crate::sieve::interp::MAX_FILEINTO,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-flags",
+		crate::sieve::interp::MAX_FLAGS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-flag-length",
+		crate::sieve::interp::MAX_FLAG_BYTES,
+		"octets",
+		Own,
+		"no standard mandate (the IMAP keyword limit)"
+	),
+	number!(
+		"sieve-nesting-depth",
+		crate::sieve::parser::MAX_NESTING_DEPTH,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-variable-length",
+		crate::sieve::MAX_VAR_BYTES,
+		"octets",
+		Own,
+		"RFC 5229 §4.1 (a server may keep as little as 4000 octets)"
+	),
+	number!(
+		"sieve-variables-total-bytes",
+		crate::sieve::MAX_VARS_TOTAL_BYTES,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-variables",
+		crate::sieve::MAX_VARS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-variable-name-length",
+		crate::sieve::MAX_VAR_NAME,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-steps",
+		crate::sieve::MAX_STEPS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-work",
+		crate::sieve::MAX_WORK,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-headers",
+		crate::sieve::MAX_HEADERS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-pattern-length",
+		crate::sieve::MAX_PATTERN_CHARS,
+		"characters",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-wildcards",
+		crate::sieve::MAX_WILDCARDS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"jmap-max-size-request",
+		crate::api::jmap::limits::MAX_SIZE_REQUEST,
+		"octets",
+		Should,
+		"RFC 8620 §2 (maxSizeRequest, at least 10000000 recommended)"
+	),
+	number!(
+		"jmap-max-calls-in-request",
+		crate::api::jmap::limits::MAX_CALLS_IN_REQUEST,
+		"count",
+		Should,
+		"RFC 8620 §2 (maxCallsInRequest, at least 16 recommended)"
+	),
+	number!(
+		"jmap-max-concurrent-requests",
+		crate::api::jmap::limits::MAX_CONCURRENT_REQUESTS,
+		"count",
+		Should,
+		"RFC 8620 §2 (maxConcurrentRequests, at least 4 recommended)"
+	),
+	number!(
+		"jmap-max-concurrent-upload",
+		crate::api::jmap::limits::MAX_CONCURRENT_UPLOAD,
+		"count",
+		Should,
+		"RFC 8620 §2 (maxConcurrentUpload, at least 4 recommended)"
+	),
+	number!(
+		"jmap-max-objects-in-get",
+		crate::api::jmap::limits::MAX_OBJECTS_IN_GET,
+		"count",
+		Should,
+		"RFC 8620 §2 (maxObjectsInGet, at least 500 recommended)"
+	),
+	number!(
+		"jmap-max-objects-in-set",
+		crate::api::jmap::limits::MAX_OBJECTS_IN_SET,
+		"count",
+		Should,
+		"RFC 8620 §2 (maxObjectsInSet, at least 500 recommended)"
+	),
+	number!(
+		"jmap-event-source-min-ping",
+		crate::api::jmap::event_source::MIN_PING,
+		"seconds",
+		Own,
+		"RFC 8620 §7.3 (ping interval)"
+	),
+	number!(
+		"jmap-event-source-max-ping",
+		crate::api::jmap::event_source::MAX_PING,
+		"seconds",
+		Own,
+		"RFC 8620 §7.3 (ping interval)"
+	),
+	number!(
+		"jmap-event-streams-per-caller",
+		crate::api::jmap::event_source::MAX_STREAMS_PER_CALLER,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"jmap-push-subscriptions-per-caller",
+		crate::api::jmap::push_subscription::MAX_PER_CALLER,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"spf-max-dns-lookups",
+		crate::spf::MAX_DNS_MECHANISMS,
+		"count",
+		Must,
+		"RFC 7208 §4.6.4 (max 10 DNS-querying terms)"
+	),
+	number!(
+		"spf-max-void-lookups",
+		crate::spf::MAX_VOID_LOOKUPS,
+		"count",
+		Should,
+		"RFC 7208 §4.6.4 (void lookups limited to 2)"
+	),
 	FixedEntry {
 		name: "tls-minimum-version",
-		value: FixedValue::Text("1.2"),
+		value: FixedValue::TlsMinimum,
 		unit: "version",
 		class: Class::Must,
 		reference: "RFC 8996 (TLS 1.0/1.1 prohibited)",
+		source: "tls::PROTOCOL_VERSIONS",
 	},
 ];

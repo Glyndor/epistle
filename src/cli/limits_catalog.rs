@@ -81,11 +81,15 @@ pub(super) struct Adjustable {
 
 /// The value of a limit the operator cannot change. A number is read
 /// from the constant the server enforces, so the catalog cannot say one
-/// thing while the code does another.
+/// thing while the code does another. `Text` is a rule that is not a
+/// number in the code (the null reverse path never gets a bounce).
 #[derive(Clone, Copy, Debug)]
 pub(super) enum FixedValue {
 	Number(u64),
 	Text(&'static str),
+	/// The oldest TLS version a listener negotiates, read from the list
+	/// every acceptor is built with.
+	TlsMinimum,
 }
 
 impl FixedValue {
@@ -93,7 +97,22 @@ impl FixedValue {
 		match self {
 			Self::Number(value) => value.to_string(),
 			Self::Text(text) => text.to_string(),
+			Self::TlsMinimum => tls_minimum(),
 		}
+	}
+}
+
+/// The oldest of [`crate::tls::PROTOCOL_VERSIONS`] as `1.2` or `1.3`.
+fn tls_minimum() -> String {
+	let oldest = crate::tls::PROTOCOL_VERSIONS
+		.iter()
+		.map(|version| u16::from(version.version))
+		.min()
+		.unwrap_or(0);
+	match oldest {
+		0x0303 => "1.2".into(),
+		0x0304 => "1.3".into(),
+		other => format!("{other:#06x}"),
 	}
 }
 
@@ -109,6 +128,10 @@ pub(super) struct FixedEntry {
 	pub(super) unit: &'static str,
 	pub(super) class: Class,
 	pub(super) reference: &'static str,
+	/// The path of the constant the value is read from, as written in
+	/// `limits_protocol.rs`; empty for a rule that is not a constant.
+	#[allow(dead_code)] // Read by the tests that tie each row to its constant.
+	pub(super) source: &'static str,
 }
 
 /// Every adjustable key, in the order `show` prints them.
@@ -231,9 +254,11 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 	Adjustable {
 		key: Key::MaxMessageSize,
-		kind: Kind::Adjustable,
-		bound: None,
-		reference: "no standard mandate",
+		kind: Kind::Must,
+		bound: Some(Bound::AtLeast(
+			crate::smtp::session::MIN_MESSAGE_SIZE as u64,
+		)),
+		reference: "RFC 5321 §4.5.3.1.7 (at least 64K octets)",
 	},
 	Adjustable {
 		key: Key::MaxRecipients,
@@ -275,9 +300,11 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 	Adjustable {
 		key: Key::PreauthTimeout,
-		kind: Kind::Adjustable,
-		bound: None,
-		reference: "no standard mandate",
+		kind: Kind::Recommended,
+		bound: Some(Bound::AtLeast(
+			crate::smtp::session::SHOULD_COMMAND_TIMEOUT_SECS,
+		)),
+		reference: "RFC 5321 §4.5.3.2.7 (5 minutes recommended)",
 	},
 	Adjustable {
 		key: Key::KnownNetworkWindow,

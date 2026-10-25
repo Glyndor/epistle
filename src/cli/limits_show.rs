@@ -34,9 +34,8 @@ pub fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 /// left to the protocol, an array for `queue-backoff`) and `unit` is
 /// `bytes`, `bytes-per-second`, `seconds`, `count` or the catalog's own
 /// `octets`/`version`/`boolean` for fixed rules. `kind` is one of
-/// `adjustable`, `recommended` (SHOULD), `must` (MUST) or `fixed`; a fixed
-/// row also carries `class` (`must`, `should` or `own`), how strongly a
-/// standard ties the limit;
+/// `adjustable`, `recommended` (SHOULD), `must` (MUST) or `fixed`; `class`
+/// is `must`, `should` or `own`, how strongly a standard ties the limit;
 /// `bounds` is the standard floor the RFC puts on the limit, when there is
 /// one; `reference`
 /// names the RFC and section the rule comes from.
@@ -177,6 +176,7 @@ fn write_adjustable_json(
 	limits: &mut serde_json::Map<String, serde_json::Value>,
 ) {
 	let kind = kind_name(entry.kind);
+	let class = entry.kind.class().label();
 	let bounds = bound_json(entry.bound);
 	if let Some((values, default)) = entry.key.list(config) {
 		limits.insert(
@@ -186,6 +186,7 @@ fn write_adjustable_json(
 				"unit": "seconds",
 				"source": if default { "default" } else { "configured" },
 				"kind": kind,
+				"class": class,
 				"bounds": bounds,
 				"reference": entry.reference,
 			}),
@@ -202,6 +203,7 @@ fn write_adjustable_json(
 				"unit": "bytes",
 				"source": "derived",
 				"kind": kind,
+				"class": class,
 				"bounds": bounds,
 				"reference": entry.reference,
 			}),
@@ -225,6 +227,7 @@ fn write_adjustable_json(
 			"unit": unit,
 			"source": if default { "default" } else { "configured" },
 			"kind": kind,
+			"class": class,
 			"bounds": bounds,
 			"reference": entry.reference,
 		}),

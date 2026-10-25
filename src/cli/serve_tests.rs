@@ -205,14 +205,14 @@ Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\
 #[tokio::test]
 async fn serve_applies_max_message_size_to_the_api() {
 	// The configured cap must reach the REST send body limit, not only the
-	// SMTP listeners: an 8 KiB body under a 4 KiB cap is refused with 413
+	// SMTP listeners: a 72 KiB body under a 64 KiB cap is refused with 413
 	// before it is parsed.
 	let port = crate::test_fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener =
 		toml::from_str(&format!("kind = \"api\"\nport = {port}")).expect("listener config");
 	let mut config = test_config(dir.path(), vec![listener]);
-	config.max_message_size = Some(4096);
+	config.max_message_size = Some(65536);
 	config.api = Some(
 		toml::from_str(&format!(
 			"token_hash = \"{}\"",
@@ -221,7 +221,7 @@ async fn serve_applies_max_message_size_to_the_api() {
 		.expect("api config"),
 	);
 	let server = tokio::spawn(serve(config));
-	let body = format!("{{\"pad\":\"{}\"}}", "x".repeat(8 * 1024));
+	let body = format!("{{\"pad\":\"{}\"}}", "x".repeat(72 * 1024));
 	let status = api_post_status(port, "/api/v1/send", body.as_bytes()).await;
 	server.abort();
 	assert_eq!(status, 413, "the API body limit follows max_message_size");

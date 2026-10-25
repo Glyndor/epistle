@@ -696,6 +696,7 @@ mod notify;
 mod parse;
 mod search;
 mod search_key;
+pub(crate) use search_key::MAX_SEARCH_DEPTH;
 mod select_params;
 
 pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
