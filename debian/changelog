@@ -46,6 +46,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     down in the documentation.
   * `epistle init`, `service` and `stack` read configuration, keys and the generated compose file through one reader that refuses a pipe, a device or a directory instead of waiting on it, the wait for the compose lock spends what the configuration lock left of the same 30 s, and `init` refuses a DNS `token_file` with a `$` before it writes anything. The documentation says that an `init` stopped part way is finished by running it again.
   * Upgrade note: `epistle service enable`, `service disable`, `init` and `stack update` publish WebDAV, the management API and autoconfig on `127.0.0.1` only, and a generated compose file that had one of them on every address of the host (`8090:8090`, `0.0.0.0:8090:8090` or `[::]:8090:8090`) is narrowed the next time one of those commands rewrites it. Each command says on stderr which mapping it narrowed. To reach one from another host, publish its port in `compose.override.yaml` behind a TLS reverse proxy.
+  * Mailing lists keep their own identity on each delivered copy, a recipient addressed directly takes none, `epistle init` leaves a role address that an account or masked address holds alone, and DKIM covers `Disposition-Notification-To` and `Return-Receipt-To` when a message carries them.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

@@ -39,6 +39,88 @@ fn an_address_outside_the_domains_or_with_an_unusable_local_part_is_refused() {
 	assert!(named.check(&domains()).is_err());
 }
 
+/// The domain list is compared with the same normalisation the answers
+/// validator applies, so a domain it refuses cannot become the domain of
+/// the first account through an insensitive comparison.
+#[test]
+fn an_address_in_a_domain_the_server_refuses_is_refused() {
+	// The same invalid domain twice, as a list of served domains can carry.
+	let served = vec!["bad..example".to_string(), "bad..example".to_string()];
+	let refused = account("alice@bad..example").check(&served);
+	assert!(
+		refused
+			.as_ref()
+			.is_err_and(|why| why.contains("not a valid mail domain")),
+		"{refused:?}"
+	);
+	// A domain the server does not serve is refused the same way it always
+	// was.
+	let other = account("alice@elsewhere.example").check(&served);
+	assert!(
+		other
+			.as_ref()
+			.is_err_and(|why| why.contains("not one of the configured domains")),
+		"{other:?}"
+	);
+}
+
+/// A role address that a dynamic account already holds is left alone: init
+/// never writes an alias on top of an address that already delivers
+/// somewhere.
+#[test]
+fn a_role_address_a_dynamic_account_holds_is_left_alone() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config_path = dir.path().join("mail.toml");
+	std::fs::write(
+		&config_path,
+		format!(
+			"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\ndomains = [\"example.org\"]\n",
+			dir.path().join("data").display()
+		),
+	)
+	.expect("write config");
+	std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+	let config = Config::load(&config_path).expect("config");
+	std::fs::create_dir_all(&config.data_dir).expect("data dir");
+	let store = AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.expect("store");
+	// A dynamic account already holds the role address of the domain, spelled
+	// with capitals.
+	let holder = DynamicAccount::with_password(
+		"postmaster".to_string(),
+		vec!["Postmaster@EXAMPLE.org".to_string()],
+		"Zq8!vT3#mL0@pW6$",
+		&crate::password::Policy::from_config(&config.auth),
+		config.auth.scram,
+	)
+	.expect("account");
+	store.add(holder).expect("add the account");
+
+	let mut report = Report::default();
+	add_role_aliases(
+		&account("alice@example.org"),
+		&config,
+		&config_path,
+		"alice@example.org",
+		&store,
+		&mut report,
+	)
+	.expect("role aliases");
+
+	let text = std::fs::read_to_string(&config_path).expect("read config");
+	assert!(
+		!text.contains("postmaster@example.org"),
+		"the alias was written on top of the account: {text}"
+	);
+	assert!(text.contains("abuse@example.org"), "{text}");
+}
+
 #[test]
 fn a_dot_in_the_address_gives_a_hyphenated_account_name() {
 	let first = account("Torre.Control@example.org");

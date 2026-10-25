@@ -130,11 +130,26 @@ impl FirstAccount {
 		if local.is_empty() || domain.is_empty() {
 			return Err(format!("{:?} is not a mail address", self.address));
 		}
-		if !domains.iter().any(|served| {
-			crate::domain::normalize(served).map_or_else(
-				|_| served.eq_ignore_ascii_case(domain),
-				|stored| stored == domain,
-			)
+		// The domain is compared in the form the server stores, with the
+		// same normalisation the answers validator applies to the domains
+		// it serves: a domain that normaliser refuses is refused here too,
+		// instead of matching a served one by an insensitive comparison.
+		let served = match crate::domain::normalize(domain) {
+			Ok(stored) => stored,
+			Err(why) => {
+				let reason = match why {
+					crate::domain::DomainError::Invalid => {
+						crate::util::address_reason::domain_reason(domain)
+					}
+					crate::domain::DomainError::Confusable => {
+						"it is confusable with another name".to_string()
+					}
+				};
+				return Err(format!("{domain:?} is not a valid mail domain: {reason}"));
+			}
+		};
+		if !domains.iter().any(|configured| {
+			crate::domain::normalize(configured).is_ok_and(|stored| stored == served)
 		}) {
 			return Err(format!(
 				"{domain} is not one of the configured domains ({})",
@@ -169,7 +184,7 @@ impl FirstAccount {
 			.flat_map(|domain| {
 				ROLES
 					.iter()
-					.map(move |role| format!("{role}@{}", domain.to_ascii_lowercase()))
+					.map(move |role| normalize(&format!("{role}@{domain}")))
 			})
 			.filter(|address| *address != own)
 			.collect()
@@ -258,7 +273,7 @@ pub(super) fn create(
 			address: address.clone(),
 		});
 	}
-	add_role_aliases(first, &config, config_path, &address, report)
+	add_role_aliases(first, &config, config_path, &address, &store, report)
 }
 
 /// Whether the account named `name` already exists and is the one `address`
@@ -285,11 +300,12 @@ fn name_is_free_or_ours(
 	}
 }
 
-/// Whether the address is free for the account `name`: no alias, masked
+/// Whether the address is free for the account `owner`: no alias, masked
 /// address or other account holds it, compared in the form the system stores.
-/// The account `name` itself may already hold it, which is a re-run.
+/// The account `owner` itself may already hold it, which is a re-run; with
+/// no owner the address must be free of every account.
 fn address_is_free_or_ours(
-	name: &str,
+	owner: Option<&str>,
 	address: &str,
 	store: &AccountStore,
 	static_accounts: &[(String, Vec<String>)],
@@ -316,27 +332,27 @@ fn address_is_free_or_ours(
 		.dynamic_accounts()
 		.into_iter()
 		.find(|account| {
-			account.name != name
+			Some(account.name.as_str()) != owner
 				&& account
 					.addresses
 					.iter()
 					.any(|existing| normalize(existing) == wanted)
 		})
 		.map(|account| account.name);
-	let static_owner = static_accounts.iter().find_map(|(owner, addresses)| {
-		if owner != name
+	let static_owner = static_accounts.iter().find_map(|(holder, addresses)| {
+		if Some(holder.as_str()) != owner
 			&& addresses
 				.iter()
 				.any(|existing| normalize(existing) == wanted)
 		{
-			Some(owner.clone())
+			Some(holder.clone())
 		} else {
 			None
 		}
 	});
-	if let Some(owner) = dynamic_owner.or(static_owner) {
+	if let Some(holder) = dynamic_owner.or(static_owner) {
 		return Err(format!(
-			"the address {address} is already used by the account \"{owner}\"; use another address"
+			"the address {address} is already used by the account \"{holder}\"; use another address"
 		));
 	}
 	Ok(())
@@ -426,7 +442,7 @@ pub(super) fn precheck(
 	let name = first.name();
 	let address = first.stored_address();
 	name_is_free_or_ours(&name, &address, &store, &statics)?;
-	address_is_free_or_ours(&name, &address, &store, &statics, &aliases)
+	address_is_free_or_ours(Some(&name), &address, &store, &statics, &aliases)
 }
 
 /// The static accounts of a loaded configuration as name and addresses.
@@ -459,30 +475,29 @@ fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result
 
 /// Add each role address as an `[[alias]]` table delivering to `target`,
 /// through the same validated, atomic edit `epistle alias add` uses. A role
-/// address that is already an alias or some account's address is left alone.
+/// address that anything already holds is left alone: an alias, a masked
+/// address, or the address of a dynamic or static account.
 fn add_role_aliases(
 	first: &FirstAccount,
 	config: &Config,
 	config_path: &Path,
 	target: &str,
+	store: &AccountStore,
 	report: &mut Report,
 ) -> Result<(), ApplyError> {
 	let fail = |why: String| ApplyError::FirstAccount(why);
-	let taken: Vec<String> = config
+	let statics = static_pairs(config);
+	let aliases: Vec<String> = config
 		.alias
 		.iter()
-		.map(|alias| alias.address.to_ascii_lowercase())
-		.chain(
-			config
-				.accounts
-				.iter()
-				.flat_map(|account| account.addresses.iter().map(|a| a.to_ascii_lowercase())),
-		)
+		.map(|alias| alias.address.clone())
 		.collect();
 	let roles: Vec<String> = first
 		.role_addresses(&config.domains)
 		.into_iter()
-		.filter(|role| !taken.contains(role))
+		// A role address that is taken is left alone, so init never writes
+		// an alias on top of an address that already delivers somewhere.
+		.filter(|role| address_is_free_or_ours(None, role, store, &statics, &aliases).is_ok())
 		.collect();
 	if roles.is_empty() {
 		return Ok(());

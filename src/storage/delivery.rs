@@ -2,6 +2,8 @@
 
 #[path = "delivery_io.rs"]
 mod io;
+#[path = "delivery_lists.rs"]
+mod lists;
 #[path = "delivery_policy.rs"]
 mod policy;
 #[path = "delivery_reports.rs"]
@@ -14,7 +16,6 @@ pub(super) use trace::forwarded_copy;
 #[path = "delivery_vacation.rs"]
 mod vacation;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -22,7 +23,6 @@ use uuid::Uuid;
 
 use crate::directory_store::DirectoryHandle;
 use crate::imap::changelog::{Change, Op};
-use crate::smtp::address::Address;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
@@ -111,33 +111,10 @@ impl LocalDelivery {
 
 	/// Resolve recipients to their distinct accounts, each with the address
 	/// its copy is delivered as (the first one when several recipients reach
-	/// the same account). A multi-target alias fans out to every member
-	/// account, as the member's own address. The session already rejected
-	/// unresolvable recipients; hitting one here is a logic error and fails
-	/// the whole delivery (fail closed, client retries).
-	fn accounts_for(
-		&self,
-		message: &AcceptedMessage,
-	) -> Result<BTreeMap<String, String>, SinkError> {
-		let mut accounts = BTreeMap::new();
-		for recipient in &message.recipients {
-			let address = Address::parse(recipient).map_err(|_| {
-				SinkError::Unavailable(format!("unparseable recipient {recipient}"))
-			})?;
-			let finals = self
-				.directory
-				.current()
-				.final_recipients(&address)
-				.ok_or_else(|| {
-					SinkError::Unavailable(format!(
-						"recipient {recipient} no longer resolves to an account"
-					))
-				})?;
-			for (account, delivered_to) in finals {
-				accounts.entry(account).or_insert(delivered_to);
-			}
-		}
-		Ok(accounts)
+	/// the same account) and the `List-*` headers of the list its delivery
+	/// belongs to, when that delivery went through one.
+	fn accounts_for(&self, message: &AcceptedMessage) -> Result<lists::Recipients, SinkError> {
+		lists::accounts_for(&self.directory.current(), message)
 	}
 
 	fn deliver_to_account(
@@ -210,17 +187,25 @@ impl LocalDelivery {
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
-		// Mailing list: prepend List-* headers to the copies members receive.
-		let listed = self.list_message(message);
-		let message = listed.as_ref().unwrap_or(message);
 		let mut delivered = Delivered::default();
 		// (Kind, domain) pairs already ingested for this message, so the report
 		// hook fires once per matching report even when an alias fans out to
 		// several accounts.
 		let mut ingested = reports::Ingested::new();
-		for (account, delivered_to) in &accounts {
-			let one =
-				self.deliver_for_account(account, delivered_to, message, mailbox, &mut ingested)?;
+		for (account, (delivered_to, list)) in &accounts {
+			// Mailing list: the copies of the accounts the list reaches
+			// carry that list's `List-*` headers; every other copy is the
+			// message as it came.
+			let listed = list
+				.as_ref()
+				.map(|headers| lists::listed_message(message, headers));
+			let one = self.deliver_for_account(
+				account,
+				delivered_to,
+				listed.as_ref().unwrap_or(message),
+				mailbox,
+				&mut ingested,
+			)?;
 			delivered.redirects.extend(one.redirects);
 			delivered.reject = delivered.reject.or(one.reject);
 			delivered.replies.extend(one.replies);
@@ -236,23 +221,6 @@ impl LocalDelivery {
 			&mut ingested,
 		);
 		Ok(delivered)
-	}
-
-	/// If any recipient is a mailing list, a copy of the message with the list's
-	/// `List-*` headers prepended; otherwise `None` (deliver the original).
-	fn list_message(&self, message: &AcceptedMessage) -> Option<AcceptedMessage> {
-		let directory = self.directory.current();
-		let headers = message
-			.recipients
-			.iter()
-			.filter_map(|recipient| Address::parse(recipient).ok())
-			.find_map(|address| directory.list_headers(&address.to_string()))?;
-		let mut data = headers.into_bytes();
-		data.extend_from_slice(&message.data);
-		Some(AcceptedMessage {
-			data,
-			..message.clone()
-		})
 	}
 
 	/// Deliver one message to one account. An explicit `hint` mailbox (an
@@ -605,6 +573,10 @@ mod forward_tests;
 #[cfg(test)]
 #[path = "delivery_tests_default_mailboxes.rs"]
 mod default_mailboxes;
+
+#[cfg(test)]
+#[path = "delivery_tests_lists.rs"]
+mod list_tests;
 
 #[cfg(test)]
 #[path = "delivery_tests_containment.rs"]

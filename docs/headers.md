@@ -123,6 +123,9 @@ or to inbound mail.
 - Both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered when present,
   as required for one-click unsubscribe by
   [RFC 8058 section 4](https://www.rfc-editor.org/rfc/rfc8058.html#section-4).
+- `Disposition-Notification-To` and `Return-Receipt-To` are never added by
+  epistle. When the message already carries them they are signed and
+  oversigned, so a later hop cannot redirect or request a read receipt.
 - `Received`, `Return-Path`, `Authentication-Results`, `X-*` and other fields
   outside the table are excluded. Existing `Resent-*` fields are signed,
   without oversigning, so a later resending hop can prepend a new block.
@@ -154,6 +157,8 @@ or to inbound mail.
 | `List-Owner` | No |
 | `List-Archive` | No |
 | `Feedback-ID` | No |
+| `Disposition-Notification-To` | Yes |
+| `Return-Receipt-To` | Yes |
 | `Resent-*` | No |
 
 Oversigning and the `Resent-*` wildcard are deliberate, and they have a real

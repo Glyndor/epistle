@@ -32,6 +32,8 @@ const FIELDS: &[(&str, &str, bool)] = &[
 	("List-Owner", "<mailto:owner@example.org>", false),
 	("List-Archive", "<https://example.org/archive>", false),
 	("Feedback-ID", "campaign:sender", false),
+	("Disposition-Notification-To", "alice@example.org", true),
+	("Return-Receipt-To", "alice@example.org", true),
 ];
 
 fn fixture(dual: bool) -> (Signer, KeyDns) {
@@ -135,7 +137,7 @@ async fn signs_every_documented_field_with_both_algorithms() {
 					"{name}"
 				);
 			}
-			assert_eq!(list.len(), FIELDS.len() + 10);
+			assert_eq!(list.len(), FIELDS.len() + 12);
 		}
 		assert!(lists.windows(2).all(|pair| pair[0] == pair[1]));
 		check(&dns, &signature, &raw, DkimOutcome::Pass).await;

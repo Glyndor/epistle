@@ -36,6 +36,8 @@ const SIGNED_HEADERS: &[&str] = &[
 	"list-owner",
 	"list-archive",
 	"feedback-id",
+	"disposition-notification-to",
+	"return-receipt-to",
 ];
 
 /// List each name once beyond its present count, even when absent (RFC 6376 section 5.4).
@@ -50,6 +52,8 @@ const OVERSIGNED_HEADERS: &[&str] = &[
 	"list-unsubscribe",
 	"list-unsubscribe-post",
 	"content-type",
+	"disposition-notification-to",
+	"return-receipt-to",
 ];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.
