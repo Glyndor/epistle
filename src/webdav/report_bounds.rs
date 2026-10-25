@@ -95,6 +95,13 @@ pub fn distinct_hrefs(root: &Path, hrefs: Vec<String>, max: usize) -> Result<Vec
 	Ok(out)
 }
 
+/// Whether a report asks for the content of each resource. A request that
+/// names only `getetag` among the properties gets the etags alone.
+pub fn wants_data(body: &str, data_element: &str) -> bool {
+	use super::caldav_filter_xml::first_open;
+	first_open(body, data_element).is_some() || first_open(body, "getetag").is_none()
+}
+
 /// Read `disk` into memory, at most `limit` bytes. `None` when the file is
 /// longer, even if it grew after its size was read.
 pub async fn read_capped(disk: &Path, limit: u64) -> Option<Vec<u8>> {

@@ -172,22 +172,31 @@ These bounds are fixed in the server and are not in the catalog above,
 because `limits set` cannot change them. They keep one request from costing
 more than a fixed amount of work or memory:
 
-- A request body for `REPORT`, `MKCOL` or the scheduling outbox
+- A request body for `PROPFIND`, `REPORT`, `MKCOL` or the scheduling outbox
   is read up to 1 MiB; more is `413`. A file `PUT` is read up to 50 MiB,
   except a `.ics` or `.vcf`, which is held to 4 MiB (`413`).
 - A `calendar-multiget` or `addressbook-multiget` may name 1000 distinct
   resources. Two spellings of one resource count once. More is `413`.
 - A `calendar-query`, `addressbook-query` or `free-busy-query` body is read up
   to 64 KiB; more is `413`.
-- The body of a report reply is at most about 24 MiB, counted after escaping.
+- The body of a report reply is at most 24 MiB and 64 KiB, counted after escaping.
   A resource that does not fit is answered with its own `507` inside the `207`,
   and the client asks for it on its own. A query that runs out ends with a
   `507` on the collection carrying `DAV:number-of-matches-within-limits`, and
-  keeps the results that fitted. A file too long for any reply is answered
+  keeps the results that fitted; such a query cannot be continued, so a client
+  with a large collection asks for the etags alone (a request naming only
+  `getetag` gets no content) and fetches the objects with multigets. A file too long for any reply is answered
   `507` by name too, never left out.
-- A first `sync-collection` lists at most 50000 members; a collection with more
-  answers `507` with `DAV:number-of-matches-within-limits`. Its data, when
+- A first `sync-collection` lists at most 50000 members, fewer when their names
+  are long, because the reply budget above holds; a collection with more
+  answers `507` with `DAV:number-of-matches-within-limits` and no token, since a
+  first sync has no position to resume from. That client lists the collection
+  with `PROPFIND` instead. An incremental sync that runs out stops with `507` on
+  the collection and the token of the last change it delivered. Its data, when
   asked for, follows the reply budget above.
+- A character XML 1.0 cannot carry (most control characters) in a stored object
+  is sent as U+FFFD, so one dirty object never spoils the reply for the rest.
+- A `MOVE` or `COPY` onto a `.ics` or `.vcf` name is held to the 4 MiB limit too.
 - A resource name with a control character is refused (`400`). A file made
   earlier under such a name can still be removed or moved away.
 

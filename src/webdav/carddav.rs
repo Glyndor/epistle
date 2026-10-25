@@ -29,6 +29,7 @@ use super::path;
 use super::reply::{Added, Reply};
 use super::report_bounds::{
 	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
+	wants_data,
 };
 
 /// The CardDAV XML namespace.
@@ -111,6 +112,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let Some(kind) = report_kind(&text) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
+	let data = wants_data(&text, "address-data");
 	let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
 	match kind {
 		ReportKind::Multiget => {
@@ -123,7 +125,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
 				{
-					push_card(&mut reply, &href, &resolved).await;
+					push_card(&mut reply, &href, &resolved, data).await;
 				}
 			}
 		}
@@ -136,7 +138,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 				Err(_) => return super::carddav_filter::unsupported_filter_response(),
 			};
 			let request = super::href::resource(root, target).unwrap_or_default();
-			collect_cards_filtered(root, target, &filter, &request, &mut reply).await;
+			collect_cards_filtered(root, target, &filter, &request, &mut reply, data).await;
 		}
 	}
 	reply.finish("")
@@ -150,7 +152,7 @@ const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 /// `href`. A missing file is skipped, matching how a multiget treats an
 /// unknown href; one that does not fit what is left of the reply is
 /// answered `507` so the client asks for it on its own.
-async fn push_card(reply: &mut Reply, href: &str, disk: &Path) {
+async fn push_card(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
 	let Ok(metadata) = tokio::fs::metadata(disk).await else {
 		return;
 	};
@@ -158,9 +160,15 @@ async fn push_card(reply: &mut Reply, href: &str, disk: &Path) {
 		return;
 	}
 	let etag = etag(&metadata);
+	if !data {
+		if reply.member(href, &etag, None) == Added::NoRoom {
+			reply.too_large(href);
+		}
+		return;
+	}
 	match read_capped(disk, metadata.len().min(reply.remaining())).await {
-		Some(data) => {
-			if reply.member(href, &etag, Some(("C:address-data", &data))) == Added::NoRoom {
+		Some(bytes) => {
+			if reply.member(href, &etag, Some(("C:address-data", &bytes))) == Added::NoRoom {
 				reply.too_large(href);
 			}
 		}
@@ -180,6 +188,7 @@ async fn collect_cards_filtered(
 	filter: &super::carddav_filter::AddressbookQueryFilter,
 	request: &str,
 	reply: &mut Reply,
+	data: bool,
 ) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -216,17 +225,22 @@ async fn collect_cards_filtered(
 			reply.too_large(&href);
 			continue;
 		}
-		let Some(data) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
+		let Some(bytes) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
 			reply.too_large(&href);
 			continue;
 		};
 		// Apply the filter. An empty filter (no `prop-filter`
 		// children) is a no-op, so the call is cheap.
-		let text = String::from_utf8_lossy(&data);
+		let text = String::from_utf8_lossy(&bytes);
 		if !super::carddav_filter::matches(filter, &text) {
 			continue;
 		}
-		if reply.member(&href, &etag(&metadata), Some(("C:address-data", &data))) == Added::Yes {
+		if reply.member(
+			&href,
+			&etag(&metadata),
+			data.then_some(("C:address-data", &bytes[..])),
+		) == Added::Yes
+		{
 			continue;
 		}
 		if reply.members() == 0 {

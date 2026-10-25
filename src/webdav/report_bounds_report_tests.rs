@@ -191,3 +191,39 @@ async fn a_query_or_free_busy_body_over_the_cap_is_refused() {
 	let response = carddav::report(&root, &root, body.as_bytes()).await;
 	assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+/// A request that names only `getetag` gets no content, and an object with a
+/// character XML cannot carry does not spoil the reply for the others.
+#[tokio::test]
+async fn etag_only_requests_get_no_data_and_dirty_objects_stay_well_formed() {
+	let (_dir, root) = root();
+	std::fs::write(
+		root.join("a.ics"),
+		b"BEGIN:VCALENDAR\r\nX:\x0b\r\nEND:VCALENDAR\r\n",
+	)
+	.expect("write");
+	std::fs::write(root.join("b.ics"), b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n").expect("write");
+	let etags = format!(
+		"<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"{}\"><D:prop><D:getetag/></D:prop></C:calendar-query>",
+		caldav::CALDAV_NS
+	);
+	let (status, body) = text(caldav::report(&root, &root, etags.as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert_eq!(body.matches("<D:getetag>").count(), 2);
+	assert!(!body.contains("calendar-data"));
+	let full = format!(
+		"<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"{}\"><D:prop><D:getetag/><C:calendar-data/></D:prop></C:calendar-query>",
+		caldav::CALDAV_NS
+	);
+	let (_, body) = text(caldav::report(&root, &root, full.as_bytes()).await).await;
+	assert_eq!(body.matches("<C:calendar-data>").count(), 2);
+	assert!(!body.contains('\u{b}'));
+	assert!(body.contains("X:\u{fffd}&#13;"));
+	let once = ["/a.ics".to_string()].into_iter();
+	let ask = calendar_multiget(once).replace(
+		"</C:calendar-multiget>",
+		"<D:prop><D:getetag/></D:prop></C:calendar-multiget>",
+	);
+	let (_, body) = text(caldav::report(&root, &root, ask.as_bytes()).await).await;
+	assert!(!body.contains("calendar-data"));
+}

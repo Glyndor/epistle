@@ -220,6 +220,9 @@ fn sync_props(entry: &Entry) -> String {
 }
 
 /// Escape the XML special characters for safe interpolation into the body.
+/// A character XML 1.0 cannot carry at all (most control characters, and
+/// U+FFFE and U+FFFF) becomes U+FFFD so the document stays well formed, and a
+/// carriage return becomes a character reference so a parser keeps it.
 pub fn escape(value: &str) -> String {
 	let mut out = String::with_capacity(escaped_len(value));
 	escape_into(&mut out, value);
@@ -234,6 +237,9 @@ fn entity(c: char) -> Option<&'static str> {
 		'>' => Some("&gt;"),
 		'"' => Some("&quot;"),
 		'\'' => Some("&apos;"),
+		'\r' => Some("&#13;"),
+		'\t' | '\n' => None,
+		c if c < ' ' || matches!(c, '\u{FFFE}' | '\u{FFFF}') => Some("\u{FFFD}"),
 		_ => None,
 	}
 }

@@ -483,6 +483,15 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	if sync_handler::is_reserved(&dest_path) {
 		return StatusCode::FORBIDDEN.into_response();
 	}
+	// A calendar object or contact is held to the same size however it got
+	// its name, so a report can always return it on its own.
+	if source_meta.is_file()
+		&& source_meta.len() > MAX_RESOURCE_BYTES
+		&& (caldav::is_ics_path(&uri_name(&dest_path))
+			|| carddav::is_vcard_path(&uri_name(&dest_path)))
+	{
+		return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+	}
 	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
 	// (or onto itself) would lose data: the existing implementation removes
 	// the destination before the source is read. Detect any overlap before

@@ -80,6 +80,12 @@ impl Log {
 			.map_or(self.base, |change| change.sequence)
 	}
 
+	/// The token that names `sequence` of this log, for a reply that stops
+	/// there so the client resumes from it.
+	pub fn token_at(&self, sequence: u64) -> String {
+		format!("{TOKEN_PREFIX}{}-{sequence}", self.epoch)
+	}
+
 	/// The current sync token, also used as the `CS:getctag` value.
 	pub fn token(&self) -> String {
 		format!("{TOKEN_PREFIX}{}-{}", self.epoch, self.highest())

@@ -498,3 +498,40 @@ async fn a_calendar_object_or_contact_over_the_resource_limit_is_refused() {
 	let (status, _) = send(&app, "PUT", "/d/a.bin", Some(&alice()), &[], &over).await;
 	assert!(status.is_success(), "{status}");
 }
+
+/// Renaming or copying a big file onto a `.ics` or `.vcf` name meets the same
+/// limit as uploading it there.
+#[tokio::test]
+async fn a_big_file_cannot_take_a_calendar_object_name_by_move_or_copy() {
+	use crate::webdav::report_bounds::MAX_RESOURCE_BYTES;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	let big = vec![b'x'; MAX_RESOURCE_BYTES as usize + 1];
+	let (status, _) = send(&app, "PUT", "/big.bin", Some(&alice()), &[], &big).await;
+	assert!(status.is_success(), "{status}");
+	for method in ["MOVE", "COPY"] {
+		for name in ["moved.ics", "moved.vcf"] {
+			let destination = format!("http://localhost/{name}");
+			let (status, _) = send(
+				&app,
+				method,
+				"/big.bin",
+				Some(&alice()),
+				&[("Destination", destination)],
+				b"",
+			)
+			.await;
+			assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{method} {name}");
+		}
+	}
+	let (status, _) = send(
+		&app,
+		"COPY",
+		"/big.bin",
+		Some(&alice()),
+		&[("Destination", "http://localhost/copy.bin".to_string())],
+		b"",
+	)
+	.await;
+	assert!(status.is_success(), "{status}");
+}

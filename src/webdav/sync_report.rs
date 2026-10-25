@@ -48,6 +48,30 @@ pub fn precondition_failed(name: &str) -> Response {
 /// `calendar` is true and an addressbook otherwise. `root` is the account's
 /// DAV root, used to build member hrefs the same way the other reports do.
 pub async fn report(root: &Path, collection: &Path, calendar: bool, body: &str) -> Response {
+	report_within(
+		root,
+		collection,
+		calendar,
+		body,
+		(MAX_REPORT_BYTES, MAX_SYNC_MEMBERS),
+	)
+	.await
+}
+
+/// [`report`] with its two bounds given: the bytes of the reply and the
+/// members a first sync lists.
+///
+/// A reply that runs out of room never drops a member quietly. An
+/// incremental sync stops there with `507` on the collection and the token of
+/// the last change it delivered, so the client resumes from it. A first sync
+/// has no position to resume from, so it is refused as a whole.
+async fn report_within(
+	root: &Path,
+	collection: &Path,
+	calendar: bool,
+	body: &str,
+	(limit, max_members): (u64, usize),
+) -> Response {
 	match level(body) {
 		Some(true) => {}
 		Some(false) => return precondition_failed("sync-traversal-supported"),
@@ -56,8 +80,10 @@ pub async fn report(root: &Path, collection: &Path, calendar: bool, body: &str) 
 	let Some(log) = sync::load(collection).await else {
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	};
+	let first = requested_token(body).is_none();
+	let mut delivered = requested_token(body).and_then(|token| log.position_of(&token));
 	let changes = match requested_token(body) {
-		None => match members(collection, calendar, MAX_SYNC_MEMBERS).await {
+		None => match members(collection, calendar, max_members).await {
 			Ok(members) => members,
 			Err(refusal) => return refusal.response(),
 		},
@@ -82,7 +108,7 @@ pub async fn report(root: &Path, collection: &Path, calendar: bool, body: &str) 
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\" \
 		xmlns:CAL=\"urn:ietf:params:xml:ns:caldav\">\n",
-		MAX_REPORT_BYTES,
+		limit,
 	);
 	for change in &changes {
 		let member_href = format!("{}/{}", base.trim_end_matches('/'), change.name);
@@ -106,7 +132,13 @@ pub async fn report(root: &Path, collection: &Path, calendar: bool, body: &str) 
 				}
 			}
 			Some((etag, _, _)) => {
-				reply.member(&member_href, &etag, None);
+				if reply.member(&member_href, &etag, None) == Added::NoRoom {
+					if first {
+						return Refusal::TooManyMembers.response();
+					}
+					reply.truncated(&base);
+					return finish_at(reply, &log, delivered);
+				}
 			}
 			None => {
 				let mut gone = String::from("\t<D:response>\n\t\t<D:href>");
@@ -117,9 +149,17 @@ pub async fn report(root: &Path, collection: &Path, calendar: bool, body: &str) 
 				reply.raw(&gone);
 			}
 		}
+		delivered = Some(change.sequence);
 	}
+	finish_at(reply, &log, None)
+}
+
+/// Close the reply with the token of the last change delivered, or the
+/// current token when it holds them all.
+fn finish_at(reply: Reply, log: &sync::Log, delivered: Option<u64>) -> Response {
+	let token = delivered.map_or_else(|| log.token(), |sequence| log.token_at(sequence));
 	let mut tail = String::from("\t<D:sync-token>");
-	propfind::escape_into(&mut tail, &log.token());
+	propfind::escape_into(&mut tail, &token);
 	tail.push_str("</D:sync-token>\n");
 	reply.finish(&tail)
 }

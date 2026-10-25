@@ -38,6 +38,7 @@ use super::path;
 use super::reply::{Added, Reply};
 use super::report_bounds::{
 	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
+	wants_data,
 };
 use super::rrule;
 
@@ -127,6 +128,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let Some(kind) = report_kind(&text) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
+	let data = wants_data(&text, "calendar-data");
 	match kind {
 		ReportKind::Multiget => {
 			let wanted = match distinct_hrefs(root, hrefs(&text), MAX_REPORT_HREFS) {
@@ -139,7 +141,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
 				{
-					push_event(&mut reply, &href, &resolved).await;
+					push_event(&mut reply, &href, &resolved, data).await;
 				}
 			}
 			reply.finish("")
@@ -154,7 +156,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 			};
 			let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
 			let request = super::href::resource(root, target).unwrap_or_default();
-			collect_events_filtered(root, target, &filter, &request, &mut reply).await;
+			collect_events_filtered(root, target, &filter, &request, &mut reply, data).await;
 			reply.finish("")
 		}
 		ReportKind::FreeBusy => {
@@ -482,7 +484,7 @@ const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 /// `href`. A missing file is skipped, matching how a multiget treats an
 /// unknown href; one that does not fit what is left of the reply is
 /// answered `507` so the client asks for it on its own.
-async fn push_event(reply: &mut Reply, href: &str, disk: &Path) {
+async fn push_event(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
 	let Ok(metadata) = tokio::fs::metadata(disk).await else {
 		return;
 	};
@@ -490,9 +492,15 @@ async fn push_event(reply: &mut Reply, href: &str, disk: &Path) {
 		return;
 	}
 	let etag = super::carddav::etag(&metadata);
+	if !data {
+		if reply.member(href, &etag, None) == Added::NoRoom {
+			reply.too_large(href);
+		}
+		return;
+	}
 	match read_capped(disk, metadata.len().min(reply.remaining())).await {
-		Some(data) => {
-			if reply.member(href, &etag, Some(("C:calendar-data", &data))) == Added::NoRoom {
+		Some(bytes) => {
+			if reply.member(href, &etag, Some(("C:calendar-data", &bytes))) == Added::NoRoom {
 				reply.too_large(href);
 			}
 		}
@@ -512,6 +520,7 @@ async fn collect_events_filtered(
 	filter: &super::caldav_filter::CalendarQueryFilter,
 	request: &str,
 	reply: &mut Reply,
+	data: bool,
 ) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -548,18 +557,23 @@ async fn collect_events_filtered(
 			reply.too_large(&href);
 			continue;
 		}
-		let Some(data) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
+		let Some(bytes) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
 			reply.too_large(&href);
 			continue;
 		};
 		// Apply the filter. An empty filter (no `comp-filter`
 		// children) is a no-op, so the call is cheap.
-		let text = String::from_utf8_lossy(&data);
+		let text = String::from_utf8_lossy(&bytes);
 		if !super::caldav_filter::matches(filter, &text) {
 			continue;
 		}
 		let etag = super::carddav::etag(&metadata);
-		if reply.member(&href, &etag, Some(("C:calendar-data", &data))) == Added::Yes {
+		if reply.member(
+			&href,
+			&etag,
+			data.then_some(("C:calendar-data", &bytes[..])),
+		) == Added::Yes
+		{
 			continue;
 		}
 		if reply.members() == 0 {
