@@ -8,6 +8,7 @@ pub mod constant_time;
 pub mod encoded_word;
 pub mod header;
 pub mod header_block;
+pub mod label_rule;
 pub mod mailbox_path;
 pub mod mailto;
 pub mod mutf7;

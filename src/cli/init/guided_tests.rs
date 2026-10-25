@@ -209,7 +209,9 @@ fn an_invalid_resumed_hostname_is_asked_again() {
 	saved.insert("hostname".into(), "bad hostname".into());
 	let (result, text, _) = drive("mail.example.org\n", saved);
 	assert_eq!(result.unwrap().hostname, "mail.example.org");
-	assert!(text.contains("bad hostname: must be a valid FQDN"));
+	assert!(
+		text.contains("bad hostname: spaces are not allowed; for example \"mail.example.org\"")
+	);
 }
 
 /// A draft written by another process can carry an escape sequence in a
@@ -233,4 +235,16 @@ fn a_resumed_path_with_a_control_sequence_is_asked_again() {
 		"{text}"
 	);
 	assert!(!text.contains('\u{1b}'), "{text}");
+}
+
+#[test]
+fn a_resumed_hostname_with_hidden_characters_is_refused_without_echoing_them() {
+	let (_, _, mut saved) = drive(&valid_input(), Draft::new());
+	saved.insert("hostname".into(), "bad\u{202e}\u{9b}\u{2028}name".into());
+	let (result, text, _) = drive("mail.example.org\n", saved);
+	assert_eq!(result.unwrap().hostname, "mail.example.org");
+	assert!(
+		!text.contains('\u{202e}') && !text.contains('\u{9b}') && !text.contains('\u{2028}'),
+		"{text:?}"
+	);
 }

@@ -50,6 +50,9 @@ pub(super) fn create(
 		class,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
+	if let Some(problem) = crate::util::label_rule::problem(label) {
+		return super::exit::refused(problem);
+	}
 	if scopes.is_empty() {
 		return super::exit::refused(
 			"--scope is required (repeat to grant more than one: read, write, send, scim)",

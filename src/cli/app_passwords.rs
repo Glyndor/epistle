@@ -103,33 +103,6 @@ pub enum AppPasswordCli {
 	},
 }
 
-/// The longest label, in characters.
-const MAX_LABEL: usize = 64;
-
-/// Why `label` cannot name an app password, or `None` when it can. A label
-/// is printed by `list` and typed to revoke, so it stays short and plain.
-fn label_problem(label: &str) -> Option<String> {
-	if label.trim().is_empty() {
-		return Some("the label must not be empty".into());
-	}
-	if label.chars().any(char::is_control) {
-		return Some("the label must not contain control characters".into());
-	}
-	if label.chars().any(super::term::is_invisible_format) {
-		return Some(
-			"the label must not contain invisible formatting characters (such as a right-to-left override)"
-				.into(),
-		);
-	}
-	if label != label.trim() {
-		return Some("the label must not start or end with a space".into());
-	}
-	if label.chars().count() > MAX_LABEL {
-		return Some(format!("the label must be at most {MAX_LABEL} characters"));
-	}
-	None
-}
-
 /// Generate a strong random secret, hash it (argon2id) and store it for
 /// `account` under `label`. The plaintext secret is printed once and never
 /// stored. `expires_at` is epoch seconds; `ip_cidr` a single CIDR allowlist.
@@ -152,7 +125,7 @@ pub(super) fn create(
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	if let Some(problem) = label_problem(label) {
+	if let Some(problem) = crate::util::label_rule::problem(label) {
 		return super::exit::refused(problem);
 	}
 	if let Err(code) = ensure_known_dynamic_account(config, account) {
@@ -470,7 +443,7 @@ fn rename(
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	if let Some(problem) = label_problem(new_label) {
+	if let Some(problem) = crate::util::label_rule::problem(new_label) {
 		return super::exit::refused(problem);
 	}
 	let mut store = match open_known(config, account, label) {

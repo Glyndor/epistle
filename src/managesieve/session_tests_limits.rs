@@ -77,3 +77,35 @@ fn havespace_answers_before_the_script_is_sent() {
 		"NO (QUOTA/MAXSIZE) \"Script is too large.\"\r\n"
 	);
 }
+
+/// A refused name says what a name may be and offers one that works, so the
+/// client is not left to guess at the rule, and the numbers it states are the
+/// ones the store enforces.
+#[test]
+fn an_invalid_script_name_is_refused_with_the_rule_and_an_example() {
+	use crate::managesieve::store::{MAX_NAME_BYTES, MAX_NAME_CHARS};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = session(dir.path());
+	let too_long = "a".repeat(MAX_NAME_CHARS + 1);
+	assert!(
+		too_long.len() <= MAX_NAME_BYTES,
+		"the bytes cap alone would accept it"
+	);
+	for name in ["a/b", "..", ".", too_long.as_str()] {
+		let Response::No(Some(text)) = put(&mut session, name, "keep;\r\n".to_string()) else {
+			panic!("{name:?} must be refused");
+		};
+		assert!(
+			text.contains(&format!("1 to {MAX_NAME_CHARS} characters")),
+			"{text}"
+		);
+		assert!(
+			text.contains(&format!("at most {MAX_NAME_BYTES} bytes")),
+			"{text}"
+		);
+		assert!(text.contains("normal form C"), "{text}");
+		assert!(text.contains("not . or .."), "{text}");
+		assert!(text.contains("no slash"), "{text}");
+		assert!(text.contains("for example keep-spam"), "{text}");
+	}
+}

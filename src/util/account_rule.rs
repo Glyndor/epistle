@@ -65,12 +65,21 @@ impl fmt::Display for Fault {
 	}
 }
 
-/// The refusal of `name` as one line: the name and why, or just that the
-/// name is empty (quoting an empty name adds nothing).
+/// A name that satisfies the rule, offered in every refusal as the thing to
+/// type instead.
+const EXAMPLE: &str = "torre-control";
+
+/// The refusal of `name` as one line: the name, why, and a name that would be
+/// accepted. The name is cut and quoted with escapes, so a newline or an escape
+/// sequence in it cannot split the line or move the cursor of the terminal that
+/// prints it. An empty name has nothing to quote.
 pub fn refusal(name: &str, fault: &Fault) -> String {
 	match fault {
-		Fault::Empty => "account name must not be empty".to_string(),
-		_ => format!("account name \"{name}\": {fault}"),
+		Fault::Empty => format!("account name must not be empty; for example {EXAMPLE:?}"),
+		_ => format!(
+			"account name {:?}: {fault}; for example {EXAMPLE:?}",
+			crate::util::address_reason::shorten(name)
+		),
 	}
 }
 

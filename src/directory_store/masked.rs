@@ -169,9 +169,10 @@ impl MaskedAddressStore {
 		}
 		let slug = slugify_label(label);
 		if slug.is_empty() {
-			return Err(StoreError::Invalid(
-				"label must contain at least one alphanumeric character".to_string(),
-			));
+			return Err(StoreError::Invalid(format!(
+				"label {:?} has no letter or digit to build an address from; write a name such as \"newsletter\"",
+				crate::util::address_reason::shorten(label)
+			)));
 		}
 		let max_per_account = self.max_per_account;
 		let account = account.to_ascii_lowercase();

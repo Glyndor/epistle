@@ -67,6 +67,7 @@ network at all and are reached only through Unix sockets.
 | [CLI reference](docs/cli.md) | Every command, starting with common tasks |
 | [Configuration](docs/configuration.md) | The `mail.toml` file, every section and key, secrets |
 | [HTTP API](docs/api.md) | Keys and scopes, sending, the delivery log, webhooks, JMAP, SCIM, errors and limits; the routes as [OpenAPI](src/api/openapi/openapi.yaml) |
+| [Input validation](docs/validation.md) | Every input rule, where it is defined, which entry points use it and why |
 | [Message headers](docs/headers.md) | Which headers the server adds, removes and leaves alone, path by path |
 | [Storage](docs/storage.md) | On-disk layout, at-rest encryption, the spool hardening |
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |

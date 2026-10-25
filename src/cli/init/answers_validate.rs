@@ -18,36 +18,19 @@ enum HostnameCheck {
 fn check_hostname(hostname: &str) -> HostnameCheck {
 	match crate::domain::normalize(hostname) {
 		Ok(norm) => HostnameCheck::Ok(norm),
-		Err(why) => {
-			let reason = match why {
-				crate::domain::DomainError::Invalid => "is not a valid FQDN".to_string(),
-				crate::domain::DomainError::Confusable => {
-					"is confusable with another name".to_string()
-				}
-			};
-			HostnameCheck::Err(Invalid::Hostname(reason))
-		}
+		Err(why) => HostnameCheck::Err(Invalid::Hostname(format!(
+			"{:?}: {}",
+			crate::util::address_reason::shorten(hostname),
+			crate::util::address_reason::name_refusal(hostname, why, "mail.example.org")
+		))),
 	}
 }
 
 fn check_domain(value: &str) -> Result<String, Invalid> {
-	match crate::domain::normalize(value) {
-		Ok(norm) => Ok(norm),
-		Err(why) => {
-			let reason = match why {
-				crate::domain::DomainError::Invalid => {
-					crate::util::address_reason::domain_reason(value)
-				}
-				crate::domain::DomainError::Confusable => {
-					"is confusable with another name".to_string()
-				}
-			};
-			Err(Invalid::Domain {
-				value: crate::util::address_reason::shorten(value),
-				reason,
-			})
-		}
-	}
+	crate::domain::normalize(value).map_err(|why| Invalid::Domain {
+		value: crate::util::address_reason::shorten(value),
+		reason: crate::util::address_reason::name_refusal(value, why, "example.org"),
+	})
 }
 
 fn check_domains(domains: &[String], errors: &mut Vec<Invalid>) -> Vec<String> {
@@ -138,16 +121,13 @@ fn check_dns(
 						}
 					}
 					Err(why) => {
-						let reason = match why {
-							crate::domain::DomainError::Invalid => {
-								"is not a valid FQDN".to_string()
-							}
-							crate::domain::DomainError::Confusable => {
-								"is confusable with another name".to_string()
-							}
-						};
+						let reason = crate::util::address_reason::name_refusal(
+							&dns.zone,
+							why,
+							"example.org",
+						);
 						errors.push(Invalid::DnsZoneMalformed {
-							value: dns.zone.clone(),
+							value: crate::util::address_reason::shorten(&dns.zone),
 							reason,
 						});
 					}

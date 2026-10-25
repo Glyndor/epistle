@@ -40,13 +40,24 @@ fn trusted_proxies<'de, D: serde::Deserializer<'de>>(
 	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 	for spec in raw {
 		if !spec.contains('/') {
-			return Err(serde::de::Error::custom(
-				"[api] trusted_proxies entries must be IPv4 or IPv6 CIDR networks",
-			));
+			// A bare address is a fair mistake and gets the prefix hint; a
+			// value that is no address at all gets the general refusal.
+			let message = if spec.parse::<std::net::IpAddr>().is_ok() {
+				format!(
+					"{:?} has no prefix length; an entry is an IPv4 or IPv6 network, for example \"10.0.0.0/8\" or \"2001:db8::/32\"",
+					crate::util::address_reason::shorten(&spec)
+				)
+			} else {
+				crate::cidr::Cidr::refusal(&spec)
+			};
+			return Err(serde::de::Error::custom(format!(
+				"[api] trusted_proxies: {message}"
+			)));
 		}
 		let cidr = crate::cidr::Cidr::parse(&spec).ok_or_else(|| {
 			serde::de::Error::custom(format!(
-				"[api] trusted_proxies contains invalid CIDR: {spec}"
+				"[api] trusted_proxies: {}",
+				crate::cidr::Cidr::refusal(&spec)
 			))
 		})?;
 		if cidr.prefix() == 0 {

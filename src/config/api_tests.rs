@@ -127,3 +127,28 @@ fn trusted_proxies_rejects_lists_above_the_documented_maximum() {
 		"{err}"
 	);
 }
+
+#[test]
+fn a_refused_trusted_proxy_names_the_value_the_rule_and_a_network_to_write() {
+	use crate::config::Config;
+	let base = "hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n[api]\n";
+	for (invalid, rule) in [
+		("192.0.2.1", "has no prefix length"),
+		("foo", "is not an IP address or CIDR block"),
+		("192.0.2.0/33", "is not an IP address or CIDR block"),
+	] {
+		let err = Config::parse_text(
+			&format!("{base}trusted_proxies = [\"{invalid}\"]"),
+			std::path::Path::new("mail.toml"),
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(err.contains(&format!("\"{invalid}\"")), "{err}");
+		assert!(err.contains(rule), "{err}");
+		assert!(
+			err.contains("for example \"10.0.0.0/8\"")
+				|| err.contains("for example \"203.0.113.0/24\""),
+			"{err}"
+		);
+	}
+}

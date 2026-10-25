@@ -301,7 +301,7 @@ impl ApiKeyStore {
 		{
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
-				format!("invalid CIDR \"{spec}\""),
+				crate::cidr::Cidr::refusal(spec),
 			));
 		}
 		validate_new_scopes(&key.scopes)?;
