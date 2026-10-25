@@ -57,7 +57,7 @@ async fn text_only_is_one_text_plain_part() {
 	let (_, raw) = queued(dir.path());
 	assert_eq!(shape(&raw), ["text/plain"]);
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	assert_eq!(message.body_text(0).expect("text").as_ref(), "hello");
+	assert_eq!(message.body_text(0).expect("text").as_ref(), "hello\r\n");
 }
 
 #[tokio::test]
@@ -68,7 +68,10 @@ async fn html_only_is_one_text_html_part() {
 	let (_, raw) = queued(dir.path());
 	assert_eq!(shape(&raw), ["text/html"]);
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	assert_eq!(message.body_html(0).expect("html").as_ref(), "<p>Grüße</p>");
+	assert_eq!(
+		message.body_html(0).expect("html").as_ref(),
+		"<p>Grüße</p>\r\n"
+	);
 }
 
 #[tokio::test]

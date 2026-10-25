@@ -486,6 +486,7 @@ impl Worker {
 				&recipients,
 				&entry.data,
 				std::time::SystemTime::now(),
+				self.auto_submitted,
 			) {
 			self.send_report(id, message, "bounce");
 		}
@@ -518,6 +519,7 @@ impl Worker {
 				&recipients,
 				&entry.data,
 				std::time::SystemTime::now(),
+				self.auto_submitted,
 			) {
 			self.send_report(id, message, "delay warning");
 		}

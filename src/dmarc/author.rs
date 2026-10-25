@@ -37,15 +37,19 @@ pub enum AuthorDomain {
 /// The unfolded values of every From field in the header block of `raw`,
 /// or `None` when the header block is not UTF-8.
 pub fn from_fields(raw: &[u8]) -> Option<Vec<String>> {
-	let end = raw
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.map(|p| p + 2)
-		.unwrap_or(raw.len());
-	let block = std::str::from_utf8(&raw[..end]).ok()?;
+	let block = std::str::from_utf8(crate::util::header_block::split_at_blank_line(raw).0).ok()?;
 	let mut fields = Vec::new();
 	let mut current: Option<String> = None;
-	for line in block.split("\r\n") {
+	for line in block.split_inclusive('\n') {
+		let (line, had_line_feed) = match line.strip_suffix('\n') {
+			Some(line) => (line, true),
+			None => (line, false),
+		};
+		let line = if had_line_feed {
+			line.strip_suffix('\r').unwrap_or(line)
+		} else {
+			line
+		};
 		if line.starts_with([' ', '\t']) {
 			if let Some(value) = &mut current {
 				value.push_str(line);

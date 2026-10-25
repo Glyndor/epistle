@@ -24,6 +24,18 @@ fn counts_every_spelling_of_the_from_name() {
 }
 
 #[test]
+fn reads_lf_only_header_blocks() {
+	assert_eq!(
+		author(b"Subject: x\nFrom: \"Alice\" <alice@example.org>\n\nbody\n"),
+		Author::Addresses(vec!["alice@example.org".to_string()])
+	);
+	assert_eq!(
+		author(b"From: a@x.example\nFrom: b@x.example\n\nbody\n"),
+		Author::MultipleFields
+	);
+}
+
+#[test]
 fn a_field_without_an_address_is_missing() {
 	assert_eq!(author(b"Subject: x\r\n\r\n"), Author::Missing);
 	assert_eq!(author(b"From: undisclosed:;\r\n\r\n"), Author::Missing);

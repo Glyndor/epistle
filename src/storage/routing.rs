@@ -36,6 +36,9 @@ pub struct SplitDelivery {
 	webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// Records submissions that keep evidence; `None` keeps none.
 	pub(super) evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
+	/// Which identification and reputation headers the mail this sink
+	/// generates gets (a Sieve rejection or a forward-loop notice).
+	pub(super) identification: crate::smtp::identification::Policy,
 }
 
 impl SplitDelivery {
@@ -64,7 +67,15 @@ impl SplitDelivery {
 			metrics: None,
 			webhook: None,
 			evidence: None,
+			identification: crate::smtp::identification::Policy::default(),
 		})
+	}
+
+	/// Set which identification and reputation headers the mail this sink
+	/// generates gets. The same policy the submission paths use.
+	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
+		self.identification = policy;
+		self
 	}
 
 	/// Fire delivery-event notifications to this webhook.
@@ -384,6 +395,7 @@ impl SplitDelivery {
 							&reason,
 							&message.data,
 							std::time::SystemTime::now(),
+							self.identification.system_auto_submitted,
 						)
 					})
 					.flatten()
@@ -461,6 +473,11 @@ impl SplitDelivery {
 	/// returns the DKIM-Signature header line; it is prepended to the body
 	/// in a single allocation, so the body is moved, not copied.
 	pub(super) fn sign_outbound(&self, message: &mut AcceptedMessage) {
+		if let std::borrow::Cow::Owned(data) =
+			crate::util::header_block::outbound_crlf(&message.data)
+		{
+			message.data = data;
+		}
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(message)
 			&& let Some(header) = signer.sign(&domain, &message.data)

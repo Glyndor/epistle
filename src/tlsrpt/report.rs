@@ -228,6 +228,11 @@ struct PolicyGroup {
 
 /// Build the MIME email carrying the report as a gzip attachment per
 /// RFC 8460 §3. Returns raw RFC 5322 bytes ready for the outbound spool.
+///
+/// `auto_submitted` writes `Auto-Submitted: auto-generated`, as RFC 3834
+/// section 5 asks of a machine-generated report; `false` leaves the field
+/// out (the `system_auto_submitted` switch).
+#[allow(clippy::too_many_arguments)]
 pub fn build_email(
 	policy_domain: &str,
 	to_address: &str,
@@ -236,6 +241,7 @@ pub fn build_email(
 	period_end: u64,
 	reporting_domain: &str,
 	attachment: &[u8],
+	auto_submitted: bool,
 ) -> Vec<u8> {
 	use base64::Engine;
 	let b64 = base64::engine::general_purpose::STANDARD.encode(attachment);
@@ -253,6 +259,9 @@ pub fn build_email(
 	email.push_str(policy_domain);
 	email.push_str("\r\n");
 	email.push_str(&format!("TLS-Report-Submitter: {reporting_domain}\r\n"));
+	if auto_submitted {
+		email.push_str("Auto-Submitted: auto-generated\r\n");
+	}
 	email.push_str("MIME-Version: 1.0\r\n");
 	email.push_str(&format!(
 		"Content-Type: multipart/report; report-type=\"tlsrpt\"; boundary=\"{boundary}\"\r\n"

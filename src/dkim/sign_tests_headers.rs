@@ -34,6 +34,9 @@ const FIELDS: &[(&str, &str, bool)] = &[
 	("Feedback-ID", "campaign:sender", false),
 	("Disposition-Notification-To", "alice@example.org", true),
 	("Return-Receipt-To", "alice@example.org", true),
+	("Auto-Submitted", "auto-generated", true),
+	("Organization", "Example Org", false),
+	("X-Epistle", "1", false),
 ];
 
 fn fixture(dual: bool) -> (Signer, KeyDns) {
@@ -137,11 +140,48 @@ async fn signs_every_documented_field_with_both_algorithms() {
 					"{name}"
 				);
 			}
-			assert_eq!(list.len(), FIELDS.len() + 12);
+			assert_eq!(list.len(), FIELDS.len() + 13);
 		}
 		assert!(lists.windows(2).all(|pair| pair[0] == pair[1]));
 		check(&dns, &signature, &raw, DkimOutcome::Pass).await;
 	}
+}
+
+#[tokio::test]
+async fn an_lf_only_message_signs_and_verifies_its_body() {
+	let (signer, dns) = fixture(false);
+	let raw = "From: alice@example.org\nSubject: hi\n\nbody\n";
+	let signature = signer.sign("example.org", raw.as_bytes()).expect("signs");
+	let (_, body) = raw.split_once("\n\n").expect("independent LF boundary");
+	assert_eq!(body, "body\n");
+	let expected = BASE64.encode(ring::digest::digest(&ring::digest::SHA256, b"body\r\n"));
+	assert!(signature.contains(&format!("bh={expected}")), "{signature}");
+	for field in signature_headers(signature.as_bytes()) {
+		let listed = names(&field);
+		assert_eq!(listed.iter().filter(|name| *name == "from").count(), 2);
+		assert_eq!(listed.iter().filter(|name| *name == "subject").count(), 2);
+	}
+	let wire = format!("{signature}{}", raw.replace('\n', "\r\n"));
+	let (_, wire_body) = wire
+		.split_once("\r\n\r\n")
+		.expect("independent CRLF boundary");
+	assert_eq!(wire_body, "body\r\n");
+	let results = verify_message(&dns, wire.as_bytes()).await;
+	assert_eq!(results.len(), 1);
+	assert_eq!(results[0].outcome, DkimOutcome::Pass);
+}
+
+#[test]
+fn a_message_that_starts_with_a_blank_line_has_no_signable_from() {
+	let (signer, _) = fixture(false);
+	assert!(
+		signer
+			.sign(
+				"example.org",
+				b"\r\nFrom: attacker@example.org\r\n\r\nbody\r\n"
+			)
+			.is_none()
+	);
 }
 
 #[tokio::test]
@@ -282,6 +322,9 @@ async fn repeated_fields_and_all_resent_names_are_signed_bottom_up() {
 #[tokio::test]
 async fn transit_headers_are_excluded_and_can_change() {
 	let (signer, dns) = fixture(true);
+	// `X-Epistle` is the one `X-` field in the signature: it is one of ours
+	// (see `smtp::identification`), so it is signed like any other field the
+	// server writes. A custom `X-` header from a client still is not.
 	let raw = format!(
 		"Received: old hop\r\nReturn-Path: <old@example.org>\r\nAuthentication-Results: old\r\nX-Custom: old\r\nReceived-SPF: old\r\n{}",
 		message()
@@ -292,7 +335,7 @@ async fn transit_headers_are_excluded_and_can_change() {
 		.map(|field| names(field))
 	{
 		assert!(!list.iter().any(|name| {
-			name.starts_with("x-")
+			(name.starts_with("x-") && name != "x-epistle")
 				|| [
 					"received",
 					"return-path",

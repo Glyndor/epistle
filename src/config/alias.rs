@@ -21,6 +21,10 @@ pub struct Alias {
 	/// Treat this alias as a mailing list: when set, delivered copies carry
 	/// `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers
 	/// (RFC 2369/2919). Absent means a plain alias with no list headers.
+	/// The value is written between the angle brackets the server adds, so it
+	/// has to be an identifier those brackets can carry: a dot-atom of
+	/// non-empty `atext` atoms joined by single dots. Anything else is
+	/// refused at load.
 	#[serde(default)]
 	pub list_id: Option<String>,
 }
@@ -65,10 +69,54 @@ impl Alias {
 				));
 			}
 		}
+		if let Some(list_id) = &self.list_id
+			&& !usable_list_id(list_id)
+		{
+			return Err(format!(
+				"alias {} has a list_id the list headers cannot carry",
+				self.address
+			));
+		}
 		Ok(())
 	}
+}
+
+/// Whether `list_id` is an identifier the `List-Id` field can carry between
+/// the angle brackets the server writes: RFC 2919 puts an identifier there, so
+/// the value is read as a dot-atom, `atext` atoms joined by single dots.
+///
+/// A `>` would close those brackets early and leave the rest of the value
+/// outside the identifier, a `<` would open a second pair inside them, a space
+/// would split the identifier into two words, and a control character would end
+/// the line and let the rest of the value read as further headers. A phrase
+/// such as `Team List team.example.org` is none of those, but it is not an
+/// identifier either: RFC 2919 spells a phrase as `Team List <id>`, with the
+/// description outside the brackets, and this server does not compose one.
+///
+/// The bytes checked are the bytes written: the value goes between the brackets
+/// as it stands, so whitespace around it is refused rather than trimmed for the
+/// check and written as it came. Neither such a case reaches a message: the
+/// configuration refuses the alias at load, and the writer that composes the
+/// block asks this again, so a directory built in process is held to the same
+/// rule.
+pub(crate) fn usable_list_id(list_id: &str) -> bool {
+	let identifier = list_id.trim();
+	!identifier.is_empty()
+		&& list_id
+			.split('.')
+			.all(|atom| !atom.is_empty() && atom.chars().all(is_atext))
+}
+
+/// One character of an `atext` atom (RFC 5322 section 3.2.3): a letter, a
+/// digit or one of the specials an address local part may carry.
+fn is_atext(character: char) -> bool {
+	character.is_ascii_alphanumeric() || crate::util::validation::ATEXT.contains(character)
 }
 
 #[cfg(test)]
 #[path = "alias_separator_tests.rs"]
 mod separator_tests;
+
+#[cfg(test)]
+#[path = "alias_tests.rs"]
+mod tests;

@@ -9,9 +9,11 @@ use crate::smtp::session::{AcceptedMessage, Session};
 
 impl Server {
 	/// Decide the class of `message` from the credential that authenticated
-	/// `session` and from `account`, strip the client's class header, and
-	/// apply the marketing rules. A refusal is the reply to send.
-	pub(super) fn prepare_submission(
+	/// `session` and from `account`, strip the client's class header, write
+	/// the identification headers, and apply the marketing rules. A refusal
+	/// is the reply to send. `pub(crate)` because the API tests compare this
+	/// path against the two that submit through the API.
+	pub(crate) fn prepare_submission(
 		&self,
 		session: &Session,
 		account: &str,
@@ -30,8 +32,14 @@ impl Server {
 			},
 			None => ClassSources::default(),
 		};
-		let prepared = prepare(message, sources, self.data_dir.as_deref())
-			.map_err(|refusal| refusal.smtp_reply())?;
+		let prepared = prepare(
+			message,
+			sources,
+			self.data_dir.as_deref(),
+			&self.identification,
+			Some(&self.directory.current()),
+		)
+		.map_err(|refusal| refusal.smtp_reply())?;
 		if !prepared.suppressed.is_empty() {
 			tracing::info!(
 				account = %crate::log_id::account(account),

@@ -377,6 +377,12 @@ impl Server {
 						);
 						// The MSA drops Bcc: those recipients are on the envelope.
 						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
+						// The trace header is this hop's, written just above;
+						// a client may not write one of its own.
+						crate::smtp::trace::strip_headers_in_place(
+							&mut message.data,
+							&["received"],
+						);
 					}
 					// Build the final stamped buffer in one allocation of
 					// the exact trace + auth + body length: the body is

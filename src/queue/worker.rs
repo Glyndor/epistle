@@ -95,6 +95,10 @@ pub struct Worker {
 	/// The IP warm-up, when one applies: recipients over the daily cap of
 	/// their receiver group wait for it.
 	warmup: Option<Arc<super::warmup::Warmup>>,
+	/// Whether the failure and delay notices this worker builds carry
+	/// `Auto-Submitted: auto-generated` (the `system_auto_submitted`
+	/// switch).
+	auto_submitted: bool,
 }
 
 impl Worker {
@@ -126,7 +130,15 @@ impl Worker {
 			attempt_limit: super::timeouts::ATTEMPT,
 			holds: Default::default(),
 			warmup: None,
+			auto_submitted: true,
 		}
+	}
+
+	/// Write `Auto-Submitted` on the failure and delay notices this worker
+	/// builds. `false` leaves the field out of them.
+	pub fn with_system_auto_submitted(mut self, auto_submitted: bool) -> Self {
+		self.auto_submitted = auto_submitted;
+		self
 	}
 
 	/// Hold off a destination that asks to slow down for these waits

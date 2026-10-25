@@ -200,7 +200,7 @@ impl LocalDelivery {
 			let one = self.deliver_for_account(
 				account,
 				delivered_to,
-				listed.for_list(list.as_deref()),
+				listed.for_list(list.as_ref()),
 				mailbox,
 				&mut ingested,
 			)?;
@@ -567,6 +567,10 @@ mod tests {
 #[cfg(test)]
 #[path = "delivery_forward_tests.rs"]
 mod forward_tests;
+
+#[cfg(test)]
+#[path = "delivery_tests_list_copy.rs"]
+mod list_copy_tests;
 
 #[cfg(test)]
 #[path = "delivery_tests_default_mailboxes.rs"]

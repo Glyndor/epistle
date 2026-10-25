@@ -439,7 +439,47 @@ publishes never contain either character.
 
 To show your brand logo in supporting inboxes you need DMARC at enforce
 (`p=quarantine` or `p=reject`), an SVG Tiny PS logo hosted over HTTPS, and a
-`default._bimi.example.org` TXT record (Gmail additionally requires a paid VMC).
+`default._bimi.example.org` TXT record (Gmail additionally requires a
+certificate, a VMC or a CMC).
+
+The record and the logo are the whole of the DNS side. epistle writes no BIMI
+header and reads none, so publishing the record changes nothing about the mail
+it sends until a receiver has a reason to look.
+
+What each receiver asks for on top of the record:
+
+- **Gmail** takes a Verified Mark Certificate (VMC) or a Common Mark
+  Certificate (CMC) from a CA that supports BIMI (Entrust, DigiCert, GlobalSign
+  or Sectigo), and its DMARC policy has to be at `p=quarantine` or `p=reject`
+  with `pct=100`. Either certificate brings the logo; the checkmark next to the
+  sender is the mark of a VMC, which names the organization and the DNS name in
+  its subject, so it has to be issued for the exact domain that publishes the
+  record. See
+  [Set up BIMI](https://knowledge.workspace.google.com/admin/security/set-up-bimi).
+- **Yahoo** asks for no certificate, but eligibility also depends on the
+  sender sending bulk mail and having enough reputation and engagement. A valid
+  SVG and a DMARC policy at `p=quarantine` or `p=reject` do not by themselves
+  guarantee that the logo is shown. A VMC in the record is used to decide the
+  overall eligibility, it is not needed for the logo. See
+  [BIMI](https://senders.yahooinc.com/bimi/).
+- **Apple Mail and Fastmail** need neither the VMC nor the certificate.
+- **The logo** must be an SVG Tiny Portable/Secure (SVG P/S) file served over
+  HTTPS with a valid certificate, small enough for the receiver's limit, with
+  no scripting and no external references. Gmail caches it for about a day, so
+  a fixed URL that changes in place is not noticed quickly.
+- **The DMARC policy** has to be at enforce for every receiver that shows the
+  mark. `p=none` collects the data but displays no logo anywhere.
+- **`rua=` is not enough on its own**: the receiver needs a DMARC report
+  aggregate stream to exist, which is what `rua=` is for, but the record and
+  the mark are read independently of it.
+
+The domain the record lives on is the one that must pass DMARC, and the logo
+belongs to that domain. A logo served from another domain can be recorded in
+the `l=` tag, and Gmail accepts a cross-domain `l=` only when the certificate
+covers both names.
+
+epistle does not generate or publish the record: `default._bimi` is a TXT
+record you add, and `epistle dns` does not manage BIMI records.
 
 ## DNS provider token storage
 

@@ -55,6 +55,17 @@ fn documented() -> Vec<(String, BTreeSet<String>)> {
 	rows
 }
 
+/// The value RFC 3834 section 5 gives a message the server wrote itself.
+/// Every system message here is machine-generated, so this is the value
+/// they all carry (a vacation reply is `auto-replied`, and its test says so).
+fn expect_auto_generated(built: &[u8]) {
+	let text = String::from_utf8_lossy(built);
+	assert!(
+		text.contains("Auto-Submitted: auto-generated"),
+		"the message is not marked machine-generated: {text}"
+	);
+}
+
 fn expect(label: &str, built: &[u8], added_later: &[&str]) {
 	let rows = documented();
 	let (_, wanted) = rows
@@ -80,10 +91,12 @@ fn a_failure_notice_has_the_documented_headers() {
 		"550 5.1.1 no such user",
 		ORIGINAL,
 		now(),
+		true,
 	)
 	.expect("a notice");
 	assert!(message.reverse_path.is_empty());
 	expect("Failure notice", &message.data, &[]);
+	expect_auto_generated(&message.data);
 }
 
 #[test]
@@ -98,9 +111,11 @@ fn a_delay_warning_has_the_documented_headers() {
 		&recipients,
 		ORIGINAL,
 		now(),
+		true,
 	)
 	.expect("a warning");
 	expect("Delay warning", &message.data, &[]);
+	expect_auto_generated(&message.data);
 }
 
 #[test]
@@ -134,6 +149,7 @@ fn an_abuse_report_has_the_documented_headers() {
 	};
 	let message = arf::build("mail.example.org", &report, now());
 	expect("Abuse report", &message.data, &[]);
+	expect_auto_generated(&message.data);
 }
 
 #[test]
@@ -148,8 +164,10 @@ fn a_dmarc_report_has_the_documented_headers() {
 		"mail.example.org",
 		now(),
 		b"gz",
+		true,
 	);
 	expect("DMARC aggregate report", &email, &[]);
+	expect_auto_generated(&email);
 }
 
 #[test]
@@ -162,7 +180,9 @@ fn a_tls_rpt_report_has_the_documented_headers() {
 		1_789_986_400,
 		"example.org",
 		b"gz",
+		true,
 	);
 	// The sender puts Date and Message-ID in front of this (tlsrpt/send.rs).
 	expect("TLS-RPT report", &email, &["Date", "Message-ID"]);
+	expect_auto_generated(&email);
 }

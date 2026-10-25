@@ -43,6 +43,9 @@ pub struct Sender<'a> {
 	/// Time the `Date:` header of outgoing report messages is taken from.
 	/// Injected so tests can pin the value.
 	pub now: SystemTime,
+	/// Whether outgoing report messages carry
+	/// `Auto-Submitted: auto-generated`.
+	pub auto_submitted: bool,
 }
 
 /// Write one delivery record to the per-domain JSONL file for today.
@@ -175,6 +178,7 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 					reporting,
 					sender.now,
 					&gz,
+					sender.auto_submitted,
 				);
 				let message = AcceptedMessage {
 					reverse_path: format!("postmaster@{reporting}"),
