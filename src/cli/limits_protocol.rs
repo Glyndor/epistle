@@ -134,7 +134,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		crate::pop3::server::TIMEOUT,
 		"seconds",
 		Must,
-		"RFC 1939 §3 (an inactivity timer of at least 10 minutes)"
+		"RFC 1939 §3 (an inactivity timer of at least 10 minutes; before sign-in preauth-timeout bounds the session)"
 	),
 	number!(
 		"pop3-error-streak",
@@ -155,7 +155,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		crate::imap::server::DEFAULT_READ_TIMEOUT,
 		"seconds",
 		Must,
-		"RFC 3501 §5.4 (an autologout timer of at least 30 minutes)"
+		"RFC 3501 §5.4 (an autologout timer of at least 30 minutes; before sign-in preauth-timeout bounds the session)"
 	),
 	number!(
 		"imap-error-streak",
@@ -321,6 +321,41 @@ pub(super) const FIXED: &[FixedEntry] = &[
 	number!(
 		"sieve-headers",
 		crate::sieve::MAX_HEADERS,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-header-name-length",
+		crate::sieve::message::MAX_NAME,
+		"octets",
+		Own,
+		"RFC 5322 §2.1.1 (lines of 998 octets)"
+	),
+	number!(
+		"sieve-body-window",
+		crate::sieve::BODY_WINDOW,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-header-name-values",
+		crate::sieve::HEADER_NAME_VALUES,
+		"count",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-header-name-window",
+		crate::sieve::HEADER_NAME_WINDOW,
+		"octets",
+		Own,
+		"no standard mandate"
+	),
+	number!(
+		"sieve-header-names-per-lookup",
+		crate::sieve::HEADER_NAMES_PER_LOOKUP,
 		"count",
 		Own,
 		"no standard mandate"

@@ -165,3 +165,38 @@ fn a_name_too_long_for_a_file_survives_a_lost_index_a_rename_and_a_delete() {
 	assert_eq!(names(".name"), 0);
 	assert!(s.list().expect("list").is_empty());
 }
+
+/// Put a script file in the directory by hand, the way an operator might.
+fn drop_in(dir: &std::path::Path, stem: &str) {
+	let sieve = dir.join("alice/sieve");
+	std::fs::create_dir_all(&sieve).expect("dir");
+	std::fs::write(sieve.join(format!("{stem}.sieve")), "keep;\r\n").expect("write");
+}
+
+#[test]
+fn a_file_put_in_by_hand_with_a_name_between_201_and_249_octets_is_not_listed() {
+	// Such a name would be stored under a hashed file name, so the file
+	// could be listed and never opened, and it would take one of the slots.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	drop_in(dir.path(), &"\u{e9}".repeat(117));
+	drop_in(dir.path(), &"\u{e9}".repeat(100));
+	let names: Vec<String> = s
+		.list()
+		.expect("list")
+		.into_iter()
+		.map(|i| i.name)
+		.collect();
+	assert_eq!(names, vec!["\u{e9}".repeat(100)]);
+	assert_eq!(s.get(&"\u{e9}".repeat(100)).expect("get"), "keep;\r\n");
+}
+
+#[test]
+fn a_file_named_like_a_hashed_one_without_its_name_file_is_not_listed_or_opened() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	drop_in(dir.path(), "~sha256-legacy");
+	assert!(s.list().expect("list").is_empty());
+	assert_eq!(s.get("~sha256-legacy"), Err(StoreError::InvalidName));
+	assert_eq!(s.delete("~sha256-legacy"), Err(StoreError::InvalidName));
+}

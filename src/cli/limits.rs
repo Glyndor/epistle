@@ -74,6 +74,7 @@ fn edit_document(
 		})?;
 	if let (Some(value), Some((floor, reason))) = (value, key.must_floor())
 		&& value < floor
+		&& !(value == 0 && key.zero_is_default())
 	{
 		return Err(format!("{REFUSED_PREFIX}{reason}"));
 	}
@@ -466,3 +467,7 @@ mod tests_catalog;
 #[cfg(test)]
 #[path = "limits_tests_protocol.rs"]
 mod tests_protocol;
+
+#[cfg(test)]
+#[path = "limits_tests_scan.rs"]
+mod tests_scan;

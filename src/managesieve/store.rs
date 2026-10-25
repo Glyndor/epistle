@@ -424,8 +424,11 @@ impl ScriptStore {
 				continue;
 			};
 			let hashed = store_names::original(&self.dirs()?.sieve_dir, name);
+			// A file that is its own name holds a short name: a longer one
+			// would be looked for under its hashed file name.
+			let plain = hashed.is_none() && name.len() <= store_names::FILE_NAME_BYTES;
 			let name = hashed.as_deref().unwrap_or(name);
-			if is_valid_name(name) {
+			if (plain || hashed.is_some()) && is_valid_name(name) {
 				names.insert(name.to_string());
 			} else {
 				left_out += 1;

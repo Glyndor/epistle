@@ -108,22 +108,3 @@ fn the_retry_schedule_warnings_match_the_runtime_text() {
 			.is_empty()
 	);
 }
-
-#[test]
-fn preauth_timeout_below_five_minutes_warns_and_is_saved() {
-	let (_dir, file) = super::tests_config::config_file();
-	let (code, printed) = limits(file.path(), &["set", "preauth-timeout", "120"]);
-	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
-	assert!(
-		printed.contains("warning: preauth-timeout is below the 5 minutes RFC 5321 §4.5.3.2.7"),
-		"the saved value must carry the SHOULD warning: {printed}"
-	);
-}
-
-#[test]
-fn preauth_timeout_at_five_minutes_is_saved_without_warning() {
-	let (_dir, file) = super::tests_config::config_file();
-	let (code, printed) = limits(file.path(), &["set", "preauth-timeout", "300"]);
-	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
-	assert!(!printed.contains("warning"), "{printed}");
-}

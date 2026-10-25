@@ -60,7 +60,7 @@ rule comes from.
 | `data-rate-grace` | 120 | seconds | adjustable | | no standard mandate |
 | `junk-command-limit` | 100 | count | adjustable | | no standard mandate |
 | `max-session-time` | 1800 | seconds | adjustable | | no standard mandate |
-| `preauth-timeout` | 60 | seconds | recommended | at-least 300 | RFC 5321 §4.5.3.2.7 (5 minutes recommended) |
+| `preauth-timeout` | 60 | seconds | adjustable | | no standard mandate |
 | `known-network-window` | 2592000 | seconds | adjustable | | no standard mandate |
 | `max-mailbox-connections-per-ip` | 200 | count | adjustable | | no standard mandate |
 | `max-http-connections` | 1024 | count | adjustable | | no standard mandate |
@@ -84,9 +84,18 @@ The `class` column says how strongly a standard ties the limit:
   request limits are the least RFC 8620 §2 recommends a server to offer).
 - `own`: no standard fixes the number; it is a bound epistle picked.
 
+The idle timers of POP3 (10 minutes) and IMAP (30 minutes) are the
+inactivity timers of a signed-in session. Before sign-in the session is
+bounded by `preauth-timeout` (60 seconds by default), which is a limit of its
+own and not one of the MUSTs above.
+
 A script name longer than 200 octets, which RFC 5804 §1.6 requires a server
 to accept up to 512, is kept under a file named after its SHA-256 digest,
-with a `.name` file beside it that holds the name.
+with a `.name` file beside it that holds the name. A name that starts with
+`~sha256-` is refused, and a script file put in the directory by hand is
+listed only when its file name is its own name (200 octets or fewer) or it
+has the `.name` file; any other is left out of the list, with a warning in
+the log.
 
 | key | value | unit | class | reference |
 | --- | --- | --- | --- | --- |
@@ -102,10 +111,10 @@ with a `.name` file beside it that holds the name.
 | `smtp-header-fields` | 9900 | count | own | no standard mandate |
 | `smtp-error-streak` | 20 | count | own | no standard mandate (consecutive error replies before the connection is dropped) |
 | `pop3-command-line` | 512 | octets | must | RFC 2449 §4 (commands of at least 255 octets) |
-| `pop3-idle-timeout` | 600 | seconds | must | RFC 1939 §3 (an inactivity timer of at least 10 minutes) |
+| `pop3-idle-timeout` | 600 | seconds | must | RFC 1939 §3 (an inactivity timer of at least 10 minutes; before sign-in preauth-timeout bounds the session) |
 | `pop3-error-streak` | 20 | count | own | no standard mandate (consecutive -ERR replies before the connection is dropped) |
 | `imap-command-line` | 32768 | octets | own | no standard mandate |
-| `imap-idle-timeout` | 1800 | seconds | must | RFC 3501 §5.4 (an autologout timer of at least 30 minutes) |
+| `imap-idle-timeout` | 1800 | seconds | must | RFC 3501 §5.4 (an autologout timer of at least 30 minutes; before sign-in preauth-timeout bounds the session) |
 | `imap-error-streak` | 20 | count | own | no standard mandate (consecutive BAD replies before the connection is dropped) |
 | `imap-keywords-per-message` | 32 | count | own | no standard mandate |
 | `imap-keyword-length` | 64 | octets | own | no standard mandate |
@@ -130,6 +139,11 @@ with a `.name` file beside it that holds the name.
 | `sieve-steps` | 20000 | count | own | no standard mandate |
 | `sieve-work` | 268435456 | octets | own | no standard mandate |
 | `sieve-headers` | 10000 | count | own | no standard mandate |
+| `sieve-header-name-length` | 998 | octets | own | RFC 5322 §2.1.1 (lines of 998 octets) |
+| `sieve-body-window` | 1048576 | octets | own | no standard mandate |
+| `sieve-header-name-values` | 1000 | count | own | no standard mandate |
+| `sieve-header-name-window` | 65536 | octets | own | no standard mandate |
+| `sieve-header-names-per-lookup` | 16 | count | own | no standard mandate |
 | `sieve-pattern-length` | 256 | characters | own | no standard mandate |
 | `sieve-wildcards` | 32 | count | own | no standard mandate |
 | `jmap-max-size-request` | 10000000 | octets | should | RFC 8620 §2 (maxSizeRequest, at least 10000000 recommended) |
@@ -161,16 +175,15 @@ refused: RFC 5321 §4.5.3.1.8 requires accepting at least 100 recipients
 refused: RFC 5321 §4.5.3.1.7 requires accepting messages of at least 64K octets
 ```
 
-The SHOULD floors on `queue-give-up`, `queue-retry-base` and
-`preauth-timeout` are accepted with a warning naming the recommendation:
+The SHOULD floors on `queue-give-up` and `queue-retry-base`
+are accepted with a warning naming the recommendation:
 
 ```
 warning: queue-give-up is below the 4 days RFC 5321 §4.5.4.1 recommends; recipients will bounce sooner than the standard expects
 warning: queue-retry-base is below the 30 minutes the RFC recommends; the first retry is sooner than receivers expect
-warning: preauth-timeout is below the 5 minutes RFC 5321 §4.5.3.2.7 recommends; a slow client is dropped before it signs in
 ```
 
-The two queue warnings are printed at start-up so a configuration that was
+The warnings are printed at start-up so a configuration that was
 edited months ago still tells the operator what was crossed. The
 audit trail keeps both the saved value and the warning line so the
 deviation is visible later.

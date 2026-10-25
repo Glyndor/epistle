@@ -23,7 +23,9 @@ impl Config {
 			&& size < crate::smtp::session::MIN_MESSAGE_SIZE as u64
 		{
 			return Err(ConfigError::Invalid(format!(
-				"max_message_size ({size} bytes) is below {}: {}",
+				"max_message_size ({size} bytes) is below {}: {}; set it to 64k or more \
+				 (`epistle limits set max-message-size 64k`) or remove it \
+				 (`epistle limits unset max-message-size`)",
 				crate::smtp::session::MIN_MESSAGE_SIZE,
 				crate::smtp::session::MIN_MESSAGE_SIZE_REASON
 			)));

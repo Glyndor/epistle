@@ -42,10 +42,6 @@ pub const MIN_MESSAGE_SIZE: usize = 64 * 1024;
 pub const MIN_MESSAGE_SIZE_REASON: &str =
 	"RFC 5321 §4.5.3.1.7 requires accepting messages of at least 64K octets";
 
-/// The shortest time to wait for a client that RFC 5321 §4.5.3.2.7 recommends
-/// (SHOULD): five minutes. `preauth-timeout` warns below it.
-pub const SHOULD_COMMAND_TIMEOUT_SECS: u64 = 300;
-
 /// The fewest recipients per transaction `max_recipients` may allow: RFC 5321
 /// §4.5.3.1.8 says a server MUST accept at least 100.
 pub const MIN_MAX_RECIPIENTS: usize = 100;

@@ -223,7 +223,7 @@ fn window(text: &str, limit: usize) -> &str {
 }
 
 /// The longest header name read, in octets (RFC 5322 section 2.1.1).
-const MAX_NAME: usize = 998;
+pub(crate) const MAX_NAME: usize = 998;
 
 /// Text from octets, a `?` for each one that is not UTF-8: never longer than
 /// the octets, which is what keeps a message of bad octets from costing

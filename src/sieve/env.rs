@@ -30,18 +30,18 @@ pub(crate) const MAX_STEPS: u32 = 20_000;
 /// small one: when it asks for more than this many octets of reading.
 pub(crate) const MAX_WORK: u64 = 256 * 1024 * 1024;
 /// How much of the body the `body` test reads: the first mebibyte.
-pub(super) const BODY_WINDOW: usize = 1024 * 1024;
+pub(crate) const BODY_WINDOW: usize = 1024 * 1024;
 /// What a lookup reads of the headers called one name: the first 1000 values,
 /// and the first 64 KiB of them in all (a value is cut at that too). Every
 /// name a test lists has a quota of its own, so that a name with a thousand
 /// values or one huge value cannot use up what another is allowed to show.
-pub(super) const HEADER_NAME_VALUES: usize = 1000;
+pub(crate) const HEADER_NAME_VALUES: usize = 1000;
 /// See [`HEADER_NAME_VALUES`]: the octets a lookup reads of one name.
-pub(super) const HEADER_NAME_WINDOW: usize = 64 * 1024;
+pub(crate) const HEADER_NAME_WINDOW: usize = 64 * 1024;
 /// How many names one lookup reads (the rest of a longer list are not looked
 /// at). With the quotas above, a lookup reads at most 1 MiB, as much as a
 /// `body` test does.
-pub(super) const HEADER_NAMES_PER_LOOKUP: usize = 16;
+pub(crate) const HEADER_NAMES_PER_LOOKUP: usize = 16;
 
 /// How many headers of a message the interpreter reads: the first 10 000.
 /// A message may hold millions of one-letter headers, and copying and

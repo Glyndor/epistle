@@ -43,7 +43,7 @@ fn shown(file: &Path) -> String {
 fn the_preauth_deadline_is_shown_set_and_unset() {
 	let (_dir, file) = super::tests_config::config_file();
 	assert!(shown(file.path()).lines().any(
-		|line| line == "preauth-timeout\t60 seconds\tdefault\trecommended\tRFC 5321 §4.5.3.2.7 (5 minutes recommended)"
+		|line| line == "preauth-timeout\t60 seconds\tdefault\tadjustable\tno standard mandate"
 	));
 	let (code, printed) = limits(file.path(), &["set", "preauth-timeout", "2m"]);
 	assert_eq!(code, ExitCode::SUCCESS, "{printed}");
@@ -51,7 +51,7 @@ fn the_preauth_deadline_is_shown_set_and_unset() {
 	assert!(text.contains("preauth_timeout = 120"), "{text}");
 	assert!(
 		shown(file.path()).lines().any(|line| line
-			== "preauth-timeout\t120 seconds\tconfigured\trecommended\tRFC 5321 §4.5.3.2.7 (5 minutes recommended)")
+			== "preauth-timeout\t120 seconds\tconfigured\tadjustable\tno standard mandate")
 	);
 	let (code, _) = limits(file.path(), &["unset", "preauth-timeout"]);
 	assert_eq!(code, ExitCode::SUCCESS);

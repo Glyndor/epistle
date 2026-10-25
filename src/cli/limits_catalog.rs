@@ -300,11 +300,9 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 	Adjustable {
 		key: Key::PreauthTimeout,
-		kind: Kind::Recommended,
-		bound: Some(Bound::AtLeast(
-			crate::smtp::session::SHOULD_COMMAND_TIMEOUT_SECS,
-		)),
-		reference: "RFC 5321 §4.5.3.2.7 (5 minutes recommended)",
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
 	},
 	Adjustable {
 		key: Key::KnownNetworkWindow,
