@@ -1352,6 +1352,17 @@ and the file mtime does not change. A run that changes every answer the
 operator can change (hostname, domains, services, mode) does not regenerate a
 single key.
 
+An `init` that stops part way (killed, or a step that failed once the keys were
+written) leaves what it had finished and no `mail.toml`: the keys, the
+self-signed pair and the passwords are in place, because each file is written
+whole under a temporary name and renamed, so none is ever half written. Run the
+same command again. The keys are reused byte for byte, the missing files are
+written, and nothing needs to be deleted first. Do not delete the storage key
+to "start clean": it encrypts what is already stored. Every answer is checked
+before the first file is written, so a refusal of the answers (an unset
+variable in a path, an address already in use) leaves nothing behind; only a
+failure of the disk or the process itself can stop a run after the keys.
+
 What this build does **not** do (other parts of `init`, deliberately out of
 scope here):
 

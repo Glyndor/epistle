@@ -415,9 +415,9 @@ impl std::fmt::Display for Invalid {
 			Invalid::PathInterpolated { field, value } => write!(
 				f,
 				"{field} {value:?}: must not contain a `$`; compose would interpolate it \
-				 and the rendered mail.toml would still carry the literal `$VAR` in its \
-				 data and key paths, so the container could not find the generated keys. \
-				 Write the resolved path directly."
+				 while the rendered mail.toml keeps the literal `$VAR` (or expands it itself, \
+				 and stops when the variable is unset), so the container could not find \
+				 the file the host expects. Write the resolved path directly."
 			),
 			Invalid::ApiUnsupported => f.write_str(
 				"services.api: enable the management API by editing the [api] section of the generated config after init; init does not generate an api credential",

@@ -185,3 +185,19 @@ fn an_existing_account_spelled_as_a_u_label_is_the_same_address() {
 		"a different domain is still a collision"
 	);
 }
+
+/// `precheck` runs with the configuration lock held, and reads the existing
+/// configuration as raw TOML. A fifo there counts as no accounts instead of
+/// holding the command, and the lock with it, for a writer that never comes.
+#[cfg(unix)]
+#[test]
+fn a_fifo_where_the_configuration_belongs_is_not_waited_on() {
+	use crate::cli::regular_read::{bounded, fifo_at};
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("mail.toml");
+	fifo_at(&path);
+	let (accounts, aliases) = bounded(&path, |path| {
+		(static_accounts_of(path), static_aliases_of(path))
+	});
+	assert!(accounts.is_empty() && aliases.is_empty());
+}

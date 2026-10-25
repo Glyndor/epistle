@@ -144,6 +144,33 @@ fn credential_references_retry_without_echoing_or_checkpointing_pasted_values() 
 	assert_eq!(text.matches("Invalid credential reference").count(), 2);
 }
 
+/// A file reference with a `$` would be interpolated by compose and expanded by
+/// the loader of `mail.toml`, and stop the run after the keys were written when
+/// the variable is unset, so the question asks again instead of taking it.
+#[test]
+fn a_file_credential_reference_with_an_environment_reference_is_asked_again() {
+	let mut input = &b"/run/${AUDIT_DNS_FILE}\n/run/secrets/epistle-dns\n"[..];
+	let mut out = Vec::new();
+	let mut checkpoint = |_: &Draft| panic!("credential references must not be checkpointed");
+	let mut ui = Prompt {
+		reader: &mut input,
+		out: &mut out,
+		policy: Policy {
+			interactive: true,
+			colour: false,
+			input_tty: false,
+		},
+		answers: Draft::new(),
+		checkpoint: &mut checkpoint,
+	};
+	assert_eq!(
+		credential_reference(&mut ui, true).unwrap(),
+		"/run/secrets/epistle-dns"
+	);
+	let text = String::from_utf8(out).unwrap();
+	assert_eq!(text.matches("Invalid credential reference").count(), 1);
+}
+
 #[test]
 fn first_mailbox_retries_address_and_display_name_and_derives_the_account() {
 	let input = format!(

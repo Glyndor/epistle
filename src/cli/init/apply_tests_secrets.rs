@@ -206,3 +206,49 @@ fn a_fifo_at_the_served_configuration_is_refused_instead_of_waited_on() {
 		assert!(error.contains("must be a regular file"), "{label}: {error}");
 	}
 }
+
+/// An `init` that stops after the keys were written and before `mail.toml`
+/// leaves them behind. The documentation tells the operator to run the same
+/// command again, so this is the evidence it is safe: the rerun reuses every
+/// key byte for byte and writes the files that are missing.
+#[test]
+fn a_rerun_after_a_run_that_stopped_before_the_config_keeps_every_key() {
+	let root = tempfile::tempdir().unwrap();
+	let answers = answers(root.path());
+	// A file where the configuration directory belongs stops the run at the
+	// step after the keys, which is where a kill in that window leaves it.
+	std::fs::write(root.path().join("etc"), "in the way").unwrap();
+	let stopped = apply(&answers);
+	assert!(stopped.error.is_some(), "the run must stop at the config");
+	assert!(!answers.config_path.exists());
+	let secrets = root.path().join("secrets");
+	let keys = answers.data_dir.join("keys");
+	let kept: Vec<(std::path::PathBuf, Vec<u8>)> = [
+		secrets.join("storage.key"),
+		secrets.join("oauth_signing.key"),
+		keys.join("oauth_public.key"),
+		keys.join("s1.pem"),
+		keys.join("s2.pem"),
+		keys.join("cert.pem"),
+		keys.join("key.pem"),
+	]
+	.into_iter()
+	.map(|path| {
+		let bytes = std::fs::read(&path)
+			.unwrap_or_else(|error| panic!("{} was not written: {error}", path.display()));
+		(path, bytes)
+	})
+	.collect();
+	std::fs::remove_file(root.path().join("etc")).unwrap();
+	let finished = apply(&answers);
+	assert!(finished.error.is_none(), "{:?}", finished.error);
+	assert!(answers.config_path.is_file());
+	for (path, bytes) in kept {
+		assert_eq!(
+			std::fs::read(&path).unwrap(),
+			bytes,
+			"{} must survive the rerun unchanged",
+			path.display()
+		);
+	}
+}
