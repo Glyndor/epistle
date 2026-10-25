@@ -27,6 +27,13 @@ macro_rules! number {
 	};
 }
 
+/// A row of epistle's own with no standard behind it, in one line.
+macro_rules! own {
+	($name:literal, $source:path, $unit:literal) => {
+		number!($name, $source, $unit, Own, "no standard mandate")
+	};
+}
+
 /// A row whose value is the `Duration` constant at `$source`, in seconds.
 macro_rules! seconds {
 	($name:literal, $source:path, $unit:literal, $class:ident, $reference:literal) => {
@@ -276,13 +283,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"no standard mandate"
 	),
-	number!(
-		"sieve-flags",
-		crate::sieve::interp::MAX_FLAGS,
-		"count",
-		Own,
-		"no standard mandate"
-	),
+	own!("sieve-flags", crate::sieve::interp::MAX_FLAGS, "count"),
 	number!(
 		"sieve-flag-length",
 		crate::sieve::interp::MAX_FLAG_BYTES,
@@ -311,13 +312,38 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"no standard mandate"
 	),
-	number!(
-		"sieve-variables",
-		crate::sieve::MAX_VARS,
-		"count",
-		Own,
-		"no standard mandate"
+	own!("sieve-variables", crate::sieve::MAX_VARS, "count"),
+	own!(
+		"caldav-freebusy-window",
+		crate::webdav::caldav_busy::MAX_WINDOW_SECS,
+		"seconds"
 	),
+	own!(
+		"caldav-freebusy-items",
+		crate::webdav::caldav_busy::MAX_ITEMS,
+		"count"
+	),
+	own!(
+		"caldav-freebusy-file-size",
+		crate::webdav::caldav_busy::MAX_FILE_BYTES,
+		"octets"
+	),
+	own!(
+		"caldav-freebusy-periods",
+		crate::webdav::caldav_busy::MAX_PERIODS,
+		"count"
+	),
+	own!(
+		"webdav-entry-bytes",
+		crate::webdav::quota::MIN_ENTRY_BYTES,
+		"octets"
+	),
+	own!(
+		"webdav-collection-members",
+		crate::webdav::bounds::MAX_MEMBERS,
+		"count"
+	),
+	own!("webdav-depth", crate::webdav::bounds::MAX_DEPTH, "count"),
 	number!(
 		"sieve-variable-name-length",
 		crate::sieve::MAX_VAR_NAME,
@@ -325,27 +351,9 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"no standard mandate"
 	),
-	number!(
-		"sieve-steps",
-		crate::sieve::MAX_STEPS,
-		"count",
-		Own,
-		"no standard mandate"
-	),
-	number!(
-		"sieve-work",
-		crate::sieve::MAX_WORK,
-		"octets",
-		Own,
-		"no standard mandate"
-	),
-	number!(
-		"sieve-headers",
-		crate::sieve::MAX_HEADERS,
-		"count",
-		Own,
-		"no standard mandate"
-	),
+	own!("sieve-steps", crate::sieve::MAX_STEPS, "count"),
+	own!("sieve-work", crate::sieve::MAX_WORK, "octets"),
+	own!("sieve-headers", crate::sieve::MAX_HEADERS, "count"),
 	number!(
 		"sieve-header-name-length",
 		crate::sieve::message::MAX_NAME,
@@ -353,13 +361,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"RFC 5322 §2.1.1 (lines of 998 octets)"
 	),
-	number!(
-		"sieve-body-window",
-		crate::sieve::BODY_WINDOW,
-		"octets",
-		Own,
-		"no standard mandate"
-	),
+	own!("sieve-body-window", crate::sieve::BODY_WINDOW, "octets"),
 	number!(
 		"sieve-header-name-values",
 		crate::sieve::HEADER_NAME_VALUES,
@@ -388,13 +390,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"no standard mandate"
 	),
-	number!(
-		"sieve-wildcards",
-		crate::sieve::MAX_WILDCARDS,
-		"count",
-		Own,
-		"no standard mandate"
-	),
+	own!("sieve-wildcards", crate::sieve::MAX_WILDCARDS, "count"),
 	number!(
 		"jmap-max-size-request",
 		crate::api::jmap::limits::MAX_SIZE_REQUEST,

@@ -53,13 +53,19 @@ fn base64_encode(input: &[u8]) -> String {
 
 /// A WebDAV router over `dir` with the accounts `alice` and `bob`.
 pub fn test_app(dir: &std::path::Path) -> Router {
+	test_app_with_quota(dir, None)
+}
+
+/// The same router with `quota_bytes` as both accounts' quota (`Some(0)` is
+/// no limit).
+pub fn test_app_with_quota(dir: &std::path::Path, quota_bytes: Option<u64>) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
 		password_hash: Some(crate::smtp::auth::hash_password(pw).expect("hash")),
 		catch_all: Vec::new(),
-		quota_bytes: None,
+		quota_bytes,
 		forward: Vec::new(),
 		forward_keep_local: true,
 		allowed_protocols: None,

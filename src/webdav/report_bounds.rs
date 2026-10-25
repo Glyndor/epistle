@@ -40,7 +40,7 @@ pub const ESCAPE_EXPANSION: u64 = 6;
 pub const MAX_REPORT_BYTES: u64 = MAX_RESOURCE_BYTES * ESCAPE_EXPANSION + 64 * 1024;
 
 /// How many members a first `sync-collection` lists.
-pub const MAX_SYNC_MEMBERS: usize = 50_000;
+pub const MAX_SYNC_MEMBERS: usize = super::bounds::MAX_MEMBERS;
 
 /// The largest body a query or free-busy report may have.
 pub const MAX_FILTER_BODY: usize = 64 * 1024;

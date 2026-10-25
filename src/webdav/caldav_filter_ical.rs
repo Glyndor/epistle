@@ -143,7 +143,7 @@ impl Component {
 
 /// Parse an RFC 5545 §3.3.6 duration (`P1D`, `PT1H30M`, `P2W`, `-PT15M`)
 /// into seconds.
-fn duration(value: &str) -> Option<i64> {
+pub(super) fn duration(value: &str) -> Option<i64> {
 	let value = value.trim();
 	let (sign, rest) = match value.as_bytes().first()? {
 		b'-' => (-1, &value[1..]),

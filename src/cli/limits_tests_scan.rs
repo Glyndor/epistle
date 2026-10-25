@@ -25,6 +25,9 @@ const SCANNED_FILES: &[&str] = &[
 	"util/validation/mod.rs",
 	"util/mailbox_path.rs",
 	"util/header.rs",
+	"webdav/caldav_busy.rs",
+	"webdav/quota.rs",
+	"webdav/bounds.rs",
 ];
 
 /// Constants that are not a row of their own, each with the reason. The
