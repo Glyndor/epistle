@@ -34,8 +34,11 @@ pub fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 /// left to the protocol, an array for `queue-backoff`) and `unit` is
 /// `bytes`, `bytes-per-second`, `seconds`, `count` or the catalog's own
 /// `octets`/`version`/`boolean` for fixed rules. `kind` is one of
-/// `adjustable`, `recommended`, `fixed`; `bounds` is the standard floor
-/// or ceiling the RFC puts on the limit, when there is one; `reference`
+/// `adjustable`, `recommended` (SHOULD), `must` (MUST) or `fixed`; a fixed
+/// row also carries `class` (`must`, `should` or `own`), how strongly a
+/// standard ties the limit;
+/// `bounds` is the standard floor the RFC puts on the limit, when there is
+/// one; `reference`
 /// names the RFC and section the rule comes from.
 pub fn show_json(config: &Config) -> serde_json::Value {
 	let mut limits = serde_json::Map::new();
@@ -60,6 +63,7 @@ fn kind_name(kind: catalog::Kind) -> &'static str {
 	match kind {
 		catalog::Kind::Adjustable => "adjustable",
 		catalog::Kind::Recommended => "recommended",
+		catalog::Kind::Must => "must",
 		catalog::Kind::Fixed => "fixed",
 	}
 }
@@ -70,7 +74,6 @@ fn bound_json(bound: Option<Bound>) -> serde_json::Value {
 	match bound {
 		None => serde_json::Value::Null,
 		Some(Bound::AtLeast(value)) => serde_json::json!({"at-least": value}),
-		Some(Bound::AtMost(value)) => serde_json::json!({"at-most": value}),
 	}
 }
 
@@ -152,8 +155,12 @@ fn write_adjustable_row(
 fn write_fixed_row(fixed: &FixedEntry, out: &mut impl Write) -> std::io::Result<()> {
 	writeln!(
 		out,
-		"{}\t{} {}\tfixed\tfixed\t{}",
-		fixed.name, fixed.value, fixed.unit, fixed.reference,
+		"{}\t{} {}\tfixed\t{}\t{}",
+		fixed.name,
+		fixed.value.render(),
+		fixed.unit,
+		kind_name(catalog::Kind::Fixed),
+		fixed.reference,
 	)?;
 	Ok(())
 }
@@ -228,10 +235,11 @@ fn write_fixed_json(fixed: &FixedEntry, limits: &mut serde_json::Map<String, ser
 	limits.insert(
 		fixed.name.to_string(),
 		serde_json::json!({
-			"value": fixed.value,
+			"value": fixed.value.render(),
 			"unit": fixed.unit,
 			"source": "fixed",
-			"kind": "fixed",
+			"kind": kind_name(catalog::Kind::Fixed),
+			"class": fixed.class.label(),
 			"bounds": null,
 			"reference": fixed.reference,
 		}),

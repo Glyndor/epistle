@@ -6,6 +6,9 @@ pub(super) mod values;
 #[path = "limits_catalog.rs"]
 pub(super) mod catalog;
 
+#[path = "limits_protocol.rs"]
+mod protocol;
+
 #[path = "limits_show.rs"]
 mod show;
 
@@ -459,3 +462,7 @@ mod tests_should_warn;
 #[cfg(test)]
 #[path = "limits_tests_catalog.rs"]
 mod tests_catalog;
+
+#[cfg(test)]
+#[path = "limits_tests_protocol.rs"]
+mod tests_protocol;

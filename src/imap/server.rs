@@ -41,7 +41,7 @@ const SHUTTING_DOWN: &[u8] = b"* BYE server shutting down\r\n";
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
 /// Consecutive `BAD` responses before the connection is dropped (abuse guard).
-const MAX_ERROR_STREAK: u32 = 20;
+pub(crate) const MAX_ERROR_STREAK: u32 = 20;
 
 /// What a connection over a cap is told before it is closed.
 fn refusal(why: Refusal) -> &'static [u8] {

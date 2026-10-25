@@ -112,7 +112,7 @@ fn the_catalog_drives_the_docs_page_row_for_row() {
 			.expect("the membership check above guarantees this");
 		let docs_cells = &docs_row.cells;
 		match row.kind {
-			"adjustable" | "recommended" => {
+			"adjustable" | "recommended" | "must" => {
 				assert_eq!(
 					docs_cells.len(),
 					6,
@@ -147,35 +147,27 @@ fn the_catalog_drives_the_docs_page_row_for_row() {
 				);
 			}
 			"fixed" => {
-				// Fixed rows from the catalog live in the
-				// fixed-standards table (four columns). A future
-				// adjustable row marked `fixed` would live in the
-				// adjustable table (six columns). Accept either.
-				let (docs_unit, docs_reference) = if docs_cells.len() == 4 {
-					(
-						docs_cells.get(2).map(String::as_str).unwrap_or(""),
-						docs_cells.get(3).map(String::as_str).unwrap_or(""),
-					)
-				} else {
-					assert_eq!(
-						docs_cells.len(),
-						6,
-						"docs row for `{}` should have 4 or 6 cells, got {:?}",
-						row.name,
-						docs_cells,
-					);
-					(
-						docs_cells.get(2).map(String::as_str).unwrap_or(""),
-						docs_cells.get(5).map(String::as_str).unwrap_or(""),
-					)
-				};
+				// Fixed rows live in the fixed-limits table: key, value,
+				// unit, class, reference.
 				assert_eq!(
-					docs_unit, row.unit,
-					"`{}`: unit column drift (docs says `{docs_unit}`, catalog says `{}`)",
-					row.name, row.unit,
+					docs_cells.len(),
+					5,
+					"docs row for `{}` should have 5 cells (key, value, unit, class, reference), got {:?}",
+					row.name,
+					docs_cells,
 				);
+				let cell = |index: usize| docs_cells.get(index).map(String::as_str).unwrap_or("");
 				assert_eq!(
-					docs_reference, row.reference,
+					cell(1),
+					row.value.unwrap_or(""),
+					"`{}`: value column drift",
+					row.name,
+				);
+				assert_eq!(cell(2), row.unit, "`{}`: unit column drift", row.name);
+				assert_eq!(cell(3), row.class, "`{}`: class column drift", row.name);
+				assert_eq!(
+					cell(4),
+					row.reference,
 					"`{}`: reference column drift",
 					row.name,
 				);
@@ -194,7 +186,10 @@ fn the_kind_column_meaning_is_documented() {
 	for marker in [
 		"`adjustable`",
 		"`recommended`",
+		"`must`",
 		"`fixed`",
+		"`should`",
+		"`own`",
 		"refuses",
 		"warning",
 		"audit trail",

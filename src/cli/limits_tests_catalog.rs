@@ -41,7 +41,7 @@ fn every_fixed_limit_appears_in_show_text() {
 	show(&config, &mut out).unwrap();
 	let printed = String::from_utf8(out).unwrap();
 	for fixed in catalog::FIXED {
-		let row = format!("{}\t{} {}", fixed.name, fixed.value, fixed.unit);
+		let row = format!("{}\t{} {}", fixed.name, fixed.value.render(), fixed.unit);
 		assert!(
 			printed.lines().any(|line| line.starts_with(&row)),
 			"fixed limit `{}` must appear in `limits show`; printed:\n{printed}",
@@ -72,16 +72,15 @@ fn show_json_lists_kind_bounds_and_reference_for_every_key() {
 }
 
 #[test]
-fn the_max_recipients_floor_is_the_rfc_must_value() {
-	// The §4.5.3.1.8 floor is a hard lower bound (MUST accept at least
-	// 100) but the operator may set a value above it; `set
-	// max-recipients 500` is valid. The catalog marks it
-	// `recommended` so the operator sees a warning, not a refusal.
+fn the_max_recipients_floor_is_a_must_not_a_recommendation() {
+	// RFC 5321 §4.5.3.1.8 says a server MUST accept at least 100
+	// recipients. The operator may raise the cap, never go below the
+	// floor, so the catalog calls it `must`, not `recommended`.
 	let (_dir, file) = super::tests_config::config_file();
 	let config = Config::load(file.path()).unwrap();
 	let json = show_json(&config);
 	let row = &json["max-recipients"];
-	assert_eq!(row["kind"], "recommended");
+	assert_eq!(row["kind"], "must");
 	assert_eq!(row["bounds"], json!({"at-least": 100_u64}));
 	assert!(
 		row["reference"]
@@ -148,58 +147,25 @@ fn fixed_limits_cannot_be_overridden_by_set() {
 	}
 }
 
-/// The catalog is the user-facing mirror of the constants the server
-/// enforces. If the server changes `MAX_DNS_MECHANISMS` to `8` but the
-/// catalog still reads `10`, the operator will see the wrong number and
-/// the docs page will lie. This test pins every fixed row against the
-/// constant it advertises, so a drift between code and catalog trips it.
+/// The SHOULD floors take their numbers from the queue schedule
+/// constants, so one source rules both the warning and the catalog.
 #[test]
-fn fixed_rows_match_the_constants_the_server_enforces() {
-	let by_name = |name: &str| -> &catalog::FixedEntry {
-		catalog::FIXED
+fn the_should_bounds_use_the_schedule_constants() {
+	let bound_of = |name: &str| {
+		catalog::ADJUSTABLE
 			.iter()
-			.find(|entry| entry.name == name)
-			.unwrap_or_else(|| panic!("catalog missing fixed entry `{name}`"))
+			.find(|entry| entry.key.name() == name)
+			.unwrap_or_else(|| panic!("{name} in catalog"))
+			.bound
 	};
 	assert_eq!(
-		by_name("smtp-line-length").value,
-		"998",
-		"smtp-line-length must mirror `crate::smtp::line::MAX_LINE_LENGTH`"
-	);
-	assert_eq!(
-		by_name("spf-max-dns-lookups").value,
-		"10",
-		"spf-max-dns-lookups must mirror `crate::spf::evaluator::MAX_DNS_MECHANISMS`"
-	);
-	assert_eq!(
-		by_name("spf-max-void-lookups").value,
-		"2",
-		"spf-max-void-lookups must mirror `crate::spf::evaluator::MAX_VOID_LOOKUPS`"
-	);
-	assert_eq!(
-		by_name("tls-minimum-version").value,
-		"1.2",
-		"tls-minimum-version must mirror the rustls version pinned in src/tls"
-	);
-	// The two queuing-side floors the RFC SHOULD rule are in the
-	// schedule constants; the catalog's `AtLeast` mirror must use them
-	// too so a single source of truth rules.
-	let give_up = catalog::ADJUSTABLE
-		.iter()
-		.find(|entry| entry.key.name() == "queue-give-up")
-		.expect("queue-give-up in catalog");
-	let retry_base = catalog::ADJUSTABLE
-		.iter()
-		.find(|entry| entry.key.name() == "queue-retry-base")
-		.expect("queue-retry-base in catalog");
-	assert_eq!(
-		give_up.bound,
+		bound_of("queue-give-up"),
 		Some(catalog::Bound::AtLeast(
 			crate::queue::schedule::SHOULD_GIVE_UP_SECS
 		)),
 	);
 	assert_eq!(
-		retry_base.bound,
+		bound_of("queue-retry-base"),
 		Some(catalog::Bound::AtLeast(
 			crate::queue::schedule::SHOULD_RETRY_BASE_SECS
 		)),
@@ -210,6 +176,7 @@ fn catalog_kind_name(kind: catalog::Kind) -> &'static str {
 	match kind {
 		catalog::Kind::Adjustable => "adjustable",
 		catalog::Kind::Recommended => "recommended",
+		catalog::Kind::Must => "must",
 		catalog::Kind::Fixed => "fixed",
 	}
 }

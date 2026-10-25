@@ -22,7 +22,7 @@ use super::{
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
 /// akin to Postfix's `smtpd_hard_error_limit`).
-const MAX_ERROR_STREAK: u32 = 20;
+pub(crate) const MAX_ERROR_STREAK: u32 = 20;
 
 impl Server {
 	/// The protocol loop over an established (plain or TLS) stream.

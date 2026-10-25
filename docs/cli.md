@@ -472,6 +472,9 @@ from the `mem_limit` of `mail` in `compose.yaml` (or `auto (204 MiB, no mail
 container limit found, 1g assumed)`), marked `derived`, and `--json` gives its
 bytes with `"source": "derived"`. The running server reads its cgroup instead,
 which `podup` sets from that same `mem_limit`.
+`show` also lists the limits the server hard-codes (`fixed`) and marks a floor
+the RFC makes mandatory `must`; [Limits and standards](limits.md) has the full
+table.
 `unset` removes the field so its built-in default applies again. With
 `--json`, `show` also lists every per-domain override and every named tenant
 in addition to the global dials.

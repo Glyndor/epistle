@@ -22,7 +22,7 @@ pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 mod builder;
 mod data_rate;
 mod dnsbl_check;
-mod run;
+pub(crate) mod run;
 mod run_attachments;
 mod run_auth;
 mod run_band;
@@ -48,7 +48,7 @@ const MAX_CONNECTIONS_PER_IP: usize = DEFAULT_MAX_CONNECTIONS_PER_IP;
 
 /// Per-read idle timeout. RFC 5321 §4.5.3.2 mandates at least 5 minutes between
 /// command-phase reads; we match that minimum to kill Slowloris connections.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Anything the connection loop can read from and write to.
 trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}

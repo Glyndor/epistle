@@ -13,17 +13,20 @@ about that change:
 - `adjustable`: the operator may set the value through
   `epistle limits set`. The value must pass the floors
   `Config::validate()` enforces.
-- `recommended`: the standard recommends a floor (`RFC 5321 §4.5.4.1`
-  suggests 4-5 days for the queue give-up window, 30 minutes for the
-  first retry). The server accepts a value below the floor with a one-line
-  warning naming the RFC clause, never refuses. The deviation is visible in
-  the audit trail alongside the saved value.
-- `fixed`: the standard forbids crossing the bound; the value is
-  hard-coded in the server. `limits show` lists it so the operator sees
-  what the server enforces, but `limits set` has no path to override it.
+- `recommended` (a SHOULD): the standard recommends a floor
+  (`RFC 5321 §4.5.4.1` suggests 4-5 days for the queue give-up window, 30
+  minutes for the first retry). The server accepts a value below the floor
+  with a one-line warning naming the RFC clause, never refuses. The
+  deviation is visible in the audit trail alongside the saved value.
+- `must` (a MUST): the standard makes the floor mandatory. The operator may
+  raise the value, but `limits set` refuses anything below the floor and
+  leaves the file as it was.
+- `fixed`: the value is hard-coded in the server. `limits show` lists it so
+  the operator sees what the server enforces, but `limits set` has no path
+  to change it.
 
-The `bounds` column records the floor or ceiling the standard imposes,
-when there is one. The `reference` column names the RFC and section the
+The `bounds` column records the floor the standard imposes, when there is
+one. The `reference` column names the RFC and section the
 rule comes from.
 
 ## Adjustable limits
@@ -50,7 +53,7 @@ rule comes from.
 | `queue-per-domain-concurrency` | 2 | count | adjustable | | no standard mandate |
 | `queue-backoff` | 60,300,900,3600 | seconds | adjustable | | no standard mandate |
 | `max-message-size` | 26214400 | bytes | adjustable | | no standard mandate |
-| `max-recipients` | 100 | count | recommended | at-least 100 | RFC 5321 §4.5.3.1.8 (at least 100) |
+| `max-recipients` | 100 | count | must | at-least 100 | RFC 5321 §4.5.3.1.8 (at least 100) |
 | `message-memory-budget` | derived | bytes | adjustable | | no standard mandate |
 | `min-data-rate` | 10240 | bytes-per-second | adjustable | | no standard mandate |
 | `data-rate-grace` | 120 | seconds | adjustable | | no standard mandate |
@@ -62,31 +65,69 @@ rule comes from.
 | `max-http-connections` | 1024 | count | adjustable | | no standard mandate |
 | `max-http-connections-per-ip` | 256 | count | adjustable | | no standard mandate |
 
-## Fixed standards
+## Fixed limits
 
-The following limits the server enforces because the standards make them
-mandatory (MUST). They are listed so the operator sees what is in force;
-`epistle limits set` has no path to override any of them.
+The limits the server hard-codes and a client can run into. Every number is
+read from the constant the server enforces, and a test fails when a limit
+the code defines has no row here. `epistle limits set` has no path to change
+any of them.
 
-| key | value | unit | reference |
-| --- | --- | --- | --- |
-| `smtp-line-length` | 998 | octets | RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF) |
-| `smtp-command-minimum-timeout` | 300 | seconds | RFC 5321 §4.5.3.2 (5 minute minimum) |
-| `smtp-never-bounce-a-bounce` | true | boolean | RFC 5321 §5.3.3 (no bounce of a bounce) |
-| `spf-max-dns-lookups` | 10 | count | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
-| `spf-max-void-lookups` | 2 | count | RFC 7208 §4.6.4 (max 2 void lookups) |
-| `tls-minimum-version` | 1.2 | version | RFC 8996 (TLS 1.0/1.1 prohibited) |
+The `class` column says how strongly a standard ties the limit:
+
+- `must`: the standard makes it mandatory; the server is broken below it.
+- `should`: the standard recommends it and clients may rely on it (the JMAP
+  request limits are the least RFC 8620 §2 recommends a server to offer).
+- `own`: no standard fixes the number; it is a bound epistle picked.
+
+| key | value | unit | class | reference |
+| --- | --- | --- | --- | --- |
+| `smtp-line-length` | 998 | octets | must | RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF) |
+| `smtp-command-line` | 512 | octets | must | RFC 5321 §4.5.3.1.4 (512 octets incl. CRLF) |
+| `smtp-command-minimum-timeout` | 300 | seconds | must | RFC 5321 §4.5.3.2 (5 minute minimum) |
+| `smtp-never-bounce-a-bounce` | true | boolean | must | RFC 5321 §5.3.3 (no bounce of a bounce) |
+| `smtp-address-length` | 254 | octets | must | RFC 5321 §4.5.3.1.3 (path of 256 octets with the angle brackets) |
+| `smtp-local-part-length` | 64 | octets | must | RFC 5321 §4.5.3.1.1 (local part of 64 octets) |
+| `smtp-domain-length` | 253 | octets | must | RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4 (255 octets on the wire) |
+| `smtp-domain-label-length` | 63 | octets | must | RFC 1035 §2.3.4 (labels of 63 octets) |
+| `smtp-received-hop-limit` | 100 | count | should | RFC 5321 §6.3 (a Received count near 100 is a loop) |
+| `smtp-header-fields` | 9900 | count | own | no standard mandate |
+| `smtp-error-streak` | 20 | count | own | no standard mandate (consecutive error replies before the connection is dropped) |
+| `pop3-command-line` | 512 | octets | own | RFC 1939 §3 (generous bound) |
+| `pop3-error-streak` | 20 | count | own | no standard mandate (consecutive -ERR replies before the connection is dropped) |
+| `imap-command-line` | 32768 | octets | own | no standard mandate |
+| `imap-error-streak` | 20 | count | own | no standard mandate (consecutive BAD replies before the connection is dropped) |
+| `imap-keywords-per-message` | 32 | count | own | no standard mandate |
+| `imap-keyword-length` | 64 | octets | own | no standard mandate |
+| `imap-mailbox-depth` | 16 | count | own | no standard mandate |
+| `imap-mailbox-name-length` | 255 | octets | own | no standard mandate (NAME_MAX of the common filesystems) |
+| `managesieve-script-size` | 1048576 | octets | own | no standard mandate |
+| `managesieve-scripts-per-account` | 50 | count | own | RFC 9661 (maxNumberScripts capability) |
+| `managesieve-script-name-length` | 128 | characters | own | RFC 5804 §1.6 (script names) |
+| `managesieve-script-name-bytes` | 200 | octets | own | no standard mandate (room for the staging file name) |
+| `managesieve-auth-failures` | 3 | count | own | no standard mandate (failed AUTHENTICATE attempts before the connection is dropped) |
+| `sieve-redirects` | 4 | count | own | RFC 9661 (maxNumberRedirects capability) |
+| `sieve-fileinto` | 8 | count | own | no standard mandate |
+| `sieve-flags` | 32 | count | own | no standard mandate |
+| `sieve-flag-length` | 64 | octets | own | no standard mandate (the IMAP keyword limit) |
+| `sieve-nesting-depth` | 64 | count | own | no standard mandate |
+| `jmap-max-size-request` | 10000000 | octets | should | RFC 8620 §2 (maxSizeRequest, at least 10000000 recommended) |
+| `jmap-max-calls-in-request` | 16 | count | should | RFC 8620 §2 (maxCallsInRequest, at least 16 recommended) |
+| `jmap-max-concurrent-requests` | 4 | count | should | RFC 8620 §2 (maxConcurrentRequests, at least 4 recommended) |
+| `jmap-max-concurrent-upload` | 4 | count | should | RFC 8620 §2 (maxConcurrentUpload, at least 4 recommended) |
+| `jmap-max-objects-in-get` | 500 | count | should | RFC 8620 §2 (maxObjectsInGet, at least 500 recommended) |
+| `jmap-max-objects-in-set` | 500 | count | should | RFC 8620 §2 (maxObjectsInSet, at least 500 recommended) |
+| `spf-max-dns-lookups` | 10 | count | must | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
+| `spf-max-void-lookups` | 2 | count | must | RFC 7208 §4.6.4 (max 2 void lookups) |
+| `tls-minimum-version` | 1.2 | version | must | RFC 8996 (TLS 1.0/1.1 prohibited) |
 
 ## Failing a MUST or a SHOULD
 
 `epistle limits set` runs the candidate value through three checks in
 order: the value's own type (size, duration, count), the catalog's
-standard floor (the `at-least` / `at-most` in the table above), and
-finally `Config::validate()` on the resulting configuration. The
-`at-least 100` floor on `max-recipients` is the only MUST the catalog
-enforces today, even though it is marked `recommended` (the operator
-may set a value above it; only the lower bound is mandatory): a value
-below it is refused with
+standard floor (the `at-least` in the table above), and finally
+`Config::validate()` on the resulting configuration. The `at-least 100`
+floor on `max-recipients` is the one MUST among the adjustable keys (the
+operator may set a value above it): a value below it is refused with
 
 ```
 refused: RFC 5321 §4.5.3.1.8 requires accepting at least 100 recipients

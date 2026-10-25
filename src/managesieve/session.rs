@@ -96,7 +96,7 @@ impl Response {
 
 /// How many failed `AUTHENTICATE` attempts close the connection, matching the
 /// SMTP and IMAP auth paths so this protocol is not a softer brute-force target.
-const MAX_AUTH_FAILURES: u8 = 3;
+pub(crate) const MAX_AUTH_FAILURES: u8 = 3;
 
 /// One ManageSieve connection's protocol state.
 pub struct Session<B: Backend> {
