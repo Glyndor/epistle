@@ -1,8 +1,8 @@
 //! Tests for the restore staging file. The SQL staged for a container
 //! restore carries credential hashes, so the host copy must be `0600` from
 //! the moment it is created and must not survive the restore, and the copy
-//! inside the container must land on a name unique to that restore, be
-//! tightened to `0600`, and be removed when the replay shell exits.
+//! inside the container must land on a name unique to that restore and be
+//! removed from the container once the replay is over.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

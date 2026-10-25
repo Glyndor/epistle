@@ -1015,7 +1015,12 @@ checks it, and moves it into the store with a single rename, so a copy that
 fails never replaces the one already saved. It keeps the two newest versions.
 The version it saves has to be digits and dots, the only shape `stack rollback`
 can select, so a name carrying a Debian revision, a tilde or a colon is
-refused with a warning instead of taking a slot no listing can choose.
+refused with a warning instead of taking a slot no listing can choose; so is
+a part of twenty digits or more, which does not fit the integer the command
+reads it into. A binary whose digest matches a copy already saved is not saved
+again under the next name: after a manual `stack rollback` dpkg still lists the
+newer version, and saving those older bytes under it would label them with a
+release that is gone and push a real copy out of the store.
 Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
 never installed, including when owned by root. If only legacy copies exist,
 rollback remains unavailable until an upgrade saves a trusted copy in the new
@@ -1033,6 +1038,14 @@ Limits:
   state) is gone once the dump is restored. Message files on disk are kept.
 - Only the binary and the database go back; the compose file stays as
   `stack update` rendered it.
+- The store is trusted only through a plain path: `/`, `/var` and `/var/lib`
+  must be real directories owned by root, not links, and not writable by group
+  or other. On a host where one of them fails that check (a `/var` that is a
+  link, for example), the preinst does not create or fill the store. It prints `could not prepare the root-owned rollback store; rollback is
+  unavailable` on stderr and the upgrade goes on, so the only trace is that
+  line in the apt output. `sudo epistle stack rollback` then refuses with the
+  reason. Check `/var/lib/epistle-rollback` before relying on rollback on such a
+  host.
 
 ### Moving PostgreSQL to a new major
 
@@ -1116,7 +1129,13 @@ which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
 file on the host is created in `$TMPDIR` at `0600` under a name unique
 to that restore, and a guard removes it on every exit path, error and
-panic included.
+panic included. A `SIGINT` or `SIGTERM` ends the process without running
+the guard, so a restore killed that way leaves its host file (mode `0600`,
+owned by the operator) and its copy in the `db` container behind. The next
+`restore` removes host files left by a process that no longer exists; the
+copy inside the container sits in the `/tmp` tmpfs of the `db` service and
+goes when that container is recreated, or with `podup exec -T db sh -c "rm -f
+/tmp/epistle-restore-*.sql"`.
 
 ### What lives in the tar
 

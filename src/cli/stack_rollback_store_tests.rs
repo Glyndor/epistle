@@ -17,17 +17,17 @@ fn source_links_and_non_root_files_are_rejected() {
 	symlink("binary", temp.path().join("link")).unwrap();
 	let dir = File::open(temp.path()).unwrap();
 	assert_eq!(
-		checked_file(&dir, "link").unwrap_err().raw_os_error(),
+		checked_file(&dir, 0, "link").unwrap_err().raw_os_error(),
 		Some(libc::ELOOP)
 	);
 	// A normal unprivileged test run must exercise the ownership refusal.
 	if dir.metadata().unwrap().uid() != 0 {
-		let error = checked_file(&dir, "binary").unwrap_err();
+		let error = checked_file(&dir, 0, "binary").unwrap_err();
 		assert!(error.to_string().contains("root-owned"));
 	}
-	assert!(checked_file(&dir, ".").is_err());
-	assert!(checked_file(&dir, "../binary").is_err());
-	assert!(checked_file(&dir, "missing").is_err());
+	assert!(checked_file(&dir, 0, ".").is_err());
+	assert!(checked_file(&dir, 0, "../binary").is_err());
+	assert!(checked_file(&dir, 0, "missing").is_err());
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn non_regular_sources_are_rejected_without_reading_them() {
 	let dir = File::open(temp.path()).unwrap();
 	for name in ["directory", "fifo"] {
 		assert!(
-			checked_file(&dir, name)
+			checked_file(&dir, 0, name)
 				.unwrap_err()
 				.to_string()
 				.contains("regular")
@@ -95,7 +95,7 @@ fn directory_validation_requires_protected_root_parents_and_private_store() {
 	let temp = tempfile::tempdir().unwrap();
 	let file = File::open(temp.path()).unwrap();
 	if file.metadata().unwrap().uid() != 0 {
-		assert!(check_directory(&file, true).is_err());
+		assert!(check_directory(&file, ROOT, true).is_err());
 	}
 	assert!(Store::open(Path::new("relative")).is_err());
 	assert!(Store::open(Path::new("/usr/../usr")).is_err());
@@ -129,6 +129,7 @@ fn a_published_generation_is_read_from_its_own_directory() {
 	.unwrap();
 	let store = Store {
 		dir: File::open(temp.path()).unwrap(),
+		owner: ROOT,
 	};
 	// A normal unprivileged test run reaches the ownership refusal of the
 	// published generation; with root ownership the pair is read and checked.
@@ -174,6 +175,54 @@ fn a_published_generation_is_read_from_its_own_directory() {
 	);
 	assert!(store.binary("../epistle-0.12.1").is_err());
 	assert!(store.binary("missing").is_err());
+}
+
+/// The happy path of a published generation for any user, with no sandbox and
+/// no privileges: the store trusts the owner it is given, and production hands
+/// it root. Without this the read of a verified generation ran only where a
+/// root namespace was available.
+#[test]
+fn a_published_generation_opens_for_the_owner_the_store_trusts() {
+	let temp = tempfile::tempdir().unwrap();
+	let kept = temp.path().join("epistle-0.12.1");
+	std::fs::create_dir(&kept).unwrap();
+	std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o700)).unwrap();
+	std::fs::write(kept.join("epistle"), "abc").unwrap();
+	std::fs::write(kept.join("epistle.sha256"), ABC_SHA256).unwrap();
+	for (name, mode) in [("epistle", 0o755), ("epistle.sha256", 0o600)] {
+		std::fs::set_permissions(kept.join(name), std::fs::Permissions::from_mode(mode)).unwrap();
+	}
+	let metadata = kept.metadata().unwrap();
+	let owner = (metadata.uid(), metadata.gid());
+	let open = |owner| Store {
+		dir: File::open(temp.path()).unwrap(),
+		owner,
+	};
+
+	let (chosen, mut binary) = open(owner)
+		.select("0.12.2", None)
+		.expect("the owner the store trusts reads the generation and checks its digest");
+	assert_eq!(chosen, "epistle-0.12.1");
+	let mut read = String::new();
+	binary.read_to_string(&mut read).unwrap();
+	assert_eq!(read, "abc");
+
+	let other = (owner.0 + 1, owner.1);
+	assert!(
+		open(other)
+			.select("0.12.2", None)
+			.unwrap_err()
+			.contains("root-owned"),
+		"a generation owned by anybody else is refused"
+	);
+	std::fs::write(kept.join("epistle"), "abd").unwrap();
+	assert!(
+		open(owner)
+			.select("0.12.2", None)
+			.unwrap_err()
+			.contains("digest"),
+		"altered bytes fail the digest even for the trusted owner"
+	);
 }
 
 /// Set by the outer run for the inner one, so this test knows it is the pass
@@ -299,6 +348,7 @@ fn publish_and_read() {
 
 	let store = Store {
 		dir: File::open(&store).unwrap(),
+		owner: ROOT,
 	};
 	let (chosen, mut binary) = store
 		.select("0.12.2", None)
@@ -441,17 +491,17 @@ fn the_store_source_keeps_the_published_names() {
 
 #[test]
 fn ownership_type_and_permissions_must_all_be_trusted() {
-	assert!(protected(true, 0, 0o755));
+	assert!(protected(true, 0, 0, 0o755));
 	for (kind, uid, mode) in [
 		(false, 0, 0o755),
 		(true, 1000, 0o755),
 		(true, 0, 0o775),
 		(true, 0, 0o757),
 	] {
-		assert!(!protected(kind, uid, mode));
+		assert!(!protected(kind, 0, uid, mode));
 	}
-	assert!(protected_directory(true, 0, 0, 0o755, false));
-	assert!(protected_directory(true, 0, 0, 0o700, true));
+	assert!(protected_directory(true, ROOT, 0, 0, 0o755, false));
+	assert!(protected_directory(true, ROOT, 0, 0, 0o700, true));
 	for (kind, uid, gid, mode, private) in [
 		(false, 0, 0, 0o700, true),
 		(true, 1000, 0, 0o700, true),
@@ -459,6 +509,6 @@ fn ownership_type_and_permissions_must_all_be_trusted() {
 		(true, 0, 0, 0o777, false),
 		(true, 0, 0, 0o755, true),
 	] {
-		assert!(!protected_directory(kind, uid, gid, mode, private));
+		assert!(!protected_directory(kind, ROOT, uid, gid, mode, private));
 	}
 }

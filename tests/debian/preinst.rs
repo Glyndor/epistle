@@ -109,6 +109,9 @@ fn an_upgrade_keeps_the_replaced_binary_and_only_the_two_newest() {
 	let root = dir.path();
 	prepare(root);
 	for version in ["0.9.2", "0.10.1", "0.10.10"] {
+		// Each upgrade replaces a different binary: bytes already saved are
+		// not saved again under another name.
+		std::fs::write(root.join("epistle"), format!("binary {version}")).unwrap();
 		let output = preinst(root, &["upgrade", version], "");
 		assert!(output.status.success(), "{output:?}");
 		assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0:0 700");
@@ -117,7 +120,7 @@ fn an_upgrade_keeps_the_replaced_binary_and_only_the_two_newest() {
 	let kept = generation(root, "0.10.10");
 	assert_eq!(
 		std::fs::read_to_string(kept.join("epistle")).unwrap(),
-		"installed binary"
+		"binary 0.10.10"
 	);
 	assert_eq!(mode(&kept) & 0o777, 0o700);
 	assert_eq!(mode(&kept.join("epistle")) & 0o777, 0o755);

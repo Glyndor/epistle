@@ -503,9 +503,11 @@ pub(crate) fn load_dump_container(compose: &Path, sql: &[u8]) -> Result<(), Back
 /// carries and two simultaneous restores cannot clobber each other. The
 /// [`RestoreHostTemp`] guard removes it on every exit path, including the
 /// error path and a panic. Inside the container the file lands on a name
-/// derived from the same unique file name, is tightened to `0600` by the
-/// `psql` shell, and is removed by a host-side `podup exec` once the
-/// replay completes (success or error); see
+/// derived from the same unique file name, keeps whatever mode `podup cp`
+/// gives it (nothing in the replay shell changes it; it sits in the `/tmp`
+/// tmpfs of the `db` service, which is private to that container), and is
+/// removed by a host-side `podup exec` once the replay completes (success
+/// or error); see
 /// [`container_psql_load_spec`] and [`container_rm_temp_spec`].
 fn load_dump_container_with(
 	compose: &Path,
@@ -662,12 +664,21 @@ fn run_command_capturing_stdout_with(
 			});
 		}
 	};
-	if let Some(payload) = spec.stdin_payload()
-		&& let Some(mut stdin) = child.stdin.take()
-	{
-		let _ = stdin.write_all(payload);
-	}
-	let output = match child.wait_with_output() {
+	// The payload goes in on its own thread while the output is drained: a
+	// child that answers before it has read everything (a large dump, a
+	// `psql` that prints as it goes) would otherwise fill its stdout pipe
+	// while this thread is still blocked writing its stdin.
+	let output = std::thread::scope(|scope| {
+		if let Some(payload) = spec.stdin_payload()
+			&& let Some(mut stdin) = child.stdin.take()
+		{
+			scope.spawn(move || {
+				let _ = stdin.write_all(payload);
+			});
+		}
+		child.wait_with_output()
+	});
+	let output = match output {
 		Ok(output) => output,
 		Err(error) => {
 			return Err(BackupError::CommandFailed {

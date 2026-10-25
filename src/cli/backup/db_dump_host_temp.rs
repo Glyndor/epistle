@@ -7,10 +7,13 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use super::BackupError;
+
+/// The start of every staged name; the process id follows it.
+const PREFIX: &str = "epistle-restore-";
 
 /// A host-side restore temp file: created `0600` with `O_EXCL` and
 /// `O_NOFOLLOW` under a name unique to this call, written through the
@@ -32,13 +35,21 @@ impl RestoreHostTemp {
 	/// name from redirecting the write.
 	pub(super) fn create() -> Result<Self, BackupError> {
 		let parent = std::env::temp_dir();
-		for attempt in 0..1024_u64 {
-			let name = format!(
-				"epistle-restore-{}-{}-{attempt}.sql",
+		remove_abandoned(&parent);
+		Self::create_in(&parent, &|attempt| {
+			format!(
+				"{PREFIX}{}-{}-{attempt}.sql",
 				std::process::id(),
 				nanos_since_epoch(),
-			);
-			let path = parent.join(name);
+			)
+		})
+	}
+
+	/// [`create`](Self::create) with the directory and the candidate names
+	/// chosen by the caller, so a test can make the first candidate collide.
+	fn create_in(parent: &Path, name_of: &dyn Fn(u64) -> String) -> Result<Self, BackupError> {
+		for attempt in 0..1024_u64 {
+			let path = parent.join(name_of(attempt));
 			match OpenOptions::new()
 				.write(true)
 				.create_new(true)
@@ -86,6 +97,47 @@ impl Drop for RestoreHostTemp {
 	}
 }
 
+/// Remove the staged files an earlier restore left behind when a signal
+/// killed it before its guard could run. The process id in the name tells
+/// whether the restore that made it is still alive; only regular files of
+/// this user are touched, never a link, and a failure to remove one is not
+/// a failure of the restore that is starting.
+fn remove_abandoned(parent: &Path) {
+	let Ok(entries) = std::fs::read_dir(parent) else {
+		return;
+	};
+	// SAFETY: geteuid takes no arguments and cannot fail.
+	let me = unsafe { libc::geteuid() };
+	for entry in entries.flatten() {
+		let name = entry.file_name();
+		let Some(pid) = name.to_str().and_then(|name| {
+			name.strip_prefix(PREFIX)?
+				.strip_suffix(".sql")?
+				.split('-')
+				.next()?
+				.parse::<i32>()
+				.ok()
+		}) else {
+			continue;
+		};
+		let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+			continue;
+		};
+		if metadata.is_file() && metadata.uid() == me && !process_alive(pid) {
+			let _ = std::fs::remove_file(entry.path());
+		}
+	}
+}
+
+/// Whether a process with this id exists. A process of another user answers
+/// `EPERM`, which still means it is there.
+fn process_alive(pid: i32) -> bool {
+	// SAFETY: signal 0 only checks that the process exists.
+	pid <= 0
+		|| unsafe { libc::kill(pid, 0) } == 0
+		|| io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 /// The clock reading the name off, in nanoseconds since the epoch. A
 /// process that cannot read the clock (it is before the epoch, on a
 /// filesystem mounted with a broken RTC) still gets a name from the pid and
@@ -103,3 +155,7 @@ fn cannot(path: &Path, error: io::Error) -> BackupError {
 		code: None,
 	}
 }
+
+#[cfg(test)]
+#[path = "db_dump_tests_host_temp.rs"]
+mod tests;

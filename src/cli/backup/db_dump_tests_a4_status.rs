@@ -9,7 +9,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use super::db_dump_marker::output_ends_with_pg_dump_complete;
-use super::{BackupError, Database, collect_dump_with};
+use super::{BackupError, CommandSpec, Database, collect_dump_with, run_command_capturing_stdout};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// Write an executable `/bin/sh` stub at `dest` that prints `body` on
 /// stdout and exits with `exit_code`.
@@ -203,4 +205,28 @@ fn a_cut_dump_is_not_a_complete_dump() {
 	assert!(!output_ends_with_pg_dump_complete(
 		b"INSERT INTO t VALUES ('-- PostgreSQL database dump complete');\n"
 	));
+}
+
+/// The stub writes more than a pipe holds before it reads a byte, the way a
+/// `psql` that prints as it replays a large dump does. A caller that finishes
+/// writing the payload before it reads the output waits on the child while the
+/// child waits on it.
+#[test]
+fn a_child_that_prints_before_it_reads_does_not_hang_on_a_large_payload() {
+	let spec = CommandSpec::new(vec![
+		"sh".to_string(),
+		"-c".to_string(),
+		"dd if=/dev/zero bs=1000 count=300 2>/dev/null; cat >/dev/null".to_string(),
+	])
+	.with_stdin(vec![b'x'; 4 * 1024 * 1024]);
+	let (sender, receiver) = mpsc::channel();
+	std::thread::spawn(move || {
+		let _ = sender.send(run_command_capturing_stdout(&spec));
+	});
+	let output = receiver
+		.recv_timeout(Duration::from_secs(30))
+		.expect("the child must finish: the payload is written while the output is read")
+		.expect("the child runs");
+	assert!(output.status_ok, "the child exits cleanly");
+	assert_eq!(output.stdout.len(), 300_000, "all of its output is kept");
 }

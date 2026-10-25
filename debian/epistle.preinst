@@ -40,6 +40,12 @@ epistle_keep_binary() (
 	case "$1" in
 		''|.*|*.|*[!0-9.]*|*..*) return 1 ;;
 	esac
+	# A part of twenty digits or more can overflow the integer `pick` reads it
+	# into, which makes the name unselectable while `sort -V` still ranks it
+	# newest and prunes the generations that can be chosen.
+	case "$1" in
+		*[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) return 1 ;;
+	esac
 	for parent in /usr /usr/bin; do
 		[ ! -L "$parent" ] && [ -d "$parent" ] \
 			&& [ "$(stat -c '%u:%g' -- "$parent")" = 0:0 ] || return 1
@@ -56,6 +62,15 @@ epistle_keep_binary() (
 	if [ -d "$rollback/epistle-$1" ] && [ ! -L "$rollback/epistle-$1" ]; then
 		return 0
 	fi
+	# After a manual `stack rollback` dpkg still records the newer version, so
+	# the binary being replaced is a copy already saved under its own name.
+	# Saving it again would label the old bytes with the version that is gone
+	# and push a real generation out of the store.
+	current=$(sha256sum /usr/bin/epistle | cut -d ' ' -f 1)
+	for saved in "$rollback"/epistle-*/epistle.sha256; do
+		[ -f "$saved" ] && [ ! -L "$saved" ] || continue
+		[ "$(cat "$saved")" != "$current" ] || return 0
+	done
 	# dpkg holds the maintainer script lock, so any leftover staging directory
 	# belongs to an interrupted earlier run.
 	find "$rollback" -mindepth 1 -maxdepth 1 -type d -name '.stage-*' \
