@@ -48,14 +48,14 @@ fn records_are_read_back_in_order_and_unknown_uids_are_not_confirmed() {
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			Some(fingerprint(seed)),
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 	for uid in [1, 4, 8, 10, 29, 31, u32::MAX] {
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			None,
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 	// Asking again out of order finds the same records.
@@ -114,7 +114,7 @@ fn records_below_the_last_one_are_left_out_and_a_batch_that_does_not_rise_is_ref
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			confirmed,
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 
@@ -408,7 +408,7 @@ fn a_ledger_of_seventy_thousand_messages_answers_within_a_fixed_workspace() {
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			Some(fingerprint((uid % 251) as u8)),
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 	// A second folder does not fit in the same workspace.

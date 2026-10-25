@@ -66,7 +66,7 @@ fn copy(root: &std::path::Path, account: &str) -> String {
 		.expect("inbox")
 		.map(|entry| entry.expect("entry").path())
 		.collect();
-	assert_eq!(files.len(), 1, "one copy for {account}");
+	assert_eq!(files.len(), 1, "one copy in the inbox");
 	fs::read_to_string(&files[0]).expect("read the copy")
 }
 

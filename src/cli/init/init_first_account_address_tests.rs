@@ -42,7 +42,7 @@ fn an_address_used_by_another_principal_stops_both_runs_before_anything_is_writt
 			let account = crate::directory_store::DynamicAccount::with_password(
 				"other".to_string(),
 				vec!["taken@example.org".to_string()],
-				PASSWORD,
+				password(),
 				&policy,
 				config.auth.scram,
 			)

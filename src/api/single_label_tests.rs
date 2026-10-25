@@ -62,6 +62,6 @@ async fn a_refused_account_is_not_created() {
 	let accounts = body["accounts"].as_array().expect("accounts");
 	assert!(
 		accounts.iter().all(|account| account["name"] != "bob"),
-		"the refused account must not exist: {accounts:?}"
+		"the refused account must not exist"
 	);
 }

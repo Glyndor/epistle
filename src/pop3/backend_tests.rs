@@ -174,7 +174,10 @@ fn fetch_only_serves_ids_of_the_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let backend = backend(dir.path());
 	for uid in ["", ".", "..", "../x", "a/b", ".hidden", "a\\b"] {
-		assert!(backend.fetch("alice", uid).is_none(), "{uid:?}");
+		assert!(
+			backend.fetch("alice", uid).is_none(),
+			"an id outside the inbox is not served"
+		);
 	}
 	assert!(backend.fetch("alice", "missing").is_none());
 }

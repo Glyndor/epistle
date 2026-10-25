@@ -29,7 +29,7 @@ fn a_replay_in_uid_order_reads_the_file_in_windows_not_per_message() {
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			Some(seed(uid)),
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 	let used = reads() - before;
@@ -54,7 +54,7 @@ fn a_far_jump_still_finds_the_record_and_the_gaps_between_them() {
 		assert_eq!(
 			ledger.fingerprint(uid).expect("fingerprint"),
 			expected,
-			"uid {uid}"
+			"the fingerprint of the uid"
 		);
 	}
 }

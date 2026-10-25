@@ -92,7 +92,7 @@ pub(crate) fn bounded<T: Send + 'static>(
 				.open(path),
 		);
 	}
-	let result = value.unwrap_or_else(|_| panic!("{} made the reader wait", path.display()));
+	let result = value.unwrap_or_else(|_| panic!("the reader waited on the path"));
 	thread.join().expect("reader thread").expect("hung up");
 	result
 }

@@ -231,7 +231,7 @@ fn a_linked_parent_of_data_dir_allows_state_and_scratch_access() {
 	std::os::unix::fs::symlink(&real, &link).unwrap();
 	let data = link.join("data");
 	let result = StateDir::open(&data, "alice", "source");
-	assert!(result.is_ok(), "allow a linked parent: {result:?}");
+	assert!(result.is_ok(), "a linked parent is allowed");
 	let states = result.unwrap();
 	states.save(b"INBOX", &state(2)).unwrap();
 	assert_eq!(states.load(b"INBOX").unwrap(), Some(state(2)));
