@@ -94,3 +94,19 @@ pub fn fixture_password(len: usize) -> String {
 pub fn toml_string(text: &str) -> String {
 	toml::Value::String(text.to_string()).to_string()
 }
+
+/// Assert that `said` carries no control character (the line break that ends
+/// the message aside) and no invisible formatting character, so what an
+/// operator typed cannot move the cursor or reorder the line it is printed on.
+///
+/// Piped through a process the terminal library strips an escape sequence
+/// before the test sees it, so this is the check that holds for every
+/// character it can see: it fails on a raw U+202E, U+2028 or U+009B.
+pub fn assert_printable(said: &str, what: &str) {
+	for c in said.chars() {
+		assert!(
+			c == '\n' || !(c.is_control() || epistle::util::validation::is_invisible_format(c)),
+			"{what}: the message carries {c:?} unescaped: {said:?}"
+		);
+	}
+}

@@ -267,3 +267,27 @@ fn three_independent_mistakes_report_three_errors() {
 		"expected at least 3 errors, got {count}: {errors:?}"
 	);
 }
+
+/// A host name with a bidirectional override, a C1 control or a line
+/// separator is refused without any of them reaching the message raw.
+#[test]
+fn a_refused_hostname_is_reported_without_raw_control_or_hidden_characters() {
+	for hostname in [
+		"a\u{202e}b",
+		"mail\u{9b}.example.net",
+		"mail\u{2028}x",
+		"\u{202e}",
+	] {
+		let mut answers = minimal(Manual);
+		answers.hostname = hostname.to_string();
+		let errors = answers.validate().expect_err("refused");
+		for error in errors {
+			let line = error.to_string();
+			assert!(
+				line.chars()
+					.all(|c| !(c.is_control() || crate::util::validation::is_invisible_format(c))),
+				"{hostname:?} came back raw in {line:?}"
+			);
+		}
+	}
+}

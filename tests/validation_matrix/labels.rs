@@ -13,7 +13,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::common::{Row, cell, fixture_password, matrix};
+use super::common::{Row, assert_printable, cell, fixture_password, matrix};
 use super::single_label::{cli_config, epistle};
 use epistle::util::label_rule;
 
@@ -132,6 +132,13 @@ fn a_credential_label_answers_the_same_through_every_entry() {
 		("an escape", "work\u{1b}[2Jphone".to_string(), false),
 		("a bidi override", "work\u{202e}phone".to_string(), false),
 		("a zero-width space", "work\u{200b}phone".to_string(), false),
+		("a line separator", "work\u{2028}phone".to_string(), false),
+		(
+			"an Arabic letter mark",
+			"work\u{61c}phone".to_string(),
+			false,
+		),
+		("a soft hyphen", "work\u{ad}phone".to_string(), false),
 		("a space before", " iphone".to_string(), false),
 		("a space after", "iphone ".to_string(), false),
 		("at the maximum length", at_max, true),
@@ -156,10 +163,18 @@ fn a_credential_label_answers_the_same_through_every_entry() {
 		for said in messages {
 			assert!(said.contains("label"), "{label:?}: {said}");
 			assert!(said.contains("for example"), "{label:?}: {said}");
-			assert!(
-				!said.contains('\u{1b}') && !said.contains('\u{202e}'),
-				"{label:?} reached the terminal unescaped: {said:?}"
-			);
+			assert_printable(&said, &format!("label {label:?}"));
+			// A character the rule refuses for being invisible is echoed as
+			// its escape, so the operator can see which one it was.
+			if let Some(c) = label
+				.chars()
+				.find(|c| epistle::util::validation::is_invisible_format(*c))
+			{
+				assert!(
+					said.contains(&c.escape_unicode().to_string()),
+					"{label:?}: {said}"
+				);
+			}
 		}
 		rows.push(Row {
 			what,

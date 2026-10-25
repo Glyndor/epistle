@@ -535,3 +535,17 @@ fn assistant_ipv4_answer_in_ipv6_question_is_rejected() {
 		"the IPv6 hint must surface when the operator answered IPv4: {text}"
 	);
 }
+
+#[test]
+fn the_assistant_echoes_a_refused_value_escaped_and_cut() {
+	let long = "x".repeat(500);
+	let input = format!("manual\na\u{202e}b\u{9b}\n{long}\nmail.example.org\nexample.org\n\n");
+	let (out, _) = harness(&input);
+	let text = parse_out(&out);
+	assert!(text.contains("a\\u{202e}b\\u{9b}"), "{text}");
+	assert!(
+		!text.contains('\u{202e}') && !text.contains('\u{9b}'),
+		"{text:?}"
+	);
+	assert!(!text.contains(&long), "a pasted value is cut");
+}

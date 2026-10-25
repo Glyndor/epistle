@@ -10,7 +10,7 @@
 //!
 //! Declared from `tests/validation_matrix.rs`.
 
-use super::common::{Row, cell, matrix, toml_string};
+use super::common::{Row, assert_printable, cell, matrix, toml_string};
 use super::single_label::{config_refusal, epistle};
 
 const PATHS: [&str; 2] = ["config", "init"];
@@ -89,10 +89,7 @@ fn a_data_directory_answers_the_same_except_where_init_guards_the_compose_file()
 				said.contains("data_dir"),
 				"{path} refused {value:?} without naming the field: {said}"
 			);
-			assert!(
-				!said.contains('\u{1b}') && !said.contains('\u{202e}'),
-				"{path} echoed a control character of {value:?}: {said:?}"
-			);
+			assert_printable(&said, &format!("{path} for {value:?}"));
 		}
 	}
 	for (what, _, expected) in &cases {

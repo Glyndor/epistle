@@ -127,7 +127,7 @@ fn check_dns(
 							"example.org",
 						);
 						errors.push(Invalid::DnsZoneMalformed {
-							value: dns.zone.clone(),
+							value: crate::util::address_reason::shorten(&dns.zone),
 							reason,
 						});
 					}

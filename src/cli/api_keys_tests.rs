@@ -168,7 +168,16 @@ fn revoke_missing_label_fails() {
 fn a_label_the_rule_refuses_creates_no_key() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
-	for label in ["", "  ", "ci\nprod", "\u{202e}ci", " ci", &"a".repeat(65)] {
+	for label in [
+		"",
+		"  ",
+		"ci\nprod",
+		"\u{202e}ci",
+		"ci\u{2028}prod",
+		"ci\u{61c}",
+		" ci",
+		&"a".repeat(65),
+	] {
 		let code = create(
 			&config,
 			NewKey {

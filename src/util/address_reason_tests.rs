@@ -166,3 +166,28 @@ fn a_refused_name_gets_the_rule_and_an_example() {
 	assert!(mixed.contains("mixes scripts"), "{mixed}");
 	assert!(mixed.ends_with("for example \"example.org\""), "{mixed}");
 }
+
+#[test]
+fn a_reason_never_repeats_a_control_or_hidden_character_raw() {
+	for value in [
+		"mail\u{202e}.net",
+		"\u{9b}2J.org",
+		"x\u{2028}y",
+		"a\u{9b}",
+		"-\u{202e}x.example.org",
+		"\u{202e}",
+	] {
+		for line in [
+			domain_reason(value),
+			name_refusal(value, crate::domain::DomainError::Invalid, "example.org"),
+			name_refusal(value, crate::domain::DomainError::Confusable, "example.org"),
+			not_handled(value),
+		] {
+			assert!(
+				line.chars()
+					.all(|c| !(c.is_control() || crate::util::validation::is_invisible_format(c))),
+				"{value:?} came back raw in {line:?}"
+			);
+		}
+	}
+}

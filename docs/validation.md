@@ -24,7 +24,7 @@ A rule is one of three kinds:
 | Host name | The domain rule. `mail.toml` trims, lowercases and drops trailing dots first, and wants the ASCII form on disk | Standard | `hostname` in `mail.toml`, `epistle init` |
 | Account name | `util::account_rule` (lowercase ASCII letters, digits, hyphen; not starting with a hyphen; 64 characters) | Safety (it is a directory name) | `epistle account add`, `[[accounts]]` in `mail.toml`, the management API `POST /accounts`, SCIM `POST /Users`, `epistle init` (derived from the address) |
 | Account directory component | `util::path_component::AccountName` (plain path component, wider than the account rule because SQL and LDAP rows may name accounts `J_Smith`) | Safety | Every module that builds a path under `<data_dir>/accounts/`, including external directory rows |
-| Credential label | `util::label_rule` (1 to 64 characters, no control or invisible formatting character, no space at either end) | Habit, plus Safety for what reaches a terminal or a log | `epistle app-password create` and `rename`, `epistle api-key create`. No HTTP route creates either |
+| Credential label | `util::label_rule` (1 to 64 characters, no control character, no invisible or bidirectional formatting character as `util::validation::is_invisible_format` defines it, no space at either end) | Habit, plus Safety for what reaches a terminal or a log | `epistle app-password create` and `rename`, `epistle api-key create`. No HTTP route creates either |
 | Masked address label | `directory_store::masked` (must hold a letter or a digit; it is slugified into the address) | Habit | `epistle masked`, API v1 masked addresses |
 | Sieve script name | `managesieve::store::is_valid_name` (`MAX_NAME_BYTES`, NFC, no slash, backslash, control or bidirectional character) | Safety plus Standard (RFC 5804, RFC 5198) | ManageSieve, JMAP `SieveScript` |
 | Mailbox name | `util::mailbox_path::valid_folder` (`DELIMITER`, `MAX_DEPTH`, `MAX_DISK_NAME_LEN`) | Safety (it becomes a directory) plus Standard (RFC 3501 modified UTF-7 on the wire) | IMAP `CREATE`, `RENAME`, `SUBSCRIBE`, JMAP `Mailbox/set`, API v1 mailboxes |
@@ -67,8 +67,8 @@ value cannot flood a log. A secret is never part of a refusal: passwords and key
 are not echoed, and the credential label rules apply to a label, which is not a
 secret.
 
-A protocol reply (ManageSieve `NO`) states the rule and an example but not the
-value, because the client already holds it.
+A protocol reply (ManageSieve `NO`) states the rule, with the limits the store
+enforces, and an example, but not the value, because the client already holds it.
 
 ## Tests
 

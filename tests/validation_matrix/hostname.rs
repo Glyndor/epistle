@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use super::common::{Row, cell, matrix, toml_string};
+use super::common::{Row, assert_printable, cell, matrix, toml_string};
 use super::single_label::{config_refusal, epistle};
 use epistle::domain;
 
@@ -162,6 +162,7 @@ fn a_host_name_answers_the_same_through_every_entry_except_where_the_file_tidies
 			("init", (!init_ok).then_some(init_said)),
 		] {
 			let Some(said) = said else { continue };
+			assert_printable(&said, &format!("{path} for {value:?}"));
 			assert!(
 				said.contains("for example") || said.contains("must be written as its ASCII form"),
 				"{path} refused the host name {value:?} without an example: {said}"

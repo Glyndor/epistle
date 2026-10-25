@@ -276,3 +276,21 @@ fn a_refused_label_names_the_value_the_rule_and_a_label_to_type() {
 	assert!(message.contains("no letter or digit"), "{message}");
 	assert!(message.contains("such as \"newsletter\""), "{message}");
 }
+
+#[test]
+fn a_refused_label_is_echoed_escaped_and_cut() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = store(dir.path());
+	for value in ["\u{202e}!!\u{9b}\u{2028}", &"!".repeat(500)] {
+		let Err(StoreError::Invalid(message)) = store.add("alice", value, "example.org", 1) else {
+			panic!("{value:?} has no letter or digit and must be refused");
+		};
+		assert!(
+			message
+				.chars()
+				.all(|c| !(c.is_control() || crate::util::validation::is_invisible_format(c))),
+			"{message:?}"
+		);
+		assert!(message.len() < 300, "{message}");
+	}
+}

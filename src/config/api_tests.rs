@@ -134,6 +134,7 @@ fn a_refused_trusted_proxy_names_the_value_the_rule_and_a_network_to_write() {
 	let base = "hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n[api]\n";
 	for (invalid, rule) in [
 		("192.0.2.1", "has no prefix length"),
+		("foo", "is not an IP address or CIDR block"),
 		("192.0.2.0/33", "is not an IP address or CIDR block"),
 	] {
 		let err = Config::parse_text(

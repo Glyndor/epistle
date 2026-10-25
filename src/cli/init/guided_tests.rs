@@ -236,3 +236,15 @@ fn a_resumed_path_with_a_control_sequence_is_asked_again() {
 	);
 	assert!(!text.contains('\u{1b}'), "{text}");
 }
+
+#[test]
+fn a_resumed_hostname_with_hidden_characters_is_refused_without_echoing_them() {
+	let (_, _, mut saved) = drive(&valid_input(), Draft::new());
+	saved.insert("hostname".into(), "bad\u{202e}\u{9b}\u{2028}name".into());
+	let (result, text, _) = drive("mail.example.org\n", saved);
+	assert_eq!(result.unwrap().hostname, "mail.example.org");
+	assert!(
+		!text.contains('\u{202e}') && !text.contains('\u{9b}') && !text.contains('\u{2028}'),
+		"{text:?}"
+	);
+}

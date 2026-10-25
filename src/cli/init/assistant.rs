@@ -66,10 +66,16 @@ fn ask_domain<R: BufRead>(
 			Ok(_) => return Ok(raw),
 			Err(why) => {
 				let reason = crate::util::address_reason::name_refusal(&raw, why, example);
-				let _ = writeln!(out, "  {raw:?}: {reason}; try again");
+				let _ = writeln!(out, "  {}: {reason}; try again", shown(&raw));
 			}
 		}
 	}
+}
+
+/// The value a refusal repeats: cut, quoted and escaped, so a pasted value
+/// cannot flood the screen or move the cursor.
+fn shown(raw: &str) -> String {
+	format!("{:?}", crate::util::address_reason::shorten(raw))
 }
 
 /// Read a list of domains, one per line, until a blank line. Each
@@ -92,7 +98,7 @@ fn ask_domain_list<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<V
 			Ok(_) => out_list.push(raw),
 			Err(why) => {
 				let reason = crate::util::address_reason::name_refusal(&raw, why, "example.org");
-				let _ = writeln!(out, "  {raw:?}: {reason}; skipped");
+				let _ = writeln!(out, "  {}: {reason}; skipped", shown(&raw));
 			}
 		}
 	}

@@ -70,6 +70,17 @@ pub fn is_bidi_or_invisible(c: char) -> bool {
 	)
 }
 
+/// Whether `c` reorders, hides or blanks text without being a control
+/// character: the whole Unicode format category, the Unicode line and
+/// paragraph separators, and the default-ignorable code points. This is the
+/// set a *label* is refused for, because a label is printed back by `list`
+/// and written to logs. It is the set of
+/// [`crate::evidence::hidden::is_hidden`], named here so the rules under
+/// `util` do not reach into a terminal module for it.
+pub fn is_invisible_format(c: char) -> bool {
+	crate::evidence::hidden::is_hidden(c)
+}
+
 /// Longest address, in octets, without the angle brackets (RFC 5321 section
 /// 4.5.3.1.3: the longest path is 256 octets with them).
 pub const MAX_ADDRESS: usize = 254;

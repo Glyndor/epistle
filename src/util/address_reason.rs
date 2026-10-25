@@ -30,9 +30,19 @@ pub fn shorten(value: &str) -> String {
 	cut
 }
 
+/// [`shorten`] with every control, bidirectional and invisible formatting
+/// character written as an escape and no quotes around it, for a message that
+/// repeats a value inside its own sentence. A raw U+202E or U+009B in a value
+/// the operator typed would otherwise reorder the line or move the cursor of
+/// the terminal that prints it.
+pub fn escaped(value: &str) -> String {
+	let quoted = format!("{:?}", shorten(value));
+	quoted[1..quoted.len() - 1].to_string()
+}
+
 /// The refusal for an address in a domain this server does not serve.
 pub fn not_handled(domain: &str) -> String {
-	format!("{} is not a domain this server handles", shorten(domain))
+	format!("{} is not a domain this server handles", escaped(domain))
 }
 
 /// Length unit for a message: an ASCII value is counted in characters, any
@@ -58,7 +68,7 @@ pub fn reason(raw: &str) -> String {
 		return "quoted local parts are not accepted".to_string();
 	}
 	let Some((local, domain)) = raw.rsplit_once('@') else {
-		return format!("{} has no @", shorten(raw));
+		return format!("{} has no @", escaped(raw));
 	};
 	if local.contains('@') {
 		return "only one @ is allowed".to_string();
@@ -116,7 +126,7 @@ pub fn domain_reason(domain: &str) -> String {
 		return format!("the domain is {len} {unit}; the maximum is {MAX_DOMAIN}");
 	}
 	if !domain.contains('.') {
-		return format!("the domain {} needs at least one dot", shorten(domain));
+		return format!("the domain {} needs at least one dot", escaped(domain));
 	}
 	for label in domain.split('.') {
 		if label.is_empty() {
@@ -126,13 +136,13 @@ pub fn domain_reason(domain: &str) -> String {
 		if label.is_ascii() && len > MAX_LABEL {
 			return format!(
 				"the domain label '{}' is {len} {unit}; the maximum is {MAX_LABEL}",
-				shorten(label)
+				escaped(label)
 			);
 		}
 		if label.starts_with('-') || label.ends_with('-') {
 			return format!(
 				"the domain label '{}' starts or ends with a hyphen",
-				shorten(label)
+				escaped(label)
 			);
 		}
 		if let Some(c) = label
@@ -145,9 +155,9 @@ pub fn domain_reason(domain: &str) -> String {
 	match crate::domain::normalize(domain) {
 		Err(crate::domain::DomainError::Confusable) => format!(
 			"the domain {} mixes scripts or imitates another name",
-			shorten(domain)
+			escaped(domain)
 		),
-		_ => format!("{} is not a valid domain", shorten(domain)),
+		_ => format!("{} is not a valid domain", escaped(domain)),
 	}
 }
 

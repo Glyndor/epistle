@@ -69,7 +69,7 @@ pub fn check(label: &str) -> Result<(), Fault> {
 	}
 	if let Some(c) = label
 		.chars()
-		.find(|c| crate::cli::term::is_invisible_format(*c))
+		.find(|c| crate::util::validation::is_invisible_format(*c))
 	{
 		return Err(Fault::Invisible(c));
 	}
