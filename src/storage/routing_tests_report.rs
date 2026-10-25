@@ -64,3 +64,27 @@ fn a_recipient_that_no_longer_exists_is_gone_not_unavailable() {
 	let refused = sink.deliver_report(report_to("ghost@example.org"));
 	assert!(matches!(refused, Err(SinkError::Gone(_))), "{refused:?}");
 }
+
+#[test]
+fn a_recipient_that_is_only_switched_off_is_unavailable_not_gone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string(), "off.example".to_string()],
+			[
+				("alice@example.org".to_string(), "alice".to_string()),
+				("carol@off.example".to_string(), "carol".to_string()),
+			],
+		)
+		.with_disabled_domains(["off.example".to_string()])
+		.with_masked_paused(["mask.paused@example.org".to_string()]),
+	);
+	let sink = SplitDelivery::new(dir.path(), directory).expect("sink");
+	for recipient in ["carol@off.example", "mask.paused@example.org"] {
+		let refused = sink.deliver_report(report_to(recipient));
+		assert!(
+			matches!(refused, Err(SinkError::Unavailable(_))),
+			"{recipient}: {refused:?}"
+		);
+	}
+}

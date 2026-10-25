@@ -617,7 +617,7 @@ impl Server {
 							}
 						}
 						Err(error) => {
-							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
+							if error.is_storage_fault() {
 								tracing::warn!(%error, "delivery failed");
 							}
 							error.smtp_reply()

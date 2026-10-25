@@ -134,6 +134,9 @@ pub struct Directory {
 	/// Disabled masks are not present here, so they reject exactly like an
 	/// unknown user (the directory never reveals that one once existed).
 	masked_by_address: HashMap<String, String>,
+	/// Masked addresses that are switched off (lowercased). Only
+	/// [`Directory::is_paused`] reads them: resolution treats them as unknown.
+	masked_paused: std::collections::HashSet<String>,
 	/// Shared metrics handle for the audit counters (`auth_login_succeeded`
 	/// / `auth_login_failed`). `None` in tests that do not need the
 	/// counters — a `Directory::new(...)` without `with_metrics(...)` still
@@ -211,6 +214,7 @@ impl Directory {
 			account_save_sent: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
+			masked_paused: std::collections::HashSet::new(),
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
@@ -278,6 +282,16 @@ impl Directory {
 		self.masked_by_address = entries
 			.into_iter()
 			.map(|(address, account)| (normalize(&address), account))
+			.collect();
+		self
+	}
+
+	/// Attach the masked addresses that are switched off, so a delivery that
+	/// finds one can tell it from an address nobody had.
+	pub fn with_masked_paused(mut self, entries: impl IntoIterator<Item = String>) -> Self {
+		self.masked_paused = entries
+			.into_iter()
+			.map(|address| normalize(&address))
 			.collect();
 		self
 	}

@@ -359,9 +359,10 @@ impl SplitDelivery {
 				// The session rejected unknown local users; drift here is
 				// a logic error and the whole delivery fails closed.
 				Resolution::UnknownUser => {
-					return Err(SinkError::Gone(format!(
-						"recipient {recipient} no longer resolves"
-					)));
+					return Err(self.directory.current().unresolved(
+						&address,
+						format!("recipient {recipient} no longer resolves"),
+					));
 				}
 			}
 		}

@@ -110,6 +110,13 @@ pub enum SinkError {
 }
 
 impl SinkError {
+	/// Whether the delivery failed for want of storage or of a recipient
+	/// that is gone, which the operator should see in the log; the other
+	/// refusals are the message's own doing.
+	pub fn is_storage_fault(&self) -> bool {
+		matches!(self, SinkError::Unavailable(_) | SinkError::Gone(_))
+	}
+
 	/// The SMTP reply that refuses the message for this reason.
 	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
 		use crate::smtp::reply::Reply;

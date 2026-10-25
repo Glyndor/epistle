@@ -299,3 +299,38 @@ async fn a_silent_clamd_is_cut_off_at_its_deadline() {
 	);
 	assert_eq!(inner.messages().len(), 1);
 }
+
+/// Counts which of its two entry points a sink was reached by.
+#[derive(Default)]
+struct Counting {
+	delivered: std::sync::atomic::AtomicUsize,
+	reported: std::sync::atomic::AtomicUsize,
+}
+
+impl MessageSink for Counting {
+	fn deliver(&self, _: AcceptedMessage) -> Result<(), SinkError> {
+		self.delivered
+			.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+		Ok(())
+	}
+
+	fn deliver_report(&self, _: AcceptedMessage) -> Result<(), SinkError> {
+		self.reported
+			.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+		Ok(())
+	}
+}
+
+#[test]
+fn a_report_reaches_the_inner_sink_as_a_report() {
+	let clamd = FakeClamd::start();
+	let inner = Arc::new(Counting::default());
+	let hook = Arc::new(ClamdHook::new(clamd.socket.to_path_buf()));
+	let sink = ScanningSink::wrap(true, inner.clone(), Some(hook), None, None).expect("scanner");
+	sink.deliver_report(message("report")).expect("report");
+	let count = |counter: &std::sync::atomic::AtomicUsize| {
+		counter.load(std::sync::atomic::Ordering::SeqCst)
+	};
+	assert_eq!(count(&inner.reported), 1);
+	assert_eq!(count(&inner.delivered), 0);
+}
