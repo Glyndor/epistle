@@ -14,6 +14,7 @@ use crate::smtp::directory::Resolution;
 use super::super::command::Secret;
 use super::state::State;
 use super::{Output, Session};
+use crate::smtp::directory::bearer_proof;
 
 /// In-flight SASL state between AUTHENTICATE continuation lines.
 pub(super) enum PendingAuth {
@@ -133,6 +134,7 @@ COMPRESS=DEFLATE",
 
 	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
 	fn oauth_bearer(&mut self, tag: &str, initial: Option<String>) -> Output {
+		let proof = bearer_proof(self.oauth.as_deref());
 		let outcome = self
 			.oauth
 			.clone()
@@ -151,7 +153,7 @@ COMPRESS=DEFLATE",
 				// bearer token as to a password, with the same wire outcome as
 				// an unverifiable token.
 				self.directory
-					.admit_login(&account, self.auth_protocol, Proof::Federated)
+					.admit_login(&account, self.auth_protocol, proof)
 					.then_some(account)
 			});
 		match outcome {

@@ -7,7 +7,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::super::address::Address;
-use super::super::directory::{Proof, Resolution};
+use super::super::directory::{Resolution, bearer_proof};
 use super::super::reply::Reply;
 use super::{Action, Session};
 
@@ -42,6 +42,7 @@ impl Session {
 		let Some(verifier) = self.oauth.clone() else {
 			return Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
 		};
+		let proof = bearer_proof(Some(&verifier));
 		let outcome = initial
 			.as_deref()
 			.and_then(parse_bearer)
@@ -54,7 +55,7 @@ impl Session {
 				// answers like a wrong token, so the wire response does not
 				// reveal that the account exists.
 				self.directory
-					.admit_login(&account, self.auth_protocol, Proof::Federated)
+					.admit_login(&account, self.auth_protocol, proof)
 					.then_some(account)
 			});
 		match outcome {

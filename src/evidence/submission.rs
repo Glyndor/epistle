@@ -39,6 +39,9 @@ pub fn prepare(
 	directory: Option<&Directory>,
 ) -> Result<Prepared, MarketingRefusal> {
 	identification::reject_ambiguous_headers(&message.data)?;
+	if crate::util::header_block::has_unframed_byte(&message.data) {
+		return Err(MarketingRefusal::AmbiguousLineFraming);
+	}
 	if let std::borrow::Cow::Owned(normalized) =
 		crate::util::header_block::outbound_crlf(&message.data)
 	{

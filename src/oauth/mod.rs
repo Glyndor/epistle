@@ -1,13 +1,14 @@
 //! OAuth2/OIDC bearer-token verification for SASL (OAUTHBEARER/XOAUTH2).
 //!
 //! Validates a bearer JWT against a configured issuer, audience and signing
-//! key, returning the authenticated identity (the email/sub claim). The SASL
-//! mechanism wiring consumes this.
+//! key, returning the authenticated identity (the verified `email` claim). The
+//! SASL mechanism wiring consumes this.
 
 use std::sync::{Arc, RwLock};
 
 use crate::jwt::{self, Algorithm, Validation};
 
+mod identity;
 pub mod oidc;
 
 pub use oidc::{Jwk, OidcError};
@@ -30,6 +31,7 @@ pub struct OauthVerifier {
 	issuer: String,
 	audience: String,
 	source: KeySource,
+	policy: identity::IdentityPolicy,
 }
 
 /// Why a verifier could not be built.
@@ -66,6 +68,7 @@ impl OauthVerifier {
 				algorithm,
 				public_key,
 			},
+			policy: identity::IdentityPolicy::default(),
 		})
 	}
 
@@ -81,7 +84,38 @@ impl OauthVerifier {
 			issuer: issuer.into(),
 			audience: audience.into(),
 			source: KeySource::Jwks(Arc::new(RwLock::new(keys))),
+			policy: identity::IdentityPolicy::default(),
 		}
+	}
+
+	/// Set what the operator declares about the identity provider: whether it
+	/// may vouch for an `email` claim without `email_verified`, and whether it
+	/// enforces its own second factor on the sign-in that issues a token.
+	pub fn with_identity_policy(
+		mut self,
+		allow_unverified_email: bool,
+		second_factor_attested: bool,
+	) -> Self {
+		self.policy = identity::IdentityPolicy {
+			allow_unverified_email,
+			second_factor_attested,
+		};
+		self
+	}
+
+	/// [`Self::with_identity_policy`] with what the `[oauth]` section declares.
+	pub fn declared_by(self, config: &crate::config::Oauth) -> Self {
+		self.with_identity_policy(
+			config.allow_unverified_email,
+			config.idp_enforces_second_factor,
+		)
+	}
+
+	/// Whether the operator declared that the identity provider enforces a
+	/// second factor itself. When it is not, an account with a TOTP secret
+	/// cannot sign in with a bearer token.
+	pub fn second_factor_attested(&self) -> bool {
+		self.policy.second_factor_attested
 	}
 
 	/// The shared JWKS cache, when this verifier is OIDC-backed. The background
@@ -94,8 +128,9 @@ impl OauthVerifier {
 	}
 
 	/// Verify a bearer token at `now_secs`, returning the authenticated email
-	/// (the `email` claim, falling back to `sub`) when it is valid. Synchronous
-	/// and network-free: OIDC keys are read from the in-memory cache.
+	/// (the `email` claim, which must carry `email_verified` unless the
+	/// operator declared otherwise) when it is valid. Synchronous and
+	/// network-free: OIDC keys are read from the in-memory cache.
 	pub fn verify(&self, token: &str, now_secs: u64) -> Option<String> {
 		let validation = Validation {
 			now: now_secs,
@@ -114,10 +149,7 @@ impl OauthVerifier {
 				jwt::validate(token, key.algorithm, &key.key, &validation).ok()?
 			}
 		};
-		claims
-			.string("email")
-			.or_else(|| claims.string("sub"))
-			.map(str::to_string)
+		self.policy.identity(&claims)
 	}
 }
 
@@ -197,6 +229,7 @@ mod tests {
 				"iss": "https://idp.example",
 				"aud": "mail",
 				"email": "alice@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
@@ -228,7 +261,7 @@ mod tests {
 	}
 
 	#[test]
-	fn falls_back_to_sub_when_email_absent() {
+	fn a_token_with_only_a_subject_names_no_identity() {
 		let rng = SystemRandom::new();
 		let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
 		let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
@@ -246,7 +279,7 @@ mod tests {
 				"exp": 2000,
 			}),
 		);
-		assert_eq!(verifier.verify(&token, 1000).as_deref(), Some("user-123"));
+		assert_eq!(verifier.verify(&token, 1000), None);
 	}
 
 	/// Sign an ES256 token whose header carries `kid`, like an IdP-issued token.
@@ -297,6 +330,7 @@ mod tests {
 				"iss": "https://idp.example",
 				"aud": "mail",
 				"email": "bob@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
@@ -350,7 +384,7 @@ mod tests {
 	}
 
 	#[test]
-	fn jwks_verifier_falls_back_to_single_key_without_kid() {
+	fn jwks_verifier_uses_the_single_key_without_kid() {
 		let (pair, rng, point) = ec_keypair();
 		let keys = vec![Jwk {
 			kid: String::new(),
@@ -365,11 +399,15 @@ mod tests {
 			&serde_json::json!({
 				"iss": "https://idp.example",
 				"aud": "mail",
-				"sub": "carol",
+				"email": "carol@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
-		assert_eq!(verifier.verify(&token, 1000).as_deref(), Some("carol"));
+		assert_eq!(
+			verifier.verify(&token, 1000).as_deref(),
+			Some("carol@example.org")
+		);
 	}
 
 	#[test]

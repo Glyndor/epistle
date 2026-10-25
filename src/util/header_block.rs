@@ -63,25 +63,43 @@ pub(crate) fn line_ending(raw: &[u8]) -> &'static [u8] {
 	}
 }
 
-/// I borrow an SMTP-ready message, or normalize its LF and final line ending
-/// before validation, signing and queueing so DATA cannot change those bytes.
+/// Whether `data` holds a byte no outbound message may carry: a NUL, or a
+/// carriage return that is not the first half of a `CRLF`. Both are line
+/// framing a remote server may read differently from this one.
+pub(crate) fn has_unframed_byte(data: &[u8]) -> bool {
+	data.iter()
+		.enumerate()
+		.any(|(index, byte)| *byte == 0 || (*byte == b'\r' && data.get(index + 1) != Some(&b'\n')))
+}
+
+/// I borrow an SMTP-ready message, or normalize it before validation,
+/// signing and queueing so DATA cannot change those bytes: every line ends
+/// in `CRLF` (a lone `LF` or `CR` becomes one), the message ends in one, and
+/// no NUL is left.
 pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-	if data.ends_with(b"\r\n")
+	let framed = data.ends_with(b"\r\n")
+		&& !has_unframed_byte(data)
 		&& data
 			.iter()
 			.enumerate()
-			.all(|(index, byte)| *byte != b'\n' || (index > 0 && data[index - 1] == b'\r'))
-	{
+			.all(|(index, byte)| *byte != b'\n' || (index > 0 && data[index - 1] == b'\r'));
+	if framed {
 		return std::borrow::Cow::Borrowed(data);
 	}
-	let mut normalized = Vec::with_capacity(data.len());
-	let mut previous = None;
-	for byte in data.iter().copied() {
-		if byte == b'\n' && previous != Some(b'\r') {
-			normalized.push(b'\r');
+	let mut normalized = Vec::with_capacity(data.len() + 2);
+	let mut bytes = data.iter().copied().peekable();
+	while let Some(byte) = bytes.next() {
+		match byte {
+			0 => {}
+			b'\r' => {
+				normalized.extend_from_slice(b"\r\n");
+				if bytes.peek() == Some(&b'\n') {
+					bytes.next();
+				}
+			}
+			b'\n' => normalized.extend_from_slice(b"\r\n"),
+			other => normalized.push(other),
 		}
-		normalized.push(byte);
-		previous = Some(byte);
 	}
 	if !normalized.ends_with(b"\r\n") {
 		normalized.extend_from_slice(b"\r\n");
@@ -178,3 +196,7 @@ mod tests {
 		assert_eq!(field_count(b"A: 1\nB: 2\n\n"), 2);
 	}
 }
+
+#[cfg(test)]
+#[path = "header_block_framing_tests.rs"]
+mod framing_tests;

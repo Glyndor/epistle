@@ -50,6 +50,21 @@ pub struct Oauth {
 	/// example).
 	#[serde(default)]
 	pub allow_private_jwks: bool,
+	/// Accept an `email` claim that carries no `email_verified` claim at all,
+	/// for an identity provider that never emits it. Off by default: the
+	/// address of a token is an identity only when the provider says it
+	/// verified it, and a claim that says `false` is refused either way. Set
+	/// this only when the provider is known to confirm every address it
+	/// issues tokens for.
+	#[serde(default)]
+	pub allow_unverified_email: bool,
+	/// Declare that the identity provider enforces a second factor of its own
+	/// before it issues a token. Off by default: a bearer token cannot carry
+	/// a TOTP code, so an account with a TOTP secret is refused a token
+	/// sign-in, as it is refused SCRAM. When set, the token stands for the
+	/// second factor too.
+	#[serde(default)]
+	pub idp_enforces_second_factor: bool,
 }
 
 /// Why an `[oauth]` section is invalid.
@@ -155,6 +170,11 @@ impl std::fmt::Debug for Oauth {
 			.field("discovery_url", &self.discovery_url)
 			.field("signing_key", &self.signing_key.as_ref().map(|_| "***"))
 			.field("signing_key_file", &self.signing_key_file)
+			.field("allow_unverified_email", &self.allow_unverified_email)
+			.field(
+				"idp_enforces_second_factor",
+				&self.idp_enforces_second_factor,
+			)
 			.finish()
 	}
 }
@@ -162,6 +182,22 @@ impl std::fmt::Debug for Oauth {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_identity_declarations_default_to_off_and_parse() {
+		let base = "issuer = \"i\"\naudience = \"a\"\nalgorithm = \"ES256\"\npublic_key = \"K\"\n";
+		let off: Oauth = toml::from_str(base).expect("parse");
+		assert!(!off.allow_unverified_email);
+		assert!(!off.idp_enforces_second_factor);
+		let on: Oauth = toml::from_str(&format!(
+			"{base}allow_unverified_email = true\nidp_enforces_second_factor = true\n"
+		))
+		.expect("parse");
+		assert!(on.allow_unverified_email);
+		assert!(on.idp_enforces_second_factor);
+		let verifier = crate::oauth::OauthVerifier::from_jwks("i", "a", vec![]).declared_by(&on);
+		assert!(verifier.second_factor_attested());
+	}
 
 	#[test]
 	fn parses_oauth_section() {

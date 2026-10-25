@@ -171,7 +171,7 @@ pub(super) async fn build_oauth_verifier(
 		}
 		(None, None) => unreachable!("validate() rejects the no-source case"),
 	};
-	Ok(Some(Arc::new(verifier)))
+	Ok(Some(Arc::new(verifier.declared_by(oauth))))
 }
 
 /// Build the built-in OAuth authorization server from `[oauth] signing_key` or

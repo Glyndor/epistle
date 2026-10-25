@@ -173,6 +173,27 @@ fn a_bearer_token_for_a_disabled_account_is_refused() {
 	}
 }
 
+fn bearer_with(verifier_attests: bool, email: &str, verified: Option<bool>) -> Output {
+	let (verifier, pair, rng) = verifier_and_key_with(verifier_attests);
+	let response = bearer_response_verified(&pair, &rng, email, verified);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = session(dir.path(), gate_directory_arc()).with_oauth(Some(verifier));
+	session.command_line(&format!("a AUTHENTICATE OAUTHBEARER {response}"))
+}
+
+#[test]
+fn a_bearer_token_with_an_unverified_or_unstated_email_opens_nothing() {
+	for verified in [Some(false), None] {
+		assert!(!is_ok(&bearer_with(false, "alice@example.org", verified)));
+	}
+}
+
+#[test]
+fn a_bearer_token_does_not_skip_the_second_factor_unless_the_provider_enforces_it() {
+	assert!(!is_ok(&bearer_with(false, "carol@example.org", Some(true))));
+	assert!(is_ok(&bearer_with(true, "carol@example.org", Some(true))));
+}
+
 #[test]
 fn a_client_certificate_for_a_disabled_account_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");

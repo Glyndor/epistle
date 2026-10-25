@@ -143,6 +143,36 @@ fn a_bearer_token_for_a_disabled_account_is_refused() {
 	}
 }
 
+fn authenticate(mut session: Session, response: &str) -> u16 {
+	reply_code(&session.command_line(&format!("AUTH OAUTHBEARER {response}")))
+}
+
+#[test]
+fn a_bearer_token_with_an_unverified_or_unstated_email_opens_nothing() {
+	for verified in [Some(false), None] {
+		let (verifier, pair, rng) = verifier_and_key();
+		let response = bearer_response_verified(&pair, &rng, "alice@example.org", verified);
+		let session = session(gate_directory_arc()).with_oauth(verifier);
+		assert_eq!(authenticate(session, &response), 535, "{verified:?}");
+	}
+}
+
+#[test]
+fn a_bearer_token_does_not_skip_the_second_factor() {
+	let (verifier, pair, rng) = verifier_and_key();
+	let response = bearer_response(&pair, &rng, "carol@example.org");
+	let session = session(gate_directory_arc()).with_oauth(verifier);
+	assert_eq!(authenticate(session, &response), 535);
+}
+
+#[test]
+fn a_bearer_token_opens_a_second_factor_account_when_the_provider_enforces_it() {
+	let (verifier, pair, rng) = verifier_and_key_with(true);
+	let response = bearer_response(&pair, &rng, "carol@example.org");
+	let session = session(gate_directory_arc()).with_oauth(verifier);
+	assert_eq!(authenticate(session, &response), 235);
+}
+
 #[test]
 fn a_client_certificate_for_a_disabled_account_is_refused() {
 	let mut session = session(gate_directory_arc());

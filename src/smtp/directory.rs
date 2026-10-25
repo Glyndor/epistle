@@ -688,7 +688,7 @@ pub(crate) mod hash_gate;
 
 #[path = "directory_gate.rs"]
 mod gate;
-pub use gate::{Proof, ScramPlan, ScramRefusal};
+pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
 
 #[cfg(test)]
 #[path = "directory_gate_fixture.rs"]

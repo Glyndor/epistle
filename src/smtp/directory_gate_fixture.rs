@@ -99,6 +99,14 @@ pub(crate) fn gate_directory_arc() -> Arc<Directory> {
 
 /// A verifier that trusts one throwaway ES256 key, and the key itself.
 pub(crate) fn verifier_and_key() -> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyPair, SystemRandom) {
+	verifier_and_key_with(false)
+}
+
+/// [`verifier_and_key`], with the operator declaring (or not) that the
+/// identity provider enforces a second factor itself.
+pub(crate) fn verifier_and_key_with(
+	second_factor_attested: bool,
+) -> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyPair, SystemRandom) {
 	let rng = SystemRandom::new();
 	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
 		.expect("generate signing key");
@@ -107,24 +115,37 @@ pub(crate) fn verifier_and_key() -> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyP
 	let public_b64 = B64.encode(pair.public_key().as_ref());
 	let verifier = Arc::new(
 		crate::oauth::OauthVerifier::new("https://idp.example", "mail", "ES256", &public_b64)
-			.expect("verifier"),
+			.expect("verifier")
+			.with_identity_policy(false, second_factor_attested),
 	);
 	(verifier, pair, rng)
 }
 
 /// The base64 SASL initial response of an OAUTHBEARER exchange carrying a
-/// token the verifier trusts, issued for `email`.
+/// token the verifier trusts, issued for `email` and marked verified.
 pub(crate) fn bearer_response(pair: &EcdsaKeyPair, rng: &SystemRandom, email: &str) -> String {
+	bearer_response_verified(pair, rng, email, Some(true))
+}
+
+/// [`bearer_response`] with the `email_verified` claim as given (`None`
+/// leaves it out).
+pub(crate) fn bearer_response_verified(
+	pair: &EcdsaKeyPair,
+	rng: &SystemRandom,
+	email: &str,
+	verified: Option<bool>,
+) -> String {
 	let header = B64URL.encode(br#"{"alg":"ES256","typ":"JWT"}"#);
-	let payload = B64URL.encode(
-		serde_json::to_vec(&serde_json::json!({
-			"iss": "https://idp.example",
-			"aud": "mail",
-			"email": email,
-			"exp": 99_999_999_999u64,
-		}))
-		.expect("claims"),
-	);
+	let mut claims = serde_json::json!({
+		"iss": "https://idp.example",
+		"aud": "mail",
+		"email": email,
+		"exp": 99_999_999_999u64,
+	});
+	if let Some(verified) = verified {
+		claims["email_verified"] = verified.into();
+	}
+	let payload = B64URL.encode(serde_json::to_vec(&claims).expect("claims"));
 	let input = format!("{header}.{payload}");
 	let sig = pair.sign(rng, input.as_bytes()).expect("sign token");
 	let token = format!("{input}.{}", B64URL.encode(sig.as_ref()));

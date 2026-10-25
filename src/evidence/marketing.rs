@@ -31,6 +31,8 @@ pub enum MarketingRefusal {
 	HeaderReaderFramingMismatch,
 	/// The header block holds more fields than the server reads.
 	TooManyHeaderFields,
+	/// The message carries a NUL or a bare carriage return.
+	AmbiguousLineFraming,
 }
 
 impl MarketingRefusal {
@@ -56,6 +58,9 @@ impl MarketingRefusal {
 			}
 			Self::AmbiguousHeaderFraming => {
 				"submission headers must use one line-ending style without a bare carriage return"
+			}
+			Self::AmbiguousLineFraming => {
+				"a submitted message must not contain a NUL or a bare carriage return"
 			}
 			Self::MalformedHeaderLine => {
 				"submission header lines must follow RFC 5322 field and folding syntax"
