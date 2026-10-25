@@ -31,14 +31,23 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::cli::init::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, compose_file_path};
+use crate::cli::init::compose_file_path;
 use crate::config::Database;
 
+#[path = "db_dump_container.rs"]
+mod db_dump_container;
 #[path = "db_dump_host_temp.rs"]
 mod db_dump_host_temp;
 #[path = "db_dump_marker.rs"]
 mod db_dump_marker;
 
+#[cfg(test)]
+use db_dump_container::container_rm_temp_spec;
+use db_dump_container::load_dump_container_with;
+pub(crate) use db_dump_container::{
+	container_cp_into_spec, container_pg_dump_spec, container_psql_load_spec, load_dump_container,
+};
+#[cfg(test)]
 use db_dump_host_temp::RestoreHostTemp;
 use db_dump_marker::output_ends_with_pg_dump_complete;
 
@@ -392,193 +401,6 @@ pub(crate) fn host_psql_load_spec(db: &Database, sql: &[u8]) -> Result<CommandSp
 	Ok(spec)
 }
 
-/// The container-side `pg_dump` invocation. The shell reads the mounted
-/// secret into `PGPASSWORD` inside `db`, then executes the client against
-/// the Unix socket. Only fixed compose constants enter the shell script;
-/// the secret value never reaches the host environment or argv.
-pub(crate) fn container_pg_dump_spec(compose: &Path) -> Result<CommandSpec, BackupError> {
-	if !compose.exists() {
-		return Err(BackupError::ComposeFileMissing(compose.to_path_buf()));
-	}
-	let compose_str = compose.to_string_lossy().into_owned();
-	let script = format!(
-		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec pg_dump -Fp --clean --if-exists --no-owner --no-privileges -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#
-	);
-	let spec = CommandSpec::new(vec![
-		"podup".to_string(),
-		"-f".to_string(),
-		compose_str,
-		"exec".to_string(),
-		"-T".to_string(),
-		"db".to_string(),
-		"sh".to_string(),
-		"-c".to_string(),
-		script,
-	]);
-	Ok(spec)
-}
-
-/// The container-side `psql` invocation. `podup exec` does not forward
-/// stdin (measured against `podup 5.10.13`), so the SQL is copied in
-/// first through `podup cp <host> <svc>:<in_container_path>`, and then a
-/// shell reads the secret into `PGPASSWORD` and execs `psql -1 -f` against
-/// that path. The transaction and `ON_ERROR_STOP` make replay atomic when
-/// a SQL statement fails. The shell uses `exec psql` so a `SIGTERM` sent
-/// to the container's exec process (an operator hitting Ctrl-C, a
-/// timeout, an aborted `podman exec`) reaches `psql` itself and aborts
-/// the transaction. Cleanup of the in-container copy lives in
-/// [`container_rm_temp_spec`] (host-side, since the wrapper shell is
-/// gone), invoked from [`load_dump_container_with`] on both success and
-/// error.
-pub(crate) fn container_psql_load_spec(
-	compose: &Path,
-	in_container_path: &str,
-	_sql: &[u8],
-) -> Result<CommandSpec, BackupError> {
-	if !compose.exists() {
-		return Err(BackupError::ComposeFileMissing(compose.to_path_buf()));
-	}
-	let compose_str = compose.to_string_lossy().into_owned();
-	let script = format!(
-		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#,
-		path = in_container_path,
-	);
-	let spec = CommandSpec::new(vec![
-		"podup".to_string(),
-		"-f".to_string(),
-		compose_str,
-		"exec".to_string(),
-		"-T".to_string(),
-		"db".to_string(),
-		"sh".to_string(),
-		"-c".to_string(),
-		script,
-	]);
-	Ok(spec)
-}
-
-/// `podup -f <compose> exec -T db sh -c "rm -f <in_container_path>"`.
-/// Removes the staged SQL file from the `db` service after the restore
-/// returns, whether the replay succeeded or failed. Must run from the
-/// host (`podup exec`) because the in-container shell that exec'd
-/// `psql` is no longer around to trap a `rm -f` on its own exit.
-pub(crate) fn container_rm_temp_spec(
-	compose: &Path,
-	in_container_path: &str,
-) -> Result<CommandSpec, BackupError> {
-	if !compose.exists() {
-		return Err(BackupError::ComposeFileMissing(compose.to_path_buf()));
-	}
-	let compose_str = compose.to_string_lossy().into_owned();
-	let script = format!(r#"rm -f '{path}'"#, path = in_container_path);
-	let spec = CommandSpec::new(vec![
-		"podup".to_string(),
-		"-f".to_string(),
-		compose_str,
-		"exec".to_string(),
-		"-T".to_string(),
-		"db".to_string(),
-		"sh".to_string(),
-		"-c".to_string(),
-		script,
-	]);
-	Ok(spec)
-}
-
-/// Load the SQL into the database through the container path. The
-/// `podup cp` happens in `copy_sql_into_container`, then the `psql`
-/// exec is run. The two-step is exposed as one function so the caller
-/// stays linear.
-#[allow(dead_code)]
-pub(crate) fn load_dump_container(compose: &Path, sql: &[u8]) -> Result<(), BackupError> {
-	load_dump_container_with(compose, sql, &default_program_resolver)
-}
-
-/// Same as [`load_dump_container`] with a custom program resolver. The
-/// host-temp write happens before any spawn, so it stays unchanged
-/// between the production path and the test path.
-///
-/// The SQL is staged to a host temp file created `0600` under a name unique
-/// to this call, so nothing but its owner can read the credential hashes it
-/// carries and two simultaneous restores cannot clobber each other. The
-/// [`RestoreHostTemp`] guard removes it on every exit path, including the
-/// error path and a panic. Inside the container the file lands on a name
-/// derived from the same unique file name, is tightened to `0600` by the
-/// `psql` shell, and is removed by a host-side `podup exec` once the
-/// replay completes (success or error); see
-/// [`container_psql_load_spec`] and [`container_rm_temp_spec`].
-fn load_dump_container_with(
-	compose: &Path,
-	sql: &[u8],
-	resolver: &dyn Fn(&str) -> Option<PathBuf>,
-) -> Result<(), BackupError> {
-	let mut host_temp = RestoreHostTemp::create()?;
-	host_temp.write_all(sql)?;
-	let in_container_path = format!("/tmp/{}", host_temp.file_name());
-	let result = (|| -> Result<(), BackupError> {
-		let cp = container_cp_into_spec(compose, host_temp.path(), &in_container_path)?;
-		run_command_capturing_stdout_with(&cp, resolver).and_then(|output| {
-			if output.status_ok {
-				Ok(())
-			} else {
-				Err(BackupError::CommandFailed {
-					stderr: output.stderr.trim().to_string(),
-					code: output.code,
-				})
-			}
-		})?;
-		let psql = container_psql_load_spec(compose, &in_container_path, sql)?;
-		run_command_capturing_stdout_with(&psql, resolver).and_then(|output| {
-			if output.status_ok {
-				Ok(())
-			} else {
-				Err(BackupError::CommandFailed {
-					stderr: output.stderr.trim().to_string(),
-					code: output.code,
-				})
-			}
-		})
-	})();
-	// Drop runs even when the closure returned `Err`, removing the host
-	// temp. The in-container file is removed by the host-side `podup exec`
-	// below regardless of the replay outcome: with `exec psql` in the
-	// replay shell, the wrapper shell is replaced by psql and any trap
-	// would never fire on the psql exit path. The cleanup is best-effort:
-	// a leftover `rm -f` failure does not override the restore outcome.
-	if let Ok(cleanup) = container_rm_temp_spec(compose, &in_container_path) {
-		let _ = run_command_capturing_stdout_with(&cleanup, resolver);
-	}
-	drop(host_temp);
-	result
-}
-
-/// `podup -f <compose> cp <host> db:/tmp/...`, copy the SQL file from
-/// the host temp path into the `db` container. podup's `cp` requires the
-/// target to be writable inside the container; `/tmp` is the conventional
-/// scratch path in the `db` service (the compose also binds a tmpfs on
-/// `/tmp` for exactly this kind of use).
-pub(crate) fn container_cp_into_spec(
-	compose: &Path,
-	host_path: &Path,
-	container_path: &str,
-) -> Result<CommandSpec, BackupError> {
-	if !compose.exists() {
-		return Err(BackupError::ComposeFileMissing(compose.to_path_buf()));
-	}
-	let compose_str = compose.to_string_lossy().into_owned();
-	let host_str = host_path.to_string_lossy().into_owned();
-	let dest = format!("db:{container_path}");
-	let spec = CommandSpec::new(vec![
-		"podup".to_string(),
-		"-f".to_string(),
-		compose_str,
-		"cp".to_string(),
-		host_str,
-		dest,
-	]);
-	Ok(spec)
-}
-
 /// The output of a child process: stdout, stderr and a flag for the exit
 /// status. The flag is set from the raw status; the integer code is kept
 /// alongside it for the error path so the message can name it.
@@ -662,12 +484,21 @@ fn run_command_capturing_stdout_with(
 			});
 		}
 	};
-	if let Some(payload) = spec.stdin_payload()
-		&& let Some(mut stdin) = child.stdin.take()
-	{
-		let _ = stdin.write_all(payload);
-	}
-	let output = match child.wait_with_output() {
+	// The payload goes in on its own thread while the output is drained: a
+	// child that answers before it has read everything (a large dump, a
+	// `psql` that prints as it goes) would otherwise fill its stdout pipe
+	// while this thread is still blocked writing its stdin.
+	let output = std::thread::scope(|scope| {
+		if let Some(payload) = spec.stdin_payload()
+			&& let Some(mut stdin) = child.stdin.take()
+		{
+			scope.spawn(move || {
+				let _ = stdin.write_all(payload);
+			});
+		}
+		child.wait_with_output()
+	});
+	let output = match output {
 		Ok(output) => output,
 		Err(error) => {
 			return Err(BackupError::CommandFailed {

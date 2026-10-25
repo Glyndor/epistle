@@ -8,8 +8,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path};
 
+/// The owner a store trusts, as `(uid, gid)`: root in production.
+type Owner = (u32, u32);
+
+const ROOT: Owner = (0, 0);
+
 pub(super) struct Store {
 	dir: File,
+	/// Who must own what the store opens. Production is always root; a test
+	/// names the user it runs as, so the whole path of a published generation
+	/// runs without privileges.
+	owner: Owner,
 }
 
 impl Store {
@@ -18,19 +27,19 @@ impl Store {
 			return Err(io::Error::other("rollback store must be absolute"));
 		}
 		let mut dir = File::open("/")?;
-		check_directory(&dir, false)?;
+		check_directory(&dir, ROOT, false)?;
 		for component in path.components() {
 			match component {
 				Component::RootDir => continue,
 				Component::Normal(name) => {
 					dir = open_at(&dir, name.as_bytes(), libc::O_DIRECTORY)?;
-					check_directory(&dir, false)?;
+					check_directory(&dir, ROOT, false)?;
 				}
 				_ => return Err(io::Error::other("invalid rollback store path")),
 			}
 		}
-		check_directory(&dir, true)?;
-		Ok(Self { dir })
+		check_directory(&dir, ROOT, true)?;
+		Ok(Self { dir, owner: ROOT })
 	}
 
 	pub(super) fn select(&self, current: &str, to: Option<&str>) -> Result<(String, File), String> {
@@ -50,10 +59,10 @@ impl Store {
 	/// preinst renamed into place once the pair was complete and checked.
 	fn binary(&self, name: &str) -> io::Result<File> {
 		let generation = open_at(&self.dir, name.as_bytes(), libc::O_DIRECTORY)?;
-		check_directory(&generation, true)?;
-		let mut binary = checked_file(&generation, "epistle")?;
+		check_directory(&generation, self.owner, true)?;
+		let mut binary = checked_file(&generation, self.owner.0, "epistle")?;
 		let mut manifest = String::new();
-		checked_file(&generation, "epistle.sha256")?
+		checked_file(&generation, self.owner.0, "epistle.sha256")?
 			.take(66)
 			.read_to_string(&mut manifest)?;
 		verify_digest(&mut binary, &manifest)?;
@@ -61,10 +70,11 @@ impl Store {
 	}
 }
 
-fn check_directory(dir: &File, private: bool) -> io::Result<()> {
+fn check_directory(dir: &File, owner: Owner, private: bool) -> io::Result<()> {
 	let metadata = dir.metadata()?;
 	if !protected_directory(
 		metadata.is_dir(),
+		owner,
 		metadata.uid(),
 		metadata.gid(),
 		metadata.mode(),
@@ -77,10 +87,10 @@ fn check_directory(dir: &File, private: bool) -> io::Result<()> {
 	Ok(())
 }
 
-fn checked_file(dir: &File, name: &str) -> io::Result<File> {
+fn checked_file(dir: &File, owner: u32, name: &str) -> io::Result<File> {
 	let file = open_at(dir, name.as_bytes(), libc::O_NONBLOCK)?;
 	let metadata = file.metadata()?;
-	if !protected(metadata.is_file(), metadata.uid(), metadata.mode()) {
+	if !protected(metadata.is_file(), owner, metadata.uid(), metadata.mode()) {
 		return Err(io::Error::other(
 			"rollback source must be a regular root-owned file without group or other write permission",
 		));
@@ -89,12 +99,19 @@ fn checked_file(dir: &File, name: &str) -> io::Result<File> {
 }
 
 /// Apply the same root ownership and write restrictions to source descriptors and parents.
-fn protected(expected_type: bool, uid: u32, mode: u32) -> bool {
-	expected_type && uid == 0 && mode & 0o022 == 0
+fn protected(expected_type: bool, owner: u32, uid: u32, mode: u32) -> bool {
+	expected_type && uid == owner && mode & 0o022 == 0
 }
 
-fn protected_directory(is_dir: bool, uid: u32, gid: u32, mode: u32, private: bool) -> bool {
-	protected(is_dir, uid, mode) && gid == 0 && (!private || mode & 0o777 == 0o700)
+fn protected_directory(
+	is_dir: bool,
+	owner: Owner,
+	uid: u32,
+	gid: u32,
+	mode: u32,
+	private: bool,
+) -> bool {
+	protected(is_dir, owner.0, uid, mode) && gid == owner.1 && (!private || mode & 0o777 == 0o700)
 }
 
 fn open_at(dir: &File, name: &[u8], flags: i32) -> io::Result<File> {

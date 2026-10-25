@@ -143,6 +143,7 @@ fn only_versions_pick_can_choose_reach_the_store() {
 		".12.3",
 		"12.3.",
 		"1..2",
+		"0.12.99999999999999999999",
 	] {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path();

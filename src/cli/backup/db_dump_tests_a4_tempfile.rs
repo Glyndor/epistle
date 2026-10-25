@@ -1,8 +1,8 @@
 //! Tests for the restore staging file. The SQL staged for a container
 //! restore carries credential hashes, so the host copy must be `0600` from
 //! the moment it is created and must not survive the restore, and the copy
-//! inside the container must land on a name unique to that restore, be
-//! tightened to `0600`, and be removed when the replay shell exits.
+//! inside the container must land on a name unique to that restore and be
+//! removed from the container once the replay is over.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -225,6 +225,22 @@ fn container_replay_script_uses_exec_psql() {
 	assert!(
 		!script.contains("rm -f"),
 		"the in-container removal has moved to the host; got: {script}"
+	);
+}
+
+/// The staged SQL carries the credential hashes of every account, so the
+/// replay shell forces the copy inside the container to `0600` before `psql`
+/// reads it, and does not start `psql` if it cannot.
+#[test]
+fn container_replay_script_restricts_the_copy_before_psql() {
+	let data_dir = tempfile::tempdir().expect("data_dir");
+	let compose = place_compose(data_dir.path());
+	let path = "/tmp/epistle-restore-1234-999.sql";
+	let spec = container_psql_load_spec(&compose, path, b"select 1;\n").expect("spec");
+	let script = spec.argv().last().expect("last argv");
+	assert!(
+		script.starts_with(&format!("chmod 600 '{path}' && ")),
+		"the copy must be restricted, and psql gated on it, got: {script}"
 	);
 }
 

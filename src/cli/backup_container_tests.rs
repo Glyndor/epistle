@@ -24,7 +24,7 @@ fn dump_shell() -> &'static str {
 
 fn restore_shell(path: &str) -> String {
 	format!(
-		"PGPASSWORD=\"$(cat '/run/secrets/epistle_db_password')\" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"
+		"chmod 600 '{path}' && PGPASSWORD=\"$(cat '/run/secrets/epistle_db_password')\" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"
 	)
 }
 

@@ -40,6 +40,16 @@ epistle_keep_binary() (
 	case "$1" in
 		''|.*|*.|*[!0-9.]*|*..*) return 1 ;;
 	esac
+	# `pick` reads every part into a 64-bit integer, which holds at most twenty
+	# digits and fails above 18446744073709551615. A part of twenty digits or
+	# more can therefore be unselectable while `sort -V` still ranks it newest
+	# and prunes the generations that can be chosen. Telling the ones that fit
+	# (a run of leading zeros, say) from the ones that do not takes arithmetic
+	# this script does not have, so it refuses the whole length and errs on the
+	# side of keeping the store selectable.
+	case "$1" in
+		*[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) return 1 ;;
+	esac
 	for parent in /usr /usr/bin; do
 		[ ! -L "$parent" ] && [ -d "$parent" ] \
 			&& [ "$(stat -c '%u:%g' -- "$parent")" = 0:0 ] || return 1
@@ -56,6 +66,16 @@ epistle_keep_binary() (
 	if [ -d "$rollback/epistle-$1" ] && [ ! -L "$rollback/epistle-$1" ]; then
 		return 0
 	fi
+	# After a manual `stack rollback` dpkg still records the newer version, so
+	# the binary being replaced is a copy already saved under its own name.
+	# Saving it again would label the old bytes with the version that is gone
+	# and push a real generation out of the store. Status 2 tells the caller
+	# that nothing was wrong, so it can say why nothing new was saved.
+	current=$(sha256sum /usr/bin/epistle | cut -d ' ' -f 1)
+	for saved in "$rollback"/epistle-*/epistle.sha256; do
+		[ -f "$saved" ] && [ ! -L "$saved" ] || continue
+		[ "$(cat "$saved")" != "$current" ] || return 2
+	done
 	# dpkg holds the maintainer script lock, so any leftover staging directory
 	# belongs to an interrupted earlier run.
 	find "$rollback" -mindepth 1 -maxdepth 1 -type d -name '.stage-*' \
@@ -88,8 +108,13 @@ install|upgrade)
 	if ! epistle_rollback_dir; then
 		echo "epistle: could not prepare the root-owned rollback store; rollback is unavailable" >&2
 	elif [ "$1" = upgrade ] && [ -n "${2:-}" ]; then
-		if ! epistle_keep_binary "$2"; then
-			echo "epistle: could not keep a copy of the $2 binary; epistle stack rollback will not be able to go back to it" >&2
+		if epistle_keep_binary "$2"; then
+			:
+		else
+			case $? in
+			2) echo "epistle: the binary being replaced is already saved under an earlier version, so it is not saved again as $2" >&2 ;;
+			*) echo "epistle: could not keep a copy of the $2 binary; epistle stack rollback will not be able to go back to it" >&2 ;;
+			esac
 		fi
 	fi
 	if [ -e /var/lib/glyndor/epistle/rollback ] || [ -L /var/lib/glyndor/epistle/rollback ]; then

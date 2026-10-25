@@ -76,6 +76,7 @@ fn a_failed_publication_leaves_the_previous_generation_installable() {
 	assert!(generation_installs(root, "0.12.1"));
 	let saved = listing(root);
 
+	std::fs::write(root.join("epistle"), "next binary").unwrap();
 	// The rename that publishes the next version fails.
 	let calls = fail_renames(root, 1);
 	let output = preinst(root, &["upgrade", "0.12.2"], "");
@@ -108,6 +109,7 @@ fn a_saved_version_is_published_with_a_single_rename() {
 	prepare(root);
 	assert!(preinst(root, &["upgrade", "0.12.1"], "").status.success());
 
+	std::fs::write(root.join("epistle"), "next binary").unwrap();
 	// The second rename fails: a copy published in two steps keeps the digest
 	// of one binary beside the bytes of another.
 	let calls = fail_renames(root, 2);
@@ -242,6 +244,7 @@ fn a_failure_to_create_the_temporary_saves_nothing_and_keeps_what_is_saved() {
 	assert!(generation_installs(root, "0.12.1"));
 	let saved = listing(root);
 
+	std::fs::write(root.join("epistle"), "next binary").unwrap();
 	// The exclusive temporary cannot be created at all.
 	wrap(root, "mktemp", "#!/bin/sh\nexit 1\n");
 	let output = preinst(root, &["upgrade", "0.12.2"], "");
@@ -256,4 +259,41 @@ fn a_failure_to_create_the_temporary_saves_nothing_and_keeps_what_is_saved() {
 		"without the exclusive temporary nothing is published"
 	);
 	assert!(generation_installs(root, "0.12.1"));
+}
+
+/// After a manual `stack rollback` dpkg still records the newer version, so
+/// the next upgrade replaces a binary that is already saved under its own
+/// name. Saving it again would label those bytes with the version that is
+/// gone and push a real generation out of the store.
+#[test]
+fn a_binary_already_saved_is_not_saved_again_under_the_next_name() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path();
+	prepare(root);
+	assert!(preinst(root, &["upgrade", "0.12.1"], "").status.success());
+	assert_eq!(listing(root), ["epistle-0.12.1"]);
+
+	// The operator rolled back to the copy saved as 0.12.1, then upgraded
+	// from the version dpkg still lists, 0.12.3.
+	let output = preinst(root, &["upgrade", "0.12.3"], "");
+	assert!(output.status.success(), "{output:?}");
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("already saved under an earlier version"),
+		"the upgrade must say why nothing new was saved: {output:?}"
+	);
+	assert!(
+		!stderr.contains("could not keep"),
+		"keeping what is saved is not a failure: {output:?}"
+	);
+	assert_eq!(
+		listing(root),
+		["epistle-0.12.1"],
+		"the bytes of 0.12.1 must not take the name of 0.12.3"
+	);
+
+	// A binary nobody saved still gets its own generation.
+	std::fs::write(root.join("epistle"), "a new binary").unwrap();
+	assert!(preinst(root, &["upgrade", "0.12.4"], "").status.success());
+	assert_eq!(listing(root), ["epistle-0.12.1", "epistle-0.12.4"]);
 }
