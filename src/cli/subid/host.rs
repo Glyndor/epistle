@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::mover::{Host, UNITS};
+use super::retry::{self, Failed};
 use super::shift::{self, Shift, Tally};
 use super::table::{ACCOUNT, Block};
 
@@ -145,9 +146,29 @@ impl Host for System {
 	}
 
 	fn usermod(&mut self, args: &[String]) -> Result<(), String> {
-		let mut command = Command::new("usermod");
-		command.args(args).arg(ACCOUNT).stdin(Stdio::null());
-		checked(command, &format!("usermod {} {ACCOUNT}", args.join(" ")))
+		let what = format!("usermod {} {ACCOUNT}", args.join(" "));
+		// Another tool can hold the lock on the tables for a moment; the
+		// message says so, and asking again a little later finds it free.
+		retry::run(retry::ATTEMPTS, retry::WAIT, || {
+			let output = Command::new("usermod")
+				.args(args)
+				.arg(ACCOUNT)
+				.stdin(Stdio::null())
+				.output()
+				.map_err(|error| Failed {
+					message: format!("cannot run `{what}`: {error}"),
+					transient: false,
+				})?;
+			if output.status.success() {
+				return Ok(());
+			}
+			let stderr = String::from_utf8_lossy(&output.stderr);
+			eprint!("{stderr}");
+			Err(Failed {
+				message: format!("`{what}` exited with {}", output.status),
+				transient: retry::is_lock_contention(&stderr),
+			})
+		})
 	}
 
 	fn active_units(&mut self) -> Result<Vec<String>, String> {
@@ -236,7 +257,27 @@ impl Host for System {
 		let manager = format!("user@{}.service", self.uid);
 		let mut command = Command::new("systemctl");
 		command.args(["start", &manager]);
-		checked(command, &format!("systemctl start {manager}"))
+		checked(command, &format!("systemctl start {manager}"))?;
+		// The job is done before the manager answers on its bus, and the
+		// units are started through that bus next.
+		let ready = retry::run(retry::MANAGER_ATTEMPTS, retry::WAIT, || {
+			let mut probe = self.account("systemctl");
+			probe.args(["--user", "show-environment"]);
+			probe.stdout(Stdio::null()).stderr(Stdio::null());
+			match probe.status() {
+				Ok(status) if status.success() => Ok(()),
+				_ => Err(Failed {
+					message: String::new(),
+					transient: true,
+				}),
+			}
+		});
+		if ready.is_err() {
+			self.log(&format!(
+				"the user manager of {ACCOUNT} did not answer on its bus; starting its units may fail"
+			));
+		}
+		Ok(())
 	}
 
 	fn account_processes(&mut self) -> Vec<String> {
