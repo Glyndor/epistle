@@ -39,11 +39,22 @@ pub fn account_root(data_dir: &Path, account: &str) -> Option<PathBuf> {
 /// The path is decoded, split on `/`, and walked component by component:
 /// `.` is skipped, a leading/empty segment is skipped, and `..` is rejected
 /// outright (we never pop, so there is no way to climb above the root). A NUL
-/// byte or any other control character anywhere is rejected, so a name can be
-/// written to a line-based file without being able to split the line. The result is always a descendant of `root`.
+/// byte or any other control character anywhere is rejected: no client sends
+/// one in a name, and listings and logs would have to escape it. The result is always a descendant of `root`.
 pub fn resolve(root: &Path, uri_path: &str) -> Option<PathBuf> {
+	resolve_with(root, uri_path, false)
+}
+
+/// Like [`resolve`] but a control character in a name is accepted, so a
+/// resource that was created before names were checked can still be reached
+/// to be removed or moved away. NUL is refused all the same.
+pub fn resolve_existing(root: &Path, uri_path: &str) -> Option<PathBuf> {
+	resolve_with(root, uri_path, true)
+}
+
+fn resolve_with(root: &Path, uri_path: &str, allow_control: bool) -> Option<PathBuf> {
 	let decoded = percent_decode(uri_path)?;
-	if decoded.chars().any(char::is_control) {
+	if decoded.contains('\0') || (!allow_control && decoded.chars().any(char::is_control)) {
 		return None;
 	}
 	let mut out = root.to_path_buf();

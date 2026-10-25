@@ -103,8 +103,9 @@ pub fn local_name(after: &str) -> Option<String> {
 	Some(name.rsplit(':').next().unwrap_or(name).to_string())
 }
 
-/// The longest entity body kept, the `#x10FFFF` of the highest code point.
-const MAX_ENTITY: usize = 8;
+/// The longest entity body decoded: room for the `#x10FFFF` of the highest
+/// code point after a run of leading zeros. A longer one is kept as text.
+const MAX_ENTITY: usize = 32;
 
 /// Replace the five predefined XML entities and numeric character
 /// references in `text`. An unknown or malformed entity is kept verbatim.

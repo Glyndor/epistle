@@ -88,3 +88,14 @@ fn resolve_refuses_a_name_with_a_control_character() {
 	assert!(resolve(root, "/d/a%20b").is_some());
 	assert!(!has_control_char("/d/a%20b"));
 }
+
+#[test]
+fn resolve_existing_reaches_a_name_with_a_control_character_but_not_nul() {
+	let root = Path::new("/r");
+	assert_eq!(
+		resolve_existing(root, "/d/a%0Ab"),
+		Some(PathBuf::from("/r/d/a\nb"))
+	);
+	assert!(resolve_existing(root, "/d/a%00b").is_none());
+	assert!(resolve_existing(root, "/d/../a%0Ab").is_none());
+}

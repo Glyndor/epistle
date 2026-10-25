@@ -166,6 +166,34 @@ the log.
 | `spf-max-void-lookups` | 2 | count | should | RFC 7208 §4.6.4 (void lookups limited to 2) |
 | `tls-minimum-version` | 1.2 | version | must | RFC 8996 (TLS 1.0/1.1 prohibited) |
 
+## WebDAV, CalDAV and CardDAV bounds
+
+These bounds are fixed in the server and are not in the catalog above,
+because `limits set` cannot change them. They keep one request from costing
+more than a fixed amount of work or memory:
+
+- A request body for `REPORT`, `MKCOL` or the scheduling outbox
+  is read up to 1 MiB; more is `413`. A file `PUT` is read up to 50 MiB,
+  except a `.ics` or `.vcf`, which is held to 4 MiB (`413`).
+- A `calendar-multiget` or `addressbook-multiget` may name 1000 distinct
+  resources. Two spellings of one resource count once. More is `413`.
+- A `calendar-query`, `addressbook-query` or `free-busy-query` body is read up
+  to 64 KiB; more is `413`.
+- The body of a report reply is at most about 24 MiB, counted after escaping.
+  A resource that does not fit is answered with its own `507` inside the `207`,
+  and the client asks for it on its own. A query that runs out ends with a
+  `507` on the collection carrying `DAV:number-of-matches-within-limits`, and
+  keeps the results that fitted. A file too long for any reply is answered
+  `507` by name too, never left out.
+- A first `sync-collection` lists at most 50000 members; a collection with more
+  answers `507` with `DAV:number-of-matches-within-limits`. Its data, when
+  asked for, follows the reply budget above.
+- A resource name with a control character is refused (`400`). A file made
+  earlier under such a name can still be removed or moved away.
+
+The `413` and `507` answers of a report carry
+`DAV:number-of-matches-within-limits` in a `DAV:error` body.
+
 ## Failing a MUST or a SHOULD
 
 `epistle limits set` runs the candidate value through three checks in

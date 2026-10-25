@@ -221,12 +221,39 @@ fn sync_props(entry: &Entry) -> String {
 
 /// Escape the XML special characters for safe interpolation into the body.
 pub fn escape(value: &str) -> String {
+	let mut out = String::with_capacity(escaped_len(value));
+	escape_into(&mut out, value);
+	out
+}
+
+/// The XML entity for `c`, when it needs one.
+fn entity(c: char) -> Option<&'static str> {
+	match c {
+		'&' => Some("&amp;"),
+		'<' => Some("&lt;"),
+		'>' => Some("&gt;"),
+		'"' => Some("&quot;"),
+		'\'' => Some("&apos;"),
+		_ => None,
+	}
+}
+
+/// Append `value`, escaped, to `out` in one pass.
+pub fn escape_into(out: &mut String, value: &str) {
+	for c in value.chars() {
+		match entity(c) {
+			Some(text) => out.push_str(text),
+			None => out.push(c),
+		}
+	}
+}
+
+/// How many bytes [`escape_into`] appends for `value`.
+pub fn escaped_len(value: &str) -> usize {
 	value
-		.replace('&', "&amp;")
-		.replace('<', "&lt;")
-		.replace('>', "&gt;")
-		.replace('"', "&quot;")
-		.replace('\'', "&apos;")
+		.chars()
+		.map(|c| entity(c).map_or(c.len_utf8(), str::len))
+		.sum()
 }
 
 #[cfg(test)]

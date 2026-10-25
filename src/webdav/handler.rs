@@ -20,6 +20,7 @@ use super::caldav;
 use super::carddav;
 use super::path;
 use super::propfind;
+use super::report_bounds::MAX_RESOURCE_BYTES;
 
 #[path = "handler_propfind.rs"]
 mod propfind_handler;
@@ -55,6 +56,9 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 /// `epistle limits set`: an Internet standard does not require a specific
 /// size for a DAV resource, only that the server advertises the limit it
 /// will accept.
+///
+/// A `.ics` or `.vcf` is held to [`MAX_RESOURCE_BYTES`] instead, the most a
+/// report can always hand back on its own.
 const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
 
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
@@ -84,10 +88,18 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
 	let uri_path = request.uri().path().to_string();
-	if path::has_control_char(&uri_path) {
+	// A name with a control character cannot be created any more, but one
+	// made earlier can still be removed or moved away.
+	let legacy_name =
+		path::has_control_char(&uri_path) && matches!(request.method().as_str(), "DELETE" | "MOVE");
+	if path::has_control_char(&uri_path) && !legacy_name {
 		return StatusCode::BAD_REQUEST.into_response();
 	}
-	let Some(target) = path::resolve(&root, &uri_path) else {
+	let Some(target) = (if legacy_name {
+		path::resolve_existing(&root, &uri_path)
+	} else {
+		path::resolve(&root, &uri_path)
+	}) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
 	// A symlink anywhere along the path is an escape attempt: refuse before
@@ -331,7 +343,13 @@ async fn put(target: &Path, request: Request) -> Response {
 		return StatusCode::FORBIDDEN.into_response();
 	}
 	let existed = target.is_file();
-	let body = match read_body_capped(request.into_body(), PUT_BODY_LIMIT).await {
+	let limit =
+		if caldav::is_ics_path(&uri_name(target)) || carddav::is_vcard_path(&uri_name(target)) {
+			MAX_RESOURCE_BYTES as usize
+		} else {
+			PUT_BODY_LIMIT
+		};
+	let body = match read_body_capped(request.into_body(), limit).await {
 		Ok(bytes) => bytes,
 		Err(response) => return *response,
 	};
@@ -345,6 +363,14 @@ async fn put(target: &Path, request: Request) -> Response {
 		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 	}
+}
+
+/// The last path component of `target`, for judging its extension.
+fn uri_name(target: &Path) -> String {
+	target
+		.file_name()
+		.map(|name| name.to_string_lossy().into_owned())
+		.unwrap_or_default()
 }
 
 /// Build the success response for a completed `PUT`: `204`/`201` carrying the

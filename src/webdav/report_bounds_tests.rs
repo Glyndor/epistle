@@ -6,41 +6,49 @@ fn names(list: &[&str]) -> Vec<String> {
 
 #[test]
 fn a_repeated_href_counts_once_and_keeps_its_place() {
-	let got = distinct_hrefs(names(&["/a", "/b", "/a", "/b", "/c"]), 3).expect("fits");
+	let root = Path::new("/r");
+	let got = distinct_hrefs(root, names(&["/a", "/b", "/a", "/b", "/c"]), 3).expect("fits");
 	assert_eq!(got, names(&["/a", "/b", "/c"]));
 }
 
 #[test]
+fn two_spellings_of_one_resource_count_once() {
+	let root = Path::new("/r");
+	let spellings = names(&["/a.ics", "/./a.ics", "//a.ics", "/%61.ics", "/x/../a.ics"]);
+	let got = distinct_hrefs(root, spellings, 2);
+	// `/x/../a.ics` is refused by `resolve` and stays a distinct key.
+	assert_eq!(got.map(|v| v.len()), Ok(2));
+	let got = distinct_hrefs(root, names(&["/a.ics", "/./a.ics", "/%61.ics"]), 1);
+	assert_eq!(got, Ok(names(&["/a.ics"])));
+}
+
+#[test]
 fn more_distinct_hrefs_than_the_cap_are_refused() {
+	let root = Path::new("/r");
 	assert_eq!(
-		distinct_hrefs(names(&["/a", "/b", "/c"]), 2),
+		distinct_hrefs(root, names(&["/a", "/b", "/c"]), 2),
 		Err(Refusal::TooManyHrefs)
 	);
-	assert!(distinct_hrefs(names(&["/a", "/b", "/a"]), 2).is_ok());
+	assert!(distinct_hrefs(root, names(&["/a", "/b", "/a"]), 2).is_ok());
 }
 
-#[test]
-fn the_budget_refuses_what_does_not_fit() {
-	let mut budget = Budget::new(10);
-	assert!(budget.charge(4).is_ok());
-	assert!(budget.charge(6).is_ok());
-	assert_eq!(budget.charge(1), Err(Refusal::TooLarge));
-}
-
-#[test]
-fn the_refusals_answer_with_standard_codes() {
-	assert_eq!(
-		Refusal::TooManyHrefs.response().status(),
-		StatusCode::PAYLOAD_TOO_LARGE
-	);
-	assert_eq!(
-		Refusal::BodyTooLarge.response().status(),
-		StatusCode::PAYLOAD_TOO_LARGE
-	);
-	assert_eq!(
-		Refusal::TooLarge.response().status(),
-		StatusCode::INSUFFICIENT_STORAGE
-	);
+#[tokio::test]
+async fn the_refusals_answer_with_standard_codes_and_the_condition() {
+	for (refusal, status) in [
+		(Refusal::TooManyHrefs, StatusCode::PAYLOAD_TOO_LARGE),
+		(Refusal::BodyTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+		(Refusal::TooManyMembers, StatusCode::INSUFFICIENT_STORAGE),
+	] {
+		let response = refusal.response();
+		assert_eq!(response.status(), status);
+		let body = axum::body::to_bytes(response.into_body(), 4096)
+			.await
+			.expect("body");
+		assert!(
+			String::from_utf8_lossy(&body).contains("<D:number-of-matches-within-limits/>"),
+			"{refusal:?}"
+		);
+	}
 }
 
 #[tokio::test]
@@ -52,26 +60,7 @@ async fn a_capped_read_stops_at_the_limit() {
 	assert!(read_capped(&file, 99).await.is_none());
 }
 
-#[tokio::test]
-async fn a_member_larger_than_what_is_left_is_refused_unread() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let file = dir.path().join("f");
-	std::fs::write(&file, vec![b'x'; 100]).expect("write");
-	let mut budget = Budget::new(150);
-	assert!(
-		read_member(&file, &mut budget)
-			.await
-			.expect("fits")
-			.is_some()
-	);
-	assert!(matches!(
-		read_member(&file, &mut budget).await,
-		Err(Refusal::TooLarge)
-	));
-	assert!(
-		read_member(&dir.path().join("missing"), &mut budget)
-			.await
-			.expect("skipped")
-			.is_none()
-	);
+#[test]
+fn the_reply_limit_holds_the_worst_escaped_resource() {
+	const { assert!(MAX_REPORT_BYTES > MAX_RESOURCE_BYTES * ESCAPE_EXPANSION) };
 }

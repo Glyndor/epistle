@@ -35,10 +35,9 @@ use super::caldav_hrefs::hrefs;
 #[cfg(test)]
 use super::caldav_hrefs::{SCAN_STEPS, find_open};
 use super::path;
-use super::propfind::escape;
+use super::reply::{Added, Reply};
 use super::report_bounds::{
-	Budget, MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs,
-	read_capped, read_member,
+	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
 };
 use super::rrule;
 
@@ -130,23 +129,20 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	};
 	match kind {
 		ReportKind::Multiget => {
-			let wanted = match distinct_hrefs(hrefs(&text), MAX_REPORT_HREFS) {
+			let wanted = match distinct_hrefs(root, hrefs(&text), MAX_REPORT_HREFS) {
 				Ok(wanted) => wanted,
 				Err(refusal) => return refusal.response(),
 			};
-			let mut entries = Vec::new();
-			let mut budget = Budget::standard();
+			let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
 			for href in wanted {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
-					&& let Err(refusal) =
-						push_event(&mut entries, &href, &resolved, &mut budget).await
 				{
-					return refusal.response();
+					push_event(&mut reply, &href, &resolved).await;
 				}
 			}
-			multistatus(&entries).into_response()
+			reply.finish("")
 		}
 		ReportKind::Query => {
 			if body.len() > MAX_FILTER_BODY {
@@ -156,14 +152,10 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 				Ok(filter) => filter,
 				Err(_) => return super::caldav_filter::unsupported_filter_response(),
 			};
-			let mut entries = Vec::new();
-			let mut budget = Budget::standard();
-			if let Err(refusal) =
-				collect_events_filtered(root, target, &filter, &mut entries, &mut budget).await
-			{
-				return refusal.response();
-			}
-			multistatus(&entries).into_response()
+			let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
+			let request = super::href::resource(root, target).unwrap_or_default();
+			collect_events_filtered(root, target, &filter, &request, &mut reply).await;
+			reply.finish("")
 		}
 		ReportKind::FreeBusy => {
 			if body.len() > MAX_FILTER_BODY {
@@ -482,31 +474,30 @@ fn vfreebusy(start: i64, end: i64, periods: &[Period]) -> String {
 	out
 }
 
-/// One event line in a `calendar-data` multi-status: its href, the file bytes,
-/// and the ETag.
-struct Event {
-	href: String,
-	data: Vec<u8>,
-	etag: String,
-}
+/// The opening of a `calendar-data` multistatus.
+const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+	<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n";
 
-/// Read an event at `disk` and, if it is a readable file, append it under
-/// `href`. A missing file is skipped — matching how a multiget treats an
-/// unknown href.
-async fn push_event(
-	entries: &mut Vec<Event>,
-	href: &str,
-	disk: &Path,
-	budget: &mut Budget,
-) -> Result<(), Refusal> {
-	if let Some((data, metadata)) = read_member(disk, budget).await? {
-		entries.push(Event {
-			href: href.to_string(),
-			data,
-			etag: super::carddav::etag(&metadata),
-		});
+/// Read the event at `disk` and, if it is a readable file, add it under
+/// `href`. A missing file is skipped, matching how a multiget treats an
+/// unknown href; one that does not fit what is left of the reply is
+/// answered `507` so the client asks for it on its own.
+async fn push_event(reply: &mut Reply, href: &str, disk: &Path) {
+	let Ok(metadata) = tokio::fs::metadata(disk).await else {
+		return;
+	};
+	if !metadata.is_file() {
+		return;
 	}
-	Ok(())
+	let etag = super::carddav::etag(&metadata);
+	match read_capped(disk, metadata.len().min(reply.remaining())).await {
+		Some(data) => {
+			if reply.member(href, &etag, Some(("C:calendar-data", &data))) == Added::NoRoom {
+				reply.too_large(href);
+			}
+		}
+		None => reply.too_large(href),
+	}
 }
 
 /// Append every `.ics` directly inside the `collection` directory to
@@ -519,11 +510,11 @@ async fn collect_events_filtered(
 	root: &Path,
 	collection: &Path,
 	filter: &super::caldav_filter::CalendarQueryFilter,
-	entries: &mut Vec<Event>,
-	budget: &mut Budget,
-) -> Result<(), Refusal> {
+	request: &str,
+	reply: &mut Reply,
+) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
-		return Ok(());
+		return;
 	};
 	while let Ok(Some(child)) = dir.next_entry().await {
 		let Ok(kind) = child.file_type().await else {
@@ -548,8 +539,17 @@ async fn collect_events_filtered(
 		if !metadata.is_file() {
 			continue;
 		}
-		// A file longer than a whole reply could never be returned.
+		let Some(href) = super::href::resource(root, &child.path()) else {
+			continue;
+		};
+		// A file longer than a whole reply can be neither filtered nor
+		// returned: say so instead of leaving it out.
+		if metadata.len() > MAX_REPORT_BYTES {
+			reply.too_large(&href);
+			continue;
+		}
 		let Some(data) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
+			reply.too_large(&href);
 			continue;
 		};
 		// Apply the filter. An empty filter (no `comp-filter`
@@ -558,43 +558,17 @@ async fn collect_events_filtered(
 		if !super::caldav_filter::matches(filter, &text) {
 			continue;
 		}
-		let Some(href) = super::href::resource(root, &child.path()) else {
+		let etag = super::carddav::etag(&metadata);
+		if reply.member(&href, &etag, Some(("C:calendar-data", &data))) == Added::Yes {
 			continue;
-		};
-		budget.charge(data.len() as u64)?;
-		entries.push(Event {
-			href,
-			data,
-			etag: super::carddav::etag(&metadata),
-		});
+		}
+		if reply.members() == 0 {
+			reply.too_large(&href);
+		} else {
+			reply.truncated(request);
+			return;
+		}
 	}
-	Ok(())
-}
-
-/// Build the `calendar-data` `207 Multi-Status` for the collected events.
-fn multistatus(entries: &[Event]) -> Response {
-	let mut body = String::from(
-		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n",
-	);
-	for entry in entries {
-		let data = escape(&String::from_utf8_lossy(&entry.data));
-		body.push_str(&format!(
-			"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
-			\t\t\t\t<D:getetag>{etag}</D:getetag>\n\
-			\t\t\t\t<C:calendar-data>{data}</C:calendar-data>\n\
-			\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
-			href = escape(&entry.href),
-			etag = escape(&entry.etag),
-		));
-	}
-	body.push_str("</D:multistatus>\n");
-	(
-		StatusCode::MULTI_STATUS,
-		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
-		body,
-	)
-		.into_response()
 }
 
 #[cfg(test)]

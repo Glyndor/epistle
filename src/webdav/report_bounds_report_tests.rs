@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 
 use crate::webdav::{caldav, carddav};
 
-use super::{MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS};
+use super::{MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, MAX_RESOURCE_BYTES};
 
 async fn text(response: axum::response::Response) -> (StatusCode, String) {
 	let status = response.status();
@@ -27,27 +27,47 @@ fn card_multiget(hrefs: impl Iterator<Item = String>) -> String {
 	multiget(carddav::CARDDAV_NS, "addressbook-multiget", hrefs)
 }
 
-#[tokio::test]
-async fn a_multiget_naming_too_many_distinct_hrefs_is_refused() {
+fn root() -> (tempfile::TempDir, std::path::PathBuf) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let root = dir.path().canonicalize().expect("root");
+	(dir, root)
+}
+
+fn file_of(path: std::path::PathBuf, len: u64, byte: u8) {
+	std::fs::write(path, vec![byte; len as usize]).expect("write");
+}
+
+#[tokio::test]
+async fn a_multiget_naming_too_many_distinct_hrefs_is_refused() {
+	let (_dir, root) = root();
 	let many = (0..=MAX_REPORT_HREFS).map(|n| format!("/e{n}.ics"));
-	let response = caldav::report(&root, &root, calendar_multiget(many).as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+	let (status, body) =
+		text(caldav::report(&root, &root, calendar_multiget(many).as_bytes()).await).await;
+	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+	assert!(body.contains("number-of-matches-within-limits"));
 	let many = (0..=MAX_REPORT_HREFS).map(|n| format!("/c{n}.vcf"));
 	let response = carddav::report(&root, &root, card_multiget(many).as_bytes()).await;
 	assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]
-async fn a_repeated_href_is_answered_once() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let root = dir.path().canonicalize().expect("root");
+async fn a_resource_named_twice_is_answered_once() {
+	let (_dir, root) = root();
 	std::fs::write(root.join("a.ics"), b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n").expect("write");
 	std::fs::write(root.join("a.vcf"), b"BEGIN:VCARD\r\nEND:VCARD\r\n").expect("write");
-	let repeated = (0..5 * MAX_REPORT_HREFS).map(|_| "/a.ics".to_string());
-	let (status, body) =
-		text(caldav::report(&root, &root, calendar_multiget(repeated).as_bytes()).await).await;
+	let mut spellings: Vec<String> = (0..5 * MAX_REPORT_HREFS)
+		.map(|_| "/a.ics".to_string())
+		.collect();
+	spellings.extend(["/./a.ics", "//a.ics", "/%61.ics"].map(String::from));
+	let (status, body) = text(
+		caldav::report(
+			&root,
+			&root,
+			calendar_multiget(spellings.into_iter()).as_bytes(),
+		)
+		.await,
+	)
+	.await;
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	assert_eq!(body.matches("<D:response>").count(), 1);
 	let repeated = (0..5 * MAX_REPORT_HREFS).map(|_| "/a.vcf".to_string());
@@ -57,57 +77,115 @@ async fn a_repeated_href_is_answered_once() {
 	assert_eq!(body.matches("<D:response>").count(), 1);
 }
 
-/// A file just over half the reply budget, so two names for it overflow it.
-fn big_file(path: &std::path::Path) {
-	std::fs::write(path, vec![b'x'; MAX_REPORT_BYTES as usize / 2 + 1]).expect("write");
+/// The biggest stored resource, made of the byte that grows most when
+/// escaped, is returned on its own and complete.
+#[tokio::test]
+async fn the_largest_stored_resource_is_returned_whole() {
+	let (_dir, root) = root();
+	file_of(root.join("big.ics"), MAX_RESOURCE_BYTES, b'"');
+	file_of(root.join("big.vcf"), MAX_RESOURCE_BYTES, b'"');
+	let once = ["/big.ics".to_string()].into_iter();
+	let (status, body) =
+		text(caldav::report(&root, &root, calendar_multiget(once).as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	// The quotes of the etag add two.
+	assert_eq!(
+		body.matches("&quot;").count() as u64,
+		MAX_RESOURCE_BYTES + 2
+	);
+	assert!(body.len() as u64 <= MAX_REPORT_BYTES);
+	let once = ["/big.vcf".to_string()].into_iter();
+	let (status, body) =
+		text(carddav::report(&root, &root, card_multiget(once).as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	// The quotes of the etag add two.
+	assert_eq!(
+		body.matches("&quot;").count() as u64,
+		MAX_RESOURCE_BYTES + 2
+	);
 }
 
+/// Seven resources of the largest stored size do not fit one reply: the ones
+/// that fit are returned and the rest are answered `507` by name.
 #[tokio::test]
-async fn a_multiget_reply_over_the_byte_budget_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let root = dir.path().canonicalize().expect("root");
-	big_file(&root.join("a.ics"));
-	big_file(&root.join("a.vcf"));
-	let twice = ["/a.ics", "/./a.ics"].map(String::from).into_iter();
-	let response = caldav::report(&root, &root, calendar_multiget(twice).as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
-	let twice = ["/a.vcf", "/./a.vcf"].map(String::from).into_iter();
-	let response = carddav::report(&root, &root, card_multiget(twice).as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
-	let once = ["/a.ics".to_string()].into_iter();
-	let response = caldav::report(&root, &root, calendar_multiget(once).as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::MULTI_STATUS);
-}
-
-#[tokio::test]
-async fn a_query_reply_over_the_byte_budget_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let root = dir.path().canonicalize().expect("root");
-	for name in ["a.ics", "b.ics"] {
-		big_file(&root.join(name));
+async fn a_multiget_that_outgrows_the_reply_answers_the_rest_with_507() {
+	let (_dir, root) = root();
+	let names: Vec<String> = (0..7).map(|n| format!("/e{n}.ics")).collect();
+	for name in &names {
+		file_of(root.join(&name[1..]), MAX_RESOURCE_BYTES, b'x');
 	}
-	for name in ["a.vcf", "b.vcf"] {
-		big_file(&root.join(name));
+	let (status, body) = text(
+		caldav::report(
+			&root,
+			&root,
+			calendar_multiget(names.clone().into_iter()).as_bytes(),
+		)
+		.await,
+	)
+	.await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert_eq!(body.matches("200 OK").count(), 6);
+	assert_eq!(body.matches("507 Insufficient Storage").count(), 1);
+	assert!(body.contains("<D:href>/e6.ics</D:href>\n\t\t<D:status>HTTP/1.1 507"));
+	assert!(body.len() as u64 <= MAX_REPORT_BYTES + 4096);
+}
+
+/// A query that outgrows the reply keeps what fitted and ends with the
+/// truncation condition on the collection; it never drops a match quietly.
+#[tokio::test]
+async fn a_query_that_outgrows_the_reply_says_it_was_cut() {
+	let (_dir, root) = root();
+	for n in 0..7 {
+		file_of(root.join(format!("e{n}.ics")), MAX_RESOURCE_BYTES, b'x');
+		file_of(root.join(format!("c{n}.vcf")), MAX_RESOURCE_BYTES, b'x');
 	}
 	let query = format!("<C:calendar-query xmlns:C=\"{}\"/>", caldav::CALDAV_NS);
-	let response = caldav::report(&root, &root, query.as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
+	let (status, body) = text(caldav::report(&root, &root, query.as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert_eq!(body.matches("200 OK").count(), 6);
+	assert!(body.contains("<D:number-of-matches-within-limits/>"));
 	let query = format!("<C:addressbook-query xmlns:C=\"{}\"/>", carddav::CARDDAV_NS);
-	let response = carddav::report(&root, &root, query.as_bytes()).await;
-	assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
+	let (status, body) = text(carddav::report(&root, &root, query.as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert_eq!(body.matches("200 OK").count(), 6);
+	assert!(body.contains("<D:number-of-matches-within-limits/>"));
+}
+
+/// A file too long for any reply (one stored before the limit on a resource,
+/// or moved in from elsewhere) is listed with its own `507`, not skipped.
+#[tokio::test]
+async fn a_file_longer_than_any_reply_is_answered_507_not_skipped() {
+	let (_dir, root) = root();
+	std::fs::write(
+		root.join("small.ics"),
+		b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+	)
+	.expect("write");
+	let huge = std::fs::File::create(root.join("huge.ics")).expect("create");
+	huge.set_len(MAX_REPORT_BYTES + 1).expect("sparse");
+	let query = format!("<C:calendar-query xmlns:C=\"{}\"/>", caldav::CALDAV_NS);
+	let (status, body) = text(caldav::report(&root, &root, query.as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert!(body.contains("/small.ics"));
+	assert!(body.contains("<D:href>/huge.ics</D:href>\n\t\t<D:status>HTTP/1.1 507"));
+	let once = ["/huge.ics".to_string()].into_iter();
+	let (status, body) =
+		text(caldav::report(&root, &root, calendar_multiget(once).as_bytes()).await).await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	assert!(body.contains("<D:href>/huge.ics</D:href>\n\t\t<D:status>HTTP/1.1 507"));
 }
 
 #[tokio::test]
 async fn a_query_or_free_busy_body_over_the_cap_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let root = dir.path().canonicalize().expect("root");
+	let (_dir, root) = root();
 	let pad = " ".repeat(MAX_FILTER_BODY);
 	for body in [
 		format!("<C:calendar-query xmlns:C=\"x\">{pad}</C:calendar-query>"),
 		format!("<C:free-busy-query xmlns:C=\"x\">{pad}</C:free-busy-query>"),
 	] {
-		let response = caldav::report(&root, &root, body.as_bytes()).await;
-		assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+		let (status, text) = text(caldav::report(&root, &root, body.as_bytes()).await).await;
+		assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+		assert!(text.contains("number-of-matches-within-limits"));
 	}
 	let body = format!("<C:addressbook-query xmlns:C=\"x\">{pad}</C:addressbook-query>");
 	let response = carddav::report(&root, &root, body.as_bytes()).await;
