@@ -22,7 +22,7 @@ fn stub(env: &Env, row: &str, exit: i32, stderr: &str) -> PathBuf {
 	std::fs::write(
 		&shim,
 		"#!/bin/sh\nd=\"$(dirname \"$0\")\"\n\
-		 if [ \"$1\" = \"--version\" ]; then echo 'podup version v5.10.13'; exit 0; fi\n\
+		 if [ \"$1\" = \"--version\" ]; then echo 'podup version v5.12.0'; exit 0; fi\n\
 		 printf '%s\\n' \"$*\" >> \"$d/calls.txt\"\n\
 		 cat \"$d/row.txt\"\ncat \"$d/stderr.txt\" >&2\nexit \"$(cat \"$d/exit.txt\")\"\n",
 	)
