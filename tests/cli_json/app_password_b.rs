@@ -206,15 +206,15 @@ fn labels_are_bounded_and_printable() {
 	phone(&env);
 	let too_long = "x".repeat(65);
 	for (label, needle) in [
-		("", "must not be empty"),
-		("   ", "must not be empty"),
-		(" padded", "must not start or end with a space"),
-		("padded ", "must not start or end with a space"),
-		("b\u{202e}idi", "invisible formatting characters"),
-		("zero\u{200b}width", "invisible formatting characters"),
-		("tab\there", "control characters"),
-		("esc\u{1b}[2J", "control characters"),
-		(too_long.as_str(), "at most 64 characters"),
+		("", "it is empty"),
+		("   ", "it is empty"),
+		(" padded", "starts or ends with a space"),
+		("padded ", "starts or ends with a space"),
+		("b\u{202e}idi", "invisible formatting character"),
+		("zero\u{200b}width", "invisible formatting character"),
+		("tab\there", "is a control character"),
+		("esc\u{1b}[2J", "is a control character"),
+		(too_long.as_str(), "the limit is 64"),
 	] {
 		let (code, stdout, stderr) = plain(&env, &["rename", "bob", "phone", label, "--json"]);
 		assert_eq!(
