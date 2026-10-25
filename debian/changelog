@@ -1,6 +1,6 @@
 epistle (0.12.3) UNRELEASED; urgency=medium
 
-  * The package requires podup 5.12.0 or newer, and `epistle stack` refuses an older one.
+  * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
   * Expose per-account connection limits in the operator limits catalog.
   * Document how to expose the management API on a private interface, and warn
     when an API key pinned to a network sits behind a bridge that hides the

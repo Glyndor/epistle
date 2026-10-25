@@ -141,7 +141,7 @@ pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
 	let shim = bin.join("podup");
 	std::fs::write(
 		&shim,
-		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.12.0'; exit 0; fi\n\
+		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.13.0'; exit 0; fi\n\
 		 echo \"podup says: $*\"\nexit 0\n",
 	)
 	.expect("write shim");

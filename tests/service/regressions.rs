@@ -18,7 +18,7 @@ fn ports(path: &std::path::Path) -> serde_json::Value {
 fn podup_fixture(bin: &std::path::Path) {
 	helpers::install_podup_shim(
 		bin,
-		"#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'podup version v5.12.0'; fi\nexit 0\n",
+		"#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'podup version v5.13.0'; fi\nexit 0\n",
 	);
 	let runtime = bin.join("runtime");
 	fs::create_dir_all(runtime.join("podman")).unwrap();
