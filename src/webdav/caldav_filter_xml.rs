@@ -69,7 +69,12 @@ pub fn matching_close(body: &str, start: usize, tag: &str) -> Option<(usize, usi
 		} else {
 			// A nested element of the same name opens one more level,
 			// unless it closes itself (`<C:comp-filter name="X"/>`).
-			let gt = at + body[at..].find('>')?;
+			// The next `<` before a `>` makes the tag malformed, and
+			// stopping there keeps the whole scan linear.
+			let gt = at + 1 + body[at + 1..].find(['>', '<'])?;
+			if bytes[gt] == b'<' {
+				return None;
+			}
 			let open_tag = &body[at + 1..gt];
 			if local_name(open_tag).as_deref() == Some(tag) && !open_tag.ends_with('/') {
 				depth += 1;
@@ -98,6 +103,10 @@ pub fn local_name(after: &str) -> Option<String> {
 	Some(name.rsplit(':').next().unwrap_or(name).to_string())
 }
 
+/// The longest entity body decoded: room for the `#x10FFFF` of the highest
+/// code point after a run of leading zeros. A longer one is kept as text.
+const MAX_ENTITY: usize = 32;
+
 /// Replace the five predefined XML entities and numeric character
 /// references in `text`. An unknown or malformed entity is kept verbatim.
 pub fn unescape(text: &str) -> String {
@@ -106,8 +115,13 @@ pub fn unescape(text: &str) -> String {
 	while let Some(amp) = rest.find('&') {
 		out.push_str(&rest[..amp]);
 		let tail = &rest[amp..];
-		let Some(semi) = tail.find(';') else {
-			break;
+		// No entity is longer than `MAX_ENTITY` bytes, so the search for the
+		// `;` never looks further than that.
+		let window = &tail.as_bytes()[1..tail.len().min(MAX_ENTITY + 2)];
+		let Some(semi) = window.iter().position(|b| *b == b';').map(|at| at + 1) else {
+			out.push('&');
+			rest = &tail[1..];
+			continue;
 		};
 		let entity = &tail[1..semi];
 		let decoded = match entity {
@@ -265,3 +279,7 @@ pub fn children(content: &str) -> Option<Vec<(String, Element<'_>)>> {
 	}
 	Some(out)
 }
+
+#[cfg(test)]
+#[path = "caldav_filter_xml_tests.rs"]
+mod tests;

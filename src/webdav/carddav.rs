@@ -22,11 +22,15 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use super::path;
-use super::propfind::escape;
+use super::reply::{Added, Reply};
+use super::report_bounds::{
+	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
+	wants_data,
+};
 
 /// The CardDAV XML namespace.
 pub const CARDDAV_NS: &str = "urn:ietf:params:xml:ns:carddav";
@@ -108,53 +112,67 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let Some(kind) = report_kind(&text) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
-	let mut entries = Vec::new();
+	let data = wants_data(&text, "address-data");
+	let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
 	match kind {
 		ReportKind::Multiget => {
-			for href in hrefs(&text) {
+			let wanted = match distinct_hrefs(root, hrefs(&text), MAX_REPORT_HREFS) {
+				Ok(wanted) => wanted,
+				Err(refusal) => return refusal.response(),
+			};
+			for href in wanted {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
 				{
-					push_card(&mut entries, &href, &resolved).await;
+					push_card(&mut reply, &href, &resolved, data).await;
 				}
 			}
 		}
 		ReportKind::Query => {
+			if body.len() > MAX_FILTER_BODY {
+				return Refusal::BodyTooLarge.response();
+			}
 			let filter = match super::carddav_filter::parse(&text) {
 				Ok(filter) => filter,
 				Err(_) => return super::carddav_filter::unsupported_filter_response(),
 			};
-			collect_cards_filtered(root, target, &filter, &mut entries).await;
+			let request = super::href::resource(root, target).unwrap_or_default();
+			collect_cards_filtered(root, target, &filter, &request, &mut reply, data).await;
 		}
 	}
-	multistatus(&entries).into_response()
+	reply.finish("")
 }
 
-/// One card line in an `address-data` multi-status: its href, the file bytes,
-/// and the ETag.
-struct Card {
-	href: String,
-	data: Vec<u8>,
-	etag: String,
-}
+/// The opening of an `address-data` multistatus.
+const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+	<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n";
 
-/// Read a card at `disk` and, if it is a readable file, append it to `entries`
-/// under `href`. A missing file or read error is skipped (it simply does not
-/// appear in the 207) — matching how a multiget treats an unknown href.
-async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
+/// Read the card at `disk` and, if it is a readable file, add it under
+/// `href`. A missing file is skipped, matching how a multiget treats an
+/// unknown href; one that does not fit what is left of the reply is
+/// answered `507` so the client asks for it on its own.
+async fn push_card(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
 	let Ok(metadata) = tokio::fs::metadata(disk).await else {
 		return;
 	};
 	if !metadata.is_file() {
 		return;
 	}
-	if let Ok(data) = tokio::fs::read(disk).await {
-		entries.push(Card {
-			href: href.to_string(),
-			data,
-			etag: etag(&metadata),
-		});
+	let etag = etag(&metadata);
+	if !data {
+		if reply.member(href, &etag, None) == Added::NoRoom {
+			reply.too_large(href);
+		}
+		return;
+	}
+	match read_capped(disk, metadata.len().min(reply.remaining())).await {
+		Some(bytes) => {
+			if reply.member(href, &etag, Some(("C:address-data", &bytes))) == Added::NoRoom {
+				reply.too_large(href);
+			}
+		}
+		None => reply.too_large(href),
 	}
 }
 
@@ -168,7 +186,9 @@ async fn collect_cards_filtered(
 	root: &Path,
 	collection: &Path,
 	filter: &super::carddav_filter::AddressbookQueryFilter,
-	entries: &mut Vec<Card>,
+	request: &str,
+	reply: &mut Reply,
+	data: bool,
 ) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -196,23 +216,39 @@ async fn collect_cards_filtered(
 		if !metadata.is_file() {
 			continue;
 		}
-		let Ok(data) = tokio::fs::read(child.path()).await else {
+		let Some(href) = super::href::resource(root, &child.path()) else {
+			continue;
+		};
+		// A file longer than a whole reply can be neither filtered nor
+		// returned: say so instead of leaving it out.
+		if metadata.len() > MAX_REPORT_BYTES {
+			reply.too_large(&href);
+			continue;
+		}
+		let Some(bytes) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
+			reply.too_large(&href);
 			continue;
 		};
 		// Apply the filter. An empty filter (no `prop-filter`
 		// children) is a no-op, so the call is cheap.
-		let text = String::from_utf8_lossy(&data);
+		let text = String::from_utf8_lossy(&bytes);
 		if !super::carddav_filter::matches(filter, &text) {
 			continue;
 		}
-		entries.push(Card {
-			href: match super::href::resource(root, &child.path()) {
-				Some(href) => href,
-				None => continue,
-			},
-			data,
-			etag: etag(&metadata),
-		});
+		if reply.member(
+			&href,
+			&etag(&metadata),
+			data.then_some(("C:address-data", &bytes[..])),
+		) == Added::Yes
+		{
+			continue;
+		}
+		if reply.members() == 0 {
+			reply.too_large(&href);
+		} else {
+			reply.truncated(request);
+			return;
+		}
 	}
 }
 
@@ -313,32 +349,6 @@ fn find_open(body: &str, local: &str) -> Option<usize> {
 /// Read in tests to assert the body scan is linear, not quadratic.
 #[cfg(test)]
 static SCAN_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Build the `address-data` `207 Multi-Status` for the collected cards.
-fn multistatus(entries: &[Card]) -> Response {
-	let mut body = String::from(
-		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n",
-	);
-	for entry in entries {
-		let data = escape(&String::from_utf8_lossy(&entry.data));
-		body.push_str(&format!(
-			"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
-			\t\t\t\t<D:getetag>{etag}</D:getetag>\n\
-			\t\t\t\t<C:address-data>{data}</C:address-data>\n\
-			\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
-			href = escape(&entry.href),
-			etag = escape(&entry.etag),
-		));
-	}
-	body.push_str("</D:multistatus>\n");
-	(
-		StatusCode::MULTI_STATUS,
-		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
-		body,
-	)
-		.into_response()
-}
 
 #[cfg(test)]
 #[path = "carddav_tests.rs"]

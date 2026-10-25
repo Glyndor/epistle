@@ -31,8 +31,15 @@ use std::path::Path;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
+use super::caldav_hrefs::hrefs;
+#[cfg(test)]
+use super::caldav_hrefs::{SCAN_STEPS, find_open};
 use super::path;
-use super::propfind::escape;
+use super::reply::{Added, Reply};
+use super::report_bounds::{
+	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
+	wants_data,
+};
 use super::rrule;
 
 /// The CalDAV XML namespace.
@@ -121,29 +128,43 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let Some(kind) = report_kind(&text) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
+	let data = wants_data(&text, "calendar-data");
 	match kind {
 		ReportKind::Multiget => {
-			let mut entries = Vec::new();
-			for href in hrefs(&text) {
+			let wanted = match distinct_hrefs(root, hrefs(&text), MAX_REPORT_HREFS) {
+				Ok(wanted) => wanted,
+				Err(refusal) => return refusal.response(),
+			};
+			let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
+			for href in wanted {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
 				{
-					push_event(&mut entries, &href, &resolved).await;
+					push_event(&mut reply, &href, &resolved, data).await;
 				}
 			}
-			multistatus(&entries).into_response()
+			reply.finish("")
 		}
 		ReportKind::Query => {
+			if body.len() > MAX_FILTER_BODY {
+				return Refusal::BodyTooLarge.response();
+			}
 			let filter = match super::caldav_filter::parse(&text) {
 				Ok(filter) => filter,
 				Err(_) => return super::caldav_filter::unsupported_filter_response(),
 			};
-			let mut entries = Vec::new();
-			collect_events_filtered(root, target, &filter, &mut entries).await;
-			multistatus(&entries).into_response()
+			let mut reply = Reply::new(HEAD, MAX_REPORT_BYTES);
+			let request = super::href::resource(root, target).unwrap_or_default();
+			collect_events_filtered(root, target, &filter, &request, &mut reply, data).await;
+			reply.finish("")
 		}
-		ReportKind::FreeBusy => free_busy_report(target, &text).await,
+		ReportKind::FreeBusy => {
+			if body.len() > MAX_FILTER_BODY {
+				return Refusal::BodyTooLarge.response();
+			}
+			free_busy_report(target, &text).await
+		}
 	}
 }
 
@@ -455,30 +476,35 @@ fn vfreebusy(start: i64, end: i64, periods: &[Period]) -> String {
 	out
 }
 
-/// One event line in a `calendar-data` multi-status: its href, the file bytes,
-/// and the ETag.
-struct Event {
-	href: String,
-	data: Vec<u8>,
-	etag: String,
-}
+/// The opening of a `calendar-data` multistatus.
+const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+	<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n";
 
-/// Read an event at `disk` and, if it is a readable file, append it under
-/// `href`. A missing file is skipped — matching how a multiget treats an
-/// unknown href.
-async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
+/// Read the event at `disk` and, if it is a readable file, add it under
+/// `href`. A missing file is skipped, matching how a multiget treats an
+/// unknown href; one that does not fit what is left of the reply is
+/// answered `507` so the client asks for it on its own.
+async fn push_event(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
 	let Ok(metadata) = tokio::fs::metadata(disk).await else {
 		return;
 	};
 	if !metadata.is_file() {
 		return;
 	}
-	if let Ok(data) = tokio::fs::read(disk).await {
-		entries.push(Event {
-			href: href.to_string(),
-			data,
-			etag: super::carddav::etag(&metadata),
-		});
+	let etag = super::carddav::etag(&metadata);
+	if !data {
+		if reply.member(href, &etag, None) == Added::NoRoom {
+			reply.too_large(href);
+		}
+		return;
+	}
+	match read_capped(disk, metadata.len().min(reply.remaining())).await {
+		Some(bytes) => {
+			if reply.member(href, &etag, Some(("C:calendar-data", &bytes))) == Added::NoRoom {
+				reply.too_large(href);
+			}
+		}
+		None => reply.too_large(href),
 	}
 }
 
@@ -492,7 +518,9 @@ async fn collect_events_filtered(
 	root: &Path,
 	collection: &Path,
 	filter: &super::caldav_filter::CalendarQueryFilter,
-	entries: &mut Vec<Event>,
+	request: &str,
+	reply: &mut Reply,
+	data: bool,
 ) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -520,135 +548,41 @@ async fn collect_events_filtered(
 		if !metadata.is_file() {
 			continue;
 		}
-		let Ok(data) = tokio::fs::read(child.path()).await else {
+		let Some(href) = super::href::resource(root, &child.path()) else {
+			continue;
+		};
+		// A file longer than a whole reply can be neither filtered nor
+		// returned: say so instead of leaving it out.
+		if metadata.len() > MAX_REPORT_BYTES {
+			reply.too_large(&href);
+			continue;
+		}
+		let Some(bytes) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
+			reply.too_large(&href);
 			continue;
 		};
 		// Apply the filter. An empty filter (no `comp-filter`
 		// children) is a no-op, so the call is cheap.
-		let text = String::from_utf8_lossy(&data);
+		let text = String::from_utf8_lossy(&bytes);
 		if !super::caldav_filter::matches(filter, &text) {
 			continue;
 		}
-		entries.push(Event {
-			href: match super::href::resource(root, &child.path()) {
-				Some(href) => href,
-				None => continue,
-			},
-			data,
-			etag: super::carddav::etag(&metadata),
-		});
-	}
-}
-
-/// Extract every `<...:href>VALUE</...:href>` value from a REPORT body, matching
-/// on the local name `href` regardless of namespace prefix.
-fn hrefs(body: &str) -> Vec<String> {
-	let mut out = Vec::new();
-	let mut rest = body;
-	while let Some(start) = find_open(rest, "href") {
-		let after = &rest[start..];
-		let Some(close) = after.find('>') else {
-			break;
-		};
-		let value_start = close + 1;
-		let Some(end) = after[value_start..].find('<') else {
-			break;
-		};
-		let value = after[value_start..value_start + end].trim();
-		if !value.is_empty() {
-			out.push(value.to_string());
-		}
-		rest = &after[value_start + end..];
-	}
-	out
-}
-
-/// Find the byte index of an opening tag whose local name is `local`, allowing
-/// an optional `prefix:`.
-///
-/// The implementation walks the body once, byte by byte. The previous
-/// quadratic version restarted the search from the cursor after every
-/// non-match, and `tag.split(['>', ' ', '/']).next()` returned the whole
-/// remaining tail as one piece when the tag was unclosed, so a body of
-/// N unclosed tags cost O(N²) bytes touched. The linear scan advances
-/// past the tag name in one jump and bounds the name by the next `<`
-/// when no closing delimiter is found, so the total stays O(N) bytes
-/// touched. The byte counter [`SCAN_STEPS`] is exposed for tests that
-/// want to assert the bound.
-fn find_open(body: &str, local: &str) -> Option<usize> {
-	let bytes = body.as_bytes();
-	let needle = local.as_bytes();
-	let mut i = 0;
-	while i < bytes.len() {
-		#[cfg(test)]
+		let etag = super::carddav::etag(&metadata);
+		if reply.member(
+			&href,
+			&etag,
+			data.then_some(("C:calendar-data", &bytes[..])),
+		) == Added::Yes
 		{
-			SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		}
-		if bytes[i] != b'<' {
-			i += 1;
 			continue;
 		}
-		let name_start = i + 1;
-		let mut name_end = name_start;
-		while name_end < bytes.len() {
-			#[cfg(test)]
-			{
-				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-			}
-			let c = bytes[name_end];
-			if c == b'>' || c == b' ' || c == b'/' || c == b'<' {
-				break;
-			}
-			name_end += 1;
+		if reply.members() == 0 {
+			reply.too_large(&href);
+		} else {
+			reply.truncated(request);
+			return;
 		}
-		let mut local_start = name_start;
-		for (k, b) in bytes[name_start..name_end].iter().enumerate() {
-			#[cfg(test)]
-			{
-				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-			}
-			if *b == b':' {
-				local_start = name_start + k + 1;
-			}
-		}
-		let local_len = name_end - local_start;
-		if local_len == needle.len() && &bytes[local_start..name_end] == needle {
-			return Some(i);
-		}
-		i = name_end.max(i + 1);
 	}
-	None
-}
-
-/// Per-process counter of how many bytes the report scanner compared.
-/// Read in tests to assert the body scan is linear, not quadratic.
-#[cfg(test)]
-static SCAN_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Build the `calendar-data` `207 Multi-Status` for the collected events.
-fn multistatus(entries: &[Event]) -> Response {
-	let mut body = String::from(
-		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\n",
-	);
-	for entry in entries {
-		let data = escape(&String::from_utf8_lossy(&entry.data));
-		body.push_str(&format!(
-			"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
-			\t\t\t\t<D:getetag>{etag}</D:getetag>\n\
-			\t\t\t\t<C:calendar-data>{data}</C:calendar-data>\n\
-			\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
-			href = escape(&entry.href),
-			etag = escape(&entry.etag),
-		));
-	}
-	body.push_str("</D:multistatus>\n");
-	(
-		StatusCode::MULTI_STATUS,
-		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
-		body,
-	)
-		.into_response()
 }
 
 #[cfg(test)]

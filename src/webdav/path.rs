@@ -39,10 +39,22 @@ pub fn account_root(data_dir: &Path, account: &str) -> Option<PathBuf> {
 /// The path is decoded, split on `/`, and walked component by component:
 /// `.` is skipped, a leading/empty segment is skipped, and `..` is rejected
 /// outright (we never pop, so there is no way to climb above the root). A NUL
-/// byte anywhere is rejected. The result is always a descendant of `root`.
+/// byte or any other control character anywhere is rejected: no client sends
+/// one in a name, and listings and logs would have to escape it. The result is always a descendant of `root`.
 pub fn resolve(root: &Path, uri_path: &str) -> Option<PathBuf> {
+	resolve_with(root, uri_path, false)
+}
+
+/// Like [`resolve`] but a control character in a name is accepted, so a
+/// resource that was created before names were checked can still be reached
+/// to be removed or moved away. NUL is refused all the same.
+pub fn resolve_existing(root: &Path, uri_path: &str) -> Option<PathBuf> {
+	resolve_with(root, uri_path, true)
+}
+
+fn resolve_with(root: &Path, uri_path: &str, allow_control: bool) -> Option<PathBuf> {
 	let decoded = percent_decode(uri_path)?;
-	if decoded.contains('\0') {
+	if decoded.contains('\0') || (!allow_control && decoded.chars().any(char::is_control)) {
 		return None;
 	}
 	let mut out = root.to_path_buf();
@@ -167,6 +179,12 @@ pub fn confine_parent_for_write(target: &Path, root: &Path) -> bool {
 		}
 	}
 	true
+}
+
+/// Whether the decoded form of `uri_path` holds a control character, which no
+/// resource name may carry. A path that does not decode is not judged here.
+pub fn has_control_char(uri_path: &str) -> bool {
+	percent_decode(uri_path).is_some_and(|decoded| decoded.chars().any(char::is_control))
 }
 
 /// Decode `%XX` percent-escapes in a URI path into a UTF-8 string, or `None`

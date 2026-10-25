@@ -4,6 +4,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * Bound the work and the memory of a POP3 session: it reads an index at sign-in and one message at a time, and refuses a message above a fixed size.
   * CI: the workflows that emit a required check also run on the merge queue, and a check keeps that from regressing.
   * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
+  * Bound the work and the memory of WebDAV, CalDAV and CardDAV reports: a multiget names at most 1000 distinct resources, a reply is at most about 24 MiB after escaping, a resource that does not fit is answered `507` by name instead of being left out, a stored `.ics` or `.vcf` is at most 4 MiB, and a resource name with a control character is refused with `400`. The bounds are listed in `docs/limits.md`.
   * Expose per-account connection limits in the operator limits catalog.
   * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.
   * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` is shown as the RFC minimum it is, which `limits set` refuses to lower.
