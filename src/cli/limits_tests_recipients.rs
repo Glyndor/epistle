@@ -93,9 +93,12 @@ fn a_configured_message_size_below_64k_is_raised_to_it_with_a_warning() {
 	let config = crate::config::Config::load(file.path()).expect("it still loads");
 	assert_eq!(config.max_message_size, Some(65536));
 	let [line] = config.adjusted.as_slice() else {
-		panic!("one line expected: {:?}", config.adjusted)
+		panic!("one line expected")
 	};
-	assert!(line.contains("1000 bytes"), "the value in the file: {line}");
+	assert!(
+		line.contains("1000 bytes"),
+		"the line names the value in the file"
+	);
 	assert!(
 		line.contains("65536 bytes are used"),
 		"the value in use: {line}"
@@ -113,7 +116,10 @@ fn a_message_size_of_zero_or_at_the_floor_is_not_adjusted() {
 		let text = std::fs::read_to_string(file.path()).expect("config");
 		std::fs::write(file.path(), format!("max_message_size = {value}\n{text}")).expect("write");
 		let config = crate::config::Config::load(file.path()).expect("loads");
-		assert!(config.adjusted.is_empty(), "{value}: {:?}", config.adjusted);
+		assert!(
+			config.adjusted.is_empty(),
+			"a value at or above the floor is not adjusted"
+		);
 	}
 }
 

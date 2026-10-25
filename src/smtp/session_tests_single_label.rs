@@ -59,7 +59,7 @@ fn a_single_label_reverse_path_is_refused() {
 	assert_eq!(code, 553);
 	assert!(
 		text.contains("5.1.7"),
-		"the refusal names the reverse-path code: {text}"
+		"the refusal names the reverse-path code"
 	);
 }
 
@@ -72,7 +72,7 @@ fn a_single_label_recipient_is_refused() {
 	assert_eq!(code, 553);
 	assert!(
 		text.contains("5.1.3"),
-		"the refusal names the recipient code: {text}"
+		"the refusal names the recipient code"
 	);
 }
 
@@ -101,7 +101,7 @@ fn the_domain_less_postmaster_is_refused_today() {
 	assert_eq!(code, 553);
 	assert!(
 		text.contains("5.1.3"),
-		"the refusal names the recipient code: {text}"
+		"the refusal names the recipient code"
 	);
 }
 
@@ -114,6 +114,6 @@ fn the_domain_less_postmaster_is_refused_as_a_reverse_path() {
 	assert_eq!(code, 553);
 	assert!(
 		text.contains("5.1.7"),
-		"the refusal names the reverse-path code: {text}"
+		"the refusal names the reverse-path code"
 	);
 }

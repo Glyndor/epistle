@@ -171,7 +171,7 @@ fn the_flat_api_key_create_reads_a_date_and_a_duration() {
 		};
 		match legacy.into_resource().1 {
 			Resource::ApiKey(ApiKeyCli::Create { expires_at, .. }) => expires_at,
-			other => panic!("not api-key create: {other:?}"),
+			_ => panic!("not api-key create"),
 		}
 	};
 	assert_eq!(expiry("2100-01-01"), Some(4_102_444_800));

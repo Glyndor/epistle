@@ -72,7 +72,7 @@ fn host_dump_that_failed_after_partial_output_is_refused() {
 		Err(BackupError::CommandFailed { code, .. }) => {
 			assert_eq!(code, Some(23), "the dump tool's exit status must surface")
 		}
-		other => panic!("a failed dump must not be accepted, got {other:?}"),
+		_ => panic!("a failed dump must not be accepted"),
 	}
 }
 
@@ -86,7 +86,7 @@ fn container_dump_that_failed_after_partial_output_is_refused() {
 		Err(BackupError::CommandFailed { code, .. }) => {
 			assert_eq!(code, Some(23), "the dump tool's exit status must surface")
 		}
-		other => panic!("a failed dump must not be accepted, got {other:?}"),
+		_ => panic!("a failed dump must not be accepted"),
 	}
 }
 
@@ -100,7 +100,7 @@ fn failed_dump_without_output_reports_the_failure() {
 		Err(BackupError::CommandFailed { code, .. }) => {
 			assert_eq!(code, Some(7), "the dump tool's exit status must surface")
 		}
-		other => panic!("a failed dump must not be accepted, got {other:?}"),
+		_ => panic!("a failed dump must not be accepted"),
 	}
 }
 
@@ -138,7 +138,7 @@ fn truncated_dump_with_clean_exit_is_refused() {
 	let result = dump_with_stub(stubs.path(), "pg_dump", false, "-- partial schema\n", 0);
 	match result {
 		Err(BackupError::TruncatedDump) => {}
-		other => panic!("a truncated dump must be refused as TruncatedDump, got {other:?}"),
+		_ => panic!("a truncated dump must be refused as TruncatedDump"),
 	}
 }
 

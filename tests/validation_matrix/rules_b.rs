@@ -91,8 +91,8 @@ fn a_password_answers_the_same_under_both_policies() {
 	let at_64 = fixture_password(64);
 	let at_65 = fixture_password(65);
 	for (what, value, ascii, unicode) in [
-		("empty", "", false, false),
-		("one character", "a", false, false),
+		("empty", fixture_password(0).as_str(), false, false),
+		("one character", fixture_password(1).as_str(), false, false),
 		("at 11 characters", &fixture_password(11), false, false),
 		("at 12 characters", &fixture_password(12), true, true),
 		("at 64 characters", at_64.as_str(), true, true),
