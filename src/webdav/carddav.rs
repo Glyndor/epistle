@@ -27,6 +27,10 @@ use axum::response::{IntoResponse, Response};
 
 use super::path;
 use super::propfind::escape;
+use super::report_bounds::{
+	Budget, MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs,
+	read_capped, read_member,
+};
 
 /// The CardDAV XML namespace.
 pub const CARDDAV_NS: &str = "urn:ietf:params:xml:ns:carddav";
@@ -109,23 +113,37 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
 	let mut entries = Vec::new();
+	let mut budget = Budget::standard();
 	match kind {
 		ReportKind::Multiget => {
-			for href in hrefs(&text) {
+			let wanted = match distinct_hrefs(hrefs(&text), MAX_REPORT_HREFS) {
+				Ok(wanted) => wanted,
+				Err(refusal) => return refusal.response(),
+			};
+			for href in wanted {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
 					&& let Some(href) = super::href::resource(root, &resolved)
+					&& let Err(refusal) =
+						push_card(&mut entries, &href, &resolved, &mut budget).await
 				{
-					push_card(&mut entries, &href, &resolved).await;
+					return refusal.response();
 				}
 			}
 		}
 		ReportKind::Query => {
+			if body.len() > MAX_FILTER_BODY {
+				return Refusal::BodyTooLarge.response();
+			}
 			let filter = match super::carddav_filter::parse(&text) {
 				Ok(filter) => filter,
 				Err(_) => return super::carddav_filter::unsupported_filter_response(),
 			};
-			collect_cards_filtered(root, target, &filter, &mut entries).await;
+			if let Err(refusal) =
+				collect_cards_filtered(root, target, &filter, &mut entries, &mut budget).await
+			{
+				return refusal.response();
+			}
 		}
 	}
 	multistatus(&entries).into_response()
@@ -142,20 +160,20 @@ struct Card {
 /// Read a card at `disk` and, if it is a readable file, append it to `entries`
 /// under `href`. A missing file or read error is skipped (it simply does not
 /// appear in the 207) — matching how a multiget treats an unknown href.
-async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
-	let Ok(metadata) = tokio::fs::metadata(disk).await else {
-		return;
-	};
-	if !metadata.is_file() {
-		return;
-	}
-	if let Ok(data) = tokio::fs::read(disk).await {
+async fn push_card(
+	entries: &mut Vec<Card>,
+	href: &str,
+	disk: &Path,
+	budget: &mut Budget,
+) -> Result<(), Refusal> {
+	if let Some((data, metadata)) = read_member(disk, budget).await? {
 		entries.push(Card {
 			href: href.to_string(),
 			data,
 			etag: etag(&metadata),
 		});
 	}
+	Ok(())
 }
 
 /// Append every `.vcf` directly inside the `collection` directory to
@@ -169,9 +187,10 @@ async fn collect_cards_filtered(
 	collection: &Path,
 	filter: &super::carddav_filter::AddressbookQueryFilter,
 	entries: &mut Vec<Card>,
-) {
+	budget: &mut Budget,
+) -> Result<(), Refusal> {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
-		return;
+		return Ok(());
 	};
 	while let Ok(Some(child)) = dir.next_entry().await {
 		let Ok(kind) = child.file_type().await else {
@@ -196,7 +215,8 @@ async fn collect_cards_filtered(
 		if !metadata.is_file() {
 			continue;
 		}
-		let Ok(data) = tokio::fs::read(child.path()).await else {
+		// A file longer than a whole reply could never be returned.
+		let Some(data) = read_capped(&child.path(), MAX_REPORT_BYTES).await else {
 			continue;
 		};
 		// Apply the filter. An empty filter (no `prop-filter`
@@ -205,15 +225,17 @@ async fn collect_cards_filtered(
 		if !super::carddav_filter::matches(filter, &text) {
 			continue;
 		}
+		let Some(href) = super::href::resource(root, &child.path()) else {
+			continue;
+		};
+		budget.charge(data.len() as u64)?;
 		entries.push(Card {
-			href: match super::href::resource(root, &child.path()) {
-				Some(href) => href,
-				None => continue,
-			},
+			href,
 			data,
 			etag: etag(&metadata),
 		});
 	}
+	Ok(())
 }
 
 /// Extract every `<...:href>VALUE</...:href>` value from a REPORT body. The

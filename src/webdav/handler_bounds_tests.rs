@@ -362,3 +362,48 @@ async fn propfind_malformed_depth_returns_400_wire() {
 		);
 	}
 }
+
+/// A name holding a control character is refused for every method that
+/// would create it, and the collection's change log stays readable.
+#[tokio::test]
+async fn a_name_with_a_control_character_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	send(&app, "MKCOL", "/d", Some(&alice()), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(&alice()), &[], b"a").await;
+	for name in ["a%0Ab.txt", "a%09b.txt"] {
+		let (status, _) = send(
+			&app,
+			"PUT",
+			&format!("/d/{name}"),
+			Some(&alice()),
+			&[],
+			b"x",
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "PUT {name}");
+		let (status, _) = send(
+			&app,
+			"MKCOL",
+			&format!("/d/{name}"),
+			Some(&alice()),
+			&[],
+			b"",
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "MKCOL {name}");
+		let destination = format!("http://localhost/d/{name}");
+		let (status, _) = send(
+			&app,
+			"COPY",
+			"/d/a.txt",
+			Some(&alice()),
+			&[("Destination", destination)],
+			b"",
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "COPY {name}");
+	}
+	let (status, _) = send(&app, "PUT", "/d/b.txt", Some(&alice()), &[], b"x").await;
+	assert!(status.is_success());
+}

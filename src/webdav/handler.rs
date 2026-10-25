@@ -84,6 +84,9 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
 	let uri_path = request.uri().path().to_string();
+	if path::has_control_char(&uri_path) {
+		return StatusCode::BAD_REQUEST.into_response();
+	}
 	let Some(target) = path::resolve(&root, &uri_path) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
@@ -440,6 +443,13 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	};
 	if source_meta.file_type().is_symlink() {
 		return StatusCode::FORBIDDEN.into_response();
+	}
+	if headers
+		.get("Destination")
+		.and_then(|value| value.to_str().ok())
+		.is_some_and(|raw| path::has_control_char(strip_to_path(raw)))
+	{
+		return StatusCode::BAD_REQUEST.into_response();
 	}
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();

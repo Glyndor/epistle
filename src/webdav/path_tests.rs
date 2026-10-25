@@ -77,3 +77,14 @@ fn resolve_result_is_always_under_root() {
 		assert!(resolved.starts_with(root), "{path} escaped root");
 	}
 }
+
+#[test]
+fn resolve_refuses_a_name_with_a_control_character() {
+	let root = Path::new("/r");
+	for name in ["a%09b", "a%0Ab", "a%0db", "a%1Fb", "a%7Fb", "a%C2%85b"] {
+		assert!(resolve(root, &format!("/d/{name}")).is_none(), "{name}");
+		assert!(has_control_char(&format!("/d/{name}")), "{name}");
+	}
+	assert!(resolve(root, "/d/a%20b").is_some());
+	assert!(!has_control_char("/d/a%20b"));
+}
