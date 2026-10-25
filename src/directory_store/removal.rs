@@ -263,6 +263,19 @@ pub async fn remove_account(
 	let mailbox_root = account_root(data_dir, name).map_err(StoreError::Io)?;
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
 
+	// The blobs uploaded into the account's own partition.
+	if let Some(partition) = crate::storage::BlobAccount::new(name) {
+		match crate::api::jmap::blob_path::account_dir(data_dir, &partition) {
+			Ok(dir) => {
+				if remove_mailbox_dir(&dir).map_err(StoreError::Io)? > 0 {
+					fs::remove_dir(&dir).map_err(StoreError::Io)?;
+				}
+			}
+			Err(error) if error.kind() == ErrorKind::NotFound => {}
+			Err(error) => return Err(StoreError::Io(error)),
+		}
+	}
+
 	// Clear every ban row keyed on this account name so a recreated
 	// account does not inherit a ban from its predecessor.
 	if let Some(ban_store) = store.ban_store() {
@@ -295,6 +308,11 @@ pub async fn remove_account(
 		None => 0,
 	};
 
+	// Keys bound to this name go with the account.
+	crate::api::api_keys::ApiKeyStore::open(data_dir)
+		.and_then(|mut keys| keys.revoke_bound_to(name))
+		.map_err(StoreError::Io)?;
+
 	store.remove(name)?;
 
 	Ok(Removed {
@@ -320,3 +338,7 @@ mod containment_tests;
 #[cfg(test)]
 #[path = "removal_tests_class.rs"]
 mod class_tests;
+
+#[cfg(test)]
+#[path = "removal_tests_keys.rs"]
+mod key_tests;

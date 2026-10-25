@@ -178,6 +178,7 @@ pub async fn remove(
 	)
 	.await
 	.map_err(store_error)?;
+	crate::api::jmap::push_subscription::forget_account(&state, &name);
 	audit::log_account_removal(&name, client_ip.0, &counts);
 	Ok(Json(RemovedResponse {
 		removed: name,

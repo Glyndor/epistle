@@ -178,10 +178,8 @@ fn match_filters(
 		if !reachable.contains(tag) {
 			return false;
 		}
-		// The tag is a name, and a name outlives the account that held it.
 		// The sender of the record must also sit inside the caller's
-		// domains, the rule the queue applies, so a record written under an
-		// earlier holder of the name stays out of reach.
+		// domains, the rule the queue applies.
 		if !caller.admits_sender(&record.from) {
 			return false;
 		}

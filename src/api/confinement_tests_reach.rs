@@ -1,6 +1,6 @@
-//! Edges of the reach of a confined key: a name that outlives its account,
-//! the answer for an account that is not the caller's, a binding its domains
-//! do not reach, and two keys behind one secret.
+//! Edges of the reach of a confined key: records by sender domain, the
+//! answer for an account that is not the caller's, a binding its domains do
+//! not reach, and two keys behind one secret.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -26,11 +26,10 @@ fn record(account: &str, from: &str, recipient: &str) -> DeliveryRecord {
 	}
 }
 
-/// A record is tagged with an account name. A key that now holds that name
-/// in its own domain does not inherit the records written when another
-/// tenant held it.
+/// A record carries an account name and a sender. A key confined to some
+/// domains lists only the records whose sender is inside them.
 #[tokio::test]
-async fn a_reused_account_name_does_not_inherit_earlier_records() {
+async fn records_follow_the_sender_domain() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), DEFAULT_DELIVERY_LOG_DAYS);
 	log.append(&record("carol", "carol@b.example", "one@elsewhere.example"))

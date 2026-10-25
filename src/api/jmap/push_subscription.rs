@@ -42,6 +42,25 @@ impl StoredSubscription {
 	}
 }
 
+/// Drop the subscriptions kept for the account `name`, which a removed
+/// account leaves behind under its name.
+pub(crate) fn forget_account(state: &ApiState, name: &str) {
+	state.with_push_subscriptions(|store| drop_account_subscriptions(store, name));
+}
+
+fn drop_account_subscriptions(store: &mut Vec<StoredSubscription>, name: &str) {
+	store.retain(|stored| {
+		stored
+			.owner
+			.strip_prefix("account:")
+			.is_none_or(|own| !own.eq_ignore_ascii_case(name))
+	});
+}
+
+#[cfg(test)]
+#[path = "push_subscription_tests.rs"]
+mod tests;
+
 /// The stable identity of the caller behind `principal`, the key subscriptions
 /// are stored under. A credential bound to one account is that account, so
 /// every key bound to it shares the account's subscriptions. Any other key is

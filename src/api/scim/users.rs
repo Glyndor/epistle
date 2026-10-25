@@ -397,6 +397,7 @@ pub async fn delete_user(
 	)
 	.await
 	.map_err(store_to_scim)?;
+	crate::api::jmap::push_subscription::forget_account(&state, &id);
 	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
 	audit::log_account_removal(&id, None, &counts);
 	Ok(StatusCode::NO_CONTENT)
