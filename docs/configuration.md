@@ -1216,7 +1216,10 @@ broadcast addresses are rejected. IPv4-mapped, IPv4-compatible, NAT64
 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are classified using their
 embedded IPv4 address, and a transition address is refused on its own even
 when that payload is global, so the clock refuses exactly what a
-`public_ipv6` value is refused for. IPv6 zone identifiers such as `fe80::1%eth0` or `fe80::1%1`
+`public_ipv6` value is refused for. The NAT64 prefix your operator uses is not
+known to the probe, so a NAT64 address under a prefix other than
+`64:ff9b::/96` is read as a plain IPv6 address and the IPv4 it carries is not
+classified. IPv6 zone identifiers such as `fe80::1%eth0` or `fe80::1%1`
 are not supported and are rejected with a configuration error, even with
 the opt-in, so the destination has to be one that needs no zone. Directed
 broadcast addresses cannot be identified without the destination
