@@ -365,7 +365,7 @@ fn resolve_oauth_pair(
 			// `OAuthPairIncomplete` so the operator sees the same
 			// shape of error whether they hit it in `plan` or
 			// `apply`.
-			let private_bytes = std::fs::read(private_path)
+			let private_bytes = crate::cli::regular_read::read(private_path)
 				.map_err(|error| ApplyError::KeyWrite(private_path.to_path_buf(), error))?;
 			let private_text = std::str::from_utf8(&private_bytes).map_err(|_| {
 				ApplyError::OAuthPairIncomplete(format!(
@@ -380,7 +380,7 @@ fn resolve_oauth_pair(
 						private_path.display()
 					))
 				})?;
-			let public_bytes = std::fs::read(public_path)
+			let public_bytes = crate::cli::regular_read::read(public_path)
 				.map_err(|error| ApplyError::KeyWrite(public_path.to_path_buf(), error))?;
 			let public_text = std::str::from_utf8(&public_bytes).map_err(|_| {
 				ApplyError::OAuthPairIncomplete(format!(
@@ -537,7 +537,7 @@ fn managed_key_count(answers: &Answers) -> usize {
 /// state is unknown.
 fn compose_is_identical_to_desired(answers: &Answers) -> Result<bool, ApplyError> {
 	let path = compose::compose_file_path(&answers.data_dir);
-	let existing = match std::fs::read_to_string(&path) {
+	let existing = match crate::cli::regular_read::read_to_string(&path) {
 		Ok(text) => text,
 		Err(_) => return Ok(false),
 	};

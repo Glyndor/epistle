@@ -259,7 +259,8 @@ fn credential_reference<R: BufRead, W: Write>(
 	loop {
 		let raw = ui.hidden("DNS credential reference")?;
 		let valid = if file {
-			std::path::Path::new(&raw).is_absolute() && !raw.chars().any(char::is_control)
+			std::path::Path::new(&raw).is_absolute()
+				&& !raw.chars().any(|c| c.is_control() || c == '$')
 		} else {
 			let mut chars = raw.chars();
 			chars

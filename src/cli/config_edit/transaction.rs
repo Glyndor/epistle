@@ -1,7 +1,7 @@
 //! Prepare both service files before replacing either, with verified rollback.
 
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -54,49 +54,20 @@ struct Opened {
 	metadata: Metadata,
 }
 
+/// `compose.yaml` is often a symlink into another directory of the
+/// installation, so the link is followed. The shared reader opens once, never
+/// waits for a fifo, and takes the bytes and the metadata from that one
+/// descriptor, so a path swapped between the check and the read does not
+/// decide what is staged.
 fn read(path: &Path) -> Result<Opened, String> {
-	let mut options = OpenOptions::new();
-	options.read(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-	}
-	let mut file = match options.open(path) {
-		Ok(file) => file,
-		// `compose.yaml` is often a symlink into another directory of the
-		// installation, and the writers before the staged transaction read
-		// and replaced it through the link. `O_NOFOLLOW` would turn every
-		// command that touches it into "Too many levels of symbolic links",
-		// so the link is followed here and only a fifo or a device is
-		// refused.
-		Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-			// One open, following the link, then everything is read from that
-			// descriptor: a path checked first and opened afterwards could be
-			// swapped between the two.
-			let mut followed = OpenOptions::new();
-			followed.read(true);
-			{
-				use std::os::unix::fs::OpenOptionsExt;
-				followed.custom_flags(libc::O_NONBLOCK);
-			}
-			let mut link = followed.open(path).map_err(|e| e.to_string())?;
-			let metadata = link.metadata().map_err(|e| e.to_string())?;
-			if !metadata.is_file() {
-				return Err(format!("{} must be a regular file", path.display()));
-			}
-			let mut bytes = Vec::new();
-			link.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-			return Ok(Opened { bytes, metadata });
+	use crate::cli::regular_read::{is_not_regular, read_with_metadata};
+	let (bytes, metadata) = read_with_metadata(path).map_err(|error| {
+		if is_not_regular(&error) {
+			format!("{} must be a regular file", path.display())
+		} else {
+			error.to_string()
 		}
-		Err(error) => return Err(error.to_string()),
-	};
-	let metadata = file.metadata().map_err(|e| e.to_string())?;
-	if !metadata.is_file() {
-		return Err(format!("{} must be a regular file", path.display()));
-	}
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+	})?;
 	Ok(Opened { bytes, metadata })
 }
 

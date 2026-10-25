@@ -12,47 +12,26 @@
 //! reader checks, and the bytes come from that same descriptor, so a path
 //! swapped after the check does not decide what is read.
 
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
+
+use crate::cli::regular_read;
 
 /// The bytes of the generated compose file, or `None` when the install has
 /// none. The reason a read failed, naming the path it could not read.
 pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
-	let mut options = std::fs::OpenOptions::new();
-	options.read(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		options.custom_flags(libc::O_NONBLOCK);
+	match regular_read::read(path) {
+		Ok(bytes) => Ok(Some(bytes)),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(error) if regular_read::is_not_regular(&error) => {
+			Err(format!("{} must be a regular file", path.display()))
+		}
+		Err(error) => Err(format!("cannot read {}: {error}", path.display())),
 	}
-	let mut file: File = match options.open(path) {
-		Ok(file) => file,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-		Err(error) => return Err(format!("cannot open {}: {error}", path.display())),
-	};
-	let metadata = file
-		.metadata()
-		.map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
-	if !metadata.is_file() {
-		return Err(format!("{} must be a regular file", path.display()));
-	}
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes)
-		.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-	Ok(Some(bytes))
 }
 
-/// A named pipe at `path`, the shape that turns a blocking read into a wait.
-/// Shared by the tests of every reader, so each of them stands the same case
-/// up the same way.
+/// A named pipe at `path`, shared by the tests of every reader.
 #[cfg(all(test, unix))]
-pub(crate) fn fifo_at(path: &Path) {
-	let c_path = std::ffi::CString::new(path.to_str().expect("utf-8 path")).expect("nul-free");
-	// SAFETY: `c_path` is a NUL-terminated string valid for the call.
-	let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-	assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-}
+pub(crate) use crate::cli::regular_read::fifo_at;
 
 #[cfg(all(test, unix))]
 #[path = "compose_read_tests.rs"]

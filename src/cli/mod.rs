@@ -59,6 +59,7 @@ mod pick;
 mod probe;
 mod prompt;
 mod queue;
+pub(crate) mod regular_read;
 mod relay;
 mod report_abuse;
 mod reports;

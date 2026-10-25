@@ -5,8 +5,8 @@
 //! second lock can be an older `epistle` command or a local tool that only
 //! respects this one, and a plain `flock` waits for as long as the other
 //! process keeps it, so the wait has to end somewhere: the command announces
-//! it once, gives up at the same deadline the common lock uses, says which
-//! file it was waiting for and drops the common lock with it. Nothing is
+//! it once, gives up when the budget the common lock started is spent, says
+//! which file it was waiting for and drops the common lock with it. Nothing is
 //! recorded in this lock, so the wait names the file and not its holder.
 
 use std::path::Path;
@@ -14,9 +14,11 @@ use std::time::{Duration, Instant};
 
 use crate::storage::lock::FileLock;
 
-/// Take the lock that guards a rewrite of the generated compose file.
+/// Take the lock that guards a rewrite of the generated compose file. The
+/// command already holds the common lock, so the wait is what is left of the
+/// budget that lock spent from, not a second full one.
 pub(super) fn acquire(path: &Path) -> Result<FileLock, String> {
-	acquire_within(path, super::service_lock::WAIT)
+	acquire_within(path, super::service_lock::remaining())
 }
 
 /// [`acquire`] with the deadline passed in, so a test does not have to wait

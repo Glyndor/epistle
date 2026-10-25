@@ -63,8 +63,8 @@ fn ensure_self_signed_cert(
 		// and self-sign the new certificate with it. A corrupt or
 		// wrong-algorithm key fails here with a recoverable
 		// diagnostic instead of silently regenerating.
-		let pem_bytes =
-			fs::read(&key_path).map_err(|error| ApplyError::KeyWrite(key_path.clone(), error))?;
+		let pem_bytes = crate::cli::regular_read::read(&key_path)
+			.map_err(|error| ApplyError::KeyWrite(key_path.clone(), error))?;
 		let pem_text = std::str::from_utf8(&pem_bytes).map_err(|_| {
 			ApplyError::CertPairIncomplete(format!(
 				"self-signed private key {} is not valid utf-8",
@@ -199,7 +199,7 @@ fn ensure_secret_keys(
 		report
 			.steps
 			.push(ReportStep::Reused(oauth_private.to_path_buf()));
-		let private_bytes = fs::read(oauth_private)
+		let private_bytes = crate::cli::regular_read::read(oauth_private)
 			.map_err(|error| ApplyError::KeyWrite(oauth_private.to_path_buf(), error))?;
 		let private_text = std::str::from_utf8(&private_bytes).map_err(|_| {
 			ApplyError::OAuthPairIncomplete(format!(
@@ -215,7 +215,7 @@ fn ensure_secret_keys(
 				))
 			})?;
 		if oauth_public.exists() {
-			let public_bytes = fs::read(oauth_public)
+			let public_bytes = crate::cli::regular_read::read(oauth_public)
 				.map_err(|error| ApplyError::KeyWrite(oauth_public.to_path_buf(), error))?;
 			let public_text = std::str::from_utf8(&public_bytes).map_err(|_| {
 				ApplyError::OAuthPairIncomplete(format!(

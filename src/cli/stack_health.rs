@@ -47,7 +47,7 @@ pub(super) fn wait_with_interval(
 	timeout: Duration,
 	interval: Duration,
 ) -> Result<(), String> {
-	let checked = std::fs::read_to_string(compose)
+	let checked = crate::cli::regular_read::read_to_string(compose)
 		.map_err(|error| format!("cannot read {}: {error}", compose.display()))
 		.map(|text| has_healthcheck(&text, service))?;
 	let deadline = Instant::now() + timeout;

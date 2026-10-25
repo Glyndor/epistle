@@ -82,3 +82,30 @@ fn wait_for_holder(lock: &Path, holder: &mut std::process::Child) {
 	let _ = holder.kill();
 	panic!("the holder never took {}", lock.display());
 }
+
+/// The common lock and this one spend one budget, not one each. A command that
+/// queued for the common lock until 300 ms of its 30 s were left waits 300 ms
+/// for this one, so the two holders together cannot keep it out for a minute.
+#[test]
+fn the_wait_is_what_the_common_lock_left_of_the_budget() {
+	let dir = tempfile::tempdir().unwrap();
+	let lock = dir.path().join(".compose.yaml.lock");
+	let held = FileLock::try_acquire(&lock).unwrap().expect("a free lock");
+	let (done, waited) = std::sync::mpsc::channel();
+	let waiting = lock.clone();
+	// The budget is per thread, so the clock starts on the thread that waits.
+	std::thread::spawn(move || {
+		let began = std::time::Instant::now();
+		super::super::service_lock::began_at(
+			began - (super::super::service_lock::WAIT - Duration::from_millis(300)),
+		);
+		let outcome = acquire(&waiting);
+		done.send((outcome.is_err(), began.elapsed())).unwrap();
+	});
+	let (refused, took) = waited
+		.recv_timeout(Duration::from_secs(10))
+		.expect("the wait must end with the budget of the common lock, not a fresh 30 s");
+	assert!(refused, "a lock held elsewhere must not be taken");
+	assert!(took < Duration::from_secs(5), "waited {took:?}");
+	drop(held);
+}

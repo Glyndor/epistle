@@ -464,7 +464,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 		let acme_cert = acme_dir.join("cert.pem");
 		let acme_key = acme_dir.join("key.pem");
 		for (src, dst) in [(&cert_path, &acme_cert), (&key_path, &acme_key)] {
-			match fs::read(src) {
+			match crate::cli::regular_read::read(src) {
 				Ok(bytes) => {
 					if let Err(error) = crate::storage::write_secret(dst, &bytes) {
 						return ApplyOutcome {
@@ -655,6 +655,9 @@ mod tests_failures_c;
 #[cfg(test)]
 #[path = "apply_failures_tests_d.rs"]
 mod tests_failures_d;
+#[cfg(test)]
+#[path = "apply_tests_fifo.rs"]
+mod tests_fifo;
 #[cfg(test)]
 #[path = "apply_tests_implicit_tls.rs"]
 mod tests_implicit_tls;

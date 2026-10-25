@@ -167,6 +167,19 @@ fn check_dns(
 				.token_env
 				.as_deref()
 				.is_some_and(|v| !v.trim().is_empty());
+			// The path is mounted by compose, which interpolates `$VAR`, and
+			// written into `mail.toml`, whose loader expands `${VAR}` and
+			// stops when the variable is unset. A reference to a variable the
+			// run does not have therefore passed every question and failed
+			// after the keys were written, so the shape is refused here.
+			if let Some(text) = dns.token_file.as_deref().and_then(Path::to_str)
+				&& text.contains('$')
+			{
+				errors.push(Invalid::PathInterpolated {
+					field: "dns.token_file".to_string(),
+					value: text.to_string(),
+				});
+			}
 			let provided = [token_present, token_file_present, token_env_present]
 				.iter()
 				.filter(|x| **x)

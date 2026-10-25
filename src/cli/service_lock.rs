@@ -16,9 +16,35 @@ use std::time::{Duration, Instant};
 /// How long a writer waits for the lock before it gives up. Longer than the
 /// slowest thing that holds it (a `podup` recreate of the mail service), so a
 /// slow neighbour is not reported as a stuck one. The lock that guards the
-/// generated compose file waits with it, so a command is never kept out of
-/// the configuration directory longer than it waits for one file.
+/// generated compose file spends what this wait left (see [`remaining`]), so a
+/// command is never kept out of the configuration directory longer than this
+/// in all.
 pub(super) const WAIT: Duration = Duration::from_secs(30);
+
+thread_local! {
+	/// When the command on this thread started waiting for the common lock.
+	/// The lock of the generated compose file is taken after it, and both
+	/// waits spend the one [`WAIT`] between them.
+	static BEGAN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// What is left of [`WAIT`] for a second lock taken after the common one: all
+/// of it when this command never waited for the common lock, and what the
+/// first wait did not use when it did. A command that queued 25 s for the
+/// common lock therefore waits at most 5 s more, so it is never kept out of
+/// the configuration directory longer than [`WAIT`] in all.
+pub(super) fn remaining() -> Duration {
+	BEGAN
+		.get()
+		.map_or(WAIT, |began| WAIT.saturating_sub(began.elapsed()))
+}
+
+/// Start the clock [`remaining`] reads at `began`, so a test does not have to
+/// let the budget run down in real time.
+#[cfg(test)]
+pub(super) fn began_at(began: Instant) {
+	BEGAN.set(Some(began));
+}
 
 /// Pause between attempts while a neighbour holds the lock.
 pub(super) const POLL: Duration = Duration::from_millis(100);
@@ -38,6 +64,7 @@ pub(super) fn acquire_within(config: &Path, within: Duration) -> Result<File, St
 		.filter(|p| !p.as_os_str().is_empty())
 		.unwrap_or(Path::new("."));
 	let path = parent.join(".epistle-config.lock");
+	BEGAN.set(Some(Instant::now()));
 	let file = open(&path)?;
 	let metadata = file.metadata().map_err(|e| e.to_string())?;
 	if !metadata.is_file() {
