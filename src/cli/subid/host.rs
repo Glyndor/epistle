@@ -122,6 +122,52 @@ fn on_path(program: &str) -> bool {
 		.is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
+/// Run `program` as `usermod` with `args` and the account's name. Another
+/// tool can hold the lock on the tables for a moment; asking again a little
+/// later finds it free. The locale is fixed because the lock is recognised by
+/// the words of the English message.
+fn usermod_with(program: &str, args: &[String], wait: std::time::Duration) -> Result<(), String> {
+	let what = format!("usermod {} {ACCOUNT}", args.join(" "));
+	retry::run(retry::ATTEMPTS, wait, || {
+		let output = Command::new(program)
+			.args(args)
+			.arg(ACCOUNT)
+			.env("LC_ALL", "C")
+			.stdin(Stdio::null())
+			.output()
+			.map_err(|error| Failed {
+				message: format!("cannot run `{what}`: {error}"),
+				transient: false,
+			})?;
+		if output.status.success() {
+			return Ok(());
+		}
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		eprint!("{stderr}");
+		Err(Failed {
+			message: format!("`{what}` exited with {}", output.status),
+			transient: retry::is_lock_contention(&stderr),
+		})
+	})
+}
+
+/// Whether the command `probe` builds succeeds within `attempts` tries,
+/// `wait` apart.
+fn manager_answers(probe: impl Fn() -> Command, attempts: u32, wait: std::time::Duration) -> bool {
+	retry::run(attempts, wait, || {
+		let mut command = probe();
+		command.stdout(Stdio::null()).stderr(Stdio::null());
+		match command.status() {
+			Ok(status) if status.success() => Ok(()),
+			_ => Err(Failed {
+				message: String::new(),
+				transient: true,
+			}),
+		}
+	})
+	.is_ok()
+}
+
 /// Run `command` and turn a failure into a message naming `what`.
 fn checked(mut command: Command, what: &str) -> Result<(), String> {
 	match command.status() {
@@ -146,29 +192,7 @@ impl Host for System {
 	}
 
 	fn usermod(&mut self, args: &[String]) -> Result<(), String> {
-		let what = format!("usermod {} {ACCOUNT}", args.join(" "));
-		// Another tool can hold the lock on the tables for a moment; the
-		// message says so, and asking again a little later finds it free.
-		retry::run(retry::ATTEMPTS, retry::WAIT, || {
-			let output = Command::new("usermod")
-				.args(args)
-				.arg(ACCOUNT)
-				.stdin(Stdio::null())
-				.output()
-				.map_err(|error| Failed {
-					message: format!("cannot run `{what}`: {error}"),
-					transient: false,
-				})?;
-			if output.status.success() {
-				return Ok(());
-			}
-			let stderr = String::from_utf8_lossy(&output.stderr);
-			eprint!("{stderr}");
-			Err(Failed {
-				message: format!("`{what}` exited with {}", output.status),
-				transient: retry::is_lock_contention(&stderr),
-			})
-		})
+		usermod_with("usermod", args, retry::WAIT)
 	}
 
 	fn active_units(&mut self) -> Result<Vec<String>, String> {
@@ -260,19 +284,16 @@ impl Host for System {
 		checked(command, &format!("systemctl start {manager}"))?;
 		// The job is done before the manager answers on its bus, and the
 		// units are started through that bus next.
-		let ready = retry::run(retry::MANAGER_ATTEMPTS, retry::WAIT, || {
-			let mut probe = self.account("systemctl");
-			probe.args(["--user", "show-environment"]);
-			probe.stdout(Stdio::null()).stderr(Stdio::null());
-			match probe.status() {
-				Ok(status) if status.success() => Ok(()),
-				_ => Err(Failed {
-					message: String::new(),
-					transient: true,
-				}),
-			}
-		});
-		if ready.is_err() {
+		let ready = manager_answers(
+			|| {
+				let mut probe = self.account("systemctl");
+				probe.args(["--user", "show-environment"]);
+				probe
+			},
+			retry::MANAGER_ATTEMPTS,
+			retry::WAIT,
+		);
+		if !ready {
 			self.log(&format!(
 				"the user manager of {ACCOUNT} did not answer on its bus; starting its units may fail"
 			));

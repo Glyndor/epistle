@@ -27,11 +27,18 @@ set -e
 
 # Run the command made of the words after $1 up to $1 times, two seconds
 # apart; succeed on the first attempt that does and fail after the last one.
+# A command that exits 70 reports a cause waiting cannot remove: it is not run
+# again and the status is passed on.
 epistle_retry() {
 	retry_max=$1
 	shift
 	retry_try=1
-	while ! "$@"; do
+	while :; do
+		"$@" && return 0
+		retry_status=$?
+		if [ "$retry_status" -eq 70 ]; then
+			return 70
+		fi
 		if [ "$retry_try" -ge "$retry_max" ]; then
 			return 1
 		fi
@@ -61,16 +68,37 @@ epistle_install_dir() {
 	fi
 }
 
-# Add the subordinate id block that starts at $1 (subuid) and $2 (subgid) to
-# each table that holds no range of the account yet. It reads the tables
-# again on every attempt, so a retry never adds a range twice.
+# Warn about directory $1 when it exists but is not owned by the service
+# account or allows more than mode $2. Nothing is changed: the directory may
+# hold mail or credentials, and what to do with it is the operator's call.
+epistle_check_dir() {
+	if [ -d "$1" ] && [ ! -L "$1" ]; then
+		check_owner=$(stat -c '%U:%G' -- "$1" 2>/dev/null) || check_owner=unknown
+		check_mode=$(stat -c '%a' -- "$1" 2>/dev/null) || check_mode=777
+		if [ "$check_owner" != glyndor-epistle:glyndor-epistle ] ||
+			[ "$((0$check_mode & ~0$2 & 0777))" -ne 0 ]; then
+			echo "epistle: $1 is owned by $check_owner with mode $check_mode, not glyndor-epistle:glyndor-epistle with mode $2 or stricter; if that is not intended, run sudo chown glyndor-epistle:glyndor-epistle $1 && sudo chmod $2 $1" >&2
+		fi
+	fi
+}
+
+# Add the subordinate id block the account lacks to each table that holds no
+# range of it yet. The free block is chosen again on every attempt, since
+# another tool may have taken the one chosen before, and the tables are read
+# again, so a retry never adds a range twice. Exit 70 when no block is free.
 epistle_add_subids() {
+	if ! add_starts=$(epistle_subid_starts /etc/login.defs /etc/subuid /etc/subgid); then
+		echo "epistle: no free block of 65536 subordinate ids for glyndor-epistle within SUB_UID_MIN/MAX and SUB_GID_MIN/MAX of /etc/login.defs; rootless Podman will not start until it has one" >&2
+		return 70
+	fi
+	add_uid=${add_starts% *}
+	add_gid=${add_starts#* }
 	add_args=
 	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null; then
-		add_args="--add-subuids $1-$(($1 + 65535))"
+		add_args="--add-subuids $add_uid-$((add_uid + 65535))"
 	fi
 	if ! grep -q '^glyndor-epistle:' /etc/subgid 2>/dev/null; then
-		add_args="$add_args --add-subgids $2-$(($2 + 65535))"
+		add_args="$add_args --add-subgids $add_gid-$((add_gid + 65535))"
 	fi
 	if [ -z "$add_args" ]; then
 		return 0
@@ -273,20 +301,30 @@ configure)
 
 	# 1. The account. --no-create-home because the state directory is created
 	# below with the mode the server needs rather than the skeleton's.
+	account_ok=true
 	if ! epistle_retry 5 epistle_add_account; then
-		echo "epistle: could not create the glyndor-epistle account; the steps that need it will fail until it exists, so run sudo dpkg-reconfigure epistle to try again" >&2
+		account_ok=false
+		echo "epistle: could not create the glyndor-epistle account, so its directories, subordinate ids, linger, Podman socket and stack update were skipped and the package is configured without them; run sudo dpkg-reconfigure epistle to try again" >&2
 	fi
 
-	if [ ! -d /var/lib/glyndor/epistle ]; then
-		epistle_install_dir 0700 /var/lib/glyndor/epistle
-	fi
+	if [ "$account_ok" = true ]; then
+		if [ ! -d /var/lib/glyndor/epistle ]; then
+			epistle_install_dir 0700 /var/lib/glyndor/epistle
+		else
+			epistle_check_dir /var/lib/glyndor/epistle 0700
+		fi
 
-	if [ ! -e /var/lib/glyndor/epistle/data ] && [ ! -L /var/lib/glyndor/epistle/data ]; then
-		epistle_install_dir 0700 /var/lib/glyndor/epistle/data
-	fi
+		if [ ! -e /var/lib/glyndor/epistle/data ] && [ ! -L /var/lib/glyndor/epistle/data ]; then
+			epistle_install_dir 0700 /var/lib/glyndor/epistle/data
+		else
+			epistle_check_dir /var/lib/glyndor/epistle/data 0700
+		fi
 
-	if [ ! -e /etc/epistle ]; then
-		epistle_install_dir 0750 /etc/epistle
+		if [ ! -e /etc/epistle ]; then
+			epistle_install_dir 0750 /etc/epistle
+		else
+			epistle_check_dir /etc/epistle 0750
+		fi
 	fi
 
 	# 2. The subordinate id ranges rootless Podman maps into its containers.
@@ -295,17 +333,11 @@ configure)
 	# user 100000 onwards by default, and two accounts mapping the same host ids
 	# can each own the other's container files.
 	ranges_added=false
-	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null || ! grep -q '^glyndor-epistle:' /etc/subgid 2>/dev/null; then
-		if ! subid_starts=$(epistle_subid_starts /etc/login.defs /etc/subuid /etc/subgid); then
-			echo "epistle: no free block of 65536 subordinate ids for glyndor-epistle within SUB_UID_MIN/MAX and SUB_GID_MIN/MAX of /etc/login.defs; rootless Podman will not start until it has one" >&2
-		else
-			uid_start=${subid_starts% *}
-			gid_start=${subid_starts#* }
-			if ! epistle_retry 5 epistle_add_subids "$uid_start" "$gid_start"; then
-				echo "epistle: could not add the subuid/subgid ranges for glyndor-epistle (usermod may have found /etc/subuid or /etc/subgid locked); rootless Podman will not start until they exist, so run sudo dpkg-reconfigure epistle to try again" >&2
-			else
-				ranges_added=true
-			fi
+	if [ "$account_ok" = true ] && { ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null || ! grep -q '^glyndor-epistle:' /etc/subgid 2>/dev/null; }; then
+		if epistle_retry 5 epistle_add_subids; then
+			ranges_added=true
+		elif [ $? -ne 70 ]; then
+			echo "epistle: could not add the subuid/subgid ranges for glyndor-epistle (usermod may have found /etc/subuid or /etc/subgid locked); rootless Podman will not start until they exist, so run sudo dpkg-reconfigure epistle to try again" >&2
 		fi
 	fi
 
@@ -314,7 +346,9 @@ configure)
 	# Linger starts the manager in the background, so its runtime directory
 	# is waited for below, and only when linger is on.
 	manager_wait=1
-	if [ -d /run/systemd/system ]; then
+	if [ "$account_ok" != true ]; then
+		:
+	elif [ -d /run/systemd/system ]; then
 		if ! epistle_retry 5 loginctl enable-linger glyndor-epistle; then
 			echo "epistle: loginctl enable-linger glyndor-epistle failed; the rootless services will not start at boot, so run sudo loginctl enable-linger glyndor-epistle" >&2
 		else
@@ -325,7 +359,7 @@ configure)
 	fi
 
 	# podup speaks the libpod API rather than invoking the Podman CLI.
-	if [ -d /run/systemd/system ]; then
+	if [ "$account_ok" = true ] && [ -d /run/systemd/system ]; then
 		(
 			if ! service_uid=$(id -u glyndor-epistle); then
 				echo "epistle: could not look up the uid of glyndor-epistle, so the Podman API socket was not enabled; run systemctl --user enable --now podman.socket as glyndor-epistle" >&2
@@ -347,7 +381,7 @@ configure)
 
 	# 4. Prepare the rootless Podman runtime for the new ranges. Podman arrives
 	# through podup, a Depends, so it is only absent under --force-depends.
-	if [ "$ranges_added" = true ] && [ -z "${2:-}" ] && command -v podman >/dev/null 2>&1; then
+	if [ "$ranges_added" = true ] && command -v podman >/dev/null 2>&1; then
 		if ! runuser -u glyndor-epistle -- podman system migrate; then
 			echo "epistle: podman system migrate failed for glyndor-epistle; epistle init will check the rootless runtime" >&2
 		fi
@@ -378,7 +412,7 @@ configure)
 	# the owner of its container files, starts the stack again, and puts all
 	# of it back when a step fails. It runs before `stack update` below so the
 	# stack that update restarts is already on the new block.
-	if [ -n "${2:-}" ] && { epistle_subid_overlaps /etc/subuid || epistle_subid_overlaps /etc/subgid; }; then
+	if [ "$account_ok" = true ] && [ -n "${2:-}" ] && { epistle_subid_overlaps /etc/subuid || epistle_subid_overlaps /etc/subgid; }; then
 		subid_size=$(epistle_account_subid_size /etc/subuid /etc/subgid)
 		if ! subid_starts=$(epistle_subid_starts /etc/login.defs /etc/subuid /etc/subgid "$subid_size"); then
 			echo "epistle: glyndor-epistle shares subordinate ids with another account and there is no free block of $subid_size ids within SUB_UID_MIN/MAX and SUB_GID_MIN/MAX to move it to; epistle check subid shows the overlap" >&2
@@ -390,7 +424,9 @@ configure)
 	# Only an enabled stack opts into automatic image updates on apt upgrades.
 	# Whatever goes wrong here leaves the package configured: the stack is
 	# the one part `sudo epistle stack update` can redo afterwards.
-	if [ -n "${2:-}" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then
+	# A run that has just added the ranges (a reconfigure after they failed)
+	# has no stack to refresh yet.
+	if [ "$account_ok" = true ] && [ "$ranges_added" != true ] && [ -n "${2:-}" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then
 		(
 			if ! service_uid=$(id -u glyndor-epistle); then
 				echo "epistle: could not look up the uid of glyndor-epistle, so the stack was not updated; run sudo epistle stack update" >&2

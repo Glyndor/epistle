@@ -1013,17 +1013,31 @@ seconds) for the user manager before it enables the socket or updates the
 stack. `epistle move-subids` does the same for the lock and for the manager it
 restarts.
 
-A step that still fails never leaves the package half installed. The script
-prints one line on stderr that names what failed and the command that repeats
-it, and exits 0. Apt shows these lines at the end of the upgrade:
+A step that still fails does not stop the others and does not fail apt. The
+script prints one line on stderr that names what failed and the command that
+repeats it, and exits 0, so dpkg marks the package as installed even though
+that step did not happen. What stays undone is exactly what the line names;
+nothing is rolled back. When the account cannot be created, everything that
+needs it is skipped (directories, subordinate ids, linger, the Podman socket,
+the stack update) and the package is configured without them: running
+`sudo dpkg-reconfigure epistle` repeats the whole script once the cause is
+gone, and `epistle init` refuses to continue until the account exists. A
+directory that already exists is never changed: when its owner is not
+`glyndor-epistle` or its mode is looser than the one the package uses (`0700`
+for the state directories, `0750` for `/etc/epistle`), the script prints the
+`chown` and `chmod` that fix it.
+
+Apt shows these lines at the end of the upgrade:
 
 | Message starts with | What it means | What to run |
 |---|---|---|
-| `could not create the glyndor-epistle account`, `could not create <dir>` | `adduser` or `install` failed five times. | `sudo dpkg-reconfigure epistle` |
+| `could not create the glyndor-epistle account` | `adduser` failed five times; the steps that need the account were skipped. | `sudo dpkg-reconfigure epistle` |
+| `could not create <dir>` | `install -d` failed five times. | `sudo dpkg-reconfigure epistle` |
+| `<dir> is owned by ... with mode ...` | An existing directory has another owner or a looser mode. Nothing was changed. | The `chown` and `chmod` in the message |
 | `could not add the subuid/subgid ranges` | `usermod` found `/etc/subuid` or `/etc/subgid` locked, or failed for another reason (see the line above it). | `sudo dpkg-reconfigure epistle` |
-| `no free block of 65536 subordinate ids` | `/etc/login.defs` leaves no room for a block. | `epistle check subid` |
+| `no free block of 65536 subordinate ids` | `/etc/login.defs` leaves no room for a block. It is reported once and not retried. | `epistle check subid` |
 | `loginctl enable-linger glyndor-epistle failed` | `logind` did not accept the request. | `sudo loginctl enable-linger glyndor-epistle` |
-| `... is not running` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
+| `/run/user/<uid> does not exist` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
 | `could not enable the Podman API socket` | The manager answered but refused the unit. | `systemctl --user enable --now podman.socket` as `glyndor-epistle` |
 | `the stack did not come back healthy after this upgrade` | `epistle stack update` failed; the error above the frame says which check. | `sudo epistle stack update`, or `sudo epistle stack rollback` |
 | `could not look up the uid of glyndor-epistle` | The account is missing or the name service did not answer. | `getent passwd glyndor-epistle`, then `sudo dpkg-reconfigure epistle` |
