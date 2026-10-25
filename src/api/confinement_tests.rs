@@ -286,13 +286,14 @@ async fn the_configured_token_still_reads_every_record() {
 #[tokio::test]
 async fn both_provisioning_surfaces_refuse_a_foreign_address_the_same_way() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let app = router(world(dir.path()));
+	let state = world(dir.path());
+	let app = router(state.clone());
 	let rest = json!({
 		"name": "mallory",
 		"addresses": ["mallory@b.example"],
 		"password": "correct horse battery staple",
 	});
-	let (rest_status, _) =
+	let (rest_status, rest_body) =
 		request_with_body(&app, "POST", "/api/v1/accounts", Some(TENANT_A), Some(rest)).await;
 	let scim = json!({
 		"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -300,8 +301,19 @@ async fn both_provisioning_surfaces_refuse_a_foreign_address_the_same_way() {
 		"active": true,
 		"emails": [{"value": "mallory@b.example"}],
 	});
-	let (scim_status, _) =
+	let (scim_status, scim_body) =
 		request_with_body(&app, "POST", "/scim/v2/Users", Some(TENANT_A), Some(scim)).await;
-	assert_eq!(rest_status, StatusCode::BAD_REQUEST, "the REST surface");
-	assert_eq!(scim_status, rest_status, "the SCIM surface");
+	assert_eq!(
+		rest_status,
+		StatusCode::BAD_REQUEST,
+		"the REST surface: {rest_body}"
+	);
+	assert_eq!(scim_status, rest_status, "the SCIM surface: {scim_body}");
+	assert!(
+		state
+			.accounts()
+			.iter()
+			.all(|account| account.name != "mallory"),
+		"neither surface may create the account"
+	);
 }

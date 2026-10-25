@@ -280,3 +280,20 @@ fn a_key_with_an_account_and_domains_survives_a_reload() {
 	assert_eq!(stored.account.as_deref(), Some("alice"));
 	assert_eq!(stored.domains, vec!["a.example".to_string()]);
 }
+
+/// A secret belongs to one key: adding a second key behind the same secret
+/// is refused and leaves the store as it was.
+#[test]
+fn a_second_key_behind_the_same_secret_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	store.add(key("first", "shared")).expect("add first");
+	let error = store
+		.add(key("second", "shared"))
+		.expect_err("same secret, other label");
+	assert!(
+		error.to_string().contains("already uses this secret"),
+		"{error}"
+	);
+	assert_eq!(store.keys().len(), 1);
+}

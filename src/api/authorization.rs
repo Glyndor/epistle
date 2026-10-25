@@ -160,12 +160,14 @@ impl Principal {
 			client_ip: auth.client_ip,
 		};
 		let keys = state.api_keys().snapshot();
-		match keys
+		let mut matching = keys
 			.iter()
-			.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
-		{
-			Some(key) => Principal::of_key(key, Some(credential)),
-			None => Principal::unreachable(Some(credential)),
+			.filter(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE));
+		match (matching.next(), matching.next()) {
+			(Some(key), None) => Principal::of_key(key, Some(credential)),
+			// Two keys share the secret, so the one that let the request in
+			// cannot be told from the other and no reach is safe to pick.
+			_ => Principal::unreachable(Some(credential)),
 		}
 	}
 
@@ -229,6 +231,14 @@ impl Principal {
 				domains.contains(&domain)
 			}
 		}
+	}
+
+	/// Whether the domain of the single address `address` is inside the
+	/// credential's domains. A credential with no domain restriction admits
+	/// any sender, and an address with no domain, such as the empty
+	/// reverse-path of a bounce, is outside every declared domain.
+	pub fn admits_sender(&self, address: &str) -> bool {
+		self.admits_domains(&[address.to_string()])
 	}
 
 	/// Whether the credential is unrestricted: it declares neither an

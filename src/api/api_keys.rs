@@ -327,6 +327,19 @@ impl ApiKeyStore {
 						format!("API key \"{}\" already exists", key.label),
 					));
 				}
+				// One secret, one key: two keys behind the same secret would
+				// leave the request with the reach of whichever the lookup
+				// meets first.
+				if state
+					.keys
+					.iter()
+					.any(|existing| existing.hash.eq_ignore_ascii_case(&key.hash))
+				{
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::AlreadyExists,
+						"another API key already uses this secret",
+					));
+				}
 				state.keys.push(key.clone());
 				Ok(())
 			},

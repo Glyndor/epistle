@@ -131,7 +131,9 @@ pub async fn list(
 	// reach's own view, never the other tenant's records.
 	let account_filter = match &scope {
 		Scope::Admin => account_filter,
-		Scope::Tenant(reachable) => account_filter.filter(|account| reachable.contains(account)),
+		Scope::Tenant { reachable, .. } => {
+			account_filter.filter(|account| reachable.contains(account))
+		}
 	};
 
 	let log = DeliveryLog::open(state.data_dir(), retention);
@@ -169,11 +171,18 @@ fn match_filters(
 	// The account tag decides who may read the record. A restricted caller
 	// only sees the records of the accounts it may reach, and a record with
 	// no tag belongs to no account: it stays with the administrators.
-	if let Scope::Tenant(reachable) = scope {
+	if let Scope::Tenant { reachable, caller } = scope {
 		let Some(tag) = record.account.as_deref() else {
 			return false;
 		};
 		if !reachable.contains(tag) {
+			return false;
+		}
+		// The tag is a name, and a name outlives the account that held it.
+		// The sender of the record must also sit inside the caller's
+		// domains, the rule the queue applies, so a record written under an
+		// earlier holder of the name stays out of reach.
+		if !caller.admits_sender(&record.from) {
 			return false;
 		}
 	}
@@ -229,7 +238,10 @@ enum Scope {
 	/// A restricted caller: only the records tagged with an account it may
 	/// reach. The account names are resolved against the directory once,
 	/// before the log is read, so the filter never has to walk it again.
-	Tenant(std::collections::HashSet<String>),
+	Tenant {
+		reachable: std::collections::HashSet<String>,
+		caller: Principal,
+	},
 }
 
 impl Scope {
@@ -237,14 +249,15 @@ impl Scope {
 		if principal.is_unrestricted() {
 			return Self::Admin;
 		}
-		Self::Tenant(
-			state
+		Self::Tenant {
+			reachable: state
 				.accounts()
 				.into_iter()
 				.filter(|account| principal.admits_account(&account.name, &account.addresses))
 				.map(|account| account.name)
 				.collect(),
-		)
+			caller: principal.clone(),
+		}
 	}
 }
 

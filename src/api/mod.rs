@@ -465,3 +465,7 @@ mod confinement_tests;
 #[cfg(test)]
 #[path = "confinement_tests_jmap.rs"]
 mod confinement_tests_jmap;
+
+#[cfg(test)]
+#[path = "confinement_tests_reach.rs"]
+mod confinement_tests_reach;

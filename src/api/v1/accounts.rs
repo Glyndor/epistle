@@ -42,24 +42,14 @@ pub async fn list(
 ///
 /// The answer is `404`, not `403`: a key confined to one tenant must not be
 /// able to enumerate another tenant's account names by reading the status
-/// code, so an account it may not touch is indistinguishable from one that
-/// does not exist.
+/// code, so an account it may not touch answers exactly as one that does not
+/// exist, before the route looks at anything else in the request.
 pub(super) fn require_in_scope(
 	state: &ApiState,
 	principal: &Principal,
 	name: &str,
 ) -> Result<(), ApiError> {
-	let known = state
-		.accounts()
-		.into_iter()
-		.find(|account| account.name == name);
-	match known {
-		Some(account) if principal.admits_account(&account.name, &account.addresses) => Ok(()),
-		Some(_) => Err(ApiError::not_found("no such account")),
-		// Unknown to us: let the store produce its own error, which is what
-		// happened before scopes existed.
-		None => Ok(()),
-	}
+	super::scope::account_in_scope(state, principal, name)
 }
 
 #[derive(Deserialize)]

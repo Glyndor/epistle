@@ -50,7 +50,12 @@ impl StoredSubscription {
 /// to a key, which owns nothing.
 pub(crate) fn owner_of(state: &ApiState, principal: &Principal) -> Option<String> {
 	if let Some(name) = principal.bound_account() {
-		return Some(format!("account:{name}"));
+		// A key bound to an account its domains do not reach owns nothing,
+		// the same reach it has everywhere else.
+		let reached = state.accounts().iter().any(|account| {
+			account.name == name && principal.admits_account(name, &account.addresses)
+		});
+		return reached.then(|| format!("account:{name}"));
 	}
 	let Some(credential) = principal.credential() else {
 		// The configured static token is its own caller.
