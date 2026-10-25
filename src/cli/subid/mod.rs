@@ -12,6 +12,7 @@ use std::process::ExitCode;
 mod host;
 mod journal;
 mod mover;
+mod retry;
 mod shift;
 pub(crate) mod table;
 

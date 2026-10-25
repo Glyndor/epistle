@@ -995,6 +995,60 @@ and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
 
+### What the package does on install and upgrade
+
+The `postinst` of the `.deb` runs on every install, upgrade and
+`dpkg-reconfigure epistle`. It creates the `glyndor-epistle` account and its
+directories, adds the subordinate id ranges, turns on linger, enables the
+account's `podman.socket`, applies the port floor and, on an upgrade of an
+enabled stack, runs `epistle stack update`. Each step does only what is still
+missing, so running the script again is safe.
+
+Some steps depend on something that finishes a moment later: the lock that
+`usermod` takes on `/etc/subuid`, a name service that has not caught up with a
+new account, and the user manager that linger starts in the background
+together with its bus (`/run/user/<uid>/bus`). The script tries those steps up
+to five times, two seconds apart, and waits up to ten looks (about eighteen
+seconds) for the user manager before it enables the socket or updates the
+stack. `epistle move-subids` does the same for the lock and for the manager it
+restarts.
+
+A step that still fails does not stop the others and does not fail apt. The
+script prints one line on stderr that names what failed and the command that
+repeats it, and exits 0, so dpkg marks the package as installed even though
+that step did not happen. What stays undone is exactly what the line names;
+nothing is rolled back. When the account cannot be created, everything that
+needs it is skipped (directories, subordinate ids, linger, the Podman socket,
+the stack update) and the package is configured without them: running
+`sudo dpkg-reconfigure epistle` repeats the whole script once the cause is
+gone, and `epistle init` refuses to continue until the account exists. A
+directory that already exists is never changed: when its owner is not
+`glyndor-epistle` or its mode is looser than the one the package uses (`0700`
+for the state directories, `0750` for `/etc/epistle`), the script prints the
+`chown` and `chmod` that fix it.
+
+Apt shows these lines at the end of the upgrade:
+
+| Message starts with | What it means | What to run |
+|---|---|---|
+| `could not create the glyndor-epistle account` | `adduser` failed five times; the steps that need the account were skipped. | `sudo dpkg-reconfigure epistle` |
+| `could not create <dir>` | `install -d` failed five times. | `sudo dpkg-reconfigure epistle` |
+| `<dir> is owned by ... with mode ...` | An existing directory has another owner or a looser mode. Nothing was changed. | The `chown` and `chmod` in the message |
+| `could not add the subuid/subgid ranges` | `usermod` found `/etc/subuid` or `/etc/subgid` locked, or failed for another reason (see the line above it). | `sudo dpkg-reconfigure epistle` |
+| `no free block of 65536 subordinate ids` | `/etc/login.defs` leaves no room for a block. It is reported once and not retried. | `epistle check subid` |
+| `loginctl enable-linger glyndor-epistle failed` | `logind` did not accept the request. | `sudo loginctl enable-linger glyndor-epistle` |
+| `/run/user/<uid> does not exist` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
+| `could not enable the Podman API socket` | The manager answered but refused the unit. | `systemctl --user enable --now podman.socket` as `glyndor-epistle` |
+| `the stack did not come back healthy after this upgrade` | `epistle stack update` failed; the error above the frame says which check. | `sudo epistle stack update`, or `sudo epistle stack rollback` |
+| `could not look up the uid of glyndor-epistle` | The account is missing or the name service did not answer. | `getent passwd glyndor-epistle`, then `sudo dpkg-reconfigure epistle` |
+
+To diagnose an upgrade that printed one of these, read the lines above it in
+the apt output, then `systemctl status user@$(id -u glyndor-epistle).service`
+and `journalctl -u user@$(id -u glyndor-epistle).service -b` for the manager,
+and `sudo epistle status` for the stack. `epistle init` checks the account,
+the ranges, linger and the port floor again and refuses to continue when one
+is still missing.
+
 ### Rolling back an upgrade
 
 `sudo epistle stack rollback` checks the root-owned store at

@@ -71,6 +71,10 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     counts differ between readers is refused, and outgoing line endings are
     normalised before signing and queueing so the signature covers the
     transmitted bytes.
+  * The package postinst and `epistle move-subids` wait a bounded time for the
+    lock on the subordinate id tables, the new account and the user manager,
+    say on stderr what failed and which command repeats it, and an upgrade
+    whose stack cannot be refreshed still finishes configuring the package.
 
  -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
 

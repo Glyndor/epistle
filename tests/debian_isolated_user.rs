@@ -246,7 +246,9 @@ fn control_depends_on_adduser_for_the_maintainer_scripts() {
 fn postinst_provisions_config_directory_without_changing_existing_directory() {
 	let postinst = read("debian/epistle.postinst");
 	assert!(
-		postinst.contains("if [ ! -e /etc/epistle ]; then\n\t\tinstall -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle\n\tfi"),
+		postinst.contains(
+			"if [ ! -e /etc/epistle ]; then\n\t\t\tepistle_install_dir 0750 /etc/epistle\n\t\telse"
+		),
 		"postinst must create only a missing /etc/epistle with service ownership and mode 0750"
 	);
 }
@@ -257,10 +259,8 @@ fn postinst_migrates_only_after_adding_missing_ranges() {
 	assert!(
 		postinst.contains("ranges_added=false")
 			&& postinst.contains("|| ! grep -q '^glyndor-epistle:' /etc/subgid")
-			&& postinst.contains("else\n\t\t\tranges_added=true")
-			&& postinst.contains(
-				"if [ \"$ranges_added\" = true ] && [ -z \"${2:-}\" ] && command -v podman"
-			),
+			&& postinst.contains("then\n\t\t\tranges_added=true")
+			&& postinst.contains("if [ \"$ranges_added\" = true ] && command -v podman"),
 		"postinst must migrate only when it successfully added missing subuid or subgid ranges"
 	);
 }
@@ -269,7 +269,7 @@ fn postinst_migrates_only_after_adding_missing_ranges() {
 fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 	let postinst = read("debian/epistle.postinst");
 	assert!(
-		postinst.contains("if [ -n \"${2:-}\" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then")
+		postinst.contains("[ -n \"${2:-}\" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then")
 			&& postinst.contains("export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS")
 			&& postinst.contains("if runuser -u glyndor-epistle -- systemctl --user is-enabled --quiet podup-epistle.service; then")
 			&& postinst.contains("if ! runuser -u glyndor-epistle -- epistle stack update; then")
@@ -366,9 +366,8 @@ fn the_sample_unit_recipe_installs_a_config_the_service_can_read() {
 	}
 
 	assert!(
-		read("debian/epistle.postinst").contains(&format!(
-			"install -d -m 0750 -o glyndor-epistle -g glyndor-epistle {config_dir}\n"
-		)),
+		read("debian/epistle.postinst")
+			.contains(&format!("epistle_install_dir 0750 {config_dir}\n")),
 		"the unit must point at the directory the package's postinst prepares ({config_dir}), not \
 		 at a path no script creates"
 	);
@@ -421,3 +420,15 @@ mod configure_sysctl;
 
 #[path = "debian/purge_lifecycle.rs"]
 mod purge_lifecycle;
+
+#[path = "debian/races.rs"]
+mod races;
+
+#[path = "debian/races_account.rs"]
+mod races_account;
+
+#[path = "debian/races_manager.rs"]
+mod races_manager;
+
+#[path = "debian/races_review.rs"]
+mod races_review;

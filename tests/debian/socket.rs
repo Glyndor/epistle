@@ -24,6 +24,7 @@ fn postinst_enables_the_service_socket_with_runtime_environment_and_tolerates_fa
 					("grep", "exit 0".to_owned()),
 					("id", "echo 103".to_owned()),
 					("loginctl", "exit 0".to_owned()),
+					("sleep", "exit 0".to_owned()),
 					(
 						"runuser",
 						format!("printf '%s\\n' \"$@\" > \"$ARGV_LOG\"\nexit {exit_code}"),
