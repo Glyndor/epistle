@@ -22,7 +22,81 @@ pub struct MailboxBackend {
 	crypto: MessageCrypto,
 }
 
+/// Run blocking file work without holding up the other tasks of a
+/// multi-threaded runtime; elsewhere (a test, a current-thread runtime) run
+/// it in place.
+fn off_the_reactor<R>(work: impl FnOnce() -> R) -> R {
+	use tokio::runtime::{Handle, RuntimeFlavor};
+	match Handle::try_current() {
+		Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+			tokio::task::block_in_place(work)
+		}
+		_ => work(),
+	}
+}
+
 impl MailboxBackend {
+	/// The newest `keep` messages of the inbox in arrival order, with their
+	/// sizes. Only the names are collected for the whole directory, and only
+	/// `keep` of them are held at a time; a file is looked at once it is
+	/// known to be retained. A message over [`MAX_MESSAGE_OCTETS`] is not
+	/// listed, so no size is announced that cannot be retrieved.
+	fn list_newest(&self, account: &str, keep: usize) -> Vec<(String, usize)> {
+		use std::cmp::Reverse;
+		use std::collections::BinaryHeap;
+		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
+			return Vec::new();
+		};
+		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+			return Vec::new();
+		};
+		// UUIDv7 filenames sort lexically in arrival order; a min-heap of the
+		// largest `keep` names drops the oldest as it goes.
+		let mut newest: BinaryHeap<Reverse<String>> = BinaryHeap::new();
+		let mut seen = 0usize;
+		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
+			let Some(stem) = entry
+				.file_name()
+				.to_str()
+				.and_then(|name| name.strip_suffix(".eml"))
+				.map(str::to_string)
+			else {
+				continue;
+			};
+			seen += 1;
+			newest.push(Reverse(stem));
+			if newest.len() > keep {
+				newest.pop();
+			}
+		}
+		if seen > keep {
+			tracing::warn!(
+				account,
+				listed = keep,
+				hidden = seen - keep,
+				"POP3 inbox over the session limit, oldest messages not listed"
+			);
+		}
+		let mut stems: Vec<String> = newest.into_iter().map(|Reverse(stem)| stem).collect();
+		stems.sort();
+		stems
+			.into_iter()
+			.filter_map(|stem| {
+				let path = dir.join(format!("{stem}.eml"));
+				let stored = std::fs::symlink_metadata(&path)
+					.ok()
+					.filter(std::fs::Metadata::is_file)?
+					.len();
+				let octets = self.crypto.stored_plaintext_len(&path, stored);
+				let octets = usize::try_from(octets).unwrap_or(usize::MAX);
+				(octets <= MAX_MESSAGE_OCTETS).then_some((stem, octets))
+			})
+			.collect()
+	}
+
 	/// Build a backend sharing the server's directory handle and data dir, with
 	/// no at-rest encryption. The encrypting variant is
 	/// [`MailboxBackend::new_with_crypto`].
@@ -93,30 +167,11 @@ impl Backend for MailboxBackend {
 	}
 
 	fn list(&self, account: &str) -> Vec<(String, usize)> {
-		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
-			return Vec::new();
-		};
-		let mut index: Vec<(String, usize)> = match crate::util::fs_walk::read_dir(&dir) {
-			Ok(entries) => entries
-				.flatten()
-				.filter_map(|entry| {
-					let name = entry.file_name();
-					let stem = name.to_str()?.strip_suffix(".eml")?.to_string();
-					let meta = entry.metadata().ok().filter(std::fs::Metadata::is_file)?;
-					let octets = self.crypto.stored_plaintext_len(&entry.path(), meta.len());
-					Some((stem, usize::try_from(octets).unwrap_or(usize::MAX)))
-				})
-				.collect(),
-			Err(_) => Vec::new(),
-		};
-		// UUIDv7 filenames sort lexically in arrival order.
-		index.sort();
-		index.truncate(MAX_SESSION_MESSAGES);
-		index
+		off_the_reactor(|| self.list_newest(account, MAX_SESSION_MESSAGES))
 	}
 
 	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>> {
-		self.fetch_within(account, uid, MAX_MESSAGE_OCTETS)
+		off_the_reactor(|| self.fetch_within(account, uid, MAX_MESSAGE_OCTETS))
 	}
 
 	fn remove(&self, account: &str, uids: &[String]) {

@@ -231,7 +231,7 @@ where
 		};
 
 		// Abuse guard: drop a client that only produces errors.
-		if matches!(response, Response::Err(_)) {
+		if response.is_client_error() {
 			error_streak += 1;
 			if error_streak >= MAX_ERROR_STREAK {
 				let reply = Response::Err("too many errors".to_string());
@@ -244,18 +244,20 @@ where
 				.await;
 				return Ok(());
 			}
-		} else {
+		} else if !matches!(response, Response::Err(_)) {
 			error_streak = 0;
 		}
 
 		let is_final = response.is_final();
-		response_writer::write_response(
-			&mut stream,
-			&response.encode(),
-			&clock,
-			session.is_authenticated(),
-		)
-		.await?;
+		for piece in response.wire() {
+			response_writer::write_response(
+				&mut stream,
+				&piece,
+				&clock,
+				session.is_authenticated(),
+			)
+			.await?;
+		}
 		if is_final {
 			return Ok(());
 		}

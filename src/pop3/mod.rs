@@ -8,6 +8,7 @@ pub mod bounds;
 pub mod command;
 pub mod server;
 pub mod session;
+pub mod wire;
 
 #[cfg(test)]
 mod session_tests;

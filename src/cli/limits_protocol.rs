@@ -148,14 +148,14 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		crate::pop3::bounds::MAX_SESSION_MESSAGES,
 		"count",
 		Own,
-		"no standard mandate (messages a session lists, oldest first)"
+		"no standard mandate (messages a session lists; the newest when the inbox holds more)"
 	),
 	number!(
 		"pop3-message-octets",
 		crate::pop3::bounds::MAX_MESSAGE_OCTETS,
 		"octets",
 		Own,
-		"no standard mandate (largest message a session retrieves)"
+		"no standard mandate (largest message a session lists and retrieves)"
 	),
 	number!(
 		"imap-command-line",

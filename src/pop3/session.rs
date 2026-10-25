@@ -33,7 +33,8 @@ pub trait Backend {
 		}
 	}
 	/// The index of the account's inbox at login: `(unique-id, octets)` in
-	/// arrival order, at most [`MAX_SESSION_MESSAGES`] entries. No message
+	/// arrival order, at most [`MAX_SESSION_MESSAGES`] entries (the newest
+	/// when there are more). No message
 	/// body is read.
 	fn list(&self, account: &str) -> Vec<(String, usize)>;
 	/// The bytes of one message of the index, read when a command needs it.
@@ -70,49 +71,26 @@ impl Response {
 	/// Encode to the exact bytes sent on the wire, including dot-stuffing of
 	/// the body and the terminating `.` line for multiline responses.
 	pub fn encode(&self) -> Vec<u8> {
-		match self {
-			Response::Continuation => b"+ \r\n".to_vec(),
-			Response::Ok(text) | Response::Bye(text) => format!("+OK {text}\r\n").into_bytes(),
-			Response::Err(text) => format!("-ERR {text}\r\n").into_bytes(),
-			Response::Multiline { status, body } => {
-				let mut out = format!("+OK {status}\r\n").into_bytes();
-				out.extend_from_slice(&dot_stuff(body));
-				out.extend_from_slice(b".\r\n");
-				out
-			}
-		}
+		self.wire().flatten().collect()
+	}
+
+	/// The bytes of [`Response::encode`] in pieces of bounded size, so a large
+	/// message is never held a second time in full.
+	pub fn wire(&self) -> super::wire::Wire<'_> {
+		super::wire::Wire::new(self)
 	}
 
 	/// Whether the connection should close after sending this response.
 	pub fn is_final(&self) -> bool {
 		matches!(self, Response::Bye(_))
 	}
-}
 
-/// Byte-stuff a message body: any line starting with `.` gets an extra `.`,
-/// and bare LF is normalized to CRLF so the terminator is unambiguous.
-fn dot_stuff(body: &[u8]) -> Vec<u8> {
-	let mut out = Vec::with_capacity(body.len() + 16);
-	let mut at_line_start = true;
-	let mut prev = 0u8;
-	for &byte in body {
-		if at_line_start && byte == b'.' {
-			out.push(b'.');
-		}
-		if byte == b'\n' && prev != b'\r' {
-			out.push(b'\r');
-		}
-		out.push(byte);
-		at_line_start = byte == b'\n';
-		prev = byte;
+	/// Whether this is the client's own protocol error (a bad command, a
+	/// failed sign-in, an unknown message), the only kind the abuse guard
+	/// counts. A `[SYS/...]` reply is a condition of the server or the store.
+	pub fn is_client_error(&self) -> bool {
+		matches!(self, Response::Err(text) if !text.starts_with("[SYS/"))
 	}
-	if !body.is_empty() && !out.ends_with(b"\r\n") {
-		if !out.ends_with(b"\r") {
-			out.push(b'\r');
-		}
-		out.push(b'\n');
-	}
-	out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,11 +338,19 @@ impl<B: Backend> Session<B> {
 				}
 			}
 		}
-		self.messages = self
-			.backend
-			.list(&account)
+		let mut index = self.backend.list(&account);
+		if index.len() > MAX_SESSION_MESSAGES {
+			// The newest stay reachable; the oldest are not listed.
+			tracing::warn!(
+				account = %account,
+				listed = MAX_SESSION_MESSAGES,
+				hidden = index.len() - MAX_SESSION_MESSAGES,
+				"POP3 inbox over the session limit, oldest messages not listed"
+			);
+			index.drain(..index.len() - MAX_SESSION_MESSAGES);
+		}
+		self.messages = index
 			.into_iter()
-			.take(MAX_SESSION_MESSAGES)
 			.map(|(uid, size)| Message {
 				uid,
 				size,
@@ -418,7 +404,7 @@ impl<B: Backend> Session<B> {
 		};
 		match self.backend.fetch(account, &self.messages[index].uid) {
 			Some(data) if data.len() <= MAX_MESSAGE_OCTETS => ok(data),
-			_ => Response::Err("[SYS/TEMP] message unavailable".to_string()),
+			_ => Response::Err("[SYS/PERM] message unavailable".to_string()),
 		}
 	}
 

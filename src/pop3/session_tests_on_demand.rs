@@ -105,7 +105,7 @@ fn a_message_over_the_cap_is_refused() {
 }
 
 #[test]
-fn an_inbox_larger_than_the_cap_is_listed_up_to_the_cap() {
+fn an_inbox_larger_than_the_cap_lists_the_newest() {
 	let index: Vec<(String, usize)> = (0..MAX_SESSION_MESSAGES + 5)
 		.map(|n| (n.to_string(), 1))
 		.collect();
@@ -114,4 +114,43 @@ fn an_inbox_larger_than_the_cap_is_listed_up_to_the_cap() {
 		session.handle(Command::Stat),
 		Response::Ok(format!("{MAX_SESSION_MESSAGES} {MAX_SESSION_MESSAGES}"))
 	);
+	// The five oldest are the ones left out.
+	assert_eq!(
+		session.handle(Command::Uidl(Some(1))),
+		Response::Ok("1 5".to_string())
+	);
+	assert_eq!(
+		session.handle(Command::Uidl(Some(MAX_SESSION_MESSAGES as u32))),
+		Response::Ok(format!(
+			"{MAX_SESSION_MESSAGES} {}",
+			MAX_SESSION_MESSAGES + 4
+		))
+	);
+}
+
+#[test]
+fn an_unreadable_message_is_a_permanent_condition_and_not_a_client_error() {
+	struct Gone;
+	impl Backend for Gone {
+		fn verify(&self, _: &str, _: &str, _: Option<std::net::IpAddr>) -> Option<String> {
+			Some("alice".into())
+		}
+		fn list(&self, _: &str) -> Vec<(String, usize)> {
+			vec![("m".into(), 3)]
+		}
+		fn fetch(&self, _: &str, _: &str) -> Option<Vec<u8>> {
+			None
+		}
+		fn remove(&self, _: &str, _: &[String]) {}
+	}
+	let mut session = Session::new(Gone);
+	session.handle(Command::User("alice".into()));
+	session.handle(Command::Pass(String::new()));
+	let reply = session.handle(Command::Retr(1));
+	assert_eq!(
+		reply,
+		Response::Err("[SYS/PERM] message unavailable".to_string())
+	);
+	assert!(!reply.is_client_error());
+	assert!(session.handle(Command::Retr(9)).is_client_error());
 }

@@ -178,3 +178,29 @@ fn fetch_only_serves_ids_of_the_inbox() {
 	}
 	assert!(backend.fetch("alice", "missing").is_none());
 }
+
+#[test]
+fn list_keeps_the_newest_messages_in_arrival_order() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let backend = backend(dir.path());
+	let ids: Vec<String> = (0..6)
+		.map(|n| {
+			crate::imap::mailbox::append(
+				dir.path(),
+				"alice",
+				"INBOX",
+				&[],
+				format!("Subject: {n}\r\n\r\nb\r\n").as_bytes(),
+				&MessageCrypto::disabled(),
+			)
+			.expect("append")
+			.to_string()
+		})
+		.collect();
+	let kept = backend.list_newest("alice", 3);
+	let names: Vec<&str> = kept.iter().map(|(name, _)| name.as_str()).collect();
+	let mut expected: Vec<&str> = ids.iter().map(String::as_str).collect();
+	expected.sort_unstable();
+	assert_eq!(names, expected[3..].to_vec());
+	assert_eq!(backend.list_newest("alice", 100).len(), 6);
+}
