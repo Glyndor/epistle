@@ -92,3 +92,11 @@ pub(super) fn log_retry_schedule_warnings(config: &Config) {
 		tracing::warn!("{warning}");
 	}
 }
+
+/// Values the file set below a MUST of an RFC and load raised: the lines
+/// `config-check` and `status` print too.
+pub(super) fn log_adjusted_values(config: &Config) {
+	for line in &config.adjusted {
+		tracing::warn!("{line}");
+	}
+}

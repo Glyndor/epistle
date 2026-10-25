@@ -112,12 +112,91 @@ fn names_are_bounded_in_characters_and_in_octets() {
 		s.put(&"a".repeat(MAX_NAME_CHARS + 1), "keep;\r\n"),
 		Err(StoreError::InvalidName)
 	);
-	// 100 characters of two octets: exactly 200 octets, at the octet limit.
-	s.put(&"\u{e9}".repeat(100), "keep;\r\n")
-		.expect("200 octets");
-	// 101 of them is 202 octets, over the limit though under 128 characters.
+	// 128 characters of four octets: 512 octets, at the octet limit, and
+	// longer than a file name, so it is kept under a hashed file name.
+	let long = "\u{1f600}".repeat(MAX_NAME_CHARS);
+	assert_eq!(long.len(), MAX_NAME_BYTES);
+	s.put(&long, "keep;\r\n").expect("512 octets");
+	assert_eq!(s.get(&long).expect("get"), "keep;\r\n");
+	assert!(
+		s.list().expect("list").iter().any(|info| info.name == long),
+		"the long name is listed as itself"
+	);
+	// 128 Chinese characters of three octets, 384 octets: also kept.
+	let cjk = "\u{4e2d}".repeat(MAX_NAME_CHARS);
+	s.put(&cjk, "keep;\r\n").expect("384 octets");
+	// 129 characters is over the character limit.
 	assert_eq!(
-		s.put(&"\u{e9}".repeat(101), "keep;\r\n"),
+		s.put(&"\u{4e2d}".repeat(MAX_NAME_CHARS + 1), "keep;\r\n"),
 		Err(StoreError::InvalidName)
 	);
+	// A name starting like a hashed file name is refused.
+	assert_eq!(
+		s.put("~sha256-abc", "keep;\r\n"),
+		Err(StoreError::InvalidName)
+	);
+}
+
+#[test]
+fn a_name_too_long_for_a_file_survives_a_lost_index_a_rename_and_a_delete() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	let long = "\u{4e2d}".repeat(MAX_NAME_CHARS);
+	s.put(&long, "keep;\r\n").expect("put");
+	let sieve = dir.path().join("alice/sieve");
+	let names = |ext: &str| {
+		std::fs::read_dir(&sieve)
+			.expect("dir")
+			.flatten()
+			.filter(|entry| entry.file_name().to_string_lossy().ends_with(ext))
+			.count()
+	};
+	assert_eq!(names(".name"), 1);
+	std::fs::remove_file(sieve.join(".index.json")).expect("drop the index");
+	let listed = s.list().expect("list");
+	assert_eq!(listed.len(), 1);
+	assert_eq!(listed[0].name, long);
+	s.rename(&long, "short").expect("rename");
+	assert_eq!(names(".name"), 0, "the name file goes with the old name");
+	assert_eq!(s.get("short").expect("get"), "keep;\r\n");
+	s.rename("short", &long).expect("rename back");
+	assert_eq!(names(".name"), 1);
+	s.delete(&long).expect("delete");
+	assert_eq!(names(".name"), 0);
+	assert!(s.list().expect("list").is_empty());
+}
+
+/// Put a script file in the directory by hand, the way an operator might.
+fn drop_in(dir: &std::path::Path, stem: &str) {
+	let sieve = dir.join("alice/sieve");
+	std::fs::create_dir_all(&sieve).expect("dir");
+	std::fs::write(sieve.join(format!("{stem}.sieve")), "keep;\r\n").expect("write");
+}
+
+#[test]
+fn a_file_put_in_by_hand_with_a_name_between_201_and_249_octets_is_not_listed() {
+	// Such a name would be stored under a hashed file name, so the file
+	// could be listed and never opened, and it would take one of the slots.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	drop_in(dir.path(), &"\u{e9}".repeat(117));
+	drop_in(dir.path(), &"\u{e9}".repeat(100));
+	let names: Vec<String> = s
+		.list()
+		.expect("list")
+		.into_iter()
+		.map(|i| i.name)
+		.collect();
+	assert_eq!(names, vec!["\u{e9}".repeat(100)]);
+	assert_eq!(s.get(&"\u{e9}".repeat(100)).expect("get"), "keep;\r\n");
+}
+
+#[test]
+fn a_file_named_like_a_hashed_one_without_its_name_file_is_not_listed_or_opened() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	drop_in(dir.path(), "~sha256-legacy");
+	assert!(s.list().expect("list").is_empty());
+	assert_eq!(s.get("~sha256-legacy"), Err(StoreError::InvalidName));
+	assert_eq!(s.delete("~sha256-legacy"), Err(StoreError::InvalidName));
 }

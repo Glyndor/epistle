@@ -3,9 +3,9 @@
 use std::sync::{Arc, RwLock};
 
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::rustls::server::{ClientHello, ResolvesServerCert};
 use tokio_rustls::rustls::sign::CertifiedKey;
-use tokio_rustls::rustls::{ServerConfig, version};
 
 #[derive(Debug)]
 struct Resolver {
@@ -95,10 +95,9 @@ impl ReloadableAcceptor {
 	/// one), and it negotiates `http/1.1` over ALPN.
 	pub fn https(&self) -> TlsAcceptor {
 		super::ensure_crypto_provider();
-		let mut config =
-			ServerConfig::builder_with_protocol_versions(&[&version::TLS13, &version::TLS12])
-				.with_no_client_auth()
-				.with_cert_resolver(self.resolver.clone());
+		let mut config = ServerConfig::builder_with_protocol_versions(super::PROTOCOL_VERSIONS)
+			.with_no_client_auth()
+			.with_cert_resolver(self.resolver.clone());
 		config.alpn_protocols = vec![b"http/1.1".to_vec()];
 		TlsAcceptor::from(Arc::new(config))
 	}

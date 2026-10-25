@@ -556,6 +556,11 @@ pub struct Config {
 	/// Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub mixed_case: Vec<String>,
+	/// Values the file sets that load changed to keep the server within a
+	/// MUST of an RFC, each as a line naming the value in the file and the
+	/// one in use. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub adjusted: Vec<String>,
 	/// External-clock probe: three independent NTP/NTS sources and the
 	/// offsets `epistle status` and `epistle check clock` report. Absent
 	/// uses the design defaults (Cloudflare NTS, Netnod NTS, Google NTP,

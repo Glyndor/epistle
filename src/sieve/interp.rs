@@ -344,7 +344,7 @@ fn parse_vacation(args: &[Argument]) -> Option<VacationRequest> {
 /// The most different IMAP flags a run puts on a message.
 pub const MAX_FLAGS: usize = 32;
 /// The longest a flag may be, in octets (the IMAP keyword limit).
-const MAX_FLAG_BYTES: usize = 64;
+pub(crate) const MAX_FLAG_BYTES: usize = 64;
 
 /// Add `tokens` to `flags`: a flag once however it is cased, none over
 /// [`MAX_FLAG_BYTES`], and at most [`MAX_FLAGS`] in all (the first ones win).

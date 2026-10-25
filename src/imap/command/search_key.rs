@@ -10,7 +10,7 @@ use crate::imap::mailbox::Flag;
 /// Parsing, matching and dropping a key all recurse once per level, so the
 /// bound keeps a long command line from exhausting the stack; deeper input is
 /// a BAD command.
-pub(super) const MAX_SEARCH_DEPTH: usize = 64;
+pub(crate) const MAX_SEARCH_DEPTH: usize = 64;
 
 /// Parse one search-key from the start of `s`, return `(key, remaining)`.
 pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {

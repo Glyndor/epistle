@@ -151,14 +151,14 @@ fn names_cannot_drive_the_terminal() {
 #[test]
 fn a_file_over_the_message_size_limit_is_refused_before_reading_it_all() {
 	let (_dir, config, eml) = fixture(
-		"max_message_size = 1024\nmessage_memory_budget = 0\n",
-		&vec![b'a'; 1025],
+		"max_message_size = 65536\nmessage_memory_budget = 0\n",
+		&vec![b'a'; 65537],
 	);
 	let (result, out) = run(&config, &eml, false);
 	assert_eq!(
 		result,
 		Err(format!(
-			"{} is larger than the message size limit (1024 bytes)",
+			"{} is larger than the message size limit (65536 bytes)",
 			eml.display()
 		))
 	);

@@ -47,6 +47,8 @@ fn warnings(config: &Config) -> Vec<String> {
 	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
 		warnings.push(warning.to_string());
 	}
+	// A value the file sets below a MUST of an RFC, raised when it loaded.
+	warnings.extend(config.adjusted.iter().cloned());
 	// Capitals in an address or a domain are accepted (epistle uses the
 	// lowercase form), but named so the file can be fixed.
 	for entry in &config.mixed_case {

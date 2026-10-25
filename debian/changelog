@@ -3,6 +3,10 @@ epistle (0.12.3) UNRELEASED; urgency=medium
   * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
   * Expose per-account connection limits in the operator limits catalog.
   * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.
+  * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` is shown as the RFC minimum it is, which `limits set` refuses to lower.
+  * Operators: a configuration with `max_message_size` below 64 KiB no longer loads, because RFC 5321 requires a server to accept at least 64K octets; the error names the fix, `epistle limits set max-message-size 64k`, and `epistle limits unset max-message-size` also works. A ManageSieve script name starting with `~sha256-` is no longer valid.
+  * Operators: a configuration with `max_message_size` below 64 KiB is raised to 64 KiB when it loads, because RFC 5321 requires a server to accept at least 64K octets; the server still starts, and the log, `epistle config-check` and `epistle status` name the value in the file and the one in use. `epistle limits set max-message-size 64k` writes the floor into the file. A ManageSieve script name starting with `~sha256-` is no longer valid.
+  * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` and `max-message-size` are shown as the RFC minimums they are, which `limits set` refuses to lower; a ManageSieve script name may be up to 128 characters (512 octets).
   * Document how to expose the management API on a private interface, and warn
     when an API key pinned to a network sits behind a bridge that hides the
     address of the client.

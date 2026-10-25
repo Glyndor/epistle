@@ -153,3 +153,23 @@ fn config_check_accepts_a_disabled_external_clock_probe() {
 		);
 	}
 }
+
+#[test]
+fn config_check_says_when_it_raised_a_message_size_below_64k() {
+	let file = write_config(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\nmax_message_size = 1000\n",
+	);
+	let mut out = Vec::new();
+	let mut err = Vec::new();
+	assert_eq!(
+		super::run(file.path(), false, &mut out, &mut err),
+		ExitCode::SUCCESS,
+		"the file still loads"
+	);
+	let text = String::from_utf8_lossy(&err).to_string();
+	assert!(
+		text.contains("max_message_size is 1000 bytes in the file"),
+		"{text}"
+	);
+	assert!(text.contains("65536 bytes are used"), "{text}");
+}

@@ -37,7 +37,7 @@ fn an_unset_budget_shows_what_the_mail_limit_gives() {
 		(
 			"message-memory-budget\tauto (409 MiB from the mail container limit)\tderived\tadjustable\tno standard mandate"
 				.to_string(),
-			serde_json::json!({"value": 409_u64 * 1024 * 1024, "unit": "bytes", "source": "derived", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+			serde_json::json!({"value": 409_u64 * 1024 * 1024, "unit": "bytes", "source": "derived", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 		)
 	);
 }
@@ -52,7 +52,7 @@ fn an_unset_budget_without_a_compose_file_shows_the_assumed_limit() {
 			"message-memory-budget\tauto (204 MiB, no mail container limit found, 1g \
 			 assumed)\tderived\tadjustable\tno standard mandate"
 				.to_string(),
-			serde_json::json!({"value": 204_u64 * 1024 * 1024, "unit": "bytes", "source": "derived", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+			serde_json::json!({"value": 204_u64 * 1024 * 1024, "unit": "bytes", "source": "derived", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 		)
 	);
 }
@@ -68,7 +68,7 @@ fn a_set_budget_is_configured_whatever_its_value() {
 		(
 			"message-memory-budget\t268435456 bytes\tconfigured\tadjustable\tno standard mandate"
 				.to_string(),
-			serde_json::json!({"value": 268_435_456_u64, "unit": "bytes", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+			serde_json::json!({"value": 268_435_456_u64, "unit": "bytes", "source": "configured", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 		)
 	);
 }

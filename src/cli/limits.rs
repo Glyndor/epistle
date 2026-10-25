@@ -6,6 +6,9 @@ pub(super) mod values;
 #[path = "limits_catalog.rs"]
 pub(super) mod catalog;
 
+#[path = "limits_protocol.rs"]
+mod protocol;
+
 #[path = "limits_show.rs"]
 mod show;
 
@@ -71,6 +74,7 @@ fn edit_document(
 		})?;
 	if let (Some(value), Some((floor, reason))) = (value, key.must_floor())
 		&& value < floor
+		&& !(value == 0 && key.zero_is_default())
 	{
 		return Err(format!("{REFUSED_PREFIX}{reason}"));
 	}
@@ -459,3 +463,11 @@ mod tests_should_warn;
 #[cfg(test)]
 #[path = "limits_tests_catalog.rs"]
 mod tests_catalog;
+
+#[cfg(test)]
+#[path = "limits_tests_protocol.rs"]
+mod tests_protocol;
+
+#[cfg(test)]
+#[path = "limits_tests_scan.rs"]
+mod tests_scan;

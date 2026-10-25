@@ -234,6 +234,7 @@ impl Key {
 				| Self::MaxMailboxConnectionsPerIp
 				| Self::MaxHttpConnections
 				| Self::MaxHttpConnectionsPerIp
+				| Self::MaxMessageSize
 		)
 	}
 
@@ -262,6 +263,10 @@ impl Key {
 			Self::MaxRecipients => Some((
 				crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
 				crate::smtp::session::MIN_MAX_RECIPIENTS_REASON,
+			)),
+			Self::MaxMessageSize => Some((
+				crate::smtp::session::MIN_MESSAGE_SIZE as u64,
+				crate::smtp::session::MIN_MESSAGE_SIZE_REASON,
 			)),
 			_ => None,
 		}

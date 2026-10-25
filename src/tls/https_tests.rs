@@ -1,5 +1,5 @@
 use super::*;
-use tokio_rustls::rustls::{ClientConfig, ProtocolVersion, RootCertStore};
+use tokio_rustls::rustls::{ClientConfig, ProtocolVersion, RootCertStore, version};
 
 #[tokio::test]
 async fn https_pins_tls12_minimum_and_accepts_both_supported_versions() {
