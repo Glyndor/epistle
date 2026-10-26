@@ -71,6 +71,10 @@ mod tests_a4_tempfile;
 #[path = "db_dump_tests_staging.rs"]
 mod tests_staging;
 
+#[cfg(test)]
+#[path = "db_dump_tests_signal.rs"]
+mod tests_signal;
+
 /// The path of `database.sql` inside the backup archive.
 pub(crate) const DATABASE_SQL_NAME: &str = "database.sql";
 
@@ -120,6 +124,9 @@ pub enum BackupError {
 	/// operator can re-run `podup exec -T db ls <path>` to confirm.
 	#[allow(dead_code)]
 	ContainerFileMissing(PathBuf),
+	/// A held stop signal (the number) came before the restore wrote the
+	/// database or the files, so it stopped without writing either.
+	Interrupted(i32),
 }
 
 impl std::fmt::Display for BackupError {
@@ -152,6 +159,11 @@ impl std::fmt::Display for BackupError {
 				f,
 				"the SQL file copied into the container at {} is missing; podup cp reported success but the file is not visible to the exec'd psql",
 				path.display()
+			),
+			BackupError::Interrupted(signal) => write!(
+				f,
+				"stopped by {} before the database or the files were written",
+				super::restore_signals::signal_name(*signal)
 			),
 		}
 	}
@@ -295,6 +307,7 @@ pub(crate) fn load_dump_with(
 		load_dump_container_with(&compose_file_path(data_dir), sql, resolver)
 	} else {
 		let spec = host_psql_load_spec(db, sql)?;
+		super::restore_signals::stop_if_arrived()?;
 		run_command_capturing_stdout_with(&spec, resolver).and_then(|output| {
 			if output.status_ok {
 				Ok(())
@@ -476,6 +489,9 @@ fn run_command_capturing_stdout_with(
 	}
 	command.stdout(Stdio::piped());
 	command.stderr(Stdio::piped());
+	if super::restore_signals::spawn_apart() {
+		std::os::unix::process::CommandExt::process_group(&mut command, 0);
+	}
 	let mut child = match command.spawn() {
 		Ok(child) => child,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
