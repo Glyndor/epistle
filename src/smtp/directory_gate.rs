@@ -23,9 +23,24 @@ pub enum Proof {
 	/// A SCRAM exchange. The proof is derived from the password alone, so
 	/// there is no room for a TOTP code.
 	Scram,
-	/// An identity vouched for by a bearer token or a client certificate. The
-	/// second factor, if any, belongs to whoever issued it.
+	/// An identity vouched for by a client certificate, or by a bearer token
+	/// from an identity provider the operator declared enforces its own
+	/// second factor. The second factor, if any, belongs to whoever issued it.
 	Federated,
+	/// A bearer token from an identity provider that is not declared to
+	/// enforce a second factor. Like SCRAM, the proof has no room for a TOTP
+	/// code.
+	Bearer,
+}
+
+/// The proof a bearer token from `verifier` amounts to: federated when the
+/// operator declared that the identity provider enforces its own second
+/// factor, and otherwise a proof with no room for a TOTP code.
+pub fn bearer_proof(verifier: Option<&crate::oauth::OauthVerifier>) -> Proof {
+	match verifier {
+		Some(verifier) if verifier.second_factor_attested() => Proof::Federated,
+		_ => Proof::Bearer,
+	}
 }
 
 /// How a SCRAM exchange that cannot succeed is carried on.
@@ -61,8 +76,9 @@ impl Directory {
 	///
 	/// - an administratively disabled account never signs in;
 	/// - the account's protocol allowlist must include `protocol`;
-	/// - SCRAM is refused for an account with a second factor, because the
-	///   proof cannot carry the code and accepting it would skip the factor.
+	/// - SCRAM and a bearer token not backed by a provider-side second factor
+	///   are refused for an account with a second factor, because the proof
+	///   cannot carry the code and accepting it would skip the factor.
 	///
 	/// A login by an address in a switched-off domain is refused earlier, when
 	/// the address fails to resolve to an account.
@@ -79,7 +95,14 @@ impl Directory {
 		if !self.is_protocol_allowed(&account, protocol) {
 			return false;
 		}
-		!(proof == Proof::Scram && self.totp.contains_key(&account))
+		let needs_code =
+			matches!(proof, Proof::Scram | Proof::Bearer) && self.totp.contains_key(&account);
+		if needs_code && proof == Proof::Bearer {
+			tracing::warn!(
+				"bearer sign-in refused for an account with a TOTP secret; a token cannot carry the code (see idp_enforces_second_factor in [oauth])"
+			);
+		}
+		!needs_code
 	}
 
 	/// Plan the answer to a SCRAM client-first message for `username`. Bans

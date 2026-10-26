@@ -110,6 +110,16 @@ impl MaskedAddressStore {
 			.map(|entry| (entry.address.clone(), entry.account.clone()))
 	}
 
+	/// The addresses of the entries that are switched off. They may be
+	/// switched on again, which is why they are told apart from an address
+	/// nobody ever had.
+	pub fn paused(&self) -> impl Iterator<Item = String> + '_ {
+		self.entries
+			.values()
+			.filter(|entry| !entry.enabled)
+			.map(|entry| entry.address.clone())
+	}
+
 	/// Every `(address, account)`, enabled or not.
 	pub(crate) fn all(&self) -> impl Iterator<Item = (String, String)> + '_ {
 		self.entries

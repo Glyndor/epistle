@@ -264,3 +264,25 @@ fn the_rest_submission_refuses_identity_disagreement_created_by_crlf_normalizati
 	);
 	assert_eq!(submitted.data, raw);
 }
+
+#[test]
+fn the_rest_submission_refuses_a_body_with_a_loose_cr_or_a_nul() {
+	for raw in [
+		b"From: news@example.org\r\n\r\nhello\r.\r\nbody\r\n".as_slice(),
+		b"From: news@example.org\r\n\r\nbody\r".as_slice(),
+		b"From: news@example.org\r\n\r\nbo\0dy\r\n".as_slice(),
+	] {
+		let mut submitted = raw_message(raw);
+		let before = submitted.data.clone();
+		let refusal = prepare(
+			&mut submitted,
+			ClassSources::default(),
+			None,
+			&Policy::default(),
+			None,
+		)
+		.expect_err("loose body framing");
+		assert_eq!(refusal, MarketingRefusal::AmbiguousLineFraming);
+		assert_eq!(submitted.data, before);
+	}
+}

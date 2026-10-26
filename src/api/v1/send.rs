@@ -272,7 +272,7 @@ pub(crate) fn sink_refusal(error: SinkError) -> ApiError {
 		SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
 		SinkError::ScanUnavailable => ApiError::scan_unavailable(),
 		SinkError::ScanTooLarge => ApiError::scan_too_large(),
-		SinkError::Unavailable(_) => ApiError::internal(),
+		SinkError::Unavailable(_) | SinkError::Gone(_) => ApiError::internal(),
 		SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
 		SinkError::TooManyHeaderFields => ApiError::too_many_header_fields(),
 	}

@@ -183,7 +183,7 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 				let message = AcceptedMessage {
 					reverse_path: format!("postmaster@{reporting}"),
 					recipients: vec![to_addr.to_string()],
-					data: email_bytes,
+					data: crate::util::header_block::frame_generated(email_bytes),
 					require_tls: false,
 					mailbox: None,
 					tlsrpt_verified: false,
@@ -237,7 +237,7 @@ async fn lookup_rua(dns: &dyn DnsLookup, domain: &str) -> Result<Vec<String>, Lo
 /// domain controls and ends up in the `To:` header of a message we sign,
 /// so anything that could break out of that header (CR, LF, spaces,
 /// commas, angle brackets, quotes) is refused rather than escaped.
-fn report_address(uri: &str) -> Option<&str> {
+pub(crate) fn report_address(uri: &str) -> Option<&str> {
 	let mailbox = uri.strip_prefix("mailto:")?.split('?').next()?;
 	let (local, domain) = mailbox.split_once('@')?;
 	let plain = |part: &str| {

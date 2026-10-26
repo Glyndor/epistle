@@ -56,6 +56,7 @@ mod masked;
 mod migrate;
 mod mobileconfig;
 mod mta_sts_serve;
+mod oauth_advice;
 mod pick;
 mod probe;
 mod prompt;
@@ -78,6 +79,9 @@ mod serve_smtp_state;
 mod serve_store;
 mod serve_tasks;
 mod serve_tasks_delivery;
+#[cfg(test)]
+#[path = "serve_tests_oauth.rs"]
+mod serve_tests_oauth;
 mod serve_tls;
 mod serve_webdav;
 mod service;

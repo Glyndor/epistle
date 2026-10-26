@@ -72,9 +72,10 @@ pub(super) fn accounts_for(
 		let address = Address::parse(recipient)
 			.map_err(|_| SinkError::Unavailable(format!("unparseable recipient {recipient}")))?;
 		let finals = directory.final_recipients(&address).ok_or_else(|| {
-			SinkError::Unavailable(format!(
-				"recipient {recipient} no longer resolves to an account"
-			))
+			directory.unresolved(
+				&address,
+				format!("recipient {recipient} no longer resolves to an account"),
+			)
 		})?;
 		// The list identity belongs to the delivery, not to the message: a
 		// recipient that reaches an account through a list carries that
@@ -230,3 +231,7 @@ mod tests {
 		assert!(copy.require_tls && copy.sender_verified && !copy.tlsrpt_verified);
 	}
 }
+
+#[cfg(test)]
+#[path = "delivery_lists_tests_gone.rs"]
+mod tests_gone;

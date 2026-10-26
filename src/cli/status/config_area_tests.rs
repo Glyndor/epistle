@@ -110,3 +110,22 @@ async fn a_config_that_does_not_load_fails_and_skips_the_restart_check() {
 	assert_eq!(report.detail, "bad config");
 	assert!(report.items.is_empty());
 }
+
+#[tokio::test]
+async fn the_verified_email_line_is_information_and_leaves_the_area_green() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ctx = ctx(
+		dir.path(),
+		"[oauth]\nissuer = \"i\"\naudience = \"a\"\nalgorithm = \"ES256\"\npublic_key = \"K\"\n",
+	);
+	compose(&ctx, MAIL_STARTED);
+	set_mtime(&ctx.path, STARTED - 3600);
+	let report = check(&ctx).await;
+	let item = report
+		.items
+		.iter()
+		.find(|i| i.name == "bearer sign-in")
+		.expect("the line about email_verified");
+	assert_eq!(item.status, Level::Ok, "{item:?}");
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+}

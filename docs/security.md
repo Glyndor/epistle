@@ -87,11 +87,25 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   a switched-off domain, as `domain disable` documents. SCRAM is refused for an
   account with a TOTP secret, because the SCRAM proof is derived from the
   password alone and cannot carry the code; such an account uses PLAIN or LOGIN
-  with the code appended. A refused exchange runs on decoy credentials and ends
+  with the code appended. A bearer token from an external identity provider is
+  refused for such an account in the same way, unless `[oauth]
+  idp_enforces_second_factor = true` declares that the provider enforces a
+  second factor itself; a token of the built-in authorization server counts as
+  having passed it, since the server asks for the code when it issues one. A
+  bearer token names a mailbox only through an `email` claim with
+  `email_verified` true, matched against the exact address of an account.
+  The same exact match applies to a SASL EXTERNAL client certificate: one that
+  carries a catch-all, masked or sub-address (`user+tag@`) no longer signs in.
+  A token of the built-in authorization server lives one hour. The checks of
+  an app password (its network range, expiry and revocation) apply when the
+  token is issued, not while it lives, and a token issued before TOTP was
+  turned on for the account is good until it expires. With `signing_key` the
+  configuration is refused unless the key is the private half of
+  `public_key`. A refused exchange runs on decoy credentials and ends
   at the final step as a wrong password, so nothing tells a refusal from a bad
-  proof. Bearer tokens and client certificates are not asked for a TOTP code
-  (the issuer or the certificate is the factor) but are asked for everything
-  else. Before 0.12.2 SCRAM skipped the TOTP code and the disabled flag, and a
+  proof. Client certificates are not asked for a TOTP code (the certificate is the
+  factor), and bearer tokens are asked for it unless the issuer is declared to
+  be the factor; both are asked for everything else. Before 0.12.2 SCRAM skipped the TOTP code and the disabled flag, and a
   bearer token or client certificate skipped the disabled flag.
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
   password, and repeated failures close the connection. For a password

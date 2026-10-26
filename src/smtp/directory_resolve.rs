@@ -22,6 +22,53 @@ impl Directory {
 		self.disabled_domains.contains(&domain.to_ascii_lowercase())
 	}
 
+	/// The account whose own address is `address`, and nothing else: an alias
+	/// of a hosted domain counts, but a catch-all, a masked address, a
+	/// multi-target alias and a sub-address do not. For an identity that a
+	/// foreign party vouched for, where a near match must not open a mailbox.
+	pub fn resolve_exact(&self, address: &Address) -> Option<String> {
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		if !self.domains.contains(domain) || self.disabled_domains.contains(domain) {
+			return None;
+		}
+		let key = normalize(&format!("{}@{domain}", address.local_part()));
+		self.accounts_by_address.get(&key).cloned()
+	}
+
+	/// The account called `name`, when it exists and can hold a password.
+	pub fn named_account(&self, name: &str) -> Option<String> {
+		let name = name.to_ascii_lowercase();
+		self.password_hashes.contains_key(&name).then_some(name)
+	}
+
+	/// Whether `address` is switched off for now: its domain is, or it is a
+	/// masked address that is. Either can be switched on again, so a
+	/// recipient that does not resolve for this reason is not gone for good.
+	pub fn is_paused(&self, address: &Address) -> bool {
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		self.disabled_domains.contains(domain)
+			|| self
+				.masked_paused
+				.contains(&normalize(&format!("{}@{domain}", address.local_part())))
+	}
+
+	/// The error for a local recipient that no longer resolves: gone for
+	/// good, unless it is only switched off.
+	pub fn unresolved(&self, address: &Address, what: String) -> crate::smtp::sink::SinkError {
+		match self.is_paused(address) {
+			true => crate::smtp::sink::SinkError::Unavailable(what),
+			false => crate::smtp::sink::SinkError::Gone(what),
+		}
+	}
+
 	/// Resolve a validated address.
 	pub fn resolve(&self, address: &Address) -> Resolution {
 		let local = address.local_part();

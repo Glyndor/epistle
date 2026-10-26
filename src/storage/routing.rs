@@ -249,6 +249,29 @@ impl MessageSink for SplitDelivery {
 		)
 	}
 
+	/// A report the server wrote: once it is in a local mailbox, a later step
+	/// (a redirect, a vacation reply) that fails is logged and not returned,
+	/// because the caller would send the report again and fill the mailbox
+	/// with copies.
+	fn deliver_report(&self, mut message: AcceptedMessage) -> Result<(), SinkError> {
+		message.data = crate::queue::tls_required::strip(message.data);
+		let mut done = None;
+		let routed = self.route_reporting(
+			message,
+			(uuid::Uuid::now_v7(), None, &BTreeMap::new()),
+			(crate::evidence::MailClass::Personal, None),
+			None,
+			&mut done,
+		);
+		match (routed, done) {
+			(Err(error), Some(_)) => {
+				tracing::warn!(%error, "a report reached a mailbox and a later step failed; not repeated");
+				Ok(())
+			}
+			(routed, _) => routed,
+		}
+	}
+
 	/// Mail one of our accounts sends: only the server's own inspection may
 	/// speak in the attachment warning header, so whatever the sender wrote
 	/// there is dropped before any copy is stored, queued or signed.
@@ -336,9 +359,10 @@ impl SplitDelivery {
 				// The session rejected unknown local users; drift here is
 				// a logic error and the whole delivery fails closed.
 				Resolution::UnknownUser => {
-					return Err(SinkError::Unavailable(format!(
-						"recipient {recipient} no longer resolves"
-					)));
+					return Err(self.directory.current().unresolved(
+						&address,
+						format!("recipient {recipient} no longer resolves"),
+					));
 				}
 			}
 		}
@@ -496,6 +520,7 @@ impl SplitDelivery {
 	/// it to the body in a single allocation sized to the combined length
 	/// so the body is moved, not copied.
 	fn sign_reply(&self, reply: &mut AcceptedMessage) {
+		reply.data = crate::util::header_block::frame_generated(std::mem::take(&mut reply.data));
 		if let Some(signer) = &self.signer
 			&& let Some(domain) = self.signing_domain(reply)
 			&& let Some(header) = signer.sign(&domain, &reply.data)
@@ -573,6 +598,14 @@ mod tests_dkim_per_domain;
 #[cfg(test)]
 #[path = "routing_tests_forward.rs"]
 mod tests_forward;
+
+#[cfg(test)]
+#[path = "routing_tests_report.rs"]
+mod tests_report;
+
+#[cfg(test)]
+#[path = "routing_tests_sign_reply.rs"]
+mod tests_sign_reply;
 
 #[cfg(test)]
 #[path = "routing_tests_vacation.rs"]

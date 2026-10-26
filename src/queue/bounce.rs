@@ -213,6 +213,14 @@ fn build_report(
 		per_recipient.push_str(&recipient_fields(kind, recipient, &reason));
 	}
 
+	// The sender is written into the `To:` header of the notice: one with a
+	// control character or an angle bracket would open a header of its own.
+	if original_reverse_path
+		.chars()
+		.any(|ch| ch.is_control() || ch == '<' || ch == '>')
+	{
+		return None;
+	}
 	let original_headers = original_header_block(original_data);
 	// The server writes this notice, so it is `auto-generated`: a DSN that
 	// claims to be a reply invites an auto-responder to answer a bounce
@@ -260,7 +268,7 @@ Content-Type: message/rfc822-headers\r\n\
 	Some(AcceptedMessage {
 		reverse_path: String::new(),
 		recipients: vec![original_reverse_path.to_string()],
-		data: body.into_bytes(),
+		data: crate::util::header_block::frame_generated(body.into_bytes()),
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
@@ -290,10 +298,27 @@ fn original_header_block(data: &[u8]) -> String {
 		.windows(4)
 		.position(|w| w == b"\r\n\r\n")
 		.map(|position| position + 2)
-		.unwrap_or(data.len())
-		.min(MAX_HEADERS);
-	String::from_utf8_lossy(&data[..end]).to_string()
+		.unwrap_or(data.len());
+	let block = &data[..end];
+	// A cut falls on the end of a whole line, never between the two bytes of
+	// a line ending.
+	let block = match block.len() > MAX_HEADERS {
+		true => {
+			let cut = &block[..MAX_HEADERS];
+			let whole = cut
+				.iter()
+				.rposition(|byte| *byte == b'\n')
+				.map_or(0, |at| at + 1);
+			&cut[..whole]
+		}
+		false => block,
+	};
+	String::from_utf8_lossy(block).to_string()
 }
+
+#[cfg(test)]
+#[path = "bounce_tests_framing.rs"]
+mod tests_framing;
 
 #[cfg(test)]
 mod tests {

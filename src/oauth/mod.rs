@@ -1,13 +1,15 @@
 //! OAuth2/OIDC bearer-token verification for SASL (OAUTHBEARER/XOAUTH2).
 //!
 //! Validates a bearer JWT against a configured issuer, audience and signing
-//! key, returning the authenticated identity (the email/sub claim). The SASL
-//! mechanism wiring consumes this.
+//! key, returning the authenticated identity (the verified `email` claim). The
+//! SASL mechanism wiring consumes this.
 
 use std::sync::{Arc, RwLock};
 
 use crate::jwt::{self, Algorithm, Validation};
 
+mod identity;
+pub use identity::Verified;
 pub mod oidc;
 
 pub use oidc::{Jwk, OidcError};
@@ -30,6 +32,7 @@ pub struct OauthVerifier {
 	issuer: String,
 	audience: String,
 	source: KeySource,
+	policy: identity::IdentityPolicy,
 }
 
 /// Why a verifier could not be built.
@@ -66,6 +69,7 @@ impl OauthVerifier {
 				algorithm,
 				public_key,
 			},
+			policy: identity::IdentityPolicy::default(),
 		})
 	}
 
@@ -81,7 +85,52 @@ impl OauthVerifier {
 			issuer: issuer.into(),
 			audience: audience.into(),
 			source: KeySource::Jwks(Arc::new(RwLock::new(keys))),
+			policy: identity::IdentityPolicy::default(),
 		}
+	}
+
+	/// Set what the operator declares about the identity provider: whether it
+	/// may vouch for an `email` claim without `email_verified`, and whether it
+	/// enforces its own second factor on the sign-in that issues a token.
+	pub fn with_identity_policy(
+		mut self,
+		allow_unverified_email: bool,
+		second_factor_attested: bool,
+	) -> Self {
+		self.policy = identity::IdentityPolicy {
+			allow_unverified_email,
+			second_factor_attested,
+			..self.policy
+		};
+		self
+	}
+
+	/// [`Self::with_identity_policy`] with what the `[oauth]` section declares.
+	/// Tokens signed with the key of epistle's own authorization server
+	/// (`signing_key` or `signing_key_file`) name an account in `sub` and
+	/// come after the second factor was asked for.
+	pub fn declared_by(mut self, config: &crate::config::Oauth) -> Self {
+		self.policy.own_tokens = config.signing_key.is_some() || config.signing_key_file.is_some();
+		self.with_identity_policy(
+			config.allow_unverified_email,
+			config.idp_enforces_second_factor,
+		)
+	}
+
+	/// Treat every token as one of epistle's own authorization server.
+	#[cfg(test)]
+	pub(crate) fn with_own_tokens(mut self) -> Self {
+		self.policy.own_tokens = true;
+		self
+	}
+
+	/// Whether a token of this verifier stands for the second factor: the
+	/// operator declared that the identity provider enforces one, or the
+	/// tokens come from epistle's own authorization server, which asks for
+	/// it before issuing. When it does not, an account with a TOTP secret
+	/// cannot sign in with a bearer token.
+	pub fn second_factor_attested(&self) -> bool {
+		self.policy.second_factor_met()
 	}
 
 	/// The shared JWKS cache, when this verifier is OIDC-backed. The background
@@ -94,30 +143,89 @@ impl OauthVerifier {
 	}
 
 	/// Verify a bearer token at `now_secs`, returning the authenticated email
-	/// (the `email` claim, falling back to `sub`) when it is valid. Synchronous
-	/// and network-free: OIDC keys are read from the in-memory cache.
+	/// (the `email` claim, which must carry `email_verified` unless the
+	/// operator declared otherwise) when it is valid. Synchronous and
+	/// network-free: OIDC keys are read from the in-memory cache.
 	pub fn verify(&self, token: &str, now_secs: u64) -> Option<String> {
+		self.verify_identity(token, now_secs)
+			.map(|verified| verified.as_str().to_string())
+	}
+
+	/// Verify a bearer token and say who it names. A refusal is logged with
+	/// its reason and nothing taken from the token.
+	pub fn verify_identity(&self, token: &str, now_secs: u64) -> Option<Verified> {
+		let claims = match self.validate(token, now_secs) {
+			Ok(claims) => claims,
+			// A client that keeps its old token is routine, not a fault.
+			Err(Invalid::Token(jwt::JwtError::Expired)) => {
+				tracing::info!("bearer token refused: it has expired");
+				return None;
+			}
+			Err(error) => {
+				tracing::warn!("bearer token refused: {}", invalid_reason(&error));
+				return None;
+			}
+		};
+		match self.policy.identity(&claims) {
+			Ok(verified) => Some(verified),
+			Err(refusal) => {
+				tracing::warn!("bearer token refused: {}", refusal.reason());
+				None
+			}
+		}
+	}
+
+	fn validate(&self, token: &str, now_secs: u64) -> Result<crate::jwt::Claims, Invalid> {
 		let validation = Validation {
 			now: now_secs,
 			issuer: Some(&self.issuer),
 			audience: Some(&self.audience),
 		};
-		let claims = match &self.source {
+		match &self.source {
 			KeySource::Static {
 				algorithm,
 				public_key,
-			} => jwt::validate(token, *algorithm, public_key, &validation).ok()?,
+			} => jwt::validate(token, *algorithm, public_key, &validation).map_err(Invalid::Token),
 			KeySource::Jwks(cache) => {
 				let kid = token_kid(token);
-				let keys = cache.read().ok()?;
-				let key = select_key(&keys, kid.as_deref())?;
-				jwt::validate(token, key.algorithm, &key.key, &validation).ok()?
+				let keys = cache.read().map_err(|_| Invalid::KeysUnavailable)?;
+				if keys.is_empty() {
+					return Err(Invalid::NoKeys);
+				}
+				let key = select_key(&keys, kid.as_deref()).ok_or(Invalid::UnknownKey)?;
+				jwt::validate(token, key.algorithm, &key.key, &validation).map_err(Invalid::Token)
 			}
-		};
-		claims
-			.string("email")
-			.or_else(|| claims.string("sub"))
-			.map(str::to_string)
+		}
+	}
+}
+
+/// Why a token does not validate.
+enum Invalid {
+	/// The token itself failed a check.
+	Token(jwt::JwtError),
+	/// The provider's key set has no key yet (the first fetch gave none).
+	NoKeys,
+	/// No cached key matches the token's `kid`, or it has none and several
+	/// keys are cached.
+	UnknownKey,
+	/// The key cache could not be read.
+	KeysUnavailable,
+}
+
+/// Why a token does not validate, as the log states it.
+fn invalid_reason(error: &Invalid) -> &'static str {
+	use jwt::JwtError::*;
+	match error {
+		Invalid::NoKeys => "the provider's key set is empty",
+		Invalid::UnknownKey => "no known key matches the kid of the token",
+		Invalid::KeysUnavailable => "the key cache could not be read",
+		Invalid::Token(Malformed | AlgorithmMismatch) => "it is not a token this verifier can read",
+		Invalid::Token(BadSignature) => "its signature does not verify",
+		Invalid::Token(MissingExpiry) => "it has no usable exp claim",
+		Invalid::Token(Expired) => "it has expired",
+		Invalid::Token(NotYetValid) => "it is not valid yet (nbf)",
+		Invalid::Token(WrongIssuer) => "its issuer is not the configured one",
+		Invalid::Token(WrongAudience) => "its audience is not the configured one",
 	}
 }
 
@@ -197,6 +305,7 @@ mod tests {
 				"iss": "https://idp.example",
 				"aud": "mail",
 				"email": "alice@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
@@ -228,7 +337,7 @@ mod tests {
 	}
 
 	#[test]
-	fn falls_back_to_sub_when_email_absent() {
+	fn a_token_with_only_a_subject_names_no_identity() {
 		let rng = SystemRandom::new();
 		let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
 		let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
@@ -246,7 +355,7 @@ mod tests {
 				"exp": 2000,
 			}),
 		);
-		assert_eq!(verifier.verify(&token, 1000).as_deref(), Some("user-123"));
+		assert_eq!(verifier.verify(&token, 1000), None);
 	}
 
 	/// Sign an ES256 token whose header carries `kid`, like an IdP-issued token.
@@ -297,6 +406,7 @@ mod tests {
 				"iss": "https://idp.example",
 				"aud": "mail",
 				"email": "bob@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
@@ -350,7 +460,7 @@ mod tests {
 	}
 
 	#[test]
-	fn jwks_verifier_falls_back_to_single_key_without_kid() {
+	fn jwks_verifier_uses_the_single_key_without_kid() {
 		let (pair, rng, point) = ec_keypair();
 		let keys = vec![Jwk {
 			kid: String::new(),
@@ -365,11 +475,15 @@ mod tests {
 			&serde_json::json!({
 				"iss": "https://idp.example",
 				"aud": "mail",
-				"sub": "carol",
+				"email": "carol@example.org",
+				"email_verified": true,
 				"exp": 2000,
 			}),
 		);
-		assert_eq!(verifier.verify(&token, 1000).as_deref(), Some("carol"));
+		assert_eq!(
+			verifier.verify(&token, 1000).as_deref(),
+			Some("carol@example.org")
+		);
 	}
 
 	#[test]
@@ -380,3 +494,7 @@ mod tests {
 		assert!(static_v.jwks_cache().is_none());
 	}
 }
+
+#[cfg(test)]
+#[path = "invalid_tests.rs"]
+mod invalid_tests;

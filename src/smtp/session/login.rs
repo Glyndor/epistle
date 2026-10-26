@@ -89,9 +89,9 @@ impl Session {
 		// for here, with the same outcome as a missing or untrusted
 		// certificate.
 		let account = match crate::smtp::address::Address::parse(&identity) {
-			Ok(address) => match self.directory.resolve(&address) {
-				crate::smtp::directory::Resolution::Account(account) => account,
-				_ => return self.auth_fail(),
+			Ok(address) => match self.directory.resolve_exact(&address) {
+				Some(account) => account,
+				None => return self.auth_fail(),
 			},
 			Err(_) => return self.auth_fail(),
 		};

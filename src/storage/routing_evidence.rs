@@ -223,6 +223,7 @@ fn abandon(service: &EvidenceService, (id, account): (uuid::Uuid, &str), why: &S
 		SinkError::ScanTooLarge => "too large for the content scan",
 		SinkError::EvidenceUnavailable(_) => "evidence unavailable",
 		SinkError::Unavailable(_) => "storage unavailable",
+		SinkError::Gone(_) => "recipient gone",
 		SinkError::TooManyHeaderFields => "too many header fields",
 	};
 	if let Err(error) = service.abandon_for(Some(account), id, reason) {

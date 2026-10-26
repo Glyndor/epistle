@@ -63,8 +63,19 @@ pub(crate) fn line_ending(raw: &[u8]) -> &'static [u8] {
 	}
 }
 
+/// Whether `data` holds a byte no outbound message may carry: a NUL, or a
+/// carriage return that is not the first half of a `CRLF`. Both are line
+/// framing a remote server may read differently from this one.
+pub(crate) fn has_unframed_byte(data: &[u8]) -> bool {
+	data.iter()
+		.enumerate()
+		.any(|(index, byte)| *byte == 0 || (*byte == b'\r' && data.get(index + 1) != Some(&b'\n')))
+}
+
 /// I borrow an SMTP-ready message, or normalize its LF and final line ending
 /// before validation, signing and queueing so DATA cannot change those bytes.
+/// A NUL or a bare CR is not repaired here: [`has_unframed_byte`] finds them
+/// and the caller refuses the message.
 pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 	if data.ends_with(b"\r\n")
 		&& data
@@ -74,7 +85,7 @@ pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 	{
 		return std::borrow::Cow::Borrowed(data);
 	}
-	let mut normalized = Vec::with_capacity(data.len());
+	let mut normalized = Vec::with_capacity(data.len() + 2);
 	let mut previous = None;
 	for byte in data.iter().copied() {
 		if byte == b'\n' && previous != Some(b'\r') {
@@ -87,6 +98,33 @@ pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 		normalized.extend_from_slice(b"\r\n");
 	}
 	std::borrow::Cow::Owned(normalized)
+}
+
+/// A message the server wrote itself, from parts that came from outside,
+/// made fit to queue: no NUL, every line ending a `CRLF` (a lone `CR` or
+/// `LF`, such as one a cut left at its end, becomes one) and a final one.
+/// Unlike a message a user submitted, which is refused when it holds such a
+/// byte, a generated one must not be lost over what it quotes.
+pub(crate) fn frame_generated(data: Vec<u8>) -> Vec<u8> {
+	if !has_unframed_byte(&data) {
+		return outbound_crlf(&data).into_owned();
+	}
+	let mut framed = Vec::with_capacity(data.len() + 2);
+	let mut bytes = data.into_iter().peekable();
+	while let Some(byte) = bytes.next() {
+		match byte {
+			0 => {}
+			b'\r' => {
+				framed.extend_from_slice(b"\r\n");
+				if bytes.peek() == Some(&b'\n') {
+					bytes.next();
+				}
+			}
+			b'\n' => framed.extend_from_slice(b"\r\n"),
+			other => framed.push(other),
+		}
+	}
+	outbound_crlf(&framed).into_owned()
 }
 
 /// The lines of a header block, each without its terminator.
@@ -178,3 +216,7 @@ mod tests {
 		assert_eq!(field_count(b"A: 1\nB: 2\n\n"), 2);
 	}
 }
+
+#[cfg(test)]
+#[path = "header_block_framing_tests.rs"]
+mod framing_tests;

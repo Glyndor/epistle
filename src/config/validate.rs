@@ -98,6 +98,7 @@ impl Config {
 			oauth
 				.validate()
 				.map_err(|e| ConfigError::Invalid(e.to_string()))?;
+			oauth.check_signing_pair().map_err(ConfigError::Invalid)?;
 		}
 		Ok(())
 	}

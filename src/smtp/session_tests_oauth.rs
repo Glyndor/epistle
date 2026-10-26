@@ -48,6 +48,7 @@ fn bearer_response(pair: &EcdsaKeyPair, rng: &SystemRandom, email: &str) -> Stri
 			"iss": "https://idp.example",
 			"aud": "mail",
 			"email": email,
+			"email_verified": true,
 			"exp": 99_999_999_999u64,
 		}))
 		.unwrap(),

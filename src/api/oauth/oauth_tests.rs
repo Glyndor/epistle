@@ -115,15 +115,18 @@ async fn post_form(app: &axum::Router, path: &str, form: &str) -> (StatusCode, s
 }
 
 /// Verify an issued access token through the real verifier built from the public
-/// half of the pair, returning the resolved identity (the `sub`).
-fn verified_subject(keys: &Keys, token: &str) -> Option<String> {
-	let verifier =
-		OauthVerifier::new(ISSUER, AUDIENCE, "ES256", &keys.public_b64).expect("verifier");
+/// half of the pair, returning the account it names.
+fn verified_account(keys: &Keys, token: &str) -> Option<String> {
+	let verifier = OauthVerifier::new(ISSUER, AUDIENCE, "ES256", &keys.public_b64)
+		.expect("verifier")
+		.with_own_tokens();
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_secs();
-	verifier.verify(token, now)
+	verifier
+		.verify_identity(token, now)
+		.map(|who| who.as_str().to_string())
 }
 
 #[test]
@@ -200,7 +203,7 @@ async fn device_flow_pending_then_approved_issues_verifiable_token() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["token_type"], "Bearer");
 	let token = body["access_token"].as_str().expect("token");
-	assert_eq!(verified_subject(&keys, token).as_deref(), Some("alice"));
+	assert_eq!(verified_account(&keys, token).as_deref(), Some("alice"));
 
 	// 5. The device_code is one-time: a second redemption fails.
 	let (status, body) = post_form(&app, "/oauth/token", &form).await;
@@ -274,7 +277,7 @@ async fn pkce_round_trip_succeeds_and_rejects_failures() {
 	let (status, body) = post_form(&app, "/oauth/token", &good).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let token = body["access_token"].as_str().expect("token");
-	assert_eq!(verified_subject(&keys, token).as_deref(), Some("alice"));
+	assert_eq!(verified_account(&keys, token).as_deref(), Some("alice"));
 }
 
 #[tokio::test]

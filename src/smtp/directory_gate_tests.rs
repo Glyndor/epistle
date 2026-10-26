@@ -42,7 +42,12 @@ fn every_protocol() -> [Protocol; 9] {
 #[test]
 fn an_open_account_is_admitted_by_every_proof() {
 	let directory = gate_directory();
-	for proof in [Proof::Password, Proof::Scram, Proof::Federated] {
+	for proof in [
+		Proof::Password,
+		Proof::Scram,
+		Proof::Bearer,
+		Proof::Federated,
+	] {
 		assert!(directory.admit_login(OPEN, Protocol::Imaps, proof));
 	}
 }
@@ -50,16 +55,22 @@ fn an_open_account_is_admitted_by_every_proof() {
 #[test]
 fn a_disabled_account_is_admitted_by_no_proof_whatever_the_case_of_its_name() {
 	let directory = gate_directory();
-	for proof in [Proof::Password, Proof::Scram, Proof::Federated] {
+	for proof in [
+		Proof::Password,
+		Proof::Scram,
+		Proof::Bearer,
+		Proof::Federated,
+	] {
 		assert!(!directory.admit_login(DISABLED, Protocol::Imaps, proof));
 		assert!(!directory.admit_login("BOB", Protocol::Imaps, proof));
 	}
 }
 
 #[test]
-fn only_scram_is_refused_for_an_account_with_a_second_factor() {
+fn only_scram_and_a_bare_bearer_are_refused_for_an_account_with_a_second_factor() {
 	let directory = gate_directory();
 	assert!(!directory.admit_login(TWO_FACTOR, Protocol::Imaps, Proof::Scram));
+	assert!(!directory.admit_login(TWO_FACTOR, Protocol::Imaps, Proof::Bearer));
 	assert!(directory.admit_login(TWO_FACTOR, Protocol::Imaps, Proof::Password));
 	assert!(directory.admit_login(TWO_FACTOR, Protocol::Imaps, Proof::Federated));
 }
@@ -68,7 +79,12 @@ fn only_scram_is_refused_for_an_account_with_a_second_factor() {
 fn the_protocol_allowlist_binds_every_proof() {
 	let directory =
 		gate_directory().with_allowed_protocols([(OPEN.to_string(), vec![Protocol::Imaps])]);
-	for proof in [Proof::Password, Proof::Scram, Proof::Federated] {
+	for proof in [
+		Proof::Password,
+		Proof::Scram,
+		Proof::Bearer,
+		Proof::Federated,
+	] {
 		assert!(directory.admit_login(OPEN, Protocol::Imaps, proof));
 		assert!(!directory.admit_login(OPEN, Protocol::Submission, proof));
 	}

@@ -218,3 +218,23 @@ async fn reader_disagreement_and_invalid_encoding_are_refused_before_the_author_
 		assert_eq!(stored_message(dir.path()), stored);
 	}
 }
+
+/// A carriage return or a NUL in the body is refused too, whatever the
+/// headers look like, so nothing with loose framing reaches the spool.
+#[tokio::test]
+async fn a_loose_cr_or_nul_in_the_body_is_refused() {
+	for body in [
+		b"hello\r.\r\nmore\r\n".as_slice(),
+		b"body\r".as_slice(),
+		b"bo\0dy\r\n".as_slice(),
+	] {
+		let mut stored = b"From: alice@example.org\r\nSubject: s\r\n\r\n".to_vec();
+		stored.extend_from_slice(body);
+		let (response, dir) = submit(&stored).await;
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "forbiddenToSend",
+			"{response}"
+		);
+		assert!(spool_is_empty(dir.path()), "{response}");
+	}
+}

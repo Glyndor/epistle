@@ -289,14 +289,24 @@ impl FsSpool {
 		let final_message = self.entry_file(SpoolDir::New, id, MessageExt::Eml)?;
 		let final_envelope = self.entry_file(SpoolDir::New, id, MessageExt::Json)?;
 
-		write_sync(&tmp_message, &self.crypto.encode(&message.data)?)?;
+		// Whatever path queued it, a message leaves with CRLF line ends, so
+		// the bytes the evidence hook records are the ones sent. A NUL or a
+		// bare CR is not repaired: the message is refused.
+		if crate::util::header_block::has_unframed_byte(&message.data) {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"message holds a NUL or a bare carriage return",
+			));
+		}
+		let data = crate::util::header_block::outbound_crlf(&message.data);
+		write_sync(&tmp_message, &self.crypto.encode(&data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
 		let envelope_sealed = self
 			.crypto
 			.encode_with_aad(&envelope_bytes, id.as_bytes())?;
 		write_sync(&tmp_envelope, &envelope_sealed)?;
 		if let Some(record) = options.evidence
-			&& let Err(error) = record(&message.data)
+			&& let Err(error) = record(&data)
 		{
 			let _ = fs::remove_file(&tmp_envelope);
 			let _ = fs::remove_file(&tmp_message);
@@ -647,3 +657,7 @@ mod tests_perms;
 #[cfg(test)]
 #[path = "spool_tests_env_crypto.rs"]
 mod tests_env_crypto;
+
+#[cfg(test)]
+#[path = "spool_tests_framing.rs"]
+mod tests_framing;
