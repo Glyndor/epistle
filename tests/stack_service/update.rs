@@ -7,7 +7,7 @@ fn healthy_shim(log: &std::path::Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$*\" >> {log}\n\
 		 case \"$*\" in\n\
-		 \t--version) printf '\\npodup version v5.13.0\\n\\n' ;;\n\
+		 \t--version) printf '\\npodup version v5.14.0\\n\\n' ;;\n\
 		 \t*' ps '*) printf '%s' '[{{\"Service\":\"mail\",\"State\":\"running\",\"Health\":\"healthy\",\"ExitCode\":0,\"Image\":\"x\"}}]' ;;\n\
 		 esac\n\
 		 exit 0\n",
