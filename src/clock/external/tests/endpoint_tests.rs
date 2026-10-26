@@ -405,3 +405,22 @@ async fn review_scoped_ipv6_is_rejected_before_lookup() {
 		matches!(result, Err(ProbeError::Dial(why)) if why.contains("IPv6 zone identifiers are not supported"))
 	);
 }
+
+#[tokio::test]
+async fn the_port_an_nts_ke_answer_names_is_checked_against_a_closed_list() {
+	let defaults = crate::clock::external::source::ClockExternal::default();
+	assert!(defaults.validate().is_ok());
+	let policy = defaults.policy().for_ke_answer();
+	let stop = || Instant::now() + Duration::from_secs(2);
+	let address = || async { Ok(vec!["1.1.1.1".parse().unwrap()]) };
+	let ok = resolve_with("nts.netnod.se", 4123, 123, &policy, stop(), address()).await;
+	assert_eq!(ok, Ok(SocketAddr::new("1.1.1.1".parse().unwrap(), 4123)));
+	for port in [22u16, 25, 5432, 6379, 11211, 4460] {
+		let bad = resolve_with("evil.example", port, 123, &policy, stop(), address()).await;
+		assert!(matches!(bad, Err(ProbeError::Dial(_))), "accepted {port}");
+	}
+	// A configured source does not get the list: it needs allowed_ports.
+	let configured = defaults.policy();
+	let bad = resolve_with("nts.netnod.se", 4123, 123, &configured, stop(), address()).await;
+	assert!(matches!(bad, Err(ProbeError::Dial(_))));
+}

@@ -94,6 +94,8 @@ mod login_gate;
 mod metadata;
 #[path = "session_tests_misc.rs"]
 mod misc;
+#[path = "session_tests_oauth_flow.rs"]
+mod oauth_flow;
 #[path = "session_tests_paths.rs"]
 mod paths;
 #[path = "session_tests_quota_zero.rs"]

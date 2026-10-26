@@ -1,5 +1,6 @@
 epistle (0.12.3) unstable; urgency=medium
 
+  * Fix a fresh install reporting the clock check as a warning, and IMAP AUTHENTICATE with OAUTHBEARER or XOAUTH2 failing when the client sends no initial response.
   * Security: ctutils is updated to 0.4.6, which fixes RUSTSEC-2026-0385 (a
     comparison that did not run in constant time).
   * Test assertions and fixtures no longer print or hard-code values that code scanning reads as credentials.

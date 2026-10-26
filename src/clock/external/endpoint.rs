@@ -10,6 +10,15 @@ use super::adapter::ProbeError;
 
 const DNS_DEADLINE: Duration = Duration::from_millis(500);
 
+/// UDP ports, besides 123, that a default NTS operator publishes in its
+/// NTS-KE answer (RFC 8915 section 4.1.8). `nts.netnod.se` answers on 4123.
+/// The list is closed on purpose: a hostile NTS-KE server can name any port
+/// in that record, so accepting "any unprivileged port" would let it aim the
+/// poll at 5432, 6379 or 11211. Only these exact numbers are accepted without
+/// `allowed_ports`, and none belongs to another well-known service. They apply
+/// only to the port an NTS-KE answer names, never to a configured source.
+const PUBLISHED_NTP_PORTS: [u16; 1] = [4123];
+
 /// What the operator allowed the probe to dial. The two permissions travel
 /// together so no caller applies one without noticing the other: internal
 /// addresses and custom ports are separate decisions in
@@ -37,6 +46,19 @@ impl Policy {
 	/// `expected_port`. Port zero is never a destination.
 	fn allows_port(&self, port: u16, expected_port: u16) -> bool {
 		port != 0 && (port == expected_port || self.allowed_ports.contains(&port))
+	}
+
+	/// This policy for the NTP port an NTS-KE answer names: the ports in
+	/// [`PUBLISHED_NTP_PORTS`] are added. Only the exchange that follows a key
+	/// exchange uses it; a configured source never gets them for free.
+	pub(super) fn for_ke_answer(&self) -> Self {
+		let mut policy = self.clone();
+		for port in PUBLISHED_NTP_PORTS {
+			if !policy.allowed_ports.contains(&port) {
+				policy.allowed_ports.push(port);
+			}
+		}
+		policy
 	}
 }
 
