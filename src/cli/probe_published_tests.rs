@@ -73,7 +73,6 @@ async fn unknown_publications_warn_without_dialing_or_failing() {
 	for json in [
 		Err("cannot run podup".to_string()),
 		Ok("not JSON".to_string()),
-		Ok("[]".to_string()),
 		Ok(r#"[{"Service":"mail"}]"#.to_string()),
 		Ok(r#"[{"Service":"mail","Publishers":[]}]"#.to_string()),
 		Ok(publication("", 8025.into())),
@@ -158,8 +157,9 @@ async fn every_known_binding_is_checked_and_other_services_are_ignored() {
 	assert!(lines[0].error.is_some());
 }
 
-#[tokio::test]
-async fn host_discovery_passes_the_override_and_reports_unknown_metadata() {
+/// Run `probe_in` on the host path against a stub `podup` that checks it was
+/// handed the compose file and its override, then prints `ps_output`.
+async fn probe_through_stub(ps_output: &str) -> Vec<ProbeLine> {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().unwrap();
 	let config: Config = toml::from_str(&format!(
@@ -171,24 +171,114 @@ async fn host_discovery_passes_the_override_and_reports_unknown_metadata() {
 	std::fs::write(&compose, "{}").unwrap();
 	let override_path = compose.with_file_name("compose.override.yaml");
 	std::fs::write(&override_path, "services: {}\n").unwrap();
+	let output = dir.path().join("ps.json");
+	std::fs::write(&output, ps_output).unwrap();
 	let stub = dir.path().join("podup");
 	// Paths are passed as argv, never interpolated into the script.
-	std::fs::write(&stub, "#!/bin/sh\n[ \"$1\" = -f ] && [ \"$3\" = -f ] && [ \"$5\" = ps ] && [ \"$6\" = --format ] && [ \"$7\" = json ] || exit 1\nprintf '[]'\n").unwrap();
+	std::fs::write(&stub, "#!/bin/sh\n[ \"$1\" = -f ] && [ \"$3\" = -f ] && [ \"$5\" = ps ] && [ \"$6\" = --format ] && [ \"$7\" = json ] || exit 1\nexec cat \"$(dirname \"$0\")/ps.json\"\n").unwrap();
 	std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
-	let lines = probe_in(&config, None, stub.to_str().unwrap(), false)
+	probe_in(&config, None, stub.to_str().unwrap(), false)
 		.await
-		.unwrap();
+		.unwrap()
+}
+
+#[tokio::test]
+async fn host_discovery_passes_the_override_and_reports_unknown_metadata() {
+	let lines = probe_through_stub(r#"[{"Service":"mail"}]"#).await;
 	assert_eq!(lines.len(), 1);
 	assert!(
 		lines[0]
 			.warning
 			.as_deref()
 			.unwrap()
-			.contains("mail is not listed by podup ps"),
+			.contains("podup ps has no port publication metadata"),
 		"{lines:?}"
 	);
 	assert_eq!(
 		super::super::result_code(&lines),
 		std::process::ExitCode::SUCCESS
+	);
+}
+
+fn smtp() -> Listener {
+	toml::from_str("kind = 'smtp'\naddr = '0.0.0.0'\nport = 25").unwrap()
+}
+
+fn answering(listener: Listener, dialed: &mut Vec<SocketAddr>) -> std::future::Ready<ProbeLine> {
+	dialed.push(listener.socket_addr());
+	std::future::ready(ProbeLine {
+		kind: listener.kind.as_str(),
+		addr: listener.socket_addr().to_string(),
+		ok: true,
+		error: None,
+		warning: None,
+	})
+}
+
+/// `podup ps` lists running containers only. Between the stop and the start
+/// of a `mail` restart it lists no `mail` row, and the published ports refuse
+/// connections; that window used to read as "not checkable" and exit 0.
+#[tokio::test]
+async fn mail_missing_from_podup_ps_fails_every_listener() {
+	for json in ["[]", r#"[{"Service":"db","Publishers":[]}]"#] {
+		let mut dialed = Vec::new();
+		let lines = probe_with(&[smtp(), api()], Ok(json.to_string()), |listener| {
+			answering(listener, &mut dialed)
+		})
+		.await;
+		assert!(dialed.is_empty(), "{json}: {dialed:?}");
+		assert_eq!(lines.len(), 2);
+		for line in &lines {
+			assert!(!line.ok, "{json}: {lines:?}");
+			assert!(line.warning.is_none(), "{json}: {lines:?}");
+			assert!(
+				line.error
+					.as_deref()
+					.is_some_and(|error| error.contains("the mail container is not running")),
+				"{json}: {lines:?}"
+			);
+		}
+		assert_eq!(
+			super::super::result_code(&lines),
+			std::process::ExitCode::FAILURE,
+			"{json}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn running_mail_with_an_answering_smtp_publication_passes() {
+	let json = serde_json::json!([{"Service":"mail", "Publishers":[
+		{"URL":"0.0.0.0", "TargetPort":25, "PublishedPort":25, "Protocol":"tcp"}
+	]}])
+	.to_string();
+	let mut dialed = Vec::new();
+	let lines = probe_with(&[smtp()], Ok(json), |listener| {
+		answering(listener, &mut dialed)
+	})
+	.await;
+	assert_eq!(dialed, vec!["127.0.0.1:25".parse::<SocketAddr>().unwrap()]);
+	assert!(lines[0].ok && lines[0].warning.is_none(), "{lines:?}");
+	assert_eq!(
+		super::super::result_code(&lines),
+		std::process::ExitCode::SUCCESS
+	);
+}
+
+#[tokio::test]
+async fn host_discovery_fails_while_mail_is_not_running() {
+	let lines = probe_through_stub("[]").await;
+	assert_eq!(lines.len(), 1);
+	assert!(lines[0].warning.is_none(), "{lines:?}");
+	assert!(
+		lines[0]
+			.error
+			.as_deref()
+			.is_some_and(|error| error.contains("the mail container is not running")),
+		"{lines:?}"
+	);
+	assert_eq!(
+		super::super::result_code(&lines),
+		std::process::ExitCode::FAILURE
 	);
 }

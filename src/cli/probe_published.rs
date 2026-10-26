@@ -73,6 +73,17 @@ pub(in crate::cli) async fn probe_in(
 	.await)
 }
 
+/// Why the `mail` publications cannot be used to dial the listeners.
+#[derive(Clone, Debug)]
+enum Unusable {
+	/// `podup ps` answered and lists no `mail` row. It lists running
+	/// containers only, so `mail` is down, for example between the stop and
+	/// the start of a restart. That is a failure, not something left unchecked.
+	NotRunning,
+	/// The publications could not be read, so the probe cannot tell.
+	Unknown(String),
+}
+
 /// Keep one result per configured listener even with multiple host bindings.
 async fn probe_with<F, Fut>(
 	listeners: &[Listener],
@@ -83,15 +94,17 @@ where
 	F: FnMut(Listener) -> Fut,
 	Fut: std::future::Future<Output = ProbeLine>,
 {
-	let publications = json.and_then(|json| parse(&json));
+	let publications = json
+		.map_err(Unusable::Unknown)
+		.and_then(|json| parse(&json));
 	let mut lines = Vec::with_capacity(listeners.len());
 	for listener in listeners {
-		let targets = publications
-			.as_ref()
-			.map_err(String::as_str)
-			.and_then(|ports| {
-				targets(listener, ports).map_err(|_| "no usable TCP publication for this listener")
-			});
+		let targets = match &publications {
+			Ok(ports) => targets(listener, ports).map_err(|_| {
+				Unusable::Unknown("no usable TCP publication for this listener".into())
+			}),
+			Err(unusable) => Err(unusable.clone()),
+		};
 		let line = match targets {
 			Ok(targets) => {
 				let mut result = None;
@@ -105,7 +118,16 @@ where
 				}
 				result.expect("at least one target")
 			}
-			Err(reason) => ProbeLine {
+			Err(Unusable::NotRunning) => ProbeLine {
+				kind: listener.kind.as_str(),
+				addr: listener.socket_addr().to_string(),
+				ok: false,
+				error: Some(
+					"the mail container is not running: `podup ps` does not list it".to_string(),
+				),
+				warning: None,
+			},
+			Err(Unusable::Unknown(reason)) => ProbeLine {
 				kind: listener.kind.as_str(),
 				addr: listener.socket_addr().to_string(),
 				ok: false,
@@ -120,16 +142,17 @@ where
 	lines
 }
 
-fn parse(json: &str) -> Result<Vec<Publisher>, String> {
+fn parse(json: &str) -> Result<Vec<Publisher>, Unusable> {
+	let unknown = |reason: &str| Unusable::Unknown(reason.to_string());
 	let rows: Vec<Row> = serde_json::from_str(json)
-		.map_err(|_| "cannot read port publications from podup ps".to_string())?;
+		.map_err(|_| unknown("cannot read port publications from podup ps"))?;
 	let mut mail = rows.into_iter().filter(|row| row.service == "mail");
-	let row = mail.next().ok_or("mail is not listed by podup ps")?;
+	let row = mail.next().ok_or(Unusable::NotRunning)?;
 	if mail.next().is_some() {
-		return Err("multiple mail containers are listed by podup ps".to_string());
+		return Err(unknown("multiple mail containers are listed by podup ps"));
 	}
 	row.publishers
-		.ok_or_else(|| "podup ps has no port publication metadata".to_string())
+		.ok_or_else(|| unknown("podup ps has no port publication metadata"))
 }
 
 fn targets(listener: &Listener, ports: &[Publisher]) -> Result<Vec<Listener>, ()> {
