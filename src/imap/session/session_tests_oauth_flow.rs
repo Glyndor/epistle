@@ -91,3 +91,47 @@ fn cancelling_after_the_error_challenge_still_counts_as_a_failure() {
 		text(&last)
 	);
 }
+
+#[test]
+fn acknowledging_the_error_challenge_counts_and_the_third_failure_closes() {
+	for with_initial in [true, false] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (mut session, _) = session(dir.path());
+		let bad = B64.encode("n,a=alice@example.org,\x01auth=Bearer not.a.jwt\x01\x01");
+		let attempt = |session: &mut Session| {
+			if with_initial {
+				session.command_line(&format!("a AUTHENTICATE OAUTHBEARER {bad}"))
+			} else {
+				session.command_line("a AUTHENTICATE OAUTHBEARER");
+				session.auth_response(&bad)
+			}
+		};
+		for round in 0..2 {
+			assert!(attempt(&mut session).collect_auth, "round {round}");
+			let done = text(&session.auth_response("AQ=="));
+			assert_eq!(done, "a NO authentication failed\r\n", "round {round}");
+		}
+		let last = attempt(&mut session);
+		assert!(!last.collect_auth, "with_initial {with_initial}");
+		assert!(
+			text(&last).contains("* BYE too many failures"),
+			"{}",
+			text(&last)
+		);
+	}
+}
+
+#[test]
+fn an_initial_response_of_equals_is_an_empty_message_and_is_refused() {
+	for mechanism in MECHANISMS {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (mut session, _) = session(dir.path());
+		let first = session.command_line(&format!("a AUTHENTICATE {mechanism} ="));
+		assert!(first.collect_auth, "{mechanism}");
+		assert_eq!(
+			text(&session.auth_response("")),
+			"a NO authentication failed\r\n"
+		);
+		assert_eq!(session.account(), None);
+	}
+}

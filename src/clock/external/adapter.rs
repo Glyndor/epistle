@@ -175,6 +175,7 @@ async fn exchange_via_nts(
 	stop: Instant,
 	policy: endpoint::Policy,
 ) -> Result<OneShot, ProbeError> {
+	let policy = policy.for_ke_answer();
 	let remote = endpoint::resolve(&remote, remote_port, NTP_PORT, &policy, stop).await?;
 	let cookie = nts_data
 		.get_cookie()

@@ -1194,7 +1194,7 @@ sources = [
 | `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). Below it all valid offsets are `Ok`; at or above it and below `fail_seconds` the largest absolute offset is `Warn`; at or above `fail_seconds` it is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
 | `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
 | `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations for internal deployments, including NTS-KE referrals. It grants nothing over ports. |
-| `allowed_ports` | array | `[]` | Ports the probe may dial besides the standard one for the protocol (TCP 4460 for NTS-KE, UDP 123 for NTP), for a peer that answers elsewhere. The NTP port 4123 that `nts.netnod.se` publishes in its key exchange is accepted without being listed, and no other port is. Each entry is a port number; none may be `0` and none may repeat. |
+| `allowed_ports` | array | `[]` | Ports the probe may dial besides the standard one for the protocol (TCP 4460 for NTS-KE, UDP 123 for NTP), for a peer that answers elsewhere. The NTP port 4123 that `nts.netnod.se` publishes in its key exchange is accepted without being listed when a key exchange names it, and no other port is; a source configured with `port = 4123` still needs it listed here. Each entry is a port number; none may be `0` and none may repeat. |
 | `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set and has to be the standard port for the protocol or one listed in `allowed_ports`. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
 
 Validation rules `Config::validate` enforces: exactly three sources; at
@@ -1217,8 +1217,8 @@ probe connects to the selected validated address without resolving again.
 By default, sources and NTS-KE Server/Port referrals must use
 global unicast addresses, excluding shared, documentation, benchmarking,
 reserved, loopback, private and link-local networks,
-and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP, plus UDP 4123 for
-the NTP side of an NTS exchange). The NTP port comes from the NTS-KE server's
+and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP, plus UDP 4123 when an
+NTS-KE answer names it). The NTP port comes from the NTS-KE server's
 own answer, so a hostile server could name any port; the probe therefore accepts
 only 4123, the one a default operator publishes, and never an arbitrary
 unprivileged port such as 5432 or 6379.
