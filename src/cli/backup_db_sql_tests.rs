@@ -109,7 +109,9 @@ fn database_sql_reaches_psql_through_the_entry_list() {
 		.expect("chmod psql");
 	let data_dir = dir.path().join("data");
 	std::fs::create_dir_all(&data_dir).expect("data dir");
-	let archive = build_archive_with_database_sql(Some(b"-- marker sql --\n"));
+	let archive = build_archive_with_database_sql(Some(
+		b"-- marker sql --\n-- PostgreSQL database dump complete\n--\n",
+	));
 	let toml = format!(
 		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\
 		 \n[database]\nurl = \"postgres://epistle@localhost/epistle?sslmode=require\"\n",

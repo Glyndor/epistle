@@ -1,8 +1,12 @@
-//! The container restore against a `podup` stub that behaves like the
-//! engine measured on Debian 13 (podup 5.14.0, podman 5.4.2): `podup cp`
-//! leaves the copy owned by the host user, so the container user cannot
-//! `chmod` it or `rm` it by name in the sticky `/tmp`, while it can still
-//! read it and can remove anything inside a directory it owns.
+//! The container restore against a `podup` stub that models who may do what
+//! in a database container that drops every capability: the password is read
+//! by the container user only, a file can be read by its owner or, with `o+r`,
+//! by anyone, root changes the mode of the files it owns and removes what is in
+//! its own directory, and the container user does neither for a file that is
+//! not its own. `podup cp` leaves the copy to root with mode 0600 (a rootless
+//! engine that maps the host user to container root, as the VM measured) unless
+//! the test switches on `cp-owner-postgres` (an engine that leaves it to the
+//! container user).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -11,7 +15,8 @@ use std::path::{Path, PathBuf};
 use super::tests_a4_tempfile::UmaskGuard;
 use super::{BackupError, RestoreHostTemp, leftover_note, load_dump_container_with};
 
-const SQL: &[u8] = b"insert into accounts values ('credential-hash');\n";
+const SQL: &[u8] =
+	b"insert into accounts values ('credential-hash');\n-- PostgreSQL database dump complete\n--\n";
 
 /// The pretend container: its file tree, the notes the stub keeps, and the
 /// stub itself.
@@ -39,28 +44,40 @@ impl FakeEngine {
 FS='{fs}'; REC='{rec}'
 printf '%s\n' "$*" >> "$REC/calls.log"
 for last; do :; done
+case " $* " in *' -u root '*) user=root;; *) user=postgres;; esac
 case "$*" in
 *' cp '*)
 	dest="${{5#db:}}"
 	[ -d "$(dirname "$FS$dest")" ] || {{ echo "Error: no such directory" >&2; exit 125; }}
-	cp "$4" "$FS$dest" && : > "$FS$dest.foreign"
+	cp "$4" "$FS$dest" || exit 1
+	if [ -f "$REC/cp-owner-postgres" ]; then echo postgres > "$FS$dest.owner"; else echo root > "$FS$dest.owner"; fi
+	echo 600 > "$FS$dest.mode"
 	exit 0;;
 esac
 case "$last" in
-*chmod*|*chown*)
-	echo "chmod: changing permissions of file: Operation not permitted" >&2; exit 1;;
-"mkdir -m 700 "*)
-	d="${{last#mkdir -m 700 \'}}"; d="${{d%\'}}"
-	mkdir -m 700 "$FS$d"; exit $?;;
-"rm -f "*)
-	echo "rm: cannot remove: Operation not permitted" >&2; exit 1;;
+"ls -1 /tmp")
+	[ -f "$REC/ls-fails" ] && exit 1
+	ls -1 "$FS/tmp" | grep -v '\.\(owner\|mode\)$'; exit 0;;
+"mkdir -m "*)
+	d="${{last#mkdir -m * \'}}"; d="${{d%\'}}"
+	[ -f "$REC/mkdir-fails" ] && {{ echo "mkdir: cannot create directory: File exists" >&2; exit 1; }}
+	mkdir -m 700 "$FS$d" && echo "$user" > "$FS$d.owner"; exit $?;;
+"chmod o+r "*)
+	f="${{last#chmod o+r \'}}"; f="${{f%%\'*}}"
+	if [ "$user" = root ] && [ "$(cat "$FS$f.owner")" = root ]; then echo 604 > "$FS$f.mode"; fi
+	exit 0;;
 "rm -rf "*)
-	[ -f "$REC/rm-fails" ] && {{ echo "rm: cannot remove: Read-only file system" >&2; exit 1; }}
 	d="${{last#rm -rf \'}}"; d="${{d%\'}}"
-	rm -rf "$FS$d" "$FS$d.foreign"; exit 0;;
+	[ "$user" = root ] || {{ echo "rm: cannot remove: Operation not permitted" >&2; exit 1; }}
+	[ -f "$REC/rm-fails" ] && {{ echo "rm: cannot remove: Read-only file system" >&2; exit 1; }}
+	rm -rf "$FS$d" "$FS$d.owner"; exit 0;;
 *psql*)
+	[ "$user" = postgres ] || {{ echo "cat: can't open '/run/secrets/epistle_db_password': Permission denied" >&2; exit 1; }}
 	f="${{last#*-f \'}}"; f="${{f%%\'*}}"
 	[ -f "$FS$f" ] || {{ echo "psql: no such file" >&2; exit 2; }}
+	if [ "$(cat "$FS$f.owner")" != postgres ] && [ "$(cat "$FS$f.mode")" != 604 ]; then
+		echo "psql: $f: Permission denied" >&2; exit 2
+	fi
 	cat "$FS$f" > "$REC/psql.sql"
 	[ -f "$REC/psql-fails" ] && {{ echo "ERROR: boom" >&2; exit 3; }}
 	exit 0;;
@@ -111,6 +128,7 @@ exit 0
 					.to_string_lossy()
 					.into_owned()
 			})
+			.filter(|name| !name.ends_with(".owner"))
 			.collect()
 	}
 
@@ -140,7 +158,12 @@ fn restore_loads_a_copy_owned_by_someone_else_and_leaves_nothing() {
 		fs::read(engine.rec.join("psql.sql")).expect("psql ran"),
 		SQL
 	);
-	assert!(!engine.calls().contains("chmod"), "{}", engine.calls());
+	let calls = engine.calls();
+	assert!(
+		!calls.contains("chmod 600") && !calls.contains("chown"),
+		"{calls}"
+	);
+	assert!(calls.contains("-u root db sh -c chmod o+r"), "{calls}");
 	assert_eq!(engine.container_tmp(), Vec::<String>::new());
 	assert!(!engine.staged_host_file().parent().unwrap().exists());
 }
@@ -177,7 +200,10 @@ fn a_failed_replay_and_a_failed_removal_say_what_was_left_and_where() {
 	assert!(message.contains("ERROR: boom"), "{message}");
 	assert!(message.contains("/tmp/epistle-restore-"), "{message}");
 	assert!(message.contains("in the db container"), "{message}");
-	assert!(message.contains("podup exec -T db rm -rf"), "{message}");
+	assert!(
+		message.contains("podup exec -T -u root db rm -rf"),
+		"{message}"
+	);
 	assert!(message.contains("credential hashes"), "{message}");
 }
 
@@ -214,6 +240,75 @@ fn the_host_copy_sits_in_a_private_directory() {
 	assert_eq!((dir_mode, file_mode), (0o700, 0o600));
 	assert_eq!(temp.path().parent(), Some(temp.dir()));
 	assert!(Path::new(temp.dir()).starts_with(std::env::temp_dir()));
+}
+
+/// An engine that leaves the copy to the container user needs no change of
+/// mode, and the restore works the same.
+#[test]
+fn a_copy_left_to_the_container_user_loads_as_well() {
+	let engine = FakeEngine::new();
+	engine.switch_on("cp-owner-postgres");
+	engine.restore().expect("the restore must work");
+	assert_eq!(
+		fs::read(engine.rec.join("psql.sql")).expect("psql ran"),
+		SQL
+	);
+	assert_eq!(engine.container_tmp(), Vec::<String>::new());
+}
+
+/// Nothing is removed in the container when its directory was not made: the
+/// name was not ours.
+#[test]
+fn nothing_is_removed_when_the_directory_could_not_be_made() {
+	let engine = FakeEngine::new();
+	engine.switch_on("mkdir-fails");
+	engine.restore().expect_err("mkdir fails");
+	assert!(!engine.calls().contains("rm -rf"), "{}", engine.calls());
+}
+
+/// The directories an interrupted restore left in the container go at the next
+/// restore; one that belongs to a restore still running stays.
+#[test]
+fn the_next_restore_removes_what_an_interrupted_one_left() {
+	let engine = FakeEngine::new();
+	let mut child = std::process::Command::new("true").spawn().expect("spawn");
+	let dead = child.id();
+	child.wait().expect("wait");
+	let stale = format!("epistle-restore-{dead}-1-0");
+	let live = format!("epistle-restore-{}-1-0", std::process::id());
+	for name in [&stale, &live, &"unrelated".to_string()] {
+		fs::create_dir(engine.fs.join("tmp").join(name)).expect("dir");
+	}
+	engine.restore().expect("the restore works");
+	assert_eq!(
+		{
+			let mut left = engine.container_tmp();
+			left.sort();
+			left
+		},
+		{
+			let mut kept = vec![live, "unrelated".to_string()];
+			kept.sort();
+			kept
+		}
+	);
+}
+
+#[test]
+fn a_psql_exit_is_a_rollback_and_a_lost_exec_is_not_known() {
+	let data = Path::new("/var/lib/mail");
+	let exit = BackupError::CommandFailed {
+		stderr: String::new(),
+		code: Some(3),
+	};
+	assert!(super::super::load_failure_state(&exit, data).contains("rolled the dump back"));
+	let lost = BackupError::CommandFailed {
+		stderr: String::new(),
+		code: None,
+	};
+	let said = super::super::load_failure_state(&lost, data);
+	assert!(said.contains("not known"), "{said}");
+	assert!(!said.contains("rolled"), "{said}");
 }
 
 /// A whole restore through the stub: `data_dir` is the one the stub's
@@ -305,5 +400,29 @@ fn files_that_cannot_be_laid_down_stop_the_restore_before_the_database() {
 		!engine.rec.join("psql.sql").exists(),
 		"the database was loaded"
 	);
+	assert!(!engine.calls().contains("psql"), "{}", engine.calls());
+}
+
+/// A dump cut short is refused before anything is touched.
+#[test]
+fn a_dump_without_its_closing_marker_is_refused_before_anything_is_touched() {
+	let engine = FakeEngine::new();
+	let entries = vec![
+		(
+			"data/accounts/alice/new/m1.eml".to_string(),
+			0o644,
+			b"hi".to_vec(),
+		),
+		(
+			"database.sql".to_string(),
+			0o644,
+			b"insert into t values (1);\n".to_vec(),
+		),
+	];
+	assert_ne!(
+		restore_all(&engine, &entries),
+		std::process::ExitCode::SUCCESS
+	);
+	assert!(!mail_file(&engine).exists());
 	assert!(!engine.calls().contains("psql"), "{}", engine.calls());
 }

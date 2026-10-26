@@ -49,7 +49,7 @@ pub(crate) use db_dump_container::{
 use db_dump_container::{container_rm_temp_spec, leftover_note};
 #[cfg(test)]
 use db_dump_host_temp::{RestoreHostTemp, SQL_FILE_NAME};
-use db_dump_marker::output_ends_with_pg_dump_complete;
+pub(in crate::cli::backup) use db_dump_marker::output_ends_with_pg_dump_complete;
 
 #[cfg(test)]
 #[path = "db_dump_tests_debug.rs"]

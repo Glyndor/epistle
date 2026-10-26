@@ -21,7 +21,6 @@ use crate::config::Config;
 #[path = "dispatch_restore.rs"]
 mod restore;
 pub(in crate::cli) use restore::dispatch_restore;
-pub(in crate::cli) use restore::{warn_invalid, with_config_lenient};
 
 /// Run `f` with the loaded config, or surface a `style::error` and the
 /// non-zero exit code on a parse failure. The closure shape lets the
@@ -129,7 +128,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Backup { config } => with_config_lenient(&config, |config| {
+			Command::Backup { config } => with_config(&config, |config| {
 				backup::run(config, &mut std::io::stdout().lock(), &mut style::stderr())
 			}),
 			Command::Restore {

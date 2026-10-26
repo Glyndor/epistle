@@ -64,9 +64,7 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 			"it replaces /usr/bin/epistle, so run it as root: sudo epistle stack rollback".into(),
 		);
 	}
-	let config =
-		Config::load_lenient(config_path).map_err(|error| Stop::Failed(error.to_string()))?;
-	crate::cli::dispatch::warn_invalid(&config);
+	let config = Config::load(config_path).map_err(|error| Stop::Failed(error.to_string()))?;
 	let compose = crate::cli::stack::compose_path(&config.data_dir);
 	let user = crate::cli::rootless::lookup_user()
 		.map_err(|error| format!("cannot look up glyndor-epistle: {error}"))?

@@ -520,8 +520,8 @@ The scripts below are passed as one argument to `sh -c`:
 ```sh
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
-# Restore script, after mkdir -m 700 '/tmp/<staged-name>' and
-# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql
+# Restore script, after (as root) mkdir -m 711 '/tmp/<staged-name>',
+# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql and chmod o+r on it
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
@@ -532,8 +532,8 @@ The password value stays inside the container and never enters the
 host argv or environment. Restore uses the copied SQL file, stops on
 the first SQL error and runs in one transaction. The host temp file is
 removed when the replay finishes, and the private directory holding the
-copy inside `db` is removed afterwards with `podup exec -T db sh -c "rm -rf
-'/tmp/<staged-name>'"`, whether the replay succeeded or failed.
+copy inside `db` is removed afterwards with `podup exec -T -u root db sh -c
+"rm -rf '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
 
 The `pg_dump`/`psql` host binaries are not required on the host
 in this path; the database step runs entirely inside the `db`

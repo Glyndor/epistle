@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use super::BackupError;
 
 /// The start of every staged name; the process id follows it.
-const PREFIX: &str = "epistle-restore-";
+pub(super) const PREFIX: &str = "epistle-restore-";
 
 /// The name of the SQL file inside the private directory, on the host and
 /// inside the container alike.
@@ -96,11 +96,14 @@ impl RestoreHostTemp {
 
 	/// The name of the private directory, so the caller can hand the
 	/// container copy the same unique name.
-	pub(super) fn file_name(&self) -> String {
+	pub(super) fn file_name(&self) -> Result<String, BackupError> {
 		self.dir
 			.file_name()
 			.map(|name| name.to_string_lossy().into_owned())
-			.unwrap_or_default()
+			.ok_or_else(|| BackupError::CommandFailed {
+				stderr: format!("restore directory {} has no name", self.dir.display()),
+				code: None,
+			})
 	}
 
 	/// Write `sql` through the handle that created the file, so the bytes
@@ -134,6 +137,12 @@ impl Drop for RestoreHostTemp {
 		let _ = std::fs::remove_file(&self.path);
 		let _ = std::fs::remove_dir(&self.dir);
 	}
+}
+
+/// The process id inside a staged name (`epistle-restore-<pid>-...`), when
+/// the name is one.
+pub(super) fn staged_pid(name: &str) -> Option<i32> {
+	name.strip_prefix(PREFIX)?.split('-').next()?.parse().ok()
 }
 
 /// Remove the staged directories an earlier restore left behind when a signal
@@ -188,7 +197,7 @@ fn removable(is_plain: bool, owner: u32, me: u32, restore_alive: bool) -> bool {
 
 /// Whether a process with this id exists. A process of another user answers
 /// `EPERM`, which still means it is there.
-fn process_alive(pid: i32) -> bool {
+pub(super) fn process_alive(pid: i32) -> bool {
 	// SAFETY: signal 0 only checks that the process exists.
 	pid <= 0
 		|| unsafe { libc::kill(pid, 0) } == 0

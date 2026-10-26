@@ -32,7 +32,7 @@ fn a_name_already_taken_is_skipped_and_its_bytes_kept() {
 	.expect("the next name is free");
 	temp.write_all(b"new").unwrap();
 	assert_eq!(fs::read_to_string(&taken).unwrap(), "somebody else's bytes");
-	assert_eq!(temp.file_name(), "second-1.sql");
+	assert_eq!(temp.file_name().unwrap(), "second-1.sql");
 	assert_eq!(fs::read_to_string(temp.path()).unwrap(), "new");
 }
 

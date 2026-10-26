@@ -257,7 +257,7 @@ fn container_replay_script_does_not_change_the_copy() {
 	);
 }
 
-/// The host-side cleanup spec is `podup exec -T db sh -c "rm -rf <dir>"`,
+/// The host-side cleanup spec is `podup exec -T -u root db sh -c "rm -rf <dir>"`,
 /// the last podup call in the restore flow (after mkdir, cp and psql).
 #[test]
 fn host_rm_temp_spec_targets_db_service_with_no_tty() {
@@ -268,10 +268,17 @@ fn host_rm_temp_spec_targets_db_service_with_no_tty() {
 	assert_eq!(argv[0], "podup");
 	assert_eq!(argv[3], "exec");
 	assert_eq!(argv[4], "-T");
-	assert_eq!(argv[5], "db");
 	assert!(
-		argv[6..] == ["sh", "-c", "rm -rf '/tmp/epistle-restore-1234-999'"],
-		"the host-side cleanup must run rm -rf inside db; got: {argv:?}"
+		argv[5..]
+			== [
+				"-u",
+				"root",
+				"db",
+				"sh",
+				"-c",
+				"rm -rf '/tmp/epistle-restore-1234-999'"
+			],
+		"the host-side cleanup must run rm -rf inside db as the owner of the directory; got: {argv:?}"
 	);
 }
 
@@ -332,7 +339,7 @@ fn successful_restore_removes_the_in_container_temp_from_the_host() {
 	let calls = run_successful_container_restore(stubs.path());
 	let rm_call = find_call(&calls, "rm -rf");
 	assert!(
-		rm_call.contains(" exec -T db sh -c "),
+		rm_call.contains(" exec -T -u root db sh -c "),
 		"the cleanup must exec inside the db service with no TTY; got: {rm_call}"
 	);
 	let script_start = rm_call.find("rm -rf").expect("rm -rf in the cleanup call");
@@ -353,7 +360,7 @@ fn failed_restore_removes_the_in_container_temp_from_the_host() {
 	let calls = run_failing_container_restore(stubs.path());
 	let rm_call = find_call(&calls, "rm -rf");
 	assert!(
-		rm_call.contains(" exec -T db sh -c "),
+		rm_call.contains(" exec -T -u root db sh -c "),
 		"the cleanup must exec inside the db service with no TTY on error; got: {rm_call}"
 	);
 	let script_start = rm_call.find("rm -rf").expect("rm -rf in the cleanup call");

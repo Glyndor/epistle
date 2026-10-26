@@ -562,8 +562,8 @@ pub struct Config {
 	/// one in use. Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub adjusted: Vec<String>,
-	/// Why validation refused the file, when it was loaded with
-	/// [`Config::load_lenient`]. Always `None` after [`Config::load`], which
+	/// Why validation refused the file, when `epistle status` loaded it with
+	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
 	/// fails instead. Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub validation_error: Option<String>,
@@ -709,12 +709,15 @@ impl Config {
 		Self::parse_text(&raw, path)
 	}
 
-	/// [`load`](Self::load) for the commands that have to run on a file the
-	/// validation refuses (`backup`, `restore`, `stack rollback`, `status`):
-	/// they exist to get an installation out of a bad state, so a validation
-	/// failure is kept in [`Config::validation_error`] for the caller to
-	/// report. A file that cannot be read or parsed still fails.
-	pub fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
+	/// [`load`](Self::load) for `epistle status` alone: it reports on an
+	/// installation, so a file the validation refuses is still read and the
+	/// reason is kept in [`Config::validation_error`] for the `config` area.
+	/// Every command that acts on the data (`backup`, `restore`, `stack
+	/// rollback`, `serve`) uses `load` and refuses such a file, because the
+	/// rules it breaks can be the ones that keep a dump off an unprotected
+	/// connection or a path inside the data directory. A file that cannot be
+	/// read or parsed still fails here.
+	pub(crate) fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
 		check_permissions(path, "config file")?;
 		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),

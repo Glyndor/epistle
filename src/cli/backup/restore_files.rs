@@ -63,6 +63,24 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 	Ok(())
 }
 
+/// What a failed database load says about the state it left. `psql` runs the
+/// dump in one transaction that stops at the first error, so a failure it
+/// reports leaves the database as it was. When the failure is not a `psql`
+/// exit (the exec was cut, the engine lost the process), nobody can know
+/// whether the transaction committed, and the message says to check.
+pub(super) fn load_failure_state(error: &super::db_dump::BackupError, data_dir: &Path) -> String {
+	match error {
+		super::db_dump::BackupError::CommandFailed { code: Some(_), .. } => format!(
+			"psql rolled the dump back, so the database and the files under {} are unchanged",
+			data_dir.display()
+		),
+		_ => format!(
+			"it is not known whether the dump was committed, so check the database with `epistle db status` before relying on it; the files under {} are unchanged",
+			data_dir.display()
+		),
+	}
+}
+
 /// Whether an archive entry is written under `data_dir`. `database.sql` goes
 /// to the database restore step instead. A JMAP journal header is never
 /// restored: the restored journal is older than what clients may hold, and
