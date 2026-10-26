@@ -1,5 +1,5 @@
 //! Tests for the restore staging file. The SQL staged for a container
-//! restore carries credential hashes, so the host copy must be `0600` from
+//! restore carries credential hashes, so the host copy sits in a `0700` directory from
 //! the moment it is created and must not survive the restore, and the copy
 //! inside the container must land on a name unique to that restore and be
 //! removed from the container once the replay is over.
@@ -79,11 +79,11 @@ fn mode_of(path: &Path) -> u32 {
 	fs::metadata(path).expect("stat").permissions().mode() & 0o777
 }
 
-/// Under the permissive umask a plain create would land at `0644`. The
-/// staged SQL must be `0600` from creation, before anyone has a chance to
-/// read it.
+/// Whatever the umask, the staged SQL is `0644` (the copy in the container
+/// has to be readable by the database user, since its owner there is nobody)
+/// inside a `0700` directory nobody else can enter.
 #[test]
-fn host_restore_temp_is_0600_under_umask_022() {
+fn host_restore_temp_is_0644_in_a_0700_directory_under_umask_022() {
 	let mask = UmaskGuard::new(0o022);
 	let mut temp = RestoreHostTemp::create().expect("restore temp");
 	temp.write_all(b"-- credential hash\n").expect("write");
@@ -91,8 +91,8 @@ fn host_restore_temp_is_0600_under_umask_022() {
 	let dir_mode = mode_of(temp.dir());
 	drop(mask);
 	assert_eq!(
-		mode, 0o600,
-		"host restore temp landed at {mode:o}, must be 0600"
+		mode, 0o644,
+		"host restore temp landed at {mode:o}, must be 0644"
 	);
 	assert_eq!(
 		dir_mode, 0o700,

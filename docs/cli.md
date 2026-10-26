@@ -1173,15 +1173,18 @@ works on the host and inside the container deployment:
   to a host temp file and copies it into a directory that root makes in the
   `/tmp` tmpfs of `db` (`podup exec -u root db sh -c "mkdir -m 711 ..."`) with
   `podup cp <host> db:/tmp/<staged-name>/restore.sql`. The file holds the
-  credential hashes of every account. Its owner and mode after `podup cp`
-  depend on the engine: a rootless one maps the host user to container root,
-  so the copy is root's with mode 0600, which the container user cannot read;
-  another leaves it to the container user. A root step runs `chmod o+r` on the
-  copy (allowed for a file root owns, harmlessly refused otherwise), and then
-  `psql` runs as the container user through the same shell with `-v
-  ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql'`. It cannot run as
-  root, because the password mounted in `db` is readable by the container
-  user alone. The only other user in the container is the one `psql` runs as.
+  credential hashes of every account. `podup cp` keeps the mode and the
+  numeric owner of the host file, and in `db` that owner is neither root nor
+  the database user, while root, with every capability dropped, cannot change
+  the mode of a file that is not its own. So the mode is set before the copy:
+  the host file is `0644`, inside a directory only the operator can enter
+  (`0700`), and the copy sits in a `0711` directory that only root can list.
+  `psql` then runs as the container user through the same shell with `-v
+  ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql'`, reading the
+  copy through its `o+r`. It cannot run as root, because the password mounted
+  in `db` is readable by the container user alone. A file that user can read
+  adds no exposure: it already reads every one of those hashes in the
+  database.
   Each
   script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
   inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
@@ -1211,7 +1214,7 @@ restore again with `--force` finishes the job.
 `podup exec` does not forward stdin (measured against `podup 5.10.13` and
 `5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
-file on the host is created in `$TMPDIR` at `0600`, inside a directory
+file on the host is created in `$TMPDIR` at `0644`, inside a directory
 created at `0700`, under a name unique to that restore, and a guard removes
 both on every exit path, error and panic included. A `SIGINT` or `SIGTERM`
 ends the process without running the guard, so a restore killed that way

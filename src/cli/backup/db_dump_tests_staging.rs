@@ -1,12 +1,10 @@
-//! The container restore against a `podup` stub that models who may do what
-//! in a database container that drops every capability: the password is read
-//! by the container user only, a file can be read by its owner or, with `o+r`,
-//! by anyone, root changes the mode of the files it owns and removes what is in
-//! its own directory, and the container user does neither for a file that is
-//! not its own. `podup cp` leaves the copy to root with mode 0600 (a rootless
-//! engine that maps the host user to container root, as the VM measured) unless
-//! the test switches on `cp-owner-postgres` (an engine that leaves it to the
-//! container user).
+//! The container restore against a `podup` stub that models what the VM
+//! measured (Debian 13, podup 5.14.0, podman 5.4.2) in a database container
+//! that drops every capability: `podup cp` keeps the mode and the numeric owner
+//! of the host file, and that owner (uid 103) is neither root nor the database
+//! user; the password is read by the database user alone; the database user
+//! reads a file only through `o+r`; root cannot change the mode or the owner of
+//! a file that is not its own, and can remove entries of a directory it owns.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -50,8 +48,8 @@ case "$*" in
 	dest="${{5#db:}}"
 	[ -d "$(dirname "$FS$dest")" ] || {{ echo "Error: no such directory" >&2; exit 125; }}
 	cp "$4" "$FS$dest" || exit 1
-	if [ -f "$REC/cp-owner-postgres" ]; then echo postgres > "$FS$dest.owner"; else echo root > "$FS$dest.owner"; fi
-	echo 600 > "$FS$dest.mode"
+	echo 103 > "$FS$dest.owner"
+	stat -c %a "$4" > "$FS$dest.mode"
 	exit 0;;
 esac
 case "$last" in
@@ -62,10 +60,8 @@ case "$last" in
 	d="${{last#mkdir -m * \'}}"; d="${{d%\'}}"
 	[ -f "$REC/mkdir-fails" ] && {{ echo "mkdir: cannot create directory: File exists" >&2; exit 1; }}
 	mkdir -m 700 "$FS$d" && echo "$user" > "$FS$d.owner"; exit $?;;
-"chmod o+r "*)
-	f="${{last#chmod o+r \'}}"; f="${{f%%\'*}}"
-	if [ "$user" = root ] && [ "$(cat "$FS$f.owner")" = root ]; then echo 604 > "$FS$f.mode"; fi
-	exit 0;;
+"chmod "*|"chown "*)
+	echo "chmod: changing permissions: Operation not permitted" >&2; exit 1;;
 "rm -rf "*)
 	d="${{last#rm -rf \'}}"; d="${{d%\'}}"
 	[ "$user" = root ] || {{ echo "rm: cannot remove: Operation not permitted" >&2; exit 1; }}
@@ -75,9 +71,10 @@ case "$last" in
 	[ "$user" = postgres ] || {{ echo "cat: can't open '/run/secrets/epistle_db_password': Permission denied" >&2; exit 1; }}
 	f="${{last#*-f \'}}"; f="${{f%%\'*}}"
 	[ -f "$FS$f" ] || {{ echo "psql: no such file" >&2; exit 2; }}
-	if [ "$(cat "$FS$f.owner")" != postgres ] && [ "$(cat "$FS$f.mode")" != 604 ]; then
-		echo "psql: $f: Permission denied" >&2; exit 2
-	fi
+	case "$(cat "$FS$f.mode")" in
+	*[4567]) ;;
+	*) echo "psql: $f: Permission denied" >&2; exit 2;;
+	esac
 	cat "$FS$f" > "$REC/psql.sql"
 	[ -f "$REC/psql-fails" ] && {{ echo "ERROR: boom" >&2; exit 3; }}
 	exit 0;;
@@ -163,7 +160,7 @@ fn restore_loads_a_copy_owned_by_someone_else_and_leaves_nothing() {
 		!calls.contains("chmod 600") && !calls.contains("chown"),
 		"{calls}"
 	);
-	assert!(calls.contains("-u root db sh -c chmod o+r"), "{calls}");
+	assert!(!calls.contains("chmod"), "{calls}");
 	assert_eq!(engine.container_tmp(), Vec::<String>::new());
 	assert!(!engine.staged_host_file().parent().unwrap().exists());
 }
@@ -228,7 +225,7 @@ fn leftover_note_names_the_host_path_too() {
 /// whatever the umask.
 #[test]
 fn the_host_copy_sits_in_a_private_directory() {
-	let mask = UmaskGuard::new(0o000);
+	let mask = UmaskGuard::new(0o077);
 	let temp = RestoreHostTemp::create().expect("temp");
 	let dir_mode = fs::metadata(temp.dir()).expect("dir").permissions().mode() & 0o777;
 	let file_mode = fs::metadata(temp.path())
@@ -237,23 +234,9 @@ fn the_host_copy_sits_in_a_private_directory() {
 		.mode()
 		& 0o777;
 	drop(mask);
-	assert_eq!((dir_mode, file_mode), (0o700, 0o600));
+	assert_eq!((dir_mode, file_mode), (0o700, 0o644));
 	assert_eq!(temp.path().parent(), Some(temp.dir()));
 	assert!(Path::new(temp.dir()).starts_with(std::env::temp_dir()));
-}
-
-/// An engine that leaves the copy to the container user needs no change of
-/// mode, and the restore works the same.
-#[test]
-fn a_copy_left_to_the_container_user_loads_as_well() {
-	let engine = FakeEngine::new();
-	engine.switch_on("cp-owner-postgres");
-	engine.restore().expect("the restore must work");
-	assert_eq!(
-		fs::read(engine.rec.join("psql.sql")).expect("psql ran"),
-		SQL
-	);
-	assert_eq!(engine.container_tmp(), Vec::<String>::new());
 }
 
 /// Nothing is removed in the container when its directory was not made: the

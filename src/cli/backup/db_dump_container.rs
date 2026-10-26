@@ -69,8 +69,9 @@ fn db_sh_spec(compose: &Path, script: String, root: bool) -> Result<CommandSpec,
 /// that path. It runs as the container user, because the password is mounted
 /// readable by that user alone (mode 0400, and the container drops every
 /// capability, so root cannot read it either). That user has to be able to
-/// read the copy, which the staging steps arrange; see
-/// [`container_mkdir_spec`] and [`container_readable_spec`]. The transaction
+/// read the copy: `podup cp` keeps the mode (`0644`) and the numeric owner of
+/// the host file, and that owner is nobody in the container, so the mode set
+/// on the host before the copy is what lets it. The transaction
 /// and `ON_ERROR_STOP` make replay atomic when a SQL statement fails. The
 /// shell uses `exec psql` so a `SIGTERM` sent to the container's exec process
 /// (an operator hitting Ctrl-C, a timeout, an aborted `podman exec`) reaches
@@ -104,25 +105,6 @@ pub(crate) fn container_mkdir_spec(
 	in_container_dir: &str,
 ) -> Result<CommandSpec, BackupError> {
 	db_sh_spec(compose, format!("mkdir -m 711 '{in_container_dir}'"), true)
-}
-
-/// `podup -f <compose> exec -T -u root db sh -c "chmod o+r <file>"`. What
-/// owner and mode `podup cp` gives the copy depends on the engine: a rootless
-/// one maps the host user to container root, so the copy is root's and mode
-/// 0600, which the container user cannot read; another leaves it to the
-/// container user, who can. Root may change the mode of a file it owns
-/// without any capability, so this makes the copy readable for the first case,
-/// and is refused, harmlessly, in the second. Failing is not an error: if the
-/// copy stays unreadable, `psql` says so.
-pub(crate) fn container_readable_spec(
-	compose: &Path,
-	in_container_path: &str,
-) -> Result<CommandSpec, BackupError> {
-	db_sh_spec(
-		compose,
-		format!("chmod o+r '{in_container_path}' 2>/dev/null; true"),
-		true,
-	)
 }
 
 /// `podup -f <compose> exec -T -u root db sh -c "rm -rf <dir>"`. Removes the
@@ -197,17 +179,17 @@ pub(super) fn leftover_note(
 /// host-temp write happens before any spawn, so it stays unchanged
 /// between the production path and the test path.
 ///
-/// The SQL is staged to a host file created `0600` inside a directory
+/// The SQL is staged to a host file made `0644` inside a directory
 /// created `0700`, under a name unique to this call, so nothing but its owner
-/// can read the credential hashes it carries and two simultaneous restores
+/// can enter the directory to read the credential hashes it carries (the module
+/// comment of the host temp says why the file itself is `0644`) and two simultaneous restores
 /// cannot clobber each other. The [`RestoreHostTemp`] guard removes it on
 /// every exit path, including the error path and a panic. Inside the
 /// container the file lands in a directory of the same unique name in the
 /// `/tmp` tmpfs of the `db` service (private to that container), and the
 /// directory is removed by a host-side `podup exec` once the replay completes
 /// (success or error), unless it was never made. See [`container_mkdir_spec`],
-/// [`container_readable_spec`], [`container_psql_load_spec`] and
-/// [`container_rm_temp_spec`]. When a removal fails the error (or, if the
+/// [`container_psql_load_spec`] and [`container_rm_temp_spec`]. When a removal fails the error (or, if the
 /// replay worked, a warning) says what was left and where. A restore killed by
 /// a signal cannot clean up after itself, so the next one removes what it left
 /// in the container ([`sweep_container`]).
@@ -227,10 +209,6 @@ pub(super) fn load_dump_container_with(
 		made = true;
 		let cp = container_cp_into_spec(compose, host_temp.path(), &in_container_path)?;
 		run_checked(&cp, resolver)?;
-		run_checked(
-			&container_readable_spec(compose, &in_container_path)?,
-			resolver,
-		)?;
 		run_checked(
 			&container_psql_load_spec(compose, &in_container_path, sql)?,
 			resolver,

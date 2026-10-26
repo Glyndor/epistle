@@ -1,13 +1,23 @@
 //! The host-side restore temp file used by the container restore path.
 //! The SQL bytes contain credential hashes, so the file lives in a directory
-//! of its own created at mode `0700` and is itself created at mode `0600`
-//! from the moment of creation, must not follow a hostile parent directory,
+//! of its own created at mode `0700` and is itself `0644`, must not follow a
+//! hostile parent directory,
 //! and must be removed on every exit path (success, error, panic). It lives
 //! in its own file to keep `db_dump.rs` under the per-file code-line cap.
+//!
+//! Why the file is `0644`: `podup cp` keeps the mode and the numeric owner of
+//! the host file, and inside the `db` container that owner is neither root nor
+//! the database user, while root has no capability to change the mode of a
+//! file that is not its own. The mode therefore has to be right before the
+//! copy, and the database user has to be able to read it (`o+r`). The host copy
+//! is protected by its `0700` directory, which nobody else on the host can
+//! enter, and the copy in the container sits in a directory only root can
+//! list. The database user already reads every one of those hashes in the
+//! database, so a dump it can read adds no exposure.
 
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::BackupError;
@@ -20,7 +30,7 @@ pub(super) const PREFIX: &str = "epistle-restore-";
 pub(super) const SQL_FILE_NAME: &str = "restore.sql";
 
 /// A host-side restore temp file: a private directory made `0700` under a
-/// name unique to this call, holding a file created `0600` with `O_EXCL` and
+/// name unique to this call, holding a file made `0644` with `O_EXCL` and
 /// `O_NOFOLLOW`, written through the handle that created it, and removed on
 /// `Drop`. `pub(super)` so the unit tests can inspect the modes and the
 /// cleanup without spawning anything.
@@ -31,7 +41,7 @@ pub(super) struct RestoreHostTemp {
 }
 
 impl RestoreHostTemp {
-	/// Create an empty file at mode `0600` inside a new `0700` directory
+	/// Create an empty file at mode `0644` inside a new `0700` directory
 	/// under [`std::env::temp_dir`] and return a handle ready to be written
 	/// into.
 	///
@@ -66,10 +76,15 @@ impl RestoreHostTemp {
 			return match OpenOptions::new()
 				.write(true)
 				.create_new(true)
-				.mode(0o600)
+				.mode(0o644)
 				.custom_flags(libc::O_NOFOLLOW)
 				.open(&path)
-			{
+				.and_then(|file| {
+					// The umask may have narrowed the mode, and the copy needs
+					// the database user to be able to read it.
+					file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+					Ok(file)
+				}) {
 				Ok(file) => Ok(Self { dir, path, file }),
 				Err(error) => {
 					let _ = std::fs::remove_dir(&dir);

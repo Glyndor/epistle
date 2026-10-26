@@ -521,7 +521,7 @@ The scripts below are passed as one argument to `sh -c`:
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 # Restore script, after (as root) mkdir -m 711 '/tmp/<staged-name>',
-# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql and chmod o+r on it
+# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql (host file 0644)
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
