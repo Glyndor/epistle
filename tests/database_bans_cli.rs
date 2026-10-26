@@ -6,7 +6,7 @@
 
 use std::process::{Command, Output};
 
-use epistle::antispam::bans::{BanStore, PgBanStore};
+use epistle::antispam::bans::{BanStore, PgBanStore, subject_pair};
 use epistle::config::DatabaseTls;
 
 fn now() -> u64 {
@@ -221,5 +221,87 @@ async fn the_allow_list_actions_and_their_effect_on_a_ban() {
 	assert!(stderr(&missing).contains(&format!("{net} is not on the allow list")));
 	assert!(h.ban(&["add", &ip, "--for", "1h"]).status.success());
 	assert!(h.banned(&ip).await);
+	h.ban(&["remove", &ip]);
+}
+
+/// Record `times` failures on `subject`, enough for the default policy to ban it.
+async fn ban_with_failures(store: &PgBanStore, subject: &str, times: usize) {
+	for _ in 0..times {
+		store.record_failure(subject, "imap", now()).await;
+	}
+	assert!(store.is_banned(subject, now()).await.is_some(), "{subject}");
+}
+
+#[tokio::test]
+async fn remove_lifts_a_pair_ban_in_the_form_list_prints_it() {
+	let Some(h) = Harness::new().await else {
+		return;
+	};
+	let block = fresh_block();
+	let login = format!("pair-{}", uuid::Uuid::now_v7().simple());
+	let client: std::net::IpAddr = format!("{block}::5").parse().expect("ip");
+	let pair = subject_pair(&login, Some(client));
+	assert_eq!(pair, format!("pair:{login}|{block}::"));
+
+	ban_with_failures(&h.store, &pair, 5).await;
+	let listed = stdout(&h.ban(&["list"]));
+	assert!(
+		listed.lines().any(|l| l.starts_with(&format!("{pair}\t"))),
+		"{listed}"
+	);
+	let removed = h.ban(&["remove", &pair]);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	assert_eq!(
+		stdout(&removed),
+		format!("unbanned {pair} (1 bans, 5 failures cleared)\n")
+	);
+	assert!(h.store.is_banned(&pair, now()).await.is_none());
+
+	// The same pair named by its parts, from another address in the same /64.
+	ban_with_failures(&h.store, &pair, 5).await;
+	let other = format!("{block}::9");
+	let removed = h.ban(&["remove", "--account", &login, "--ip", &other]);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	assert_eq!(
+		stdout(&removed),
+		format!("unbanned {pair} (1 bans, 5 failures cleared)\n")
+	);
+	assert!(h.store.is_banned(&pair, now()).await.is_none());
+
+	let again = h.ban(&["remove", &pair]);
+	assert_eq!(again.status.code(), Some(1));
+	assert!(
+		stderr(&again).contains(&format!("{pair} has no ban or failure record")),
+		"{}",
+		stderr(&again)
+	);
+}
+
+#[tokio::test]
+async fn lifting_a_pair_leaves_the_address_and_the_account_banned() {
+	let Some(h) = Harness::new().await else {
+		return;
+	};
+	let block = fresh_block();
+	let ip = format!("{block}::5");
+	let login = format!("pair-{}", uuid::Uuid::now_v7().simple());
+	let pair = subject_pair(&login, Some(ip.parse().expect("ip")));
+	let account = format!("account:{login}");
+	ban_with_failures(&h.store, &pair, 5).await;
+	ban_with_failures(&h.store, &account, 20).await;
+	assert!(h.ban(&["add", &ip, "--for", "1h"]).status.success());
+
+	let removed = h.ban(&["remove", &pair]);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	assert!(h.store.is_banned(&pair, now()).await.is_none());
+	assert!(h.banned(&ip).await, "the address ban must stay");
+	assert!(
+		h.store.is_banned(&account, now()).await.is_some(),
+		"the account ban must stay"
+	);
+
+	let removed = h.ban(&["remove", &account]);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	assert!(h.store.is_banned(&account, now()).await.is_none());
 	h.ban(&["remove", &ip]);
 }
