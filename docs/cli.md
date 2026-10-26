@@ -1714,7 +1714,8 @@ memory by the running server and are not manageable from the CLI, and exits 1.
 |---|---|
 | `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, where an IPv6 client appears as its /64, `cidr:<net>/<prefix>`, `pair:<login>|<client>` or `account:<login>`), reason, and the epoch second each one ends. |
 | `epistle ban add <ip\|cidr> [--for 24h]` | Ban an address or network by hand. `--for` takes a number and a unit (`s`, `m`, `h`, `d`, `w`); the default is 24h. Refused for an address on the allow list. |
-| `epistle ban remove <ip\|cidr>` | Lift the ban now and clear the address's failure counter (for IPv6, the /64's), so the next failure starts from zero. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban remove <ip\|cidr\|subject>` | Lift the ban now and clear its failure counter, so the next failure starts from zero. Takes an address or network (for an IPv6 address, the /64's counter goes too) or any subject exactly as `ban list` prints it. Quote a `pair:` subject, because the shell reads `\|` as a pipe. Lifting a pair or an account clears that subject only. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban remove --account <login> --ip <addr>` | The same for a pair ban, named by its parts. An IPv6 address names its /64. |
 | `epistle ban allow list [--json]` | Addresses and networks that are never banned. |
 | `epistle ban allow add <ip\|cidr>` | Never ban this address or network. |
 | `epistle ban allow remove <ip\|cidr>` | Take it off the allow list. |
