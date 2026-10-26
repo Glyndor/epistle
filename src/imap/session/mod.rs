@@ -8,6 +8,7 @@ use crate::smtp::directory::hash_gate::Verdict;
 
 mod acl;
 mod auth;
+mod auth_oauth;
 mod base_subject;
 mod codes;
 mod commands;
