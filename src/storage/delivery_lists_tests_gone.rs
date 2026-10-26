@@ -32,7 +32,10 @@ fn message(recipient: &str) -> AcceptedMessage {
 #[test]
 fn an_address_nobody_has_is_gone() {
 	let refused = accounts_for(&directory(), &message("ghost@example.org"));
-	assert!(matches!(refused, Err(SinkError::Gone(_))), "{refused:?}");
+	assert!(
+		matches!(refused, Err(SinkError::Gone(_))),
+		"an unknown address is gone"
+	);
 }
 
 #[test]
@@ -40,7 +43,7 @@ fn a_switched_off_domain_is_only_unavailable() {
 	let refused = accounts_for(&directory(), &message("carol@off.example"));
 	assert!(
 		matches!(refused, Err(SinkError::Unavailable(_))),
-		"{refused:?}"
+		"the address is unavailable"
 	);
 }
 
@@ -49,7 +52,7 @@ fn a_switched_off_masked_address_is_only_unavailable() {
 	let refused = accounts_for(&directory(), &message("mask.paused@example.org"));
 	assert!(
 		matches!(refused, Err(SinkError::Unavailable(_))),
-		"{refused:?}"
+		"the address is unavailable"
 	);
 }
 

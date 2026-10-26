@@ -187,7 +187,11 @@ fn a_token_of_the_built_in_server_for_a_disabled_or_unknown_account_opens_nothin
 		let (verifier, pair, rng) = own_verifier_and_key();
 		let response = own_bearer_response(&pair, &rng, account);
 		let session = session(gate_directory_arc()).with_oauth(verifier);
-		assert_eq!(authenticate(session, &response), 535, "{account}");
+		assert_eq!(
+			authenticate(session, &response),
+			535,
+			"the sign-in is refused"
+		);
 	}
 }
 

@@ -49,7 +49,10 @@ fn a_later_failure_after_the_mailbox_took_the_report_is_not_returned() {
 	let mut report = report_to("alice@example.org");
 	report.reverse_path = "mailer@example.net".into();
 	let plain = sink.deliver(report.clone());
-	assert!(matches!(plain, Err(SinkError::Unavailable(_))), "{plain:?}");
+	assert!(
+		matches!(plain, Err(SinkError::Unavailable(_))),
+		"a plain delivery is unavailable"
+	);
 	assert_eq!(inbox_count(dir.path()), 1);
 
 	sink.deliver_report(report)
@@ -62,7 +65,10 @@ fn a_recipient_that_no_longer_exists_is_gone_not_unavailable() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
 	let refused = sink.deliver_report(report_to("ghost@example.org"));
-	assert!(matches!(refused, Err(SinkError::Gone(_))), "{refused:?}");
+	assert!(
+		matches!(refused, Err(SinkError::Gone(_))),
+		"an unknown address is gone"
+	);
 }
 
 #[test]
@@ -84,7 +90,7 @@ fn a_recipient_that_is_only_switched_off_is_unavailable_not_gone() {
 		let refused = sink.deliver_report(report_to(recipient));
 		assert!(
 			matches!(refused, Err(SinkError::Unavailable(_))),
-			"{recipient}: {refused:?}"
+			"the recipient is unavailable"
 		);
 	}
 }
