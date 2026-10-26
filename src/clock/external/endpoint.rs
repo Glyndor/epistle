@@ -7,8 +7,18 @@ use hickory_resolver::config::{LookupIpStrategy, ProtocolConfig};
 use tokio::time::timeout_at;
 
 use super::adapter::ProbeError;
+use super::source::NTP_PORT;
 
 const DNS_DEADLINE: Duration = Duration::from_millis(500);
+
+/// UDP ports, besides 123, that a default NTS operator publishes in its
+/// NTS-KE answer (RFC 8915 section 4.1.8). `nts.netnod.se` answers on 4123.
+/// The list is closed on purpose: a hostile NTS-KE server can name any port
+/// in that record, so accepting "any unprivileged port" would let it aim the
+/// poll at 5432, 6379 or 11211. Only these exact numbers are accepted without
+/// `allowed_ports`, and none belongs to another well-known service. They apply
+/// to the NTP side (expected port 123) and never to NTS-KE (4460).
+const PUBLISHED_NTP_PORTS: [u16; 1] = [4123];
 
 /// What the operator allowed the probe to dial. The two permissions travel
 /// together so no caller applies one without noticing the other: internal
@@ -34,9 +44,13 @@ impl Policy {
 	}
 
 	/// Whether this port may be dialled for a protocol whose standard port is
-	/// `expected_port`. Port zero is never a destination.
+	/// `expected_port`. Port zero is never a destination. For the NTP side
+	/// (`expected_port` 123) the ports in [`PUBLISHED_NTP_PORTS`] also pass.
 	fn allows_port(&self, port: u16, expected_port: u16) -> bool {
-		port != 0 && (port == expected_port || self.allowed_ports.contains(&port))
+		port != 0
+			&& (port == expected_port
+				|| self.allowed_ports.contains(&port)
+				|| (expected_port == NTP_PORT && PUBLISHED_NTP_PORTS.contains(&port)))
 	}
 }
 

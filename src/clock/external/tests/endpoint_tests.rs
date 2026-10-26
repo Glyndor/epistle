@@ -405,3 +405,23 @@ async fn review_scoped_ipv6_is_rejected_before_lookup() {
 		matches!(result, Err(ProbeError::Dial(why)) if why.contains("IPv6 zone identifiers are not supported"))
 	);
 }
+
+#[tokio::test]
+async fn default_policy_accepts_the_port_a_default_operator_publishes() {
+	// The policy a fresh install builds from its default configuration.
+	let defaults = crate::clock::external::source::ClockExternal::default();
+	assert!(defaults.validate().is_ok());
+	let policy = defaults.policy();
+	let stop = || Instant::now() + Duration::from_secs(2);
+	let address = || async { Ok(vec!["1.1.1.1".parse().unwrap()]) };
+	let ok = resolve_with("nts.netnod.se", 4123, 123, &policy, stop(), address()).await;
+	assert_eq!(ok, Ok(SocketAddr::new("1.1.1.1".parse().unwrap(), 4123)));
+	// A hostile key-exchange answer cannot aim the poll at a sensitive port.
+	for port in [22u16, 25, 5432, 6379, 11211, 4460] {
+		let bad = resolve_with("evil.example", port, 123, &policy, stop(), address()).await;
+		assert!(matches!(bad, Err(ProbeError::Dial(_))), "accepted {port}");
+	}
+	// The extra port is for the NTP side only, never for the key exchange.
+	let ke = resolve_with("evil.example", 4123, 4460, &policy, stop(), address()).await;
+	assert!(matches!(ke, Err(ProbeError::Dial(_))));
+}
