@@ -145,8 +145,21 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 	);
 	let reference = checkouts[0].key("ref").unwrap_or_default();
 	assert_eq!(
-		reference, "${{ steps.resolve.outputs.commit }}",
-		"verify must inspect the resolved SHA, just like every build"
+		reference, "main",
+		"verify checks out a literal ref: a ref taken from the dispatch or the resolved tag \
+		 would make every later step run code the gate has not yet placed on main"
+	);
+	let mover = verify_steps
+		.iter()
+		.position(|s| s.name() == "Move to the release commit, only when it is promoted")
+		.expect("verify moves to the resolved commit after checking it is reachable from main");
+	let mover_run = verify_steps[mover].lines.join("\n");
+	assert!(
+		mover_run
+			.find("merge-base --is-ancestor")
+			.unwrap_or(usize::MAX)
+			< mover_run.find("checkout --detach").unwrap_or(0),
+		"the ancestry check comes before the switch"
 	);
 	let resolvers: Vec<&Step> = verify_steps
 		.iter()
@@ -177,7 +190,7 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 		.position(|s| s.name() == "Tag matches the crate version")
 		.unwrap();
 	assert!(
-		checkout_index < guard_index && guard_index < first_content_check,
+		checkout_index < mover && mover < guard_index && guard_index < first_content_check,
 		"check HEAD before reading release content"
 	);
 	assert_eq!(
