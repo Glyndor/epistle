@@ -43,7 +43,10 @@ fn a_global_public_address_is_kept() {
 	let config = parse("public_ipv6 = \"2606:4700::1111\"\npublic_ipv4 = \"1.1.1.1\"\n").unwrap();
 	assert_eq!(config.public_ipv6, Some("2606:4700::1111".parse().unwrap()));
 	assert!(config.public_ipv4.is_some());
-	assert!(config.adjusted.is_empty(), "{:?}", config.adjusted);
+	assert!(
+		config.adjusted.is_empty(),
+		"a global address leaves nothing adjusted"
+	);
 }
 
 /// The validation is what `init` and the writers still call, so the same
@@ -68,8 +71,7 @@ fn a_list_id_the_headers_cannot_carry_is_ignored_with_a_line() {
 	assert_eq!(config.alias[0].list_id, None);
 	assert!(
 		config.adjusted[0].contains("team@example.org"),
-		"{:?}",
-		config.adjusted
+		"the line names the alias"
 	);
 	assert!(config.adjusted[0].contains("list_id \"Team List team.example.org\""));
 }
