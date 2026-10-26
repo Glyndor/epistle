@@ -1170,11 +1170,15 @@ works on the host and inside the container deployment:
   refused too, so a truncated `database.sql` never reaches the archive.
 - **container** (compose file present): the dump runs through
   `podup -f <compose> exec -T db sh -c <script>`. Restore writes the SQL
-  to a host temp file and copies it in with `podup cp <host>
-  db:/tmp/<staged-name>`, then runs `psql` through the same container
-  shell with `-v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>'`, after a
-  `chmod 600` of the copy, which holds the credential hashes of every
-  account. Each
+  to a host temp file and copies it into a directory made `0700` in the
+  `/tmp` tmpfs of `db` (`mkdir -m 700`, as the container user) with
+  `podup cp <host> db:/tmp/<staged-name>/restore.sql`, then runs `psql`
+  through the same container shell with `-v ON_ERROR_STOP=1 -1 -X -f
+  '/tmp/<staged-name>/restore.sql'`. The file holds the credential hashes of
+  every account. Its owner and mode after `podup cp` depend on the engine
+  (some versions leave the host user as owner, which the container user
+  cannot `chmod`), so the restore does not change them: the private
+  directory keeps everyone else out. Each
   script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
   inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
   read by the image entrypoint during initialization, not by libpq. The
@@ -1184,24 +1188,33 @@ works on the host and inside the container deployment:
   The replay script runs `exec psql`, so a `SIGTERM` sent to the exec
   (Ctrl-C, a timeout, an aborted `podman exec`) reaches `psql` and
   aborts the transaction instead of the idle wrapper shell. The staged
-  copy is then removed from the host with `podup exec -T db sh -c "rm -f
-  '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
+  directory is then removed from the host with `podup exec -T db sh -c
+  "rm -rf '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
+  If that removal fails, the error (or, when the replay worked, a warning)
+  says which path in the container is left and how to remove it.
 
-`podup exec` does not forward stdin (measured against `podup 5.10.13`),
-which is why the restore path uses `podup cp` to land the SQL file
+The database is loaded before the files are laid down, and the archive is
+checked against `data_dir` first. A dump that cannot be loaded therefore
+leaves both the database and the files as they were. If the files fail after
+the database loaded, the message says so, and running the restore again with
+`--force` finishes the job.
+
+`podup exec` does not forward stdin (measured against `podup 5.10.13` and
+`5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
-file on the host is created in `$TMPDIR` at `0600` under a name unique
-to that restore, and a guard removes it on every exit path, error and
-panic included. A `SIGINT` or `SIGTERM` ends the process without running
-the guard, so a restore killed that way leaves its host file (mode `0600`,
-owned by the operator) and its copy in the `db` container behind. The next
-`restore` removes host files left by a process that no longer exists; the
-copy inside the container sits in the `/tmp` tmpfs of the `db` service, mode
-`0600`, and goes the next time that container is stopped or restarted (a
-tmpfs is emptied by both), or at once with `podup exec -T db sh
--c "rm -f /tmp/epistle-restore-*.sql"`. The host cleanup only touches files of
-the same user, so a restore killed as root is not cleared by one run as an
-operator, and the reverse.
+file on the host is created in `$TMPDIR` at `0600`, inside a directory
+created at `0700`, under a name unique to that restore, and a guard removes
+both on every exit path, error and panic included. A `SIGINT` or `SIGTERM`
+ends the process without running the guard, so a restore killed that way
+leaves its host directory (mode `0700`, owned by the operator) and its copy
+in the `db` container behind. The next `restore` removes host directories
+left by a process that no longer exists; the copy inside the container sits
+in the `/tmp` tmpfs of the `db` service, in a `0700` directory, and goes the
+next time that container is stopped or restarted (a tmpfs is emptied by
+both), or at once with `podup exec -T db sh -c "rm -rf
+/tmp/epistle-restore-*"`. The host cleanup only touches entries of the same
+user, so a restore killed as root is not cleared by one run as an operator,
+and the reverse.
 
 ### What lives in the tar
 

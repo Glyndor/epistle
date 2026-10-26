@@ -9,9 +9,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::util::path_component::StateFile;
 
-pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
-	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
-	let paths = entries
+/// Check every file entry of the archive against `data_dir` without writing
+/// anything, so a restore can learn that it cannot lay the files down before
+/// it changes the database.
+pub(super) fn check_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	checked_paths(entries, data_dir).map(drop)
+}
+
+fn checked_paths<'a>(
+	entries: &'a [(String, u32, Vec<u8>)],
+	data_dir: &Path,
+) -> io::Result<Vec<&'a Path>> {
+	entries
 		.iter()
 		.filter_map(|(name, _, _)| {
 			// `database.sql` is the database dump; it goes to the
@@ -35,7 +44,12 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 				Err(error) => Some(Err(error)),
 			}
 		})
-		.collect::<io::Result<Vec<_>>>()?;
+		.collect::<io::Result<Vec<_>>>()
+}
+
+pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
+	let paths = checked_paths(entries, data_dir)?;
 	for ((_, mode, content), relative) in entries
 		.iter()
 		.filter(|(name, _, _)| lays_down(name))

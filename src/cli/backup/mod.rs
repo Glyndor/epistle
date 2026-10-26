@@ -12,7 +12,7 @@ mod keys_note;
 mod restore_files;
 mod tar_format;
 
-use restore_files::lay_files;
+use restore_files::{check_files, lay_files};
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -194,7 +194,7 @@ fn restore_summarising(
 	let mut steps = if dry_run {
 		Steps::off()
 	} else {
-		Steps::start(&["archive", "files", "database"], false)
+		Steps::start(&["archive", "database", "files"], false)
 	};
 	steps.begin("archive");
 	let tar = match gunzip_archive(archive) {
@@ -243,31 +243,51 @@ fn restore_summarising(
 		let _ = writeln!(out, "no files written; rerun without --dry-run to apply");
 		return ExitCode::SUCCESS;
 	}
-	steps.begin("files");
-	if let Err(error) = lay_files(&entries, &config.data_dir) {
-		steps.fail();
+	// Nothing is written until everything that can be checked has been: the
+	// files must be placeable, and the dump must be there if a database is
+	// configured. The database goes first because its load is one
+	// transaction that stops at the first error, so a failure leaves the
+	// data directory and the database as they were. Laying the files first
+	// left them restored and the database not.
+	if let Err(error) = check_files(&entries, &config.data_dir) {
 		super::style::error(format_args!("laying down files: {error}"));
 		return ExitCode::FAILURE;
 	}
-	steps.done();
+	let mut database_loaded = false;
 	if let Some(db) = &config.database {
 		steps.begin("database");
-		let Some((_, sql)) = entries
+		let Some(sql) = entries
 			.iter()
 			.find(|(name, _, _)| name == DATABASE_SQL_NAME)
-			.map(|(n, _, c)| (n.clone(), c.clone()))
+			.map(|(_, _, content)| content)
 		else {
 			steps.fail();
 			super::style::error("archive has no database.sql but [database] is configured");
 			return ExitCode::FAILURE;
 		};
-		if let Err(error) = load_dump_with(db, &config.data_dir, &sql, resolver) {
+		if let Err(error) = load_dump_with(db, &config.data_dir, sql, resolver) {
 			steps.fail();
-			super::style::error(format_args!("database load: {error}"));
+			super::style::error(format_args!(
+				"database load: {error}; the database and the files under {} are unchanged",
+				config.data_dir.display()
+			));
 			return ExitCode::FAILURE;
 		}
+		database_loaded = true;
 		steps.done();
 	}
+	steps.begin("files");
+	if let Err(error) = lay_files(&entries, &config.data_dir) {
+		steps.fail();
+		let state = if database_loaded {
+			"; the database was already restored from the archive, so fix the cause and run the restore again with --force"
+		} else {
+			""
+		};
+		super::style::error(format_args!("laying down files: {error}{state}"));
+		return ExitCode::FAILURE;
+	}
+	steps.done();
 	writeln!(out, "restored {} entries", entries.len()).ok();
 	keys_note::after_restore(&config.data_dir, &entries, status);
 	steps.conclude(true, "restore");

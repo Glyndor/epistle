@@ -79,8 +79,9 @@ fn database_sql_is_not_laid_into_data_dir() {
 		"database.sql must not be written into data_dir: {}",
 		data_dir.join("database.sql").display()
 	);
-	// The mail entry under `data/` is still extracted.
-	assert!(data_dir.join("accounts/alice/new/m1.eml").exists());
+	// The database step failed, so the mail entry under `data/` is not
+	// extracted either: the files follow the database, never precede it.
+	assert!(!data_dir.join("accounts/alice/new/m1.eml").exists());
 	// Database restore nevertheless got the SQL bytes: the archive
 	// entry is reached through `entries` in `run_restore`, separate
 	// from `lay_files`. We assert that here by checking the bytes
