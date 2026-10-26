@@ -1,10 +1,10 @@
-epistle (0.12.3) UNRELEASED; urgency=medium
+epistle (0.12.3) unstable; urgency=medium
 
   * Test assertions and fixtures no longer print or hard-code values that code scanning reads as credentials.
   * Bound the work of a plain-HTTP request: a body that arrives too slowly, or takes too long, is cut off.
   * Bound the work and the memory of a POP3 session: it reads an index at sign-in and one message at a time, and refuses a message above a fixed size.
   * CI: the workflows that emit a required check also run on the merge queue, and a check keeps that from regressing.
-  * The package requires podup 5.13.0 or newer, and `epistle stack` refuses an older one.
+  * The package requires podup 5.14.0 or newer, and `epistle stack` refuses an older one.
   * Bound the work and the memory of WebDAV, CalDAV and CardDAV reports: a multiget names at most 1000 distinct resources, a reply is at most about 24 MiB after escaping, a resource that does not fit is answered `507` by name instead of being left out, a stored `.ics` or `.vcf` is at most 4 MiB, and a resource name with a control character is refused with `400`. The bounds are listed in `docs/limits.md`.
   * Expose per-account connection limits in the operator limits catalog.
   * Bound the work and the storage of WebDAV and CalDAV requests: writes, collections and copies count against the account quota and answer `507` when it is full, a collection and a path have a size bound that holds with or without a quota, a free-busy request evaluates the usual weekday, month-day, month and date rules, has a bound on its range and its size, and is refused rather than answered wrongly, and the change log of one collection no longer holds up the others.
@@ -85,7 +85,7 @@ epistle (0.12.3) UNRELEASED; urgency=medium
     say on stderr what failed and which command repeats it, and an upgrade
     whose stack cannot be refreshed still finishes configuring the package.
 
- -- Glyndor <packages@glyndor.net>  Tue, 20 Oct 2026 20:00:00 +0000
+ -- Glyndor <packages@glyndor.net>  Sun, 25 Oct 2026 12:00:00 +0000
 
 epistle (0.12.2) unstable; urgency=medium
 

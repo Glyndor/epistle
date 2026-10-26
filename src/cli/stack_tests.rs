@@ -28,8 +28,9 @@ fn version_at_least_is_numeric_per_component_not_lexicographic() {
 		("5.10.13", false),
 		("5.11.0", false),
 		("5.12.0", false),
-		("5.13.0", true),
-		("5.13.1", true),
+		("5.13.0", false),
+		("5.14.0", true),
+		("5.14.1", true),
 		("6.0", true),
 	];
 	for (input, expected) in rows {
