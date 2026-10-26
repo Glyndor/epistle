@@ -2,11 +2,40 @@
 //! Kept out of `dispatch.rs` so the dispatch table stays under the
 //! per-file line budget.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::cli::{backup, style};
 use crate::config::Config;
+
+/// [`with_config`] for the commands that exist to get out of a bad state
+/// (`backup`, `restore`): a configuration the validation refuses still runs
+/// them, after a warning that says why it is refused.
+pub(in crate::cli) fn with_config_lenient<F: FnOnce(&Config) -> ExitCode>(
+	path: &Path,
+	f: F,
+) -> ExitCode {
+	match Config::load_lenient(path) {
+		Ok(config) => {
+			warn_invalid(&config);
+			f(&config)
+		}
+		Err(error) => {
+			style::error(error);
+			ExitCode::FAILURE
+		}
+	}
+}
+
+/// Say that the configuration is refused by validation and that the command
+/// goes ahead anyway.
+pub(in crate::cli) fn warn_invalid(config: &Config) {
+	if let Some(why) = &config.validation_error {
+		style::warn(format_args!(
+			"the configuration is not valid ({why}); this command runs anyway, and `epistle config-check` shows what to fix"
+		));
+	}
+}
 
 /// Run the `restore` subcommand: read the archive from stdin, load the
 /// config, hand the bytes to [`backup::run_restore`]. Lives here rather
@@ -17,13 +46,14 @@ pub(in crate::cli) fn dispatch_restore(
 	(force, dry_run, yes): (bool, bool, bool),
 	json: bool,
 ) -> ExitCode {
-	let config = match Config::load(&config) {
+	let config = match Config::load_lenient(&config) {
 		Ok(config) => config,
 		Err(error) => {
 			style::error(error);
 			return ExitCode::FAILURE;
 		}
 	};
+	warn_invalid(&config);
 	// stdin carries the archive, so the question is answered on the
 	// terminal. `--yes` answers it; it never stands in for `--force`, and
 	// the restore still refuses an unsafe target without `--force`.

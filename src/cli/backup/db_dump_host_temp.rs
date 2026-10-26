@@ -89,6 +89,7 @@ impl RestoreHostTemp {
 	}
 
 	/// The private directory holding the SQL file.
+	#[cfg(test)]
 	pub(super) fn dir(&self) -> &Path {
 		&self.dir
 	}

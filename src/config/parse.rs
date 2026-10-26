@@ -21,8 +21,9 @@ impl Config {
 		adjusted
 	}
 
-	/// Parse and validate text already read from a verified config descriptor.
-	pub(crate) fn parse_text(raw: &str, path: &Path) -> Result<Self, ConfigError> {
+	/// Parse the text and apply what loading changes, without validating:
+	/// the step `parse_text` and `parse_text_lenient` share.
+	fn parse_unvalidated(raw: &str, path: &Path) -> Result<Self, ConfigError> {
 		let expanded = expand_env(raw)?;
 		let mut config: Config =
 			toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
@@ -31,7 +32,25 @@ impl Config {
 			})?;
 		config.mixed_case = config.normalize_identifiers();
 		config.adjusted = config.raise_to_floors();
+		let ignored = config.ignore_legacy_values();
+		config.adjusted.extend(ignored);
+		Ok(config)
+	}
+
+	/// Parse and validate text already read from a verified config descriptor.
+	pub(crate) fn parse_text(raw: &str, path: &Path) -> Result<Self, ConfigError> {
+		let config = Self::parse_unvalidated(raw, path)?;
 		config.validate()?;
+		Ok(config)
+	}
+
+	/// Parse text for a command that has to work on a file the validation
+	/// refuses: it still has to be well-formed TOML with known keys, but a
+	/// validation failure is kept in [`Config::validation_error`] instead of
+	/// stopping the load.
+	pub(crate) fn parse_text_lenient(raw: &str, path: &Path) -> Result<Self, ConfigError> {
+		let mut config = Self::parse_unvalidated(raw, path)?;
+		config.validation_error = config.validate().err().map(|error| error.to_string());
 		Ok(config)
 	}
 }

@@ -428,7 +428,7 @@ sudo epistle check subid
 |---|---|
 | `epistle serve` | Bind the configured listeners and run. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
-| `epistle config-check` | Validate the configuration and exit. |
+| `epistle config-check` | Validate the configuration and exit. Values an older release accepted that the current rules refuse (`public_ipv4`, `public_ipv6`, an alias `list_id`) are ignored with a warning rather than failing. |
 | `epistle verify` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
@@ -1062,6 +1062,11 @@ stops `mail`, compares the migrations in the database with those in the newest
 `pre-<this version>-*.sql.gz` dump, and restores the dump only when the schema moved past it. It then copies the
 kept binary over `/usr/bin/epistle` with one rename and starts `mail` on it.
 Its closing message says whether the database was restored or kept.
+`backup`, `restore`, `stack rollback` and `status` also run when the configuration
+fails validation for some other reason: they print a warning with the reason
+(`status` reports it in the `config` area) and carry on, because they are the
+commands that get an installation out of that state. Every other command still
+refuses an invalid file.
 If there is no dump from before this version, or the restore fails, nothing
 is rolled back and `mail` starts again on the current binary.
 

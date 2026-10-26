@@ -12,6 +12,12 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(config) => config,
 		Err(error) => return AreaReport::fail(error.clone()),
 	};
+	if let Some(why) = &config.validation_error {
+		return AreaReport::fail(format!(
+			"{} does not pass validation: {why}; `epistle config-check` shows the same, and the other checks ran on the file as it is",
+			ctx.path.display()
+		));
+	}
 	let data_dir = config.data_dir.clone();
 	let podup = ctx.podup.clone();
 	let started = tokio::task::spawn_blocking(move || mail_started_at(&data_dir, &podup))
@@ -57,7 +63,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	for line in &config.adjusted {
 		summary.push_str("; ");
 		summary.push_str(line);
-		items.push(Item::new("raised value", Level::Warn, line.clone()));
+		items.push(Item::new("adjusted value", Level::Warn, line.clone()));
 	}
 	AreaReport::from_items(items, summary)
 }
@@ -120,3 +126,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_area_tests_addresses.rs"]
 mod tests_addresses;
+
+#[cfg(test)]
+#[path = "config_area_tests_invalid.rs"]
+mod tests_invalid;
