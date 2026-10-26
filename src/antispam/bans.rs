@@ -274,7 +274,9 @@ pub fn subject_account(account: &str) -> String {
 
 #[path = "bans_sql.rs"]
 mod sql;
-pub use sql::{BanRow, BanTarget, MANUAL_REASON, PgBanStore, parse_allow};
+pub use sql::{
+	BanRow, BanTarget, MANUAL_REASON, PgBanStore, UnbanTarget, parse_allow, parse_login,
+};
 
 #[cfg(test)]
 #[path = "bans_tests.rs"]

@@ -59,6 +59,112 @@ impl std::fmt::Display for BanTarget {
 	}
 }
 
+/// Subject prefix for a ban on one account as seen from one client.
+const PAIR_PREFIX: &str = "pair:";
+/// Subject prefix for a ban on one account from every client.
+const ACCOUNT_PREFIX: &str = "account:";
+
+/// What `ban remove` lifts: an address or network, or one of the subjects the
+/// listeners ban on their own, written as `ban list` prints it. Lifting a ban
+/// clears that subject's rows and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnbanTarget {
+	/// An address or network, as `ban add` takes it.
+	Address(BanTarget),
+	/// One account as seen from one client: a `pair:<login>|<client>` subject.
+	Pair(String),
+	/// One account from every client: an `account:<login>` subject.
+	Account(String),
+}
+
+impl UnbanTarget {
+	/// Parse an address or network, or a subject exactly as `ban list` prints
+	/// it: `ip:<addr>`, `cidr:<net>`, `pair:<login>|<client>` (the client is an
+	/// address or `unknown`) or `account:<login>`.
+	pub fn parse(spec: &str) -> Result<Self, String> {
+		if let Some(rest) = spec.strip_prefix(PAIR_PREFIX) {
+			let malformed = || {
+				format!(
+					"{:?} is not a pair; write it as `ban list` prints it, for example \
+					 \"pair:alice@example.org|203.0.113.9\"",
+					crate::util::address_reason::shorten(spec)
+				)
+			};
+			let (login, client) = rest.rsplit_once('|').ok_or_else(malformed)?;
+			let ip = match client {
+				"unknown" => None,
+				client => Some(client.parse().map_err(|_| malformed())?),
+			};
+			return Self::pair(login, ip);
+		}
+		if let Some(login) = spec.strip_prefix(ACCOUNT_PREFIX) {
+			return Ok(Self::Account(subject_account(&parse_login(login)?)));
+		}
+		let address = spec
+			.strip_prefix("ip:")
+			.or_else(|| spec.strip_prefix(CIDR_PREFIX))
+			.unwrap_or(spec);
+		if Cidr::parse(address).is_none() {
+			return Err(format!(
+				"{}; or name an account ban as `ban list` prints it, for example \
+				 \"pair:alice@example.org|203.0.113.9\" or \"account:alice@example.org\"",
+				Cidr::refusal(spec)
+			));
+		}
+		BanTarget::parse(address).map(Self::Address)
+	}
+
+	/// The pair ban on `login` as seen from `ip`. An IPv6 address names the
+	/// /64 its failures are counted under (see [`subject_pair`]).
+	pub fn pair(login: &str, ip: Option<IpAddr>) -> Result<Self, String> {
+		Ok(Self::Pair(subject_pair(&parse_login(login)?, ip)))
+	}
+
+	/// The `auth_ban` and `auth_failure` subjects this target clears. For an
+	/// address that includes the /64 an IPv6 client is counted under (see
+	/// [`subject_client`]).
+	fn subjects(&self) -> Vec<String> {
+		match self {
+			Self::Address(target @ BanTarget::Ip(ip)) => {
+				vec![target.subject(), subject_client(*ip)]
+			}
+			Self::Address(target) => vec![target.subject()],
+			Self::Pair(subject) | Self::Account(subject) => vec![subject.clone()],
+		}
+	}
+}
+
+impl From<BanTarget> for UnbanTarget {
+	fn from(target: BanTarget) -> Self {
+		Self::Address(target)
+	}
+}
+
+impl std::fmt::Display for UnbanTarget {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Address(target) => write!(f, "{target}"),
+			Self::Pair(subject) | Self::Account(subject) => f.write_str(subject),
+		}
+	}
+}
+
+/// Check a login named on the command line and return it lowercased, the
+/// spelling ban subjects use. Empty logins and logins with whitespace or
+/// control characters are refused: no account has one.
+pub fn parse_login(login: &str) -> Result<String, String> {
+	if login.is_empty() {
+		return Err("the login is empty".to_string());
+	}
+	if login.chars().any(|c| c.is_whitespace() || c.is_control()) {
+		return Err(format!(
+			"{:?} is not a login: it contains whitespace or a control character",
+			crate::util::address_reason::shorten(login)
+		));
+	}
+	Ok(login.to_ascii_lowercase())
+}
+
 /// Parse one allow-list entry into its canonical `network/prefix` form.
 pub fn parse_allow(spec: &str) -> Result<Cidr, String> {
 	Cidr::parse(spec).ok_or_else(|| Cidr::refusal(spec))
@@ -145,13 +251,15 @@ impl PgBanStore {
 
 	/// Lift the ban on `target` and forget its failure counter, so the next
 	/// failure starts from zero. For an IPv6 address that includes the /64 its
-	/// failures are counted under (see [`subject_client`]). Returns
+	/// failures are counted under (see [`subject_client`]). A pair or account
+	/// target clears that one subject only: the address and the other
+	/// subjects keep their bans and counters. Returns
 	/// `(bans removed, failures cleared)`.
-	pub async fn remove_ban(&self, target: BanTarget) -> Result<(u64, u64), sqlx::Error> {
-		let mut subjects = vec![target.subject()];
-		if let BanTarget::Ip(ip) = target {
-			subjects.push(subject_client(ip));
-		}
+	pub async fn remove_ban(
+		&self,
+		target: impl Into<UnbanTarget>,
+	) -> Result<(u64, u64), sqlx::Error> {
+		let subjects = target.into().subjects();
 		let mut tx = self.pool.begin().await?;
 		let bans = sqlx::query("DELETE FROM auth_ban WHERE subject = ANY($1)")
 			.bind(&subjects)

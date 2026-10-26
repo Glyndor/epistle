@@ -7,13 +7,14 @@
 //! manage from outside the process.
 
 use std::io::Write;
+use std::net::IpAddr;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Subcommand;
 use serde::Serialize;
 
-use crate::antispam::bans::{BanTarget, PgBanStore, parse_allow};
+use crate::antispam::bans::{BanTarget, PgBanStore, UnbanTarget, parse_allow, parse_login};
 use crate::cidr::Cidr;
 use crate::config::Config;
 
@@ -41,11 +42,26 @@ pub enum BanCli {
 		#[arg(long = "for", value_name = "DURATION", value_parser = parse_duration)]
 		duration: Option<u64>,
 	},
-	/// Lift a ban now and clear the address's failure counter.
+	/// Lift a ban now and clear its failure counter.
+	///
+	/// Name the ban as `ban list` prints it, or a pair ban by its parts with
+	/// `--account` and `--ip`. Quote a `pair:` subject: the shell reads `|` as
+	/// a pipe.
 	Remove {
-		/// Address or network whose ban to lift.
-		#[arg(value_parser = BanTarget::parse)]
-		target: BanTarget,
+		/// Address, network, or subject as `ban list` prints it
+		/// (`pair:alice@example.org|203.0.113.9`, `account:alice@example.org`).
+		#[arg(
+			value_parser = UnbanTarget::parse,
+			required_unless_present = "account",
+			conflicts_with = "account"
+		)]
+		target: Option<UnbanTarget>,
+		/// Lift the ban on this account as seen from `--ip` (a pair ban).
+		#[arg(long, value_name = "LOGIN", value_parser = parse_login, requires = "ip")]
+		account: Option<String>,
+		/// The client address of the pair named by `--account`.
+		#[arg(long, value_name = "ADDRESS", requires = "account")]
+		ip: Option<IpAddr>,
 	},
 	/// Manage the allow list: addresses never banned and never counted.
 	Allow {
@@ -229,8 +245,26 @@ async fn execute(
 			let fields = serde_json::json!({ "target": target.to_string(), "until": until });
 			Ok(report.change("add", true, fields, None))
 		}
-		BanCli::Remove { target } => {
-			let (bans, failures) = store.remove_ban(target).await?;
+		BanCli::Remove {
+			target,
+			account,
+			ip,
+		} => {
+			let target = match (target, account) {
+				(Some(target), _) => target,
+				(None, Some(account)) => match UnbanTarget::pair(&account, ip) {
+					Ok(target) => target,
+					Err(error) => {
+						super::style::error_to(err, error);
+						return Ok(ExitCode::FAILURE);
+					}
+				},
+				(None, None) => {
+					super::style::error_to(err, "name the ban to lift");
+					return Ok(ExitCode::FAILURE);
+				}
+			};
+			let (bans, failures) = store.remove_ban(target.clone()).await?;
 			if bans == 0 && failures == 0 {
 				super::style::error_to(err, format_args!("{target} has no ban or failure record"));
 				return Ok(ExitCode::FAILURE);

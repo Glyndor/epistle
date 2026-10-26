@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 #[path = "bans_admin.rs"]
 mod admin;
-pub use admin::{BanRow, BanTarget, MANUAL_REASON, parse_allow};
+pub use admin::{BanRow, BanTarget, MANUAL_REASON, UnbanTarget, parse_allow, parse_login};
 
 /// The PostgreSQL-backed ban store: the production implementation of
 /// [`BanStore`]. One instance per process, shared across listeners.
