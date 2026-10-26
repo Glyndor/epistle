@@ -1,3 +1,96 @@
+epistle (0.12.3) unstable; urgency=medium
+
+  * Fix a fresh install reporting the clock check as a warning, and IMAP AUTHENTICATE with OAUTHBEARER or XOAUTH2 failing when the client sends no initial response.
+  * Security: ctutils is updated to 0.4.6, which fixes RUSTSEC-2026-0385 (a
+    comparison that did not run in constant time).
+  * Test assertions and fixtures no longer print or hard-code values that code scanning reads as credentials.
+  * Bound the work of a plain-HTTP request: a body that arrives too slowly, or takes too long, is cut off.
+  * Bound the work and the memory of a POP3 session: it reads an index at sign-in and one message at a time, and refuses a message above a fixed size.
+  * CI: the workflows that emit a required check also run on the merge queue, and a check keeps that from regressing.
+  * The package requires podup 5.14.0 or newer, and `epistle stack` refuses an older one.
+  * Bound the work and the memory of WebDAV, CalDAV and CardDAV reports: a multiget names at most 1000 distinct resources, a reply is at most about 24 MiB after escaping, a resource that does not fit is answered `507` by name instead of being left out, a stored `.ics` or `.vcf` is at most 4 MiB, and a resource name with a control character is refused with `400`. The bounds are listed in `docs/limits.md`.
+  * Expose per-account connection limits in the operator limits catalog.
+  * Bound the work and the storage of WebDAV and CalDAV requests: writes, collections and copies count against the account quota and answer `507` when it is full, a collection and a path have a size bound that holds with or without a quota, a free-busy request evaluates the usual weekday, month-day, month and date rules, has a bound on its range and its size, and is refused rather than answered wrongly, and the change log of one collection no longer holds up the others.
+  * Operators: a bearer-token sign-in (OAUTHBEARER, XOAUTH2) now names a mailbox only through a verified `email` claim, never `sub`, and an account with a TOTP secret needs `[oauth] idp_enforces_second_factor = true` to use it; `[oauth] allow_unverified_email` accepts a provider that never emits `email_verified`.
+  * Operators: bearer-token sign-in (OAUTHBEARER, XOAUTH2) with an external identity provider now needs the token to carry `email` and `email_verified` set to true, and the address must be an account's own address (no catch-all, masked address or sub-address); `sub` is no longer read, and an account with a TOTP secret can no longer sign in this way. If sign-ins start failing after the upgrade, the log says why (`bearer token refused: ...`) and `epistle config-check` and `epistle status` warn. Set `allow_unverified_email = true` in `[oauth]` for a provider that does not emit `email_verified`, and `idp_enforces_second_factor = true` only if the provider itself enforces a second factor. Tokens of the built-in authorization server (`signing_key`) are unaffected and count as having passed the second factor; they are matched by `sub`.
+  * Every queued message leaves with CRLF line ends and no NUL, and the outbound dot-stuffing no longer depends on the sender's framing.
+  * `api-key create` accepts a readable expiry (`--expires-at` takes a date, an RFC 3339 instant or a duration such as `90d`, and `--expires-in` a duration), `api-key list` shows it readable, and `epistle status` warns about keys that expire soon, have expired or reach too widely; no key expires by default.
+  * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` is shown as the RFC minimum it is, which `limits set` refuses to lower.
+  * Operators: a configuration with `max_message_size` below 64 KiB no longer loads, because RFC 5321 requires a server to accept at least 64K octets; the error names the fix, `epistle limits set max-message-size 64k`, and `epistle limits unset max-message-size` also works. A ManageSieve script name starting with `~sha256-` is no longer valid.
+  * Operators: a configuration with `max_message_size` below 64 KiB is raised to 64 KiB when it loads, because RFC 5321 requires a server to accept at least 64K octets; the server still starts, and the log, `epistle config-check` and `epistle status` name the value in the file and the one in use. `epistle limits set max-message-size 64k` writes the floor into the file. A ManageSieve script name starting with `~sha256-` is no longer valid.
+  * The limits catalog lists the protocol limits a client can run into, each marked as a MUST, a SHOULD or a limit of epistle's own, and `max-recipients` and `max-message-size` are shown as the RFC minimums they are, which `limits set` refuses to lower; a ManageSieve script name may be up to 128 characters (512 octets).
+  * Document how to expose the management API on a private interface, and warn
+    when an API key pinned to a network sits behind a bridge that hides the
+    address of the client.
+  * WebDAV logs a failed sign-in with the client address behind a trusted reverse proxy and counts it against that address, as the API listeners do.
+  * `epistle probe`, `status` and `stack update` check each listener on the host address it is really published on, so a management API pinned to a private address no longer counts as down.
+  * Validation: one definition for each input rule that was copied (RFC 5321 atext, address and domain length limits, memory sizes and the invisible-formatting set), and a table of boundary cases that the entry paths must agree on.
+  * Validation: an API key label is checked like an app password label, the messages that refuse a name, label, network or script name say the value, the rule and an example, and the rules are listed in docs/validation.md.
+  * migrate imap: the progress file no longer follows links, every command and the whole run have a deadline, and the memory kept per mailbox is bounded, so a hostile or slow source server cannot hold the process or its memory, and an interrupted copy resumes without losing or duplicating messages.
+  * Backup: a database dump that stops part way is no longer kept as a backup, the SQL staged for a restore is written with owner-only permissions and removed once the restore finishes, and restored secrets and data directories are never readable by other users.
+  * Backup and rollback: the leftovers of the reviews are closed, a restore killed by a signal no longer leaves its staged SQL behind for good, the host `psql` cannot block on a large dump, the SQL copied into the `db` container is forced to owner-only permissions before `psql` reads it, and the rollback store only saves version names and binaries it can later select, saying so when the upgrade skips a binary it already holds.
+  * Security: webpki-roots and rustls-webpki are updated so certificate paths through the distrusted emSign roots are rejected (RUSTSEC-2026-0381, RUSTSEC-2026-0382 and RUSTSEC-2026-0383).
+  * Security: stack rollback keeps its saved binaries in a store owned by root outside the directory of the service account, writes each copy through an exclusive temporary file, checks type, owner and digest before installing, ignores the store of earlier versions, and purge removes it.
+  * `epistle init` asks its questions step by step with colour, an explanation and the default for each, shows a summary and asks for confirmation before it writes anything, and keeps what was answered when it is interrupted; with `--json`, without a terminal, with `NO_COLOR` or with `TERM=dumb` it behaves as before.
+  * Packaging and release checks: an upgrade leaves the port floor the operator
+    configured alone, purge stops the service before it removes anything, and
+    the audit and release workflows verify and build the commit they publish.
+  * migrate imap: a folder keeps a ledger of the messages it has confirmed, so a
+    run resumed after an interruption does not bring back a message the user
+    deleted or moved in the local mailbox, and an unreadable ledger stops the
+    run with a message instead of importing anything again.
+  * migrate imap: resuming a large folder does much less disk work, and the
+    total deadline also stops the scan of the local mailbox between messages.
+  * Clock: `epistle status` gains an external clock probe that compares
+    three independent time sources, reports how many of them answered over
+    NTS, and decides the verdict from the worst of them rather than from a
+    median. The source list and the protocol per source are configurable, the
+    probe is read-only, per-source and per-run deadlines bound the call, and
+    `enabled = false` turns it off on a host with no route to the time sources.
+  * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them.
+  * An internationalised address local part no longer accepts the Unicode line and paragraph separators (U+2028, U+2029), as the Sieve script name and mailbox name rules already refused them. The static alias table and the structured addresses of a JMAP Email/set refuse them too.
+  * `epistle init` compares the domain of the first account with the configured domains in the form the system stores, so an internationalised domain typed as a U-label matches its A-label.
+  * `epistle init` refuses a first-account address already held by another account, alias, or masked address before it writes anything.
+  * `epistle service set NAME --bind ADDRESS --port PORT` moves a listener that is already enabled, publishes the address on the host without touching the operator override, and `service list` shows where each service is published.
+  * The guided setup test target no longer hangs when the whole suite runs, and
+    no longer depends on how the run was started.
+  * The guided setup tests create their terminals already private to themselves,
+    take down every process they started when they give up, and fail when they
+    could not check what they meant to check.
+  * migrate imap: the documentation says what a resumed run really skips, what an
+    unreadable ledger does, when only one migration of an account runs at a time
+    and which messages a replay can only match against the mailbox.
+  * A domain of one label, such as `localhost`, is refused wherever an address or a domain is created or configured, and the refusal says the domain needs at least one dot. A configuration file that held such an alias or forwarding target stops loading, so run `epistle config-check` before restarting after the upgrade.
+  * Clock: the external probe tests cover the source deadline, the local
+    clock step and the origin check against a local server, and the limit of
+    the destination check with the NAT64 prefix of an operator is now written
+    down in the documentation.
+  * `epistle init`, `service` and `stack` read configuration, keys and the generated compose file through one reader that refuses a pipe, a device or a directory instead of waiting on it, the wait for the compose lock spends what the configuration lock left of the same 30 s, and `init` refuses a DNS `token_file` with a `$` before it writes anything. The documentation says that an `init` stopped part way is finished by running it again.
+  * Upgrade note: `epistle service enable`, `service disable`, `init` and `stack update` publish WebDAV, the management API and autoconfig on `127.0.0.1` only, and a generated compose file that had one of them on every address of the host (`8090:8090`, `0.0.0.0:8090:8090` or `[::]:8090:8090`) is narrowed the next time one of those commands rewrites it. Each command says on stderr which mapping it narrowed. To reach one from another host, publish its port in `compose.override.yaml` behind a TLS reverse proxy.
+  * Mailing lists keep their own identity on each delivered copy, a recipient addressed directly takes none, `epistle init` leaves a role address that an account or masked address holds alone, and DKIM covers `Disposition-Notification-To` and `Return-Receipt-To` when a message carries them.
+  * Improve API authorization consistency.
+  * Improve API authorization consistency: a key confined to some domains reads the delivery records of an account only while the sender is inside those domains, answers the same for another tenant's account and for one that does not exist on every route that takes an account name, and an account-bound key whose domains do not reach the account owns no push subscriptions. A secret can belong to one key only: adding a second key behind the same secret is refused, and a request whose secret matches two keys is served with the reach of neither.
+  * API keys apply the same account and domain limits on every route.
+  * Outgoing mail carries identification headers on every path: a Feedback-ID
+    built from the domain and the mail class, List-Unsubscribe on bulk mail
+    outside the marketing class, List-Id on list mail, Auto-Submitted on system
+    mail, and optional Organization and X-Epistle values; each can be turned
+    off, and the ones that identify or control replies are signed.
+  * A submission with an ambiguous header name or line ending is refused before
+    any header is changed, so the fields the server checks and the fields the
+    signature covers are the ones a receiver sees.
+  * A submission whose RFC 5322 header syntax, encoding or identity field
+    counts differ between readers is refused, and outgoing line endings are
+    normalised before signing and queueing so the signature covers the
+    transmitted bytes.
+  * The package postinst and `epistle move-subids` wait a bounded time for the
+    lock on the subordinate id tables, the new account and the user manager,
+    say on stderr what failed and which command repeats it, and an upgrade
+    whose stack cannot be refreshed still finishes configuring the package.
+  * Fix `epistle restore` failing on Debian 13 with podup 5.14.0 (the database dump is staged in a private directory, the database loads before the files so a failure leaves nothing half restored, and a leftover says where it is), and let a `mail.toml` an older release wrote keep loading: a `public_ipv4`, `public_ipv6` or alias `list_id` the new rules refuse is ignored with a warning, and `status` reports a file that fails validation instead of stopping.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 25 Oct 2026 12:00:00 +0000
+
 epistle (0.12.2) unstable; urgency=medium
 
   * Improve DNS provider inspection safety and accuracy.

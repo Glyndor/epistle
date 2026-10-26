@@ -9,20 +9,11 @@
 //! 500-character paste does not come back as a 500-character error.
 
 use crate::smtp::address::Address;
+use crate::util::validation::{MAX_ADDRESS, MAX_DOMAIN, MAX_LABEL, MAX_LOCAL_PART, is_atext};
 
 /// How many characters of a refused value a message quotes before cutting
 /// it with an ellipsis.
 pub const ECHO_LIMIT: usize = 40;
-
-/// RFC 5321 section 4.5.3.1.3: the longest path is 256 octets including the
-/// angle brackets, so 254 for the address itself.
-const MAX_ADDRESS: usize = 254;
-/// RFC 5321 section 4.5.3.1.1.
-const MAX_LOCAL_PART: usize = 64;
-/// RFC 1035 section 2.3.4, presentation form without the root dot.
-const MAX_DOMAIN: usize = 253;
-/// RFC 1035 section 2.3.4.
-const MAX_LABEL: usize = 63;
 
 /// Parse an address, or say why it is not one.
 pub fn parse(raw: &str) -> Result<Address, String> {
@@ -39,9 +30,19 @@ pub fn shorten(value: &str) -> String {
 	cut
 }
 
+/// [`shorten`] with every control, bidirectional and invisible formatting
+/// character written as an escape and no quotes around it, for a message that
+/// repeats a value inside its own sentence. A raw U+202E or U+009B in a value
+/// the operator typed would otherwise reorder the line or move the cursor of
+/// the terminal that prints it.
+pub fn escaped(value: &str) -> String {
+	let quoted = format!("{:?}", shorten(value));
+	quoted[1..quoted.len() - 1].to_string()
+}
+
 /// The refusal for an address in a domain this server does not serve.
 pub fn not_handled(domain: &str) -> String {
-	format!("{} is not a domain this server handles", shorten(domain))
+	format!("{} is not a domain this server handles", escaped(domain))
 }
 
 /// Length unit for a message: an ASCII value is counted in characters, any
@@ -67,7 +68,7 @@ pub fn reason(raw: &str) -> String {
 		return "quoted local parts are not accepted".to_string();
 	}
 	let Some((local, domain)) = raw.rsplit_once('@') else {
-		return format!("{} has no @", shorten(raw));
+		return format!("{} has no @", escaped(raw));
 	};
 	if local.contains('@') {
 		return "only one @ is allowed".to_string();
@@ -98,11 +99,8 @@ fn local_part_reason(local: &str) -> Option<String> {
 	if local.contains("..") {
 		return Some("consecutive dots in the local part".to_string());
 	}
-	let allowed = |c: char| {
-		c.is_ascii_alphanumeric()
-			|| "!#$%&'*+-/=?^_`{|}~.".contains(c)
-			|| (!c.is_ascii() && !c.is_control())
-	};
+	// `atext` plus the dot that separates the atoms of a dot-string.
+	let allowed = |c: char| is_atext(c) || c == '.';
 	local
 		.chars()
 		.find(|c| !allowed(*c))
@@ -128,7 +126,7 @@ pub fn domain_reason(domain: &str) -> String {
 		return format!("the domain is {len} {unit}; the maximum is {MAX_DOMAIN}");
 	}
 	if !domain.contains('.') {
-		return format!("the domain {} has no dot", shorten(domain));
+		return format!("the domain {} needs at least one dot", escaped(domain));
 	}
 	for label in domain.split('.') {
 		if label.is_empty() {
@@ -138,13 +136,13 @@ pub fn domain_reason(domain: &str) -> String {
 		if label.is_ascii() && len > MAX_LABEL {
 			return format!(
 				"the domain label '{}' is {len} {unit}; the maximum is {MAX_LABEL}",
-				shorten(label)
+				escaped(label)
 			);
 		}
 		if label.starts_with('-') || label.ends_with('-') {
 			return format!(
 				"the domain label '{}' starts or ends with a hyphen",
-				shorten(label)
+				escaped(label)
 			);
 		}
 		if let Some(c) = label
@@ -157,10 +155,28 @@ pub fn domain_reason(domain: &str) -> String {
 	match crate::domain::normalize(domain) {
 		Err(crate::domain::DomainError::Confusable) => format!(
 			"the domain {} mixes scripts or imitates another name",
-			shorten(domain)
+			escaped(domain)
 		),
-		_ => format!("{} is not a valid domain", shorten(domain)),
+		_ => format!("{} is not a valid domain", escaped(domain)),
 	}
+}
+
+/// What an operator reads when a typed domain or host name is refused: the
+/// rule `value` breaks and a name that would be accepted. Every place that
+/// refuses a name the operator typed (the first-run assistant, the answers
+/// file, the zone of a DNS provider) goes through this, so none of them says
+/// only that the name is "not valid".
+///
+/// The reason may or may not quote the value, so the caller puts the value in
+/// front of it when the message has no other place for it.
+pub fn name_refusal(value: &str, why: crate::domain::DomainError, example: &str) -> String {
+	let reason = match why {
+		crate::domain::DomainError::Invalid => domain_reason(value),
+		crate::domain::DomainError::Confusable => {
+			"it is confusable with another name because it mixes scripts or imitates one; write it in a single script".to_string()
+		}
+	};
+	format!("{reason}; for example {example:?}")
 }
 
 #[cfg(test)]

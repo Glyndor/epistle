@@ -9,9 +9,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::util::path_component::StateFile;
 
-pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
-	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
-	let paths = entries
+/// Check every file entry of the archive against `data_dir` without writing
+/// anything, so a restore can learn that it cannot lay the files down before
+/// it changes the database.
+pub(super) fn check_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	checked_paths(entries, data_dir).map(drop)
+}
+
+fn checked_paths<'a>(
+	entries: &'a [(String, u32, Vec<u8>)],
+	data_dir: &Path,
+) -> io::Result<Vec<&'a Path>> {
+	entries
 		.iter()
 		.filter_map(|(name, _, _)| {
 			// `database.sql` is the database dump; it goes to the
@@ -35,7 +44,12 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 				Err(error) => Some(Err(error)),
 			}
 		})
-		.collect::<io::Result<Vec<_>>>()?;
+		.collect::<io::Result<Vec<_>>>()
+}
+
+pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
+	let paths = checked_paths(entries, data_dir)?;
 	for ((_, mode, content), relative) in entries
 		.iter()
 		.filter(|(name, _, _)| lays_down(name))
@@ -47,6 +61,24 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 		}
 	}
 	Ok(())
+}
+
+/// What a failed database load says about the state it left. `psql` runs the
+/// dump in one transaction that stops at the first error, so a failure it
+/// reports leaves the database as it was. When the failure is not a `psql`
+/// exit (the exec was cut, the engine lost the process), nobody can know
+/// whether the transaction committed, and the message says to check.
+pub(super) fn load_failure_state(error: &super::db_dump::BackupError, data_dir: &Path) -> String {
+	match error {
+		super::db_dump::BackupError::CommandFailed { code: Some(_), .. } => format!(
+			"psql rolled the dump back, so the database and the files under {} are unchanged",
+			data_dir.display()
+		),
+		_ => format!(
+			"it is not known whether the dump was committed, so check the database with `epistle db status` before relying on it; the files under {} are unchanged",
+			data_dir.display()
+		),
+	}
 }
 
 /// Whether an archive entry is written under `data_dir`. `database.sql` goes
@@ -140,13 +172,26 @@ fn write_file(data_dir: &Path, relative: &Path, mode: u32, content: &[u8]) -> io
 		.parent()
 		.ok_or_else(|| io::Error::other("missing restore parent"))?;
 	validate_destination(data_dir, relative)?;
+	// If the restore target didn't exist yet, `create_dir_all` below will
+	// make it under the host umask (typically 022), landing at 0755. Pin
+	// `data_dir` itself to 0700 only when restore was the one that made
+	// it: an operator's data_dir keeps its mode.
+	let data_dir_pre_existed = data_dir.exists();
 	std::fs::create_dir_all(parent)?;
+	if !data_dir_pre_existed {
+		std::fs::set_permissions(data_dir, std::fs::Permissions::from_mode(0o700))?;
+	}
+	// Tighten every directory from `data_dir` down to the leaf parent to
+	// `0700`, regardless of the host umask. `create_dir_all` walks the
+	// chain and only creates what is missing, so an existing `secrets/`
+	// left over from a lax tar build must also be locked down here.
+	tighten_dir_chain(data_dir, parent)?;
 	validate_destination(data_dir, relative)?;
 	let (mut file, temp) = create_temp(parent)?;
-	// Private-key material is always `0600` on restore, regardless of what
-	// the archive claimed. A tar built with a permissive umask (or by an
-	// attacker who edited the header) must not bring a key back group- or
-	// world-readable.
+	// Secret material is always `0600` on restore, regardless of what the
+	// archive claimed. A tar built with a permissive umask (or by an
+	// attacker who edited the header) must not bring a credential back
+	// group- or world-readable.
 	let mode = enforced_mode_for(relative, mode & 0o777);
 	let result = (|| {
 		file.write_all(content)?;
@@ -159,33 +204,79 @@ fn write_file(data_dir: &Path, relative: &Path, mode: u32, content: &[u8]) -> io
 	result
 }
 
-/// The permission bits to write to `relative` on restore. Private-key material
-/// is tightened to `0600`; ordinary files keep the mode the archive recorded
-/// (already masked to the bottom 9 bits by the caller). `relative` is the
-/// path inside `data_dir`, with `data/` and `./` stripped by [`relative_path`].
+/// Walk from the leaf `parent` up to (but not including) `data_dir` and
+/// re-apply `0700` on every directory it touches. `data_dir` itself is left
+/// alone by this helper; the call site tightens it only when restore was the
+/// one that created it (see [`write_file`]). `set_permissions` is not affected
+/// by the umask, so the result holds whatever mask the host runs with.
+fn tighten_dir_chain(data_dir: &Path, parent: &Path) -> io::Result<()> {
+	let mut current = parent;
+	while current != data_dir {
+		std::fs::set_permissions(current, std::fs::Permissions::from_mode(0o700))?;
+		match current.parent() {
+			Some(next) if next.starts_with(data_dir) => current = next,
+			_ => break,
+		}
+	}
+	Ok(())
+}
+
+/// The permission bits to write to `relative` on restore. Secret material is
+/// tightened to `0600`; root-level operator config (`config.toml`) keeps the
+/// owner bits the archive recorded but with any group or other bits stripped,
+/// so a permissive umask on the source host cannot bring the live config back
+/// group- or world-readable; ordinary files keep the mode the archive
+/// recorded (already masked to the bottom 9 bits by the caller). `relative`
+/// is the path inside `data_dir`, with `data/` and `./` stripped by
+/// [`relative_path`].
 pub(super) fn enforced_mode_for(relative: &Path, archived_mode: u32) -> u32 {
 	if is_private_key_path(relative) {
 		0o600
+	} else if is_root_config_path(relative) {
+		// Owner bits preserved, group and other dropped. An executable
+		// archive entry still lands as `0700`; a `0644` archive lands as
+		// `0600`; nothing reaches `data_dir` with another user able to read.
+		archived_mode & 0o700
 	} else {
 		archived_mode
 	}
 }
 
-/// True for paths that carry private-key material and so must always land at
+/// True for `config.toml` at the root of `data_dir`. The live server reads
+/// this file with each request, so it is the one config file the operator
+/// cares about being unmodifiable from the outside; everything under
+/// `secrets/`, `accounts/`, or named `accounts.toml` is handled by
+/// [`is_private_key_path`] instead.
+pub(super) fn is_root_config_path(relative: &Path) -> bool {
+	relative.to_string_lossy() == "config.toml"
+}
+
+/// True for paths that carry credential material and so must always land at
 /// `0600` on restore, regardless of what the archive's mode field records.
 ///
-/// The list is intentionally narrow: a tar created by an operator who chmod'd
-/// the live tree should round-trip the operator's intent on every other file.
-/// Only files whose contents are by definition secret (signing keys,
-/// per-server pseudonyms, account credential stores) get the hard floor. New
-/// key-shaped additions should land here too rather than rely on the archive
-/// author getting the mode right by hand.
+/// The rule is "credential store or key, everything else round-trips". A
+/// public certificate or a message body is not secret and the operator
+/// chmod'd it deliberately, so the archive mode is honoured there. Anything
+/// whose content is secret by definition gets the hard floor:
+/// signing keys, per-server pseudonyms, the global account store, and the
+/// whole `secrets/` tree. New key-shaped additions should land here too
+/// rather than rely on the archive author getting the mode right by hand.
 pub(super) fn is_private_key_path(relative: &Path) -> bool {
 	let path_str = relative.to_string_lossy();
 	// Exact filenames: anything that sits at the data_dir root and is a known
 	// server-wide key. The match is by tail so `accounts/<name>/key` (if such
 	// a path is ever added) does not collide.
 	if path_str == "log-pseudonym.key" || path_str.ends_with("/log-pseudonym.key") {
+		return true;
+	}
+	// The global account store holds every account's credentials, not just the
+	// ones living under `accounts/`, so the root file needs the floor too.
+	if path_str == "accounts.toml" {
+		return true;
+	}
+	// Anything under `secrets/` is a credential by where it is stored: the
+	// database password, the at-rest storage key, per-feature API tokens.
+	if path_str.starts_with("secrets/") {
 		return true;
 	}
 	// Any file ending in `.key` is private by convention: DKIM selectors
@@ -205,6 +296,10 @@ pub(super) fn is_private_key_path(relative: &Path) -> bool {
 	}
 	false
 }
+
+#[cfg(test)]
+#[path = "restore_files_tests_a4_modes.rs"]
+mod tests_a4_modes;
 
 #[cfg(test)]
 mod tests {

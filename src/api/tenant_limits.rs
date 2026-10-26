@@ -126,8 +126,8 @@ impl TenantLimits {
 
 	/// Every tenant that owns at least one of `addresses`, in config order.
 	/// Used by quota and rate-limit paths: an account straddling two tenants
-	/// counts against both, matching the existing all-vs-any rule for scope
-	/// (`src/api/domain_scope.rs`).
+	/// counts against both, matching the existing all-vs-any rule for reach
+	/// (`src/api/authorization.rs`).
 	fn tenants_for_addresses<'a, I>(&'a self, addresses: I) -> Vec<&'a TenantRuntime>
 	where
 		I: IntoIterator<Item = &'a str>,

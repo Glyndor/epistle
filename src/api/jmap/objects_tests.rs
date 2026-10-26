@@ -38,3 +38,14 @@ fn an_invalid_encoded_word_candidate_does_not_disable_later_recognition() {
 	assert_eq!(arr[0]["email"], "one@example.org");
 	assert_eq!(arr[1]["email"], "two@example.org");
 }
+
+/// A To field is data, not an address epistle created: a domain of one
+/// label is reported as it came, because the message may have come from
+/// anywhere. The list is read, never refused.
+#[test]
+fn a_single_label_recipient_is_reported_as_it_comes() {
+	let parsed = address_list(Some("user@localhost"));
+	let arr = parsed.as_array().expect("address list");
+	assert_eq!(arr.len(), 1, "the address is reported: {arr:?}");
+	assert_eq!(arr[0]["email"], "user@localhost");
+}

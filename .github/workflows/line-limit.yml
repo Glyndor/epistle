@@ -18,6 +18,11 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+  # Required check `line-limit / line limit`.
+  # `paths:` and `branches:` filters do not apply to merge_group, so the
+  # trigger sits at the top level. See docs/merge-queue.md.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read

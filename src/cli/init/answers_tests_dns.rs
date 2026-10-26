@@ -346,3 +346,60 @@ fn capitalised_dns_provider_name_is_accepted() {
 		"capitalised provider must validate, got {result:?}"
 	);
 }
+
+/// A `token_file` that names an environment variable passed every question and
+/// the plan, then stopped the run after the keys were written: the generated
+/// `mail.toml` is loaded with `${VAR}` expanded, and an unset variable aborts
+/// the load. The validator refuses the shape before any effect.
+#[test]
+fn a_dns_token_file_with_an_environment_reference_is_refused_before_any_effect() {
+	for reference in [
+		"${AUDIT_DNS_FILE}",
+		"/run/secrets/${AUDIT_DNS_FILE}",
+		"/run/$X",
+	] {
+		let mut answers = minimal(Automatic);
+		answers.dns = Some(DnsAnswers {
+			provider: "cloudflare".to_string(),
+			zone: "example.org".to_string(),
+			token: None,
+			token_file: Some(PathBuf::from(reference)),
+			token_env: None,
+		});
+		let errors = answers
+			.validate()
+			.expect_err("an interpolated token_file must be refused");
+		assert!(
+			errors.iter().any(|e| matches!(
+				e,
+				Invalid::PathInterpolated { field, value }
+					if field == "dns.token_file" && value == reference
+			)),
+			"{reference} must surface as PathInterpolated, got {errors:?}"
+		);
+	}
+}
+
+/// A zone that is not a name is refused with the value, the rule and a zone
+/// that would be taken, in the sentence the other name checks use.
+#[test]
+fn a_malformed_dns_zone_is_refused_with_the_rule_and_an_example() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudflare".to_string(),
+		zone: "no zone".to_string(),
+		token: None,
+		token_file: Some(PathBuf::from("/run/secrets/cf")),
+		token_env: None,
+	});
+	let errors = answers.validate().expect_err("a zone with a space");
+	let line = errors
+		.iter()
+		.find(|e| matches!(e, Invalid::DnsZoneMalformed { .. }))
+		.expect("the zone is reported")
+		.to_string();
+	assert_eq!(
+		line,
+		"dns.zone \"no zone\": spaces are not allowed; for example \"example.org\""
+	);
+}

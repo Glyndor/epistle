@@ -134,6 +134,9 @@ pub struct Directory {
 	/// Disabled masks are not present here, so they reject exactly like an
 	/// unknown user (the directory never reveals that one once existed).
 	masked_by_address: HashMap<String, String>,
+	/// Masked addresses that are switched off (lowercased). Only
+	/// [`Directory::is_paused`] reads them: resolution treats them as unknown.
+	masked_paused: std::collections::HashSet<String>,
 	/// Shared metrics handle for the audit counters (`auth_login_succeeded`
 	/// / `auth_login_failed`). `None` in tests that do not need the
 	/// counters — a `Directory::new(...)` without `with_metrics(...)` still
@@ -211,6 +214,7 @@ impl Directory {
 			account_save_sent: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
+			masked_paused: std::collections::HashSet::new(),
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
@@ -282,6 +286,16 @@ impl Directory {
 		self
 	}
 
+	/// Attach the masked addresses that are switched off, so a delivery that
+	/// finds one can tell it from an address nobody had.
+	pub fn with_masked_paused(mut self, entries: impl IntoIterator<Item = String>) -> Self {
+		self.masked_paused = entries
+			.into_iter()
+			.map(|address| normalize(&address))
+			.collect();
+		self
+	}
+
 	/// Attach multi-target aliases (alias address → spec).
 	pub fn with_aliases(mut self, aliases: impl IntoIterator<Item = (String, AliasSpec)>) -> Self {
 		self.aliases = aliases
@@ -296,18 +310,6 @@ impl Directory {
 	pub fn alias_members(&self, address: &str) -> Option<Vec<String>> {
 		let spec = self.aliases.get(&normalize(address))?;
 		(!spec.hidden).then(|| spec.members.clone())
-	}
-
-	/// Mailing-list headers (`List-Id`/`List-Post`/`List-Unsubscribe`, each with
-	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
-	/// to delivered copies so clients can identify and leave the list (RFC 2369).
-	pub fn list_headers(&self, address: &str) -> Option<String> {
-		let spec = self.aliases.get(&normalize(address))?;
-		let list_id = spec.list_id.as_ref()?;
-		Some(format!(
-			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
-			 List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
-		))
 	}
 
 	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
@@ -669,6 +671,13 @@ impl Directory {
 #[path = "directory_resolve.rs"]
 mod resolve;
 
+#[path = "directory_list.rs"]
+mod list_fields;
+
+#[cfg(test)]
+#[path = "directory_list_tests.rs"]
+mod list_fields_tests;
+
 #[cfg(test)]
 #[path = "directory_disabled_domain_tests.rs"]
 mod disabled_domain_tests;
@@ -693,7 +702,7 @@ pub(crate) mod hash_gate;
 
 #[path = "directory_gate.rs"]
 mod gate;
-pub use gate::{Proof, ScramPlan, ScramRefusal};
+pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
 
 #[cfg(test)]
 #[path = "directory_gate_fixture.rs"]
@@ -738,6 +747,10 @@ mod auth_audit_tests;
 #[cfg(test)]
 #[path = "directory_masked_tests.rs"]
 mod masked_tests;
+
+#[cfg(test)]
+#[path = "directory_exact_tests.rs"]
+mod exact_tests;
 
 #[cfg(test)]
 #[path = "directory_alias_tests.rs"]

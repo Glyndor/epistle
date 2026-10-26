@@ -18,6 +18,8 @@ mod claims;
 mod conversation;
 #[path = "worker_evidence.rs"]
 mod evidence;
+#[path = "worker_report_failures.rs"]
+mod report_failures;
 #[path = "worker_reports.rs"]
 mod reports;
 #[path = "worker_scheduler.rs"]
@@ -95,6 +97,10 @@ pub struct Worker {
 	/// The IP warm-up, when one applies: recipients over the daily cap of
 	/// their receiver group wait for it.
 	warmup: Option<Arc<super::warmup::Warmup>>,
+	/// Whether the failure and delay notices this worker builds carry
+	/// `Auto-Submitted: auto-generated` (the `system_auto_submitted`
+	/// switch).
+	auto_submitted: bool,
 }
 
 impl Worker {
@@ -126,7 +132,15 @@ impl Worker {
 			attempt_limit: super::timeouts::ATTEMPT,
 			holds: Default::default(),
 			warmup: None,
+			auto_submitted: true,
 		}
+	}
+
+	/// Write `Auto-Submitted` on the failure and delay notices this worker
+	/// builds. `false` leaves the field out of them.
+	pub fn with_system_auto_submitted(mut self, auto_submitted: bool) -> Self {
+		self.auto_submitted = auto_submitted;
+		self
 	}
 
 	/// Hold off a destination that asks to slow down for these waits
@@ -516,6 +530,15 @@ impl Worker {
 		let envelope = self.spool.load_envelope(id)?;
 		let pending = envelope.pending();
 		if pending.is_empty() {
+			// A failure report the sink refused keeps the entry until it is
+			// sent or given up on (see `report_failures`).
+			if envelope
+				.recipients_in(RecipientStatus::Failed)
+				.iter()
+				.any(|recipient| !envelope.recipient_state(recipient).reported)
+			{
+				return Ok(());
+			}
 			// An outcome the log has not taken keeps the entry: it is
 			// removed when the outcome is written.
 			return match envelope.outcomes_pending.is_empty() {
@@ -574,6 +597,10 @@ mod tests_classes;
 #[cfg(test)]
 #[path = "worker_tests_reports.rs"]
 mod tests_reports;
+
+#[cfg(test)]
+#[path = "worker_tests_reports_retry.rs"]
+mod tests_reports_retry;
 
 #[cfg(test)]
 #[path = "worker_tests_webhook.rs"]

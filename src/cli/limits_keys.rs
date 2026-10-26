@@ -54,6 +54,10 @@ pub enum Key {
 	/// Per-client-IP concurrent connection cap. A peer over the cap
 	/// is answered `421 4.7.0` and closed. Default is 20.
 	MaxConnectionsPerIp,
+	/// Authenticated connections per account from one client IP. Default is 10.
+	MaxConnectionsPerAccountPerIp,
+	/// Authenticated connections per account across client IPs. Default is 50.
+	MaxConnectionsPerAccountTotal,
 	/// Minimum average rate of one message transaction in bytes per
 	/// second, once its grace is over. Default is 10240; `0` turns it off.
 	MinDataRate,
@@ -96,7 +100,7 @@ impl Key {
 	/// appearing in `limits show` without the metadata the operator
 	/// needs.
 	#[allow(dead_code)] // The catalog is the new iteration surface; ALL is kept for direct tests.
-	pub(super) const ALL: [Self; 29] = [
+	pub(super) const ALL: [Self; 31] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -117,6 +121,8 @@ impl Key {
 		Self::MaxRecipients,
 		Self::MessageMemoryBudget,
 		Self::MaxConnectionsPerIp,
+		Self::MaxConnectionsPerAccountPerIp,
+		Self::MaxConnectionsPerAccountTotal,
 		Self::MinDataRate,
 		Self::DataRateGrace,
 		Self::JunkCommandLimit,
@@ -150,6 +156,8 @@ impl Key {
 			Self::MaxRecipients => "max-recipients",
 			Self::MessageMemoryBudget => "message-memory-budget",
 			Self::MaxConnectionsPerIp => "max-connections-per-ip",
+			Self::MaxConnectionsPerAccountPerIp => "max-connections-per-account-per-ip",
+			Self::MaxConnectionsPerAccountTotal => "max-connections-per-account-total",
 			Self::MinDataRate => "min-data-rate",
 			Self::DataRateGrace => "data-rate-grace",
 			Self::JunkCommandLimit => "junk-command-limit",
@@ -184,6 +192,8 @@ impl Key {
 			Self::MaxRecipients => "max_recipients",
 			Self::MessageMemoryBudget => "message_memory_budget",
 			Self::MaxConnectionsPerIp => "max_connections_per_ip",
+			Self::MaxConnectionsPerAccountPerIp => "max_connections_per_account_per_ip",
+			Self::MaxConnectionsPerAccountTotal => "max_connections_per_account_total",
 			Self::MinDataRate => "min_data_rate",
 			Self::DataRateGrace => "data_rate_grace",
 			Self::JunkCommandLimit => "junk_command_limit",
@@ -219,9 +229,12 @@ impl Key {
 		matches!(
 			self,
 			Self::MaxConnectionsPerIp
+				| Self::MaxConnectionsPerAccountPerIp
+				| Self::MaxConnectionsPerAccountTotal
 				| Self::MaxMailboxConnectionsPerIp
 				| Self::MaxHttpConnections
 				| Self::MaxHttpConnectionsPerIp
+				| Self::MaxMessageSize
 		)
 	}
 
@@ -250,6 +263,10 @@ impl Key {
 			Self::MaxRecipients => Some((
 				crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
 				crate::smtp::session::MIN_MAX_RECIPIENTS_REASON,
+			)),
+			Self::MaxMessageSize => Some((
+				crate::smtp::session::MIN_MESSAGE_SIZE as u64,
+				crate::smtp::session::MIN_MESSAGE_SIZE_REASON,
 			)),
 			_ => None,
 		}
@@ -300,7 +317,9 @@ impl Key {
 			| Self::NewRecipientsPerDay
 			| Self::InboundRatePerIp
 			| Self::InboundRatePerSender
-			| Self::JunkCommandLimit => u32::MAX as u64,
+			| Self::JunkCommandLimit
+			| Self::MaxConnectionsPerAccountPerIp
+			| Self::MaxConnectionsPerAccountTotal => u32::MAX as u64,
 			Self::MaxConnectionsPerListener | Self::MaxHttpConnections => {
 				crate::net::conn_limit::MAX_CONNECTIONS as u64
 			}
@@ -345,6 +364,14 @@ impl Key {
 			Self::MaxRecipients => config.max_recipients.map(|value| value as u64),
 			Self::MessageMemoryBudget => config.message_memory_budget,
 			Self::MaxConnectionsPerIp => config.max_connections_per_ip.map(|value| value as u64),
+			Self::MaxConnectionsPerAccountPerIp => config
+				.max_connections_per_account_per_ip
+				.filter(|value| *value != 0)
+				.map(u64::from),
+			Self::MaxConnectionsPerAccountTotal => config
+				.max_connections_per_account_total
+				.filter(|value| *value != 0)
+				.map(u64::from),
 			Self::MinDataRate => config.min_data_rate,
 			Self::DataRateGrace => config.data_rate_grace,
 			Self::JunkCommandLimit => config.junk_command_limit,
@@ -383,6 +410,12 @@ impl Key {
 			Self::MaxRecipients => Some(crate::smtp::session::DEFAULT_MAX_RECIPIENTS as u64),
 			Self::MaxConnectionsPerIp => {
 				Some(crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP as u64)
+			}
+			Self::MaxConnectionsPerAccountPerIp => {
+				Some(crate::net::per_account_conn::DEFAULT_PER_ACCOUNT_PER_IP as u64)
+			}
+			Self::MaxConnectionsPerAccountTotal => {
+				Some(crate::net::per_account_conn::DEFAULT_PER_ACCOUNT_TOTAL as u64)
 			}
 			Self::MinDataRate => Some(crate::smtp::server::DEFAULT_MIN_DATA_RATE),
 			Self::DataRateGrace => Some(crate::smtp::server::DEFAULT_DATA_RATE_GRACE_SECS),

@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::{Extension, Json};
 use serde::Serialize;
 
-use crate::api::domain_scope::DomainScope;
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 
@@ -25,28 +25,31 @@ pub async fn get(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 ) -> Result<Json<Status>, ApiError> {
-	let scope = state.domain_scope(&auth);
-	let queue_size = match scope {
-		DomainScope::All => Some(
+	let principal = Principal::for_token(&state, &auth);
+	// The queue is shared, so a count of it would include the other
+	// tenants' messages: only an unrestricted key is told the size.
+	let queue_size = if principal.is_unrestricted() {
+		Some(
 			state
 				.spool()
 				.list()
 				.map_err(|_| ApiError::internal())?
 				.len(),
-		),
-		DomainScope::Only(_) => None,
+		)
+	} else {
+		None
 	};
 	Ok(Json(Status {
 		version: env!("CARGO_PKG_VERSION"),
 		domains: state
 			.domains()
 			.iter()
-			.filter(|domain| scope.admits_domain(domain))
+			.filter(|domain| principal.admits_domain(domain))
 			.count(),
 		accounts: state
 			.accounts()
 			.iter()
-			.filter(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+			.filter(|account| principal.admits_account(&account.name, &account.addresses))
 			.count(),
 		queue_size,
 	}))

@@ -92,6 +92,7 @@ async fn pass(data_dir: &Path, dns: &Dns, sink: &MemorySink, poster: &Poster) {
 		dns,
 		sink,
 		poster,
+		auto_submitted: true,
 	};
 	send_pending(&sender, TODAY).await;
 }
@@ -254,7 +255,52 @@ async fn todays_sessions_wait_for_the_day_to_end() {
 		dns: &dns,
 		sink: &sink,
 		poster: &Poster::default(),
+		auto_submitted: true,
 	};
 	send_pending(&sender, "20240101").await;
 	assert_eq!(sink.messages().len(), 0);
+}
+
+/// A pass under `hostname`, which goes into the headers of the report.
+async fn pass_as(hostname: &str, data_dir: &Path, dns: &Dns, sink: &MemorySink) {
+	let poster = Poster::default();
+	let sender = Sender {
+		data_dir,
+		hostname,
+		dns,
+		sink,
+		poster: &poster,
+		auto_submitted: true,
+	};
+	send_pending(&sender, TODAY).await;
+}
+
+#[tokio::test]
+async fn a_queued_report_is_framed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	journal(dir.path(), "remote.example", &[TlsOutcome::Success]);
+	let dns = dns(&[(
+		"remote.example",
+		"v=TLSRPTv1; rua=mailto:tlsrpt@remote.example",
+	)]);
+	let sink = MemorySink::new();
+	pass_as("mail\r.sender\0.example", dir.path(), &dns, &sink).await;
+	let messages = sink.messages();
+	assert_eq!(messages.len(), 1);
+	assert!(!crate::util::header_block::has_unframed_byte(
+		&messages[0].data
+	));
+}
+
+#[tokio::test]
+async fn a_rua_that_is_not_a_plain_mailbox_is_not_mailed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	journal(dir.path(), "remote.example", &[TlsOutcome::Success]);
+	let dns = dns(&[(
+		"remote.example",
+		"v=TLSRPTv1; rua=mailto:tlsrpt@remote.example\r\nBcc: victim@evil.example",
+	)]);
+	let sink = MemorySink::new();
+	pass(dir.path(), &dns, &sink, &Poster::default()).await;
+	assert!(sink.messages().is_empty());
 }

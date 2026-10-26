@@ -83,6 +83,7 @@ fn build_sender<'a>(
 		dns,
 		sink,
 		now: fixed_now(),
+		auto_submitted: true,
 	}
 }
 
@@ -436,4 +437,20 @@ fn report_address_accepts_only_plain_mailboxes() {
 	] {
 		assert_eq!(report_address(bad), None, "{bad:?} must be refused");
 	}
+}
+
+#[tokio::test]
+async fn a_queued_report_is_framed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	record_delivery(dir.path(), "20240101", &sample_record("example.org"));
+	let dns = dns_with_dmarc("example.org", "reject");
+	let sink = MemorySink::new();
+	let mut sender = build_sender(dir.path(), &dns, &sink);
+	sender.reporting_domain = "mail\r.reporter\0.example";
+	flush_pending(&sender, "20240102").await;
+	let messages = sink.messages();
+	assert_eq!(messages.len(), 1);
+	assert!(!crate::util::header_block::has_unframed_byte(
+		&messages[0].data
+	));
 }

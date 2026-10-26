@@ -152,3 +152,30 @@ fn every_flat_command_is_hidden_from_help() {
 	let flats: Vec<&str> = PAIRS.iter().map(|(flat, _)| flat[0]).collect();
 	assert_eq!(legacy_names, flats, "a flat command has no alias test");
 }
+
+#[test]
+fn the_flat_api_key_create_reads_a_date_and_a_duration() {
+	use crate::cli::api_keys::ApiKeyCli;
+	let expiry = |value: &str| {
+		let args = [
+			"api-key-create",
+			"--label",
+			"ci",
+			"--scope",
+			"read",
+			"--expires-at",
+			value,
+		];
+		let Command::Legacy(legacy) = parse(&args) else {
+			panic!("not a flat command");
+		};
+		match legacy.into_resource().1 {
+			Resource::ApiKey(ApiKeyCli::Create { expires_at, .. }) => expires_at,
+			_ => panic!("not api-key create"),
+		}
+	};
+	assert_eq!(expiry("2100-01-01"), Some(4_102_444_800));
+	assert_eq!(expiry("1700000000"), Some(1_700_000_000));
+	let soon = expiry("90d").expect("duration");
+	assert!(soon > 1_700_000_000 + 90 * 86_400);
+}

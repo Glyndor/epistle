@@ -93,6 +93,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 		keys.join("storage.key").display()
 	);
 	std::fs::write(&config, &text).unwrap();
+	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
 	let lines = super::prepare_keys_for_update(&data_dir, &config, true).unwrap();
 	let secrets = root.path().join("secrets");
 	assert_eq!(
@@ -160,6 +161,94 @@ fn stack_update_creates_the_keys_directory_when_an_install_has_none() {
 	std::fs::create_dir_all(&data_dir).unwrap();
 	let config = root.path().join("mail.toml");
 	std::fs::write(&config, "hostname = \"h\"\n").unwrap();
+	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
 	super::prepare_keys_for_update(&data_dir, &config, false).unwrap();
 	assert!(data_dir.join("keys/oauth_public.key").is_file());
+}
+
+/// The configuration the compose file serves is read while the update holds
+/// both locks, so a fifo there, or a link to one, has to be refused by name
+/// and not waited on.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_served_configuration_is_refused_instead_of_waited_on() {
+	use crate::cli::init::compose_read::fifo_at;
+	use std::sync::mpsc;
+	use std::time::Duration;
+	for linked in [false, true] {
+		let root = tempfile::tempdir().unwrap();
+		let data_dir = root.path().join("data");
+		std::fs::create_dir_all(data_dir.join("keys")).unwrap();
+		let fifo = root.path().join("served.fifo");
+		fifo_at(&fifo);
+		let config = root.path().join("mail.toml");
+		if linked {
+			std::os::unix::fs::symlink(&fifo, &config).unwrap();
+		} else {
+			std::fs::rename(&fifo, &config).unwrap();
+		}
+		let label = format!("a {} fifo", if linked { "linked" } else { "direct" });
+		let (sender, receiver) = mpsc::channel();
+		let (data, served) = (data_dir.clone(), config.clone());
+		let preparing = std::thread::spawn(move || {
+			sender
+				.send(super::prepare_keys_for_update(&data, &served, false))
+				.ok();
+		});
+		let value = receiver.recv_timeout(Duration::from_secs(5));
+		if value.is_err() {
+			drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+		}
+		let error = value
+			.unwrap_or_else(|_| panic!("{label}: the update waited for a fifo writer"))
+			.expect_err(&label);
+		preparing.join().expect("the preparing thread panicked");
+		assert!(error.contains("must be a regular file"), "{label}: {error}");
+	}
+}
+
+/// An `init` that stops after the keys were written and before `mail.toml`
+/// leaves them behind. The documentation tells the operator to run the same
+/// command again, so this is the evidence it is safe: the rerun reuses every
+/// key byte for byte and writes the files that are missing.
+#[test]
+fn a_rerun_after_a_run_that_stopped_before_the_config_keeps_every_key() {
+	let root = tempfile::tempdir().unwrap();
+	let answers = answers(root.path());
+	// A file where the configuration directory belongs stops the run at the
+	// step after the keys, which is where a kill in that window leaves it.
+	std::fs::write(root.path().join("etc"), "in the way").unwrap();
+	let stopped = apply(&answers);
+	assert!(stopped.error.is_some(), "the run must stop at the config");
+	assert!(!answers.config_path.exists());
+	let secrets = root.path().join("secrets");
+	let keys = answers.data_dir.join("keys");
+	let kept: Vec<(std::path::PathBuf, Vec<u8>)> = [
+		secrets.join("storage.key"),
+		secrets.join("oauth_signing.key"),
+		keys.join("oauth_public.key"),
+		keys.join("s1.pem"),
+		keys.join("s2.pem"),
+		keys.join("cert.pem"),
+		keys.join("key.pem"),
+	]
+	.into_iter()
+	.map(|path| {
+		let bytes = std::fs::read(&path)
+			.unwrap_or_else(|error| panic!("{} was not written: {error}", path.display()));
+		(path, bytes)
+	})
+	.collect();
+	std::fs::remove_file(root.path().join("etc")).unwrap();
+	let finished = apply(&answers);
+	assert!(finished.error.is_none(), "{:?}", finished.error);
+	assert!(answers.config_path.is_file());
+	for (path, bytes) in kept {
+		assert_eq!(
+			std::fs::read(&path).unwrap(),
+			bytes,
+			"{} must survive the rerun unchanged",
+			path.display()
+		);
+	}
 }

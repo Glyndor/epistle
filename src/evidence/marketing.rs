@@ -10,24 +10,60 @@
 
 use crate::smtp::trace::{header_values, strip_headers_in_place};
 
-/// Why a `marketing` submission was refused.
+/// Why a submission was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketingRefusal {
 	/// No `List-Unsubscribe` field naming an `https` URI.
 	NoUnsubscribeUri,
 	/// No single `List-Unsubscribe-Post: List-Unsubscribe=One-Click` field.
 	NoOneClick,
+	/// A header field name contains embedded whitespace or a control byte.
+	AmbiguousHeaderName,
+	/// A header block contains a bare carriage return or mixed line endings.
+	AmbiguousHeaderFraming,
+	/// A header line does not follow RFC 5322 field or folding syntax.
+	MalformedHeaderLine,
+	/// I cannot read the submitted header block as UTF-8.
+	InvalidHeaderEncoding,
+	/// I see different identity field counts through the two header readers.
+	HeaderReaderMismatch,
+	/// I see a field consumed by another field's parser.
+	HeaderReaderFramingMismatch,
+	/// The header block holds more fields than the server reads.
+	TooManyHeaderFields,
+	/// The message carries a NUL or a bare carriage return.
+	AmbiguousLineFraming,
 }
 
 impl MarketingRefusal {
 	/// The text of the refusal, the same on SMTP, REST and JMAP.
 	pub fn message(self) -> &'static str {
 		match self {
+			Self::HeaderReaderFramingMismatch => {
+				"I cannot accept headers whose field boundaries disagree between readers"
+			}
+			Self::TooManyHeaderFields => "submission headers hold more fields than I accept",
+			Self::InvalidHeaderEncoding => "I cannot accept submission headers that are not UTF-8",
+			Self::HeaderReaderMismatch => {
+				"I cannot accept headers whose From or Sender field counts disagree between readers"
+			}
 			Self::NoUnsubscribeUri => {
 				"marketing mail needs a List-Unsubscribe field with an https URI (RFC 8058)"
 			}
 			Self::NoOneClick => {
 				"marketing mail needs List-Unsubscribe-Post: List-Unsubscribe=One-Click (RFC 8058)"
+			}
+			Self::AmbiguousHeaderName => {
+				"submission header field names must use printable ASCII without embedded whitespace"
+			}
+			Self::AmbiguousHeaderFraming => {
+				"submission headers must use one line-ending style without a bare carriage return"
+			}
+			Self::AmbiguousLineFraming => {
+				"a submitted message must not contain a NUL or a bare carriage return"
+			}
+			Self::MalformedHeaderLine => {
+				"submission header lines must follow RFC 5322 field and folding syntax"
 			}
 		}
 	}

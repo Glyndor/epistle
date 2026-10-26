@@ -42,6 +42,7 @@ pub(super) fn spawn_dmarc_flush(
 	let data_dir = config.data_dir.clone();
 	let hostname = config.hostname.clone();
 	let org_email = format!("postmaster@{hostname}");
+	let auto_submitted = config.system_auto_submitted;
 	tokio::spawn(async move {
 		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -61,6 +62,7 @@ pub(super) fn spawn_dmarc_flush(
 				dns: spf_dns.as_ref(),
 				sink: sink.as_ref(),
 				now,
+				auto_submitted,
 			};
 			crate::dmarc::aggregate::flush_pending(&sender, &today).await;
 		}
@@ -87,6 +89,7 @@ pub(super) fn spawn_tlsrpt_reports(
 		dns,
 		sink,
 		Arc::new(poster),
+		config.system_auto_submitted,
 	));
 	Ok(())
 }
@@ -168,7 +171,7 @@ pub(super) async fn build_oauth_verifier(
 		}
 		(None, None) => unreachable!("validate() rejects the no-source case"),
 	};
-	Ok(Some(Arc::new(verifier)))
+	Ok(Some(Arc::new(verifier.declared_by(oauth))))
 }
 
 /// Build the built-in OAuth authorization server from `[oauth] signing_key` or
@@ -439,7 +442,12 @@ pub(super) fn spawn_alert_engine(
 	if config.alerts.is_empty() {
 		return;
 	}
-	let ctx = crate::alerts::context(webhook, spool, config.hostname.clone());
+	let ctx = crate::alerts::context(
+		webhook,
+		spool,
+		config.hostname.clone(),
+		config.system_auto_submitted,
+	);
 	let _handle = crate::alerts::run(config.alerts.clone(), metrics, ctx);
 }
 

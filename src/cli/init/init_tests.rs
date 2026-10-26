@@ -187,3 +187,21 @@ fn run_exits_1_when_apply_partially_fails() {
 		"no config was written through a regular-file parent"
 	);
 }
+
+/// The plan and the report print values that came from the answers or
+/// from a saved draft. A terminal executes the escape sequence it finds
+/// there, so both blocks escape it before writing.
+#[test]
+fn the_plan_and_the_report_escape_terminal_controls() {
+	let mut out = Vec::new();
+	escaped(
+		&mut out,
+		"plan:",
+		"  1. data dir: create /srv/\u{1b}[2Jdata (mode 0700)\n  2. ordinary line\n",
+	);
+	let text = String::from_utf8(out).unwrap();
+	assert!(!text.contains('\u{1b}'), "{text}");
+	assert!(text.contains("\\u{1b}[2Jdata"), "{text}");
+	assert!(text.contains("  2. ordinary line\n"), "{text}");
+	assert!(text.starts_with("plan:\n"), "{text}");
+}

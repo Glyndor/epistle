@@ -298,3 +298,10 @@ fn the_links_in_the_guide_lead_somewhere() {
 		);
 	}
 }
+
+#[test]
+fn verify_scope_documentation_excludes_account_bound_keys() {
+	let text = guide();
+	assert!(text.contains("administrative keys without `account` or `domains`"));
+	assert!(text.contains("Account-bound keys cannot access `/api/v1/auth/verify`"));
+}

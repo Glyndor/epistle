@@ -60,6 +60,18 @@ fn the_refusal_is_a_permanent_smtp_reply() {
 }
 
 #[test]
+fn an_ambiguous_header_is_a_permanent_smtp_reply() {
+	for refusal in [
+		MarketingRefusal::AmbiguousHeaderName,
+		MarketingRefusal::AmbiguousHeaderFraming,
+		MarketingRefusal::MalformedHeaderLine,
+	] {
+		let text = refusal.smtp_reply().to_string();
+		assert!(text.starts_with("550 5.7.1 submission header"), "{text}");
+	}
+}
+
+#[test]
 fn bulk_precedence_replaces_the_clients_own() {
 	let mut data = message("Precedence: first-class\r\n");
 	mark_bulk(&mut data);

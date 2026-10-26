@@ -24,6 +24,18 @@ fn counts_every_spelling_of_the_from_name() {
 }
 
 #[test]
+fn reads_lf_only_header_blocks() {
+	assert_eq!(
+		author(b"Subject: x\nFrom: \"Alice\" <alice@example.org>\n\nbody\n"),
+		Author::Addresses(vec!["alice@example.org".to_string()])
+	);
+	assert_eq!(
+		author(b"From: a@x.example\nFrom: b@x.example\n\nbody\n"),
+		Author::MultipleFields
+	);
+}
+
+#[test]
 fn a_field_without_an_address_is_missing() {
 	assert_eq!(author(b"Subject: x\r\n\r\n"), Author::Missing);
 	assert_eq!(author(b"From: undisclosed:;\r\n\r\n"), Author::Missing);
@@ -48,5 +60,25 @@ fn a_domain_that_cannot_be_a_dns_name_is_missing() {
 	assert_eq!(
 		author_domain(b"From: \"a@x\" <@>\r\n\r\n"),
 		AuthorDomain::Missing
+	);
+}
+
+/// A From field is data, not an address epistle created: a domain of one
+/// label is kept as the author domain, because the message may have come
+/// from anywhere. The DMARC lookup that follows finds no record for it and
+/// the message is not aligned with it.
+#[test]
+fn a_single_label_author_domain_is_kept_as_it_comes() {
+	assert_eq!(
+		author(b"From: user@localhost\r\n\r\n"),
+		Author::Addresses(vec!["user@localhost".to_string()])
+	);
+	assert_eq!(
+		author_domain(b"From: user@localhost\r\n\r\n"),
+		AuthorDomain::One("localhost".to_string())
+	);
+	assert_eq!(
+		author_domain(b"From: user@intranet\r\n\r\n"),
+		AuthorDomain::One("intranet".to_string())
 	);
 }

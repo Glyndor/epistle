@@ -7,10 +7,11 @@
 //! copies, and each remote message that matches uses one up, so two
 //! identical messages in the source still end up as two locally.
 
-use std::collections::HashMap;
 use std::path::Path;
 
-use crate::imap::mailbox::Snapshot;
+use super::MigrateError;
+use super::metadata::Budget;
+use crate::imap::mailbox;
 use crate::storage::MessageCrypto;
 
 /// How far into a message the Message-ID header is looked for.
@@ -38,47 +39,134 @@ pub(crate) fn key(message: &[u8]) -> Key {
 	}
 }
 
-/// The messages already in a local mailbox, counted by identity.
-#[derive(Debug, Default)]
+#[path = "dedupe_disk.rs"]
+mod disk;
+
+/// The 32-byte identity fingerprint the index compares. The ledger of
+/// confirmed messages keeps one per message, so a message that is not
+/// downloaded again can still consume its copy of the local mailbox.
+pub(crate) fn fingerprint(key: &Key) -> [u8; 32] {
+	disk::Table::digest(key)
+}
+
+/// The messages already in a local mailbox, indexed without retaining their identities in memory.
+#[derive(Debug)]
 pub(crate) struct Index {
-	counts: HashMap<Key, u32>,
+	table: disk::Table,
 }
 
 impl Index {
 	/// Index every message in `mailbox`. A mailbox that does not exist yet
-	/// is empty.
+	/// is empty. Only a possibly interrupted batch requires fresh durability barriers.
 	pub(crate) fn scan(
 		data_dir: &Path,
 		account: &str,
 		mailbox: &str,
 		crypto: &MessageCrypto,
-	) -> std::io::Result<Self> {
-		let mut index = Index::default();
-		if !crate::imap::mailbox::exists(data_dir, account, mailbox) {
-			return Ok(index);
+		budget: &mut Budget,
+		body_limit: usize,
+		sync_pending: bool,
+	) -> Result<Self, MigrateError> {
+		use std::io::Read;
+		use std::os::unix::fs::OpenOptionsExt;
+		budget.charge(16 * 1024)?;
+		let dir = mailbox::mailbox_dir(data_dir, account, mailbox).ok_or_else(|| {
+			MigrateError::Storage(std::io::Error::other("invalid recovery mailbox"))
+		})?;
+		let entries = || -> std::io::Result<_> {
+			match std::fs::read_dir(&dir) {
+				Ok(entries) => Ok(Some(entries)),
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+				Err(error) => Err(error),
+			}
+		};
+		let count = entries()
+			.map_err(MigrateError::Storage)?
+			.into_iter()
+			.flatten()
+			.try_fold(0u64, |count, entry| entry.map(|_| count.saturating_add(1)))
+			.map_err(MigrateError::Storage)?;
+		let file = super::state::scratch(data_dir).map_err(MigrateError::Storage)?;
+		let mut index = Index {
+			table: disk::Table::new(file, count).map_err(MigrateError::Storage)?,
+		};
+		let mut synced = false;
+		// Avoid Snapshot::open: it collects every local message and its flags
+		// before the recovery index can apply any memory limit.
+		for entry in entries()
+			.map_err(MigrateError::Storage)?
+			.into_iter()
+			.flatten()
+		{
+			let entry = entry.map_err(MigrateError::Storage)?;
+			budget.check_deadline()?;
+			let path = entry.path();
+			if path.extension().is_none_or(|ext| ext != "eml")
+				|| path
+					.file_stem()
+					.and_then(|s| s.to_str())
+					.and_then(|s| uuid::Uuid::parse_str(s).ok())
+					.is_none()
+			{
+				continue;
+			}
+			let read = || -> std::io::Result<Vec<u8>> {
+				let file = std::fs::OpenOptions::new()
+					.read(true)
+					.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+					.open(&path)?;
+				if !file.metadata()?.is_file() {
+					return Err(std::io::Error::other(
+						"recovery message must be a regular file",
+					));
+				}
+				let limit = body_limit.saturating_add(crate::storage::OVERHEAD);
+				let mut bytes = Vec::new();
+				file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+				if bytes.len() > limit {
+					return Err(std::io::Error::other(
+						"recovery message exceeds the message size limit; saved progress is retained",
+					));
+				}
+				let body = crypto.decode(&bytes)?;
+				if body.len() > body_limit {
+					return Err(std::io::Error::other(
+						"recovery message exceeds the message size limit; saved progress is retained",
+					));
+				}
+				Ok(body)
+			};
+			let body = read().map_err(MigrateError::Storage)?;
+			let key = key(&body);
+			let id = path
+				.file_stem()
+				.and_then(|s| s.to_str())
+				.and_then(|s| uuid::Uuid::parse_str(s).ok())
+				.expect("validated message UUID");
+			if sync_pending {
+				super::durability::files(data_dir, account, mailbox, id)
+					.map_err(MigrateError::Storage)?;
+				synced = true;
+			}
+			index.table.add(&key).map_err(MigrateError::Storage)?;
 		}
-		let snapshot = Snapshot::open(data_dir, account, mailbox, crypto)?;
-		for message in snapshot.messages() {
-			let body = snapshot.read(message)?;
-			index.add(key(&body));
+		// The directories are shared by every message, so they are made durable
+		// once for the whole scan and not once for each message.
+		if synced {
+			super::durability::hierarchy(data_dir, account, mailbox)
+				.map_err(MigrateError::Storage)?;
 		}
 		Ok(index)
 	}
 
-	/// Count one more stored copy of `key`.
-	pub(crate) fn add(&mut self, key: Key) {
-		*self.counts.entry(key).or_default() += 1;
+	/// Whether a stored copy of `key` is still unclaimed; claims it.
+	pub(crate) fn claim(&mut self, key: &Key) -> std::io::Result<bool> {
+		self.table.claim(key)
 	}
 
-	/// Whether a stored copy of `key` is still unclaimed; claims it.
-	pub(crate) fn claim(&mut self, key: &Key) -> bool {
-		match self.counts.get_mut(key) {
-			Some(count) if *count > 0 => {
-				*count -= 1;
-				true
-			}
-			_ => false,
-		}
+	/// Whether a stored copy of `fingerprint` is still unclaimed; claims it.
+	pub(crate) fn claim_fingerprint(&mut self, fingerprint: &[u8; 32]) -> std::io::Result<bool> {
+		self.table.claim_hash(fingerprint)
 	}
 }
 

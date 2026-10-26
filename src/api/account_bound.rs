@@ -6,11 +6,15 @@
 //! the handler runs. Without this the key would be read on those routes like
 //! an unconfined one.
 //!
-//! On the account-scoped surface the key acts for its account only while that
-//! account exists and is not disabled. [`bound_account_is_live`] is the one
+//! On the account-scoped surface the key acts for its own account only while
+//! that account exists and is not disabled. [`bound_account_is_live`] is the one
 //! check for that: [`confine`] runs it on every HTTP request, and the JMAP
 //! WebSocket runs it again on every frame of a socket opened before the
 //! account went away.
+//!
+//! The binding is read from the same authorization snapshot every other
+//! restriction comes from, so a key bound to one account *and* confined to
+//! some domains is confined by both at once.
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -18,7 +22,6 @@ use axum::response::Response;
 
 use super::ApiState;
 use super::Principal;
-use super::api_keys::Scope;
 use super::error::ApiError;
 use super::state::MatchedAuth;
 
@@ -30,39 +33,17 @@ pub(crate) fn path_is_account_scoped(path: &str) -> bool {
 		|| path.starts_with("/jmap/")
 }
 
-/// Whether the credentials in `auth` are an API key bound to one account.
-/// The configured static token never is.
-pub(crate) fn is_account_bound(state: &ApiState, auth: &MatchedAuth) -> bool {
-	let Some(token) = auth.token.as_deref() else {
-		return false;
-	};
-	if auth.configured {
-		return false;
-	}
-	let now = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0);
-	const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
-	state
-		.api_keys()
-		.snapshot()
-		.iter()
-		.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
-		.is_some_and(|key| key.account.is_some())
-}
-
 /// Whether the account `principal` is bound to can still be acted on: it
 /// exists and is not disabled. A principal not bound to one account is not
 /// affected. A disabled account keeps its mail, so without this its keys would
 /// go on reading and sending as if nothing happened.
 pub(crate) fn bound_account_is_live(state: &ApiState, principal: &Principal) -> bool {
-	match principal {
-		Principal::Account { name, .. } => {
+	match principal.bound_account() {
+		Some(name) => {
 			!state.store().is_disabled(name)
-				&& state.accounts().iter().any(|account| &account.name == name)
+				&& state.accounts().iter().any(|account| account.name == name)
 		}
-		_ => true,
+		None => true,
 	}
 }
 
@@ -75,11 +56,15 @@ pub(crate) async fn confine(
 	next: Next,
 ) -> Result<Response, ApiError> {
 	if let Some(auth) = request.extensions().get::<MatchedAuth>() {
+		// One resolution of the credential, the same one the handlers use:
+		// the account binding, the domain binding and the scopes all come
+		// from the same key snapshot.
+		let principal = Principal::for_token(&state, auth);
 		if !path_is_account_scoped(request.uri().path()) {
-			if is_account_bound(&state, auth) {
+			if principal.bound_account().is_some() {
 				return Err(ApiError::account_bound_route());
 			}
-		} else if !bound_account_is_live(&state, &Principal::for_token(&state, auth)) {
+		} else if !bound_account_is_live(&state, &principal) {
 			return Err(ApiError::bound_account_unavailable());
 		}
 	}

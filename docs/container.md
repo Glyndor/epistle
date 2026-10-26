@@ -87,6 +87,15 @@ thin wrapper around podup and is not a replacement: every other
 the same data dir, the same config file, the same `glyndor-epistle`
 account.
 
+The package keeps replaced host binaries for `sudo epistle stack rollback` in
+`/var/lib/epistle-rollback` (root:root, mode 0700), outside the service account
+home and container mounts. Rollback validates ownership, permissions, file type
+and the saved SHA-256 digest before stopping mail. Legacy copies under the
+service account home are ignored. An upgrade must save a trusted copy in the
+new store before it can be used. Database dumps stay in `<data_dir>/backups`;
+see [Rolling back an upgrade](cli.md#rolling-back-an-upgrade). Purge removes the
+host binary store.
+
 The minimum a Podman or Docker compose unit needs is:
 
 ```sh
@@ -98,7 +107,7 @@ podman run --rm \
   -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.2
+  ghcr.io/glyndor/epistle:0.12.3
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -127,7 +136,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.2
+    image: ghcr.io/glyndor/epistle:0.12.3
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -187,9 +196,121 @@ listener is not reachable through the pasta mapping, so the
 host-side reach is the operator's responsibility, not the
 init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
-non-loopback address; a `127.0.0.1:<p>:<p>` publish on the
-compose side is the operator's own addition to the generated
-file (or a follow-up edit after `init` runs).
+non-loopback address; where the host reaches it is the
+operator's decision, made with `epistle service set
+<name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
+reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
+
+`epistle service enable` starts those two on loopback instead of on SMTP's
+bind, which is what keeps a port they serve in plaintext off the public
+interfaces, and it publishes no mapping for them: a loopback bind inside the
+container is not one the pasta mapping reaches. Opening one is `epistle service
+set <name> --bind 127.0.0.1`, which moves the container bind to the wildcard
+and publishes that single host address.
+
+### Publishing a port on one host address
+
+The `ports:` array of `mail` is derived from the listeners: every non-loopback
+listener is published as `<port>:<port>`, and a loopback listener gets no
+entry. With no host address in the mapping the engine publishes on every
+address the host has, so a listener nobody narrowed answers on the public
+interfaces too. Binding the listener to a private address does not change that,
+and inside the container the bind address has to be one the container owns, or
+`serve` fails to start with `EADDRNOTAVAIL`. The three listeners whose transport
+is HTTP without TLS (`api`, `web-dav`, plain `autoconfig`) are the exception:
+they are published on `127.0.0.1` when the file names no address for them, so a
+map that lost the address a `set` wrote, or an `addr` an operator edited by hand,
+leaves them on loopback.
+
+`epistle service set <name> --bind <address>` writes the host side of the
+mapping for one listener and leaves the rest of the file alone:
+
+```sh
+sudo epistle service set imap --bind 127.0.0.1
+```
+
+It moves the bind the container uses to the unspecified address of the family
+the operator asked for, `0.0.0.0` for IPv4 and `::` for IPv6, and publishes
+`127.0.0.1:143:143` on the host. A loopback or private address inside the
+container is not one the published mapping can reach, so a listener that leaves
+loopback moves to that wildcard; a container bind that is already unspecified
+and answers the requested family stays, which keeps the dual-stack `::` that
+`init` writes. Asking for an IPv6 address with a container bound on `0.0.0.0`
+is therefore not a publication on every host address: the container moves to
+`::` and the mapping is `[ADDRESS]:PORT:PORT`.
+
+Every writer of the generated map reads the host address back before rendering
+it, so enabling another service, an `init` rerun or `stack update` keeps the
+address on the listener that has it. A wildcard renders as `PORT:PORT` in both
+families and publishes on every address the host owns either way; the family
+stays in the container bind, which is where the engine needs it.
+`epistle service list` shows the address in a `HOST` column.
+
+A file from a release that published the listeners with no TLS transport wide
+is different: `8090:8090`, `0.0.0.0:8090:8090` and `[::]:8090:8090` all name the
+same thing, every address of the host, so any command that re-renders the map
+takes them to `127.0.0.1`. That means an upgrade can be what stops WebDAV
+answering on the public interface, which is why the command that does it says
+so on stderr, naming the service and the port and pointing at
+`compose.override.yaml`; `init` says it in its report and `stack update` in its
+notes. A concrete address in the map is not a wildcard and stays where the
+operator put it.
+
+The address has to be one of the host's own: `epistle service set` refuses a
+multicast group, `255.255.255.255` and a link-local IPv6 address, and it writes
+`::ffff:10.0.0.5` as the `10.0.0.5` it names. Both wildcards are accepted. What
+it can not know from the outside is whether the host actually owns a unicast
+address it names; that surfaces as a bind refusal from the engine.
+
+A listener the container holds on loopback, an `api` one for example, is
+reported as `set` and not as `published`, because a loopback bind inside the
+container gets no mapping. Naming an address for it does widen that bind to the
+container wildcard, which publishes the listener on the host address named; the
+reach is still only what the operator asked for, and `api` and `web-dav` only
+accept loopback. When the two files describe different stacks, which is what a
+command killed between its writes leaves behind, the next service command says
+which ports each one published before it brings them together.
+
+#### What was measured for the mapping form
+
+pasta, the rootless network mode the stack uses, refuses a port mapping that
+names an explicit address on Podman 5.4.2 (Debian 13): `"[::]:25:25"`, alone or
+next to `"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`,
+and `"25:25"` is the form that publishes on both families. That is why a
+wildcard is never written as an explicit address. Podman 5.7.0 accepts the
+explicit forms, so this is a floor and not a rule of the format.
+
+Not measured: an explicit IPv6 host address (`[ADDR]:PORT:PORT`) under pasta on
+Podman 5.4.2, a rootless bridge instead of pasta, and a client connecting from
+another host. Those shapes are written by the operator in
+`compose.override.yaml`, where the generated map can not reach them.
+
+The override stays the place for a mapping that has to carry every port, or
+one that changes shape: `init` regenerates the base file on a rerun and `stack
+update` regenerates it too, taking the published ports from the listeners. An
+operator override in `compose.override.yaml`, which every stack invocation
+passes after `compose.yaml`, is merged with the generated map, or replaces it
+where it carries `!override`, and is never written. Lists in the override are
+merged with the generated ones, so a plain `ports:` entry would be added to
+`8025:8025` and the engine would refuse to bind both; the `!override` tag
+replaces the list, and then it has to carry every port the stack publishes, the
+mail ones included:
+
+```yaml
+services:
+  mail:
+    ports: !override
+      - "25:25"
+      - "143:143"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "10.0.0.1:8025:8025"
+```
+
+[Exposing the API on a private interface](api.md#exposing-the-api-on-a-private-interface)
+covers the API case, including what `--ip-cidr` sees when the container
+network does not carry the client's address.
 
 ### What each container may do
 
@@ -399,8 +520,9 @@ The scripts below are passed as one argument to `sh -c`:
 ```sh
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
-# Restore script, after podup cp <host-sql> db:/tmp/epistle-restore.sql
-PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/epistle-restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
+# Restore script, after (as root) mkdir -m 711 '/tmp/<staged-name>',
+# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql (host file 0644)
+PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
 `POSTGRES_PASSWORD_FILE` is consumed by the image entrypoint during
@@ -408,8 +530,10 @@ initialization. libpq does not read it, so it cannot authenticate the
 clients against `local all all scram-sha-256` without `PGPASSWORD`.
 The password value stays inside the container and never enters the
 host argv or environment. Restore uses the copied SQL file, stops on
-the first SQL error and runs in one transaction. Its host temp file
-is removed when replay finishes.
+the first SQL error and runs in one transaction. The host temp file is
+removed when the replay finishes, and the private directory holding the
+copy inside `db` is removed afterwards with `podup exec -T -u root db sh -c
+"rm -rf '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
 
 The `pg_dump`/`psql` host binaries are not required on the host
 in this path; the database step runs entirely inside the `db`
@@ -421,15 +545,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.2-amd64`, `…:0.12.2-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.12.3-amd64`, `…:0.12.3-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.2` the full release.
+- `ghcr.io/glyndor/epistle:0.12.3` the full release.
 - `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.2 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.3 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -441,7 +565,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.2 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.3 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -451,7 +575,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.2`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.3`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

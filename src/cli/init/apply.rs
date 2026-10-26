@@ -86,6 +86,9 @@ pub enum ReportStep {
 		/// Operator-facing reason it was skipped.
 		reason: String,
 	},
+	/// A published listener was moved off every address of the host by the
+	/// generated file this run wrote.
+	Narrowed(crate::cli::init::Narrowed),
 }
 
 impl Report {
@@ -106,6 +109,7 @@ impl Report {
 				ReportStep::Skipped { name, reason } => {
 					writeln!(out, "  skipped: {name} ({reason})")?
 				}
+				ReportStep::Narrowed(one) => writeln!(out, "  narrowed: {one}")?,
 				ReportStep::AccountCreated { name, address } => {
 					writeln!(out, "  account: {name} <{address}>")?
 				}
@@ -460,7 +464,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 		let acme_cert = acme_dir.join("cert.pem");
 		let acme_key = acme_dir.join("key.pem");
 		for (src, dst) in [(&cert_path, &acme_cert), (&key_path, &acme_key)] {
-			match fs::read(src) {
+			match crate::cli::regular_read::read(src) {
 				Ok(bytes) => {
 					if let Err(error) = crate::storage::write_secret(dst, &bytes) {
 						return ApplyOutcome {
@@ -485,6 +489,18 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
+	let _held = match crate::cli::service_lock::acquire(&answers.config_path) {
+		Ok(held) => held,
+		Err(error) => {
+			return ApplyOutcome {
+				report,
+				error: Some(ApplyError::ConfigRead(
+					answers.config_path.clone(),
+					std::io::Error::other(error),
+				)),
+			};
+		}
+	};
 	// Lay down the database password before the config: `Config::load`
 	// opens `[database] password_file` to validate the URL.
 	if answers.services.database
@@ -639,6 +655,9 @@ mod tests_failures_c;
 #[cfg(test)]
 #[path = "apply_failures_tests_d.rs"]
 mod tests_failures_d;
+#[cfg(test)]
+#[path = "apply_tests_fifo.rs"]
+mod tests_fifo;
 #[cfg(test)]
 #[path = "apply_tests_implicit_tls.rs"]
 mod tests_implicit_tls;

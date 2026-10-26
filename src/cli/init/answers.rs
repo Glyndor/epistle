@@ -300,6 +300,14 @@ pub enum Invalid {
 	/// validator refuses the input before any effect rather than
 	/// silently normalising to a path the operator did not write.
 	PathParentEscapesRoot { field: String, value: String },
+	/// `data_dir` or `config_path` carries a control character or an
+	/// invisible formatting character. The path is written into the plan
+	/// the operator confirms and into the final report, so an escape
+	/// sequence arriving from an answers file or from a saved draft
+	/// could repaint the terminal or hide part of what is shown. The
+	/// validator refuses it before any effect, the same place that
+	/// refuses the `$` shape below.
+	PathControl { field: String, value: String },
 	/// `data_dir` or `config_path` contains a `$` that compose
 	/// would interpolate at `podup config` time. The compose
 	/// file mounts the two paths verbatim on both sides of the
@@ -356,7 +364,7 @@ impl std::fmt::Display for Invalid {
 			Invalid::DnsForbidden => f.write_str("mode = \"manual\" must not have [dns]"),
 			Invalid::DnsZoneMissing => f.write_str("dns.zone must be set"),
 			Invalid::DnsZoneMalformed { value, reason } => {
-				write!(f, "dns.zone {value:?} {reason}")
+				write!(f, "dns.zone {value:?}: {reason}")
 			}
 			Invalid::DnsProviderMissing => f.write_str("dns.provider must be set"),
 			Invalid::DnsProviderUnsupported { value, supported } => write!(
@@ -397,12 +405,19 @@ impl std::fmt::Display for Invalid {
 				"{field} {value:?}: contains `..` that escapes the path root; \
 				 write the path without `..` components"
 			),
+			Invalid::PathControl { field, value } => write!(
+				f,
+				"{field} {value:?}: must not contain control or invisible formatting \
+				 characters; the plan and the report are printed on the terminal, so an \
+				 escape sequence in the path would repaint what you are confirming. \
+				 Write the plain path."
+			),
 			Invalid::PathInterpolated { field, value } => write!(
 				f,
 				"{field} {value:?}: must not contain a `$`; compose would interpolate it \
-				 and the rendered mail.toml would still carry the literal `$VAR` in its \
-				 data and key paths, so the container could not find the generated keys. \
-				 Write the resolved path directly."
+				 while the rendered mail.toml keeps the literal `$VAR` (or expands it itself, \
+				 and stops when the variable is unset), so the container could not find \
+				 the file the host expects. Write the resolved path directly."
 			),
 			Invalid::ApiUnsupported => f.write_str(
 				"services.api: enable the management API by editing the [api] section of the generated config after init; init does not generate an api credential",

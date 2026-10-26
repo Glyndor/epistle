@@ -496,3 +496,42 @@ fn plan_lists_directory_steps_before_writes() {
 fn file_mtime(_path: &PathBuf) -> std::time::SystemTime {
 	std::time::SystemTime::UNIX_EPOCH
 }
+
+#[test]
+fn a_rerun_waits_for_service_edits_before_reading_the_config() {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	let dir = tempfile::tempdir().unwrap();
+	let mut answers = answers_minimal();
+	answers.data_dir = dir.path().join("data");
+	answers.config_path = dir.path().join("mail.toml");
+	assert!(apply(&answers).error.is_none());
+	let held = crate::cli::service_lock::acquire(&answers.config_path).unwrap();
+	std::thread::scope(|scope| {
+		let (tx, rx) = mpsc::channel();
+		let answers = &answers;
+		scope.spawn(move || {
+			tx.send(apply(answers)).unwrap();
+		});
+		let early = rx.recv_timeout(Duration::from_millis(300));
+		let mut document =
+			crate::cli::config_edit::ConfigDocument::open(&answers.config_path).unwrap();
+		document
+			.upsert_element("listeners", "kind", "smtp", &[("port", 2525.into())])
+			.unwrap();
+		document.commit().unwrap();
+		drop(held);
+		assert!(
+			matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
+			"init escaped the shared lock"
+		);
+		assert!(
+			rx.recv_timeout(Duration::from_secs(20))
+				.unwrap()
+				.error
+				.is_none()
+		);
+	});
+	let config = crate::config::Config::load(&answers.config_path).unwrap();
+	assert_eq!(config.listeners[0].socket_addr().port(), 2525);
+}

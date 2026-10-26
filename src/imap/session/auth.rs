@@ -8,9 +8,6 @@ use crate::smtp::directory::hash_gate::Verdict;
 use crate::smtp::directory::{Proof, ScramPlan, ScramRefusal};
 use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
-use crate::smtp::address::Address;
-use crate::smtp::directory::Resolution;
-
 use super::super::command::Secret;
 use super::state::State;
 use super::{Output, Session};
@@ -43,6 +40,12 @@ pub(super) enum PendingAuth {
 	LoginPass { tag: String, user: String },
 	/// AUTH=EXTERNAL: awaiting the (optional) authzid.
 	External { tag: String },
+	/// OAUTHBEARER/XOAUTH2 without an initial response: awaiting the bearer
+	/// message after the empty `+ ` continuation (RFC 3501 6.2.2, RFC 4959).
+	Bearer { tag: String },
+	/// OAUTHBEARER/XOAUTH2: the error challenge was sent; awaiting the
+	/// client's acknowledgement line before the final `NO` (RFC 7628 3.2.3).
+	BearerError { tag: String },
 }
 
 impl Session {
@@ -131,35 +134,6 @@ COMPRESS=DEFLATE",
 		}
 	}
 
-	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
-	fn oauth_bearer(&mut self, tag: &str, initial: Option<String>) -> Output {
-		let outcome = self
-			.oauth
-			.clone()
-			.zip(initial)
-			.and_then(|(verifier, enc)| {
-				let token = parse_bearer(&enc)?;
-				let email = verifier.verify(&token, unix_now())?;
-				let address = Address::parse(&email).ok()?;
-				match self.directory.resolve(&address) {
-					Resolution::Account(account) => Some(account),
-					_ => None,
-				}
-			})
-			.and_then(|account| {
-				// The account rules (disabled, protocol allowlist) apply to a
-				// bearer token as to a password, with the same wire outcome as
-				// an unverifiable token.
-				self.directory
-					.admit_login(&account, self.auth_protocol, Proof::Federated)
-					.then_some(account)
-			});
-		match outcome {
-			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
-			None => self.auth_failure(tag),
-		}
-	}
-
 	/// Begin AUTHENTICATE. AUTHENTICATE requires TLS and the unauthenticated
 	/// state, like LOGIN.
 	pub(super) fn auth(&mut self, tag: &str, mechanism: &str, initial: Option<Secret>) -> Output {
@@ -217,7 +191,7 @@ COMPRESS=DEFLATE",
 					continuation("VXNlcm5hbWU6")
 				}
 			},
-			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(tag, initial),
+			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_begin(tag, initial),
 		}
 	}
 
@@ -250,6 +224,11 @@ COMPRESS=DEFLATE",
 	pub fn auth_response(&mut self, line: &str) -> Output {
 		if line == "*" {
 			let tag = self.pending_auth_tag();
+			// Cancelling after the error challenge is still the failed
+			// attempt it acknowledges, so it cannot be used to skip the count.
+			if matches!(self.pending_auth, Some(PendingAuth::BearerError { .. })) {
+				return self.auth_failure(&tag);
+			}
 			self.pending_auth = None;
 			return Output::text(format!("{tag} BAD authentication cancelled\r\n"));
 		}
@@ -266,6 +245,8 @@ COMPRESS=DEFLATE",
 			Some(PendingAuth::LoginUser { tag }) => self.login_user(&tag, line),
 			Some(PendingAuth::LoginPass { tag, user }) => self.login_pass(&tag, &user, line),
 			Some(PendingAuth::External { tag }) => self.auth_external(&tag, line),
+			Some(PendingAuth::Bearer { tag }) => self.oauth_bearer(&tag, Some(line.to_string())),
+			Some(PendingAuth::BearerError { tag }) => self.auth_failure(&tag),
 			None => Output::text("* BAD unexpected authentication response\r\n".to_string()),
 		}
 	}
@@ -295,9 +276,9 @@ COMPRESS=DEFLATE",
 		// still has to be a real local account; a refusal rejects with the
 		// same wire outcome as an unknown address.
 		let account = match crate::smtp::address::Address::parse(&identity) {
-			Ok(address) => match self.directory.resolve(&address) {
-				crate::smtp::directory::Resolution::Account(account) => account,
-				_ => return self.auth_failure(tag),
+			Ok(address) => match self.directory.resolve_exact(&address) {
+				Some(account) => account,
+				None => return self.auth_failure(tag),
 			},
 			Err(_) => return self.auth_failure(tag),
 		};
@@ -497,7 +478,7 @@ COMPRESS=DEFLATE",
 		}
 	}
 
-	fn auth_failure(&mut self, tag: &str) -> Output {
+	pub(super) fn auth_failure(&mut self, tag: &str) -> Output {
 		self.pending_auth = None;
 		if let State::NotAuthenticated { login_failures } = &mut self.state {
 			*login_failures += 1;
@@ -556,7 +537,9 @@ COMPRESS=DEFLATE",
 				PendingAuth::Plain { tag }
 				| PendingAuth::ScramFirst { tag, .. }
 				| PendingAuth::LoginUser { tag }
-				| PendingAuth::External { tag },
+				| PendingAuth::External { tag }
+				| PendingAuth::Bearer { tag }
+				| PendingAuth::BearerError { tag },
 			) => tag.clone(),
 			Some(PendingAuth::ScramFinal { tag, .. } | PendingAuth::LoginPass { tag, .. }) => {
 				tag.clone()
@@ -578,31 +561,12 @@ COMPRESS=DEFLATE",
 }
 
 /// A `+ <base64>` continuation that collects the next line as an auth response.
-fn continuation(challenge_b64: &str) -> Output {
+pub(super) fn continuation(challenge_b64: &str) -> Output {
 	let mut output = Output::text(format!("+ {challenge_b64}\r\n"));
 	output.collect_auth = true;
 	output
 }
 
-fn decode(encoded: &str) -> Option<String> {
+pub(super) fn decode(encoded: &str) -> Option<String> {
 	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
-}
-
-/// Extract the bearer token from a base64 OAUTHBEARER/XOAUTH2 initial response.
-fn parse_bearer(encoded: &str) -> Option<String> {
-	let text = decode(encoded)?;
-	let token = text
-		.split("auth=Bearer ")
-		.nth(1)?
-		.split('\x01')
-		.next()?
-		.trim();
-	(!token.is_empty()).then(|| token.to_string())
-}
-
-fn unix_now() -> u64 {
-	std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0)
 }

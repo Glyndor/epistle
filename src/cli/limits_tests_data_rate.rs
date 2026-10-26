@@ -85,11 +85,11 @@ fn the_defaults_and_a_floor_turned_off_are_shown() {
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["min-data-rate"],
-		serde_json::json!({"value": 10240, "unit": "bytes-per-second", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": 10240, "unit": "bytes-per-second", "source": "default", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	assert_eq!(
 		show_json(&config)["data-rate-grace"],
-		serde_json::json!({"value": 120, "unit": "seconds", "source": "default", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": 120, "unit": "seconds", "source": "default", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 	let (code, _) = limits(file.path(), &["set", "min-data-rate", "0"]);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -102,7 +102,7 @@ fn the_defaults_and_a_floor_turned_off_are_shown() {
 	let config = Config::load(file.path()).expect("config");
 	assert_eq!(
 		show_json(&config)["min-data-rate"],
-		serde_json::json!({"value": null, "unit": "bytes-per-second", "source": "configured", "kind": "adjustable", "bounds": null, "reference": "no standard mandate"})
+		serde_json::json!({"value": null, "unit": "bytes-per-second", "source": "configured", "kind": "adjustable", "class": "own", "bounds": null, "reference": "no standard mandate"})
 	);
 }
 

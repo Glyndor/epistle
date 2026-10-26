@@ -95,6 +95,10 @@ impl MessageSink for ScanningSink {
 		self.inner.deliver(message)
 	}
 
+	fn deliver_report(&self, message: AcceptedMessage) -> Result<(), SinkError> {
+		self.inner.deliver_report(message)
+	}
+
 	fn submit(
 		&self,
 		message: AcceptedMessage,

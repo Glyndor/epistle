@@ -112,7 +112,10 @@ fn names_an_overlong_domain() {
 
 #[test]
 fn names_domain_shape_problems() {
-	assert_eq!(refused("a@localhost"), "the domain localhost has no dot");
+	assert_eq!(
+		refused("a@localhost"),
+		"the domain localhost needs at least one dot"
+	);
 	assert_eq!(refused("a@ex..org"), "consecutive dots in the domain");
 	assert_eq!(
 		refused("a@-ex.org"),
@@ -150,4 +153,41 @@ fn shorten_keeps_short_values_and_cuts_long_ones() {
 	assert_eq!(shorten("short"), "short");
 	let long = "z".repeat(41);
 	assert_eq!(shorten(&long), format!("{}\u{2026}", "z".repeat(40)));
+}
+
+#[test]
+fn a_refused_name_gets_the_rule_and_an_example() {
+	use crate::domain::DomainError;
+	assert_eq!(
+		name_refusal("mail", DomainError::Invalid, "mail.example.org"),
+		"the domain mail needs at least one dot; for example \"mail.example.org\""
+	);
+	let mixed = name_refusal("\u{435}xample.org", DomainError::Confusable, "example.org");
+	assert!(mixed.contains("mixes scripts"), "{mixed}");
+	assert!(mixed.ends_with("for example \"example.org\""), "{mixed}");
+}
+
+#[test]
+fn a_reason_never_repeats_a_control_or_hidden_character_raw() {
+	for value in [
+		"mail\u{202e}.net",
+		"\u{9b}2J.org",
+		"x\u{2028}y",
+		"a\u{9b}",
+		"-\u{202e}x.example.org",
+		"\u{202e}",
+	] {
+		for line in [
+			domain_reason(value),
+			name_refusal(value, crate::domain::DomainError::Invalid, "example.org"),
+			name_refusal(value, crate::domain::DomainError::Confusable, "example.org"),
+			not_handled(value),
+		] {
+			assert!(
+				line.chars()
+					.all(|c| !(c.is_control() || crate::util::validation::is_invisible_format(c))),
+				"{value:?} came back raw in {line:?}"
+			);
+		}
+	}
 }

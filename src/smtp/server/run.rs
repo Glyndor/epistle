@@ -22,7 +22,7 @@ use super::{
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
 /// akin to Postfix's `smtpd_hard_error_limit`).
-const MAX_ERROR_STREAK: u32 = 20;
+pub(crate) const MAX_ERROR_STREAK: u32 = 20;
 
 impl Server {
 	/// The protocol loop over an established (plain or TLS) stream.
@@ -377,6 +377,12 @@ impl Server {
 						);
 						// The MSA drops Bcc: those recipients are on the envelope.
 						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
+						// The trace header is this hop's, written just above;
+						// a client may not write one of its own.
+						crate::smtp::trace::strip_headers_in_place(
+							&mut message.data,
+							&["received"],
+						);
 					}
 					// Build the final stamped buffer in one allocation of
 					// the exact trace + auth + body length: the body is
@@ -611,7 +617,7 @@ impl Server {
 							}
 						}
 						Err(error) => {
-							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
+							if error.is_storage_fault() {
 								tracing::warn!(%error, "delivery failed");
 							}
 							error.smtp_reply()

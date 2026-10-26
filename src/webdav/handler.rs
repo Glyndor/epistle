@@ -11,21 +11,27 @@ use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use super::WebDavState;
 use super::auth::{self, REALM};
+use super::bounds;
 use super::caldav;
 use super::carddav;
 use super::path;
 use super::propfind;
+use super::quota::{Change, LOG_RESERVE, MIN_ENTRY_BYTES, Quota};
+use super::report_bounds::MAX_RESOURCE_BYTES;
 
 #[path = "handler_propfind.rs"]
 mod propfind_handler;
 use propfind_handler::propfind;
+#[path = "handler_copy.rs"]
+mod copy_handler;
 #[path = "handler_sync.rs"]
 mod sync_handler;
+use copy_handler::copy_move;
 
 /// The `Allow` header listing every method this server implements.
 const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
@@ -45,8 +51,8 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 /// limit. It was chosen to match the old fixed JMAP upload limit; JMAP now
 /// follows `[server] max_message_size` (25 MiB by default), so a DAV
 /// resource may be larger than a message. A per-account
-/// storage quota (the `quota_bytes` field in the account config) still
-/// applies on top of this for cumulative usage; this is the per-file cap.
+/// storage quota (the `quota_bytes` field in the account config) applies on
+/// top of this for cumulative usage; this is the per-file cap.
 ///
 /// WebDAV `PUT` keeps its own cap rather than `[server] max_message_size`
 /// because a single resource (a calendar, a long vCard, a large attachment
@@ -55,6 +61,9 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 /// `epistle limits set`: an Internet standard does not require a specific
 /// size for a DAV resource, only that the server advertises the limit it
 /// will accept.
+///
+/// A `.ics` or `.vcf` is held to [`MAX_RESOURCE_BYTES`] instead, the most a
+/// report can always hand back on its own.
 const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
 
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
@@ -63,7 +72,15 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	let peer = request
 		.extensions()
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| crate::net::canonical_peer(info.0).ip());
+		.map(|info| crate::net::canonical_peer(info.0));
+	// Resolve the client address through the same trusted-proxy chain the
+	// API listeners use (`X-Forwarded-For`, walking from the right, fails
+	// closed on a malformed entry). Behind a trusted reverse proxy the
+	// failure audit log and the per-IP ban counters key on the real
+	// client; without one they key on the socket peer like the API does.
+	let peer = peer.and_then(|socket| {
+		crate::net::trusted_ip::effective(&state.trusted_proxies, Some(socket), request.headers())
+	});
 	let Some(account) = auth::authenticate(request.headers(), &state.directory, peer) else {
 		return challenge();
 	};
@@ -75,8 +92,20 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	if tokio::fs::create_dir_all(&root).await.is_err() {
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
+	let quota = Quota::new(&state, &account, &root);
 	let uri_path = request.uri().path().to_string();
-	let Some(target) = path::resolve(&root, &uri_path) else {
+	// A name with a control character cannot be created any more, but one
+	// made earlier can still be removed or moved away.
+	let legacy_name =
+		path::has_control_char(&uri_path) && matches!(request.method().as_str(), "DELETE" | "MOVE");
+	if path::has_control_char(&uri_path) && !legacy_name {
+		return StatusCode::BAD_REQUEST.into_response();
+	}
+	let Some(target) = (if legacy_name {
+		path::resolve_existing(&root, &uri_path)
+	} else {
+		path::resolve(&root, &uri_path)
+	}) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
 	// A symlink anywhere along the path is an escape attempt: refuse before
@@ -97,9 +126,11 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		Method::GET => get(&target, true).await,
 		Method::HEAD => get(&target, false).await,
 		Method::POST => post(&root, &uri_path, request).await,
-		Method::PUT => put(&target, request).await,
-		Method::DELETE => delete(&target).await,
-		method => dispatch_extension(method.as_str(), &root, &target, &uri_path, request).await,
+		Method::PUT => put(&target, &quota, request).await,
+		Method::DELETE => delete(&target, &quota).await,
+		method => {
+			dispatch_extension(method.as_str(), &root, &target, &uri_path, &quota, request).await
+		}
 	}
 }
 
@@ -138,14 +169,15 @@ async fn dispatch_extension(
 	root: &Path,
 	target: &Path,
 	uri_path: &str,
+	quota: &Quota,
 	request: Request,
 ) -> Response {
 	match method {
-		"MKCOL" => mkcol(target, request).await,
+		"MKCOL" => mkcol(target, quota, request).await,
 		"PROPFIND" => propfind(target, uri_path, request).await,
 		"REPORT" => report(root, target, request).await,
-		"COPY" => copy_move(root, target, request.headers(), false).await,
-		"MOVE" => copy_move(root, target, request.headers(), true).await,
+		"COPY" => copy_move(root, target, request.headers(), false, quota).await,
+		"MOVE" => copy_move(root, target, request.headers(), true, quota).await,
 		_ => method_not_allowed(),
 	}
 }
@@ -304,7 +336,7 @@ fn content_type(target: &Path) -> &'static str {
 /// If the target is an existing symlink (escape planted in the user's tree)
 /// the request is refused with `403`, `tokio::fs::write` would otherwise
 /// follow the link and rewrite the file it points at.
-async fn put(target: &Path, request: Request) -> Response {
+async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 	if target.is_dir() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
 	}
@@ -320,11 +352,39 @@ async fn put(target: &Path, request: Request) -> Response {
 		return StatusCode::FORBIDDEN.into_response();
 	}
 	let existed = target.is_file();
-	let body = match read_body_capped(request.into_body(), PUT_BODY_LIMIT).await {
+	let limit =
+		if caldav::is_ics_path(&uri_name(target)) || carddav::is_vcard_path(&uri_name(target)) {
+			MAX_RESOURCE_BYTES as usize
+		} else {
+			PUT_BODY_LIMIT
+		};
+	let body = match read_body_capped(request.into_body(), limit).await {
 		Ok(bytes) => bytes,
 		Err(response) => return *response,
 	};
-	match tokio::fs::write(target, &body).await {
+	// The size is the real one, the body already read. The reservation holds
+	// the account's quota lock until the file is written.
+	let mut reservation = match quota
+		.admit(Change {
+			bytes: (body.len() as u64).max(MIN_ENTRY_BYTES),
+			replaces: existed.then(|| target.to_path_buf()),
+			..Change::default()
+		})
+		.await
+	{
+		Ok(reservation) => reservation,
+		Err(response) => return *response,
+	};
+	if let Err(response) = quota.check_create(target, None).await {
+		reservation.invalidate();
+		return *response;
+	}
+	let written = tokio::fs::write(target, &body).await;
+	if written.is_err() {
+		reservation.invalidate();
+		bounds::forget_counts(&[target]);
+	}
+	match written {
 		Ok(()) => {
 			sync_handler::log_member(target, false).await;
 			put_success(target, existed).await
@@ -334,6 +394,14 @@ async fn put(target: &Path, request: Request) -> Response {
 		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 	}
+}
+
+/// The last path component of `target`, for judging its extension.
+pub(super) fn uri_name(target: &Path) -> String {
+	target
+		.file_name()
+		.map(|name| name.to_string_lossy().into_owned())
+		.unwrap_or_default()
 }
 
 /// Build the success response for a completed `PUT`: `204`/`201` carrying the
@@ -352,7 +420,8 @@ async fn put_success(target: &Path, existed: bool) -> Response {
 
 /// `DELETE`: remove a file or a collection (recursively). Missing is `404`,
 /// success is `204`.
-async fn delete(target: &Path) -> Response {
+async fn delete(target: &Path, quota: &Quota) -> Response {
+	let _reservation = quota.exclusive().await;
 	let metadata = match tokio::fs::symlink_metadata(target).await {
 		Ok(metadata) => metadata,
 		Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -364,6 +433,7 @@ async fn delete(target: &Path) -> Response {
 	};
 	match result {
 		Ok(()) => {
+			bounds::forget_counts(&[target]);
 			if !metadata.is_dir() {
 				sync_handler::log_member(target, true).await;
 			}
@@ -380,7 +450,7 @@ async fn delete(target: &Path) -> Response {
 /// accordingly (a [`carddav::MARKER`]/[`caldav::MARKER`] file is written into
 /// it). `addressbook` takes precedence if a body somehow names both. Success is
 /// `201`.
-async fn mkcol(target: &Path, request: Request) -> Response {
+async fn mkcol(target: &Path, quota: &Quota, request: Request) -> Response {
 	// Use `symlink_metadata` so a target that already exists as a symlink
 	// is detected without following the link; refusing here closes a
 	// symlink-to-outside edge the dispatch guard (write-creating method)
@@ -403,7 +473,26 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 	let text = String::from_utf8_lossy(&body);
 	let as_addressbook = text.contains("addressbook");
 	let as_calendar = !as_addressbook && caldav::requests_calendar(&text);
+	// A collection costs its own entry and, when flagged, the marker file in it.
+	let flagged = as_addressbook || as_calendar;
+	let cost = MIN_ENTRY_BYTES * (1 + u64::from(flagged)) + if flagged { LOG_RESERVE } else { 0 };
+	let mut reservation = match quota
+		.admit(Change {
+			bytes: cost,
+			..Change::default()
+		})
+		.await
+	{
+		Ok(reservation) => reservation,
+		Err(response) => return *response,
+	};
+	if let Err(response) = quota.check_create(target, None).await {
+		reservation.invalidate();
+		return *response;
+	}
 	if tokio::fs::create_dir(target).await.is_err() {
+		reservation.invalidate();
+		bounds::forget_counts(&[target]);
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
 	if as_addressbook && !carddav::mark_addressbook(target).await {
@@ -415,200 +504,18 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 	StatusCode::CREATED.into_response()
 }
 
-/// `COPY`/`MOVE`: resolve the `Destination` header into the same account tree,
-/// honour `Overwrite`, then copy (and, for `MOVE`, remove the source). The
-/// destination crossing the account root is impossible — it is resolved through
-/// the same confinement as every other path. An overlap (destination equal to
-/// or inside the source, or vice versa) is also refused up front: removing
-/// the destination first would otherwise destroy data the copy itself needs
-/// (RFC 4918 §9.8.5 / §9.9.4).
-async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool) -> Response {
-	// Use `symlink_metadata` everywhere so the final-component symlink is not
-	// followed here; the dispatch-level guard above already confined the
-	// source path under `root` and refused any intermediate symlink.
-	let source_meta = match tokio::fs::symlink_metadata(source).await {
-		Ok(meta) => meta,
-		Err(_) => return StatusCode::NOT_FOUND.into_response(),
-	};
-	if source_meta.file_type().is_symlink() {
-		return StatusCode::FORBIDDEN.into_response();
-	}
-	let Some(dest_path) = destination_path(root, headers) else {
-		return StatusCode::FORBIDDEN.into_response();
-	};
-	if sync_handler::is_reserved(&dest_path) {
-		return StatusCode::FORBIDDEN.into_response();
-	}
-	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
-	// (or onto itself) would lose data: the existing implementation removes
-	// the destination before the source is read. Detect any overlap before
-	// any I/O and refuse with `403 Forbidden` (a copy or move into a
-	// sub-tree of itself is forbidden by RFC 4918).
-	if paths_overlap(source, &dest_path) {
-		return StatusCode::FORBIDDEN.into_response();
-	}
-	// Confine the destination with the write-create rule (parent chain is
-	// symlink-free and under canonical root). If the destination exists
-	// already it has to be confined as well, both because the recursion may
-	// replace it and because it could itself be a symlink to outside.
-	if !path::confine_parent_for_write(&dest_path, root) {
-		return StatusCode::FORBIDDEN.into_response();
-	}
-	let overwrite = headers
-		.get("Overwrite")
-		.and_then(|value| value.to_str().ok())
-		.map(|value| !value.eq_ignore_ascii_case("F"))
-		.unwrap_or(true);
-	let dest_meta = tokio::fs::symlink_metadata(&dest_path).await.ok();
-	if dest_meta.is_some() && !overwrite {
-		return StatusCode::PRECONDITION_FAILED.into_response();
-	}
-	let Some(parent) = dest_path.parent() else {
-		return StatusCode::FORBIDDEN.into_response();
-	};
-	let parent_meta = match tokio::fs::symlink_metadata(parent).await {
-		Ok(meta) => meta,
-		Err(_) => return StatusCode::CONFLICT.into_response(),
-	};
-	if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
-		return StatusCode::CONFLICT.into_response();
-	}
-	let dest_was_dir = dest_meta.as_ref().map(|meta| meta.is_dir());
-	let dest_existed = dest_meta.is_some();
-	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
-		return *response;
-	}
-	if !source_meta.is_dir() {
-		sync_handler::log_member(&dest_path, false).await;
-	}
-	if remove {
-		let removal = if source_meta.is_dir() {
-			tokio::fs::remove_dir_all(source).await
-		} else {
-			tokio::fs::remove_file(source).await
-		};
-		if removal.is_err() {
-			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-		}
-		if !source_meta.is_dir() {
-			sync_handler::log_member(source, true).await;
-		}
-	}
-	if dest_existed {
-		StatusCode::NO_CONTENT.into_response()
-	} else {
-		StatusCode::CREATED.into_response()
-	}
-}
-
-/// Copy `source` onto `dest`, replacing an existing destination first. A
-/// directory source is copied recursively; any child that is itself a
-/// symlink is skipped (we do not follow external links into the destination
-/// tree). On error returns the response to send.
-async fn perform_copy(
-	source: &Path,
-	dest: &Path,
-	dest_was_dir: Option<bool>,
-) -> Result<(), Box<Response>> {
-	if let Some(is_dir) = dest_was_dir {
-		// Remove the destination without ever following a symlink: we
-		// already know the destination's existence and kind from the
-		// `symlink_metadata` gathered by the caller, which never resolves
-		// the link.
-		let removal = if is_dir {
-			tokio::fs::remove_dir_all(dest).await
-		} else {
-			tokio::fs::remove_file(dest).await
-		};
-		if removal.is_err() {
-			return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
-		}
-	}
-	let result = if source.is_dir() {
-		copy_dir(source, dest).await
-	} else {
-		tokio::fs::copy(source, dest).await.map(|_| ())
-	};
-	result.map_err(|_| Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()))
-}
-
-/// Recursively copy a directory tree (an iterative walk; no async recursion).
-/// Any child that is itself a symlink is skipped: we never follow the link
-/// into the destination tree.
-async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
-	let mut stack = vec![(source.to_path_buf(), dest.to_path_buf())];
-	while let Some((from, to)) = stack.pop() {
-		tokio::fs::create_dir_all(&to).await?;
-		let mut dir = tokio::fs::read_dir(&from).await?;
-		while let Some(child) = dir.next_entry().await? {
-			let file_type = child.file_type().await?;
-			if !crate::util::fs_walk::allowed(&child.path(), file_type) {
-				continue;
-			}
-			// A copied calendar starts its own change log: tokens issued for
-			// the source must not be valid on the copy.
-			if child
-				.file_name()
-				.to_str()
-				.is_some_and(super::sync::is_internal)
-			{
-				continue;
-			}
-			let child_to = to.join(child.file_name());
-			if file_type.is_dir() {
-				stack.push((child.path(), child_to));
-			} else if file_type.is_file() {
-				tokio::fs::copy(child.path(), &child_to).await?;
-			}
-		}
-	}
-	Ok(())
-}
-
-/// Resolve the `Destination` header — an absolute URL or an absolute path —
-/// into a confined on-disk path under the same account `root`. `None` if it is
-/// missing, malformed, or would escape the root (fail closed).
-fn destination_path(root: &Path, headers: &HeaderMap) -> Option<PathBuf> {
-	let raw = headers.get("Destination")?.to_str().ok()?;
-	let dest_path = strip_to_path(raw);
-	path::resolve(root, dest_path)
-}
-
-/// Reduce a `Destination` value to its absolute path component, stripping a
-/// `scheme://authority` prefix when present.
-fn strip_to_path(raw: &str) -> &str {
-	if let Some(rest) = raw.find("://").map(|i| &raw[i + 3..]) {
-		match rest.find('/') {
-			Some(slash) => &rest[slash..],
-			None => "/",
-		}
-	} else {
-		raw
-	}
-}
-
-/// Whether two paths occupy the same place or one sits inside the other.
-/// A `MOVE /a /a` is an exact match; a `MOVE /a /a/b` or `MOVE /a/b /a` is
-/// an ancestor/descendant relationship. The check is the same for files and
-/// directories, the per-method handler does not need to know the kind.
-/// Comparing lexical paths is sufficient here: both names were resolved
-/// through the same per-account `path::resolve` so a path that does not
-/// share a prefix with the other could not have been conflated.
-fn paths_overlap(a: &Path, b: &Path) -> bool {
-	if a == b {
-		return true;
-	}
-	// Path components give a robust boundary match: `/a/b` and `/a/b/c`
-	// share the first two components, while `/a/bc` does not share a third.
-	let a_comps: Vec<_> = a.components().collect();
-	let b_comps: Vec<_> = b.components().collect();
-	b_comps.starts_with(&a_comps) || a_comps.starts_with(&b_comps)
-}
-
 #[cfg(test)]
 #[path = "handler_tests.rs"]
 mod tests;
 
 #[cfg(test)]
+#[path = "handler_lock_tests.rs"]
+mod lock_tests;
+
+#[cfg(test)]
 #[path = "handler_bounds_tests.rs"]
 mod bounds_tests;
+
+#[cfg(test)]
+#[path = "handler_trusted_proxy_tests.rs"]
+mod trusted_proxy_tests;

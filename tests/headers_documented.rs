@@ -28,6 +28,10 @@ const NOT_HEADERS: &[(&str, &str)] = &[
 		"Retry-After",
 		"a header of the HTTP refusal a full listener sends, not of a message",
 	),
+	(
+		"nts-ke",
+		"a label in the external-clock error string, not a message header",
+	),
 ];
 
 /// Single-word names that count as headers; any name with a hyphen does.

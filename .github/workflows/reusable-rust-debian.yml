@@ -228,10 +228,10 @@ jobs:
           apt-get update -qq
           if [ -n "$RUST_TOOLCHAIN" ]; then
             apt-get install -y --no-install-recommends \
-              ca-certificates build-essential curl
+              ca-certificates build-essential curl fakeroot
           else
             apt-get install -y --no-install-recommends \
-              ca-certificates build-essential cargo rustc
+              ca-certificates build-essential cargo rustc fakeroot
           fi
 
       - name: Install the pinned Rust toolchain

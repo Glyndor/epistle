@@ -18,36 +18,19 @@ enum HostnameCheck {
 fn check_hostname(hostname: &str) -> HostnameCheck {
 	match crate::domain::normalize(hostname) {
 		Ok(norm) => HostnameCheck::Ok(norm),
-		Err(why) => {
-			let reason = match why {
-				crate::domain::DomainError::Invalid => "is not a valid FQDN".to_string(),
-				crate::domain::DomainError::Confusable => {
-					"is confusable with another name".to_string()
-				}
-			};
-			HostnameCheck::Err(Invalid::Hostname(reason))
-		}
+		Err(why) => HostnameCheck::Err(Invalid::Hostname(format!(
+			"{:?}: {}",
+			crate::util::address_reason::shorten(hostname),
+			crate::util::address_reason::name_refusal(hostname, why, "mail.example.org")
+		))),
 	}
 }
 
 fn check_domain(value: &str) -> Result<String, Invalid> {
-	match crate::domain::normalize(value) {
-		Ok(norm) => Ok(norm),
-		Err(why) => {
-			let reason = match why {
-				crate::domain::DomainError::Invalid => {
-					crate::util::address_reason::domain_reason(value)
-				}
-				crate::domain::DomainError::Confusable => {
-					"is confusable with another name".to_string()
-				}
-			};
-			Err(Invalid::Domain {
-				value: crate::util::address_reason::shorten(value),
-				reason,
-			})
-		}
-	}
+	crate::domain::normalize(value).map_err(|why| Invalid::Domain {
+		value: crate::util::address_reason::shorten(value),
+		reason: crate::util::address_reason::name_refusal(value, why, "example.org"),
+	})
 }
 
 fn check_domains(domains: &[String], errors: &mut Vec<Invalid>) -> Vec<String> {
@@ -138,16 +121,13 @@ fn check_dns(
 						}
 					}
 					Err(why) => {
-						let reason = match why {
-							crate::domain::DomainError::Invalid => {
-								"is not a valid FQDN".to_string()
-							}
-							crate::domain::DomainError::Confusable => {
-								"is confusable with another name".to_string()
-							}
-						};
+						let reason = crate::util::address_reason::name_refusal(
+							&dns.zone,
+							why,
+							"example.org",
+						);
 						errors.push(Invalid::DnsZoneMalformed {
-							value: dns.zone.clone(),
+							value: crate::util::address_reason::shorten(&dns.zone),
 							reason,
 						});
 					}
@@ -167,6 +147,19 @@ fn check_dns(
 				.token_env
 				.as_deref()
 				.is_some_and(|v| !v.trim().is_empty());
+			// The path is mounted by compose, which interpolates `$VAR`, and
+			// written into `mail.toml`, whose loader expands `${VAR}` and
+			// stops when the variable is unset. A reference to a variable the
+			// run does not have therefore passed every question and failed
+			// after the keys were written, so the shape is refused here.
+			if let Some(text) = dns.token_file.as_deref().and_then(Path::to_str)
+				&& text.contains('$')
+			{
+				errors.push(Invalid::PathInterpolated {
+					field: "dns.token_file".to_string(),
+					value: text.to_string(),
+				});
+			}
 			let provided = [token_present, token_file_present, token_env_present]
 				.iter()
 				.filter(|x| **x)
@@ -187,6 +180,14 @@ fn check_dns(
 		}
 		(Mode::Manual, None) => {}
 	}
+}
+
+/// A character that must never reach a terminal as itself: a control
+/// character moves the cursor or repaints the screen, and an invisible
+/// formatting character reorders or hides the text around it. Both are
+/// what [`crate::cli::term::sanitize`] escapes before printing.
+fn control_or_invisible(c: char) -> bool {
+	c.is_control() || crate::cli::term::is_invisible_format(c)
 }
 
 fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<Invalid>) {
@@ -212,6 +213,21 @@ fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<In
 			value: text.to_string(),
 		});
 		return;
+	}
+	// The plan and the report print both paths on the terminal, so a
+	// control or invisible formatting character in one would move the
+	// cursor, clear the screen or hide text in what the operator is
+	// reading. A path never needs one, so the validator refuses the
+	// shape before any effect instead of escaping it at print time.
+	for (field, path) in [("data_dir", data_dir), ("config_path", config_path)] {
+		if let Some(text) = path.to_str()
+			&& text.chars().any(control_or_invisible)
+		{
+			errors.push(Invalid::PathControl {
+				field: field.to_string(),
+				value: text.to_string(),
+			});
+		}
 	}
 	if let Some(text) = config_path.to_str()
 		&& text.contains('$')

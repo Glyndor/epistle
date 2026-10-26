@@ -94,3 +94,41 @@ fn a_from_with_two_mailboxes_is_refused() {
 fn a_message_without_from_is_refused() {
 	assert_refused("Subject: hi");
 }
+
+#[track_caller]
+fn assert_malformed_refused(headers: &str) {
+	let action = submit(headers);
+	assert!(
+		!matches!(action, Action::Deliver(..)),
+		"accepted: {headers:?}"
+	);
+	assert_eq!(
+		reply_text(&action),
+		"550 5.7.1 submission header lines must follow RFC 5322 field and folding syntax\r\n",
+		"{headers:?}"
+	);
+}
+
+#[test]
+fn malformed_header_lines_are_refused_before_the_author_check() {
+	for headers in [
+		" From: victim@example.org\r\nFrom: alice@example.org",
+		"From: alice@example.org\r\n:From: victim@example.org",
+		"From: alice@example.org\r\nGarbage\r\n Fr om: victim@example.org",
+	] {
+		assert_malformed_refused(headers);
+	}
+}
+
+#[test]
+fn a_body_after_a_leading_blank_line_is_not_a_header_block() {
+	let action = submit("\r\nHello world: x\r\n");
+	assert!(
+		!matches!(action, Action::Deliver(..)),
+		"accepted a body as a header block"
+	);
+	assert_eq!(
+		reply_text(&action),
+		"550 5.7.1 From header not owned by the authenticated account\r\n"
+	);
+}

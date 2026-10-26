@@ -195,6 +195,7 @@ fn limits_and_antispam_show_json_are_objects_keyed_by_name() {
 			"unit": "bytes",
 			"source": "default",
 			"kind": "adjustable",
+			"class": "own",
 			"bounds": null,
 			"reference": "no standard mandate",
 		})

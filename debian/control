@@ -23,7 +23,7 @@ Rules-Requires-Root: no
 
 Package: epistle
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.10.13)
+Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.14.0)
 Recommends: openssl, systemd-timesyncd | chrony
 Description: self-hosted mail server with a management API and CLI
  epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the

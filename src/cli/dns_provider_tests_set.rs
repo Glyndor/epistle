@@ -264,7 +264,8 @@ fn invalid_requests_are_refused_and_leave_the_file_untouched() {
 				"--token-env",
 				"A",
 			],
-			"--zone: spaces are not allowed".to_string(),
+			"--zone \"not a zone\": spaces are not allowed; for example \"example.org\""
+				.to_string(),
 		),
 	] {
 		let run = run(DNS, &args, false);

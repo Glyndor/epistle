@@ -133,23 +133,6 @@ jobs:
             exit 1
           fi
 
-      - name: Upload cargo audit JSON
-        # `if: always()` because the step must run when the audit failed
-        # too: the report job needs the JSON either way to decide
-        # whether to open an issue. The `hashFiles` check skips the step
-        # only when the audit crashed before writing JSON at all; an
-        # `audit.json` written by a failing step is still uploaded so
-        # the caller can read it.
-        if: always() && hashFiles('audit.json') != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: audit-json-${{ inputs.ref }}
-          path: |
-            audit.json
-            audit-fuzz.json
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Run cargo audit on the extra lockfiles
         if: inputs.extra-lockfiles != ''
         env:
@@ -161,9 +144,10 @@ jobs:
         # reports advisories this repository has already assessed. That is how
         # fuzz/Cargo.lock looked like it carried four findings when the same
         # graph audits clean from here.
-        # The fuzz audit emits JSON to `audit-fuzz.json` so the report job
-        # sees it through the same artifact path; without that, fuzz's
-        # findings are invisible to the open-issue decision.
+        # This step runs before the upload below so its JSON travels in the
+        # same artifact: an upload placed before it shipped an artifact with
+        # the root audit only, and the extra workspace was invisible to the
+        # open-issue decision.
         run: |
           set -euo pipefail
           echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
@@ -172,13 +156,35 @@ jobs:
               echo "::error::$lockfile does not exist; the input is stale."
               exit 1
             fi
-            stem="$(basename "$lockfile" .lock)"
+            # The name carries the whole path with the separators folded, so
+            # two workspaces cannot land on the same report: `fuzz/Cargo.lock`
+            # becomes `audit-fuzz-Cargo.json`. Naming it after the file alone
+            # gives every workspace the name `audit-Cargo.json`.
+            name="$(printf '%s' "${lockfile%.lock}" | tr '/' '-')"
             if ! cargo audit --json --deny warnings --file "$lockfile" \
-                > "audit-${stem}.json" 2>"audit-${stem}.stderr"; then
-              cat "audit-${stem}.stderr" >&2
+                > "audit-${name}.json" 2>"audit-${name}.stderr"; then
+              cat "audit-${name}.stderr" >&2
               exit 1
             fi
           done
+
+      - name: Upload cargo audit JSON
+        # `if: always()` because the step must run when the audit failed
+        # too: the report job needs the JSON either way to decide
+        # whether to open an issue. The `hashFiles` check skips the step
+        # only when no audit wrote JSON at all; a report written by a
+        # failing step is still uploaded so the caller can read it.
+        # The pattern covers the root audit and every extra lockfile, whose
+        # names carry their own path.
+        if: always() && hashFiles('audit*.json') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audit-json-${{ inputs.ref }}
+          path: |
+            audit.json
+            audit-*.json
+          if-no-files-found: error
+          retention-days: 7
 
   deny:
     name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}

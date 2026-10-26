@@ -5,9 +5,10 @@ Run from the repository root with:
 
 	python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
-The combine script reads raw `cargo audit --json` documents from a
-directory of `audit-json-<ref>/audit.json` files (the way the workflow
-downloads them) and emits one combined JSON object. Every assertion is
+The combine script reads raw `cargo audit --json` documents from the
+`audit-json-<ref>/` directories the workflow downloads, one file per
+audited workspace (`audit.json` for the ref itself, a path-derived name
+for each extra lockfile), and emits one combined JSON object. Every assertion is
 on a JSON value the script emits; nothing depends on a sentence in the
 body, so wording changes that keep the fields intact cannot break a
 test.
@@ -80,9 +81,18 @@ def _run_dir(directory: Path, *extra_args: str) -> dict:
 
 def _write_artifact(directory: Path, ref: str, audit_document: dict) -> Path:
 	"""Drop a `audit-json-<ref>/audit.json` file into `directory`."""
+	return _write_report(directory, ref, "audit.json", audit_document)
+
+
+def _write_report(directory: Path, ref: str, name: str, audit_document: dict) -> Path:
+	"""Drop a report under `audit-json-<ref>/`, named `name`.
+
+	The name is the one the reusable's upload step gives it: `audit.json` for
+	the ref's own workspace, and a path-derived name for each extra lockfile.
+	"""
 	subdir = directory / f"audit-json-{ref}"
 	subdir.mkdir(parents=True, exist_ok=True)
-	path = subdir / "audit.json"
+	path = subdir / name
 	path.write_text(json.dumps(audit_document), encoding="utf-8")
 	return path
 
@@ -310,6 +320,36 @@ class TestUnreadableInput(unittest.TestCase):
 				cwd=str(REPO_ROOT),
 			)
 		self.assertEqual(proc.returncode, 2, msg=proc.stdout + proc.stderr)
+
+
+class TestExtraWorkspaces(unittest.TestCase):
+	"""A ref can be audited in more than one workspace."""
+
+	def test_a_second_workspace_report_reaches_the_combined_title(self) -> None:
+		# fuzz/Cargo.lock is a second graph with its own advisories. Its
+		# report travels in the same artifact as the root one, and a title
+		# that leaves it out sends the operator to a clean lockfile.
+		own = _audit([])
+		extra = _audit([_vulnerability("RUSTSEC-2026-0999", "libfuzzer-sys", "0.4.7", [])])
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_report(directory, "develop", "audit.json", own)
+			_write_report(directory, "develop", "audit-fuzz-Cargo.json", extra)
+			out = _run_dir(directory)
+		self.assertFalse(out["clean"])
+		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2026-0999")
+		self.assertIn("`develop/fuzz-Cargo`", out["body"])
+
+	def test_a_clean_extra_workspace_does_not_make_the_ref_dirty(self) -> None:
+		own = _audit([_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])])
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_report(directory, "main", "audit.json", own)
+			_write_report(directory, "main", "audit-fuzz-Cargo.json", _audit([]))
+			out = _run_dir(directory)
+		self.assertFalse(out["clean"])
+		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2026-0338")
+		self.assertNotIn("fuzz-Cargo", out["body"])
 
 
 if __name__ == "__main__":

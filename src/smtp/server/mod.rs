@@ -23,6 +23,7 @@ mod builder;
 mod data_rate;
 mod dnsbl_check;
 mod run;
+pub(crate) use run::MAX_ERROR_STREAK;
 mod run_attachments;
 mod run_auth;
 mod run_band;
@@ -48,7 +49,7 @@ const MAX_CONNECTIONS_PER_IP: usize = DEFAULT_MAX_CONNECTIONS_PER_IP;
 
 /// Per-read idle timeout. RFC 5321 §4.5.3.2 mandates at least 5 minutes between
 /// command-phase reads; we match that minimum to kill Slowloris connections.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Anything the connection loop can read from and write to.
 trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -173,6 +174,9 @@ pub struct Server {
 	/// Default classes bound to accounts and credentials; `None` grants
 	/// every submission `personal`.
 	class_bindings: Option<Arc<crate::evidence::bindings::BindingSet>>,
+	/// Which identification and reputation headers a submission gets.
+	/// Defaults to every one of them but the vendor marker.
+	identification: crate::smtp::identification::Policy,
 	/// Rolling 24h cap on first-time recipients per account. Pairs with
 	/// `correspondents`; either absent disables the cap.
 	daily_new_recipients: Option<u32>,
@@ -364,6 +368,13 @@ impl Server {
 		self
 	}
 
+	/// Which identification and reputation headers a submission gets.
+	/// The default writes every one of them but the vendor marker.
+	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
+		self.identification = policy;
+		self
+	}
+
 	/// Attach the at-rest crypto for the mailboxes; used when
 	/// storing the Sent copy so the on-disk encoding matches the
 	/// rest of the mailbox. `None` means no at-rest crypto, the
@@ -388,6 +399,7 @@ impl Server {
 			.with_scram_enabled(self.scram_enabled)
 			.with_max_message_size(self.max_message_size)
 			.with_max_recipients(self.max_recipients)
+			.with_identification(self.identification.clone())
 			.with_junk_command_limit(self.junk_command_limit);
 		if let Some(budget) = &self.memory_budget {
 			session = session.with_memory_budget(Arc::clone(budget));

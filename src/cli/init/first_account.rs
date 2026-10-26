@@ -20,6 +20,7 @@ use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::util::account_rule;
+use crate::util::address::normalize;
 
 /// The role local parts pointed at the first account, in the order they
 /// are listed.
@@ -72,9 +73,12 @@ impl fmt::Debug for Password {
 }
 
 impl FirstAccount {
-	/// The address as it is stored: lowercase.
+	/// The address as it is stored: lowercase, with the domain in the form the
+	/// rest of the system keeps (`bücher.example` is `xn--bcher-kva.example`).
+	/// A domain that cannot be normalised stays as typed, in lowercase, and
+	/// [`FirstAccount::check`] refuses it for not being a configured one.
 	pub fn stored_address(&self) -> String {
-		self.address.trim().to_ascii_lowercase()
+		normalize(&self.address)
 	}
 
 	/// The account name the address gives: its local part in lowercase,
@@ -126,10 +130,27 @@ impl FirstAccount {
 		if local.is_empty() || domain.is_empty() {
 			return Err(format!("{:?} is not a mail address", self.address));
 		}
-		if !domains
-			.iter()
-			.any(|served| served.eq_ignore_ascii_case(domain))
-		{
+		// The domain is compared in the form the server stores, with the
+		// same normalisation the answers validator applies to the domains
+		// it serves: a domain that normaliser refuses is refused here too,
+		// instead of matching a served one by an insensitive comparison.
+		let served = match crate::domain::normalize(domain) {
+			Ok(stored) => stored,
+			Err(why) => {
+				let reason = match why {
+					crate::domain::DomainError::Invalid => {
+						crate::util::address_reason::domain_reason(domain)
+					}
+					crate::domain::DomainError::Confusable => {
+						"it is confusable with another name".to_string()
+					}
+				};
+				return Err(format!("{domain:?} is not a valid mail domain: {reason}"));
+			}
+		};
+		if !domains.iter().any(|configured| {
+			crate::domain::normalize(configured).is_ok_and(|stored| stored == served)
+		}) {
 			return Err(format!(
 				"{domain} is not one of the configured domains ({})",
 				domains.join(", ")
@@ -163,7 +184,7 @@ impl FirstAccount {
 			.flat_map(|domain| {
 				ROLES
 					.iter()
-					.map(move |role| format!("{role}@{}", domain.to_ascii_lowercase()))
+					.map(move |role| normalize(&format!("{role}@{domain}")))
 			})
 			.filter(|address| *address != own)
 			.collect()
@@ -188,6 +209,9 @@ pub(super) fn read_password(first: &FirstAccount) -> Result<Password, String> {
 			Secret::Failed(why) => return Err(format!("reading stdin: {why}")),
 		}
 	} else {
+		// The operator names this file for this one read, and a pipe from a
+		// secret manager (`<(pass show mail)`) is a way to give it, so unlike
+		// the configuration files below it is read as it comes.
 		let text = std::fs::read_to_string(path)
 			.map_err(|error| format!("reading {}: {error}", path.display()))?;
 		text.lines().next().unwrap_or_default().to_string()
@@ -249,7 +273,7 @@ pub(super) fn create(
 			address: address.clone(),
 		});
 	}
-	add_role_aliases(first, &config, config_path, &address, report)
+	add_role_aliases(first, &config, config_path, &address, &store, report)
 }
 
 /// Whether the account named `name` already exists and is the one `address`
@@ -276,10 +300,68 @@ fn name_is_free_or_ours(
 	}
 }
 
+/// Whether the address is free for the account `owner`: no alias, masked
+/// address or other account holds it, compared in the form the system stores.
+/// The account `owner` itself may already hold it, which is a re-run; with
+/// no owner the address must be free of every account.
+fn address_is_free_or_ours(
+	owner: Option<&str>,
+	address: &str,
+	store: &AccountStore,
+	static_accounts: &[(String, Vec<String>)],
+	aliases: &[String],
+) -> Result<(), String> {
+	let wanted = normalize(address);
+	if aliases.iter().any(|existing| normalize(existing) == wanted) {
+		return Err(format!(
+			"the address {address} is already used by an alias; use another address"
+		));
+	}
+	if store
+		.masked_handle()
+		.read()
+		.expect("masked lock")
+		.get(address)
+		.is_some()
+	{
+		return Err(format!(
+			"the address {address} is already used by a masked address; use another address"
+		));
+	}
+	let dynamic_owner = store
+		.dynamic_accounts()
+		.into_iter()
+		.find(|account| {
+			Some(account.name.as_str()) != owner
+				&& account
+					.addresses
+					.iter()
+					.any(|existing| normalize(existing) == wanted)
+		})
+		.map(|account| account.name);
+	let static_owner = static_accounts.iter().find_map(|(holder, addresses)| {
+		if Some(holder.as_str()) != owner
+			&& addresses
+				.iter()
+				.any(|existing| normalize(existing) == wanted)
+		{
+			Some(holder.clone())
+		} else {
+			None
+		}
+	});
+	if let Some(holder) = dynamic_owner.or(static_owner) {
+		return Err(format!(
+			"the address {address} is already used by the account \"{holder}\"; use another address"
+		));
+	}
+	Ok(())
+}
+
 /// The `[[accounts]]` of a configuration file as name and addresses, read
 /// from the raw TOML so a file the full loader refuses still counts.
 fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
-	let Ok(text) = std::fs::read_to_string(config_path) else {
+	let Ok(text) = crate::cli::regular_read::read_to_string(config_path) else {
 		return Vec::new();
 	};
 	let Ok(table) = text.parse::<toml::Table>() else {
@@ -306,9 +388,28 @@ fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
 		.collect()
 }
 
+/// The addresses of the `[[alias]]` entries of a configuration file, read from
+/// the raw TOML so a file the full loader refuses still counts.
+fn static_aliases_of(config_path: &Path) -> Vec<String> {
+	let Ok(text) = crate::cli::regular_read::read_to_string(config_path) else {
+		return Vec::new();
+	};
+	let Ok(table) = text.parse::<toml::Table>() else {
+		return Vec::new();
+	};
+	table
+		.get("alias")
+		.and_then(|value| value.as_array())
+		.into_iter()
+		.flatten()
+		.filter_map(|entry| entry.get("address")?.as_str().map(str::to_string))
+		.collect()
+}
+
 /// The collision check that needs no write: with a configuration already on
 /// disk, whether an account other than the one asked for holds the derived
-/// name. Run before anything is applied, so a clash stops the run (and
+/// name, or whether another account, an alias or a masked address holds the
+/// address. Run before anything is applied, so a clash stops the run (and
 /// `--dry-run`) with nothing written, and the assistant can ask again.
 pub(super) fn precheck(
 	first: &FirstAccount,
@@ -320,13 +421,28 @@ pub(super) fn precheck(
 	// accounts already on disk. A config that loads gives its accounts
 	// normalised and with `${VAR}` expanded; the raw file is only the
 	// fallback when it does not load.
-	let (aliases, statics) = match Config::load(config_path) {
-		Ok(config) => (config.domain_aliases.clone(), static_pairs(&config)),
-		Err(_) => (Default::default(), static_accounts_of(config_path)),
+	let (domain_aliases, statics, aliases) = match Config::load(config_path) {
+		Ok(config) => (
+			config.domain_aliases.clone(),
+			static_pairs(&config),
+			config
+				.alias
+				.iter()
+				.map(|alias| alias.address.clone())
+				.collect(),
+		),
+		Err(_) => (
+			Default::default(),
+			static_accounts_of(config_path),
+			static_aliases_of(config_path),
+		),
 	};
-	let store = AccountStore::open(data_dir, Vec::new(), aliases, Vec::new())
+	let store = AccountStore::open(data_dir, Vec::new(), domain_aliases, Vec::new())
 		.map_err(|error| format!("opening the account store: {error}"))?;
-	name_is_free_or_ours(&first.name(), &first.stored_address(), &store, &statics).map(|_| ())
+	let name = first.name();
+	let address = first.stored_address();
+	name_is_free_or_ours(&name, &address, &store, &statics)?;
+	address_is_free_or_ours(Some(&name), &address, &store, &statics, &aliases)
 }
 
 /// The static accounts of a loaded configuration as name and addresses.
@@ -343,9 +459,10 @@ fn static_pairs(config: &Config) -> Vec<(String, Vec<String>)> {
 /// `torre.control` and `torre-control` both giving `torre-control`: it is
 /// refused instead of being skipped as if it were the same account.
 fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result<bool, String> {
+	let wanted = normalize(address);
 	if holder_addresses
 		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(address))
+		.any(|existing| normalize(existing) == wanted)
 	{
 		return Ok(true);
 	}
@@ -358,30 +475,29 @@ fn name_holder(name: &str, address: &str, holder_addresses: &[String]) -> Result
 
 /// Add each role address as an `[[alias]]` table delivering to `target`,
 /// through the same validated, atomic edit `epistle alias add` uses. A role
-/// address that is already an alias or some account's address is left alone.
+/// address that anything already holds is left alone: an alias, a masked
+/// address, or the address of a dynamic or static account.
 fn add_role_aliases(
 	first: &FirstAccount,
 	config: &Config,
 	config_path: &Path,
 	target: &str,
+	store: &AccountStore,
 	report: &mut Report,
 ) -> Result<(), ApplyError> {
 	let fail = |why: String| ApplyError::FirstAccount(why);
-	let taken: Vec<String> = config
+	let statics = static_pairs(config);
+	let aliases: Vec<String> = config
 		.alias
 		.iter()
-		.map(|alias| alias.address.to_ascii_lowercase())
-		.chain(
-			config
-				.accounts
-				.iter()
-				.flat_map(|account| account.addresses.iter().map(|a| a.to_ascii_lowercase())),
-		)
+		.map(|alias| alias.address.clone())
 		.collect();
 	let roles: Vec<String> = first
 		.role_addresses(&config.domains)
 		.into_iter()
-		.filter(|role| !taken.contains(role))
+		// A role address that is taken is left alone, so init never writes
+		// an alias on top of an address that already delivers somewhere.
+		.filter(|role| address_is_free_or_ours(None, role, store, &statics, &aliases).is_ok())
 		.collect();
 	if roles.is_empty() {
 		return Ok(());

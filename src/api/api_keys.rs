@@ -301,7 +301,7 @@ impl ApiKeyStore {
 		{
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
-				format!("invalid CIDR \"{spec}\""),
+				crate::cidr::Cidr::refusal(spec),
 			));
 		}
 		validate_new_scopes(&key.scopes)?;
@@ -325,6 +325,19 @@ impl ApiKeyStore {
 					return Err(std::io::Error::new(
 						std::io::ErrorKind::AlreadyExists,
 						format!("API key \"{}\" already exists", key.label),
+					));
+				}
+				// One secret, one key: two keys behind the same secret would
+				// leave the request with the reach of whichever the lookup
+				// meets first.
+				if state
+					.keys
+					.iter()
+					.any(|existing| existing.hash.eq_ignore_ascii_case(&key.hash))
+				{
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::AlreadyExists,
+						"another API key already uses this secret",
 					));
 				}
 				state.keys.push(key.clone());
@@ -529,6 +542,9 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 		self.reload_from(text)
 	}
 }
+
+#[path = "api_keys_revoke.rs"]
+mod revoke;
 
 #[cfg(test)]
 #[path = "api_keys_tests.rs"]

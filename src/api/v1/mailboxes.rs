@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use serde::Serialize;
 
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::imap::mailbox;
@@ -33,7 +34,7 @@ pub async fn list(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<Mailboxes>, ApiError> {
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	let known = state
 		.store()
 		.account_views()
@@ -42,9 +43,8 @@ pub async fn list(
 	// An account outside the caller's domains answers exactly as one that
 	// does not exist, so the listing cannot be used to enumerate another
 	// tenant's accounts.
-	let in_scope = known.is_some_and(|(_, addresses, _)| {
-		scope.admits_account(addresses.iter().map(String::as_str))
-	});
+	let in_scope =
+		known.is_some_and(|(_, addresses, _)| principal.admits_account(&name, &addresses));
 	if !in_scope {
 		return Err(ApiError::not_found("no such account"));
 	}

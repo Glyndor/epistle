@@ -463,42 +463,6 @@ impl Worker {
 		Ok(())
 	}
 
-	/// Send the failure report for every failed recipient not reported yet,
-	/// then mark them reported. Returns whether there were any.
-	pub(super) fn report_failures(&self, id: uuid::Uuid) -> std::io::Result<bool> {
-		let entry = self.spool.load(id)?;
-		let envelope = &entry.envelope;
-		let unreported: Vec<String> = envelope
-			.recipients_in(RecipientStatus::Failed)
-			.into_iter()
-			.filter(|recipient| !envelope.recipient_state(recipient).reported)
-			.collect();
-		if unreported.is_empty() {
-			return Ok(false);
-		}
-		// Recipients with NOTIFY=NEVER get no failure DSN (RFC 3461). The
-		// others share one report, each with its own status and reply.
-		let recipients = report_recipients(envelope, &unreported);
-		if !recipients.is_empty()
-			&& let Some(message) = crate::queue::bounce::build_failed(
-				&self.ehlo_hostname,
-				&envelope.reverse_path,
-				&recipients,
-				&entry.data,
-				std::time::SystemTime::now(),
-			) {
-			self.send_report(id, message, "bounce");
-		}
-		self.spool.update_envelope(id, |envelope| {
-			for recipient in &unreported {
-				let mut state = envelope.recipient_state(recipient);
-				state.reported = true;
-				envelope.set_recipient_state(recipient, state);
-			}
-		})?;
-		Ok(true)
-	}
-
 	/// Send the one-time "delivery delayed" warning DSN for a still-queued entry.
 	pub(super) fn warn_delayed(&self, id: uuid::Uuid) {
 		let Ok(entry) = self.spool.load(id) else {
@@ -518,36 +482,20 @@ impl Worker {
 				&recipients,
 				&entry.data,
 				std::time::SystemTime::now(),
+				self.auto_submitted,
 			) {
-			self.send_report(id, message, "delay warning");
+			// The warning is advisory and attempted once, whatever came of it.
+			let _ = self.send_report(id, message, "delay warning");
 		}
 		// Mark warned regardless, so it is attempted at most once.
 		if let Err(error) = self.spool.mark_delay_warned(id) {
 			tracing::warn!(%id, %error, "failed to record delay warning");
 		}
 	}
-
-	/// Hand a generated report to the bounce sink.
-	fn send_report(
-		&self,
-		id: uuid::Uuid,
-		message: crate::smtp::session::AcceptedMessage,
-		what: &str,
-	) {
-		match &self.bounce_sink {
-			Some(sink) => {
-				if let Err(error) = sink.deliver(message) {
-					tracing::warn!(%id, %error, what, "report delivery failed");
-				}
-			}
-			None => tracing::warn!(%id, what, "dropping report: no bounce sink configured"),
-		}
-	}
 }
-
 /// The report lines for `recipients`, leaving out those that asked for no
 /// DSN (`NOTIFY=NEVER`, RFC 3461).
-fn report_recipients(
+pub(super) fn report_recipients(
 	envelope: &crate::storage::Envelope,
 	recipients: &[String],
 ) -> Vec<ReportRecipient> {

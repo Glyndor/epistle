@@ -413,22 +413,22 @@ fn timestamps_disable_and_enable_are_recorded() {
 fn clock_accept_leaves_a_request_the_server_can_take() {
 	let server = Server::new();
 	let mut out = Vec::new();
+	// One reading of the clock for the whole test: two readings can fall in
+	// different seconds and make the comparison below fail by one.
+	let at = now();
 	let code = super::super::evidence_clock::run(
 		server.root(),
 		super::ClockCli::Accept {
 			yes: true,
 			json: true,
 		},
-		now(),
+		at,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
 	let reply: serde_json::Value = serde_json::from_slice(&out).expect("json");
-	assert_eq!(reply["accepted"], now());
-	assert!(crate::evidence::clock_accept::take(
-		server.root(),
-		now() + 5
-	));
+	assert_eq!(reply["accepted"], at);
+	assert!(crate::evidence::clock_accept::take(server.root(), at + 5));
 	if !std::io::stdin().is_terminal() {
 		let unconfirmed = super::super::evidence_clock::run(
 			server.root(),

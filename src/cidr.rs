@@ -82,6 +82,19 @@ impl Cidr {
 	}
 }
 
+impl Cidr {
+	/// What an operator reads when `spec` is not an address or a block: the
+	/// value (cut and escaped, so it cannot move a terminal's cursor), the
+	/// rule, and two spellings that would be taken. Every place that reads a
+	/// typed CIDR refuses it with this text.
+	pub fn refusal(spec: &str) -> String {
+		format!(
+			"{:?} is not an IP address or CIDR block; write an address with an optional prefix length, for example \"203.0.113.0/24\" or \"2001:db8::/32\"",
+			crate::util::address_reason::shorten(spec)
+		)
+	}
+}
+
 /// The canonical `network/prefix` form, with host bits zeroed, so two spellings
 /// of the same block store and compare equal.
 impl std::fmt::Display for Cidr {

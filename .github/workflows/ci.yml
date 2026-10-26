@@ -4,6 +4,13 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+  # Required checks `rust / Format & lint`, `rust / Test` and `rust / Coverage`: the merge queue fires
+  # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
+  # does not report there leaves the queue waiting forever.
+  # `paths:` and `branches:` filters do not apply to merge_group, so the
+  # trigger sits at the top level. See docs/merge-queue.md.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -31,6 +38,14 @@ jobs:
       # implied), and was the one this input promised until sqlx 0.9 widened the
       # dep graph.
       msrv: "1.94"
+      # fakeroot is what lets the packaging tests run the maintainer scripts.
+      # Those scripts stat the owner and mode of every path they touch, and the
+      # tests assert that a root-owned store is accepted and a writable one is
+      # refused. Without fakeroot the scripts refuse to copy anything, so the
+      # tests would fail for a reason that has nothing to do with the code under
+      # test. The runner image carries it today; naming it makes the dependency
+      # survive a different image rather than being rediscovered there.
+      apt-packages: "fakeroot"
       # The `Doc warnings` job is gated on this input and this repository never
       # passed it, so the job has been skipping since it existed. It had ten
       # findings waiting when I turned it on: three unresolved intra-doc links,
@@ -63,6 +78,9 @@ jobs:
       # (issue #921).
       coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
   dependabot-freshness:
+    # Not a required check and it reads repository state, not the queued
+    # commit, so it would only spend a runner inside the queue.
+    if: github.event_name != 'merge_group'
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
       max-age-days: 15

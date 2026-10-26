@@ -155,7 +155,7 @@ impl AppPasswordStore {
 		if let Some(spec) = &password.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
-			return Err(StoreError::Invalid(format!("invalid CIDR \"{spec}\"")));
+			return Err(StoreError::Invalid(crate::cidr::Cidr::refusal(spec)));
 		}
 		let account = account.to_ascii_lowercase();
 		// The whole-file rewrite goes through `locked::edit` so a CLI

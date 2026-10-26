@@ -26,6 +26,10 @@ mod compare;
 pub(crate) use compare::{MAX_PATTERN_CHARS, MAX_WILDCARDS};
 mod date;
 mod env;
+pub(crate) use env::{
+	BODY_WINDOW, HEADER_NAME_VALUES, HEADER_NAME_WINDOW, HEADER_NAMES_PER_LOOKUP, MAX_HEADERS,
+	MAX_STEPS, MAX_VAR_BYTES, MAX_VAR_NAME, MAX_VARS, MAX_VARS_TOTAL_BYTES, MAX_WORK,
+};
 mod eval;
 pub mod interp;
 mod key_set;

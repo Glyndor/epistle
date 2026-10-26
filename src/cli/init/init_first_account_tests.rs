@@ -6,7 +6,9 @@ use std::path::Path;
 use super::*;
 use crate::cli::prompt::script::scripted;
 
-const PASSWORD: &str = "Zq8!vT3#mL0@pW6$";
+fn password() -> &'static str {
+	crate::test_fixtures::password()
+}
 
 /// An answers file under `dir` with `extra` appended (the
 /// `[first_account]` table, when the test has one).
@@ -73,7 +75,7 @@ fn config_check(dir: &Path) -> String {
 
 fn first_account_table(dir: &Path, address: &str) -> String {
 	let secret = dir.join("password");
-	std::fs::write(&secret, format!("{PASSWORD}\n")).expect("write secret");
+	std::fs::write(&secret, format!("{}\n", password())).expect("write secret");
 	format!(
 		"[first_account]\naddress = \"{address}\"\npassword_file = \"{}\"\n",
 		secret.display()
@@ -187,6 +189,9 @@ fn a_clash_stops_a_dry_run_and_a_real_run_before_anything_is_written() {
 		"the clash left the tree as it was"
 	);
 }
+
+#[path = "init_first_account_address_tests.rs"]
+mod address_tests;
 
 #[test]
 fn a_clash_is_found_when_the_config_is_gone_and_only_the_data_dir_remains() {
@@ -370,7 +375,7 @@ fn a_static_account_is_still_found_when_the_config_does_not_load() {
 fn an_answers_file_creates_the_account_and_points_the_role_addresses_at_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let secret = dir.path().join("password");
-	std::fs::write(&secret, format!("{PASSWORD}\n")).expect("write secret");
+	std::fs::write(&secret, format!("{}\n", password())).expect("write secret");
 	let file = answers(
 		dir.path(),
 		&format!(
@@ -409,7 +414,7 @@ fn an_answers_file_creates_the_account_and_points_the_role_addresses_at_it() {
 fn without_the_role_aliases_config_check_warns_about_postmaster() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let secret = dir.path().join("password");
-	std::fs::write(&secret, PASSWORD).expect("write secret");
+	std::fs::write(&secret, password()).expect("write secret");
 	let file = answers(
 		dir.path(),
 		&format!(
@@ -432,7 +437,9 @@ fn a_password_file_of_dash_is_read_from_stdin() {
 		dir.path(),
 		"[first_account]\naddress = \"bob@example.net\"\npassword_file = \"-\"\n",
 	);
-	let run = scripted(false, None, format!("{PASSWORD}\n"), || init(file, false));
+	let run = scripted(false, None, format!("{}\n", password()), || {
+		init(file, false)
+	});
 	assert_eq!(run.value.0, ExitCode::from(EXIT_OK), "{}", run.stderr);
 	assert!(store(dir.path()).dynamic("bob").is_some());
 }

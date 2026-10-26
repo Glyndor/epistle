@@ -3,7 +3,7 @@
 //! `stack update` took before the restart.
 //!
 //! The preinst keeps the replaced `/usr/bin/epistle` under
-//! `/var/lib/glyndor/epistle/rollback/epistle-<version>`. Root swaps the
+//! `/var/lib/epistle-rollback/epistle-<version>`. Root swaps the
 //! binary; the database work runs as the service account through the hidden
 //! `stack rollback-db`, because the stack is that account's rootless Podman.
 //!
@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 
 /// Where the preinst keeps replaced binaries.
-pub(super) const KEPT: &str = "/var/lib/glyndor/epistle/rollback";
+pub(super) const KEPT: &str = "/var/lib/epistle-rollback";
 
 /// The kept binary to go back to: `epistle-<to>` when `to` is given,
 /// otherwise the highest version below `current`.
@@ -47,7 +47,7 @@ pub(super) fn pick(files: &[String], current: &str, to: Option<&str>) -> Result<
 		.ok_or_else(|| {
 			format!(
 				"{KEPT} holds no earlier binary than this one (it keeps: {}); the preinst \
-				 keeps one on each upgrade from this release on",
+				 keeps one on each upgrade; legacy service-directory copies are ignored",
 				listing()
 			)
 		})
@@ -134,6 +134,9 @@ pub(super) fn summary(current: &str, version: &str, restored: bool) -> String {
 		 epistle` until a fixed release."
 	)
 }
+
+#[path = "stack_rollback_store.rs"]
+mod store;
 
 #[path = "stack_rollback_run.rs"]
 mod run;

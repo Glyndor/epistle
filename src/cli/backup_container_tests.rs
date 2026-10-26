@@ -22,14 +22,16 @@ fn dump_shell() -> &'static str {
 	r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --clean --if-exists --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"#
 }
 
-fn restore_shell() -> &'static str {
-	r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/epistle-restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"#
+fn restore_shell(path: &str) -> String {
+	format!(
+		"PGPASSWORD=\"$(cat '/run/secrets/epistle_db_password')\" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"
+	)
 }
 
 fn assert_password_stays_in_container(spec: &CommandSpec) {
 	assert!(
 		spec.argv().last().is_some_and(|arg| {
-			arg.starts_with(r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec "#)
+			arg.contains(r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')""#)
 		}),
 		"container password must be read by sh inside db"
 	);
@@ -97,14 +99,15 @@ fn container_pg_dump_missing_compose_surfaces_compose_error() {
 fn container_psql_load_argv_targets_db_service_with_no_tty() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let compose = write_minimal_compose(dir.path());
-	let spec = container_psql_load_spec(&compose, b"select 1;\n").expect("spec");
+	let container_path = "/tmp/epistle-restore.sql";
+	let spec = container_psql_load_spec(&compose, container_path, b"select 1;\n").expect("spec");
 	let argv = spec.argv();
 	assert_eq!(argv[0], "podup");
 	assert_eq!(argv[3], "exec");
 	assert_eq!(argv[4], "-T");
 	assert_eq!(argv[5], "db");
 	assert!(
-		argv[6..] == ["sh", "-c", restore_shell()],
+		argv[6..] == ["sh", "-c", restore_shell(container_path).as_str()],
 		"container restore must load the mounted secret and run psql with ON_ERROR_STOP and one transaction"
 	);
 	assert!(
@@ -117,7 +120,8 @@ fn container_psql_load_argv_targets_db_service_with_no_tty() {
 fn container_psql_load_argv_never_carries_a_password() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let compose = write_minimal_compose(dir.path());
-	let spec = container_psql_load_spec(&compose, b"select 1;\n").expect("spec");
+	let spec = container_psql_load_spec(&compose, "/tmp/epistle-restore.sql", b"select 1;\n")
+		.expect("spec");
 	assert_password_stays_in_container(&spec);
 	assert!(
 		spec.env().is_empty(),
@@ -176,7 +180,8 @@ fn container_load_spec_picks_container_path_when_compose_exists() {
 	write_minimal_compose(dir.path());
 	let body = r#"url = "postgres://epistle@%2Frun%2Fpostgresql/epistle""#.to_string();
 	let db: Database = toml::from_str(&body).expect("db");
-	let spec = psql_load_spec(&db, dir.path(), b"select 1;\n").expect("spec");
+	let spec =
+		psql_load_spec(&db, dir.path(), b"select 1;\n", "/tmp/epistle-restore.sql").expect("spec");
 	assert_eq!(
 		spec.argv()[0],
 		"podup",
@@ -196,14 +201,18 @@ fn container_commands_ignore_host_password_and_untrusted_connection_values() {
 	let compose = write_minimal_compose(dir.path());
 	let db: Database = toml::from_str(
 		r#"url = "postgres://untrusted:host-secret-sentinel@invalid/untrusted?password=query-secret-sentinel"
-password_file = "/nonexistent/$(untrusted-secret-file)""#,
+ password_file = "/nonexistent/$(untrusted-secret-file)""#,
 	)
 	.expect("db");
+	let container_path = "/tmp/epistle-restore.sql";
 	for (spec, expected) in [
-		(pg_dump_spec(&db, dir.path()).expect("dump"), dump_shell()),
 		(
-			psql_load_spec(&db, dir.path(), b"select 1;\n").expect("restore"),
-			restore_shell(),
+			pg_dump_spec(&db, dir.path()).expect("dump"),
+			dump_shell().to_string(),
+		),
+		(
+			psql_load_spec(&db, dir.path(), b"select 1;\n", container_path).expect("restore"),
+			restore_shell(container_path),
 		),
 	] {
 		let expected_argv = [
@@ -215,7 +224,7 @@ password_file = "/nonexistent/$(untrusted-secret-file)""#,
 			"db",
 			"sh",
 			"-c",
-			expected,
+			expected.as_str(),
 		];
 		assert!(
 			spec.argv() == expected_argv,

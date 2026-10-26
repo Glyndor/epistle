@@ -700,6 +700,7 @@ impl AccountStore {
 			)
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
+			.with_masked_paused(self.masked.read().expect("masked lock").paused())
 			.with_allowed_protocols(allowed_protocols);
 		if let Some(metrics) = self.metrics.clone() {
 			dir = dir.with_metrics(metrics);
@@ -740,3 +741,7 @@ mod cross_handle_tests;
 #[cfg(test)]
 #[path = "lowercase_tests.rs"]
 mod lowercase_tests;
+
+#[cfg(test)]
+#[path = "paused_tests.rs"]
+mod paused_tests;

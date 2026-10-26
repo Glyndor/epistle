@@ -126,3 +126,50 @@ fn openssl_on_path() -> bool {
 	};
 	std::env::split_paths(&path).any(|dir| dir.join("openssl").is_file())
 }
+
+/// A host with no route to 123/udp or 4460/tcp switches the external probe
+/// off. `config-check` accepts the file: the block is still validated, and
+/// `enabled = false` is a value it knows.
+#[test]
+fn config_check_accepts_a_disabled_external_clock_probe() {
+	for block in [
+		"[clock_external]\nenabled = false\n",
+		"[clock_external]\nenabled = false\nallow_private_networks = true\nallowed_ports = [4460]\n",
+	] {
+		let file = write_config(&format!(
+			"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n{block}"
+		));
+		let mut out = Vec::new();
+		let mut err = Vec::new();
+		assert_eq!(
+			super::run(file.path(), false, &mut out, &mut err),
+			ExitCode::SUCCESS,
+			"{block} must load: {}",
+			String::from_utf8_lossy(&err)
+		);
+		assert!(
+			String::from_utf8_lossy(&out).contains("configuration is valid"),
+			"{block}"
+		);
+	}
+}
+
+#[test]
+fn config_check_says_when_it_raised_a_message_size_below_64k() {
+	let file = write_config(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\nmax_message_size = 1000\n",
+	);
+	let mut out = Vec::new();
+	let mut err = Vec::new();
+	assert_eq!(
+		super::run(file.path(), false, &mut out, &mut err),
+		ExitCode::SUCCESS,
+		"the file still loads"
+	);
+	let text = String::from_utf8_lossy(&err).to_string();
+	assert!(
+		text.contains("max_message_size is 1000 bytes in the file"),
+		"{text}"
+	);
+	assert!(text.contains("65536 bytes are used"), "{text}");
+}

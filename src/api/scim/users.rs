@@ -19,8 +19,8 @@ use serde::Deserialize;
 
 use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
+use crate::api::Principal;
 use crate::api::audit::{self, AuditEvent};
-use crate::api::domain_scope::DomainScope;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{DynamicAccount, StoreError};
@@ -83,11 +83,11 @@ fn lookup(state: &ApiState, name: &str) -> Result<DynamicAccount, ScimError> {
 /// another tenant's account names from the status code.
 fn lookup_in_scope(
 	state: &ApiState,
-	scope: &DomainScope,
+	principal: &Principal,
 	name: &str,
 ) -> Result<DynamicAccount, ScimError> {
 	let account = lookup(state, name)?;
-	if scope.admits_account(account.addresses.iter().map(String::as_str)) {
+	if principal.admits_account(&account.name, &account.addresses) {
 		Ok(account)
 	} else {
 		Err(ScimError::not_found(format!("no such user \"{name}\"")))
@@ -96,8 +96,11 @@ fn lookup_in_scope(
 
 /// Refuse addresses the calling key may not give out: a confined key cannot
 /// create or move an account into a domain it was not given.
-fn require_addresses_in_scope(scope: &DomainScope, addresses: &[String]) -> Result<(), ScimError> {
-	if scope.admits_account(addresses.iter().map(String::as_str)) {
+fn require_addresses_in_scope(
+	principal: &Principal,
+	addresses: &[String],
+) -> Result<(), ScimError> {
+	if principal.admits_addresses(addresses) {
 		Ok(())
 	} else {
 		Err(ScimError::invalid(
@@ -114,14 +117,14 @@ fn require_addresses_in_scope(scope: &DomainScope, addresses: &[String]) -> Resu
 /// key may know. An unconfined key keeps the precise errors.
 fn require_name_available(
 	state: &ApiState,
-	scope: &DomainScope,
+	principal: &Principal,
 	name: &str,
 ) -> Result<(), ScimError> {
-	if matches!(scope, DomainScope::All) {
+	if principal.is_unrestricted() {
 		return Ok(());
 	}
 	let held_outside = state.accounts().iter().any(|account| {
-		account.name == name && !scope.admits_account(account.addresses.iter().map(String::as_str))
+		account.name == name && !principal.admits_account(&account.name, &account.addresses)
 	});
 	if held_outside || crate::directory_store::validate_name(name).is_err() {
 		return Err(ScimError::invalid("userName is not available"));
@@ -275,12 +278,12 @@ pub async fn list_users(
 	let start_index = query.start_index.unwrap_or(1).max(1);
 	let count = query.count.unwrap_or(100).min(200);
 
-	let scope = state.domain_scope(&auth);
+	let principal = Principal::for_token(&state, &auth);
 	let users: Vec<DynamicAccount> = state
 		.store()
 		.dynamic_accounts()
 		.into_iter()
-		.filter(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+		.filter(|account| principal.admits_account(&account.name, &account.addresses))
 		.collect();
 
 	let matched: Vec<DynamicAccount> = if let Some(filter) = query.filter.as_deref() {
@@ -320,9 +323,9 @@ pub async fn create_user(
 	// password, so a caller cannot use the password rejection to probe which
 	// addresses another tenant already has.
 	let addresses = resolve_addresses(&body.emails, &[])?;
-	let scope = state.domain_scope(&auth);
-	require_addresses_in_scope(&scope, &addresses)?;
-	require_name_available(&state, &scope, &name)?;
+	let principal = Principal::for_token(&state, &auth);
+	require_addresses_in_scope(&principal, &addresses)?;
+	require_name_available(&state, &principal, &name)?;
 	state
 		.tenant_limits()
 		.check_account_creation(state.store(), &addresses)
@@ -365,7 +368,8 @@ pub async fn get_user(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let account = lookup_in_scope(&state, &state.domain_scope(&auth), &id)?;
+	let principal = Principal::for_token(&state, &auth);
+	let account = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&account)))
 }
 
@@ -380,7 +384,8 @@ pub async fn delete_user(
 	Extension(auth): Extension<MatchedAuth>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
-	lookup_in_scope(&state, &state.domain_scope(&auth), &id)?;
+	let principal = Principal::for_token(&state, &auth);
+	lookup_in_scope(&state, &principal, &id)?;
 	let data_dir = state.data_dir().to_path_buf();
 	let counts = crate::directory_store::removal::remove_account(
 		state.store(),
@@ -392,6 +397,7 @@ pub async fn delete_user(
 	)
 	.await
 	.map_err(store_to_scim)?;
+	crate::api::jmap::push_subscription::forget_account(&state, &id);
 	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
 	audit::log_account_removal(&id, None, &counts);
 	Ok(StatusCode::NO_CONTENT)
@@ -407,8 +413,8 @@ pub async fn put_user(
 	Path(id): Path<String>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let scope = state.domain_scope(&auth);
-	let existing = lookup_in_scope(&state, &scope, &id)?;
+	let principal = Principal::for_token(&state, &auth);
+	let existing = lookup_in_scope(&state, &principal, &id)?;
 	if crate::directory_store::account_name(&body.user_name) != id {
 		return Err(ScimError::invalid(
 			"userName cannot be changed via PUT; use DELETE then POST",
@@ -418,7 +424,7 @@ pub async fn put_user(
 	// The new addresses are checked before anything is written, so a refused
 	// replace leaves the password as it was.
 	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
-	require_addresses_in_scope(&scope, &addresses)?;
+	require_addresses_in_scope(&principal, &addresses)?;
 	state
 		.tenant_limits()
 		.check_account_move(state.store(), &existing.addresses, &addresses)
@@ -470,12 +476,12 @@ pub async fn patch_user(
 	Path(id): Path<String>,
 	Json(body): Json<PatchRequest>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let scope = state.domain_scope(&auth);
-	lookup_in_scope(&state, &scope, &id)?;
+	let principal = Principal::for_token(&state, &auth);
+	lookup_in_scope(&state, &principal, &id)?;
 	for op in &body.operations {
 		apply_operation(&state, &id, op)?;
 	}
-	let stored = lookup_in_scope(&state, &scope, &id)?;
+	let stored = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 

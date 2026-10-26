@@ -159,7 +159,7 @@ impl Ctx {
 	fn load(path: &Path) -> Self {
 		Ctx {
 			path: path.to_path_buf(),
-			config: Config::load(path).map_err(|error| error.to_string()),
+			config: Config::load_lenient(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
 			meminfo: PathBuf::from("/proc/meminfo"),
@@ -227,11 +227,27 @@ pub(in crate::cli) fn failing(
 	let runtime = tokio::runtime::Runtime::new()
 		.map_err(|error| format!("cannot start async runtime: {error}"))?;
 	let reports = runtime.block_on(run_areas(areas, Arc::new(Ctx::load(path))));
-	Ok(reports
+	Ok(restart_failures(reports, &mut super::style::stderr()))
+}
+
+fn restart_failures(
+	reports: Vec<(CheckArea, AreaReport)>,
+	warnings: &mut impl Write,
+) -> Vec<(String, String)> {
+	for (area, report) in &reports {
+		if matches!(area, CheckArea::Ports) {
+			for item in &report.items {
+				if item.status == report::Level::Warn {
+					super::style::warn_to(warnings, format_args!("{}: {}", item.name, item.detail));
+				}
+			}
+		}
+	}
+	reports
 		.into_iter()
 		.filter(|(_, report)| report.status == report::Level::Fail)
 		.map(|(area, report)| (area.name().to_string(), report.detail))
-		.collect())
+		.collect()
 }
 
 async fn run_areas(areas: &[CheckArea], ctx: Arc<Ctx>) -> Vec<(CheckArea, AreaReport)> {

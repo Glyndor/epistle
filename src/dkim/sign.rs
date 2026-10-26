@@ -36,6 +36,11 @@ const SIGNED_HEADERS: &[&str] = &[
 	"list-owner",
 	"list-archive",
 	"feedback-id",
+	"disposition-notification-to",
+	"return-receipt-to",
+	"auto-submitted",
+	"organization",
+	"x-epistle",
 ];
 
 /// List each name once beyond its present count, even when absent (RFC 6376 section 5.4).
@@ -50,6 +55,13 @@ const OVERSIGNED_HEADERS: &[&str] = &[
 	"list-unsubscribe",
 	"list-unsubscribe-post",
 	"content-type",
+	"disposition-notification-to",
+	"return-receipt-to",
+	// The server writes this one; a client that adds a second copy of it
+	// has to keep both, or the signature breaks. Nothing in the path
+	// legitimately writes `Auto-Submitted`, so oversigning it costs
+	// nothing at delivery and stops a forged "this was automatic" claim.
+	"auto-submitted",
 ];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.
@@ -338,20 +350,22 @@ type HeaderPairs<'a> = Vec<(&'a str, &'a str)>;
 
 /// Split raw message into header (name, value) pairs and body.
 fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
-	let (header_end, body_start) = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
-		Some(position) => (position + 2, position + 4),
-		None => (raw.len(), raw.len()),
-	};
-	let block = std::str::from_utf8(&raw[..header_end]).ok()?;
-	let body = &raw[body_start..];
+	let (raw_block, body) = crate::util::header_block::split_at_blank_line(raw);
+	let block = std::str::from_utf8(raw_block).ok()?;
 
 	let mut headers = Vec::new();
 	let mut current: Option<(usize, usize)> = None;
 	let mut offset = 0;
-	for line in block.split_inclusive("\r\n") {
+	for line in block.split_inclusive('\n') {
 		let start = offset;
 		offset += line.len();
-		let content = line.strip_suffix("\r\n").unwrap_or(line);
+		let had_line_feed = line.ends_with('\n');
+		let content = line.strip_suffix('\n').unwrap_or(line);
+		let content = if had_line_feed {
+			content.strip_suffix('\r').unwrap_or(content)
+		} else {
+			content
+		};
 		if content.starts_with(' ') || content.starts_with('\t') {
 			if let Some((_, end)) = &mut current {
 				*end = offset;
@@ -371,7 +385,13 @@ fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
 
 	let mut parsed = Vec::with_capacity(headers.len());
 	for header in headers {
-		let header = header.strip_suffix("\r\n").unwrap_or(header);
+		let had_line_feed = header.ends_with('\n');
+		let header = header.strip_suffix('\n').unwrap_or(header);
+		let header = if had_line_feed {
+			header.strip_suffix('\r').unwrap_or(header)
+		} else {
+			header
+		};
 		let colon = header.find(':')?;
 		parsed.push((header[..colon].trim_end(), &header[colon + 1..]));
 	}
@@ -388,11 +408,7 @@ fn collect_unsafe_resent_names(raw: &[u8]) -> std::collections::HashSet<String> 
 	let mut unsafe_names = std::collections::HashSet::new();
 	// Only the header block is read: a line of the body that looks like a
 	// field must not change what the signature covers.
-	let end = raw
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.or_else(|| raw.windows(2).position(|w| w == b"\n\n"))
-		.unwrap_or(raw.len());
+	let end = crate::util::header_block::split_at_blank_line(raw).0.len();
 	for raw_line in raw[..end].split(|&b| b == b'\r' || b == b'\n') {
 		if raw_line
 			.first()

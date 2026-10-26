@@ -107,6 +107,7 @@ pub(super) fn target(dir: &std::path::Path) -> Target {
 		crypto: MessageCrypto::disabled(),
 		quota: None,
 		usage: 0,
+		max_message_size: crate::imap::command::DEFAULT_APPEND_LIMIT,
 	}
 }
 
@@ -280,7 +281,10 @@ async fn a_run_killed_while_storing_checks_before_storing_again() {
 	let (summary, error) = migrate(&server, dir.path(), &settings()).await;
 	assert!(error.is_none(), "{error:?}");
 	assert_eq!(summary.folders[0].copied, 0);
-	assert_eq!(summary.folders[0].duplicates, 3);
+	assert_eq!(
+		summary.folders[0].confirmed, 3,
+		"the ledger confirms the three messages instead of downloading them"
+	);
 	assert_eq!(local(dir.path(), "INBOX").len(), 3);
 }
 

@@ -34,17 +34,20 @@ pub(super) fn render_address(addr: &Value) -> Option<String> {
 	match name {
 		Some(raw) => {
 			let sanitized = sanitize_header_value(raw);
-			let encoded = if sanitized.is_ascii()
+			// `atext` plus the space that separates the words of an RFC 5322
+			// phrase. Anything outside that has to be written as a quoted
+			// string rather than an atom.
+			let atom = sanitized.is_ascii()
 				&& sanitized
 					.bytes()
-					.any(|b| !b.is_ascii_alphanumeric() && !b" !#$%&'*+-/=?^_`{|}~".contains(&b))
-			{
+					.all(|b| b == b' ' || crate::util::validation::is_atext_byte(b));
+			let encoded = if atom {
+				encoded_word::encode(&sanitized)
+			} else {
 				format!(
 					"\"{}\"",
 					sanitized.replace('\\', "\\\\").replace('"', "\\\"")
 				)
-			} else {
-				encoded_word::encode(&sanitized)
 			};
 			Some(format!("{encoded} <{sanitized_email}>"))
 		}

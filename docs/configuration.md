@@ -39,10 +39,10 @@ a connection URL.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `hostname` | string | — (required) | FQDN the server identifies as (EHLO, TLS, HELO/PTR). One consistent name for all outbound. |
-| `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused at validate time: only a global unicast address is accepted. |
-| `public_ipv6` | IPv6 | unset | Same for IPv6. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
+| `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused by `epistle init` and by validation: only a global unicast address is accepted. A value already in the file that fails the rule (an older release accepted more, for example a site-local `fec0::` address) does not stop the server from starting: it is ignored, as if unset, with a warning that names the value and says what to do, in the log, in `epistle config-check` and in `epistle status`. |
+| `public_ipv6` | IPv6 | unset | Same for IPv6, including the way a value in the file that fails the rule is ignored with a warning. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
-| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
+| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
 | `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, DNS records and DKIM keys are kept. Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
@@ -55,11 +55,19 @@ a connection URL.
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
 | `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default). The `init` scaffold later sets a default of 200. |
+| `default_feedback_id` | bool | `true` | Write a `Feedback-ID` of the sending domain and the class on a submission that carries none (`epistle:<class>:<domain>`). `false` leaves the field to the client. See [headers](headers.md#identification-headers). |
+| `default_list_unsubscribe` | bool | `true` | Give a bulk `transactional` submission a `mailto:` `List-Unsubscribe` naming the sender, when it has none. Marketing mail is left alone (it must carry a one-click unsubscribe) and personal mail never gets one. Nothing on the server answers the address it points at: it is the sender's own mailbox, and the sender's own tooling has to act on it. `false` turns it off for every class. |
+| `bulk_recipients` | int | `20` | Recipients above which a `transactional` submission counts as bulk for `default_list_unsubscribe`: `20`, the default, means twenty-one or more. A notice to a handful of people is correspondence, not bulk mail. Refused below `1`: it is a count of recipients, and zero would make every transactional submission bulk. For no unsubscribe at all, turn `default_list_unsubscribe` off. |
+| `default_list_id` | bool | `true` | Write the `List-Id`, `List-Post` and `List-Unsubscribe` of the list the envelope sender speaks for, when that sender is a `[[alias]]` with a `list_id`. The first two replace whatever the client wrote; a `List-Unsubscribe` the client already sent is kept, one-click included. `false` leaves them to the client. |
+| `system_auto_submitted` | bool | `true` | Write `Auto-Submitted: auto-generated` on the mail the server generates itself: bounces and delay notices, alert emails, DMARC and TLS-RPT reports. `false` leaves the field out of that mail, failure and delay notices among them, so nothing marks those as generated and the null return path is what keeps a bounce from looping. The abuse report builder does not read this switch and always writes `auto-generated`, and the report `epistle report-abuse` prints carries no `Auto-Submitted` at all. A vacation reply is always `auto-replied (vacation)` and is not affected. |
+| `x_epistle_header` | bool | `false` | Write `X-Epistle: 1` on every submission, on all three paths. The fixed value carries no version and no version field sits beside it. Off by default: no receiver acts on it. |
+| `organization_header` | bool | `true` | Write the `Organization` of the sending domain on a submission, using `domain_organization`. The configured value replaces whatever the client wrote. `false` leaves the field alone. |
+| `domain_organization` | table | `{}` | `domain → name`: the `Organization` each domain publishes (RFC 2369). The key is a DNS name, the value printable ASCII with no control character. A domain with no entry gets no `Organization` from the server. |
 | `domain_submission_limits` | table | `{}` | `domain → recipients/min`: per-domain override for `submission_rate_limit_per_min`, counted and refused the same way. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain; an account with addresses in several limited domains gets the strictest entry. Edited through `epistle limits set submission-rate --domain <NAME> <N>`. |
 | `inbound_rate_limit_per_ip_per_min` | int | unset | Max messages an unauthenticated client IP may start per minute. Sessions that authenticate are charged against the submission limiters instead; bounces (null sender) are not charged against the per-sender limit. A send over the cap is deferred with `450 4.7.1 too many messages from this client; retry later`; the temporary code lets a real burst (a mailing list, a resend after an outage) retry rather than bounce. Absent disables the per-IP limit. |
 | `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` means no cap; the request that would go above it returns `409 conflict`. |
-| `max_message_size` | int | 25 MiB | Per-instance message-size cap; `0` means the default. It may not exceed the effective `message_memory_budget` unless the budget is `0`: the server refuses to start (and `epistle limits set` refuses the change) rather than accept a size it could never receive. The same number is the SMTP `SIZE` extension value, the `MAIL FROM` SIZE parameter cap, the per-line running size check, the end-of-DATA check, the per-chunk BDAT cap, the JMAP upload route's body limit, the JMAP `Email/set` create builder cap, and the REST `POST /api/v1/send` body limit. The cap is advertised in EHLO `SIZE` and the JMAP Session resource (`maxSizeUpload`, `maxSizeAttachmentsPerEmail`). Oversize is refused with `552 5.3.4 message exceeds maximum size` (SMTP), the JMAP `limit` problem (`maxSizeUpload`), or the REST `413 message_too_large`. |
+| `max_message_size` | int | 25 MiB | Per-instance message-size cap; `0` means the default. Not below 64 KiB: RFC 5321 §4.5.3.1.7 makes 64K octets the least a server may accept. A smaller value in the file is raised to 65536 bytes when it loads, with a warning that names both values, in the log, in `epistle config-check` and in `epistle status`; `epistle limits set max-message-size 64k` writes the floor into the file, and `limits set` refuses anything smaller. It may not exceed the effective `message_memory_budget` unless the budget is `0`: the server refuses to start (and `epistle limits set` refuses the change) rather than accept a size it could never receive. The same number is the SMTP `SIZE` extension value, the `MAIL FROM` SIZE parameter cap, the per-line running size check, the end-of-DATA check, the per-chunk BDAT cap, the JMAP upload route's body limit, the JMAP `Email/set` create builder cap, and the REST `POST /api/v1/send` body limit. The cap is advertised in EHLO `SIZE` and the JMAP Session resource (`maxSizeUpload`, `maxSizeAttachmentsPerEmail`). Oversize is refused with `552 5.3.4 message exceeds maximum size` (SMTP), the JMAP `limit` problem (`maxSizeUpload`), or the REST `413 message_too_large`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener, at most 1000000; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `max_connections_per_ip` | int | 20 | Max concurrent connections from a single client IP per SMTP listener (IMAP, POP3, ManageSieve and plain HTTP have their own, below). A peer over the cap is answered `421 4.7.0 too many connections from your address` and closed; the per-listener semaphore still bounds the total. An IPv6 client is counted by its /64, and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the built-in default. Behind a proxy or NAT that hides the client address (Podman rootless bridge networking reports every client as one gateway address) every client shares one count. |
 | `message_memory_budget` | int | derived | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from. When the cap is exhausted a new transaction is refused with `452 4.3.1 insufficient system resources; try again later` (a refused `BDAT` chunk is still read and discarded). A `BDAT` chunk is charged as its octets arrive, like a `DATA` body, never for the size it announces, so a client that announces a large chunk and sends it slowly holds only what it has sent. One client (an IPv4 address or an IPv6 /64) may hold at most a quarter of the budget, and never less than one message of `max_message_size`. An accepted body stays counted until its delivery is over; reservations are released on every path that drops the body (reply, `RSET`, `EHLO`, disconnect, timeout, panic). Must be at least `max_message_size`. `0` disables the cap (every reservation succeeds, the historical unbounded behaviour). Unset, it is a fifth, in whole MiB, of the memory the `mail` container may use (its cgroup v2 `memory.max`, else the `mem_limit` of `mail` in the generated `compose.yaml`, else 1 GiB), at least `max_message_size` and at most 1 GiB: a message in flight peaks at about 2.9 times its body, so a full budget costs about three times its size, 60% of the limit. A set budget whose triple is more than 70% of that limit is kept, with a warning at start-up and in `epistle status` (area `resources`). See [Sizing](container.md#sizing). |
@@ -189,7 +197,69 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
-Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent. Operators exposing any of these externally should either configure `[tls]` itself or front the listener with a TLS proxy.
+Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent.
+
+`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where I keep them. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
+
+### A listener on a private interface
+
+`addr` is resolved in the network namespace `serve` runs in. On the
+container stack that is the container's namespace, so `addr = "10.0.0.1"` (a
+WireGuard address of the host, say) names an address the container does not
+own: the bind fails with `EADDRNOTAVAIL` and `serve` stops starting. Only `::`
+gets a fallback to another address, and it does not need one.
+
+What keeps a listener off the public interfaces is the **published port** on
+the host, and a private `addr` does not do it. `epistle init` publishes every
+non-loopback listener as `<port>:<port>` and gives a loopback listener no
+`ports:` entry at all. The three listeners with no TLS transport are the
+exception: the map publishes them on `127.0.0.1` unless it names another
+address, so `api` arrives as `127.0.0.1:8025:8025` and not as `8025:8025` on
+every host address.
+
+An install that still carries an older map has those three published wide, and
+the next command that writes the map takes them off every address of the host:
+`epistle service enable`, `epistle service disable`, `epistle service set`, an
+`epistle init` rerun and `epistle stack update` all re-render it, so an upgrade
+can be what cuts a service off. The command that does it names the service and
+the port on stderr, or in the `init` report, so the loss of reachability is
+never silent. That is deliberate: a listener with no TLS transport reachable
+from the internet is one more thing to expose, and the way to expose it is
+`compose.override.yaml` as below, behind a TLS reverse proxy. A concrete
+address the map already names, such as `10.0.0.1:8025:8025`, is left alone: the
+rule is about a wildcard, not about a decision. Set the listener to `addr = "0.0.0.0"` (the container
+side) and pin the host side in `<data_dir>/compose/compose.override.yaml`,
+which survives both an `init` rerun and `stack update`. A plain `ports:` list
+there is **merged** with the one `init` writes, so `8025:8025` and
+`10.0.0.1:8025:8025` would both be requested and the engine fails with
+"Address already in use". The `!override` tag replaces the list, so it has to
+carry every port the stack publishes, the mail ones included:
+
+```yaml
+services:
+  mail:
+    ports: !override
+      - "25:25"
+      - "143:143"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "10.0.0.1:8025:8025"
+```
+
+After this the API answers on `10.0.0.1:8025` and nowhere else. `epistle stack
+update` and `epistle probe` check the API on the loopback of the host, so they
+report `5 of 6 listeners answer` even though the stack is running as intended.
+
+Keys meant for that listener should carry `--ip-cidr` and `--expires-at`, and
+each key should hold only the scopes its program uses. `--ip-cidr` is matched
+against the address the server sees on the socket, so a `mail` service that is
+not on `network_mode: "pasta"` (a bridge, and rootless Podman on a bridge
+funnels every connection through `rootlessport`) filters on the container's
+address instead of the client's. `epistle api-key create`, `epistle api-key
+list` and `epistle status` say so when they see it.
+[Exposing the API on a private interface](api.md#exposing-the-api-on-a-private-interface)
+has the whole case.
 
 ### Public-install firewall
 
@@ -932,6 +1002,8 @@ OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 | `signing_key` | Base64 PKCS#8 ES256 private key; turns the server into its own OAuth 2.0 authorization server. |
 | `signing_key_file` | A file holding the same key, read at startup; instead of `signing_key`. `epistle init` keeps one at `secrets/oauth_signing.key` beside data_dir, mounted read-only into `mail`. A file that cannot be read stops the server. |
 | `allow_private_jwks` | Permit the discovery document's `jwks_uri` to resolve to a loopback, private (RFC 1918 / RFC 4193), link-local or unspecified address. Default `false`. The check exists because the `jwks_uri` is chosen by the IdP, not the operator, and a hostile or compromised IdP could pivot it at a cloud-metadata service (`169.254.169.254`) or an internal host. Set this only when the IdP genuinely lives on a private network and the trust relationship justifies it. |
+| `allow_unverified_email` | Accept a token whose `email` claim has no `email_verified` claim at all. Default `false`: the address in a token names the mailbox only when the identity provider says it verified it (`true`, or the string `"true"`), and a token that says `false` is refused either way. The `sub` claim of an external provider is never read as an identity, and the address must be the exact address of an account: a catch-all, a masked address or a sub-address does not match. Set this only for a provider that does not emit `email_verified` but confirms every address it issues tokens for. A refused token is logged with its reason (`bearer token refused: ...`), never with a value from the token. |
+| `idp_enforces_second_factor` | Declare that the identity provider enforces a second factor itself before it issues a token. Default `false`: a bearer token cannot carry a TOTP code, so an account that has a TOTP secret cannot sign in with OAUTHBEARER or XOAUTH2 (the same refusal SCRAM gets; the log says so), and its owner uses a password plus code instead. When `true`, a valid token stands for the second factor as well, for every account. It has no effect with `signing_key`: tokens of the built-in authorization server are matched by `sub` and always count as having passed the second factor, because the server asks for the code when it issues them. `epistle config-check`, `epistle status` and the startup log warn when an external provider is configured, accounts have a TOTP secret and this is `false`; `status` and the log also carry a plain line about `email_verified` for an external provider, which is not a warning. |
 
 ### `[webhook]`
 Outbound event notifications. The URL must be `https://` (or a loopback `http://`).
@@ -1093,6 +1165,140 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
 `scanner_clamd_skipped`, `outbound_virus`.
+
+### `[clock_external]`
+
+Read-only external-clock probe `epistle status` and `epistle check clock`
+run when the area is reached. Three independent sources, diagnostic
+median, warn/fail thresholds. The probe runs once per `status` call and
+never writes the host clock; it is a probe for the operator, not a
+discipliner. A host with no route to the sources can switch it off with
+`enabled = false`: the area then says the probe is switched off, at `ok`,
+and makes no network call.
+
+```toml
+[clock_external]
+enabled = true      # false turns the probe off entirely
+warn_seconds = 1.0   # an offset at or above this reading is a Warn
+fail_seconds = 5.0   # an offset at or above this reading is a Fail
+sources = [
+  { host = "nts.netnod.se",    kind = "nts" },
+  { host = "nts.time.nl",      kind = "nts" },
+  { host = "ptbtime2.ptb.de",  kind = "nts" },
+]
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Run the probe. `false` switches it off: `epistle status` reports the switch at `ok` and queries nothing. The rest of the block is still validated, so a disabled probe cannot hide a broken file. |
+| `warn_seconds` | float | `1.0` | Inclusive warn threshold (seconds). Below it all valid offsets are `Ok`; at or above it and below `fail_seconds` the largest absolute offset is `Warn`; at or above `fail_seconds` it is `Fail`. Must be positive, finite, and strictly less than `fail_seconds`. |
+| `fail_seconds` | float | `5.0` | Inclusive fail threshold (seconds). See `warn_seconds`. |
+| `allow_private_networks` | bool | `false` | Permit private, loopback and link-local destinations for internal deployments, including NTS-KE referrals. It grants nothing over ports. |
+| `allowed_ports` | array | `[]` | Ports the probe may dial besides the standard one for the protocol (TCP 4460 for NTS-KE, UDP 123 for NTP), for a peer that answers elsewhere. The NTP port 4123 that `nts.netnod.se` publishes in its key exchange is accepted without being listed when a key exchange names it, and no other port is; a source configured with `port = 4123` still needs it listed here. Each entry is a port number; none may be `0` and none may repeat. |
+| `sources` | array | the example above | Three entries, no duplicate hosts, at least one of them `nts`. Each is `{ host, kind, [port] }` where `kind` is `nts` (port 4460 by default) or `ntp` (port 123 by default); `port` overrides the default when set and has to be the standard port for the protocol or one listed in `allowed_ports`. Hostnames must be ASCII, not empty, and shorter than 253 octets. |
+
+Validation rules `Config::validate` enforces: exactly three sources; at
+least one NTS source; no duplicate hosts (case-insensitive); no empty
+hosts; no non-ASCII hosts; no whitespace or control characters in hosts;
+no `0` and no repeated entry in `allowed_ports`. The split between `nts`
+and `ntp` is otherwise the operator's. A `[clock_external]` that fails
+these checks refuses to load.
+
+The probe bounds: each source gets a `2 s` per-source deadline
+(`SOURCE_DEADLINE`) covering the whole probe, dial, TLS handshake,
+key exchange and authenticated exchange included rather than each of
+those separately; the whole run gets a `2.1 s` cap (`RUN_DEADLINE`).
+A hung server is reported, never retried.
+
+DNS uses asynchronous resolution with a separate 500 ms cap inside the
+source deadline. Both A and AAAA results are checked before connecting;
+if any returned address is forbidden, the whole answer is rejected. The
+probe connects to the selected validated address without resolving again.
+By default, sources and NTS-KE Server/Port referrals must use
+global unicast addresses, excluding shared, documentation, benchmarking,
+reserved, loopback, private and link-local networks,
+and standard ports (TCP 4460 for NTS-KE, UDP 123 for NTP, plus UDP 4123 when an
+NTS-KE answer names it). The NTP port comes from the NTS-KE server's
+own answer, so a hostile server could name any port; the probe therefore accepts
+only 4123, the one a default operator publishes, and never an arbitrary
+unprivileged port such as 5432 or 6379.
+`allow_private_networks = true` is for deployments that dial internal
+servers, and `allowed_ports` is for a public peer that answers somewhere
+other than its standard port: neither one turns the other on. Even with
+`allow_private_networks = true`, multicast, unspecified and limited
+broadcast addresses are rejected. IPv4-mapped, IPv4-compatible, NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are classified using their
+embedded IPv4 address, and a transition address is refused on its own even
+when that payload is global, so the clock refuses exactly what a
+`public_ipv6` value is refused for. The NAT64 prefix your operator uses is not
+known to the probe, so a NAT64 address under a prefix other than
+`64:ff9b::/96` is read as a plain IPv6 address and the IPv4 it carries is not
+classified. IPv6 zone identifiers such as `fe80::1%eth0` or `fe80::1%1`
+are not supported and are rejected with a configuration error, even with
+the opt-in, so the destination has to be one that needs no zone. Directed
+broadcast addresses cannot be identified without the destination
+network's prefix; blocking those networks is the job of the routing and
+egress policy of the network.
+
+The verdict currently uses the largest absolute offset among all valid
+readings. The median and `smear_excluded` are diagnostic values only: an
+outlier or a reading identified by the smear diagnostic can still cause
+`Warn` or `Fail`.
+They do not currently protect the verdict from a single incorrect peer.
+With one or two valid readings, a healthy offset still gives `Warn`; any
+valid offset at or above the fail threshold gives `Fail`. No valid readings
+gives `Fail`. The area also retains individual source and smear warnings.
+
+NTP eras are unfolded relative to the local wall clock. This handles the
+2036 rollover while the local clock is within 68 years of the remote time;
+it cannot establish an era independently of a severely incorrect host clock.
+
+The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
+`nts:ptbtime2.ptb.de`: Netnod (Sweden), SIDN Labs (Netherlands) and the
+Physikalisch-Technische Bundesanstalt (Germany), three independent
+operators, every offset authenticated. The diagnostic median is
+insensitive to one drifting source, subject to the verdict limitation
+above. All three answered the whole NTS exchange (key exchange, cookies,
+authenticated poll) from the development host when the list was measured
+on 2026-10-22. A whole NTS exchange costs a dial, a TLS handshake, the
+key exchange and the authenticated poll, so on a slow link it comes close
+to the `2 s` budget: `nts.netnod.se` took between 1.37 s and 1.82 s on
+the development host across eight consecutive runs. The `2 s` per-source
+budget is a constant in the binary, not a key here. A miss is reported as
+a timeout, the run loses its diagnostic median, and the area gives at
+least `Warn`; no valid readings or a valid offset at the fail threshold
+gives `Fail`. Measure the three from the host that will run
+`epistle status`, because a network can answer one operator and not
+another.
+
+Two other providers are not in the list because of what they answered:
+
+- `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
+  attempt measured. Its NTS-KE endpoint answers the key exchange and
+  returns cookies, then never answers the authenticated poll, on every run
+  recorded for this branch and at budgets up to 15 s. Use it as
+  `kind = "ntp"`, or set `kind = "nts"` on a network where its
+  authenticated exchange does answer.
+- `time.google.com` publishes no NTS-KE endpoint, so it can only be a plain
+  NTPv4 source.
+
+Replace any of them when the chosen peers change; keep one provider per
+autonomous system, and set `kind` per source to what that source actually
+answers.
+
+Two notes an operator should have. The area renders one line saying how
+many of the sources were authenticated over NTS and names them, so a run
+with a plain source among them does not read as equally trusted offsets.
+And the leap-second smear check compares one plain reading against two
+authenticated readings that agree within 100 ms, so on the shipped list,
+which has no plain source, it stays dormant; it can fire when an operator
+replaces one `nts` source with a plain `ntp` one.
+
+The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
+design that drove the first delivery. They are the same numbers
+`docs/limits.md` would expose as adjustable limits if a catalog entry
+were added later. Until then they live in `[clock_external]` and
+`Config::validate` enforces the strict-less relation.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
@@ -1597,7 +1803,7 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
-Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`.
+Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`. An address needs a domain with at least one dot, like `domains` does, so `torre@localhost` is refused and the refusal names the rule.
 
 | Key | Meaning |
 |---|---|
@@ -1606,7 +1812,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
 | `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. `0` means no limit. |
-| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
+| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. Each target needs a domain with at least one dot. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 | `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
@@ -1617,10 +1823,10 @@ A multi-target alias: one address that delivers to several local accounts.
 | Key | Meaning |
 |---|---|
 | `address` | The alias address (e.g. `team@example.org`). |
-| `members` | Member addresses it delivers to (each a local account address). |
+| `members` | Member addresses it delivers to (each a local account address, with a domain that has at least one dot). |
 | `senders` | Addresses allowed to send *as* the alias (From / MAIL FROM). Empty means any member may; a non-member is always refused. |
 | `hidden` | Keep the membership private — not disclosed through directory queries (default `true`). |
-| `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. |
+| `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. The value is written between angle brackets as it stands, so it has to be an identifier those brackets can carry: a dot-atom of non-empty `atext` atoms joined by single dots, as in `team.example.org`. Anything else is refused at load, brackets and whitespace included; RFC 2919 puts a description outside the brackets (`Team List <team.example.org>`) and this server does not compose one |
 
 ### Masked email addresses
 Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.

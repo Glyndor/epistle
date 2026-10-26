@@ -246,7 +246,9 @@ fn control_depends_on_adduser_for_the_maintainer_scripts() {
 fn postinst_provisions_config_directory_without_changing_existing_directory() {
 	let postinst = read("debian/epistle.postinst");
 	assert!(
-		postinst.contains("if [ ! -e /etc/epistle ]; then\n\t\tinstall -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle\n\tfi"),
+		postinst.contains(
+			"if [ ! -e /etc/epistle ]; then\n\t\t\tepistle_install_dir 0750 /etc/epistle\n\t\telse"
+		),
 		"postinst must create only a missing /etc/epistle with service ownership and mode 0750"
 	);
 }
@@ -257,10 +259,8 @@ fn postinst_migrates_only_after_adding_missing_ranges() {
 	assert!(
 		postinst.contains("ranges_added=false")
 			&& postinst.contains("|| ! grep -q '^glyndor-epistle:' /etc/subgid")
-			&& postinst.contains("else\n\t\t\tranges_added=true")
-			&& postinst.contains(
-				"if [ \"$ranges_added\" = true ] && [ -z \"${2:-}\" ] && command -v podman"
-			),
+			&& postinst.contains("then\n\t\t\tranges_added=true")
+			&& postinst.contains("if [ \"$ranges_added\" = true ] && command -v podman"),
 		"postinst must migrate only when it successfully added missing subuid or subgid ranges"
 	);
 }
@@ -269,7 +269,7 @@ fn postinst_migrates_only_after_adding_missing_ranges() {
 fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 	let postinst = read("debian/epistle.postinst");
 	assert!(
-		postinst.contains("if [ -n \"${2:-}\" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then")
+		postinst.contains("[ -n \"${2:-}\" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then")
 			&& postinst.contains("export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS")
 			&& postinst.contains("if runuser -u glyndor-epistle -- systemctl --user is-enabled --quiet podup-epistle.service; then")
 			&& postinst.contains("if ! runuser -u glyndor-epistle -- epistle stack update; then")
@@ -282,6 +282,94 @@ fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 	assert!(
 		enabled < update,
 		"postinst must check autostart before updating the stack"
+	);
+}
+
+#[test]
+fn the_sample_unit_recipe_installs_a_config_the_service_can_read() {
+	let unit = read("docs/epistle.service");
+
+	// The file the unit tells the server to serve.
+	let exec_start = unit
+		.lines()
+		.find_map(|line| line.strip_prefix("ExecStart="))
+		.expect("docs/epistle.service has an ExecStart line");
+	let config_path = exec_start
+		.split("--config ")
+		.nth(1)
+		.unwrap_or_default()
+		.trim()
+		.to_owned();
+	assert!(
+		config_path.ends_with(".toml"),
+		"the sample unit must name the config file it serves; ExecStart was: {exec_start}"
+	);
+
+	// The recipe, one `install` line per command, each ending on its target.
+	let recipe: Vec<(&str, &str)> = unit
+		.lines()
+		.map(|line| {
+			// The recipe lives in the header comment, so each command sits
+			// behind the comment marker and its indentation.
+			let commented = line
+				.trim_start()
+				.strip_prefix('#')
+				.unwrap_or(line.trim_start());
+			commented.trim_start()
+		})
+		.filter_map(|line| line.strip_prefix("install "))
+		.filter_map(|line| line.split_whitespace().last().map(|path| (line, path)))
+		.collect();
+	let config_line = recipe
+		.iter()
+		.find(|(_, path)| *path == config_path)
+		.unwrap_or_else(|| {
+			panic!(
+				"the recipe must install {config_path}, the file the unit serves; it was: {recipe:?}"
+			)
+		})
+		.0;
+	for needle in ["-o glyndor-epistle", "-g glyndor-epistle", "-m 0600"] {
+		assert!(
+			config_line.contains(needle),
+			"the config install line must carry {needle:?}: the service runs unprivileged with no \
+			 CAP_DAC_OVERRIDE, so a file that is not readable by glyndor-epistle is a file the \
+			 server cannot open. The line was: {config_line}"
+		);
+	}
+	assert!(
+		!config_line.contains("-D"),
+		"install -D creates the parent directories root-owned and 0755 whatever -m and -o say for \
+		 the file, so the directory holding the config has to be prepared by its own line. The \
+		 line was: {config_line}"
+	);
+
+	let config_dir = Path::new(&config_path)
+		.parent()
+		.expect("the config path has a directory")
+		.to_str()
+		.unwrap()
+		.to_owned();
+	let dir_line = recipe
+		.iter()
+		.find(|(_, path)| *path == config_dir)
+		.unwrap_or_else(|| {
+			panic!("the recipe must create {config_dir}, the directory it installs the config into")
+		})
+		.0;
+	for needle in ["-d", "-m 0750", "-o glyndor-epistle", "-g glyndor-epistle"] {
+		assert!(
+			dir_line.contains(needle),
+			"the {config_dir} line must carry {needle:?}: the directory holds the credential and \
+			 key material and nothing above it may be readable by others. The line was: {dir_line}"
+		);
+	}
+
+	assert!(
+		read("debian/epistle.postinst")
+			.contains(&format!("epistle_install_dir 0750 {config_dir}\n")),
+		"the unit must point at the directory the package's postinst prepares ({config_dir}), not \
+		 at a path no script creates"
 	);
 }
 
@@ -314,3 +402,33 @@ mod subid_move;
 
 #[path = "debian/preinst.rs"]
 mod preinst;
+
+#[path = "debian/preinst_publish.rs"]
+mod preinst_publish;
+
+#[path = "debian/store_paths.rs"]
+mod store_paths;
+
+#[path = "debian/preinst_mutants.rs"]
+mod preinst_mutants;
+
+#[path = "debian/purge_safety.rs"]
+mod purge_safety;
+
+#[path = "debian/configure_sysctl.rs"]
+mod configure_sysctl;
+
+#[path = "debian/purge_lifecycle.rs"]
+mod purge_lifecycle;
+
+#[path = "debian/races.rs"]
+mod races;
+
+#[path = "debian/races_account.rs"]
+mod races_account;
+
+#[path = "debian/races_manager.rs"]
+mod races_manager;
+
+#[path = "debian/races_review.rs"]
+mod races_review;

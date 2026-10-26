@@ -106,11 +106,15 @@ impl Conn {
 	/// block at a time, each within [`Phase::DataBlock`].
 	pub(super) async fn send_data(&mut self, data: &[u8]) -> Result<(), DeliveryError> {
 		let mut wire = Vec::with_capacity(data.len() + 16);
-		for line in data.split_inclusive(|&b| b == b'\n') {
-			if line.first() == Some(&b'.') {
+		// A dot is doubled after any line break the peer might honour, CR or
+		// LF alone included, whatever the sender of the message promised.
+		let mut at_line_start = true;
+		for &byte in data {
+			if at_line_start && byte == b'.' {
 				wire.push(b'.');
 			}
-			wire.extend_from_slice(line);
+			wire.push(byte);
+			at_line_start = byte == b'\r' || byte == b'\n';
 		}
 		if !wire.ends_with(b"\r\n") {
 			wire.extend_from_slice(b"\r\n");
@@ -209,3 +213,7 @@ pub(super) fn complete_reply(buffer: &[u8]) -> Option<usize> {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "client_conn_tests.rs"]
+mod tests;

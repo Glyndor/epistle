@@ -1,9 +1,24 @@
 use super::{read, stubs::write_stub};
 
+/// The text of shell function `name`: from its `name() {` line to the closing
+/// brace in the first column.
+fn function(script: &str, name: &str) -> String {
+	let open = format!("{name}() {{");
+	let mut lines = script.lines().skip_while(|line| *line != open);
+	let mut text = vec![
+		lines
+			.next()
+			.unwrap_or_else(|| panic!("{name} is not defined")),
+	];
+	text.extend(lines.take_while(|line| *line != "}"));
+	text.push("}");
+	text.join("\n")
+}
+
 #[test]
 fn postinst_creates_only_a_missing_private_data_directory() {
 	let postinst = read("debian/epistle.postinst");
-	assert!(postinst.contains("if [ ! -e /var/lib/glyndor/epistle/data ] && [ ! -L /var/lib/glyndor/epistle/data ]; then\n\t\tinstall -d -m 0700 -o glyndor-epistle -g glyndor-epistle \\\n\t\t\t/var/lib/glyndor/epistle/data\n\tfi"),
+	assert!(postinst.contains("if [ ! -e /var/lib/glyndor/epistle/data ] && [ ! -L /var/lib/glyndor/epistle/data ]; then\n\t\t\tepistle_install_dir 0700 /var/lib/glyndor/epistle/data\n\t\telse"),
         "postinst must create only a missing data directory with service ownership and mode 0700");
 }
 
@@ -31,6 +46,9 @@ fn postinst_preserves_existing_data_and_installs_missing_data_privately() {
 			"printf '%s\\n' \"$@\" > \"$INSTALL_LOG\"\nfor arg do last=$arg; done\nexec /usr/bin/install -d -m 0700 \"$last\"",
 		);
 		let postinst = read("debian/epistle.postinst");
+		let helpers = ["epistle_retry", "epistle_install_dir", "epistle_check_dir"]
+			.map(|name| function(&postinst, name))
+			.join("\n");
 		let block: String = postinst
 			.lines()
 			.skip_while(|line| !line.contains("if [ ! -e /var/lib/glyndor/epistle/data ]"))
@@ -41,7 +59,7 @@ fn postinst_preserves_existing_data_and_installs_missing_data_privately() {
 			.replace("/var/lib/glyndor/epistle/data", data.to_str().unwrap());
 		let log = dir.path().join("install.log");
 		let output = Command::new("/bin/sh")
-			.args(["-c", &block])
+			.args(["-c", &format!("{helpers}\n{block}")])
 			.env("PATH", &bin)
 			.env("INSTALL_LOG", &log)
 			.output()

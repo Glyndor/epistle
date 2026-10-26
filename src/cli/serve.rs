@@ -52,6 +52,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// reused by `config-check` and `verify-dns`.
 	super::serve_tasks::log_single_signature_dkim_warning(&config);
 	super::serve_connection_limits::log_retry_schedule_warnings(&config);
+	super::serve_connection_limits::log_adjusted_values(&config);
 	if config.listeners.is_empty() {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());
@@ -137,7 +138,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
 	// OIDC discovery this fetches the JWKS and spawns the hourly refresh task.
-	let oauth_verifier = super::serve_tasks::build_oauth_verifier(&config).await?;
+	let oauth_verifier = super::oauth_advice::build_and_say(&config).await?;
 
 	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
 	// the renewal task that publishes key authorizations into it.
@@ -341,6 +342,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_blob_backend(blob_backend)
 				.with_correspondents((*correspondents).clone())
 				.with_class_bindings(Arc::clone(&evidence.bindings))
+				.with_identification(crate::smtp::identification::Policy::from_config(&config))
 				.with_new_recipients_per_day(daily_new_recipients)
 				.with_outbound(Arc::clone(&sink));
 				state = super::serve_ratelimit::wire_api_submission_limits(
@@ -461,10 +463,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
-				tasks.push(super::serve_tasks::serve_http(
+				tasks.push(super::serve_webdav::spawn(
 					listener,
-					router,
+					&config,
+					directory.clone(),
 					http_limits,
 				));
 			}
@@ -500,6 +502,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
 					.with_max_recipients(max_recipients)
+					.with_identification(crate::smtp::identification::Policy::from_config(&config))
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
@@ -510,9 +513,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {
-						let store: Arc<dyn crate::antispam::corpus::BayesScorer> =
-							Arc::new(store.clone());
-						server = server.with_bayes(store);
+						server = server.with_bayes(Arc::new(store.clone()));
 					}
 				}
 				if let Some(hook) = &scanner_hook {

@@ -115,6 +115,37 @@ public_ipv6 = "::ffff:10.0.0.1"
 }
 
 #[test]
+fn rejects_a_public_ipv6_that_carries_a_non_global_ipv4() {
+	// Every form that carries an IPv4 payload must be read as that IPv4:
+	// NAT64 (64:ff9b::/96), 6to4 (2002::/16), IPv4-compatible (::a.b.c.d) and
+	// IPv4-mapped (::ffff:a.b.c.d). A v6 value must not be a way in for
+	// loopback, RFC 1918 or the link-local address of the metadata service.
+	for value in [
+		"64:ff9b::7f00:1",
+		"64:ff9b::a00:1",
+		"64:ff9b::169.254.169.254",
+		"2002:7f00:1::1",
+		"2002:c000:201::1",
+		"::127.0.0.1",
+		"::ffff:192.168.1.10",
+	] {
+		let config = config_from(&format!(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+public_ipv6 = "{value}"
+"#
+		));
+		let err = config.expect_err("an IPv6 carrying a non-global IPv4 must be rejected");
+		let message = format!("{err:?}");
+		assert!(
+			message.contains("public_ipv6") && message.contains("carrying"),
+			"expected the error to name the field and the payload it carries, got {message:?}"
+		);
+	}
+}
+
+#[test]
 fn accepts_a_global_public_address() {
 	let config = config_from(
 		r#"

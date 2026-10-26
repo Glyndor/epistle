@@ -87,12 +87,12 @@ fn ws_state(
 
 /// A minimal RFC 6455 client: enough to send masked text frames and read the
 /// server's unmasked frames, so the test needs no WebSocket dependency.
-struct Client {
+pub(super) struct Client {
 	stream: TcpStream,
 }
 
 impl Client {
-	async fn open(state: ApiState, token: &str) -> Client {
+	pub(super) async fn open(state: ApiState, token: &str) -> Client {
 		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 			.await
 			.expect("bind loopback");
@@ -120,7 +120,7 @@ impl Client {
 		Client { stream }
 	}
 
-	async fn send(&mut self, frame: &Value) {
+	pub(super) async fn send(&mut self, frame: &Value) {
 		let payload = frame.to_string().into_bytes();
 		let mask = [0x11u8, 0x22, 0x33, 0x44];
 		let mut out = vec![0x81u8];
@@ -138,7 +138,7 @@ impl Client {
 
 	/// The next frame's opcode and payload; opcode 0 (a continuation, which
 	/// this server never sends) when the connection ended without one.
-	async fn next(&mut self) -> (u8, Vec<u8>) {
+	pub(super) async fn next(&mut self) -> (u8, Vec<u8>) {
 		tokio::time::timeout(Duration::from_secs(5), async {
 			let Ok(first) = self.stream.read_u8().await else {
 				return (0, Vec::new());
@@ -159,7 +159,7 @@ impl Client {
 		.expect("no frame within 5s")
 	}
 
-	async fn next_json(&mut self) -> Value {
+	pub(super) async fn next_json(&mut self) -> Value {
 		let (opcode, payload) = self.next().await;
 		assert_eq!(opcode, 1, "expected a text frame");
 		serde_json::from_slice(&payload).expect("frame is JSON")

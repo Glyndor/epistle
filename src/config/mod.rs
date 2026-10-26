@@ -20,6 +20,7 @@ mod ldap;
 mod listener;
 mod mta_sts;
 mod oauth;
+mod oauth_pair;
 mod otel;
 mod privileges;
 mod queue;
@@ -30,7 +31,10 @@ mod tls;
 mod transport;
 mod validate;
 mod validate_limits;
-pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
+pub(crate) use alias::usable_list_id;
+pub(crate) use validate::validate_addresses::{
+	embedded_ipv4, non_global_ipv4_reason, non_global_ipv6_reason,
+};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
 
@@ -146,6 +150,19 @@ pub enum LogFormat {
 /// caps abuse before it can mint the whole 8-character suffix space.
 fn default_masked_addresses_max() -> usize {
 	100
+}
+
+/// Default for the identification switches that are on unless the operator
+/// turns them off: a `Feedback-ID`, the bulk unsubscribe address, the list
+/// id, `Auto-Submitted` on server-generated mail and `Organization`.
+fn default_yes() -> bool {
+	true
+}
+
+/// Default for [`Config::bulk_recipients`]: twenty-one recipients or more
+/// is bulk, the threshold [`crate::smtp::identification::Policy`] ships.
+fn default_bulk_recipients() -> usize {
+	crate::smtp::identification::DEFAULT_BULK_RECIPIENTS
 }
 
 /// Top-level server configuration.
@@ -272,6 +289,44 @@ pub struct Config {
 	/// domain that have no quota of their own.
 	#[serde(default)]
 	pub domain_quotas: std::collections::HashMap<String, u64>,
+	/// Write a `Feedback-ID` of the sending domain and the class on a
+	/// submission that has none. `false` leaves the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_feedback_id: bool,
+	/// Give a bulk `transactional` submission a `mailto` `List-Unsubscribe`
+	/// pointing at the sender. `false` leaves every submission without one.
+	/// Nothing on the server answers the address it points at: it is the
+	/// sender's own mailbox, and the sender's own tooling has to act on it.
+	#[serde(default = "default_yes")]
+	pub default_list_unsubscribe: bool,
+	/// Recipients above which a `transactional` submission counts as bulk
+	/// for `default_list_unsubscribe`. `20`, the default, means twenty-one or
+	/// more: a notice to a handful of people is correspondence, not bulk
+	/// mail. Personal mail never counts and marketing mail already has to
+	/// carry a one-click unsubscribe.
+	#[serde(default = "default_bulk_recipients")]
+	pub bulk_recipients: usize,
+	/// Write the `List-Id` of the list a sender speaks for when the envelope
+	/// sender is a configured `[[alias]]` with a `list_id`. `false` leaves
+	/// the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_list_id: bool,
+	/// Write `Auto-Submitted: auto-generated` on the mail the server builds
+	/// itself (bounces, alerts, DMARC and TLS-RPT reports). `false` leaves
+	/// the field out of that mail.
+	#[serde(default = "default_yes")]
+	pub system_auto_submitted: bool,
+	/// Write `X-Epistle: 1` on every submission. Off by default: the field
+	/// says nothing a receiver acts on, and no version rides in it.
+	#[serde(default)]
+	pub x_epistle_header: bool,
+	/// Write `Organization` on a submission whose domain has an entry in
+	/// `domain_organization`. `false` leaves the field out.
+	#[serde(default = "default_yes")]
+	pub organization_header: bool,
+	/// The `Organization` value of each domain, lowercase keys.
+	#[serde(default)]
+	pub domain_organization: std::collections::HashMap<String, String>,
 	/// Max messages an authenticated account may submit per minute. Absent
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
@@ -502,6 +557,22 @@ pub struct Config {
 	/// Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub mixed_case: Vec<String>,
+	/// Values the file sets that load changed to keep the server within a
+	/// MUST of an RFC, each as a line naming the value in the file and the
+	/// one in use. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub adjusted: Vec<String>,
+	/// Why validation refused the file, when `epistle status` loaded it with
+	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
+	/// fails instead. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub validation_error: Option<String>,
+	/// External-clock probe: three independent NTP/NTS sources and the
+	/// offsets `epistle status` and `epistle check clock` report. Absent
+	/// uses the design defaults (Cloudflare NTS, Netnod NTS, Google NTP,
+	/// warn 1 s, fail 5 s).
+	#[serde(default)]
+	pub clock_external: Option<crate::clock::external::ClockExternal>,
 }
 
 impl std::fmt::Debug for Config {
@@ -545,6 +616,14 @@ impl std::fmt::Debug for Config {
 			.field("acme", &self.acme)
 			.field("dns", &self.dns)
 			.field("domain_quotas", &self.domain_quotas)
+			.field("default_feedback_id", &self.default_feedback_id)
+			.field("default_list_unsubscribe", &self.default_list_unsubscribe)
+			.field("bulk_recipients", &self.bulk_recipients)
+			.field("default_list_id", &self.default_list_id)
+			.field("system_auto_submitted", &self.system_auto_submitted)
+			.field("x_epistle_header", &self.x_epistle_header)
+			.field("organization_header", &self.organization_header)
+			.field("domain_organization", &self.domain_organization)
 			.field(
 				"submission_rate_limit_per_min",
 				&self.submission_rate_limit_per_min,
@@ -606,6 +685,7 @@ impl std::fmt::Debug for Config {
 			.field("auth", &self.auth)
 			.field("alerts", &self.alerts)
 			.field("hold_outbound", &self.hold_outbound)
+			.field("clock_external", &self.clock_external)
 			.finish()
 	}
 }
@@ -627,6 +707,24 @@ impl Config {
 			kind: "config file",
 		})?;
 		Self::parse_text(&raw, path)
+	}
+
+	/// [`load`](Self::load) for `epistle status` alone: it reports on an
+	/// installation, so a file the validation refuses is still read and the
+	/// reason is kept in [`Config::validation_error`] for the `config` area.
+	/// Every command that acts on the data (`backup`, `restore`, `stack
+	/// rollback`, `serve`) uses `load` and refuses such a file, because the
+	/// rules it breaks can be the ones that keep a dump off an unprotected
+	/// connection or a path inside the data directory. A file that cannot be
+	/// read or parsed still fails here.
+	pub(crate) fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
+		check_permissions(path, "config file")?;
+		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+			path: path.to_path_buf(),
+			source,
+			kind: "config file",
+		})?;
+		Self::parse_text_lenient(&raw, path)
 	}
 
 	/// The `[webhook]` section when it is there and switched on. Whatever
@@ -730,6 +828,7 @@ mod hold_outbound_tests;
 #[path = "config_tests.rs"]
 mod tests;
 
+mod legacy_values;
 mod parse;
 
 #[path = "normalize.rs"]

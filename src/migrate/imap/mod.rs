@@ -10,10 +10,14 @@
 mod client;
 mod copy;
 mod dedupe;
+mod durability;
 mod folders;
 mod insecure;
+mod ledger;
+mod metadata;
 mod parse;
 mod state;
+mod state_files;
 mod token;
 mod transport;
 mod wire;
@@ -54,6 +58,8 @@ pub(crate) struct Target {
 	pub(crate) quota: Option<u64>,
 	/// Bytes the account already stores; grows as messages are copied.
 	pub(crate) usage: u64,
+	/// Maximum decoded size of an existing local message during recovery.
+	pub(crate) max_message_size: usize,
 }
 
 /// How the copy runs.
@@ -69,12 +75,17 @@ pub(crate) struct Settings {
 	pub(crate) batch_messages: usize,
 	/// Most octets fetched in one command (one larger message still goes).
 	pub(crate) batch_bytes: u64,
+	/// Total time allowed for one resumable migration run.
+	pub(crate) total_timeout: Duration,
+	/// How long a run waits for another run of the same account to release the
+	/// migration lock before it refuses to start.
+	pub(crate) lock_wait: Duration,
 }
 
 impl Settings {
 	/// The defaults: 64 KiB lines, literals up to the largest message the
-	/// server accepts, 60 s without data, 10 minutes per response, batches of
-	/// 100 messages or 32 MiB.
+	/// server accepts, 60 s without data, 10 minutes per command, 24 hours per run, batches of
+	/// 100 messages or 32 MiB, 30 s waiting for the migration lock of the account.
 	pub(crate) fn new(filter: Filter, dry_run: bool) -> Self {
 		Settings {
 			filter,
@@ -87,6 +98,8 @@ impl Settings {
 			},
 			batch_messages: 100,
 			batch_bytes: 32 * 1024 * 1024,
+			total_timeout: Duration::from_secs(24 * 60 * 60),
+			lock_wait: Duration::from_secs(30),
 		}
 	}
 }
@@ -98,7 +111,7 @@ pub(crate) struct FolderReport {
 	pub(crate) remote: String,
 	/// The local mailbox.
 	pub(crate) local: String,
-	/// Messages found to copy this run.
+	/// Messages the source listed for this run, confirmed ones included.
 	pub(crate) messages: u64,
 	/// Their total size as the server reported it.
 	pub(crate) planned_bytes: u64,
@@ -110,6 +123,9 @@ pub(crate) struct FolderReport {
 	pub(crate) deleted: u64,
 	/// Messages already stored locally, not stored again.
 	pub(crate) duplicates: u64,
+	/// Messages an earlier run already confirmed for this folder, not
+	/// downloaded again.
+	pub(crate) confirmed: u64,
 	/// Messages over the local size limit, not carried over.
 	pub(crate) too_large: u64,
 	/// Messages that disappeared between listing and fetching.
@@ -178,6 +194,11 @@ pub(crate) enum MigrateError {
 	/// Storing a message failed.
 	#[error("storing mail: {0}")]
 	Storage(std::io::Error),
+	/// The migration reached its total time allowance.
+	#[error(
+		"IMAP migration total deadline exceeded; saved progress is retained, run again to resume"
+	)]
+	Timeout,
 	/// Reading or writing the progress files failed.
 	#[error("migration state: {0}")]
 	State(std::io::Error),
@@ -203,13 +224,45 @@ pub(crate) async fn run(
 	settings: &Settings,
 	progress: &mut dyn Progress,
 ) -> (Summary, Option<MigrateError>) {
+	run_with_connection(
+		source,
+		target,
+		settings,
+		progress,
+		Client::connect(&source.endpoint, settings.limits),
+	)
+	.await
+}
+
+async fn run_with_connection(
+	source: &Source,
+	target: &mut Target,
+	settings: &Settings,
+	progress: &mut dyn Progress,
+	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
+) -> (Summary, Option<MigrateError>) {
 	let mut summary = Summary {
 		dry_run: settings.dry_run,
 		..Summary::default()
 	};
-	let error = copy_all(source, target, settings, progress, &mut summary)
-		.await
-		.err();
+	let deadline = std::time::Instant::now().checked_add(settings.total_timeout);
+	let error = match tokio::time::timeout(
+		settings.total_timeout,
+		copy_all(
+			source,
+			target,
+			settings,
+			progress,
+			&mut summary,
+			connection,
+			deadline,
+		),
+	)
+	.await
+	{
+		Ok(result) => result.err(),
+		Err(_) => Some(MigrateError::Timeout),
+	};
 	summary.copied = summary.folders.iter().map(|f| f.copied).sum();
 	summary.bytes = summary.folders.iter().map(|f| f.bytes).sum();
 	(summary, error)
@@ -221,12 +274,9 @@ async fn copy_all(
 	settings: &Settings,
 	progress: &mut dyn Progress,
 	summary: &mut Summary,
+	connection: impl std::future::Future<Output = Result<Client, ClientError>>,
+	deadline: Option<std::time::Instant>,
 ) -> Result<(), MigrateError> {
-	let mut client = Client::connect(&source.endpoint, settings.limits).await?;
-	client.login(&source.user, &source.password).await?;
-	let namespace = client.namespace().await?;
-	let entries = client.list().await?;
-	let plans = folders::plan(&entries, namespace.as_deref(), &settings.filter);
 	// The port is left out on purpose: the same account reached over 993
 	// one day and STARTTLS on 143 the next is still the same mail.
 	let key = format!(
@@ -236,6 +286,26 @@ async fn copy_all(
 	);
 	let states =
 		StateDir::open(&target.data_dir, &target.account, &key).map_err(MigrateError::State)?;
+	// One migration of an account at a time: a second run would append to the
+	// same ledgers. The lock is taken before the server is contacted, so a run
+	// that has to wait says so without logging in. A dry run writes nothing, so
+	// it takes no lock.
+	let _account_lock = if settings.dry_run {
+		None
+	} else {
+		Some(
+			states
+				.lock(settings.lock_wait)
+				.await
+				.map_err(MigrateError::State)?,
+		)
+	};
+	let mut client = connection.await?;
+	client.metadata.deadline = deadline;
+	client.login(&source.user, &source.password).await?;
+	let namespace = client.namespace().await?;
+	let entries = client.list().await?;
+	let plans = folders::plan(&entries, namespace.as_deref(), &settings.filter);
 	for plan in &plans {
 		let local = match &plan.local {
 			Ok(local) => local,
@@ -249,11 +319,14 @@ async fn copy_all(
 				continue;
 			}
 		};
-		let mut report = FolderReport::new(&plan.display, local);
+		summary
+			.folders
+			.push(FolderReport::new(&plan.display, local));
+		let report = summary.folders.last_mut().expect("current folder");
 		let copied = copy::folder(
 			&mut client,
 			plan,
-			&mut report,
+			report,
 			&states,
 			target,
 			settings,
@@ -262,11 +335,11 @@ async fn copy_all(
 		.await;
 		match copied {
 			Ok(()) => {
-				progress.folder_done(&report);
-				summary.folders.push(report);
+				progress.folder_done(report);
 			}
 			// The folder went away or cannot be opened: report it, go on.
 			Err(MigrateError::Client(ClientError::Refused { text, .. })) => {
+				summary.folders.pop();
 				let skipped = Skipped {
 					folder: plan.display.clone(),
 					reason: format!("the server refused to open it: {text}"),
@@ -276,8 +349,8 @@ async fn copy_all(
 			}
 			Err(error) => {
 				// What was stored before the stop is part of the summary.
-				if report.copied > 0 {
-					summary.folders.push(report);
+				if report.copied == 0 {
+					summary.folders.pop();
 				}
 				return Err(error);
 			}
@@ -302,3 +375,11 @@ mod run_tests_security;
 #[cfg(test)]
 #[path = "run_tests_memory.rs"]
 mod run_tests_memory;
+
+#[cfg(test)]
+#[path = "ledger_resume_tests.rs"]
+mod ledger_resume_tests;
+
+#[cfg(test)]
+#[path = "ledger_rerun_tests.rs"]
+mod ledger_rerun_tests;

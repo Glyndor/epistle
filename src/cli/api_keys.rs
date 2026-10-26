@@ -38,6 +38,7 @@ pub(super) fn create(
 	key: NewKey,
 	json: bool,
 	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
 ) -> ExitCode {
 	let NewKey {
 		label,
@@ -49,6 +50,9 @@ pub(super) fn create(
 		class,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
+	if let Some(problem) = crate::util::label_rule::problem(label) {
+		return super::exit::refused(problem);
+	}
 	if scopes.is_empty() {
 		return super::exit::refused(
 			"--scope is required (repeat to grant more than one: read, write, send, scim)",
@@ -96,6 +100,10 @@ pub(super) fn create(
 			return ExitCode::FAILURE;
 		}
 	}
+	// Read before the move into the key: the advisory names the network it
+	// was pinned to.
+	let pinned =
+		super::client_address::cidr_advisory(&config.data_dir, ip_cidr.as_deref(), "this key");
 	let key = ApiKey {
 		label: label.to_string(),
 		hash,
@@ -107,13 +115,26 @@ pub(super) fn create(
 	};
 	match store.add(key) {
 		Ok(()) => {
+			// The advisory travels with the result: stderr for a human, and
+			// the `warnings` array of the JSON result for a script. The exit
+			// code stays SUCCESS; the key was created as asked.
+			let warnings = pinned.into_iter().collect::<Vec<_>>();
+			for warning in &warnings {
+				super::style::warn_to(err, warning);
+			}
 			let mut report = super::json_out::Report::new(out, json);
 			report.line(format_args!("created API key \"{label}\""));
 			if let Some(name) = account {
 				report.line(format_args!("account-bound to {name}"));
 			}
 			report.line(format_args!("key (shown once): {secret}"));
-			report.change("create", true, fields, None)
+			let mut object = crate::cli::json_out::change_object("create", true, fields, None);
+			// Absent when there is nothing to say, the same way `reload` is:
+			// the published result object keeps exactly the keys it had.
+			if !warnings.is_empty() {
+				object["warnings"] = serde_json::json!(warnings);
+			}
+			report.object(object)
 		}
 		Err(error) => {
 			let code = super::exit::for_io_error(&error);
@@ -220,9 +241,24 @@ pub enum ApiKeyCli {
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(value_name = "LABEL")]
 		label: String,
-		/// Optional expiry as Unix epoch seconds.
-		#[arg(long, value_name = "EPOCH")]
+		/// Optional expiry: Unix epoch seconds, a date (`2027-01-31`, midnight
+		/// UTC), an RFC 3339 instant or a duration from now such as `90d`.
+		#[arg(
+			long,
+			value_name = "WHEN",
+			value_parser = super::api_keys_expiry::parse_expires_at,
+		)]
 		expires_at: Option<u64>,
+		/// Optional expiry as a duration from now: a number and a unit
+		/// (`s`, `m`, `h`, `d`, `w`), for example `90d`. `m` is minutes; for
+		/// months count in days.
+		#[arg(
+			long,
+			value_name = "DURATION",
+			conflicts_with = "expires_at",
+			value_parser = super::api_keys_expiry::parse_expires_in,
+		)]
+		expires_in: Option<u64>,
 		/// Optional single-CIDR client-IP allowlist.
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
@@ -277,29 +313,37 @@ pub(super) fn run(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	match action {
-		ApiKeyCli::List { json: leaf } => list(config, leaf || json, out),
+		ApiKeyCli::List { json: leaf } => {
+			let mut err = super::style::stderr();
+			list(config, leaf || json, out, &mut err)
+		}
 		ApiKeyCli::Create {
 			label,
 			expires_at,
+			expires_in,
 			ip_cidr,
 			scopes,
 			domains,
 			account,
 			class,
-		} => create(
-			config,
-			NewKey {
-				label,
-				expires_at,
-				ip_cidr,
-				scopes,
-				domains,
-				account,
-				class,
-			},
-			json,
-			out,
-		),
+		} => {
+			let mut err = super::style::stderr();
+			create(
+				config,
+				NewKey {
+					label,
+					expires_at: expires_at.or(expires_in),
+					ip_cidr,
+					scopes,
+					domains,
+					account,
+					class,
+				},
+				json,
+				out,
+				&mut err,
+			)
+		}
 		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, json, out),
 		ApiKeyCli::Rotate { label } => rotate(config, &label, json, out),
 	}
@@ -307,7 +351,12 @@ pub(super) fn run(
 
 /// List the management API keys (never the key or its hash), one line per
 /// key or, with `json`, as an array of objects.
-pub(super) fn list(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
+pub(super) fn list(
+	config: &Config,
+	json: bool,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> ExitCode {
 	let store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
@@ -315,6 +364,21 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl std::io::Write) -
 			return ExitCode::FAILURE;
 		}
 	};
+	// Each key that carries an allowlist the network cannot decide gets its
+	// own advisory on stderr, before the listing. The `--json` output is a
+	// bare array whose object keys are fixed, so nothing goes there.
+	if !json {
+		for row in store.list() {
+			let subject = format!("key \"{}\"", row.label);
+			if let Some(warning) = super::client_address::cidr_advisory(
+				&config.data_dir,
+				row.ip_cidr.as_deref(),
+				&subject,
+			) {
+				super::style::warn_to(err, warning);
+			}
+		}
+	}
 	if json {
 		let rows = store
 			.list()
@@ -332,10 +396,12 @@ pub(super) fn list(config: &Config, json: bool, out: &mut impl std::io::Write) -
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
+	let now = super::api_keys_expiry::now_secs();
 	for row in store.list() {
-		let expiry = row
-			.expires_at
-			.map_or_else(|| "never".to_string(), |e| e.to_string());
+		let expiry = row.expires_at.map_or_else(
+			|| "never".to_string(),
+			|expires| super::api_keys_expiry::describe(expires, now),
+		);
 		let cidr = row.ip_cidr.unwrap_or_else(|| "any".to_string());
 		// An empty scope list is a legacy key; show the warning verbatim so
 		// operators can spot it on `api-key list` without grepping the logs.
@@ -422,3 +488,11 @@ mod tests;
 #[cfg(test)]
 #[path = "api_keys_tests_rotate.rs"]
 mod tests_rotate;
+
+#[cfg(test)]
+#[path = "api_keys_tests_cidr.rs"]
+mod tests_cidr;
+
+#[cfg(test)]
+#[path = "api_keys_tests_expiry.rs"]
+mod tests_expiry;

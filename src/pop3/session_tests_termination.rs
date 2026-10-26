@@ -7,8 +7,11 @@ impl Backend for Inbox {
 	fn verify(&self, _: &str, _: &str, _: Option<std::net::IpAddr>) -> Option<String> {
 		Some("alice".into())
 	}
-	fn load(&self, _: &str) -> Vec<(String, Vec<u8>)> {
-		vec![("message".into(), self.0.clone())]
+	fn list(&self, _: &str) -> Vec<(String, usize)> {
+		vec![("message".into(), self.0.len())]
+	}
+	fn fetch(&self, _: &str, _: &str) -> Option<Vec<u8>> {
+		Some(self.0.clone())
 	}
 	fn remove(&self, _: &str, _: &[String]) {}
 }

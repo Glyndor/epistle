@@ -143,8 +143,13 @@ pub enum Legacy {
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(long, value_name = "LABEL")]
 		label: String,
-		/// Optional expiry as Unix epoch seconds.
-		#[arg(long, value_name = "EPOCH")]
+		/// Optional expiry: epoch seconds, a date, an RFC 3339 instant or a
+		/// duration from now such as `90d`.
+		#[arg(
+			long,
+			value_name = "WHEN",
+			value_parser = crate::cli::api_keys_expiry::parse_expires_at,
+		)]
 		expires_at: Option<u64>,
 		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
 		#[arg(long, value_name = "CIDR")]
@@ -313,6 +318,7 @@ impl Legacy {
 				Resource::ApiKey(ApiKeyCli::Create {
 					label,
 					expires_at,
+					expires_in: None,
 					ip_cidr,
 					scopes,
 					domains,

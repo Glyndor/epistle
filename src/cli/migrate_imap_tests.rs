@@ -180,3 +180,23 @@ fn an_unknown_account_is_refused_before_any_connection() {
 	assert_eq!(alice.account, "alice");
 	assert_eq!(alice.quota, Some(crate::imap::session::DEFAULT_QUOTA_BYTES));
 }
+
+#[test]
+fn the_recovery_body_limit_uses_the_configured_message_size() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut config: Config = toml::from_str(&format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\ndomains = [\"example.org\"]\n[[accounts]]\nname = \"alice\"\npassword_hash = \"unused\"\naddresses = [\"alice@example.org\"]\n",
+		dir.path().display()
+	)).unwrap();
+	for (configured, expected) in [
+		(None, 25 * 1024 * 1024),
+		(Some(30 * 1024 * 1024), 30 * 1024 * 1024),
+	] {
+		config.max_message_size = configured;
+		let local = target(&config, "alice").unwrap();
+		assert_eq!(
+			local.max_message_size, expected,
+			"use the local configuration for recovery"
+		);
+	}
+}

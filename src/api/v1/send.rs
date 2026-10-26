@@ -180,9 +180,14 @@ pub async fn send(
 	};
 	let mut message = message;
 	let sources = state.class_sources(Some(&auth), &account, explicit_class);
-	let prepared =
-		crate::evidence::submission::prepare(&mut message, sources, Some(state.data_dir()))
-			.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
+	let prepared = crate::evidence::submission::prepare(
+		&mut message,
+		sources,
+		Some(state.data_dir()),
+		state.identification(),
+		state.directory_snapshot().as_deref(),
+	)
+	.map_err(|refusal| ApiError::marketing_refused(refusal.message()))?;
 	if message.recipients.is_empty() {
 		return Err(ApiError::marketing_refused(
 			"every recipient is on the suppression list",
@@ -234,8 +239,17 @@ fn rate_limited() -> ApiError {
 /// `None` when no reachable account owns `from`, the same answer whether
 /// another account owns it or none does.
 fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option<String> {
-	if let Principal::Account { name, .. } = principal {
-		return Some(name.clone());
+	if let Some(bound) = principal.bound_account() {
+		// The bound account is reachable only while it also satisfies the
+		// other restrictions the key declares.
+		let view = state
+			.accounts()
+			.into_iter()
+			.find(|view| view.name == bound)?;
+		if !principal.admits_account(&view.name, &view.addresses) {
+			return None;
+		}
+		return Some(view.name);
 	}
 	let lower = crate::util::address::normalize(from);
 	state
@@ -258,7 +272,7 @@ pub(crate) fn sink_refusal(error: SinkError) -> ApiError {
 		SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
 		SinkError::ScanUnavailable => ApiError::scan_unavailable(),
 		SinkError::ScanTooLarge => ApiError::scan_too_large(),
-		SinkError::Unavailable(_) => ApiError::internal(),
+		SinkError::Unavailable(_) | SinkError::Gone(_) => ApiError::internal(),
 		SinkError::EvidenceUnavailable(_) => ApiError::evidence_unavailable(),
 		SinkError::TooManyHeaderFields => ApiError::too_many_header_fields(),
 	}

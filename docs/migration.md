@@ -111,12 +111,47 @@ The local account must exist. The remote password comes from `--password-file`
   the local size limit (25 MiB); the summary counts both.
 - **Resuming.** Progress is kept per local account, remote user and host, and
   remote folder, in `data_dir/migrate/<account>/`. A run copies only messages
-  newer than the last one copied. If the old server renumbers a folder (its
-  UIDVALIDITY changes), the folder is read again and each message is checked
-  against the mailbox by Message-ID and size, so nothing is stored twice. Keep
-  `--host` and `--user` the same between runs: they name the progress files.
+  newer than the last one copied. After an interruption the folder is replayed
+  from its first UID, but the messages a previous run confirmed are not
+  downloaded again: a ledger next to the progress file records the identity of
+  every confirmed message, and a replay skips them and matches only the rest
+  against the mailbox. A message you deleted or moved while the run was
+  interrupted is not brought back, as long as the ledger holds it. A message the
+  source stops marking `\Deleted`, and the prefix of a migration a version
+  without a ledger started, are confirmed by a replay below the UID the ledger
+  already reaches, so the ledger leaves them out and only the match against the
+  mailbox protects them. If the old server renumbers a folder (its UIDVALIDITY
+  changes), the ledger is discarded and the folder is read again, with each
+  message checked against the mailbox by Message-ID and size, so nothing is
+  stored twice. Keep `--host` and `--user` the same between runs: they name the
+  progress files and the ledgers.
+- **One run at a time.** The lock is held per local account, not per source, so
+  two different old servers cannot be migrated into the same account at once:
+  the second run waits 30 seconds and then stops. One lock covers the whole run
+  because each run counts the bytes the account already stores once, at its
+  start, and two runs of the same account would each decide from their own
+  count.
 - **Limits.** The run stops with an error when the next message would exceed
   the account's quota; raise it and run again to continue.
+- **Data directory owner.** `data_dir` and the `migrate/<account>` directories
+  below it must belong to the user that runs epistle, and a dry run checks this
+  too, because it reads the same progress files and ledgers. The check applies to
+  dry runs on purpose: those files decide what a real run skips, and in a
+  directory owned by someone else that user could swap them between the two.
+  The error names `data_dir`. Run the migration as the owner
+  of the data directory, or change the owner, rather than expecting a dry run to
+  get past it.
+- **Total time.** The run stops after 24 hours. The timer only fires while the
+  run waits on the network, so the scan of the local mailbox after an
+  interruption checks the deadline between messages itself, but the write of one
+  message and the first read of a ledger do not: a ledger is read once, in 64
+  KiB steps, when its folder is opened, and a file over 1 GiB is refused before
+  that read. The count of local messages that comes before the scan and the
+  final sync of the mailbox directories do not check the deadline either, and
+  take time in proportion to the number of files in the mailbox directory. A
+  deadline that passes during any of those ends the run when it finishes, so
+  the overshoot is the time to read one ledger, store one batch or walk the
+  directory once, not the time to scan the whole mailbox.
 - **Output.** One line per folder with messages, bytes and rate; `--dry-run`
   lists each folder and how many messages it would copy; `--json` prints the
   summary as one object.

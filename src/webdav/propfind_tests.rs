@@ -88,3 +88,17 @@ fn escapes_special_characters_in_name() {
 	assert!(body.contains("a&amp;b&lt;c&gt;"));
 	assert!(body.contains("<D:href>/a&amp;b</D:href>"));
 }
+
+#[test]
+fn characters_xml_cannot_carry_are_replaced_and_the_length_is_exact() {
+	let dirty = "a\u{b}b\u{0}c\u{c}d\u{1f}e\u{fffe}f\u{ffff}g";
+	let clean = escape(dirty);
+	assert_eq!(
+		clean,
+		"a\u{fffd}b\u{fffd}c\u{fffd}d\u{fffd}e\u{fffd}f\u{fffd}g"
+	);
+	assert_eq!(escape("t\tn\nr\r"), "t\tn\nr&#13;");
+	for text in [dirty, "t\tn\nr\r", "a&<>\"'z", "é\u{2028}\u{85}"] {
+		assert_eq!(escaped_len(text), escape(text).len(), "{text:?}");
+	}
+}

@@ -13,10 +13,10 @@ use super::names::{canonical_name, in_domain};
 use crate::dns::provider::{DnsRecord, RecordKind};
 
 /// The longest DNS name, without the root dot (RFC 1035 section 2.3.4).
-pub const MAX_NAME_LEN: usize = 253;
+pub const MAX_NAME_LEN: usize = crate::util::validation::MAX_DOMAIN;
 
 /// The longest label of a DNS name (RFC 1035 section 2.3.4).
-pub const MAX_LABEL_LEN: usize = 63;
+pub const MAX_LABEL_LEN: usize = crate::util::validation::MAX_LABEL;
 
 /// Whether `name`, in [`canonical_name`] form, is a name the lockdown may
 /// plan a record at: within the length caps, no empty label, and every label

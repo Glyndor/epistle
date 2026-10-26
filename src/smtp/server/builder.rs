@@ -51,6 +51,7 @@ impl Server {
 			quota: None,
 			correspondents: None,
 			class_bindings: None,
+			identification: crate::smtp::identification::Policy::default(),
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			memory_budget: None,

@@ -66,6 +66,10 @@ pub fn router() -> Router<ApiState> {
 mod tests;
 
 #[cfg(test)]
+#[path = "single_label_tests.rs"]
+mod single_label_tests;
+
+#[cfg(test)]
 #[path = "scim_tests_b.rs"]
 mod tests_b;
 

@@ -110,3 +110,38 @@ fn not_toml_is_an_error() {
 	std::fs::write(&file, "[unclosed").expect("write");
 	assert!(matches!(read(&file), Err(ReadError::Parse(..))));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_key_is_rejected_without_waiting_for_a_writer() {
+	use std::os::unix::fs::OpenOptionsExt;
+	use std::sync::mpsc;
+	use std::time::Duration;
+	let dir = tempfile::tempdir().expect("dir");
+	let fifo = dir.path().join("key.pem");
+	assert!(
+		std::process::Command::new("mkfifo")
+			.arg(&fifo)
+			.status()
+			.expect("mkfifo")
+			.success()
+	);
+	let (send, receive) = mpsc::channel();
+	let path = dir.path().to_path_buf();
+	let worker = std::thread::spawn(move || {
+		let result = private_key("%{file:key.pem}%", &path);
+		send.send(result.map(|_| ())).expect("result");
+	});
+	let result = receive.recv_timeout(Duration::from_secs(1));
+	// Release an old blocking reader before checking the result.
+	let writer = std::fs::OpenOptions::new()
+		.write(true)
+		.custom_flags(libc::O_NONBLOCK)
+		.open(&fifo);
+	drop(writer);
+	worker.join().expect("reader");
+	assert!(
+		matches!(result, Ok(Err(_))),
+		"a special file must fail before waiting for data"
+	);
+}

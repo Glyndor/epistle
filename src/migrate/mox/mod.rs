@@ -10,6 +10,7 @@
 //! Account passwords are not in the configuration (Mox keeps them, hashed,
 //! in its account database), so they cannot be carried over.
 
+mod bounded;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub(crate) mod sconf;
@@ -78,18 +79,9 @@ fn load(file: &Path) -> Result<Doc, ReadError> {
 	Doc::parse(&text).map_err(|e| ReadError::Parse(file.into(), e))
 }
 
-/// Read at most `limit` bytes of a UTF-8 file.
+/// Read a regular UTF-8 file within 30 seconds and at most `limit` bytes.
 pub(crate) fn read_bounded(file: &Path, limit: usize) -> std::io::Result<String> {
-	let handle = std::fs::File::open(file)?;
-	let mut text = String::new();
-	std::io::Read::read_to_string(
-		&mut std::io::Read::take(handle, limit as u64 + 1),
-		&mut text,
-	)?;
-	if text.len() > limit {
-		return Err(std::io::Error::other(format!("larger than {limit} bytes")));
-	}
-	Ok(text)
+	bounded::read(file, limit)
 }
 
 fn read_domain(doc: &Doc, dir: &Path, raw: &str, plan: &mut Plan) {

@@ -2,10 +2,10 @@
 //! service account restores the database.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
-use super::{KEPT, migrations_in_dump, pick, schema_moved};
+use super::{KEPT, migrations_in_dump, schema_moved};
 use crate::config::Config;
 
 /// The installed binary the rollback replaces.
@@ -69,15 +69,11 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 	let user = crate::cli::rootless::lookup_user()
 		.map_err(|error| format!("cannot look up glyndor-epistle: {error}"))?
 		.ok_or("there is no glyndor-epistle account")?;
-	let files: Vec<String> = std::fs::read_dir(KEPT)
-		.map(|entries| {
-			entries
-				.filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-				.collect()
-		})
-		.unwrap_or_default();
 	let current = env!("CARGO_PKG_VERSION");
-	let chosen = pick(&files, current, to)?;
+	let store = super::store::Store::open(Path::new(KEPT)).map_err(|error| {
+		format!("cannot open {KEPT} ({error}); legacy copies in the service directory are ignored; rollback is unavailable until an upgrade saves a trusted binary")
+	})?;
+	let (chosen, mut binary) = store.select(current, to)?;
 	let version = chosen.trim_start_matches("epistle-").to_string();
 	crate::cli::prompt::confirm_destructive(
 		&super::action(&version),
@@ -107,7 +103,7 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 			)));
 		}
 	};
-	if let Err(error) = install(&Path::new(KEPT).join(&chosen)) {
+	if let Err(error) = super::store::install(&mut binary, Path::new(INSTALLED)) {
 		let _ = start_mail(&user, &compose);
 		return Err(Stop::Failed(format!(
 			"cannot put the {version} binary in place ({error}); mail was started again on {current}, \
@@ -116,18 +112,6 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 	}
 	start_mail(&user, &compose)?;
 	Ok(super::summary(current, &version, restored))
-}
-
-/// Copy `kept` over the installed binary through a temporary file in the
-/// same directory, so the swap is one rename.
-fn install(kept: &Path) -> std::io::Result<()> {
-	use std::os::unix::fs::PermissionsExt;
-	let staged = PathBuf::from(format!("{INSTALLED}.rollback-{}", std::process::id()));
-	std::fs::copy(kept, &staged)?;
-	std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
-	std::fs::rename(&staged, INSTALLED).inspect_err(|_| {
-		let _ = std::fs::remove_file(&staged);
-	})
 }
 
 /// `podup start mail` as the account, with the operator's override.
@@ -164,7 +148,7 @@ fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, Strin
 	if crate::cli::stack::run_sequence(podup, compose, &[&["stop", "mail"]]) != ExitCode::SUCCESS {
 		return Err("cannot stop mail".into());
 	}
-	let has_db = std::fs::read(compose)
+	let has_db = crate::cli::regular_read::read(compose)
 		.ok()
 		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
 		.is_some_and(|value| value["services"].get("db").is_some());

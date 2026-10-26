@@ -98,6 +98,9 @@ pub struct Sender<'a> {
 	pub sink: &'a dyn MessageSink,
 	/// HTTPS path for `https:` reports.
 	pub poster: &'a dyn ReportPoster,
+	/// Whether outgoing report messages carry
+	/// `Auto-Submitted: auto-generated`.
+	pub auto_submitted: bool,
 }
 
 /// Send the reports for every completed day before `today` (`YYYYMMDD`).
@@ -158,20 +161,32 @@ async fn deliver(
 	let contact = format!("postmaster@{hostname}");
 	let gzip = build_report(hostname, &contact, &report_id, start, end, journal);
 	for uri in rua {
-		if let Some(address) = uri.strip_prefix("mailto:") {
-			let address = address.split('?').next().unwrap_or_default();
+		if uri.starts_with("mailto:") {
+			// The address comes from a record anyone can publish and goes into
+			// a header: only a plain mailbox is used.
+			let Some(address) = crate::dmarc::aggregate::report_address(uri) else {
+				tracing::debug!(%domain, "TLS-RPT rua is not a plain mailbox; skipped");
+				continue;
+			};
 			let mut data = format!(
 				"Date: {}\r\nMessage-ID: <{report_id}>\r\n",
 				crate::clock::rfc5322(SystemTime::now())
 			)
 			.into_bytes();
 			data.extend(build_email(
-				domain, address, &report_id, start, end, hostname, &gzip,
+				domain,
+				address,
+				&report_id,
+				start,
+				end,
+				hostname,
+				&gzip,
+				sender.auto_submitted,
 			));
 			let message = AcceptedMessage {
 				reverse_path: contact.clone(),
 				recipients: vec![address.to_string()],
-				data,
+				data: crate::util::header_block::frame_generated(data),
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
@@ -218,12 +233,14 @@ fn day_start(day: &str) -> u64 {
 }
 
 /// Send completed days' reports every hour, forever.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
 	data_dir: std::path::PathBuf,
 	hostname: String,
 	dns: Arc<dyn DnsLookup>,
 	sink: Arc<dyn MessageSink>,
 	poster: Arc<dyn ReportPoster>,
+	auto_submitted: bool,
 ) {
 	let mut ticker = tokio::time::interval(INTERVAL);
 	ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -240,6 +257,7 @@ pub async fn run(
 			dns: dns.as_ref(),
 			sink: sink.as_ref(),
 			poster: poster.as_ref(),
+			auto_submitted,
 		};
 		send_pending(&sender, &today).await;
 	}

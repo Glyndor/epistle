@@ -32,8 +32,17 @@ impl Backend for FakeBackend {
 	fn verify(&self, user: &str, pass: &str, _peer_ip: Option<std::net::IpAddr>) -> Option<String> {
 		(user == self.user && pass == self.pass).then(|| self.user.clone())
 	}
-	fn load(&self, _account: &str) -> Vec<(String, Vec<u8>)> {
-		self.inbox.clone()
+	fn list(&self, _account: &str) -> Vec<(String, usize)> {
+		self.inbox
+			.iter()
+			.map(|(uid, data)| (uid.clone(), data.len()))
+			.collect()
+	}
+	fn fetch(&self, _account: &str, uid: &str) -> Option<Vec<u8>> {
+		self.inbox
+			.iter()
+			.find(|(id, _)| id == uid)
+			.map(|(_, data)| data.clone())
 	}
 	fn remove(&self, _account: &str, uids: &[String]) {
 		self.removed.borrow_mut().extend_from_slice(uids);

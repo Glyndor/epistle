@@ -103,3 +103,21 @@ fn host_routes_are_recognised() {
 		ip("10.0.0.0")
 	);
 }
+
+#[test]
+fn a_refusal_names_the_value_the_rule_and_two_spellings_that_work() {
+	let line = Cidr::refusal("10.0.0.0/33");
+	assert!(
+		line.starts_with("\"10.0.0.0/33\" is not an IP address or CIDR block"),
+		"{line}"
+	);
+	assert!(line.contains("for example \"203.0.113.0/24\""), "{line}");
+	assert!(line.contains("\"2001:db8::/32\""), "{line}");
+}
+
+#[test]
+fn a_refusal_echoes_the_value_escaped_and_cut() {
+	let line = Cidr::refusal("a\u{1b}[2J");
+	assert!(!line.contains('\u{1b}'), "{line:?}");
+	assert!(Cidr::refusal(&"1".repeat(500)).len() < 400);
+}

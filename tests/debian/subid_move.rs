@@ -53,6 +53,7 @@ fn upgrade(subuid: &str, subgid: &str, login_defs: &str, exit: u8) -> Run {
 		("/etc/subgid", "subgid"),
 		("/etc/login.defs", "login.defs"),
 		("/var/lib/glyndor/epistle", "state"),
+		("/var/lib/epistle-rollback", "rollback"),
 		("/etc/epistle", "config"),
 		("/run/systemd/system", "no-systemd"),
 		("/proc/sys", "missing-sys"),

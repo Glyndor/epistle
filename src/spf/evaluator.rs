@@ -6,13 +6,13 @@ use super::dns::{DnsFailure, DnsLookup};
 use super::record::{Mechanism, Qualifier, Record};
 
 /// Maximum DNS-querying terms per evaluation (RFC 7208 section 4.6.4).
-const MAX_DNS_MECHANISMS: u32 = 10;
+pub(crate) const MAX_DNS_MECHANISMS: u32 = 10;
 
 /// Maximum void DNS lookups per evaluation (RFC 7208 section 4.6.4). A
 /// void lookup is one that returns either NXDOMAIN or a response with
 /// no relevant records. Two voids are tolerated; a third turns the
 /// evaluation into `permerror`.
-const MAX_VOID_LOOKUPS: u32 = 2;
+pub(crate) const MAX_VOID_LOOKUPS: u32 = 2;
 
 /// SPF evaluation result (RFC 7208 section 2.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

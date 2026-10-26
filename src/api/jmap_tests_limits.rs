@@ -151,7 +151,7 @@ async fn an_upload_far_over_max_size_upload_gets_the_limit_problem() {
 fn a_websocket_request_over_max_size_request_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = test_state(dir.path(), 0);
-	let principal = Principal::Admin { credential: None };
+	let principal = Principal::unrestricted();
 	let mut push = PushState::default();
 	let frame = |size: usize| {
 		let shell = json!({

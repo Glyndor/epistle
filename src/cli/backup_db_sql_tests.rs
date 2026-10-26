@@ -79,8 +79,9 @@ fn database_sql_is_not_laid_into_data_dir() {
 		"database.sql must not be written into data_dir: {}",
 		data_dir.join("database.sql").display()
 	);
-	// The mail entry under `data/` is still extracted.
-	assert!(data_dir.join("accounts/alice/new/m1.eml").exists());
+	// The database step failed, so the mail entry under `data/` is not
+	// extracted either: the files follow the database, never precede it.
+	assert!(!data_dir.join("accounts/alice/new/m1.eml").exists());
 	// Database restore nevertheless got the SQL bytes: the archive
 	// entry is reached through `entries` in `run_restore`, separate
 	// from `lay_files`. We assert that here by checking the bytes
@@ -108,7 +109,9 @@ fn database_sql_reaches_psql_through_the_entry_list() {
 		.expect("chmod psql");
 	let data_dir = dir.path().join("data");
 	std::fs::create_dir_all(&data_dir).expect("data dir");
-	let archive = build_archive_with_database_sql(Some(b"-- marker sql --\n"));
+	let archive = build_archive_with_database_sql(Some(
+		b"-- marker sql --\n-- PostgreSQL database dump complete\n--\n",
+	));
 	let toml = format!(
 		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\
 		 \n[database]\nurl = \"postgres://epistle@localhost/epistle?sslmode=require\"\n",

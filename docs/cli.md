@@ -188,12 +188,15 @@ epistle service list
 epistle service list --json
 epistle service enable imaps
 epistle service disable imap
+epistle service set imap --bind 127.0.0.1
+epistle service set api --bind 127.0.0.1 --port 8025
 epistle service --config /path/to/mail.toml enable submission
 ```
 
 `list` shows enabled or disabled state, port, and bind address. Enabled rows use
 actual configured sockets, including custom ports; disabled rows show the defaults
-that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`.
+that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`,
+plus `host` on a container stack where the generated map pins one.
 
 Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 `pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
@@ -203,8 +206,80 @@ Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
 Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
 `/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must
-be valid. New mail listeners inherit SMTP's bind address; API uses loopback.
-An already enabled or disabled service reports no change and exits successfully.
+be valid. New mail listeners inherit SMTP's bind address; the listeners with no
+TLS transport of their own (`api`, `webdav`) start on loopback, so enabling one
+publishes nothing until `set --bind` opens it.
+An already enabled or disabled service reports no change and exits successfully,
+and so does `set` asked for the socket the listener already has.
+
+`set NAME [--bind ADDRESS] [--port PORT]` moves a listener that is already
+enabled, so `enable` is what adds one. It refuses a port another enabled
+listener answers on, a port 0, and an address the parser does not read; a value
+of `--port 70000` is a usage error. The API keeps the token requirement the loader
+enforces. API, WebDAV and
+plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
+loopback for these listeners, even when mail certificates are configured in
+`[tls]`. I keep them behind a TLS reverse proxy on loopback.
+
+Without a container stack the bind in `mail.toml` is the address the server
+binds, so `set` writes the requested one there. With
+`<data_dir>/compose/compose.yaml` the two sides split: inside the container the
+listener binds the unspecified address of the family the operator named
+(`0.0.0.0` for IPv4, `::` for IPv6), because a loopback or private address
+there is not one the published mapping can reach, and the requested address
+becomes the host side of the generated mapping as `ADDRESS:PORT:PORT`. A
+container bind that already answers that family is left alone, so the dual-stack
+`::` survives a move to an IPv4 host address. `list` then shows that address in
+a `HOST` column, `-` where the mapping still answers on every host address. A
+wildcard renders as `PORT:PORT` in both families, because a wildcard publishes
+on every address the host owns either way, and pasta on Podman 5.4.2 refuses the
+explicit `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms. A generated mapping
+with no explicit address stays `PORT:PORT`, and the
+host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
+or `stack update`, since every writer of the map reads it back first. If
+`compose.override.yaml` already publishes a port for the same service, `set`
+leaves it alone and says that the override merges with the generated map, or
+replaces it where it carries `!override`. That notice is read out of the file
+rather than parsed, so it sees the block form, the flow form (`mail: {ports:
+[...]}`) and ranges of ports, in block or inline; it does not see a `ports` key
+behind an anchor, an alias or a value a template fills in at run time, and a
+file it cannot make sense of reports nothing.
+
+The address has to be one of the host's own: a multicast group, `255.255.255.255`
+and a link-local IPv6 address are refused before anything is written, both
+wildcards are accepted, and an IPv4-mapped address is written as the IPv4
+address it names. A listener the container holds on loopback publishes nothing
+and is reported as `set` rather than as `published`. A listener with no TLS
+transport of its own (`api`, `webdav`, plain `autoconfig`) is published on
+`127.0.0.1` when the generated file names no address for it, so a map rebuilt
+without the address one `set` wrote, or an `addr` an operator edited by hand,
+puts it on loopback rather than on every address of the host.
+
+`set`, `enable` and `disable` validate and stage both files before replacing
+either, and a `compose.yaml` that is a symlink is read through the link and then replaced by a regular file: the file behind the link is left as it was, and the link is not followed for the write, so a path that changes between the read and the rename cannot redirect it. Keep the generated file where the command expects it, or put the symlink on the directory instead.
+That write needs write access to that directory. A write error restores the
+previous files and verifies their contents and permissions. If restoration
+fails, the error names a retained recovery copy, which takes its own
+`.service-recovery.*` name and is kept for a week instead of the hour a staged
+copy is kept. A command killed between its two renames leaves its
+staged copies in the directory of the file it was writing, and the next command
+under the lock sweeps and names the ones the configuration directory holds; when
+the generated map and `mail.toml` describe different ports, which is what that
+kill leaves behind and what a port edited by hand also leaves behind, the
+command that reconciles them says so before it writes. Service edits, `dns
+provider set`, init reruns, stack writers and `db upgrade` share a
+configuration-directory lock through the write and reload; the wait has a
+deadline and names the command that holds it. The lock file is created `0600`
+by the first command that takes it, so it belongs to the service user or to
+root; a lock this command owns is put back to `0600`, and one it can only read
+is still a lock, so a lock root created at `0644` keeps two commands apart. A
+mode that lets other users write it, and a lock file a third user owns, are
+refused with the mode it has and the `chmod` that fixes it.
+
+`--dry-run` prints the diff of `mail.toml`, and on a container stack the
+`ports:` change that comes with it. With `--json` the result object carries the
+same diff and the map as `ports` with its `current` and `wanted` lists, so a
+consumer does not read a stack change as an empty one.
 
 When `<data_dir>/compose/compose.yaml` exists, the generated mail port map is
 updated and the mail service is restarted through `epistle stack`. The operator
@@ -233,13 +308,68 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `tls` | 21 days or more left, hostname in the certificate, the TLSA record (when DNSSEC publishes one) matches it | under 21 days, under 14 days with nothing renewing it (no `[acme]`), the TLSA lookup failed | under 7 days, expired, or hostname not in the certificate; unreadable file; a TLSA record that does not match the certificate in use |
 | `dns` | published records match | a lookup was inconclusive, or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
-| `api_keys` | every key has an expiry, and each `scim` key has an associated domain | a key has no expiry or a `scim` key has no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
+| `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `write` or `send` with no domain, account or usable `--ip-cidr`, or is a `scim` key with no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
-| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused) | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed | |
+| `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
+
+The `clock` area adds two read-only probes. The host probe asks the
+kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
+the syscall is refused; the area is `ok` when the kernel reports a
+disciplined clock, `warn` when it does not or when neither probe can
+tell. The external probe is the [clock_external] block: three
+independent sources, a diagnostic median of the three valid readings,
+configurable warn/fail thresholds (defaults 1 s / 5 s). The area
+surfaces one line naming how many sources were authenticated over NTS,
+then one line per source, the external verdict, and the diagnostic median.
+The verdict uses the largest absolute valid offset, so any drifting peer
+can cause `Warn` or `Fail`. The smear diagnostic
+surfaces a `warn` when two authenticated sources agree within 100 ms and
+a plain one differs from their midpoint by more than 250 ms (a typical
+operator-visible signature of a leap-second smear on the plain server).
+The probe runs only when the area is reached, never writes the host
+clock, and uses no state between runs.
+
+The three defaults, `nts.netnod.se`, `nts.time.nl` and `ptbtime2.ptb.de`
+(all NTS), are three operators in three countries, so every offset of a
+default run is authenticated, with a diagnostic median that is insensitive
+to one drifting source. This median does not exclude that source from the
+verdict. Each answered the whole NTS exchange inside the budget when the
+list was chosen. `time.cloudflare.com` answers plain NTPv4 but its key
+exchange returns cookies and the authenticated poll then goes unanswered
+on the networks measured, and `time.google.com` publishes no NTS-KE
+endpoint, so neither is in the default list; either can replace a source
+as a plain `ntp` entry. Replace them when the chosen peers change; the
+list and the protocol per source are both yours to set, and a host that
+answers NTS on your network can be configured as `nts`. The two ports the probes
+dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
+`123/udp` (NTPv4, RFC 5905) for the plain ones; both must be reachable
+from the host that runs `epistle status`. The full run is capped at
+`2.1 s` and each source at `2 s` for the whole probe, so a server that
+answers the key exchange slowly cannot buy a second budget; a hung
+server is reported, never retried. A whole NTS exchange costs a dial, a
+TLS handshake, a key exchange and the authenticated poll, so it comes
+close to the `2 s` per-source budget. A source that misses
+the budget is reported as a timeout and the run loses its diagnostic
+median. One or two healthy readings give `warn`; no valid readings or any
+valid offset at or above the fail threshold gives `fail`. The budget
+itself is a constant in the binary, not a setting. With no route to those
+ports the probe stays red, and `enabled = false` in `[clock_external]`
+turns it off so the area reports the switch instead.
+
+The probe is read-only: nothing writes the host clock, and a Warn or
+Fail from this area never produces a `clock_drift_exceeded` event
+(`metrics.clock_drift_exceeded` only ticks on the host-jump probe,
+which the kernel's existing time source catches). Configure chrony or
+systemd-timesyncd for the host, and point that daemon at the servers of
+one provider: a host daemon fed by two providers that smear differently
+disagrees every night. The external probe is the opposite case on
+purpose. It takes one host per provider, reports a diagnostic median,
+and uses the largest absolute valid offset for its verdict. Smear
+detection is diagnostic too; every valid reading still affects the verdict.
 
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).
@@ -298,7 +428,7 @@ sudo epistle check subid
 |---|---|
 | `epistle serve` | Bind the configured listeners and run. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
-| `epistle config-check` | Validate the configuration and exit. |
+| `epistle config-check` | Validate the configuration and exit. Values an older release accepted that the current rules refuse (`public_ipv4`, `public_ipv6`, an alias `list_id`) are ignored with a warning rather than failing; any other validation error fails, and so it does for `backup`, `restore`, `stack rollback` and `serve`. `status` alone still reads such a file and reports the reason in its `config` area. |
 | `epistle verify` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
@@ -342,6 +472,9 @@ from the `mem_limit` of `mail` in `compose.yaml` (or `auto (204 MiB, no mail
 container limit found, 1g assumed)`), marked `derived`, and `--json` gives its
 bytes with `"source": "derived"`. The running server reads its cgroup instead,
 which `podup` sets from that same `mem_limit`.
+`show` also lists the limits the server hard-codes (`fixed`) and marks a floor
+the RFC makes mandatory `must`; [Limits and standards](limits.md) has the full
+table.
 `unset` removes the field so its built-in default applies again. With
 `--json`, `show` also lists every per-domain override and every named tenant
 in addition to the global dials.
@@ -822,7 +955,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.10.13 or newer. A failed podup command stops the
+Stack requires podup 5.14.0 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
@@ -836,7 +969,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
-| `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/glyndor/epistle/rollback`) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
+| `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
@@ -862,15 +995,99 @@ and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
 
+### What the package does on install and upgrade
+
+The `postinst` of the `.deb` runs on every install, upgrade and
+`dpkg-reconfigure epistle`. It creates the `glyndor-epistle` account and its
+directories, adds the subordinate id ranges, turns on linger, enables the
+account's `podman.socket`, applies the port floor and, on an upgrade of an
+enabled stack, runs `epistle stack update`. Each step does only what is still
+missing, so running the script again is safe.
+
+Some steps depend on something that finishes a moment later: the lock that
+`usermod` takes on `/etc/subuid`, a name service that has not caught up with a
+new account, and the user manager that linger starts in the background
+together with its bus (`/run/user/<uid>/bus`). The script tries those steps up
+to five times, two seconds apart, and waits up to ten looks (about eighteen
+seconds) for the user manager before it enables the socket or updates the
+stack. `epistle move-subids` does the same for the lock and for the manager it
+restarts.
+
+A step that still fails does not stop the others and does not fail apt. The
+script prints one line on stderr that names what failed and the command that
+repeats it, and exits 0, so dpkg marks the package as installed even though
+that step did not happen. What stays undone is exactly what the line names;
+nothing is rolled back. When the account cannot be created, everything that
+needs it is skipped (directories, subordinate ids, linger, the Podman socket,
+the stack update) and the package is configured without them: running
+`sudo dpkg-reconfigure epistle` repeats the whole script once the cause is
+gone, and `epistle init` refuses to continue until the account exists. A
+directory that already exists is never changed: when its owner is not
+`glyndor-epistle` or its mode is looser than the one the package uses (`0700`
+for the state directories, `0750` for `/etc/epistle`), the script prints the
+`chown` and `chmod` that fix it.
+
+Apt shows these lines at the end of the upgrade:
+
+| Message starts with | What it means | What to run |
+|---|---|---|
+| `could not create the glyndor-epistle account` | `adduser` failed five times; the steps that need the account were skipped. | `sudo dpkg-reconfigure epistle` |
+| `could not create <dir>` | `install -d` failed five times. | `sudo dpkg-reconfigure epistle` |
+| `<dir> is owned by ... with mode ...` | An existing directory has another owner or a looser mode. Nothing was changed. | The `chown` and `chmod` in the message |
+| `could not add the subuid/subgid ranges` | `usermod` found `/etc/subuid` or `/etc/subgid` locked, or failed for another reason (see the line above it). | `sudo dpkg-reconfigure epistle` |
+| `no free block of 65536 subordinate ids` | `/etc/login.defs` leaves no room for a block. It is reported once and not retried. | `epistle check subid` |
+| `loginctl enable-linger glyndor-epistle failed` | `logind` did not accept the request. | `sudo loginctl enable-linger glyndor-epistle` |
+| `/run/user/<uid> does not exist` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
+| `could not enable the Podman API socket` | The manager answered but refused the unit. | `systemctl --user enable --now podman.socket` as `glyndor-epistle` |
+| `the stack did not come back healthy after this upgrade` | `epistle stack update` failed; the error above the frame says which check. | `sudo epistle stack update`, or `sudo epistle stack rollback` |
+| `could not look up the uid of glyndor-epistle` | The account is missing or the name service did not answer. | `getent passwd glyndor-epistle`, then `sudo dpkg-reconfigure epistle` |
+
+To diagnose an upgrade that printed one of these, read the lines above it in
+the apt output, then `systemctl status user@$(id -u glyndor-epistle).service`
+and `journalctl -u user@$(id -u glyndor-epistle).service -b` for the manager,
+and `sudo epistle status` for the stack. `epistle init` checks the account,
+the ranges, linger and the port floor again and refuses to continue when one
+is still missing.
+
 ### Rolling back an upgrade
 
-`sudo epistle stack rollback` asks first, then stops `mail`, compares the migrations in the
-database with those in the newest `pre-<this version>-*.sql.gz` dump, and
-restores the dump only when the schema moved past it. It then copies the
+`sudo epistle stack rollback` checks the root-owned store at
+`/var/lib/epistle-rollback` before asking or stopping `mail`. Every parent must
+be root-owned and protected from group or other writers, and the store must
+have mode 0700. The version it selects is a directory in the store, and the
+binary and its SHA-256 manifest inside it must be regular root-owned files
+without group or other write permission. Links are rejected, and the digest
+must match before the command proceeds. It asks for confirmation,
+stops `mail`, compares the migrations in the database with those in the newest
+`pre-<this version>-*.sql.gz` dump, and restores the dump only when the schema moved past it. It then copies the
 kept binary over `/usr/bin/epistle` with one rename and starts `mail` on it.
 Its closing message says whether the database was restored or kept.
 If there is no dump from before this version, or the restore fails, nothing
 is rolled back and `mail` starts again on the current binary.
+
+The package creates the store on install or configure and saves the replaced
+`/usr/bin/epistle` on upgrade as one directory per version holding the binary
+and its digest. It stages that pair in an exclusive random temporary directory,
+checks it, and moves it into the store with a single rename, so a copy that
+fails never replaces the one already saved. It keeps the two newest versions.
+The version it saves has to be digits and dots, the only shape `stack rollback`
+can select, so a name carrying a Debian revision, a tilde or a colon is
+refused with a warning instead of taking a slot no listing can choose; so is
+a part of twenty digits or more, because the command reads each part into a
+64-bit integer and a part that long may not fit (the package refuses the whole
+length rather than work out which ones do). A binary whose digest matches a
+copy already saved is not saved again under the next name: after a manual
+`stack rollback` dpkg still lists the newer version, and saving those older
+bytes under it would label them with a release that is gone and push a real
+copy out of the store. The upgrade says so on stderr. The same happens when you
+reinstall the same binary (`apt install --reinstall`, or a package that only
+changes Debian metadata): no new copy is saved and the line is the only trace.
+Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
+never installed, including when owned by root. If only legacy copies exist,
+rollback remains unavailable until an upgrade saves a trusted copy in the new
+store. The package warns when it finds legacy copies. Purging the package
+removes the new store. Database dumps remain under `<data_dir>/backups`, where
+`stack update` can write them as the service account.
 
 Limits:
 
@@ -882,6 +1099,14 @@ Limits:
   state) is gone once the dump is restored. Message files on disk are kept.
 - Only the binary and the database go back; the compose file stays as
   `stack update` rendered it.
+- The store is trusted only through a plain path: `/`, `/var` and `/var/lib`
+  must be real directories owned by root, not links, and not writable by group
+  or other. On a host where one of them fails that check (a `/var` that is a
+  link, for example), the preinst does not create or fill the store. It prints `could not prepare the root-owned rollback store; rollback is
+  unavailable` on stderr and the upgrade goes on, so the only trace is that
+  line in the apt output. `sudo epistle stack rollback` then refuses with the
+  reason. Check `/var/lib/epistle-rollback` before relying on rollback on such a
+  host.
 
 ### Moving PostgreSQL to a new major
 
@@ -938,24 +1163,69 @@ works on the host and inside the container deployment:
   environment variable (read from `[database] url` or `[database]
   password_file`), never through argv, so the secret is never visible
   through `/proc/<pid>/cmdline`. A missing or empty `password_file`,
-  a non-zero exit, or empty output is a hard error: the run exits
-  non-zero with a one-line stderr message that names the cause.
+  a non-zero exit, empty output, or output that does not end with
+  pg_dump's closing marker (`-- PostgreSQL database dump complete`) is
+  a hard error: the run exits non-zero with a one-line stderr message
+  that names the cause. A dump cut short with a clean exit status is
+  refused too, so a truncated `database.sql` never reaches the archive.
 - **container** (compose file present): the dump runs through
-  `podup -f <compose> exec -T db sh -c <script>`. Restore copies the SQL
-  with `podup cp <host> db:/tmp/epistle-restore.sql`, then runs `psql`
-  through the same container shell with `-v ON_ERROR_STOP=1 -1 -X -f
-  /tmp/epistle-restore.sql`. Each script reads
-  `/run/secrets/epistle_db_password` into `PGPASSWORD` inside `db`
-  before executing the client. `POSTGRES_PASSWORD_FILE` is read by
-  the image entrypoint during initialization, not by libpq. The host
-  argv contains the shell script and secret path, never the password
+  `podup -f <compose> exec -T db sh -c <script>`. Restore writes the SQL
+  to a host temp file and copies it into a directory that root makes in the
+  `/tmp` tmpfs of `db` (`podup exec -u root db sh -c "mkdir -m 711 ..."`) with
+  `podup cp <host> db:/tmp/<staged-name>/restore.sql`. The file holds the
+  credential hashes of every account. `podup cp` keeps the mode and the
+  numeric owner of the host file, and in `db` that owner is neither root nor
+  the database user, while root, with every capability dropped, cannot change
+  the mode of a file that is not its own. So the mode is set before the copy:
+  the host file is `0644`, inside a directory only the operator can enter
+  (`0700`), and the copy sits in a `0711` directory that only root can list.
+  `psql` then runs as the container user through the same shell with `-v
+  ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql'`, reading the
+  copy through its `o+r`. It cannot run as root, because the password mounted
+  in `db` is readable by the container user alone. A file that user can read
+  adds no exposure: it already reads every one of those hashes in the
+  database.
+  Each
+  script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
+  inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
+  read by the image entrypoint during initialization, not by libpq. The
+  host argv contains the shell script and secret path, never the password
   value, and the host process does not load the password. Restore
   stops at the first SQL error and rolls back the single transaction.
+  The replay script runs `exec psql`, so a `SIGTERM` sent to the exec
+  (Ctrl-C, a timeout, an aborted `podman exec`) reaches `psql` and
+  aborts the transaction instead of the idle wrapper shell. The staged
+  directory is then removed with `podup exec -T -u root db sh -c "rm -rf
+  '/tmp/<staged-name>'"`, whether the replay succeeded or failed (not when
+  the directory could not be made). If that removal fails, the error (or,
+  when the replay worked, a warning) says which path in the container is left
+  and how to remove it.
 
-`podup exec` does not forward stdin (measured against `podup 5.10.13`),
-which is why the restore path uses `podup cp` to land the SQL file
+The archive's `database.sql` has to end with the closing marker `pg_dump`
+writes, as the backup requires; a restore refuses one that does not before it
+touches anything. The database is loaded before the files are laid down, and
+the archive is checked against `data_dir` first. A dump that `psql` rejects
+therefore leaves both the database and the files as they were. When the load
+ends without a `psql` exit (the exec was cut), the message says it is not
+known whether the dump was committed and points at `epistle db status`. If the
+files fail after the database loaded, the message says so, and running the
+restore again with `--force` finishes the job.
+
+`podup exec` does not forward stdin (measured against `podup 5.10.13` and
+`5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
-file on the host is created in `$TMPDIR` and removed after the copy.
+file on the host is created in `$TMPDIR` at `0644`, inside a directory
+created at `0700`, under a name unique to that restore, and a guard removes
+both on every exit path, error and panic included. A `SIGINT` or `SIGTERM`
+ends the process without running the guard, so a restore killed that way
+leaves its host directory (mode `0700`, owned by the operator) and its copy
+in the `db` container behind. The next `restore` removes the host directories
+left by a process that no longer exists, and the ones in the container, saying
+so with the path; if it cannot remove one it names the path and the command
+(`podup exec -T -u root db rm -rf`). A restart of `db` empties them too, the
+directory being in a tmpfs. The host cleanup only touches entries of the same
+user, so a restore killed as root is not cleared by one run as an operator,
+and the reverse.
 
 ### What lives in the tar
 
@@ -967,12 +1237,20 @@ treat the keys themselves: store it offline, encrypt it at rest, restrict
 who can read it, and never leave a copy on a shared host. Delete the
 archive file once `restore` has been verified.
 
-Restore writes every private-key file at `0600` regardless of what the
-archive recorded: an archive that captured a permissive umask (or that
-was tampered with) cannot bring a key back group- or world-readable.
-Every other file lands at the mode the archive recorded (always masked
-to the lower 9 bits, so `setuid` / `setgid` / sticky bits never survive
-a round-trip).
+Restore writes every credential at `0600` regardless of what the
+archive recorded: the private-key material, everything under `secrets/`,
+`accounts.toml`, and the per-account credential stores. An archive that
+captured a permissive umask (or that was tampered with) cannot bring
+one back group- or world-readable. The root `config.toml` keeps its
+owner bits and loses every group and other bit, so a co-tenant on a
+shared host cannot read or edit the live config. Every other file lands
+at the mode the archive recorded (always masked to the lower 9 bits, so
+`setuid` / `setgid` / sticky bits never survive a round-trip).
+
+Every directory the restore creates lands at `0700`, whatever umask the
+host runs with, and so does `data_dir` itself when the restore is the
+one that created it. A `data_dir` the operator already had keeps the
+mode they gave it.
 
 ## `epistle mta-sts-serve`
 
@@ -1071,9 +1349,37 @@ The command shapes are:
 | `epistle init --answers FILE --dry-run` | Print the plan, write nothing. |
 | `epistle init --print-answers` | Print the answers template on stdout. |
 
-The TOML fields the file accepts and the assistant asks for are the same. Every
-field is a key with the same name as the question, and a missing key fails the
-validator before any side effect runs. Exit codes are `0` (done or nothing to
+On a terminal, setup asks inline questions in seven numbered steps. Each question
+explains its purpose and what Enter selects. Options accept a number or the option
+name. Invalid entries show the rejected value, the rule and a valid example, then
+ask the same question again. The proposed paths are the package defaults,
+`/var/lib/glyndor/epistle/data` and `/etc/epistle/mail.toml`. A review of the selected
+settings and the file plan precedes an explicit confirmation. The final report
+lists created or reused files, their locations and the next commands.
+
+Accepted ordinary answers are checkpointed in
+`$XDG_STATE_HOME/epistle/init-draft.json`, or
+`$HOME/.local/state/epistle/init-draft.json` when the state variable is absent.
+The directory is private (`0700`) and the file is `0600`. After Ctrl+C, run
+`epistle init` again to accept the offer to resume. Resumed answers are validated
+again, and confirmation is always asked again. Passwords are requested after
+confirmation, never written into the draft or printed, and must be entered again
+when resuming. Guided automatic mode accepts a DNS credential file or environment
+variable reference instead of an inline token. Credential references are requested
+again after interruption and are not saved in the draft. DNS publishing is still not
+implemented in this build.
+
+Without `--answers`, only a run whose stdin and stderr are both terminals and that
+carries no `--json` gets the guided steps. Every other run, a pipe, a redirected
+stderr or `--json`, keeps the plain questions this command shipped with: they go to
+stderr and are read from stdin until it ends, so a script can still answer them and
+the machine result still goes to stdout. `--answers FILE` remains the way to supply
+every value up front; that path keeps its existing validation and output.
+`NO_COLOR` and `TERM=dumb` suppress question colours while keeping terminal
+input available. The answers file uses the TOML field names from `--print-answers`;
+a missing required key fails validation before setup files are written.
+
+Exit codes are `0` (done or nothing to
 do), `1` (a step failed after effects were applied; the report names which
 step), and `2` (nothing was touched, either because the answers were invalid or
 because a precondition stopped the run before any effect: the existing config
@@ -1104,7 +1410,10 @@ What this build does:
   `password_file` (`-` reads it from stdin); it is never written in the
   answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
   of every domain become aliases of that account, so `config-check` no longer
-  warns about the missing `postmaster@` (RFC 5321) address;
+  warns about the missing `postmaster@` (RFC 5321) address. The alias is
+  written in the form the server stores, so a domain given with non-ASCII
+  letters appears in punycode (`postmaster@xn--...`), and an address that an
+  account or a masked address already holds is left alone;
 - prints the plan before the confirmation, and a report on stderr listing what
   was reused, what was written, and what was skipped; the report is also
   printed when a later step fails, so the operator can see what is already
@@ -1154,6 +1463,17 @@ matches: the keys are reused, the config is reported `identical, not touched`,
 and the file mtime does not change. A run that changes every answer the
 operator can change (hostname, domains, services, mode) does not regenerate a
 single key.
+
+An `init` that stops part way (killed, or a step that failed once the keys were
+written) leaves what it had finished and no `mail.toml`: the keys, the
+self-signed pair and the passwords are in place, because each file is written
+whole under a temporary name and renamed, so none is ever half written. Run the
+same command again. The keys are reused byte for byte, the missing files are
+written, and nothing needs to be deleted first. Do not delete the storage key
+to "start clean": it encrypts what is already stored. Every answer is checked
+before the first file is written, so a refusal of the answers (an unset
+variable in a path, an address already in use) leaves nothing behind; only a
+failure of the disk or the process itself can stop a run after the keys.
 
 What this build does **not** do (other parts of `init`, deliberately out of
 scope here):
@@ -1252,8 +1572,8 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
-| `epistle api-key list [--json]` | API keys: label, expiry, CIDR, scopes, domains, bound account. Never the key. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N]` | Create a key; prints it once. Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account. Never the key. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d]` | Create a key; prints it once. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
 | `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
 
@@ -1277,6 +1597,65 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle suppression import FILE [--account SENDER] [--reason TEXT] [--dry-run] [--json]` | Suppress every address of a file in the form `export` writes, or a plain list with one address per line. UTF-8 text of at most 16 MiB and 100000 entries; blank lines and lines starting with `#` are skipped. The whole file is checked first: one bad line refuses it with exit 2, naming the first ten bad lines, and nothing is written. An address that is already suppressed keeps its entry. The time must be a real RFC 3339 time (`2026-02-30T00:00:00Z` is refused); the file must be a regular file, a named pipe or a device is refused. `--reason` is the reason for lines that give none. The result counts `added`, `already` and `duplicates` (an address repeated in the file); `--dry-run` counts and writes nothing. If a write fails part way the error says how many entries were written; running the import again skips them. Run as root, the file is read through a private copy like the other input files. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+
+For `migrate imap`, `data_dir` and its migration state must be owned by the
+process's effective user, including during `--dry-run`. Run the migration as the
+account that owns the data directory; group write permission alone is insufficient.
+Parents of `data_dir` may be symbolic links. The final `data_dir` component and
+entries under `migrate/<account>` must not be symbolic links.
+One migration per account runs at a time: the run holds
+`migrate/<account>/.lock` and a second run waits 30 seconds for it before it
+stops with the name of that file. A dry run writes nothing, so it takes no lock
+and never waits.
+Recovery uses a private temporary disk index with a fixed metadata workspace, so
+large local mailboxes do not require an in-memory identity set. Free disk space is
+still required; an index failure retains the saved progress. Recovery bounds each
+decoded local message by the configured `max_message_size`, independently of the
+source response literal limit.
+
+An interrupted batch is replayed from the first UID the folder listed, matching
+pending copies against the local mailbox.
+What an earlier run already confirmed is not downloaded again: every remote
+folder keeps a ledger of the messages it has handed over next to its progress
+file in `data_dir/migrate/<account>`, the replay skips whatever the ledger
+confirms, and only the rest is matched against the local mailbox. A message you
+deleted or moved after an interruption therefore does not come back, as long as
+the ledger holds it. The ledger holds the identity of each confirmed message,
+40 bytes per message, so two identical messages in the source still end up as
+two copies here. It is written and synchronized before the checkpoint that
+confirms the batch, so it never claims a message that is not stored locally, and
+a copy left behind by a cut is dropped on the next run. A change in UIDVALIDITY
+discards the ledger with a warning and reads the folder again from the start. A
+ledger that cannot be read stops the run without removing anything, and the
+message names the file to delete to copy the folder again. Already confirmed
+local messages do not need fresh durability barriers unless the saved state
+marks a batch in progress.
+
+A record can only be appended above the UID the ledger already reaches, because
+its records rise in UID order and a lookup binary searches them. A message a
+replay confirms below that UID is therefore left out of the ledger, and from
+then on only the match against the local mailbox protects it: if you delete it
+there, a later replay brings it back. A message the source stops marking
+`\Deleted` is confirmed that way.
+
+A migration a version without a ledger started carries on with it: that version
+kept only the progress file, so the new ledger starts empty and confirms nothing
+about what was already copied. A later run that is cut and then replayed
+downloads that prefix once more and matches it against the local mailbox, so a
+message deleted there in the meantime can come back once. Deleting
+`migrate/<account>` discards the progress and the ledgers of every folder, which
+is how a full copy of the account is forced.
+
+UID windows start at 10000 and double across empty ranges, keeping sparse UIDNEXT
+values from causing a long sequence of empty queries. Each folder/run permits at
+most `32 * (EXISTS + 1)` listing commands. A final bounded query checks UIDs at
+and above UIDNEXT in case the source underestimated it. Without UIDNEXT, up to 16
+messages arriving after EXAMINE are accepted and the discrepancy is logged;
+larger counts are refused.
+A limit or inconsistent-count error retains completed window checkpoints; run the
+same command again to resume. While a batch is in progress every local message
+stays a candidate for matching, not only the ones newer than the checkpoint.
+A dry run saves no checkpoints.
 
 ## Outbound queue
 

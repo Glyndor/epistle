@@ -62,7 +62,7 @@ async fn runner_fires_webhook_when_counter_crosses_threshold() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx: DispatchContext = context(Some(webhook), spool, "mail.example.org".into());
+	let ctx: DispatchContext = context(Some(webhook), spool, "mail.example.org".into(), true);
 
 	let rules = vec![alert_rule_bounced_ge_50(1, 1)];
 	let handle: EngineHandle = run(rules, Arc::clone(&metrics), ctx).expect("engine started");
@@ -111,7 +111,7 @@ async fn runner_respects_cooldown_and_hysteresis() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx = context(Some(webhook), spool, "mail.example.org".into());
+	let ctx = context(Some(webhook), spool, "mail.example.org".into(), true);
 
 	let rules = vec![alert_rule_bounced_ge_50(1, 60)];
 	let handle = run(rules, Arc::clone(&metrics), ctx).expect("engine started");
@@ -144,7 +144,7 @@ async fn runner_queues_alert_email_to_spool() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
 	let captured_spool = Arc::clone(&spool);
-	let ctx = context(None, Arc::clone(&spool), "mail.example.org".into());
+	let ctx = context(None, Arc::clone(&spool), "mail.example.org".into(), true);
 
 	let rules = vec![Alert {
 		name: "bounce-storm".into(),
@@ -203,7 +203,7 @@ async fn empty_rules_returns_none() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx = context(None, spool, "mail.example.org".into());
+	let ctx = context(None, spool, "mail.example.org".into(), true);
 	assert!(run(Vec::new(), metrics, ctx).is_none());
 }
 
@@ -214,7 +214,7 @@ async fn unknown_metric_at_compile_is_dropped() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx = context(None, spool, "mail.example.org".into());
+	let ctx = context(None, spool, "mail.example.org".into(), true);
 	let rules = vec![Alert {
 		name: "broken".into(),
 		metric: "not_a_counter".into(),
@@ -247,7 +247,7 @@ async fn a_disabled_rule_is_not_started() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx = context(None, spool, "mail.example.org".into());
+	let ctx = context(None, spool, "mail.example.org".into(), true);
 	let mut off = alert_rule_bounced_ge_50(1, 1);
 	off.enabled = false;
 	assert!(

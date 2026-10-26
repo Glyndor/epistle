@@ -33,6 +33,15 @@ pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 /// otherwise. RFC 5321 §4.5.3.1.8 makes 100 the least a server may offer.
 pub const DEFAULT_MAX_RECIPIENTS: usize = 100;
 
+/// The least `max_message_size` may allow: RFC 5321 §4.5.3.1.7 says a server
+/// MUST accept message content of at least 64K octets.
+pub const MIN_MESSAGE_SIZE: usize = 64 * 1024;
+
+/// Why [`MIN_MESSAGE_SIZE`] cannot be crossed, as `max_message_size` and
+/// `epistle limits set max-message-size` word the refusal.
+pub const MIN_MESSAGE_SIZE_REASON: &str =
+	"RFC 5321 §4.5.3.1.7 requires accepting messages of at least 64K octets";
+
 /// The fewest recipients per transaction `max_recipients` may allow: RFC 5321
 /// §4.5.3.1.8 says a server MUST accept at least 100.
 pub const MIN_MAX_RECIPIENTS: usize = 100;
@@ -124,6 +133,9 @@ pub struct Session {
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
 	auth_protocol: crate::config::Protocol,
+	/// Which identification and reputation headers the mail this session
+	/// generates gets (the mailbox-full notice it builds at end-of-DATA).
+	identification: crate::smtp::identification::Policy,
 	/// Shared metrics handle. Optional: with no metrics wired the inbound
 	/// rate-limit rejection still returns the 450 reply, the counter just
 	/// does not move. Server sets this to its own `Arc<Metrics>` so the
@@ -184,6 +196,7 @@ impl Session {
 			peer_ip: None,
 			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
+			identification: crate::smtp::identification::Policy::default(),
 			metrics: None,
 			scram_enabled: true,
 			memory_budget: None,
@@ -247,6 +260,13 @@ impl Session {
 	/// matches the historical behaviour for SMTP AUTH.
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
+		self
+	}
+
+	/// Set which identification and reputation headers the mail this
+	/// session generates gets.
+	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
+		self.identification = policy;
 		self
 	}
 

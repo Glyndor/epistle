@@ -1,8 +1,9 @@
 //! The catalog that `epistle limits show` enumerates.
 //!
 //! Every operational limit on the server has one row here: the keys the
-//! operator may set through `epistle limits set`, plus the standards the
-//! RFC makes mandatory and the server cannot relax. The catalog is the
+//! operator may set through `epistle limits set`, plus the protocol limits
+//! a client can run into that the server hard-codes (`limits_protocol.rs`).
+//! The catalog is the
 //! single source of truth for `show` (text and `--json`), the MUST/SHOULD
 //! checks in `set`, and the docs page
 //! (`docs/limits.md`, asserted by a test).
@@ -15,35 +16,56 @@ pub(super) enum Kind {
 	/// Operator may change the value; the server takes whatever it can
 	/// pass the `validate()` floors of [`Config`].
 	Adjustable,
-	/// The standard recommends a floor (or ceiling) but lets the server
-	/// cross it; `limits set` accepts the value and prints a one-line
-	/// warning naming the RFC recommendation.
+	/// The standard recommends a floor (SHOULD) but lets the server cross
+	/// it; `limits set` accepts the value and prints a one-line warning
+	/// naming the RFC recommendation.
 	Recommended,
-	/// The standard forbids the limit being crossed (MUST); the value is
-	/// hard-coded in the server. `limits show` lists it so the operator
-	/// sees what the server enforces, but `limits set` rejects any
-	/// attempt to override it.
-	#[allow(dead_code)] // Reserved for MUST-grade keys; today every
-	// adjustable entry is either adjustable (no
-	// standard mandate) or recommended (operator may
-	// set it with a warning). Reachable through `match`
-	// on `kind` in the snapshot helper.
+	/// The standard makes a floor mandatory (MUST): the operator may raise
+	/// the value but `limits set` refuses anything below the RFC minimum.
+	Must,
+	/// The value is hard-coded in the server. `limits show` lists it so the
+	/// operator sees what the server enforces, but `limits set` has no
+	/// path to change it.
 	Fixed,
 }
 
-/// A bound the RFC puts on a limit: either a floor (`AtLeast`) the value
-/// must stay above, or a ceiling (`AtMost`) it must stay below. The
-/// `text` is the human-readable bound (e.g. "100") and `rfc_reason` is
-/// the section that requires it.
+/// How strongly a limit is tied to a standard: a MUST, a SHOULD, or a
+/// bound epistle picked itself (no standard mandates it, or the standard
+/// leaves the number to the implementation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // AtMost is reserved for future ceiling-style limits; only the doc test exercises it.
+pub(super) enum Class {
+	Must,
+	Should,
+	Own,
+}
+
+impl Class {
+	pub(super) fn label(self) -> &'static str {
+		match self {
+			Self::Must => "must",
+			Self::Should => "should",
+			Self::Own => "own",
+		}
+	}
+}
+
+impl Kind {
+	/// The class an adjustable row belongs to, from how `set` treats it.
+	pub(super) fn class(self) -> Class {
+		match self {
+			Self::Adjustable | Self::Fixed => Class::Own,
+			Self::Recommended => Class::Should,
+			Self::Must => Class::Must,
+		}
+	}
+}
+
+/// A floor the RFC puts on a limit: the value must stay at or above it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Bound {
-	/// The value must be at least this high; below it is forbidden or
-	/// advised against.
+	/// The value must be at least this high; below it is forbidden (MUST)
+	/// or advised against (SHOULD).
 	AtLeast(u64),
-	/// The value must be at most this high; above it is forbidden or
-	/// advised against.
-	AtMost(u64),
 }
 
 /// One row of the catalog: a key the operator can adjust through
@@ -57,16 +79,59 @@ pub(super) struct Adjustable {
 	pub(super) reference: &'static str,
 }
 
+/// The value of a limit the operator cannot change. A number is read
+/// from the constant the server enforces, so the catalog cannot say one
+/// thing while the code does another. `Text` is a rule that is not a
+/// number in the code (the null reverse path never gets a bounce).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FixedValue {
+	Number(u64),
+	Text(&'static str),
+	/// The oldest TLS version a listener negotiates, read from the list
+	/// every acceptor is built with.
+	TlsMinimum,
+}
+
+impl FixedValue {
+	pub(super) fn render(self) -> String {
+		match self {
+			Self::Number(value) => value.to_string(),
+			Self::Text(text) => text.to_string(),
+			Self::TlsMinimum => tls_minimum(),
+		}
+	}
+}
+
+/// The oldest of [`crate::tls::PROTOCOL_VERSIONS`] as `1.2` or `1.3`.
+fn tls_minimum() -> String {
+	let oldest = crate::tls::PROTOCOL_VERSIONS
+		.iter()
+		.map(|version| u16::from(version.version))
+		.min()
+		.unwrap_or(0);
+	match oldest {
+		0x0303 => "1.2".into(),
+		0x0304 => "1.3".into(),
+		other => format!("{other:#06x}"),
+	}
+}
+
 /// One row of the catalog for a limit the operator cannot change: the
-/// server enforces it because the RFC makes it mandatory (MUST). The
-/// `fixed` form is listed read-only so the limits page reflects what
-/// the server actually enforces, not just what is configurable.
+/// server enforces it as a MUST, a SHOULD or a bound of its own, and
+/// `class` says which. The row is listed read-only so the limits page
+/// reflects what the server actually enforces, not just what is
+/// configurable.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FixedEntry {
 	pub(super) name: &'static str,
-	pub(super) value: &'static str,
+	pub(super) value: FixedValue,
 	pub(super) unit: &'static str,
+	pub(super) class: Class,
 	pub(super) reference: &'static str,
+	/// The path of the constant the value is read from, as written in
+	/// `limits_protocol.rs`; empty for a rule that is not a constant.
+	#[allow(dead_code)] // Read by the tests that tie each row to its constant.
+	pub(super) source: &'static str,
 }
 
 /// Every adjustable key, in the order `show` prints them.
@@ -140,6 +205,18 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 		reference: "no standard mandate",
 	},
 	Adjustable {
+		key: Key::MaxConnectionsPerAccountPerIp,
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
+	},
+	Adjustable {
+		key: Key::MaxConnectionsPerAccountTotal,
+		kind: Kind::Adjustable,
+		bound: None,
+		reference: "no standard mandate",
+	},
+	Adjustable {
 		key: Key::MaskedAddressesMax,
 		kind: Kind::Adjustable,
 		bound: None,
@@ -177,13 +254,15 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 	Adjustable {
 		key: Key::MaxMessageSize,
-		kind: Kind::Adjustable,
-		bound: None,
-		reference: "no standard mandate",
+		kind: Kind::Must,
+		bound: Some(Bound::AtLeast(
+			crate::smtp::session::MIN_MESSAGE_SIZE as u64,
+		)),
+		reference: "RFC 5321 §4.5.3.1.7 (at least 64K octets)",
 	},
 	Adjustable {
 		key: Key::MaxRecipients,
-		kind: Kind::Recommended,
+		kind: Kind::Must,
 		bound: Some(Bound::AtLeast(
 			crate::smtp::session::MIN_MAX_RECIPIENTS as u64,
 		)),
@@ -251,47 +330,7 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 ];
 
-/// The standards the server enforces because the RFC requires it. Listed
-/// read-only: `limits show` includes them so the operator sees what is
-/// in force, but `limits set` has no path to override them.
-pub(super) const FIXED: &[FixedEntry] = &[
-	FixedEntry {
-		name: "smtp-line-length",
-		value: "998",
-		unit: "octets",
-		reference: "RFC 5321 §4.5.3.1.6 (998 octets excl. CRLF; 1000 incl. CRLF)",
-	},
-	FixedEntry {
-		name: "smtp-command-minimum-timeout",
-		value: "300",
-		unit: "seconds",
-		reference: "RFC 5321 §4.5.3.2 (5 minute minimum)",
-	},
-	FixedEntry {
-		name: "smtp-never-bounce-a-bounce",
-		value: "true",
-		unit: "boolean",
-		reference: "RFC 5321 §5.3.3 (no bounce of a bounce)",
-	},
-	FixedEntry {
-		name: "spf-max-dns-lookups",
-		value: "10",
-		unit: "count",
-		reference: "RFC 7208 §4.6.4 (max 10 DNS-querying terms)",
-	},
-	FixedEntry {
-		name: "spf-max-void-lookups",
-		value: "2",
-		unit: "count",
-		reference: "RFC 7208 §4.6.4 (max 2 void lookups)",
-	},
-	FixedEntry {
-		name: "tls-minimum-version",
-		value: "1.2",
-		unit: "version",
-		reference: "RFC 8996 (TLS 1.0/1.1 prohibited)",
-	},
-];
+pub(super) use super::protocol::FIXED;
 
 /// The default value of every adjustable key. The docs page uses this to
 /// print the same numbers the server reports.
@@ -312,6 +351,7 @@ pub struct DocsRow {
 	pub name: &'static str,
 	pub kind: &'static str,
 	pub unit: &'static str,
+	pub class: &'static str,
 	pub reference: &'static str,
 	pub default: Option<&'static str>,
 	pub bounds: Option<&'static str>,
@@ -330,6 +370,7 @@ pub fn docs_snapshot() -> Vec<DocsRow> {
 			name: entry.key.name(),
 			kind: kind_label(entry.kind),
 			unit: unit_label(entry.key.unit()),
+			class: entry.kind.class().label(),
 			reference: entry.reference,
 			default: entry.key.default_value().map(value_label),
 			bounds: entry.bound.map(bound_label),
@@ -339,12 +380,13 @@ pub fn docs_snapshot() -> Vec<DocsRow> {
 	for fixed in FIXED {
 		rows.push(DocsRow {
 			name: fixed.name,
-			kind: "fixed",
+			kind: kind_label(Kind::Fixed),
 			unit: fixed.unit,
+			class: fixed.class.label(),
 			reference: fixed.reference,
 			default: None,
 			bounds: None,
-			value: Some(fixed.value),
+			value: Some(value_text(fixed.value)),
 		});
 	}
 	rows
@@ -356,6 +398,7 @@ fn kind_label(kind: Kind) -> &'static str {
 	match kind {
 		Kind::Adjustable => "adjustable",
 		Kind::Recommended => "recommended",
+		Kind::Must => "must",
 		Kind::Fixed => "fixed",
 	}
 }
@@ -385,10 +428,15 @@ fn value_label(value: u64) -> &'static str {
 
 #[doc(hidden)]
 #[allow(dead_code)]
+fn value_text(value: FixedValue) -> &'static str {
+	Box::leak(value.render().into_boxed_str())
+}
+
+#[doc(hidden)]
+#[allow(dead_code)]
 fn bound_label(bound: Bound) -> &'static str {
 	let rendered = match bound {
 		Bound::AtLeast(value) => format!("at-least {value}"),
-		Bound::AtMost(value) => format!("at-most {value}"),
 	};
 	Box::leak(rendered.into_boxed_str())
 }

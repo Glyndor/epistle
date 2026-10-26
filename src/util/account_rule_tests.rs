@@ -85,10 +85,25 @@ fn the_dot_message_does_not_claim_init_converts_it() {
 }
 
 #[test]
-fn an_empty_name_is_one_plain_sentence() {
-	assert_eq!(refusal("", &Fault::Empty), "account name must not be empty");
+fn a_refusal_names_the_value_the_rule_and_a_name_to_type() {
+	assert_eq!(
+		refusal("", &Fault::Empty),
+		"account name must not be empty; for example \"torre-control\""
+	);
 	assert_eq!(
 		refusal("a.b", &Fault::BadChar('.')),
-		format!("account name \"a.b\": {}", Fault::BadChar('.'))
+		format!(
+			"account name \"a.b\": {}; for example \"torre-control\"",
+			Fault::BadChar('.')
+		)
 	);
+}
+
+#[test]
+fn a_refusal_echoes_the_value_escaped_and_cut() {
+	let line = refusal("a\nb\u{1b}[2J", &Fault::BadChar('\n'));
+	assert!(!line.contains('\n') && !line.contains('\u{1b}'), "{line:?}");
+	assert!(line.contains("a\\nb"), "{line}");
+	let long = refusal(&"a".repeat(500), &Fault::TooLong(500));
+	assert!(long.len() < 300, "{long}");
 }

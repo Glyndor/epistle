@@ -179,6 +179,7 @@ fn authenticate_oauthbearer_succeeds() {
 			"iss": "https://idp.example",
 			"aud": "mail",
 			"email": "alice@example.org",
+			"email_verified": true,
 			"exp": 99_999_999_999u64,
 		}))
 		.unwrap(),

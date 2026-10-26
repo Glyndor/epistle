@@ -140,22 +140,10 @@ pub struct Budget {
 
 /// A memory size as compose writes it: a whole number followed by `k`, `m`
 /// or `g` (any case), in bytes. `None` for anything else or an overflow.
+/// The shape is the one Podman reads, so it is stated once in
+/// [`crate::util::validation::parse_memory_size`].
 pub fn parse_memory(value: &str) -> Option<u64> {
-	let (digits, unit) = value.split_at_checked(value.len().checked_sub(1)?)?;
-	let scale: u64 = match unit {
-		"k" | "K" => 1024,
-		"m" | "M" => 1024 * 1024,
-		"g" | "G" => 1024 * 1024 * 1024,
-		_ => return None,
-	};
-	if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-		return None;
-	}
-	digits
-		.parse::<u64>()
-		.ok()
-		.and_then(|number| number.checked_mul(scale))
-		.filter(|bytes| *bytes > 0)
+	crate::util::validation::parse_memory_size(value)
 }
 
 /// The lowest cgroup v2 `memory.max` from the process's cgroup (named in

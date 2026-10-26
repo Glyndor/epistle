@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.10.13)` dependency in `debian/control`; a test reads
+/// `podup (>= 5.14.0)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
 /// drift away from the package relationship.
-const PODUP_FLOOR: &str = "5.10.13";
+const PODUP_FLOOR: &str = "5.14.0";
 
 /// Path of the compose file `epistle init` writes, relative to
 /// `data_dir`. Kept in one place so the operator-facing error names
@@ -196,6 +196,10 @@ pub(crate) enum StackAction {
 		service: String,
 	},
 }
+
+#[path = "stack_entry.rs"]
+mod entry;
+pub(super) use entry::run_from_path;
 
 /// Run the `stack` subcommand the operator typed. With `json`, podup's
 /// own output has gone to stderr and a success prints one object naming
@@ -674,3 +678,7 @@ mod tests_service;
 #[cfg(test)]
 #[path = "stack_tests_override.rs"]
 mod tests_override;
+
+#[cfg(test)]
+#[path = "stack_tests_lock.rs"]
+mod tests_lock;

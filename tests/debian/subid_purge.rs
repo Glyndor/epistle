@@ -14,33 +14,53 @@ fn purge(subuid: &str, subgid: &str) -> String {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path();
 	std::fs::create_dir_all(root.join("state")).unwrap();
+	std::fs::create_dir(root.join("rollback")).unwrap();
+	std::fs::write(root.join("rollback/epistle-0.12.1"), "saved").unwrap();
 	std::fs::write(root.join("subuid"), subuid).unwrap();
 	std::fs::write(root.join("subgid"), subgid).unwrap();
 	let bin = root.join("bin");
 	std::fs::create_dir(&bin).unwrap();
 	for (name, body) in [
+		("id", "exit 1"),
 		("loginctl", "exit 0"),
 		("deluser", "exit 0"),
 		("usermod", "printf '%s\\n' \"$@\" > \"$USERMOD_LOG\""),
 	] {
 		write_stub(&bin.join(name), body);
 	}
+	std::fs::create_dir_all(root.join("config")).unwrap();
 	let mut script = read("debian/epistle.postrm");
 	for (from, to) in [
 		("/etc/subuid", "subuid"),
 		("/etc/subgid", "subgid"),
 		("/var/lib/glyndor/epistle", "state"),
+		("/var/lib/epistle-rollback", "rollback"),
+		("/etc/epistle", "config"),
+		("/etc/glyndor", "legacy-parent"),
 		("/run/systemd/system", "no-systemd"),
 	] {
 		script = script.replace(from, root.join(to).to_str().unwrap());
 	}
-	assert!(
-		!script.contains("/var/lib/glyndor") && !script.contains("/etc/sub"),
-		"the purge under test must only touch the fixture directory"
-	);
+	// Nothing runs as the account in these tests, so the writers check has
+	// nothing to wait for; the wait itself is pinned in `purge_safety`.
+	script = script.replace("EPISTLE_STOP_WAIT=30", "EPISTLE_STOP_WAIT=0");
+	for untouched in ["/var/lib/glyndor", "/etc/sub", "/etc/epistle"] {
+		assert!(
+			!script.contains(untouched),
+			"the purge under test must only touch the fixture directory, but {untouched} survived"
+		);
+	}
 	let script_path = root.join("postrm");
-	std::fs::write(&script_path, script).unwrap();
+	std::fs::write(&script_path, &script).unwrap();
 	let log = root.join("usermod.log");
+	let remove = Command::new("sh")
+		.arg(&script_path)
+		.arg("remove")
+		.env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+		.output()
+		.unwrap();
+	assert!(remove.status.success());
+	assert!(root.join("rollback/epistle-0.12.1").exists());
 	let output = Command::new("sh")
 		.arg(&script_path)
 		.arg("purge")
@@ -49,6 +69,10 @@ fn purge(subuid: &str, subgid: &str) -> String {
 		.output()
 		.unwrap();
 	assert_eq!(output.status.code(), Some(0), "purge must not fail");
+	assert!(
+		!root.join("rollback").exists(),
+		"purge must remove the executable store"
+	);
 	std::fs::read_to_string(log).unwrap_or_default()
 }
 

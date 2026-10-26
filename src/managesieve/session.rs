@@ -96,7 +96,7 @@ impl Response {
 
 /// How many failed `AUTHENTICATE` attempts close the connection, matching the
 /// SMTP and IMAP auth paths so this protocol is not a softer brute-force target.
-const MAX_AUTH_FAILURES: u8 = 3;
+pub(crate) const MAX_AUTH_FAILURES: u8 = 3;
 
 /// One ManageSieve connection's protocol state.
 pub struct Session<B: Backend> {
@@ -312,7 +312,11 @@ fn result(outcome: Result<(), StoreError>) -> Response {
 /// Map a [`StoreError`] to the appropriate ManageSieve failure response.
 fn store_error(error: StoreError) -> Response {
 	match error {
-		StoreError::InvalidName => Response::No(Some("Invalid script name.".to_string())),
+		StoreError::InvalidName => Response::No(Some(format!(
+			"Invalid script name: use 1 to {} characters and at most {} bytes, in Unicode normal form C, with no slash, backslash, control or bidirectional character, no space at either end, and not . or .., for example keep-spam.",
+			super::store::MAX_NAME_CHARS,
+			super::store::MAX_NAME_BYTES
+		))),
 		StoreError::NoSuchScript => Response::NoCode("NONEXISTENT", "No such script.".to_string()),
 		StoreError::AlreadyExists => {
 			Response::NoCode("ALREADYEXISTS", "Script already exists.".to_string())

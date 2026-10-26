@@ -188,8 +188,17 @@ mod tests;
 
 impl Stack for Podup {
 	fn compose(&mut self) -> Result<String, String> {
-		std::fs::read_to_string(&self.compose)
-			.map_err(|error| format!("cannot read {}: {error}", self.compose.display()))
+		// The upgrade holds the common lock for minutes, so this read goes
+		// through the reader that refuses a fifo instead of waiting for a
+		// writer that may never come and holding the lock while it does.
+		let bytes = crate::cli::init::compose_read::read(&self.compose)?.ok_or_else(|| {
+			format!(
+				"cannot read {}: there is no such file",
+				self.compose.display()
+			)
+		})?;
+		String::from_utf8(bytes)
+			.map_err(|_| format!("{} is not valid UTF-8", self.compose.display()))
 	}
 
 	fn write_compose(&mut self, text: &str) -> Result<(), String> {
