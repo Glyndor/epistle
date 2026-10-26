@@ -66,9 +66,26 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Verify the same immutable commit that every build receives.
-          ref: ${{ steps.resolve.outputs.commit }}
+          # A literal ref: nothing a dispatch supplies decides what the runner
+          # checks out before the gate has looked at it.
+          ref: main
           fetch-depth: 0
+
+      - name: Move to the release commit, only when it is promoted
+        env:
+          RELEASE_COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # The tag must name a commit reachable from main, so the tree every
+          # later step runs is code that already went through promotion. The
+          # check runs before the switch and before any build tool starts.
+          git fetch --no-tags origin "refs/tags/$TAG"
+          test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$RELEASE_COMMIT"
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "::error::$TAG is not reachable from origin/main; only promoted code is released"
+            exit 1
+          fi
+          git checkout --detach "$RELEASE_COMMIT"
 
       - name: Check the verified checkout
         env:
@@ -93,17 +110,6 @@ jobs:
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["version"])')"
           if [ "$TAG" != "v$version" ]; then
             echo "::error::tag $TAG does not match crate version v$version"
-            exit 1
-          fi
-
-      - name: Tagged commit is on origin/main
-        env:
-          RELEASE_COMMIT: ${{ steps.resolve.outputs.commit }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
-            echo "::error::$TAG is not reachable from origin/main; only promoted code is released"
             exit 1
           fi
 
