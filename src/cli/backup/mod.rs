@@ -12,7 +12,7 @@ mod keys_note;
 mod restore_files;
 mod tar_format;
 
-use restore_files::lay_files;
+use restore_files::{check_files, lay_files, load_failure_state};
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -22,7 +22,9 @@ use std::process::ExitCode;
 use super::term::live::{Steps, quiet};
 use crate::config::{BlobBackendConfig, Config};
 
-use db_dump::{DATABASE_SQL_NAME, collect_dump_with, load_dump_with};
+use db_dump::{
+	DATABASE_SQL_NAME, collect_dump_with, load_dump_with, output_ends_with_pg_dump_complete,
+};
 
 /// Run the `backup` subcommand. Builds the entries, writes the tar.gz, emits
 /// warnings. A configured database whose dump cannot be taken is a hard
@@ -194,7 +196,7 @@ fn restore_summarising(
 	let mut steps = if dry_run {
 		Steps::off()
 	} else {
-		Steps::start(&["archive", "files", "database"], false)
+		Steps::start(&["archive", "database", "files"], false)
 	};
 	steps.begin("archive");
 	let tar = match gunzip_archive(archive) {
@@ -243,31 +245,64 @@ fn restore_summarising(
 		let _ = writeln!(out, "no files written; rerun without --dry-run to apply");
 		return ExitCode::SUCCESS;
 	}
-	steps.begin("files");
-	if let Err(error) = lay_files(&entries, &config.data_dir) {
-		steps.fail();
+	// Nothing is written until everything that can be checked has been: the
+	// files must be placeable, and the dump must be there if a database is
+	// configured. The database goes first because its load is one
+	// transaction that stops at the first error, so a failure leaves the
+	// data directory and the database as they were. Laying the files first
+	// left them restored and the database not.
+	if let Err(error) = check_files(&entries, &config.data_dir) {
 		super::style::error(format_args!("laying down files: {error}"));
 		return ExitCode::FAILURE;
 	}
-	steps.done();
-	if let Some(db) = &config.database {
-		steps.begin("database");
-		let Some((_, sql)) = entries
+	// A dump cut short never reaches the database: the marker `pg_dump` writes
+	// last has to be there, as it has to be when the backup is made.
+	if config.database.is_some()
+		&& let Some((_, _, sql)) = entries
 			.iter()
 			.find(|(name, _, _)| name == DATABASE_SQL_NAME)
-			.map(|(n, _, c)| (n.clone(), c.clone()))
+		&& !output_ends_with_pg_dump_complete(sql)
+	{
+		super::style::error(
+			"database.sql in the archive does not end with the pg_dump closing marker, so it is incomplete; nothing was restored",
+		);
+		return ExitCode::FAILURE;
+	}
+	let mut database_loaded = false;
+	if let Some(db) = &config.database {
+		steps.begin("database");
+		let Some(sql) = entries
+			.iter()
+			.find(|(name, _, _)| name == DATABASE_SQL_NAME)
+			.map(|(_, _, content)| content)
 		else {
 			steps.fail();
 			super::style::error("archive has no database.sql but [database] is configured");
 			return ExitCode::FAILURE;
 		};
-		if let Err(error) = load_dump_with(db, &config.data_dir, &sql, resolver) {
+		if let Err(error) = load_dump_with(db, &config.data_dir, sql, resolver) {
 			steps.fail();
-			super::style::error(format_args!("database load: {error}"));
+			super::style::error(format_args!(
+				"database load: {error}; {}",
+				load_failure_state(&error, &config.data_dir)
+			));
 			return ExitCode::FAILURE;
 		}
+		database_loaded = true;
 		steps.done();
 	}
+	steps.begin("files");
+	if let Err(error) = lay_files(&entries, &config.data_dir) {
+		steps.fail();
+		let state = if database_loaded {
+			"; the database was already restored from the archive, so fix the cause and run the restore again with --force"
+		} else {
+			""
+		};
+		super::style::error(format_args!("laying down files: {error}{state}"));
+		return ExitCode::FAILURE;
+	}
+	steps.done();
 	writeln!(out, "restored {} entries", entries.len()).ok();
 	keys_note::after_restore(&config.data_dir, &entries, status);
 	steps.conclude(true, "restore");

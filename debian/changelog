@@ -87,6 +87,7 @@ epistle (0.12.3) unstable; urgency=medium
     lock on the subordinate id tables, the new account and the user manager,
     say on stderr what failed and which command repeats it, and an upgrade
     whose stack cannot be refreshed still finishes configuring the package.
+  * Fix `epistle restore` failing on Debian 13 with podup 5.14.0 (the database dump is staged in a private directory, the database loads before the files so a failure leaves nothing half restored, and a leftover says where it is), and let a `mail.toml` an older release wrote keep loading: a `public_ipv4`, `public_ipv6` or alias `list_id` the new rules refuse is ignored with a warning, and `status` reports a file that fails validation instead of stopping.
 
  -- Glyndor <packages@glyndor.net>  Sun, 25 Oct 2026 12:00:00 +0000
 

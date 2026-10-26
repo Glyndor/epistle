@@ -562,6 +562,11 @@ pub struct Config {
 	/// one in use. Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub adjusted: Vec<String>,
+	/// Why validation refused the file, when `epistle status` loaded it with
+	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
+	/// fails instead. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub validation_error: Option<String>,
 	/// External-clock probe: three independent NTP/NTS sources and the
 	/// offsets `epistle status` and `epistle check clock` report. Absent
 	/// uses the design defaults (Cloudflare NTS, Netnod NTS, Google NTP,
@@ -704,6 +709,24 @@ impl Config {
 		Self::parse_text(&raw, path)
 	}
 
+	/// [`load`](Self::load) for `epistle status` alone: it reports on an
+	/// installation, so a file the validation refuses is still read and the
+	/// reason is kept in [`Config::validation_error`] for the `config` area.
+	/// Every command that acts on the data (`backup`, `restore`, `stack
+	/// rollback`, `serve`) uses `load` and refuses such a file, because the
+	/// rules it breaks can be the ones that keep a dump off an unprotected
+	/// connection or a path inside the data directory. A file that cannot be
+	/// read or parsed still fails here.
+	pub(crate) fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
+		check_permissions(path, "config file")?;
+		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+			path: path.to_path_buf(),
+			source,
+			kind: "config file",
+		})?;
+		Self::parse_text_lenient(&raw, path)
+	}
+
 	/// The `[webhook]` section when it is there and switched on. Whatever
 	/// posts an event reads the section through this, so a webhook with
 	/// `enabled = false` posts nothing.
@@ -805,6 +828,7 @@ mod hold_outbound_tests;
 #[path = "config_tests.rs"]
 mod tests;
 
+mod legacy_values;
 mod parse;
 
 #[path = "normalize.rs"]

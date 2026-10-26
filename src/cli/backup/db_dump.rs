@@ -41,15 +41,15 @@ mod db_dump_host_temp;
 #[path = "db_dump_marker.rs"]
 mod db_dump_marker;
 
-#[cfg(test)]
-use db_dump_container::container_rm_temp_spec;
 use db_dump_container::load_dump_container_with;
 pub(crate) use db_dump_container::{
 	container_cp_into_spec, container_pg_dump_spec, container_psql_load_spec, load_dump_container,
 };
 #[cfg(test)]
-use db_dump_host_temp::RestoreHostTemp;
-use db_dump_marker::output_ends_with_pg_dump_complete;
+use db_dump_container::{container_rm_temp_spec, leftover_note};
+#[cfg(test)]
+use db_dump_host_temp::{RestoreHostTemp, SQL_FILE_NAME};
+pub(in crate::cli::backup) use db_dump_marker::output_ends_with_pg_dump_complete;
 
 #[cfg(test)]
 #[path = "db_dump_tests_debug.rs"]
@@ -66,6 +66,10 @@ mod tests_a4_status;
 #[cfg(test)]
 #[path = "db_dump_tests_a4_tempfile.rs"]
 mod tests_a4_tempfile;
+
+#[cfg(test)]
+#[path = "db_dump_tests_staging.rs"]
+mod tests_staging;
 
 /// The path of `database.sql` inside the backup archive.
 pub(crate) const DATABASE_SQL_NAME: &str = "database.sql";

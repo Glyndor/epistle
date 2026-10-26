@@ -1,44 +1,61 @@
 //! The host-side restore temp file used by the container restore path.
-//! The SQL bytes contain credential hashes, so the file must be created at
-//! mode `0600` from the moment of creation, must not follow a hostile
-//! parent directory, and must be removed on every exit path (success,
-//! error, panic). It lives in its own file to keep `db_dump.rs` under the
-//! per-file code-line cap.
+//! The SQL bytes contain credential hashes, so the file lives in a directory
+//! of its own created at mode `0700` and is itself `0644`, must not follow a
+//! hostile parent directory,
+//! and must be removed on every exit path (success, error, panic). It lives
+//! in its own file to keep `db_dump.rs` under the per-file code-line cap.
+//!
+//! Why the file is `0644`: `podup cp` keeps the mode and the numeric owner of
+//! the host file, and inside the `db` container that owner is neither root nor
+//! the database user, while root has no capability to change the mode of a
+//! file that is not its own. The mode therefore has to be right before the
+//! copy, and the database user has to be able to read it (`o+r`). The host copy
+//! is protected by its `0700` directory, which nobody else on the host can
+//! enter, and the copy in the container sits in a directory only root can
+//! list. The database user already reads every one of those hashes in the
+//! database, so a dump it can read adds no exposure.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::BackupError;
 
 /// The start of every staged name; the process id follows it.
-const PREFIX: &str = "epistle-restore-";
+pub(super) const PREFIX: &str = "epistle-restore-";
 
-/// A host-side restore temp file: created `0600` with `O_EXCL` and
-/// `O_NOFOLLOW` under a name unique to this call, written through the
-/// handle that created it, and removed on `Drop`. `pub(super)` so the unit
-/// tests can inspect the mode and the cleanup without spawning anything.
+/// The name of the SQL file inside the private directory, on the host and
+/// inside the container alike.
+pub(super) const SQL_FILE_NAME: &str = "restore.sql";
+
+/// A host-side restore temp file: a private directory made `0700` under a
+/// name unique to this call, holding a file made `0644` with `O_EXCL` and
+/// `O_NOFOLLOW`, written through the handle that created it, and removed on
+/// `Drop`. `pub(super)` so the unit tests can inspect the modes and the
+/// cleanup without spawning anything.
 pub(super) struct RestoreHostTemp {
+	dir: PathBuf,
 	path: PathBuf,
 	file: File,
 }
 
 impl RestoreHostTemp {
-	/// Create an empty temp file under [`std::env::temp_dir`] at mode `0600`
-	/// and return a handle ready to be written into.
+	/// Create an empty file at mode `0644` inside a new `0700` directory
+	/// under [`std::env::temp_dir`] and return a handle ready to be written
+	/// into.
 	///
-	/// `O_EXCL` plus a name built from the pid, the wall clock and the
-	/// attempt counter keeps a name guesser from pre-creating the path: the
-	/// open fails instead of following whatever is already there, and the
-	/// loop moves to the next candidate. `O_NOFOLLOW` keeps a symlink at the
-	/// name from redirecting the write.
+	/// The directory is made by `mkdir` with the mode in the call, so there
+	/// is no moment at which it is more open than `0700`, and a name that is
+	/// already taken (a directory, a file or a link planted by a name
+	/// guesser) is skipped rather than followed. The name is built from the
+	/// pid, the wall clock and the attempt counter.
 	pub(super) fn create() -> Result<Self, BackupError> {
 		let parent = std::env::temp_dir();
 		remove_abandoned(&parent);
 		Self::create_in(&parent, &|attempt| {
 			format!(
-				"{PREFIX}{}-{}-{attempt}.sql",
+				"{PREFIX}{}-{}-{attempt}",
 				std::process::id(),
 				nanos_since_epoch(),
 			)
@@ -49,18 +66,31 @@ impl RestoreHostTemp {
 	/// chosen by the caller, so a test can make the first candidate collide.
 	fn create_in(parent: &Path, name_of: &dyn Fn(u64) -> String) -> Result<Self, BackupError> {
 		for attempt in 0..1024_u64 {
-			let path = parent.join(name_of(attempt));
-			match OpenOptions::new()
+			let dir = parent.join(name_of(attempt));
+			match DirBuilder::new().mode(0o700).create(&dir) {
+				Ok(()) => {}
+				Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+				Err(error) => return Err(cannot(&dir, error)),
+			}
+			let path = dir.join(SQL_FILE_NAME);
+			return match OpenOptions::new()
 				.write(true)
 				.create_new(true)
-				.mode(0o600)
+				.mode(0o644)
 				.custom_flags(libc::O_NOFOLLOW)
 				.open(&path)
-			{
-				Ok(file) => return Ok(Self { path, file }),
-				Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-				Err(error) => return Err(cannot(&path, error)),
-			}
+				.and_then(|file| {
+					// The umask may have narrowed the mode, and the copy needs
+					// the database user to be able to read it.
+					file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+					Ok(file)
+				}) {
+				Ok(file) => Ok(Self { dir, path, file }),
+				Err(error) => {
+					let _ = std::fs::remove_dir(&dir);
+					Err(cannot(&path, error))
+				}
+			};
 		}
 		Err(BackupError::CommandFailed {
 			stderr: "restore temporary names are occupied".to_string(),
@@ -68,18 +98,27 @@ impl RestoreHostTemp {
 		})
 	}
 
-	/// The path the file lives at.
+	/// The path of the SQL file.
 	pub(super) fn path(&self) -> &Path {
 		&self.path
 	}
 
-	/// The file name alone, so the caller can hand the container copy the
-	/// same unique name.
-	pub(super) fn file_name(&self) -> String {
-		self.path
+	/// The private directory holding the SQL file.
+	#[cfg(test)]
+	pub(super) fn dir(&self) -> &Path {
+		&self.dir
+	}
+
+	/// The name of the private directory, so the caller can hand the
+	/// container copy the same unique name.
+	pub(super) fn file_name(&self) -> Result<String, BackupError> {
+		self.dir
 			.file_name()
 			.map(|name| name.to_string_lossy().into_owned())
-			.unwrap_or_default()
+			.ok_or_else(|| BackupError::CommandFailed {
+				stderr: format!("restore directory {} has no name", self.dir.display()),
+				code: None,
+			})
 	}
 
 	/// Write `sql` through the handle that created the file, so the bytes
@@ -89,19 +128,43 @@ impl RestoreHostTemp {
 			.write_all(sql)
 			.map_err(|error| cannot(&self.path, error))
 	}
+
+	/// Remove the file and its directory now, saying what is still there if
+	/// that fails. `Drop` repeats the attempt, silently, as a backstop.
+	pub(super) fn remove(&self) -> Result<(), String> {
+		let file = std::fs::remove_file(&self.path);
+		let dir = std::fs::remove_dir(&self.dir);
+		match (file, dir) {
+			(Ok(()), Ok(())) => Ok(()),
+			(Err(error), _) if error.kind() != io::ErrorKind::NotFound => {
+				Err(format!("{} on the host: {error}", self.path.display()))
+			}
+			(_, Err(error)) if error.kind() != io::ErrorKind::NotFound => {
+				Err(format!("{} on the host: {error}", self.dir.display()))
+			}
+			_ => Ok(()),
+		}
+	}
 }
 
 impl Drop for RestoreHostTemp {
 	fn drop(&mut self) {
 		let _ = std::fs::remove_file(&self.path);
+		let _ = std::fs::remove_dir(&self.dir);
 	}
 }
 
-/// Remove the staged files an earlier restore left behind when a signal
+/// The process id inside a staged name (`epistle-restore-<pid>-...`), when
+/// the name is one.
+pub(super) fn staged_pid(name: &str) -> Option<i32> {
+	name.strip_prefix(PREFIX)?.split('-').next()?.parse().ok()
+}
+
+/// Remove the staged directories an earlier restore left behind when a signal
 /// killed it before its guard could run. The process id in the name tells
-/// whether the restore that made it is still alive; only regular files of
-/// this user are touched, never a link, and a failure to remove one is not
-/// a failure of the restore that is starting.
+/// whether the restore that made it is still alive; only directories and
+/// regular files of this user are touched, never a link, and a failure to
+/// remove one is not a failure of the restore that is starting.
 fn remove_abandoned(parent: &Path) {
 	let Ok(entries) = std::fs::read_dir(parent) else {
 		return;
@@ -112,7 +175,6 @@ fn remove_abandoned(parent: &Path) {
 		let name = entry.file_name();
 		let Some(pid) = name.to_str().and_then(|name| {
 			name.strip_prefix(PREFIX)?
-				.strip_suffix(".sql")?
 				.split('-')
 				.next()?
 				.parse::<i32>()
@@ -123,23 +185,34 @@ fn remove_abandoned(parent: &Path) {
 		let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
 			continue;
 		};
-		if removable(metadata.is_file(), metadata.uid(), me, process_alive(pid)) {
-			let _ = std::fs::remove_file(entry.path());
+		if removable(
+			metadata.is_dir() || metadata.is_file(),
+			metadata.uid(),
+			me,
+			process_alive(pid),
+		) {
+			// A directory of ours is emptied without following links; a
+			// plain file (the shape an older version staged) is unlinked.
+			if metadata.is_dir() {
+				let _ = std::fs::remove_dir_all(entry.path());
+			} else {
+				let _ = std::fs::remove_file(entry.path());
+			}
 		}
 	}
 }
 
 /// Whether a staged name found in a shared `$TMPDIR` is ours to remove: a
-/// regular file (never a link), owned by the user running this restore (a
+/// directory or regular file (never a link), owned by the user running this restore (a
 /// file of somebody else with a name that looks like ours is not touched),
 /// whose restore is gone.
-fn removable(is_file: bool, owner: u32, me: u32, restore_alive: bool) -> bool {
-	is_file && owner == me && !restore_alive
+fn removable(is_plain: bool, owner: u32, me: u32, restore_alive: bool) -> bool {
+	is_plain && owner == me && !restore_alive
 }
 
 /// Whether a process with this id exists. A process of another user answers
 /// `EPERM`, which still means it is there.
-fn process_alive(pid: i32) -> bool {
+pub(super) fn process_alive(pid: i32) -> bool {
 	// SAFETY: signal 0 only checks that the process exists.
 	pid <= 0
 		|| unsafe { libc::kill(pid, 0) } == 0

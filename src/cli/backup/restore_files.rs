@@ -9,9 +9,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::util::path_component::StateFile;
 
-pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
-	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
-	let paths = entries
+/// Check every file entry of the archive against `data_dir` without writing
+/// anything, so a restore can learn that it cannot lay the files down before
+/// it changes the database.
+pub(super) fn check_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	checked_paths(entries, data_dir).map(drop)
+}
+
+fn checked_paths<'a>(
+	entries: &'a [(String, u32, Vec<u8>)],
+	data_dir: &Path,
+) -> io::Result<Vec<&'a Path>> {
+	entries
 		.iter()
 		.filter_map(|(name, _, _)| {
 			// `database.sql` is the database dump; it goes to the
@@ -35,7 +44,12 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 				Err(error) => Some(Err(error)),
 			}
 		})
-		.collect::<io::Result<Vec<_>>>()?;
+		.collect::<io::Result<Vec<_>>>()
+}
+
+pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
+	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
+	let paths = checked_paths(entries, data_dir)?;
 	for ((_, mode, content), relative) in entries
 		.iter()
 		.filter(|(name, _, _)| lays_down(name))
@@ -47,6 +61,24 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 		}
 	}
 	Ok(())
+}
+
+/// What a failed database load says about the state it left. `psql` runs the
+/// dump in one transaction that stops at the first error, so a failure it
+/// reports leaves the database as it was. When the failure is not a `psql`
+/// exit (the exec was cut, the engine lost the process), nobody can know
+/// whether the transaction committed, and the message says to check.
+pub(super) fn load_failure_state(error: &super::db_dump::BackupError, data_dir: &Path) -> String {
+	match error {
+		super::db_dump::BackupError::CommandFailed { code: Some(_), .. } => format!(
+			"psql rolled the dump back, so the database and the files under {} are unchanged",
+			data_dir.display()
+		),
+		_ => format!(
+			"it is not known whether the dump was committed, so check the database with `epistle db status` before relying on it; the files under {} are unchanged",
+			data_dir.display()
+		),
+	}
 }
 
 /// Whether an archive entry is written under `data_dir`. `database.sql` goes

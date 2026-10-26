@@ -159,7 +159,7 @@ impl Ctx {
 	fn load(path: &Path) -> Self {
 		Ctx {
 			path: path.to_path_buf(),
-			config: Config::load(path).map_err(|error| error.to_string()),
+			config: Config::load_lenient(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
 			meminfo: PathBuf::from("/proc/meminfo"),

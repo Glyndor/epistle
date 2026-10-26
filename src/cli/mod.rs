@@ -51,6 +51,8 @@ mod json_out;
 mod learning;
 mod legacy;
 mod limits;
+#[cfg(test)]
+mod load_wiring_tests;
 mod local;
 mod masked;
 mod migrate;

@@ -1,5 +1,5 @@
 //! Tests for the restore staging file. The SQL staged for a container
-//! restore carries credential hashes, so the host copy must be `0600` from
+//! restore carries credential hashes, so the host copy sits in a `0700` directory from
 //! the moment it is created and must not survive the restore, and the copy
 //! inside the container must land on a name unique to that restore and be
 //! removed from the container once the replay is over.
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use libc;
 
 use super::{
-	BackupError, RestoreHostTemp, container_psql_load_spec, container_rm_temp_spec,
+	BackupError, RestoreHostTemp, SQL_FILE_NAME, container_psql_load_spec, container_rm_temp_spec,
 	load_dump_container_with,
 };
 
@@ -28,12 +28,12 @@ fn restore_against_stub(compose: &Path, stub: &Path) -> Result<(), BackupError> 
 /// Pin the process umask for the lifetime of the guard. `umask(2)` has no
 /// per-thread form, so the guard covers only the call that creates files,
 /// not the assertions that read them back.
-struct UmaskGuard {
+pub(super) struct UmaskGuard {
 	previous: libc::mode_t,
 }
 
 impl UmaskGuard {
-	fn new(value: libc::mode_t) -> Self {
+	pub(super) fn new(value: libc::mode_t) -> Self {
 		// SAFETY: `umask` takes and returns a `mode_t` and touches no memory
 		// the caller owns, so the call is sound from safe code.
 		let previous = unsafe { libc::umask(value) };
@@ -79,19 +79,24 @@ fn mode_of(path: &Path) -> u32 {
 	fs::metadata(path).expect("stat").permissions().mode() & 0o777
 }
 
-/// Under the permissive umask a plain create would land at `0644`. The
-/// staged SQL must be `0600` from creation, before anyone has a chance to
-/// read it.
+/// Whatever the umask, the staged SQL is `0644` (the copy in the container
+/// has to be readable by the database user, since its owner there is nobody)
+/// inside a `0700` directory nobody else can enter.
 #[test]
-fn host_restore_temp_is_0600_under_umask_022() {
+fn host_restore_temp_is_0644_in_a_0700_directory_under_umask_022() {
 	let mask = UmaskGuard::new(0o022);
 	let mut temp = RestoreHostTemp::create().expect("restore temp");
 	temp.write_all(b"-- credential hash\n").expect("write");
 	let mode = mode_of(temp.path());
+	let dir_mode = mode_of(temp.dir());
 	drop(mask);
 	assert_eq!(
-		mode, 0o600,
-		"host restore temp landed at {mode:o}, must be 0600"
+		mode, 0o644,
+		"host restore temp landed at {mode:o}, must be 0644"
+	);
+	assert_eq!(
+		dir_mode, 0o700,
+		"the directory holding it landed at {dir_mode:o}, must be 0700"
 	);
 }
 
@@ -102,16 +107,18 @@ fn drop_guard_removes_the_host_temp() {
 	let mut temp = RestoreHostTemp::create().expect("restore temp");
 	temp.write_all(b"x").expect("write");
 	let path = temp.path().to_path_buf();
+	let dir = temp.dir().to_path_buf();
 	assert!(
 		path.exists(),
 		"the staged file exists while the guard holds it"
 	);
 	drop(temp);
 	assert!(!path.exists(), "the staged file must not survive its guard");
+	assert!(!dir.exists(), "nor its directory");
 }
 
 /// Drive the container restore against a `podup` stub that appends its argv
-/// to `record` and exits non-zero, so the copy step fails. Returns the
+/// to `record` and exits non-zero on the copy step. Returns the
 /// argv lines the stub recorded.
 fn run_failing_container_restore(stubs: &Path) -> Vec<String> {
 	let record = stubs.join("argv.log");
@@ -120,7 +127,10 @@ fn run_failing_container_restore(stubs: &Path) -> Vec<String> {
 	// name (`podup`) and a test can find the call by argv position.
 	write_stub(
 		&stub,
-		&format!("printf '%s\\n' \"$0 $*\" >> '{}'\nexit 5", record.display()),
+		&format!(
+			"printf '%s\\n' \"$0 $*\" >> '{}'\ncase \"$*\" in *' cp '*) exit 5;; esac\nexit 0",
+			record.display()
+		),
 	);
 
 	let data_dir = tempfile::tempdir().expect("data_dir");
@@ -150,7 +160,7 @@ fn failed_restore_removes_the_host_temp() {
 		.nth(1)
 		.expect("the cp step named the staged file");
 	assert!(
-		!Path::new(host_path).exists(),
+		!Path::new(host_path).exists() && !Path::new(host_path).parent().unwrap().exists(),
 		"the staged SQL survived a failed restore: {host_path}"
 	);
 }
@@ -172,11 +182,11 @@ fn overlapping_staging_files_do_not_share_a_name() {
 	assert!(first.path().exists() && second.path().exists());
 }
 
-/// The copy inside the container is named after the staged host file, so it
-/// carries that file's uniqueness, and it is never the fixed name two
-/// restores would fight over.
+/// The copy inside the container goes into a directory named after the
+/// staged host directory, so it carries that name's uniqueness, and it is
+/// never the fixed name two restores would fight over.
 #[test]
-fn container_copy_is_named_after_the_staged_file() {
+fn container_copy_is_named_after_the_staged_directory() {
 	let stubs = tempfile::tempdir().expect("stubs");
 	let calls = run_failing_container_restore(stubs.path());
 	let cp_call = cp_call_words(&calls);
@@ -186,17 +196,18 @@ fn container_copy_is_named_after_the_staged_file() {
 		.nth(1)
 		.expect("the cp step named the staged file");
 	let destination = cp_call.last().expect("the cp step named a destination");
-	let staged_name = Path::new(host_path)
-		.file_name()
+	let staged_dir = Path::new(host_path)
+		.parent()
+		.and_then(Path::file_name)
 		.map(|name| name.to_string_lossy().into_owned())
-		.expect("the staged path has a file name");
+		.expect("the staged path has a directory");
 	assert_eq!(
 		destination,
-		&format!("db:/tmp/{staged_name}"),
+		&format!("db:/tmp/{staged_dir}/{SQL_FILE_NAME}"),
 		"the container copy must reuse the unique staged name"
 	);
 	assert!(
-		!destination.ends_with("epistle-restore.sql"),
+		!destination.contains("/tmp/epistle-restore.sql"),
 		"the container copy must not use a fixed name (got {destination})"
 	);
 }
@@ -211,7 +222,7 @@ fn container_copy_is_named_after_the_staged_file() {
 fn container_replay_script_uses_exec_psql() {
 	let data_dir = tempfile::tempdir().expect("data_dir");
 	let compose = place_compose(data_dir.path());
-	let in_container_path = "/tmp/epistle-restore-1234-999.sql";
+	let in_container_path = "/tmp/epistle-restore-1234-999/restore.sql";
 	let spec = container_psql_load_spec(&compose, in_container_path, b"select 1;\n").expect("spec");
 	let script = spec.argv().last().expect("last argv");
 	assert!(
@@ -223,42 +234,51 @@ fn container_replay_script_uses_exec_psql() {
 		"no trap can survive `exec psql`; got: {script}"
 	);
 	assert!(
-		!script.contains("rm -f"),
+		!script.contains("rm -"),
 		"the in-container removal has moved to the host; got: {script}"
 	);
 }
 
-/// The staged SQL carries the credential hashes of every account, so the
-/// replay shell forces the copy inside the container to `0600` before `psql`
-/// reads it, and does not start `psql` if it cannot.
+/// The replay shell must not try to change the owner or the mode of the
+/// copy: `podup cp` leaves it owned by the host user on some engines, and the
+/// container user cannot `chmod` a file it does not own. That was the
+/// `Operation not permitted` that stopped every restore. The directory the
+/// copy sits in is what keeps others out.
 #[test]
-fn container_replay_script_restricts_the_copy_before_psql() {
+fn container_replay_script_does_not_change_the_copy() {
 	let data_dir = tempfile::tempdir().expect("data_dir");
 	let compose = place_compose(data_dir.path());
-	let path = "/tmp/epistle-restore-1234-999.sql";
+	let path = "/tmp/epistle-restore-1234-999/restore.sql";
 	let spec = container_psql_load_spec(&compose, path, b"select 1;\n").expect("spec");
 	let script = spec.argv().last().expect("last argv");
 	assert!(
-		script.starts_with(&format!("chmod 600 '{path}' && ")),
-		"the copy must be restricted, and psql gated on it, got: {script}"
+		!script.contains("chmod") && !script.contains("chown"),
+		"the replay must not touch the copy's owner or mode, got: {script}"
 	);
 }
 
-/// The host-side cleanup spec is `podup exec -T db sh -c "rm -f <path>"`,
-/// the third podup call in the restore flow (after cp and psql).
+/// The host-side cleanup spec is `podup exec -T -u root db sh -c "rm -rf <dir>"`,
+/// the last podup call in the restore flow (after mkdir, cp and psql).
 #[test]
 fn host_rm_temp_spec_targets_db_service_with_no_tty() {
 	let data_dir = tempfile::tempdir().expect("data_dir");
 	let compose = place_compose(data_dir.path());
-	let spec = container_rm_temp_spec(&compose, "/tmp/epistle-restore-1234-999.sql").expect("spec");
+	let spec = container_rm_temp_spec(&compose, "/tmp/epistle-restore-1234-999").expect("spec");
 	let argv = spec.argv();
 	assert_eq!(argv[0], "podup");
 	assert_eq!(argv[3], "exec");
 	assert_eq!(argv[4], "-T");
-	assert_eq!(argv[5], "db");
 	assert!(
-		argv[6..] == ["sh", "-c", "rm -f '/tmp/epistle-restore-1234-999.sql'"],
-		"the host-side cleanup must run rm -f inside db; got: {argv:?}"
+		argv[5..]
+			== [
+				"-u",
+				"root",
+				"db",
+				"sh",
+				"-c",
+				"rm -rf '/tmp/epistle-restore-1234-999'"
+			],
+		"the host-side cleanup must run rm -rf inside db as the owner of the directory; got: {argv:?}"
 	);
 }
 
@@ -308,7 +328,7 @@ fn cp_call_words(calls: &[String]) -> Vec<&str> {
 		.collect::<Vec<_>>()
 }
 
-/// A successful replay still issues the host-side `podup exec -T db rm -f`,
+/// A successful replay still issues the host-side `podup exec -T db rm -rf`,
 /// so the SQL bytes do not linger inside the container after a clean restore.
 /// Without it a follow-up restore could read the prior file if `podup cp`
 /// allowed the destination to be reused, and the file would survive the
@@ -317,12 +337,12 @@ fn cp_call_words(calls: &[String]) -> Vec<&str> {
 fn successful_restore_removes_the_in_container_temp_from_the_host() {
 	let stubs = tempfile::tempdir().expect("stubs");
 	let calls = run_successful_container_restore(stubs.path());
-	let rm_call = find_call(&calls, "rm -f");
+	let rm_call = find_call(&calls, "rm -rf");
 	assert!(
-		rm_call.contains(" exec -T db sh -c "),
+		rm_call.contains(" exec -T -u root db sh -c "),
 		"the cleanup must exec inside the db service with no TTY; got: {rm_call}"
 	);
-	let script_start = rm_call.find("rm -f").expect("rm -f in the cleanup call");
+	let script_start = rm_call.find("rm -rf").expect("rm -rf in the cleanup call");
 	assert!(
 		rm_call[script_start..].contains("'/tmp/"),
 		"the cleanup script must rm a path inside the container /tmp; got: {rm_call}"
@@ -338,12 +358,12 @@ fn successful_restore_removes_the_in_container_temp_from_the_host() {
 fn failed_restore_removes_the_in_container_temp_from_the_host() {
 	let stubs = tempfile::tempdir().expect("stubs");
 	let calls = run_failing_container_restore(stubs.path());
-	let rm_call = find_call(&calls, "rm -f");
+	let rm_call = find_call(&calls, "rm -rf");
 	assert!(
-		rm_call.contains(" exec -T db sh -c "),
+		rm_call.contains(" exec -T -u root db sh -c "),
 		"the cleanup must exec inside the db service with no TTY on error; got: {rm_call}"
 	);
-	let script_start = rm_call.find("rm -f").expect("rm -f in the cleanup call");
+	let script_start = rm_call.find("rm -rf").expect("rm -rf in the cleanup call");
 	assert!(
 		rm_call[script_start..].contains("'/tmp/"),
 		"the cleanup script must rm a path inside the container /tmp on error; got: {rm_call}"

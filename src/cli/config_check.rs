@@ -86,3 +86,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_check_tests_case.rs"]
 mod tests_case;
+
+#[cfg(test)]
+#[path = "config_check_tests_legacy.rs"]
+mod tests_legacy;

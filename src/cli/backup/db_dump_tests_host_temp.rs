@@ -1,5 +1,5 @@
-//! The host restore temp file refuses a name that is taken and clears what a
-//! killed restore left behind.
+//! The host restore temp directory refuses a name that is taken and clears
+//! what a killed restore left behind.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -32,7 +32,7 @@ fn a_name_already_taken_is_skipped_and_its_bytes_kept() {
 	.expect("the next name is free");
 	temp.write_all(b"new").unwrap();
 	assert_eq!(fs::read_to_string(&taken).unwrap(), "somebody else's bytes");
-	assert_eq!(temp.file_name(), "second-1.sql");
+	assert_eq!(temp.file_name().unwrap(), "second-1.sql");
 	assert_eq!(fs::read_to_string(temp.path()).unwrap(), "new");
 }
 
@@ -60,6 +60,13 @@ fn a_file_left_by_a_dead_restore_is_removed_and_a_live_one_is_kept() {
 	let live = dir
 		.path()
 		.join(format!("{PREFIX}{}-1-0.sql", std::process::id()));
+	let stale_dir = dir.path().join(format!("{PREFIX}{}-3-0", dead_pid()));
+	fs::create_dir(&stale_dir).unwrap();
+	fs::write(stale_dir.join("restore.sql"), "x").unwrap();
+	let live_dir = dir
+		.path()
+		.join(format!("{PREFIX}{}-3-0", std::process::id()));
+	fs::create_dir(&live_dir).unwrap();
 	let other = dir.path().join("notes.sql");
 	let linked = dir.path().join(format!("{PREFIX}{}-2-0.sql", dead_pid()));
 	let target = dir.path().join("target");
@@ -70,6 +77,8 @@ fn a_file_left_by_a_dead_restore_is_removed_and_a_live_one_is_kept() {
 	remove_abandoned(dir.path());
 	assert!(!stale.exists(), "the file of a dead restore must go");
 	assert!(live.exists(), "a restore that is running keeps its file");
+	assert!(!stale_dir.exists(), "the directory of a dead restore goes");
+	assert!(live_dir.exists(), "the directory of a live restore stays");
 	assert!(other.exists(), "a file that is not a staged name stays");
 	assert!(
 		linked.symlink_metadata().is_ok() && target.exists(),
@@ -92,8 +101,5 @@ fn only_a_regular_file_of_this_user_with_a_dead_restore_is_removable() {
 		!removable(true, me, me, true),
 		"a live restore keeps its file"
 	);
-	assert!(
-		!removable(false, me, me, false),
-		"a link or directory stays"
-	);
+	assert!(!removable(false, me, me, false), "a link stays");
 }
