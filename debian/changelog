@@ -1,5 +1,7 @@
 epistle (0.12.3) unstable; urgency=medium
 
+  * Security: ctutils is updated to 0.4.6, which fixes RUSTSEC-2026-0385 (a
+    comparison that did not run in constant time).
   * Test assertions and fixtures no longer print or hard-code values that code scanning reads as credentials.
   * Bound the work of a plain-HTTP request: a body that arrives too slowly, or takes too long, is cut off.
   * Bound the work and the memory of a POP3 session: it reads an index at sign-in and one message at a time, and refuses a message above a fixed size.
