@@ -4,6 +4,9 @@
 
 pub mod markdown;
 pub mod rust_source;
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
 mod tests;
 
 use std::path::Path;
