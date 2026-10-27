@@ -214,7 +214,6 @@ async fn crlf_reverse_path_is_rejected_before_any_mail_command() {
 }
 
 #[tokio::test]
-#[ignore = "bug: outbound SMTP parser has no 512-octet per-line reply limit"]
 async fn complete_sixteen_kib_banner_is_refused_before_ehlo() {
 	let (client, mut peer) = tokio::io::duplex(32768);
 	let mut banner = b"220 ".to_vec();
