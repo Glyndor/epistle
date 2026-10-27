@@ -6,7 +6,7 @@
 //! helpers. Reuses the `reply_code`, `b64`, `b64_bytes`, and
 //! `TapEhlo` helpers from `tests_scram` so both files stay in sync.
 
-use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
+use super::tests_scram::{TapEhlo, b64, b64_bytes, finish_scram, reply_code};
 use super::*;
 use crate::test_fixtures as fixtures;
 use base64::Engine;
@@ -622,7 +622,7 @@ async fn smtp_scram_success_clears_ban_store() {
 	assert_eq!(reply_code(&challenge), 334);
 	let server_first = decode_server_first(&scram_challenge_text(&challenge));
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
-	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 235);
+	assert_eq!(finish_scram(&mut session, &client_final), 235);
 
 	assert_eq!(
 		ban_store.call_count("clear_success"),

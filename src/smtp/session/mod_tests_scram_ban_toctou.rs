@@ -22,7 +22,7 @@
 //! Split from `mod_tests_scram_ban_owner_known_network.rs` to keep
 //! that file under the per-file code-line budget.
 
-use super::tests_scram::{TapEhlo, b64, reply_code};
+use super::tests_scram::{TapEhlo, b64, finish_scram, reply_code};
 use super::tests_scram_bans::{
 	decode_server_first, scram_challenge_text, scram_directory_with_ban_store, valid_client_final,
 };
@@ -97,7 +97,7 @@ async fn smtp_scram_bypass_toctou_ban_appears_in_flight_keeps_ban() {
 
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(
-		reply_code(&session.auth_line(&b64(&client_final))),
+		finish_scram(&mut session, &client_final),
 		235,
 		"a valid SCRAM proof from a known network must succeed even when a ban fires in flight",
 	);
@@ -161,7 +161,7 @@ async fn smtp_scram_bypass_toctou_ban_lapses_in_flight_lifts_ban() {
 
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(
-		reply_code(&session.auth_line(&b64(&client_final))),
+		finish_scram(&mut session, &client_final),
 		235,
 		"a valid SCRAM proof after the ban lapses must succeed as a normal login"
 	);

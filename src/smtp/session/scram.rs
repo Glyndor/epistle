@@ -27,6 +27,10 @@ pub(super) enum PendingScram {
 		/// valid proof nor extend it with a bad one.
 		refusal: Option<ScramRefusal>,
 	},
+	/// The proof was verified and the server-final went out as a `334`
+	/// challenge; awaiting the client's acknowledgement (the empty line)
+	/// before the session is authenticated.
+	ServerFinal { account: String },
 }
 
 impl Session {
@@ -181,17 +185,37 @@ impl Session {
 				// does. A bypass lift keeps the ban row in force: only
 				// the bypass list gets refreshed.
 				self.record_scram_outcome(account, Some(account), true, bypassed);
-				self.authenticated = Some(account.to_string());
-				Action::Continue(Reply::single(
-					235,
-					&format!("2.7.0 {}", BASE64.encode(server_final)),
-				))
+				// The server-final travels as a challenge. SMTP has no room
+				// for the SASL "additional data with a successful outcome"
+				// (RFC 4954 §4), so the `235` cannot carry it; the client
+				// gets it in a `334`, verifies its own signature against it
+				// and acknowledges with the empty line. The session is
+				// authenticated only then, so a client that proves itself
+				// and walks away does not get in.
+				self.pending_scram = Some(PendingScram::ServerFinal {
+					account: account.to_string(),
+				});
+				Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_final)))
 			}
 			Err(_) => {
 				self.record_scram_outcome(account, Some(account), false, false);
 				self.scram_failure()
 			}
 		}
+	}
+
+	/// The last round: the client acknowledges the server-final with the
+	/// empty line and the session is authenticated. Any other line is a
+	/// protocol error (RFC 4954 §4) and leaves the session
+	/// unauthenticated. The outcome of the exchange was already recorded
+	/// when the proof was verified, so this round moves no strike and
+	/// clears no ban.
+	pub(super) fn scram_server_final(&mut self, line: &str, account: String) -> Action {
+		if !line.is_empty() {
+			return Action::Continue(Reply::single(501, "5.5.2 invalid authentication response"));
+		}
+		self.authenticated = Some(account);
+		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}
 
 	/// A failed SCRAM step: clear state, count the failure, and reply 535

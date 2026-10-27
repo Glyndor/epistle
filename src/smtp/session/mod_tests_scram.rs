@@ -14,7 +14,7 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 	}
 }
 
-fn scram_directory() -> Arc<Directory> {
+pub(super) fn scram_directory() -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
 		fixtures::password(),
@@ -34,7 +34,7 @@ fn scram_directory() -> Arc<Directory> {
 	)
 }
 
-fn scram_session(inject_nonce: bool) -> Session {
+pub(super) fn scram_session(inject_nonce: bool) -> Session {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(scram_directory())
 		.with_tls_active();
@@ -57,6 +57,20 @@ pub(super) fn b64_bytes(bytes: &[u8]) -> String {
 
 /// A 32-byte stand-in for the tls-server-end-point certificate hash.
 const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+/// Run the last round of a SCRAM exchange: the server answers the
+/// client-final with the server-final as a `334` challenge, and the
+/// client's empty line closes the exchange. Returns the code of the
+/// reply to the acknowledgement: the `235` of a successful exchange, or
+/// the `535` of a refused one (a refused proof never reaches the
+/// challenge).
+pub(super) fn finish_scram(session: &mut Session, client_final: &str) -> u16 {
+	let challenge = session.auth_line(&b64(client_final));
+	if reply_code(&challenge) != 334 {
+		return reply_code(&challenge);
+	}
+	reply_code(&session.auth_line(""))
+}
 
 /// A SCRAM session on a TLS link that also offers channel binding (-PLUS).
 fn scram_plus_session() -> Session {

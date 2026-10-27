@@ -62,6 +62,18 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
   certificate is configured; under ACME (where the certificate is renewed at
   runtime) it is omitted and clients use SCRAM-SHA-256.
+- **The SCRAM exchange over SMTP ends with an acknowledgement.** The server
+  sends the server-final (the `v=...` signature the client checks) as a `334`
+  challenge, and the client acknowledges it with the empty line; only then does
+  the server answer `235 2.7.0 authentication successful`. The server-final
+  cannot ride on the `235`, because SMTP has no room for the SASL "additional
+  data with a successful outcome" (RFC 4954 §4), so it travels as a challenge
+  instead. A client that answers that challenge with anything other than the
+  empty line (or `*`, which cancels the exchange) gets a `501` and stays
+  unauthenticated: a correct proof alone does not open the session. IMAP has no
+  such last round — there the server-final travels in the response code of the
+  `OK` that closes the `AUTHENTICATE` — so an IMAP client sees one message
+  fewer than an SMTP one.
 - **SCRAM verifiers** stored next to the argon2id hash are derived with
   600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
   verifier is not a cheaper target than the hash for someone who reads

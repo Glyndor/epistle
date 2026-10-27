@@ -159,6 +159,12 @@ fn scram_sha256_authenticates() {
 	let client_final = format!("{without_proof},p={}", B64.encode(&proof));
 
 	let action = session.auth_line(&B64.encode(&client_final));
+	assert_eq!(
+		reply_code(&action),
+		334,
+		"the server-final comes as a challenge"
+	);
+	let action = session.auth_line("");
 	assert_eq!(reply_code(&action), 235);
 	assert_eq!(session.authenticated(), Some("alice"));
 }
