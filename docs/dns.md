@@ -26,7 +26,10 @@ After publishing, verify with `epistle config-check` and an external checker.
 | Client autoconfig | `autoconfig.example.org` | A/CNAME | the host |
 | Client autodiscover | `autodiscover.example.org` | A/CNAME | the host |
 
-Plus the **SRV** records printed by `epistle srv-records`.
+Plus the **SRV** records printed by `epistle srv-records`. `epistle
+dns-records` prints one SRV locator per service your listeners enable: a
+service you turned off gets no locator, so a client that follows a
+published record always reaches a port the server answers on.
 
 ## The essential four
 

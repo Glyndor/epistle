@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use crate::config::Config;
 use crate::dns::provider::RecordKind;
-use crate::dns::records::{self, PublishRecord, Services, txt_zone_form};
+use crate::dns::records::{self, PublishRecord, txt_zone_form};
 
 /// Compute and print the expected records for the configured domains.
 /// With `json` the records are one JSON array of `{"name", "ttl", "type",
@@ -61,10 +61,10 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 		&dkim_per_domain,
 		tlsa.as_deref(),
 		&records::mta_sts_id(config),
-		// The `webdav` listener always exposes CalDAV/CardDAV when present;
-		// we don't have a flag for "operator disabled CalDAV only", so emit
-		// both SRVs and let the operator prune them by hand if needed.
-		Services::all(),
+		// The SRV locators follow the configuration: a service the
+		// operator turned off gets no locator, so a client that follows
+		// one of the published records reaches a listener.
+		records::Services::from_config(config),
 		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 		config.public_ipv4,
 		config.public_ipv6,
@@ -272,3 +272,7 @@ mod tests_rsa;
 #[cfg(test)]
 #[path = "dns_records_tests_per_domain.rs"]
 mod tests_per_domain;
+
+#[cfg(test)]
+#[path = "dns_records_tests_services.rs"]
+mod tests_services;

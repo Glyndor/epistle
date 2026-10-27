@@ -9,6 +9,7 @@ pub mod provider;
 pub mod providers;
 pub mod proxied_check;
 pub mod records;
+pub mod records_services;
 pub mod txt;
 #[cfg(test)]
 mod uri_probe;
