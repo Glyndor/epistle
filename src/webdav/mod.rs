@@ -41,6 +41,7 @@ pub mod carddav;
 pub mod carddav_filter;
 pub mod handler;
 mod href;
+mod if_match;
 pub mod path;
 pub mod propfind;
 pub mod quota;
