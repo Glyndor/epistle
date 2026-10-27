@@ -10,72 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
-
-/// An SRV service descriptor: a `(name, port)` pair the operator wants to
-/// advertise. The record's FQDN is `<name>._tcp.<zone>`; priority and weight
-/// are the Stalwart-parity defaults (priority 0, weight 1).
-struct SrvService {
-	name: &'static str,
-	port: u16,
-}
-
-/// All the SRV records epistle publishes. Per RFC 6186 (IMAP/POP3/SUBMISSION)
-/// and RFC 8314 (Implicit TLS), RFC 8621 (JMAP), and ManageSieve (RFC 5804).
-/// CalDAV/CardDAV SRVs are added in [`build_records`] when the `webdav`
-/// module exposes them.
-const SRV_SERVICES: &[SrvService] = &[
-	SrvService {
-		name: "_submissions",
-		port: 465,
-	},
-	SrvService {
-		name: "_submission",
-		port: 587,
-	},
-	SrvService {
-		name: "_imaps",
-		port: 993,
-	},
-	SrvService {
-		name: "_imap",
-		port: 143,
-	},
-	SrvService {
-		name: "_pop3s",
-		port: 995,
-	},
-	SrvService {
-		name: "_jmap",
-		port: 443,
-	},
-	SrvService {
-		name: "_sieve",
-		port: 4190,
-	},
-];
-
-/// Which extra services the deployment exposes. Drives the optional
-/// CalDAV/CardDAV SRV records and the CNAME discovery records. The CAA
-/// record is separate: it comes from the `directory_url` of the `acme`
-/// config section, and only when that directory names a CA we recognise.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Services {
-	/// CalDAV (RFC 4791) is served by the in-tree `webdav` module.
-	pub caldav: bool,
-	/// CardDAV (RFC 6352) is served by the in-tree `webdav` module.
-	pub carddav: bool,
-}
-
-impl Services {
-	/// Every service on: the default for a full epistle deployment where
-	/// the `webdav` listener is configured.
-	pub fn all() -> Self {
-		Services {
-			caldav: true,
-			carddav: true,
-		}
-	}
-}
+pub use super::records_services::{Services, SrvService};
 
 /// Map an ACME directory URL to the CA we expect to issue certs for this
 /// domain. Returns `None` for unknown directories — emitting a wrong CAA
@@ -176,9 +111,10 @@ pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
 /// then the optional RSA selector), replaced for a domain in
 /// `dkim_per_domain` by that domain's own list; `tlsa` is the `3 0 1` association for
 /// the mail host's certificate when one is available; `mta_sts_id`
-/// versions the MTA-STS record; `services` toggles the optional SRV records
-/// (CalDAV/CardDAV are tied to the `webdav` listener); `caa_directory` is
-/// the configured ACME directory URL; when it maps to a known CA via
+/// versions the MTA-STS record; `services` selects the SRV locators, one
+/// per service the deployment exposes (see [`Services::from_config`]);
+/// `caa_directory` is the configured ACME directory URL; when it maps to a
+/// known CA via
 /// [`caa_ca_for_directory`], a single CAA `0 issue "<ca>"` is emitted for
 /// every domain, locking renewal to that CA. Unknown directories emit no
 /// CAA (a wrong value would block renewal).
@@ -339,17 +275,18 @@ pub fn build_records(
 				},
 			});
 		}
-		// Service locators (RFC 6186, 8314, 8621, 5804) — mail, JMAP, and
-		// ManageSieve always; CalDAV/CardDAV only when the webdav listener
-		// exposes them.
-		for svc in SRV_SERVICES {
-			records.push(srv(format!("{}._{}.{domain}", svc.name, "tcp"), svc.port));
-		}
-		if services.caldav {
-			records.push(srv(format!("_caldavs._tcp.{domain}"), 443));
-		}
-		if services.carddav {
-			records.push(srv(format!("_carddavs._tcp.{domain}"), 443));
+		// Service locators (RFC 6186, 8314, 8621, 5804) — one per service
+		// the deployment exposes. A locator names a port, so a client that
+		// follows one of a service nobody listens on reaches nothing; the
+		// set therefore follows the configuration.
+		for service in SrvService::ALL {
+			if !services.contains(service) {
+				continue;
+			}
+			records.push(srv(
+				format!("{}._tcp.{domain}", service.label()),
+				service.port(),
+			));
 		}
 	}
 

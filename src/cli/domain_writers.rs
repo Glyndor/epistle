@@ -52,7 +52,9 @@ pub fn print_domain_records(
 		&dns_records::DomainDkim::new(),
 		tlsa.as_deref(),
 		&dns_records::mta_sts_id(config),
-		dns_records::Services::all(),
+		// The SRV locators follow the configuration: a service the
+		// operator turned off gets no locator.
+		dns_records::Services::from_config(config),
 		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 		config.public_ipv4,
 		config.public_ipv6,
@@ -246,3 +248,7 @@ pub(super) fn alias_commit<'a>(alias: &str, verb: &'a str) -> Commit<'a> {
 		records_for: None,
 	}
 }
+
+#[cfg(test)]
+#[path = "domain_writers_tests.rs"]
+mod tests;
