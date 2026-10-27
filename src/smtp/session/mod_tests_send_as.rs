@@ -1,5 +1,5 @@
 //! Send-as over SMTP submission, for the shared table in
-//! `directory_send_as_fixture.rs`: `MAIL FROM` and the From header are both
+//! `directory/send_as_fixture.rs`: `MAIL FROM` and the From header are both
 //! held to `Directory::owns_address`, for dotted addresses, any case, lists
 //! and the addresses that merely deliver to the account.
 

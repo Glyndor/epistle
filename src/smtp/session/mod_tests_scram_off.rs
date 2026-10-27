@@ -1,7 +1,7 @@
 //! Behaviour with `[auth] scram = false`.
 //!
-//! Split into a sibling so `session_tests_auth.rs` and `session_tests.rs`
-//! stay under the per-file code-line budget. Every test here exercises
+//! Split into a sibling so `mod_tests_auth.rs` and the other session test
+//! files stay under the per-file code-line budget. Every test here exercises
 //! the disable path and asserts the exact wire output (capability line
 //! and refusal line) plus the on-disk account state, so a future change
 //! cannot silently re-enable SCRAM without the assertion firing.
@@ -9,7 +9,7 @@
 use super::*;
 use crate::smtp::auth::tests::{fixture_password, hash as hash_password};
 
-/// Local copy of `session_tests_auth::tls_session` so the toggle tests do not
+/// Local copy of `tests_auth::tls_session` so the toggle tests do not
 /// depend on a sibling module's pub(super) items.
 fn tls_session() -> super::Session {
 	let directory = crate::smtp::directory::Directory::new(

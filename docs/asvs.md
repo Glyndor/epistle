@@ -56,7 +56,7 @@ function name is the stable reference.
 | 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `constant_time_eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
 | 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram.rs`, `src/imap/session/auth.rs`). |
-| 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory.rs::authenticate_with_ip`/`credentials`). |
+| 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
 | 2.10.4 OAuth/JWT bearer fully validated | Met (hardened in this sweep) | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` now required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`, fixed in this sweep). |
 
 ---
@@ -85,7 +85,7 @@ function name is the stable reference.
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
 | 4.3.3 Per-account confinement (WebDAV/CalDAV/CardDAV) | Met | `src/webdav/path.rs::resolve` percent-decodes, rejects NUL/`..`/`\`/non-`Normal` components and ends with a `starts_with(root)` guard; the root is derived from the *resolved* account (`src/webdav/auth.rs`, `src/webdav/handler.rs`). |
-| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/mod.rs` → `src/smtp/directory.rs::owns_address`); relay to foreign domains requires auth. |
+| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/mod.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
 
 > RFC 4314 IMAP ACLs are stored and reported (`SETACL`/`GETACL`/`MYRIGHTS`,
 > `src/imap/session/acl.rs`) but no shared-mailbox **read path consults them yet**

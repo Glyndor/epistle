@@ -1,5 +1,5 @@
 //! Send-as over the REST API and JMAP, for the shared table in
-//! `directory_send_as_fixture.rs`: `POST /api/v1/send` and
+//! `directory/send_as_fixture.rs`: `POST /api/v1/send` and
 //! `EmailSubmission/set` hold the sender and the From header to the same
 //! `Directory::owns_address` as SMTP submission, for dotted addresses, any
 //! case, lists and the addresses that merely deliver to the account.

@@ -58,7 +58,6 @@ pub const MAX_MAX_RECIPIENTS: usize = 10_000;
 
 mod auth_dispatch;
 mod transaction_policy;
-#[path = "types.rs"]
 mod types;
 pub use junk::DEFAULT_JUNK_COMMAND_LIMIT;
 use transaction_policy::TransactionPolicy;

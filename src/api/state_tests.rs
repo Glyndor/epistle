@@ -118,7 +118,7 @@ fn owns_address_is_fail_closed_without_directory() {
 /// `owns_address` delegates to the wired-in directory: a foreign address is
 /// rejected, an owned one is accepted, and a case-different variant of an
 /// owned address is still accepted (Directory::owns_address is
-/// case-insensitive on the address — see src/smtp/directory.rs:412).
+/// case-insensitive on the address — see src/smtp/directory/mod.rs:412).
 #[test]
 fn owns_address_consults_attached_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");

@@ -1,7 +1,6 @@
 //! The local half of the password check: the primary password with its TOTP
 //! second factor, then the account's app passwords. LDAP and the account
-//! rules that apply to every proof live in `directory_bans.rs` and
-//! `directory_gate.rs`.
+//! rules that apply to every proof live in `bans.rs` and `gate.rs`.
 
 use std::borrow::Cow;
 

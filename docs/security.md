@@ -169,7 +169,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   `553` at `MAIL FROM`, `550 5.7.1` at the `From` header, `forbiddenFrom` in
   JMAP and `forbidden_from` in the API, as is any address of another account
   or of another domain. Loosening any of them is a decision about spoofing,
-  not a fix. The table of cases lives in `src/smtp/directory_send_as_fixture.rs`.
+  not a fix. The table of cases lives in `src/smtp/directory/send_as_fixture.rs`.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,

@@ -34,5 +34,4 @@ impl Directory {
 }
 
 #[cfg(test)]
-#[path = "directory_test_counter.rs"]
 mod test_counter;
