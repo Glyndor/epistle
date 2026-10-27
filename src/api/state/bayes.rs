@@ -2,7 +2,7 @@
 //!
 //! `Email/set` feeds the training queue on a `$Junk` / `$NotJunk`
 //! change; account-removal drops the rows through the BayesStore. The
-//! builder/accessor pairs sit here so the rest of `state.rs` stays
+//! builder/accessor pairs sit here so the rest of `mod.rs` stays
 //! under the line limit and the bayes surface is one place to read in
 //! full.
 

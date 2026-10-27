@@ -114,14 +114,14 @@ struct Inner {
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
 	/// The per-account submission limiter the SMTP listeners share, and
-	/// the server-wide per-account cap; see `state_submission.rs`.
+	/// the server-wide per-account cap; see `submission.rs`.
 	submission_limit: Option<(Arc<crate::smtp::ratelimit::SendLimiter>, Option<u32>)>,
 	/// Per-account Bayesian wiring: the training queue and the
 	/// store, both `None` without a database. Builders and accessors
-	/// live in `state_bayes.rs`.
+	/// live in `bayes.rs`.
 	bayes: bayes::BayesBindings,
 	/// The outbound path SMTP submission uses (routing, DKIM, local
-	/// delivery); `None` sends straight to `spool`. See `state_outbound.rs`.
+	/// delivery); `None` sends straight to `spool`. See `outbound.rs`.
 	outbound: Option<Arc<dyn crate::smtp::sink::MessageSink>>,
 	/// Retention window in days for the per-recipient delivery log
 	/// (`<data_dir>/deliverylog/`). `0` (the default) disables the log;
@@ -581,7 +581,7 @@ impl ApiState {
 	/// window. Test-only: the router-level rate-limit test builds its state
 	/// with a long window so the wall clock under a loaded parallel run is
 	/// never the thing under test. The window logic itself is covered by
-	/// `state_limiter_tests.rs`. Must be called before the state is shared
+	/// `mod_limiter_tests.rs`. Must be called before the state is shared
 	/// (the other builders quietly no-op when the `Arc` is already taken;
 	/// this one panics, because a test-only builder that silently does
 	/// nothing defeats its own control).

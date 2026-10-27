@@ -26,7 +26,7 @@ fn different_length_slices_mismatch_without_scanning() {
 
 /// Per-callsite coverage of the four credential comparisons the secret-hygiene
 /// pass names (`src/smtp/scram.rs` stored key, `src/api/oauth/device.rs` user
-/// code, `src/api/state.rs` bearer digest, `src/api/api_keys.rs` api-key
+/// code, `src/api/state/mod.rs` bearer digest, `src/api/api_keys/mod.rs` api-key
 /// digest). Each test feeds the helper the right value, a same-length wrong
 /// value, and a different-length wrong value, asserting the result the caller
 /// relies on: accept / reject / reject.
@@ -73,7 +73,7 @@ fn oauth_device_user_code_check() {
 #[test]
 fn bearer_digest_check() {
 	// A SHA-256 digest rendered as hex is 64 bytes; that is the length the
-	// bearer-token comparison in `src/api/state.rs` works with.
+	// bearer-token comparison in `src/api/state/mod.rs` works with.
 	let expected_hex = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 	let mut wrong_same_length = *expected_hex;
 	wrong_same_length[1] = b'f';
