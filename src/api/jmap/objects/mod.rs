@@ -11,7 +11,8 @@ use crate::util::header::sanitize_header_value;
 pub(super) mod mime;
 
 #[cfg(test)]
-mod mime_tests_structure;
+#[path = "mod_tests_mime_structure.rs"]
+mod tests_mime_structure;
 
 /// One RFC 5322 address (`"name" <email>` or `<email>`) built from a JMAP
 /// address object. The name, when present, is sanitized and then encoded
@@ -359,16 +360,21 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 mod tests;
 
 #[cfg(test)]
-mod mime_tests_body;
+#[path = "mod_tests_mime_body.rs"]
+mod tests_mime_body;
 
 #[cfg(test)]
-mod mime_tests_values;
+#[path = "mod_tests_mime_values.rs"]
+mod tests_mime_values;
 
 #[cfg(test)]
-mod mime_tests_download;
+#[path = "mod_tests_mime_download.rs"]
+mod tests_mime_download;
 
 #[cfg(test)]
-mod mime_tests_depth;
+#[path = "mod_tests_mime_depth.rs"]
+mod tests_mime_depth;
 
 #[cfg(test)]
-mod default_mailboxes;
+#[path = "mod_tests_default_mailboxes.rs"]
+mod tests_default_mailboxes;

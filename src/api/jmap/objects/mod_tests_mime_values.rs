@@ -1,4 +1,4 @@
-use super::mime_tests_structure::ID;
+use super::tests_mime_structure::ID;
 use crate::api::tests::{TOKEN, request_with_body, test_state};
 use serde_json::{Value, json};
 

@@ -49,7 +49,7 @@ struct Inner {
 	/// once. A request past the limit waits for its turn, it is not refused.
 	argon2_gate: std::sync::Arc<tokio::sync::Semaphore>,
 	/// Requests waiting for the gate; past [`MAX_ARGON2_QUEUE`] they are refused.
-	argon2_waiting: std::sync::Mutex<state_auth_queue::QueueSlots>,
+	argon2_waiting: std::sync::Mutex<auth_queue::QueueSlots>,
 	argon2_queue_max: usize,
 	/// Test-only: argon2 runs started, running now, and the most at once.
 	#[cfg(test)]
@@ -213,7 +213,7 @@ impl ApiState {
 				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
 					MAX_CONCURRENT_ARGON2,
 				)),
-				argon2_waiting: std::sync::Mutex::new(state_auth_queue::QueueSlots::default()),
+				argon2_waiting: std::sync::Mutex::new(auth_queue::QueueSlots::default()),
 				argon2_queue_max: MAX_ARGON2_QUEUE,
 				#[cfg(test)]
 				argon2_stats: Default::default(),
@@ -581,7 +581,7 @@ impl ApiState {
 	/// window. Test-only: the router-level rate-limit test builds its state
 	/// with a long window so the wall clock under a loaded parallel run is
 	/// never the thing under test. The window logic itself is covered by
-	/// `mod_limiter_tests.rs`. Must be called before the state is shared
+	/// `mod_tests_limiter.rs`. Must be called before the state is shared
 	/// (the other builders quietly no-op when the `Arc` is already taken;
 	/// this one panics, because a test-only builder that silently does
 	/// nothing defeats its own control).
@@ -773,7 +773,7 @@ mod bearer;
 pub(in crate::api) use bearer::acceptable_scopes_for;
 pub use bearer::require_bearer_token;
 
-mod state_auth_queue;
+mod auth_queue;
 
 mod auth;
 
@@ -790,7 +790,7 @@ mod classes;
 mod tests;
 
 #[cfg(test)]
-#[path = "mod_limiter_tests.rs"]
-mod limiter_tests;
+#[path = "mod_tests_limiter.rs"]
+mod tests_limiter;
 
 mod client_ip;

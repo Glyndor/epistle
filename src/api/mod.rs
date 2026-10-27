@@ -109,7 +109,7 @@ pub fn router(state: ApiState) -> Router {
 }
 
 #[cfg(test)]
-#[path = "api_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
@@ -117,7 +117,7 @@ mod tests;
 mod single_label_tests;
 
 #[cfg(test)]
-#[path = "api_tests_b.rs"]
+#[path = "mod_tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
@@ -129,11 +129,11 @@ mod scram_off_tests;
 mod account_bound_tests;
 
 #[cfg(test)]
-#[path = "api_tests_newrecipients.rs"]
+#[path = "mod_tests_newrecipients.rs"]
 mod tests_newrecipients;
 
 #[cfg(test)]
-#[path = "api_tests_quota.rs"]
+#[path = "mod_tests_quota.rs"]
 mod tests_quota;
 
 #[cfg(test)]
@@ -388,15 +388,15 @@ mod jmap_tests_sieve_cost;
 mod jmap_tests_sieve_padding;
 
 #[cfg(test)]
-#[path = "api_tests_addresses.rs"]
+#[path = "mod_tests_addresses.rs"]
 mod tests_addresses;
 
 #[cfg(test)]
-#[path = "api_tests_display_name.rs"]
+#[path = "mod_tests_display_name.rs"]
 mod tests_display_name;
 
 #[cfg(test)]
-#[path = "api_tests_queue.rs"]
+#[path = "mod_tests_queue.rs"]
 mod tests_queue;
 
 #[cfg(test)]

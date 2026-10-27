@@ -398,7 +398,7 @@ async fn rate_limit_triggers_after_repeated_failures() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// The wall clock under a loaded parallel run is not the thing under test
 	// here; the limiter's window logic is covered by
-	// `src/api/state/mod_limiter_tests.rs`.
+	// `src/api/state/mod_tests_limiter.rs`.
 	// Stretch the window so the 21 calls cannot span it.
 	let app = router(test_state(dir.path(), 0).with_auth_window(Duration::from_secs(3600)));
 	for _ in 0..20 {

@@ -147,7 +147,7 @@ impl ApiState {
 		known.copy_from_slice(digest.as_ref());
 		// A bounded queue: a flood waits at most this long, and the request
 		// that would be one too many is refused instead of piling up.
-		let _waiting = super::state_auth_queue::Waiting::enter(
+		let _waiting = super::auth_queue::Waiting::enter(
 			&self.inner.argon2_waiting,
 			client_ip,
 			self.inner.argon2_queue_max,

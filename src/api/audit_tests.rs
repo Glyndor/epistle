@@ -142,8 +142,8 @@ fn audit_blob(events: &[CapturedEvent]) -> String {
 // as six false positives here.
 
 /// Bootstrap a dynamic account on `app` so each privileged handler has
-/// something to act on. Mirrors the body shape used by the other `api_tests`
-/// cases. The caller owns `app` because every subsequent request must hit
+/// something to act on. Mirrors the body shape used by the other
+/// `mod_tests` cases. The caller owns `app` because every subsequent request must hit
 /// the same `AccountStore` (each call to `router(test_state(...))` builds a
 /// fresh in-memory store).
 async fn bootstrap_account(app: &axum::Router, name: &str) {
