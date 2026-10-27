@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 
-use crate::dkim::{Canon, DkimOutcome, canon, parse_key};
+use crate::dkim::{Algorithm, Canon, DkimOutcome, canon, parse_key};
 use crate::spf::{DnsFailure, DnsLookup};
 
 use super::signature::MessageSignature;
@@ -58,7 +58,10 @@ h={}; bh={body_hash}; b=",
 	self_line.truncate(self_line.len() - 2); // drop trailing CRLF
 	hash_input.push_str(&self_line);
 
-	let signature = BASE64.encode(key.sign(hash_input.as_bytes()).as_ref());
+	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
+	// digest of the signed data, not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(hash_input.as_bytes());
+	let signature = BASE64.encode(key.sign(signed.as_ref()).as_ref());
 	Some(format!("ARC-Message-Signature:{value}{signature}\r\n"))
 }
 
@@ -93,7 +96,10 @@ pub async fn verify(
 	};
 
 	let public_key = UnparsedPublicKey::new(&ED25519, key);
-	match public_key.verify(hash_input.as_bytes(), &ams.signature) {
+	// The same rule the signer followed: an Ed25519-SHA256 signature covers
+	// the SHA-256 digest of the signed data.
+	let signed = ams.algorithm.signed_bytes(hash_input.as_bytes());
+	match public_key.verify(signed.as_ref(), &ams.signature) {
 		Ok(()) => DkimOutcome::Pass,
 		Err(_) => DkimOutcome::Fail,
 	}

@@ -2,7 +2,8 @@
 
 use super::ams::{build, verify};
 use super::signature::parse_message_signature;
-use crate::dkim::DkimOutcome;
+use crate::dkim::signature::Algorithm;
+use crate::dkim::{Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -64,6 +65,60 @@ const MESSAGE: &[u8] =
 fn value_of(line: &str) -> String {
 	let after = line.split_once(':').expect("colon").1;
 	after.strip_suffix("\r\n").unwrap_or(after).to_string()
+}
+
+/// The bytes an AMS covers: the headers its `h=` tag lists, relaxed
+/// canonicalized, then the `ARC-Message-Signature` header with `b=` emptied
+/// and no trailing CRLF (RFC 6376 section 3.7).
+fn ams_input(ams_value: &str) -> String {
+	let mut input = String::new();
+	input.push_str(&canon::header(Canon::Relaxed, "From", " alice@example.org"));
+	input.push_str(&canon::header(Canon::Relaxed, "To", " bob@example.net"));
+	input.push_str(&canon::header(Canon::Relaxed, "Subject", " hi"));
+	input.push_str(
+		canon::header(
+			Canon::Relaxed,
+			"ARC-Message-Signature",
+			&without_signature(ams_value),
+		)
+		.strip_suffix("\r\n")
+		.expect("canonical CRLF"),
+	);
+	input
+}
+
+/// The header value with the `b=` tag emptied, the way the verifier strips
+/// it before hashing.
+fn without_signature(value: &str) -> String {
+	value
+		.split(';')
+		.map(|tag| {
+			let trimmed = tag.trim_start();
+			if trimmed.starts_with("b=") {
+				let prefix = tag.len() - trimmed.len();
+				format!("{}b=", &tag[..prefix])
+			} else {
+				tag.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join(";")
+}
+
+#[test]
+fn the_ams_signature_covers_the_sha256_of_the_signed_headers() {
+	let key = key();
+	let line = build(&key, 1, DOMAIN, SELECTOR, MESSAGE).expect("signed");
+	let value = value_of(&line);
+
+	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
+	// digest of the signed data, not the data itself.
+	let input = ams_input(&value);
+	let expected = key.sign(&Algorithm::Ed25519Sha256.signed_bytes(input.as_bytes()));
+	assert_eq!(
+		parse_message_signature(&value).expect("parse").signature,
+		expected.as_ref()
+	);
 }
 
 #[tokio::test]

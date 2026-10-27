@@ -8,7 +8,7 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair, RSA_PKCS1_SHA256, RsaKeyPair};
 
 use super::canon;
-use super::signature::Canon;
+use super::signature::{Algorithm, Canon};
 
 #[path = "sign_wire.rs"]
 mod wire;
@@ -212,7 +212,12 @@ impl Signer {
 			&names,
 			&body_hash,
 			&header_input,
-			&|input| Some(self.key.sign(input).as_ref().to_vec()),
+			&|input| {
+				// RFC 8463 section 3: an Ed25519-SHA256 signature covers the
+				// SHA-256 digest of the header data, not the data itself.
+				let signed = Algorithm::Ed25519Sha256.signed_bytes(input);
+				Some(self.key.sign(signed.as_ref()).as_ref().to_vec())
+			},
 		)?;
 		if let Some(rsa) = &self.rsa
 			&& let Some(line) = self.one_signature(

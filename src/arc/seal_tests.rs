@@ -3,7 +3,8 @@
 use super::chain::{ChainValidation, Instance};
 use super::seal::{SealParams, build, verify};
 use super::signature::parse_seal;
-use crate::dkim::DkimOutcome;
+use crate::dkim::signature::Algorithm;
+use crate::dkim::{Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -72,6 +73,59 @@ fn params(instance: u32, cv: ChainValidation) -> SealParams<'static> {
 fn value_of(line: &str) -> String {
 	let after = line.split_once(':').expect("colon").1;
 	after.strip_suffix("\r\n").unwrap_or(after).to_string()
+}
+
+/// The bytes a seal covers: the ARC set in instance order, relaxed
+/// canonicalized, with the seal's own `b=` emptied and no trailing CRLF
+/// (RFC 8617 section 5.1.1).
+fn seal_input(aar: &str, ams: &str, seal_value: &str) -> String {
+	let mut input = String::new();
+	input.push_str(&canon::header(
+		Canon::Relaxed,
+		"ARC-Authentication-Results",
+		aar,
+	));
+	input.push_str(&canon::header(Canon::Relaxed, "ARC-Message-Signature", ams));
+	input.push_str(
+		canon::header(Canon::Relaxed, "ARC-Seal", &without_signature(seal_value))
+			.strip_suffix("\r\n")
+			.expect("canonical CRLF"),
+	);
+	input
+}
+
+/// The header value with the `b=` tag emptied, the way the verifier strips
+/// it before hashing.
+fn without_signature(value: &str) -> String {
+	value
+		.split(';')
+		.map(|tag| {
+			let trimmed = tag.trim_start();
+			if trimmed.starts_with("b=") {
+				let prefix = tag.len() - trimmed.len();
+				format!("{}b=", &tag[..prefix])
+			} else {
+				tag.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join(";")
+}
+
+#[test]
+fn the_seal_signature_covers_the_sha256_of_the_arc_set() {
+	let key = key();
+	let line = build(&key, &params(1, ChainValidation::None), &[], AAR, AMS);
+	let value = value_of(&line);
+
+	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
+	// digest of the signed data, not the data itself.
+	let input = seal_input(AAR, AMS, &value);
+	let expected = key.sign(&Algorithm::Ed25519Sha256.signed_bytes(input.as_bytes()));
+	assert_eq!(
+		parse_seal(&value).expect("parse").signature,
+		expected.as_ref()
+	);
 }
 
 #[tokio::test]

@@ -61,7 +61,7 @@ impl DnsLookup for KeyDns {
 }
 
 fn signed_report(domain: &str, length_tag: bool) -> (AcceptedMessage, KeyDns) {
-	use crate::dkim::{Canon, canon};
+	use crate::dkim::{Algorithm, Canon, canon};
 	let key = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
 		.expect("generate signing key");
 	let key = Ed25519KeyPair::from_pkcs8(key.as_ref()).expect("load signing key");
@@ -84,7 +84,10 @@ fn signed_report(domain: &str, length_tag: bool) -> (AcceptedMessage, KeyDns) {
 	let mut signature_line = canon::header(Canon::Relaxed, "DKIM-Signature", &value);
 	signature_line.truncate(signature_line.len() - 2);
 	header_input.push_str(&signature_line);
-	let signature = base64.encode(key.sign(header_input.as_bytes()).as_ref());
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the header
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(header_input.as_bytes());
+	let signature = base64.encode(key.sign(signed.as_ref()).as_ref());
 	let data = format!(
 		"From:{from}\r\nContent-Type:{content_type}\r\nDKIM-Signature:{value}{signature}\r\n\r\n{body}"
 	)
