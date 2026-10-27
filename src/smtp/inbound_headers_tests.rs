@@ -260,8 +260,9 @@ fn empty_header_only_and_lf_messages_have_the_same_policy() {
 }
 
 /// Leading `:` and ASCII whitespace at the start of the line are folded by
-/// mail-parser 0.11.9 (`src/parsers/header.rs::parse_header_name`); the
-/// stripper mirrors that byte rule so the canonical-name comparison sees
+/// mail-parser 0.11.9
+/// (`mail-parser/src/parsers/header.rs::parse_header_name`); the stripper
+/// mirrors that byte rule so the canonical-name comparison sees
 /// the same effective name every downstream reader does. Without this,
 /// `:Authentication-Results: mail.example.org; dkim=pass` parsed to an
 /// empty name and survived strip as a forged trust field.

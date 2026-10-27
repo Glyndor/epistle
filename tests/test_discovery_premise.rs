@@ -2,8 +2,8 @@
 //! check, rather than the conclusion drawn from it.
 //!
 //! `apt`, `homebrew-tap` and `scoop-bucket` each carry
-//! `tests/ci-runs-every-test.test.sh`, which fails when a test file exists and
-//! no workflow invokes it. It exists because a test once lived in `apt/tests/`,
+//! `apt/tests/ci-runs-every-test.test.sh` or a copy of it, which fails when a
+//! test file exists and no workflow invokes it. It exists because a test once lived in `apt/tests/`,
 //! passed by hand, and nothing in CI called it. epistle does not carry that
 //! guard, and the reason is narrow: every test here is a Rust test, cargo
 //! discovers `tests/*.rs` and `#[cfg(test)]` modules on its own, and
@@ -12,7 +12,8 @@
 //!
 //! That reasoning is sound and it is also **conditional**, which is the part
 //! worth writing down. podup reached the identical conclusion from the identical
-//! premise, and three commits later added `tests/shell/locale-pinned.test.sh` —
+//! premise, and three commits later added
+//! `podup/tests/shell/locale-pinned.test.sh`,
 //! a test file that runs only if a workflow names it. The premise had an
 //! unwritten second half, "and there are no shell tests", and nobody re-read a
 //! conclusion to notice it had expired.
@@ -27,9 +28,10 @@ use std::path::{Path, PathBuf};
 
 /// Directories that never hold source this repository owns. `cargo-home` is
 /// where `dpkg-buildpackage` drops the vendored crate registry: `sqlx`, `bytes`
-/// and `vcpkg` all ship their own `tests/*.sh`, and a dependency's test scripts
-/// say nothing about whether *our* tests are wired into CI. Scanning them made
-/// this test fail the Debian build on its first run.
+/// and `vcpkg` all ship shell scripts under their own `tests` directory, and a
+/// dependency's test scripts say nothing about whether *our* tests are wired
+/// into CI. Scanning them made this test fail the Debian build on its first
+/// run.
 const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-home"];
 
 /// Directories that contain test files invoked by a workflow committed to
@@ -64,8 +66,8 @@ fn no_test_file_here_needs_a_workflow_to_name_it() {
 		 in CI until a workflow invokes it by path, which is how apt lost one.\n\n\
 		 Pick one:\n  \
 		 - delete the file, if the check belongs in a Rust test;\n  \
-		 - or wire it into a workflow AND port `tests/ci-runs-every-test.test.sh`\n    \
-		 from apt, so the next one cannot go unwired either.\n\n\
+		 - or wire it into a workflow AND port `apt/tests/ci-runs-every-test.test.sh`,\n    \
+		 so the next one cannot go unwired either.\n\n\
 		 Do not simply delete this test to make the failure go away: it is the only\n\
 		 thing standing between this repository and the defect apt already had.",
 		found.join("\n  ")

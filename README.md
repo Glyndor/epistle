@@ -79,6 +79,7 @@ network at all and are reached only through Unix sockets.
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
 | [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |
 | [Performance](docs/performance.md) | The measured hot paths and how to reproduce them |
+| [Repository structure](docs/structure.md) | Where the code and its tests live, and the layout rules |
 | [Contributing](CONTRIBUTING.md) | Building from source, tests and the contribution flow |
 
 ## License
