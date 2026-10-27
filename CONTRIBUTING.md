@@ -111,6 +111,26 @@ to `127.0.0.1` unless `addr` says otherwise, and the config file must be
 owner-only (`chmod 600`). [Configuration](docs/configuration.md) has a full
 example and every key.
 
+## Repository layout
+
+[Repository structure](docs/structure.md) has the map. Four rules decide
+where code goes:
+
+1. One folder, one module. A folder that mixes two responsibilities is split
+   by responsibility, never by size.
+2. A module with more than one file becomes a folder with `mod.rs`, and its
+   siblings are declared with a plain `mod <sibling>;`.
+3. The tests of a module go in `tests/` inside that module, never beside the
+   source.
+4. No new `#[path]` unless it points at a data file next to the module that
+   reads it. A new `#[path]` usually means a folder is missing.
+
+The tree is moving to this shape in batches (#1211), so most modules do not
+follow rules 3 and 4 yet. Write new code in the target shape, and leave a
+module you only edit where it is: its batch moves it. A path cited in a doc
+or a comment has to exist, and `tests/repository_paths_exist.rs` fails on
+any that does not.
+
 ## Tests
 
 The suite that runs in CI is:
