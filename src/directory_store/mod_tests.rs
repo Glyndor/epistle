@@ -1,6 +1,7 @@
 //! Tests for the runtime account store and directory handle.
 
 use super::*;
+use crate::smtp::address::Address;
 use crate::smtp::auth::tests::{fixture_password, wrong_password};
 use crate::smtp::directory::Resolution;
 use crate::test_fixtures as fixtures;
@@ -14,6 +15,7 @@ fn static_account() -> Account {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		display_name: None,
 		allowed_protocols: None,
 	}
 }
@@ -292,6 +294,7 @@ fn disabled_alias_falls_through_to_catch_all_in_account_store() {
 			quota_bytes: None,
 			forward: Vec::new(),
 			forward_keep_local: true,
+			display_name: None,
 			allowed_protocols: None,
 		}],
 	)
@@ -356,6 +359,7 @@ fn static_allowed_protocols_propagates_to_directory() {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		display_name: None,
 		allowed_protocols: Some(vec![Protocol::Api]),
 	};
 	let store = AccountStore::open(

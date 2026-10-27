@@ -5,11 +5,12 @@
 //!
 //! Every `src` file named like a test file (`*_tests.rs`, `*_tests_*.rs`,
 //! `tests.rs`, `mod_tests*.rs`) must be reached by a `#[path = "<file>"]`
-//! attribute or by a `mod <name>;` declaration somewhere in `src`.
+//! attribute or by a `mod <name>;` declaration, resolved against the folder of
+//! the file that declares it.
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 	for entry in fs::read_dir(dir).unwrap() {
@@ -26,19 +27,37 @@ fn is_test_file_name(name: &str) -> bool {
 	name == "tests.rs" || name.starts_with("mod_tests") || name.contains("_tests")
 }
 
-/// File names a `#[path = "..."]` attribute points at, and `<name>.rs` for every
-/// `mod <name>;`.
-fn declared_names(sources: &[String]) -> HashSet<String> {
-	let mut names = HashSet::new();
-	for text in sources {
+/// Full paths of the files the sources declare: a `#[path = "x.rs"]` attribute
+/// names `x.rs` next to the declaring file, and `mod name;` names `name.rs` or
+/// `name/mod.rs` next to it, or `name.rs` inside the folder of the declaring
+/// file's own name. Matching whole paths matters: two modules may each have a
+/// test file with the same name, and one declaration must not hide the other.
+/// `a/b/../c` as `a/c`, without touching the file system.
+fn normalised(path: PathBuf) -> PathBuf {
+	let mut out = PathBuf::new();
+	for part in path.components() {
+		match part {
+			Component::ParentDir => {
+				out.pop();
+			}
+			other => out.push(other),
+		}
+	}
+	out
+}
+
+fn declared_paths(files: &[PathBuf], sources: &[String]) -> HashSet<PathBuf> {
+	let mut paths = HashSet::new();
+	for (file, text) in files.iter().zip(sources) {
+		let dir = file.parent().unwrap();
+		let own_folder = dir.join(file.file_stem().unwrap());
 		for line in text.lines() {
 			let line = line.trim();
 			if let Some(rest) = line.strip_prefix("#[path")
 				&& let Some(start) = rest.find('"')
 				&& let Some(end) = rest[start + 1..].find('"')
 			{
-				let target = &rest[start + 1..start + 1 + end];
-				names.insert(target.rsplit('/').next().unwrap().to_string());
+				paths.insert(normalised(dir.join(&rest[start + 1..start + 1 + end])));
 			}
 			let line = line
 				.strip_prefix("pub(crate) ")
@@ -46,11 +65,14 @@ fn declared_names(sources: &[String]) -> HashSet<String> {
 				.or_else(|| line.strip_prefix("pub "))
 				.unwrap_or(line);
 			if let Some(name) = line.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
-				names.insert(format!("{}.rs", name.trim()));
+				let name = name.trim();
+				paths.insert(dir.join(format!("{name}.rs")));
+				paths.insert(dir.join(name).join("mod.rs"));
+				paths.insert(own_folder.join(format!("{name}.rs")));
 			}
 		}
 	}
-	names
+	paths
 }
 
 #[test]
@@ -64,12 +86,12 @@ fn every_test_file_in_src_is_declared_by_a_module() {
 		.iter()
 		.map(|p| fs::read_to_string(p).unwrap())
 		.collect();
-	let declared = declared_names(&sources);
+	let declared = declared_paths(&files, &sources);
 	let mut orphans: Vec<String> = files
 		.iter()
 		.filter_map(|path| {
 			let name = path.file_name()?.to_str()?;
-			(is_test_file_name(name) && !declared.contains(name))
+			(is_test_file_name(name) && !declared.contains(path))
 				.then(|| path.display().to_string())
 		})
 		.collect();
