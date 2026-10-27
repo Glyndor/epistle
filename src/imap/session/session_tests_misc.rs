@@ -487,7 +487,7 @@ fn list_extended_subscribed_selection_and_attribute() {
 fn list_advertises_has_no_children() {
 	// CHILDREN (RFC 3348): every LIST line carries \HasNoChildren or
 	// \HasChildren. None of these mailboxes has a folder under it, so each
-	// is \HasNoChildren; list_status_tests_hierarchy covers \HasChildren.
+	// is \HasNoChildren; list_status/hierarchy covers \HasChildren.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	session.command_line("rev ENABLE IMAP4rev2");
