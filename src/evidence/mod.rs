@@ -18,7 +18,6 @@ pub mod checkpoint;
 pub mod class;
 pub mod clock_accept;
 pub mod day;
-pub mod day_state;
 #[cfg(test)]
 mod end_to_end_tests;
 mod final_break;

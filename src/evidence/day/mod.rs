@@ -5,6 +5,8 @@
 //! disk is accepted only when it renders to itself, so `2026-02-30` or
 //! `../x` never names a day.
 
+pub mod state;
+
 /// `0000-01-01` and `9999-12-31` as days since 1970-01-01.
 const FIRST_NAMED: i64 = -719_528;
 const LAST_NAMED: i64 = 2_932_896;
@@ -78,5 +80,5 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 #[cfg(test)]
-#[path = "day_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

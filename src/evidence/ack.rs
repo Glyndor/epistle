@@ -19,7 +19,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::chain::{CHAIN_DIR, Chain, day_file, open_day};
-use super::day_state::day_state;
+use super::day::state::day_state;
 use super::key::{self, EvidenceKey};
 use super::lines::{Line, Lines};
 use super::record::{Entry, Record, bounded, hash_from_hex, sha256, to_hex};
@@ -41,7 +41,7 @@ pub struct Acknowledged {
 	/// The id of the key that signed it.
 	pub key: String,
 	/// The digest of the day as the operator saw it (see
-	/// [`super::day_state::day_state`]), for a break found while walking a
+	/// [`super::day::state::day_state`]), for a break found while walking a
 	/// day. Empty for a break that names its own state.
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub state: String,
