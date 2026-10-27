@@ -189,32 +189,4 @@ pub(super) fn token_chain_pem(token: &[u8]) -> Result<String, String> {
 }
 
 #[cfg(test)]
-#[path = "bundle_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "bundle_tests_complete.rs"]
-mod tests_complete;
-#[cfg(test)]
-#[path = "bundle_tests_delivery.rs"]
-mod tests_delivery;
-#[cfg(test)]
-#[path = "bundle_tests_export.rs"]
-mod tests_export;
-#[cfg(test)]
-#[path = "bundle_tests_private.rs"]
-mod tests_private;
-#[cfg(test)]
-#[path = "bundle_tests_readme.rs"]
-mod tests_readme;
-#[cfg(test)]
-#[path = "bundle_tests_retired.rs"]
-mod tests_retired;
-#[cfg(test)]
-#[path = "bundle_tests_scope.rs"]
-mod tests_scope;
-#[cfg(test)]
-#[path = "bundle_tests_stray.rs"]
-mod tests_stray;
-#[cfg(test)]
-#[path = "bundle_tests_window.rs"]
-mod tests_window;

@@ -429,14 +429,4 @@ mod finish;
 use finish::{finish_deleting, resume};
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "mod_tests_crash.rs"]
-mod tests_crash;
-#[cfg(test)]
-#[path = "mod_tests_keys.rs"]
-mod tests_keys;
-#[cfg(test)]
-#[path = "mod_tests_planted.rs"]
-mod tests_planted;

@@ -18,8 +18,6 @@ pub mod checkpoint;
 pub mod class;
 pub mod clock_accept;
 pub mod day;
-#[cfg(test)]
-mod end_to_end_tests;
 mod final_break;
 pub mod head;
 pub mod hidden;
@@ -37,10 +35,10 @@ pub mod submission;
 pub mod tasks;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod tests;
 pub mod timeref;
 pub mod tsa;
-#[cfg(test)]
-mod vectors_tests;
 pub mod verify;
 
 pub use class::{CLASS_HEADER, ClassSources, MailClass};
