@@ -1,7 +1,7 @@
 //! Recipient resolution: what an address names (an account, an alias, a
 //! masked address, a sub-address, a catch-all), and where it is finally
 //! delivered, with the address each copy is delivered as. Kept apart from
-//! `directory.rs`, which holds the lookup tables.
+//! `mod.rs`, which holds the lookup tables.
 
 use super::{Directory, Resolution};
 use crate::smtp::address::Address;

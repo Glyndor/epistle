@@ -217,7 +217,7 @@ fn an_ldap_account_whose_name_escapes_the_data_dir_is_dropped() {
 
 // Integration tests for the alias disabled-overlay wiring through
 // `AccountStore`. The directory-level tests in
-// `src/smtp/directory_alias_tests.rs` cover `Directory`'s behaviour in
+// `src/smtp/directory/mod_alias_tests.rs` cover `Directory`'s behaviour in
 // isolation; this module covers the AccountStore path that rebuilds the
 // directory from the disabled set on every write.
 

@@ -133,7 +133,7 @@ fn submit_email(
 	}
 	// Send-as guard: the envelope mailFrom must belong to the account on whose
 	// behalf the bearer authenticated, matching what SMTP enforces at
-	// `src/smtp/session/mod.rs:380`. Empty mailFrom is the null reverse path
+	// `src/smtp/session/mod.rs:379`. Empty mailFrom is the null reverse path
 	// (JMAP `Envelope.mailFrom.email: null`), legal for bounces; a non-empty
 	// mailFrom that does not parse, or that the account does not own, is
 	// rejected with the RFC 8621 §7.5.2 `forbiddenFrom` error.

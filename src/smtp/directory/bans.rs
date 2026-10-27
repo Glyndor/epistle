@@ -1,6 +1,6 @@
 //! The ban-aware half of [`Directory`]: attaching the shared ban store and
 //! the authentication entry points that consult it before hashing. Kept in
-//! its own file so `directory.rs` stays readable; it is a child module so the
+//! its own file so `mod.rs` stays readable; it is a child module so the
 //! private helpers of the directory remain reachable.
 //!
 //! Two shared operations live here and are used by every password-based

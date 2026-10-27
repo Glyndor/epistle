@@ -165,7 +165,7 @@ pub struct Directory {
 	/// non-ASCII candidate set under `[auth] unicode_passwords = true`
 	/// verifies consistently with the bytes hashed at set-time.
 	password_policy: Policy,
-	/// Bounds how many password checks run at once (see `directory_hash_gate.rs`).
+	/// Bounds how many password checks run at once (see `hash_gate.rs`).
 	hash_gate: std::sync::Arc<hash_gate::HashGate>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
@@ -174,7 +174,7 @@ pub struct Directory {
 	#[cfg(test)]
 	scram_lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 	/// Test-only counts of the stand-in work done for logins that have no
-	/// credential of their own (see `directory_test_counter.rs`).
+	/// credential of their own (see `scram/test_counter.rs`).
 	#[cfg(test)]
 	decoy_counters: Option<std::sync::Arc<decoy_counters::DecoyCounters>>,
 }

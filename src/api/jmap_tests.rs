@@ -300,7 +300,7 @@ async fn jmap_email_submission_accepts_owned_mail_from() {
 	let app = router(test_state(dir.path(), 0));
 
 	// The case-insensitive variant `ALICE@EXAMPLE.ORG` still matches:
-	// `Directory::owns_address` lower-cases the key (smtp/directory.rs:412).
+	// `Directory::owns_address` lower-cases the key (smtp/directory/mod.rs:412).
 	let req = serde_json::json!({
 		"using": ["urn:ietf:params:jmap:submission"],
 		"methodCalls": [["EmailSubmission/set", {

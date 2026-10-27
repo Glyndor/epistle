@@ -6,7 +6,7 @@
 //! the per-file code-line budget. The PLAIN/LOGIN paths inherit
 //! the same behaviour through [`Directory::authenticate_verdict`],
 //! so the SCRAM tests cover the shared gate; the PLAIN coverage
-//! lives in `directory_known_network_tests.rs`.
+//! lives in `directory/mod_known_network_tests.rs`.
 
 use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::tests_scram_bans::{

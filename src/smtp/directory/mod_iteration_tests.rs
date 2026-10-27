@@ -1,7 +1,7 @@
 //! Tests for SCRAM iteration-count defaults and the transparent upgrade on
 //! successful cleartext authentication.
 //!
-//! Split into a sibling so `directory.rs` stays under the per-file
+//! Split into a sibling so `mod.rs` stays under the per-file
 //! code-line budget. The tests exercise `ScramStored::with_fresh_salt`
 //! (the value the directory feeds into the directory snapshot) and the
 //! upgrade path wired through the `ScramUpgrader` trait.

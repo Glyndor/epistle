@@ -3,8 +3,8 @@
 //! These tests pin the safety property that `totp_strip` does not call
 //! `str::split_at` on a byte offset that is not on a UTF-8 character
 //! boundary. They exist as a sibling module rather than inline so the
-//! 450-line cap on `directory.rs` is not threatened; the body lives
-//! here next to the other `directory_*_tests.rs` files.
+//! 450-line cap on `mod.rs` is not threatened; the body lives
+//! here next to the other `mod_*_tests.rs` files.
 //!
 //! The control test exercises two shapes of multibyte tail. The first
 //! is a set of illustrative suffixes (e.g. `"correct-horse\u{00e9}"`,

@@ -3,7 +3,7 @@
 //! The directory owns the `scram_upgrader` field, the
 //! `with_scram_upgrader` builder, and the per-attempt
 //! `maybe_upgrade_scram` call site. The block is split into a sibling
-//! so `directory.rs` stays under the per-file code-line budget.
+//! so `mod.rs` stays under the per-file code-line budget.
 
 use crate::password::Policy;
 

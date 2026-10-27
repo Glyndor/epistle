@@ -1,7 +1,7 @@
 //! Shared test helpers for the SMTP directory test modules.
 //!
 //! Kept here so multiple `#[path = "..."] mod xxx_tests;` declarations in
-//! `directory.rs` can pull the same function in without duplicating it.
+//! `mod.rs` can pull the same function in without duplicating it.
 //! `#[cfg(test)]` gates the file so it never reaches the production build.
 
 /// The variant name of a `Resolution`, for assertion messages that must not
