@@ -299,3 +299,7 @@ mod tests;
 #[cfg(test)]
 #[path = "verify_dns_tests_per_domain.rs"]
 mod tests_per_domain;
+
+#[cfg(test)]
+#[path = "verify_dns_tests_services.rs"]
+mod tests_services;
