@@ -85,7 +85,7 @@ fn drain_line(reader: &mut impl BufRead) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "delivery_log_day_tests.rs"]
+#[path = "day_tests.rs"]
 mod tests;
 
 /// Whether `year-month-day` is a day of the calendar: the month has that many

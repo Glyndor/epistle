@@ -18,7 +18,6 @@ use super::spool_permissions::{
 	FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir,
 };
 pub use super::spool_recipients::{RecipientState, RecipientStatus};
-#[path = "spool_envelope.rs"]
 mod envelope;
 use envelope::LAST_ERROR_MAX;
 pub use envelope::{Envelope, PendingOutcome};
@@ -635,29 +634,28 @@ impl MessageSink for FsSpool {
 	}
 }
 
-#[path = "spool_leftovers.rs"]
 pub(super) mod leftovers;
 
 #[cfg(test)]
-#[path = "spool_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "spool_tests_edit.rs"]
+#[path = "mod_tests_edit.rs"]
 mod tests_edit;
 
 #[cfg(all(test, unix))]
-#[path = "spool_tests_absent.rs"]
+#[path = "mod_tests_absent.rs"]
 mod tests_absent;
 
 #[cfg(test)]
-#[path = "spool_tests_perms.rs"]
+#[path = "mod_tests_perms.rs"]
 mod tests_perms;
 
 #[cfg(test)]
-#[path = "spool_tests_env_crypto.rs"]
+#[path = "mod_tests_env_crypto.rs"]
 mod tests_env_crypto;
 
 #[cfg(test)]
-#[path = "spool_tests_framing.rs"]
+#[path = "mod_tests_framing.rs"]
 mod tests_framing;

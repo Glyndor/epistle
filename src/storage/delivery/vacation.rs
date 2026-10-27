@@ -389,9 +389,9 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "delivery_vacation_jmap_tests.rs"]
+#[path = "vacation_jmap_tests.rs"]
 mod jmap_tests;
 
 #[cfg(test)]
-#[path = "delivery_vacation_guard_tests.rs"]
+#[path = "vacation_guard_tests.rs"]
 mod guard_tests;

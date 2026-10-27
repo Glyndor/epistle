@@ -1,19 +1,13 @@
 //! Local delivery: accepted inbound messages land in account mailboxes.
 
-#[path = "delivery_io.rs"]
 mod io;
-#[path = "delivery_lists.rs"]
 mod lists;
-#[path = "delivery_policy.rs"]
 mod policy;
-#[path = "delivery_reports.rs"]
 mod reports;
-#[path = "delivery_trace.rs"]
 mod trace;
 
 pub use trace::Redirect;
 pub(super) use trace::forwarded_copy;
-#[path = "delivery_vacation.rs"]
 mod vacation;
 
 use std::fs;
@@ -362,7 +356,7 @@ impl MessageSink for LocalDelivery {
 }
 
 #[cfg(test)]
-#[path = "delivery_tests_trace.rs"]
+#[path = "mod_tests_trace.rs"]
 mod tests_trace;
 
 #[cfg(test)]
@@ -565,37 +559,32 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "delivery_forward_tests.rs"]
+#[path = "mod_forward_tests.rs"]
 mod forward_tests;
 
 #[cfg(test)]
-#[path = "delivery_tests_list_copy.rs"]
+#[path = "mod_tests_list_copy.rs"]
 mod list_copy_tests;
 
 #[cfg(test)]
-#[path = "delivery_tests_default_mailboxes.rs"]
 mod default_mailboxes;
 
 #[cfg(test)]
-#[path = "delivery_tests_lists.rs"]
+#[path = "mod_tests_lists.rs"]
 mod list_tests;
 
 #[cfg(test)]
-#[path = "delivery_tests_containment.rs"]
 mod containment;
 
 #[cfg(test)]
-#[path = "delivery_tests_sieve_names.rs"]
 mod sieve_names;
 
 #[cfg(test)]
-#[path = "delivery_tests_redirects.rs"]
+#[path = "mod_tests_redirects.rs"]
 mod redirect_tests;
 
 #[cfg(test)]
-#[path = "delivery_tests_sieve_limits.rs"]
 mod sieve_limits;
 
 #[cfg(test)]
-#[path = "delivery_tests_sieve_warnings.rs"]
 mod sieve_warnings;

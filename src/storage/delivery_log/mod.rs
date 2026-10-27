@@ -653,14 +653,12 @@ fn parse_offset(offset: &str) -> Result<i64, String> {
 	Ok(seconds)
 }
 
-#[path = "delivery_log_lines.rs"]
 mod lines;
 use lines::{Line, MAX_LINE_BYTES, day_in_window, read_capped_line};
 
-#[path = "delivery_log_day.rs"]
 mod day;
 pub use day::{MAX_LINE, day_name};
 
 #[cfg(test)]
-#[path = "delivery_log_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
