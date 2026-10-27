@@ -18,16 +18,16 @@ const SQL: &[u8] =
 
 /// The pretend container: its file tree, the notes the stub keeps, and the
 /// stub itself.
-struct FakeEngine {
+pub(super) struct FakeEngine {
 	_root: tempfile::TempDir,
-	fs: PathBuf,
-	rec: PathBuf,
-	stub: PathBuf,
-	compose: PathBuf,
+	pub(super) fs: PathBuf,
+	pub(super) rec: PathBuf,
+	pub(super) stub: PathBuf,
+	pub(super) compose: PathBuf,
 }
 
 impl FakeEngine {
-	fn new() -> Self {
+	pub(super) fn new() -> Self {
 		let root = tempfile::tempdir().expect("root");
 		let fs_dir = root.path().join("fs");
 		let rec = root.path().join("rec");
@@ -41,6 +41,14 @@ impl FakeEngine {
 			r#"#!/bin/sh
 FS='{fs}'; REC='{rec}'
 printf '%s\n' "$*" >> "$REC/calls.log"
+hit() {{
+	[ -f "$REC/signal-at-$1" ] || return 0
+	kill -s TERM -- "-$(cat "$REC/pgid")"
+	n=0
+	until grep -q 'stop signal arrived' "$REC/child.stderr" 2>/dev/null || [ $n -ge 500 ]; do
+		sleep 0.01; n=$((n + 1))
+	done
+}}
 for last; do :; done
 case " $* " in *' -u root '*) user=root;; *) user=postgres;; esac
 case "$*" in
@@ -50,16 +58,17 @@ case "$*" in
 	cp "$4" "$FS$dest" || exit 1
 	echo 103 > "$FS$dest.owner"
 	stat -c %a "$4" > "$FS$dest.mode"
-	exit 0;;
+	hit cp; exit 0;;
 esac
 case "$last" in
 "ls -1 /tmp")
 	[ -f "$REC/ls-fails" ] && exit 1
-	ls -1 "$FS/tmp" | grep -v '\.\(owner\|mode\)$'; exit 0;;
+	ls -1 "$FS/tmp" | grep -v '\.\(owner\|mode\)$'; hit ls; exit 0;;
 "mkdir -m "*)
 	d="${{last#mkdir -m * \'}}"; d="${{d%\'}}"
 	[ -f "$REC/mkdir-fails" ] && {{ echo "mkdir: cannot create directory: File exists" >&2; exit 1; }}
-	mkdir -m 700 "$FS$d" && echo "$user" > "$FS$d.owner"; exit $?;;
+	mkdir -m 700 "$FS$d" && echo "$user" > "$FS$d.owner" || exit 1
+	hit mkdir; exit 0;;
 "chmod "*|"chown "*)
 	echo "chmod: changing permissions: Operation not permitted" >&2; exit 1;;
 "rm -rf "*)
@@ -77,7 +86,7 @@ case "$last" in
 	esac
 	cat "$FS$f" > "$REC/psql.sql"
 	[ -f "$REC/psql-fails" ] && {{ echo "ERROR: boom" >&2; exit 3; }}
-	exit 0;;
+	hit psql; exit 0;;
 esac
 exit 0
 "#,
@@ -102,7 +111,7 @@ exit 0
 		}
 	}
 
-	fn switch_on(&self, name: &str) {
+	pub(super) fn switch_on(&self, name: &str) {
 		fs::write(self.rec.join(name), "").expect("switch");
 	}
 
@@ -115,7 +124,7 @@ exit 0
 	}
 
 	/// What is left in the pretend container's `/tmp`.
-	fn container_tmp(&self) -> Vec<String> {
+	pub(super) fn container_tmp(&self) -> Vec<String> {
 		fs::read_dir(self.fs.join("tmp"))
 			.expect("tmp")
 			.map(|entry| {
@@ -297,15 +306,24 @@ fn a_psql_exit_is_a_rollback_and_a_lost_exec_is_not_known() {
 /// A whole restore through the stub: `data_dir` is the one the stub's
 /// compose file sits in.
 fn restore_all(engine: &FakeEngine, entries: &[(String, u32, Vec<u8>)]) -> std::process::ExitCode {
+	restore_at(&engine.compose, &engine.stub, entries)
+}
+
+/// [`restore_all`] from the paths of an engine another process made.
+pub(super) fn restore_at(
+	compose: &Path,
+	stub: &Path,
+	entries: &[(String, u32, Vec<u8>)],
+) -> std::process::ExitCode {
 	use crate::config::Config;
-	let data_dir = engine.compose.parent().unwrap().parent().unwrap();
+	let data_dir = compose.parent().unwrap().parent().unwrap();
 	let toml = format!(
 		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\n[database]\nurl = \"postgres://epistle@localhost/epistle\"\n",
 		data_dir.display()
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let archive = crate::cli::backup::tar_gz(entries).expect("archive");
-	let stub = engine.stub.clone();
+	let stub = stub.to_path_buf();
 	let resolver = move |program: &str| (program == "podup").then(|| stub.clone());
 	super::super::run_restore_with(
 		&config,
@@ -318,7 +336,7 @@ fn restore_all(engine: &FakeEngine, entries: &[(String, u32, Vec<u8>)]) -> std::
 	)
 }
 
-fn archive_entries() -> Vec<(String, u32, Vec<u8>)> {
+pub(super) fn archive_entries() -> Vec<(String, u32, Vec<u8>)> {
 	vec![
 		(
 			"data/accounts/alice/new/m1.eml".to_string(),
@@ -329,7 +347,7 @@ fn archive_entries() -> Vec<(String, u32, Vec<u8>)> {
 	]
 }
 
-fn mail_file(engine: &FakeEngine) -> PathBuf {
+pub(super) fn mail_file(engine: &FakeEngine) -> PathBuf {
 	engine
 		.compose
 		.parent()

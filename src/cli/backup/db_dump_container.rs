@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::init::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER};
 
+use super::super::restore_signals::stop_if_arrived;
 use super::db_dump_host_temp::{PREFIX, RestoreHostTemp, SQL_FILE_NAME, process_alive, staged_pid};
 use super::{
 	BackupError, CommandSpec, default_program_resolver, run_command_capturing_stdout_with,
@@ -204,11 +205,16 @@ pub(super) fn load_dump_container_with(
 	let in_container_dir = format!("/tmp/{}", host_temp.file_name()?);
 	let in_container_path = format!("{in_container_dir}/{SQL_FILE_NAME}");
 	let mut made = false;
+	// A held stop signal ends the restore at the next of these checks, before
+	// anything else is staged and never once `psql` has started.
 	let result = (|| -> Result<(), BackupError> {
+		stop_if_arrived()?;
 		run_checked(&container_mkdir_spec(compose, &in_container_dir)?, resolver)?;
 		made = true;
+		stop_if_arrived()?;
 		let cp = container_cp_into_spec(compose, host_temp.path(), &in_container_path)?;
 		run_checked(&cp, resolver)?;
+		stop_if_arrived()?;
 		run_checked(
 			&container_psql_load_spec(compose, &in_container_path, sql)?,
 			resolver,

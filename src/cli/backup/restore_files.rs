@@ -70,6 +70,10 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 /// whether the transaction committed, and the message says to check.
 pub(super) fn load_failure_state(error: &super::db_dump::BackupError, data_dir: &Path) -> String {
 	match error {
+		super::db_dump::BackupError::Interrupted(_) => format!(
+			"nothing was restored, so the database and the files under {} are unchanged",
+			data_dir.display()
+		),
 		super::db_dump::BackupError::CommandFailed { code: Some(_), .. } => format!(
 			"psql rolled the dump back, so the database and the files under {} are unchanged",
 			data_dir.display()

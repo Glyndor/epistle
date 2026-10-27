@@ -10,6 +10,7 @@
 mod db_dump;
 mod keys_note;
 mod restore_files;
+mod restore_signals;
 mod tar_format;
 
 use restore_files::{check_files, lay_files, load_failure_state};
@@ -266,6 +267,14 @@ fn restore_summarising(
 		super::style::error(
 			"database.sql in the archive does not end with the pg_dump closing marker, so it is incomplete; nothing was restored",
 		);
+		return ExitCode::FAILURE;
+	}
+	// From here on a stop signal is held: the restore either stops before it
+	// writes anything or finishes both halves, and the signal is raised again
+	// when `_held` is dropped at the end of this function.
+	let _held = restore_signals::HeldSignals::hold();
+	if let Err(error) = restore_signals::stop_if_arrived() {
+		super::style::error(format_args!("restore: {error}; nothing was restored"));
 		return ExitCode::FAILURE;
 	}
 	let mut database_loaded = false;
