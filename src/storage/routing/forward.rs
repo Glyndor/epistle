@@ -8,8 +8,8 @@ use crate::queue::bounce::{ReportRecipient, build_failed};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::SinkError;
 
-use super::delivery::{Redirect, forwarded_copy};
-use super::routing::SplitDelivery;
+use super::SplitDelivery;
+use crate::storage::delivery::{Redirect, forwarded_copy};
 
 impl SplitDelivery {
 	/// Queue every redirect of `message`, preserving the (non-null)

@@ -13,11 +13,11 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
-pub(super) use super::spool_permissions::write_sync;
-use super::spool_permissions::{
-	FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir,
-};
-pub use super::spool_recipients::{RecipientState, RecipientStatus};
+mod permissions;
+pub(super) use permissions::write_sync;
+use permissions::{FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir};
+mod recipients;
+pub use recipients::{RecipientState, RecipientStatus};
 mod envelope;
 use envelope::LAST_ERROR_MAX;
 pub use envelope::{Envelope, PendingOutcome};

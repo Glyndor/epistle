@@ -203,7 +203,7 @@ fn audit_and_count_never_follow_a_link_out_of_the_spool() {
 fn retighten_never_follows_a_link_swapped_in_after_the_listing() {
 	use std::os::unix::fs::MetadataExt;
 
-	use crate::storage::spool_permissions::{Kind, retighten};
+	use super::permissions::{Kind, retighten};
 
 	let dir = tempfile::tempdir().expect("tempdir");
 	let victim = dir.path().join("victim.json");

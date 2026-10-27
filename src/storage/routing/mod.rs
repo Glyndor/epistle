@@ -577,6 +577,7 @@ fn header_of(data: &[u8], field: &str) -> Option<String> {
 }
 
 mod evidence;
+mod forward;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

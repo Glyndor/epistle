@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::RecipientState;
+use super::recipients::RecipientState;
 
 /// Envelope metadata stored next to the raw message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
