@@ -188,7 +188,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 12.1.1 Upload size limited | Met | Message size capped at 25 MiB; IMAP/JMAP blob handling bounded. |
-| 12.3.1 No path traversal in file paths | Met | WebDAV `src/webdav/path.rs::resolve` and storage `src/storage/delivery.rs::is_safe_mailbox` + IMAP `valid_name` are allow-lists rejecting `..`/`/`/`\`/NUL/control/leading-dot; all writes are confined under the account root. Every path built under the data directory (account roots, mailboxes, message and state files, spool, correspondents, subscriptions) also goes through `src/util/path_containment.rs::contained`, which resolves `..` and symlinks and refuses anything that is not inside its root, so a validator bug cannot walk out of the tree. |
+| 12.3.1 No path traversal in file paths | Met | WebDAV `src/webdav/path.rs::resolve` and storage `src/storage/delivery/mod.rs::is_safe_mailbox` + IMAP `valid_name` are allow-lists rejecting `..`/`/`/`\`/NUL/control/leading-dot; all writes are confined under the account root. Every path built under the data directory (account roots, mailboxes, message and state files, spool, correspondents, subscriptions) also goes through `src/util/path_containment.rs::contained`, which resolves `..` and symlinks and refuses anything that is not inside its root, so a validator bug cannot walk out of the tree. |
 | 12.4.1 Files stored outside the web root with safe perms | Met | `.eml` and config files written `0600` under the isolated user (`src/storage/`); no web root exists. |
 | 12.5.1 No execution of uploaded content | Met | Stored mail is inert `.eml`; never executed. |
 

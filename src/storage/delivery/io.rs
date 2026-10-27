@@ -1,6 +1,6 @@
-//! Tiny I/O helpers for `delivery.rs`: persist the IMAP `.flags` sidecar a
-//! Sieve `addflag`/`setflag` produces, the mailbox-name safety check, and
-//! the stored spelling of a Sieve `fileinto` target.
+//! Tiny I/O helpers for `src/storage/delivery/mod.rs`: persist the IMAP
+//! `.flags` sidecar a Sieve `addflag`/`setflag` produces, the mailbox-name
+//! safety check, and the stored spelling of a Sieve `fileinto` target.
 //! Pulled out so the parent stays focused on the delivery decision tree.
 
 use uuid::Uuid;

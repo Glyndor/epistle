@@ -156,7 +156,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"default {}. There is no cursor",
 	),
 	(
-		"src/storage/delivery_log.rs",
+		"src/storage/delivery_log/mod.rs",
 		&["DEFAULT_DELIVERY_LOG_DAYS"],
 		"({} by default)",
 	),
