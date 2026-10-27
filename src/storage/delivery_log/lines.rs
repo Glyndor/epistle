@@ -67,5 +67,5 @@ pub(super) fn day_in_window(name: &str, first: Option<&str>, last: Option<&str>)
 }
 
 #[cfg(test)]
-#[path = "delivery_log_lines_tests.rs"]
+#[path = "lines_tests.rs"]
 mod tests;

@@ -232,8 +232,8 @@ fn abandon(service: &EvidenceService, (id, account): (uuid::Uuid, &str), why: &S
 }
 
 #[cfg(test)]
-#[path = "routing_evidence_tests.rs"]
+#[path = "evidence_tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "routing_evidence_tests_signed.rs"]
+#[path = "evidence_tests_signed.rs"]
 mod tests_signed;

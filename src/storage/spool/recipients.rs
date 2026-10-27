@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::spool::Envelope;
+use super::envelope::Envelope;
 
 /// Where one recipient stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,5 +209,5 @@ impl Envelope {
 }
 
 #[cfg(test)]
-#[path = "spool_recipients_tests.rs"]
+#[path = "recipients_tests.rs"]
 mod tests;

@@ -21,7 +21,7 @@ untouched (see [What was left alone](#what-was-left-alone)).
 - **Flag persistence** — IMAP STORE writing the `.flags` sidecar
   (`src/imap/snapshot.rs`, `src/imap/flags.rs`).
 - **Outbound queue + spool** — SRS rewriting, DSN construction, the filesystem
-  spool, suppression lookup (`src/queue`, `src/storage/spool.rs`).
+  spool, suppression lookup (`src/queue`, `src/storage/spool/mod.rs`).
 
 ## Allocation reductions
 

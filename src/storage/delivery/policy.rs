@@ -1,7 +1,8 @@
 //! Policy decisions on top of the raw delivery: admin-configured external
-//! forwarding, and the account's Sieve filter. Pulled out of `delivery.rs`
-//! so the parent's policy-free plumbing (the storage layout, the mailbox
-//! naming check, the report-ingest hook) is the readable surface.
+//! forwarding, and the account's Sieve filter. Pulled out of
+//! `src/storage/delivery/mod.rs` so the parent's policy-free plumbing (the
+//! storage layout, the mailbox naming check, the report-ingest hook) is the
+//! readable surface.
 
 use std::fs;
 

@@ -576,41 +576,41 @@ fn header_of(data: &[u8], field: &str) -> Option<String> {
 	None
 }
 
-#[path = "routing_evidence.rs"]
 mod evidence;
+mod forward;
 
 #[cfg(test)]
-#[path = "routing_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "routing_tests_dkim_rotation.rs"]
+#[path = "mod_tests_dkim_rotation.rs"]
 mod tests_dkim_rotation;
 
 #[cfg(test)]
-#[path = "routing_tests_dkim_domain.rs"]
+#[path = "mod_tests_dkim_domain.rs"]
 mod tests_dkim_domain;
 
 #[cfg(test)]
-#[path = "routing_tests_dkim_per_domain.rs"]
+#[path = "mod_tests_dkim_per_domain.rs"]
 mod tests_dkim_per_domain;
 
 #[cfg(test)]
-#[path = "routing_tests_forward.rs"]
+#[path = "mod_tests_forward.rs"]
 mod tests_forward;
 
 #[cfg(test)]
-#[path = "routing_tests_report.rs"]
+#[path = "mod_tests_report.rs"]
 mod tests_report;
 
 #[cfg(test)]
-#[path = "routing_tests_sign_reply.rs"]
+#[path = "mod_tests_sign_reply.rs"]
 mod tests_sign_reply;
 
 #[cfg(test)]
-#[path = "routing_tests_vacation.rs"]
+#[path = "mod_tests_vacation.rs"]
 mod tests_vacation;
 
 #[cfg(test)]
-#[path = "routing_tests_warning.rs"]
+#[path = "mod_tests_warning.rs"]
 mod tests_warning;

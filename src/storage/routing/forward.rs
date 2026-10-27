@@ -1,14 +1,15 @@
 //! What the routing sink queues on behalf of a local delivery: the copies
 //! a forward or a Sieve redirect sends onward, and the 5.4.6 bounce for a
-//! delivery refused as a forwarding loop. Kept apart from `routing.rs`,
-//! which decides which recipients are local at all.
+//! delivery refused as a forwarding loop. Kept apart from
+//! `src/storage/routing/mod.rs`, which decides which recipients are local
+//! at all.
 
 use crate::queue::bounce::{ReportRecipient, build_failed};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::SinkError;
 
-use super::delivery::{Redirect, forwarded_copy};
-use super::routing::SplitDelivery;
+use super::SplitDelivery;
+use crate::storage::delivery::{Redirect, forwarded_copy};
 
 impl SplitDelivery {
 	/// Queue every redirect of `message`, preserving the (non-null)

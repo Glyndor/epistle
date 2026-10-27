@@ -59,5 +59,5 @@ fn report_kind(local: &str, domain: &str, domains: &[String]) -> Option<Kind> {
 }
 
 #[cfg(test)]
-#[path = "delivery_reports_tests.rs"]
+#[path = "reports_tests.rs"]
 mod tests;

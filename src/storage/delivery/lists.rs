@@ -233,5 +233,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "delivery_lists_tests_gone.rs"]
+#[path = "lists_tests_gone.rs"]
 mod tests_gone;

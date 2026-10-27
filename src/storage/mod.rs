@@ -14,11 +14,8 @@ pub mod delivery_log;
 pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
-mod routing_forward;
 pub(crate) mod save_sent;
 mod spool;
-mod spool_permissions;
-mod spool_recipients;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;
 
