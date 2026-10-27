@@ -68,7 +68,8 @@ jobs:
       #     end-to-end rather than by unit tests.
       # acme/transport and pop3/backend are well covered and deliberately NOT
       # excluded (they count toward the gate).
-      # Test files (the *_tests(_<word>)?.rs splits and test_support.rs) are
+      # Test files (the *_tests(_<word>)?.rs splits, the leaves of a tests/
+      # folder and test_support.rs) are
       # left out for a different reason: cargo llvm-cov does not separate them
       # from production code by name, and a test file split to stay under the
       # line limit raises the coverage number, which is the opposite of what
@@ -79,7 +80,7 @@ jobs:
       # The test modules of storage/delivery and of imap/session/list_status
       # are named after their module, so they are listed one by one: the
       # folder holds the module itself (mod.rs) and its coverage must count.
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs|/tests/[^/]+\\.rs"
   dependabot-freshness:
     # Not a required check and it reads repository state, not the queued
     # commit, so it would only spend a runner inside the queue.
