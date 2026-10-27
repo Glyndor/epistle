@@ -176,10 +176,10 @@ fn init_warns_about_an_existing_data_dir_with_loose_permissions() {
 
 #[cfg(unix)]
 #[test]
-fn init_mentions_openssl_when_it_is_not_on_path() {
+fn init_plans_the_rsa_dkim_key_when_openssl_is_not_on_path() {
 	// Point PATH at an empty directory so the binary cannot find
-	// `openssl`; the apply phase must report the gap rather than
-	// silently dropping the rsa key step.
+	// `openssl`; the RSA key is made in process, so the plan must
+	// still say the key is generated and must not report a gap.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
@@ -214,7 +214,11 @@ fn init_mentions_openssl_when_it_is_not_on_path() {
 	);
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
-		stderr.contains("openssl") && stderr.contains("not on PATH"),
-		"missing openssl must be surfaced in the plan/report; stderr: {stderr}"
+		stderr.contains("dkim rsa key: generate"),
+		"the plan must say the RSA key is generated; stderr: {stderr}"
+	);
+	assert!(
+		!stderr.contains("not on PATH"),
+		"nothing has to be on PATH for the key; stderr: {stderr}"
 	);
 }

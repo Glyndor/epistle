@@ -86,9 +86,8 @@ string). For receivers without Ed25519 support, add an RSA selector:
 epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
 ```
 
-`--rsa` delegates to `openssl genpkey` and the binary must be on `PATH`
-(the Debian package installs it). `--bits` defaults to 2048 and accepts
-2048 or 4096 only.
+`--rsa` makes the key in process, so nothing has to be on `PATH`.
+`--bits` defaults to 2048 and accepts 2048 or 4096 only.
 
 Publish the printed TXT at `<selector>._domainkey.example.org`, and
 configure `[dkim] selector` / `key_file`. Add `rsa_selector` /

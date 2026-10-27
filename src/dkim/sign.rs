@@ -260,19 +260,26 @@ pub fn generate_key() -> Result<(String, String), SignerError> {
 	let key = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
 		.map_err(|_| SignerError::InvalidKey("key generation failed".into()))?;
 
-	let body = BASE64.encode(pkcs8.as_ref());
-	let mut pem = String::from("-----BEGIN PRIVATE KEY-----\n");
-	for chunk in body.as_bytes().chunks(64) {
-		pem.push_str(std::str::from_utf8(chunk).expect("base64 is ascii"));
-		pem.push('\n');
-	}
-	pem.push_str("-----END PRIVATE KEY-----\n");
+	let pem = pem_encode(pkcs8.as_ref());
 
 	let record = format!(
 		"v=DKIM1; k=ed25519; p={}",
 		BASE64.encode(key.public_key().as_ref())
 	);
 	Ok((pem, record))
+}
+
+/// Wrap DER bytes in the PEM envelope a PKCS#8 key is written in, the
+/// inverse of [`pem_body`]. The body is base64 in lines of 64 columns.
+pub(super) fn pem_encode(der: &[u8]) -> String {
+	let body = BASE64.encode(der);
+	let mut pem = String::from("-----BEGIN PRIVATE KEY-----\n");
+	for chunk in body.as_bytes().chunks(64) {
+		pem.push_str(std::str::from_utf8(chunk).expect("base64 is ascii"));
+		pem.push('\n');
+	}
+	pem.push_str("-----END PRIVATE KEY-----\n");
+	pem
 }
 
 /// Load a PKCS#8 PEM ed25519 private key from a file. Shared by DKIM signing

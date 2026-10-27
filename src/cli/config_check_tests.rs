@@ -72,13 +72,7 @@ key_file = "/etc/mail/dkim.pem"
 fn config_check_emits_no_warning_when_both_rsa_fields_are_set() {
 	// Generate a real RSA key in a tempdir the way `epistle dkim-keygen
 	// --rsa` would, so the configuration validates and the signer could
-	// in principle load it. Skipped with a printed reason when openssl
-	// is not on PATH, matching the precedent set by the dkim-keygen
-	// tests.
-	if !openssl_on_path() {
-		eprintln!("skip: openssl not on PATH");
-		return;
-	}
+	// in principle load it.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let key_path = dir.path().join("rsa.pem");
 	let cli = crate::cli::Cli::try_parse_from([
@@ -115,16 +109,6 @@ rsa_key_file = {:?}
 		!err_text.contains("signs with one key only"),
 		"both RSA fields set: stderr must not carry the warning: {err_text}"
 	);
-}
-
-/// Returns true when an `openssl` binary resolves somewhere on PATH. Mirrors
-/// the helper in `cli_tests_d.rs`: we need it again here because tests in
-/// sibling files do not share helpers.
-fn openssl_on_path() -> bool {
-	let Some(path) = std::env::var_os("PATH") else {
-		return false;
-	};
-	std::env::split_paths(&path).any(|dir| dir.join("openssl").is_file())
 }
 
 /// A host with no route to 123/udp or 4460/tcp switches the external probe

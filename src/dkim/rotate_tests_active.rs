@@ -29,17 +29,31 @@ fn relative_state_key_path_is_resolved_against_the_data_dir() {
 }
 
 #[test]
-fn invalid_or_empty_selector_state_is_an_error() {
+fn a_state_that_cannot_be_parsed_is_an_error() {
 	let dir = tempfile::tempdir().expect("directory");
-	for content in [
-		"not json",
-		r#"{"selector":"","key_file":"k","rotated_at":0,"previous":null}"#,
-	] {
-		std::fs::write(dir.path().join(STATE_FILE), content).expect("state");
-		let error = active_ed25519(&dkim("cfg"), dir.path()).expect_err("must fail");
-		assert!(
-			error.to_string().contains(STATE_FILE),
-			"error must name the state file, got: {error}"
-		);
-	}
+	std::fs::write(dir.path().join(STATE_FILE), "not json").expect("state");
+	let error = active_ed25519(&dkim("cfg"), dir.path()).expect_err("must fail");
+	assert!(
+		error.to_string().contains(STATE_FILE),
+		"error must name the state file, got: {error}"
+	);
+}
+
+#[test]
+fn a_state_with_an_empty_selector_and_a_retired_key_is_an_error() {
+	// A state that names no key in service but keeps a retired one is
+	// inconsistent, not absent: the retired selector's TXT is still
+	// published, so the file is reported rather than ignored.
+	let dir = tempfile::tempdir().expect("directory");
+	std::fs::write(
+		dir.path().join(STATE_FILE),
+		r#"{"selector":"","key_file":"","rotated_at":0,
+		"previous":{"selector":"ed1","key_file":"k","retire_at":9}}"#,
+	)
+	.expect("state");
+	let error = active_ed25519(&dkim("cfg"), dir.path()).expect_err("must fail");
+	assert!(
+		error.to_string().contains("empty selector"),
+		"error must say the selector is empty, got: {error}"
+	);
 }

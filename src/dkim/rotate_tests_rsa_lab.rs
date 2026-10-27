@@ -1,6 +1,6 @@
 //! A data directory, a zone and a dual-signing server for the tests of
 //! the RSA half of a rotation: [`super::tests_crash::Lab`] plus a
-//! configured RSA key, and RSA keys made by `openssl` at test time.
+//! configured RSA key, and RSA keys made in process at test time.
 
 use super::tests_crash::{DOMAINS, Lab, NOW, Resolver, Start, Visibility};
 use super::*;
@@ -18,7 +18,7 @@ const RAW: &[u8] = b"From: alice@example.org\r\nSubject: dual\r\n\r\nHello\r\n";
 pub(super) const CONFIGURED: &str = "rsa0";
 const CONFIGURED_FILE: &str = "configured-rsa.key";
 
-/// Three distinct 2048-bit RSA keys `(PEM, TXT value)`, made by `openssl`
+/// Three distinct 2048-bit RSA keys `(PEM, TXT value)`, made in process
 /// once per test run. `Err` names why they could not be made.
 pub(super) fn rsa_pool() -> Result<&'static [(String, String); 3], String> {
 	static POOL: OnceLock<Result<[(String, String); 3], String>> = OnceLock::new();

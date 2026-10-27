@@ -11,24 +11,21 @@ use std::path::Path;
 use super::tests_failures::{answers_minimal, apply_error_name, render_report_to_string};
 use super::*;
 
-/// When `openssl` is on `PATH` but the actual `genpkey` call
-/// fails, the apply phase must record a `Skipped` step for the
-/// RSA DKIM key rather than panic or fall back to using the
-/// Ed25519 key in the RSA slot. The integration test
-/// `init_omits_rsa_dkim_keys_when_openssl_is_absent` covers the
-/// runtime shape end-to-end; this unit test pins the report
-/// shape the operator sees when generation fails.
+/// A step the run left out is rendered with its name and its reason,
+/// so the operator can see what did not happen and why. A key that
+/// cannot be made is a refusal (`ApplyError::RsaKeygen`), not a skip:
+/// the operator asked for the key and it did not land.
 #[test]
-fn skipped_rsa_step_render_includes_the_failure_name() {
+fn skipped_step_render_includes_the_reason() {
 	let mut report = Report::default();
 	report.steps.push(ReportStep::Skipped {
-		name: "dkim rsa key".to_string(),
-		reason: "openssl genpkey failed".to_string(),
+		name: "account alice@example.org".to_string(),
+		reason: "it already exists".to_string(),
 	});
 	let rendered = render_report_to_string(&report);
 	assert!(
-		rendered.contains("skipped:") && rendered.contains("dkim rsa key"),
-		"the report must name the skipped RSA key: {rendered}"
+		rendered.contains("skipped:") && rendered.contains("alice@example.org"),
+		"the report must name the skipped account: {rendered}"
 	);
 }
 

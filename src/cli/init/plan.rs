@@ -29,10 +29,6 @@ pub enum PlanStep {
 		path: PathBuf,
 		/// `true` when the file already exists and will not be touched.
 		reused: bool,
-		/// `true` when `openssl` is on `PATH` and the key can be generated.
-		/// `false` leaves the step out of the apply phase and reports
-		/// the gap on stderr.
-		openssl_available: bool,
 	},
 	/// The at-rest storage key file.
 	Storage {
@@ -220,22 +216,9 @@ impl fmt::Display for PlanStep {
 				let verb = if *reused { "reuse" } else { "generate" };
 				write!(f, "dkim ed25519 key: {verb} {}", path.display())
 			}
-			PlanStep::DkimRsa {
-				path,
-				reused,
-				openssl_available,
-			} => {
-				if *reused {
-					write!(f, "dkim rsa key: reuse {}", path.display())
-				} else if *openssl_available {
-					write!(f, "dkim rsa key: generate {}", path.display())
-				} else {
-					write!(
-						f,
-						"dkim rsa key: skip (openssl not on PATH); run \"epistle dkim-keygen --rsa\" to create {}",
-						path.display()
-					)
-				}
+			PlanStep::DkimRsa { path, reused } => {
+				let verb = if *reused { "reuse" } else { "generate" };
+				write!(f, "dkim rsa key: {verb} {}", path.display())
 			}
 			PlanStep::Storage { path, reused } => {
 				let verb = if *reused { "reuse" } else { "generate" };

@@ -29,6 +29,17 @@ axum = { version = "0.8.9", features = ["ws"] }
 flate2 = "1.1.9"
 futures-core = "0.3.34"
 base64 = "0.23.1"
+# `aws-lc-rs` is the TLS provider `rustls` already installs, so it was in
+# the tree and in the binary before this line existed. It is named here
+# for one reason: the RSA DKIM key is generated in process, so a server
+# whose image ships no `openssl` can rotate its keys
+# (Glyndor/epistle#1376). `ring` cannot generate an RSA key and `rcgen`
+# only makes certificates, so this is the crate that can.
+#
+# The features are the ones `rustls` already turns on, so the build does
+# not grow a second crypto provider: `aws-lc-sys` is the C library both
+# use, and `prebuilt-nasm` comes with it through `rustls`.
+aws-lc-rs = { version = "1.18.0", default-features = false, features = ["aws-lc-sys"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.11"
 clap_mangen = "0.3.3"

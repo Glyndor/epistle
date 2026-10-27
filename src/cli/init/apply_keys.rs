@@ -14,7 +14,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::apply_plan;
 use super::{ApplyError, Report, ReportStep};
 
 /// Generate a self-signed certificate for the configured hostname and
@@ -127,11 +126,9 @@ pub(super) fn key_file_present(path: &Path) -> bool {
 }
 
 /// Lay down the five key-tree files under `keys_dir`:
-/// `s1.pem` (DKIM ed25519), `s2.pem` (DKIM RSA via openssl, or
-/// skipped when openssl is not on PATH, or refused when genpkey
-/// fails), `storage.key`, and the OAuth ES256 pair (private +
-/// public). Each step pushes a `Reused` or `Wrote` line into the
-/// report; a generation or write failure surfaces as
+/// `s1.pem` (DKIM ed25519), `s2.pem` (DKIM RSA), `storage.key`, and the
+/// OAuth ES256 pair (private + public). Each step pushes a `Reused` or
+/// `Wrote` line into the report; a generation or write failure surfaces as
 /// `ApplyError::*` and the caller stops the run with the report
 /// of the keys that already landed.
 fn ensure_key_tree(
@@ -155,25 +152,20 @@ fn ensure_key_tree(
 
 	if key_file_present(s2) {
 		report.steps.push(ReportStep::Reused(s2.to_path_buf()));
-	} else if openssl_available() {
+	} else {
 		let (pem, _record) = match crate::cli::util::generate_rsa_key(2048) {
 			Ok(pair) => pair,
 			Err(error) => {
-				// openssl is on PATH but the actual key generation
-				// failed (broken binary, missing entropy, etc.). The
-				// operator asked for the key, the key did not land:
-				// the run exits 1 with the report of the keys that
-				// did land rather than a silent Skipped line.
+				// The key is made in process, so a failure here is the
+				// generator's own (no entropy, a rejected key), not a
+				// missing program. The operator asked for the key, the
+				// key did not land: the run exits 1 with the report of
+				// the keys that did land rather than a silent Skipped
+				// line.
 				return Err(ApplyError::RsaKeygen(error.to_string()));
 			}
 		};
 		write_secret_with_report(s2, pem.as_bytes(), report)?;
-	} else {
-		report.steps.push(ReportStep::Skipped {
-			name: "dkim rsa key".to_string(),
-			reason: "openssl not on PATH; run \"epistle dkim-keygen --rsa\" to create it"
-				.to_string(),
-		});
 	}
 
 	ensure_secret_keys(storage, oauth_private, oauth_public, report)
@@ -247,13 +239,6 @@ fn ensure_secret_keys(
 	}
 
 	Ok(())
-}
-
-/// True when `openssl` is on `PATH` and we can shell out to it. Used by
-/// the RSA DKIM key step; false leaves the step out of the apply phase
-/// and reports the gap on stderr.
-pub(crate) fn openssl_available() -> bool {
-	apply_plan::openssl_available()
 }
 
 /// Materialise the keys dir + every key + the self-signed cert

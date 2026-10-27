@@ -92,25 +92,13 @@ async fn a_tampered_body_fails_the_rsa_signature_too() {
 	assert_eq!(outcomes(&results), [DkimOutcome::Fail, DkimOutcome::Fail]);
 }
 
-/// An RSA key record for a key other than the test key, generated with
-/// openssl at test time.
+/// An RSA key record for a key other than the test key, generated in
+/// process at test time.
 fn another_rsa_record() -> String {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let key = dir.path().join("other.pem");
-	let status = std::process::Command::new("openssl")
-		.args([
-			"genpkey",
-			"-algorithm",
-			"RSA",
-			"-pkeyopt",
-			"rsa_keygen_bits:2048",
-			"-out",
-		])
-		.arg(&key)
-		.stderr(std::process::Stdio::null())
-		.status()
-		.expect("openssl runs");
-	assert!(status.success(), "openssl generates a key");
+	let (pem, _) = crate::dkim::generate_rsa_key(2048).expect("RSA key");
+	std::fs::write(&key, pem).expect("write RSA key");
 	let ed = dir.path().join("ed.pem");
 	let (pem, _) = crate::dkim::generate_key().expect("ed25519 key");
 	std::fs::write(&ed, pem).expect("write ed25519 key");

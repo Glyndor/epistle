@@ -12,7 +12,7 @@ pub(crate) type RsaKeygen = fn() -> Result<(String, String), String>;
 
 /// The production generator: a 2048-bit key, the size `dkim-keygen --rsa`
 /// writes by default.
-pub(super) fn openssl_rsa_2048() -> Result<(String, String), String> {
+pub(super) fn rsa_2048() -> Result<(String, String), String> {
 	super::super::generate_rsa_key(2048).map_err(|error| error.to_string())
 }
 
@@ -25,8 +25,8 @@ pub(super) fn pending_selectors(pending: &Pending) -> Vec<&str> {
 }
 
 impl Rotator {
-	/// Use `keygen` instead of `openssl` for the RSA keys this rotator
-	/// generates.
+	/// Use `keygen` instead of the default generator for the RSA keys this
+	/// rotator generates.
 	#[cfg(test)]
 	pub(crate) fn with_rsa_keygen(mut self, keygen: RsaKeygen) -> Self {
 		self.rsa_keygen = keygen;

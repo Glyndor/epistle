@@ -77,8 +77,8 @@ fn report_renders_every_step_kind_with_a_distinct_label() {
 		.push(ReportStep::ConfigIdentical(config_path.clone()));
 	report.steps.push(ReportStep::CreatedDir(data_dir.clone()));
 	report.steps.push(ReportStep::Skipped {
-		name: "dkim rsa key".to_string(),
-		reason: "openssl not on PATH".to_string(),
+		name: "account alice@example.org".to_string(),
+		reason: "it already exists".to_string(),
 	});
 	let mut buf = Vec::new();
 	report.write_to(&mut buf).expect("render");
@@ -104,7 +104,7 @@ fn report_renders_every_step_kind_with_a_distinct_label() {
 		"created dir label missing: {rendered}"
 	);
 	assert!(
-		rendered.contains("skipped:") && rendered.contains("dkim rsa key"),
+		rendered.contains("skipped:") && rendered.contains("alice@example.org"),
 		"skipped label missing: {rendered}"
 	);
 }

@@ -5,8 +5,8 @@
 //! fresh tree with `database = false`, the database-on rerun that
 //! must keep the password and compose file byte-for-byte), the
 //! interactive assistant with both an EOF and a declined
-//! confirmation, the skip path when `openssl` is off `PATH`, and
-//! the plan-fail-without-effects path on an unparseable existing
+//! confirmation, the run with nothing on `PATH`, and the
+//! plan-fail-without-effects path on an unparseable existing
 //! config. Each topic lives in its own sibling so this entry stays
 //! small.
 
