@@ -425,19 +425,18 @@ fn sweep_messages(evidence_root: &Path, today: Day) -> std::io::Result<usize> {
 	Ok(removed)
 }
 
-#[path = "retention_finish.rs"]
 mod finish;
 use finish::{finish_deleting, resume};
 
 #[cfg(test)]
-#[path = "retention_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "retention_tests_crash.rs"]
+#[path = "mod_tests_crash.rs"]
 mod tests_crash;
 #[cfg(test)]
-#[path = "retention_tests_keys.rs"]
+#[path = "mod_tests_keys.rs"]
 mod tests_keys;
 #[cfg(test)]
-#[path = "retention_tests_planted.rs"]
+#[path = "mod_tests_planted.rs"]
 mod tests_planted;
