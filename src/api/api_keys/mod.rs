@@ -543,9 +543,8 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 	}
 }
 
-#[path = "api_keys_revoke.rs"]
 mod revoke;
 
 #[cfg(test)]
-#[path = "api_keys_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

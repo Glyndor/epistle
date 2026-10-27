@@ -8,11 +8,9 @@ use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value;
 use crate::util::header::sanitize_header_value;
 
-#[path = "mime.rs"]
 pub(super) mod mime;
 
 #[cfg(test)]
-#[path = "mime_tests_structure.rs"]
 mod mime_tests_structure;
 
 /// One RFC 5322 address (`"name" <email>` or `<email>`) built from a JMAP
@@ -357,25 +355,20 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-#[path = "objects_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "mime_tests_body.rs"]
 mod mime_tests_body;
 
 #[cfg(test)]
-#[path = "mime_tests_values.rs"]
 mod mime_tests_values;
 
 #[cfg(test)]
-#[path = "mime_tests_download.rs"]
 mod mime_tests_download;
 
 #[cfg(test)]
-#[path = "mime_tests_depth.rs"]
 mod mime_tests_depth;
 
 #[cfg(test)]
-#[path = "objects_tests_default_mailboxes.rs"]
 mod default_mailboxes;

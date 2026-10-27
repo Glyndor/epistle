@@ -146,7 +146,6 @@ struct Inner {
 	max_recipients: usize,
 }
 
-#[path = "state_limiter.rs"]
 mod limiter;
 use limiter::{AUTH_WINDOW, ClientLimiters};
 
@@ -767,7 +766,6 @@ thread_local! {
 	pub(crate) static CONFIGURED_HASH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[path = "state_bearer.rs"]
 mod bearer;
 /// The scopes the bearer middleware accepts for a request line, for the tests
 /// that hold the OpenAPI description to it.
@@ -775,31 +773,24 @@ mod bearer;
 pub(in crate::api) use bearer::acceptable_scopes_for;
 pub use bearer::require_bearer_token;
 
-#[path = "state_auth_queue.rs"]
 mod state_auth_queue;
 
-#[path = "state_auth.rs"]
 mod auth;
 
-#[path = "state_bayes.rs"]
 mod bayes;
 
-#[path = "state_outbound.rs"]
 mod outbound;
 
-#[path = "state_submission.rs"]
 mod submission;
 
-#[path = "state_classes.rs"]
 mod classes;
 
 #[cfg(test)]
-#[path = "state_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "state_limiter_tests.rs"]
+#[path = "mod_limiter_tests.rs"]
 mod limiter_tests;
 
-#[path = "state_client_ip.rs"]
 mod client_ip;
