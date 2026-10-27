@@ -3,7 +3,7 @@
 use std::net::IpAddr;
 use std::pin::Pin;
 
-use hickory_resolver::config::{ProtocolConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{ProtocolConfig, ResolveHosts, ResolverConfig, ResolverOpts};
 
 use crate::dane::rrset::TlsaRrset;
 
@@ -28,12 +28,16 @@ pub(crate) fn system_resolver_config() -> std::io::Result<ResolverConfig> {
 }
 
 /// Build the resolver options the system resolver uses: defaults from
-/// `/etc/resolv.conf`, DNSSEC validation enabled.
+/// `/etc/resolv.conf`, DNSSEC validation enabled, and the hosts file never
+/// consulted. The lookups made here (SPF, MX, DANE, `verify-dns`, the PTR
+/// check of `init`) are about what the world sees, so a line in
+/// `/etc/hosts` must not answer them.
 pub(crate) fn system_resolver_options() -> ResolverOpts {
 	let (_config, mut opts) = hickory_resolver::system_conf::read_system_conf()
 		.map_err(std::io::Error::other)
 		.unwrap();
 	opts.validate = true;
+	opts.use_hosts_file = ResolveHosts::Never;
 	opts
 }
 

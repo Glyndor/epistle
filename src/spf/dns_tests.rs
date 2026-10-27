@@ -72,3 +72,13 @@ fn shared_system_resolver_options_enable_dnssec() {
 		"DNSSEC validation must stay enabled so DANE TLSA records stay trustworthy (RFC 7672 §2.1)",
 	);
 }
+
+#[test]
+fn the_system_resolver_never_reads_the_hosts_file() {
+	// A line in /etc/hosts for the server's own address must not answer the
+	// PTR, A and MX checks: they report what the public DNS publishes.
+	assert!(matches!(
+		super::system_resolver_options().use_hosts_file,
+		hickory_resolver::config::ResolveHosts::Never
+	));
+}
