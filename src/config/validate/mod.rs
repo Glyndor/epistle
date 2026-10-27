@@ -153,9 +153,20 @@ impl Config {
 			Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
 			None => false,
 		};
+		// A private destination needs the operator to say so: the webhook
+		// client refuses those destinations, so a section that names one
+		// without the option would never deliver anything.
+		let private = crate::webhook::destination::names_private(&webhook.url);
+		if private && !webhook.allow_private_webhooks {
+			return Err(ConfigError::Invalid(
+				"[webhook] url names a private address; set allow_private_webhooks = true to reach it"
+					.into(),
+			));
+		}
 		match url.scheme() {
 			"https" => Ok(()),
 			"http" if loopback => Ok(()),
+			"http" if private => Ok(()),
 			_ => Err(refused()),
 		}
 	}

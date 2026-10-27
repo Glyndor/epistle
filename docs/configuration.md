@@ -1018,6 +1018,7 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 | `url` | Endpoint to POST events to. |
 | `secret` | Optional HMAC-SHA256 signing secret. |
 | `enabled` | Default `true`. With `false` the section stays in the file but no event is posted, not even for an alert with `webhook = true`. `epistle webhook disable\|enable` edits it. `webhook test` still posts. |
+| `allow_private_webhooks` | Permit the endpoint to be a private destination: a loopback address, a private (RFC 1918 / RFC 4193) or link-local address, or the cloud metadata service (`169.254.169.254`). Default `false`. The endpoint is chosen by the operator, but the address it names may be one the host must not reach on its own, and the addresses its name resolves to are judged the same way, so a host that points inside the private networks of the site is refused too. Set this only when the receiver genuinely lives on a private network. `epistle config-check` refuses a section that names a private address without it, and `epistle webhook set` writes the option when the URL needs it. |
 
 Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`

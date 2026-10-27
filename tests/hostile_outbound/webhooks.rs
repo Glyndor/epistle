@@ -12,7 +12,8 @@ async fn redirect(code: u16, target: &str) {
 		"HTTP/1.1 {code} Redirect\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 	);
 	let front = HttpPeer::start(response.into_bytes(), false).await;
-	let webhook = Webhook::new(&front.url(), Some("fixture-secret".into())).expect("webhook");
+	let webhook = Webhook::new_allowing_private(&front.url(), Some("fixture-secret".into()))
+		.expect("webhook");
 	assert_eq!(
 		within(webhook.send_test())
 			.await
@@ -81,7 +82,7 @@ async fn advertised_petabyte_body_is_not_buffered_or_awaited() {
 		true,
 	)
 	.await;
-	let hook = Webhook::new(&peer.url(), None).expect("webhook");
+	let hook = Webhook::new_allowing_private(&peer.url(), None).expect("webhook");
 	assert_eq!(
 		within(hook.send_test()).await.expect("headers suffice"),
 		200
@@ -96,7 +97,7 @@ async fn infinite_chunked_body_is_not_read() {
 		true,
 	)
 	.await;
-	let hook = Webhook::new(&peer.url(), None).expect("webhook");
+	let hook = Webhook::new_allowing_private(&peer.url(), None).expect("webhook");
 	assert_eq!(
 		within(hook.send_test())
 			.await
@@ -112,7 +113,7 @@ async fn megabyte_response_header_is_rejected() {
 	response.extend(std::iter::repeat_n(b'x', 1 << 20));
 	response.extend_from_slice(b"\r\nContent-Length: 0\r\n\r\n");
 	let peer = HttpPeer::start(response, false).await;
-	let hook = Webhook::new(&peer.url(), None).expect("webhook");
+	let hook = Webhook::new_allowing_private(&peer.url(), None).expect("webhook");
 	let error = within(hook.send_test())
 		.await
 		.expect_err("HTTP header limit");
@@ -126,7 +127,7 @@ async fn megabyte_response_header_is_rejected() {
 #[tokio::test]
 async fn silent_receiver_hits_production_fifteen_second_timeout() {
 	let peer = HttpPeer::start(Vec::new(), true).await;
-	let hook = Webhook::new(&peer.url(), None).expect("webhook");
+	let hook = Webhook::new_allowing_private(&peer.url(), None).expect("webhook");
 	let started = std::time::Instant::now();
 	let error = within(hook.send_test()).await.expect_err("silent receiver");
 	assert!(error.is_timeout(), "{error}");
@@ -150,7 +151,6 @@ async fn file_and_gopher_initial_urls_fail_before_transport() {
 macro_rules! private_url {
 	($name:ident, $url:literal) => {
 		#[test]
-		#[ignore = "bug: webhook constructor does not reject private destinations"]
 		fn $name() {
 			bounded(|| {
 				assert!(
@@ -184,7 +184,6 @@ private_url!(
 );
 
 #[tokio::test]
-#[ignore = "bug: webhook DNS resolution has no private-address filter"]
 async fn localhost_resolving_to_loopback_cannot_receive_a_webhook() {
 	let peer = HttpPeer::start(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(), false).await;
 	let url = format!("http://localhost:{}/hook", peer.addr.port());

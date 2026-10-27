@@ -80,11 +80,9 @@ pub struct Target {
 /// The webhook the queue actions notify: the configured one, unless it is
 /// switched off.
 pub(super) fn webhook_for(config: &crate::config::Config) -> Option<Arc<crate::webhook::Webhook>> {
-	config.active_webhook().map(|section| {
-		Arc::new(
-			crate::webhook::Webhook::new(&section.url, section.secret.clone()).expect("webhook"),
-		)
-	})
+	config
+		.active_webhook()
+		.map(|section| Arc::new(crate::webhook::poster(section).expect("webhook")))
 }
 
 /// Run one queue action against the spool under `data_dir`, writing data to

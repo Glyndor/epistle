@@ -392,7 +392,9 @@ async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
 	let (url, captured) = webhook_receiver().await;
 	let (dir, _spool, ids) = spool_with(1);
 	let id = ids[0];
-	let webhook = std::sync::Arc::new(crate::webhook::Webhook::new(&url, None).expect("webhook"));
+	let webhook = std::sync::Arc::new(
+		crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook"),
+	);
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),

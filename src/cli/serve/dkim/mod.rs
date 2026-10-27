@@ -97,7 +97,7 @@ pub(in crate::cli) fn build_split_with_companions(
 	}
 	let webhook = match config.active_webhook() {
 		Some(webhook) => Some(Arc::new(
-			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
+			crate::webhook::poster(webhook)
 				.map_err(std::io::Error::other)?
 				.with_metrics(metrics.clone()),
 		)),

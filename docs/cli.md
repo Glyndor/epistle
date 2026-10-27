@@ -669,13 +669,16 @@ address (`127.0.0.1`, `::1`, `localhost`), and cannot carry credentials. The sig
 secret arrives on stdin as one line and is stored inline in the 0600 configuration
 file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps a
 secret that is already configured. `unset` is refused while an alert still posts
-to the webhook.
+to the webhook. A URL that names a private destination (a loopback address, a
+private or link-local network) is refused by the server unless the section says
+`allow_private_webhooks = true`; `set` writes that key when the URL needs it, and
+`show` says whether it is on.
 
 `disable` writes `enabled = false` into the section and keeps the URL and the
 secret: after the restart no event is posted, alerts with `--webhook` included, and the warning on stderr lists which ones (`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, the warm-up reports) and the alerts that go quiet. While an alert posts to the webhook, `disable` asks first and off a terminal needs `--yes` (exit 2 without it), like `webhook unset` refusing. `config-check` warns about an alert whose webhook is off.
 `enable` takes the key out again. Both say `unchanged` when the webhook is
 already that way and refuse with exit 3 when no webhook is configured (a setting the command needs is missing; so is `unset` while an alert posts to the webhook, exit 3). `set`
-keeps a disabled webhook disabled. `show` prints `enabled`.
+keeps a disabled webhook disabled. `show` prints `enabled` and `allow_private_webhooks`.
 
 `test` posts one `test` event (see [configuration](configuration.md)), signed like
 any other, and reports the HTTP status. It fails on a non-2xx answer, a connection

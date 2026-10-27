@@ -93,14 +93,24 @@ fn show(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 		"unset"
 	};
 	if json {
-		let shown = json!({ "url": webhook.url, "secret": secret, "enabled": webhook.enabled });
+		let shown = json!({
+			"url": webhook.url,
+			"secret": secret,
+			"enabled": webhook.enabled,
+			"allow_private_webhooks": webhook.allow_private_webhooks,
+		});
 		return resource::json(out, &shown);
 	}
 	writeln!(
 		out,
-		"url\t{}\nsecret\t{secret}\nenabled\t{}",
+		"url\t{}\nsecret\t{secret}\nenabled\t{}\nallow_private_webhooks\t{}",
 		webhook.url,
-		if webhook.enabled { "yes" } else { "no" }
+		if webhook.enabled { "yes" } else { "no" },
+		if webhook.allow_private_webhooks {
+			"yes"
+		} else {
+			"no"
+		}
 	)
 	.map_err(|error| error.to_string())
 }
@@ -211,10 +221,17 @@ fn execute_with(
 			} else {
 				None
 			};
+			// A private destination is only reachable when the file says
+			// so: the option goes in with the URL, so the section the
+			// operator ends up with is one the server accepts.
+			let private = crate::webhook::destination::names_private(&url);
 			let shown =
 				json!({ "url": url, "secret": if secret.is_some() { "set" } else { "unchanged" } });
 			let change: resource::Change = Box::new(move |document, _| {
 				let mut fields = vec![("url", Some(TomlValue::from(url)))];
+				if private {
+					fields.push(("allow_private_webhooks", Some(TomlValue::from(true))));
+				}
 				if let Some(secret) = secret {
 					fields.push(("secret", Some(TomlValue::from(secret))));
 				}

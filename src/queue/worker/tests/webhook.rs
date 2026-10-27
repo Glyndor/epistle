@@ -72,7 +72,7 @@ async fn the_failure_event_carries_the_class_the_remote_and_its_reply() {
 		"remote.example",
 		Script::rcpt("carol@remote.example", "550 5.7.1 rejected by policy"),
 	);
-	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
+	let webhook = crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook");
 	let worker = Worker::new(spool, Arc::new(remote), "mail.sender.example")
 		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
 		.with_webhook(Arc::new(webhook));
@@ -116,7 +116,7 @@ async fn the_delivered_event_carries_the_message_id_the_remote_and_the_extra() {
 		"remote.example",
 		Script::rcpt("bob@remote.example", "250 OK"),
 	);
-	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
+	let webhook = crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook");
 	let worker = Worker::new(spool, Arc::new(remote), "mail.sender.example")
 		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
 		.with_webhook(Arc::new(webhook));
@@ -166,7 +166,7 @@ async fn delayed_fires_once_across_several_retries() {
 		"remote.example",
 		Script::rcpt("bob@remote.example", "451 4.3.0 later"),
 	);
-	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
+	let webhook = crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook");
 	let worker = Worker::new(spool, Arc::new(remote), "mail.sender.example")
 		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
 		.with_webhook(Arc::new(webhook))
@@ -239,7 +239,7 @@ async fn a_suppressed_recipient_emits_a_suppressed_webhook() {
 		.expect("store");
 	let suppression = crate::queue::SuppressionList::open(dir.path()).expect("suppression");
 	suppression.suppress("bob@suppressed.example");
-	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
+	let webhook = crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook");
 	let worker = Worker::new(
 		spool,
 		Arc::new(FakeRemote::default()),

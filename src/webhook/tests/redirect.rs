@@ -55,7 +55,7 @@ async fn redirecting_endpoint() -> (String, Arc<AtomicUsize>) {
 #[tokio::test]
 async fn a_redirect_is_not_followed_by_the_test_event() {
 	let (url, hits) = redirecting_endpoint().await;
-	let webhook = Webhook::new(&url, Some("topsecret".into())).expect("webhook");
+	let webhook = Webhook::new_allowing_private(&url, Some("topsecret".into())).expect("webhook");
 	let status = webhook
 		.send_test()
 		.await
@@ -68,7 +68,7 @@ async fn a_redirect_is_not_followed_by_the_test_event() {
 async fn a_redirect_is_a_failed_delivery_and_is_not_followed() {
 	let (url, hits) = redirecting_endpoint().await;
 	let metrics = Arc::new(crate::metrics::Metrics::new());
-	let webhook = Webhook::new(&url, Some("topsecret".into()))
+	let webhook = Webhook::new_allowing_private(&url, Some("topsecret".into()))
 		.expect("webhook")
 		.with_metrics(metrics.clone());
 	webhook
