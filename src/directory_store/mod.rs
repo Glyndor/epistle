@@ -745,3 +745,7 @@ mod lowercase_tests;
 #[cfg(test)]
 #[path = "paused_tests.rs"]
 mod paused_tests;
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
