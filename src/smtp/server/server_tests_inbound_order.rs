@@ -12,7 +12,7 @@ use crate::arc::chain::ChainValidation;
 use crate::arc::seal::{self, SealParams};
 use crate::arc::sealer::ArcSealer;
 use crate::dkim::test_support::KeyDns;
-use crate::dkim::{Canon, DkimOutcome, canon};
+use crate::dkim::{Algorithm, Canon, DkimOutcome, canon};
 use crate::smtp::sink::MemorySink;
 use crate::smtp::trace::header_values;
 
@@ -46,9 +46,12 @@ fn signature(key: &Ed25519KeyPair, name: &str, preamble: &str) -> String {
 	));
 	let own = canon::header(Canon::Relaxed, name, &value);
 	input.push_str(own.strip_suffix("\r\n").expect("canonical CRLF"));
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the signed
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(input.as_bytes());
 	format!(
 		"{value}{}",
-		BASE64.encode(key.sign(input.as_bytes()).as_ref())
+		BASE64.encode(key.sign(signed.as_ref()).as_ref())
 	)
 }
 

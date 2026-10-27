@@ -246,7 +246,12 @@ async fn verify_one(
 		Algorithm::Ed25519Sha256 => key,
 	};
 	let public_key = UnparsedPublicKey::new(algorithm, key);
-	let outcome = match public_key.verify(hash_input.as_bytes(), &signature.signature) {
+	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
+	// digest of the header data, not the data itself; `rsa-sha256` hashes
+	// inside the PKCS#1 padding. The signer and the verifier ask the same
+	// function which bytes the signature covers, so they cannot drift apart.
+	let signed = signature.algorithm.signed_bytes(hash_input.as_bytes());
+	let outcome = match public_key.verify(signed.as_ref(), &signature.signature) {
 		Ok(()) => DkimOutcome::Pass,
 		Err(_) => DkimOutcome::Fail,
 	};
@@ -378,3 +383,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "verify_tests_rsa.rs"]
 mod rsa_tests;
+
+#[cfg(test)]
+#[path = "verify_tests_ed25519.rs"]
+mod ed25519_tests;

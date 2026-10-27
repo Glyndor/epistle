@@ -4,7 +4,7 @@ use super::*;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::dkim::signature::Canon;
+use crate::dkim::signature::{Algorithm, Canon};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -68,7 +68,10 @@ fn signed_message() -> (Vec<u8>, KeyDns) {
 	dkim_line.truncate(dkim_line.len() - 2);
 	hash_input.push_str(&dkim_line);
 
-	let signature = BASE64.encode(key_pair.sign(hash_input.as_bytes()).as_ref());
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the header
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(hash_input.as_bytes());
+	let signature = BASE64.encode(key_pair.sign(signed.as_ref()).as_ref());
 	let message = format!(
 		"From:{from}\r\nSubject:{subject}\r\nDKIM-Signature:{dkim_value}{signature}\r\n\r\nHello world\r\n"
 	);
@@ -114,7 +117,10 @@ fn signed_message_with_l_tag() -> (Vec<u8>, KeyDns) {
 	dkim_line.truncate(dkim_line.len() - 2);
 	hash_input.push_str(&dkim_line);
 
-	let signature = BASE64.encode(key_pair.sign(hash_input.as_bytes()).as_ref());
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the header
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(hash_input.as_bytes());
+	let signature = BASE64.encode(key_pair.sign(signed.as_ref()).as_ref());
 	let message = format!(
 		"From:{from}\r\nSubject:{subject}\r\nDKIM-Signature:{dkim_value}{signature}\r\n\r\nHello world\r\n"
 	);
@@ -170,7 +176,10 @@ fn signed_message_with_simple_body_canon_and_trailing_blank_line() -> (Vec<u8>, 
 	dkim_line.truncate(dkim_line.len() - 2);
 	hash_input.push_str(&dkim_line);
 
-	let signature = BASE64.encode(key_pair.sign(hash_input.as_bytes()).as_ref());
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the header
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(hash_input.as_bytes());
+	let signature = BASE64.encode(key_pair.sign(signed.as_ref()).as_ref());
 	let message = format!(
 		"From:{from}\r\nSubject:{subject}\r\nDKIM-Signature:{dkim_value}{signature}\r\n\r\nHello world\r\n\r\n"
 	);
@@ -221,7 +230,10 @@ fn signed_message_with_relaxed_body_canon_and_internal_wsp() -> (Vec<u8>, KeyDns
 	dkim_line.truncate(dkim_line.len() - 2);
 	hash_input.push_str(&dkim_line);
 
-	let signature = BASE64.encode(key_pair.sign(hash_input.as_bytes()).as_ref());
+	// An Ed25519-SHA256 signature covers the SHA-256 digest of the header
+	// data (RFC 8463 section 3), not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(hash_input.as_bytes());
+	let signature = BASE64.encode(key_pair.sign(signed.as_ref()).as_ref());
 	let message = format!(
 		"From:{from}\r\nSubject:{subject}\r\nDKIM-Signature:{dkim_value}{signature}\r\n\r\nHello  \t \tworld\r\n"
 	);

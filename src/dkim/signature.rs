@@ -1,4 +1,7 @@
-//! `DKIM-Signature` header parsing (RFC 6376 section 3.5).
+//! `DKIM-Signature` header parsing (RFC 6376 section 3.5) and the rule each
+//! signing algorithm follows about which bytes its signature covers.
+
+use std::borrow::Cow;
 
 /// Canonicalization mode (RFC 6376 section 3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +15,29 @@ pub enum Canon {
 pub enum Algorithm {
 	RsaSha256,
 	Ed25519Sha256,
+}
+
+impl Algorithm {
+	/// The bytes a signature of this algorithm covers, given the canonicalized
+	/// signing input.
+	///
+	/// `rsa-sha256` hashes the input inside the PKCS#1 v1.5 padding, so its
+	/// signature covers the input itself. `ed25519-sha256` (RFC 8463 section
+	/// 3) computes a SHA-256 digest of the input and signs that digest,
+	/// because PureEdDSA has no hash step of its own.
+	///
+	/// The signer and the verifier both ask here, so the two cannot drift
+	/// apart on which bytes the signature covers.
+	pub fn signed_bytes<'a>(&self, input: &'a [u8]) -> Cow<'a, [u8]> {
+		match self {
+			Algorithm::RsaSha256 => Cow::Borrowed(input),
+			Algorithm::Ed25519Sha256 => Cow::Owned(
+				ring::digest::digest(&ring::digest::SHA256, input)
+					.as_ref()
+					.to_vec(),
+			),
+		}
+	}
 }
 
 /// A parsed DKIM-Signature header.

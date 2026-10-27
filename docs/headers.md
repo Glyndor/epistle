@@ -205,6 +205,13 @@ or to inbound mail.
 
 - Algorithm `ed25519-sha256`. When an RSA key is configured the message carries
   a second `DKIM-Signature` with `rsa-sha256` and the RSA selector.
+- The `ed25519-sha256` signature covers the SHA-256 digest of the signed
+  header data, as RFC 8463
+  [section 3](https://www.rfc-editor.org/rfc/rfc8463.html#section-3) requires:
+  Ed25519 has no hash step of its own, so the digest is computed before
+  signing and before verifying. The `rsa-sha256` signature covers the same
+  header data, with the hash inside the PKCS#1 padding. The ARC set is signed
+  the same way.
 - Canonicalization `relaxed/relaxed`.
 - Both algorithms use the same `h=` list, covering every present instance of
   the fields below, selected from the bottom of the message upward.
