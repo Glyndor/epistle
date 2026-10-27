@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 
-use crate::dkim::{Canon, DkimOutcome, canon, parse_key};
+use crate::dkim::{Algorithm, Canon, DkimOutcome, canon, parse_key};
 use crate::spf::{DnsFailure, DnsLookup};
 
 use super::ams::strip_b;
@@ -66,7 +66,10 @@ pub fn build(
 	append_instance(&mut input, current_auth_results, current_message_signature);
 	input.push_str(&final_seal_line(&value));
 
-	let signature = BASE64.encode(key.sign(input.as_bytes()).as_ref());
+	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
+	// digest of the signed data, not the data itself.
+	let signed = Algorithm::Ed25519Sha256.signed_bytes(input.as_bytes());
+	let signature = BASE64.encode(key.sign(signed.as_ref()).as_ref());
 	format!("ARC-Seal:{value}{signature}\r\n")
 }
 
@@ -100,7 +103,10 @@ pub async fn verify(
 	};
 
 	let public_key = UnparsedPublicKey::new(&ED25519, key);
-	match public_key.verify(input.as_bytes(), &seal.signature) {
+	// The same rule the signer followed: an Ed25519-SHA256 signature covers
+	// the SHA-256 digest of the signed data.
+	let signed = seal.algorithm.signed_bytes(input.as_bytes());
+	match public_key.verify(signed.as_ref(), &seal.signature) {
 		Ok(()) => DkimOutcome::Pass,
 		Err(_) => DkimOutcome::Fail,
 	}
