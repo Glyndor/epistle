@@ -264,7 +264,6 @@ fn incomplete_arc_chain_claiming_pass_fails_closed() {
 }
 
 #[test]
-#[ignore = "bug: DKIM verifier has no header-byte or signature-count budget"]
 fn dkim_header_flood_is_rejected_as_one_bounded_error() {
 	checked(async {
 		let mut raw = b"From: a@sender.test\r\n".to_vec();

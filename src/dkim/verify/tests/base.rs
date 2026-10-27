@@ -467,3 +467,30 @@ async fn resolver_stub_methods_are_inert() {
 	assert!(dns.addresses("x").await.expect("ok").is_empty());
 	assert!(dns.mx("x").await.expect("ok").is_empty());
 }
+
+#[tokio::test]
+async fn a_flood_of_signature_headers_is_one_bounded_error() {
+	// More signatures than the budget allows: one error, not one result per
+	// header.
+	let mut raw = b"From: alice@example.org\r\n".to_vec();
+	raw.extend(b"DKIM-Signature: v=1; a=ed25519-sha256\r\n".repeat(MAX_SIGNATURES + 1));
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let results = verify_message(&empty_dns(), &raw).await;
+	assert_eq!(results.len(), 1, "{results:?}");
+	assert_eq!(results[0].outcome, DkimOutcome::PermError);
+}
+
+#[tokio::test]
+async fn a_header_block_past_the_budget_is_one_bounded_error() {
+	// A header block larger than the budget is refused before its
+	// signatures are looked at.
+	let mut raw = b"From: alice@example.org\r\n".to_vec();
+	let padding = "X-Padding: 0123456789\r\n";
+	raw.extend(
+		std::iter::repeat_n(padding.as_bytes(), MAX_HEADER_BYTES / padding.len() + 1).flatten(),
+	);
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let results = verify_message(&empty_dns(), &raw).await;
+	assert_eq!(results.len(), 1, "{results:?}");
+	assert_eq!(results[0].outcome, DkimOutcome::PermError);
+}

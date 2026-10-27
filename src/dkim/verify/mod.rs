@@ -51,6 +51,15 @@ pub struct DkimResult {
 	pub domain: Option<String>,
 }
 
+/// The largest header block a message may carry for its signatures to be
+/// verified. Past it, the message is refused with one error instead of
+/// being walked header by header.
+pub(crate) const MAX_HEADER_BYTES: usize = 2 * 1024 * 1024;
+
+/// The most DKIM-Signature headers one message may carry. A message with
+/// more is refused with one error, not one result per signature.
+pub(crate) const MAX_SIGNATURES: usize = 10;
+
 /// Verify every DKIM-Signature header of a raw message. An unsigned message
 /// yields a single `none` result.
 pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> {
@@ -61,6 +70,16 @@ pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> 
 		}];
 	};
 
+	// The budget comes before the signatures are looked at: a message that
+	// carries a flood of them is refused with one error, not with one
+	// result, one lookup and one error per signature.
+	if message.header_bytes > MAX_HEADER_BYTES {
+		return vec![DkimResult {
+			outcome: DkimOutcome::PermError,
+			domain: None,
+		}];
+	}
+
 	let signatures: Vec<(usize, &Header)> = message
 		.headers
 		.iter()
@@ -70,6 +89,12 @@ pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> 
 	if signatures.is_empty() {
 		return vec![DkimResult {
 			outcome: DkimOutcome::None,
+			domain: None,
+		}];
+	}
+	if signatures.len() > MAX_SIGNATURES {
+		return vec![DkimResult {
+			outcome: DkimOutcome::PermError,
 			domain: None,
 		}];
 	}
@@ -89,6 +114,17 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 	let Some(message) = Message::split(raw) else {
 		return false;
 	};
+	if message.header_bytes > MAX_HEADER_BYTES {
+		return false;
+	}
+	let signatures = message
+		.headers
+		.iter()
+		.filter(|header| header.name.eq_ignore_ascii_case("DKIM-Signature"))
+		.count();
+	if signatures > MAX_SIGNATURES {
+		return false;
+	}
 	for (index, header) in message.headers.iter().enumerate() {
 		if !header.name.eq_ignore_ascii_case("DKIM-Signature") {
 			continue;
@@ -307,6 +343,9 @@ fn strip_b_tag(value: &str) -> String {
 struct Message<'a> {
 	headers: Vec<Header<'a>>,
 	body: &'a [u8],
+	/// How many octets the header block holds, to bound the work a message
+	/// can ask for.
+	header_bytes: usize,
 }
 
 struct Header<'a> {
@@ -352,7 +391,11 @@ impl<'a> Message<'a> {
 		if let Some((start, end)) = current.take() {
 			headers.push(parse_header(&header_block[start..end])?);
 		}
-		Some(Message { headers, body })
+		Some(Message {
+			headers,
+			body,
+			header_bytes: raw_header.len(),
+		})
 	}
 }
 
