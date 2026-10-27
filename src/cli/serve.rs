@@ -24,7 +24,7 @@ pub fn run(config: Config) -> ExitCode {
 	// Initialise tracing inside the runtime so the OTLP batch exporter (if any)
 	// can spawn its background task. The provider is held for a clean shutdown.
 	let _guard = runtime.enter();
-	let otel_provider = super::tracing_setup::init_tracing(&config);
+	let otel_provider = super::trace::init_tracing(&config);
 
 	let result = runtime.block_on(serve(config));
 

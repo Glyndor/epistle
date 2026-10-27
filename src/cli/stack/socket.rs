@@ -55,10 +55,12 @@ pub(super) fn socket_path() -> PathBuf {
 pub(super) fn ensure() -> io::Result<()> {
 	let runtime = runtime_dir();
 	ensure_with(&runtime, Path::exists, |command| {
-		command.stdout(super::json_out::child_stdout()).status()
+		command
+			.stdout(crate::cli::json_out::child_stdout())
+			.status()
 	})
 }
 
 #[cfg(test)]
-#[path = "stack_socket_tests.rs"]
+#[path = "socket_tests.rs"]
 mod tests;

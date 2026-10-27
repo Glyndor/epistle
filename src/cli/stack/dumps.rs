@@ -86,5 +86,5 @@ pub(super) fn newest(data_dir: &Path, prefix: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "stack_dumps_tests.rs"]
+#[path = "dumps_tests.rs"]
 mod tests;

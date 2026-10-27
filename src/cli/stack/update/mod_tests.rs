@@ -9,7 +9,7 @@
 
 #[test]
 fn stack_update_module_does_not_expose_a_rewrite_default_image_helper() {
-	let module = include_str!("stack_update.rs");
+	let module = include_str!("mod.rs");
 	for line in module.lines() {
 		assert!(
 			!line.contains("fn rewrite_default_image"),

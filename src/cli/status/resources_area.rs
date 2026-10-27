@@ -63,7 +63,7 @@ fn suggested_item(compose: &Path, meminfo: &Path, largest: u64) -> Option<Item> 
 	let document: serde_json::Value = serde_json::from_str(&read_bounded(compose)?).ok()?;
 	let total = host_sizing::mem_total(meminfo)?;
 	let sizing = host_sizing::for_host(total);
-	let current = crate::cli::stack_resources::read_limits(&document);
+	let current = crate::cli::stack::resources::read_limits(&document);
 	let host = format!("a new install on this host ({})", gib(total));
 	let mut differences = Vec::new();
 	let mut commands = Vec::new();
@@ -137,7 +137,7 @@ fn needs(service: &str, largest: u64) -> u64 {
 
 /// A byte count as compose writes it.
 fn compose_size(bytes: u64) -> String {
-	crate::cli::stack_resources::compose_size(bytes)
+	crate::cli::stack::resources::compose_size(bytes)
 }
 
 /// The containers finding: the sum of the compose memory limits against the
@@ -159,7 +159,7 @@ fn containers_item(compose: &Path, meminfo: &Path, largest: u64) -> Item {
 		);
 	};
 	let mut limits: Vec<(String, u64, String)> =
-		crate::cli::stack_resources::read_limits(&document)
+		crate::cli::stack::resources::read_limits(&document)
 			.into_iter()
 			.filter_map(|limit| Some((limit.service, limit.memory_bytes?, limit.memory?)))
 			.collect();

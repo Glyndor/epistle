@@ -166,28 +166,25 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	let _held = match crate::cli::compose_lock::acquire(&lock) {
 		Ok(held) => held,
 		Err(error) => {
-			super::style::error(error);
+			crate::cli::style::error(error);
 			return ExitCode::FAILURE;
 		}
 	};
 	let plan = match plan_update(compose, &config.data_dir, &config.listeners) {
 		Ok(plan) => plan,
 		Err(error) => {
-			super::style::error(format_args!("cannot update {}: {error}", compose.display()));
+			crate::cli::style::error(format_args!("cannot update {}: {error}", compose.display()));
 			return ExitCode::FAILURE;
 		}
 	};
 	// The socket unit can be listening while `podman system service` is
 	// still starting, as it is right after an upgrade or a boot. Nothing has
 	// changed yet, so a service that never answers stops the update here.
-	if !super::stack_retry::wait_for_api(
-		&super::stack_socket::socket_path(),
-		super::stack_retry::API_WAIT,
-	) {
-		super::style::error(format_args!(
+	if !super::retry::wait_for_api(&super::socket::socket_path(), super::retry::API_WAIT) {
+		crate::cli::style::error(format_args!(
 			"Podman's API at {} did not answer within {} s; nothing was changed",
-			super::stack_socket::socket_path().display(),
-			super::stack_retry::API_WAIT.as_secs()
+			super::socket::socket_path().display(),
+			super::retry::API_WAIT.as_secs()
 		));
 		return ExitCode::FAILURE;
 	}
@@ -201,7 +198,7 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	match execute::execute(&mut host, &plan) {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {
-			super::style::error(format_args!("stack update failed: {error}"));
+			crate::cli::style::error(format_args!("stack update failed: {error}"));
 			ExitCode::FAILURE
 		}
 	}
@@ -215,10 +212,10 @@ const HEALTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// The `status` areas a restart can break. DNS, TLS, the queue and the
 /// antivirus depend on the world outside the restart (a recreated clamav
 /// spends minutes downloading signatures), so they do not judge it.
-const RESTART_AREAS: [super::status::CheckArea; 3] = [
-	super::status::CheckArea::Config,
-	super::status::CheckArea::Ports,
-	super::status::CheckArea::Db,
+const RESTART_AREAS: [crate::cli::status::CheckArea; 3] = [
+	crate::cli::status::CheckArea::Config,
+	crate::cli::status::CheckArea::Ports,
+	crate::cli::status::CheckArea::Db,
 ];
 
 /// Whether the compose file on disk has a `db` service. Read the same way, so
@@ -251,13 +248,13 @@ impl execute::UpdateHost for Live<'_> {
 			.database
 			.as_ref()
 			.ok_or("the config has no [database]")?;
-		super::backup::collect_dump(database, &self.config.data_dir)
+		crate::cli::backup::collect_dump(database, &self.config.data_dir)
 			.map_err(|error| error.to_string())
 	}
 
 	fn keep_dump(&mut self, sql: &[u8]) -> Result<std::path::PathBuf, String> {
 		let name = format!("pre-{}", env!("CARGO_PKG_VERSION"));
-		super::stack_dumps::keep(
+		super::dumps::keep(
 			&self.config.data_dir,
 			&name,
 			sql,
@@ -267,7 +264,7 @@ impl execute::UpdateHost for Live<'_> {
 	}
 
 	fn harden_database(&mut self) -> Result<bool, String> {
-		super::db_harden::run(self.compose)
+		crate::cli::db_harden::run(self.compose)
 	}
 
 	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
@@ -286,38 +283,27 @@ impl execute::UpdateHost for Live<'_> {
 	fn podup(&mut self, step: &[String]) -> Result<(), String> {
 		let args: Vec<&str> = step.iter().map(String::as_str).collect();
 		let label = format!("`podup {}`", args.join(" "));
-		super::stack_retry::with_retries(
-			|| {
-				super::stack_retry::run_tee(super::stack::build_command(
-					self.podup,
-					self.compose,
-					&args,
-				))
-			},
-			|| {
-				super::stack_retry::wait_for_api(
-					&super::stack_socket::socket_path(),
-					super::stack_retry::API_WAIT,
-				)
-			},
+		super::retry::with_retries(
+			|| super::retry::run_tee(super::build_command(self.podup, self.compose, &args)),
+			|| super::retry::wait_for_api(&super::socket::socket_path(), super::retry::API_WAIT),
 			|line| {
-				let _ = writeln!(super::style::stderr(), "epistle: {line}");
+				let _ = writeln!(crate::cli::style::stderr(), "epistle: {line}");
 			},
 		)
 		.map_err(|error| format!("{label} failed: {error}"))
 	}
 
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
-		super::stack_health::wait_healthy(self.podup, self.compose, service, HEALTH_TIMEOUT)
+		super::health::wait_healthy(self.podup, self.compose, service, HEALTH_TIMEOUT)
 	}
 
 	fn failing_areas(&mut self) -> Vec<(String, String)> {
-		super::status::failing(self.config_path, &RESTART_AREAS)
+		crate::cli::status::failing(self.config_path, &RESTART_AREAS)
 			.unwrap_or_else(|error| vec![("status".to_string(), error)])
 	}
 
 	fn log(&mut self, line: &str) {
-		let _ = writeln!(super::style::stderr(), "epistle: {line}");
+		let _ = writeln!(crate::cli::style::stderr(), "epistle: {line}");
 	}
 }
 
@@ -325,13 +311,12 @@ fn step(parts: &[&str]) -> Step {
 	Step(parts.iter().map(|part| part.to_string()).collect())
 }
 
-#[path = "stack_update_run.rs"]
 mod execute;
 
 #[cfg(test)]
-#[path = "stack_update_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "stack_update_steps_tests.rs"]
+#[path = "mod_tests_steps.rs"]
 mod tests_steps;

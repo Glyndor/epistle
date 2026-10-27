@@ -53,7 +53,7 @@ pub(super) fn wait_with_interval(
 	let deadline = Instant::now() + timeout;
 	let mut last: String;
 	loop {
-		match super::stack_started::ps_json_with(podup, compose, Duration::from_secs(10)) {
+		match super::started::ps_json_with(podup, compose, Duration::from_secs(10)) {
 			Ok(json) => match service_status(&json, service) {
 				Some((state, health)) if ready(&state, &health, checked) => return Ok(()),
 				Some((state, health)) => last = format!("{state}, health {health:?}"),
@@ -89,5 +89,5 @@ pub(super) fn has_healthcheck(compose: &str, service: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "stack_health_tests.rs"]
+#[path = "health_tests.rs"]
 mod tests;

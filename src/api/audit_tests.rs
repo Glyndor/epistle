@@ -102,7 +102,7 @@ impl Visit for FieldVisitor<'_> {
 /// single-threaded test runtime cannot host a nested `block_on`, which is
 /// why this helper requires `flavor = "multi_thread"` at every call site.
 fn run_with_capture<F: Future<Output = ()>>(future: F) -> Vec<CapturedEvent> {
-	crate::cli::tracing_capture::keep_callsites_live();
+	crate::cli::trace::capture::keep_callsites_live();
 	let cap = Capture::default();
 	let events = cap.events.clone();
 	let subscriber = Registry::default().with(LevelFilter::INFO).with(cap);

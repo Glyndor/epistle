@@ -14,7 +14,7 @@ fn skipped_notice_names_the_path_with_the_account_pseudonymised() {
 
 #[test]
 fn the_logged_warning_does_not_carry_the_account_name() {
-	let events = crate::cli::tracing_capture::run_with_capture(|| {
+	let events = crate::cli::trace::capture::run_with_capture(|| {
 		warn_skipped(Path::new("/var/lib/epistle/accounts/zelda/new/y.eml"));
 	});
 	assert_eq!(events.len(), 1, "one warning expected");

@@ -73,3 +73,6 @@ fn build_otel_layer(
 	let layer = tracing_opentelemetry::layer().with_tracer(tracer).boxed();
 	Ok((layer, provider))
 }
+
+#[cfg(test)]
+pub(crate) mod capture;

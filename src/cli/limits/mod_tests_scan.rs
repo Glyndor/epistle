@@ -430,9 +430,9 @@ fn every_excused_constant_still_exists_and_is_not_also_a_row() {
 	let rows = row_sources();
 	let keys = code_lines(&format!(
 		"{}{}{}",
-		include_str!("limits.rs"),
-		include_str!("limits_keys.rs"),
-		include_str!("limits_catalog.rs")
+		include_str!("mod.rs"),
+		include_str!("keys.rs"),
+		include_str!("catalog.rs")
 	));
 	for (path, reason) in NOT_A_ROW {
 		assert!(!reason.is_empty(), "{path}: say why it is not a row");

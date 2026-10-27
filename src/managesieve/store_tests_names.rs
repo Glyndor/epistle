@@ -4,7 +4,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
-use crate::cli::tracing_capture::run_with_capture;
+use crate::cli::trace::capture::run_with_capture;
 
 fn store(dir: &std::path::Path) -> ScriptStore {
 	ScriptStore::new(dir, "alice")

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::stack::{build_command, compose_path};
-use super::status::parse_rfc3339;
+use super::{build_command, compose_path};
+use crate::cli::status::parse_rfc3339;
 
 /// How long `podup ps` may take before it is abandoned.
 pub(super) const PS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -96,5 +96,5 @@ fn parse_started(json: &str) -> Result<i64, String> {
 }
 
 #[cfg(test)]
-#[path = "stack_started_tests.rs"]
+#[path = "started_tests.rs"]
 mod tests;

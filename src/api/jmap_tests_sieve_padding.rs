@@ -86,7 +86,7 @@ fn smtp_refuses_a_padded_message_for_good() {
 
 #[test]
 fn a_refusal_is_counted_and_said_once_an_hour() {
-	use crate::cli::tracing_capture::run_with_capture;
+	use crate::cli::trace::capture::run_with_capture;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		["example.org".to_string()],

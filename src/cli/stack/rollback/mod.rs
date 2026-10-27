@@ -135,13 +135,11 @@ pub(super) fn summary(current: &str, version: &str, restored: bool) -> String {
 	)
 }
 
-#[path = "stack_rollback_store.rs"]
 mod store;
 
-#[path = "stack_rollback_run.rs"]
 mod run;
 pub(super) use run::{restore_db, run_as_root};
 
 #[cfg(test)]
-#[path = "stack_rollback_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

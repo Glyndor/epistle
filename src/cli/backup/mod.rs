@@ -406,7 +406,7 @@ fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
 /// shares the live `podup` binary the rest of the CLI calls, so the
 /// answer is what the operator sees.
 fn mail_service_is_running(data_dir: &Path) -> bool {
-	super::stack_started::mail_started_at(data_dir, "podup")
+	super::stack::started::mail_started_at(data_dir, "podup")
 		.ok()
 		.flatten()
 		.is_some()

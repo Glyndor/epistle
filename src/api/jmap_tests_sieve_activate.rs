@@ -303,7 +303,7 @@ async fn the_log_says_when_the_active_script_is_one_left_out() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	legacy_active(dir.path());
 	let s = store(dir.path(), "alice");
-	let events = crate::cli::tracing_capture::run_with_capture(|| {
+	let events = crate::cli::trace::capture::run_with_capture(|| {
 		s.list().expect("list");
 	});
 	let said = events

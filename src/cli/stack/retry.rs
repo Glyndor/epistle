@@ -93,7 +93,7 @@ pub(super) struct Run {
 pub(super) fn run_tee(mut command: std::process::Command) -> std::io::Result<Run> {
 	let mut child = command
 		.stdin(Stdio::inherit())
-		.stdout(super::json_out::child_stdout())
+		.stdout(crate::cli::json_out::child_stdout())
 		.stderr(Stdio::piped())
 		.spawn()?;
 	let mut stderr = child
@@ -159,5 +159,5 @@ pub(super) fn with_retries(
 }
 
 #[cfg(test)]
-#[path = "stack_retry_tests.rs"]
+#[path = "retry_tests.rs"]
 mod tests;

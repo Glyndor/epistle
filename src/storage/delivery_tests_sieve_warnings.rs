@@ -4,7 +4,7 @@
 
 use super::sieve_limits::{count, inbox, message, setup};
 use super::*;
-use crate::cli::tracing_capture::run_with_capture;
+use crate::cli::trace::capture::run_with_capture;
 
 #[test]
 fn the_overspending_warning_is_said_once_an_hour_for_an_account() {
@@ -107,7 +107,7 @@ fn the_flags_sidecar_holds_no_more_than_the_limit() {
 	assert_eq!(written.len(), crate::sieve::interp::MAX_FLAGS);
 }
 
-fn said(events: &[crate::cli::tracing_capture::CapturedEvent], text: &str) -> usize {
+fn said(events: &[crate::cli::trace::capture::CapturedEvent], text: &str) -> usize {
 	events
 		.iter()
 		.filter(|e| e.fields.get("message").is_some_and(|m| m.contains(text)))

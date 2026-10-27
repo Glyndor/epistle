@@ -6,7 +6,7 @@
 
 use tracing::Level;
 
-use super::super::tracing_capture::run_with_capture;
+use super::super::trace::capture::run_with_capture;
 use super::connect_database;
 use super::dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;

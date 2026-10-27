@@ -221,7 +221,7 @@ impl Stack for Podup {
 	}
 
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
-		super::super::stack_health::wait_healthy("podup", &self.compose, service, DB_HEALTH)
+		super::super::stack::health::wait_healthy("podup", &self.compose, service, DB_HEALTH)
 	}
 
 	fn counts(&mut self) -> Result<String, String> {
@@ -234,7 +234,7 @@ impl Stack for Podup {
 	}
 
 	fn keep_dump(&mut self, name: &str, sql: &[u8]) -> Result<PathBuf, String> {
-		super::super::stack_dumps::keep(&self.data_dir, name, sql, SystemTime::now())
+		super::super::stack::dumps::keep(&self.data_dir, name, sql, SystemTime::now())
 			.map_err(|error| format!("cannot keep the dump: {error}"))
 	}
 

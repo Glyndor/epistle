@@ -120,7 +120,7 @@ fn require_running_mail(json: &str) -> Result<(), String> {
 pub(super) fn ensure_mail_running(config: &Config) -> Result<(), String> {
 	let compose = super::init::compose_file_path(&config.data_dir);
 	let json =
-		super::stack_started::ps_json_with("podup", &compose, super::stack_started::PS_TIMEOUT)?;
+		super::stack::started::ps_json_with("podup", &compose, super::stack::started::PS_TIMEOUT)?;
 	require_running_mail(&json)
 }
 

@@ -42,7 +42,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Lines {
 
 #[tokio::test]
 async fn a_gone_recipient_is_answered_451_and_logged() {
-	crate::cli::tracing_capture::keep_callsites_live();
+	crate::cli::trace::capture::keep_callsites_live();
 	let lines = Lines::default();
 	let _guard =
 		tracing::subscriber::set_default(tracing_subscriber::registry().with(lines.clone()));
