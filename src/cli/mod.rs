@@ -266,3 +266,7 @@ mod cli_confirmation_tests;
 #[cfg(test)]
 #[path = "oauth_keygen_tests.rs"]
 mod oauth_keygen_tests;
+
+#[cfg(test)]
+#[path = "cli_tests_service.rs"]
+mod tests_service;
