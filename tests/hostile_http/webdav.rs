@@ -230,19 +230,16 @@ async fn mismatched_etag(value: &'static str, expected: StatusCode) {
 }
 
 #[tokio::test]
-#[ignore = "bug: DAV PUT ignores stale If-Match and overwrites the resource (H1)"]
 async fn stale_if_match_cannot_overwrite() {
 	mismatched_etag("\"stale\"", StatusCode::PRECONDITION_FAILED).await;
 }
 
 #[tokio::test]
-#[ignore = "bug: DAV PUT ignores weak If-Match and overwrites the resource (H1)"]
 async fn weak_if_match_cannot_overwrite() {
 	mismatched_etag("W/\"stale\"", StatusCode::PRECONDITION_FAILED).await;
 }
 
 #[tokio::test]
-#[ignore = "bug: DAV PUT ignores a nonmatching If-Match list (H1)"]
 async fn if_match_list_cannot_overwrite() {
 	mismatched_etag(
 		"\"old-one\", W/\"old-two\"",
@@ -252,7 +249,6 @@ async fn if_match_list_cannot_overwrite() {
 }
 
 #[tokio::test]
-#[ignore = "bug: DAV PUT ignores malformed If-Match and overwrites the resource (H1)"]
 async fn malformed_if_match_cannot_overwrite() {
 	mismatched_etag("not-an-entity-tag", StatusCode::BAD_REQUEST).await;
 }
