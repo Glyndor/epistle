@@ -2,7 +2,7 @@
 //!
 //! Every operational limit on the server has one row here: the keys the
 //! operator may set through `epistle limits set`, plus the protocol limits
-//! a client can run into that the server hard-codes (`limits_protocol.rs`).
+//! a client can run into that the server hard-codes (`protocol.rs`).
 //! The catalog is the
 //! single source of truth for `show` (text and `--json`), the MUST/SHOULD
 //! checks in `set`, and the docs page
@@ -129,7 +129,7 @@ pub(super) struct FixedEntry {
 	pub(super) class: Class,
 	pub(super) reference: &'static str,
 	/// The path of the constant the value is read from, as written in
-	/// `limits_protocol.rs`; empty for a rule that is not a constant.
+	/// `protocol.rs`; empty for a rule that is not a constant.
 	#[allow(dead_code)] // Read by the tests that tie each row to its constant.
 	pub(super) source: &'static str,
 }

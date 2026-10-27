@@ -1,5 +1,5 @@
 //! The scan that ties the catalog to the code: every constant that reads as a
-//! limit in the protocol modules is a row of `limits_protocol.rs` or is
+//! limit in the protocol modules is a row of `protocol.rs` or is
 //! excused here with a reason.
 
 use std::collections::BTreeSet;
@@ -389,7 +389,7 @@ fn every_limit_constant_in_the_protocol_modules_has_a_row() {
 	assert!(seen > 50, "the scan found only {seen} limit constants");
 	assert!(
 		unlisted.is_empty(),
-		"limits with no row in src/cli/limits_protocol.rs (add one, or name it in NOT_A_ROW with the reason): {unlisted:#?}"
+		"limits with no row in src/cli/limits/protocol.rs (add one, or name it in NOT_A_ROW with the reason): {unlisted:#?}"
 	);
 }
 

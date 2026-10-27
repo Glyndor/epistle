@@ -18,7 +18,7 @@ pub(super) fn dir(data_dir: &Path) -> PathBuf {
 
 /// Write `sql` gzipped as `<name>-<timestamp>.sql.gz` and delete all but
 /// the newest [`KEEP`] `pre-*` dumps. Returns the path written.
-pub(super) fn keep(
+pub(in crate::cli) fn keep(
 	data_dir: &Path,
 	name: &str,
 	sql: &[u8],

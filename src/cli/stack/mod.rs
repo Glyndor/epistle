@@ -197,13 +197,13 @@ pub(crate) enum StackAction {
 	},
 }
 
-mod dumps;
-mod health;
-mod resources;
+pub(super) mod dumps;
+pub(super) mod health;
+pub(super) mod resources;
 mod retry;
-mod rollback;
+pub(super) mod rollback;
 mod socket;
-mod started;
+pub(super) mod started;
 mod update;
 
 mod entry;

@@ -1,7 +1,7 @@
 //! Sanity check that the legacy tests file does not pin helpers
 //! removed by the host-binary switch. The test bodies are kept
 //! thin because the operator-facing logic moved to
-//! `stack_update_steps`; a future drive-by edit cannot resurrect
+//! `mod_tests_steps.rs`; a future drive-by edit cannot resurrect
 //! `rewrite_default_image` without the regression suite
 //! noticing. The string match looks for a `pub`-tagged function
 //! declaration so the doc-comment that names the helper for

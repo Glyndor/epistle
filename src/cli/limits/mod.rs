@@ -218,8 +218,8 @@ fn derived_budget(config: &Config) -> Option<(u64, String)> {
 	Some((bytes, text))
 }
 
-/// `limits show` and `limits show --json`: see `limits_show::show` and
-/// `limits_show::show_json` for the row shape. These are the thin
+/// `limits show` and `limits show --json`: see `show::show` and
+/// `show::show_json` for the row shape. These are the thin
 /// re-exports so the rest of the CLI keeps the same call site.
 pub(super) use show::show;
 pub(super) use show::show_json;

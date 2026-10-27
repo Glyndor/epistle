@@ -292,7 +292,7 @@ fn logs_passes_the_verb_and_a_service_named_down() {
 /// Sabotage landing place for the `down` test: a regression
 /// comment plus a positive control that the flag is absent.
 /// A reviewer reading the diff follows the comment to the
-/// `run_inherited` call site in `src/cli/stack.rs` and
+/// `run_inherited` call site in `src/cli/stack/mod.rs` and
 /// temporarily re-introduces `&["down", "--volumes"]` (or
 /// `-v`) to confirm the
 /// `down_passes_only_down_to_podup_never_volumes` test turns

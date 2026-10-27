@@ -138,7 +138,8 @@ pub(super) fn summary(current: &str, version: &str, restored: bool) -> String {
 mod store;
 
 mod run;
-pub(super) use run::{restore_db, run_as_root};
+pub(super) use run::restore_db;
+pub(in crate::cli) use run::run_as_root;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

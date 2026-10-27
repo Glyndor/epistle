@@ -30,7 +30,7 @@ pub(super) fn service_status(json: &str, service: &str) -> Option<(String, Strin
 /// said `starting` and `Health` was `""`), and treating that as healthy
 /// let `stack update` judge mail before it listened. A service without a
 /// healthcheck is ready once it runs. `Err` says what it last saw.
-pub(super) fn wait_healthy(
+pub(in crate::cli) fn wait_healthy(
 	podup: &str,
 	compose: &Path,
 	service: &str,
