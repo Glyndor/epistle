@@ -160,3 +160,7 @@ mod tests_inbound_headers_unicode;
 #[cfg(test)]
 #[path = "server_tests_inbound_order.rs"]
 mod tests_inbound_order;
+
+#[cfg(test)]
+#[path = "server_tests_quota.rs"]
+mod tests_quota;

@@ -466,3 +466,7 @@ mod tests_protocol;
 #[cfg(test)]
 #[path = "mod_tests_scan.rs"]
 mod tests_scan;
+
+#[cfg(test)]
+#[path = "mod_tests_cli.rs"]
+mod tests_cli;
