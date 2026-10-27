@@ -534,56 +534,50 @@ impl Server {
 	}
 }
 
-#[path = "server_builder.rs"]
 mod builder;
 
 #[cfg(test)]
-#[path = "server_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "server_tests_drain.rs"]
+#[path = "mod_tests_drain.rs"]
 mod tests_drain;
 
 #[cfg(test)]
-#[path = "server_tests_compress.rs"]
+#[path = "mod_tests_compress.rs"]
 mod tests_compress;
 
 #[cfg(test)]
-#[path = "server_tests_literals.rs"]
+#[path = "mod_tests_literals.rs"]
 mod tests_literals;
 
 #[cfg(test)]
-#[path = "server_tests_utf8_append.rs"]
+#[path = "mod_tests_utf8_append.rs"]
 mod tests_utf8_append;
 
-#[path = "server_accept.rs"]
 mod accept;
 
-#[path = "server_discard.rs"]
 mod discard;
 
-#[path = "server_idle.rs"]
 mod idle;
 
-#[path = "server_literal.rs"]
 mod server_literal;
 
-#[path = "server_session_factory.rs"]
 mod session_factory;
 
 #[cfg(test)]
-#[path = "server_tests_conn_limit.rs"]
+#[path = "mod_tests_conn_limit.rs"]
 mod tests_conn_limit;
 
 #[cfg(test)]
-#[path = "server_tests_deadline.rs"]
+#[path = "mod_tests_deadline.rs"]
 mod tests_deadline;
 
 #[cfg(test)]
-#[path = "server_tests_discard.rs"]
+#[path = "mod_tests_discard.rs"]
 mod tests_discard;
 
 #[cfg(test)]
-#[path = "server_tests_starttls.rs"]
+#[path = "mod_tests_starttls.rs"]
 mod tests_starttls;

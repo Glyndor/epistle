@@ -1,5 +1,5 @@
 //! Ban-lifecycle IMAP AUTHENTICATE (SASL) tests. Split from
-//! `session_tests_auth_bans.rs` to keep both files under the
+//! `mod_tests_auth_bans.rs` to keep both files under the
 //! per-file code-line budget. The tests here exercise the
 //! lifecycle around a ban refusal: a malformed client-first from
 //! a banned IP must not extend the ban, and a ban refusal that

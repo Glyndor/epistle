@@ -76,10 +76,10 @@ jobs:
       # gate stopped counting test code as covered production code; this is
       # the gate becoming honest, not a relaxed gate. Ratcheted up from here
       # (issue #921).
-      # The five test modules of storage/delivery are named after their
-      # module, so they are listed one by one: the folder holds the module
-      # itself (mod.rs) and its coverage must count.
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
+      # The test modules of storage/delivery and of imap/session/list_status
+      # are named after their module, so they are listed one by one: the
+      # folder holds the module itself (mod.rs) and its coverage must count.
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
   dependabot-freshness:
     # Not a required check and it reads repository state, not the queued
     # commit, so it would only spend a runner inside the queue.

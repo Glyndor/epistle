@@ -5,7 +5,7 @@
 //! AUTHENTICATE continuation, the LOGIN command, and the ban
 //! store's per-method counters.
 //!
-//! Split from `session_tests_auth_ban_lifecycle.rs` to keep both
+//! Split from `mod_tests_auth_ban_lifecycle.rs` to keep both
 //! files under the per-file code-line budget.
 
 use super::auth_bans::{scram_directory_with_ban_store, valid_client_final};

@@ -58,168 +58,168 @@ pub fn scram_directory() -> Arc<Directory> {
 	)
 }
 
-#[path = "session_tests_acl.rs"]
+#[path = "mod_tests_acl.rs"]
 mod acl;
-#[path = "session_tests_auth.rs"]
+#[path = "mod_tests_auth.rs"]
 mod auth;
-#[path = "session_tests_auth_ban_lifecycle.rs"]
+#[path = "mod_tests_auth_ban_lifecycle.rs"]
 mod auth_ban_lifecycle;
-#[path = "session_tests_auth_ban_owner_known_network.rs"]
+#[path = "mod_tests_auth_ban_owner_known_network.rs"]
 mod auth_ban_owner_known_network;
-#[path = "session_tests_auth_ban_toctou.rs"]
+#[path = "mod_tests_auth_ban_toctou.rs"]
 mod auth_ban_toctou;
-#[path = "session_tests_auth_bans.rs"]
+#[path = "mod_tests_auth_bans.rs"]
 mod auth_bans;
-#[path = "session_tests_basic.rs"]
+#[path = "mod_tests_basic.rs"]
 mod basic;
-#[path = "session_tests_commands.rs"]
+#[path = "mod_tests_commands.rs"]
 mod commands_tests;
-#[path = "session_tests_condstore_search.rs"]
+#[path = "mod_tests_condstore_search.rs"]
 mod condstore_search;
-#[path = "session_tests_encoded_search.rs"]
+#[path = "mod_tests_encoded_search.rs"]
 mod encoded_search;
-#[path = "session_tests_esearch_sets.rs"]
+#[path = "mod_tests_esearch_sets.rs"]
 mod esearch_sets;
-#[path = "session_tests_gate_busy.rs"]
+#[path = "mod_tests_gate_busy.rs"]
 mod gate_busy;
-#[path = "session_tests_keyword_search.rs"]
+#[path = "mod_tests_keyword_search.rs"]
 mod keyword_search;
-#[path = "session_tests_learn_e2e.rs"]
+#[path = "mod_tests_learn_e2e.rs"]
 mod learn_e2e;
-#[path = "session_tests_learn_moves.rs"]
+#[path = "mod_tests_learn_moves.rs"]
 mod learn_moves;
-#[path = "session_tests_login_gate.rs"]
+#[path = "mod_tests_login_gate.rs"]
 mod login_gate;
-#[path = "session_tests_metadata.rs"]
+#[path = "mod_tests_metadata.rs"]
 mod metadata;
-#[path = "session_tests_misc.rs"]
+#[path = "mod_tests_misc.rs"]
 mod misc;
-#[path = "session_tests_oauth_flow.rs"]
+#[path = "mod_tests_oauth_flow.rs"]
 mod oauth_flow;
-#[path = "session_tests_paths.rs"]
+#[path = "mod_tests_paths.rs"]
 mod paths;
-#[path = "session_tests_quota_zero.rs"]
+#[path = "mod_tests_quota_zero.rs"]
 mod quota_zero;
-#[path = "session_tests_scram_decoy.rs"]
+#[path = "mod_tests_scram_decoy.rs"]
 mod scram_decoy;
-#[path = "session_tests_search.rs"]
+#[path = "mod_tests_search.rs"]
 mod search;
-#[path = "session_tests_search_headers.rs"]
+#[path = "mod_tests_search_headers.rs"]
 mod search_headers;
-#[path = "session_tests_search_keys.rs"]
+#[path = "mod_tests_search_keys.rs"]
 mod search_keys;
 
-#[path = "session_tests_rev1.rs"]
+#[path = "mod_tests_rev1.rs"]
 mod rev1;
 
-#[path = "session_tests_rev1_recent.rs"]
+#[path = "mod_tests_rev1_recent.rs"]
 mod rev1_recent;
 
-#[path = "session_tests_rev1_search.rs"]
+#[path = "mod_tests_rev1_search.rs"]
 mod rev1_search;
 
-#[path = "session_tests_rev1_check.rs"]
+#[path = "mod_tests_rev1_check.rs"]
 mod rev1_check;
 
-#[path = "session_tests_rev1_list.rs"]
+#[path = "mod_tests_rev1_list.rs"]
 mod rev1_list;
 
-#[path = "session_tests_rev1_flow.rs"]
+#[path = "mod_tests_rev1_flow.rs"]
 mod rev1_flow;
 
-#[path = "session_tests_rfc9051_select.rs"]
+#[path = "mod_tests_rfc9051_select.rs"]
 mod rfc9051_select;
 
-#[path = "session_tests_rfc5182_searchres.rs"]
+#[path = "mod_tests_rfc5182_searchres.rs"]
 mod rfc5182_searchres;
 
-#[path = "session_tests_rfc9051_uid_star.rs"]
+#[path = "mod_tests_rfc9051_uid_star.rs"]
 mod rfc9051_uid_star;
 
-#[path = "session_tests_rfc9051_poll.rs"]
+#[path = "mod_tests_rfc9051_poll.rs"]
 mod rfc9051_poll;
 
 #[cfg(test)]
-#[path = "session_tests_default_mailboxes.rs"]
+#[path = "mod_tests_default_mailboxes.rs"]
 mod default_mailboxes;
 
-#[path = "session_tests_fetch_envelope.rs"]
+#[path = "mod_tests_fetch_envelope.rs"]
 mod fetch_envelope;
 
-#[path = "session_tests_fetch_structure.rs"]
+#[path = "mod_tests_fetch_structure.rs"]
 mod fetch_structure;
 
-#[path = "session_tests_fetch_sections.rs"]
+#[path = "mod_tests_fetch_sections.rs"]
 mod fetch_sections;
 
-#[path = "session_tests_fetch_aliases.rs"]
+#[path = "mod_tests_fetch_aliases.rs"]
 mod fetch_aliases;
 
-#[path = "session_tests_fetch_edges.rs"]
+#[path = "mod_tests_fetch_edges.rs"]
 mod fetch_edges;
 
-#[path = "session_tests_fetch_depth.rs"]
+#[path = "mod_tests_fetch_depth.rs"]
 mod fetch_depth;
 
-#[path = "session_tests_capabilities.rs"]
+#[path = "mod_tests_capabilities.rs"]
 mod capabilities;
 
-#[path = "session_tests_utf8.rs"]
+#[path = "mod_tests_utf8.rs"]
 mod utf8;
 
-#[path = "session_tests_quota_names.rs"]
+#[path = "mod_tests_quota_names.rs"]
 mod quota_names;
 
-#[path = "session_tests_hierarchy_surfaces.rs"]
+#[path = "mod_tests_hierarchy_surfaces.rs"]
 mod hierarchy_surfaces;
 
-#[path = "session_tests_utf8_responses.rs"]
+#[path = "mod_tests_utf8_responses.rs"]
 mod utf8_responses;
 
-#[path = "session_tests_flags_update.rs"]
+#[path = "mod_tests_flags_update.rs"]
 mod flags_update;
 
-#[path = "session_tests_save_sent.rs"]
+#[path = "mod_tests_save_sent.rs"]
 mod save_sent;
 
-#[path = "session_tests_append_exists.rs"]
+#[path = "mod_tests_append_exists.rs"]
 mod append_exists;
 
-#[path = "session_tests_noop_exists.rs"]
+#[path = "mod_tests_noop_exists.rs"]
 mod noop_exists;
 
-#[path = "session_tests_cross_session.rs"]
+#[path = "mod_tests_cross_session.rs"]
 mod cross_session;
 
-#[path = "session_tests_sort_dates.rs"]
+#[path = "mod_tests_sort_dates.rs"]
 mod sort_dates;
 
-#[path = "session_tests_sort_text.rs"]
+#[path = "mod_tests_sort_text.rs"]
 mod sort_text;
 
-#[path = "session_tests_thread_ordered.rs"]
+#[path = "mod_tests_thread_ordered.rs"]
 mod thread_ordered;
 
-#[path = "session_tests_thread_references.rs"]
+#[path = "mod_tests_thread_references.rs"]
 mod thread_references;
 
-#[path = "session_tests_appendlimit.rs"]
+#[path = "mod_tests_appendlimit.rs"]
 mod appendlimit;
 
-#[path = "session_tests_per_account.rs"]
+#[path = "mod_tests_per_account.rs"]
 mod per_account;
 
-#[path = "session_tests_notify_status.rs"]
+#[path = "mod_tests_notify_status.rs"]
 mod notify_status;
 
-#[path = "session_tests_uidvalidity.rs"]
+#[path = "mod_tests_uidvalidity.rs"]
 mod uidvalidity;
 
-#[path = "session_tests_fetch_whole.rs"]
+#[path = "mod_tests_fetch_whole.rs"]
 mod fetch_whole;
 
-#[path = "session_tests_append_binary.rs"]
+#[path = "mod_tests_append_binary.rs"]
 mod append_binary;
 
-#[path = "session_tests_append_date.rs"]
+#[path = "mod_tests_append_date.rs"]
 mod append_date;

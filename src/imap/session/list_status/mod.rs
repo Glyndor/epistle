@@ -205,13 +205,10 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "list_status_tests_special_use.rs"]
 mod special_use_selection;
 
 #[cfg(test)]
-#[path = "list_status_tests_root.rs"]
 mod root_hierarchy;
 
 #[cfg(test)]
-#[path = "list_status_tests_hierarchy.rs"]
 mod hierarchy;

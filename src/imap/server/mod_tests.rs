@@ -483,5 +483,5 @@ async fn idle_times_out_during_idle() {
 	task.abort();
 }
 
-#[path = "server_tests_line_limit.rs"]
+#[path = "mod_tests_line_limit.rs"]
 mod line_limit;
