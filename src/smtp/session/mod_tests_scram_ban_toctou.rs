@@ -19,7 +19,7 @@
 //!     two messages, the network is unknown, a valid proof is
 //!     refused (a ban that fires in flight rejects).
 //!
-//! Split from `session_tests_scram_ban_owner_known_network.rs` to keep
+//! Split from `mod_tests_scram_ban_owner_known_network.rs` to keep
 //! that file under the per-file code-line budget.
 
 use super::tests_scram::{TapEhlo, b64, reply_code};

@@ -2,7 +2,7 @@
 //! account is admitted from a network it has previously signed in
 //! from with the right credentials, and refused from any other
 //! network with the same wire shape. Split from
-//! `session_tests_scram_ban_lifecycle.rs` to keep both files under
+//! `mod_tests_scram_ban_lifecycle.rs` to keep both files under
 //! the per-file code-line budget. The PLAIN/LOGIN paths inherit
 //! the same behaviour through [`Directory::authenticate_verdict`],
 //! so the SCRAM tests cover the shared gate; the PLAIN coverage

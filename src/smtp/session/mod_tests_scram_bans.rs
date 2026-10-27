@@ -1,5 +1,5 @@
 //! Ban-aware SCRAM tests for the SMTP session. Split from
-//! `session_tests_scram.rs` to keep both files under the per-file
+//! `mod_tests_scram.rs` to keep both files under the per-file
 //! code-line budget. Pulls the `use super::*;` import the same way
 //! the sibling module does, and brings in the ban store and the
 //! per-test SCRAM credential-lookup counter from the directory
@@ -90,7 +90,7 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 	);
 }
 
-// Ban lifecycle tests live in `session_tests_scram_ban_lifecycle.rs`.
+// Ban lifecycle tests live in `mod_tests_scram_ban_lifecycle.rs`.
 // Keep them separate to stay within the per-file code-line budget.
 
 /// A SCRAM success drives the credential lookup, so the per-test

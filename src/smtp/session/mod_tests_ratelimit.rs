@@ -1,5 +1,5 @@
 //! Submission rate limiting through a real SMTP session. Split out of
-//! `session_tests_auth.rs` only to stay under the per-file line limit; the
+//! `mod_tests_auth.rs` only to stay under the per-file line limit; the
 //! harness lives there.
 
 use super::tests_auth::*;
