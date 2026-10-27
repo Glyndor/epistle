@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::tests_lines;
 use super::*;
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 use crate::evidence::test_support::{accepted, at};
 
 #[test]

@@ -4,7 +4,7 @@ use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::Path;
 
 use super::*;
-use crate::evidence::audit::tests::Fixture;
+use crate::evidence::audit::tests::base::Fixture;
 use crate::storage::MessageCrypto;
 
 const MESSAGE: &str = "<1@example.org>";

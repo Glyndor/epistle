@@ -2,7 +2,7 @@
 //! was made for, and no other.
 
 use crate::evidence::ack::{Operator, acknowledge_at};
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 use crate::evidence::audit::{Options, Report, verify};
 use crate::evidence::chain::Chain;
 use crate::evidence::day::Day;

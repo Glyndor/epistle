@@ -1,7 +1,7 @@
 //! A rotation that is cut short can be finished, once, from any step.
 
 use super::*;
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 use crate::evidence::audit::{Options, verify};
 use crate::evidence::checkpoint::{files, seal_closed_days};
 use crate::evidence::day::Day;

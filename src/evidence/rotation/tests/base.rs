@@ -1,5 +1,5 @@
 use super::*;
-use crate::evidence::audit::tests::{DAY, Fixture, reason};
+use crate::evidence::audit::tests::base::{DAY, Fixture, reason};
 use crate::evidence::audit::{Options, Report, verify};
 use crate::evidence::checkpoint::Checkpoint;
 use crate::evidence::checkpoint::{files, seal_closed_days};

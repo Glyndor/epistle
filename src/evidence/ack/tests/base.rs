@@ -1,5 +1,5 @@
 use crate::evidence::ack::{Acknowledged, Operator, acknowledge_at, is_acknowledged, statement};
-use crate::evidence::audit::tests::{DAY, Fixture, reason};
+use crate::evidence::audit::tests::base::{DAY, Fixture, reason};
 use crate::evidence::chain::Chain;
 use crate::evidence::checkpoint::files;
 use crate::evidence::day::Day;

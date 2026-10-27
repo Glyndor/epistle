@@ -274,7 +274,7 @@ fn a_signer_outside_its_validity_at_the_stamped_time_is_refused() {
 
 #[test]
 fn a_real_sectigo_token_verifies_against_the_pinned_root_key() {
-	let response = include_bytes!("testdata/sectigo.tsr");
+	let response = include_bytes!("../../testdata/sectigo.tsr");
 	let digest = crate::evidence::record::hash_from_hex(FIXTURE_DIGEST).expect("digest");
 	let anchor = crate::evidence::record::hash_from_hex(SECTIGO_R46).expect("anchor");
 	let stamp = verify(response, &digest, None, &[anchor]).expect("the captured token verifies");
@@ -297,7 +297,7 @@ fn a_real_sectigo_token_verifies_against_the_pinned_root_key() {
 
 #[test]
 fn freetsa_tokens_use_a_signature_this_verifier_does_not_support() {
-	let response = include_bytes!("testdata/freetsa.tsr");
+	let response = include_bytes!("../../testdata/freetsa.tsr");
 	let digest = crate::evidence::record::hash_from_hex(FIXTURE_DIGEST).expect("digest");
 	let report = check(
 		response,
@@ -322,7 +322,7 @@ fn freetsa_tokens_use_a_signature_this_verifier_does_not_support() {
 
 #[test]
 fn every_truncation_of_a_real_token_is_refused_without_panicking() {
-	let response = include_bytes!("testdata/sectigo.tsr");
+	let response = include_bytes!("../../testdata/sectigo.tsr");
 	let digest = crate::evidence::record::hash_from_hex(FIXTURE_DIGEST).expect("digest");
 	for length in 0..response.len() {
 		assert!(verify(&response[..length], &digest, None, &[[0; 32]]).is_err());

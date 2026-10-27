@@ -1,5 +1,5 @@
 use super::*;
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 
 #[test]
 fn any_line_or_checkpoint_file_changes_the_state() {

@@ -24,7 +24,7 @@ fn a_purge_after_a_rotation_must_be_signed_by_the_key_in_force() {
 	assert_eq!(
 		report
 			.first_break
-			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.map(|at| crate::evidence::audit::tests::base::plain(at.to_string()))
 			.as_deref(),
 		Some(
 			"2026-10-19 line 2: checkpoint: the purge statement was not signed by the evidence key in force"

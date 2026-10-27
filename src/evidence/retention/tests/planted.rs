@@ -221,7 +221,7 @@ fn a_cut_purge_is_not_decided_while_a_day_of_the_chain_cannot_be_read() {
 	sweep(dir.path(), &key, &[tsa.anchor], now).expect("first purge");
 	// A second purge, cut before its record.
 	let later = at(DAY + 9, 12);
-	crate::evidence::retention::tests::stamp_all(dir.path(), &key, &mut tsa, at(DAY + 9, 0));
+	crate::evidence::retention::tests::base::stamp_all(dir.path(), &key, &mut tsa, at(DAY + 9, 0));
 	sweep_steps(dir.path(), &key, &[tsa.anchor], later, |step| {
 		step == Step::Statement
 	})

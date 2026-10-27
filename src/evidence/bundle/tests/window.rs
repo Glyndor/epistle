@@ -2,7 +2,7 @@
 
 use super::base::{kept_stamped_at, key_of};
 use super::*;
-use crate::evidence::audit::tests::DAY;
+use crate::evidence::audit::tests::base::DAY;
 use crate::evidence::test_support::at;
 
 fn failed_checks(gen_time: u64) -> Vec<String> {

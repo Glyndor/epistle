@@ -4,7 +4,7 @@ use std::os::unix::fs::symlink;
 
 use super::base::{by_id, exported, failures, resum};
 use super::*;
-use crate::evidence::audit::tests::Fixture;
+use crate::evidence::audit::tests::base::Fixture;
 
 const DAY_NAME: &str = "2026-10-15";
 

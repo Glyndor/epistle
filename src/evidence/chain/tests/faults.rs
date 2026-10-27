@@ -2,7 +2,7 @@
 
 use super::tests_lines;
 use super::*;
-use crate::evidence::audit::tests::DAY;
+use crate::evidence::audit::tests::base::DAY;
 use crate::evidence::test_support::{accepted, at};
 
 fn chain_with_a_record() -> (tempfile::TempDir, Chain) {

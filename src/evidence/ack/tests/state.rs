@@ -2,7 +2,7 @@
 //! day is rewritten to afterwards.
 
 use crate::evidence::ack::{Operator, acknowledge_at};
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 use crate::evidence::chain::Chain;
 use crate::evidence::day::Day;
 use crate::evidence::record::{Entry, Record, sha256, to_hex};

@@ -160,7 +160,7 @@ fn an_anchor_moved_without_its_purge_record_is_a_break() {
 	assert_eq!(
 		report
 			.first_break
-			.map(|b| crate::evidence::audit::tests::plain(b.to_string()))
+			.map(|b| crate::evidence::audit::tests::base::plain(b.to_string()))
 			.as_deref(),
 		Some("2026-10-15: checkpoint: days were purged without a purge record")
 	);
@@ -341,7 +341,7 @@ fn the_statement_names_what_went_and_cannot_be_changed() {
 	assert_eq!(
 		report
 			.first_break
-			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.map(|at| crate::evidence::audit::tests::base::plain(at.to_string()))
 			.as_deref(),
 		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
 	);
@@ -446,7 +446,7 @@ fn every_purge_statement_is_checked_not_only_the_last() {
 	assert_eq!(
 		verified(dir.path(), &tsa, now)
 			.first_break
-			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.map(|at| crate::evidence::audit::tests::base::plain(at.to_string()))
 			.as_deref(),
 		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
 	);

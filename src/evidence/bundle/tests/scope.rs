@@ -4,7 +4,7 @@
 use super::base::{failures, resum};
 use super::complete::{checked, drop_records, export_of, fixture};
 use super::*;
-use crate::evidence::audit::tests::{DAY, Fixture};
+use crate::evidence::audit::tests::base::{DAY, Fixture};
 use crate::evidence::chain::Chain;
 use crate::evidence::checkpoint::{files, seal_closed_days};
 use crate::evidence::day::Day;

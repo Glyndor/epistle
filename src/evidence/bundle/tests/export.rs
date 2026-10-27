@@ -2,7 +2,7 @@
 
 use super::base::kept_stamped_at;
 use super::*;
-use crate::evidence::audit::tests::DAY;
+use crate::evidence::audit::tests::base::DAY;
 use crate::evidence::day::Day;
 use crate::evidence::test_support::at;
 
@@ -85,7 +85,7 @@ fn nothing_is_said_of_a_message_whose_day_is_not_sealed() {
 
 #[test]
 fn a_day_altered_after_it_was_sealed_is_not_exported() {
-	use crate::evidence::audit::tests::Fixture;
+	use crate::evidence::audit::tests::base::Fixture;
 	use crate::evidence::chain::Chain;
 	let fixture = Fixture::new();
 	let path = Chain::open(fixture.root())

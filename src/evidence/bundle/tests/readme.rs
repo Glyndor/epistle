@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::base::{by_id, exported};
-use crate::evidence::audit::tests::Fixture;
+use crate::evidence::audit::tests::base::Fixture;
 use crate::evidence::record::{sha256, to_hex};
 
 fn run(bundle: &Path, program: &str, args: &[&str]) -> std::process::Output {
