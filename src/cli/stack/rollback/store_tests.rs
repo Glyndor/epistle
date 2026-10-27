@@ -478,11 +478,11 @@ fn skip(why: &str) {
 /// the sandboxed read runs only where a root namespace is available.
 #[test]
 fn the_store_source_keeps_the_published_names() {
-	let source = include_str!("stack_rollback_store.rs");
+	let source = include_str!("store.rs");
 	for needle in ["\"epistle\"", "\"epistle.sha256\""] {
 		assert!(
 			source.contains(needle),
-			"src/cli/stack_rollback_store.rs must open the published file under {needle:?}; \
+			"src/cli/stack/rollback/store.rs must open the published file under {needle:?}; \
 			 the package maintainer script writes exactly that name, and a rename here would \
 			 silently break every rollback"
 		);

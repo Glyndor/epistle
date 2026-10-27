@@ -57,10 +57,10 @@ pub(in crate::cli) async fn probe_in(
 	}
 	let podup = podup.to_string();
 	let json = tokio::task::spawn_blocking(move || {
-		crate::cli::stack_started::ps_json_with(
+		crate::cli::stack::started::ps_json_with(
 			&podup,
 			&compose,
-			crate::cli::stack_started::PS_TIMEOUT,
+			crate::cli::stack::started::PS_TIMEOUT,
 		)
 	})
 	.await
@@ -184,5 +184,5 @@ fn targets(listener: &Listener, ports: &[Publisher]) -> Result<Vec<Listener>, ()
 }
 
 #[cfg(test)]
-#[path = "probe_published_tests.rs"]
+#[path = "published_tests.rs"]
 mod tests;

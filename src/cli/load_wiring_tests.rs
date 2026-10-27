@@ -73,5 +73,5 @@ fn the_commands_that_act_on_the_data_read_it_strictly() {
 		.expect("the serve arm");
 	assert!(serve.contains("Config::load(&config)"), "{serve}");
 	assert!(source("cli/dispatch_restore.rs").contains("Config::load(&config)"));
-	assert!(source("cli/stack_rollback_run.rs").contains("Config::load(config_path)"));
+	assert!(source("cli/stack/rollback/run.rs").contains("Config::load(config_path)"));
 }

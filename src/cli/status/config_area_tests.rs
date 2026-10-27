@@ -1,5 +1,5 @@
 //! Tests for the config check, including "restart pending". `sh -f <compose>`
-//! stands in for `podup -f <compose> ps ...` (see `stack_started_tests`).
+//! stands in for `podup -f <compose> ps ...` (see `src/cli/stack/started_tests.rs`).
 
 use std::time::{Duration, UNIX_EPOCH};
 

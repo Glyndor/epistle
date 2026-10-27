@@ -718,7 +718,7 @@ pub enum Command {
 		json: bool,
 		/// DKIM action (`show`, `rotate`, `cleanup`).
 		#[command(subcommand)]
-		action: dkim_cli::DkimCli,
+		action: dkim::DkimCli,
 	},
 	/// Show the server's TLS certificate or renew it now.
 	///

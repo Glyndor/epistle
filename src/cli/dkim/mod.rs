@@ -105,8 +105,8 @@ pub(super) fn show_with(
 	runtime: &tokio::runtime::Runtime,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	match runtime.block_on(super::dkim_show::build(config, Some(dns))) {
-		Ok(view) => super::dkim_show::render(&view, json, out),
+	match runtime.block_on(show::build(config, Some(dns))) {
+		Ok(view) => show::render(&view, json, out),
 		Err(error) => {
 			super::style::error(error);
 			ExitCode::FAILURE
@@ -285,9 +285,9 @@ pub(super) fn rotate_now_with(
 	report.object(result)
 }
 
-#[path = "dkim_cli_cleanup.rs"]
 mod cleanup;
+mod show;
 
 #[cfg(test)]
-#[path = "dkim_cli_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

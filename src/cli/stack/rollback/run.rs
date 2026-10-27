@@ -156,12 +156,12 @@ fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, Strin
 		return Ok("the stack has no database of its own; nothing to restore".into());
 	};
 	let version = env!("CARGO_PKG_VERSION");
-	let dump = crate::cli::stack_dumps::newest(&config.data_dir, &format!("pre-{version}-"))
+	let dump = crate::cli::stack::dumps::newest(&config.data_dir, &format!("pre-{version}-"))
 		.ok_or_else(|| {
 			format!(
 				"there is no dump from before {version} under {}; an older binary may not read \
 				 this schema, so nothing was rolled back",
-				crate::cli::stack_dumps::dir(&config.data_dir).display()
+				crate::cli::stack::dumps::dir(&config.data_dir).display()
 			)
 		})?;
 	let mut sql = String::new();

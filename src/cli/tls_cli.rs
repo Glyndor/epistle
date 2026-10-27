@@ -57,7 +57,7 @@ pub(super) fn run(
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let now = super::dkim_cli::now_epoch();
+	let now = super::dkim::now_epoch();
 	match action {
 		TlsCli::Show { json: leaf } => match view(config, now) {
 			Ok(view) => render(&view, leaf || json, out),

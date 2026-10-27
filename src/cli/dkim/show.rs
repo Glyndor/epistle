@@ -165,7 +165,7 @@ pub(super) async fn build(
 							.push((override_.selector.clone(), Some(signer.dns_record_value())));
 					}
 					Err(error) => {
-						super::style::warn(format_args!(
+						crate::cli::style::warn(format_args!(
 							"cannot load DKIM key for {domain}: {error}"
 						));
 					}
@@ -358,13 +358,13 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 }
 
 #[cfg(test)]
-#[path = "dkim_show_tests.rs"]
+#[path = "show_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "dkim_show_tests_rsa.rs"]
+#[path = "show_tests_rsa.rs"]
 mod tests_rsa;
 
 #[cfg(test)]
-#[path = "dkim_show_tests_per_domain.rs"]
+#[path = "show_tests_per_domain.rs"]
 mod tests_per_domain;

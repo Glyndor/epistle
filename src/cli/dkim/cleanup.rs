@@ -130,9 +130,9 @@ pub(super) fn cleanup_with(
 }
 
 #[cfg(test)]
-#[path = "dkim_cli_cleanup_tests.rs"]
+#[path = "cleanup_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "dkim_cli_cleanup_tests_per_domain.rs"]
+#[path = "cleanup_tests_per_domain.rs"]
 mod tests_per_domain;

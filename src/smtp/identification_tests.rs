@@ -1,7 +1,7 @@
 //! What each identification header is written for, and when it stays out.
 
 use super::*;
-use crate::cli::tracing_capture::run_with_capture;
+use crate::cli::trace::capture::run_with_capture;
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::directory::{AliasSpec, Directory};
 use crate::smtp::trace::header_values;

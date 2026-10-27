@@ -1,22 +1,17 @@
 //! Server-wide numeric limits in the configuration file.
 
-#[path = "limits_values.rs"]
 pub(super) mod values;
 
-#[path = "limits_catalog.rs"]
 pub(super) mod catalog;
 
-#[path = "limits_protocol.rs"]
 mod protocol;
 
-#[path = "limits_show.rs"]
 mod show;
 
 #[cfg(test)]
-#[path = "limits_tests_values.rs"]
+#[path = "mod_tests_values.rs"]
 mod tests_values;
 
-#[path = "limits_keys.rs"]
 mod keys;
 pub use keys::Key;
 
@@ -223,8 +218,8 @@ fn derived_budget(config: &Config) -> Option<(u64, String)> {
 	Some((bytes, text))
 }
 
-/// `limits show` and `limits show --json`: see `limits_show::show` and
-/// `limits_show::show_json` for the row shape. These are the thin
+/// `limits show` and `limits show --json`: see `show::show` and
+/// `show::show_json` for the row shape. These are the thin
 /// re-exports so the rest of the CLI keeps the same call site.
 pub(super) use show::show;
 pub(super) use show::show_json;
@@ -417,57 +412,57 @@ fn run_with_restart(
 }
 
 #[cfg(test)]
-#[path = "limits_tests_config.rs"]
+#[path = "mod_tests_config.rs"]
 mod tests_config;
 
 #[cfg(test)]
-#[path = "limits_tests_domains.rs"]
+#[path = "mod_tests_domains.rs"]
 mod tests_domains;
 
 #[cfg(test)]
-#[path = "limits_tests_data_rate.rs"]
+#[path = "mod_tests_data_rate.rs"]
 mod tests_data_rate;
 
 #[cfg(test)]
-#[path = "limits_tests_session_limits.rs"]
+#[path = "mod_tests_session_limits.rs"]
 mod tests_session_limits;
 
 #[cfg(test)]
-#[path = "limits_tests_connection.rs"]
+#[path = "mod_tests_connection.rs"]
 mod tests_connection;
 
 #[cfg(test)]
-#[path = "limits_tests_schedule.rs"]
+#[path = "mod_tests_schedule.rs"]
 mod tests_schedule;
 
 #[cfg(test)]
-#[path = "limits_tests_queue.rs"]
+#[path = "mod_tests_queue.rs"]
 mod tests_queue;
 
 #[cfg(test)]
-#[path = "limits_tests_tenants.rs"]
+#[path = "mod_tests_tenants.rs"]
 mod tests_tenants;
 
 #[cfg(test)]
-#[path = "limits_tests_budget.rs"]
+#[path = "mod_tests_budget.rs"]
 mod tests_budget;
 
 #[cfg(test)]
-#[path = "limits_tests_recipients.rs"]
+#[path = "mod_tests_recipients.rs"]
 mod tests_recipients;
 
 #[cfg(test)]
-#[path = "limits_tests_should_warn.rs"]
+#[path = "mod_tests_should_warn.rs"]
 mod tests_should_warn;
 
 #[cfg(test)]
-#[path = "limits_tests_catalog.rs"]
+#[path = "mod_tests_catalog.rs"]
 mod tests_catalog;
 
 #[cfg(test)]
-#[path = "limits_tests_protocol.rs"]
+#[path = "mod_tests_protocol.rs"]
 mod tests_protocol;
 
 #[cfg(test)]
-#[path = "limits_tests_scan.rs"]
+#[path = "mod_tests_scan.rs"]
 mod tests_scan;

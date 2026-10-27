@@ -154,7 +154,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
 fn a_detection_logs_the_account_pseudonym_and_the_signature() {
 	let clamd = FakeClamd::start();
 	let (sink, _, _) = sink(true, &clamd.socket, None);
-	crate::cli::tracing_capture::keep_callsites_live();
+	crate::cli::trace::capture::keep_callsites_live();
 	let warnings = Warnings::default();
 	let subscriber = tracing_subscriber::registry().with(warnings.clone());
 	tracing::subscriber::with_default(subscriber, || {

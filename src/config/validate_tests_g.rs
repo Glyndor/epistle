@@ -32,7 +32,7 @@ addresses = ["alice@example.org"]
 		result.err()
 	);
 
-	let events = crate::cli::tracing_capture::run_with_capture(|| {
+	let events = crate::cli::trace::capture::run_with_capture(|| {
 		let _ = config_from(
 			r#"
 hostname = "mail.example.org"
@@ -139,7 +139,7 @@ addresses = ["alice@example.org", "postmaster@example.org"]
 		result.err()
 	);
 
-	let events = crate::cli::tracing_capture::run_with_capture(|| {
+	let events = crate::cli::trace::capture::run_with_capture(|| {
 		let _ = config_from(
 			r#"
 hostname = "mail.example.org"

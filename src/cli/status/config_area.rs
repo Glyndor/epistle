@@ -4,7 +4,7 @@
 use super::Ctx;
 use super::clock::epoch;
 use super::report::{AreaReport, Item, Level};
-use crate::cli::stack_started::mail_started_at;
+use crate::cli::stack::started::mail_started_at;
 
 /// Report whether the configuration loaded and whether a restart is pending.
 pub(super) async fn check(ctx: &Ctx) -> AreaReport {

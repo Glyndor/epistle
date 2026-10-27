@@ -338,13 +338,13 @@ fn report_change(
 }
 
 #[cfg(test)]
-#[path = "stack_resources_tests.rs"]
+#[path = "resources_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "stack_resources_tests_lock.rs"]
+#[path = "resources_tests_lock.rs"]
 mod tests_lock;
 
 #[cfg(test)]
-#[path = "stack_resources_tests_escapes.rs"]
+#[path = "resources_tests_escapes.rs"]
 mod tests_escapes;

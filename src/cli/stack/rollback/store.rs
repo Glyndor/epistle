@@ -180,5 +180,5 @@ pub(super) fn install(binary: &mut File, installed: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "stack_rollback_store_tests.rs"]
+#[path = "store_tests.rs"]
 mod tests;

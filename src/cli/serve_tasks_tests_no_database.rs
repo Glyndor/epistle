@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::super::tracing_capture::run_with_capture;
+use super::super::trace::capture::run_with_capture;
 use super::connect_database;
 use crate::config::Config;
 

@@ -12,9 +12,9 @@ use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, attachments,
-	autoconfig, autodiscover, backup, ban, delivery, dkim_cli, dns_records, domain, evidence,
-	export, import, init, learning, local, masked, mobileconfig, probe, queue, report_abuse,
-	reports, serve, srv, stack, status, style, suppression, tls_cli, verify, verify_dns, warmup,
+	autoconfig, autodiscover, backup, ban, delivery, dkim, dns_records, domain, evidence, export,
+	import, init, learning, local, masked, mobileconfig, probe, queue, report_abuse, reports,
+	serve, srv, stack, status, style, suppression, tls_cli, verify, verify_dns, warmup,
 };
 use crate::config::Config;
 
@@ -435,7 +435,7 @@ impl Cli {
 				config,
 				json,
 				action: stack::StackCli::Rollback { to, yes },
-			} => super::stack_rollback::run_as_root(&config, to.as_deref(), yes, json),
+			} => super::stack::rollback::run_as_root(&config, to.as_deref(), yes, json),
 			Command::Stack {
 				config,
 				json,
@@ -447,12 +447,12 @@ impl Cli {
 				action,
 			} => match Config::load(&config) {
 				Ok(config) => match action {
-					action @ dkim_cli::DkimCli::Rotate { .. } => {
+					action @ dkim::DkimCli::Rotate { .. } => {
 						live::run("dkim rotate", json, |mut out| {
-							dkim_cli::run(&config, action, json, &mut out)
+							dkim::run(&config, action, json, &mut out)
 						})
 					}
-					action => dkim_cli::run(&config, action, json, &mut std::io::stdout().lock()),
+					action => dkim::run(&config, action, json, &mut std::io::stdout().lock()),
 				},
 				Err(error) => {
 					style::error(error);

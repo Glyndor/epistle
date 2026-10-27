@@ -23,7 +23,7 @@ fn resource_edits_wait_for_the_common_lock_before_loading_config() {
 		let path = &config;
 		scope.spawn(move || {
 			let cli = StackCli::Resources {
-				action: Some(crate::cli::stack_resources::ResourcesCli::Set {
+				action: Some(crate::cli::stack::resources::ResourcesCli::Set {
 					service: "mail".into(),
 					memory: None,
 					pids: Some(123),
@@ -174,7 +174,7 @@ fn compose_in(dir: &Path) -> PathBuf {
 
 fn set_pids() -> StackCli {
 	StackCli::Resources {
-		action: Some(crate::cli::stack_resources::ResourcesCli::Set {
+		action: Some(crate::cli::stack::resources::ResourcesCli::Set {
 			service: "mail".into(),
 			memory: None,
 			pids: Some(123),

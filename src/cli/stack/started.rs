@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::stack::{build_command, compose_path};
-use super::status::parse_rfc3339;
+use super::{build_command, compose_path};
+use crate::cli::status::parse_rfc3339;
 
 /// How long `podup ps` may take before it is abandoned.
-pub(super) const PS_TIMEOUT: Duration = Duration::from_secs(5);
+pub(in crate::cli) const PS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 struct Row {
@@ -27,7 +27,7 @@ struct Row {
 ///
 /// `Ok(None)` when the installation has no compose stack (the start time is
 /// then not observable); `Err` carries the reason it could not be read.
-pub(super) fn mail_started_at(data_dir: &Path, podup: &str) -> Result<Option<i64>, String> {
+pub(in crate::cli) fn mail_started_at(data_dir: &Path, podup: &str) -> Result<Option<i64>, String> {
 	let compose = compose_path(data_dir);
 	if !compose.exists() {
 		return Ok(None);
@@ -39,7 +39,7 @@ fn started_at_with(podup: &str, compose: &Path, timeout: Duration) -> Result<i64
 	parse_started(&ps_json_with(podup, compose, timeout)?)
 }
 
-pub(super) fn ps_json_with(
+pub(in crate::cli) fn ps_json_with(
 	podup: &str,
 	compose: &Path,
 	timeout: Duration,
@@ -96,5 +96,5 @@ fn parse_started(json: &str) -> Result<i64, String> {
 }
 
 #[cfg(test)]
-#[path = "stack_started_tests.rs"]
+#[path = "started_tests.rs"]
 mod tests;

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::*;
-use crate::cli::tracing_capture::run_with_capture;
+use crate::cli::trace::capture::run_with_capture;
 
 fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(crate::smtp::directory::Directory::new(

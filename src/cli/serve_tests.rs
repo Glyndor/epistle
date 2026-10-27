@@ -81,7 +81,7 @@ fn serve_emits_single_signature_dkim_warning_at_startup() {
 	// `run_with_capture` requires a sync closure, and the surrounding
 	// test framework may already be inside a tokio runtime, so we drive
 	// `serve::serve` from a fresh current-thread runtime here.
-	use super::super::tracing_capture::run_with_capture;
+	use super::super::trace::capture::run_with_capture;
 	use tracing::Level;
 
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -138,7 +138,7 @@ fn serve_is_silent_on_dkim_when_both_rsa_fields_are_set() {
 	// must not log the single-signature warning. The no-listeners notice
 	// is `eprintln!`, so the captured events list must not contain any
 	// event with the `remedy` field.
-	use super::super::tracing_capture::run_with_capture;
+	use super::super::trace::capture::run_with_capture;
 
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut config: Config = toml::from_str(&format!(

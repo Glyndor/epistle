@@ -103,5 +103,5 @@ const ROLLBACK: &str = "To go back to the previous version and, if the schema mo
 	database from before the update, run `sudo epistle stack rollback`";
 
 #[cfg(test)]
-#[path = "stack_update_run_tests.rs"]
+#[path = "execute_tests.rs"]
 mod tests;

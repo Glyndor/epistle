@@ -4,7 +4,7 @@
 //! drifts from the other.
 //!
 //! The test reads the real catalog through the `#[doc(hidden)]` snapshot
-//! in `src/cli/limits_catalog.rs` (the same catalog `epistle limits
+//! in `src/cli/limits/catalog.rs` (the same catalog `epistle limits
 //! show` enumerates). Every row of the catalog is matched against a row
 //! of the docs page by name, kind, default, unit, bounds, and reference;
 //! a stale docs row trips the test, and a stale catalog row does too.

@@ -1,6 +1,6 @@
 //! Per-tenant submission limit editing through `epistle limits
 //! set submission-rate --tenant NAME`. Mirrors the per-domain tests
-//! in `limits_tests_domains.rs` so the operator workflow, the config
+//! in `mod_tests_domains.rs` so the operator workflow, the config
 //! shape and the restart pipeline all stay aligned.
 
 use std::io::{Seek, Write};

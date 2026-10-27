@@ -105,7 +105,7 @@ pub enum StackCli {
 		json: bool,
 		/// `set <SERVICE> --memory <SIZE>`; without it the limits are listed.
 		#[command(subcommand)]
-		action: Option<super::stack_resources::ResourcesCli>,
+		action: Option<resources::ResourcesCli>,
 	},
 }
 
@@ -184,7 +184,7 @@ pub(crate) enum StackAction {
 	/// Show or change the limits in the compose file; podup is not run.
 	Resources {
 		/// `set`, or `None` to list.
-		action: Option<super::stack_resources::ResourcesCli>,
+		action: Option<resources::ResourcesCli>,
 		/// Print JSON.
 		json: bool,
 	},
@@ -197,7 +197,15 @@ pub(crate) enum StackAction {
 	},
 }
 
-#[path = "stack_entry.rs"]
+pub(super) mod dumps;
+pub(super) mod health;
+pub(super) mod resources;
+mod retry;
+pub(super) mod rollback;
+mod socket;
+pub(super) mod started;
+mod update;
+
 mod entry;
 pub(super) use entry::run_from_path;
 
@@ -261,7 +269,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 	// The limits live in the compose file alone: no podup, no socket.
 	let action = match action {
 		StackAction::Resources { action, json } => {
-			return super::stack_resources::run(
+			return resources::run(
 				&compose,
 				crate::smtp::memory_fit::largest_message(config.max_message_size),
 				action,
@@ -271,7 +279,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		}
 		action => action,
 	};
-	if let Err(error) = super::stack_socket::ensure() {
+	if let Err(error) = socket::ensure() {
 		super::style::error(error);
 		return ExitCode::FAILURE;
 	}
@@ -280,12 +288,12 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Err(code) => return code,
 	};
 	match action {
-		StackAction::Update => super::stack_update::run(config, &compose, podup),
+		StackAction::Update => update::run(config, &compose, podup),
 		StackAction::Rollback => {
 			super::style::error("run it as root: sudo epistle stack rollback");
 			ExitCode::FAILURE
 		}
-		StackAction::RollbackDb => super::stack_rollback::restore_db(config, &compose, podup),
+		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}
@@ -363,7 +371,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
 		}
-		StackAction::Resources { action, json } => super::stack_resources::run(
+		StackAction::Resources { action, json } => resources::run(
 			&compose,
 			crate::smtp::memory_fit::largest_message(config.max_message_size),
 			action,
@@ -668,17 +676,17 @@ fn format_ports(publishers: &[Publisher]) -> String {
 }
 
 #[cfg(test)]
-#[path = "stack_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "stack_tests_service.rs"]
+#[path = "mod_tests_service.rs"]
 mod tests_service;
 
 #[cfg(test)]
-#[path = "stack_tests_override.rs"]
+#[path = "mod_tests_override.rs"]
 mod tests_override;
 
 #[cfg(test)]
-#[path = "stack_tests_lock.rs"]
+#[path = "mod_tests_lock.rs"]
 mod tests_lock;
