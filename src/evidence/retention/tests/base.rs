@@ -1,0 +1,468 @@
+use super::*;
+use crate::evidence::audit::{Options, TOKEN_GRACE_SECS, verify};
+use crate::evidence::checkpoint::seal_closed_days;
+use crate::evidence::test_support::{accepted_for, at, delivered};
+use crate::evidence::tsa::fake::FakeTsa;
+use crate::evidence::tsa::request::{build, random_nonce};
+
+pub(super) const DAY: i64 = 20_740;
+
+/// Days DAY..DAY+3 with short retentions, sealed and stamped.
+fn fixture() -> (tempfile::TempDir, EvidenceKey, FakeTsa) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY + 10, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	for offset in 0..4 {
+		let n = offset as u32;
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(n, 2))
+			.expect("append");
+		chain
+			.append_at(at(DAY + offset, 2), delivered(n))
+			.expect("append");
+	}
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
+	(dir, key, tsa)
+}
+
+pub(super) fn stamp_all(root: &Path, key: &EvidenceKey, tsa: &mut FakeTsa, now: u64) {
+	tsa.gen_time = now + 60;
+	seal_closed_days(root, key, true, now).expect("seal");
+	for day in Chain::open(root).expect("chain").days().expect("days") {
+		let paths = files(root, day);
+		if paths.json.exists() && !paths.tsr.exists() {
+			let json = std::fs::read(&paths.json).expect("json");
+			std::fs::write(
+				&paths.tsr,
+				tsa.respond(&build(&sha256(&json), random_nonce()).der),
+			)
+			.expect("tsr");
+		}
+	}
+}
+
+pub(super) fn verified(root: &Path, tsa: &FakeTsa, now: u64) -> crate::evidence::audit::Report {
+	verify(
+		root,
+		&Options {
+			from: None,
+			to: None,
+			anchors: vec![tsa.anchor],
+			now,
+		},
+	)
+	.expect("verify")
+}
+
+#[test]
+fn nothing_is_purged_while_any_record_of_the_day_must_be_kept() {
+	let (dir, key, _) = fixture();
+	// delivered() keeps a year: no day is purgeable.
+	let swept = sweep(dir.path(), &key, &[], at(DAY + 30, 0)).expect("sweep");
+	assert_eq!(swept, Sweep::default());
+	assert_eq!(
+		Chain::open(dir.path())
+			.expect("chain")
+			.days()
+			.expect("days")
+			.len(),
+		4
+	);
+}
+
+#[test]
+fn a_purge_keeps_the_rest_of_the_chain_verifiable() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	for offset in 0..4 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
+	// Two days later the first days' two-day retention has passed.
+	let now = at(DAY + 5, 12);
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
+	assert_eq!(
+		swept.days, 3,
+		"every closed day before yesterday whose retention passed"
+	);
+	let days = chain.days().expect("days");
+	assert!(
+		days.iter().all(|day| *day >= Day(DAY + 3)),
+		"purged days are gone"
+	);
+	assert!(
+		!files(dir.path(), Day(DAY)).json.exists(),
+		"the checkpoint went with its day"
+	);
+	// The chain verifies from the anchor, and the purge record is sealed later.
+	let later = at(DAY + 7, 0);
+	chain
+		.append_at(at(DAY + 6, 1), accepted_for(9, 2))
+		.expect("append after");
+	stamp_all(dir.path(), &key, &mut tsa, later);
+	let report = verified(dir.path(), &tsa, later);
+	assert_eq!(report.first_break.as_ref().map(ToString::to_string), None);
+	// The statement is signed by the evidence key.
+	let statement = std::fs::read(
+		dir.path()
+			.join(PURGES_DIR)
+			.join(format!("{}.json", Day(DAY + 2).name())),
+	)
+	.expect("statement");
+	let signature = std::fs::read(
+		dir.path()
+			.join(PURGES_DIR)
+			.join(format!("{}.sig", Day(DAY + 2).name())),
+	)
+	.expect("sig");
+	assert!(crate::evidence::key::verify(
+		&key.public_key(),
+		&statement,
+		&signature
+	));
+}
+
+#[test]
+fn an_anchor_moved_without_its_purge_record_is_a_break() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	for offset in 0..4 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
+	// Delete the oldest day by hand and write an anchor: no purge record.
+	let (cp, bytes) = checkpoint::load(dir.path(), Day(DAY))
+		.expect("load")
+		.expect("cp");
+	let position = Position {
+		hash: hash_from_hex(&cp.last_hash).expect("hash"),
+		seq: cp.last_seq,
+		time: cp.last_time,
+	};
+	super::super::super::anchor::write(
+		&dir.path().join(CHAIN_DIR),
+		&Day(DAY).name(),
+		&position,
+		&sha256(&bytes),
+	)
+	.expect("anchor");
+	std::fs::remove_file(chain.day_file(Day(DAY))).expect("rm");
+	let report = verified(dir.path(), &tsa, at(DAY + 4, 12));
+	assert_eq!(
+		report
+			.first_break
+			.map(|b| crate::evidence::audit::tests::plain(b.to_string()))
+			.as_deref(),
+		Some("2026-10-15: checkpoint: days were purged without a purge record")
+	);
+}
+
+#[test]
+fn kept_messages_go_when_their_retention_passes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let old = dir
+		.path()
+		.join(MESSAGES_DIR)
+		.join(Day(DAY).name())
+		.join("2");
+	let young = dir
+		.path()
+		.join(MESSAGES_DIR)
+		.join(Day(DAY).name())
+		.join("30");
+	std::fs::create_dir_all(&old).expect("mkdir");
+	std::fs::create_dir_all(&young).expect("mkdir");
+	std::fs::write(old.join("a.eml"), b"x").expect("write");
+	let swept = sweep(dir.path(), &key, &[], at(DAY + 3, 0)).expect("sweep");
+	assert_eq!(swept.message_dirs, 1);
+	assert!(!old.exists());
+	assert!(young.exists());
+}
+
+#[test]
+fn a_day_sealed_after_every_older_checkpoint_was_purged_names_the_anchor() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	chain
+		.append_at(at(DAY, 1), accepted_for(1, 1))
+		.expect("append");
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 1, 0));
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 3, 0)).expect("sweep");
+	assert_eq!(swept.days, 1, "the sweep did not take the old day");
+	// The purge record sits on DAY+3; seal it two days later with nothing
+	// older left.
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 1));
+	let report = verified(dir.path(), &tsa, at(DAY + 4, 2));
+	assert_eq!(report.first_break.as_ref().map(ToString::to_string), None);
+	assert_eq!(report.sealed, 1);
+}
+
+/// Days DAY..DAY+3, each kept two days, sealed and stamped.
+pub(super) fn short_lived() -> (tempfile::TempDir, EvidenceKey, FakeTsa, Chain) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let mut tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	for offset in 0..4 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 4, 0));
+	(dir, key, tsa, chain)
+}
+
+fn tamper(chain: &Chain, day: Day) {
+	let path = chain.day_file(day);
+	let text = std::fs::read_to_string(&path).expect("read");
+	std::fs::write(&path, text.replacen("student", "studemt", 1)).expect("tamper");
+}
+
+#[test]
+fn nothing_is_purged_while_the_evidence_does_not_verify() {
+	let (dir, key, tsa, chain) = short_lived();
+	// A change to a day that is not even due: the due days stay too.
+	tamper(&chain, Day(DAY + 3));
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 0);
+	let refused = swept.refused.expect("reported");
+	assert!(
+		refused.starts_with("purge refused: the evidence does not verify"),
+		"the refusal is not the verification one"
+	);
+	assert_eq!(chain.days().expect("days").len(), 4, "every day stays");
+	assert!(!dir.path().join(PURGES_DIR).exists());
+}
+
+#[test]
+fn a_day_without_a_token_is_never_purged() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let key = EvidenceKey::load_or_create(dir.path()).expect("key");
+	let tsa = FakeTsa::new(at(DAY + 30, 0));
+	let chain = Chain::open(dir.path()).expect("chain");
+	chain
+		.append_at(
+			at(DAY, 0),
+			Entry::Setting(crate::evidence::record::Setting {
+				name: "timestamp".into(),
+				value: "disabled by uid=0".into(),
+			}),
+		)
+		.expect("disable");
+	for offset in 0..3 {
+		chain
+			.append_at(at(DAY + offset, 1), accepted_for(offset as u32, 2))
+			.expect("append");
+	}
+	// Sealed with timestamps off: the evidence verifies, nothing vouches.
+	seal_closed_days(dir.path(), &key, false, at(DAY + 3, 0)).expect("seal");
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 0);
+	let refused = swept.refused.expect("reported");
+	assert!(
+		refused.contains("no timestamp token that verifies"),
+		"the refusal is not the missing token one"
+	);
+	assert_eq!(chain.days().expect("days").len(), 3);
+}
+
+#[test]
+fn an_acknowledged_break_and_what_follows_are_never_purged() {
+	let (dir, key, tsa, chain) = short_lived();
+	tamper(&chain, Day(DAY + 1));
+	let now = at(DAY + 5, 12);
+	// The chain break, then the seal that no longer matches: each is accepted.
+	for hour in 1..3 {
+		let at_break = verified(dir.path(), &tsa, now)
+			.first_break
+			.expect("a break");
+		crate::evidence::ack::acknowledge_at(
+			dir.path(),
+			&key,
+			&at_break,
+			"restored from backup",
+			&crate::evidence::ack::Operator::named("uid=0 host=mail"),
+			at(DAY + 5, hour),
+		)
+		.expect("acknowledge");
+	}
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
+	assert_eq!(swept.days, 1, "only the day before the break");
+	assert!(
+		swept
+			.refused
+			.expect("reported")
+			.contains("acknowledged break is kept")
+	);
+	assert!(chain.days().expect("days").contains(&Day(DAY + 1)));
+}
+
+#[test]
+fn the_statement_names_what_went_and_cannot_be_changed() {
+	let (dir, key, tsa, chain) = short_lived();
+	let now = at(DAY + 5, 12);
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], now).expect("sweep");
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
+	let path = dir
+		.path()
+		.join(PURGES_DIR)
+		.join(format!("{}.json", Day(DAY + 2).name()));
+	let statement: Statement =
+		serde_json::from_slice(&std::fs::read(&path).expect("statement")).expect("parse");
+	assert_eq!(
+		(statement.from.as_str(), statement.records),
+		("2026-10-14", 3)
+	);
+	assert_eq!(statement.days.len(), 3);
+	assert!(statement.days.iter().all(|day| day.merkle_root.len() == 64));
+	let record = std::fs::read_to_string(chain.day_file(Day(DAY + 5))).expect("today");
+	assert!(
+		record.contains("\"from\":\"2026-10-14\"") && record.contains("\"records\":3"),
+		"{record}"
+	);
+	assert_eq!(verified(dir.path(), &tsa, now).first_break, None);
+	let edited = std::fs::read_to_string(&path)
+		.expect("read")
+		.replace("\"records\": 3", "\"records\": 2");
+	std::fs::write(&path, edited).expect("write");
+	let report = verified(dir.path(), &tsa, now);
+	assert_eq!(
+		report
+			.first_break
+			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.as_deref(),
+		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
+	);
+	std::fs::remove_file(&path).expect("remove");
+	let report = verified(dir.path(), &tsa, now);
+	assert!(
+		report
+			.first_break
+			.expect("a break")
+			.to_string()
+			.contains("statement is missing")
+	);
+}
+
+/// Replace `day`'s token with one stamped at `gen_time`.
+fn restamp(root: &Path, tsa: &mut FakeTsa, day: Day, gen_time: u64) {
+	tsa.gen_time = gen_time;
+	let paths = files(root, day);
+	let json = std::fs::read(&paths.json).expect("json");
+	std::fs::write(
+		&paths.tsr,
+		tsa.respond(&build(&sha256(&json), random_nonce()).der),
+	)
+	.expect("tsr");
+}
+
+fn judged(root: &Path, tsa: &FakeTsa, day: Day) -> Option<String> {
+	let (sealed, bytes) = checkpoint::load(root, day).expect("load").expect("sealed");
+	unpurgeable(root, day, &sealed, &bytes, &[tsa.anchor], at(DAY + 5, 12))
+}
+
+#[test]
+fn a_token_that_verifies_but_predates_the_end_of_the_day_does_not_vouch() {
+	let (dir, _key, mut tsa, _chain) = short_lived();
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)),
+		None,
+		"a token in its window"
+	);
+	restamp(dir.path(), &mut tsa, Day(DAY), at(DAY, 5));
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)).as_deref(),
+		Some("2026-10-14: no timestamp token that verifies: the token predates the end of the day")
+	);
+}
+
+#[test]
+fn a_token_issued_long_after_the_seal_does_not_vouch() {
+	let (dir, _key, mut tsa, _chain) = short_lived();
+	let (sealed, _) = checkpoint::load(dir.path(), Day(DAY))
+		.expect("load")
+		.expect("sealed");
+	restamp(
+		dir.path(),
+		&mut tsa,
+		Day(DAY),
+		sealed.created + TOKEN_GRACE_SECS + 1,
+	);
+	assert_eq!(
+		judged(dir.path(), &tsa, Day(DAY)).as_deref(),
+		Some(
+			"2026-10-14: no timestamp token that verifies: the token was issued more than 3 days after the checkpoint"
+		)
+	);
+}
+
+#[test]
+fn every_purge_statement_is_checked_not_only_the_last() {
+	let (dir, key, mut tsa, chain) = short_lived();
+	// A day kept for a year stops the second purge before the first purge's record.
+	chain
+		.append_at(at(DAY + 4, 1), accepted_for(5, 365))
+		.expect("append");
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 5, 0));
+	let first = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(first.days, 3, "the first sweep did not take the old days");
+	chain
+		.append_at(at(DAY + 6, 1), accepted_for(9, 2))
+		.expect("append");
+	stamp_all(dir.path(), &key, &mut tsa, at(DAY + 7, 0));
+	let second = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 9, 12)).expect("sweep");
+	assert_eq!((second.days, second.refused.as_deref()), (1, None));
+	let now = at(DAY + 9, 13);
+	assert_eq!(verified(dir.path(), &tsa, now).first_break, None);
+	// The earlier statement is edited after a later, valid one was written.
+	let path = dir
+		.path()
+		.join(PURGES_DIR)
+		.join(format!("{}.json", Day(DAY + 2).name()));
+	assert!(
+		path.exists()
+			&& dir
+				.path()
+				.join(PURGES_DIR)
+				.join(format!("{}.json", Day(DAY + 3).name()))
+				.exists()
+	);
+	let edited = std::fs::read_to_string(&path)
+		.expect("read")
+		.replace("\"records\": 3", "\"records\": 2");
+	std::fs::write(&path, edited).expect("write");
+	assert_eq!(
+		verified(dir.path(), &tsa, now)
+			.first_break
+			.map(|at| crate::evidence::audit::tests::plain(at.to_string()))
+			.as_deref(),
+		Some("2026-10-19 line 1: checkpoint: the purge statement is not the one its record names")
+	);
+}
+
+#[test]
+fn a_purge_statement_signed_before_a_rotation_still_verifies() {
+	let (dir, key, tsa, _chain) = short_lived();
+	let swept = sweep(dir.path(), &key, &[tsa.anchor], at(DAY + 5, 12)).expect("sweep");
+	assert_eq!(swept.days, 3, "the sweep did not take the old days");
+	assert_eq!(
+		verified(dir.path(), &tsa, at(DAY + 5, 13)).first_break,
+		None
+	);
+	let new = crate::evidence::rotation::rotate_at(dir.path(), at(DAY + 5, 14)).expect("rotate");
+	assert_ne!(new, key.id());
+	let report = verified(dir.path(), &tsa, at(DAY + 5, 15));
+	assert_eq!(report.first_break.map(|at| at.to_string()), None);
+}

@@ -6,7 +6,9 @@
 //! Every `src` file named like a test file (`*_tests.rs`, `*_tests_*.rs`,
 //! `tests.rs`, `mod_tests*.rs`) must be reached by a `#[path = "<file>"]`
 //! attribute or by a `mod <name>;` declaration, resolved against the folder of
-//! the file that declares it.
+//! the file that declares it. The leaves of a `tests/` folder count as test
+//! files too, whatever their name is, since the convention of 2026-10-27
+//! names them after the topic and not after the word "tests".
 
 use std::collections::HashSet;
 use std::fs;
@@ -25,6 +27,15 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn is_test_file_name(name: &str) -> bool {
 	name == "tests.rs" || name.starts_with("mod_tests") || name.contains("_tests")
+}
+
+/// The unit tests of a module live in its own `tests/` folder, one leaf per
+/// topic, and the name of the leaf says nothing about what it holds.
+fn in_tests_folder(path: &Path) -> bool {
+	path.parent()
+		.and_then(|parent| parent.file_name())
+		.and_then(|name| name.to_str())
+		== Some("tests")
 }
 
 /// Full paths of the files the sources declare: a `#[path = "x.rs"]` attribute
@@ -91,7 +102,7 @@ fn every_test_file_in_src_is_declared_by_a_module() {
 		.iter()
 		.filter_map(|path| {
 			let name = path.file_name()?.to_str()?;
-			(is_test_file_name(name) && !declared.contains(path))
+			((is_test_file_name(name) || in_tests_folder(path)) && !declared.contains(path))
 				.then(|| path.display().to_string())
 		})
 		.collect();
