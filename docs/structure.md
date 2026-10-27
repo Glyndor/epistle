@@ -1,6 +1,6 @@
 # Repository structure
 
-This is the map of the source tree and the four rules that keep it a map. If
+This is the map of the source tree and the rules that keep it a map. If
 something is hard to find, the fix is to move the code, not to widen this
 page.
 
@@ -23,37 +23,33 @@ reach the same code the binary runs.
 
 Many domains still keep dozens of files side by side. The tree is moving to
 this shape in batches, tracked in #1211, and those domains are what the
-batches split.
+batches split. Moving the product code from `src/` to `internal/`, as the
+organisation's layout standard asks, is a separate step that has not been
+taken yet.
 
 ## The four rules
 
 1. One folder, one module. A folder that mixes two responsibilities is split
    by responsibility, never by size.
-2. A module with more than one file becomes a folder with `mod.rs`.
-3. The tests of a module go in `tests/` inside that module, never beside the
-   source.
-4. `#[path]` is an exception, not a layout. A `#[path]` earns its place by
-   pointing at a data file next to the module that reads it. If a new one
-   appears, the answer is usually a missing folder.
+2. A module with more than one file becomes a folder with `mod.rs`, and its
+   siblings are declared with a plain `mod <sibling>;`.
+3. The unit tests of a module live in a sibling file, never in an inline
+   `mod tests { ... }` block. `foo.rs` declares
+   `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` and the tests sit in
+   `foo_tests.rs` beside it; a `mod.rs` uses `mod_tests.rs`.
+4. `#[path]` declares that sibling test module, or reads a data file next to
+   the module that uses it. A `#[path]` that splits production code across
+   files is a missing folder, and those are the ones the batches remove.
 
-Rules 3 and 4 describe where the tree is going, not where it is. Today the
-unit tests of a module sit beside it as `<module>_tests.rs`, or
-`<module>_tests_<topic>.rs` once they grow, and are pulled in with `#[path]`.
-That is the layout the batches replace. New code is written in the target
-shape; existing code moves when its batch comes.
+Whether the tests of each module should move into a folder of their own is
+an open decision for the maintainer. Until it is taken, rule 3 is the rule.
 
 ## Tests
 
-Unit tests live with the code they test. The target layout for a module:
-
-```text example
-src/smtp/session/mod.rs              the session
-src/smtp/session/tests/mod.rs        declares the session tests
-src/smtp/session/tests/queue.rs      one area of the session
-```
-
-The `mod.rs` of that `tests/` folder opens with `pub use super::*;`, so a
-test file keeps its `use super::*;` unchanged when it moves there.
+`src/cidr.rs` and `src/cidr_tests.rs` are the shape of rule 3, and so are
+`src/metrics/mod.rs` and `src/metrics/mod_tests.rs`. Tests that outgrow one
+file are split by topic as `<module>_tests_<topic>.rs`, each declared the
+same way.
 
 The integration suite is separate: `tests/`, one file per flow, with shared
 helpers in `tests/common/` and fixtures in `tests/fixtures/`.
@@ -71,5 +67,5 @@ asking to become the folder `<stem>/`.
 `tests/`, and fails on any that does not exist, so a move cannot leave a page
 or a comment pointing at nothing. A path that only illustrates a shape is
 written with a placeholder (`src/<domain>/`), or inside a block fenced
-as ```` ```text example ```` like the target layout above. The 500-line
-limit per file is checked by `.github/workflows/line-limit.yml`.
+as ```` ```text example ````. The 500-line limit per file is checked by
+`.github/workflows/line-limit.yml`.
