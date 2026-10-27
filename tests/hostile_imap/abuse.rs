@@ -66,7 +66,6 @@ async fn pipelined_5000_noops_release_slot_at_absolute_preauth_deadline() {
 }
 
 #[tokio::test]
-#[ignore = "bug: authenticated response writes have no timeout and can retain a listener slot"]
 async fn authenticated_unread_capability_flood_must_release_listener_slot() {
 	let server = Harness::start(|s| s.with_read_timeout(SHORT).with_max_connections(1)).await;
 	let mut client = server.authenticated().await;
@@ -153,7 +152,6 @@ async fn repeated_rejected_literal_plus_cannot_extend_preauth_deadline() {
 }
 
 #[tokio::test]
-#[ignore = "bug: rejected literal continuations restart authenticated deadlines without a command budget"]
 async fn authenticated_rejected_literal_chain_must_have_total_deadline() {
 	let server = Harness::start(|s| s.with_read_timeout(SHORT)).await;
 	let mut client = server.authenticated().await;
@@ -180,7 +178,6 @@ async fn idle_without_done_closes_after_poll_interval() {
 }
 
 #[tokio::test]
-#[ignore = "bug: IDLE waits 30-second poll instead of the configured shorter read timeout"]
 async fn idle_without_done_must_honor_short_configured_timeout() {
 	let server = Harness::start(|s| s.with_read_timeout(SHORT)).await;
 	let mut client = server.authenticated().await;
