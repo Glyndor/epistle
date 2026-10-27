@@ -17,6 +17,7 @@ on:
       # list omits itself does not run on the pull request that changes
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/fuzz.yml"
+      - ".github/scripts/fuzz_targets.py"
       - "src/smtp/**"
       - "src/imap/**"
       - "src/sieve/**"
@@ -39,28 +40,35 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: choose targets
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # A pull request runs the targets of the protocols it touches; a
+      # schedule or a manual run, and any change the script cannot narrow,
+      # run all of them. See .github/scripts/fuzz_targets.py.
+      - id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/fuzz_targets.py
+
   fuzz:
     name: cargo fuzz
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target:
-          [
-            smtp_command,
-            smtp_line,
-            smtp_address,
-            imap_command,
-            sieve_message,
-            sieve_script,
-            sieve_run,
-            sieve_validate,
-            pop3_command,
-            managesieve_command,
-            smtp_data,
-            dkim_signature,
-            mime,
-          ]
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
