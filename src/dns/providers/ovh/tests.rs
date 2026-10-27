@@ -230,9 +230,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[test]
 fn signature_matches_ovh_python_reference_vector() {
 	// The vector is the same one python-ovh ships in
-	// `tests/test_client.py::TestClient::test_call_signature`: a GET against
-	// `https://eu.api.ovh.com/1.0/auth` at unix 1457018875 with the body
-	// empty produces this exact signature header.
+	// `python-ovh/tests/test_client.py::TestClient::test_call_signature`:
+	// a GET against `https://eu.api.ovh.com/1.0/auth` at unix 1457018875
+	// with the body empty produces this exact signature header.
 	let provider = OvhProvider::new(
 		"TDPKJdwZwAQPwKX2".into(),
 		"9ufkBmLaTQ9nz5yMUlg79taH0GNnzDjk".into(),
