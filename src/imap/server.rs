@@ -185,6 +185,11 @@ impl Server {
 		// Set after a rejected literal is drained: the next line is the rest
 		// of that command, not a new one.
 		let mut rejected_tail = false;
+		// The total budget of the command whose literal was rejected. It is
+		// fixed when the rejection is seen and not moved by the
+		// continuations that follow, so a chain of rejected literals
+		// cannot extend the session the way a chain of commands does.
+		let mut rejected_until: Option<Instant> = None;
 		loop {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => {
@@ -196,7 +201,14 @@ impl Server {
 					// IDLE_POLL intervals while waiting for the next command and
 					// push unsolicited EXISTS/EXPUNGE, bounded by the line's
 					// deadline: absolute, so trickled bytes do not move it.
-					let deadline = clock.line(session.is_authenticated());
+					// A line that belongs to a rejected command shares the
+					// budget of that command, so its continuations cannot
+					// push the deadline out.
+					let line_deadline = clock.line(session.is_authenticated());
+					let deadline = match rejected_until {
+						Some(until) => std::cmp::min(line_deadline, until),
+						None => line_deadline,
+					};
 					let read = loop {
 						let remaining = deadline.saturating_duration_since(Instant::now());
 						let poll = if session.notify_active() {
@@ -275,7 +287,8 @@ impl Server {
 				// What follows a drained literal belongs to the rejected
 				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
 				// message), not to a new one.
-				let deadline = clock.step(session.is_authenticated());
+				let deadline =
+					*rejected_until.get_or_insert_with(|| clock.step(session.is_authenticated()));
 				match discard::rejected_tail(
 					&mut *stream,
 					&mut decoder,
@@ -285,7 +298,14 @@ impl Server {
 				)
 				.await?
 				{
-					Some(more) => rejected_tail = more,
+					Some(more) => {
+						rejected_tail = more;
+						if !more {
+							// The command is over: the next one gets a
+							// budget of its own.
+							rejected_until = None;
+						}
+					}
 					None => return Ok(()),
 				}
 				continue;
@@ -359,7 +379,10 @@ impl Server {
 					// command, and drop the rest of the command's line
 					// (`rejected_tail`). The rejection has already been
 					// written; return to the command loop.
-					let deadline = clock.step(session.is_authenticated());
+					// The whole command shares one budget, fixed here, so a
+					// chain of rejected continuations cannot extend it.
+					let deadline = *rejected_until
+						.get_or_insert_with(|| clock.step(session.is_authenticated()));
 					if !discard::literal_or_close(&mut *stream, &mut decoder, size, deadline)
 						.await?
 					{
@@ -489,69 +512,18 @@ impl Server {
 					break;
 				}
 				if output.idle {
-					// Poll for new messages at IDLE_POLL intervals; close after self.read_timeout.
-					let idle_start = tokio::time::Instant::now();
-					loop {
-						match decoder.next_line() {
-							Ok(Some(line)) => {
-								if line.eq_ignore_ascii_case(b"DONE") {
-									break;
-								}
-								// Anything else during IDLE is ignored.
-							}
-							Ok(None) => {
-								if idle_start.elapsed() >= self.read_timeout {
-									tracing::debug!("IMAP idle timeout during IDLE, closing");
-									let _ = response_writer::write_response(
-										&mut *stream,
-										b"* BYE idle timeout\r\n",
-										&clock,
-										session.is_authenticated(),
-									)
-									.await;
-									return Ok(());
-								}
-								let reading = stream.read(&mut buffer);
-								let drain = self.drain.as_deref();
-								let Some(waited) =
-									crate::shutdown::or_drain(drain, IDLE_POLL, reading).await
-								else {
-									let _ = response_writer::write_response(
-										&mut *stream,
-										SHUTTING_DOWN,
-										&clock,
-										session.is_authenticated(),
-									)
-									.await;
-									return Ok(());
-								};
-								let read = match waited {
-									Ok(Ok(n)) => n,
-									Ok(Err(e)) => return Err(e),
-									Err(_) => {
-										// Poll interval expired; check for new messages.
-										if let Some(notification) = session.check_idle()
-											&& response_writer::write_response(
-												&mut *stream,
-												&notification.bytes,
-												&clock,
-												session.is_authenticated(),
-											)
-											.await
-											.is_err()
-										{
-											return Ok(());
-										}
-										continue;
-									}
-								};
-								if read == 0 {
-									return Ok(());
-								}
-								decoder.feed(&buffer[..read]);
-							}
-							Err(_) => return Ok(()),
-						}
+					match self
+						.wait_idle(
+							&mut *stream,
+							&mut decoder,
+							&mut buffer,
+							&clock,
+							&mut session,
+						)
+						.await?
+					{
+						idle::Outcome::Done => {}
+						idle::Outcome::Closed => return Ok(()),
 					}
 					output = session.idle_done();
 					continue;
@@ -590,6 +562,9 @@ mod accept;
 
 #[path = "server_discard.rs"]
 mod discard;
+
+#[path = "server_idle.rs"]
+mod idle;
 
 #[path = "server_literal.rs"]
 mod server_literal;

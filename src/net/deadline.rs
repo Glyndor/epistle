@@ -9,8 +9,11 @@
 //! cannot fill the output and hold the listener slot past the deadline.
 //! Afterwards a command gets the idle timeout for its line from the moment
 //! the server starts waiting for it, and a fresh one for every later step
-//! of that command (a literal, a SASL line); the post-auth deadline is not
-//! touched by this module.
+//! of that command (a literal, a SASL line). The response that follows is
+//! held to a stall window: the peer has to keep accepting the bytes, and
+//! one that stops accepting for longer than the window loses the
+//! connection and the listener slot it holds. The window is not a budget
+//! for the whole message, so a peer that reads slowly keeps its session.
 
 use std::time::Duration;
 
@@ -21,6 +24,12 @@ use tokio::time::Instant;
 /// handshake, every command and every literal before it count against this
 /// one deadline. A signed-in session gets the idle timeout of its protocol.
 pub const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long a peer may stop accepting the bytes of a response before the
+/// write is given up. The window is refreshed every time bytes go out, so
+/// a peer that reads slowly keeps its session and a peer that stopped
+/// reading loses it.
+pub const DEFAULT_WRITE_STALL: Duration = Duration::from_secs(60);
 
 /// The deadlines of one session.
 pub struct SessionClock {
@@ -43,6 +52,14 @@ impl SessionClock {
 	/// The end of the pre-authentication phase.
 	pub fn preauth_until(&self) -> Instant {
 		self.preauth_until
+	}
+
+	/// How long a response write may stall before it is given up: the
+	/// shorter of the shared stall window and the idle timeout of this
+	/// session, so a write is never more patient than the read it waits
+	/// for.
+	pub fn write_stall(&self) -> Duration {
+		DEFAULT_WRITE_STALL.min(self.idle)
 	}
 
 	/// The deadline for a step that begins now: the end of the
@@ -98,6 +115,52 @@ where
 		Err(_) => Err(std::io::Error::new(
 			std::io::ErrorKind::TimedOut,
 			"deadline reached while flushing a response",
+		)),
+	}
+}
+
+/// Write `message` and flush the stream. The peer has to keep accepting
+/// bytes: it may take `stall` to accept the next one, and a peer that
+/// stops accepting for longer is cut with `ErrorKind::TimedOut`. The
+/// bound is not a budget for the whole message, so a peer that reads
+/// slowly is never cut for being slow, while a peer that stopped reading
+/// cannot keep the connection (and its listener slot) past the stall.
+pub async fn write_all_progressing<S>(
+	stream: &mut S,
+	message: &[u8],
+	stall: Duration,
+) -> std::io::Result<()>
+where
+	S: AsyncWrite + Unpin + ?Sized,
+{
+	let mut deadline = Instant::now() + stall;
+	let mut written = 0;
+	while written < message.len() {
+		match tokio::time::timeout_at(deadline, stream.write(&message[written..])).await {
+			Ok(Ok(0)) => {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::WriteZero,
+					"the peer stopped accepting the response",
+				));
+			}
+			Ok(Ok(count)) => {
+				written += count;
+				deadline = Instant::now() + stall;
+			}
+			Ok(Err(error)) => return Err(error),
+			Err(_) => {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::TimedOut,
+					"the peer stopped reading the response",
+				));
+			}
+		}
+	}
+	match tokio::time::timeout_at(deadline, stream.flush()).await {
+		Ok(result) => result,
+		Err(_) => Err(std::io::Error::new(
+			std::io::ErrorKind::TimedOut,
+			"the peer stopped reading the response",
 		)),
 	}
 }
