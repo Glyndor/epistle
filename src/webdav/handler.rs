@@ -352,6 +352,9 @@ async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 		return StatusCode::FORBIDDEN.into_response();
 	}
 	let existed = target.is_file();
+	if let Some(refusal) = super::if_match::refusal(request.headers(), target, existed) {
+		return refusal;
+	}
 	let limit =
 		if caldav::is_ics_path(&uri_name(target)) || carddav::is_vcard_path(&uri_name(target)) {
 			MAX_RESOURCE_BYTES as usize
