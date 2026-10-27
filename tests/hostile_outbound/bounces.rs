@@ -121,7 +121,6 @@ fn ten_thousand_original_headers_are_quoted_only_within_four_kib() {
 }
 
 #[test]
-#[ignore = "bug: DSN Final-Recipient interpolates failed recipient CRLF/NUL"]
 fn failed_recipient_cannot_inject_dsn_fields() {
 	bounded(|| {
 		let recipient =

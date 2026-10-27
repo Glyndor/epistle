@@ -194,6 +194,13 @@ where
 	let tlsa = tlsa.records();
 	let mut conn = Conn::new(Box::new(stream));
 	conn.expect(220, Phase::Greeting).await?;
+	// The envelope is checked before a single byte is written: the reverse
+	// path and the recipients go into the `MAIL FROM` and `RCPT TO` command
+	// lines, and a CR, an LF or a NUL in one of them would end that line
+	// and open a command of the attacker's choosing. The check waits for
+	// the greeting, so the remote sees a conversation that ends without a
+	// command rather than a connection that never spoke.
+	check_envelope(reverse_path, recipients)?;
 
 	conn.command(&format!("EHLO {ehlo_hostname}"), 250, Phase::Command)
 		.await?;
@@ -323,6 +330,30 @@ where
 		let _ = conn.command("QUIT", 221, Phase::Quit).await;
 	}
 	Ok(results)
+}
+
+/// Check the envelope addresses before the conversation starts. The reverse
+/// path and every recipient are written into a command line, so a value that
+/// is not an address would put a line break, a NUL or a stray bracket on the
+/// wire. The parser is the one the inbound path already applies, so an
+/// address that reached the spool is one this accepts. An empty reverse path
+/// is the null sender of a bounce and stays allowed.
+fn check_envelope(reverse_path: &str, recipients: &[String]) -> Result<(), DeliveryError> {
+	if !reverse_path.is_empty() {
+		check_address(reverse_path, "reverse path")?;
+	}
+	for recipient in recipients {
+		check_address(recipient, "recipient")?;
+	}
+	Ok(())
+}
+
+/// Refuse an address that is not one, naming the rule it breaks instead of
+/// repeating the value: it may hold the characters the refusal is about.
+fn check_address(raw: &str, role: &str) -> Result<(), DeliveryError> {
+	crate::util::address_reason::parse(raw)
+		.map(|_| ())
+		.map_err(|why| DeliveryError::Permanent(format!("invalid {role}: {why}")))
 }
 
 /// Whether the STARTTLS certificate must pass PKIX (webpki roots and the

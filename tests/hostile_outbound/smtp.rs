@@ -191,7 +191,6 @@ async fn unsafe_envelope(sender: &str, recipient: &str) {
 }
 
 #[tokio::test]
-#[ignore = "bug: outbound client interpolates recipient CRLF into RCPT command"]
 async fn crlf_recipient_is_rejected_before_rcpt_command() {
 	unsafe_envelope(
 		"sender@outside.test",
@@ -201,13 +200,11 @@ async fn crlf_recipient_is_rejected_before_rcpt_command() {
 }
 
 #[tokio::test]
-#[ignore = "bug: outbound client does not validate recipient NUL"]
 async fn nul_recipient_is_rejected_before_rcpt_command() {
 	unsafe_envelope("sender@outside.test", "victim\0@outside.test").await;
 }
 
 #[tokio::test]
-#[ignore = "bug: outbound client interpolates reverse-path CRLF into MAIL command"]
 async fn crlf_reverse_path_is_rejected_before_any_mail_command() {
 	unsafe_envelope(
 		"sender@outside.test>\r\nRCPT TO:<evil@outside.test",
