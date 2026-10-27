@@ -10,10 +10,10 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::chain::{CHAIN_DIR, day_file, open_day};
-use super::checkpoint::{files, read_bounded};
-use super::day::Day;
-use super::record::to_hex;
+use super::super::chain::{CHAIN_DIR, day_file, open_day};
+use super::super::checkpoint::{files, read_bounded};
+use super::super::record::to_hex;
+use super::Day;
 
 /// The largest checkpoint file read.
 const MAX_FILE: u64 = 1024 * 1024;
@@ -116,5 +116,5 @@ fn stream_lines(
 }
 
 #[cfg(test)]
-#[path = "day_state_tests.rs"]
+#[path = "state_tests.rs"]
 mod tests;
