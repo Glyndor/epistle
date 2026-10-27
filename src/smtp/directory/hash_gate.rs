@@ -219,5 +219,5 @@ impl super::Directory {
 }
 
 #[cfg(test)]
-#[path = "directory_hash_gate_tests.rs"]
+#[path = "hash_gate_tests.rs"]
 pub(crate) mod tests;

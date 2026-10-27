@@ -668,118 +668,105 @@ impl Directory {
 	}
 }
 
-#[path = "directory_resolve.rs"]
 mod resolve;
 
-#[path = "directory_list.rs"]
 mod list_fields;
 
 #[cfg(test)]
-#[path = "directory_list_tests.rs"]
+#[path = "mod_list_tests.rs"]
 mod list_fields_tests;
 
 #[cfg(test)]
-#[path = "directory_disabled_domain_tests.rs"]
+#[path = "mod_disabled_domain_tests.rs"]
 mod disabled_domain_tests;
 
-#[path = "directory_scram.rs"]
 mod scram;
 
-#[path = "directory_scram_upgrade.rs"]
 mod scram_upgrade;
 
-#[path = "directory_bans.rs"]
 pub mod bans;
 
-#[path = "directory_credential.rs"]
 mod credential;
 
-#[path = "directory_local.rs"]
 mod local;
 
-#[path = "directory_hash_gate.rs"]
 pub(crate) mod hash_gate;
 
-#[path = "directory_gate.rs"]
 mod gate;
 pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
 
 #[cfg(test)]
-#[path = "directory_gate_fixture.rs"]
 pub(crate) mod gate_fixture;
 
 #[cfg(test)]
-#[path = "directory_gate_tests.rs"]
+#[path = "mod_gate_tests.rs"]
 mod gate_tests;
 
 #[cfg(test)]
-#[path = "directory_protocol_refusal_tests.rs"]
+#[path = "mod_protocol_refusal_tests.rs"]
 mod protocol_refusal_tests;
 
 #[cfg(test)]
-#[path = "directory_timing_tests.rs"]
+#[path = "mod_timing_tests.rs"]
 mod timing_tests;
 
 #[cfg(test)]
-#[path = "directory_ban_policy_tests.rs"]
+#[path = "mod_ban_policy_tests.rs"]
 mod ban_policy_tests;
 
 #[cfg(test)]
-#[path = "directory_known_network_tests.rs"]
+#[path = "mod_known_network_tests.rs"]
 mod known_network_tests;
 
 #[cfg(test)]
-#[path = "directory_decoy_counters.rs"]
 pub(crate) mod decoy_counters;
 
 #[cfg(test)]
-#[path = "directory_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "directory_app_password_tests.rs"]
+#[path = "mod_app_password_tests.rs"]
 mod app_password_tests;
 
 #[cfg(test)]
-#[path = "directory_auth_audit_tests.rs"]
+#[path = "mod_auth_audit_tests.rs"]
 mod auth_audit_tests;
 
 #[cfg(test)]
-#[path = "directory_masked_tests.rs"]
+#[path = "mod_masked_tests.rs"]
 mod masked_tests;
 
 #[cfg(test)]
-#[path = "directory_exact_tests.rs"]
+#[path = "mod_exact_tests.rs"]
 mod exact_tests;
 
 #[cfg(test)]
-#[path = "directory_alias_tests.rs"]
+#[path = "mod_alias_tests.rs"]
 mod alias_tests;
 
 #[cfg(test)]
-#[path = "directory_protocol_tests.rs"]
+#[path = "mod_protocol_tests.rs"]
 mod protocol_tests;
 
 #[cfg(test)]
-#[path = "directory_iteration_tests.rs"]
+#[path = "mod_iteration_tests.rs"]
 mod iteration_tests;
 
 #[cfg(test)]
-#[path = "directory_totp_tests.rs"]
+#[path = "mod_totp_tests.rs"]
 mod totp_tests;
 
 #[cfg(test)]
-#[path = "directory_login_form_tests.rs"]
+#[path = "mod_login_form_tests.rs"]
 mod login_form_tests;
 
 #[cfg(test)]
-#[path = "directory_test_support.rs"]
 mod test_support;
 
 #[cfg(test)]
-#[path = "directory_send_as_fixture.rs"]
 pub(crate) mod send_as_fixture;
 
 #[cfg(test)]
-#[path = "directory_send_as_tests.rs"]
+#[path = "mod_send_as_tests.rs"]
 mod send_as_tests;
