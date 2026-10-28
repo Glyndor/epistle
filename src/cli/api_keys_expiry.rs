@@ -8,10 +8,6 @@ use crate::webdav::rrule::{civil_from_secs, days_from_civil};
 
 const UNITS: &str = "s, m, h, d or w";
 const DAY: u64 = 86_400;
-/// 9999-12-31T23:59:59Z, the last instant `YYYY` can name. An epoch above it
-/// is not a date any command here can show, so it is refused as a probable
-/// count of milliseconds.
-const LAST_INSTANT: u64 = 253_402_300_799;
 /// 2001-09-09, the earliest epoch taken at face value. A bare number below
 /// it is far more likely a year (`2027`) or a compact date (`20270131`).
 const FIRST_EPOCH: u64 = 1_000_000_000;
@@ -39,7 +35,7 @@ fn at(value: &str, now: u64) -> Result<u64, String> {
 		return value
 			.parse()
 			.ok()
-			.filter(|epoch| (FIRST_EPOCH..=LAST_INSTANT).contains(epoch))
+			.filter(|epoch| (FIRST_EPOCH..=crate::clock::LAST_INSTANT).contains(epoch))
 			.ok_or_else(|| {
 				format!(
 					"\"{value}\" is not a plausible Unix epoch in seconds; \
@@ -90,7 +86,7 @@ fn within(value: &str, now: u64) -> Result<u64, String> {
 		.filter(|&span| span > 0)
 		.ok_or_else(|| format!("\"{value}\" is not a usable duration"))?;
 	now.checked_add(span)
-		.filter(|&instant| instant <= LAST_INSTANT)
+		.filter(|&instant| instant <= crate::clock::LAST_INSTANT)
 		.ok_or_else(|| format!("\"{value}\" is too far away (the last date is 9999-12-31)"))
 }
 
@@ -166,11 +162,7 @@ fn number(text: &str) -> Option<i64> {
 /// An instant as RFC 3339, or the bare number when it is past 9999-12-31
 /// (an old key written by hand), which no date format can show.
 fn readable(epoch: u64) -> String {
-	if epoch > LAST_INSTANT {
-		epoch.to_string()
-	} else {
-		crate::clock::rfc3339(epoch)
-	}
+	crate::clock::rfc3339_or_epoch(epoch)
 }
 
 /// The expiry as `api-key list` prints it: an RFC 3339 instant, marked once

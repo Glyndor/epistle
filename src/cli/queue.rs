@@ -328,14 +328,18 @@ fn show(spool: &FsSpool, id: Uuid, now: u64, out: &mut impl Write) -> ExitCode {
 	} else {
 		format!(
 			"{} (in {}s)",
-			envelope.next_attempt,
+			crate::clock::rfc3339_or_epoch(envelope.next_attempt),
 			envelope.next_attempt - now
 		)
 	};
 	let _ = writeln!(out, "next attempt: {next}");
 	match envelope.held {
 		Some(since) => {
-			let _ = writeln!(out, "held: yes, since {since}");
+			let _ = writeln!(
+				out,
+				"held: yes, since {}",
+				crate::clock::rfc3339_or_epoch(since)
+			);
 		}
 		None => {
 			let _ = writeln!(out, "held: no");

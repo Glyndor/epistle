@@ -182,6 +182,78 @@ fn json_output_carries_the_documented_fields() {
 }
 
 #[test]
+fn the_text_shows_every_time_as_an_rfc3339_instant() {
+	let f = fixture(true);
+	let state = crate::dkim::rotate::RotationState {
+		selector: "original".into(),
+		key_file: f.dir.path().join("original.key"),
+		rotated_at: DAY,
+		previous: Some(crate::dkim::rotate::Previous {
+			selector: "ed1".into(),
+			key_file: std::path::PathBuf::new(),
+			retire_at: 21 * DAY,
+			rsa: None,
+		}),
+		pending: Some(crate::dkim::rotate::Pending {
+			selector: "ed100".into(),
+			key_file: f.dir.path().join("dkim-ed100.key"),
+			domains: vec!["example.org".into()],
+			started_at: 100 * DAY,
+			withdrawing: None,
+			rsa: None,
+		}),
+		rsa: None,
+	};
+	let path = f.dir.path().join(rotate::STATE_FILE);
+	std::fs::write(&path, serde_json::to_vec(&state).expect("json")).expect("state");
+	crate::dkim::rotate::request_rotation(f.dir.path(), 9 * DAY).expect("request");
+
+	let view = view_with(&f, &[]);
+	let mut out = Vec::new();
+	render(&view, false, &mut out);
+	let text = String::from_utf8(out).expect("utf-8");
+	// Every instant the operator reads is a date, not a number: the epoch
+	// made them do the arithmetic to know when the next rotation was due.
+	assert!(text.contains("rotated at: 1970-01-02T00:00:00Z"), "{text}");
+	assert!(
+		text.contains("next rotation: 1970-04-02T00:00:00Z"),
+		"{text}"
+	);
+	assert!(text.contains("retires at 1970-01-22T00:00:00Z"), "{text}");
+	assert!(
+		text.contains("in progress since 1970-04-11T00:00:00Z"),
+		"{text}"
+	);
+	assert!(
+		text.contains("rotation requested at 1970-01-10T00:00:00Z"),
+		"{text}"
+	);
+	for epoch in ["86400", "1814400", "7862400", "8640000", "777600"] {
+		assert!(
+			!text.contains(epoch),
+			"the epoch {epoch} must not reach the text output: {text}"
+		);
+	}
+}
+
+#[test]
+fn the_json_view_keeps_the_epochs() {
+	let f = fixture(true);
+	let view = view_with(&f, &[]);
+	let mut out = Vec::new();
+	assert_eq!(render(&view, true, &mut out), ExitCode::SUCCESS);
+	let json: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert!(
+		json.get("rotated_at").is_some(),
+		"the field is present, null before the first rotation"
+	);
+	assert!(
+		json.get("next_rotation_due").is_some(),
+		"the field is present, null when the server does not rotate"
+	);
+}
+
+#[test]
 fn a_rotation_in_progress_is_shown_beside_the_key_that_signs() {
 	let f = fixture(true);
 	let state = rotate::RotationState {
@@ -212,7 +284,8 @@ fn a_rotation_in_progress_is_shown_beside_the_key_that_signs() {
 		"the committed key is the one shown as signing"
 	);
 	assert!(
-		text(&view).contains("rotation to ed100 in progress since 8640000; original signs"),
+		text(&view)
+			.contains("rotation to ed100 in progress since 1970-04-11T00:00:00Z; original signs"),
 		"{}",
 		text(&view)
 	);

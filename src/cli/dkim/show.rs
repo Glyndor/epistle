@@ -278,8 +278,9 @@ fn pair(ed: &str, rsa: Option<&str>) -> String {
 	}
 }
 
+/// An instant as RFC 3339 UTC, or `-` when there is none.
 fn when(epoch: Option<u64>) -> String {
-	epoch.map_or_else(|| "-".to_string(), |e| e.to_string())
+	epoch.map_or_else(|| "-".to_string(), crate::clock::rfc3339_or_epoch)
 }
 
 fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Result<()> {
@@ -310,28 +311,32 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 			out,
 			"previous: {} (retires at {})",
 			pair(&previous.selector, previous.rsa_selector.as_deref()),
-			previous.retire_at
+			crate::clock::rfc3339_or_epoch(previous.retire_at)
 		)?;
 	}
 	if let Some(next) = &view.in_progress {
 		let to = pair(&next.selector, next.rsa_selector.as_deref());
+		let since = crate::clock::rfc3339_or_epoch(next.started_at);
 		match &next.withdrawing {
 			Some(reason) => writeln!(out, "rotation to {to} is being withdrawn: {reason}")?,
 			None if next.rsa_selector.is_some() => writeln!(
 				out,
-				"rotation to {to} in progress since {}; {} sign until DNS shows the new keys",
-				next.started_at,
+				"rotation to {to} in progress since {since}; {} sign until DNS shows the new keys",
 				pair(&view.selector, view.rsa_selector.as_deref())
 			)?,
 			None => writeln!(
 				out,
-				"rotation to {to} in progress since {}; {} signs until DNS shows the new key",
-				next.started_at, view.selector
+				"rotation to {to} in progress since {since}; {} signs until DNS shows the new key",
+				view.selector
 			)?,
 		}
 	}
 	if let Some(at) = view.rotation_requested_at {
-		writeln!(out, "rotation requested at {at}, waiting for the server")?;
+		writeln!(
+			out,
+			"rotation requested at {}, waiting for the server",
+			crate::clock::rfc3339_or_epoch(at)
+		)?;
 	}
 	if let Some(error) = &view.last_request_error {
 		writeln!(out, "last rotation error: {error}")?;

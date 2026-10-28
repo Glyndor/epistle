@@ -284,7 +284,7 @@ pub(super) fn list(
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
 	for (account, label, expires_at, ip_cidr, save_sent) in rows {
-		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
+		let expiry = expires_at.map_or_else(|| "never".to_string(), crate::clock::rfc3339_or_epoch);
 		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
 		let save_sent = match save_sent {
 			Some(true) => "save_sent=on",

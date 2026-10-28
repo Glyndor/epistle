@@ -48,6 +48,26 @@ fn targets_normalise_to_one_subject_each() {
 }
 
 #[test]
+fn the_listing_shows_the_end_of_a_ban_as_an_rfc3339_instant() {
+	let rows = vec![BanRow {
+		subject: "ip:203.0.113.9".into(),
+		reason: "too many failures".into(),
+		until_secs: 1_700_000_000,
+	}];
+	let mut out = Vec::new();
+	render_rows(&rows, &mut out);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains("until=2023-11-14T22:13:20Z"),
+		"the end of the ban must be readable at a glance: {text}"
+	);
+	assert!(
+		!text.contains("1700000000"),
+		"the listing must not print the epoch: {text}"
+	);
+}
+
+#[test]
 fn targets_reject_junk_and_the_whole_internet() {
 	assert!(BanTarget::parse("not-an-ip").is_err());
 	assert!(BanTarget::parse("203.0.113.0/33").is_err());

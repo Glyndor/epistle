@@ -288,6 +288,83 @@ fn the_list_defaults_match_a_bare_delivery() {
 }
 
 #[test]
+fn the_list_shows_the_time_as_an_rfc3339_instant() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	write_records(
+		dir.path(),
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
+	);
+	let (_code, text) = invoke(dir.path(), &["list"]);
+	assert!(
+		text.contains("2023-11-14T22:13:20Z"),
+		"the time must be readable at a glance: {text}"
+	);
+	assert!(
+		!text.contains("1700000000"),
+		"the table must not print the epoch: {text}"
+	);
+}
+
+#[test]
+fn the_table_on_a_terminal_shows_the_time_as_an_rfc3339_instant() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	write_records(
+		dir.path(),
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
+	);
+	let mut out = Vec::new();
+	crate::cli::term::fake::with_stdout(crate::cli::term::Decor::coloured(120), || {
+		let cli = Cli::try_parse_from(["epistle", "delivery", "list"]).expect("parse");
+		let Command::Delivery(args) = cli.command else {
+			panic!("not a delivery command");
+		};
+		run(
+			dir.path(),
+			DEFAULT_DELIVERY_LOG_DAYS,
+			args.action,
+			1_700_000_000,
+			&mut out,
+		);
+	});
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains("2023-11-14T22:13:20Z"),
+		"the time must be readable at a glance: {text}"
+	);
+	assert!(
+		!text.contains("1700000000"),
+		"the table must not print the epoch: {text}"
+	);
+}
+
+#[test]
+fn the_json_list_keeps_the_epoch() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	write_records(
+		dir.path(),
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
+	);
+	let (_code, text) = invoke(dir.path(), &["list", "--json"]);
+	let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+	assert_eq!(
+		value[0]["time"], 1_700_000_000,
+		"the JSON keeps the epoch second: {text}"
+	);
+}
+
+#[test]
 fn filters_belong_to_the_list_action() {
 	let error = Cli::try_parse_from(["epistle", "delivery", "--recipient", "bob@x.example"])
 		.expect_err("a filter without `list` must not parse");

@@ -103,8 +103,12 @@ fn destinations_lists_the_holds_in_force_and_why() {
 			"domain busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
 			 exchanger mx.busy.example\tuntil={until} (in 300s)\tdeferrals=2\treason=421 4.7.0 slow down\n\
 			 2 destinations on hold\n",
-			until = NOW + 300
+			until = "2027-01-15T08:05:00Z"
 		)
+	);
+	assert!(
+		!out.contains("1800000300"),
+		"the epoch must not reach the text output: {out}"
 	);
 }
 

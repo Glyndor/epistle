@@ -132,11 +132,36 @@ fn show_prints_envelope_state_and_never_the_body() {
 	assert_eq!(code, ExitCode::SUCCESS);
 	let expected = format!(
 		"id: {}\nfrom: alice0@example.org\nto: bob0@remote.example\nattempts: 1\n\
-		 next attempt: 160 (in 60s)\nheld: no\nrequire tls: false\nlast error: greylisted\n",
+		 next attempt: 1970-01-01T00:02:40Z (in 60s)\nheld: no\nrequire tls: false\nlast error: greylisted\n",
 		ids[0]
 	);
 	assert_eq!(text, expected);
 	assert!(!text.contains("secret body"));
+}
+
+#[test]
+fn show_prints_the_times_as_rfc3339_instants() {
+	let (dir, spool, ids) = spool_with(1);
+	spool
+		.record_attempt(ids[0], 1_700_000_000, "deferred")
+		.expect("attempt");
+	spool
+		.update_envelope(ids[0], |e| e.hold(1_700_000_000))
+		.expect("hold");
+	let (code, text) = run_args(dir.path(), &["show", &ids[0].to_string()], 1_699_999_000);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		text.contains("next attempt: 2023-11-14T22:13:20Z (in 1000s)"),
+		"{text}"
+	);
+	assert!(
+		text.contains("held: yes, since 2023-11-14T22:13:20Z"),
+		"{text}"
+	);
+	assert!(
+		!text.contains("1700000000"),
+		"the epoch must not reach the text output: {text}"
+	);
 }
 
 #[test]

@@ -169,7 +169,11 @@ fn render_text(view: &TlsView, out: &mut impl std::io::Write) -> std::io::Result
 		view.not_after_utc, view.days_left
 	)?;
 	if let Some(at) = view.renewal_requested_at {
-		writeln!(out, "renewal requested at {at}, waiting for the server")?;
+		writeln!(
+			out,
+			"renewal requested at {}, waiting for the server",
+			crate::clock::rfc3339_or_epoch(at)
+		)?;
 	}
 	if let Some(error) = &view.last_request_error {
 		writeln!(out, "last request error: {error}")?;

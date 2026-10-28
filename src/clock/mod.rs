@@ -56,6 +56,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 	(if month <= 2 { year + 1 } else { year }, month, day)
 }
 
+/// The last instant an RFC 3339 date with a four-digit year can name:
+/// 9999-12-31T23:59:59Z. An epoch above it is not a date any command here
+/// can show, so it is kept as the bare number.
+pub const LAST_INSTANT: u64 = 253_402_300_799;
+
 /// Format a Unix timestamp (seconds) as an RFC 3339 / ISO 8601 date-time in
 /// UTC: `YYYY-MM-DDTHH:MM:SSZ`. Used for TLS-RPT report `date-range` values
 /// (RFC 8460 §4.3), which require ISO 8601 rather than the RFC 5322 form.
@@ -73,6 +78,18 @@ pub fn rfc3339(unix_secs: u64) -> String {
 		(seconds_of_day % 3600) / 60,
 		seconds_of_day % 60
 	)
+}
+
+/// An instant as RFC 3339 UTC for a human to read, or the bare epoch second
+/// when the instant is past [`LAST_INSTANT`] and no four-digit year can name
+/// it. This is what the CLI prints instead of a raw epoch: the operator
+/// reads a date, and only the `--json` output keeps the number.
+pub fn rfc3339_or_epoch(unix_secs: u64) -> String {
+	if unix_secs > LAST_INSTANT {
+		unix_secs.to_string()
+	} else {
+		rfc3339(unix_secs)
+	}
 }
 
 /// The drift threshold above which a startup probe fires the
@@ -245,6 +262,21 @@ mod tests {
 	fn rfc3339_formats_year_boundary() {
 		// 2025-12-31 23:59:59 UTC.
 		assert_eq!(rfc3339(1_767_225_599), "2025-12-31T23:59:59Z");
+	}
+
+	#[test]
+	fn rfc3339_or_epoch_keeps_the_number_past_the_last_date() {
+		assert_eq!(rfc3339_or_epoch(1_780_662_896), "2026-06-05T12:34:56Z");
+		assert_eq!(
+			rfc3339_or_epoch(LAST_INSTANT),
+			"9999-12-31T23:59:59Z",
+			"the last date a four-digit year can name is still a date"
+		);
+		assert_eq!(
+			rfc3339_or_epoch(LAST_INSTANT + 1),
+			"253402300800",
+			"past the last date no year can name it, so the number stays"
+		);
 	}
 
 	#[test]
