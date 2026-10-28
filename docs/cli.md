@@ -68,6 +68,7 @@ Every change is validated before it is written, keeps the comments in
 | [Is it working?](#health-epistle-status-epistle-check) | `epistle status`, `epistle check <area>` |
 | [Turn IMAP, POP3, 587… on or off](#service-listeners) | `epistle service list\|enable\|disable` |
 | [Accounts: add, password, disable, quota, addresses](#accounts) | `epistle account …` |
+| [Connect Roundcube webmail](roundcube.md) | IMAP/SMTP configuration and checks |
 | [Aliases and mailing lists](#aliases-epistle-alias) | `epistle alias …` |
 | [Domains and domain aliases](#domains-epistle-domain) | `epistle domain …` |
 | [Masked addresses](#masked-addresses) | `epistle masked …` |
