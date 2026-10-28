@@ -1,0 +1,553 @@
+//! Semantic validation beyond what the type system enforces.
+
+use std::collections::HashSet;
+
+use super::{Config, ConfigError};
+
+mod validate_tenants;
+
+mod validate_database;
+
+mod validate_disabled_domains;
+
+mod validate_identification;
+
+pub(crate) mod validate_addresses;
+
+mod validate_dns_name;
+pub(crate) use validate_dns_name::validate_dns_name;
+
+impl Config {
+	/// Validate the configuration. Any violation is an error: the server
+	/// refuses to start rather than run with a questionable setup.
+	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+		validate_dns_name("hostname", &self.hostname)?;
+		self.validate_addresses()?;
+		self.validate_data_dir()?;
+		self.validate_domains()?;
+		self.validate_disabled_domains()?;
+		self.validate_dns()?;
+		self.validate_accounts()?;
+		self.validate_srs()?;
+		self.validate_api()?;
+		self.validate_listeners()?;
+		self.validate_acme()?;
+		self.validate_webhook()?;
+		self.validate_retry_schedule()?;
+		self.validate_privileges()?;
+		self.validate_transport()?;
+		self.validate_oauth()?;
+		self.validate_ldap()?;
+		self.validate_antispam_llm()?;
+		self.validate_scanner()?;
+		self.validate_alerts()?;
+		self.validate_tenants()?;
+		self.validate_database()?;
+		self.validate_subjectpass()?;
+		self.validate_dkim()?;
+		self.validate_max_recipients()?;
+		self.validate_message_limits()?;
+		if let Some(external) = &self.clock_external {
+			external.validate().map_err(ConfigError::Invalid)?;
+		}
+		self.validate_bulk_recipients()?;
+		self.validate_domain_organization()
+	}
+
+	fn validate_dkim(&self) -> Result<(), ConfigError> {
+		match &self.dkim {
+			Some(dkim) => dkim.validate(&self.domains, &self.domain_aliases),
+			None => Ok(()),
+		}
+	}
+
+	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
+		if let Some(llm) = &self.antispam_llm {
+			llm.validate()?;
+		}
+		Ok(())
+	}
+
+	fn validate_subjectpass(&self) -> Result<(), ConfigError> {
+		if !self.subjectpass.enabled {
+			return Ok(());
+		}
+		// SubjectPass challenges the uncertain Bayesian band; without a
+		// `[database]` there is no score to test against, so enabling it
+		// without a database is a logical impossibility the operator
+		// should hear about at load time.
+		if self.database.is_none() {
+			return Err(ConfigError::Invalid(
+				"[antispam] subjectpass = true requires a [database] section (the \
+				 uncertain band needs the Bayesian score). Add [database] or set \
+				 subjectpass = false."
+					.into(),
+			));
+		}
+		Ok(())
+	}
+
+	fn validate_oauth(&self) -> Result<(), ConfigError> {
+		if let Some(oauth) = &self.oauth {
+			oauth
+				.validate()
+				.map_err(|e| ConfigError::Invalid(e.to_string()))?;
+			oauth.check_signing_pair().map_err(ConfigError::Invalid)?;
+		}
+		Ok(())
+	}
+
+	fn validate_ldap(&self) -> Result<(), ConfigError> {
+		if let Some(ldap) = &self.ldap {
+			ldap.validate().map_err(ConfigError::Invalid)?;
+		}
+		Ok(())
+	}
+
+	fn validate_transport(&self) -> Result<(), ConfigError> {
+		for rule in &self.transport {
+			rule.validate().map_err(ConfigError::Invalid)?;
+		}
+		for alias in &self.alias {
+			alias.validate().map_err(ConfigError::Invalid)?;
+		}
+		Ok(())
+	}
+
+	fn validate_privileges(&self) -> Result<(), ConfigError> {
+		let Some(privileges) = &self.privileges else {
+			return Ok(());
+		};
+		if privileges.user.trim().is_empty() {
+			return Err(ConfigError::Invalid(
+				"[privileges] user must not be empty".into(),
+			));
+		}
+		if privileges
+			.group
+			.as_ref()
+			.is_some_and(|g| g.trim().is_empty())
+		{
+			return Err(ConfigError::Invalid(
+				"[privileges] group must not be empty when set".into(),
+			));
+		}
+		Ok(())
+	}
+
+	fn validate_webhook(&self) -> Result<(), ConfigError> {
+		let Some(webhook) = &self.webhook else {
+			return Ok(());
+		};
+		// Event payloads carry message metadata, so require TLS, except for a
+		// loopback endpoint, which never leaves the host. The host is compared
+		// after parsing: a name that only starts like `localhost` or
+		// `127.0.0.1` can point anywhere.
+		let refused = || {
+			ConfigError::Invalid("[webhook] url must be https (or a loopback http endpoint)".into())
+		};
+		let url = url::Url::parse(&webhook.url).map_err(|_| refused())?;
+		let loopback = match url.host() {
+			Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+			Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+			Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+			None => false,
+		};
+		match url.scheme() {
+			"https" => Ok(()),
+			"http" if loopback => Ok(()),
+			_ => Err(refused()),
+		}
+	}
+
+	fn validate_acme(&self) -> Result<(), ConfigError> {
+		let Some(acme) = &self.acme else {
+			return Ok(());
+		};
+		if !acme.directory_url.starts_with("https://") {
+			return Err(ConfigError::Invalid(
+				"[acme] directory_url must be an https URL".into(),
+			));
+		}
+		if acme.domains.is_empty() {
+			return Err(ConfigError::Invalid(
+				"[acme] requires at least one domain".into(),
+			));
+		}
+		// The cert's SAN list must cover names this server is
+		// responsible for. `self.domains` is the set of names the
+		// server accepts mail for (the delivery target); the cert
+		// also has to cover `self.hostname` because that is the
+		// FQDN clients connect to over SMTP/IMAP/POP3 and verify
+		// against the cert during the TLS handshake. A cert that
+		// does not cover the hostname is unusable for the
+		// very connections the server exposes, so excluding it
+		// here would reject every config that names a separate
+		// `hostname` and `domains` (the documented shape).
+		let mut configured: HashSet<String> = self
+			.domains
+			.iter()
+			.map(|d| d.to_ascii_lowercase())
+			.collect();
+		validate_dns_name("hostname", &self.hostname)?;
+		configured.insert(self.hostname.to_ascii_lowercase());
+		for domain in &acme.domains {
+			validate_dns_name("acme domain", domain)?;
+			if !configured.contains(&domain.to_ascii_lowercase()) {
+				return Err(ConfigError::Invalid(format!(
+					"[acme] domain \"{domain}\" is not a configured domain"
+				)));
+			}
+		}
+		super::acme::validate_challenge(acme, self.dns.as_ref(), &self.listeners)
+			.map_err(ConfigError::Invalid)
+	}
+
+	fn validate_api(&self) -> Result<(), ConfigError> {
+		if let Some(api) = &self.api {
+			// Accept both token-hash formats the runtime understands: the
+			// `sha256:<64-hex>` form emitted by `mail token-hash` (the current
+			// default), and a legacy argon2id PHC string.
+			let sha256 = api
+				.token_hash
+				.strip_prefix("sha256:")
+				.is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+			let argon2id = api.token_hash.starts_with("$argon2id$")
+				&& argon2::password_hash::phc::PasswordHash::new(&api.token_hash).is_ok();
+			if !sha256 && !argon2id {
+				return Err(ConfigError::Invalid(
+					"[api] token_hash must be a `sha256:<hex>` (from `mail token-hash`) or argon2id PHC string".into(),
+				));
+			}
+		}
+		Ok(())
+	}
+
+	fn validate_accounts(&self) -> Result<(), ConfigError> {
+		let domains: HashSet<String> = self
+			.domains
+			.iter()
+			.map(|domain| domain.to_ascii_lowercase())
+			.collect();
+		let mut names = HashSet::new();
+		let mut addresses = HashSet::new();
+		let mut catch_all_domains = HashSet::new();
+		for account in &self.accounts {
+			let name = &account.name;
+			// The name becomes a directory under data_dir: keep it boring.
+			if let Err(fault) = crate::util::account_rule::check(name) {
+				return Err(ConfigError::Invalid(crate::util::account_rule::refusal(
+					name, &fault,
+				)));
+			}
+			if !names.insert(name.clone()) {
+				return Err(ConfigError::Invalid(format!(
+					"duplicate account name \"{name}\""
+				)));
+			}
+			if account.addresses.is_empty() {
+				return Err(ConfigError::Invalid(format!(
+					"account \"{name}\" has no addresses"
+				)));
+			}
+			if let Some(raw) = &account.display_name {
+				crate::directory_store::display_name::validate(raw)
+					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
+			}
+			if let Some(hash) = &account.password_hash {
+				let argon2id = hash.starts_with("$argon2id$")
+					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();
+				if !argon2id {
+					return Err(ConfigError::Invalid(format!(
+						"account \"{name}\": password_hash must be an argon2id PHC string"
+					)));
+				}
+			}
+			account.validate_forward().map_err(ConfigError::Invalid)?;
+			for raw in &account.addresses {
+				let address = crate::util::address_reason::parse(raw)
+					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
+				if !domains.contains(address.domain()) {
+					return Err(ConfigError::Invalid(format!(
+						"account \"{name}\": {}",
+						crate::util::address_reason::not_handled(address.domain())
+					)));
+				}
+				let key = crate::util::address::normalize(raw);
+				if !addresses.insert(key.clone()) {
+					let first = self
+						.accounts
+						.iter()
+						.find(|other| other.addresses.contains(&key))
+						.map_or(name.as_str(), |other| other.name.as_str());
+					return Err(ConfigError::Invalid(format!(
+						"address \"{key}\" belongs to both account \"{first}\" and account \"{name}\""
+					)));
+				}
+			}
+			for raw in &account.catch_all {
+				let domain = raw.to_ascii_lowercase();
+				if !domains.contains(&domain) {
+					return Err(ConfigError::Invalid(format!(
+						"account \"{name}\": catch_all domain \"{raw}\" is not a configured domain"
+					)));
+				}
+				if !catch_all_domains.insert(domain) {
+					return Err(ConfigError::Invalid(format!(
+						"domain \"{raw}\" has more than one catch-all account"
+					)));
+				}
+			}
+		}
+		// RFC 5321 §4.5.1: the server MUST accept mail addressed to
+		// `postmaster` at every domain it serves. Without an explicit
+		// `postmaster@<domain>` address or a per-domain catch-all, RCPT TO
+		// for that address would resolve to `UnknownUser` and the server
+		// would 5.1.1 the message — the MUST violation. We warn at validate
+		// time so `config-check` and `serve` both surface the missing
+		// address instead of leaving it for the first inbound bounce
+		// report, but we do NOT reject the config: an upgrade that refuses
+		// to start a previously-running server is a worse failure mode than
+		// the RFC violation it was meant to fix, and operators have been
+		// running without a configured `postmaster@` for a while now. The
+		// runtime still rejects `postmaster@<domain>` at delivery time when
+		// no address or catch-all exists; closing the MUST for real is a
+		// follow-up that converts this warning into a hard error behind an
+		// opt-in flag once we know how many deployments rely on the
+		// permissive behaviour. Skipped when no accounts are configured: an
+		// account-less server has nothing to deliver mail to regardless.
+		// RFC 2142 lists `abuse@` as a SHOULD, not a MUST, so it is not
+		// enforced here — when an operator adds it (explicit address or
+		// catch-all), the existing resolution order accepts it.
+		if !self.accounts.is_empty() {
+			for domain in &self.domains {
+				let domain_lc = domain.to_ascii_lowercase();
+				let key = format!("postmaster@{domain_lc}");
+				if addresses.contains(&key) || catch_all_domains.contains(&domain_lc) {
+					continue;
+				}
+				tracing::warn!(
+					domain = %domain,
+					"domain \"{domain}\" has no `postmaster@<domain>` address and no catch-all; \
+					 RFC 5321 §4.5.1 requires the server to accept mail to postmaster. \
+					 Fix by adding a `postmaster@<domain>` address to an account, or by \
+					 adding the domain to some account's `catch_all`."
+				);
+			}
+		}
+		Ok(())
+	}
+
+	fn validate_domains(&self) -> Result<(), ConfigError> {
+		if !self.listeners.is_empty() && self.domains.is_empty() {
+			return Err(ConfigError::Invalid(
+				"at least one entry in \"domains\" is required when listeners are configured"
+					.into(),
+			));
+		}
+		let mut seen = HashSet::new();
+		for domain in &self.domains {
+			validate_dns_name("domain", domain)?;
+			if !seen.insert(domain.to_ascii_lowercase()) {
+				return Err(ConfigError::Invalid(format!(
+					"duplicate domain \"{domain}\""
+				)));
+			}
+		}
+		for (alias, target) in &self.domain_aliases {
+			validate_dns_name("domain alias", alias)?;
+			let alias_lc = alias.to_ascii_lowercase();
+			let target_lc = target.to_ascii_lowercase();
+			if !seen.contains(&target_lc) {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" targets \"{target}\", which is not a configured domain"
+				)));
+			}
+			if seen.contains(&alias_lc) {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" is also a configured domain (cannot alias \
+					 a real domain to \"{target}\")"
+				)));
+			}
+			if alias_lc == target_lc {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" cannot target itself"
+				)));
+			}
+		}
+		Ok(())
+	}
+
+	fn validate_data_dir(&self) -> Result<(), ConfigError> {
+		if self.data_dir.as_os_str().is_empty() {
+			return Err(ConfigError::Invalid("data_dir must not be empty".into()));
+		}
+		if !self.data_dir.is_absolute() {
+			return Err(ConfigError::Invalid(format!(
+				"data_dir \"{}\" must be an absolute path",
+				self.data_dir.display()
+			)));
+		}
+		Ok(())
+	}
+
+	/// Reject a `dns.provider` value the build does not know. Without
+	/// this check, a typo like `provider = "cloudfare"` falls through
+	/// `Dns::build` to the manual-mode arm and the operator's automation
+	/// silently never runs. The check is case-insensitive because the
+	/// build lowercases on entry; the list in the message comes from
+	/// `SUPPORTED_PROVIDERS` so the operator sees every name they could
+	/// have written.
+	fn validate_dns(&self) -> Result<(), ConfigError> {
+		let Some(dns) = &self.dns else {
+			return Ok(());
+		};
+		if !super::is_supported_provider(&dns.provider) {
+			return Err(ConfigError::Invalid(format!(
+				"[dns] provider {:?} is not a supported provider; supported: {}",
+				dns.provider,
+				super::SUPPORTED_PROVIDERS.join(", "),
+			)));
+		}
+		Ok(())
+	}
+
+	fn validate_listeners(&self) -> Result<(), ConfigError> {
+		let mut seen = HashSet::new();
+		for listener in &self.listeners {
+			let addr = listener.socket_addr();
+			if !seen.insert(addr) {
+				return Err(ConfigError::Invalid(format!(
+					"duplicate listener address {addr}"
+				)));
+			}
+			if listener.kind == crate::config::ListenerKind::Submissions && self.tls.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} is \"submissions\" (implicit TLS) but no [tls] section is configured"
+				)));
+			}
+			// pop3s is implicit TLS by protocol definition (RFC 2595, port 995):
+			// the only way to speak it is INSIDE a TLS session. Refusing here
+			// surfaces the misconfiguration at validate time instead of letting
+			// serve() fail at bind time with a less actionable error.
+			if listener.kind == crate::config::ListenerKind::Pop3s && self.tls.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} is \"pop3s\" (implicit TLS) but no [tls] section is configured"
+				)));
+			}
+			if listener.kind == crate::config::ListenerKind::Autoconfigs && self.tls.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} is \"autoconfigs\" (HTTPS) but no [tls] section is configured"
+				)));
+			}
+			let needs_tls = matches!(
+				listener.kind,
+				crate::config::ListenerKind::Imaps
+					| crate::config::ListenerKind::Imap
+					| crate::config::ListenerKind::ManageSieve
+			);
+			if needs_tls && self.tls.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} requires a [tls] section (logins never cross plaintext)"
+				)));
+			}
+			// Plaintext-capable listeners (Submission, WebDav, Api, Autoconfig,
+			// Metrics) are accepted without [tls] so the typical "front me with
+			// a TLS proxy" deployment keeps working. The loopback default is
+			// the passive defense: when bound externally, warn at validate
+			// time rather than reject — the next release will add an opt-in
+			// flag, then fail closed by default.
+			if Self::plaintext_listener_warn(listener.kind)
+				&& self.tls.is_none()
+				&& !addr.ip().is_loopback()
+			{
+				tracing::warn!(
+					listener = ?listener.kind,
+					addr = %addr,
+					"no-TLS listener bound externally; configure [tls] or front with a TLS proxy"
+				);
+			}
+			if listener.kind == crate::config::ListenerKind::Api && self.api.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} is \"api\" but no [api] section is configured"
+				)));
+			}
+		}
+		Ok(())
+	}
+
+	/// Whether a listener kind is plaintext-capable: the kind runs in clear
+	/// unless a `[tls]` block is configured, and is usually fronted by a TLS
+	/// proxy in production. Returns `false` for kinds that always require TLS
+	/// (submissions, imaps, pop3s, imap, manage-sieve) — those are rejected
+	/// above on a missing `[tls]` block.
+	fn plaintext_listener_warn(kind: crate::config::ListenerKind) -> bool {
+		matches!(
+			kind,
+			crate::config::ListenerKind::Submission
+				| crate::config::ListenerKind::WebDav
+				| crate::config::ListenerKind::Api
+				| crate::config::ListenerKind::Autoconfig
+				| crate::config::ListenerKind::Metrics
+		)
+	}
+
+	/// Reject a config that forwards mail from any account without a configured
+	/// SRS secret. The recommended SPF policy for our domains is `-all`
+	/// (hardfail) — see `dns::records::build_records` — and `-all` only stays
+	/// safe to publish because forwarding rewrites the envelope sender onto
+	/// our own domain (SRS), so the next hop evaluates SPF against our record
+	/// and passes. Without SRS, forwarded mail keeps the original sender; the
+	/// recipient MTA's SPF check on the original domain fails, and any domain
+	/// that publishes `-all` rejects the message. Refusing here surfaces the
+	/// mismatch at load time rather than at the first forwarded bounce.
+	fn validate_srs(&self) -> Result<(), ConfigError> {
+		let forwarding: Vec<&str> = self
+			.accounts
+			.iter()
+			.filter(|account| !account.forward.is_empty())
+			.map(|account| account.name.as_str())
+			.collect();
+		if forwarding.is_empty() {
+			return Ok(());
+		}
+		if self.srs_secret.is_none() {
+			let names = forwarding
+				.iter()
+				.map(|name| format!("\"{name}\""))
+				.collect::<Vec<_>>()
+				.join(", ");
+			return Err(ConfigError::Invalid(format!(
+				"[[accounts]] {names} set `forward = [...]` but no `srs_secret` is configured; \
+				 without SRS, forwarded mail keeps the original envelope sender and any \
+				 destination whose SPF policy is `-all` will reject the message. \
+				 Set `srs_secret` or remove the `forward` entries."
+			)));
+		}
+		Ok(())
+	}
+
+	fn validate_alerts(&self) -> Result<(), ConfigError> {
+		let mut seen = HashSet::new();
+		for alert in &self.alerts {
+			if !seen.insert(alert.name.as_str()) {
+				return Err(ConfigError::Invalid(format!(
+					"[[alerts]] name \"{}\" is declared more than once",
+					alert.name
+				)));
+			}
+			alert.validate().map_err(ConfigError::Invalid)?;
+			// A rule that posts to the webhook needs a configured poster.
+			if alert.webhook && self.webhook.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"[[alerts]] \"{}\" sets webhook = true but no [webhook] section is configured",
+					alert.name
+				)));
+			}
+		}
+		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests;
