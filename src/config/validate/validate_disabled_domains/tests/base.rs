@@ -1,6 +1,6 @@
 //! `disabled_domains` names hosted domains and nothing else.
 
-use super::super::super::tests::config_from;
+use super::super::super::tests::base::config_from;
 
 const BASE: &str = r#"
 hostname = "mail.example.org"

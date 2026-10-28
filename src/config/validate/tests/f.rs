@@ -1,7 +1,8 @@
 //! Validation tests for the `[database]` section's `sslmode` enforcement.
 //!
-//! Split out of `src/config/validate/tests/base.rs`, matching the precedent set by the alerts
-//! tests in `src/config/validate/tests/c.rs` and the tenants tests in `src/config/validate/tests/d.rs`.
+//! Split out of `src/config/validate/tests/base.rs`, matching the precedent
+//! set by the alerts tests in `src/config/validate/tests/c.rs` and the tenants
+//! tests in `src/config/validate/tests/d.rs`.
 //!
 //! The PostgreSQL connection carries the reputation, the Bayes corpus and, with
 //! `directory = true`, the mail accounts. libpq's default `sslmode` is
