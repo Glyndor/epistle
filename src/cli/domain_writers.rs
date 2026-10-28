@@ -40,10 +40,12 @@ pub fn print_domain_records(
 			dkim_owned.push((rsa_selector.clone(), value));
 		}
 	}
-	let tlsa = config
-		.tls
+	// The TLSA association names the certificate in service: the pair
+	// the authority issued when there is one, the `[tls]` pair
+	// otherwise. The record has to match what the listeners present.
+	let tlsa = crate::tls::served_tls(config)
 		.as_ref()
-		.and_then(|tls| std::fs::read_to_string(&tls.cert_file).ok())
+		.and_then(|served| std::fs::read_to_string(&served.tls.cert_file).ok())
 		.and_then(|pem| dns_records::tlsa_full_cert(&pem));
 	let recs = dns_records::build_records(
 		&[domain.to_string()],

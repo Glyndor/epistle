@@ -429,14 +429,17 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 				};
 			}
 		};
-	// When ACME is on, the [tls] section points at
-	// `<data_dir>/acme/cert.pem` (the renewal loop's target) but
-	// the self-signed bootstrap cert is generated next to the
-	// other keys in `keys/`. Copy both halves into the ACME path
-	// so the server can load them at startup; ACME renewal will
-	// overwrite the files in place. Without this step, a fresh
-	// install with ACME on would fail to start because the cert
-	// the server is told to load is not on disk yet.
+	// When ACME is on, the renewal loop writes the certificate the
+	// authority issues to `<data_dir>/acme/cert.pem` and
+	// `<data_dir>/acme/key.pem`. The directory is created here so it
+	// carries the same mode as the rest of the data tree, but it
+	// stays empty: a bootstrap certificate written there would be
+	// read by `needs_renewal` as a certificate valid until the year
+	// 4096, so the first boot would never place an order and the
+	// host would serve the bootstrap forever. The server loads the
+	// self-signed pair from `keys/` (the `[tls]` section points
+	// there) until the authority answers, and
+	// `crate::tls::served_tls` prefers the ACME pair from then on.
 	if apply_config_acme::should_enable_acme(answers) {
 		let acme_dir = answers.data_dir.join("acme");
 		if let Err(error) = fs::create_dir_all(&acme_dir) {
@@ -455,27 +458,6 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 					report,
 					error: Some(ApplyError::KeyWrite(acme_dir.clone(), error)),
 				};
-			}
-		}
-		let acme_cert = acme_dir.join("cert.pem");
-		let acme_key = acme_dir.join("key.pem");
-		for (src, dst) in [(&cert_path, &acme_cert), (&key_path, &acme_key)] {
-			match crate::cli::regular_read::read(src) {
-				Ok(bytes) => {
-					if let Err(error) = crate::storage::write_secret(dst, &bytes) {
-						return ApplyOutcome {
-							report,
-							error: Some(ApplyError::KeyWrite(dst.clone(), error)),
-						};
-					}
-					report.steps.push(ReportStep::Wrote(dst.clone()));
-				}
-				Err(error) => {
-					return ApplyOutcome {
-						report,
-						error: Some(ApplyError::KeyWrite(src.clone(), error)),
-					};
-				}
 			}
 		}
 	}

@@ -42,17 +42,19 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 		return ExitCode::FAILURE;
 	}
 
-	// TLSA association from the leaf certificate, if a cert is configured.
-	let tlsa = config
-		.tls
-		.as_ref()
-		.and_then(|tls| match std::fs::read_to_string(&tls.cert_file) {
+	// TLSA association from the leaf certificate in service: the
+	// pair the authority issued when there is one, the `[tls]` pair
+	// otherwise. The record has to name the certificate the listeners
+	// present, which is not always the one `[tls]` names.
+	let tlsa = crate::tls::served_tls(config).as_ref().and_then(|served| {
+		match std::fs::read_to_string(&served.tls.cert_file) {
 			Ok(pem) => records::tlsa_full_cert(&pem),
 			Err(error) => {
 				super::style::warn(format_args!("cannot read certificate: {error}"));
 				None
 			}
-		});
+		}
+	});
 
 	let recs = records::build_records(
 		&config.domains,

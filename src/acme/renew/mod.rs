@@ -83,41 +83,83 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 	}
 }
 
-/// Whether a certificate should be (re)issued now: absent, unreadable, or
-/// within `renew_before_days` of its X.509 expiry. If parsing fails, assume
-/// a 90-day lifetime from the file modification time.
-pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> bool {
-	if let Some(expires) = certificate_expiry(&cert_path(data_dir)) {
-		let window = renew_before_days.saturating_mul(86_400);
-		return now_secs >= expires.saturating_sub(window);
-	}
-	let Ok(meta) = fs::metadata(cert_path(data_dir)) else {
-		return true;
-	};
-	let Ok(modified) = meta.modified() else {
-		return true;
-	};
-	let issued = modified
-		.duration_since(UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0);
-	let renew_at = issued.saturating_add(
-		LIFETIME_DAYS
-			.saturating_sub(renew_before_days)
-			.saturating_mul(86_400),
-	);
-	now_secs >= renew_at
+/// What the certificate at the ACME path is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CertificateState {
+	/// No file on disk.
+	Missing,
+	/// The file is there but could not be read or parsed.
+	Unreadable,
+	/// A certificate an authority issued, with the second its
+	/// validity ends.
+	Issued(u64),
+	/// A certificate that is its own issuer: nobody vouches for it.
+	SelfIssued,
 }
 
-fn certificate_expiry(path: &Path) -> Option<u64> {
+/// Whether a certificate should be (re)issued now: absent, unreadable,
+/// self-issued, or within `renew_before_days` of its X.509 expiry.
+///
+/// A self-issued certificate is due however far its expiry is: no
+/// authority issues one, so it is a placeholder (the self-signed pair
+/// `init` used to write at the ACME path) and the only way to have a
+/// certificate the authority vouches for is to ask for one. If
+/// parsing fails, assume a 90-day lifetime from the file modification
+/// time.
+pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> bool {
+	let path = cert_path(data_dir);
+	match certificate_state(&path) {
+		CertificateState::Missing => true,
+		CertificateState::SelfIssued => true,
+		CertificateState::Issued(expires) => {
+			let window = renew_before_days.saturating_mul(86_400);
+			now_secs >= expires.saturating_sub(window)
+		}
+		CertificateState::Unreadable => {
+			let Ok(meta) = fs::metadata(&path) else {
+				return true;
+			};
+			let Ok(modified) = meta.modified() else {
+				return true;
+			};
+			let issued = modified
+				.duration_since(UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			let renew_at = issued.saturating_add(
+				LIFETIME_DAYS
+					.saturating_sub(renew_before_days)
+					.saturating_mul(86_400),
+			);
+			now_secs >= renew_at
+		}
+	}
+}
+
+/// Read the certificate at the ACME path and say what it is.
+fn certificate_state(path: &Path) -> CertificateState {
 	use rustls_pki_types::CertificateDer;
 	use rustls_pki_types::pem::PemObject;
 	use x509_parser::prelude::FromDer;
 
 	// The leaf is first in the persisted ACME certificate chain.
-	let der = CertificateDer::from_pem_file(path).ok()?;
-	let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der.as_ref()).ok()?;
-	Some(u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0))
+	let Ok(der) = CertificateDer::from_pem_file(path) else {
+		return if path.exists() {
+			CertificateState::Unreadable
+		} else {
+			CertificateState::Missing
+		};
+	};
+	let Ok((_, cert)) = x509_parser::certificate::X509Certificate::from_der(der.as_ref()) else {
+		return CertificateState::Unreadable;
+	};
+	// The issuer is the subject: the certificate signed itself.
+	// A certificate an authority issued names that authority as its
+	// issuer, so the two differ.
+	if cert.issuer().as_raw() == cert.subject().as_raw() {
+		return CertificateState::SelfIssued;
+	}
+	CertificateState::Issued(u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0))
 }
 
 fn now_secs() -> u64 {
