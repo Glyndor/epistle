@@ -49,12 +49,17 @@ fn stack_with(
 
 /// The `set` command with the given token flags, ready to run.
 fn action(token_flags: &[&str]) -> DnsCli {
+	action_of("cloudflare", token_flags)
+}
+
+/// The `set` command for the given provider, with the given token flags.
+fn action_of(provider: &str, token_flags: &[&str]) -> DnsCli {
 	let mut full = vec![
 		"epistle",
 		"dns",
 		"provider",
 		"set",
-		"cloudflare",
+		provider,
 		"--zone",
 		"example.org",
 	];
@@ -231,6 +236,113 @@ fn the_mount_of_the_previous_token_file_is_removed() {
 	assert!(mounted(&compose, TOKEN));
 }
 
+/// The mount of the token file the configuration carried before leaves the
+/// container with it: a container that keeps the old token mounted still
+/// exposes the credential, and the configuration no longer names the path,
+/// so a later edit cannot find the mount to take away.
+#[test]
+fn the_mount_of_the_previous_token_file_leaves_when_the_token_moves_to_the_environment() {
+	let previous = "/etc/epistle/secrets/old.token";
+	let (_dir, path, compose) = stack_with(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {{data:?}}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_file = '{previous}'\n"
+		),
+		&[(previous, previous)],
+	);
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let result = execute_with(
+		&path,
+		action(&["--token-env", "EPI_DNS_TOKEN"]),
+		false,
+		false,
+		&mut out,
+		&mut status,
+		|_, _| ExitCode::SUCCESS,
+	);
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	assert!(
+		!mounted(&compose, previous),
+		"the old token file must not stay mounted: {}",
+		std::fs::read_to_string(&compose).unwrap()
+	);
+	let document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	assert_eq!(
+		document["services"]["mail"]["environment"]["EPI_DNS_TOKEN"], "${EPI_DNS_TOKEN}",
+		"the token variable has to reach the container"
+	);
+}
+
+/// The same when the token source goes away: the configuration stops naming
+/// the file, so the mount of that file has to go with it.
+#[test]
+fn the_mount_of_the_previous_token_file_leaves_when_the_token_is_removed() {
+	let previous = "/etc/epistle/secrets/old.token";
+	let (_dir, path, compose) = stack_with(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {{data:?}}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_file = '{previous}'\n"
+		),
+		&[(previous, previous)],
+	);
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let result = execute_with(
+		&path,
+		action_of("manual", &[]),
+		false,
+		false,
+		&mut out,
+		&mut status,
+		|_, _| ExitCode::SUCCESS,
+	);
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	assert!(
+		!mounted(&compose, previous),
+		"the old token file must not stay mounted: {}",
+		std::fs::read_to_string(&compose).unwrap()
+	);
+}
+
+/// A second edit finds the file the configuration names and nothing else: the
+/// mount of the first file is gone, so it cannot come back nor stay behind.
+#[test]
+fn a_second_edit_leaves_no_token_file_mounted_but_the_current_one() {
+	let previous = "/etc/epistle/secrets/old.token";
+	let current = "/etc/epistle/secrets/new.token";
+	let (_dir, path, compose) = stack_with(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {{data:?}}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_file = '{previous}'\n"
+		),
+		&[(previous, previous)],
+	);
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	for flags in [
+		vec!["--token-env", "EPI_DNS_TOKEN"],
+		vec!["--token-file", current],
+	] {
+		let result = execute_with(
+			&path,
+			action(&flags),
+			false,
+			false,
+			&mut out,
+			&mut status,
+			|_, _| ExitCode::SUCCESS,
+		);
+		assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	}
+	let mounts = mail_mounts(&compose);
+	assert!(
+		!mounts.iter().any(|mount| mount["source"] == previous),
+		"the first token file must not stay mounted: {}",
+		std::fs::read_to_string(&compose).unwrap()
+	);
+	assert!(
+		mounted(&compose, current),
+		"the current token file has to be mounted: {}",
+		std::fs::read_to_string(&compose).unwrap()
+	);
+}
+
 /// A token the environment holds is forwarded to the container as `${NAME}`,
 /// which is the only way the container reads it.
 #[test]
@@ -256,5 +368,35 @@ fn a_token_environment_variable_is_forwarded_to_the_container() {
 	assert!(
 		mail_mounts(&compose).is_empty(),
 		"a token in the environment is not a file to mount"
+	);
+}
+
+/// A token written as a multiline string continues on the next lines, and
+/// those lines are part of the credential: the dry run has to hide them too,
+/// or it prints the token in the terminal, in a log or in the JSON output.
+#[test]
+fn the_dry_run_does_not_print_a_multiline_token() {
+	let token = "synthetic-test-token";
+	let (_dir, path, _compose) = stack_with(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {{data:?}}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken = \"\"\"\n{token}\"\"\"\n"
+		),
+		&[],
+	);
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let result = execute_with(
+		&path,
+		action(&["--store-token"]),
+		true,
+		false,
+		&mut out,
+		&mut status,
+		|_, _| panic!("a dry run must not reach the stack"),
+	);
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	let printed = String::from_utf8(out).unwrap();
+	assert!(
+		!printed.contains(token),
+		"the dry run printed the token: {printed}"
 	);
 }

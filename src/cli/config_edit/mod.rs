@@ -85,6 +85,8 @@ impl ConfigDocument {
 }
 
 #[cfg(test)]
+mod tests_diff;
+#[cfg(test)]
 mod tests_dry_run;
 #[cfg(test)]
 mod tests_file;

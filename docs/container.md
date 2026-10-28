@@ -477,7 +477,9 @@ A token you already keep elsewhere is named with `--token-file /absolute/path`:
 the command leaves the file where it is and mounts that path read-only into
 `mail`, which is the only way the container reads a file of the host. A
 credential the Compose file does not mount is a credential the container does
-not have, and the provider never builds.
+not have, and the provider never builds. When the source of the token changes,
+the mount of the file the configuration no longer names is removed too, so the
+container keeps no credential you took away.
 
 An environment token is passed to the container and can be exposed through
 `podman inspect` in `Config.Env`. A token stored inline in `mail.toml` remains

@@ -499,11 +499,14 @@ and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
 instead. A different existing destination is refused.
 
-For a generated stack, the command removes the old token environment entry,
-adds a read-only file mount only to `mail`, and recreates `mail`. Without a
-stack, restart the server yourself. Remove the old environment variable from
-your shell, service configuration, answers file and Compose overrides too.
-Keep the secret separately from data backups.
+For a generated stack, the command removes the old token environment entry and
+the read-only mount of a token file the configuration no longer names, adds the
+mount of the new source only to `mail`, and recreates `mail`. A container that
+keeps the mount of a credential you took away still has that credential, so the
+mount leaves with the setting that named it. Without a stack, restart the server
+yourself. Remove the old environment variable from your shell, service
+configuration, answers file and Compose overrides too. Keep the secret
+separately from data backups.
 
 `--token-file /absolute/path` names a file you already keep: the command does
 not move it, and the generated stack mounts that path read-only into `mail`, so
@@ -511,7 +514,10 @@ the container reads the same file the host does. A path the stack does not
 mount is a path the container does not have, and the provider never builds.
 
 `--dry-run` previews the redacted configuration change and the change to the
-generated Compose file, and writes neither the token nor the Compose file.
+generated Compose file, and writes neither the token nor the Compose file. The
+redaction walks the TOML tree, so a credential is hidden whole: a token written
+as a multiline string does not reach the terminal, a log or the JSON output
+with the lines it continues on.
 
 Existing inline and environment sources keep working. `epistle status` reports
 a warning with migration instructions, without displaying the token. A file
