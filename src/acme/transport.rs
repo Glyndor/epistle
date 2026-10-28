@@ -195,13 +195,28 @@ mod tests {
 		async fn over_cap_post() -> Bytes {
 			over_cap().await
 		}
+		// /refused: a CA that answers a GET with a problem document instead
+		// of the resource that was asked for.
+		async fn refused() -> impl IntoResponse {
+			(
+				StatusCode::BAD_REQUEST,
+				"{\n  \"type\": \"urn:ietf:params:acme:error:malformed\",\n  \
+				 \"detail\": \"Request message was malformed\",\n  \"status\": 400\n}\n",
+			)
+		}
+		// /refused_nonce: a HEAD answered with a status and no body.
+		async fn refused_nonce() -> impl IntoResponse {
+			(StatusCode::SERVICE_UNAVAILABLE, "")
+		}
 		let app = axum::Router::new()
 			.route("/dir", get(directory))
 			.route("/nonce", head(nonce))
 			.route("/order", post(order))
 			.route("/small", get(small))
 			.route("/over_cap", get(over_cap))
-			.route("/over_cap_post", post(over_cap_post));
+			.route("/over_cap_post", post(over_cap_post))
+			.route("/refused", get(refused))
+			.route("/refused_nonce", head(refused_nonce));
 		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 			.await
 			.expect("bind");
@@ -303,6 +318,44 @@ mod tests {
 			message.contains(&MAX_ACME_BODY_BYTES.to_string()),
 			"error must name the cap value ({}): {message}",
 			MAX_ACME_BODY_BYTES
+		);
+	}
+
+	#[tokio::test]
+	async fn a_refused_get_names_the_reason() {
+		// The directory is fetched with GET. A refusal carries a problem
+		// document, not a directory, and the reason it names is what the
+		// operator has to read.
+		let base = mock_server().await;
+		let transport = HttpTransport::new().expect("transport");
+		let error = transport
+			.get(&format!("{base}/refused"))
+			.await
+			.expect_err("a refused GET must fail");
+		let message = error.to_string();
+		assert!(
+			message.contains("urn:ietf:params:acme:error:malformed"),
+			"the reason must be named: {message}"
+		);
+		assert!(
+			message.contains("Request message was malformed"),
+			"the detail must be named: {message}"
+		);
+	}
+
+	#[tokio::test]
+	async fn a_refused_nonce_names_the_status() {
+		// A HEAD answer carries no body, so the status is all there is.
+		let base = mock_server().await;
+		let transport = HttpTransport::new().expect("transport");
+		let error = transport
+			.new_nonce(&format!("{base}/refused_nonce"))
+			.await
+			.expect_err("a refused nonce must fail");
+		let message = error.to_string();
+		assert!(
+			message.contains("503"),
+			"the status must be named: {message}"
 		);
 	}
 }
