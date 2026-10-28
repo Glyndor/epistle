@@ -16,7 +16,7 @@ use crate::evidence::record::sha256;
 use crate::evidence::service::EvidenceService;
 use crate::evidence::tsa::fake::FakeTsa;
 use crate::evidence::tsa::request::{build, random_nonce};
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::queue::{SuppressionList, Worker};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink, Submission};

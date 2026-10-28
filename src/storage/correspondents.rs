@@ -13,7 +13,7 @@
 //!   greylist deferral and the reputation first-time delay are skipped.
 //!
 //! Files live at `<data_dir>/correspondents/<sha256(account)>/<sha256(addr)>`,
-//! the same shape `src/queue/suppression.rs` uses for its per-account
+//! the same shape `src/queue/suppression/mod.rs` uses for its per-account
 //! suppression list. The digest is computed over the ASCII-lowercased
 //! address so the lookup is case-insensitive and the filename is always
 //! safe.
