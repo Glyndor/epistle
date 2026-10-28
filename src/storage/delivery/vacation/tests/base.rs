@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::directory_store::DirectoryHandle;
 use crate::sieve::interp::VacationRequest;

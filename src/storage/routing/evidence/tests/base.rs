@@ -295,7 +295,7 @@ fn a_crash_between_the_evidence_and_the_queue_leaves_a_recoverable_state() {
 	let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
 		.args([
 			"--exact",
-			"storage::routing::evidence::tests::a_crash_between_the_evidence_and_the_queue_leaves_a_recoverable_state",
+			"storage::routing::evidence::tests::base::a_crash_between_the_evidence_and_the_queue_leaves_a_recoverable_state",
 			"--test-threads=1",
 		])
 		.env("EPISTLE_TEST_CRASH_DIR", dir.path())

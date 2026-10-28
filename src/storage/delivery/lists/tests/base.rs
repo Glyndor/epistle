@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn block(id: &str) -> ListBlock {

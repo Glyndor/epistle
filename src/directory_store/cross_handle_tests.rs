@@ -11,7 +11,7 @@
 //! the writes. The handles live in the same process, so they exercise
 //! the "re-read under the lock" half of the contract; the cross-process
 //! half rests on the lock primitive whose own tests are in
-//! [`crate::storage::lock_tests`].
+//! [`crate::storage::tests::lock`].
 
 use std::thread;
 
