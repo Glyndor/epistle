@@ -614,7 +614,9 @@ reaches the container: a `--token-file` is mounted read-only into `mail` at the
 same path, a `--token-env` is forwarded as `${NAME}`, and the mount and the
 environment entry the previous setting left behind are removed. `mail` is
 recreated so the new mount is in the container. `--dry-run` previews the
-configuration change and the Compose change, and writes neither.
+configuration change and the Compose change, and writes neither. The preview
+hides the credentials of the configuration over the TOML tree, so a value that
+spans several lines is hidden whole.
 
 ## DNS lockdown (`epistle dns lockdown`)
 

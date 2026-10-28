@@ -370,3 +370,33 @@ fn a_token_environment_variable_is_forwarded_to_the_container() {
 		"a token in the environment is not a file to mount"
 	);
 }
+
+/// A token written as a multiline string continues on the next lines, and
+/// those lines are part of the credential: the dry run has to hide them too,
+/// or it prints the token in the terminal, in a log or in the JSON output.
+#[test]
+fn the_dry_run_does_not_print_a_multiline_token() {
+	let token = "synthetic-test-token";
+	let (_dir, path, _compose) = stack_with(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {{data:?}}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken = \"\"\"\n{token}\"\"\"\n"
+		),
+		&[],
+	);
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let result = execute_with(
+		&path,
+		action(&["--store-token"]),
+		true,
+		false,
+		&mut out,
+		&mut status,
+		|_, _| panic!("a dry run must not reach the stack"),
+	);
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	let printed = String::from_utf8(out).unwrap();
+	assert!(
+		!printed.contains(token),
+		"the dry run printed the token: {printed}"
+	);
+}
