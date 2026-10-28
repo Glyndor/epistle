@@ -114,6 +114,18 @@ fn a_url_keeps_its_user_and_its_host() {
 	assert!(output.contains("@localhost/epistle"), "{output}");
 }
 
+/// A url is only a url when it is a string. A key called `url` that holds
+/// a table is walked like any other key, so the credential inside it goes.
+#[test]
+fn a_credential_under_a_url_key_is_hidden() {
+	let output = diff(
+		"url = { password = \"synthetic-old\" }\n",
+		"url = { password = \"synthetic-new\" }\n",
+	);
+	assert!(!output.contains("synthetic-old"), "{output}");
+	assert!(!output.contains("synthetic-new"), "{output}");
+}
+
 /// A url without credentials is not hidden: it is not a secret.
 #[test]
 fn a_url_without_credentials_is_printed() {

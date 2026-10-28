@@ -161,7 +161,7 @@ fn patches(text: &str, lines: &[&str]) -> Patches {
 				first,
 				Patch {
 					start: span.start - starts[first],
-					end: span.end - starts[first],
+					end: (span.end - starts[first]).min(content_end(lines[first])),
 					text: replacement,
 				},
 			));
@@ -193,7 +193,7 @@ fn patches(text: &str, lines: &[&str]) -> Patches {
 			last,
 			Patch {
 				start: 0,
-				end: span.end - starts[last],
+				end: (span.end - starts[last]).min(content_end(lines[last])),
 				text: REDACTED.to_string(),
 			},
 		));
@@ -279,13 +279,14 @@ fn collect_value(key: &str, value: &Value, found: &mut Vec<(String, Range<usize>
 	}
 	if key == "url" {
 		// A url is not a credential by itself: only its password is, and
-		// only a string can carry one.
-		if let Value::String(_) = value
-			&& let Some(span) = value.span()
-		{
-			found.push((key.to_string(), span));
+		// only a string can carry one. A url that is not a string is
+		// walked like any other key.
+		if let Value::String(_) = value {
+			if let Some(span) = value.span() {
+				found.push((key.to_string(), span));
+			}
+			return;
 		}
-		return;
 	}
 	match value {
 		Value::InlineTable(table) => {
