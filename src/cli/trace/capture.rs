@@ -21,9 +21,9 @@ pub(crate) struct CapturedEvent {
 	pub(crate) fields: HashMap<String, String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Capture {
-	events: Arc<Mutex<Vec<CapturedEvent>>>,
+	pub(crate) events: Arc<Mutex<Vec<CapturedEvent>>>,
 }
 
 impl<S: tracing::Subscriber> Layer<S> for Capture {

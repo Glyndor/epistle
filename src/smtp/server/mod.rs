@@ -24,6 +24,7 @@ mod data_rate;
 mod dnsbl_check;
 mod run;
 pub(crate) use run::MAX_ERROR_STREAK;
+mod run_accept_log;
 mod run_attachments;
 mod run_auth;
 mod run_band;
@@ -332,6 +333,15 @@ impl Server {
 			};
 			for account in accounts {
 				if store.knows(&account, &sender) {
+					// The line lives here, next to the lookup that
+					// found the correspondent: the caller skips the
+					// greylist and the first-time delay because of
+					// this answer.
+					tracing::debug!(
+						account = %crate::log_id::account(&account),
+						sender = %sender,
+						"trusted reply: skipping greylist and first-time delay"
+					);
 					return Some((account, sender));
 				}
 			}

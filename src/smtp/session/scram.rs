@@ -214,6 +214,16 @@ impl Session {
 		if !line.is_empty() {
 			return Action::Continue(Reply::single(501, "5.5.2 invalid authentication response"));
 		}
+		// The exchange succeeded. The line that says so at the default
+		// level: the password path writes the audit channel instead, and
+		// this mechanism never reached it.
+		crate::smtp::session_log::authentication(
+			&crate::log_id::account(&account),
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::SUCCEEDED,
+			self.auth_failures,
+		);
 		self.authenticated = Some(account);
 		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}
@@ -223,9 +233,15 @@ impl Session {
 	fn scram_failure(&mut self) -> Action {
 		self.pending_scram = None;
 		self.auth_failures += 1;
-		tracing::warn!(
-			failures = self.auth_failures,
-			"SMTP SCRAM authentication failed"
+		// The attempt is recorded at the default level. The account is
+		// not named: a refused attempt never says which account it
+		// tried to be, the same way the wire answer does not.
+		crate::smtp::session_log::authentication(
+			crate::smtp::session_log::UNKNOWN,
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::FAILED,
+			self.auth_failures,
 		);
 		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
 		if self.auth_failures >= 3 {

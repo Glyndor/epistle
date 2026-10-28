@@ -256,13 +256,6 @@ impl Server {
 					// domain alias or a multi-target alias applies
 					// identically to how the recipient was admitted.
 					let known_correspondent = self.known_correspondent(&message);
-					if let Some((account, sender)) = known_correspondent.as_ref() {
-						tracing::debug!(
-							account = %crate::log_id::account(account),
-							sender = %sender,
-							"trusted reply: skipping greylist and first-time delay"
-						);
-					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
 					// MTA retries and is then accepted. The store is the
 					// in-memory one by default and the PostgreSQL-backed one
@@ -529,7 +522,11 @@ impl Server {
 					// path, which applies what holds for our own senders
 					// (the antivirus on outbound mail among them).
 					let mut dropped = 0usize;
-					let handed = match session.authenticated() {
+					// What the line about the acceptance carries is taken
+					// where the message is handed to the sink: the sink
+					// takes it and it cannot be read again, and the
+					// submission path may have changed it before that.
+					let (handed, accepted) = match session.authenticated() {
 						Some(account) => {
 							// The class: from the credential and the
 							// account, never from the message, and with
@@ -572,6 +569,7 @@ impl Server {
 							let sent_copy = (prepared.class.allows_sent_copy()
 								&& self.save_sent_enabled_for(&session))
 							.then(|| message.data.clone());
+							let accepted = self.accepted_record(&message);
 							let submitted = self.sink.submit(
 								message,
 								uuid::Uuid::now_v7(),
@@ -581,15 +579,21 @@ impl Server {
 							if let (Ok(()), Some(copy)) = (&submitted, sent_copy) {
 								self.save_sent_copy(&session, account, &copy);
 							}
-							submitted
+							(submitted, accepted)
 						}
-						None => self.sink.deliver(message),
+						None => {
+							let accepted = self.accepted_record(&message);
+							(self.sink.deliver(message), accepted)
+						}
 					};
 					let reply = match handed {
 						Ok(()) => {
 							charge.accept();
 							session.message_delivered();
 							self.metrics.accepted();
+							// The message is accepted: the one line
+							// that says so at the default level.
+							crate::smtp::session_log::accepted(&accepted);
 							for report in quota_reports {
 								if let Err(error) = self.sink.deliver(report) {
 									tracing::warn!(%error, "mailbox-full report not delivered");

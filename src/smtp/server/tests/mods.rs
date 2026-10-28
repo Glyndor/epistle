@@ -127,3 +127,6 @@ mod tests_quota;
 
 #[cfg(test)]
 mod tests_drain;
+
+#[cfg(test)]
+mod server_tests_accept_log;

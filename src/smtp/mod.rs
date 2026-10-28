@@ -20,6 +20,7 @@ pub mod reply;
 pub mod scram;
 pub mod server;
 pub mod session;
+pub mod session_log;
 pub mod sink;
 pub mod submission_budget;
 #[cfg(test)]
