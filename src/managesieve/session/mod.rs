@@ -355,17 +355,4 @@ fn quoted(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "session_tests_ban_owner_known_network.rs"]
-mod tests_ban_owner_known_network;
-
-#[cfg(test)]
-#[path = "session_tests_continuation.rs"]
-mod continuation_tests;
-
-#[cfg(test)]
-#[path = "session_tests_limits.rs"]
-mod limits_tests;

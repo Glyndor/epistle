@@ -34,7 +34,7 @@ impl Validated {
 /// `mailbox` extension's own rule.
 pub(super) fn check(script: &str) -> Result<(), StoreError> {
 	#[cfg(test)]
-	counted::note(script);
+	tests::counted::note(script);
 	if script.len() > MAX_SCRIPT_BYTES {
 		return Err(StoreError::TooLarge);
 	}
@@ -212,24 +212,4 @@ fn declares_mailbox_require(commands: &[crate::sieve::ast::Command]) -> bool {
 /// In tests, which scripts were checked (by their first line), so that a test
 /// can say how many times a script was checked and not how long it took.
 #[cfg(test)]
-pub(crate) mod counted {
-	use std::sync::Mutex;
-
-	static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-	pub(super) fn note(script: &str) {
-		let first = script.lines().next().unwrap_or("").to_string();
-		SEEN.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.push(first);
-	}
-
-	/// How many times a script whose first line is `first` was checked.
-	pub(crate) fn times(first: &str) -> usize {
-		SEEN.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.iter()
-			.filter(|line| line.as_str() == first)
-			.count()
-	}
-}
+pub(crate) mod tests;

@@ -513,24 +513,6 @@ trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
 
 #[cfg(test)]
-#[path = "server_tests_literals.rs"]
-mod tests_literals;
+mod tests;
 
-#[cfg(test)]
-#[path = "server_tests_starttls.rs"]
-mod tests_starttls;
-
-#[path = "server_discard.rs"]
 mod discard;
-
-#[cfg(test)]
-#[path = "server_tests_conn_limit.rs"]
-mod conn_limit_tests;
-
-#[cfg(test)]
-#[path = "server_tests_deadline.rs"]
-mod tests_deadline;
-
-#[cfg(test)]
-#[path = "server_tests_discard.rs"]
-mod tests_discard;

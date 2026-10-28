@@ -206,5 +206,4 @@ fn tokenize(line: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "command_tests.rs"]
 mod tests;

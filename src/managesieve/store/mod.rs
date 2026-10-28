@@ -515,41 +515,11 @@ impl Txn {
 	}
 }
 
-#[path = "store_by_id.rs"]
 mod by_id;
 pub use super::store_check::Validated;
 #[cfg(test)]
-pub(crate) use super::store_check::counted;
+pub(crate) use super::store_check::tests::counted;
 pub use by_id::Tx;
 
 #[cfg(test)]
-#[path = "store_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "store_tests_limits.rs"]
-mod limits_tests;
-
-#[cfg(test)]
-#[path = "store_tests_check.rs"]
-mod check_tests;
-
-#[cfg(test)]
-#[path = "store_tests_index.rs"]
-mod index_tests;
-
-#[cfg(test)]
-#[path = "store_tests_by_id.rs"]
-mod by_id_tests;
-
-#[cfg(test)]
-#[path = "store_tests_names.rs"]
-mod names_tests;
-
-#[cfg(test)]
-#[path = "store_tests_tx.rs"]
-mod tx_tests;
-
-#[cfg(test)]
-#[path = "store_tests_async.rs"]
-mod async_tests;

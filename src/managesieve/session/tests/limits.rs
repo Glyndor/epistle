@@ -1,6 +1,6 @@
 //! What a ManageSieve client is told when a limit is reached.
 
-use super::super::store::{MAX_SCRIPT_BYTES, MAX_SCRIPTS, ScriptStore};
+use super::super::super::store::{MAX_SCRIPT_BYTES, MAX_SCRIPTS, ScriptStore};
 use super::{Backend, Response, Session};
 use crate::managesieve::command::Command;
 

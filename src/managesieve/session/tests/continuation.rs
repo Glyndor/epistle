@@ -1,4 +1,4 @@
-use super::super::store::ScriptStore;
+use super::super::super::store::ScriptStore;
 use super::{Backend, Session};
 use crate::smtp::auth::tests::base::fixture_password;
 use base64::Engine;

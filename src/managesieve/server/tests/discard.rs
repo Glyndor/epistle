@@ -127,3 +127,6 @@ async fn discarded_literal_keeps_preauth_read_deadline() {
 	);
 	task.await.expect("server task").expect("server result");
 }
+
+#[allow(unused_imports)]
+use super::super::discard;
