@@ -1,4 +1,4 @@
-use super::super::super::tests::{logged_in, text};
+use super::super::super::tests::base::{logged_in, text};
 
 /// `LIST "" ""` is the canonical hierarchy-separator discovery call
 /// (RFC 3501 §6.3.8). The server must answer with the root of the

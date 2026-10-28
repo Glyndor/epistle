@@ -1,4 +1,3 @@
-
 use super::{InternalDate, UNIX_EPOCH, split_date_time};
 
 fn seconds(date: InternalDate) -> u64 {

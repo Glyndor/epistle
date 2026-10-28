@@ -1,7 +1,7 @@
 //! LIST, LSUB, CREATE, DELETE and RENAME over hierarchical mailbox names
 //! (RFC 9051 §6.3, RFC 5258, RFC 3348).
 
-use super::super::super::tests::{deliver, logged_in, text};
+use super::super::super::tests::base::{deliver, logged_in, text};
 
 fn lines(reply: &str, prefix: &str) -> Vec<String> {
 	reply

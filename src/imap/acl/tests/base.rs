@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn account_with_mailbox(dir: &std::path::Path) {

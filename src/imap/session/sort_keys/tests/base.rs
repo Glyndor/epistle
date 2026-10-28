@@ -1,4 +1,3 @@
-
 use super::{address_key, date_header_seconds};
 
 #[test]

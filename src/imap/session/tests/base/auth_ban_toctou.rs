@@ -19,7 +19,7 @@
 //!     two messages, the network is unknown, a valid proof is
 //!     refused (a ban that fires in flight rejects).
 //!
-//! Split from `mod_tests_auth_ban_owner_known_network.rs` to keep
+//! Split from `auth_ban_owner_known_network.rs` to keep
 //! that file under the per-file code-line budget.
 
 use super::auth_bans::{decode_server_first, scram_directory_with_ban_store, valid_client_final};

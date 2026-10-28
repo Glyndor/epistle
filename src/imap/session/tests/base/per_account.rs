@@ -8,7 +8,7 @@ use crate::imap::session::Session;
 use crate::net::per_account_conn::PerAccountCounter;
 use crate::test_fixtures as fixtures;
 
-use super::tests::{directory, text as rendered};
+use super::{directory, text as rendered};
 
 fn session_in(
 	dir: &std::path::Path,

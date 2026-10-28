@@ -206,7 +206,7 @@ with mailbox size: a cheap `read_dir` followed, **per message**, by opening the
 directly with a per-mailbox metadata index — a rebuildable read-acceleration
 cache that keeps the filesystem-first store fast at scale **without an external
 database** and **without adding write amplification**. It lives in
-`src/imap/index.rs` and is wired into `Snapshot::open`.
+`src/imap/index/mod.rs` and is wired into `Snapshot::open`.
 
 ### What it is
 

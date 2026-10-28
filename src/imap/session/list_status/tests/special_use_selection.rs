@@ -1,4 +1,4 @@
-use super::super::super::tests::{logged_in, text};
+use super::super::super::tests::base::{logged_in, text};
 
 fn selected_defaults(rev2: bool) -> String {
 	let mut response = String::new();

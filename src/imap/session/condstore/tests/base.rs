@@ -1,4 +1,3 @@
-
 use super::reply_modseq;
 use crate::imap::command::ReturnOpt;
 

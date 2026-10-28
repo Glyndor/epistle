@@ -1,5 +1,5 @@
 //! Ban-aware IMAP AUTHENTICATE (SASL) tests. Split from
-//! `mod_tests_auth.rs` to keep both files under the per-file
+//! `auth.rs` to keep both files under the per-file
 //! code-line budget. Reuses the `directory()`, `text()`, and
 //! `unauth()` helpers from the sibling `auth` module so both files
 //! stay in sync.
@@ -64,7 +64,7 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 	);
 }
 
-// Ban lifecycle tests live in `mod_tests_auth_ban_lifecycle.rs`.
+// Ban lifecycle tests live in `auth_ban_lifecycle.rs`.
 // Keep them separate to stay within the per-file code-line budget.
 
 /// An IMAP LOGIN attempt routes through the directory's

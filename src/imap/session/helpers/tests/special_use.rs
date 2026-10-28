@@ -1,4 +1,3 @@
-
 use super::special_use_attribute;
 
 #[test]

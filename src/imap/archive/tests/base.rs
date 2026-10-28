@@ -353,7 +353,7 @@ fn expunge_through_a_real_session_archives_rather_than_deletes() {
 	// and every new call site went back to `Snapshot::open`, which leaves
 	// retention at zero — the feature would have been silently gone with the
 	// whole suite green. This test goes in through SELECT and EXPUNGE.
-	use crate::imap::session::tests::{logged_in, text};
+	use crate::imap::session::tests::base::{logged_in, text};
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = delivered(dir.path(), "alice", "INBOX", b"Subject: hi\r\n\r\nbody\r\n");
 
@@ -377,7 +377,7 @@ fn expunge_through_a_real_session_archives_rather_than_deletes() {
 
 #[test]
 fn a_session_without_retention_still_deletes_in_the_act() {
-	use crate::imap::session::tests::{logged_in, text};
+	use crate::imap::session::tests::base::{logged_in, text};
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = delivered(dir.path(), "alice", "INBOX", b"Subject: hi\r\n\r\nbody\r\n");
 

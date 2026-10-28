@@ -1,6 +1,7 @@
 //! COMPRESS=DEFLATE driven end to end against the real connection loop.
 //!
-//! The unit tests in `compress_tests.rs` exercise the wrapper in isolation.
+//! The unit tests in `src/imap/compress/tests/base.rs` exercise the wrapper in
+//! isolation.
 //! These go in through the server: they prove the loop actually swaps the
 //! stream, that the tagged OK arrives uncompressed as RFC 4978 §3 requires,
 //! and that commands sent after it are understood. A wrapper that works and a
