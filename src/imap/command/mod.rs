@@ -705,13 +705,4 @@ pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_lin
 pub use parse::{DEFAULT_APPEND_LIMIT, parse};
 
 #[cfg(test)]
-#[path = "command_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "command_tests_rfc9051_sequence.rs"]
-mod tests_rfc9051_sequence;
-
-#[cfg(test)]
-#[path = "command_tests_utf8_append.rs"]
-mod tests_utf8_append;

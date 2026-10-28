@@ -2,7 +2,7 @@
 //! errors with exact JMAP error types, cross-account refusal, and that the
 //! capability is present on every account the session advertises.
 //!
-//! The unit-level read/write tests live in `src/storage/vacation_store_tests.rs`;
+//! The unit-level read/write tests live in `src/storage/vacation_store/tests/base.rs`;
 //! here we only exercise the JMAP wire surface.
 
 use axum::http::StatusCode;

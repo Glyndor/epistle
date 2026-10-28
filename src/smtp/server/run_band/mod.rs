@@ -167,7 +167,7 @@ impl Server {
 			);
 			message.data = crate::smtp::trace::inject_spam_headers(&message.data, score);
 			// "Junk" maps to the IMAP `\Junk` special-use mailbox via
-			// the helper in `imap/session/helpers.rs`. The historical
+			// the helper in `imap/session/helpers/mod.rs`. The historical
 			// "Rejects" alias still works; the threshold-based path uses
 			// "Junk" so the prefix lines up with what the user sees.
 			message.mailbox = Some("Junk".to_string());

@@ -660,5 +660,4 @@ mod day;
 pub use day::{MAX_LINE, day_name};
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

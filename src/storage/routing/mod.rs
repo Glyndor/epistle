@@ -580,37 +580,4 @@ mod evidence;
 mod forward;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_dkim_rotation.rs"]
-mod tests_dkim_rotation;
-
-#[cfg(test)]
-#[path = "mod_tests_dkim_domain.rs"]
-mod tests_dkim_domain;
-
-#[cfg(test)]
-#[path = "mod_tests_dkim_per_domain.rs"]
-mod tests_dkim_per_domain;
-
-#[cfg(test)]
-#[path = "mod_tests_forward.rs"]
-mod tests_forward;
-
-#[cfg(test)]
-#[path = "mod_tests_report.rs"]
-mod tests_report;
-
-#[cfg(test)]
-#[path = "mod_tests_sign_reply.rs"]
-mod tests_sign_reply;
-
-#[cfg(test)]
-#[path = "mod_tests_vacation.rs"]
-mod tests_vacation;
-
-#[cfg(test)]
-#[path = "mod_tests_warning.rs"]
-mod tests_warning;
