@@ -1020,6 +1020,13 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 | `enabled` | Default `true`. With `false` the section stays in the file but no event is posted, not even for an alert with `webhook = true`. `epistle webhook disable\|enable` edits it. `webhook test` still posts. |
 | `allow_private_webhooks` | Permit the endpoint to be a private destination: a loopback address, a private (RFC 1918 / RFC 4193) or link-local address, or the cloud metadata service (`169.254.169.254`). Default `false`. The endpoint is chosen by the operator, but the address it names may be one the host must not reach on its own, and the addresses its name resolves to are judged the same way, so a host that points inside the private networks of the site is refused too. Set this only when the receiver genuinely lives on a private network. `epistle config-check` refuses a section that names a private address without it, and `epistle webhook set` writes the option when the URL needs it. |
 
+A webhook that refuses private destinations connects to the endpoint
+directly and ignores the proxy of the environment (`HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`): a proxy resolves the name itself and connects
+to the address it chooses, so the destination check would never see the
+address the event reaches. A webhook that sets `allow_private_webhooks`
+uses the proxy of the environment as any other client does.
+
 Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
 (a rotated DKIM key never showed up in DNS, so the previous key keeps signing),

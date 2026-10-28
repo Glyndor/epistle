@@ -227,7 +227,7 @@ impl Webhook {
 
 	fn build(url: &str, secret: Option<String>, allow_private: bool) -> Result<Self, WebhookError> {
 		destination::check_url(url, allow_private).map_err(WebhookError::Destination)?;
-		let client = reqwest::Client::builder()
+		let mut builder = reqwest::Client::builder()
 			.timeout(Duration::from_secs(15))
 			// Never follow a redirect: the POST carries the signature and the
 			// event, and a 307 would resend both wherever the endpoint (or
@@ -236,8 +236,17 @@ impl Webhook {
 			// The addresses the host name resolves to are checked as well:
 			// a name that points inside the networks of this host is as
 			// private as the address it spells.
-			.dns_resolver(Arc::new(destination::DestinationResolver { allow_private }))
-			.build()?;
+			.dns_resolver(Arc::new(destination::DestinationResolver { allow_private }));
+		if !allow_private {
+			// The proxy of the environment resolves the name itself and
+			// connects to the address it chooses, so neither the check above
+			// nor the resolver would see the address the event reaches. The
+			// client that refuses private destinations goes to the endpoint
+			// directly; the one that allows them uses the proxy as any
+			// other client does.
+			builder = builder.no_proxy();
+		}
+		let client = builder.build()?;
 		Ok(Webhook {
 			client,
 			url: url.to_string(),
