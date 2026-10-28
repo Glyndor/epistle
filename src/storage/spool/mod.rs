@@ -637,25 +637,4 @@ impl MessageSink for FsSpool {
 pub(super) mod leftovers;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_edit.rs"]
-mod tests_edit;
-
-#[cfg(all(test, unix))]
-#[path = "mod_tests_absent.rs"]
-mod tests_absent;
-
-#[cfg(test)]
-#[path = "mod_tests_perms.rs"]
-mod tests_perms;
-
-#[cfg(test)]
-#[path = "mod_tests_env_crypto.rs"]
-mod tests_env_crypto;
-
-#[cfg(test)]
-#[path = "mod_tests_framing.rs"]
-mod tests_framing;
