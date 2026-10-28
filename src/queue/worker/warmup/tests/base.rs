@@ -3,10 +3,10 @@
 //! toward the give-up window, then go out as the cap allows.
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Hang, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Hang, Script};
 use crate::queue::warmup::settings::{self, Settings};
 use crate::queue::warmup::{Group, Warmup};
-use crate::queue::worker::tests_backoff::store;
+use crate::queue::worker::tests::backoff::store;
 use crate::storage::{DeliveryLog, DeliveryOutcome, FsSpool, RecipientStatus};
 
 const GMAIL_MX: &str = "gmail-smtp-in.l.google.com";

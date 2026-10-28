@@ -7,7 +7,7 @@
 use super::backoff::{greeting, hold, store, worker_for};
 use super::*;
 use crate::queue::destination::Destination;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::storage::RecipientStatus;
 
 const PROVIDER: &str = "mx.provider.example";

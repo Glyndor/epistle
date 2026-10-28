@@ -4,7 +4,7 @@
 
 use super::report_failures::{MAX_REPORT_ATTEMPTS, report_wait};
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink, SinkError};
 use std::collections::BTreeMap;

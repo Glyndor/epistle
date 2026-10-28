@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn wrapped(error: TlsError) -> std::io::Error {

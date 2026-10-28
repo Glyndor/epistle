@@ -1,7 +1,7 @@
 //! `epistle suppression list` says when and why an address was suppressed.
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use std::collections::BTreeMap;
 

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::queue::warmup::settings::{self, Settings};
 use crate::queue::warmup::{Group, Warmup};
 use crate::smtp::session::AcceptedMessage;

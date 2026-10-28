@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::queue::SuppressionList;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink};
 use crate::storage::delivery_log::DeliveryLog;

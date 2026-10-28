@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::queue::resolver::Connector;
-use crate::queue::test_remote::{FakeRemote, Hang, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Hang, Script};
 use crate::queue::timeouts;
 
 const DOMAIN: &str = "slow.example";

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Hang, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Hang, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::RecipientStatus;
 

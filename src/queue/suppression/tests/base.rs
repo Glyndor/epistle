@@ -172,7 +172,7 @@ fn markers_are_owner_only_under_every_umask() {
 			.arg("-c")
 			.arg(format!(
 				"umask {umask}; exec \"$0\" --exact --ignored --nocapture \
-				 queue::suppression::tests::markers_and_their_directories_are_owner_only"
+				 queue::suppression::tests::base::markers_and_their_directories_are_owner_only"
 			))
 			.arg(test)
 			.output()

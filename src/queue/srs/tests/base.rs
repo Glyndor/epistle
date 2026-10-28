@@ -1,4 +1,3 @@
-
 use super::*;
 
 const SECRET: &[u8] = b"a shared srs secret";

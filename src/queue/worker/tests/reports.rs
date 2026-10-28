@@ -2,7 +2,7 @@
 //! per recipient, each with its own status and the reply that caused it.
 
 use super::*;
-use crate::queue::test_remote::{FakeRemote, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink};
 use std::collections::BTreeMap;

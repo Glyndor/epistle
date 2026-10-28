@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::queue::destination::Destination;
-use crate::queue::test_remote::{FakeRemote, Hang, Received, Script};
+use crate::queue::tests::test_remote::{FakeRemote, Hang, Received, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::RecipientStatus;
 
