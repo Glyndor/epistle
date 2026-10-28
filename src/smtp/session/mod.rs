@@ -794,5 +794,4 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "tests_mods.rs"]
-mod tests_mods;
+mod tests;

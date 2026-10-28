@@ -34,4 +34,4 @@ impl Directory {
 }
 
 #[cfg(test)]
-mod test_counter;
+mod tests;
