@@ -1,6 +1,6 @@
 //! End-to-end `addressbook-query` filter tests (RFC 6352 §10.5), driven
 //! through the WebDAV handler. The parser and matcher have their own unit
-//! tests in `carddav_filter_tests.rs`.
+//! tests in `src/webdav/carddav_filter/tests/base.rs`.
 
 use axum::Router;
 use axum::http::StatusCode;

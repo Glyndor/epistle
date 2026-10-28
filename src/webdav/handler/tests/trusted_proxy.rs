@@ -14,7 +14,7 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use tower::ServiceExt;
 
 /// Standard base64 encode for building Basic credentials (matches the
-/// encoding helper kept in `handler_tests.rs`).
+/// encoding helper kept in `src/webdav/handler/tests/base.rs`).
 fn base64_encode(input: &[u8]) -> String {
 	const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	let mut out = String::new();

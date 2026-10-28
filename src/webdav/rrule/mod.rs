@@ -15,7 +15,7 @@
 //! - `UNTIL=<datetime>`: stop at an inclusive UTC bound.
 //! - `BYDAY` (with an ordinal in a month, `2TU`, `-1FR`), `BYMONTHDAY`
 //!   (negative counts from the end), `BYMONTH` and `WKST`, evaluated as
-//!   RFC 5545 §3.3.10 describes (`rrule_select.rs`).
+//!   RFC 5545 §3.3.10 describes (`src/webdav/rrule/select.rs`).
 //! - A series that starts on the 29th to the 31st recurs only in the months
 //!   that have the day.
 //!

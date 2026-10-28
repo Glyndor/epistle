@@ -1,6 +1,6 @@
 //! End-to-end `calendar-query` filter tests (RFC 4791 §9.7).
 //!
-//! The unit tests in `caldav_filter_tests.rs` cover the filter
+//! The unit tests in `src/webdav/caldav_filter/tests/base.rs` cover the filter
 //! parser and matcher; the tests here drive the filter through the
 //! WebDAV handler to make sure the integration holds.
 
