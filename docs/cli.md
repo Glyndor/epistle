@@ -609,6 +609,13 @@ the value. `test` lists the zone's records through the provider (a read only cal
 10 second limit) and reports the count. Every mutation accepts `--dry-run` and
 `--config FILE`.
 
+On a generated stack, `set` also writes the Compose file, so the credential
+reaches the container: a `--token-file` is mounted read-only into `mail` at the
+same path, a `--token-env` is forwarded as `${NAME}`, and the mount and the
+environment entry the previous setting left behind are removed. `mail` is
+recreated so the new mount is in the container. `--dry-run` previews the
+configuration change and the Compose change, and writes neither.
+
 ## DNS lockdown (`epistle dns lockdown`)
 
 ```sh
