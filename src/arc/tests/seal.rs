@@ -3,12 +3,13 @@
 use super::super::chain::{ChainValidation, Instance};
 use super::super::seal::{SealParams, build, verify};
 use super::super::signature::parse_seal;
+use super::key::{ed25519_record, rsa_key_pair, rsa_record};
 use crate::dkim::signature::Algorithm;
 use crate::dkim::{Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ring::signature::{Ed25519KeyPair, KeyPair, RSA_PKCS1_SHA256, RsaKeyPair};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -51,6 +52,11 @@ fn dns_for(key: &Ed25519KeyPair, temp_fail: bool) -> MockDns {
 		"v=DKIM1; k=ed25519; p={}",
 		BASE64.encode(key.public_key().as_ref())
 	);
+	dns_with(record, temp_fail)
+}
+
+/// A resolver that serves one key record for the selector of the tests.
+fn dns_with(record: String, temp_fail: bool) -> MockDns {
 	let mut txt = HashMap::new();
 	txt.insert(format!("{SELECTOR}._domainkey.{DOMAIN}"), vec![record]);
 	MockDns { txt, temp_fail }
@@ -110,6 +116,43 @@ fn without_signature(value: &str) -> String {
 		})
 		.collect::<Vec<_>>()
 		.join(";")
+}
+
+/// An ARC-Seal that declares `a=rsa-sha256` and carries an RSA signature
+/// over the ARC set itself, which is what an RSA signature covers: the hash
+/// goes inside the PKCS#1 padding.
+fn rsa_seal(key: &RsaKeyPair) -> String {
+	let value = format!(" i=1; a=rsa-sha256; d={DOMAIN}; s={SELECTOR}; cv=none; b=");
+	let input = seal_input(AAR, AMS, &value);
+	let mut signature = vec![0u8; key.public().modulus_len()];
+	key.sign(
+		&RSA_PKCS1_SHA256,
+		&ring::rand::SystemRandom::new(),
+		input.as_bytes(),
+		&mut signature,
+	)
+	.expect("sign");
+	format!("{value}{}", BASE64.encode(&signature))
+}
+
+/// An ARC-Seal that declares `a=rsa-sha256` and carries an Ed25519
+/// signature over the raw ARC set, which is the bytes an RSA signature
+/// covers.
+fn ed25519_seal_over_raw_bytes_labelled_as_rsa(key: &Ed25519KeyPair) -> String {
+	let value = format!(" i=1; a=rsa-sha256; d={DOMAIN}; s={SELECTOR}; cv=none; b=");
+	let input = seal_input(AAR, AMS, &value);
+	let signature = key.sign(input.as_bytes());
+	format!("{value}{}", BASE64.encode(signature.as_ref()))
+}
+
+/// The one-instance chain a seal covers.
+fn chain_with(seal: &str) -> Vec<Instance> {
+	vec![Instance {
+		instance: 1,
+		auth_results: AAR.to_string(),
+		message_signature: AMS.to_string(),
+		seal: seal.to_string(),
+	}]
 }
 
 #[test]
@@ -240,6 +283,60 @@ async fn dns_temp_failure_is_temperror() {
 	assert_eq!(
 		verify(&dns, &seal, &value, &chain).await,
 		DkimOutcome::TempError
+	);
+}
+
+#[tokio::test]
+async fn an_rsa_seal_verifies_with_the_key_the_record_publishes() {
+	let key = rsa_key_pair();
+	let value = rsa_seal(&key);
+	let seal = parse_seal(&value).expect("parse");
+	let chain = chain_with(&value);
+	let dns = dns_with(rsa_record(&key), false);
+	assert_eq!(verify(&dns, &seal, &value, &chain).await, DkimOutcome::Pass);
+}
+
+#[tokio::test]
+async fn an_rsa_seal_is_refused_when_the_record_publishes_an_ed25519_key() {
+	let key = rsa_key_pair();
+	let value = rsa_seal(&key);
+	let seal = parse_seal(&value).expect("parse");
+	let chain = chain_with(&value);
+	// The record publishes an Ed25519 key for a seal that says RSA.
+	let dns = dns_with(ed25519_record(&[4u8; 32]), false);
+	assert_eq!(
+		verify(&dns, &seal, &value, &chain).await,
+		DkimOutcome::PermError
+	);
+}
+
+#[tokio::test]
+async fn an_ed25519_seal_is_refused_when_the_record_publishes_an_rsa_key() {
+	let key = key();
+	let line = build(&key, &params(1, ChainValidation::None), &[], AAR, AMS);
+	let value = value_of(&line);
+	let seal = parse_seal(&value).expect("parse");
+	let chain = chain_with(&value);
+	let dns = dns_with(rsa_record(&rsa_key_pair()), false);
+	assert_eq!(
+		verify(&dns, &seal, &value, &chain).await,
+		DkimOutcome::PermError
+	);
+}
+
+#[tokio::test]
+async fn an_ed25519_seal_over_the_raw_data_is_refused_when_the_header_says_rsa() {
+	// The seal claims RSA, and the signature is an Ed25519 one over the raw
+	// ARC set, which is the bytes an RSA signature covers. The record
+	// publishes the Ed25519 key that made it.
+	let key = key();
+	let value = ed25519_seal_over_raw_bytes_labelled_as_rsa(&key);
+	let seal = parse_seal(&value).expect("parse");
+	let chain = chain_with(&value);
+	let dns = dns_for(&key, false);
+	assert_eq!(
+		verify(&dns, &seal, &value, &chain).await,
+		DkimOutcome::PermError
 	);
 }
 

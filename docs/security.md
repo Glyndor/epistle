@@ -273,6 +273,13 @@ Inbound mail is checked with **SPF**, **DKIM**, **DMARC** (with aggregate
 reports), and **ARC**; outbound is **DKIM-signed**, with **MTA-STS**, **DANE**
 and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
 
+An inbound ARC chain is verified with the algorithm each of its headers
+declares: `a=ed25519-sha256` with Ed25519 over the SHA-256 digest of the
+signed data, `a=rsa-sha256` with RSA over a key whose modulus is at least
+1024 bits. The key type the DNS record declares has to be the one the
+algorithm needs, and a record that publishes another kind of key is refused
+instead of being read as whichever primitive the verifier happened to use.
+
 ## Anti-abuse
 
 - Layered inbound filtering: **greylisting**, a **Bayesian** filter, sender

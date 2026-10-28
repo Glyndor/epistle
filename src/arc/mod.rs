@@ -7,6 +7,7 @@
 
 pub mod ams;
 pub mod chain;
+pub(crate) mod key;
 pub mod seal;
 pub mod sealer;
 pub mod signature;

@@ -2,16 +2,19 @@
 //!
 //! The AMS signs the message headers and body exactly like a DKIM signature,
 //! so this reuses DKIM's canonicalization and public-key record format. We
-//! always sign with relaxed/relaxed ed25519; verification honours the `c=` the
-//! signer declared.
+//! always sign with relaxed/relaxed ed25519; verification honours the `c=`
+//! the signer declared and the algorithm it declared too: an
+//! `a=ed25519-sha256` header is verified with Ed25519 and an `a=rsa-sha256`
+//! header with RSA.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
+use ring::signature::Ed25519KeyPair;
 
-use crate::dkim::{Algorithm, Canon, DkimOutcome, canon, parse_key};
+use crate::dkim::{Algorithm, Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
 
+use super::key::KeyRecord;
 use super::signature::MessageSignature;
 
 /// Headers signed when present, lowest occurrence first (RFC 6376 §5.4).
@@ -91,17 +94,24 @@ pub async fn verify(
 		Ok(texts) => texts,
 		Err(DnsFailure::Temporary) => return DkimOutcome::TempError,
 	};
-	let Some(key) = texts.iter().find_map(|text| parse_key(text)) else {
-		return DkimOutcome::PermError;
+	let record = match KeyRecord::first(&texts) {
+		Ok(record) => record,
+		Err(_) => return DkimOutcome::PermError,
+	};
+	// The algorithm the header declares decides the primitive and the shape
+	// of the key, and the record has to publish a key of that type.
+	let key = match record.verification_key(ams.algorithm) {
+		Ok(key) => key,
+		Err(_) => return DkimOutcome::PermError,
 	};
 
-	let public_key = UnparsedPublicKey::new(&ED25519, key);
 	// The same rule the signer followed: an Ed25519-SHA256 signature covers
 	// the SHA-256 digest of the signed data.
 	let signed = ams.algorithm.signed_bytes(hash_input.as_bytes());
-	match public_key.verify(signed.as_ref(), &ams.signature) {
-		Ok(()) => DkimOutcome::Pass,
-		Err(_) => DkimOutcome::Fail,
+	if key.verify(signed.as_ref(), &ams.signature) {
+		DkimOutcome::Pass
+	} else {
+		DkimOutcome::Fail
 	}
 }
 
