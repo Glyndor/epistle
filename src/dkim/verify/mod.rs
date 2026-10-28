@@ -5,6 +5,7 @@ use ring::signature::{ED25519, RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY, U
 use crate::spf::{DnsFailure, DnsLookup};
 
 use super::canon;
+use super::key_record;
 use super::signature::Algorithm;
 
 /// Outcome of one signature (RFC 8601 keywords).
@@ -225,12 +226,20 @@ async fn verify_one(
 			};
 		}
 	};
-	let Some(key) = texts.iter().find_map(|text| parse_key(text)) else {
+	let Some(record) = key_record::select(&texts, signature.algorithm) else {
 		return DkimResult {
 			outcome: DkimOutcome::PermError,
 			domain,
 		};
 	};
+	// The identity of the signature must be one the record authorizes: the
+	// "s" flag of the record asks for the signing domain exactly.
+	if !record.accepts_identity(signature.identity.as_deref(), &signature.domain) {
+		return DkimResult {
+			outcome: DkimOutcome::PermError,
+			domain,
+		};
+	}
 
 	let algorithm: &dyn ring::signature::VerificationAlgorithm = match signature.algorithm {
 		// RFC 8301 section 3.2 asks every verifier to validate RSA keys
@@ -243,10 +252,9 @@ async fn verify_one(
 	// wants the RSAPublicKey inside it; a record with the bare key is used
 	// as it is.
 	let key = match signature.algorithm {
-		Algorithm::RsaSha256 => {
-			super::spki::rsa_public_key_from_spki(&key).map_or(key.clone(), <[u8]>::to_vec)
-		}
-		Algorithm::Ed25519Sha256 => key,
+		Algorithm::RsaSha256 => super::spki::rsa_public_key_from_spki(&record.public_key)
+			.map_or_else(|| record.public_key.clone(), <[u8]>::to_vec),
+		Algorithm::Ed25519Sha256 => record.public_key.clone(),
 	};
 	let public_key = UnparsedPublicKey::new(algorithm, key);
 	// RFC 8463 section 3: an Ed25519-SHA256 signature covers the SHA-256
@@ -259,21 +267,6 @@ async fn verify_one(
 		Err(_) => DkimOutcome::Fail,
 	};
 	DkimResult { outcome, domain }
-}
-
-/// Extract the `p=` public key from a key record.
-pub(crate) fn parse_key(text: &str) -> Option<Vec<u8>> {
-	use base64::Engine;
-	for tag in text.split(';') {
-		let tag = tag.trim();
-		if let Some(value) = tag.strip_prefix("p=") {
-			let compact: String = value.chars().filter(|c| !c.is_whitespace()).collect();
-			return base64::engine::general_purpose::STANDARD
-				.decode(compact)
-				.ok();
-		}
-	}
-	None
 }
 
 /// Names this parser reads out of a raw message, with the `trim_end` it

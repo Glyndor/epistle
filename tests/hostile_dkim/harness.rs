@@ -141,3 +141,9 @@ pub fn case(name: &str, outcome: DkimOutcome, queries: usize) {
 		queries,
 	);
 }
+
+pub fn replace(raw: &[u8], old: &str, new: &str) -> Vec<u8> {
+	let raw = std::str::from_utf8(raw).expect("ASCII message");
+	assert!(raw.contains(old), "mutation did not match");
+	raw.replacen(old, new, 1).into_bytes()
+}
