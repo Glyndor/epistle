@@ -54,38 +54,50 @@ fn simple_body(body: &[u8]) -> Vec<u8> {
 	out
 }
 
-/// Relaxed body: per line, strip trailing WSP and collapse inner WSP runs
-/// to one space; then strip trailing empty lines and ensure one final CRLF.
+/// Relaxed body (RFC 6376 section 3.4.4): reduce every run of WSP within a
+/// line to one space and drop the WSP at the end of the line, then ignore
+/// the empty lines at the end of the body.
 fn relaxed_body(body: &[u8]) -> Vec<u8> {
 	let mut out = Vec::with_capacity(body.len());
+	// The empty lines at the end of the body are ignored, so they are only
+	// written once a line with content follows them.
+	let mut empty_lines = 0usize;
 	for line in body.split_inclusive(|&b| b == b'\n') {
 		let line = line
 			.strip_suffix(b"\r\n")
 			.or_else(|| line.strip_suffix(b"\n"))
 			.unwrap_or(line);
-		let mut canonical = Vec::with_capacity(line.len());
-		let mut in_space = false;
-		for &byte in line {
-			if byte == b' ' || byte == b'\t' {
-				in_space = true;
-			} else {
-				if in_space && !canonical.is_empty() {
-					canonical.push(b' ');
-				}
-				in_space = false;
-				canonical.push(byte);
-			}
+		let canonical = collapse_wsp(line);
+		if canonical.is_empty() {
+			empty_lines += 1;
+			continue;
 		}
+		for _ in 0..empty_lines {
+			out.extend_from_slice(b"\r\n");
+		}
+		empty_lines = 0;
 		out.extend_from_slice(&canonical);
 		out.extend_from_slice(b"\r\n");
 	}
-	while out.ends_with(b"\r\n\r\n") {
-		out.truncate(out.len() - 2);
-	}
-	if out.is_empty() {
-		// An empty body canonicalizes to nothing in relaxed mode... except
-		// the hash input is then empty CRLF per errata; keep RFC text: empty.
-		return Vec::new();
+	out
+}
+
+/// Reduce every run of WSP within a line to one space and drop the WSP at
+/// the end of the line. The WSP at the start of the line becomes that one
+/// space too: relaxed keeps the indentation, it does not delete it.
+fn collapse_wsp(line: &[u8]) -> Vec<u8> {
+	let mut out = Vec::with_capacity(line.len());
+	let mut in_space = false;
+	for &byte in line {
+		if byte == b' ' || byte == b'\t' {
+			in_space = true;
+			continue;
+		}
+		if in_space {
+			out.push(b' ');
+			in_space = false;
+		}
+		out.push(byte);
 	}
 	out
 }
