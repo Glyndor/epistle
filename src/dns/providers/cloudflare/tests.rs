@@ -5,6 +5,7 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
+use axum::extract::Query;
 use axum::extract::State;
 use axum::routing::get;
 
@@ -28,8 +29,18 @@ struct MockState {
 
 type Shared = Arc<Mutex<MockState>>;
 
-async fn list_zones(State(state): State<Shared>) -> axum::Json<serde_json::Value> {
+async fn list_zones(
+	State(state): State<Shared>,
+	Query(query): Query<std::collections::HashMap<String, String>>,
+) -> axum::Json<serde_json::Value> {
 	state.lock().unwrap().calls.push("GET /zones".into());
+	// A zone lookup names the zone it asks for. The mock holds one zone,
+	// the one the credential covers, so a name below it is not a zone.
+	if let Some(name) = query.get("name")
+		&& name != "example.org"
+	{
+		return axum::Json(serde_json::json!({ "result": [] }));
+	}
 	axum::Json(serde_json::json!({ "result": [{ "id": "zone123" }] }))
 }
 
@@ -536,3 +547,6 @@ mod txt_forms;
 
 #[path = "tests_contract.rs"]
 mod contract;
+
+#[path = "tests_zone.rs"]
+mod zone;

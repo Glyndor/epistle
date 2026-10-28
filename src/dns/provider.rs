@@ -320,6 +320,9 @@ pub fn same_txt_purpose(a: &str, b: &str) -> bool {
 type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
 type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
+/// The answer of a provider's zone lookup: whether it holds the zone.
+pub type ZoneOp<'a> = Pin<Box<dyn Future<Output = Result<bool, ProviderError>> + Send + 'a>>;
+
 /// A DNS provider that can publish and remove records in a zone. Object-safe
 /// and test-injectable (mirrors the [`crate::spf::DnsLookup`] pattern).
 pub trait DnsProvider: Send + Sync {
@@ -370,6 +373,22 @@ pub trait DnsProvider: Send + Sync {
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_>;
 	/// List the records epistle manages in `zone`.
 	fn list(&self, zone: &str) -> ListOp<'_>;
+	/// Whether `zone` is a zone this provider holds.
+	///
+	/// A record name is not a zone: `mail.example.org` is a name inside the
+	/// `example.org` zone, and a provider that names its zones looks one
+	/// up by its exact name — handed the name, it answers "zone not found"
+	/// and the write never happens. A caller that holds a name and not a
+	/// zone asks the provider which zone holds the name, one candidate at
+	/// a time (see [`crate::dns::zone::resolve`]).
+	///
+	/// The default answers by listing the zone: a provider that can list a
+	/// zone holds it. A provider that does not name zones at all lists
+	/// every name, and the caller then keeps the name as the zone, the way
+	/// it wrote before.
+	fn has_zone<'a>(&'a self, zone: &'a str) -> ZoneOp<'a> {
+		Box::pin(async move { Ok(self.list(zone).await.is_ok()) })
+	}
 }
 
 /// Manual mode: no API access. Writes fail with [`ProviderError::Unsupported`]

@@ -15,8 +15,8 @@ mod check;
 mod list;
 mod tags;
 use crate::dns::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
-	same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, ZoneOp, parse_srv,
+	record_description, same_txt_purpose,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_encode};
@@ -333,15 +333,19 @@ impl CloudflareProvider {
 		Ok(self.base.with_segments(segments)?)
 	}
 
-	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
+	/// The id of the zone named `zone`, or `None` when the account holds
+	/// no zone with that name. The lookup is an exact match, so a name
+	/// below a zone (`mail.example.org`) is not a zone of its own.
+	async fn find_zone_id(&self, zone: &str) -> Result<Option<String>, ProviderError> {
 		let url = self.base.with_segments(["zones"])?.with_query("name", zone);
 		let zones: ListZones = self.get_json(url).await?;
-		zones
-			.result
-			.into_iter()
-			.next()
-			.map(|z| z.id)
-			.ok_or(ProviderError::Remote(format!("zone not found: {zone}")))
+		Ok(zones.result.into_iter().next().map(|z| z.id))
+	}
+
+	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
+		self.find_zone_id(zone)
+			.await?
+			.ok_or_else(|| ProviderError::Remote(format!("zone not found: {zone}")))
 	}
 
 	async fn find_record(
@@ -560,6 +564,14 @@ impl DnsProvider for CloudflareProvider {
 		let zone_name = zone.to_string();
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			self.list_inner(&zone).await
+		}))
+	}
+	fn has_zone(&self, zone: &str) -> ZoneOp<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			// The zone lookup answers the question on its own: it reads
+			// one zone by name, not the records of a zone.
+			Ok(self.find_zone_id(&zone).await?.is_some())
 		}))
 	}
 }

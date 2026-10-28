@@ -174,8 +174,15 @@ impl ChallengeResponder for Dns01 {
 	) -> Fut<'a, Result<(), AcmeError>> {
 		Box::pin(async move {
 			let record = Self::record(domain, token, key);
+			// The zone that holds the challenge name: a provider that
+			// names its zones looks a zone up by its exact name, and the
+			// ACME identifier is a name below the zone the credential
+			// covers.
+			let zone = crate::dns::zone::resolve(self.provider.as_ref(), domain)
+				.await
+				.map_err(|error| AcmeError::Protocol(format!("dns-01: publish: {error}")))?;
 			self.provider
-				.upsert(domain, record.clone())
+				.upsert(&zone, record.clone())
 				.await
 				.map_err(|error| AcmeError::Protocol(format!("dns-01: publish: {error}")))?;
 			self.wait_visible(&record).await
@@ -185,7 +192,13 @@ impl ChallengeResponder for Dns01 {
 	fn withdraw<'a>(&'a self, domain: &'a str, token: &'a str, key: &'a AccountKey) -> Fut<'a, ()> {
 		Box::pin(async move {
 			let record = Self::record(domain, token, key);
-			if let Err(error) = self.provider.delete(domain, record).await {
+			// The zone the challenge was published in. A lookup that fails
+			// leaves the record where it is: the withdrawal is best effort
+			// and the record expires on its own.
+			let zone = crate::dns::zone::resolve(self.provider.as_ref(), domain)
+				.await
+				.unwrap_or_else(|_| domain.to_string());
+			if let Err(error) = self.provider.delete(&zone, record).await {
 				tracing::warn!(%error, %domain, "dns-01: challenge record not removed");
 			}
 		})
