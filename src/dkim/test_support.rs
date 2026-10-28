@@ -81,9 +81,10 @@ pub(crate) fn rsa_verifies(line: &str, record: &str, raw: &[u8]) -> bool {
 
 	let value = line.strip_prefix("DKIM-Signature:").expect("RSA header");
 	let signature = super::signature::parse(value).expect("parse RSA signature");
-	let Some(spki) = super::parse_key(record) else {
+	let Some(parsed) = super::key_record::parse(record) else {
 		return false;
 	};
+	let spki = parsed.public_key;
 	let Ok((_, public)) = SubjectPublicKeyInfo::from_der(&spki) else {
 		return false;
 	};

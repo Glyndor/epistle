@@ -55,6 +55,8 @@ pub struct Signature {
 	pub body_length: Option<usize>,
 	/// `x=` expiration (UNIX seconds), if present.
 	pub expiration: Option<u64>,
+	/// `i=` identity (the AUID the signer speaks for), if present.
+	pub identity: Option<String>,
 }
 
 /// Why a signature header could not be used: always a permerror.
@@ -74,6 +76,7 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 	let mut body_canon = Canon::Simple;
 	let mut body_length = None;
 	let mut expiration = None;
+	let mut identity = None;
 
 	for tag in value.split(';') {
 		let tag = tag.trim();
@@ -129,6 +132,18 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 						.map_err(|_| SignatureError("invalid x= tag".into()))?,
 				);
 			}
+			"i" => {
+				// The AUID names the user the signer speaks for; its domain
+				// has to be the signing domain or a subdomain of it
+				// (RFC 6376 section 3.5).
+				let Some((_local, identity_domain)) = compact.rsplit_once('@') else {
+					return Err(SignatureError("invalid i= tag".into()));
+				};
+				if identity_domain.is_empty() {
+					return Err(SignatureError("invalid i= tag".into()));
+				}
+				identity = Some(compact);
+			}
 			// Unknown tags must be ignored (section 3.2).
 			_ => {}
 		}
@@ -153,6 +168,7 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 		body_canon,
 		body_length,
 		expiration,
+		identity,
 	})
 }
 

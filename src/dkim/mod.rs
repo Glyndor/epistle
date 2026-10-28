@@ -1,6 +1,7 @@
 //! DKIM signing and verification (RFC 6376).
 
 pub(crate) mod canon;
+pub(crate) mod key_record;
 mod per_domain;
 pub mod rotate;
 mod rsa_keygen;
@@ -27,8 +28,6 @@ pub(crate) use signature::{Algorithm, Canon};
 #[cfg(test)]
 pub(crate) use spki::spki_for_rsa;
 pub(crate) use spki::{rsa_modulus_bits, rsa_public_key_from_spki};
-#[cfg(test)]
-pub(crate) use verify::parse_key;
 
 pub(crate) use verify::verify_tlsrpt;
 
