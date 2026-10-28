@@ -1,0 +1,183 @@
+//! OAuth2/OIDC bearer-token verification configuration (OAUTHBEARER/XOAUTH2).
+
+use serde::Deserialize;
+
+/// OAuth verifier material. Tokens are accepted when signed for `audience` by
+/// `issuer` using `algorithm`, with the signing key taken from exactly one
+/// source: a static base64 `public_key`, or keys fetched at startup from the
+/// OIDC `discovery_url` (`/.well-known/openid-configuration`).
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oauth {
+	/// Expected `iss` claim.
+	pub issuer: String,
+	/// Expected `aud` claim.
+	pub audience: String,
+	/// Signature algorithm: `ES256` or `RS256`. With OIDC discovery this is the
+	/// fallback for a JWKS key that omits its own `alg`.
+	pub algorithm: String,
+	/// Base64 public key (PKCS#1 DER for RSA, raw uncompressed point for EC).
+	/// Mutually exclusive with `discovery_url`.
+	#[serde(default)]
+	pub public_key: Option<String>,
+	/// OIDC discovery document URL (`https://…/.well-known/openid-configuration`).
+	/// Its `jwks_uri` is fetched to obtain the signing keys. Mutually exclusive
+	/// with `public_key`.
+	#[serde(default)]
+	pub discovery_url: Option<String>,
+	/// Base64 PKCS#8 DER ES256 **private** key. When set, epistle acts as its own
+	/// OAuth 2.0 authorization server (device-flow + PKCS#7636 authorization-code
+	/// endpoints under `/oauth/*`); when absent, those endpoints are not mounted
+	/// and no tokens are issued (fail closed). The corresponding public point MUST
+	/// be the one in `public_key`, so issued tokens verify with this same
+	/// verifier. Generate a matching pair with `epistle oauth-keygen`.
+	#[serde(default)]
+	pub signing_key: Option<String>,
+	/// A file holding the same base64 key as `signing_key`, read when the
+	/// server starts. Mutually exclusive with `signing_key`. `epistle init`
+	/// keeps one at `<data_dir>/../secrets/oauth_signing.key`, which the
+	/// stack mounts read-only into `mail` at that same path.
+	#[serde(default)]
+	pub signing_key_file: Option<std::path::PathBuf>,
+	/// Permit fetching the `jwks_uri` published by the discovery document
+	/// even when it resolves to a loopback, private (RFC 1918 / RFC 4193),
+	/// link-local or unspecified address. Off by default: a hostile or
+	/// compromised IdP could pivot the discovery document to an internal
+	/// service (cloud metadata at `169.254.169.254`, a LAN neighbour,
+	/// ...), and an explicit opt-in is the gate. Set this only when the
+	/// IdP really lives on a private network and the trust relationship
+	/// justifies it (Keycloak on the LAN that publishes its own JWKS, for
+	/// example).
+	#[serde(default)]
+	pub allow_private_jwks: bool,
+	/// Accept an `email` claim that carries no `email_verified` claim at all,
+	/// for an identity provider that never emits it. Off by default: the
+	/// address of a token is an identity only when the provider says it
+	/// verified it, and a claim that says `false` is refused either way. Set
+	/// this only when the provider is known to confirm every address it
+	/// issues tokens for.
+	#[serde(default)]
+	pub allow_unverified_email: bool,
+	/// Declare that the identity provider enforces a second factor of its own
+	/// before it issues a token. Off by default: a bearer token cannot carry
+	/// a TOTP code, so an account with a TOTP secret is refused a token
+	/// sign-in, as it is refused SCRAM. When set, the token stands for the
+	/// second factor too.
+	#[serde(default)]
+	pub idp_enforces_second_factor: bool,
+}
+
+/// Why an `[oauth]` section is invalid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OauthConfigError {
+	/// Neither `public_key` nor `discovery_url` was set.
+	NoKeySource,
+	/// Both `public_key` and `discovery_url` were set.
+	AmbiguousKeySource,
+	/// `discovery_url` is not an `https://` URL.
+	InsecureDiscoveryUrl,
+	/// `signing_key` is set without a static `public_key` to pair it with: the
+	/// authorization server signs ES256 tokens that must verify against the
+	/// configured static public key, so JWKS discovery alone cannot back it.
+	SigningKeyWithoutPublicKey,
+	/// Both `signing_key` and `signing_key_file` were set.
+	AmbiguousSigningKey,
+}
+
+impl std::fmt::Display for OauthConfigError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let message = match self {
+			OauthConfigError::NoKeySource => {
+				"exactly one of `public_key` or `discovery_url` must be set (got neither)"
+			}
+			OauthConfigError::AmbiguousKeySource => {
+				"exactly one of `public_key` or `discovery_url` must be set (got both)"
+			}
+			OauthConfigError::InsecureDiscoveryUrl => "`discovery_url` must be an https:// URL",
+			OauthConfigError::SigningKeyWithoutPublicKey => {
+				"`signing_key` requires a static `public_key` (the matching public point)"
+			}
+			OauthConfigError::AmbiguousSigningKey => {
+				"set `signing_key` or `signing_key_file`, not both"
+			}
+		};
+		f.write_str(message)
+	}
+}
+
+impl std::error::Error for OauthConfigError {}
+
+impl Oauth {
+	/// Validate that exactly one key source is configured and that, when OIDC
+	/// discovery is used, the endpoint is HTTPS. Fails closed.
+	pub fn validate(&self) -> Result<(), OauthConfigError> {
+		match (&self.public_key, &self.discovery_url) {
+			(Some(_), Some(_)) => return Err(OauthConfigError::AmbiguousKeySource),
+			(None, None) => return Err(OauthConfigError::NoKeySource),
+			_ => {}
+		}
+		if let Some(url) = &self.discovery_url
+			&& !url.starts_with("https://")
+		{
+			return Err(OauthConfigError::InsecureDiscoveryUrl);
+		}
+		// The authorization server (signing_key) issues ES256 tokens that must
+		// verify against the static public_key; JWKS discovery alone cannot pair
+		// with it. Fail closed rather than issue tokens nothing can verify.
+		if self.signing_key.is_some() && self.signing_key_file.is_some() {
+			return Err(OauthConfigError::AmbiguousSigningKey);
+		}
+		if (self.signing_key.is_some() || self.signing_key_file.is_some())
+			&& self.public_key.is_none()
+		{
+			return Err(OauthConfigError::SigningKeyWithoutPublicKey);
+		}
+		Ok(())
+	}
+
+	/// The base64 signing key: `signing_key`, or the trimmed contents of
+	/// `signing_key_file`. `Ok(None)` when neither is set, so the server
+	/// issues no tokens. A file that cannot be read is an error, so a
+	/// missing mount stops the server instead of quietly turning the
+	/// authorization server off.
+	pub fn signing_key_material(&self) -> std::io::Result<Option<String>> {
+		if let Some(key) = &self.signing_key {
+			return Ok(Some(key.clone()));
+		}
+		let Some(path) = &self.signing_key_file else {
+			return Ok(None);
+		};
+		let text = std::fs::read_to_string(path).map_err(|error| {
+			std::io::Error::new(
+				error.kind(),
+				format!(
+					"cannot read [oauth] signing_key_file {}: {error}",
+					path.display()
+				),
+			)
+		})?;
+		Ok(Some(text.trim().to_string()))
+	}
+}
+
+impl std::fmt::Debug for Oauth {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Oauth")
+			.field("issuer", &self.issuer)
+			.field("audience", &self.audience)
+			.field("algorithm", &self.algorithm)
+			.field("public_key", &self.public_key)
+			.field("discovery_url", &self.discovery_url)
+			.field("signing_key", &self.signing_key.as_ref().map(|_| "***"))
+			.field("signing_key_file", &self.signing_key_file)
+			.field("allow_unverified_email", &self.allow_unverified_email)
+			.field(
+				"idp_enforces_second_factor",
+				&self.idp_enforces_second_factor,
+			)
+			.finish()
+	}
+}
+
+#[cfg(test)]
+mod tests;

@@ -817,19 +817,9 @@ fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
 }
 
 #[cfg(test)]
-#[path = "redaction_tests.rs"]
-mod redaction_tests;
-
-#[cfg(test)]
-#[path = "hold_outbound_tests.rs"]
-mod hold_outbound_tests;
-
-#[cfg(test)]
-#[path = "config_tests.rs"]
 mod tests;
 
 mod legacy_values;
 mod parse;
 
-#[path = "normalize.rs"]
 mod normalize;

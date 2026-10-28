@@ -1,6 +1,6 @@
 //! Test-only tracing event capture.
 //!
-//! `validate_tests.rs` and `serve_tasks_tests.rs` both need to assert that a
+//! `src/config/validate/tests/base.rs` and `serve_tasks_tests.rs` both need to assert that a
 //! piece of code emits (or does not emit) a specific warning. The same
 //! `tracing` machinery is the right tool for both: install a custom `Layer`
 //! on the thread-local subscriber, run the code, and read what was recorded.

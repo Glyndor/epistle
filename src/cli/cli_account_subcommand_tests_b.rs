@@ -25,7 +25,7 @@ fn accounts_toml_without_quota_bytes_loads_through_cli() {
 	// must keep loading: the field's #[serde(default)] keeps the
 	// dynamic quota at None, and `account show` reports
 	// "quota_bytes: server default". This is the CLI side of the
-	// mutator test in account_mutators_tests.rs.
+	// mutator test in src/directory_store/tests/account_mutators.rs.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let text = r#"
 [[accounts]]

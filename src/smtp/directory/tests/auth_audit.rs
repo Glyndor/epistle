@@ -11,7 +11,7 @@
 //! with `tracing::subscriber::with_default`, so the subscriber guard stays
 //! alive for the whole closure. The failure message of a no-leak assert
 //! names the violated property and the fields involved, never the captured
-//! blob — printing it is the leak (`src/config/redaction_tests.rs`).
+//! blob — printing it is the leak (`src/config/tests/redaction.rs`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -277,7 +277,7 @@ fn unknown_login_emits_login_failed_event() {
 }
 
 /// The audit channel must never carry the plaintext password nor the TOTP
-/// code. The lesson from `src/config/redaction_tests.rs` applies: a test
+/// code. The lesson from `src/config/tests/redaction.rs` applies: a test
 /// that printed the captured blob on failure would leak on the very run
 /// the assertion was meant to guard, so the failure message names the
 /// property and the input fields but never the blob.

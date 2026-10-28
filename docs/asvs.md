@@ -51,7 +51,7 @@ function name is the stable reference.
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
 | 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
-| 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
+| 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
 | 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `constant_time_eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
@@ -80,7 +80,7 @@ function name is the stable reference.
 |---|---|---|
 | 4.1.1 Enforced at a trusted server layer | Met | Single `require_bearer_token` layer over the whole authenticated router; `/healthz` is the only unauthenticated route and returns a static body (`src/api/mod.rs`, `src/api/state/mod.rs`). |
 | 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); a scoped per-account API key would be stricter. Noted, not a cross-tenant leak. |
-| 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys/mod.rs::admits`, `src/directory_store/app_passwords.rs::admits`). |
+| 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys/mod.rs::admits`, `src/directory_store/app_passwords/mod.rs::admits`). |
 | 4.2.1 Object-level authZ / no IDOR | Met | JMAP blob ids parsed as UUIDs before any FS use; every data path uses the authenticated `self.account()` (`src/api/jmap/`); IMAP mailbox names allow-listed level by level and stored as one directory each (`src/util/mailbox_path.rs::valid_folder`, `disk_name`). |
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
@@ -105,7 +105,7 @@ function name is the stable reference.
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus.rs`, `src/antispam/reputation.rs`). |
 | 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input; no LDAP. |
 | 5.3.8 Deserialization is safe | Met | TOML/JSON via serde into typed structs; no arbitrary-type deserialization. |
-| 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy/mod.rs`); autodiscovery only *serves* config. |
+| 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate/mod.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy/mod.rs`); autodiscovery only *serves* config. |
 
 ---
 
@@ -215,7 +215,7 @@ function name is the stable reference.
 | 14.2.1 Dependencies current and audited | Met | Pinned, Dependabot-tracked, `cargo audit` in CI (org standard). |
 | 14.3.2 No debug/verbose errors in production | Met | Generic client errors (V7); no stack traces. |
 | 14.4.1 Safe HTTP response headers | Partial / N/A | The server emits no `Server` header and no HTML; browser security headers (CSP/HSTS/X-Frame-Options) are the operator-proxy/panel's responsibility, not this headless API's. |
-| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]` ONLY when bound externally. `submissions`, `imaps`, `imap`, `manage-sieve` are rejected without `[tls]`; `pop3s` (implicit TLS by protocol) and `autoconfigs` (HTTPS) are rejected without `[tls]`; `submission`, `web-dav`, `api`, `autoconfig`, `metrics` are accepted without `[tls]` when loopback-bound and emit a warning otherwise. The config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
+| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate/mod.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]` ONLY when bound externally. `submissions`, `imaps`, `imap`, `manage-sieve` are rejected without `[tls]`; `pop3s` (implicit TLS by protocol) and `autoconfigs` (HTTPS) are rejected without `[tls]`; `submission`, `web-dav`, `api`, `autoconfig`, `metrics` are accepted without `[tls]` when loopback-bound and emit a warning otherwise. The config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
 
 ---
 

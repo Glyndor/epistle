@@ -166,7 +166,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"{} to {} printable ASCII",
 	),
 	(
-		"src/directory_store/display_name.rs",
+		"src/directory_store/display_name/mod.rs",
 		&["MAX_CHARS"],
 		"At most {} characters",
 	),
