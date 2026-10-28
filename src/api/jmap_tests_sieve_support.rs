@@ -76,7 +76,7 @@ pub(super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Router, Strin
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash(
+		password_hash: Some(crate::smtp::auth::tests::base::hash(
 			crate::test_fixtures::password(),
 		)),
 		catch_all: Vec::new(),
@@ -99,7 +99,7 @@ pub(super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Router, Strin
 		.expect("open store"),
 	);
 	let state = crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),

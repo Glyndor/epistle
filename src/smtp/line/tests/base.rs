@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn decode_all(input: &[u8]) -> Result<Vec<Vec<u8>>, LineError> {

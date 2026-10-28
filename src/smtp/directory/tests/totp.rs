@@ -15,7 +15,7 @@
 //! that proves the boundary check actually runs.
 
 use super::*;
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::test_fixtures as fixtures;
 
 fn directory_with_totp(secret: &[u8]) -> Directory {

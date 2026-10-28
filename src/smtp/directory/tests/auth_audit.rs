@@ -24,7 +24,7 @@ use tracing_subscriber::{Layer, Registry};
 use super::*;
 use crate::antispam::bans::tests::FakeBanStore;
 use crate::antispam::bans::{BanInfo, BanPolicy};
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 
 #[derive(Clone, Debug)]
 struct CapturedEvent {
@@ -114,7 +114,10 @@ fn directory_with_alice(secret: &str) -> Directory {
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
 	)
-	.with_password_hashes([("alice".to_string(), crate::smtp::auth::tests::hash(secret))])
+	.with_password_hashes([(
+		"alice".to_string(),
+		crate::smtp::auth::tests::base::hash(secret),
+	)])
 }
 
 /// A successful password authentication must emit exactly one
@@ -295,7 +298,7 @@ fn captured_log_never_carries_password_or_totp_code() {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)])
 	.with_totp([("alice".to_string(), totp_b32.clone())]);
 

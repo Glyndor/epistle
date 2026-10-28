@@ -9,7 +9,7 @@
 //! per-file line budget.
 
 use crate::directory_store::{AccountStore, AppPassword, AppPasswordStore};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 /// A data dir with dynamic accounts `alice` and `bob`, and the server's
 /// store opened over it before anything else writes.

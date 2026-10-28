@@ -34,8 +34,8 @@ fn setup() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 		.add(DynamicAccount {
 			name: "bob".to_string(),
 			addresses: vec!["bob@example.org".to_string()],
-			password_hash: crate::smtp::auth::tests::hash(
-				crate::smtp::auth::tests::fixture_password(),
+			password_hash: crate::smtp::auth::tests::base::hash(
+				crate::smtp::auth::tests::base::fixture_password(),
 			),
 			forward: vec!["out@example.com".to_string()],
 			catch_all: vec!["example.org".to_string()],
@@ -159,7 +159,7 @@ fn app_password_list_json() {
 			"bob",
 			AppPassword {
 				label: "phone".to_string(),
-				hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
+				hash: crate::smtp::auth::tests::base::hash(crate::test_fixtures::password()),
 				expires_at: Some(99),
 				ip_cidr: None,
 				save_sent: None,

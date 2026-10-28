@@ -277,7 +277,8 @@ pub(super) fn auth_plain(authcid: &str, password: &str) -> String {
 /// three accounts in example.org; alice signs in with the fixture
 /// password.
 pub(super) fn ratelimit_config(data_dir: &std::path::Path, per_min: u32) -> Config {
-	let hash = crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password());
+	let hash =
+		crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password());
 	let toml_text = format!(
 		"hostname = \"mail.example.org\"\n\
 		 data_dir = \"{}\"\n\
@@ -329,7 +330,7 @@ async fn per_account_limit_set_in_config_refuses_a_second_submission() {
 	// be spotted here too.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = ratelimit_config(dir.path(), 1);
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(&config, crate::tls::ReloadableAcceptor::new(acceptor), None);
 	let (addr, task) = spawn_smtp_listener(server).await;
@@ -363,7 +364,7 @@ async fn per_domain_limit_set_in_config_refuses_a_second_submission() {
 	// server constructs, the second submission always passes.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = ratelimit_config_with_domain(dir.path(), 1);
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(&config, crate::tls::ReloadableAcceptor::new(acceptor), None);
 	let (addr, task) = spawn_smtp_listener(server).await;
@@ -398,7 +399,7 @@ async fn no_limit_means_no_deferral() {
 	let mut config = ratelimit_config(dir.path(), 1);
 	config.submission_rate_limit_per_min = None;
 	config.domain_submission_limits.clear();
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(&config, crate::tls::ReloadableAcceptor::new(acceptor), None);
 	let (addr, task) = spawn_smtp_listener(server).await;
@@ -429,7 +430,7 @@ async fn per_tenant_aggregate_limit_refuses_a_second_submission() {
 	let mut config = ratelimit_config(dir.path(), 1);
 	config.submission_rate_limit_per_min = None;
 	config.domain_submission_limits.clear();
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let tenant_limits = Arc::new(TenantLimits::from_config(&[crate::config::Tenant {
 		name: Some("acme".to_string()),
 		domains: vec!["example.org".to_string()],

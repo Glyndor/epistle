@@ -18,7 +18,7 @@ on:
     paths:
       - "src/imap/**"
       - "src/storage/**"
-      - "src/smtp/line.rs"
+      - "src/smtp/line/mod.rs"
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"

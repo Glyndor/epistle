@@ -216,7 +216,7 @@ async fn serve_applies_max_message_size_to_the_api() {
 	config.api = Some(
 		toml::from_str(&format!(
 			"token_hash = \"{}\"",
-			crate::smtp::auth::tests::hash(crate::test_fixtures::api_token())
+			crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token())
 		))
 		.expect("api config"),
 	);

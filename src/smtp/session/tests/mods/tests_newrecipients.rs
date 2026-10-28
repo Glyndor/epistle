@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::tests_auth::*;
 use super::*;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 
 fn alice_session_with_correspondents(
 	store: Arc<crate::storage::CorrespondentStore>,

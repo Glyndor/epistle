@@ -69,7 +69,7 @@ pub(super) async fn submit_to(server: Server, data: &str) -> String {
 		.await
 		.expect("user");
 	assert!(reply(&mut tls).await.starts_with("334 "));
-	let password = crate::smtp::auth::tests::fixture_password().to_string();
+	let password = crate::smtp::auth::tests::base::fixture_password().to_string();
 	tls.write_all(format!("{}\r\n", B64.encode(&password)).as_bytes())
 		.await
 		.expect("pass");

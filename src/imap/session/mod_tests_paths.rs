@@ -94,7 +94,7 @@ fn hostile_account_login(data: &std::path::Path, account: &str) -> String {
 	)
 	.with_password_hashes(HashMap::from([(
 		account.to_string(),
-		crate::smtp::auth::tests::hash(&password),
+		crate::smtp::auth::tests::base::hash(&password),
 	)]));
 	let mut session = Session::new(
 		"mail.example.org",

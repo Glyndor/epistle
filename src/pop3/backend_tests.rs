@@ -10,7 +10,7 @@ fn backend(dir: &std::path::Path) -> MailboxBackend {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixtures::password()),
+			crate::smtp::auth::tests::base::hash(fixtures::password()),
 		)])),
 	);
 	MailboxBackend::new(directory, dir.to_path_buf())

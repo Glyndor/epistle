@@ -28,7 +28,7 @@ pub(super) fn scram_directory() -> Arc<Directory> {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixtures::password()),
+			crate::smtp::auth::tests::base::hash(fixtures::password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	)

@@ -31,7 +31,7 @@ fn second_app_secret() -> &'static str {
 fn app(label: &str, secret: &str) -> AppPassword {
 	AppPassword {
 		label: label.to_string(),
-		hash: crate::smtp::auth::tests::hash(secret),
+		hash: crate::smtp::auth::tests::base::hash(secret),
 		expires_at: None,
 		ip_cidr: None,
 		save_sent: None,
@@ -41,7 +41,7 @@ fn app(label: &str, secret: &str) -> AppPassword {
 /// Two accounts alike in everything but the protocol allowlist, each holding
 /// the same two app passwords that open.
 fn directory() -> Directory {
-	let hash = crate::smtp::auth::tests::hash(fixtures::password());
+	let hash = crate::smtp::auth::tests::base::hash(fixtures::password());
 	Directory::new(
 		["example.org".to_string()],
 		[

@@ -43,8 +43,8 @@ fn seed_bob(data_dir: &std::path::Path) {
 		.add(DynamicAccount {
 			name: "bob".to_string(),
 			addresses: vec!["bob@example.org".to_string()],
-			password_hash: crate::smtp::auth::tests::hash(
-				crate::smtp::auth::tests::fixture_password(),
+			password_hash: crate::smtp::auth::tests::base::hash(
+				crate::smtp::auth::tests::base::fixture_password(),
 			),
 			..DynamicAccount::default()
 		})

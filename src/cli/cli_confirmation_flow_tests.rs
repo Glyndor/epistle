@@ -15,7 +15,7 @@ use crate::cli::{accounts, api_keys, app_passwords, archive, queue};
 use crate::config::Config;
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{AccountStore, AppPasswordStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
 

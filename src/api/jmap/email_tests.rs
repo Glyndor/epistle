@@ -10,7 +10,7 @@ use super::*;
 use crate::antispam::trainer::RecordingTrainer;
 use crate::antispam::training_queue::LessonBudget;
 use crate::imap::mailbox;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 use crate::storage::MessageCrypto;
 
 /// Build an [`ApiState`] whose `training()` returns a queue backed by
@@ -42,7 +42,7 @@ fn state_with_queue(
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
+		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -59,7 +59,7 @@ fn state_with_queue(
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(fixture_password()),
+		&crate::smtp::auth::tests::base::hash(fixture_password()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store,

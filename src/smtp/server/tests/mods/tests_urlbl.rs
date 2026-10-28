@@ -1,6 +1,6 @@
 //! SMTP-level tests for the domain & URL DNSBL screens.
 //!
-//! Lives in a sibling file because `server_tests.rs` is already close to the
+//! Lives in a sibling file because `tests.rs` is already close to the
 //! 450-line ceiling and these tests bring their own scripted DNS stubs.
 
 use std::net::IpAddr;

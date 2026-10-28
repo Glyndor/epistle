@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::FileWatcher;
 use crate::smtp::address::Address;
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 use crate::smtp::directory::Resolution;
 use crate::{
 	config::Account,
@@ -22,7 +22,7 @@ fn static_alice() -> Account {
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
+		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -48,7 +48,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		password_hash: "$argon2id$stub".to_string(),
 		..DynamicAccount::default()
 	};
-	account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
+	account.password_hash = crate::smtp::auth::tests::base::hash(fixture_password());
 	account
 }
 
@@ -242,7 +242,7 @@ fn poll_picks_up_a_new_app_password() {
 
 	let wrong = wrong_password();
 	let secret = uuid::Uuid::now_v7().simple().to_string();
-	let hash = crate::smtp::auth::tests::hash(&secret);
+	let hash = crate::smtp::auth::tests::base::hash(&secret);
 	// `wrong_password()` keeps the primary credential wrong, the
 	// app-password path runs, this assertion checks the swap step.
 	let _ = wrong;

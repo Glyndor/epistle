@@ -31,7 +31,7 @@ pub(super) async fn archive_test_state() -> (tempfile::TempDir, ApiState) {
 		.expect("open store"),
 	);
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),

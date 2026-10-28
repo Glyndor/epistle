@@ -2,7 +2,7 @@
 
 use super::test_support::variant_name;
 use super::*;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 
 fn directory() -> Directory {
 	Directory::new(
@@ -293,7 +293,7 @@ fn authenticate_enforces_totp_second_factor() {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)])
 	.with_totp([("alice".to_string(), crate::totp::encode_base32(secret))]);
 
@@ -333,7 +333,7 @@ fn authenticate_enforces_totp_second_factor() {
 	)
 	.with_password_hashes([(
 		"bob".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)]);
 	assert_eq!(
 		plain

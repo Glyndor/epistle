@@ -1,10 +1,10 @@
 //! Submission rate limiting through a real SMTP session. Split out of
-//! `mod_tests_auth.rs` only to stay under the per-file line limit; the
+//! `tests_auth.rs` only to stay under the per-file line limit; the
 //! harness lives there.
 
 use super::tests_auth::*;
 use super::*;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 
 #[test]
 fn submission_rate_limit_uses_per_domain_override() {
@@ -19,7 +19,7 @@ fn submission_rate_limit_uses_per_domain_override() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)])
 		.with_domain_submission_limits([("example.org".to_string(), 3)]),
 	);
@@ -103,11 +103,11 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		.with_password_hashes([
 			(
 				"alice".to_string(),
-				crate::smtp::auth::tests::hash(fixture_password()),
+				crate::smtp::auth::tests::base::hash(fixture_password()),
 			),
 			(
 				"bob".to_string(),
-				crate::smtp::auth::tests::hash(fixture_password()),
+				crate::smtp::auth::tests::base::hash(fixture_password()),
 			),
 		])
 		.with_domain_submission_limits([

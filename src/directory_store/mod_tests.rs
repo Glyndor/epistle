@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::smtp::address::Address;
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 use crate::smtp::directory::Resolution;
 use crate::test_fixtures as fixtures;
 
@@ -116,7 +116,7 @@ fn password_change_swaps_credentials() {
 	let store = open_store(dir.path());
 	store.add(dynamic("bob", "bob@example.org")).expect("add");
 
-	let real_hash = crate::smtp::auth::tests::hash(fixtures::password());
+	let real_hash = crate::smtp::auth::tests::base::hash(fixtures::password());
 	store
 		.set_password_hash("bob", real_hash, None)
 		.expect("set password");
@@ -219,7 +219,7 @@ fn an_ldap_account_whose_name_escapes_the_data_dir_is_dropped() {
 
 // Integration tests for the alias disabled-overlay wiring through
 // `AccountStore`. The directory-level tests in
-// `src/smtp/directory/mod_alias_tests.rs` cover `Directory`'s behaviour in
+// `src/smtp/directory/tests/alias.rs` cover `Directory`'s behaviour in
 // isolation; this module covers the AccountStore path that rebuilds the
 // directory from the disabled set on every write.
 
@@ -354,7 +354,7 @@ fn static_allowed_protocols_propagates_to_directory() {
 	let static_account = Account {
 		name: "service".to_string(),
 		addresses: vec!["service@example.org".to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
+		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -400,7 +400,7 @@ fn dynamic_allowed_protocols_propagates_to_directory() {
 	// The `dynamic` helper seeds a stub hash so other tests can poke
 	// `set_password_hash`; replace it with a real argon2id hash so the
 	// directory's password check matches the test password.
-	dynamic_account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
+	dynamic_account.password_hash = crate::smtp::auth::tests::base::hash(fixture_password());
 	dynamic_account.allowed_protocols = Some(vec![Protocol::Api]);
 	store.add(dynamic_account).expect("add");
 	let directory = store.handle().current();
@@ -515,7 +515,7 @@ fn reload_app_passwords_from_swaps_directory() {
 	// would short-circuit `authenticate_local` before the app-password
 	// fallback ran. Give the test account a real argon2id hash so the
 	// credential path reaches the `app_passwords` map.
-	static_alice.password_hash = Some(crate::smtp::auth::tests::hash(wrong_password()));
+	static_alice.password_hash = Some(crate::smtp::auth::tests::base::hash(wrong_password()));
 	let store = AccountStore::open(
 		dir.path(),
 		vec!["example.org".to_string()],
@@ -524,7 +524,7 @@ fn reload_app_passwords_from_swaps_directory() {
 	)
 	.expect("open");
 	let secret = uuid::Uuid::now_v7().simple().to_string();
-	let hash = crate::smtp::auth::tests::hash(&secret);
+	let hash = crate::smtp::auth::tests::base::hash(&secret);
 	let text = format!(
 		r#"[accounts.alice]
 passwords = [

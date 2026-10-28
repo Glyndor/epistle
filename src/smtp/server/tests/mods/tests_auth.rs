@@ -15,7 +15,7 @@ pub(super) fn directory_with_password() -> DirectoryHandle {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password()),
+			crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password()),
 		)])),
 	)
 }
@@ -79,7 +79,7 @@ async fn auth_login_over_starttls_authenticates() {
 	// AUTH LOGIN exchanges username then password over the wire.
 	tls.write_all(b"AUTH LOGIN\r\n").await.expect("auth");
 	assert!(reply(&mut tls).await.starts_with("334 "));
-	let password = crate::smtp::auth::tests::fixture_password().to_string();
+	let password = crate::smtp::auth::tests::base::fixture_password().to_string();
 	tls.write_all(format!("{}\r\n", B64.encode("alice")).as_bytes())
 		.await
 		.expect("user");
@@ -141,7 +141,7 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 	// AUTH LOGIN with the minted password.
 	tls.write_all(b"AUTH LOGIN\r\n").await.expect("auth");
 	assert!(reply(&mut tls).await.starts_with("334 "));
-	let password = crate::smtp::auth::tests::fixture_password().to_string();
+	let password = crate::smtp::auth::tests::base::fixture_password().to_string();
 	tls.write_all(format!("{}\r\n", B64.encode("alice")).as_bytes())
 		.await
 		.expect("user");

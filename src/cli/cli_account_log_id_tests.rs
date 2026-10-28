@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::*;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 fn store_with(dir: &Path, names: &[&str]) -> AccountStore {
 	let store = AccountStore::open(

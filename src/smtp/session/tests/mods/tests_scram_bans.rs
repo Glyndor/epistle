@@ -1,5 +1,5 @@
 //! Ban-aware SCRAM tests for the SMTP session. Split from
-//! `mod_tests_scram.rs` to keep both files under the per-file
+//! `tests_scram.rs` to keep both files under the per-file
 //! code-line budget. Pulls the `use super::*;` import the same way
 //! the sibling module does, and brings in the ban store and the
 //! per-test SCRAM credential-lookup counter from the directory
@@ -35,7 +35,7 @@ pub(super) fn scram_directory_with_ban_store(
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixtures::password()),
+		crate::smtp::auth::tests::base::hash(fixtures::password()),
 	)])
 	.with_scram([("alice".to_string(), stored)])
 	.with_ban_store(ban_store);
@@ -90,7 +90,7 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 	);
 }
 
-// Ban lifecycle tests live in `mod_tests_scram_ban_lifecycle.rs`.
+// Ban lifecycle tests live in `tests_scram_ban_lifecycle.rs`.
 // Keep them separate to stay within the per-file code-line budget.
 
 /// A SCRAM success drives the credential lookup, so the per-test
@@ -109,7 +109,7 @@ async fn smtp_scram_lookup_counter_is_per_test() {
 	use crate::antispam::bans::tests::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 
 	let mut session = Session::new("mail.example.org")
@@ -119,7 +119,7 @@ async fn smtp_scram_lookup_counter_is_per_test() {
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.47".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let before = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	// A non-banned, well-formed client-first drives a SCRAM credential
 	// lookup. The per-test counter must move; otherwise the ban test's
 	// "delta is zero when a ban short-circuits" assertion would be a
@@ -130,7 +130,7 @@ async fn smtp_scram_lookup_counter_is_per_test() {
 		),
 		334
 	);
-	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let after = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	assert_eq!(
 		after - before,
 		1,
@@ -291,7 +291,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 
 	let mut session = Session::new("mail.example.org")
@@ -301,7 +301,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let before = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	// A ban refusal at client-first looks like a normal exchange on
 	// the wire: a 334 with a server-first, then a 535 when the proof
 	// fails. The wrong-password shape is the same and the test asserts
@@ -335,7 +335,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	let bad_proof = b64_bytes(&[0u8; 32]);
 	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
-	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let after = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 
 	assert!(
 		ban_store.call_count("is_banned") >= 1,
@@ -505,7 +505,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 
 	let mut session = Session::new("mail.example.org")
@@ -517,7 +517,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 	// check would let the exchange reach the credential lookup.
 	session.set_peer_ip(Some("203.0.113.50".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let before = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	let action = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
 	assert_eq!(
 		reply_code(&action),
@@ -527,7 +527,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 	let bad_proof = b64_bytes(&[0u8; 32]);
 	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
-	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let after = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 
 	assert_eq!(
 		ban_store.call_count("record_failure"),

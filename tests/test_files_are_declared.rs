@@ -31,9 +31,8 @@ fn is_test_file_name(name: &str) -> bool {
 
 /// The unit tests of a module live in its own `tests/` folder, one leaf per
 /// topic, and the name of the leaf says nothing about what it holds. A leaf
-/// may hold helpers of its own, which live in a folder named after it
-/// (`tests/base/client.rs`), so every folder above the file counts, not only
-/// the one right next to it.
+/// may hold helpers of its own, which live in a folder named after it, so
+/// every folder above the file counts, not only the one right next to it.
 fn in_tests_folder(path: &Path) -> bool {
 	path.ancestors()
 		.skip(1)

@@ -100,7 +100,7 @@ pub(super) fn world(dir: &std::path::Path) -> ApiState {
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),

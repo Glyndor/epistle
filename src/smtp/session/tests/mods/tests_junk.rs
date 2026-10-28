@@ -198,7 +198,7 @@ fn a_successful_auth_does_not_reset_the_count() {
 	let mut session = tls_session();
 	send_kept(&mut session, "NOOP", 99);
 	assert_eq!(reply_code(&session.command_line("AUTH PLAIN")), 334);
-	let password = crate::smtp::auth::tests::fixture_password();
+	let password = crate::smtp::auth::tests::base::fixture_password();
 	let action = session.auth_line(&super::tests_auth::plain("alice", password));
 	assert_eq!(reply_code(&action), 235, "the login itself is answered");
 	assert_eq!(session.authenticated(), Some("alice"));

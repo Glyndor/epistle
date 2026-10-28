@@ -10,8 +10,8 @@ use crate::antispam::bans::BanPolicy;
 use crate::antispam::bans::tests::FakeBanStore;
 use crate::config::Protocol;
 use crate::smtp::directory::Directory;
-use crate::smtp::directory::decoy_counters::DecoyCounters;
 use crate::smtp::directory::gate_fixture::*;
+use crate::smtp::directory::tests::decoy_counters::DecoyCounters;
 use crate::test_fixtures as fixtures;
 
 /// A gate whose only place is taken, and what holds it. Dropping the holder

@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::password::{MIN_LENGTH, Policy};
-use crate::smtp::auth::tests::hash;
+use crate::smtp::auth::tests::base::hash;
 use crate::test_fixtures as fixtures;
 
 fn directory_with(password: &str, policy: Policy) -> Directory {

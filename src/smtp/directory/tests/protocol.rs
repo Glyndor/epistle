@@ -19,7 +19,7 @@
 //! indistinguishable on the wire.
 
 use crate::config::Protocol;
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 use std::collections::HashSet;
 
 /// Build a directory with one account `service` whose password is
@@ -39,7 +39,7 @@ fn directory_with_allowed(
 	)
 	.with_password_hashes([(
 		"service".to_string(),
-		crate::smtp::auth::tests::hash(password),
+		crate::smtp::auth::tests::base::hash(password),
 	)])
 	.with_allowed_protocols([("service".to_string(), protocols)])
 }
@@ -106,7 +106,7 @@ fn unrestricted_account_authenticates_every_protocol() {
 	)
 	.with_password_hashes([(
 		"legacy".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)]);
 	// No `with_allowed_protocols` call: the per-account map is empty.
 	for protocol in [
@@ -212,7 +212,7 @@ fn is_protocol_allowed_reflects_with_allowed_protocols() {
 	)
 	.with_password_hashes([(
 		"locked".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)])
 	.with_allowed_protocols([("locked".to_string(), Vec::<Protocol>::new())]);
 	assert!(!locked.is_protocol_allowed("locked", Protocol::Api));

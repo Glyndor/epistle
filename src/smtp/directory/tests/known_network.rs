@@ -1,7 +1,7 @@
 //! Ban-owner-known-network tests at the directory level: the shared
 //! gate that PLAIN/LOGIN/SCRAM all reach through
 //! [`Directory::authenticate_verdict`]. The protocol-level tests live
-//! in `session/mod_tests_scram_ban_owner_known_network.rs` for the SMTP
+//! in `session/tests/mods/tests_scram_ban_owner_known_network.rs` for the SMTP
 //! session and in the IMAP/POP3/ManageSieve analogues; the assertions
 //! here hold the shared contract together.
 

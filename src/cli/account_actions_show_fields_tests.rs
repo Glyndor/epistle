@@ -15,7 +15,7 @@ use super::*;
 use crate::cli::account_json;
 use crate::config::Config;
 use crate::directory_store::AccountStore;
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 fn config_with(data_dir: &std::path::Path, accounts: &str) -> Config {
 	let toml = format!(

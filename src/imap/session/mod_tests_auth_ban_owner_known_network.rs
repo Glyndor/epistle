@@ -94,13 +94,13 @@ async fn imap_scram_banned_account_from_unknown_network_is_refused() {
 	// Bypass row on a network the test does not use.
 	ban_store.arm_known_network("alice", "198.51.100.10", now);
 
-	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
 		.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.81".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let before = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	let challenge = session.command_line(&format!(
 		"a AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
@@ -117,7 +117,7 @@ async fn imap_scram_banned_account_from_unknown_network_is_refused() {
 		out.contains("a NO"),
 		"a banned account from an unknown network must refuse with `a NO`: {out}"
 	);
-	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let after = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	assert_eq!(
 		ban_store.call_count("clear_success"),
 		0,

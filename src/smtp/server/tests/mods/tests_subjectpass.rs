@@ -1,7 +1,7 @@
 //! SMTP-level tests for SubjectPass.
 //!
-//! Split out of `server_tests.rs` to stay under the line limit, matching
-//! the precedent set by `server_tests_auth.rs`.
+//! Split out of `tests.rs` to stay under the line limit, matching
+//! the precedent set by `tests_auth.rs`.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -49,7 +49,7 @@ fn alias_directory() -> DirectoryHandle {
 }
 
 /// DNS stub that lists 192.0.2.7 on the `bl.example` blocklist. Copied
-/// from `server_tests.rs` because the struct lives in that module and is
+/// from `tests.rs` because the struct lives in that module and is
 /// not reachable across the test-module boundary.
 struct SubjectpassListingDns;
 

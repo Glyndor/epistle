@@ -44,7 +44,7 @@ pub(crate) fn gate_directory() -> Directory {
 		4096,
 	));
 	let names = [OPEN, DISABLED, TWO_FACTOR, OFF_DOMAIN_ACCOUNT];
-	let hash = crate::smtp::auth::tests::hash(fixtures::password());
+	let hash = crate::smtp::auth::tests::base::hash(fixtures::password());
 	Directory::new(
 		["example.org".to_string(), OFF_DOMAIN.to_string()],
 		[
@@ -74,7 +74,7 @@ pub(crate) fn gate_directory_with_app_passwords() -> (Directory, &'static str, &
 	let secret_cidr = fixtures::wrong_password();
 	let entry = |label: &str, secret: &str, expires_at, ip_cidr: Option<&str>| AppPassword {
 		label: label.to_string(),
-		hash: crate::smtp::auth::tests::hash(secret),
+		hash: crate::smtp::auth::tests::base::hash(secret),
 		expires_at,
 		ip_cidr: ip_cidr.map(str::to_string),
 		save_sent: None,
@@ -259,7 +259,7 @@ pub(crate) fn directory_with_production_verifier() -> Directory {
 	)
 	.with_password_hashes([(
 		OPEN.to_string(),
-		crate::smtp::auth::tests::hash(fixtures::password()),
+		crate::smtp::auth::tests::base::hash(fixtures::password()),
 	)])
 	.with_scram([(OPEN.to_string(), stored)])
 }

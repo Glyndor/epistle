@@ -23,7 +23,7 @@ fn directory_with_account(name: &str, save_sent: Option<bool>) -> DirectoryHandl
 	let mut hashes = HashMap::new();
 	hashes.insert(
 		name.to_string(),
-		crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password()),
+		crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password()),
 	);
 	let mut dir = Directory::new(
 		["example.org".to_string()],

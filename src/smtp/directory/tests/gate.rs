@@ -136,7 +136,7 @@ fn directory_without_a_verifier() -> Directory {
 	)
 	.with_password_hashes([(
 		"dana".to_string(),
-		crate::smtp::auth::tests::hash(fixtures::password()),
+		crate::smtp::auth::tests::base::hash(fixtures::password()),
 	)])
 }
 

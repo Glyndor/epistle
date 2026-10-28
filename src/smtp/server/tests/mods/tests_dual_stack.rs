@@ -19,7 +19,7 @@
 //! the DNSBL lookups, the inbound rate limit, the greylist key, the ban
 //! table) sees the same wrong form.
 //!
-//! Lives in a sibling to `server_tests.rs` because the canonicalisation
+//! Lives in a sibling to `tests.rs` because the canonicalisation
 //! invariant deserves its own focused coverage rather than sitting as
 //! one more case in the long `server_tests` file.
 
@@ -33,7 +33,7 @@ use super::*;
 use crate::smtp::sink::MemorySink;
 
 /// Build a directory with two accounts used by the dual-stack tests.
-/// Mirrors the helper in `server_tests.rs` so this file compiles without
+/// Mirrors the helper in `tests.rs` so this file compiles without
 /// reaching into the private helper of the sibling test module.
 fn test_directory() -> DirectoryHandle {
 	DirectoryHandle::new(Directory::new(

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::directory_store::AppPassword;
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 
 /// A directory with one account `alice` and a known primary password.
 fn directory_with_primary() -> Directory {
@@ -14,7 +14,7 @@ fn directory_with_primary() -> Directory {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)])
 }
 
@@ -27,7 +27,7 @@ fn app_password(label: &str) -> (AppPassword, String) {
 	let secret = uuid::Uuid::now_v7().simple().to_string();
 	let password = AppPassword {
 		label: label.to_string(),
-		hash: crate::smtp::auth::tests::hash(&secret),
+		hash: crate::smtp::auth::tests::base::hash(&secret),
 		expires_at: None,
 		ip_cidr: None,
 		save_sent: None,
@@ -154,11 +154,11 @@ fn app_password_for_other_account_does_not_cross_over() {
 	.with_password_hashes([
 		(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		),
 		(
 			"bob".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		),
 	])
 	.with_app_passwords([("alice".to_string(), alice_app)]);

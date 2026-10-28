@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::*;
 use crate::config::Account;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 pub(super) const STATIC_NAME: &str = "alice";
 pub(super) const DYNAMIC_NAME: &str = "bob";

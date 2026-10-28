@@ -4,9 +4,9 @@
 //! and the addresses that merely deliver to the account.
 
 use super::*;
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::smtp::directory::send_as_fixture::{CASES, directory};
-use crate::smtp::session::tests_mods::tests_auth::{plain, reply_text};
+use crate::smtp::session::tests::mods::tests_auth::{plain, reply_text};
 
 fn session_as(account: &str) -> Session {
 	let directory = Arc::new(directory().with_password_hashes(

@@ -192,7 +192,7 @@ fn list_state(dir: &std::path::Path) -> crate::api::ApiState {
 		.expect("sink")
 		.with_evidence(Arc::clone(&service));
 	crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store,

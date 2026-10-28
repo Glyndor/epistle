@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::directory_store::{AccountStore, DynamicAccount, NoopScramUpgrader, ScramUpgrader};
-use crate::smtp::auth::tests::hash;
+use crate::smtp::auth::tests::base::hash;
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials, ScramStored};
 use crate::test_fixtures as fixtures;
 

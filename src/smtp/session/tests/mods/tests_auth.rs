@@ -1,5 +1,5 @@
 use super::*;
-use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 use crate::test_fixtures as fixtures;
 
 pub(super) fn reply_code(action: &Action) -> u16 {
@@ -36,7 +36,7 @@ pub(super) fn auth_directory() -> Arc<Directory> {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)]),
 	)
 }
@@ -113,7 +113,7 @@ fn scram_sha256_authenticates() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	);
@@ -189,7 +189,7 @@ fn scram_sha256_wrong_password_fails() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	);

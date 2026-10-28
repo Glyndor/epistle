@@ -75,7 +75,8 @@ fn message(headers: &str) -> AcceptedMessage {
 #[test]
 fn the_class_bound_to_the_app_password_applies_and_a_header_cannot_raise_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let hash = crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password());
+	let hash =
+		crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password());
 	update(dir.path(), |bindings| {
 		bindings
 			.credentials
@@ -200,7 +201,7 @@ async fn submit_to(
 		.await
 		.expect("user");
 	assert!(reply(&mut tls).await.starts_with("334 "));
-	let password = crate::smtp::auth::tests::fixture_password().to_string();
+	let password = crate::smtp::auth::tests::base::fixture_password().to_string();
 	tls.write_all(format!("{}\r\n", B64.encode(&password)).as_bytes())
 		.await
 		.expect("pass");
@@ -290,7 +291,9 @@ fn over_smtp_no_header_changes_the_class_bound_to_the_credential() {
 	] {
 		for asked in ["personal", "marketing", "transactional"] {
 			let dir = tempfile::tempdir().expect("tempdir");
-			let hash = crate::smtp::auth::tests::hash(crate::smtp::auth::tests::fixture_password());
+			let hash = crate::smtp::auth::tests::base::hash(
+				crate::smtp::auth::tests::base::fixture_password(),
+			);
 			update(dir.path(), |bindings| {
 				bindings.credentials.insert(app_password_key(&hash), bound);
 			})

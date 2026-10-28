@@ -6,7 +6,7 @@ use super::tests_scram::{b64, reply_code};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::hash_gate::HashGate;
-use crate::smtp::directory::hash_gate::tests::full_gate;
+use crate::smtp::directory::hash_gate::tests::base::full_gate;
 use crate::test_fixtures as fixtures;
 
 fn session(gate: &Arc<HashGate>) -> Session {

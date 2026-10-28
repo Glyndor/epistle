@@ -7,7 +7,7 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 const SECRET: &str = "JBSWY3DPEHPK3PXP";
 

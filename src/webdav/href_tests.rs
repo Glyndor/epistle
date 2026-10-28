@@ -4,14 +4,14 @@ use base64::Engine;
 use tower::ServiceExt;
 
 fn app(dir: &std::path::Path) -> axum::Router {
-	let password = crate::smtp::auth::tests::fixture_password();
+	let password = crate::smtp::auth::tests::base::fixture_password();
 	let directory = crate::smtp::directory::Directory::new(
 		["example.org".into()],
 		[("alice@example.org".into(), "alice".into())],
 	)
 	.with_password_hashes(std::collections::HashMap::from([(
 		"alice".into(),
-		crate::smtp::auth::tests::hash(password),
+		crate::smtp::auth::tests::base::hash(password),
 	)]));
 	super::router(
 		crate::directory_store::DirectoryHandle::new(directory),
@@ -22,7 +22,7 @@ fn app(dir: &std::path::Path) -> axum::Router {
 async fn send(app: &axum::Router, method: &str, uri: &str, body: String) -> Vec<u8> {
 	let auth = base64::engine::general_purpose::STANDARD.encode(format!(
 		"alice:{}",
-		crate::smtp::auth::tests::fixture_password()
+		crate::smtp::auth::tests::base::fixture_password()
 	));
 	let response = app
 		.clone()

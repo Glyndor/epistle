@@ -1,13 +1,13 @@
 //! Behaviour with `[auth] scram = false`.
 //!
-//! Split into a sibling so `mod_tests_auth.rs` and the other session test
+//! Split into a sibling so `tests_auth.rs` and the other session test
 //! files stay under the per-file code-line budget. Every test here exercises
 //! the disable path and asserts the exact wire output (capability line
 //! and refusal line) plus the on-disk account state, so a future change
 //! cannot silently re-enable SCRAM without the assertion firing.
 
 use super::*;
-use crate::smtp::auth::tests::{fixture_password, hash as hash_password};
+use crate::smtp::auth::tests::base::{fixture_password, hash as hash_password};
 
 /// Local copy of `tests_auth::tls_session` so the toggle tests do not
 /// depend on a sibling module's pub(super) items.

@@ -51,7 +51,7 @@ fn unscoped_state(dir: &std::path::Path) -> ApiState {
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),
@@ -110,7 +110,7 @@ fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState {
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),
@@ -261,7 +261,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 		.expect("open store"),
 	);
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		domains,
 		store.clone(),
@@ -335,7 +335,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 		.expect("open store"),
 	);
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		domains,
 		store.clone(),
@@ -420,7 +420,7 @@ async fn aggregate_rate_charges_per_recipient() {
 		.expect("open store"),
 	);
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		domains,
 		store.clone(),

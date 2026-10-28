@@ -7,7 +7,7 @@
 use super::SqlAccount;
 use crate::config::Account;
 use crate::directory_store::AccountStore;
-use crate::smtp::auth::tests::{fixture_password, second_password, wrong_password};
+use crate::smtp::auth::tests::base::{fixture_password, second_password, wrong_password};
 use crate::smtp::directory::Resolution;
 
 fn static_account(name: &str, address: &str, password: Option<&str>) -> Account {
@@ -15,7 +15,7 @@ fn static_account(name: &str, address: &str, password: Option<&str>) -> Account 
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
-		password_hash: password.map(crate::smtp::auth::tests::hash),
+		password_hash: password.map(crate::smtp::auth::tests::base::hash),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -49,7 +49,7 @@ fn sql(name: &str, address: &str, password: Option<&str>) -> SqlAccount {
 	SqlAccount {
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
-		password_hash: password.map(crate::smtp::auth::tests::hash),
+		password_hash: password.map(crate::smtp::auth::tests::base::hash),
 	}
 }
 

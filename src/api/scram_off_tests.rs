@@ -33,7 +33,7 @@ fn scram_off_state(dir: &std::path::Path) -> super::ApiState {
 		.expect("add carol");
 	let store = std::sync::Arc::new(store);
 	super::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),

@@ -2,11 +2,11 @@
 //! account is admitted from a network it has previously signed in
 //! from with the right credentials, and refused from any other
 //! network with the same wire shape. Split from
-//! `mod_tests_scram_ban_lifecycle.rs` to keep both files under
+//! `tests_scram_ban_lifecycle.rs` to keep both files under
 //! the per-file code-line budget. The PLAIN/LOGIN paths inherit
 //! the same behaviour through [`Directory::authenticate_verdict`],
 //! so the SCRAM tests cover the shared gate; the PLAIN coverage
-//! lives in `directory/mod_known_network_tests.rs`.
+//! lives in `directory/tests/known_network.rs`.
 
 use super::tests_scram::{TapEhlo, b64, b64_bytes, finish_scram, reply_code};
 use super::tests_scram_bans::{
@@ -121,7 +121,7 @@ async fn smtp_scram_banned_account_from_unknown_network_is_refused_with_wrong_pa
 		.unwrap_or(0);
 	ban_store.arm_known_network("alice", "198.51.100.5", now);
 
-	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 
 	let mut session = Session::new("mail.example.org")
@@ -131,7 +131,7 @@ async fn smtp_scram_banned_account_from_unknown_network_is_refused_with_wrong_pa
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.71".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let before = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	let action = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
 	assert_eq!(
 		reply_code(&action),
@@ -146,7 +146,7 @@ async fn smtp_scram_banned_account_from_unknown_network_is_refused_with_wrong_pa
 	let bad_proof = b64_bytes(&[0u8; 32]);
 	let client_final = format!("c=biws,r=CN{},p={bad_proof}", fixtures::nonce());
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
-	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let after = crate::smtp::tests::directory_scram_test_counter::count(&lookup_counter);
 	assert_eq!(
 		ban_store.call_count("clear_success"),
 		0,

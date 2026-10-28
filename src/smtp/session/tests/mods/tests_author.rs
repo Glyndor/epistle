@@ -3,8 +3,8 @@
 //! the field DMARC judges at the receiver.
 
 use super::*;
-use crate::smtp::auth::tests::fixture_password;
-use crate::smtp::session::tests_mods::tests_auth::{plain, reply_text};
+use crate::smtp::auth::tests::base::fixture_password;
+use crate::smtp::session::tests::mods::tests_auth::{plain, reply_text};
 
 fn session() -> Session {
 	let directory = Arc::new(
@@ -17,7 +17,7 @@ fn session() -> Session {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)]),
 	);
 	let mut session = Session::new("mail.example.org")

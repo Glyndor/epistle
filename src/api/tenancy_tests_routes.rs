@@ -26,7 +26,7 @@ fn account(name: &str, address: &str) -> DynamicAccount {
 	DynamicAccount {
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
-		password_hash: crate::smtp::auth::tests::hash(fixtures::password()),
+		password_hash: crate::smtp::auth::tests::base::hash(fixtures::password()),
 		..DynamicAccount::default()
 	}
 }
@@ -119,7 +119,7 @@ fn world() -> World {
 	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
 	snapshot.expunge().expect("expunge");
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		domains,
 		store.clone(),

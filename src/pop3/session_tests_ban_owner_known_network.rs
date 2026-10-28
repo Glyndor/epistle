@@ -12,7 +12,7 @@ use crate::directory_store::DirectoryHandle;
 use crate::pop3::backend::MailboxBackend;
 use crate::pop3::command::Command;
 use crate::pop3::session::{Response, Session};
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 use std::collections::HashMap;
 
 /// A POP3 sign-in from a banned account whose network is on the
@@ -47,7 +47,7 @@ async fn pop3_banned_account_from_known_network_is_admitted() {
 	)
 	.with_password_hashes(HashMap::from([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)]))
 	.with_ban_store(ban_store.clone());
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), tmp.path().to_path_buf());
@@ -115,7 +115,7 @@ async fn pop3_banned_account_from_unknown_network_is_refused() {
 	)
 	.with_password_hashes(HashMap::from([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)]))
 	.with_ban_store(ban_store.clone());
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), tmp.path().to_path_buf());

@@ -344,7 +344,7 @@ async fn arming_an_account_ban_does_not_drop_the_known_network_row() {
 
 /// Smoke checks the fallback: without a ban store attached, the
 /// directory-level decision is `Clear` for every login. This is
-/// the same shape the `src/smtp/directory/mod_known_network_tests.rs` covers,
+/// the same shape the `src/smtp/directory/tests/known_network.rs` covers,
 /// but at the integration level: a fresh `PgBanStore` against a
 /// real PostgreSQL behaves the same as the in-memory fake.
 #[tokio::test]

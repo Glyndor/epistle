@@ -32,7 +32,7 @@ function name is the stable reference.
 | 1.1 Secure SDLC, threat model | Met | Secure-by-default / fail-closed is a project invariant; the threat model and control summary live in [`docs/security.md`](security.md). |
 | 1.2 Authentication architecture (unique, low-priv service account) | Met | Runs under a dedicated isolated system user (`glyndor-epistle`); privileges are dropped after binding (`src/privdrop.rs`, `drop_to`/`verify`). |
 | 1.4 Access-control architecture (enforced at a trusted layer) | Met | Management API is gated by one middleware over the whole router (`src/api/state/mod.rs::require_bearer_token`, wired in `src/api/mod.rs`); mail-protocol access is account-scoped at the directory/storage layer. |
-| 1.5 Input/output: untrusted input bounded at the boundary | Met | Sans-IO decoders bound every external input (see V5); SMTP decoder is smuggling-immune (`src/smtp/line.rs::LineDecoder`). |
+| 1.5 Input/output: untrusted input bounded at the boundary | Met | Sans-IO decoders bound every external input (see V5); SMTP decoder is smuggling-immune (`src/smtp/line/mod.rs::LineDecoder`). |
 | 1.6 Cryptographic architecture (keys managed, rotatable) | Met | DKIM auto-rotation under new selectors with an overlap window (`src/dkim/rotate.rs`); ACME issues/renews TLS keys (`src/acme/`). |
 | 1.8 Data protection / classification | Met | Bodies on the filesystem `0600`, never in the DB; secrets only from the environment. See V8. |
 | 1.9 Communications encrypted in transit | Met | TLS for all mail protocols. Outbound STARTTLS is strict (webpki + hostname) by default and whenever TLS is mandated (MTA-STS enforce / REQUIRETLS); DANE authenticates via TLSA. Operators may opt a non-mandated, non-DANE hop down to opportunistic TLS (encryption without authentication, the SMTP norm) via `[queue] outbound_tls`. See V9. |
@@ -51,11 +51,11 @@ function name is the stable reference.
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
 | 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
-| 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
+| 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
 | 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `constant_time_eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
-| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram.rs`, `src/imap/session/auth.rs`). |
+| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
 | 2.10.4 OAuth/JWT bearer fully validated | Met (hardened in this sweep) | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` now required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`, fixed in this sweep). |
 
@@ -98,10 +98,10 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
-| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace.rs`), outbound reply 64 KiB (`src/queue/client.rs`), MTA-STS body 64 KiB (`src/mtasts/policy.rs`), bounce header block 4096 (`src/queue/bounce.rs`). |
+| 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address/mod.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
+| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client.rs`), MTA-STS body 64 KiB (`src/mtasts/policy.rs`), bounce header block 4096 (`src/queue/bounce.rs`). |
 | 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce.rs::sanitize_reason`). |
-| 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
+| 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus.rs`, `src/antispam/reputation.rs`). |
 | 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input; no LDAP. |
 | 5.3.8 Deserialization is safe | Met | TOML/JSON via serde into typed structs; no arbitrary-type deserialization. |
@@ -114,9 +114,9 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (The single SHA-1 is the RFC 6238-mandated TOTP HMAC, `src/totp/mod.rs`.) |
-| 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth.rs::hash_password` (argon2id PHC). |
+| 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth/mod.rs::hash_password` (argon2id PHC). |
 | 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
-| 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
+| 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth/mod.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
 | 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
 | 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify.rs`). |
 
@@ -177,7 +177,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 11.1.1 Sequential / business-flow integrity | Met | SMTP is a sans-IO state machine; commands out of order are rejected. |
-| 11.1.4 Anti-automation on business flows | Met | Greylisting, send rate limits (`src/smtp/ratelimit.rs::SendLimiter`), outbound suppression of dead recipients, retry with backoff. |
+| 11.1.4 Anti-automation on business flows | Met | Greylisting, send rate limits (`src/smtp/ratelimit/mod.rs::SendLimiter`), outbound suppression of dead recipients, retry with backoff. |
 | 11.1.x Resource-exhaustion / abuse bounded | Met | All attacker-controlled sizes/counts bounded (see V5); the over-quota path defers (`452`) then bounces rather than failing open; loop prevention on DSNs (null reverse-path, `src/queue/bounce.rs`). |
 | 11.x Quota invariant | Met | Global quota pool sub-allocated atomically (`sum(allocated) ≤ global`), enforced transactionally (design: PostgreSQL ledger). |
 

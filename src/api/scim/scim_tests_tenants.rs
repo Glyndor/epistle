@@ -11,7 +11,7 @@ use super::tests::{CONFIGURED_TOKEN, app, send};
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
 use crate::api::{ApiState, api_keys};
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::hash;
+use crate::smtp::auth::tests::base::hash;
 use crate::test_fixtures as fixtures;
 
 /// Reach of the key issued to tenant A (`--domain a.test`).

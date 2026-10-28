@@ -14,14 +14,14 @@ fn start() -> (
 ) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
-	let password = crate::smtp::auth::tests::fixture_password();
+	let password = crate::smtp::auth::tests::base::fixture_password();
 	let directory = crate::smtp::directory::Directory::new(
 		["example.org".into()],
 		[("alice@example.org".into(), "alice".into())],
 	)
 	.with_password_hashes(std::collections::HashMap::from([(
 		"alice".into(),
-		crate::smtp::auth::tests::hash(password),
+		crate::smtp::auth::tests::base::hash(password),
 	)]));
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), dir.path().into());
 	let (client, server) = tokio::io::duplex(8192);
@@ -96,7 +96,10 @@ async fn a_signed_in_session_is_not_held_to_the_sign_in_deadline() {
 	let _ = read_chunk(&mut client).await;
 	client.write_all(b"USER alice\r\n").await.expect("user");
 	assert!(read_chunk(&mut client).await.starts_with("+OK"));
-	let pass = format!("PASS {}\r\n", crate::smtp::auth::tests::fixture_password());
+	let pass = format!(
+		"PASS {}\r\n",
+		crate::smtp::auth::tests::base::fixture_password()
+	);
 	client.write_all(pass.as_bytes()).await.expect("pass");
 	assert!(read_chunk(&mut client).await.starts_with("+OK"));
 	tokio::time::sleep(PREAUTH * 20).await;
@@ -112,7 +115,10 @@ async fn a_signed_in_command_line_still_gets_the_idle_timeout() {
 	let _ = read_chunk(&mut client).await;
 	client.write_all(b"USER alice\r\n").await.expect("user");
 	let _ = read_chunk(&mut client).await;
-	let pass = format!("PASS {}\r\n", crate::smtp::auth::tests::fixture_password());
+	let pass = format!(
+		"PASS {}\r\n",
+		crate::smtp::auth::tests::base::fixture_password()
+	);
 	client.write_all(pass.as_bytes()).await.expect("pass");
 	let _ = read_chunk(&mut client).await;
 	let start = Instant::now();

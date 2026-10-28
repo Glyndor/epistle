@@ -1,6 +1,6 @@
 //! Tests for `handle_bayes_thresholds`, the SMTP pass that decides on
 //! its own when the Bayesian score is high enough. Sibling file
-//! (`run_band_tests.rs`) is already at the per-file line ceiling for the
+//! (`base.rs`) is already at the per-file line ceiling for the
 //! scope-picker cases; the threshold tests live here so neither file
 //! crosses the 500-code-line cap.
 

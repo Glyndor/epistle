@@ -28,7 +28,7 @@ async fn signed_in(dir: &std::path::Path, per_min: u32) -> (Tls, tokio::task::Jo
 		.await
 		.expect("ehlo");
 	let _ = expect_reply(&mut tls, "250").await;
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	tls.write_all(format!("AUTH PLAIN {plain}\r\n").as_bytes())
 		.await
 		.expect("auth");
