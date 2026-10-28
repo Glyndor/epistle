@@ -99,7 +99,7 @@ uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
 zeroize = "=1.9.1"
-mail-parser = { version = "0.11.9", default-features = false }
+mail-parser = { version = "1.0.0", default-features = false }
 toml_edit = "0.25"
 unicode-normalization = "0.1.25"
 
