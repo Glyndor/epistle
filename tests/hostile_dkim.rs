@@ -6,3 +6,5 @@
 mod harness;
 #[path = "hostile_dkim/keys.rs"]
 mod keys;
+#[path = "hostile_dkim/tags.rs"]
+mod tags;
