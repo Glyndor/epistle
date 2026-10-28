@@ -3,7 +3,7 @@
 //! the SMTP submission, IMAP, ManageSieve, API and WebDAV paths
 //! reach, so the assertions here hold the POP3-specific surface:
 //! the `USER`/`PASS` command pair and the ban store's per-method
-//! counters. Split from `session_tests.rs` to keep both files under
+//! counters. Split from `session.rs` to keep both files under
 //! the per-file code-line budget.
 
 use crate::antispam::bans::BanPolicy;

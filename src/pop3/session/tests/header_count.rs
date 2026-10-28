@@ -1,4 +1,3 @@
-
 use super::super::top_of;
 use crate::util::header_block::{cases, field_count};
 
