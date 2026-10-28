@@ -1,10 +1,10 @@
 //! Validation tests for IDNA: domains in config stay ASCII on disk.
 //!
-//! Split out of `validate_tests.rs` to stay under the line limit, matching
-//! the precedent set by the alert tests in `validate_tests_c.rs`, the
-//! tenant tests in `validate_tests_d.rs`, the SRS tests in
-//! `validate_tests_e.rs`, the database TLS tests in `validate_tests_f.rs`
-//! and the postmaster tests in `validate_tests_g.rs`.
+//! Split out of `src/config/validate/tests/base.rs` to stay under the line limit, matching
+//! the precedent set by the alert tests in `src/config/validate/tests/c.rs`, the
+//! tenant tests in `src/config/validate/tests/d.rs`, the SRS tests in
+//! `src/config/validate/tests/e.rs`, the database TLS tests in `src/config/validate/tests/f.rs`
+//! and the postmaster tests in `src/config/validate/tests/g.rs`.
 
 use super::base::config_from;
 

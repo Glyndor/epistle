@@ -1,6 +1,6 @@
 //! The rule for a host or domain name written in `mail.toml`.
 //!
-//! Pulled into a sibling so `validate.rs` stays under the per-file line
+//! Pulled into a sibling so `src/config/validate/mod.rs` stays under the per-file line
 //! limit; `Config::validate` and the commands that edit the file call it.
 
 use super::ConfigError;

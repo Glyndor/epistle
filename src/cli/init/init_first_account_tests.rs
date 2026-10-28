@@ -290,7 +290,7 @@ impl EnvVar {
 		// SAFETY: `name` is unique to the one test that creates this guard, so
 		// no other test reads or writes it. Tests elsewhere in the process
 		// only read other variables, the same arrangement as
-		// `expands_environment_variables` in config_tests.rs.
+		// `expands_environment_variables` in `src/config/tests/base.rs`.
 		unsafe { std::env::set_var(name, value) };
 		EnvVar(name)
 	}

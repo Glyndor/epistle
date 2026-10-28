@@ -1,6 +1,6 @@
-//! Validation tests for the `[[tenant]]` block. Split out of `validate_tests.rs`
+//! Validation tests for the `[[tenant]]` block. Split out of `src/config/validate/tests/base.rs`
 //! to stay under the line limit, matching the precedent set by the alert tests
-//! in `validate_tests_c.rs`.
+//! in `src/config/validate/tests/c.rs`.
 
 use super::base::config_from;
 

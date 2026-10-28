@@ -181,7 +181,7 @@ fn a_mask_beats_the_catch_all() {
 
 /// The config validator refuses `domain_aliases = {a.example: b.example}`
 /// when both `a.example` and `b.example` are in `domains` (see
-/// `validate_domains` in `src/config/validate.rs`). This pins the refusal:
+/// `validate_domains` in `src/config/validate/mod.rs`). This pins the refusal:
 /// a future refactor that loosens the validator must decide whether the
 /// alias key is rewritten, whether the target domain is rewritten, or
 /// whether the entry is silently dropped, and the test must then pin

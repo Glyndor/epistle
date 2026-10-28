@@ -1,12 +1,12 @@
 //! Validation tests for the `[database]` section's `password_file` companion:
 //! the file-or-URL refusal, the existence check, the regular-file check, and
 //! the permission-bit check that mirrors what `Config::load` applies to the
-//! config file itself. Split out of `validate_tests_f.rs` to keep that file
+//! config file itself. Split out of `src/config/validate/tests/f.rs` to keep that file
 //! scoped to the `sslmode` enforcement and leave room for both to grow.
 //!
 //! Mode and existence are checked on `st_mode` and `metadata` (the kernel is
 //! the oracle), so the assertions hold when the suite runs as root. The
-//! `redaction_tests.rs` precedent makes the same point about file-mode
+//! `src/config/tests/redaction.rs` precedent makes the same point about file-mode
 //! checks at the file-system layer rather than at the uid layer.
 
 use std::os::unix::fs::PermissionsExt as _;

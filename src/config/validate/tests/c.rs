@@ -1,6 +1,6 @@
 //! Validation tests for the `[[alerts]]` section. Split out of
-//! `validate_tests.rs`, which crossed the line limit with them in; the sibling
-//! `validate_tests_b.rs` set the precedent.
+//! `src/config/validate/tests/base.rs`, which crossed the line limit with them in; the sibling
+//! `src/config/validate/tests/b.rs` set the precedent.
 
 use super::base::config_from;
 

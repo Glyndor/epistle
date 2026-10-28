@@ -1,6 +1,6 @@
 //! Tests for the DNS provider build arms and the `SUPPORTED_PROVIDERS` list
-//! invariant. Sibling to `dns.rs` to keep that file under the per-file code
-//! line limit; the entry point is `Dns::build` in `dns.rs`.
+//! invariant. Sibling to `src/config/dns/mod.rs` to keep that file under the per-file code
+//! line limit; the entry point is `Dns::build` in `src/config/dns/mod.rs`.
 
 use super::*;
 

@@ -1,4 +1,4 @@
-//! Tests for the non-global classifier in `validate_addresses.rs`. Lives
+//! Tests for the non-global classifier in `src/config/validate/validate_addresses/mod.rs`. Lives
 //! in a sibling so the file stays under the per-file line limit.
 
 use super::{is_documentation_v6, is_shared, non_global_ipv4_reason, non_global_ipv6_reason};

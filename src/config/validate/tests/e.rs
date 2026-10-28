@@ -1,7 +1,7 @@
 //! Validation tests for the SRS / forwarding interaction. Split out of
-//! `validate_tests.rs` to stay under the line limit, matching the precedent
-//! set by the alert tests in `validate_tests_c.rs` and the tenant tests in
-//! `validate_tests_d.rs`.
+//! `src/config/validate/tests/base.rs` to stay under the line limit, matching the precedent
+//! set by the alert tests in `src/config/validate/tests/c.rs` and the tenant tests in
+//! `src/config/validate/tests/d.rs`.
 //!
 //! The check has to keep the SPF policy and the SRS config in sync: the
 //! published SPF record hardfails (`-all`) and that is only safe to

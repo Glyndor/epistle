@@ -4,7 +4,7 @@
 //! link-local addresses are reachable only from inside the operator's
 //! own network and would lie about our outward-facing IP.
 //!
-//! Pulled into a sibling so `validate.rs` stays under the per-file line
+//! Pulled into a sibling so `src/config/validate/mod.rs` stays under the per-file line
 //! limit; the entry point is invoked from `Config::validate`.
 
 use std::net::{Ipv4Addr, Ipv6Addr};

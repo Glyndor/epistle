@@ -1,6 +1,6 @@
-//! `[database]` validation. Split out of `validate.rs` to keep both files
+//! `[database]` validation. Split out of `src/config/validate/mod.rs` to keep both files
 //! under the per-file line limit, matching the precedent set by the tenant
-//! validation in `validate_tenants.rs`.
+//! validation in `src/config/validate/validate_tenants.rs`.
 //!
 //! The PostgreSQL connection carries the reputation, the Bayes corpus and, with
 //! `directory = true`, the mail accounts. libpq's default `sslmode` is `prefer`,

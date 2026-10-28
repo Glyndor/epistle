@@ -1,7 +1,7 @@
 //! Validation tests for the `[database]` section's `sslmode` enforcement.
 //!
-//! Split out of `validate_tests.rs`, matching the precedent set by the alerts
-//! tests in `validate_tests_c.rs` and the tenants tests in `validate_tests_d.rs`.
+//! Split out of `src/config/validate/tests/base.rs`, matching the precedent set by the alerts
+//! tests in `src/config/validate/tests/c.rs` and the tenants tests in `src/config/validate/tests/d.rs`.
 //!
 //! The PostgreSQL connection carries the reputation, the Bayes corpus and, with
 //! `directory = true`, the mail accounts. libpq's default `sslmode` is
@@ -33,7 +33,7 @@ url = "{url}"
 /// where the URL was accepted, that value is the parsed `Config`, and the
 /// URL inside it carries the database password. A panic message is a CI
 /// log, and CodeQL reads printing it as cleartext logging of sensitive
-/// information (`src/config/redaction_tests.rs` records the same lesson).
+/// information (`src/config/tests/redaction.rs` records the same lesson).
 /// The case name and the error text are enough to reproduce locally.
 fn rejection(result: Result<super::Config, super::ConfigError>, case: &str) -> String {
 	match result {

@@ -1,4 +1,4 @@
-//! Tenant config validation, split out of `validate.rs` to keep both files
+//! Tenant config validation, split out of `src/config/validate/mod.rs` to keep both files
 //! under the per-file line limit.
 
 use std::collections::{HashMap, HashSet};

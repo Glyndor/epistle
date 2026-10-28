@@ -1,6 +1,6 @@
 //! `[dkim]` validation: the RSA pair of the default and of every
 //! `[[dkim.domain]]` entry is complete, and every entry names a hosted
-//! domain, once. Kept beside the type rather than in `validate.rs`, which
+//! domain, once. Kept beside the type rather than in `src/config/validate/mod.rs`, which
 //! is at the line limit.
 
 use std::collections::{HashMap, HashSet};
