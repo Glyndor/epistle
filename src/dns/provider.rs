@@ -247,6 +247,11 @@ pub enum ProviderError {
 	Unsupported,
 	/// Authentication with the provider failed.
 	Auth,
+	/// The provider holds no zone with that name. It is the one failure a
+	/// caller may read as "that zone is not there": every other failure
+	/// says that the provider could not answer, and the caller must not
+	/// read it as an absent zone.
+	ZoneNotFound(String),
 	/// A transport or provider-side error.
 	Remote(String),
 }
@@ -256,6 +261,16 @@ impl std::fmt::Display for ProviderError {
 		match self {
 			ProviderError::Unsupported => f.write_str("provider does not support writes"),
 			ProviderError::Auth => f.write_str("provider authentication failed"),
+			// The zone name comes from the caller, but it still reaches a
+			// terminal, a log and a message: it is escaped like any other
+			// text from outside.
+			ProviderError::ZoneNotFound(zone) => {
+				write!(
+					f,
+					"provider error: zone not found: {}",
+					crate::cli::term::sanitize(zone)
+				)
+			}
 			// What a provider answered is text from outside: control characters
 			// and bidirectional marks in it are escaped before they can reach a
 			// terminal, a log or a message.
@@ -382,12 +397,38 @@ pub trait DnsProvider: Send + Sync {
 	/// zone asks the provider which zone holds the name, one candidate at
 	/// a time (see [`crate::dns::zone::resolve`]).
 	///
+	/// The answer has three shapes, and the difference between the last two
+	/// is the whole point of the question:
+	///
+	/// - `Ok(true)`: the provider holds the zone.
+	/// - `Ok(false)`: the provider does not hold it, and the caller may go
+	///   on to the next candidate.
+	/// - `Err`: the provider could not answer. The caller stops: a zone
+	///   that did not answer is not a zone that is not there, and a record
+	///   written in another zone is a record in the wrong place.
+	///
 	/// The default answers by listing the zone: a provider that can list a
 	/// zone holds it. A provider that does not name zones at all lists
 	/// every name, and the caller then keeps the name as the zone, the way
-	/// it wrote before.
+	/// it wrote before. The listing tells "that zone is not there" from
+	/// "the provider could not answer" only when it says so: a provider
+	/// that names its zones reports the missing one as
+	/// [`ProviderError::ZoneNotFound`].
 	fn has_zone<'a>(&'a self, zone: &'a str) -> ZoneOp<'a> {
-		Box::pin(async move { Ok(self.list(zone).await.is_ok()) })
+		Box::pin(async move {
+			match self.list(zone).await {
+				Ok(_) => Ok(true),
+				// The provider answered: it holds no zone with that name,
+				// and the search goes on to the parent.
+				Err(ProviderError::ZoneNotFound(_)) => Ok(false),
+				// A provider that cannot list cannot say which zone it
+				// holds: it claims none, and the write decides, the way
+				// it did before the search existed.
+				Err(ProviderError::Unsupported) => Ok(false),
+				// The provider could not answer: the search stops here.
+				Err(error) => Err(error),
+			}
+		})
 	}
 }
 

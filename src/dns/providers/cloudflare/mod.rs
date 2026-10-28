@@ -345,7 +345,7 @@ impl CloudflareProvider {
 	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
 		self.find_zone_id(zone)
 			.await?
-			.ok_or_else(|| ProviderError::Remote(format!("zone not found: {zone}")))
+			.ok_or_else(|| ProviderError::ZoneNotFound(zone.to_string()))
 	}
 
 	async fn find_record(

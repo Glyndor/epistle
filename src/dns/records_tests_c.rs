@@ -32,7 +32,7 @@ impl DnsProvider for OneZone {
 			if zone == ZONE {
 				Ok(())
 			} else {
-				Err(ProviderError::Remote(format!("zone not found: {zone}")))
+				Err(ProviderError::ZoneNotFound(zone))
 			}
 		})
 	}
@@ -47,7 +47,7 @@ impl DnsProvider for OneZone {
 			if zone == ZONE {
 				Ok(Vec::new())
 			} else {
-				Err(ProviderError::Remote(format!("zone not found: {zone}")))
+				Err(ProviderError::ZoneNotFound(zone))
 			}
 		})
 	}

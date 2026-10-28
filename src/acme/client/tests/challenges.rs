@@ -150,7 +150,7 @@ impl DnsProvider for Journal {
 			if held {
 				Ok(Vec::new())
 			} else {
-				Err(ProviderError::Remote(format!("zone not found: {zone}")))
+				Err(ProviderError::ZoneNotFound(zone))
 			}
 		})
 	}

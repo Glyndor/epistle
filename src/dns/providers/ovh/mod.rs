@@ -194,7 +194,7 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response)?;
+		check_status(&response, zone_of(url))?;
 		crate::dns::providers::read_body(response).await
 	}
 
@@ -222,7 +222,7 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response)?;
+		check_status(&response, zone_of(url))?;
 		Ok(())
 	}
 
@@ -526,15 +526,37 @@ pub fn resolve_base(endpoint: Option<&str>) -> Result<HttpsUrl, HttpsUrlError> {
 
 /// Map a response status to success / typed error. Returns `Ok(())` when the
 /// caller is going to ignore the body.
-fn check_status(response: &reqwest::Response) -> Result<(), ProviderError> {
+fn check_status(response: &reqwest::Response, zone: Option<&str>) -> Result<(), ProviderError> {
 	let status = response.status();
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
+	}
+	if status == reqwest::StatusCode::NOT_FOUND
+		&& let Some(zone) = zone
+	{
+		// OVH answers 404 for a zone it does not hold: the zone is not
+		// there, which is not a failure of the provider, and the search
+		// goes on to the parent.
+		return Err(ProviderError::ZoneNotFound(zone.to_string()));
 	}
 	if !status.is_success() {
 		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
 	Ok(())
+}
+
+/// The zone an OVH URL is about, when the URL addresses the zone's records:
+/// `/domain/zone/{zone}/record`. Every call that names the zone does it
+/// that way, and a 404 there says the zone is not there. A URL about one
+/// record (`/domain/zone/{zone}/record/{id}`) says nothing about the zone:
+/// a 404 there is about that record.
+fn zone_of(url: &HttpsUrl) -> Option<&str> {
+	let rest = url.as_url().path().strip_prefix("/domain/zone/")?;
+	let (zone, tail) = rest.split_once('/')?;
+	if tail != "record" {
+		return None;
+	}
+	(!zone.is_empty()).then_some(zone)
 }
 
 /// Lowercase hex bytes (matches `hashlib.sha1(...).hexdigest()`).

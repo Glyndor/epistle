@@ -81,10 +81,14 @@ async fn list_records(
 	headers: axum::http::HeaderMap,
 ) -> axum::http::Response<String> {
 	assert_eq!(account, ACCOUNT, "wrong account in path");
-	assert_eq!(zone, ZONE, "wrong zone in path");
 	note_auth(&state, &headers);
 	let mut s = state.lock().unwrap();
 	s.calls.push(format!("GET {PATH_BASE}"));
+	// A zone the account does not hold: DNSimple answers 404, and that
+	// is the zone not being there, not a failure of the provider.
+	if zone != ZONE {
+		return json_response(404, r#"{"message":"Not found"}"#);
+	}
 	let page: u32 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
 	let per_page: u32 = params
 		.get("per_page")
@@ -463,4 +467,18 @@ async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
 	let body = state.lock().unwrap().bodies[0].clone();
 	assert!(body.contains("\"content\":\".\""), "{body}");
 	assert!(body.contains("\"priority\":0"), "{body}");
+}
+
+#[tokio::test]
+async fn the_zone_search_goes_on_to_the_parent_when_the_child_zone_is_not_there() {
+	// The account holds no zone named `mail.example.org`: DNSimple answers
+	// 404, which says the zone is not there, not that the provider could
+	// not answer. The search goes on to the zone the credential covers.
+	let (provider, _state) = mock(Vec::new()).await;
+	assert_eq!(
+		crate::dns::zone::resolve(&provider, "mail.example.org")
+			.await
+			.expect("the search finds the parent zone"),
+		ZONE
+	);
 }

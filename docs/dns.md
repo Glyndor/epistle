@@ -271,6 +271,12 @@ inside `example.org`) is published in `example.org`, and the dns-01
 challenge of an ACME order for such a hostname is published in the same
 zone and withdrawn from it.
 
+A zone the provider does not hold is not a zone it could not answer
+about: the search goes on to the parent only in the first case. When the
+provider fails — a timeout, a refused token, a reply that does not parse
+— the search stops and the record is not written anywhere: publishing it
+in the parent zone would put it in a zone the operator did not ask for.
+
 ### Checking provider credentials
 
 Run `epistle dns provider check [--json]` to inspect the configured credential.
