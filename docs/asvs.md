@@ -49,7 +49,7 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
@@ -262,9 +262,9 @@ Two further low-severity hardening fixes were applied:
 
 5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
    SMTP/IMAP, repeated `AUTHENTICATE` failures were unbounded on one connection.
-   It now closes after 3 failures (`src/managesieve/session.rs`). Test:
+   It now closes after 3 failures (`src/managesieve/session/mod.rs`). Test:
    `repeated_auth_failures_close_the_connection` in
-   `src/managesieve/session_tests.rs`.
+   `src/managesieve/session/tests/base.rs`.
 
 ### Documented as deferred (genuine gaps, fix is a feature)
 

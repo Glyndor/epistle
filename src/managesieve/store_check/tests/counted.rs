@@ -1,4 +1,3 @@
-
 use std::sync::Mutex;
 
 static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());

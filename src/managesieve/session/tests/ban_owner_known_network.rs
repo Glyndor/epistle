@@ -4,7 +4,7 @@
 //! POP3, API and WebDAV paths reach, so the assertions here hold the
 //! ManageSieve-specific surface: the `AUTHENTICATE PLAIN` command
 //! and the ban store's per-method counters. Split from
-//! `session_tests.rs` to keep both files under the per-file
+//! `base.rs` to keep both files under the per-file
 //! code-line budget.
 
 use crate::antispam::bans::BanPolicy;
