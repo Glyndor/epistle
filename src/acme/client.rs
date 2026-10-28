@@ -10,21 +10,41 @@ use std::sync::Mutex;
 
 use super::directory::Directory;
 use super::jws::AccountKey;
+use super::problem::Refusal;
 use super::protocol::{self, Authorization, Order};
 
 /// Errors from the ACME flow.
 #[derive(Debug, thiserror::Error)]
 pub enum AcmeError {
-	/// HTTP-layer failure talking to the CA: network error, timeout, non-2xx
-	/// status that the protocol layer cannot interpret, or a malformed
-	/// `Replay-Nonce`/`Location` header.
+	/// HTTP-layer failure talking to the CA: network error, timeout, a non-2xx
+	/// answer whose body is not a problem document (so no reason can be read
+	/// out of it), or a malformed `Replay-Nonce` header.
 	#[error("transport error: {0}")]
 	Transport(String),
-	/// ACME-protocol failure: unparseable JSON, unexpected order/authorization
-	/// status, missing `Location`, missing expected challenge, or a state the
-	/// flow cannot recover from.
+	/// ACME-protocol failure: the CA refused the request and said why in a
+	/// problem document, an account that was not created, unparseable JSON,
+	/// unexpected order/authorization status, missing `Location`, missing
+	/// expected challenge, or a state the flow cannot recover from.
 	#[error("protocol error: {0}")]
 	Protocol(String),
+}
+
+/// The error a refused answer carries.
+///
+/// A CA that does not accept a request answers with a non-2xx status and a
+/// problem document naming the reason (RFC 8555 §6.7). Read as the resource
+/// that was asked for, that document stops the JSON parser on its numeric
+/// `status` and the real reason is lost; read here, it is the error.
+///
+/// A body that is not a problem document did not come from the CA, so it is
+/// reported as a transport failure with the bytes it carried.
+pub(crate) fn ca_refusal(status: u16, body: &[u8]) -> AcmeError {
+	let refusal = Refusal::read(status, body);
+	if refusal.is_problem() {
+		AcmeError::Protocol(refusal.describe())
+	} else {
+		AcmeError::Transport(refusal.describe())
+	}
 }
 
 /// A signed-POST response: the next nonce, an optional resource location, the
@@ -98,11 +118,24 @@ impl<T: AcmeTransport> AcmeClient<T> {
 			.sign(url, &nonce, payload, kid.as_deref())
 			.map_err(|e| AcmeError::Protocol(e.to_string()))?;
 		let response = self.transport.post(url, &jws).await?;
+		// Every answer carries the next nonce, a refusal included.
 		*self.nonce.lock().expect("nonce lock") = response.nonce.clone();
+		// A CA that refuses answers with a non-2xx status and a problem
+		// document. The status is the only thing that tells the two apart,
+		// and the body of a refusal is never the resource that was asked
+		// for, so it is read as what it is.
+		if !(200..300).contains(&response.status) {
+			return Err(ca_refusal(response.status, &response.body));
+		}
 		Ok(response)
 	}
 
 	/// Register the account; the returned location becomes the `kid`.
+	///
+	/// Fails when the CA did not create an account: a refusal carries no
+	/// `Location`, and so does an answer that quietly created nothing. Going
+	/// on without one would send every later request with no `kid`, and the
+	/// CA would refuse those for a reason that hides this one.
 	pub async fn register(&self, contacts: &[String]) -> Result<(), AcmeError> {
 		let payload = protocol::new_account_payload(contacts, true);
 		let response = self
@@ -111,9 +144,12 @@ impl<T: AcmeTransport> AcmeClient<T> {
 				&serde_json::to_vec(&payload).expect("json"),
 			)
 			.await?;
-		if let Some(location) = response.location {
-			*self.account_url.lock().expect("account lock") = Some(location);
-		}
+		let location = response.location.ok_or_else(|| {
+			AcmeError::Protocol(
+				"the CA answered newAccount without a Location: no account was created".into(),
+			)
+		})?;
+		*self.account_url.lock().expect("account lock") = Some(location);
 		Ok(())
 	}
 
@@ -287,3 +323,7 @@ mod tests;
 #[cfg(test)]
 #[path = "client_tests_challenges.rs"]
 mod tests_challenges;
+
+#[cfg(test)]
+#[path = "client_tests_problem.rs"]
+mod tests_problem;
