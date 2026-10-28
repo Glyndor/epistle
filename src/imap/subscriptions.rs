@@ -3,7 +3,8 @@
 //!
 //! Subscriptions are advisory: an unsubscribed mailbox still appears in
 //! `LIST`, the flag only stops the client from auto-opening it. epistle
-//! writes the file when the client calls SUBSCRIBE/UNSUBSCRIBE. A
+//! writes the file when the client calls SUBSCRIBE/UNSUBSCRIBE, and when
+//! `migrate imap` puts a folder in an account. A
 //! subscription outlives its mailbox: LIST-EXTENDED reports a subscribed
 //! name that no longer exists as `\NonExistent` (RFC 5258).
 

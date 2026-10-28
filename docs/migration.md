@@ -105,7 +105,9 @@ The local account must exist. The remote password comes from `--password-file`
   `Trash`, `Junk` and `Archive`. Virtual folders such as Gmail's All Mail are
   skipped unless named exactly in `--folders`. `--folders` takes patterns with
   `*`; a leading `!` excludes: `--folders '*' --folders '!Trash'`. A name that
-  cannot be stored locally is reported and skipped.
+  cannot be stored locally is reported and skipped. Every folder the run puts
+  in the account is subscribed, so a client that lists only the subscribed
+  mailboxes (Roundcube and many others) shows them without any setup.
 - **Messages.** Flags and the received date (INTERNALDATE) are kept. Messages
   marked `\Deleted` on the old server are not copied, and nor are messages over
   the local size limit (25 MiB); the summary counts both.
