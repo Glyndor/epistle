@@ -33,7 +33,7 @@ function name is the stable reference.
 | 1.2 Authentication architecture (unique, low-priv service account) | Met | Runs under a dedicated isolated system user (`glyndor-epistle`); privileges are dropped after binding (`src/privdrop.rs`, `drop_to`/`verify`). |
 | 1.4 Access-control architecture (enforced at a trusted layer) | Met | Management API is gated by one middleware over the whole router (`src/api/state/mod.rs::require_bearer_token`, wired in `src/api/mod.rs`); mail-protocol access is account-scoped at the directory/storage layer. |
 | 1.5 Input/output: untrusted input bounded at the boundary | Met | Sans-IO decoders bound every external input (see V5); SMTP decoder is smuggling-immune (`src/smtp/line/mod.rs::LineDecoder`). |
-| 1.6 Cryptographic architecture (keys managed, rotatable) | Met | DKIM auto-rotation under new selectors with an overlap window (`src/dkim/rotate.rs`); ACME issues/renews TLS keys (`src/acme/`). |
+| 1.6 Cryptographic architecture (keys managed, rotatable) | Met | DKIM auto-rotation under new selectors with an overlap window (`src/dkim/rotate/mod.rs`); ACME issues/renews TLS keys (`src/acme/`). |
 | 1.8 Data protection / classification | Met | Bodies on the filesystem `0600`, never in the DB; secrets only from the environment. See V8. |
 | 1.9 Communications encrypted in transit | Met | TLS for all mail protocols. Outbound STARTTLS is strict (webpki + hostname) by default and whenever TLS is mandated (MTA-STS enforce / REQUIRETLS); DANE authenticates via TLSA. Operators may opt a non-mandated, non-DANE hop down to opportunistic TLS (encryption without authentication, the SMTP norm) via `[queue] outbound_tls`. See V9. |
 | 1.11 Business-logic boundaries documented | Met | Per-account confinement, MAIL FROM ownership, quota pool invariant — see V4 / V11. |
@@ -99,13 +99,13 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address/mod.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
-| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client.rs`), MTA-STS body 64 KiB (`src/mtasts/policy.rs`), bounce header block 4096 (`src/queue/bounce.rs`). |
+| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce.rs`). |
 | 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus.rs`, `src/antispam/reputation.rs`). |
 | 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input; no LDAP. |
 | 5.3.8 Deserialization is safe | Met | TOML/JSON via serde into typed structs; no arbitrary-type deserialization. |
-| 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy.rs`); autodiscovery only *serves* config. |
+| 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy/mod.rs`); autodiscovery only *serves* config. |
 
 ---
 
@@ -117,8 +117,8 @@ function name is the stable reference.
 | 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth/mod.rs::hash_password` (argon2id PHC). |
 | 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
 | 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth/mod.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
-| 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
-| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify.rs`). |
+| 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
+| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify/mod.rs`). |
 
 > **Note (deferred):** the TOTP shared secret is stored as cleartext base32 in
 > the account store (`src/directory_store/mod.rs`). Encrypting it at rest needs a
@@ -157,7 +157,7 @@ function name is the stable reference.
 | 9.1.2 Strong TLS configuration, no weak protocols | Met | rustls negotiates only TLS 1.2/1.3; the crypto provider is pinned (`src/tls/mod.rs::ensure_crypto_provider`). |
 | 9.1.3 Fail closed on TLS misconfiguration | Met | A missing/unreadable/empty/mismatched cert or key is a fatal `TlsError` — the server refuses to start rather than serve plaintext (`src/tls/mod.rs`, tested). |
 | 9.2.1 Outbound connections use verified TLS where required | Met | Outbound `tls_connect` authenticates via PKIX (webpki roots + ServerName) whenever `pkix_required` holds (`src/queue/client.rs`): no usable TLSA records, and either a mandate (MTA-STS enforce / REQUIRETLS) or `[queue] outbound_tls = "strict"` (the default). With usable TLSA records the handshake accepts any certificate and DANE authenticates it against them, also under MTA-STS enforce and REQUIRETLS (RFC 8461 section 2, RFC 8689 section 4.2.1: a DANE-EE leaf is normally self-signed, so PKIX must not run first); a mismatch fails closed. Any secure TLSA RRset, usable or not, makes STARTTLS mandatory. A remote without STARTTLS where TLS is mandatory yields a **transient** error (retry, never cleartext). Every combination is pinned by `src/queue/worker_tests_policy_matrix.rs`. |
-| 9.2.x DANE / MTA-STS authentication | Met (hardened in this sweep) | DANE TLSA matched only on DNSSEC-secure responses, a bogus answer defers delivery, and a secure RRset with no usable DANE-TA/DANE-EE record still mandates TLS (`src/dane/rrset.rs`); TLSA is consulted only for MX hosts named by a DNSSEC-secure MX answer (or, for a domain without MX, when the MX denial and the domain's address answer are both secure), and a bogus MX answer, denial or address answer defers delivery (`src/queue/resolver.rs`, RFC 7672 section 2.2.1); a mismatch fails closed (`src/dane/`, `src/queue/client.rs`). A **transient TLSA lookup failure now defers delivery** instead of downgrading to opportunistic TLS (`src/queue/worker.rs::tlsa_for`, fixed in this sweep). MTA-STS enforce restricts MX and requires TLS (`src/queue/worker.rs`, `src/mtasts/`); a cached policy keeps applying for its whole `max_age` when a refresh fails or the TXT record disappears, and with no cached policy a failed lookup or fetch delivers as though none were published (RFC 8461 section 3.3). |
+| 9.2.x DANE / MTA-STS authentication | Met (hardened in this sweep) | DANE TLSA matched only on DNSSEC-secure responses, a bogus answer defers delivery, and a secure RRset with no usable DANE-TA/DANE-EE record still mandates TLS (`src/dane/rrset/mod.rs`); TLSA is consulted only for MX hosts named by a DNSSEC-secure MX answer (or, for a domain without MX, when the MX denial and the domain's address answer are both secure), and a bogus MX answer, denial or address answer defers delivery (`src/queue/resolver.rs`, RFC 7672 section 2.2.1); a mismatch fails closed (`src/dane/`, `src/queue/client.rs`). A **transient TLSA lookup failure now defers delivery** instead of downgrading to opportunistic TLS (`src/queue/worker.rs::tlsa_for`, fixed in this sweep). MTA-STS enforce restricts MX and requires TLS (`src/queue/worker.rs`, `src/mtasts/`); a cached policy keeps applying for its whole `max_age` when a refresh fails or the TXT record disappears, and with no cached policy a failed lookup or fetch delivers as though none were published (RFC 8461 section 3.3). |
 
 ---
 
@@ -254,11 +254,11 @@ change — adding one half-built would be worse than tracking it honestly.
 Two further low-severity hardening fixes were applied:
 
 4. **DKIM rotation key written with a permissive window** (V6, was low).
-   `src/dkim/rotate.rs::write_key` wrote the private key and then chmod'd it,
+   `src/dkim/rotate/mod.rs::write_key` wrote the private key and then chmod'd it,
    leaving a brief world/group-readable window. It now creates the file with
    `create_new` + `0o600` (no permissive window; matches ACME/manual keygen).
    Test: `write_key_creates_with_owner_only_perms_and_refuses_overwrite` in
-   `src/dkim/rotate_tests.rs`.
+   `src/dkim/rotate/tests/base.rs`.
 
 5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
    SMTP/IMAP, repeated `AUTHENTICATE` failures were unbounded on one connection.
