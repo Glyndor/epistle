@@ -1,6 +1,6 @@
 //! DKIM signature verification (RFC 6376 section 6).
 
-use ring::signature::{ED25519, RSA_PKCS1_2048_8192_SHA256, UnparsedPublicKey};
+use ring::signature::{ED25519, RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY, UnparsedPublicKey};
 
 use crate::spf::{DnsFailure, DnsLookup};
 
@@ -233,7 +233,10 @@ async fn verify_one(
 	};
 
 	let algorithm: &dyn ring::signature::VerificationAlgorithm = match signature.algorithm {
-		Algorithm::RsaSha256 => &RSA_PKCS1_2048_8192_SHA256,
+		// RFC 8301 section 3.2 asks every verifier to validate RSA keys
+		// from 1024 bits, so the 1024-bit algorithm is the one that serves
+		// inbound mail.
+		Algorithm::RsaSha256 => &RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY,
 		Algorithm::Ed25519Sha256 => &ED25519,
 	};
 	// An RSA record carries a SubjectPublicKeyInfo (RFC 6376 §3.6.1), ring
