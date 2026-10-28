@@ -10,6 +10,7 @@
 //! config. Each topic lives in its own sibling so this entry stays
 //! small.
 
+mod acme;
 mod apply;
 mod dry_run;
 mod edge_cases;

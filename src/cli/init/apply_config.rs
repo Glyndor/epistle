@@ -175,25 +175,20 @@ pub(super) fn build_config(
 	// block is the same flag the listener array reads below, so
 	// the two stay in sync.
 	let acme_block = super::apply_config_acme::build_acme_block(answers);
-	// When ACME is on, the `[tls]` section has to point at the
-	// ACME cert / key paths (the renewal loop in
-	// `crate::acme::renew` writes to `<data_dir>/acme/cert.pem`
-	// and `<data_dir>/acme/key.pem`, then hot-reloads the SMTP
-	// acceptor). Pointing at `keys/cert.pem` would mean the
-	// renewal loop writes a different file the server never
-	// reads; the issued cert would land on disk and never reach
-	// a listener. The keys/ path stays the bootstrap target
-	// when ACME is off.
-	let tls_cert = if acme_block.is_some() {
-		answers.data_dir.join("acme").join("cert.pem")
-	} else {
-		cert_file.to_path_buf()
-	};
-	let tls_key = if acme_block.is_some() {
-		answers.data_dir.join("acme").join("key.pem")
-	} else {
-		key_file.to_path_buf()
-	};
+	// The `[tls]` section always points at the self-signed pair in
+	// `keys/`. With ACME on, the renewal loop writes the certificate
+	// the authority issues to `<data_dir>/acme/cert.pem`, but that
+	// file is empty until the first order completes, and the server
+	// has to come up before that: `crate::tls::served_tls` resolves
+	// the pair in service (the ACME one when it is usable, the
+	// `[tls]` one otherwise), so the bootstrap in `keys/` is what
+	// the listeners present until the authority answers, and the
+	// issued certificate takes over from then on without a
+	// restart. Pointing `[tls]` at the ACME path instead would
+	// leave the server with no certificate at all on a fresh
+	// install.
+	let tls_cert = cert_file.to_path_buf();
+	let tls_key = key_file.to_path_buf();
 	let mut listeners = Vec::new();
 	let services: &Services = &answers.services;
 	// SMTP (port 25, inbound mail) is always written. It is the

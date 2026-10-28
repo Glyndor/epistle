@@ -30,16 +30,9 @@ impl Issuer for Recorder {
 
 /// A certificate valid for another 300 days, so no renewal is due.
 fn fresh_certificate(dir: &Path) {
-	let mut params =
-		rcgen::CertificateParams::new(vec!["mail.example.org".into()]).expect("params");
-	params.not_after = rcgen::date_time_ymd(2030, 10, 28);
-	let key = rcgen::KeyPair::generate().expect("key");
+	let cert = issued_certificate(2030, 10, 28);
 	fs::create_dir_all(dir.join("acme")).expect("acme dir");
-	fs::write(
-		cert_path(dir),
-		params.self_signed(&key).expect("cert").pem(),
-	)
-	.expect("write");
+	fs::write(cert_path(dir), cert.pem()).expect("write");
 }
 
 #[tokio::test]

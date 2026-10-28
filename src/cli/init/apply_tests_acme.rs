@@ -94,32 +94,27 @@ fn build_config_enables_acme_by_default_for_public_hostname() {
 		kinds.contains(&"acme"),
 		"acme listener on port 80 must be written so HTTP-01 challenges reach the server; got {kinds:?}"
 	);
-	// The `[tls]` block has to point at the ACME cert / key paths
-	// so the server can boot off the self-signed bootstrap cert
-	// init writes there. Pointing at `keys/cert.pem` instead would
-	// mean the renewal loop writes a different file the server
-	// never reads from, and the SMTP acceptor's hot reload would
-	// never pick up the new cert.
+	// The `[tls]` block points at the self-signed pair in `keys/`.
+	// The certificate the authority issues lands at
+	// `<data_dir>/acme/cert.pem` and takes over from there: the
+	// renewal loop reloads the acceptor in memory, and
+	// `crate::tls::served_tls` prefers the ACME pair on the next
+	// start. The `[tls]` path must therefore stay a file that
+	// exists: pointing it at the ACME path would leave a fresh
+	// install with no certificate to serve until the authority
+	// answered, and a certificate nobody vouches for in the
+	// meantime.
 	assert!(
-		desired.tls.cert_file.contains("/acme/cert.pem"),
-		"[tls].cert_file must point at the ACME cert path when ACME is on, so the renewal \
-		 loop's hot reload picks up the issued cert; got {:?}",
+		desired.tls.cert_file.contains("/keys/cert.pem"),
+		"[tls].cert_file must point at the bootstrap pair in keys/ when ACME is on, so the \
+		 server can serve a certificate before the authority answers; got {:?}",
 		desired.tls.cert_file
 	);
 	assert!(
-		desired.tls.key_file.contains("/acme/key.pem"),
-		"[tls].key_file must point at the ACME key path when ACME is on; got {:?}",
+		desired.tls.key_file.contains("/keys/key.pem"),
+		"[tls].key_file must point at the bootstrap pair in keys/ when ACME is on; got {:?}",
 		desired.tls.key_file
 	);
-	// The path init hands back to `build_config` is the keys/
-	// path (where init originally generated the self-signed
-	// cert). With ACME on, init needs to copy that material to
-	// the ACME path so the server has a cert to load at startup.
-	// A regression that kept writing only at keys/ would leave
-	// the server failing to start when [tls] cert_file points at
-	// the ACME path and no ACME cert has been issued yet.
-	// This test does not exercise the file-copy path; the full
-	// apply path does, in apply.rs itself.
 }
 
 /// Loopback hostname with no `acme` answers section -> init does
@@ -271,18 +266,15 @@ fn compose_publishes_acme_port_80_when_acme_is_on() {
 	);
 }
 
-/// When ACME is on, init copies the self-signed bootstrap cert
-/// (the material `apply_keys::ensure_self_signed_cert` writes next
-/// to the other keys) to `<data_dir>/acme/cert.pem` and the
-/// matching key to `<data_dir>/acme/key.pem`. The renewal loop
-/// in `crate::acme::renew` overwrites both files in place; until
-/// the first renewal lands, the server has to be able to load
-/// the bootstrap copies to start. A regression that wrote the
-/// cert only at the keys/ path would leave the server failing to
-/// start because the [tls] section (the test above) points at
-/// the ACME path and no ACME cert has been issued yet.
+/// When ACME is on, init leaves `<data_dir>/acme/` empty. The
+/// certificate the authority issues lands there and nowhere else, so
+/// a bootstrap certificate written there would be read by
+/// `crate::acme::renew::needs_renewal` as one valid until the year
+/// 4096: no order would ever be placed, and the host would serve
+/// the bootstrap forever. The server serves the self-signed pair in
+/// `keys/` until the authority answers.
 #[test]
-fn apply_copies_the_bootstrap_cert_to_the_acme_path() {
+fn apply_leaves_the_acme_path_without_a_bootstrap_certificate() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
@@ -296,40 +288,29 @@ fn apply_copies_the_bootstrap_cert_to_the_acme_path() {
 		"apply must succeed with ACME auto-enabled; got {:?}",
 		outcome.error
 	);
-	let acme_dir = data_dir.join("acme");
-	let acme_cert = acme_dir.join("cert.pem");
-	let acme_key = acme_dir.join("key.pem");
+	let acme_cert = data_dir.join("acme").join("cert.pem");
+	let acme_key = data_dir.join("acme").join("key.pem");
 	for path in [&acme_cert, &acme_key] {
 		assert!(
-			path.exists(),
-			"apply must write the bootstrap {} at the ACME target; file is missing",
-			path.display()
-		);
-		let bytes = std::fs::read(path).expect("read bootstrap cert");
-		assert!(
-			!bytes.is_empty(),
-			"bootstrap {} must not be empty",
+			!path.exists(),
+			"init must not leave a bootstrap certificate at {}; a certificate nobody vouches \
+			 for reads as valid until the year 4096, so the first boot would never ask \
+			 the authority for the real one",
 			path.display()
 		);
 	}
-	// The bootstrap copies must be byte-identical to the
-	// material at the keys/ path; the renewal loop overwrites
-	// in place, so any drift between the two would mean the
-	// server is loading a cert init never produced.
+	// The pair the server serves until the authority answers is the
+	// one in `keys/`, and it is on disk.
 	let keys_cert = data_dir.join("keys").join("cert.pem");
 	let keys_key = data_dir.join("keys").join("key.pem");
-	assert_eq!(
-		std::fs::read(&acme_cert).expect("read acme cert"),
-		std::fs::read(&keys_cert).expect("read keys cert"),
-		"the bootstrap cert init copies to <data_dir>/acme/cert.pem must be byte-identical to \
-		 the material at <data_dir>/keys/cert.pem"
-	);
-	assert_eq!(
-		std::fs::read(&acme_key).expect("read acme key"),
-		std::fs::read(&keys_key).expect("read keys key"),
-		"the bootstrap key init copies to <data_dir>/acme/key.pem must be byte-identical to \
-		 the material at <data_dir>/keys/key.pem"
-	);
+	for path in [&keys_cert, &keys_key] {
+		assert!(
+			path.exists(),
+			"init must write the bootstrap pair at {}; the server serves it until the \
+			 authority answers",
+			path.display()
+		);
+	}
 }
 
 /// When ACME is off, init does not create `<data_dir>/acme/` at

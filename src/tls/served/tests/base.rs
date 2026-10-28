@@ -79,3 +79,72 @@ fn no_sections_and_no_pair_resolves_to_none() {
 	config.tls = None;
 	assert!(served_tls(&config).is_none());
 }
+
+/// With `[acme]` on and no certificate at the ACME path, the server
+/// presents the bootstrap pair `init` writes under `keys/`. It comes
+/// up that way and asks the authority for a certificate instead of
+/// exiting for want of one.
+#[test]
+fn acme_without_a_pair_serves_the_bootstrap_pair() {
+	let dir = tempfile::tempdir().expect("dir");
+	std::fs::create_dir_all(dir.path().join("keys")).expect("keys dir");
+	let pair = rcgen::generate_simple_self_signed(vec!["mail.example.org".into()]).expect("pair");
+	std::fs::write(dir.path().join("keys/cert.pem"), pair.cert.pem()).expect("cert");
+	std::fs::write(
+		dir.path().join("keys/key.pem"),
+		pair.signing_key.serialize_pem(),
+	)
+	.expect("key");
+	let served = served_tls(&config(dir.path(), true)).expect("served");
+	assert_eq!(served.source, CertSource::Static);
+	assert_eq!(served.tls.cert_file, dir.path().join("keys/cert.pem"));
+	assert_eq!(served.tls.key_file, dir.path().join("keys/key.pem"));
+}
+
+/// The ACME pair still wins over the bootstrap pair: once the
+/// authority has answered, the certificate in service is the one it
+/// issued.
+#[test]
+fn the_acme_pair_wins_over_the_bootstrap_pair() {
+	let dir = tempfile::tempdir().expect("dir");
+	std::fs::create_dir_all(dir.path().join("keys")).expect("keys dir");
+	let pair = rcgen::generate_simple_self_signed(vec!["mail.example.org".into()]).expect("pair");
+	std::fs::write(dir.path().join("keys/cert.pem"), pair.cert.pem()).expect("cert");
+	std::fs::write(
+		dir.path().join("keys/key.pem"),
+		pair.signing_key.serialize_pem(),
+	)
+	.expect("key");
+	write_acme_pair(dir.path());
+	let served = served_tls(&config(dir.path(), true)).expect("served");
+	assert_eq!(served.source, CertSource::Acme);
+	assert_eq!(served.tls.cert_file, dir.path().join("acme/cert.pem"));
+}
+
+/// The pair the operator named in `[tls]` is the one in service while
+/// the authority has not answered: the bootstrap under `keys/` is the
+/// last resort, for a config that names a file which is not there.
+#[test]
+fn the_configured_pair_wins_over_the_bootstrap_under_keys() {
+	let dir = tempfile::tempdir().expect("dir");
+	std::fs::create_dir_all(dir.path().join("keys")).expect("keys dir");
+	let bootstrap =
+		rcgen::generate_simple_self_signed(vec!["mail.example.org".into()]).expect("pair");
+	std::fs::write(dir.path().join("keys/cert.pem"), bootstrap.cert.pem()).expect("cert");
+	std::fs::write(
+		dir.path().join("keys/key.pem"),
+		bootstrap.signing_key.serialize_pem(),
+	)
+	.expect("key");
+	let own = rcgen::generate_simple_self_signed(vec!["mail.example.org".into()]).expect("pair");
+	std::fs::write(dir.path().join("bootstrap.pem"), own.cert.pem()).expect("cert");
+	std::fs::write(
+		dir.path().join("bootstrap.key"),
+		own.signing_key.serialize_pem(),
+	)
+	.expect("key");
+	let served = served_tls(&config(dir.path(), true)).expect("served");
+	assert_eq!(served.source, CertSource::Static);
+	assert_eq!(served.tls.cert_file, dir.path().join("bootstrap.pem"));
+	assert_eq!(served.tls.key_file, dir.path().join("bootstrap.key"));
+}

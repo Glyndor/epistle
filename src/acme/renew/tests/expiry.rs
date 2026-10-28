@@ -3,11 +3,7 @@ use super::*;
 const NOW: u64 = 1_893_456_000; // 2030-01-01 UTC.
 
 fn certificate_at(dir: &Path, expiry_day: u8, modified: u64) {
-	let mut params = rcgen::CertificateParams::new(vec!["mail.example.org".into()])
-		.expect("certificate parameters");
-	params.not_after = rcgen::date_time_ymd(2030, 1, expiry_day);
-	let key = rcgen::KeyPair::generate().expect("key");
-	let cert = params.self_signed(&key).expect("certificate");
+	let cert = issued_certificate(2030, 1, expiry_day);
 	fs::create_dir_all(dir.join("acme")).expect("ACME directory");
 	let path = cert_path(dir);
 	fs::write(&path, cert.pem()).expect("certificate file");

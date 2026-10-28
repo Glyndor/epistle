@@ -6,11 +6,27 @@ use crate::acme::renew_request::{last_error, pending_request};
 /// 2030-01-01 UTC.
 const NOW: u64 = 1_893_456_000;
 
+/// A certificate an authority issued for `san`, valid until the given
+/// day of January 2030. The renewal loop reads a certificate that is
+/// its own issuer as a placeholder (nobody vouches for it) and asks
+/// for a new one whatever its expiry says, so the certificates these
+/// tests place at the ACME path have to be signed by somebody else.
 fn write_cert(cert: &std::path::Path, key: &std::path::Path, san: &str, expiry_day: u8) {
 	let mut params = rcgen::CertificateParams::new(vec![san.into()]).expect("params");
+	params.distinguished_name.push(
+		rcgen::DnType::CommonName,
+		rcgen::DnValue::Utf8String(san.into()),
+	);
 	params.not_after = rcgen::date_time_ymd(2030, 1, expiry_day);
 	let pair = rcgen::KeyPair::generate().expect("key");
-	std::fs::write(cert, params.self_signed(&pair).expect("cert").pem()).expect("cert file");
+	let mut issuer_params = rcgen::CertificateParams::new(Vec::new()).expect("issuer params");
+	issuer_params.distinguished_name.push(
+		rcgen::DnType::CommonName,
+		rcgen::DnValue::Utf8String("Epistle Test CA".to_string()),
+	);
+	let issuer_key = rcgen::KeyPair::generate().expect("issuer key");
+	let issuer = rcgen::Issuer::new(issuer_params, issuer_key);
+	std::fs::write(cert, params.signed_by(&pair, &issuer).expect("cert").pem()).expect("cert file");
 	std::fs::write(key, pair.serialize_pem()).expect("key file");
 }
 

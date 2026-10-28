@@ -1468,6 +1468,15 @@ the operator replaces it with an ACME-issued or hand-rolled PEM when
 they wire up `[acme]` or update `tls.cert_file` / `tls.key_file` to
 point elsewhere.
 
+With `[acme]` on, that pair is what the server presents until the
+authority answers. The certificate the authority issues is written to
+`<data_dir>/acme/cert.pem` (its key to `<data_dir>/acme/key.pem`), the
+running server reloads it in memory, and the next start presents it in
+place of the `[tls]` pair. `init` leaves the ACME path empty on purpose:
+a self-signed certificate written there reads as valid until the year
+4096, so the renewal loop would see nothing due and never ask the
+authority for the real one.
+
 Re-running with the same answers is a no-op for every file that already
 matches: the keys are reused, the config is reported `identical, not touched`,
 and the file mtime does not change. A run that changes every answer the
@@ -1516,7 +1525,7 @@ The API keys made with `epistle api-key` open the HTTP API, described in the [HT
 | `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
 | `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
 | `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector (`[dkim]` or `[[dkim.domain]]`) uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. |
-| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
+| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise the pair the `[tls]` section names, otherwise the bootstrap pair `init` wrote in `<data_dir>/keys/`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the certificate is outside its `renew_before_days` window. |
 | `epistle api-key rotate LABEL` | Replace the secret of an API key and print the new one once. Scopes, domains, expiry and CIDR stay; the old secret stops working in the same write, when the running server's file watcher reloads `api_keys.toml`. |
 
