@@ -1,5 +1,5 @@
+use super::super::session::{Backend, Session};
 use super::command::Command;
-use super::session::{Backend, Session};
 
 struct Inbox(Vec<u8>);
 
@@ -50,3 +50,6 @@ fn retr_and_top_terminate_unfinished_lines_on_the_wire() {
 		}
 	}
 }
+
+#[allow(unused_imports)]
+use super::super::session;

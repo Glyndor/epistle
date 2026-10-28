@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::super::session::{Backend, Response, Session};
 use super::bounds::{MAX_MESSAGE_OCTETS, MAX_SESSION_MESSAGES};
 use super::command::Command;
-use super::session::{Backend, Response, Session};
 
 struct Counting {
 	index: Vec<(String, usize)>,
@@ -154,3 +154,6 @@ fn an_unreadable_message_is_a_permanent_condition_and_not_a_client_error() {
 	assert!(!reply.is_client_error());
 	assert!(session.handle(Command::Retr(9)).is_client_error());
 }
+
+#[allow(unused_imports)]
+use super::super::session;

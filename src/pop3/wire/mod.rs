@@ -93,5 +93,4 @@ impl Iterator for Wire<'_> {
 }
 
 #[cfg(test)]
-#[path = "wire_tests.rs"]
 mod tests;

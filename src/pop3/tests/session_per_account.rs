@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::net::per_account_conn::PerAccountCounter;
 
+use super::super::session::{Backend, Session};
 use super::command::Command;
-use super::session::{Backend, Session};
 
 struct Inbox;
 
@@ -40,7 +40,7 @@ fn the_eleventh_authentication_from_one_account_and_ip_is_refused_with_in_use() 
 		session.handle(Command::User("alice".into()));
 		let response = session.handle(Command::Pass(String::new()));
 		let text = match response {
-			super::session::Response::Ok(text) => text,
+			super::super::session::Response::Ok(text) => text,
 			other => panic!("expected Ok, got {other:?}"),
 		};
 		assert!(text.contains("mailbox ready"), "the mailbox was not ready");
@@ -52,7 +52,7 @@ fn the_eleventh_authentication_from_one_account_and_ip_is_refused_with_in_use() 
 	eleventh.handle(Command::User("alice".into()));
 	let response = eleventh.handle(Command::Pass(String::new()));
 	let text = match response {
-		super::session::Response::Err(text) => text,
+		super::super::session::Response::Err(text) => text,
 		other => panic!("expected Err, got {other:?}"),
 	};
 	assert!(
@@ -65,7 +65,7 @@ fn the_eleventh_authentication_from_one_account_and_ip_is_refused_with_in_use() 
 	fresh.handle(Command::User("alice".into()));
 	let response = fresh.handle(Command::Pass(String::new()));
 	let text = match response {
-		super::session::Response::Ok(text) => text,
+		super::super::session::Response::Ok(text) => text,
 		other => panic!("expected Ok, got {other:?}"),
 	};
 	assert!(text.contains("mailbox ready"), "the mailbox was not ready");
@@ -81,7 +81,7 @@ fn the_per_account_total_cap_holds_across_distinct_ip_addresses() {
 		session.handle(Command::User("alice".into()));
 		let response = session.handle(Command::Pass(String::new()));
 		let text = match response {
-			super::session::Response::Ok(text) => text,
+			super::super::session::Response::Ok(text) => text,
 			other => panic!("expected Ok, got {other:?}"),
 		};
 		assert!(text.contains("mailbox ready"), "the mailbox was not ready");
@@ -92,7 +92,7 @@ fn the_per_account_total_cap_holds_across_distinct_ip_addresses() {
 	third.handle(Command::User("alice".into()));
 	let response = third.handle(Command::Pass(String::new()));
 	let text = match response {
-		super::session::Response::Err(text) => text,
+		super::super::session::Response::Err(text) => text,
 		other => panic!("expected Err, got {other:?}"),
 	};
 	assert!(
@@ -105,8 +105,11 @@ fn the_per_account_total_cap_holds_across_distinct_ip_addresses() {
 	fresh.handle(Command::User("alice".into()));
 	let response = fresh.handle(Command::Pass(String::new()));
 	let text = match response {
-		super::session::Response::Ok(text) => text,
+		super::super::session::Response::Ok(text) => text,
 		other => panic!("expected Ok, got {other:?}"),
 	};
 	assert!(text.contains("mailbox ready"), "the mailbox was not ready");
 }
+
+#[allow(unused_imports)]
+use super::super::session;

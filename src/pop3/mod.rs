@@ -12,19 +12,4 @@ pub mod session;
 pub mod wire;
 
 #[cfg(test)]
-mod session_tests;
-
-#[cfg(test)]
-mod session_tests_termination;
-
-#[cfg(test)]
-mod session_tests_on_demand;
-
-#[cfg(test)]
-mod session_tests_gate_busy;
-
-#[cfg(test)]
-mod session_tests_per_account;
-
-#[cfg(test)]
-mod session_tests_ban_owner_known_network;
+mod tests;

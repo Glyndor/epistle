@@ -1,7 +1,7 @@
 //! Behavioural tests for the POP3 session state machine.
 
+use super::super::session::{Backend, Response, Session};
 use super::command::Command;
-use super::session::{Backend, Response, Session};
 use crate::smtp::auth::tests::base::fixture_password;
 use crate::test_fixtures as fixtures;
 use std::cell::RefCell;
@@ -372,3 +372,6 @@ async fn pop3_failures_now_reach_the_directory() {
 		ban_store.call_count("clear_success")
 	);
 }
+
+#[allow(unused_imports)]
+use super::super::session;

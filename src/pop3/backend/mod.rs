@@ -211,5 +211,4 @@ impl Backend for MailboxBackend {
 }
 
 #[cfg(test)]
-#[path = "backend_tests.rs"]
 mod tests;

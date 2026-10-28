@@ -2,9 +2,9 @@
 //! `-ERR [SYS/TEMP]` (RFC 3206) instead of `authentication failed`, whatever
 //! the login and the password.
 
+use super::super::session::{Response, Session};
 use super::backend::MailboxBackend;
 use super::command::Command;
-use super::session::{Response, Session};
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::hash_gate::tests::base::full_gate;
@@ -50,3 +50,6 @@ fn a_full_gate_answers_a_temporary_failure_to_every_password_login() {
 	let reply = session.handle(Command::Pass(fixtures::password().into()));
 	assert!(matches!(reply, Response::Ok(_)), "{reply:?}");
 }
+
+#[allow(unused_imports)]
+use super::super::session;

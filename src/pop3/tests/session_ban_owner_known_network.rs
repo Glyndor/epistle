@@ -146,3 +146,6 @@ async fn pop3_banned_account_from_unknown_network_is_refused() {
 		ban_store.call_count("clear_success")
 	);
 }
+
+#[allow(unused_imports)]
+use super::super::session;
