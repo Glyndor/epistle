@@ -46,6 +46,38 @@ fn the_public_ranges_are_not_private() {
 }
 
 #[test]
+fn the_translation_prefixes_are_refused() {
+	// Each of these prefixes carries the IPv4 destination in the low bits
+	// of the address, so the literal says nothing about the host the
+	// translator reaches. They are refused whatever they carry.
+	for address in [
+		"64:ff9b::a00:1",
+		"64:ff9b:1::a00:1",
+		"64:ff9b::808:808",
+		"2002:a00:1::1",
+		"2001::1234:5678:9abc",
+	] {
+		assert!(private(address), "{address} must be refused");
+	}
+}
+
+#[test]
+fn a_translated_destination_is_refused() {
+	for url in [
+		"http://[64:ff9b::a00:1]/hook",
+		"http://[64:ff9b:1::a00:1]/hook",
+		"http://[2002:a00:1::1]/hook",
+		"http://[2001::1234:5678:9abc]/hook",
+	] {
+		assert!(check_url(url, false).is_err(), "{url} must be refused");
+		assert!(
+			check_url(url, true).is_ok(),
+			"{url} must be accepted when the operator allows it"
+		);
+	}
+}
+
+#[test]
 fn the_legacy_notations_spell_the_address_they_name() {
 	assert_eq!(
 		legacy_ipv4("2130706433"),

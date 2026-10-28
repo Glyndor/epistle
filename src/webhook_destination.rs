@@ -3,20 +3,25 @@
 //! The endpoint of a webhook is chosen by the operator, but the address it
 //! names may be one this host must not reach on its own: the loopback
 //! interface, the private networks of the site, the link-local addresses
-//! where the cloud metadata lives. A webhook that names one of them posts
-//! message metadata inside the host, so the policy refuses those addresses
-//! before the client is built and again after the host name is resolved.
+//! where the cloud metadata lives, or an address of a translation prefix
+//! that carries the real destination inside it. A webhook that names one of
+//! them posts message metadata inside the host, so the policy refuses those
+//! addresses before the client is built and again after the host name is
+//! resolved.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
+use crate::config::embedded_ipv4;
+
 /// Whether `ip` is a destination a webhook must not reach on its own.
 ///
 /// The list covers the loopback interface, the private networks of the
 /// site (RFC 1918 and RFC 4193), the link-local addresses where the cloud
-/// metadata service answers, the shared address space of a carrier, and the
-/// addresses that name no host at all.
+/// metadata lives, the shared address space of a carrier, the addresses
+/// that name no host at all, and the translation prefixes that carry the
+/// destination they reach inside the address itself.
 pub(crate) fn is_private(ip: IpAddr) -> bool {
 	match ip {
 		IpAddr::V4(ip) => is_private_v4(ip),
@@ -46,11 +51,39 @@ fn is_shared(ip: Ipv4Addr) -> bool {
 /// Whether an IPv6 address is one of those. An address that carries an
 /// IPv4 one, mapped or in the older compatible form, is judged by the
 /// address it carries.
+///
+/// A translation or transition prefix is refused by default: it carries the
+/// IPv4 destination in the low bits of the address, so the literal names
+/// one host and the translator reaches another, and the literal alone says
+/// nothing about which.
 fn is_private_v6(ip: Ipv6Addr) -> bool {
-	if let Some(ipv4) = ip.to_ipv4() {
+	if is_translation_v6(ip) {
+		return true;
+	}
+	if let Some(ipv4) = embedded_ipv4(ip) {
 		return is_private_v4(ipv4);
 	}
 	ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local() || ip.is_unicast_link_local()
+}
+
+/// The prefixes that translate or transition between IPv4 and IPv6.
+///
+/// The NAT64 well-known prefix (RFC 6052), the local-use NAT64 prefix
+/// (RFC 8215), 6to4 (RFC 3056) and Teredo (RFC 4380). Each of them names
+/// the IPv4 destination inside the IPv6 address, so the address the
+/// translator reaches is not the one the URL shows.
+fn is_translation_v6(ip: Ipv6Addr) -> bool {
+	matches!(
+		ip.segments(),
+		// NAT64, well-known prefix 64:ff9b::/96.
+		[0x64, 0xff9b, 0, 0, 0, 0, ..]
+			// NAT64, local-use prefix 64:ff9b:1::/48.
+			| [0x64, 0xff9b, 0x0001, ..]
+			// 6to4.
+			| [0x2002, ..]
+			// Teredo.
+			| [0x2001, 0x0000, ..]
+	)
 }
 
 /// Whether the URL names a destination the client must refuse, and why.
@@ -64,7 +97,7 @@ pub(crate) fn check_url(url: &str, allow_private: bool) -> Result<(), String> {
 	}
 	match private_address(url) {
 		Some(ip) => Err(format!(
-			"the destination {ip} is a private address; set allow_private_webhooks to reach it"
+			"the destination {ip} is a private or a translated address; set allow_private_webhooks to reach it"
 		)),
 		None => Ok(()),
 	}

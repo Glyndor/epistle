@@ -175,6 +175,19 @@ private_url!(
 	initial_mapped_loopback_is_refused,
 	"http://[::ffff:127.0.0.1]/hook"
 );
+private_url!(initial_nat64_is_refused, "http://[64:ff9b::a00:1]/hook");
+private_url!(
+	initial_nat64_local_use_prefix_is_refused,
+	"http://[64:ff9b:1::a00:1]/hook"
+);
+private_url!(
+	initial_six_to_four_is_refused,
+	"http://[2002:a00:1::1]/hook"
+);
+private_url!(
+	initial_teredo_is_refused,
+	"http://[2001::1234:5678:9abc]/hook"
+);
 private_url!(initial_decimal_ip_is_refused, "http://2130706433/hook");
 private_url!(initial_octal_ip_is_refused, "http://0177.0.0.1/hook");
 private_url!(initial_hex_ip_is_refused, "http://0x7f000001/hook");
