@@ -4,16 +4,20 @@
 //! ARC-Authentication-Results, ARC-Message-Signature and ARC-Seal, in
 //! increasing instance order, all relaxed-canonicalized — and never the body.
 //! The seal being created or verified is included last with its `b=` emptied.
+//! We always sign with ed25519; verification honours the algorithm the seal
+//! declared, so an `a=rsa-sha256` seal is verified with RSA and an
+//! `a=ed25519-sha256` seal with Ed25519.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
+use ring::signature::Ed25519KeyPair;
 
-use crate::dkim::{Algorithm, Canon, DkimOutcome, canon, parse_key};
+use crate::dkim::{Algorithm, Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
 
 use super::ams::strip_b;
 use super::chain::{ChainValidation, Instance};
+use super::key::KeyRecord;
 use super::signature::Seal;
 
 /// Identity and chain status for a new seal.
@@ -98,17 +102,24 @@ pub async fn verify(
 		Ok(texts) => texts,
 		Err(DnsFailure::Temporary) => return DkimOutcome::TempError,
 	};
-	let Some(key) = texts.iter().find_map(|text| parse_key(text)) else {
-		return DkimOutcome::PermError;
+	let record = match KeyRecord::first(&texts) {
+		Ok(record) => record,
+		Err(_) => return DkimOutcome::PermError,
+	};
+	// The algorithm the seal declares decides the primitive and the shape of
+	// the key, and the record has to publish a key of that type.
+	let key = match record.verification_key(seal.algorithm) {
+		Ok(key) => key,
+		Err(_) => return DkimOutcome::PermError,
 	};
 
-	let public_key = UnparsedPublicKey::new(&ED25519, key);
 	// The same rule the signer followed: an Ed25519-SHA256 signature covers
 	// the SHA-256 digest of the signed data.
 	let signed = seal.algorithm.signed_bytes(input.as_bytes());
-	match public_key.verify(signed.as_ref(), &seal.signature) {
-		Ok(()) => DkimOutcome::Pass,
-		Err(_) => DkimOutcome::Fail,
+	if key.verify(signed.as_ref(), &seal.signature) {
+		DkimOutcome::Pass
+	} else {
+		DkimOutcome::Fail
 	}
 }
 

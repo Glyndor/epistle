@@ -77,6 +77,28 @@ pub(crate) fn rsa_public_key_from_spki(der: &[u8]) -> Option<&[u8]> {
 	(unused == 0 && !key.is_empty()).then_some(key)
 }
 
+/// The bit length of the modulus of a PKCS#1 `RSAPublicKey` body, or `None`
+/// when the body is not that structure.
+///
+/// The body is `SEQUENCE { modulus INTEGER, publicExponent INTEGER }`, so
+/// the modulus is the first element of the sequence. A DER integer carries
+/// a leading zero byte when its top bit is set, and that byte is not part of
+/// the modulus.
+pub(crate) fn rsa_modulus_bits(pkcs1: &[u8]) -> Option<usize> {
+	let (sequence, rest) = der_take(pkcs1, 0x30)?;
+	if !rest.is_empty() {
+		return None;
+	}
+	let (modulus, _) = der_take(sequence, 0x02)?;
+	let modulus = if modulus.first() == Some(&0) {
+		&modulus[1..]
+	} else {
+		modulus
+	};
+	let top = modulus.first()?;
+	Some(modulus.len() * 8 - top.leading_zeros() as usize)
+}
+
 /// Split one DER element with tag `tag` off the front of `der`, returning
 /// its contents and what follows it.
 fn der_take(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {

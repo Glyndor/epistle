@@ -26,6 +26,8 @@ pub use verify::{DkimOutcome, DkimResult, verify_message};
 pub(crate) use signature::{Algorithm, Canon};
 #[cfg(test)]
 pub(crate) use spki::spki_for_rsa;
+pub(crate) use spki::{rsa_modulus_bits, rsa_public_key_from_spki};
+#[cfg(test)]
 pub(crate) use verify::parse_key;
 
 pub(crate) use verify::verify_tlsrpt;
