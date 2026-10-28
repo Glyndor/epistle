@@ -67,3 +67,6 @@ mod tests_send_as;
 
 #[cfg(test)]
 mod tests_single_label;
+
+#[cfg(test)]
+mod tests_auth_log;

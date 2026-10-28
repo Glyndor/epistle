@@ -597,6 +597,26 @@ maps in either direction with `epistle account show` and
 Test diagnostics follow the same rule: an assertion message names the field,
 never the credential or account data it checked.
 
+Two lines an SMTP session writes at the default level (`info`) carry those
+pseudonyms and nothing else:
+
+- **`message accepted`** — one per accepted inbound message. `log_id` is the
+  recipient account's pseudonym (`unknown` when the recipient is not served
+  here), `size` the octets delivered, `protocol` the protocol that carried
+  it (`smtp`), `recipients` how many recipients the envelope named, and
+  `result` the outcome. No address, no sender, no subject and no body reach
+  the line. An accepted message used to leave no line at all, so the log
+  could not say whether mail had arrived.
+- **`authentication attempt`** — one per attempt on the mechanisms that do not
+  go through the password check: SCRAM, OAuth and SASL EXTERNAL. `log_id` is
+  the account's pseudonym, or `unknown` when the attempt was refused: a
+  refused attempt never says which account it tried to be, the same way the
+  wire answer does not. `protocol`, `mechanism`, `result` and `failures` say
+  the rest. A refused attempt on those mechanisms used to leave a warning
+  without the protocol, and a successful one left nothing at all. The
+  password mechanisms (SASL PLAIN, AUTH LOGIN) write the audit channel
+  `epistle::auth` instead, which carries the same facts.
+
 ## Reporting a vulnerability
 
 Please report security issues privately via GitHub Security Advisories on this

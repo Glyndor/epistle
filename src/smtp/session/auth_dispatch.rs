@@ -120,6 +120,13 @@ impl Session {
 	/// Common AUTH failure: count it, no oracle, close after three.
 	pub(super) fn auth_fail(&mut self) -> Action {
 		self.auth_failures += 1;
+		self.auth_fail_counted()
+	}
+
+	/// The reply for a failure that has already been counted. A mechanism
+	/// that writes its own line counts the failure before it calls this,
+	/// so that the line and the reply agree on how many there were.
+	pub(super) fn auth_fail_counted(&mut self) -> Action {
 		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
 		if self.auth_failures >= 3 {
 			Action::Close(reply)
