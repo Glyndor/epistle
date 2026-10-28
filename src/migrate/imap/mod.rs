@@ -383,3 +383,7 @@ mod ledger_resume_tests;
 #[cfg(test)]
 #[path = "ledger_rerun_tests.rs"]
 mod ledger_rerun_tests;
+
+#[cfg(test)]
+#[path = "subscribe_tests.rs"]
+mod subscribe_tests;
