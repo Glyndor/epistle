@@ -165,6 +165,9 @@ impl Session {
 				account,
 				refusal,
 			}) => self.scram_client_final(line, *server, *credentials, &account, refusal),
+			Some(scram::PendingScram::ServerFinal { account }) => {
+				self.scram_server_final(line, account)
+			}
 			None => self.verify_plain(line),
 		}
 	}

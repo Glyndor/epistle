@@ -8,7 +8,7 @@
 //! so the SCRAM tests cover the shared gate; the PLAIN coverage
 //! lives in `directory/mod_known_network_tests.rs`.
 
-use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
+use super::tests_scram::{TapEhlo, b64, b64_bytes, finish_scram, reply_code};
 use super::tests_scram_bans::{
 	decode_server_first, scram_challenge_text, scram_directory_with_ban_store, valid_client_final,
 };
@@ -63,7 +63,7 @@ async fn smtp_scram_banned_account_from_known_network_is_admitted() {
 	let server_first = decode_server_first(&scram_challenge_text(&challenge));
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(
-		reply_code(&session.auth_line(&b64(&client_final))),
+		finish_scram(&mut session, &client_final),
 		235,
 		"a valid SCRAM proof from a banned account on a known network must succeed"
 	);
@@ -268,7 +268,7 @@ async fn smtp_scram_banned_account_known_ipv6_slash_64_is_admitted_from_any_host
 	let server_first = decode_server_first(&scram_challenge_text(&challenge));
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(
-		reply_code(&session.auth_line(&b64(&client_final))),
+		finish_scram(&mut session, &client_final),
 		235,
 		"a banned account must be admitted from any host half in the /64 the owner signed in from"
 	);
@@ -369,7 +369,7 @@ async fn smtp_scram_bypass_success_does_not_clear_any_ban_row() {
 	let server_first = decode_server_first(&scram_challenge_text(&challenge));
 	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(
-		reply_code(&session.auth_line(&b64(&client_final))),
+		finish_scram(&mut session, &client_final),
 		235,
 		"a valid SCRAM proof from a banned account on a known network must succeed"
 	);

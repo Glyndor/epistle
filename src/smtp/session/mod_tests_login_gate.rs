@@ -2,7 +2,7 @@
 //! account, an account with a second factor and an address in a switched-off
 //! domain are refused by PLAIN, LOGIN, SCRAM, OAUTHBEARER and EXTERNAL alike.
 
-use super::tests_scram::{b64, reply_code};
+use super::tests_scram::{b64, finish_scram, reply_code};
 use super::tests_scram_bans::{decode_server_first, scram_challenge_text};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
@@ -40,7 +40,7 @@ fn scram(session: &mut Session, user: &str, password: &str) -> u16 {
 	}
 	let server_first = decode_server_first(&scram_challenge_text(&first));
 	let client_final = scram_client_final(&bare, &server_first, password);
-	reply_code(&session.auth_line(&b64(&client_final)))
+	finish_scram(session, &client_final)
 }
 
 #[test]

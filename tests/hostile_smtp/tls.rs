@@ -14,13 +14,13 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use super::harness::*;
 use crate::common::TLS_PROBE_IO_TIMEOUT;
 
-struct Tls {
+pub(super) struct Tls {
 	acceptor: epistle::tls::ReloadableAcceptor,
 	connector: TlsConnector,
 }
 
 impl Tls {
-	fn new() -> Self {
+	pub(super) fn new() -> Self {
 		epistle::tls::ensure_crypto_provider();
 		let cert = rcgen::generate_simple_self_signed(vec!["mx.epistle.test".into()])
 			.expect("self-signed certificate");
@@ -42,7 +42,7 @@ impl Tls {
 		}
 	}
 
-	fn server(&self, server: Server) -> Server {
+	pub(super) fn server(&self, server: Server) -> Server {
 		server.with_tls(self.acceptor.clone(), TlsMode::Opportunistic)
 	}
 
@@ -60,7 +60,10 @@ impl Tls {
 			.expect("TLS deadline")
 	}
 
-	async fn connect(&self, server: &Harness) -> tokio_rustls::client::TlsStream<TcpStream> {
+	pub(super) async fn connect(
+		&self,
+		server: &Harness,
+	) -> tokio_rustls::client::TlsStream<TcpStream> {
 		let mut tcp = server.connect().await;
 		ehlo(&mut tcp).await;
 		send(&mut tcp, b"STARTTLS\r\n").await;

@@ -82,6 +82,9 @@ mod tests_scram_bans;
 #[path = "mod_tests_scram_decoy.rs"]
 mod tests_scram_decoy;
 #[cfg(test)]
+#[path = "mod_tests_scram_final.rs"]
+mod tests_scram_final;
+#[cfg(test)]
 #[path = "mod_tests_scram_off.rs"]
 mod tests_scram_off;
 #[cfg(test)]

@@ -14,6 +14,8 @@ mod abuse;
 mod framing;
 #[path = "hostile_smtp/harness.rs"]
 mod harness;
+#[path = "hostile_smtp/scram.rs"]
+mod scram;
 #[path = "hostile_smtp/tls.rs"]
 mod tls;
 
