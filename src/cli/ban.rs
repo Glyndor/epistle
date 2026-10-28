@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Subcommand;
 use serde::Serialize;
 
-use crate::antispam::bans::{BanTarget, PgBanStore, UnbanTarget, parse_allow, parse_login};
+use crate::antispam::bans::{BanRow, BanTarget, PgBanStore, UnbanTarget, parse_allow, parse_login};
 use crate::cidr::Cidr;
 use crate::config::Config;
 
@@ -26,7 +26,7 @@ const MAX_BAN_SECS: u64 = 10 * 365 * 24 * 3600;
 /// Ban management actions.
 #[derive(Debug, Subcommand)]
 pub enum BanCli {
-	/// List active bans: subject, reason and the epoch second each one ends.
+	/// List active bans: subject, reason and when each one ends.
 	List {
 		/// Print a JSON array instead of text lines.
 		#[arg(long)]
@@ -189,6 +189,21 @@ struct BanJson<'a> {
 	until: u64,
 }
 
+/// The text listing of the bans in force: one line per ban, with the
+/// instant it ends and the reason it was raised.
+fn render_rows(rows: &[BanRow], out: &mut impl Write) {
+	for row in rows {
+		let _ = writeln!(
+			out,
+			"{}\tuntil={}\t{}",
+			row.subject,
+			crate::clock::rfc3339_or_epoch(row.until_secs),
+			row.reason
+		);
+	}
+	let _ = writeln!(out, "{} banned", rows.len());
+}
+
 async fn execute(
 	store: &PgBanStore,
 	action: BanCli,
@@ -211,14 +226,7 @@ async fn execute(
 					.collect();
 				print_json(&rows, out, err)
 			} else {
-				for row in &rows {
-					let _ = writeln!(
-						out,
-						"{}\tuntil={}\t{}",
-						row.subject, row.until_secs, row.reason
-					);
-				}
-				let _ = writeln!(out, "{} banned", rows.len());
+				render_rows(&rows, out);
 				Ok(ExitCode::SUCCESS)
 			}
 		}
@@ -241,7 +249,10 @@ async fn execute(
 			let until = now.saturating_add(duration.unwrap_or(DEFAULT_BAN_SECS));
 			store.add_ban(target, now, until).await?;
 			let mut report = super::json_out::Report::new(out, json);
-			report.line(format_args!("banned {target} until {until}"));
+			report.line(format_args!(
+				"banned {target} until {}",
+				crate::clock::rfc3339_or_epoch(until)
+			));
 			let fields = serde_json::json!({ "target": target.to_string(), "until": until });
 			Ok(report.change("add", true, fields, None))
 		}

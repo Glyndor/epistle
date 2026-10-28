@@ -99,26 +99,10 @@ async fn add_list_and_remove_a_ban_reach_the_server_immediately() {
 	let added = h.ban(&["add", &ip, "--for", "2h"]);
 	assert!(added.status.success(), "{}", stderr(&added));
 	let line = stdout(&added);
-	let until: u64 = line
+	let until_text = line
 		.trim()
 		.strip_prefix(&format!("banned {ip} until "))
-		.unwrap_or_else(|| panic!("unexpected output {line:?}"))
-		.parse()
-		.expect("epoch");
-	assert!(
-		(before + 7200..=now() + 7200).contains(&until),
-		"until={until}"
-	);
-	assert!(h.banned(&ip).await, "the ban must apply without a restart");
-
-	let listed = h.ban(&["list"]);
-	assert!(
-		stdout(&listed)
-			.lines()
-			.any(|l| l == format!("ip:{ip}\tuntil={until}\tmanual ban")),
-		"{}",
-		stdout(&listed)
-	);
+		.unwrap_or_else(|| panic!("unexpected output {line:?}"));
 	let json = h.ban(&["list", "--json"]);
 	let rows: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("json");
 	let row = rows
@@ -127,9 +111,29 @@ async fn add_list_and_remove_a_ban_reach_the_server_immediately() {
 		.iter()
 		.find(|r| r["subject"] == format!("ip:{ip}"))
 		.expect("ban in json");
+	let until = row["until"].as_u64().expect("epoch");
 	assert_eq!(
 		(row["reason"].as_str(), row["until"].as_u64()),
 		(Some("manual ban"), Some(until))
+	);
+	assert!(
+		(before + 7200..=now() + 7200).contains(&until),
+		"until={until}"
+	);
+	assert_eq!(
+		until_text,
+		epistle::clock::rfc3339(until),
+		"the text shows the same instant the JSON keeps as an epoch"
+	);
+	assert!(h.banned(&ip).await, "the ban must apply without a restart");
+
+	let listed = h.ban(&["list"]);
+	assert!(
+		stdout(&listed)
+			.lines()
+			.any(|l| l == format!("ip:{ip}\tuntil={until_text}\tmanual ban")),
+		"{}",
+		stdout(&listed)
 	);
 
 	let removed = h.ban(&["remove", &ip]);
@@ -162,15 +166,28 @@ async fn a_network_ban_defaults_to_24_hours_and_remove_takes_the_network() {
 	let before = now();
 	let added = h.ban(&["add", &net]);
 	assert!(added.status.success(), "{}", stderr(&added));
-	let until: u64 = stdout(&added)
+	let until_text = stdout(&added)
 		.trim()
 		.strip_prefix(&format!("banned {net} until "))
 		.expect("prefix")
-		.parse()
-		.expect("epoch");
+		.to_string();
+	let json = h.ban(&["list", "--json"]);
+	let rows: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("json");
+	let row = rows
+		.as_array()
+		.expect("array")
+		.iter()
+		.find(|r| r["subject"] == format!("cidr:{net}"))
+		.expect("ban in json");
+	let until = row["until"].as_u64().expect("epoch");
 	assert!(
 		(before + 86_400..=now() + 86_400).contains(&until),
 		"until={until}"
+	);
+	assert_eq!(
+		until_text,
+		epistle::clock::rfc3339(until),
+		"the text shows the same instant the JSON keeps as an epoch"
 	);
 	assert!(h.banned(&format!("{block}::abcd")).await);
 

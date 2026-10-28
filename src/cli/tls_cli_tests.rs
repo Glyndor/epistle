@@ -161,6 +161,29 @@ fn renew_force_queues_a_forced_request() {
 }
 
 #[test]
+fn show_prints_the_renewal_request_as_an_rfc3339_instant() {
+	let (_dir, config) = acme_dir_with_cert(31);
+	let mut out = Vec::new();
+	assert_eq!(
+		renew(&config, true, NOW, false, &mut out),
+		ExitCode::SUCCESS
+	);
+	let view = view(&config, NOW).expect("view");
+	assert_eq!(view.renewal_requested_at, Some(NOW));
+	let mut text = Vec::new();
+	render_text(&view, &mut text).expect("write");
+	let text = String::from_utf8(text).expect("utf8");
+	assert!(
+		text.contains("renewal requested at 2030-01-01T00:00:00Z"),
+		"{text}"
+	);
+	assert!(
+		!text.contains("1893456000"),
+		"the epoch must not reach the text output: {text}"
+	);
+}
+
+#[test]
 fn renew_inside_the_window_queues_without_force() {
 	let dir = tempfile::tempdir().expect("dir");
 	let config = config_in(dir.path(), true);

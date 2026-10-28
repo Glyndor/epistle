@@ -64,7 +64,7 @@ pub(super) fn lines(waiting: &BTreeMap<String, Waiting>, now: u64, out: &mut imp
 			out,
 			"warm-up {}\tuntil={} (in {}s)\twaiting={}\treason=warm-up cap",
 			sanitize(group),
-			wait.until,
+			crate::clock::rfc3339_or_epoch(wait.until),
 			wait.until.saturating_sub(now),
 			wait.recipients
 		);

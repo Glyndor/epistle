@@ -60,6 +60,9 @@ impl DeliveryConfig {
 #[derive(Debug, Subcommand)]
 pub enum DeliveryCli {
 	/// List delivery records (the default when no action is given).
+	///
+	/// One line per record, newest day first: the time as RFC 3339 UTC, the
+	/// outcome, the message id, the sender and the recipient.
 	List(ListArgs),
 	/// Show every record of one message.
 	Show(ShowArgs),
@@ -258,7 +261,7 @@ fn print_table(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
 	let mut table = Table::new(&["TIME", "OUTCOME", "SPOOL", "FROM", "RECIPIENT"]);
 	for record in records {
 		table.push(vec![
-			record.time.to_string(),
+			crate::clock::rfc3339_or_epoch(record.time),
 			record.outcome.as_str().to_string(),
 			record.spool_id.to_string(),
 			record.from.clone(),
@@ -275,7 +278,7 @@ fn print_table(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
 			let _ = writeln!(
 				out,
 				"{}\t{}\t{}\t{}\t{}",
-				record.time,
+				crate::clock::rfc3339_or_epoch(record.time),
 				record.outcome.as_str(),
 				record.spool_id,
 				record.from,

@@ -99,8 +99,12 @@ fn destinations_name_each_group_at_its_cap() {
 			"0 destinations on hold\n\
 			 warm-up gmail\tuntil={} (in 600s)\twaiting=3\treason=warm-up cap\n\
 			 1 groups at the warm-up cap\n",
-			NOW + 600
+			"2027-01-15T08:10:00Z"
 		)
+	);
+	assert!(
+		!out.contains("1800000600"),
+		"the epoch must not reach the text output: {out}"
 	);
 	let (_, json) = run_args(dir.path(), &["destinations", "--json"]);
 	assert_eq!(

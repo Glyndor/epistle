@@ -99,8 +99,8 @@ fn the_rotated_rsa_key_is_shown_with_its_previous_and_pending_ones() {
 	let text = String::from_utf8(out).expect("utf-8");
 	for line in [
 		"rsa selector: rsa7 (from state)",
-		"previous: ed1 and rsa1 (retires at 1814400)",
-		"rotation to ed100 and rsa100 in progress since 8640000; ed7 and rsa7 sign until DNS shows the new keys",
+		"previous: ed1 and rsa1 (retires at 1970-01-22T00:00:00Z)",
+		"rotation to ed100 and rsa100 in progress since 1970-04-11T00:00:00Z; ed7 and rsa7 sign until DNS shows the new keys",
 	] {
 		assert!(text.contains(line), "dkim show prints {line:?}");
 	}

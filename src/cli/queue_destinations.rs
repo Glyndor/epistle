@@ -75,7 +75,7 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 			"{} {}\tuntil={} (in {}s)\tdeferrals={}\treason={}",
 			destination.kind().label(),
 			sanitize(destination.as_str()),
-			hold.until,
+			crate::clock::rfc3339_or_epoch(hold.until),
 			hold.until.saturating_sub(now),
 			hold.deferrals,
 			sanitize(&hold.reason)

@@ -20,7 +20,7 @@ use super::util::message_crypto;
 /// Subcommands on the archive.
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
-	/// List every archived message for an account (id, mailbox, unix time).
+	/// List every archived message for an account (id, mailbox, RFC 3339 time).
 	List {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
@@ -169,7 +169,13 @@ fn list(
 
 fn render_entries(entries: &[ArchivedMessage], out: &mut impl std::io::Write) {
 	for entry in entries {
-		let _ = writeln!(out, "{}\t{}\t{}", entry.id, entry.mailbox, entry.deleted_at);
+		let _ = writeln!(
+			out,
+			"{}\t{}\t{}",
+			entry.id,
+			entry.mailbox,
+			crate::clock::rfc3339_or_epoch(entry.deleted_at)
+		);
 	}
 	let _ = writeln!(out, "{} archived", entries.len());
 }
