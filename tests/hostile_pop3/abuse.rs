@@ -126,7 +126,6 @@ async fn authenticated_partial_line_keeps_its_original_deadline() {
 }
 
 #[tokio::test]
-#[ignore = "bug: authenticated response writes have no deadline and can retain the listener slot"]
 async fn authenticated_unread_retr_flood_must_return_the_single_slot() {
 	let server = Harness::start(|s| s.with_max_connections(1)).await;
 	server.seed(

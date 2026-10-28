@@ -82,7 +82,6 @@ async fn twentieth_consecutive_auth_plain_failure_closes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "bug: USER success resets the error streak so repeated USER/PASS failures never close"]
 async fn twentieth_user_pass_failure_must_close_even_with_user_between_attempts() {
 	let server = Harness::start(|s| s).await;
 	let mut client = server.connect().await;
