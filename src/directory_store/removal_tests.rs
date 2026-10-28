@@ -15,7 +15,7 @@ use crate::storage::FsSpool;
 /// `[0u8; 32]` base is overwritten by the copies, so no literal
 /// survives to the `with_key` call; the same idiom the SCRAM salt
 /// and TOTP secret tests settled for, extended to 32 bytes the way
-/// `src/smtp/server/server_tests_subjectpass.rs` does.
+/// `src/smtp/server/tests/mods/tests_subjectpass.rs` does.
 fn fixture_key() -> [u8; 32] {
 	let mut key = [0u8; 32];
 	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
@@ -375,7 +375,7 @@ async fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() 
 async fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
-	let primary = crate::smtp::auth::tests::fixture_password().to_string();
+	let primary = crate::smtp::auth::tests::base::fixture_password().to_string();
 	let primary_hash = crate::smtp::auth::hash_password(&primary).expect("hash primary");
 	add_account_with_primary_hash(&store, "alice", "alice@example.org", &primary_hash);
 
@@ -419,7 +419,7 @@ async fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 	assert!(store.dynamic("alice").is_none());
 
 	// Recreate alice with a fresh primary password.
-	let new_primary = crate::smtp::auth::tests::second_password().to_string();
+	let new_primary = crate::smtp::auth::tests::base::second_password().to_string();
 	let new_primary_hash =
 		crate::smtp::auth::hash_password(&new_primary).expect("hash new primary");
 	add_account_with_primary_hash(&store, "alice", "alice@example.org", &new_primary_hash);

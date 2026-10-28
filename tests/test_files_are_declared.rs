@@ -30,12 +30,14 @@ fn is_test_file_name(name: &str) -> bool {
 }
 
 /// The unit tests of a module live in its own `tests/` folder, one leaf per
-/// topic, and the name of the leaf says nothing about what it holds.
+/// topic, and the name of the leaf says nothing about what it holds. A leaf
+/// may hold helpers of its own, which live in a folder named after it, so
+/// every folder above the file counts, not only the one right next to it.
 fn in_tests_folder(path: &Path) -> bool {
-	path.parent()
-		.and_then(|parent| parent.file_name())
-		.and_then(|name| name.to_str())
-		== Some("tests")
+	path.ancestors()
+		.skip(1)
+		.filter_map(|dir| dir.file_name())
+		.any(|name| name == "tests")
 }
 
 /// Full paths of the files the sources declare: a `#[path = "x.rs"]` attribute

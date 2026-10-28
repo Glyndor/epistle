@@ -11,7 +11,7 @@ use crate::antispam::bans::BanPolicy;
 use crate::antispam::bans::tests::FakeBanStore;
 use crate::managesieve::command::Command;
 use crate::managesieve::session::{Backend, Response, ScriptStore, Session};
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -77,7 +77,7 @@ async fn managesieve_banned_account_from_known_network_is_admitted() {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)]))
 		.with_ban_store(ban_store.clone()),
 	);
@@ -128,7 +128,7 @@ async fn managesieve_banned_account_from_unknown_network_is_refused() {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)]))
 		.with_ban_store(ban_store.clone()),
 	);

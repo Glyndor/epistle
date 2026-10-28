@@ -11,7 +11,7 @@ use super::tests_tenants::{account, call, tenant_key, tenants, unconfined_key, u
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
 use crate::api::{ApiState, api_keys, router};
 use crate::directory_store::AccountStore;
-use crate::smtp::auth::tests::hash;
+use crate::smtp::auth::tests::base::hash;
 
 fn create_body(name: &str, email: &str) -> serde_json::Value {
 	json!({

@@ -33,7 +33,7 @@ fn two_accounts(dir: &std::path::Path) -> crate::api::ApiState {
 		.expect("open store"),
 	);
 	crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),

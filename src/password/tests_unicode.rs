@@ -2,7 +2,7 @@
 //!
 //! These cover the `Policy` surface only; SCRAM-side behaviour and the
 //! argon2id path are exercised where the bytes actually flow through the
-//! storage layer (`smtp/auth.rs`, `smtp/scram.rs`). The fixtures here stay
+//! storage layer (`smtp/auth/mod.rs`, `smtp/scram/mod.rs`). The fixtures here stay
 //! pointed at the policy so a regression in the storage wiring that
 //! bypasses `Policy` is caught independently by the storage-layer tests.
 

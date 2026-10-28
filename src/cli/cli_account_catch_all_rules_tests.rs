@@ -33,8 +33,8 @@ fn setup(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 			.add(DynamicAccount {
 				name: name.to_string(),
 				addresses: vec![format!("{name}@example.org")],
-				password_hash: crate::smtp::auth::tests::hash(
-					crate::smtp::auth::tests::fixture_password(),
+				password_hash: crate::smtp::auth::tests::base::hash(
+					crate::smtp::auth::tests::base::fixture_password(),
 				),
 				..DynamicAccount::default()
 			})

@@ -10,7 +10,7 @@ use ring::{digest, hmac, pbkdf2};
 
 use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::hash;
+use crate::smtp::auth::tests::base::hash;
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials, ScramServer, ScramStored};
 use crate::test_fixtures as fixtures;
 

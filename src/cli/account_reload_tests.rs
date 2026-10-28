@@ -16,7 +16,7 @@ use super::{NOT_LOADED_NOTE, Waited, wait_within, with_timeout};
 use crate::cli::account::enable_with_store;
 use crate::directory_store::file_watcher::Fingerprint;
 use crate::directory_store::{AccountStore, DynamicAccount, ReloadStatus, reload_fingerprint};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 
 /// A data dir with one dynamic account, `bob`, in `accounts.toml`.
 fn fixture() -> (tempfile::TempDir, AccountStore) {

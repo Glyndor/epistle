@@ -48,7 +48,7 @@ fn state(dir: &std::path::Path, token: &str) -> ApiState {
 		.expect("store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(&format!("{token}-admin")),
+		&crate::smtp::auth::tests::base::hash(&format!("{token}-admin")),
 		dir.into(),
 		domains,
 		store,
@@ -81,7 +81,7 @@ async fn copy(app: axum::Router, token: &str, args: Value) -> Vec<u8> {
 #[tokio::test]
 async fn email_copy_between_accessible_accounts_wire() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let token = crate::smtp::auth::tests::fixture_password();
+	let token = crate::smtp::auth::tests::base::fixture_password();
 	let state = state(dir.path(), token);
 	let raw = b"Subject: source\r\n\r\nhello";
 	let id =
@@ -135,7 +135,7 @@ async fn email_copy_between_accessible_accounts_wire() {
 #[tokio::test]
 async fn email_copy_denies_inaccessible_source_wire() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let token = crate::smtp::auth::tests::fixture_password();
+	let token = crate::smtp::auth::tests::base::fixture_password();
 	let state = state(dir.path(), token);
 	let id = mailbox::append(
 		dir.path(),

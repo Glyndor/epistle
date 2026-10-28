@@ -31,7 +31,7 @@ async fn per_tenant_limit_charges_per_recipient() {
 	let mut config = ratelimit_config(dir.path(), 1);
 	config.submission_rate_limit_per_min = None;
 	config.domain_submission_limits.clear();
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let tenant_limits = Arc::new(TenantLimits::from_config(&[crate::config::Tenant {
 		name: Some("acme".to_string()),
 		domains: vec!["example.org".to_string()],
@@ -84,7 +84,7 @@ async fn per_account_limit_charges_per_recipient() {
 	// back with `250` because both messages cost only one unit each.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = ratelimit_config(dir.path(), 2);
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(&config, crate::tls::ReloadableAcceptor::new(acceptor), None);
 	let (addr, task) = spawn_smtp_listener(server).await;

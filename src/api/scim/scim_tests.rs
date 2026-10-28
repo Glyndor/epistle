@@ -13,7 +13,7 @@ use tower::ServiceExt;
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
 use crate::api::{ApiState, api_keys, router};
 use crate::directory_store::AccountStore;
-use crate::smtp::auth::tests::hash as configured_token_hash;
+use crate::smtp::auth::tests::base::hash as configured_token_hash;
 use crate::storage::FsSpool;
 
 /// Configured bearer token. Generated fresh at process start so a literal

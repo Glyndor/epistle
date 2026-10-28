@@ -18,14 +18,14 @@ async fn expect_line(
 #[tokio::test]
 async fn pop3_plain_login_and_cancel_over_duplex_wire() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let password = crate::smtp::auth::tests::fixture_password();
+	let password = crate::smtp::auth::tests::base::fixture_password();
 	let directory = crate::smtp::directory::Directory::new(
 		["example.org".into()],
 		[("alice@example.org".into(), "alice".into())],
 	)
 	.with_password_hashes(std::collections::HashMap::from([(
 		"alice".into(),
-		crate::smtp::auth::tests::hash(password),
+		crate::smtp::auth::tests::base::hash(password),
 	)]));
 	let backend = MailboxBackend::new(DirectoryHandle::new(directory), dir.path().into());
 	let (client, server) = duplex(4096);

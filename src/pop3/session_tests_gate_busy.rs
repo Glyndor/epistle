@@ -7,7 +7,7 @@ use super::command::Command;
 use super::session::{Response, Session};
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::directory::gate_fixture::*;
-use crate::smtp::directory::hash_gate::tests::full_gate;
+use crate::smtp::directory::hash_gate::tests::base::full_gate;
 use crate::test_fixtures as fixtures;
 use base64::Engine;
 

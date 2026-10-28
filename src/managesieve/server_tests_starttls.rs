@@ -19,7 +19,7 @@ fn directory() -> DirectoryHandle {
 		)
 		.with_password_hashes(std::collections::HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixtures::password()),
+			crate::smtp::auth::tests::base::hash(fixtures::password()),
 		)])),
 	)
 }

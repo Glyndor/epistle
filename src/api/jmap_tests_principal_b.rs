@@ -43,7 +43,7 @@ pub(super) fn state_with_key(
 		.expect("open store"),
 	);
 	crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(super::tests::TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(super::tests::TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),

@@ -44,7 +44,7 @@ async fn tenant_submission_limit_is_shared_between_smtp_and_jmap() {
 		max_domains: None,
 		submission_rate_limit_per_min: Some(2),
 	}]));
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(
 		&config,
@@ -110,7 +110,7 @@ async fn account_submission_limit_is_shared_between_smtp_and_jmap() {
 		limiters,
 	);
 	let (addr, task) = spawn_smtp_listener(server).await;
-	let plain = auth_plain("alice", crate::smtp::auth::tests::fixture_password());
+	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let mut tls = tls_session(addr, tls_connector(cert)).await;
 	let smtp_reply =
 		authenticated_submit(&mut tls, &plain, "alice@example.org", "bob@example.org").await;
@@ -149,7 +149,7 @@ fn jmap_state_with_tenant_limits(
 	dir: &std::path::Path,
 	tenant_limits: Arc<TenantLimits>,
 ) -> crate::api::ApiState {
-	let token_hash = crate::smtp::auth::tests::hash(crate::test_fixtures::api_token());
+	let token_hash = crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token());
 	let spool = crate::storage::FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
 		display_name: None,

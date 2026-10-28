@@ -175,7 +175,7 @@ async fn limit_returns_409_not_429() {
 		.with_masked_max(1),
 	);
 	let mut state = ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),
@@ -345,7 +345,7 @@ fn two_domain_state(dir: &std::path::Path) -> ApiState {
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),

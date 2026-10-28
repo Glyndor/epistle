@@ -25,7 +25,7 @@ fn different_length_slices_mismatch_without_scanning() {
 }
 
 /// Per-callsite coverage of the four credential comparisons the secret-hygiene
-/// pass names (`src/smtp/scram.rs` stored key, `src/api/oauth/device.rs` user
+/// pass names (`src/smtp/scram/mod.rs` stored key, `src/api/oauth/device.rs` user
 /// code, `src/api/state/mod.rs` bearer digest, `src/api/api_keys/mod.rs` api-key
 /// digest). Each test feeds the helper the right value, a same-length wrong
 /// value, and a different-length wrong value, asserting the result the caller

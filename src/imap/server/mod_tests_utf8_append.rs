@@ -38,7 +38,7 @@ async fn logged_in(
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixtures::password()),
+			crate::smtp::auth::tests::base::hash(fixtures::password()),
 		)])),
 	);
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();

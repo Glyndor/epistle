@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// `[0u8; 32]` base is overwritten by the copies, so no literal
 /// survives to the `with_key` call; the same idiom the SCRAM salt
 /// and TOTP secret tests settled for, extended to 32 bytes the way
-/// `src/smtp/server/server_tests_subjectpass.rs` does.
+/// `src/smtp/server/tests/mods/tests_subjectpass.rs` does.
 fn fixture_key() -> [u8; 32] {
 	let mut key = [0u8; 32];
 	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());

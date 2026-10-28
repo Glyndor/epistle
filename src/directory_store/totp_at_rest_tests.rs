@@ -4,7 +4,7 @@
 
 use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::storage::MessageCrypto;
 use crate::test_fixtures as fixtures;
 

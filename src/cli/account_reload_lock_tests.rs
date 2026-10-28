@@ -27,7 +27,7 @@ use crate::config::Config;
 use crate::directory_store::file_watcher::{PollEvent, PollTarget};
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{AccountStore, DynamicAccount, FileWatcher, reload_fingerprint};
-use crate::smtp::auth::tests::{fixture_password, hash, second_password};
+use crate::smtp::auth::tests::base::{fixture_password, hash, second_password};
 use crate::storage::lock::FileLock;
 use crate::storage::locked::lock_path;
 

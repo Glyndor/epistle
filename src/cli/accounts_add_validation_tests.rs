@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use super::*;
 use crate::config::Config;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 
 fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let dir = tempfile::tempdir().expect("tempdir");

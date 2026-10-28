@@ -165,7 +165,7 @@ pub struct Directory {
 	/// non-ASCII candidate set under `[auth] unicode_passwords = true`
 	/// verifies consistently with the bytes hashed at set-time.
 	password_policy: Policy,
-	/// Bounds how many password checks run at once (see `hash_gate.rs`).
+	/// Bounds how many password checks run at once (see `hash_gate/mod.rs`).
 	hash_gate: std::sync::Arc<hash_gate::HashGate>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
@@ -174,9 +174,10 @@ pub struct Directory {
 	#[cfg(test)]
 	scram_lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 	/// Test-only counts of the stand-in work done for logins that have no
-	/// credential of their own (see `scram/test_counter.rs`).
+	/// credential of their own (see `scram/tests/test_counter.rs`).
 	#[cfg(test)]
-	decoy_counters: Option<std::sync::Arc<decoy_counters::DecoyCounters>>,
+	decoy_counters:
+		Option<std::sync::Arc<crate::smtp::directory::tests::decoy_counters::DecoyCounters>>,
 }
 
 impl Directory {
@@ -673,12 +674,7 @@ mod resolve;
 mod list_fields;
 
 #[cfg(test)]
-#[path = "mod_list_tests.rs"]
-mod list_fields_tests;
-
-#[cfg(test)]
-#[path = "mod_disabled_domain_tests.rs"]
-mod disabled_domain_tests;
+pub(crate) mod tests;
 
 mod scram;
 
@@ -699,74 +695,7 @@ pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
 pub(crate) mod gate_fixture;
 
 #[cfg(test)]
-#[path = "mod_gate_tests.rs"]
-mod gate_tests;
-
-#[cfg(test)]
-#[path = "mod_protocol_refusal_tests.rs"]
-mod protocol_refusal_tests;
-
-#[cfg(test)]
-#[path = "mod_timing_tests.rs"]
-mod timing_tests;
-
-#[cfg(test)]
-#[path = "mod_ban_policy_tests.rs"]
-mod ban_policy_tests;
-
-#[cfg(test)]
-#[path = "mod_known_network_tests.rs"]
-mod known_network_tests;
-
-#[cfg(test)]
-pub(crate) mod decoy_counters;
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "mod_app_password_tests.rs"]
-mod app_password_tests;
-
-#[cfg(test)]
-#[path = "mod_auth_audit_tests.rs"]
-mod auth_audit_tests;
-
-#[cfg(test)]
-#[path = "mod_masked_tests.rs"]
-mod masked_tests;
-
-#[cfg(test)]
-#[path = "mod_exact_tests.rs"]
-mod exact_tests;
-
-#[cfg(test)]
-#[path = "mod_alias_tests.rs"]
-mod alias_tests;
-
-#[cfg(test)]
-#[path = "mod_protocol_tests.rs"]
-mod protocol_tests;
-
-#[cfg(test)]
-#[path = "mod_iteration_tests.rs"]
-mod iteration_tests;
-
-#[cfg(test)]
-#[path = "mod_totp_tests.rs"]
-mod totp_tests;
-
-#[cfg(test)]
-#[path = "mod_login_form_tests.rs"]
-mod login_form_tests;
-
-#[cfg(test)]
 mod test_support;
 
 #[cfg(test)]
 pub(crate) mod send_as_fixture;
-
-#[cfg(test)]
-#[path = "mod_send_as_tests.rs"]
-mod send_as_tests;

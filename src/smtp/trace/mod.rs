@@ -1,0 +1,667 @@
+//! Trace and authentication headers stamped onto accepted mail.
+
+use std::net::IpAddr;
+use std::time::SystemTime;
+
+use super::line::LineError;
+use super::reply::Reply;
+
+/// The reply sent when the line decoder rejects a malformed line, closing the
+/// connection (RFC 5321 framing violations).
+pub(crate) fn line_error_reply(error: &LineError) -> Reply {
+	match error {
+		LineError::BareControlCharacter => Reply::single(
+			554,
+			"5.5.2 bare CR or LF is not allowed, closing connection",
+		),
+		LineError::TooLong => Reply::single(500, "5.5.2 line too long, closing connection"),
+		LineError::NulByte => Reply::single(554, "5.5.2 NUL byte received, closing connection"),
+	}
+}
+
+/// The domain SPF evaluates: the MAIL FROM domain, or the HELO domain for
+/// the null reverse-path (RFC 7208 section 2.4).
+pub(crate) fn spf_domain(reverse_path: &str, helo: Option<&str>) -> Option<String> {
+	if reverse_path.is_empty() {
+		return helo.map(|h| h.to_string());
+	}
+	reverse_path
+		.rsplit_once('@')
+		.map(|(_, domain)| domain.to_ascii_lowercase())
+}
+
+/// The maximum number of `Received:` trace headers tolerated on inbound mail
+/// before it is treated as a loop (RFC 5321 section 6.3).
+pub(crate) const RECEIVED_HOP_LIMIT: usize = 100;
+
+/// Count the `Received:` header fields already present in a raw message,
+/// scanning only the header block (up to the first blank line). Folded
+/// continuation lines do not start a new header, so they are not counted.
+pub(crate) fn received_hop_count(data: &[u8]) -> usize {
+	let header_end = data
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.map(|p| p + 2)
+		.unwrap_or(data.len());
+	let block = String::from_utf8_lossy(&data[..header_end]);
+	block
+		.split_inclusive('\n')
+		.filter(|line| {
+			let first = line.as_bytes().first();
+			// A new header starts at the line start (no leading WSP).
+			!matches!(first, Some(b' ' | b'\t'))
+				&& line.len() >= 9
+				&& line[..9].eq_ignore_ascii_case("received:")
+		})
+		.count()
+}
+
+/// The most header fields inbound mail may carry. A Sieve filter reads the
+/// first 10 000 headers of a message and the server adds a few dozen of its
+/// own, so a message past this would have fields the filter never sees, and
+/// no real message has anywhere near this many.
+pub(crate) const MAX_HEADER_FIELDS: usize = 9_900;
+
+/// Refuse a message with more header fields than [`MAX_HEADER_FIELDS`], and
+/// say so: it is counted (`rejected_header_fields`) and logged at most once an
+/// hour. This one check is made where SMTP has the message and again where
+/// local delivery starts, so it is the same whichever way a message arrives.
+/// The delivery counts the fields the server added too, so for mail with a
+/// local recipient the effective limit is a few less than the constant.
+pub(crate) fn refuse_padded_headers(
+	data: &[u8],
+	metrics: Option<&crate::metrics::Metrics>,
+) -> Result<(), crate::smtp::sink::SinkError> {
+	if crate::util::header_block::field_count(data) <= MAX_HEADER_FIELDS {
+		return Ok(());
+	}
+	if let Some(metrics) = metrics {
+		metrics.rejected(crate::metrics::RejectReason::HeaderFields);
+	}
+	if crate::util::warn_limited::allow("header-fields") {
+		tracing::warn!("rejecting message: too many header fields");
+	}
+	Err(crate::smtp::sink::SinkError::TooManyHeaderFields)
+}
+
+/// Build the RFC 5321 section 4.4 trace header prepended to accepted mail.
+pub(crate) fn received_header(
+	helo: Option<&str>,
+	peer: Option<IpAddr>,
+	hostname: &str,
+	esmtp: bool,
+	tls: bool,
+	auth: bool,
+	now: std::time::SystemTime,
+) -> String {
+	let client = helo.unwrap_or("unknown");
+	let peer = match peer {
+		Some(ip) => format!("[{ip}]"),
+		None => "[unknown]".to_string(),
+	};
+	let protocol = received_protocol(esmtp, tls, auth);
+	format!(
+		"Received: from {client} ({peer})\r\n\tby {hostname} with {protocol};\r\n\t{}\r\n",
+		crate::clock::rfc5322(now)
+	)
+}
+
+/// The `with` protocol keyword for the trace header, per RFC 3848.
+/// Plain HELO is `SMTP`; EHLO is `ESMTP`, gaining an `S` over TLS and an
+/// `A` once authenticated (`ESMTPS`, `ESMTPA`, `ESMTPSA`).
+pub(crate) fn received_protocol(esmtp: bool, tls: bool, auth: bool) -> &'static str {
+	if !esmtp {
+		return "SMTP";
+	}
+	match (tls, auth) {
+		(true, true) => "ESMTPSA",
+		(true, false) => "ESMTPS",
+		(false, true) => "ESMTPA",
+		(false, false) => "ESMTP",
+	}
+}
+
+/// Build a folded `Authentication-Results` header (RFC 8601 §2.2).
+/// Each method result is placed on a separate folded continuation line.
+pub(crate) fn format_auth_results(hostname: &str, methods: &[String]) -> String {
+	let mut out = format!("Authentication-Results: {hostname}");
+	for method in methods {
+		out.push_str(";\r\n\t");
+		out.push_str(method);
+	}
+	out.push_str("\r\n");
+	out
+}
+
+/// Stamp the two submission-mandatory headers the receiver contract expects
+/// (`Message-ID` and `Date`) on an authenticated client submission when the
+/// client omitted them.
+///
+/// The function scans the header block (everything up to the first blank
+/// line, CRLF or LF terminator) for `Message-ID:` and `Date:` field names,
+/// case-insensitive and respecting folded continuation lines (a line that
+/// starts with WSP is part of the previous header, never a fresh one). If
+/// either field is absent the server adds it at the top of the block; the
+/// fresh pair is prepended in `Message-ID`, `Date` order so a single
+/// observation reveals both. When both are already present the bytes are
+/// returned unchanged.
+///
+/// Applied only on the authenticated submission paths: the SMTP relay hop
+/// from another server is never modified, so the inbound trace keeps the
+/// sender's own Message-ID and Date exactly as received. Receivers score
+/// outbound mail down (and Gmail and Yahoo have outright rejected it since
+/// 2024) when these headers are missing on authenticated submission, so
+/// the server stamps them only when the client forgot.
+///
+/// `domain` is the local part's authoritative domain (the reverse-path
+/// domain for the SMTP submission path, the envelope `mailFrom` for JMAP
+/// `EmailSubmission/set`). The minted `Message-ID` reads
+/// `<uuidv7@domain>`, matching the shape `POST /api/v1/send` already emits.
+pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let headers = &data[..header_end];
+	let body = &data[header_end..];
+	let (has_message_id, has_date) = scan_submission_headers(headers);
+	if has_message_id && has_date {
+		return data.to_vec();
+	}
+	let ending = std::str::from_utf8(crate::util::header_block::line_ending(data))
+		.expect("ASCII line ending");
+	let mut prepended = String::new();
+	if !has_message_id {
+		prepended.push_str(&format!(
+			"Message-ID: <{}@{domain}>{ending}",
+			uuid::Uuid::now_v7()
+		));
+	}
+	if !has_date {
+		prepended.push_str(&format!("Date: {}{ending}", crate::clock::rfc5322(now)));
+	}
+	let mut out = Vec::with_capacity(data.len() + prepended.len());
+	out.extend_from_slice(prepended.as_bytes());
+	out.extend_from_slice(headers);
+	out.extend_from_slice(body);
+	out
+}
+
+/// In-place submission-header stamp: rewrite `data` to carry the
+/// `Message-ID` and `Date` headers the receiver contract expects when
+/// the client omitted them. When both are already present, the
+/// buffer is left untouched. The header lines are prepended in
+/// `Message-ID`, `Date` order; the message is shifted up inside the
+/// same buffer instead of being copied into a new one.
+pub fn ensure_submission_headers_in_place(data: &mut Vec<u8>, domain: &str, now: SystemTime) {
+	let header_end = header_block_end(data);
+	let (has_message_id, has_date) = scan_submission_headers(&data[..header_end]);
+	if has_message_id && has_date {
+		return;
+	}
+	let ending = std::str::from_utf8(crate::util::header_block::line_ending(data))
+		.expect("ASCII line ending");
+	let prepended = build_prepended_headers(domain, now, has_message_id, has_date, ending);
+	// Grow by exactly the prepended size (no doubling of a 25 MiB
+	// buffer), shift the message up with one memmove, then write the
+	// new headers in front.
+	let original_len = data.len();
+	data.reserve_exact(prepended.len());
+	data.resize(original_len + prepended.len(), 0);
+	data.copy_within(..original_len, prepended.len());
+	data[..prepended.len()].copy_from_slice(&prepended);
+}
+
+/// Build the prepended submission-header bytes for the in-place
+/// stamp helper. Kept in a small function so the allocation lives
+/// only as long as the byte slice we copy from.
+fn build_prepended_headers(
+	domain: &str,
+	now: SystemTime,
+	has_message_id: bool,
+	has_date: bool,
+	ending: &str,
+) -> Vec<u8> {
+	let mut out = Vec::new();
+	if !has_message_id {
+		out.extend_from_slice(
+			format!("Message-ID: <{}@{domain}>{ending}", uuid::Uuid::now_v7()).as_bytes(),
+		);
+	}
+	if !has_date {
+		out.extend_from_slice(format!("Date: {}{ending}", crate::clock::rfc5322(now)).as_bytes());
+	}
+	out
+}
+
+/// `data` without its `Bcc:` and `Resent-Bcc:` header fields, continuation
+/// lines included; the body is untouched.
+///
+/// The submission paths (authenticated SMTP, JMAP `EmailSubmission/set`)
+/// apply this before queueing: a Bcc recipient is on the envelope only, and
+/// every copy that leaves the server, local or remote, must not name it
+/// (RFC 5322 section 3.6.3, RFC 8621 section 7.5).
+pub fn strip_bcc(data: &[u8]) -> Vec<u8> {
+	strip_headers(data, &["bcc", "resent-bcc"])
+}
+
+/// In-place Bcc strip: `data` is cleared and rewritten without the
+/// `Bcc:` and `Resent-Bcc:` fields (and their folded continuations).
+/// Saves a full body copy at the cost of growing the buffer up to
+/// `data.len()` once, which is what the original allocator would
+/// have done anyway.
+pub fn strip_bcc_in_place(data: &mut Vec<u8>) {
+	strip_headers_in_place(data, &["bcc", "resent-bcc"]);
+}
+
+/// `data` without any header field whose name is one of `names` (compared as a
+/// reader after us reads a name, `same_name` in this module), folded
+/// continuation lines included. The body and every other field are kept byte
+/// for byte.
+pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
+	rewrite_header_block(data, |name| !named(name, names))
+}
+
+/// `data` rewritten to keep only the first field of each name in `names`
+/// (compared as a reader after us reads a name, `same_name` in this module),
+/// folded continuation lines included. Two fields of one name are two claims
+/// about the same header, and nothing in RFC 2369 or RFC 8058 says which of
+/// them a receiver acts on. Several URLs inside a single field are a different
+/// thing and stay: one field may carry up to four of them, and they are one
+/// claim. The body and every other field are kept byte for byte.
+pub fn keep_first_of_each_in_place(data: &mut Vec<u8>, names: &[&str]) {
+	let mut seen = vec![false; names.len()];
+	rewrite_header_block_in_place(data, |name| {
+		let Some(index) = names
+			.iter()
+			.position(|wanted| named(name, std::slice::from_ref(wanted)))
+		else {
+			return true;
+		};
+		let first = !seen[index];
+		seen[index] = true;
+		first
+	});
+}
+
+/// Whether `name` is one of `names`, the way a reader after us reads a name.
+fn named(name: &[u8], names: &[&str]) -> bool {
+	names
+		.iter()
+		.any(|wanted| same_name(name, wanted.as_bytes()))
+}
+
+/// Whether `name` is the field name `wanted`: case folded, and with every
+/// ASCII whitespace byte dropped from either side, wherever it appears.
+///
+/// mail-parser 0.11.9 drops exactly those bytes wherever they are in a name
+/// while it looks the name up in its table of the known ones
+/// (`parsers/header.rs`, `parse_header_name`), so `List -Id` reaches that
+/// reader as `List-Id` and `Authenti cation-Results` as
+/// `Authentication-Results`. A field left here under either spelling is a
+/// second copy of the header a receiver reads, and the operations that act on
+/// a name (the strip, the deduplication and the lookup) all compare through
+/// here, so one name can never be two of them.
+fn same_name(name: &[u8], wanted: &[u8]) -> bool {
+	let mut left = name
+		.iter()
+		.copied()
+		.filter(|byte| !byte.is_ascii_whitespace());
+	let mut right = wanted
+		.iter()
+		.copied()
+		.filter(|byte| !byte.is_ascii_whitespace());
+	loop {
+		match (left.next(), right.next()) {
+			(Some(one), Some(other)) if one.eq_ignore_ascii_case(&other) => {}
+			(None, None) => return true,
+			_ => return false,
+		}
+	}
+}
+
+/// `data` without the header fields `keep` does not want, folded
+/// continuation lines included: a continuation is kept or dropped with the
+/// field above it. The body and every other line are kept byte for byte.
+fn rewrite_header_block(data: &[u8], mut keep: impl FnMut(&[u8]) -> bool) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let mut out = Vec::with_capacity(data.len());
+	let mut dropping = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
+		if !continuation {
+			dropping = field_name(line).is_some_and(|name| !keep(name));
+		}
+		if !dropping {
+			out.extend_from_slice(line);
+		}
+	}
+	out.extend_from_slice(&data[header_end..]);
+	out
+}
+
+/// `data` without any header field in the namespace `name` (compared
+/// case-insensitively), folded continuation lines included. The body and
+/// every other field are kept byte for byte. Used to reserve a namespace
+/// (`X-Epistle`): one field cannot be named in a list that a future field
+/// would have to be added to.
+///
+/// The namespace is the exact field name and that name followed by a
+/// hyphen, not a text prefix: `X-Epistle` and `X-Epistle-Future` are ours,
+/// `X-Epistlefoo` belongs to whoever sent it.
+pub fn strip_headers_with_namespace(data: &[u8], name: &str) -> Vec<u8> {
+	rewrite_header_block(data, |field| !in_namespace(field, name.as_bytes()))
+}
+
+/// Whether the field name `field` is `namespace` itself or a name inside it,
+/// the hyphen included, read the way a downstream reader reads it: case
+/// folded, with the same tolerance for whitespace and separators inside the
+/// name that the inbound strip applies, so `X-Epistle-` alone and a spaced
+/// spelling are covered too. `X-Epistlefoo` is a different name and stays.
+fn in_namespace(field: &[u8], namespace: &[u8]) -> bool {
+	use super::inbound_headers::{name_matches, name_starts_with};
+	let mut dashed = namespace.to_vec();
+	dashed.push(b'-');
+	name_matches(field, namespace) || name_starts_with(field, &dashed)
+}
+
+/// In-place header strip: rewrite `data` in place to remove every
+/// header field whose name is one of `names`, folded continuation
+/// lines included.
+pub fn strip_headers_in_place(data: &mut Vec<u8>, names: &[&str]) {
+	rewrite_header_block_in_place(data, |name| !named(name, names))
+}
+
+/// In-place header rewrite: keep the field when `keep` wants its name, drop
+/// it otherwise, and move the body up over the space the dropped fields
+/// leave. Saves the body copy the slice-returning variants force. The buffer
+/// grows up to `data.len()` once; nothing is reallocated when no field is
+/// dropped.
+fn rewrite_header_block_in_place(data: &mut Vec<u8>, mut keep: impl FnMut(&[u8]) -> bool) {
+	let header_end = header_block_end(data);
+	// Pre-compute the kept lines' (original start, length) so the
+	// in-place copy can read from the right place in the original
+	// buffer even after earlier lines have been moved down. The
+	// structure mirrors the slice-returning `rewrite_header_block`:
+	// walk the header block line by line, drop the right ones, and
+	// keep a list of (kept_offset, kept_length) pairs to copy
+	// afterwards.
+	struct Kept {
+		offset: usize,
+		length: usize,
+	}
+	let mut kept: Vec<Kept> = Vec::new();
+	let mut dropping = false;
+	let mut cursor = 0usize;
+	while cursor < header_end {
+		let line_start = cursor;
+		let mut line_end = line_start;
+		while line_end < header_end && data[line_end] != b'\n' {
+			line_end += 1;
+		}
+		if line_end < header_end {
+			line_end += 1; // include the LF
+		}
+		let line = &data[line_start..line_end];
+		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
+		if !continuation {
+			dropping = field_name(line).is_some_and(|name| !keep(name));
+		}
+		if !dropping {
+			kept.push(Kept {
+				offset: line_start,
+				length: line.len(),
+			});
+		}
+		cursor = line_end;
+	}
+	// Compact: copy every kept line to its new offset, then move
+	// the body up to follow. Forward iteration with forward
+	// copies works because the kept lines' sources are
+	// monotonically increasing and each destination lies below
+	// the next source: the first copy reads from [0, len) and
+	// writes to [0, len) (no-op), the second reads from a
+	// higher range and writes below it, and so on. When the
+	// destination range overlaps the source (which happens when
+	// the kept line sits in the same offset range as the next
+	// kept line, with the dropped bytes in between), the
+	// destination is below the source so a forward copy reads
+	// from the source before any write touches it.
+	let mut write_to = 0usize;
+	for kept_line in &kept {
+		let dst_start = write_to;
+		let dst_end = dst_start + kept_line.length;
+		if dst_start >= kept_line.offset {
+			// Destination is at or past the start of the
+			// source: the two ranges overlap. The destination
+			// is below the source (the kept line was dropped
+			// from a higher offset), so a forward copy reads
+			// the source before the write touches it.
+			for i in 0..kept_line.length {
+				data[dst_start + i] = data[kept_line.offset + i];
+			}
+		} else {
+			data.copy_within(
+				kept_line.offset..kept_line.offset + kept_line.length,
+				dst_start,
+			);
+		}
+		write_to = dst_end;
+	}
+	let body_len = data.len() - header_end;
+	if body_len > 0 {
+		// Move the body up to follow the kept header block. The
+		// source (`header_end..data.len()`) and destination
+		// (`write_to..write_to + body_len`) may overlap when the
+		// kept header block is shorter than the original; do the
+		// copy with two disjoint mutable slices, reading from
+		// `right` (the body) and writing into `left` at the new
+		// offset. When the destination extends past the original
+		// header end we have to push the body back to its
+		// destination in two phases: the part that fits in `left`
+		// goes there, the remainder goes after the original
+		// header end.
+		if write_to + body_len <= header_end {
+			// Destination fits entirely inside the original
+			// header range; one copy does it.
+			let (left, right) = data.split_at_mut(header_end);
+			left[write_to..write_to + body_len].copy_from_slice(right);
+		} else {
+			// Destination extends past the original header end.
+			// Copy the first part (size `header_end - write_to`)
+			// from the body's head into the tail of the kept
+			// header block, then move the body's tail to its
+			// final position.
+			let head = header_end - write_to;
+			let (left, right) = data.split_at_mut(header_end);
+			left[write_to..header_end].copy_from_slice(&right[..head]);
+			right.copy_within(head..body_len, 0);
+		}
+		write_to += body_len;
+	}
+	data.truncate(write_to);
+}
+
+/// The unfolded, trimmed values of every `name` field in the header block
+/// of `data`, in order. Bytes that are not UTF-8 are replaced.
+pub fn header_values(data: &[u8], name: &str) -> Vec<String> {
+	let header_end = header_block_end(data);
+	let mut values: Vec<String> = Vec::new();
+	let mut collecting = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			if collecting && let Some(value) = values.last_mut() {
+				value.push(' ');
+				value.push_str(String::from_utf8_lossy(line).trim());
+			}
+			continue;
+		}
+		let split = split_field(line);
+		collecting = split.is_some_and(|(field, _)| same_name(field, name.as_bytes()));
+		if collecting && let Some((_, value)) = split {
+			values.push(String::from_utf8_lossy(value).trim().to_string());
+		}
+	}
+	for value in &mut values {
+		*value = value.trim().to_string();
+	}
+	values
+}
+
+/// Put `lines` at the top of the header block of `data`, shifting the message
+/// up inside the same buffer, and do nothing when there is nothing to add.
+/// Each line in `lines` carries its own CRLF terminator.
+pub fn prepend_header_block(data: &mut Vec<u8>, lines: &str) {
+	if lines.is_empty() {
+		return;
+	}
+	let ending = std::str::from_utf8(crate::util::header_block::line_ending(data))
+		.expect("ASCII line ending");
+	let prefix = if ending == "\n" {
+		lines.replace("\r\n", "\n")
+	} else {
+		lines.to_string()
+	};
+	let len = data.len();
+	data.reserve_exact(prefix.len());
+	data.resize(len + prefix.len(), 0);
+	data.copy_within(..len, prefix.len());
+	data[..prefix.len()].copy_from_slice(prefix.as_bytes());
+}
+
+/// The name of the field a header line starts and the rest of the line after
+/// its colon, read the way the readers that come after us read it. One
+/// extraction for the strip, the deduplication and the lookup, so a name one
+/// of them acts on is the name the others see.
+///
+/// Three folds, each because a reader downstream folds it: every leading `:`
+/// and ASCII whitespace byte while the name has not started (mail-parser
+/// 0.11.9, `parse_header_name`), the ASCII tail a CR leaves behind, and the
+/// trailing whitespace of any code point `char::is_whitespace` knows (DKIM
+/// and ARC-AMS call it `name.trim_end()`). `None` for a line with no name.
+/// The name comes back as those bytes stand: the whitespace a reader also
+/// folds *inside* a name is folded by [`same_name`], which is where two
+/// names are compared.
+pub(crate) fn split_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
+	split_field_from(line, name_start(line))
+}
+
+/// [`split_field`] with the name starting at `offset` rather than after the
+/// leading `:` and whitespace, so a caller that has to reproduce the reading
+/// of a line without those folds can say where the name begins.
+pub(crate) fn split_field_from(line: &[u8], offset: usize) -> Option<(&[u8], &[u8])> {
+	let rest = line.get(offset..)?;
+	let end = rest.iter().position(|&byte| byte == b':')?;
+	let name = fold_trailing_space(rest[..end].trim_ascii_end());
+	Some((name, &rest[end + 1..]))
+}
+
+/// Offset in `line` where the field name starts: while it has not started,
+/// every `:` and every ASCII whitespace byte is folded away, so
+/// `:X-Epistle-Attachment-Warning: forged` names `X-Epistle-Attachment-Warning`
+/// for the readers that fold it, which is what the strip has to act on. The
+/// readers that take the first colon as the end of the name read an empty one
+/// there, which no reserved name matches, so folding it costs nothing and closes
+/// the gap against the reader that does fold it.
+pub(crate) fn name_start(line: &[u8]) -> usize {
+	line.iter()
+		.position(|byte| *byte != b':' && !byte.is_ascii_whitespace())
+		.unwrap_or(line.len())
+}
+
+/// The name of the field a header line starts, folded the way [`split_field`]
+/// folds it; `None` for a line with no name.
+fn field_name(line: &[u8]) -> Option<&[u8]> {
+	split_field(line).map(|(name, _)| name)
+}
+
+/// Fold the trailing whitespace of `name` the way DKIM and ARC-AMS fold it
+/// when they apply `trim_end()` to each header they read. RFC 5322 section
+/// 3.6.8 limits field names to printable ASCII, so a non-ASCII byte at the end
+/// is already invalid; folding the 19 code points `char::is_whitespace` knows
+/// closes the gap that let a name those readers call `X-Epistle` reach the
+/// sink as something else. Invalid UTF-8 is left as it came, since mail-parser
+/// rejects it too.
+fn fold_trailing_space(name: &[u8]) -> &[u8] {
+	let Ok(text) = std::str::from_utf8(name) else {
+		return name;
+	};
+	text.trim_end().as_bytes()
+}
+
+/// Byte index where the first empty line starts. Everything before it is the
+/// header block, and the empty line and what follows are the body. Returns
+/// `data.len()` when no empty line is present.
+fn header_block_end(data: &[u8]) -> usize {
+	crate::util::header_block::split_at_blank_line(data).0.len()
+}
+
+/// Whether the header block already carries each of `Message-ID:` and
+/// `Date:`. Field names match case-insensitively; folded continuation
+/// lines (starting with WSP) belong to the previous field and never start
+/// a new one.
+fn scan_submission_headers(headers: &[u8]) -> (bool, bool) {
+	let mut has_message_id = false;
+	let mut has_date = false;
+	for line in split_header_lines(headers) {
+		if line.is_empty() {
+			break;
+		}
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			continue;
+		}
+		let name = match line.iter().position(|&b| b == b':') {
+			Some(pos) => &line[..pos],
+			None => continue,
+		};
+		if name.eq_ignore_ascii_case(b"message-id") {
+			has_message_id = true;
+		} else if name.eq_ignore_ascii_case(b"date") {
+			has_date = true;
+		}
+		if has_message_id && has_date {
+			break;
+		}
+	}
+	(has_message_id, has_date)
+}
+
+/// Iterate the header block line by line, stripping the trailing CR of a
+/// CRLF terminator. A blank line is yielded as an empty slice.
+fn split_header_lines(headers: &[u8]) -> impl Iterator<Item = &[u8]> + '_ {
+	headers.split(|&b| b == b'\n').map(strip_cr)
+}
+
+/// Drop a trailing `\r` from a header line slice.
+fn strip_cr(line: &[u8]) -> &[u8] {
+	if line.last() == Some(&b'\r') {
+		&line[..line.len() - 1]
+	} else {
+		line
+	}
+}
+
+/// Prepend the two spam-marking headers a downstream client uses to tell
+/// ham from junk: `X-Spam-Status: Yes` plus the raw probability in
+/// `X-Spam-Score`. The injector only fires when the corpus returned a
+/// score at or above `bayes_junk_at`: a below-threshold message must not
+/// grow headers the recipient did not ask for.
+///
+/// Header lines are inserted at the top of the existing header block (the
+/// prefix before the first blank line, CRLF or LF). The byte boundary is
+/// not re-scanned for "X-Spam-Status" already present: in practice the
+/// SMTP server runs this exactly once per accepted message, so a
+/// duplicate pass would imply a real bug in the call site, not a
+/// repeated correlate header.
+pub fn inject_spam_headers(data: &[u8], score: f64) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let (headers, body) = data.split_at(header_end);
+	// Six decimals is plenty for a probability and avoids leaking the
+	// floating-point noise that `f64::to_string` would emit.
+	let prefix = format!("X-Spam-Status: Yes\r\nX-Spam-Score: {score:.6}\r\n");
+	let mut out = Vec::with_capacity(data.len() + prefix.len());
+	out.extend_from_slice(prefix.as_bytes());
+	out.extend_from_slice(headers);
+	out.extend_from_slice(body);
+	out
+}
+
+#[cfg(test)]
+mod tests;

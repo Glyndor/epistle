@@ -16,7 +16,7 @@ fn ip(text: &str) -> IpAddr {
 fn app_password(label: &str, secret: &str) -> AppPassword {
 	AppPassword {
 		label: label.to_string(),
-		hash: crate::smtp::auth::tests::hash(secret),
+		hash: crate::smtp::auth::tests::base::hash(secret),
 		expires_at: None,
 		ip_cidr: None,
 		save_sent: None,
@@ -231,7 +231,7 @@ fn rotate_replaces_only_the_hash_of_that_label() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = two_labels(dir.path());
 	let before = store.for_account("alice")[1].hash.clone();
-	let new_hash = crate::smtp::auth::tests::hash(fixtures::wrong_password());
+	let new_hash = crate::smtp::auth::tests::base::hash(fixtures::wrong_password());
 	store
 		.rotate("alice", "phone", new_hash.clone())
 		.expect("rotate");

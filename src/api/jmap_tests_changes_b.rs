@@ -187,7 +187,7 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 		.expect("open"),
 	);
 	let state = crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),

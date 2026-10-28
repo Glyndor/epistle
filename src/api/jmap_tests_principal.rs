@@ -65,7 +65,7 @@ fn two_tenant_state(dir: &std::path::Path) -> (Router, String) {
 		.expect("open store"),
 	);
 	let state = crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(super::tests::TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(super::tests::TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),
@@ -118,7 +118,7 @@ fn single_account_key_state(dir: &std::path::Path) -> (Router, String) {
 		.expect("open store"),
 	);
 	let state = crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(super::tests::TOKEN.as_str()),
+		&crate::smtp::auth::tests::base::hash(super::tests::TOKEN.as_str()),
 		dir.to_path_buf(),
 		domains,
 		store.clone(),

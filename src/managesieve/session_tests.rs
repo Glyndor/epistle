@@ -263,7 +263,7 @@ fn logout_is_final() {
 async fn managesieve_failures_now_reach_the_directory() {
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::FakeBanStore;
-	use crate::smtp::auth::tests::{fixture_password, wrong_password};
+	use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 	use std::collections::HashMap;
 
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -275,7 +275,7 @@ async fn managesieve_failures_now_reach_the_directory() {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash(fixture_password()),
+			crate::smtp::auth::tests::base::hash(fixture_password()),
 		)]))
 		.with_ban_store(ban_store.clone()),
 	);

@@ -2,7 +2,7 @@
 
 use super::command::Command;
 use super::session::{Backend, Response, Session};
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 use crate::test_fixtures as fixtures;
 use std::cell::RefCell;
 
@@ -108,7 +108,7 @@ fn sasl_auth_plain_logs_in() {
 	let mut session = Session::new(FakeBackend::new(inbox()));
 	let bad = base64::engine::general_purpose::STANDARD.encode(format!(
 		"\0alice\0{}",
-		crate::smtp::auth::tests::wrong_password()
+		crate::smtp::auth::tests::base::wrong_password()
 	));
 	assert!(matches!(
 		session.handle(Command::Auth {
@@ -303,7 +303,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::directory_store::DirectoryHandle;
 	use crate::pop3::backend::MailboxBackend;
-	use crate::smtp::auth::tests::{fixture_password, wrong_password};
+	use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 	use std::collections::HashMap;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -314,7 +314,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	)
 	.with_password_hashes(HashMap::from([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash(fixture_password()),
+		crate::smtp::auth::tests::base::hash(fixture_password()),
 	)]))
 	.with_ban_store(ban_store.clone());
 	let handle = DirectoryHandle::new(directory);
@@ -350,7 +350,7 @@ async fn pop3_failures_now_reach_the_directory() {
 			)
 			.with_password_hashes(HashMap::from([(
 				"alice".to_string(),
-				crate::smtp::auth::tests::hash(fixture_password()),
+				crate::smtp::auth::tests::base::hash(fixture_password()),
 			)]))
 			.with_ban_store(ban_store.clone()),
 		),

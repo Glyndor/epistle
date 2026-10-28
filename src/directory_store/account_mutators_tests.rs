@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::*;
 use crate::smtp::address::Address;
-use crate::smtp::auth::tests::fixture_password;
+use crate::smtp::auth::tests::base::fixture_password;
 use crate::smtp::directory::Resolution;
 
 fn static_account() -> Account {
@@ -19,7 +19,7 @@ fn static_account() -> Account {
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
+		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -42,7 +42,7 @@ fn add_bob(store: &AccountStore) {
 	let account = DynamicAccount {
 		name: "bob".to_string(),
 		addresses: vec!["bob@example.org".to_string()],
-		password_hash: crate::smtp::auth::tests::hash(fixture_password()),
+		password_hash: crate::smtp::auth::tests::base::hash(fixture_password()),
 		..DynamicAccount::default()
 	};
 	store.add(account).expect("add bob");
@@ -399,7 +399,7 @@ fn dynamic_with(address: &str) -> DynamicAccount {
 	DynamicAccount {
 		name: "carol".to_string(),
 		addresses: vec![address.to_string()],
-		password_hash: crate::smtp::auth::tests::hash(fixture_password()),
+		password_hash: crate::smtp::auth::tests::base::hash(fixture_password()),
 		..DynamicAccount::default()
 	}
 }

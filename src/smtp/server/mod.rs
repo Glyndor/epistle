@@ -708,9 +708,4 @@ async fn end_cut(
 }
 
 #[cfg(test)]
-#[path = "tests_mods.rs"]
-mod tests_mods;
-
-#[cfg(test)]
-#[path = "train_corpus_tests.rs"]
-mod train_corpus_tests;
+mod tests;

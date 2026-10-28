@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use super::*;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials, ScramStored};
 
 const NAME: &str = "bob";
