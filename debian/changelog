@@ -5,6 +5,7 @@ epistle (0.12.4) UNRELEASED; urgency=medium
   * The log says at the default level that an SMTP session authenticated: one `info` line per attempt on SCRAM, OAuth and SASL EXTERNAL, naming the account by its log pseudonym when the attempt succeeded and naming no account when it was refused. A successful attempt on those mechanisms left no line at all.
   * The DKIM and ARC signatures made with Ed25519 now cover the SHA-256 digest of the signed header data, as RFC 8463 requires. They covered the raw header data, which every receiver reports as a failed signature. A signature that was already sent cannot be repaired.
   * `epistle probe` and the `ports` check of `epistle status` fail while the stack's `mail` container is not running, for example between the stop and the start of a restart; they used to warn and exit 0, so a script waiting for probe sent mail before SMTP listened.
+  * The DKIM signature and the ARC message signature now canonicalize the body as RFC 6376 section 3.4.4 requires: the relaxed body reduces the whitespace at the start of a line to one space instead of deleting it, and it ignores every empty line at the end of the body, so a body without content is hashed as the empty string. A body with indented lines was canonicalized without the indentation, and the signatures epistle made with it were not valid at the receivers. A signature that was already sent cannot be repaired.
 
  -- Glyndor <packages@glyndor.net>  Mon, 26 Oct 2026 20:00:00 +0000
 
