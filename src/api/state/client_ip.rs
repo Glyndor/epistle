@@ -27,5 +27,5 @@ impl ApiState {
 }
 
 #[cfg(test)]
-#[path = "state_client_ip_tests.rs"]
+#[path = "client_ip_tests.rs"]
 mod tests;

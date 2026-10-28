@@ -35,7 +35,7 @@ async fn upload_writes_owner_sidecar() {
 
 /// Convenience constructor for tests that want a state without the FsSpool
 /// open ceremony — exercises `ApiState::new` once on an empty directory so
-/// the wiring in `state.rs` cannot silently regress to "no backfill".
+/// the wiring in `src/api/state/mod.rs` cannot silently regress to "no backfill".
 #[test]
 fn api_state_new_runs_backfill_on_construction() {
 	let dir = tempfile::tempdir().expect("tempdir");

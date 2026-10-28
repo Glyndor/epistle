@@ -207,7 +207,7 @@ const NOT_A_ROW: &[(&str, &str)] = &[
 		"internal: the references a vacation reply carries",
 	),
 	(
-		"api::jmap::mime::MAX_MIME_DEPTH",
+		"api::jmap::objects::mime::MAX_MIME_DEPTH",
 		"internal: how deep a stored message is parsed",
 	),
 	(
@@ -227,7 +227,7 @@ const NOT_A_ROW: &[(&str, &str)] = &[
 		"internal: the comparators a script query inspects",
 	),
 	(
-		"api::jmap::email_build_parts::MAX_DEPTH",
+		"api::jmap::email_build::parts::MAX_DEPTH",
 		"internal: how deep a built message nests",
 	),
 	(

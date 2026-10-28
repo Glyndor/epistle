@@ -18,10 +18,8 @@ const DEFAULT_PROPERTIES: &[&str] = &[
 	"location",
 ];
 
-#[path = "mime_body.rs"]
 mod body;
 
-#[path = "mime_values.rs"]
 mod values;
 
 const MAX_MIME_DEPTH: usize = 64;

@@ -1,4 +1,4 @@
-use super::mime_tests_structure::{email, leaf};
+use super::tests_mime_structure::{email, leaf};
 use serde_json::{Value, json};
 
 fn body(email: Value) -> Value {

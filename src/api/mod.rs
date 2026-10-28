@@ -109,7 +109,7 @@ pub fn router(state: ApiState) -> Router {
 }
 
 #[cfg(test)]
-#[path = "api_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
@@ -117,7 +117,7 @@ mod tests;
 mod single_label_tests;
 
 #[cfg(test)]
-#[path = "api_tests_b.rs"]
+#[path = "mod_tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
@@ -129,11 +129,11 @@ mod scram_off_tests;
 mod account_bound_tests;
 
 #[cfg(test)]
-#[path = "api_tests_newrecipients.rs"]
+#[path = "mod_tests_newrecipients.rs"]
 mod tests_newrecipients;
 
 #[cfg(test)]
-#[path = "api_tests_quota.rs"]
+#[path = "mod_tests_quota.rs"]
 mod tests_quota;
 
 #[cfg(test)]
@@ -149,7 +149,6 @@ mod masked_tests;
 mod jmap_tests;
 
 #[cfg(test)]
-#[path = "jmap_tests_author.rs"]
 mod jmap_tests_author;
 
 #[cfg(test)]
@@ -157,43 +156,33 @@ mod jmap_tests_author;
 mod send_as_tests;
 
 #[cfg(test)]
-#[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
 
 #[cfg(test)]
-#[path = "jmap_tests_mailbox_tree.rs"]
 mod jmap_tests_mailbox_tree;
 
 #[cfg(test)]
-#[path = "jmap_tests_encoded_words.rs"]
 mod jmap_tests_encoded_words;
 
 #[cfg(test)]
-#[path = "jmap_tests_c.rs"]
 mod jmap_tests_c;
 
 #[cfg(test)]
-#[path = "jmap_tests_d.rs"]
 mod jmap_tests_d;
 
 #[cfg(test)]
-#[path = "jmap_tests_e2.rs"]
 mod jmap_tests_e2;
 
 #[cfg(test)]
-#[path = "jmap_tests_e.rs"]
 mod jmap_tests_e;
 
 #[cfg(test)]
-#[path = "jmap_tests_f.rs"]
 mod jmap_tests_f;
 
 #[cfg(test)]
-#[path = "jmap_tests_g.rs"]
 mod jmap_tests_g;
 
 #[cfg(test)]
-#[path = "jmap_tests_framing.rs"]
 mod jmap_tests_framing;
 
 #[cfg(test)]
@@ -201,137 +190,103 @@ mod jmap_tests_framing;
 mod recipients_tests;
 
 #[cfg(test)]
-#[path = "jmap_tests_principal.rs"]
 mod jmap_tests_principal;
 
 #[cfg(test)]
-#[path = "jmap_tests_principal_b.rs"]
 mod jmap_tests_principal_b;
 
 #[cfg(test)]
-#[path = "jmap_tests_principal_c.rs"]
 mod jmap_tests_principal_c;
 
 #[cfg(test)]
-#[path = "jmap_tests_push.rs"]
 mod jmap_tests_push;
 
 #[cfg(test)]
-#[path = "jmap_tests_push_validation.rs"]
 mod jmap_tests_push_validation;
 
 #[cfg(test)]
-#[path = "jmap_tests_ws_revoke.rs"]
 mod jmap_tests_ws_revoke;
 
 #[cfg(test)]
-#[path = "send_tests_principal.rs"]
 mod send_tests_principal;
 
 #[cfg(test)]
-#[path = "send_tests_outbound.rs"]
 mod send_tests_outbound;
 
 #[cfg(test)]
-#[path = "send_tests_save_sent.rs"]
 mod send_tests_save_sent;
 
 #[cfg(test)]
-#[path = "send_tests_class.rs"]
 mod send_tests_class;
 #[cfg(test)]
-#[path = "send_tests_class_key.rs"]
 mod send_tests_class_key;
 
 #[cfg(test)]
-#[path = "send_tests_class_paths.rs"]
 mod send_tests_class_paths;
 
 #[cfg(test)]
-#[path = "send_tests_identification.rs"]
 mod send_tests_identification;
 
 #[cfg(test)]
-#[path = "send_tests_rich.rs"]
 mod send_tests_rich;
 
 #[cfg(test)]
-#[path = "send_tests_rich_headers.rs"]
 mod send_tests_rich_headers;
 
 #[cfg(test)]
-#[path = "send_tests_injection.rs"]
 mod send_tests_injection;
 
 #[cfg(test)]
-#[path = "jmap_tests_email_create.rs"]
 mod jmap_tests_email_create;
 
 #[cfg(test)]
-#[path = "send_tests_bcc.rs"]
 mod send_tests_bcc;
 
 #[cfg(test)]
-#[path = "send_tests_toolarge.rs"]
 mod send_tests_toolarge;
 #[cfg(test)]
-#[path = "send_tests_virus.rs"]
 mod send_tests_virus;
 
 #[cfg(test)]
-#[path = "send_tests_attachments.rs"]
 mod send_tests_attachments;
 
 #[cfg(test)]
-#[path = "send_tests_ratelimit.rs"]
 mod send_tests_ratelimit;
 
 #[cfg(test)]
-#[path = "send_tests_trace.rs"]
 mod send_tests_trace;
 
 #[cfg(test)]
-#[path = "jmap_tests_attachment_limit.rs"]
 mod jmap_tests_attachment_limit;
 
 #[cfg(test)]
-#[path = "jmap_tests_message_size.rs"]
 mod jmap_tests_message_size;
 
 #[cfg(test)]
-#[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 
 #[cfg(test)]
-#[path = "jmap_tests_changes_helpers.rs"]
 mod jmap_tests_changes_helpers;
 
 #[cfg(test)]
-#[path = "jmap_tests_changes.rs"]
 mod jmap_tests_changes;
 
 #[cfg(test)]
-#[path = "jmap_tests_changes_b.rs"]
 mod jmap_tests_changes_b;
 
 #[cfg(test)]
-#[path = "jmap_tests_query_changes.rs"]
 mod jmap_tests_query_changes;
 
 #[cfg(test)]
-#[path = "jmap_tests_changes_c.rs"]
 mod jmap_tests_changes_c;
 
 #[cfg(test)]
-#[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
 
 #[cfg(test)]
-#[path = "jmap_tests_limits_objects.rs"]
 mod jmap_tests_limits_objects;
 
 #[cfg(test)]
-#[path = "jmap_tests_limits_concurrency.rs"]
 mod jmap_tests_limits_concurrency;
 
 #[cfg(test)]
@@ -339,7 +294,6 @@ mod jmap_tests_limits_concurrency;
 mod auth_once_tests;
 
 #[cfg(test)]
-#[path = "jmap_tests_limits_backref.rs"]
 mod jmap_tests_limits_backref;
 
 #[cfg(test)]
@@ -347,7 +301,6 @@ mod jmap_tests_limits_backref;
 mod tenancy_tests;
 
 #[cfg(test)]
-#[path = "tenancy_tests_routes.rs"]
 mod tenancy_tests_routes;
 
 #[cfg(test)]
@@ -363,7 +316,6 @@ mod auth_guessing_tests;
 mod auth_limiter_clients_tests;
 
 #[cfg(test)]
-#[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
 
 #[cfg(test)]
@@ -379,91 +331,72 @@ mod api_key_reload_tests;
 mod secret_diagnostics_tests;
 
 #[cfg(test)]
-#[path = "jmap_tests_disabled.rs"]
 mod jmap_tests_disabled;
 
 #[cfg(test)]
-#[path = "jmap_tests_read_scope.rs"]
 mod jmap_tests_read_scope;
 
 #[cfg(test)]
-#[path = "jmap_tests_push_get.rs"]
 mod jmap_tests_push_get;
 
 #[cfg(test)]
-#[path = "jmap_tests_eventsource.rs"]
 mod jmap_tests_eventsource;
 
 #[cfg(test)]
-#[path = "jmap_tests_vacation.rs"]
 mod jmap_tests_vacation;
 
 #[cfg(test)]
-#[path = "jmap_tests_vacation_b.rs"]
 mod jmap_tests_vacation_b;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_capability.rs"]
 mod jmap_tests_sieve_capability;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_support.rs"]
 mod jmap_tests_sieve_support;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_get.rs"]
 mod jmap_tests_sieve_get;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_query.rs"]
 mod jmap_tests_sieve_query;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_validate.rs"]
 mod jmap_tests_sieve_validate;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_set.rs"]
 mod jmap_tests_sieve_set;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_activate.rs"]
 mod jmap_tests_sieve_activate;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_authz.rs"]
 mod jmap_tests_sieve_authz;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_vacation.rs"]
 mod jmap_tests_sieve_vacation;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_atomic.rs"]
 mod jmap_tests_sieve_atomic;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_scope.rs"]
 mod jmap_tests_sieve_scope;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_cost.rs"]
 mod jmap_tests_sieve_cost;
 
 #[cfg(test)]
-#[path = "jmap_tests_sieve_padding.rs"]
 mod jmap_tests_sieve_padding;
 
 #[cfg(test)]
-#[path = "api_tests_addresses.rs"]
+#[path = "mod_tests_addresses.rs"]
 mod tests_addresses;
 
 #[cfg(test)]
-#[path = "api_tests_display_name.rs"]
+#[path = "mod_tests_display_name.rs"]
 mod tests_display_name;
 
 #[cfg(test)]
-#[path = "api_tests_queue.rs"]
+#[path = "mod_tests_queue.rs"]
 mod tests_queue;
 
 #[cfg(test)]
@@ -471,9 +404,7 @@ mod tests_queue;
 mod confinement_tests;
 
 #[cfg(test)]
-#[path = "confinement_tests_jmap.rs"]
 mod confinement_tests_jmap;
 
 #[cfg(test)]
-#[path = "confinement_tests_reach.rs"]
 mod confinement_tests_reach;

@@ -15,7 +15,7 @@ use crate::storage::MessageCrypto;
 
 /// Build an [`ApiState`] whose `training()` returns a queue backed by
 /// a [`RecordingTrainer`]. Two state-builders already exist
-/// (`api_tests::test_state`) but neither wires a training queue, so
+/// (`api::tests::test_state`) but neither wires a training queue, so
 /// the JMAP-side tests roll their own here rather than overload the
 /// generic one. The test never authenticates against this state, so
 /// the password hash and the SMTP credential are both derived from

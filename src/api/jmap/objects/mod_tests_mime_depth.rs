@@ -1,4 +1,4 @@
-use super::mime_tests_structure::{ID, leaf};
+use super::tests_mime_structure::{ID, leaf};
 use crate::api::Principal;
 use crate::api::tests::{TOKEN, request_raw, test_state};
 use axum::http::StatusCode;

@@ -103,22 +103,22 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 	),
 	(SEND, &["MAX_EXTRA_VALUE_LEN"], "values of at most {} bytes"),
 	(
-		"src/api/state_bearer.rs",
+		"src/api/state/bearer.rs",
 		&["MAX_BEARER_LEN"],
 		"longer than {} bytes is not looked at",
 	),
 	(
-		"src/api/state_limiter.rs",
+		"src/api/state/limiter.rs",
 		&["AUTH_MAX_FAILURES"],
 		"made {} requests with credentials",
 	),
 	(
-		"src/api/state_limiter.rs",
+		"src/api/state/limiter.rs",
 		&["AUTH_WINDOW"],
 		"in the last {} seconds",
 	),
 	(
-		"src/api/state.rs",
+		"src/api/state/mod.rs",
 		&["MAX_CONCURRENT_ARGON2", "MAX_ARGON2_QUEUE"],
 		"argon2 check: {} run at a time, {} may wait",
 	),

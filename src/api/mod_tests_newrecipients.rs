@@ -89,5 +89,5 @@ async fn send_over_the_daily_new_recipient_limit_is_429() {
 	assert_eq!(status_body["queue_size"], 0, "{status_body}");
 }
 
-#[path = "api_tests_correspondents.rs"]
+#[path = "mod_tests_correspondents.rs"]
 mod correspondents;

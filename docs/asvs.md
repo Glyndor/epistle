@@ -31,7 +31,7 @@ function name is the stable reference.
 |---|---|---|
 | 1.1 Secure SDLC, threat model | Met | Secure-by-default / fail-closed is a project invariant; the threat model and control summary live in [`docs/security.md`](security.md). |
 | 1.2 Authentication architecture (unique, low-priv service account) | Met | Runs under a dedicated isolated system user (`glyndor-epistle`); privileges are dropped after binding (`src/privdrop.rs`, `drop_to`/`verify`). |
-| 1.4 Access-control architecture (enforced at a trusted layer) | Met | Management API is gated by one middleware over the whole router (`src/api/state.rs::require_bearer_token`, wired in `src/api/mod.rs`); mail-protocol access is account-scoped at the directory/storage layer. |
+| 1.4 Access-control architecture (enforced at a trusted layer) | Met | Management API is gated by one middleware over the whole router (`src/api/state/mod.rs::require_bearer_token`, wired in `src/api/mod.rs`); mail-protocol access is account-scoped at the directory/storage layer. |
 | 1.5 Input/output: untrusted input bounded at the boundary | Met | Sans-IO decoders bound every external input (see V5); SMTP decoder is smuggling-immune (`src/smtp/line.rs::LineDecoder`). |
 | 1.6 Cryptographic architecture (keys managed, rotatable) | Met | DKIM auto-rotation under new selectors with an overlap window (`src/dkim/rotate.rs`); ACME issues/renews TLS keys (`src/acme/`). |
 | 1.8 Data protection / classification | Met | Bodies on the filesystem `0600`, never in the DB; secrets only from the environment. See V8. |
@@ -49,7 +49,7 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
@@ -65,9 +65,9 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 3.1 No session tokens in the URL | Met | Bearer token read only from the `Authorization` header (`src/api/state.rs::require_bearer_token`). |
+| 3.1 No session tokens in the URL | Met | Bearer token read only from the `Authorization` header (`src/api/state/mod.rs::require_bearer_token`). |
 | 3.2 / 3.3 Session generation, timeout, invalidation | N/A | The server holds no server-side web session: mail protocols are connection-scoped (auth state dies with the TCP connection); the API is stateless bearer-token. |
-| 3.3.x Bearer-token lifetime bounded | Met | OAuth/JWT bearer tokens require `exp` (`src/jwt/mod.rs`, fixed in this sweep); API keys carry an expiry honored fail-closed (`src/api/api_keys.rs::admits`). |
+| 3.3.x Bearer-token lifetime bounded | Met | OAuth/JWT bearer tokens require `exp` (`src/jwt/mod.rs`, fixed in this sweep); API keys carry an expiry honored fail-closed (`src/api/api_keys/mod.rs::admits`). |
 | 3.4 Cookie-based session attributes (Secure/HttpOnly/SameSite) | N/A | No cookies are issued by the server. (In scope for `epistle-panel`.) |
 | 3.5 Token-based session (no static API secrets in code) | Met | Tokens are operator-provisioned hashes (`sha256:` digest or legacy argon2id), never in source. |
 | 3.7 / CSRF defenses | N/A | No browser-driven state-changing form; API is bearer-authenticated, not cookie/ambient-authority. |
@@ -78,9 +78,9 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 4.1.1 Enforced at a trusted server layer | Met | Single `require_bearer_token` layer over the whole authenticated router; `/healthz` is the only unauthenticated route and returns a static body (`src/api/mod.rs`, `src/api/state.rs`). |
+| 4.1.1 Enforced at a trusted server layer | Met | Single `require_bearer_token` layer over the whole authenticated router; `/healthz` is the only unauthenticated route and returns a static body (`src/api/mod.rs`, `src/api/state/mod.rs`). |
 | 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); a scoped per-account API key would be stricter. Noted, not a cross-tenant leak. |
-| 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys.rs::admits`, `src/directory_store/app_passwords.rs::admits`). |
+| 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys/mod.rs::admits`, `src/directory_store/app_passwords.rs::admits`). |
 | 4.2.1 Object-level authZ / no IDOR | Met | JMAP blob ids parsed as UUIDs before any FS use; every data path uses the authenticated `self.account()` (`src/api/jmap/`); IMAP mailbox names allow-listed level by level and stored as one directory each (`src/util/mailbox_path.rs::valid_folder`, `disk_name`). |
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
@@ -115,7 +115,7 @@ function name is the stable reference.
 |---|---|---|
 | 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (The single SHA-1 is the RFC 6238-mandated TOTP HMAC, `src/totp/mod.rs`.) |
 | 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth.rs::hash_password` (argon2id PHC). |
-| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state.rs::token_matches`). |
+| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
 | 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
 | 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
 | 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify.rs`). |
@@ -198,10 +198,10 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 13.1.1 API uses the same access control as the rest of the app | Met | Single bearer middleware over the whole router (`src/api/state.rs`). |
+| 13.1.1 API uses the same access control as the rest of the app | Met | Single bearer middleware over the whole router (`src/api/state/mod.rs`). |
 | 13.1.3 No sensitive data in URLs | Met | Token in the `Authorization` header; ids are UUIDs. |
 | 13.2.1 Allowed HTTP methods enforced | Met | axum routes declare explicit methods; unknown methods 404/405. |
-| 13.2.3 Anti-automation on the API | Met | `AuthLimiter` sliding-window failure budget before any token work (`src/api/state.rs`). |
+| 13.2.3 Anti-automation on the API | Met | `AuthLimiter` sliding-window failure budget before any token work (`src/api/state/mod.rs`). |
 | 13.3.x JSON schema / typed deserialization | Met | Requests deserialized into typed structs (serde); JMAP method/argument shapes validated against RFC 8620/8621. |
 | 13.4 GraphQL | N/A | No GraphQL endpoint. |
 

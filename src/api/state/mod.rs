@@ -49,7 +49,7 @@ struct Inner {
 	/// once. A request past the limit waits for its turn, it is not refused.
 	argon2_gate: std::sync::Arc<tokio::sync::Semaphore>,
 	/// Requests waiting for the gate; past [`MAX_ARGON2_QUEUE`] they are refused.
-	argon2_waiting: std::sync::Mutex<state_auth_queue::QueueSlots>,
+	argon2_waiting: std::sync::Mutex<auth_queue::QueueSlots>,
 	argon2_queue_max: usize,
 	/// Test-only: argon2 runs started, running now, and the most at once.
 	#[cfg(test)]
@@ -114,14 +114,14 @@ struct Inner {
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
 	/// The per-account submission limiter the SMTP listeners share, and
-	/// the server-wide per-account cap; see `state_submission.rs`.
+	/// the server-wide per-account cap; see `submission.rs`.
 	submission_limit: Option<(Arc<crate::smtp::ratelimit::SendLimiter>, Option<u32>)>,
 	/// Per-account Bayesian wiring: the training queue and the
 	/// store, both `None` without a database. Builders and accessors
-	/// live in `state_bayes.rs`.
+	/// live in `bayes.rs`.
 	bayes: bayes::BayesBindings,
 	/// The outbound path SMTP submission uses (routing, DKIM, local
-	/// delivery); `None` sends straight to `spool`. See `state_outbound.rs`.
+	/// delivery); `None` sends straight to `spool`. See `outbound.rs`.
 	outbound: Option<Arc<dyn crate::smtp::sink::MessageSink>>,
 	/// Retention window in days for the per-recipient delivery log
 	/// (`<data_dir>/deliverylog/`). `0` (the default) disables the log;
@@ -146,7 +146,6 @@ struct Inner {
 	max_recipients: usize,
 }
 
-#[path = "state_limiter.rs"]
 mod limiter;
 use limiter::{AUTH_WINDOW, ClientLimiters};
 
@@ -214,7 +213,7 @@ impl ApiState {
 				argon2_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
 					MAX_CONCURRENT_ARGON2,
 				)),
-				argon2_waiting: std::sync::Mutex::new(state_auth_queue::QueueSlots::default()),
+				argon2_waiting: std::sync::Mutex::new(auth_queue::QueueSlots::default()),
 				argon2_queue_max: MAX_ARGON2_QUEUE,
 				#[cfg(test)]
 				argon2_stats: Default::default(),
@@ -582,7 +581,7 @@ impl ApiState {
 	/// window. Test-only: the router-level rate-limit test builds its state
 	/// with a long window so the wall clock under a loaded parallel run is
 	/// never the thing under test. The window logic itself is covered by
-	/// `state_limiter_tests.rs`. Must be called before the state is shared
+	/// `mod_tests_limiter.rs`. Must be called before the state is shared
 	/// (the other builders quietly no-op when the `Arc` is already taken;
 	/// this one panics, because a test-only builder that silently does
 	/// nothing defeats its own control).
@@ -767,7 +766,6 @@ thread_local! {
 	pub(crate) static CONFIGURED_HASH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[path = "state_bearer.rs"]
 mod bearer;
 /// The scopes the bearer middleware accepts for a request line, for the tests
 /// that hold the OpenAPI description to it.
@@ -775,31 +773,24 @@ mod bearer;
 pub(in crate::api) use bearer::acceptable_scopes_for;
 pub use bearer::require_bearer_token;
 
-#[path = "state_auth_queue.rs"]
-mod state_auth_queue;
+mod auth_queue;
 
-#[path = "state_auth.rs"]
 mod auth;
 
-#[path = "state_bayes.rs"]
 mod bayes;
 
-#[path = "state_outbound.rs"]
 mod outbound;
 
-#[path = "state_submission.rs"]
 mod submission;
 
-#[path = "state_classes.rs"]
 mod classes;
 
 #[cfg(test)]
-#[path = "state_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "state_limiter_tests.rs"]
-mod limiter_tests;
+#[path = "mod_tests_limiter.rs"]
+mod tests_limiter;
 
-#[path = "state_client_ip.rs"]
 mod client_ip;

@@ -14,7 +14,6 @@ use crate::compose;
 use crate::smtp::trace::ensure_submission_headers;
 use crate::util::header::sanitize_header_value;
 
-#[path = "email_build_parts.rs"]
 mod parts;
 
 /// Where the parts of one Email come from: the account's uploads read
@@ -152,5 +151,5 @@ pub(super) fn invalid(properties: &[&str]) -> Value {
 }
 
 #[cfg(test)]
-#[path = "email_build_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

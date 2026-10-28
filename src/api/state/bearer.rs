@@ -1,6 +1,6 @@
 //! The bearer middleware: every API request must carry the configured token or
 //! an API key, subject to the per-client failure limits and the argon2 gate
-//! described in `state_auth.rs` and `state_limiter.rs`.
+//! described in `auth.rs` and `limiter.rs`.
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
