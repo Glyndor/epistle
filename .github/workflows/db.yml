@@ -138,7 +138,7 @@ jobs:
           # with two unreachable-in-practice error mappings that pull the
           # file below 100%):
           #   src/db/mod.rs                  88.79%
-          #   src/directory_store/sql.rs     96.88%
+          #   src/directory_store/sql/mod.rs 96.88%
           #   src/antispam/corpus.rs         73.15%
           #   src/antispam/reputation.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
@@ -151,7 +151,7 @@ jobs:
             src/db/mod.rs
             src/antispam/reputation.rs
             src/antispam/corpus.rs
-            src/directory_store/sql.rs
+            src/directory_store/sql/mod.rs
         run: |
           # `--tests` instruments every test target (lib tests plus every
           # integration test) so a new `tests/database_*.rs` is run

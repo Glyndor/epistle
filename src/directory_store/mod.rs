@@ -336,7 +336,8 @@ pub struct AccountStore {
 	/// Runtime password policy (default `ASCII_ONLY`; production wiring
 	/// sets it from `[auth] unicode_passwords` via `with_password_policy`).
 	password_policy: Policy,
-	/// At-rest encryption for the TOTP secret (see `set_totp.rs`).
+	/// At-rest encryption for the TOTP secret (see
+	/// `src/directory_store/set_totp/mod.rs`).
 	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
 }

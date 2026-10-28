@@ -5,8 +5,8 @@
 //! because the disk store rereads under the `flock`; without the
 //! rebuild the server would refuse that credential until a restart.
 //!
-//! Lives in a sibling so `app_passwords_api.rs` stays under the
-//! per-file line budget.
+//! Lives in a sibling so `src/directory_store/app_passwords_api/mod.rs` stays
+//! under the per-file line budget.
 
 use crate::directory_store::{AccountStore, AppPassword, AppPasswordStore};
 use crate::smtp::auth::tests::base::{fixture_password, hash};

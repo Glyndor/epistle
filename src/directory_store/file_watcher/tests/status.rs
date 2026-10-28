@@ -2,8 +2,8 @@
 //! when the watcher starts, rewritten after a reload, and kept fresh
 //! on every other poll by a bare mtime update.
 //!
-//! Lives in a sibling so `file_watcher_tests.rs` stays under the
-//! per-file code-line budget.
+//! Lives in a sibling so `src/directory_store/file_watcher/tests/base.rs`
+//! stays under the per-file code-line budget.
 
 use std::path::Path;
 use std::sync::Arc;

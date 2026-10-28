@@ -424,7 +424,7 @@ fn dynamic_allowed_protocols_propagates_to_directory() {
 /// sibling process (the CLI) rewrote the file out of band. The test
 /// drives the helper directly so it stays independent of the
 /// watcher poll loop; the watcher tests in
-/// `file_watcher_tests.rs` cover the live path.
+/// `src/directory_store/file_watcher/tests/base.rs` cover the live path.
 #[test]
 fn reload_accounts_from_swaps_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
