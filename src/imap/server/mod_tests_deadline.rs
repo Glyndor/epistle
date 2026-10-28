@@ -302,9 +302,9 @@ fn start_audit_server() -> (tempfile::TempDir, crate::imap::server::Server) {
 #[tokio::test(start_paused = true)]
 async fn audit_discard_timeout_write_is_bounded() {
 	let (_dir, server) = start_audit_server();
-	let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+	let (mut client, stream, ctl) = crate::net::tests::audit_support::Gate::pair();
 	let task = tokio::spawn(async move { server.handle(stream, None).await });
-	crate::net::audit_support::greeting(&mut client).await;
+	crate::net::tests::audit_support::greeting(&mut client).await;
 	client
 		.write_all(b"a APPEND INBOX {1+}\r\n")
 		.await
@@ -314,7 +314,7 @@ async fn audit_discard_timeout_write_is_bounded() {
 	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
 	ctl.block(1);
 	tokio::time::advance(PREAUTH).await;
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	let ended = task.is_finished();
 	if !ended {
 		task.abort();
@@ -330,9 +330,9 @@ async fn audit_discard_timeout_write_is_bounded() {
 #[tokio::test(start_paused = true)]
 async fn audit_discard_timeout_flush_is_bounded() {
 	let (_dir, server) = start_audit_server();
-	let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+	let (mut client, stream, ctl) = crate::net::tests::audit_support::Gate::pair();
 	let task = tokio::spawn(async move { server.handle(stream, None).await });
-	crate::net::audit_support::greeting(&mut client).await;
+	crate::net::tests::audit_support::greeting(&mut client).await;
 	client
 		.write_all(b"a APPEND INBOX {1+}\r\n")
 		.await
@@ -340,10 +340,10 @@ async fn audit_discard_timeout_flush_is_bounded() {
 	let mut reply = [0u8; 1024];
 	let n = client.read(&mut reply).await.expect("reject");
 	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	ctl.block(2);
 	tokio::time::advance(PREAUTH).await;
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	let ended = task.is_finished();
 	if !ended {
 		task.abort();
@@ -360,9 +360,9 @@ async fn audit_discard_timeout_flush_is_bounded() {
 async fn audit_rejected_tail_write_and_flush_are_bounded() {
 	for mode in [1u8, 2u8] {
 		let (_dir, server) = start_audit_server();
-		let (mut client, stream, ctl) = crate::net::audit_support::Gate::pair();
+		let (mut client, stream, ctl) = crate::net::tests::audit_support::Gate::pair();
 		let task = tokio::spawn(async move { server.handle(stream, None).await });
-		crate::net::audit_support::greeting(&mut client).await;
+		crate::net::tests::audit_support::greeting(&mut client).await;
 		client
 			.write_all(b"a APPEND INBOX {1+}\r\nx")
 			.await
@@ -370,9 +370,9 @@ async fn audit_rejected_tail_write_and_flush_are_bounded() {
 		let mut reply = [0u8; 1024];
 		let n = client.read(&mut reply).await.expect("reject");
 		assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
-		crate::net::audit_support::settle().await;
+		crate::net::tests::audit_support::settle().await;
 		ctl.block(mode);
 		client.write_all(b" {2048+}\r\n").await.expect("tail");
-		crate::net::audit_support::cut(task, ctl, PREAUTH).await;
+		crate::net::tests::audit_support::cut(task, ctl, PREAUTH).await;
 	}
 }

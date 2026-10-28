@@ -41,7 +41,7 @@ PEM in `[tls]`).
 | DKIM private keys | the `key_file` paths in `[dkim]` (`src/config/dkim.rs:13`) and the rotated keys the server writes | whoever holds one signs mail as the domain |
 | The at-rest master key | `encryption_key_env` or `encryption_key_file` in `[storage]` | turns a stolen disk or backup from plaintext into ciphertext, and back |
 | The API bearer token and labeled API keys | `[api] token_hash` and `<data_dir>/api_keys.toml` (`src/api/api_keys/mod.rs:8`) | full administration of accounts, domains, queue and mail |
-| ACME account key and issued certificates | `<data_dir>/acme/account.key` (`src/acme/renew.rs:27`) and the certificate beside it | the mail protocols' TLS identity |
+| ACME account key and issued certificates | `<data_dir>/acme/account.key` (`src/acme/renew/mod.rs:27`) and the certificate beside it | the mail protocols' TLS identity |
 | DNS provider tokens | `[dns]` `token_file` or `token_env` (`src/config/dns.rs:33`) | a leaked token edits the zone: MX, SPF, DKIM, TLSA |
 | Backups | whatever `epistle backup` writes to (`src/cli/backup/mod.rs::run`) | a complete copy of everything above, wherever the operator keeps it |
 
@@ -70,7 +70,7 @@ PEM in `[tls]`).
 | Resource exhaustion by size or count | 25 MiB message cap advertised as ESMTP `SIZE` and enforced (`src/smtp/session/mod.rs:21`, `:463`); a per-listener connection semaphore, 1000 for SMTP by default (`src/smtp/server/mod.rs:25`, `:308`, `max_connections_per_listener` at `src/config/mod.rs:215`); a full data filesystem defers new transactions instead of accepting mail it cannot write (`src/smtp/diskspace/mod.rs:1-11`) | test: `src/smtp/session/tests/mods/tests_diskspace.rs`; the size cap: none named |
 | Header injection through inbound content that the server re-emits | ARF reports, bounces, vacation replies and JMAP-built headers pass through `sanitize_header_value`, which strips CR and LF (`src/util/header.rs:25`; used at `src/antispam/arf.rs:64-69`, `src/api/jmap/objects/mod.rs:30-33`, `src/sieve/vacation.rs:64`, `src/queue/bounce.rs:370`) | test: `strips_cr_lf_to_prevent_header_injection` (`src/util/header.rs:50`), `subject_with_crlf_does_not_inject_headers` (`src/sieve/vacation.rs:245`), `jmap_email_set_sanitises_header_injection_in_subject` (`src/api/jmap_tests_b.rs:338`), the ARF cases (`src/antispam/arf.rs:371-447`) |
 | Forwarding loops | forwarding stops at 25 `Received:` hops (`src/storage/delivery/mod.rs:32`) | test: `src/storage/delivery/mod_forward_tests.rs` |
-| Spoofed sender domains | SPF, DKIM, DMARC and ARC verification on inbound; DNSBL and greylisting when configured (`src/spf/`, `src/dkim/verify.rs`, `src/dmarc/`, `src/arc/`, `src/antispam/hook.rs`) | test: `src/dkim/verify_tests.rs` and the per-module suites; greylist state is in memory (`src/antispam/greylist.rs:79`) and resets on restart |
+| Spoofed sender domains | SPF, DKIM, DMARC and ARC verification on inbound; DNSBL and greylisting when configured (`src/spf/`, `src/dkim/verify/mod.rs`, `src/dmarc/`, `src/arc/`, `src/antispam/hook.rs`) | test: `src/dkim/verify/tests/base.rs` and the per-module suites; greylist state is in memory (`src/antispam/greylist.rs:79`) and resets on restart |
 
 ### Submission, IMAP, POP3 and JMAP: authenticated users
 
@@ -110,8 +110,8 @@ PEM in `[tls]`).
 
 | Threat | Control | Evidence |
 |---|---|---|
-| DKIM key theft | keys are read from operator-owned paths (`src/config/dkim.rs:13-20`); rotated keys, ed25519 and the RSA dual-signing key alike, are written `0600` (`write_key` in `src/dkim/rotate_steps.rs`); rotation every 90 days with a 14-day overlap (`ROTATE_INTERVAL_DAYS`, `ROTATE_OVERLAP_DAYS` in `src/dkim/rotate.rs`) | test: `src/dkim/rotate_tests.rs` |
-| ACME account key exposure | written `0600` into a fresh temp file, fsynced and renamed into place (`src/acme/renew.rs:58-72`) | none named for the mode |
+| DKIM key theft | keys are read from operator-owned paths (`src/config/dkim.rs:13-20`); rotated keys, ed25519 and the RSA dual-signing key alike, are written `0600` (`write_key` in `src/dkim/rotate/steps.rs`); rotation every 90 days with a 14-day overlap (`ROTATE_INTERVAL_DAYS`, `ROTATE_OVERLAP_DAYS` in `src/dkim/rotate/mod.rs`) | test: `src/dkim/rotate/tests/base.rs` |
+| ACME account key exposure | written `0600` into a fresh temp file, fsynced and renamed into place (`src/acme/renew/mod.rs:58-72`) | none named for the mode |
 | The at-rest key left in memory or in a log | the key bytes are read into `Zeroizing` buffers and wiped once the AEAD key is built (`src/storage/crypto.rs:263-295`); `Debug` never prints key material (`:94-101`); `zeroize` is pinned exactly (`Cargo.toml:55`); a message that fails to decrypt is an error, never served as ciphertext (`:192-216`); enabling encryption without a key refuses to start (`:126-133`) | test: `decode_fails_closed_when_tampered`, `decode_fails_closed_when_encrypted_but_no_key`, `from_config_enabled_without_key_fails_closed` (`src/storage/crypto_tests.rs:54`, `:64`, `:89`) |
 | A restored backup exposing mail | `epistle backup` archives the on-disk bytes, so an encrypted store stays ciphertext without the key (`src/cli/backup/mod.rs::collect_files`); the key is expected off the data disk (`security.md`) | test: `src/cli/backup_tests.rs` |
 | Clock drift | TOTP tolerates one 30-second step either side and no more (`src/totp/mod.rs:13`); API key expiry and DKIM rotation read the system clock; the host's time source is the operator's | test: `verify_accepts_current_and_skewed_codes` (`src/totp/mod.rs:125`) |

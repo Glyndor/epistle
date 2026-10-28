@@ -171,7 +171,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"At most {} characters",
 	),
 	(
-		"src/net/http_serve.rs",
+		"src/net/http_serve/mod.rs",
 		&["HEADER_READ_TIMEOUT"],
 		"{} seconds to send it",
 	),

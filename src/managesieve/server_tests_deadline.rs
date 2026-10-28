@@ -311,22 +311,22 @@ fn start_audit_server() -> (tempfile::TempDir, crate::managesieve::server::Serve
 #[tokio::test(start_paused = true)]
 async fn audit_unauthenticate_slow_flush_gets_a_fresh_window() {
 	let (_dir, server) = start_audit_server();
-	let (mut client, transport, ctl) = crate::net::audit_support::Gate::pair();
+	let (mut client, transport, ctl) = crate::net::tests::audit_support::Gate::pair();
 	let task =
 		tokio::spawn(async move { server.handle_preauth_for_test(transport, "alice").await });
-	crate::net::audit_support::greeting(&mut client).await;
+	crate::net::tests::audit_support::greeting(&mut client).await;
 	tokio::time::advance(PREAUTH * 3).await;
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	ctl.block(2);
 	client
 		.write_all(b"UNAUTHENTICATE\r\n")
 		.await
 		.expect("write");
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	let prematurely_ended = task.is_finished();
 	tokio::time::advance(Duration::from_secs(1)).await;
 	ctl.release();
-	crate::net::audit_support::settle().await;
+	crate::net::tests::audit_support::settle().await;
 	if !prematurely_ended {
 		let mut reply = [0u8; 64];
 		let n = client.read(&mut reply).await.expect("ok");

@@ -34,7 +34,7 @@ pub enum ConsultOutcome {
 /// Cap on the LLM response body. The model is asked to emit a tiny JSON
 /// object; a 64 KiB ceiling is defence in depth, applied chunk-by-chunk so a
 /// missing or lying `content_length` cannot bypass it. Mirrors the cap in
-/// `acme/transport.rs`.
+/// `acme/transport/mod.rs`.
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// Confidence above which a `spam: true` reply escalates the message. Below

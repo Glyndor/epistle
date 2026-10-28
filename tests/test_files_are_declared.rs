@@ -79,6 +79,9 @@ fn declared_paths(files: &[PathBuf], sources: &[String]) -> HashSet<PathBuf> {
 				.unwrap_or(line);
 			if let Some(name) = line.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
 				let name = name.trim();
+				// A topic that is a Rust keyword is declared as a raw
+				// identifier (`mod r#macro;`) and its leaf is `macro.rs`.
+				let name = name.strip_prefix("r#").unwrap_or(name);
 				paths.insert(dir.join(format!("{name}.rs")));
 				paths.insert(dir.join(name).join("mod.rs"));
 				paths.insert(own_folder.join(format!("{name}.rs")));
