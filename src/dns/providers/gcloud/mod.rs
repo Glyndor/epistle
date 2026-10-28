@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, ZoneOp, same_txt_purpose,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
@@ -500,6 +500,14 @@ impl DnsProvider for GcloudProvider {
 		let zone_name = zone.to_string();
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			self.list_inner(&zone).await
+		}))
+	}
+	fn has_zone(&self, zone: &str) -> ZoneOp<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			// The managed-zone lookup answers the question on its own: it
+			// reads one zone by name, not the records of a zone.
+			Ok(self.find_managed_zone(&zone).await.is_ok())
 		}))
 	}
 }

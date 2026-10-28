@@ -290,10 +290,12 @@ pub fn build_records(
 		}
 	}
 
-	// One TLSA record for the mail host (shared across all domains).
+	// One TLSA record for the mail host (shared across all domains), in
+	// the zone that holds the hostname: the hostname is a name inside the
+	// zone, not a zone of its own.
 	if let Some(association) = tlsa {
 		records.push(PublishRecord {
-			zone: hostname.to_string(),
+			zone: host_zone(hostname, domains),
 			record: DnsRecord {
 				name: format!("_25._tcp.{hostname}"),
 				kind: RecordKind::Tlsa,
@@ -340,7 +342,12 @@ pub async fn publish_tlsa(
 		ttl: TTL,
 		proxied: None,
 	};
-	provider.upsert(hostname, record).await
+	// The zone that holds the mail hostname, not the hostname itself: a
+	// provider that names its zones looks a zone up by its exact name, and
+	// `mail.example.org` is a name inside the `example.org` zone, not a
+	// zone of its own.
+	let zone = crate::dns::zone::resolve(provider, hostname).await?;
+	provider.upsert(&zone, record).await
 }
 
 /// Decode the first PEM `CERTIFICATE` block to DER.
@@ -360,3 +367,7 @@ mod tests;
 #[cfg(test)]
 #[path = "records_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "records_tests_c.rs"]
+mod tests_c;

@@ -13,6 +13,7 @@ pub mod records_services;
 pub mod txt;
 #[cfg(test)]
 mod uri_probe;
+pub mod zone;
 
 use crate::dns::provider::txt_purpose;
 use crate::spf::DnsLookup;

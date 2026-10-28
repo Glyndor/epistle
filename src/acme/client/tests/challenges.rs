@@ -106,10 +106,22 @@ async fn client_for(kind: &str, final_status: &str) -> AcmeClient<Recorded> {
 	client
 }
 
-/// A provider recording each call as `upsert NAME` / `delete NAME`, in order.
-#[derive(Default)]
+/// A provider recording each call as `upsert ZONE NAME` / `delete ZONE
+/// NAME`, in order. It holds the zones it was given and refuses every
+/// other one, the way a credential scoped to a zone does.
 struct Journal {
 	calls: Mutex<Vec<String>>,
+	/// The zones the credential covers.
+	zones: Vec<String>,
+}
+
+impl Journal {
+	fn with_zones(zones: &[&str]) -> Self {
+		Journal {
+			calls: Mutex::new(Vec::new()),
+			zones: zones.iter().map(|zone| zone.to_string()).collect(),
+		}
+	}
 }
 
 type Op<'a> = std::pin::Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
@@ -117,22 +129,30 @@ type ListOp<'a> =
 	std::pin::Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
 impl DnsProvider for Journal {
-	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		self.calls
 			.lock()
 			.expect("calls")
-			.push(format!("upsert {}", record.name));
+			.push(format!("upsert {zone} {}", record.name));
 		Box::pin(async { Ok(()) })
 	}
-	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		self.calls
 			.lock()
 			.expect("calls")
-			.push(format!("delete {}", record.name));
+			.push(format!("delete {zone} {}", record.name));
 		Box::pin(async { Ok(()) })
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async { Ok(Vec::new()) })
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let held = self.zones.iter().any(|held| held == zone);
+		let zone = zone.to_string();
+		Box::pin(async move {
+			if held {
+				Ok(Vec::new())
+			} else {
+				Err(ProviderError::Remote(format!("zone not found: {zone}")))
+			}
+		})
 	}
 }
 
@@ -155,7 +175,12 @@ impl TxtVisibility for Visibility {
 }
 
 fn dns01(answer: bool) -> (Arc<Journal>, Arc<Visibility>, Dns01) {
-	let provider = Arc::new(Journal::default());
+	dns01_with(answer, &[])
+}
+
+/// The responder over a credential that covers `zones`.
+fn dns01_with(answer: bool, zones: &[&str]) -> (Arc<Journal>, Arc<Visibility>, Dns01) {
+	let provider = Arc::new(Journal::with_zones(zones));
 	let visibility = Arc::new(Visibility {
 		answer,
 		asked: Mutex::new(0),
@@ -183,8 +208,8 @@ async fn dns01_record_is_removed_when_validation_fails() {
 	assert_eq!(
 		provider.calls.lock().expect("calls").as_slice(),
 		&[
-			"upsert _acme-challenge.mail.example.org".to_string(),
-			"delete _acme-challenge.mail.example.org".to_string(),
+			"upsert mail.example.org _acme-challenge.mail.example.org".to_string(),
+			"delete mail.example.org _acme-challenge.mail.example.org".to_string(),
 		]
 	);
 }
@@ -202,8 +227,29 @@ async fn dns01_record_is_removed_after_a_successful_order() {
 	assert_eq!(
 		provider.calls.lock().expect("calls").as_slice(),
 		&[
-			"upsert _acme-challenge.mail.example.org".to_string(),
-			"delete _acme-challenge.mail.example.org".to_string(),
+			"upsert mail.example.org _acme-challenge.mail.example.org".to_string(),
+			"delete mail.example.org _acme-challenge.mail.example.org".to_string(),
+		]
+	);
+}
+
+#[tokio::test]
+async fn dns01_publishes_in_the_zone_that_holds_the_challenge_name() {
+	// The ACME identifier is a name below the zone the credential covers.
+	// A provider that names its zones looks a zone up by its exact name,
+	// so the challenge has to be published in the zone that holds it, and
+	// withdrawn from the same one.
+	let client = client_for("dns-01", "valid").await;
+	let (provider, _, responder) = dns01_with(true, &["example.org"]);
+	let (_chain, _) = client
+		.obtain_certificate(&domains(), &responder, 3)
+		.await
+		.expect("obtain");
+	assert_eq!(
+		provider.calls.lock().expect("calls").as_slice(),
+		&[
+			"upsert example.org _acme-challenge.mail.example.org".to_string(),
+			"delete example.org _acme-challenge.mail.example.org".to_string(),
 		]
 	);
 }
@@ -230,8 +276,8 @@ async fn dns01_never_visible_times_out_without_asking_the_ca() {
 	assert_eq!(
 		provider.calls.lock().expect("calls").as_slice(),
 		&[
-			"upsert _acme-challenge.mail.example.org".to_string(),
-			"delete _acme-challenge.mail.example.org".to_string(),
+			"upsert mail.example.org _acme-challenge.mail.example.org".to_string(),
+			"delete mail.example.org _acme-challenge.mail.example.org".to_string(),
 		]
 	);
 }

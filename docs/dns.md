@@ -263,6 +263,14 @@ RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
 
+A record is published in the zone that holds its name. A provider that
+names its zones looks a zone up by its exact name, so epistle asks it
+which zone holds the name — the longest zone below it — and writes the
+record there. A mail hostname under the zone apex (`mail.example.org`
+inside `example.org`) is published in `example.org`, and the dns-01
+challenge of an ACME order for such a hostname is published in the same
+zone and withdrawn from it.
+
 ### Checking provider credentials
 
 Run `epistle dns provider check [--json]` to inspect the configured credential.
