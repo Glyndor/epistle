@@ -12,6 +12,8 @@ use crate::config::Config;
 
 #[path = "dns_provider_check.rs"]
 mod check;
+#[path = "dns_provider_compose.rs"]
+mod compose;
 #[path = "dns_lockdown.rs"]
 mod lockdown_handler;
 #[path = "dns_provider_probe.rs"]
@@ -22,6 +24,8 @@ mod secret;
 mod set;
 #[path = "dns_provider_show.rs"]
 mod show;
+#[path = "dns_provider_write.rs"]
+mod write;
 
 #[cfg(test)]
 #[path = "dns_lockdown_tests.rs"]
@@ -136,28 +140,18 @@ fn execute_with(
 			return probe::run(&config, out, status);
 		}
 		ProviderCli::Set { provider, args } => {
-			if args.store_token {
-				return secret::run(
-					path,
-					(&provider, &args),
-					dry_run,
-					json,
-					out,
-					status,
-					restart,
-				);
-			}
-			let fields = set::fields(&provider, &args)?;
-			let change: resource::Change = Box::new(move |document, _| {
-				document
-					.set_table_fields(&["dns"], &fields)
-					.map_err(resource::ResourceError::Failure)
-			});
-			(
-				change,
-				"provider set",
-				serde_json::json!({ "provider": provider }),
-			)
+			// The credential the configuration names has to reach the
+			// container, so this command writes the generated compose file
+			// too, and previews that change in a dry run.
+			return write::run(
+				path,
+				(&provider, &args),
+				dry_run,
+				json,
+				out,
+				status,
+				restart,
+			);
 		}
 		ProviderCli::Unset => {
 			let change: resource::Change = Box::new(|document, _| {
@@ -181,3 +175,7 @@ fn execute_with(
 #[cfg(all(test, unix))]
 #[path = "dns_provider_secret_tests.rs"]
 mod tests_secret;
+
+#[cfg(all(test, unix))]
+#[path = "dns_provider_write_tests.rs"]
+mod tests_write;

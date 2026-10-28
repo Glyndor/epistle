@@ -473,6 +473,12 @@ Compose file to mount it read-only only in `mail`, and recreates that service.
 Supply any other settings required by your provider. For `init`, point
 `dns.token_file` in the answers at this file. See [DNS token storage](dns.md#dns-provider-token-storage).
 
+A token you already keep elsewhere is named with `--token-file /absolute/path`:
+the command leaves the file where it is and mounts that path read-only into
+`mail`, which is the only way the container reads a file of the host. A
+credential the Compose file does not mount is a credential the container does
+not have, and the provider never builds.
+
 An environment token is passed to the container and can be exposed through
 `podman inspect` in `Config.Env`. A token stored inline in `mail.toml` remains
 in the mounted configuration file. A token file mount exposes its path in

@@ -1,5 +1,6 @@
 epistle (0.12.4) UNRELEASED; urgency=medium
 
+  * `epistle dns provider set --token-file` mounts the token file read-only into the `mail` container of a generated stack, and its `--dry-run` shows the change it makes to the Compose file; before, the token stayed on the host where the container could not read it, the provider was never built, and the `mail` container crash-looped on every ACME challenge.
   * The DKIM and ARC signatures made with Ed25519 now cover the SHA-256 digest of the signed header data, as RFC 8463 requires. They covered the raw header data, which every receiver reports as a failed signature. A signature that was already sent cannot be repaired.
   * `epistle probe` and the `ports` check of `epistle status` fail while the stack's `mail` container is not running, for example between the stop and the start of a restart; they used to warn and exit 0, so a script waiting for probe sent mail before SMTP listened.
 

@@ -497,14 +497,21 @@ Use your provider and zone, and repeat its other required settings, such as
 printing it, writes `<data_dir>/../secrets/dns_provider_token` with mode `0600`,
 and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
-instead. A different existing destination is refused. `--dry-run` previews the
-redacted configuration change without writing the token or Compose file.
+instead. A different existing destination is refused.
 
 For a generated stack, the command removes the old token environment entry,
 adds a read-only file mount only to `mail`, and recreates `mail`. Without a
 stack, restart the server yourself. Remove the old environment variable from
 your shell, service configuration, answers file and Compose overrides too.
 Keep the secret separately from data backups.
+
+`--token-file /absolute/path` names a file you already keep: the command does
+not move it, and the generated stack mounts that path read-only into `mail`, so
+the container reads the same file the host does. A path the stack does not
+mount is a path the container does not have, and the provider never builds.
+
+`--dry-run` previews the redacted configuration change and the change to the
+generated Compose file, and writes neither the token nor the Compose file.
 
 Existing inline and environment sources keep working. `epistle status` reports
 a warning with migration instructions, without displaying the token. A file
