@@ -551,5 +551,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "dns_tests.rs"]
+#[path = "dns_provider_build_tests.rs"]
 mod provider_build_tests;
