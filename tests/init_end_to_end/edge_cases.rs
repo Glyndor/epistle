@@ -127,11 +127,11 @@ fn init_exits_two_when_plan_fails_on_an_unparseable_existing_config() {
 }
 
 /// With PATH pointing at an empty directory, the apply phase must
-/// NOT fail just because openssl is missing. The RSA DKIM key step
-/// goes through its skip branch and the rest of the apply runs.
+/// NOT fail: the RSA DKIM key is made in process, so nothing has to
+/// be on PATH for it. The key lands and the report says so.
 #[cfg(unix)]
 #[test]
-fn init_skips_the_rsa_dkim_step_when_openssl_is_absent() {
+fn init_writes_the_rsa_dkim_key_when_openssl_is_absent() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
@@ -165,11 +165,11 @@ fn init_skips_the_rsa_dkim_step_when_openssl_is_absent() {
 	);
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
-		stderr.contains("skipped:") && stderr.contains("dkim rsa key"),
-		"report must record the RSA key as skipped; stderr: {stderr}"
+		!stderr.contains("skipped:") && stderr.contains("dkim rsa key"),
+		"the report must name the RSA key it wrote; stderr: {stderr}"
 	);
 	assert!(
-		!Path::new(&data_dir.join("keys").join("s2.pem")).exists(),
-		"s2.pem must not be written when openssl is absent"
+		Path::new(&data_dir.join("keys").join("s2.pem")).exists(),
+		"s2.pem must be written even with nothing on PATH"
 	);
 }

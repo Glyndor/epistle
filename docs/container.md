@@ -42,9 +42,8 @@ followed by `podman export | tar -t`, on this host with
   `TZ`), so tzdata is not exercised at runtime; it is in the base.
 - No shell, no package manager, no `openssl`, no `libc` (musl is
   statically linked into the binary), no `ca-certificates` source
-  tools, no editor. Anything that would have called `sh -c` is
-  not in the image; that is also why `epistle dkim-keygen --rsa`
-  has to be run on the host.
+  tools, no editor. Nothing in the server calls `sh -c`: the keys it
+  makes, the RSA DKIM key included, are made in process.
 - OCI labels: `org.opencontainers.image.source`,
   `org.opencontainers.image.version`, `org.opencontainers.image.revision`,
   and `io.containers.autoupdate=registry` so `podman-auto-update(1)`
@@ -59,11 +58,11 @@ The image is 28 MiB on `linux/amd64`. `USER 65532:65532`; `ENTRYPOINT
 one-shot operator action or a developer tool and is documented as running on
 the host, not in the container. Two deserve calling out:
 
-- `epistle dkim-keygen --rsa` shells out to `openssl genpkey`. The distroless
-  base ships no `openssl`, so the RSA DKIM key is generated on the host and
-  bind-mounted into the data directory as the configured `rsa_key_file`. The
-  Ed25519 selector (`epistle dkim-keygen`, no flag) is fine in either place
-  because it does not shell out.
+- `epistle dkim-keygen --rsa` makes the RSA key in process, so it does not
+  need the `openssl` the distroless base does not ship. The key still belongs
+  on the host: the server reads it from the data directory as the configured
+  `rsa_key_file`, and the key it rotates on its own is made in process inside
+  the container.
 - `epistle init` is an interactive setup wizard meant to be run on the host
   once, then re-run only for structural changes (a second account, a new
   domain). It writes `/etc/epistle/mail.toml`, which is then bind-mounted

@@ -1,91 +1,73 @@
-//! RSA DKIM key generation through `openssl genpkey`, shared by
-//! `epistle dkim-keygen --rsa`, `epistle init` and the rotation of the RSA
-//! dual-signing key.
+//! RSA DKIM key generation, in process.
+//!
+//! `epistle dkim-keygen --rsa`, `epistle init` and the rotation of the
+//! RSA dual-signing key all call [`generate_rsa_key`]. The key is made
+//! with `aws-lc-rs`, the TLS provider `rustls` already installs, so
+//! nothing has to be on `PATH`: the image the stack runs ships no
+//! `openssl`, and a rotation that shelled out to it failed on the
+//! first start of every install with a `[dns]` provider configured
+//! (Glyndor/epistle#1376).
+//!
+//! The key that comes out is validated through `ring`'s PKCS#8 loader
+//! — the loader the outbound signer uses — before it is written or
+//! printed, so a key the signer cannot sign with never reaches the
+//! disk.
 
-/// Generate an RSA DKIM key by asking `openssl genpkey` to produce a
-/// PKCS#8 PEM, returning the PEM and the matching DKIM DNS record value
-/// (`v=DKIM1; k=rsa; p=<base64 SPKI>`). The PEM is validated through
-/// `ring`'s PKCS#8 loader before it is written to disk or printed, so a
-/// process that depends on the loader (outbound signing, the publish
-/// record, the verifier) cannot trip on an `openssl` build we never
-/// actually parsed.
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+
+/// Generate an RSA DKIM key of `bits` bits, returning the PEM and the
+/// matching DKIM DNS record value (`v=DKIM1; k=rsa; p=<base64 SPKI>`).
 ///
-/// `openssl` must be on `PATH`; the message names the package to install
-/// when it is not.
+/// `bits` must be 2048 or 4096: the two sizes `dkim-keygen --rsa`
+/// accepts, and the only one the rotation asks for.
 pub fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
-	use base64::Engine;
-	use base64::engine::general_purpose::STANDARD as BASE64;
+	use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+	use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
 	use ring::signature::{KeyPair, RsaKeyPair};
-	use std::io::Read;
-	use std::process::{Command, Stdio};
 
-	let mut child = Command::new("openssl")
-		.args([
-			"genpkey",
-			"-algorithm",
-			"RSA",
-			"-pkeyopt",
-			&format!("rsa_keygen_bits:{bits}"),
-			"-outform",
-			"PEM",
-		])
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped())
-		.spawn()
-		.map_err(|error| match error.kind() {
-			std::io::ErrorKind::NotFound => KeygenError::OpenSslMissing,
-			_ => KeygenError::OpenSslRead(error),
-		})?;
-
-	let mut pem = String::new();
-	if let Some(mut stdout) = child.stdout.take() {
-		let mut limited = (&mut stdout).take(64 * 1024);
-		limited
-			.read_to_string(&mut pem)
-			.map_err(KeygenError::OpenSslRead)?;
-	}
-	let output = child.wait_with_output().map_err(KeygenError::OpenSslRead)?;
-	if !output.status.success() {
-		let stderr = String::from_utf8_lossy(&output.stderr);
-		return Err(KeygenError::OpenFailed(stderr.into_owned()));
-	}
-
+	let size = match bits {
+		2048 => KeySize::Rsa2048,
+		4096 => KeySize::Rsa4096,
+		_ => return Err(KeygenError::UnsupportedBits(bits)),
+	};
+	let key = PrivateDecryptingKey::generate(size).map_err(|_| KeygenError::GenerateFailed)?;
+	let der =
+		AsDer::<Pkcs8V1Der<'static>>::as_der(&key).map_err(|_| KeygenError::GenerateFailed)?;
 	// Validate through ring before we trust the bytes: the rendered record
 	// has to come from a key we can actually sign with.
-	let der = super::sign::pem_body(&pem).ok_or(KeygenError::InvalidKey)?;
-	let pair = RsaKeyPair::from_pkcs8(&der).map_err(|_| KeygenError::InvalidKey)?;
+	let pair = RsaKeyPair::from_pkcs8(der.as_ref()).map_err(|_| KeygenError::InvalidKey)?;
 	let pkcs1 = pair.public_key().as_ref();
-	// Touch the parsed key through the verifier's algorithm so an opaque
-	// invalid one fails the same path the verifier will follow.
+	// The SPKI envelope is the fixed one DKIM's `p=` value carries.
 	let spki = super::spki::spki_for_rsa(pkcs1);
-	Ok((pem, format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))))
+	Ok((
+		super::sign::pem_encode(der.as_ref()),
+		format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki)),
+	))
 }
 
 /// Errors from the RSA keygen path. Each variant owns its own message so
 /// the CLI can `eprintln!` without an intermediate formatting step (and
 /// without a taint analyser reading a constant string into a key sink).
+#[derive(Debug)]
 pub enum KeygenError {
-	/// `openssl` is not on `PATH`.
-	OpenSslMissing,
-	/// `openssl` could not be started or its output read.
-	OpenSslRead(std::io::Error),
-	/// `openssl` exited with an error; carries its stderr.
-	OpenFailed(String),
-	/// The PEM `openssl` printed is not an RSA PKCS#8 key `ring` loads.
+	/// The requested key size is not one the generator makes.
+	UnsupportedBits(u32),
+	/// The in-process generator could not produce a key.
+	GenerateFailed,
+	/// The PEM is not an RSA PKCS#8 key `ring` loads.
 	InvalidKey,
 }
 
 impl std::fmt::Display for KeygenError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			KeygenError::OpenSslMissing => f.write_str(
-				"`openssl` was not found on PATH; install it (Debian/Ubuntu: `apt install openssl`)",
-			),
-			KeygenError::OpenSslRead(error) => write!(f, "cannot read `openssl` output: {error}"),
-			KeygenError::OpenFailed(stderr) => write!(f, "`openssl genpkey` failed: {stderr}"),
+			KeygenError::UnsupportedBits(bits) => {
+				write!(f, "an RSA key of {bits} bits cannot be made (2048 or 4096)")
+			}
+			KeygenError::GenerateFailed => f.write_str("the RSA key generator produced no key"),
 			KeygenError::InvalidKey => {
-				f.write_str("the key `openssl` produced is not a valid PKCS#8 RSA key")
+				f.write_str("the RSA key that was generated is not a valid PKCS#8 RSA key")
 			}
 		}
 	}

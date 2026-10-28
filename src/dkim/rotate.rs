@@ -132,6 +132,22 @@ pub struct RotationState {
 	pub rsa: Option<RsaKey>,
 }
 
+impl RotationState {
+	/// Whether the state names no key in service and journals no rotation:
+	/// the state of an install that has not rotated yet.
+	///
+	/// Such a state is not worth keeping on disk (a rotation that never
+	/// put a key in service leaves none behind) and it is not a corrupt
+	/// file either: the server reads it as an absent state and signs with
+	/// the configured key.
+	pub fn is_empty(&self) -> bool {
+		self.selector.is_empty()
+			&& self.pending.is_none()
+			&& self.previous.is_none()
+			&& self.rsa.is_none()
+	}
+}
+
 /// File name of the persisted rotation state inside the data directory.
 pub const STATE_FILE: &str = "dkim-rotation.json";
 
@@ -148,9 +164,12 @@ pub struct ActiveKey {
 /// before its latest save.
 pub const STATE_BACKUP_FILE: &str = "dkim-rotation.json.bak";
 
-/// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` only when the file does
-/// not exist; an unreadable or invalid file is an error, because guessing the
-/// configured key would show (or sign with) a selector that is not in service.
+/// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` when the file does
+/// not exist and when it holds an empty state (one that names no key in
+/// service): an empty state is the state of an install that has not
+/// rotated yet, not a corrupt file. An unreadable or invalid file is an
+/// error, because guessing the configured key would show (or sign with) a
+/// selector that is not in service.
 pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
 	parse_state(&data_dir.join(STATE_FILE))
 }
@@ -161,20 +180,35 @@ fn parse_state(path: &std::path::Path) -> Result<Option<RotationState>, RotateEr
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 		Err(error) => return Err(RotateError(format!("read {}: {error}", path.display()))),
 	};
-	decode_state(path, &bytes).map(Some)
+	decode_state(path, &bytes)
 }
 
 /// Parse the bytes of a state file read from `path` (named in errors).
-fn decode_state(path: &std::path::Path, bytes: &[u8]) -> Result<RotationState, RotateError> {
+///
+/// `Ok(None)` when the bytes hold an empty state: a state that names no
+/// key in service and journals no rotation. A rotation journaled before
+/// its key was in service still loads (its `pending` entry is what the
+/// next tick finishes), but a state that names no selector and keeps a
+/// retired key is inconsistent, and it is reported as such.
+fn decode_state(
+	path: &std::path::Path,
+	bytes: &[u8],
+) -> Result<Option<RotationState>, RotateError> {
 	let state: RotationState = serde_json::from_slice(bytes)
 		.map_err(|error| RotateError(format!("parse {}: {error}", path.display())))?;
 	if state.selector.is_empty() {
-		return Err(RotateError(format!(
-			"{} has an empty selector",
-			path.display()
-		)));
+		if state.pending.is_some() {
+			return Ok(Some(state));
+		}
+		if state.previous.is_some() || state.rsa.is_some() {
+			return Err(RotateError(format!(
+				"{} has an empty selector",
+				path.display()
+			)));
+		}
+		return Ok(None);
 	}
-	Ok(state)
+	Ok(Some(state))
 }
 
 /// When the state cannot be read but [`STATE_BACKUP_FILE`] can, the reason
@@ -199,11 +233,13 @@ pub fn active_ed25519(
 	data_dir: &std::path::Path,
 ) -> Result<ActiveKey, RotateError> {
 	Ok(match signing_state(data_dir)? {
-		Some(state) => ActiveKey {
+		// A state that names no key in service (a rotation journaled
+		// before its key was ready) leaves the configured key signing.
+		Some(state) if !state.selector.is_empty() => ActiveKey {
 			selector: state.selector,
 			key_file: data_dir.join(state.key_file),
 		},
-		None => ActiveKey {
+		_ => ActiveKey {
 			selector: dkim.selector.clone(),
 			key_file: dkim.key_file.clone(),
 		},
@@ -371,7 +407,7 @@ impl Rotator {
 			publication_check: None,
 			webhook: None,
 			keep: Vec::new(),
-			rsa_keygen: rsa::openssl_rsa_2048,
+			rsa_keygen: rsa::rsa_2048,
 			#[cfg(test)]
 			crash_at: None,
 		}
@@ -418,10 +454,19 @@ impl Rotator {
 	/// loss right after the save reads a half-written or missing file. The
 	/// state being replaced, when it reads, is kept first as
 	/// [`STATE_BACKUP_FILE`].
+	///
+	/// A state that names no key in service is not written at all: the file
+	/// is removed instead, so a rotation that never put a key in service
+	/// leaves the data directory as a fresh install looks. The server reads
+	/// such a state as an absent one, so the file was never worth keeping.
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
+		if state.is_empty() {
+			remove_state_file(&self.state_path);
+			return Ok(());
+		}
 		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
 		if let Ok(current) = std::fs::read(&self.state_path)
-			&& decode_state(&self.state_path, &current).is_ok()
+			&& matches!(decode_state(&self.state_path, &current), Ok(Some(_)))
 		{
 			crate::storage::write_secret(&self.data_dir.join(STATE_BACKUP_FILE), &current)?;
 		}
@@ -468,6 +513,22 @@ fn txt_record(name: &str, value: &str) -> DnsRecord {
 		value: value.to_string(),
 		ttl: 300,
 		proxied: None,
+	}
+}
+
+/// Remove a state file that names no key. Best effort: the server reads
+/// an empty state as an absent one, so a file that stays behind is
+/// harmless; the failure is logged rather than allowed to break the
+/// rotation that is finishing.
+fn remove_state_file(path: &std::path::Path) {
+	if let Err(error) = std::fs::remove_file(path)
+		&& error.kind() != std::io::ErrorKind::NotFound
+	{
+		tracing::warn!(
+			%error,
+			path = %path.display(),
+			"cannot remove the empty DKIM rotation state file"
+		);
 	}
 }
 
@@ -550,3 +611,7 @@ mod tests_crash_rsa;
 #[cfg(test)]
 #[path = "rotate_tests_rsa.rs"]
 mod tests_rsa;
+
+#[cfg(test)]
+#[path = "rotate_tests_empty_state.rs"]
+mod tests_empty_state;

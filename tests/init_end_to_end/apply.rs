@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::helpers::{
-	binary, make_answers_body, mode, mtime, openssl_on_path, plan_paths, sha256_of, write_answers,
+	binary, make_answers_body, mode, mtime, plan_paths, sha256_of, write_answers,
 };
 
 #[cfg(unix)]
@@ -49,8 +49,7 @@ fn apply_creates_every_file_with_the_right_mode_and_config_check_passes() {
 	assert_eq!(mode(&config_path), 0o600, "config mode");
 
 	// The set of files under data/keys/ must equal exactly the set of
-	// paths the plan listed as `generate`. The plan includes s2.pem
-	// only when openssl is on PATH.
+	// paths the plan listed as `generate`.
 	let keys_dir = data_dir.join("keys");
 	let mut on_disk: Vec<String> = std::fs::read_dir(&keys_dir)
 		.expect("read keys")
@@ -65,9 +64,6 @@ fn apply_creates_every_file_with_the_right_mode_and_config_check_passes() {
 		.cloned()
 		.collect();
 	expected.sort();
-	if !openssl_on_path() {
-		expected.retain(|p| !p.ends_with("/s2.pem"));
-	}
 	assert_eq!(
 		on_disk, expected,
 		"data/keys files must equal the plan's generate paths; on_disk = {on_disk:?}, plan = {expected:?}"
@@ -266,26 +262,13 @@ fn second_apply_is_a_noop_on_disk_and_uses_reuse_identical() {
 			"dry-run plan must name the reuse for {needle}; got: {plan_stderr}"
 		);
 	}
-	// The RSA DKIM key step is `reuse` only when openssl is on
-	// PATH AND the operator already wrote `s2.pem`. The plan
-	// renders `skip` (with a hand-run `dkim-keygen` hint) when
-	// openssl is missing and the file is absent, and `generate`
-	// when openssl is on PATH and the file is absent. A second
-	// apply against a tree that already has the file is `reuse`
-	// in both cases. The two assertions below pin both shapes
-	// against the openssl signal the rest of the test already
-	// reads.
-	if openssl_on_path() {
-		assert!(
-			plan_stderr.contains("dkim rsa key: reuse"),
-			"dry-run plan must reuse the RSA key when openssl is on PATH; got: {plan_stderr}"
-		);
-	} else {
-		assert!(
-			plan_stderr.contains("dkim rsa key: skip"),
-			"dry-run plan must skip the RSA key when openssl is missing; got: {plan_stderr}"
-		);
-	}
+	// The RSA DKIM key is made in process, so the step is `reuse`
+	// whenever the file is already there and `generate` when it is
+	// not. This apply populated the tree, so the plan must reuse it.
+	assert!(
+		plan_stderr.contains("dkim rsa key: reuse"),
+		"dry-run plan must reuse the RSA key; got: {plan_stderr}"
+	);
 	assert!(
 		plan_stderr.contains("config:"),
 		"dry-run plan must list the config step; got: {plan_stderr}"

@@ -45,9 +45,9 @@ pub enum Command {
 		/// Where to write the private key (PKCS#8 PEM).
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
-		/// Generate an RSA key (via `openssl genpkey`) instead of the default
-		/// ed25519 key. The TXT record then uses `k=rsa` and is split across
-		/// 255-octet strings per RFC 1035 §3.3.14.
+		/// Generate an RSA key instead of the default ed25519 key. The TXT
+		/// record then uses `k=rsa` and is split across 255-octet strings
+		/// per RFC 1035 §3.3.14.
 		#[arg(long)]
 		rsa: bool,
 		/// RSA modulus size in bits, only meaningful with `--rsa`. Accepts

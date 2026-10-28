@@ -17,14 +17,15 @@ fn plan_step_dkim_ed25519_renders() {
 }
 
 #[test]
-fn plan_step_dkim_rsa_skipped_text_mentions_dkim_keygen() {
+fn plan_step_dkim_rsa_renders() {
 	let step = PlanStep::DkimRsa {
 		path: PathBuf::from("/var/lib/epistle/keys/s2.pem"),
 		reused: false,
-		openssl_available: false,
 	};
-	let rendered = step.to_string();
-	assert!(rendered.contains("dkim-keygen --rsa"), "got {rendered}");
+	assert_eq!(
+		step.to_string(),
+		"dkim rsa key: generate /var/lib/epistle/keys/s2.pem"
+	);
 }
 
 #[test]

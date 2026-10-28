@@ -757,6 +757,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "argon2",
+ "aws-lc-rs",
  "axum",
  "base64 0.23.1",
  "clap",

@@ -1,7 +1,7 @@
 //! CLI tests for the `epistle dkim-keygen --rsa` path: the `--bits`
-//! allow-list, the openssl integration, and the resulting key being
-//! loadable by ring's RSA loader (the same loader the outbound signer
-//! uses). Sibling to `cli_tests.rs`, `cli_tests_b.rs`, `cli_tests_c.rs`.
+//! allow-list and the resulting key being loadable by ring's RSA
+//! loader (the same loader the outbound signer uses). Sibling to
+//! `cli_tests.rs`, `cli_tests_b.rs`, `cli_tests_c.rs`.
 
 use super::*;
 use base64::Engine;
@@ -28,10 +28,6 @@ fn dkim_keygen_rsa_refuses_bits_other_than_2048_or_4096() {
 
 #[test]
 fn dkim_keygen_rsa_writes_a_key_ring_can_load() {
-	if !openssl_on_path() {
-		eprintln!("skip: openssl not on PATH");
-		return;
-	}
 	let dir = tempfile::tempdir().expect("tempdir");
 	let out = dir.path().join("rsa.pem");
 	let cli = Cli::try_parse_from([
@@ -89,14 +85,4 @@ fn dkim_keygen_rsa_writes_a_key_ring_can_load() {
 		crate::dns::records::txt_strings(&rsa_record).len() >= 2,
 		"RSA record did not split"
 	);
-}
-
-/// Returns true when an `openssl` binary resolves somewhere on PATH. Used
-/// to skip the truly cross-cutting tests when the host has no openssl
-/// installed, so the suite stays runnable on minimal CI images.
-fn openssl_on_path() -> bool {
-	let Some(path) = std::env::var_os("PATH") else {
-		return false;
-	};
-	std::env::split_paths(&path).any(|dir| dir.join("openssl").is_file())
 }

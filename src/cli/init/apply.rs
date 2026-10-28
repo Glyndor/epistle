@@ -15,8 +15,6 @@ use std::path::{Path, PathBuf};
 use super::answers::Answers;
 #[cfg(test)]
 pub(crate) use super::plan::PlanStep;
-#[cfg(test)]
-pub(crate) use apply_plan::which_openssl_for_tests as which_openssl;
 
 /// What `apply` actually did: a step list the operator can scan, with
 /// every `reused: true` line meaning "the file was already there and
@@ -78,8 +76,7 @@ pub enum ReportStep {
 		/// Where it is now.
 		to: PathBuf,
 	},
-	/// A step was skipped because its precondition did not hold (e.g.
-	/// `openssl` was not on `PATH` for the RSA DKIM key).
+	/// A step was skipped because its precondition did not hold.
 	Skipped {
 		/// Operator-facing name of what was skipped.
 		name: String,
@@ -183,12 +180,11 @@ pub enum ApplyError {
 	/// rather than silently overwrite or step into a non-file; the
 	/// operator has to point `config_path` at a file.
 	ConfigNotAFile(PathBuf),
-	/// `openssl` is on `PATH` but the `genpkey` invocation failed
-	/// (broken binary, missing entropy, etc.) and the RSA DKIM key
-	/// could not be produced. Carries the operator-facing reason.
-	/// Distinct from `KeyWrite` because no key file was attempted;
-	/// the failure is in the key-generation step itself, before any
-	/// write would have happened.
+	/// The RSA DKIM key could not be produced (the in-process generator
+	/// failed: no entropy, a rejected key). Carries the operator-facing
+	/// reason. Distinct from `KeyWrite` because no key file was
+	/// attempted; the failure is in the key-generation step itself,
+	/// before any write would have happened.
 	RsaKeygen(String),
 	/// The system CSPRNG could not produce bytes for a key (DKIM
 	/// ed25519, certificate pair, storage, oauth). Carries the
@@ -614,12 +610,6 @@ pub use apply_plan::plan;
 /// the config-write step wrote, without taking a second pass
 /// at the apply-internal `apply_config` module.
 pub(crate) use apply_config::listeners_to_write;
-
-/// Re-export so the apply tests can call into the keys module
-/// without the rest of the crate going through `apply::apply_keys`.
-#[allow(unused_imports)]
-#[cfg(test)]
-pub(crate) use apply_keys::openssl_available;
 
 #[cfg(test)]
 #[path = "apply_tests.rs"]

@@ -96,7 +96,7 @@ async fn an_rsa_key_that_cannot_be_made_withdraws_the_whole_rotation() {
 		Err(reason) => return skipped(&reason),
 	};
 	let (signer, rotator) = lab.start(Visibility::AfterOneWait, true);
-	let rotator = rotator.with_rsa_keygen(|| Err("openssl is missing".to_string()));
+	let rotator = rotator.with_rsa_keygen(|| Err("the key generator failed".to_string()));
 	let error = rotator.tick(NOW).await.expect_err("withdrawn");
 	assert!(
 		error.to_string().contains("withdrawn")

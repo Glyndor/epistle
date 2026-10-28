@@ -10,7 +10,7 @@ use std::collections::HashMap;
 const DAY: u64 = 86_400;
 
 /// A dual-signing configuration whose state names a rotated RSA key; the
-/// RSA key is made by `openssl` at test time. `Err` says why it could not.
+/// RSA key is made in process at test time. `Err` says why it could not.
 fn fixture() -> Result<(tempfile::TempDir, Config, String), String> {
 	let (rsa_pem, rsa_value) =
 		crate::dkim::generate_rsa_key(2048).map_err(|error| error.to_string())?;

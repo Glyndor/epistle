@@ -283,12 +283,11 @@ pub(super) fn build_config(
 			rsa_selector: Some("s2".to_string()),
 			rsa_key_file: Some(rsa.display().to_string()),
 		},
-		// When the RSA key is absent (no `openssl` on `PATH`, or key
-		// generation failed), omit both RSA fields entirely so the
-		// server configuration does not name an RSA selector pointing
-		// at Ed25519 material. The single-signature warning from
-		// `#[allow(dead_code)]` / issue #911 already explains what is
-		// missing to the operator.
+		// When the RSA key is absent (the key generation failed), omit
+		// both RSA fields entirely so the server configuration does not
+		// name an RSA selector pointing at Ed25519 material. The
+		// single-signature warning from `#[allow(dead_code)]` / issue
+		// #911 already explains what is missing to the operator.
 		(Some(ed), None) => DesiredDkim {
 			selector: "s1".to_string(),
 			key_file: ed.display().to_string(),

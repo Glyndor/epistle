@@ -111,9 +111,7 @@ fn apply_writes_keys_and_config() {
 	assert!(storage.exists());
 	assert!(oauth_private.exists());
 	assert!(oauth_public.exists());
-	if which_openssl() {
-		assert!(s2.exists());
-	}
+	assert!(s2.exists(), "the RSA key is made in process, always");
 	assert!(config_path.exists());
 	assert!(
 		report
@@ -150,7 +148,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		sha256_of(&oauth_private).expect("oauth_private"),
 		sha256_of(&oauth_public).expect("oauth_public"),
 	];
-	let before_s2 = which_openssl().then(|| sha256_of(&s2).expect("s2"));
+	let before_s2 = sha256_of(&s2).expect("s2");
 	answers.hostname = "mail2.example.org".to_string();
 	answers.domains = vec!["example.org".to_string(), "example.com".to_string()];
 	// Toggle services that need no extra config sections so the second
@@ -184,9 +182,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		before, after,
 		"keys must not be regenerated when answers change"
 	);
-	if let Some(before_s2) = before_s2 {
-		assert_eq!(before_s2, sha256_of(&s2).expect("s2"));
-	}
+	assert_eq!(before_s2, sha256_of(&s2).expect("s2"));
 }
 
 #[test]
@@ -296,23 +292,20 @@ fn apply_preserves_unknown_top_level_keys() {
 }
 
 #[test]
-fn plan_step_dkim_rsa_skipped_when_openssl_missing() {
-	// We can't remove openssl at runtime; instead we confirm the bool
-	// branch is exercised by `apply` when the helper says it is unavailable
-	// (the helper returns true on PATH).
+fn plan_step_dkim_rsa_is_always_generated() {
+	// The RSA key is made in process, so the plan never leaves it out:
+	// there is no program that could be missing.
 	let answers = answers_minimal();
 	let plan = plan(&answers).expect("plan");
 	let rsa = plan
 		.steps
 		.iter()
 		.find_map(|s| match s {
-			PlanStep::DkimRsa {
-				openssl_available, ..
-			} => Some(*openssl_available),
+			PlanStep::DkimRsa { reused, .. } => Some(*reused),
 			_ => None,
 		})
 		.expect("rsa step");
-	assert_eq!(rsa, which_openssl());
+	assert!(!rsa, "a fresh install has no RSA key yet");
 }
 
 #[test]

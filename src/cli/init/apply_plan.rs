@@ -13,38 +13,6 @@ use super::apply_keys::key_file_present;
 use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
-/// True when `openssl` is on `PATH` and the RSA DKIM key step can be
-/// generated. Used by the plan step so the operator sees the skip text
-/// in advance.
-pub(super) fn openssl_available() -> bool {
-	which_openssl()
-}
-
-#[cfg(unix)]
-fn which_openssl() -> bool {
-	use std::process::Command;
-	Command::new("openssl")
-		.arg("version")
-		.stdin(std::process::Stdio::null())
-		.stdout(std::process::Stdio::null())
-		.stderr(std::process::Stdio::null())
-		.status()
-		.map(|status| status.success())
-		.unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn which_openssl() -> bool {
-	false
-}
-
-/// Re-export so the apply-phase tests can ask whether `openssl` is on
-/// `PATH` the same way the plan and apply phases do.
-#[cfg(test)]
-pub(crate) fn which_openssl_for_tests() -> bool {
-	openssl_available()
-}
-
 /// Walk the answers and produce the plan, WITHOUT writing anything. The
 /// plan is what the operator reads before the confirmation prompt; it
 /// is computed from the disk so a re-run says `reuse` for every key
@@ -116,7 +84,6 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		PlanStep::DkimRsa {
 			path: s2.clone(),
 			reused: key_file_present(&s2),
-			openssl_available: openssl_available(),
 		},
 		PlanStep::Storage {
 			path: storage.clone(),
@@ -424,13 +391,12 @@ fn resolve_oauth_pair(
 /// step should say `identical, not touched` instead of `write`. When
 /// no config exists at the path, the answer is `false` (the file
 /// would be written). The desired config is built from the planned
-/// post-step key state: an RSA key scheduled for generation (openssl
-/// on PATH, file not yet on disk) is included so the plan cannot
-/// claim `identical` while the apply phase rewrites the config to
-/// add the new RSA fields. The same `Config::load` validation the
-/// apply phase runs before returning `Identical` is mirrored here so
-/// the plan cannot say "identical, not touched" for a file the rest
-/// of the CLI would refuse.
+/// post-step key state: the RSA key the apply phase generates is
+/// included so the plan cannot claim `identical` while the apply
+/// phase rewrites the config to add the new RSA fields. The same
+/// `Config::load` validation the apply phase runs before returning
+/// `Identical` is mirrored here so the plan cannot say "identical, not
+/// touched" for a file the rest of the CLI would refuse.
 fn config_is_identical_to_desired(
 	answers: &Answers,
 	mail_addr: std::net::IpAddr,
@@ -445,16 +411,10 @@ fn config_is_identical_to_desired(
 	};
 	let existing = &opened.text;
 	let config_path = &answers.config_path;
-	// The apply phase will land `dkim_rsa` if openssl is on PATH or
-	// if the file already exists. The plan reads the same signals so
-	// the desired config it builds matches the one apply will write
-	// a moment later.
-	let dkim_rsa_for_desired: Option<&std::path::Path> =
-		if key_file_present(dkim_rsa) || openssl_available() {
-			Some(dkim_rsa)
-		} else {
-			None
-		};
+	// The apply phase always lands the RSA key, so the desired config
+	// always names it. The plan reads the same signal so the desired
+	// config it builds matches the one apply will write a moment later.
+	let dkim_rsa_for_desired: Option<&std::path::Path> = Some(dkim_rsa);
 	let desired = apply_config::build_config(
 		answers,
 		mail_addr,

@@ -1,12 +1,10 @@
 //! Shared helpers for every `init_end_to_end` integration test.
-//! The binary path, the answers-file builder, the openssl-on-PATH
-//! probe, the plan-output parser, the file-mode helpers, and the
-//! data-dir-clean assertion every interactive test reaches for all
-//! live here so each topic split pulls from one place.
+//! The binary path, the answers-file builder, the plan-output parser,
+//! the file-mode helpers, and the data-dir-clean assertion every
+//! interactive test reaches for all live here so each topic split pulls
+//! from one place.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
 pub fn binary() -> &'static Path {
 	Path::new(env!("CARGO_BIN_EXE_epistle"))
 }
@@ -37,17 +35,6 @@ pub fn make_answers_body(data_dir: &Path, config_path: &Path) -> String {
 		data_dir.display(),
 		config_path.display(),
 	)
-}
-
-pub fn openssl_on_path() -> bool {
-	Command::new("openssl")
-		.arg("version")
-		.stdin(Stdio::null())
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.status()
-		.map(|status| status.success())
-		.unwrap_or(false)
 }
 
 pub fn plan_paths(stderr: &str) -> Vec<String> {

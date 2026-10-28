@@ -7,7 +7,7 @@ use crate::dkim::rotate::{RotationState, RsaKey, STATE_FILE};
 
 /// A data directory whose state names `ed7` and the rotated RSA key `rsa7`,
 /// and a dual-signing configuration that names other keys. The RSA key is
-/// made by `openssl` at test time; `Err` says why it could not be.
+/// made in process at test time; `Err` says why it could not be.
 fn dual(dir: &std::path::Path) -> Result<Config, String> {
 	let (rsa_pem, _) = crate::dkim::generate_rsa_key(2048).map_err(|e| e.to_string())?;
 	let (pem, _) = crate::dkim::generate_key().expect("ed25519 key");
