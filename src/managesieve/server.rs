@@ -494,9 +494,11 @@ async fn read_literal(
 
 /// Write a response and flush. Before sign-in the absolute pre-auth
 /// deadline covers both operations so a peer that stops reading cannot
-/// keep the connection alive past it; the post-auth clock is untouched.
-/// Wrapper around [`response_writer::write_response`] that takes a
-/// [`Response`] and threads it through the shared writer.
+/// keep the connection alive past it; after sign-in the write is held
+/// to the stall window, so a peer that stops accepting the bytes loses
+/// the connection and the listener slot it holds. Wrapper around
+/// [`response_writer::write_response`] that takes a [`Response`] and
+/// threads it through the shared writer.
 async fn write_response(
 	stream: &mut Box<dyn Connection>,
 	response: &Response,

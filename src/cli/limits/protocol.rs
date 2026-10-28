@@ -148,7 +148,7 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		crate::pop3::server::MAX_ERROR_STREAK,
 		"count",
 		Own,
-		"no standard mandate (consecutive -ERR replies the client earns by its own errors before the connection is dropped; a [SYS/...] reply is not counted)"
+		"no standard mandate (consecutive -ERR replies the client earns by its own errors before the connection is dropped; a [SYS/...] reply is not counted, and the acceptance of a USER does not clear the streak because the password that follows can still be refused)"
 	),
 	number!(
 		"pop3-unavailable-streak",

@@ -36,8 +36,24 @@ impl Backend for Probe {
 	fn remove(&self, _: &str, _: &[String]) {}
 }
 
+/// A backend that refuses every password, so a sign-in never completes.
+struct Refusing;
+
+impl Backend for Refusing {
+	fn verify(&self, _: &str, _: &str, _: Option<std::net::IpAddr>) -> Option<String> {
+		None
+	}
+	fn list(&self, _: &str) -> Vec<(String, usize)> {
+		vec![("m".into(), 1)]
+	}
+	fn fetch(&self, _: &str, _: &str) -> Option<Vec<u8>> {
+		None
+	}
+	fn remove(&self, _: &str, _: &[String]) {}
+}
+
 /// Send `input`, read everything the server says until it closes.
-async fn exchange(backend: Probe, input: String) -> String {
+async fn exchange<B: Backend + Send + 'static>(backend: B, input: String) -> String {
 	let (mut client, server) = duplex(1 << 20);
 	let task = tokio::spawn(run(
 		server,
@@ -95,4 +111,27 @@ async fn asking_again_and_again_for_a_message_that_cannot_be_read_ends_the_sessi
 		seen.matches("[SYS/PERM]").count(),
 		MAX_UNAVAILABLE_STREAK as usize - 1
 	);
+}
+
+/// A valid `USER` between two failing passwords does not clear the streak:
+/// the acceptance of the `USER` is one half of a sign-in the password can
+/// still refuse, so the client reaches the cap.
+#[tokio::test]
+async fn a_valid_user_between_failed_passwords_still_reaches_the_cap() {
+	let mut input = String::new();
+	for _ in 0..(MAX_ERROR_STREAK + 2) {
+		input.push_str("USER alice\r\nPASS wrong\r\n");
+	}
+	let seen = exchange(Refusing, input).await;
+	assert_eq!(
+		seen.matches("+OK send PASS").count(),
+		MAX_ERROR_STREAK as usize,
+		"{seen}"
+	);
+	assert_eq!(
+		seen.matches("-ERR authentication failed").count(),
+		MAX_ERROR_STREAK as usize - 1,
+		"{seen}"
+	);
+	assert!(seen.trim_end().ends_with("-ERR too many errors"), "{seen}");
 }

@@ -238,11 +238,15 @@ where
 		// Abuse guard: drop a client that only produces errors, and one
 		// that keeps asking for messages that cannot be read. A `[SYS/...]`
 		// reply that is not about a message neither counts nor resets.
+		// The acceptance of a `USER` does not reset the streak either: it
+		// is one half of a sign-in the password can still refuse, so a
+		// client that alternates a valid `USER` with a failing `PASS`
+		// still reaches the cap.
 		if response.is_client_error() {
 			error_streak += 1;
 		} else if response.is_unavailable() {
 			unavailable_streak += 1;
-		} else if !matches!(response, Response::Err(_)) {
+		} else if !matches!(response, Response::Err(_)) && !session.sign_in_pending() {
 			error_streak = 0;
 			unavailable_streak = 0;
 		}

@@ -137,6 +137,16 @@ impl<B: Backend> Session<B> {
 		self.state == State::Transaction
 	}
 
+	/// Whether a sign-in is waiting for its password: the client sent
+	/// `USER` and the server accepted it, so the replies that follow
+	/// belong to that attempt. Accepting a `USER` is not proof that the
+	/// client can open the mailbox, because the password that comes next
+	/// can still be refused, so it must not clear a streak of failed
+	/// sign-ins.
+	pub fn sign_in_pending(&self) -> bool {
+		self.state == State::Authorization && self.user.is_some()
+	}
+
 	/// Start a session in the AUTHORIZATION state.
 	pub fn new(backend: B) -> Self {
 		Self {
