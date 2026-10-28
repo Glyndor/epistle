@@ -182,7 +182,7 @@ fn a_tls_rpt_report_has_the_documented_headers() {
 		b"gz",
 		true,
 	);
-	// The sender puts Date and Message-ID in front of this (tlsrpt/send.rs).
+	// The sender puts Date and Message-ID in front of this (tlsrpt/send/mod.rs).
 	expect("TLS-RPT report", &email, &["Date", "Message-ID"]);
 	expect_auto_generated(&email);
 }

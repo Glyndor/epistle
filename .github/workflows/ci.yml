@@ -64,6 +64,7 @@ jobs:
       #   directory_store/ldap — needs an LDAP server (tests/ldap.rs, gated on
       #     INTEROP_LDAP_URL).
       #   acme/renew — the certificate-renewal path needs a live ACME directory.
+      #     The module is a folder now (renew/mod.rs), so the entry names both.
       #   pop3/server, managesieve/server — connection-accept glue, exercised
       #     end-to-end rather than by unit tests.
       # acme/transport and pop3/backend are well covered and deliberately NOT
@@ -84,7 +85,7 @@ jobs:
       # a folder named after it (src/smtp/identification/tests/base/client.rs),
       # so the last alternative covers the leaves of a tests/ folder under
       # src/ whatever their depth.
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs|/tests/[^/]+\\.rs|src/[^/]*(/[^/]+)*/tests(/[^/]+)*\\.rs"
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew(/mod)?|pop3/server|managesieve/server|directory_store/(sql|ldap)|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs|/tests/[^/]+\\.rs|src/[^/]*(/[^/]+)*/tests(/[^/]+)*\\.rs"
   dependabot-freshness:
     # Not a required check and it reads repository state, not the queued
     # commit, so it would only spend a runner inside the queue.

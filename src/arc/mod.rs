@@ -16,14 +16,4 @@ pub mod validate;
 pub(crate) use ams::header_names;
 
 #[cfg(test)]
-mod ams_tests;
-#[cfg(test)]
-mod chain_tests;
-#[cfg(test)]
-mod seal_tests;
-#[cfg(test)]
-mod sealer_tests;
-#[cfg(test)]
-mod signature_tests;
-#[cfg(test)]
-mod validate_tests;
+mod tests;

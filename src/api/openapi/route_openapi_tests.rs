@@ -22,8 +22,8 @@ const ROUTERS: [(&str, &str, &str); 7] = [
 		"",
 	),
 	(
-		"src/acme/http01.rs",
-		include_str!("../../acme/http01.rs"),
+		"src/acme/http01/mod.rs",
+		include_str!("../../acme/http01/mod.rs"),
 		"",
 	),
 	(

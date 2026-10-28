@@ -18,8 +18,6 @@
 //! future Rust upgrade cannot silently regress this invariant.
 
 pub mod accept;
-#[cfg(test)]
-pub mod audit_support;
 pub mod body_deadline;
 pub mod conn_limit;
 pub mod deadline;
@@ -27,6 +25,8 @@ pub mod http_serve;
 mod https_url;
 pub mod per_account_conn;
 pub mod response_writer;
+#[cfg(test)]
+pub(crate) mod tests;
 pub mod trusted_ip;
 
 pub use https_url::{HttpsUrl, HttpsUrlError};
@@ -42,57 +42,4 @@ use std::net::SocketAddr;
 /// equivalent IPv4 address; the helper never allocates.
 pub fn canonical_peer(addr: SocketAddr) -> SocketAddr {
 	SocketAddr::new(addr.ip().to_canonical(), addr.port())
-}
-
-#[cfg(test)]
-mod tests {
-	use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-
-	#[test]
-	fn v4_mapped_v6_becomes_plain_v4() {
-		let addr: SocketAddr = "[::ffff:192.0.2.7]:25".parse().expect("parse v4-mapped");
-		let canonical = super::canonical_peer(addr);
-		assert_eq!(canonical.ip(), IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7)));
-		assert_eq!(canonical.port(), 25);
-	}
-
-	#[test]
-	fn plain_v4_is_unchanged() {
-		let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 25));
-		let canonical = super::canonical_peer(addr);
-		assert_eq!(
-			canonical,
-			SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 25))
-		);
-	}
-
-	#[test]
-	fn plain_v6_is_unchanged() {
-		let addr = SocketAddr::V6(SocketAddrV6::new(
-			Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
-			25,
-			0,
-			0,
-		));
-		let canonical = super::canonical_peer(addr);
-		assert_eq!(
-			canonical,
-			SocketAddr::V6(SocketAddrV6::new(
-				Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
-				25,
-				0,
-				0,
-			))
-		);
-	}
-
-	#[test]
-	fn v4_unspecified_is_still_v4() {
-		let addr: SocketAddr = "[::ffff:0.0.0.0]:443".parse().expect("parse v4-mapped any");
-		let canonical = super::canonical_peer(addr);
-		assert_eq!(
-			canonical,
-			SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 443))
-		);
-	}
 }
