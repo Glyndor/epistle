@@ -1,5 +1,7 @@
 //! DKIM signature verification (RFC 6376 section 6).
 
+use std::collections::HashMap;
+
 use ring::signature::{ED25519, RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY, UnparsedPublicKey};
 
 use crate::spf::{DnsFailure, DnsLookup};
@@ -70,16 +72,11 @@ pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> 
 		}];
 	};
 
-	// The budget comes before the signatures are looked at: a message that
-	// carries a flood of them is refused with one error, not with one
-	// result, one lookup and one error per signature.
-	if message.header_bytes > MAX_HEADER_BYTES {
-		return vec![DkimResult {
-			outcome: DkimOutcome::PermError,
-			domain: None,
-		}];
-	}
-
+	// The size of the header block was measured before its fields were
+	// parsed, and the budget on the number of signatures comes before they
+	// are looked at: a message that carries a flood of them is refused with
+	// one error, not with one result, one lookup and one error per
+	// signature.
 	let signatures: Vec<(usize, &Header)> = message
 		.headers
 		.iter()
@@ -99,9 +96,13 @@ pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> 
 		}];
 	}
 
+	// The positions of the headers are indexed once for the whole message:
+	// every signature reads them from that index instead of walking the
+	// headers again for each name it lists.
+	let header_index = HeaderIndex::build(&message);
 	let mut results = Vec::with_capacity(signatures.len());
 	for (index, header) in signatures {
-		results.push(verify_one(dns, &message, index, header.value).await);
+		results.push(verify_one(dns, &message, &header_index, index, header.value).await);
 	}
 	results
 }
@@ -114,9 +115,6 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 	let Some(message) = Message::split(raw) else {
 		return false;
 	};
-	if message.header_bytes > MAX_HEADER_BYTES {
-		return false;
-	}
 	let signatures = message
 		.headers
 		.iter()
@@ -125,6 +123,7 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 	if signatures > MAX_SIGNATURES {
 		return false;
 	}
+	let header_index = HeaderIndex::build(&message);
 	for (index, header) in message.headers.iter().enumerate() {
 		if !header.name.eq_ignore_ascii_case("DKIM-Signature") {
 			continue;
@@ -135,7 +134,9 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 		if signature.body_length.is_none()
 			&& signature.domain.eq_ignore_ascii_case(&from_domain)
 			&& signature.signed_headers.iter().any(|name| name == "from")
-			&& verify_one(dns, &message, index, header.value).await.outcome == DkimOutcome::Pass
+			&& verify_one(dns, &message, &header_index, index, header.value)
+				.await
+				.outcome == DkimOutcome::Pass
 		{
 			return true;
 		}
@@ -143,9 +144,35 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 	false
 }
 
+/// Where the headers of a message stand: the position of every header, by
+/// lowercased name, in the order the headers appear.
+///
+/// The index is built once per message and read from the end, so a
+/// signature that names a header twice takes the last occurrence first and
+/// the one above it next, and the cost is one pass over the headers
+/// instead of one pass per name the signature lists.
+struct HeaderIndex {
+	positions: HashMap<String, Vec<usize>>,
+}
+
+impl HeaderIndex {
+	/// Index the headers of `message`.
+	fn build(message: &Message<'_>) -> Self {
+		let mut positions: HashMap<String, Vec<usize>> = HashMap::new();
+		for (index, header) in message.headers.iter().enumerate() {
+			positions
+				.entry(header.name.to_ascii_lowercase())
+				.or_default()
+				.push(index);
+		}
+		HeaderIndex { positions }
+	}
+}
+
 async fn verify_one(
 	dns: &dyn DnsLookup,
 	message: &Message<'_>,
+	header_index: &HeaderIndex,
 	signature_index: usize,
 	signature_value: &str,
 ) -> DkimResult {
@@ -221,26 +248,29 @@ async fn verify_one(
 
 	// Build the signed header block (section 3.7): listed headers from the
 	// bottom up, then the DKIM-Signature itself with b= emptied.
+	//
+	// The headers are taken from the index of the message, from the end:
+	// the first time a name is listed the last header of that name is
+	// signed, the next time the one above it, and a name the message does
+	// not carry contributes nothing (section 5.4.2).
 	let mut hash_input = String::new();
-	let mut used: Vec<bool> = vec![false; message.headers.len()];
+	let mut taken: HashMap<&str, usize> = HashMap::new();
 	for name in &signature.signed_headers {
-		if let Some(index) = message
-			.headers
-			.iter()
-			.enumerate()
-			.rev()
-			.position(|(i, header)| !used[i] && header.name.eq_ignore_ascii_case(name))
-			.map(|rev_position| message.headers.len() - 1 - rev_position)
-		{
-			used[index] = true;
-			let header = &message.headers[index];
-			hash_input.push_str(&canon::header(
-				signature.header_canon,
-				header.name,
-				header.value,
-			));
+		let Some(positions) = header_index.positions.get(name.as_str()) else {
+			continue;
+		};
+		let used = taken.entry(name.as_str()).or_insert(0);
+		if *used >= positions.len() {
+			continue;
 		}
-		// A listed but absent header contributes nothing (section 5.4.2).
+		let position = positions.len() - 1 - *used;
+		*used += 1;
+		let header = &message.headers[positions[position]];
+		hash_input.push_str(&canon::header(
+			signature.header_canon,
+			header.name,
+			header.value,
+		));
 	}
 	let dkim_header = &message.headers[signature_index];
 	let unsigned_value = strip_b_tag(dkim_header.value);
@@ -343,9 +373,6 @@ fn strip_b_tag(value: &str) -> String {
 struct Message<'a> {
 	headers: Vec<Header<'a>>,
 	body: &'a [u8],
-	/// How many octets the header block holds, to bound the work a message
-	/// can ask for.
-	header_bytes: usize,
 }
 
 struct Header<'a> {
@@ -354,9 +381,17 @@ struct Header<'a> {
 }
 
 impl<'a> Message<'a> {
-	/// Split a raw RFC 5322 message. Returns `None` on malformed headers.
+	/// Split a raw RFC 5322 message. Returns `None` on malformed headers
+	/// and on a header block past the budget.
+	///
+	/// The size of the block is measured before the first field is parsed,
+	/// so a message that floods the block pays one length check and not a
+	/// vector of fields.
 	fn split(raw: &'a [u8]) -> Option<Self> {
 		let (raw_header, body) = crate::util::header_block::split_at_blank_line(raw);
+		if raw_header.len() > MAX_HEADER_BYTES {
+			return None;
+		}
 		let header_block = std::str::from_utf8(raw_header).ok()?;
 
 		let mut headers = Vec::new();
@@ -391,11 +426,7 @@ impl<'a> Message<'a> {
 		if let Some((start, end)) = current.take() {
 			headers.push(parse_header(&header_block[start..end])?);
 		}
-		Some(Message {
-			headers,
-			body,
-			header_bytes: raw_header.len(),
-		})
+		Some(Message { headers, body })
 	}
 }
 

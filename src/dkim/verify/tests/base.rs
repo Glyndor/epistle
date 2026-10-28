@@ -11,9 +11,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
-struct KeyDns {
-	records: HashMap<String, Vec<String>>,
-	fail: bool,
+pub(super) struct KeyDns {
+	pub(super) records: HashMap<String, Vec<String>>,
+	pub(super) fail: bool,
 }
 
 impl DnsLookup for KeyDns {
@@ -431,9 +431,25 @@ fn outcome_keywords_cover_all_variants() {
 	assert_eq!(DkimOutcome::None.as_str(), "none");
 }
 
-fn empty_dns() -> KeyDns {
+pub(super) fn empty_dns() -> KeyDns {
 	KeyDns {
 		records: HashMap::new(),
+		fail: false,
+	}
+}
+
+/// The DNS that answers with the public key of `key_pair`.
+pub(super) fn dns_with_key(key_pair: &Ed25519KeyPair) -> KeyDns {
+	let mut records = HashMap::new();
+	records.insert(
+		"sel._domainkey.example.org".to_string(),
+		vec![format!(
+			"v=DKIM1; k=ed25519; p={}",
+			BASE64.encode(key_pair.public_key().as_ref())
+		)],
+	);
+	KeyDns {
+		records,
 		fail: false,
 	}
 }
