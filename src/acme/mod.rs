@@ -10,6 +10,7 @@ pub mod directory;
 pub mod dns01_authoritative;
 pub mod http01;
 pub mod jws;
+pub mod problem;
 pub mod protocol;
 pub mod renew;
 pub mod renew_request;

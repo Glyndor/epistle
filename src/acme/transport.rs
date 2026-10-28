@@ -8,7 +8,7 @@
 use std::pin::Pin;
 use std::time::Duration;
 
-use super::client::{AcmeError, AcmeTransport, PostResponse};
+use super::client::{AcmeError, AcmeTransport, PostResponse, ca_refusal};
 
 const REPLAY_NONCE: &str = "Replay-Nonce";
 
@@ -89,7 +89,15 @@ impl AcmeTransport for HttpTransport {
 				.send()
 				.await
 				.map_err(|e| AcmeError::Transport(e.to_string()))?;
-			read_response_body(response).await
+			let status = response.status().as_u16();
+			let body = read_response_body(response).await?;
+			// The directory is the one resource fetched with GET. A refusal
+			// carries a problem document, not a directory, so the status is
+			// read before the body is taken for one.
+			if !(200..300).contains(&status) {
+				return Err(ca_refusal(status, &body));
+			}
+			Ok(body)
 		})
 	}
 
@@ -102,6 +110,11 @@ impl AcmeTransport for HttpTransport {
 				.send()
 				.await
 				.map_err(|e| AcmeError::Transport(e.to_string()))?;
+			let status = response.status().as_u16();
+			if !(200..300).contains(&status) {
+				// A HEAD answer carries no body: the status is all there is.
+				return Err(ca_refusal(status, &[]));
+			}
 			header(&response, REPLAY_NONCE)
 				.ok_or_else(|| AcmeError::Transport("newNonce response had no Replay-Nonce".into()))
 		})
