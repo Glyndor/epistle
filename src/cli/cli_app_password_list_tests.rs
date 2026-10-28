@@ -79,7 +79,7 @@ fn the_expiry_is_an_rfc3339_instant_and_the_json_keeps_the_epoch() {
 			"bob",
 			AppPassword {
 				label: "phone".to_string(),
-				hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
+				hash: crate::smtp::auth::tests::base::hash(crate::test_fixtures::password()),
 				expires_at: Some(1_700_000_000),
 				ip_cidr: None,
 				save_sent: None,
