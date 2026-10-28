@@ -117,7 +117,15 @@ pub(super) fn with_token(
 				volumes.remove(index);
 			}
 		}
-		Some(TokenSource::Env(_)) => {}
+		// The credential the configuration carried before leaves the
+		// container with it: a container that keeps the old token mounted
+		// still exposes it, and the configuration no longer names the
+		// path, so a later edit cannot find the mount to take away.
+		Some(TokenSource::Env(_)) => {
+			if let Some(index) = mounted {
+				volumes.remove(index);
+			}
+		}
 	}
 	let mut updated =
 		serde_json::to_vec_pretty(&document).map_err(|_| "cannot encode compose.yaml")?;
