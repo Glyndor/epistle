@@ -49,7 +49,7 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
@@ -84,7 +84,7 @@ function name is the stable reference.
 | 4.2.1 Object-level authZ / no IDOR | Met | JMAP blob ids parsed as UUIDs before any FS use; every data path uses the authenticated `self.account()` (`src/api/jmap/`); IMAP mailbox names allow-listed level by level and stored as one directory each (`src/util/mailbox_path.rs::valid_folder`, `disk_name`). |
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
-| 4.3.3 Per-account confinement (WebDAV/CalDAV/CardDAV) | Met | `src/webdav/path.rs::resolve` percent-decodes, rejects NUL/`..`/`\`/non-`Normal` components and ends with a `starts_with(root)` guard; the root is derived from the *resolved* account (`src/webdav/auth.rs`, `src/webdav/handler.rs`). |
+| 4.3.3 Per-account confinement (WebDAV/CalDAV/CardDAV) | Met | `src/webdav/path/mod.rs::resolve` percent-decodes, rejects NUL/`..`/`\`/non-`Normal` components and ends with a `starts_with(root)` guard; the root is derived from the *resolved* account (`src/webdav/auth/mod.rs`, `src/webdav/handler/mod.rs`). |
 | 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/mod.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
 
 > RFC 4314 IMAP ACLs are stored and reported (`SETACL`/`GETACL`/`MYRIGHTS`,
@@ -188,7 +188,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 12.1.1 Upload size limited | Met | Message size capped at 25 MiB; IMAP/JMAP blob handling bounded. |
-| 12.3.1 No path traversal in file paths | Met | WebDAV `src/webdav/path.rs::resolve` and storage `src/storage/delivery/mod.rs::is_safe_mailbox` + IMAP `valid_name` are allow-lists rejecting `..`/`/`/`\`/NUL/control/leading-dot; all writes are confined under the account root. Every path built under the data directory (account roots, mailboxes, message and state files, spool, correspondents, subscriptions) also goes through `src/util/path_containment.rs::contained`, which resolves `..` and symlinks and refuses anything that is not inside its root, so a validator bug cannot walk out of the tree. |
+| 12.3.1 No path traversal in file paths | Met | WebDAV `src/webdav/path/mod.rs::resolve` and storage `src/storage/delivery/mod.rs::is_safe_mailbox` + IMAP `valid_name` are allow-lists rejecting `..`/`/`/`\`/NUL/control/leading-dot; all writes are confined under the account root. Every path built under the data directory (account roots, mailboxes, message and state files, spool, correspondents, subscriptions) also goes through `src/util/path_containment.rs::contained`, which resolves `..` and symlinks and refuses anything that is not inside its root, so a validator bug cannot walk out of the tree. |
 | 12.4.1 Files stored outside the web root with safe perms | Met | `.eml` and config files written `0600` under the isolated user (`src/storage/`); no web root exists. |
 | 12.5.1 No execution of uploaded content | Met | Stored mail is inert `.eml`; never executed. |
 
@@ -262,9 +262,9 @@ Two further low-severity hardening fixes were applied:
 
 5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
    SMTP/IMAP, repeated `AUTHENTICATE` failures were unbounded on one connection.
-   It now closes after 3 failures (`src/managesieve/session.rs`). Test:
+   It now closes after 3 failures (`src/managesieve/session/mod.rs`). Test:
    `repeated_auth_failures_close_the_connection` in
-   `src/managesieve/session_tests.rs`.
+   `src/managesieve/session/tests/base.rs`.
 
 ### Documented as deferred (genuine gaps, fix is a feature)
 

@@ -227,17 +227,17 @@ fn password_change_drops_an_existing_verifier_when_scram_disabled() {
 #[test]
 fn managesieve_advertises_plain_only_regardless_of_scram_flag() {
 	// ManageSieve never advertised SCRAM: its `Sieve` record carries only
-	// PLAIN, and the existing code in `src/managesieve/session.rs::capabilities`
+	// PLAIN, and the existing code in `src/managesieve/session/mod.rs::capabilities`
 	// only ever pushes a `SASL "PLAIN"` line under STARTTLS, never a SCRAM
 	// one. The grep-style static check pins that against future drift that
 	// would quietly couple the flag to this listener.
 	let src = std::fs::read_to_string(
-		std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/managesieve/session.rs"),
+		std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/managesieve/session/mod.rs"),
 	)
-	.expect("read session.rs");
+	.expect("read session/mod.rs");
 	assert!(
 		!src.contains("SCRAM"),
-		"ManageSieve's session.rs must not mention SCRAM; the toggle does not affect it"
+		"ManageSieve's session/mod.rs must not mention SCRAM; the toggle does not affect it"
 	);
 	assert!(
 		src.contains("\"PLAIN\""),

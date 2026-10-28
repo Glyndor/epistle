@@ -126,4 +126,4 @@ pub fn router_for(state: WebDavState) -> Router {
 }
 
 #[cfg(test)]
-mod href_tests;
+mod tests;
