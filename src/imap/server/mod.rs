@@ -537,24 +537,7 @@ impl Server {
 mod builder;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_drain.rs"]
-mod tests_drain;
-
-#[cfg(test)]
-#[path = "mod_tests_compress.rs"]
-mod tests_compress;
-
-#[cfg(test)]
-#[path = "mod_tests_literals.rs"]
-mod tests_literals;
-
-#[cfg(test)]
-#[path = "mod_tests_utf8_append.rs"]
-mod tests_utf8_append;
 
 mod accept;
 
@@ -565,19 +548,3 @@ mod idle;
 mod server_literal;
 
 mod session_factory;
-
-#[cfg(test)]
-#[path = "mod_tests_conn_limit.rs"]
-mod tests_conn_limit;
-
-#[cfg(test)]
-#[path = "mod_tests_deadline.rs"]
-mod tests_deadline;
-
-#[cfg(test)]
-#[path = "mod_tests_discard.rs"]
-mod tests_discard;
-
-#[cfg(test)]
-#[path = "mod_tests_starttls.rs"]
-mod tests_starttls;

@@ -205,10 +205,4 @@ impl Session {
 }
 
 #[cfg(test)]
-mod special_use_selection;
-
-#[cfg(test)]
-mod root_hierarchy;
-
-#[cfg(test)]
-mod hierarchy;
+mod tests;

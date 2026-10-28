@@ -440,5 +440,4 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 pub(crate) mod tests;

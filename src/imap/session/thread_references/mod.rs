@@ -166,9 +166,4 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "threader_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "threader_hostile_tests.rs"]
-mod hostile_tests;

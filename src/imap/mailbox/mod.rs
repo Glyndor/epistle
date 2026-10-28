@@ -488,17 +488,4 @@ pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_path.rs"]
-mod tests_path;
-
-#[cfg(test)]
-#[path = "mod_tests_remove.rs"]
-mod tests_remove;
-
-#[cfg(test)]
-#[path = "mod_tests_hierarchy.rs"]
-mod tests_hierarchy;
