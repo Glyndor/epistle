@@ -65,6 +65,7 @@ network at all and are reached only through Unix sockets.
 | Guide | What it covers |
 |---|---|
 | [CLI reference](docs/cli.md) | Every command, starting with common tasks |
+| [Roundcube](docs/roundcube.md) | IMAP and SMTP setup, authentication, folders, bans and upload limits; client installation remains unverified |
 | [Configuration](docs/configuration.md) | The `mail.toml` file, every section and key, secrets |
 | [HTTP API](docs/api.md) | Keys and scopes, sending, the delivery log, webhooks, JMAP, SCIM, errors and limits; the routes as [OpenAPI](src/api/openapi/openapi.yaml) |
 | [Input validation](docs/validation.md) | Every input rule, where it is defined, which entry points use it and why |
