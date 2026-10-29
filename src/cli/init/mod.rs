@@ -428,37 +428,4 @@ impl<W: std::io::Write> std::fmt::Write for StringWriter<W> {
 }
 
 #[cfg(test)]
-#[path = "init_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "init_answers_errors_tests.rs"]
-mod tests_answers_errors;
-
-#[cfg(test)]
-#[path = "init_tests_parse_privacy.rs"]
-mod tests_parse_privacy;
-
-#[cfg(test)]
-#[path = "init_detect_tests.rs"]
-mod tests_detect;
-
-#[cfg(test)]
-#[path = "init_ptr_tests.rs"]
-mod tests_ptr;
-
-#[cfg(test)]
-#[path = "init_first_account_tests.rs"]
-mod tests_first_account;
-
-#[cfg(test)]
-#[path = "init_tests_warmup.rs"]
-mod tests_warmup;
-
-#[cfg(test)]
-#[path = "init_tests_sizing.rs"]
-mod tests_sizing;
-
-#[cfg(test)]
-#[path = "init_tests_clock.rs"]
-mod tests_clock;
