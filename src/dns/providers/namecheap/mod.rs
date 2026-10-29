@@ -27,7 +27,7 @@ use std::pin::Pin;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
-use crate::dns::providers::namecheap::render::{host_from_record, host_label, split_sld_tld};
+use crate::dns::providers::namecheap::render::{host_from_record, host_label, zone_parts};
 use crate::dns::providers::namecheap::xml::{ApiResponse, Host, extract_hosts, parse_response};
 use crate::dns::providers::transport;
 use crate::net::HttpsUrl;
@@ -172,8 +172,9 @@ impl NamecheapProvider {
 
 	/// `getHosts` against Namecheap. Returns the parsed list of [`Host`]s
 	/// currently published at the zone (an empty list if the zone has none).
+	/// A candidate reduced to another domain is not itself a zone.
 	async fn get_hosts(&self, zone: &str) -> Result<Vec<Host>, ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
+		let (sld, tld) = zone_parts(zone)?;
 		let mut params = self.global_params("namecheap.domains.dns.getHosts");
 		params.push(("SLD".into(), sld));
 		params.push(("TLD".into(), tld));
@@ -187,7 +188,7 @@ impl NamecheapProvider {
 	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
 	/// read 2026-10-12).
 	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
-		let (sld, tld) = split_sld_tld(zone);
+		let (sld, tld) = zone_parts(zone)?;
 		let mut params = self.global_params("namecheap.domains.dns.setHosts");
 		params.push(("SLD".into(), sld));
 		params.push(("TLD".into(), tld));
