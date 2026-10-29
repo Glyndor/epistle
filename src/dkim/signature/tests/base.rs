@@ -88,3 +88,19 @@ fn rejects_malformed_tag_values() {
 	assert!(parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=aGFzaA==; b=c2ln; l=x").is_err());
 	assert!(parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=aGFzaA==; b=c2ln; x=y").is_err());
 }
+
+#[test]
+fn a_repeated_tag_makes_the_signature_invalid() {
+	let error =
+		parse(&format!("{SAMPLE}; i=@example.org; i=@sub.example.org")).expect_err("repeat");
+	assert_eq!(error.0, "repeated tag \"i\"");
+	let error = parse(&format!("{SAMPLE}; x-one=1; x-one=2")).expect_err("unknown repeat");
+	assert_eq!(error.0, "repeated tag \"x-one\"");
+}
+
+#[test]
+fn a_signature_with_a_hostile_number_of_tags_is_refused_early() {
+	let tags: String = (0..10_000).map(|n| format!("x{n}=1; ")).collect();
+	let error = parse(&format!("{SAMPLE}; {tags}")).expect_err("too many tags");
+	assert_eq!(error.0, "too many tags");
+}

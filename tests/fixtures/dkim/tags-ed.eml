@@ -1,0 +1,6 @@
+DKIM-Signature: v=1; a=ed25519-sha256; c=simple/simple; d=example.org; s=tags; h=from:to:subject; bh=VN486rUbHeJrPGJbDu14w4pnttmiNPVpoHfwtV9tU/U=; b=t1WgpK4rytcFrQ3TvP/8yksBL9U573Mihljv7LWHJEpDh5RewGzVJXvIMMTyFtpa9uA5OJsSyW/ZI0yjq1JBDg==
+From: Alice <alice@example.org>
+To: Bob <bob@example.net>
+Subject: DKIM tags
+
+DKIM tag validation fixture.

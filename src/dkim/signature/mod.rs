@@ -63,6 +63,9 @@ pub struct Signature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureError(pub String);
 
+/// The most tags a signature may carry before it is refused.
+const MAX_TAGS: usize = 64;
+
 /// Parse the value of a `DKIM-Signature` header.
 pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 	let mut version = None;
@@ -77,6 +80,7 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 	let mut body_length = None;
 	let mut expiration = None;
 	let mut identity = None;
+	let mut seen: Vec<&str> = Vec::new();
 
 	for tag in value.split(';') {
 		let tag = tag.trim();
@@ -86,9 +90,21 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 		let (name, tag_value) = tag
 			.split_once('=')
 			.ok_or_else(|| SignatureError(format!("malformed tag \"{tag}\"")))?;
+		// A tag name may appear once: a list that repeats one is invalid
+		// as a whole, whatever the tag (RFC 6376 section 3.2).
+		let name = name.trim();
+		if seen.contains(&name) {
+			return Err(SignatureError(format!("repeated tag \"{name}\"")));
+		}
+		// A signature carries about ten tags. The cap keeps the search
+		// above from growing with the size of a hostile header.
+		if seen.len() >= MAX_TAGS {
+			return Err(SignatureError("too many tags".into()));
+		}
+		seen.push(name);
 		// Tag values may contain folding whitespace; strip it all.
 		let compact: String = tag_value.chars().filter(|c| !c.is_whitespace()).collect();
-		match name.trim() {
+		match name {
 			"v" => version = Some(compact),
 			"a" => {
 				algorithm = Some(match compact.as_str() {
