@@ -159,7 +159,7 @@ including an already existing folder it copies into. It does not require a
 separate manual subscription pass for those folders. See
 [IMAP migration](migration.md#copying-mail-over-imap),
 [`src/migrate/imap/copy.rs`](../src/migrate/imap/copy.rs), and
-[`src/migrate/imap/subscribe_tests.rs`](../src/migrate/imap/subscribe_tests.rs).
+[`src/migrate/imap/tests/subscribe.rs`](../src/migrate/imap/tests/subscribe.rs).
 This does not establish the subscription state of folders from unrelated
 imports or older runs.
 

@@ -52,7 +52,7 @@ pub(crate) fn ed25519_v2_pem() -> String {
 
 /// The DKIM test RSA key, PKCS#8 PEM.
 pub(crate) fn rsa_pkcs8_pem() -> &'static str {
-	include_str!("../../dkim/test_rsa_key.pem")
+	include_str!("../../../dkim/test_rsa_key.pem")
 }
 
 /// The same RSA key as PKCS#1 (`BEGIN RSA PRIVATE KEY`), cut out of the

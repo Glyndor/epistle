@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::dkim::{DomainSigner, PerDomainSigner, ReloadableSigner, Signer};
-use crate::migrate::import::apply::tests::{epistle, mox_plan};
+use crate::migrate::import::apply::tests::base::{epistle, mox_plan};
 
 const BUCHER: &str = "xn--bcher-kva.example";
 
