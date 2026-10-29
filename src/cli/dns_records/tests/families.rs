@@ -47,7 +47,7 @@ fn outputs(config: &Config) -> Vec<(&'static str, String)> {
 	let mut json = Vec::new();
 	assert_eq!(run(config, true, &mut json), ExitCode::SUCCESS);
 	let mut domain = Vec::new();
-	crate::cli::domain::domain_writers::print_domain_records(config, "example.org", &mut domain)
+	crate::cli::domain::writers::print_domain_records(config, "example.org", &mut domain)
 		.expect("print the records of the domain");
 	vec![
 		("text", String::from_utf8(text).expect("utf-8")),
