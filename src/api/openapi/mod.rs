@@ -44,9 +44,4 @@ pub async fn get() -> Result<Response, ApiError> {
 }
 
 #[cfg(test)]
-#[path = "route_openapi_tests.rs"]
-mod route_openapi_tests;
-
-#[cfg(test)]
-#[path = "openapi_shape_tests.rs"]
-mod openapi_shape_tests;
+mod tests;

@@ -151,7 +151,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 	),
 	("src/api/v1/queue.rs", &["MAX_LIMIT"], "(`limit` 1 to {}"),
 	(
-		"src/api/v1/deliveries.rs",
+		"src/api/v1/deliveries/mod.rs",
 		&["DEFAULT_LIMIT"],
 		"default {}. There is no cursor",
 	),
@@ -198,7 +198,7 @@ fn the_webhook_timeout_is_the_one_in_the_guide() {
 
 /// The `code: "..."` strings of `ApiError`.
 fn error_codes() -> BTreeSet<String> {
-	let text = source("src/api/error.rs");
+	let text = source("src/api/error/mod.rs");
 	let production = text.split("#[cfg(test)]").next().expect("source");
 	production
 		.lines()
