@@ -313,7 +313,7 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 	let endpoints = banner_endpoints(&prepared.config);
 	// The banner goes to stderr. stdout is reserved for command data on
 	// every command in this binary, and `epistle local` produces none, so
-	// stdout stays empty. The test in `local_tests.rs` pins both halves:
+	// stdout stays empty. The test in `src/cli/local/tests/base.rs` pins both halves:
 	// the writer handed in is `style::stderr()`, and there is no `println!`
 	// anywhere in `local/`.
 	print_banner(
@@ -366,37 +366,7 @@ pub(super) fn print_banner(
 }
 
 #[cfg(test)]
-#[path = "test_support.rs"]
 mod test_support;
 
 #[cfg(test)]
-#[path = "layout_key_tests.rs"]
-mod layout_key_tests;
-
-#[cfg(test)]
-#[path = "layout_recovery_tests.rs"]
-mod layout_recovery_tests;
-
-#[cfg(test)]
-#[path = "layout_storage_tests.rs"]
-mod layout_storage_tests;
-
-#[cfg(test)]
-#[path = "layout_replace_tests.rs"]
-mod layout_replace_tests;
-
-#[cfg(test)]
-#[path = "config_accounts_tests.rs"]
-mod config_accounts_tests;
-
-#[cfg(test)]
-#[path = "config_listener_tests.rs"]
-mod config_listener_tests;
-
-#[cfg(test)]
-#[path = "config_mail_tests.rs"]
-mod config_mail_tests;
-
-#[cfg(test)]
-#[path = "local_tests.rs"]
 mod tests;

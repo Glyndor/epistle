@@ -95,7 +95,7 @@ pub enum Key {
 impl Key {
 	/// Every adjustable key, in the order the catalog lists it.
 	/// `catalog::ADJUSTABLE` is the catalog's table; the two are kept
-	/// in lockstep by `tests_catalog::every_catalog_key_appears_in_show_text_with_kind_and_reference`,
+	/// in lockstep by `tests::catalog::every_catalog_key_appears_in_show_text_with_kind_and_reference`,
 	/// so a key added here without listing it slips the test rather than
 	/// appearing in `limits show` without the metadata the operator
 	/// needs.

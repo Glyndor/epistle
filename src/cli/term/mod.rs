@@ -338,5 +338,4 @@ pub(crate) mod fake {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

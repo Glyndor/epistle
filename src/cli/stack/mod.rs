@@ -676,17 +676,4 @@ fn format_ports(publishers: &[Publisher]) -> String {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_service.rs"]
-mod tests_service;
-
-#[cfg(test)]
-#[path = "mod_tests_override.rs"]
-mod tests_override;
-
-#[cfg(test)]
-#[path = "mod_tests_lock.rs"]
-mod tests_lock;

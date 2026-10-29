@@ -4,7 +4,7 @@
 //! limit with the kind and the RFC reference at the end, plus the
 //! per-domain and per-tenant overrides that `epistle limits show --json`
 //! has always carried. The five-column text format matches what the
-//! `tests_catalog` and `tests_budget` tests in `cli/limits/mod.rs` already
+//! `tests::catalog` and `tests::budget` in `src/cli/limits/tests/` already
 //! pin.
 
 use std::io::Write;

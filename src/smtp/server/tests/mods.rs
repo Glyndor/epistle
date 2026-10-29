@@ -34,10 +34,10 @@ mod tests_trace;
 mod tests_urlbl;
 
 #[cfg(test)]
-mod server_tests_gone;
+mod gone;
 
 #[cfg(test)]
-mod server_tests_class;
+mod class;
 
 #[cfg(test)]
 mod tests_save_sent;
@@ -129,4 +129,4 @@ mod tests_quota;
 mod tests_drain;
 
 #[cfg(test)]
-mod server_tests_accept_log;
+mod accept_log;

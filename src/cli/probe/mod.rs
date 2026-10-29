@@ -621,15 +621,6 @@ pub(super) fn render(lines: &[ProbeLine], json: bool, out: &mut impl std::io::Wr
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_pinning.rs"]
-mod tests_pinning;
-
-#[cfg(test)]
-#[path = "mod_tests_host.rs"]
-mod tests_host;
 
 pub(super) mod published;
