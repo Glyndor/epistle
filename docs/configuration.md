@@ -468,7 +468,7 @@ data, not only on the accounts routes:
 
 Before 0.12.2 these routes ignored the key's domains. If you handed out keys
 with `domains`, treat them as having had access to the whole server and rotate
-them. `src/api/route_rules_tests.rs` lists every route with the rule it
+them. `src/api/tests/route_rules.rs` lists every route with the rule it
 follows, and fails when a route is added without one.
 
 ### What each key scope reaches

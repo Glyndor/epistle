@@ -287,12 +287,4 @@ pub fn authenticated_router() -> Router<super::ApiState> {
 }
 
 #[cfg(test)]
-#[path = "oauth_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "device_limits_tests.rs"]
-mod device_limits_tests;
-
-#[cfg(test)]
-mod proxy_tests;

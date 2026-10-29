@@ -13,7 +13,7 @@
 //! maps it back with `epistle account find-log-id`.
 //!
 //! The password path (SASL PLAIN, AUTH LOGIN) is not repeated here: it
-//! writes the audit channel `epistle::auth` (`src/api/audit.rs`), which
+//! writes the audit channel `epistle::auth` (`src/api/audit/mod.rs`), which
 //! carries the same facts.
 
 /// The value a line carries when the account it is about is not known.

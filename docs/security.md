@@ -197,7 +197,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   Every route with per-tenant data applies the key's domains, not only the
   accounts routes (see "Domain-confined API keys" in the configuration
   reference for the list). A route is added together with its rule in
-  `src/api/route_rules_tests.rs`, or that test fails.
+  `src/api/tests/route_rules.rs`, or that test fails.
   A credential that matches no key reaches nothing. Every JMAP method, upload,
   download and the WebSocket check the account against the principal; a
   refused account gets the same `accountNotFound` (HTTP 404 on upload and

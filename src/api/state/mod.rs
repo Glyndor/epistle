@@ -786,11 +786,6 @@ mod submission;
 mod classes;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_limiter.rs"]
-mod tests_limiter;
 
 mod client_ip;

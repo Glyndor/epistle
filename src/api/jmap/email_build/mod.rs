@@ -151,5 +151,4 @@ pub(super) fn invalid(properties: &[&str]) -> Value {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
