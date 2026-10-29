@@ -76,11 +76,33 @@ pub enum DnsFailure {
 	Temporary,
 }
 
+/// An SRV record: where a service is offered, and how a client should
+/// prefer that offer over the others of the same name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrvRecord {
+	/// The priority of the offer: the lower the number, the sooner a
+	/// client tries it.
+	pub priority: u16,
+	/// The weight of the offer among the offers that share a priority.
+	pub weight: u16,
+	/// The port the service is reached at.
+	pub port: u16,
+	/// The canonical name of the host that offers the service, without the
+	/// trailing dot, or `.` when the service is decidedly not available at
+	/// this name (RFC 2782).
+	pub target: String,
+}
+
 type LookupResult<T> = Result<T, DnsFailure>;
 type Lookup<'a, T> = Pin<Box<dyn Future<Output = LookupResult<T>> + Send + 'a>>;
 
-/// The queries SPF evaluation needs. Nonexistent names return empty vectors,
-/// not errors.
+/// The queries the mail evaluation needs, behind a trait so the tests can
+/// answer them without a network. A name that does not exist returns an
+/// empty vector, not an error.
+///
+/// The SRV query is the exception: its default implementation reports a
+/// temporary failure, because a resolver that cannot answer for SRV proves
+/// nothing about the name.
 pub trait DnsLookup: Send + Sync {
 	/// TXT records of a name.
 	fn txt(&self, name: &str) -> Lookup<'_, Vec<String>>;
@@ -88,6 +110,17 @@ pub trait DnsLookup: Send + Sync {
 	fn addresses(&self, name: &str) -> Lookup<'_, Vec<IpAddr>>;
 	/// MX exchange hostnames of a name.
 	fn mx(&self, name: &str) -> Lookup<'_, Vec<String>>;
+	/// The SRV records of a name: every offer the name publishes, with the
+	/// priority, the weight, the port and the canonical target of the
+	/// offer.
+	///
+	/// The default implementation reports a temporary failure. A resolver
+	/// that does not answer for SRV proves nothing about the name, and an
+	/// empty list would be read as "the service is not published", which
+	/// is a claim the resolver never made.
+	fn srv(&self, _name: &str) -> Lookup<'_, Vec<SrvRecord>> {
+		Box::pin(async { Err(DnsFailure::Temporary) })
+	}
 	/// The TLSA RRset of a name (the full owner name, e.g.
 	/// `_25._tcp.mx.example.com`), classified by
 	/// [`crate::dane::rrset::classify`].
@@ -169,6 +202,17 @@ impl SystemDns {
 	}
 }
 
+/// The canonical form of the target of an SRV record: the root stays the
+/// root, because a target of `.` says the service is decidedly not
+/// available there, and every other name loses its trailing dot and its
+/// case, like every other name of the repository.
+fn canonical_target(name: &hickory_resolver::proto::rr::Name) -> String {
+	if name.is_root() {
+		return ".".to_string();
+	}
+	crate::dns::names::canonical_name(&name.to_utf8())
+}
+
 impl DnsLookup for SystemDns {
 	fn txt(&self, name: &str) -> Lookup<'_, Vec<String>> {
 		let name = name.to_string();
@@ -212,6 +256,26 @@ impl DnsLookup for SystemDns {
 				.iter()
 				.filter_map(|data| match data {
 					RData::MX(mx) => Some(mx.exchange.to_utf8().trim_end_matches('.').to_string()),
+					_ => None,
+				})
+				.collect())
+		})
+	}
+
+	fn srv(&self, name: &str) -> Lookup<'_, Vec<SrvRecord>> {
+		let name = name.to_string();
+		Box::pin(async move {
+			use hickory_resolver::proto::rr::{RData, RecordType};
+			let records = self.lookup(&name, RecordType::SRV).await?;
+			Ok(records
+				.iter()
+				.filter_map(|data| match data {
+					RData::SRV(srv) => Some(SrvRecord {
+						priority: srv.priority,
+						weight: srv.weight,
+						port: srv.port,
+						target: canonical_target(&srv.target),
+					}),
 					_ => None,
 				})
 				.collect())
