@@ -19,7 +19,7 @@ pub fn extensions() -> impl Iterator<Item = &'static str> {
 }
 
 #[cfg(test)]
-mod alloc_probe;
+mod tests;
 pub mod analysis;
 pub mod ast;
 mod compare;
@@ -38,36 +38,3 @@ pub mod message;
 pub mod parser;
 pub mod vacation;
 mod vars;
-
-#[cfg(test)]
-mod extensions_tests;
-#[cfg(test)]
-mod interp_tests;
-#[cfg(test)]
-#[path = "interp_tests_fileinto.rs"]
-mod interp_tests_fileinto;
-#[cfg(test)]
-#[path = "interp_tests_headers.rs"]
-mod interp_tests_headers;
-#[cfg(test)]
-#[path = "interp_tests_limits.rs"]
-mod interp_tests_limits;
-#[cfg(test)]
-#[path = "interp_tests_mailbox.rs"]
-mod interp_tests_mailbox;
-#[cfg(test)]
-#[path = "interp_tests_redirects.rs"]
-mod interp_tests_redirects;
-#[cfg(test)]
-#[path = "interp_tests_sender.rs"]
-mod interp_tests_sender;
-#[cfg(test)]
-#[path = "interp_tests_window.rs"]
-mod interp_tests_window;
-#[cfg(test)]
-mod memory_tests;
-#[cfg(test)]
-mod parser_tests;
-#[cfg(test)]
-#[path = "random_run_tests.rs"]
-mod random_run_tests;
