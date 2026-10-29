@@ -200,7 +200,7 @@ fn limits_and_antispam_show_json_are_objects_keyed_by_name() {
 			"reference": "no standard mandate",
 		})
 	);
-	let antispam = crate::cli::antispam::antispam_show::show_json(&config);
+	let antispam = crate::cli::antispam::show::show_json(&config);
 	assert_eq!(antispam["dnsbl-zones"]["value"], json!([]));
 	assert_eq!(antispam["dnsbl-zones"]["source"], "default");
 	assert_eq!(antispam["llm-api-key-env"]["value"], "unset");

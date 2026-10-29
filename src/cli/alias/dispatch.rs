@@ -1,5 +1,5 @@
 //! `epistle alias`: the dispatch that turns an [`AliasCli`] into an
-//! [`Outcome`]. Split out of `alias.rs` only to keep the umbrella under
+//! [`Outcome`]. Split out of `src/cli/alias/mod.rs` only to keep the umbrella under
 //! the per-file code-line budget; the dispatch sees every helper the
 //! umbrella exposes (`find_alias`, `set_enabled`, the validation and
 //! mutators) and the `Outcome` type that carries its decisions back.
@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use crate::config::Config;
 use crate::util::address::normalize;
 
-use super::alias_helpers::find_alias;
-use super::alias_writers::{commit_reporting, set_enabled_reporting};
+use super::helpers::find_alias;
+use super::writers::{commit_reporting, set_enabled_reporting};
 use super::{
 	AliasCli, MemberSubcommand, SenderSubcommand, add_alias, list, member_edit, open, remove_alias,
 	sender_edit, show,

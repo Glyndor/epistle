@@ -1,4 +1,4 @@
-use super::tests::{ALERTS, run};
+use super::base::{ALERTS, run};
 use super::*;
 
 const ADD: [&str; 12] = [
@@ -46,7 +46,7 @@ fn add_without_a_webhook_section_works_for_email_only_rules() {
 
 #[test]
 fn add_dry_run_prints_the_diff_and_writes_nothing() {
-	let run = super::tests::run_with(ALERTS, &ADD, true);
+	let run = super::base::run_with(ALERTS, &ADD, true);
 	assert!(run.out.contains("+name = \"disk-full\""), "{}", run.out);
 	assert_eq!(run.after, run.before);
 }

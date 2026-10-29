@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use super::tests_check::{EXE_AS_PDF, fixture, run};
+use super::check_cases::{EXE_AS_PDF, fixture, run};
 
 #[test]
 fn a_submission_is_accepted_when_the_server_does_not_inspect_submissions() {

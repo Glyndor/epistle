@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use crate::config::Config;
 use crate::directory_store::AccountStore;
 
-use super::alias_helpers::find_alias;
+use super::helpers::find_alias;
 use crate::cli::config_edit::{ConfigDocument, Outcome};
 
 /// Rewrite the members list on an alias table, preserving the rest.
@@ -20,7 +20,7 @@ pub(super) fn upsert_alias_members(
 	for member in members {
 		values.push(toml_edit::Value::from(member.clone()));
 	}
-	let key = super::alias_helpers::document_address(document, address);
+	let key = super::helpers::document_address(document, address);
 	document.upsert_element(
 		"alias",
 		"address",
@@ -39,7 +39,7 @@ pub(super) fn upsert_alias_senders(
 	for sender in senders {
 		values.push(toml_edit::Value::from(sender.clone()));
 	}
-	let key = super::alias_helpers::document_address(document, address);
+	let key = super::helpers::document_address(document, address);
 	document.upsert_element(
 		"alias",
 		"address",

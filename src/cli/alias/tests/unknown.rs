@@ -2,7 +2,7 @@
 //! way `epistle account disable` refuses one. The message is preserved
 //! exactly so scripts that parse `error: alias X not found` keep working.
 //!
-//! Lives in a sibling so `alias_tests.rs` stays under the per-file code-line
+//! Lives in a sibling so `src/cli/alias/tests/base.rs` stays under the per-file code-line
 //! budget.
 
 use std::io::Write;
@@ -33,7 +33,7 @@ fn assert_unknown_alias_is_refused(action: AliasCli) {
 	let code = run(file.path(), action, false, false);
 	assert_eq!(
 		code,
-		ExitCode::from(super::super::exit::REFUSED),
+		ExitCode::from(crate::cli::exit::REFUSED),
 		"an unknown alias must exit 2 (usage error)"
 	);
 }

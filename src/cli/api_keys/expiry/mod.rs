@@ -13,14 +13,14 @@ const DAY: u64 = 86_400;
 const FIRST_EPOCH: u64 = 1_000_000_000;
 
 /// The current time as epoch seconds; a clock before 1970 reads as zero.
-pub(super) fn now_secs() -> u64 {
+pub(in crate::cli) fn now_secs() -> u64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)
 		.map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// `--expires-at`: an epoch, a date, an RFC 3339 instant or a duration.
-pub(super) fn parse_expires_at(value: &str) -> Result<u64, String> {
+pub(in crate::cli) fn parse_expires_at(value: &str) -> Result<u64, String> {
 	at(value, now_secs())
 }
 
@@ -196,5 +196,4 @@ pub(crate) fn status_warning(expires_at: u64, now: u64) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "api_keys_expiry_parse_tests.rs"]
 mod tests;

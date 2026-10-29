@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use super::alias_writers::set_enabled;
+use super::writers::set_enabled;
 use super::*;
 use crate::config::Config;
 

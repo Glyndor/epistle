@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use super::check;
-use super::tests_check::{EXE_AS_PDF, fixture};
+use super::check_cases::{EXE_AS_PDF, fixture};
 
 const CLEAN: &[u8] = b"From: x@example.net\r\nSubject: hi\r\n\r\nhello\r\n";
 
