@@ -1,5 +1,5 @@
-use crate::migrate::import::tests::test_keys;
 use super::*;
+use crate::migrate::import::tests::test_keys;
 
 #[test]
 fn ed25519_version_2_is_kept_as_is() {

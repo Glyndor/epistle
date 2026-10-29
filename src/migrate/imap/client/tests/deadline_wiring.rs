@@ -4,8 +4,8 @@
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use super::super::super::tests::run::{Quiet, target};
 use super::super::super::state::{FolderState, StateDir};
+use super::super::super::tests::run::{Quiet, target};
 use super::super::super::{
 	Filter, MigrateError, Settings, Source, Verify, durability, run_with_connection,
 };
