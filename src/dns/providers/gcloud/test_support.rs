@@ -69,6 +69,9 @@ pub(super) struct MockState {
 	/// When set, the rrsets listing answers this many rrsets per page and
 	/// hands out a `nextPageToken` for the rest, as the API may.
 	pub(super) page_size: Option<usize>,
+	/// The `dnsName` the managed-zone listing denies with a 403, as a
+	/// provider that refuses to answer about that zone does.
+	pub(super) zone_denied: Option<String>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -195,6 +198,7 @@ pub(super) async fn token(
 /// GET /dns/v1/projects/{p}/managedZones[?dnsName=…] — list matching zones.
 pub(super) async fn list_zones(
 	State(state): State<Shared>,
+	axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 	headers: axum::http::HeaderMap,
 ) -> Result<axum::Json<Value>, axum::http::StatusCode> {
 	let auth = headers
@@ -206,6 +210,13 @@ pub(super) async fn list_zones(
 	}
 	let mut s = state.lock().unwrap();
 	s.bearers.push(auth.to_string());
+	// A zone the mock refuses to answer about: the listing denies it, the
+	// way a provider that cannot answer about that zone does.
+	if let Some(denied) = s.zone_denied.as_deref()
+		&& query.get("dnsName").map(String::as_str) == Some(denied)
+	{
+		return Err(axum::http::StatusCode::FORBIDDEN);
+	}
 	Ok(axum::Json(serde_json::json!({
 		"managedZones": [
 			{ "name": "example-org", "dnsName": "example.org." }

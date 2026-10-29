@@ -171,14 +171,14 @@ impl DigitaloceanProvider {
 			.with_query("per_page", "200")
 			.with_query("type", kind)
 			.with_query("name", name);
-		self.fetch_pages(url).await
+		self.fetch_pages(url, zone).await
 	}
 
 	/// `GET /v2/domains/{zone}/records?per_page=200` — every record (for
 	/// [`DnsProvider::list`]).
 	async fn list_all(&self, zone: &str) -> Result<Vec<DomainRecord>, ProviderError> {
 		let url = self.records_url(zone, None)?.with_query("per_page", "200");
-		self.fetch_pages(url).await
+		self.fetch_pages(url, zone).await
 	}
 
 	/// GET `first` and every page DigitalOcean links to through
@@ -186,7 +186,11 @@ impl DigitaloceanProvider {
 	/// is not silently truncated. The link comes from the response body, so it
 	/// is resolved against the configured base and refused when it points at a
 	/// different origin: the bearer token must not follow it anywhere else.
-	async fn fetch_pages(&self, first: HttpsUrl) -> Result<Vec<DomainRecord>, ProviderError> {
+	async fn fetch_pages(
+		&self,
+		first: HttpsUrl,
+		zone: &str,
+	) -> Result<Vec<DomainRecord>, ProviderError> {
 		let mut url = first;
 		let mut out = Vec::new();
 		let mut pages = 0;
@@ -203,6 +207,12 @@ impl DigitaloceanProvider {
 				|| status == reqwest::StatusCode::FORBIDDEN
 			{
 				return Err(ProviderError::Auth);
+			}
+			if status == reqwest::StatusCode::NOT_FOUND {
+				// The records of a domain DigitalOcean does not hold: the
+				// domain is not there, which is not a failure of the
+				// provider, and the search goes on to the parent.
+				return Err(ProviderError::ZoneNotFound(zone.to_string()));
 			}
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);

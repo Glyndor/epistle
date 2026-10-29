@@ -25,6 +25,9 @@ struct MockState {
 	reject_tags: bool,
 	/// What a listing says in `result_info.total_pages`; nothing when `None`.
 	total_pages: Option<u32>,
+	/// The zone the lookup refuses to answer about: Cloudflare answers 403
+	/// for it, as it does for a zone the token may not read.
+	zone_denied: Option<String>,
 }
 
 type Shared = Arc<Mutex<MockState>>;
@@ -32,16 +35,27 @@ type Shared = Arc<Mutex<MockState>>;
 async fn list_zones(
 	State(state): State<Shared>,
 	Query(query): Query<std::collections::HashMap<String, String>>,
-) -> axum::Json<serde_json::Value> {
-	state.lock().unwrap().calls.push("GET /zones".into());
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
+	let mut s = state.lock().unwrap();
+	s.calls.push("GET /zones".into());
+	// A zone the account refuses to answer about.
+	if let (Some(denied), Some(name)) = (
+		s.zone_denied.as_deref(),
+		query.get("name").map(String::as_str),
+	) && denied == name
+	{
+		return Err(axum::http::StatusCode::FORBIDDEN);
+	}
 	// A zone lookup names the zone it asks for. The mock holds one zone,
 	// the one the credential covers, so a name below it is not a zone.
 	if let Some(name) = query.get("name")
 		&& name != "example.org"
 	{
-		return axum::Json(serde_json::json!({ "result": [] }));
+		return Ok(axum::Json(serde_json::json!({ "result": [] })));
 	}
-	axum::Json(serde_json::json!({ "result": [{ "id": "zone123" }] }))
+	Ok(axum::Json(
+		serde_json::json!({ "result": [{ "id": "zone123" }] }),
+	))
 }
 
 async fn records_collection(

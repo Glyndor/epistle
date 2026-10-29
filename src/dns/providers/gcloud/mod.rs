@@ -243,8 +243,11 @@ impl GcloudProvider {
 		Ok(self.dns_base.with_segments(segments)?)
 	}
 
-	/// The managed-zone id (`name`) whose `dnsName` matches `zone`.
-	async fn find_managed_zone(&self, zone: &str) -> Result<String, ProviderError> {
+	/// The managed-zone id (`name`) whose `dnsName` matches `zone`, or
+	/// `None` when the project holds no zone with that name. The lookup is
+	/// an exact match, so a name below a zone (`mail.example.org`) is not a
+	/// zone of its own.
+	async fn find_managed_zone(&self, zone: &str) -> Result<Option<String>, ProviderError> {
 		let token = self.ensure_token().await?;
 		let dns_name = format!("{}.", zone.trim_end_matches('.'));
 		let url = self
@@ -261,12 +264,20 @@ impl GcloudProvider {
 		let text = self.read_body(response).await?;
 		let parsed: ListZonesResp =
 			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
-		parsed
+		Ok(parsed
 			.managedZones
 			.into_iter()
 			.find(|z| z.dnsName.trim_end_matches('.') == zone.trim_end_matches('.'))
-			.map(|z| z.name)
-			.ok_or_else(|| ProviderError::Remote(format!("zone not found: {zone}")))
+			.map(|z| z.name))
+	}
+
+	/// The managed-zone id (`name`) whose `dnsName` matches `zone`. A zone
+	/// the project does not hold is an error here: the caller asked to
+	/// write in it.
+	async fn managed_zone_id(&self, zone: &str) -> Result<String, ProviderError> {
+		self.find_managed_zone(zone)
+			.await?
+			.ok_or_else(|| ProviderError::ZoneNotFound(zone.to_string()))
 	}
 
 	async fn post_change(
@@ -356,7 +367,7 @@ impl GcloudProvider {
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		Self::api_kind(&record.kind)?;
-		let managed_zone = self.find_managed_zone(zone).await?;
+		let managed_zone = self.managed_zone_id(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
 		let fqdn = self.fqdn(&record);
@@ -395,7 +406,7 @@ impl GcloudProvider {
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		Self::api_kind(&record.kind)?;
-		let managed_zone = self.find_managed_zone(zone).await?;
+		let managed_zone = self.managed_zone_id(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
 		let fqdn = self.fqdn(&record);
@@ -451,7 +462,7 @@ impl GcloudProvider {
 	}
 
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
-		let managed_zone = self.find_managed_zone(zone).await?;
+		let managed_zone = self.managed_zone_id(zone).await?;
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let zone_name = self.zone.trim_end_matches('.').to_ascii_lowercase();
 		Ok(rrsets
@@ -506,8 +517,10 @@ impl DnsProvider for GcloudProvider {
 		let zone = zone.to_string();
 		Box::pin(crate::dns::providers::within(async move {
 			// The managed-zone lookup answers the question on its own: it
-			// reads one zone by name, not the records of a zone.
-			Ok(self.find_managed_zone(&zone).await.is_ok())
+			// reads one zone by name, not the records of a zone. An empty
+			// answer is a zone that is not there; an error is a provider
+			// that could not answer, and the search stops there.
+			Ok(self.find_managed_zone(&zone).await?.is_some())
 		}))
 	}
 }

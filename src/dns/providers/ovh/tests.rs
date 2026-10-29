@@ -64,12 +64,17 @@ struct RecordListQuery {
 
 async fn list_records(
 	State(state): State<Shared>,
-	Path(_zone): Path<String>,
+	Path(zone): Path<String>,
 	Query(q): Query<RecordListQuery>,
 	headers: HeaderMap,
-) -> axum::Json<serde_json::Value> {
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
 	let mut s = state.lock().unwrap();
 	s.last_headers = headers;
+	// A zone OVH does not hold: it answers 404, which says the zone is
+	// not there, not that the provider could not answer.
+	if zone != "example.org" {
+		return Err(axum::http::StatusCode::NOT_FOUND);
+	}
 	let ids: Vec<u64> = s
 		.records
 		.iter()
@@ -77,7 +82,7 @@ async fn list_records(
 		.filter(|r| q.sub_domain.as_deref().is_none_or(|sd| sd == r.sub_domain))
 		.map(|r| r.id)
 		.collect();
-	axum::Json(serde_json::json!(ids))
+	Ok(axum::Json(serde_json::json!(ids)))
 }
 
 async fn create_record(
@@ -518,5 +523,19 @@ async fn list_parses_records_and_strips_txt_quotes() {
 		records
 			.iter()
 			.any(|r| r.name == "_dmarc.example.org" && r.value == "v=DMARC1; p=none")
+	);
+}
+
+#[tokio::test]
+async fn the_zone_search_goes_on_to_the_parent_when_the_child_zone_is_not_there() {
+	// OVH holds no zone named `mail.example.org`: it answers 404, which
+	// says the zone is not there, not that the provider could not answer.
+	// The search goes on to the zone the credential covers.
+	let (provider, _state) = mock().await;
+	assert_eq!(
+		crate::dns::zone::resolve(&provider, "mail.example.org")
+			.await
+			.expect("the search finds the parent zone"),
+		"example.org"
 	);
 }

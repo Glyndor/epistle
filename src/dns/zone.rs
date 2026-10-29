@@ -38,6 +38,11 @@ pub fn candidates(name: &str) -> Vec<String> {
 /// write worked before the search existed: the provider then refuses the
 /// write with the zone it could not find, and the message names the name
 /// the operator has to fix.
+///
+/// A provider that could not answer stops the search: a zone that did not
+/// answer is not a zone that is not there, and a record written in the
+/// parent zone is a record in a zone the operator did not ask for. The
+/// error is returned as it is.
 pub async fn resolve(provider: &dyn DnsProvider, name: &str) -> Result<String, ProviderError> {
 	for candidate in candidates(name) {
 		match provider.has_zone(&candidate).await {

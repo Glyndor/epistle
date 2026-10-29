@@ -47,7 +47,42 @@ impl DnsProvider for Zoned {
 			if held {
 				Ok(Vec::new())
 			} else {
-				Err(ProviderError::Remote(format!("zone not found: {zone}")))
+				Err(ProviderError::ZoneNotFound(zone))
+			}
+		})
+	}
+}
+
+/// A provider that answers the zone question the way the shared default
+/// does — with a listing — and whose listing fails for one zone: that zone
+/// did not answer, which is not the same as a zone that is not there.
+struct ListFails {
+	zones: Vec<String>,
+	failing: Vec<String>,
+}
+
+impl DnsProvider for ListFails {
+	fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Ok(()) })
+	}
+
+	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Ok(()) })
+	}
+
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let held = self.zones.iter().any(|held| held == zone);
+		let failing = self.failing.iter().any(|failing| failing == zone);
+		let zone = zone.to_string();
+		Box::pin(async move {
+			if failing {
+				Err(ProviderError::Remote(
+					"the provider did not answer".to_string(),
+				))
+			} else if held {
+				Ok(Vec::new())
+			} else {
+				Err(ProviderError::ZoneNotFound(zone))
 			}
 		})
 	}
@@ -145,5 +180,23 @@ async fn resolve_stops_when_the_provider_fails_to_answer() {
 			.await
 			.expect_err("the failure is reported"),
 		ProviderError::Auth
+	);
+}
+
+#[tokio::test]
+async fn resolve_stops_when_the_listing_of_the_child_zone_fails() {
+	// The child zone only failed to answer and the parent is there. The
+	// search stops at the child: the record belongs to the zone that
+	// holds the name, and a zone that did not answer does not say that
+	// the parent holds it.
+	let provider = ListFails {
+		zones: vec!["example.org".to_string()],
+		failing: vec!["mail.example.org".to_string()],
+	};
+	assert_eq!(
+		resolve(&provider, "mail.example.org")
+			.await
+			.expect_err("the failure is reported"),
+		ProviderError::Remote("the provider did not answer".to_string())
 	);
 }

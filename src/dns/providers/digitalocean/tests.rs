@@ -34,21 +34,26 @@ async fn list_records(
 	method: axum::http::Method,
 	headers: axum::http::HeaderMap,
 	Path(zone): Path<String>,
-) -> axum::Json<serde_json::Value> {
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
 	let mut s = state.lock().unwrap();
 	s.calls.push(format!("{method} /v2/domains/{zone}/records"));
 	s.auth = headers
 		.get("authorization")
 		.and_then(|v| v.to_str().ok())
 		.map(str::to_string);
-	axum::Json(serde_json::json!({
+	// A domain the account does not hold: DigitalOcean answers 404, and
+	// that is the domain not being there, not a failure of the provider.
+	if zone != "example.org" {
+		return Err(axum::http::StatusCode::NOT_FOUND);
+	}
+	Ok(axum::Json(serde_json::json!({
 		"domain_records": s.records.clone(),
 		"links": {
 			"pages": {
 				"next": if s.next_page { s.next_url.clone() } else { None }
 			}
 		}
-	}))
+	})))
 }
 
 /// Second page — empty body, no next link.
@@ -426,4 +431,19 @@ async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
 	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
 	assert!(body.contains("\"data\":\".\""), "{body}");
 	assert!(body.contains("\"priority\":0"), "{body}");
+}
+
+#[tokio::test]
+async fn the_zone_search_goes_on_to_the_parent_when_the_child_zone_is_not_there() {
+	// The account holds no domain named `mail.example.org`: DigitalOcean
+	// answers 404, which says the domain is not there, not that the
+	// provider could not answer. The search goes on to the domain the
+	// credential covers.
+	let (provider, _state) = mock(Vec::new(), false).await;
+	assert_eq!(
+		crate::dns::zone::resolve(&provider, "mail.example.org")
+			.await
+			.expect("the search finds the parent zone"),
+		"example.org"
+	);
 }

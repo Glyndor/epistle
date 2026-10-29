@@ -182,6 +182,12 @@ impl DnsimpleProvider {
 				.send()
 				.await
 				.map_err(transport)?;
+			if response.status() == reqwest::StatusCode::NOT_FOUND {
+				// DNSimple answers 404 for a zone it does not hold: the
+				// zone is not there, which is not a failure of the
+				// provider, and the search goes on to the parent.
+				return Err(ProviderError::ZoneNotFound(zone.to_string()));
+			}
 			let mut batch: ListResponse = decode(response).await?;
 			let count = batch.data.len();
 			all.append(&mut batch.data);
