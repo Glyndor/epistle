@@ -31,7 +31,7 @@ pub enum LearningCli {
 	/// on, with zero counters).
 	Status {
 		/// The account to show; all of them when omitted.
-		#[arg(value_parser = super::account_name::parse)]
+		#[arg(value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Print JSON instead of text lines.
 		#[arg(long)]
@@ -40,7 +40,7 @@ pub enum LearningCli {
 	/// Let the decisions of an account teach its corpus (the default).
 	Enable {
 		/// The account to switch on.
-		#[arg(value_parser = super::account_name::parse)]
+		#[arg(value_parser = crate::cli::account::name::parse)]
 		account: String,
 		/// Print what would change and write nothing.
 		#[arg(long)]
@@ -54,7 +54,7 @@ pub enum LearningCli {
 	/// What the corpus already learned stays; `reset` drops it.
 	Disable {
 		/// The account to switch off.
-		#[arg(value_parser = super::account_name::parse)]
+		#[arg(value_parser = crate::cli::account::name::parse)]
 		account: String,
 		/// Print what would change and write nothing.
 		#[arg(long)]
@@ -70,7 +70,7 @@ pub enum LearningCli {
 	/// stays off. Use it when a corpus was taught the wrong thing.
 	Reset {
 		/// The account whose corpus to drop.
-		#[arg(value_parser = super::account_name::parse)]
+		#[arg(value_parser = crate::cli::account::name::parse)]
 		account: String,
 		/// Print what would be dropped and write nothing.
 		#[arg(long)]

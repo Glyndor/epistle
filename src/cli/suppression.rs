@@ -24,7 +24,7 @@ pub enum SuppressionCli {
 	/// account's per-account list instead of the global one.
 	List {
 		/// Restrict the list to this sending account.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Print a JSON array of `{"address", "account", "since", "reason"}`
 		/// objects (`since` and `reason` are null when not recorded).
@@ -39,7 +39,7 @@ pub enum SuppressionCli {
 		/// Recipient address to suppress.
 		address: String,
 		/// Suppress it for this sending account only, not for everyone.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Why it is suppressed, kept with the entry (at most 512 characters,
 		/// no control characters). Defaults to a note that it was added by hand.
@@ -57,7 +57,7 @@ pub enum SuppressionCli {
 		/// Recipient address to resume delivering to.
 		address: String,
 		/// Remove the per-account suppression for this sender only.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Print the result as one JSON object on stdout.
 		#[arg(long)]
@@ -70,7 +70,7 @@ pub enum SuppressionCli {
 		/// The address to show.
 		address: String,
 		/// Look in this sending account's list instead of the global one.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Print the entry as one JSON object.
 		#[arg(long)]
@@ -82,7 +82,7 @@ pub enum SuppressionCli {
 	/// line, in the form `suppression import` reads.
 	Export {
 		/// Export this sending account's list instead of the global one.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Print one JSON array of `{"address", "since", "reason"}` objects
 		/// instead of CSV.
@@ -101,7 +101,7 @@ pub enum SuppressionCli {
 		/// The file to read.
 		file: PathBuf,
 		/// Import into this sending account's list instead of the global one.
-		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
 		/// Reason for the lines that carry none (at most 512 characters, no
 		/// control characters).

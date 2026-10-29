@@ -70,7 +70,7 @@ pub enum MigrateCli {
 #[derive(Debug, Args)]
 pub struct ImapArgs {
 	/// The local account the mail goes into (must exist).
-	#[arg(long, value_name = "NAME", value_parser = super::account_name::parse)]
+	#[arg(long, value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 	pub account: String,
 	/// The remote IMAP server's host name (also the name its certificate
 	/// must carry).

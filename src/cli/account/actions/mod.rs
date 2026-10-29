@@ -1,6 +1,6 @@
 //! Per-action handlers for `epistle account …`.
 //!
-//! Lives in a sibling so `account.rs` stays under the per-file code-line
+//! Lives in a sibling so `src/cli/account/mod.rs` stays under the per-file code-line
 //! budget. Every function takes a pre-built [`AccountStore`] so the test
 //! harness can drive the mutators end-to-end without spinning up a
 //! real epistle server; the dispatcher in `account::run` opens the
@@ -102,10 +102,10 @@ pub(crate) fn set_name_with_store(
 }
 
 /// Wait for the running server to load the accounts file the store
-/// just wrote; see [`crate::cli::account_reload::wait_after_write`].
+/// just wrote; see [`crate::cli::account::reload::wait_after_write`].
 /// The store holds no lock once its mutator has returned.
 fn wait_after_write(store: &AccountStore) -> Reload {
-	Reload::from(crate::cli::account_reload::wait(
+	Reload::from(crate::cli::account::reload::wait(
 		store.store_path(),
 		&mut style::stderr(),
 	))
@@ -316,7 +316,7 @@ pub(crate) fn protocols_with_store(
 		Ok(_) => {
 			let mut report = Report::new(out, json);
 			report.line(protocols_changed(allowed.as_ref()));
-			let names = crate::cli::account_json::protocols(allowed.as_ref());
+			let names = crate::cli::account::json::protocols(allowed.as_ref());
 			let fields = json!({ "account": name, "protocols": names });
 			report.change("protocols", true, fields, None)
 		}
@@ -450,7 +450,7 @@ pub(crate) fn handle_error(name: &str, error: StoreError) -> ExitCode {
 }
 
 /// Parse the `on`/`off` switch the `save_sent` and quota
-/// subcommands accept. Kept here so `account.rs` can re-export the
+/// subcommands accept. Kept here so `src/cli/account/mod.rs` can re-export the
 /// parser without keeping the whole table of accepted spellings
 /// in two places; the rules live once, callers see a short
 /// signature.
@@ -510,8 +510,4 @@ pub(crate) fn parse_protocol_list_inner(raw: &str) -> Result<Option<Vec<Protocol
 }
 
 #[cfg(test)]
-#[path = "cli_account_save_sent_tests.rs"]
-mod save_sent_tests;
-#[cfg(test)]
-#[path = "account_actions_show_fields_tests.rs"]
-mod show_fields_tests;
+mod tests;

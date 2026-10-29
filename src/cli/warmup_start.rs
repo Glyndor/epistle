@@ -296,7 +296,7 @@ pub(super) fn run_start(
 		crate::cli::style::error(format_args!("writing the result: {error}"));
 		return ExitCode::FAILURE;
 	}
-	crate::cli::account_reload::wait_after_write(
+	crate::cli::account::reload::wait_after_write(
 		&settings::path(data_dir),
 		&mut crate::cli::style::stderr(),
 	)

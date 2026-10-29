@@ -311,7 +311,7 @@ impl Change {
 		if !changed {
 			return ExitCode::SUCCESS;
 		}
-		super::account_reload::wait_after_write(
+		crate::cli::account::reload::wait_after_write(
 			&settings::path(data_dir),
 			&mut super::style::stderr(),
 		)

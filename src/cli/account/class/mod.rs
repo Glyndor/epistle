@@ -18,22 +18,24 @@ pub(super) fn set(
 		"none" => None,
 		other => match crate::evidence::class::parse_arg(other) {
 			Ok(class) => Some(class),
-			Err(error) => return super::exit::refused(format_args!("account {name}: {error}")),
+			Err(error) => {
+				return crate::cli::exit::refused(format_args!("account {name}: {error}"));
+			}
 		},
 	};
-	if let Err(code) = super::account::prepare(config_path, name) {
+	if let Err(code) = super::prepare(config_path, name) {
 		return code;
 	}
 	let data_dir = match crate::config::Config::load(config_path) {
 		Ok(config) => config.data_dir,
 		Err(error) => {
-			super::style::error(error);
+			crate::cli::style::error(error);
 			return ExitCode::FAILURE;
 		}
 	};
 	match bind(&data_dir, name, class) {
 		Ok(()) => {
-			let mut report = super::json_out::Report::new(out, json);
+			let mut report = crate::cli::json_out::Report::new(out, json);
 			report.line(match class {
 				Some(class) => format!("default class set to {class}"),
 				None => "default class cleared".to_string(),
@@ -45,7 +47,7 @@ pub(super) fn set(
 			report.change("set", true, fields, None)
 		}
 		Err(error) => {
-			super::style::error(format_args!("account {name}: {error}"));
+			crate::cli::style::error(format_args!("account {name}: {error}"));
 			ExitCode::FAILURE
 		}
 	}
@@ -63,5 +65,4 @@ pub(crate) fn bind(data_dir: &Path, name: &str, class: Option<MailClass>) -> std
 }
 
 #[cfg(test)]
-#[path = "account_class_tests.rs"]
 mod tests;

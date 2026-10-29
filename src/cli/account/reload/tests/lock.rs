@@ -10,7 +10,7 @@
 //! load the write soon after it lands, well before the command's
 //! timeout would have released a held lock.
 //!
-//! Lives in a sibling so `account_reload_tests.rs` stays under the
+//! Lives in a sibling so `src/cli/account/reload/tests/base.rs` stays under the
 //! per-file code-line budget.
 
 use std::io::Cursor;
