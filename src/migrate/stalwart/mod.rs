@@ -299,5 +299,4 @@ fn read_principals(principals: &[&Table], plan: &mut Plan) {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
