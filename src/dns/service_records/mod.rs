@@ -1,7 +1,9 @@
-//! The service locators a deployment advertises. The set comes from the
+//! The service records a deployment advertises. The set comes from the
 //! listeners the configuration names, so a service the operator turned off
 //! gets no SRV record and a client that follows a published locator always
-//! reaches a listener.
+//! reaches a listener. The names that reach the client setup documents
+//! follow the same rule: they are published when a listener serves those
+//! documents.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -127,40 +129,53 @@ impl SrvService {
 	}
 }
 
-/// The service locators a deployment advertises. The set follows the
+/// The service records a deployment advertises. The set follows the
 /// configuration: a service the operator turned off gets no locator, so a
 /// client that follows a published record reaches a listener. Each locator
 /// names the port its listener binds, and the same service announced on
 /// IPv4 and on IPv6 is one locator, not two.
 ///
 /// CalDAV and CardDAV come from the `webdav` listener and JMAP from the
-/// `api` one. The CAA record is separate: it comes from the `directory_url`
+/// `api` one, which needs an API to point a client at. The names that reach
+/// the client setup documents come from the `autoconfig` and `autoconfigs`
+/// listeners. The CAA record is separate: it comes from the `directory_url`
 /// of the `acme` config section, and only when that directory names a CA we
 /// recognise.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServiceRecords {
 	/// The locators that are on: the service, and the ports it names.
 	locators: BTreeMap<SrvService, BTreeSet<u16>>,
+	/// Whether the deployment serves the client setup documents, and the
+	/// names that reach them are published.
+	autodiscovery: bool,
 }
 
 impl ServiceRecords {
-	/// Every locator on: the set of a deployment that exposes every service
-	/// epistle serves, each on the port of the service.
-	pub fn all() -> Self {
-		let mut locators: BTreeMap<SrvService, BTreeSet<u16>> = BTreeMap::new();
-		for service in SrvService::ALL {
-			locators.insert(service, BTreeSet::from([service.port()]));
-		}
-		Self { locators }
-	}
-
-	/// The locators the configuration's listeners enable. A listener the
-	/// operator left out turns its locator off and one they added turns it
+	/// The records the configuration's listeners enable. A listener the
+	/// operator left out turns its service off and one they added turns it
 	/// on; the `webdav` listener brings CalDAV and CardDAV with it, and the
-	/// `api` listener brings JMAP.
+	/// `api` listener brings JMAP when the configuration carries the API
+	/// that serves it.
 	pub fn from_config(config: &Config) -> Self {
 		let mut locators: BTreeMap<SrvService, BTreeSet<u16>> = BTreeMap::new();
+		let mut autodiscovery = false;
 		for listener in &config.listeners {
+			// The client setup documents are served by these two listeners
+			// and by nothing else, so the names that reach them are
+			// published only when one of them is on.
+			if matches!(
+				listener.kind,
+				ListenerKind::Autoconfig | ListenerKind::Autoconfigs
+			) {
+				autodiscovery = true;
+			}
+			// JMAP lives in the API router, so it needs an API to point a
+			// client at. A configuration that names the listener without
+			// the section is one the loader refuses, and one that names no
+			// API has no JMAP session to publish.
+			if listener.kind == ListenerKind::Api && config.api.is_none() {
+				continue;
+			}
 			for service in SrvService::of_listener(listener.kind) {
 				locators
 					.entry(*service)
@@ -168,7 +183,10 @@ impl ServiceRecords {
 					.insert(service.port_for(listener));
 			}
 		}
-		Self { locators }
+		Self {
+			locators,
+			autodiscovery,
+		}
 	}
 
 	/// Whether the locator for `service` is advertised.
@@ -182,6 +200,14 @@ impl ServiceRecords {
 		self.locators
 			.iter()
 			.flat_map(|(service, ports)| ports.iter().map(move |port| (*service, *port)))
+	}
+
+	/// Whether the deployment serves the client setup documents, and the
+	/// names that reach them are published. A deployment that serves none
+	/// publishes neither name: a client that follows one of them would
+	/// reach nothing.
+	pub fn advertises_autodiscovery(&self) -> bool {
+		self.autodiscovery
 	}
 }
 

@@ -72,7 +72,7 @@ fn verify_dns_looks_up_the_rotated_rsa_selector() {
 		Err(reason) => return skipped(&reason),
 	};
 	assert_eq!(
-		super::super::verify_dns::dkim_default_selectors(&config)
+		crate::cli::verify_dns::dkim_default_selectors(&config)
 			.unwrap_or_else(|_| panic!("the selectors resolve")),
 		vec!["ed7".to_string(), "rsa7".to_string()]
 	);
@@ -86,7 +86,7 @@ fn serve_starts_signing_with_the_rotated_rsa_key() {
 		Ok(config) => config,
 		Err(reason) => return skipped(&reason),
 	};
-	let companions = super::super::serve_dkim::build_split_with_companions(
+	let companions = crate::cli::serve_dkim::build_split_with_companions(
 		&config,
 		&Arc::new(crate::metrics::Metrics::default()),
 		crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::default()),
