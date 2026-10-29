@@ -22,9 +22,23 @@ pub(crate) fn split_sld_tld(zone: &str) -> (String, String) {
 	}
 }
 
+/// Return API parameters only when they address the requested zone itself.
+/// A subdomain reduced by the PSL is absent as a zone, so discovery can
+/// continue to its parent without attributing that parent's hosts to it.
+pub(super) fn zone_parts(zone: &str) -> Result<(String, String), ProviderError> {
+	let name = zone.trim_end_matches('.');
+	let (sld, tld) = split_sld_tld(name);
+	if !name.eq_ignore_ascii_case(&format!("{sld}.{tld}")) {
+		return Err(ProviderError::ZoneNotFound(zone.to_string()));
+	}
+	Ok((sld, tld))
+}
+
 /// The Namecheap host label for a record: `@` for the apex, the prefix
 /// otherwise (`_dmarc` for `_dmarc.example.org`, leaving the zone to be added
 /// back through `SLD`/`TLD`).
+/// Provider operations validate `zone` with [`zone_parts`] before using it
+/// here, so the relative label and the API destination share the same domain.
 pub(crate) fn host_label(record_name: &str, zone: &str) -> String {
 	let record_name = record_name.trim_end_matches('.');
 	let zone = zone.trim_end_matches('.');
