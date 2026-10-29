@@ -194,7 +194,8 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response, zone_of(url))?;
+		let zone = zone_of(&self.base, url);
+		check_status(&response, zone.as_deref())?;
 		crate::dns::providers::read_body(response).await
 	}
 
@@ -222,7 +223,8 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response, zone_of(url))?;
+		let zone = zone_of(&self.base, url);
+		check_status(&response, zone.as_deref())?;
 		Ok(())
 	}
 
@@ -550,13 +552,44 @@ fn check_status(response: &reqwest::Response, zone: Option<&str>) -> Result<(), 
 /// that way, and a 404 there says the zone is not there. A URL about one
 /// record (`/domain/zone/{zone}/record/{id}`) says nothing about the zone:
 /// a 404 there is about that record.
-fn zone_of(url: &HttpsUrl) -> Option<&str> {
-	let rest = url.as_url().path().strip_prefix("/domain/zone/")?;
+///
+/// The path is read relative to the base the provider was pointed at, because
+/// the real endpoints carry a version prefix (`/1.0`) that the paths of the
+/// API start after. A URL outside that base, or one whose path does not
+/// address the records of a zone, says nothing about any zone.
+fn zone_of(base: &HttpsUrl, url: &HttpsUrl) -> Option<String> {
+	let rest = relative_path(base, url)?;
+	let rest = rest.strip_prefix("/domain/zone/")?;
 	let (zone, tail) = rest.split_once('/')?;
 	if tail != "record" {
 		return None;
 	}
-	(!zone.is_empty()).then_some(zone)
+	// The zone travelled through the URL percent-encoded. The error names
+	// the zone the operation asked for, not the encoded form of it.
+	let zone = percent_encoding::percent_decode_str(zone)
+		.decode_utf8()
+		.ok()?;
+	(!zone.is_empty()).then(|| zone.into_owned())
+}
+
+/// The path of `url` relative to the base it was built from. The base of
+/// OVH ends in `/1.0`, so the path of a request reads
+/// `/1.0/domain/zone/{zone}/record` and the version prefix has to come off
+/// before the rest of the path can be read. A URL that does not start with
+/// the path of the base is not one of ours and has no relative path.
+fn relative_path<'a>(base: &HttpsUrl, url: &'a HttpsUrl) -> Option<&'a str> {
+	let prefix = base.as_url().path().trim_end_matches('/');
+	let path = url.as_url().path();
+	if prefix.is_empty() {
+		return Some(path);
+	}
+	let rest = path.strip_prefix(prefix)?;
+	// `/1.0` must not match the start of `/1.0something`.
+	if rest.is_empty() || rest.starts_with('/') {
+		Some(rest)
+	} else {
+		None
+	}
 }
 
 /// Lowercase hex bytes (matches `hashlib.sha1(...).hexdigest()`).

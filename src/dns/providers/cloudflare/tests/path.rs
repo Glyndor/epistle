@@ -7,7 +7,11 @@ use crate::dns::tests::uri_probe::probe;
 
 #[tokio::test]
 async fn zone_name_and_zone_id_are_escaped_in_the_request_target() {
-	let (base, seen) = probe(&[r#"{"result":[{"id":"z/1?x=2"}]}"#, r#"{"result":[]}"#]).await;
+	let (base, seen) = probe(&[
+		r#"{"result":[{"id":"z/1?x=2"}],"success":true}"#,
+		r#"{"result":[],"success":true}"#,
+	])
+	.await;
 	let provider = CloudflareProvider::new(ScopedSecret::new("a&b=c.org", "tok")).with_base(base);
 	provider.list("a&b=c.org").await.expect("list");
 	assert_eq!(
@@ -22,7 +26,7 @@ async fn zone_name_and_zone_id_are_escaped_in_the_request_target() {
 #[tokio::test]
 async fn record_id_and_lookup_values_are_escaped_on_delete() {
 	let (base, seen) = probe(&[
-		r#"{"result":[{"id":"zone1"}]}"#,
+		r#"{"result":[{"id":"zone1"}],"success":true}"#,
 		r#"{"result":[{"id":"r/9?y","name":"x.example.org","type":"A","content":"192.0.2.1","ttl":300}]}"#,
 		r#"{}"#,
 	])

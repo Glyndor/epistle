@@ -51,10 +51,12 @@ async fn list_zones(
 	if let Some(name) = query.get("name")
 		&& name != "example.org"
 	{
-		return Ok(axum::Json(serde_json::json!({ "result": [] })));
+		return Ok(axum::Json(
+			serde_json::json!({ "result": [], "success": true }),
+		));
 	}
 	Ok(axum::Json(
-		serde_json::json!({ "result": [{ "id": "zone123" }] }),
+		serde_json::json!({ "result": [{ "id": "zone123" }], "success": true }),
 	))
 }
 

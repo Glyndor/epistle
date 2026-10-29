@@ -46,6 +46,10 @@ pub struct CloudflareProvider {
 
 #[derive(Deserialize)]
 struct ListZones {
+	/// Whether the reply is an answer at all. Cloudflare says it failed
+	/// in the same envelope a successful answer uses, with an empty
+	/// result, so the flag is what tells the two apart.
+	success: bool,
 	result: Vec<ZoneRef>,
 }
 
@@ -339,6 +343,13 @@ impl CloudflareProvider {
 	async fn find_zone_id(&self, zone: &str) -> Result<Option<String>, ProviderError> {
 		let url = self.base.with_segments(["zones"])?.with_query("name", zone);
 		let zones: ListZones = self.get_json(url).await?;
+		if !zones.success {
+			// The reply says it failed: the empty result it carries
+			// says nothing about the zone, and the zone is not absent.
+			return Err(ProviderError::Remote(
+				"Cloudflare answered that the zone lookup failed".into(),
+			));
+		}
 		Ok(zones.result.into_iter().next().map(|z| z.id))
 	}
 
@@ -583,13 +594,18 @@ fn retry_without_tags(status: reqwest::StatusCode) -> bool {
 	status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 429)
 }
 
-/// Decode a JSON body, mapping a 401/403 to an auth error.
+/// Decode a JSON body, mapping a 401/403 to an auth error and every other
+/// unsuccessful status to a remote error, before the body is read at all: a
+/// reply that is not an answer never gets to be one.
 async fn decode<T: serde::de::DeserializeOwned>(
 	response: reqwest::Response,
 ) -> Result<T, ProviderError> {
 	let status = response.status();
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
+	}
+	if !status.is_success() {
+		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
 	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))

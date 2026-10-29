@@ -143,7 +143,10 @@ async fn forty_pages_of_14_mib_stop_at_the_budget_in_cloudflare() {
 	);
 	let (base, hits) = serve_by(move |_, path, _| {
 		if path.starts_with("/zones?") || path == "/zones" {
-			return ("{\"result\":[{\"id\":\"zone123\"}]}".to_string(), None);
+			return (
+				"{\"result\":[{\"id\":\"zone123\"}],\"success\":true}".to_string(),
+				None,
+			);
 		}
 		(record.clone(), None)
 	})
