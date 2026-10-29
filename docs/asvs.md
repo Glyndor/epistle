@@ -249,7 +249,7 @@ change — adding one half-built would be worse than tracking it honestly.
    only checked `exp` when present, so a token without a bounded lifetime never
    expired. `exp` is now **required** (`JwtError::MissingExpiry`). Tests:
    `token_without_exp_is_rejected`, `token_with_non_numeric_exp_is_rejected` in
-   `src/jwt/tests.rs`.
+   `src/jwt/tests/base.rs`.
 
 Two further low-severity hardening fixes were applied:
 
