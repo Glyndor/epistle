@@ -15,27 +15,27 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::dns::names::{mx_target, shortened};
 use crate::dns::provider::{DnsRecord, RecordKind, txt_purpose};
 
 #[path = "lockdown_apply.rs"]
 mod apply;
-#[path = "lockdown_cuts.rs"]
-mod cuts;
 #[path = "lockdown_dmarc.rs"]
 mod dmarc;
-#[path = "lockdown_names.rs"]
-mod names;
 #[path = "lockdown_reports.rs"]
 mod reports;
 
 pub use apply::{PublishFailure, UndoChanged, UndoFailure, UndoReport, publish_plan, undo_journal};
-pub use cuts::{MAX_LABEL_LEN, MAX_NAME_LEN, is_valid_name};
 pub use dmarc::{
 	DmarcAction, DmarcInputs, DmarcPlan, DmarcStep, FailingSource, parse_dmarc, plan_dmarc,
 	rewrite_dmarc,
 };
-pub use names::{ServedNames, canonical_name, in_domain, is_null_mx, same_record};
 pub use reports::{REPORT_WINDOW_DAYS, recent_dmarc_failures};
+
+pub use crate::dns::names::{
+	MAX_LABEL_LEN, MAX_NAME_LEN, ServedNames, canonical_name, in_domain, is_valid_name,
+};
+pub use crate::dns::rrset::{Cuts, is_null_mx, same_record};
 
 /// The TTL of every record the lockdown writes.
 pub const TTL: u32 = 3600;
@@ -183,7 +183,7 @@ pub struct PlanInput<'a> {
 pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	let empty = Journal::new(input.domain);
 	let journal = input.journal.unwrap_or(&empty);
-	let cuts = cuts::Cuts::new(input.zone, input.existing);
+	let cuts = Cuts::new(input.zone, input.existing);
 	let (mut dmarc, mut dmarc_entry) =
 		plan_dmarc(input.domain, input.existing, journal, input.dmarc);
 	// A domain inside a delegation is served by other nameservers: nothing
@@ -210,10 +210,10 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	for (name, records) in address_names(input.domain, input.existing) {
 		if !is_valid_name(&name) {
 			skipped.push(SkipEntry {
-				name: cuts::shortened(&name),
+				name: shortened(&name),
 				reason: format!(
 					"{} is not a valid DNS name (ASCII letters, digits, hyphens and underscores, at most {MAX_NAME_LEN} characters and {MAX_LABEL_LEN} per label); left as is",
-					cuts::shortened(&name)
+					shortened(&name)
 				),
 			});
 			continue;
@@ -310,7 +310,7 @@ fn delegated_reason(cut: &str) -> String {
 fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
 	let mut owners = BTreeMap::new();
 	for record in existing.iter().filter(|r| r.kind == RecordKind::Mx) {
-		if let Some(target) = names::mx_target(&record.value).filter(|t| !t.is_empty()) {
+		if let Some(target) = mx_target(&record.value).filter(|t| !t.is_empty()) {
 			owners
 				.entry(target)
 				.or_insert_with(|| canonical_name(&record.name));
@@ -388,7 +388,7 @@ fn wildcard_decision(
 	existing: &[DnsRecord],
 	journal: &Journal,
 	zone_listed: bool,
-	cuts: &cuts::Cuts,
+	cuts: &Cuts,
 ) -> WildcardDecision {
 	let wildcard = format!("*.{domain}");
 	if !zone_listed {

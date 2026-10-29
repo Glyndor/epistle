@@ -6,10 +6,9 @@
 
 use std::time::{Duration, Instant};
 
-use super::MAX_NAME_LEN;
-use super::cuts::{Cuts, shortened};
 use super::tests_support::*;
 use super::*;
+use crate::dns::names::shortened;
 
 fn ns(name: &str, target: &str) -> DnsRecord {
 	rec(name, RecordKind::Ns, target)
@@ -89,29 +88,6 @@ fn two_delegations_one_inside_the_other_are_both_reported() {
 	assert_eq!(
 		skipped(&plan),
 		vec![delegated("a.sub.example.org"), delegated("sub.example.org")]
-	);
-}
-
-#[test]
-fn the_cut_that_covers_a_name_is_the_highest_one() {
-	let existing = [
-		ns("sub.example.org", "ns1.delegated.example."),
-		ns("a.sub.example.org", "ns1.other.example."),
-	];
-	let cuts = Cuts::new("example.org", &existing);
-	assert_eq!(cuts.above("x.a.sub.example.org"), Some("sub.example.org"));
-	assert_eq!(cuts.above("a.sub.example.org"), Some("sub.example.org"));
-	assert_eq!(cuts.above("sub.example.org"), Some("sub.example.org"));
-	assert_eq!(cuts.above("example.org"), None);
-	assert_eq!(cuts.above("www.example.org"), None);
-	assert_eq!(cuts.above("subexample.org"), None);
-	assert_eq!(cuts.above("sub.example.org.evil.net"), None);
-	let too_long = format!("{}sub.example.org", "a.".repeat(130));
-	assert!(too_long.len() > MAX_NAME_LEN);
-	assert_eq!(
-		cuts.above(&too_long),
-		None,
-		"a name past the DNS limit is not searched"
 	);
 }
 
