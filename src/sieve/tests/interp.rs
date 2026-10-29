@@ -1,8 +1,8 @@
 //! Tests for the Sieve interpreter.
 
 use super::super::interp::{Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 const MSG: &[u8] =
 	b"From: alice@example.org\r\nTo: bob@example.net\r\nSubject: Big SALE today\r\n\r\nbuy\r\n";

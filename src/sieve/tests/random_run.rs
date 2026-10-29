@@ -4,8 +4,8 @@
 //! runs in the test suite (the fuzz target is the open-ended version).
 
 use super::super::interp::{Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 /// xorshift64*: enough randomness for generating cases, and reproducible.
 struct Rng(u64);

@@ -2,11 +2,11 @@
 //! script may `require` everything it can run, and the list names nothing it
 //! cannot.
 
-use super::compare::COMPARATORS;
 use super::super::extensions;
 use super::super::interp::{Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::compare::COMPARATORS;
+use super::lexer::tokenize;
 
 const MSG: &[u8] =
 	b"From: Ken+sieve@Example.org\r\nTo: bob@example.net\r\nSubject: Hello 42\r\nX-N: 42\r\n\r\nthe body\r\n";

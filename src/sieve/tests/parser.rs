@@ -1,8 +1,8 @@
 //! Tests for the Sieve parser.
 
+use super::super::parser::{ParseError, parse};
 use super::ast::{Argument, Command};
 use super::lexer::tokenize;
-use super::super::parser::{ParseError, parse};
 
 fn parse_str(script: &str) -> Result<Vec<Command>, ParseError> {
 	let tokens = tokenize(script).expect("lexes");

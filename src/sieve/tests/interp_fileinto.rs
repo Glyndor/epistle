@@ -1,8 +1,8 @@
 //! How many copies of one message a script can file.
 
 use super::super::interp::{MAX_FILEINTO, Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 fn run(script: &str) -> Outcome {
 	let tokens = tokenize(script).expect("lex");

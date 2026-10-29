@@ -1,8 +1,8 @@
 //! How many forwards one run of a script may ask for.
 
 use super::super::interp::{MAX_REDIRECTS, Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 const MSG: &[u8] = b"From: a@example.org\r\nTo: b@example.net\r\nSubject: hi\r\n\r\nx\r\n";
 

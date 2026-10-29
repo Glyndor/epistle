@@ -112,7 +112,10 @@ pub(in super::super) fn target(dir: &std::path::Path) -> Target {
 }
 
 /// `(flags, internal date, body)` of every message in a local mailbox.
-pub(in super::super) fn local(dir: &std::path::Path, mailbox: &str) -> Vec<(Vec<Flag>, SystemTime, Vec<u8>)> {
+pub(in super::super) fn local(
+	dir: &std::path::Path,
+	mailbox: &str,
+) -> Vec<(Vec<Flag>, SystemTime, Vec<u8>)> {
 	if !crate::imap::mailbox::exists(dir, "alice", mailbox) {
 		return Vec::new();
 	}

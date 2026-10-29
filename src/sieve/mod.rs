@@ -18,11 +18,11 @@ pub fn extensions() -> impl Iterator<Item = &'static str> {
 	EXTENSIONS.split_whitespace()
 }
 
-#[cfg(test)]
-mod tests;
 pub mod analysis;
 pub mod ast;
 mod compare;
+#[cfg(test)]
+mod tests;
 pub(crate) use compare::{MAX_PATTERN_CHARS, MAX_WILDCARDS};
 mod date;
 mod env;

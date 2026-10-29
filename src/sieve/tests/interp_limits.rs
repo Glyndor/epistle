@@ -2,8 +2,8 @@
 //! strings it builds, steps, and matching work.
 
 use super::super::interp::{Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 fn run_with(script: &str, raw: &[u8]) -> Outcome {
 	let tokens = tokenize(script).expect("lex");

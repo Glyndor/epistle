@@ -6,10 +6,10 @@
 
 use std::time::Duration;
 
+use super::super::{MigrateError, Security, run};
 use super::fake_server::{FakeServer, Fault, Message, Mode};
 use super::ledger_resume::{inbox, remove_local, replay_from_the_start, states};
 use super::run::{DATE_1, DATE_2, Quiet, local, mail, migrate, settings, source, target};
-use super::super::{MigrateError, Security, run};
 
 /// Three messages in INBOX, none of them marked for deletion.
 fn three() -> Vec<super::fake_server::Folder> {

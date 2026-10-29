@@ -30,7 +30,8 @@ fn keys_use_the_id_and_size_or_the_digest() {
 fn each_stored_copy_is_claimed_once() {
 	let dir = tempfile::tempdir().unwrap();
 	let mut index = Index {
-		table: disk::Table::new(super::super::super::state::scratch(dir.path()).unwrap(), 1).unwrap(),
+		table: disk::Table::new(super::super::super::state::scratch(dir.path()).unwrap(), 1)
+			.unwrap(),
 	};
 	let k = key(b"Message-ID: <a@b>\r\n\r\none");
 	index.table.add(&k).unwrap();
@@ -129,10 +130,12 @@ fn recovery_scan_reserves_a_fixed_workspace_even_without_message_ids() {
 			1024,
 			false
 		),
-		Err(MigrateError::Client(super::super::super::ClientError::Metadata {
-			scope: "mailbox",
-			..
-		}))
+		Err(MigrateError::Client(
+			super::super::super::ClientError::Metadata {
+				scope: "mailbox",
+				..
+			}
+		))
 	));
 }
 

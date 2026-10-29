@@ -91,7 +91,10 @@ async fn migrate_memory(
 	dir: &std::path::Path,
 	stall: bool,
 	metadata_limit: Option<usize>,
-) -> (super::super::super::Summary, Option<super::super::super::MigrateError>) {
+) -> (
+	super::super::super::Summary,
+	Option<super::super::super::MigrateError>,
+) {
 	let limits = metadata_limit.map(|limit| (limit, usize::MAX));
 	migrate_with_budget(dir, stall, limits).await
 }
@@ -100,7 +103,10 @@ async fn migrate_with_budget(
 	dir: &std::path::Path,
 	stall: bool,
 	limits: Option<(usize, usize)>,
-) -> (super::super::super::Summary, Option<super::super::super::MigrateError>) {
+) -> (
+	super::super::super::Summary,
+	Option<super::super::super::MigrateError>,
+) {
 	use super::super::super::{Filter, Settings, run_with_connection};
 	let (stream, peer) = tokio::io::duplex(4096);
 	let mut client = tests::memory_client(stream);
@@ -129,14 +135,18 @@ async fn migrate_with_budget(
 async fn the_total_deadline_preserves_partial_summary_and_resumes() {
 	let dir = tempfile::tempdir().expect("dir");
 	let (summary, error) = migrate_memory(dir.path(), true, None).await;
-	assert!(matches!(error, Some(super::super::super::MigrateError::Timeout)));
+	assert!(matches!(
+		error,
+		Some(super::super::super::MigrateError::Timeout)
+	));
 	assert_eq!(
 		summary.copied, 1,
 		"include the completed batch in the partial report"
 	);
 	assert_eq!(local(dir.path(), "INBOX").len(), 1);
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	assert_eq!(
 		states
 			.load(b"INBOX")
@@ -154,8 +164,9 @@ async fn the_total_deadline_preserves_partial_summary_and_resumes() {
 #[tokio::test]
 async fn a_metadata_stop_keeps_the_previous_checkpoint() {
 	let dir = tempfile::tempdir().expect("dir");
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	let saved = super::super::super::state::FolderState {
 		folder: "INBOX".into(),
 		uid_validity: 7,
@@ -207,8 +218,9 @@ async fn sparse_uid_windows_are_checkpointed_without_collecting_the_mailbox() {
 			"missing bounded range {range}"
 		);
 	}
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	assert_eq!(
 		states
 			.load(b"INBOX")
@@ -223,8 +235,9 @@ async fn sparse_uid_windows_are_checkpointed_without_collecting_the_mailbox() {
 async fn an_empty_uid_window_is_checkpointed_before_a_later_failure() {
 	use super::super::super::{Filter, Settings, run_with_connection};
 	let dir = tempfile::tempdir().expect("dir");
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	let saved = super::super::super::state::FolderState {
 		folder: "INBOX".into(),
 		uid_validity: 7,
@@ -254,7 +267,9 @@ async fn an_empty_uid_window_is_checkpointed_before_a_later_failure() {
 	server.abort();
 	assert!(matches!(
 		error,
-		Some(super::super::super::MigrateError::Client(ClientError::Protocol(_)))
+		Some(super::super::super::MigrateError::Client(
+			ClientError::Protocol(_)
+		))
 	));
 	assert_eq!(
 		states
@@ -272,8 +287,9 @@ async fn recovery_preserves_identical_messages_after_a_confirmed_prefix() {
 	let target = target(dir.path());
 	crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], b"a", &target.crypto)
 		.expect("confirmed message");
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	states
 		.save(
 			b"INBOX",
@@ -308,8 +324,9 @@ async fn a_second_interruption_keeps_recovery_active_for_unclaimed_copies() {
 		crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], b"a", &target.crypto)
 			.expect("stored message");
 	}
-	let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-		.expect("states");
+	let states =
+		super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+			.expect("states");
 	states
 		.save(
 			b"INBOX",
@@ -323,7 +340,10 @@ async fn a_second_interruption_keeps_recovery_active_for_unclaimed_copies() {
 		)
 		.expect("pending batch");
 	let (_, error) = migrate_memory(dir.path(), true, None).await;
-	assert!(matches!(error, Some(super::super::super::MigrateError::Timeout)));
+	assert!(matches!(
+		error,
+		Some(super::super::super::MigrateError::Timeout)
+	));
 	assert!(
 		states
 			.load(b"INBOX")
@@ -358,8 +378,9 @@ async fn recovery_index_obeys_mailbox_and_total_metadata_limits() {
 			)
 			.expect("local message");
 		}
-		let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-			.expect("states");
+		let states =
+			super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+				.expect("states");
 		let saved = super::super::super::state::FolderState {
 			folder: "INBOX".into(),
 			uid_validity: validity,
@@ -451,8 +472,9 @@ async fn failed_message_sync_keeps_recovery_active_and_resumes_without_duplicati
 			matches!(error, Some(super::super::super::MigrateError::Storage(_))),
 			"refuse to confirm failed {barrier} sync: {error:?}"
 		);
-		let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-			.expect("states");
+		let states =
+			super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+				.expect("states");
 		let saved = states.load(b"INBOX").expect("load").expect("state");
 		assert_eq!(
 			saved.last_uid, 0,
@@ -485,8 +507,9 @@ async fn recovery_sync_failure_precedes_any_checkpoint_write() {
 		let dir = tempfile::tempdir().expect("dir");
 		let (_, error) = migrate_memory(dir.path(), false, None).await;
 		assert!(error.is_none());
-		let states = super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
-			.expect("states");
+		let states =
+			super::super::super::state::StateDir::open(dir.path(), "alice", "alice@old.example")
+				.expect("states");
 		let mut saved = states.load(b"INBOX").expect("load").expect("state");
 		saved.last_uid = 1;
 		saved.in_progress = true;

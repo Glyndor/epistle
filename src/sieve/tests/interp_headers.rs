@@ -5,8 +5,8 @@
 use std::time::{Duration, Instant};
 
 use super::super::interp::{Message, Outcome, evaluate};
-use super::lexer::tokenize;
 use super::super::parser::parse;
+use super::lexer::tokenize;
 
 /// A message with `count` headers named `x` (and a Subject).
 fn crowded(count: usize) -> Vec<u8> {
