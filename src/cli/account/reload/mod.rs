@@ -3,7 +3,7 @@
 //! does not lose the race against the server's file-watch poll and
 //! trip the brute-force ban.
 //!
-//! Lives in a sibling so `account.rs` stays under the per-file
+//! Lives in a sibling so `src/cli/account/mod.rs` stays under the per-file
 //! code-line budget.
 
 use std::io::Write;
@@ -90,9 +90,4 @@ pub(crate) fn with_timeout<R>(timeout: Duration, body: impl FnOnce() -> R) -> R 
 }
 
 #[cfg(test)]
-#[path = "account_reload_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "account_reload_lock_tests.rs"]
-mod lock_tests;

@@ -1,6 +1,6 @@
 //! Handlers for `epistle account forward …` and `epistle account catch-all …`.
 //!
-//! Lives in a sibling so `account.rs` and `account_actions.rs` stay
+//! Lives in a sibling so `src/cli/account/mod.rs` and `src/cli/account/actions/mod.rs` stay
 //! under the per-file code-line budget. The CLI variants are
 //! "list/add/remove" on the resource form; the flat equivalents do not
 //! exist (this is the first surface that introduces them).

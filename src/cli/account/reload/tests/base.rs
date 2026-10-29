@@ -5,7 +5,7 @@
 //! does not carries the wait to its timeout and the note, and a stale
 //! status (old mtime) reads as no server at all.
 //!
-//! Lives in a sibling so `account_reload.rs` stays under the per-file
+//! Lives in a sibling so `src/cli/account/reload/mod.rs` stays under the per-file
 //! code-line budget.
 
 use std::path::Path;

@@ -1,6 +1,6 @@
 //! Handlers for `epistle account 2fa show|disable <account>`.
 //!
-//! Lives in a sibling so the umbrella `account.rs` stays under the
+//! Lives in a sibling so the umbrella `src/cli/account/mod.rs` stays under the
 //! per-file code-line budget. The store already exposes
 //! `AccountStore::set_totp` (cleared via `None`): `disable` is a thin
 //! wrapper around that with the same destructive confirmation the

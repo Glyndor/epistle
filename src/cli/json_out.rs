@@ -65,9 +65,9 @@ impl Reload {
 	}
 }
 
-impl From<super::account_reload::Waited> for Reload {
-	fn from(waited: super::account_reload::Waited) -> Self {
-		use super::account_reload::Waited;
+impl From<crate::cli::account::reload::Waited> for Reload {
+	fn from(waited: crate::cli::account::reload::Waited) -> Self {
+		use crate::cli::account::reload::Waited;
 		match waited {
 			Waited::Loaded => Reload::Loaded,
 			Waited::NoServer => Reload::NoServer,

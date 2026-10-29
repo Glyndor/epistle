@@ -23,32 +23,32 @@ use crate::cli::style;
 use crate::config::{Config, Protocol};
 use crate::directory_store::{AccountStore, StoreError};
 
-#[path = "account_actions.rs"]
-mod account_actions;
-#[path = "account_args.rs"]
-mod account_args;
-#[path = "account_forward_catch_all.rs"]
-mod account_forward_catch_all;
-#[path = "account_two_factor.rs"]
-mod account_two_factor;
+mod actions;
+mod args;
+mod class;
+mod forward_catch_all;
+pub(super) mod json;
+pub(super) mod name;
+pub(super) mod reload;
+mod two_factor;
 #[allow(unused_imports)]
-pub(super) use account_actions::{
+pub(super) use actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
 	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
 	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
 	save_sent_with_store, set_name_with_store, show_with_store,
 };
-pub use account_args::{
+pub use args::{
 	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
 	ForwardSubcommand, TwoFactorArgs, TwoFactorSubcommand,
 };
 #[allow(unused_imports)]
-pub(super) use account_forward_catch_all::{
+pub(super) use forward_catch_all::{
 	catch_all_add_with_store, catch_all_list, catch_all_remove_with_store, forward_add_with_store,
 	forward_list, forward_remove_with_store,
 };
 #[allow(unused_imports)]
-pub(super) use account_two_factor::{two_factor_disable, two_factor_show};
+pub(super) use two_factor::{two_factor_disable, two_factor_show};
 
 /// Every action the `epistle account` umbrella command understands.
 /// Each maps to a single handler below; `clap` deserialises the trailing
@@ -81,7 +81,7 @@ pub enum Subcommand {
 	/// Set the display name of a dynamic account; an empty one clears it.
 	SetName {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// The person's name, kept as written.
 		#[arg(value_name = "DISPLAY_NAME")]
@@ -93,7 +93,7 @@ pub enum Subcommand {
 	/// entries and, with `--queue discard`, its queued mail.
 	Remove {
 		/// Account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// What to do with queued outbound mail: `discard` (drop) or `drain`
 		/// (leave it for delivery). Required.
@@ -112,7 +112,7 @@ pub enum Subcommand {
 	/// fresh account.
 	Password {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 	},
 	/// Disable an account.
@@ -121,13 +121,13 @@ pub enum Subcommand {
 	/// mailbox stays on disk; re-enable with `account enable`.
 	Disable {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 	},
 	/// Re-enable a previously disabled account.
 	Enable {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 	},
 	/// Add or remove a delivery address for the account.
@@ -138,7 +138,7 @@ pub enum Subcommand {
 	/// `none` for the server default).
 	Quota {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// The quota size (accepts `K`, `M`, `G`, `T` suffixes and the
 		/// literal `none` for the server default).
@@ -151,7 +151,7 @@ pub enum Subcommand {
 	/// `all` clears the restriction.
 	Protocols {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// The protocol allowlist, comma-separated
 		/// (`imap,smtp,api,webdav`), or `all` to clear.
@@ -164,7 +164,7 @@ pub enum Subcommand {
 	/// neither the request nor the credential names one (`none` clears it).
 	Set {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// `transactional`, `marketing`, `personal`, or `none`.
 		#[arg(long = "default-class", value_name = "CLASS")]
@@ -186,7 +186,7 @@ pub enum Subcommand {
 	/// protocols, log id). Never secrets.
 	Show {
 		/// The account login name.
-		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// Print one JSON object instead of `key: value` lines.
 		#[arg(long)]
@@ -293,18 +293,18 @@ pub(super) fn parse_quota_size(raw: &str) -> Result<Option<u64>, String> {
 /// protocol names are rejected with a list of the accepted ones so a
 /// typo never reaches the store. `all` (case-insensitive) returns
 /// `Ok(None)` to clear the restriction. Implementation lives in
-/// `account_actions`; the umbrella keeps only the re-export so
+/// `actions`; the umbrella keeps only the re-export so
 /// the Subcommand enum stays close to the call site.
 pub(super) fn parse_protocol_list(raw: &str) -> Result<Option<Vec<Protocol>>, String> {
-	account_actions::parse_protocol_list_inner(raw)
+	actions::parse_protocol_list_inner(raw)
 }
 
 /// Parse the `on`/`off` switch the `save_sent` and quota
 /// subcommands accept. The CLI keeps the accepted set narrow so a
 /// typo never lands on disk: `on` and `off` are the only valid
-/// spellings. Implementation lives in `account_actions`.
+/// spellings. Implementation lives in `actions`.
 pub(super) fn parse_on_off(raw: &str) -> Result<bool, String> {
-	account_actions::parse_on_off(raw)
+	actions::parse_on_off(raw)
 }
 
 /// Open the store the action will mutate. Centralising the error
@@ -322,7 +322,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 	.map(|store| store.with_password_policy(crate::password::Policy::from_config(&config.auth)))
 }
 
-/// `handle_error` lives in `account_actions`; the umbrella module only
+/// `handle_error` lives in `actions`; the umbrella module only
 /// re-exports it so callers can write `account::handle_error`.
 /// Common prelude every mutating action shares: [`prepare_show`], then
 /// refuse a static account with the config-file hint. Returns the open
@@ -405,7 +405,7 @@ pub(super) fn run(
 				}
 			};
 			if leaf || json {
-				return super::account_json::list(&config, out);
+				return crate::cli::account::json::list(&config, out);
 			}
 			super::accounts::list(&config, out)
 		}
@@ -511,7 +511,7 @@ pub(super) fn run(
 		Subcommand::Set {
 			name,
 			default_class,
-		} => super::account_class::set(config_path, &name, &default_class, json, out),
+		} => crate::cli::account::class::set(config_path, &name, &default_class, json, out),
 		Subcommand::SaveSent { name, state } => {
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,
@@ -534,7 +534,7 @@ pub(super) fn run(
 				return code;
 			}
 			if leaf || json {
-				return super::account_json::show(&store, &name, out);
+				return crate::cli::account::json::show(&store, &name, out);
 			}
 			show_with_store(&store, &name, out)
 		}
@@ -584,7 +584,7 @@ fn dispatch_forward(
 	};
 	match args.action {
 		ForwardSubcommand::List { name, json: leaf } if leaf || json => {
-			super::account_json::forwards(&store, &name, out)
+			crate::cli::account::json::forwards(&store, &name, out)
 		}
 		ForwardSubcommand::List { name, .. } => forward_list(&store, &name, out),
 		ForwardSubcommand::Add { name, address } => {
@@ -620,7 +620,7 @@ fn dispatch_catch_all(
 	};
 	match args.action {
 		CatchAllSubcommand::List { name, json: leaf } if leaf || json => {
-			super::account_json::catch_alls(&store, &name, out)
+			crate::cli::account::json::catch_alls(&store, &name, out)
 		}
 		CatchAllSubcommand::List { name, .. } => catch_all_list(&store, &name, out),
 		CatchAllSubcommand::Add { name, domain } => {
@@ -667,7 +667,7 @@ fn dispatch_two_factor(
 	};
 	match args.action {
 		TwoFactorSubcommand::Show { name, json: leaf } if leaf || json => {
-			super::account_json::two_factor(&store, &name, out)
+			crate::cli::account::json::two_factor(&store, &name, out)
 		}
 		TwoFactorSubcommand::Show { name, .. } => two_factor_show(&store, &name, out),
 		TwoFactorSubcommand::Disable { name, yes } => {

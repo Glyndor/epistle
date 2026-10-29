@@ -1,10 +1,6 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod account;
-mod account_class;
-mod account_json;
-mod account_name;
-mod account_reload;
 mod accounts;
 mod alert;
 mod alias;

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use super::term::table::Table;
-use crate::cli::account_reload;
+use crate::cli::account::reload as account_reload;
 use crate::config::Config;
 use crate::directory_store::removal::{QueuePolicy, remove_account};
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
@@ -75,7 +75,7 @@ pub(super) fn add_with_display_name(
 	out: &mut dyn std::io::Write,
 	json: bool,
 ) -> ExitCode {
-	let name = &super::account_name::for_new_account(name);
+	let name = &crate::cli::account::name::for_new_account(name);
 	let display_name = match display_name.map(crate::directory_store::display_name::validate) {
 		None => None,
 		Some(Ok(stored)) => stored,

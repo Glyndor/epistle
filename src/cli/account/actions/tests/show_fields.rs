@@ -6,13 +6,13 @@
 //! at two different shapes; a static account that forwards mail to a
 //! relay is no longer the surprise it was.
 //!
-//! Lives in a sibling so `account_actions.rs` stays under the per-file
+//! Lives in a sibling so `src/cli/account/actions/mod.rs` stays under the per-file
 //! code-line budget.
 
 use std::process::ExitCode;
 
 use super::*;
-use crate::cli::account_json;
+use crate::cli::account::json as account_json;
 use crate::config::Config;
 use crate::directory_store::AccountStore;
 use crate::smtp::auth::tests::base::{fixture_password, hash};

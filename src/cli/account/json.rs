@@ -31,7 +31,7 @@ pub(crate) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	) {
 		Ok(store) => store,
 		Err(error) => {
-			super::style::error(format_args!("opening account store: {error}"));
+			crate::cli::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -50,7 +50,7 @@ pub(crate) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			})
 		})
 		.collect();
-	super::json_out::print(out, &Value::Array(rows))
+	crate::cli::json_out::print(out, &Value::Array(rows))
 }
 
 /// `account show --json`: the public view of one account. The caller has
@@ -85,9 +85,9 @@ pub(crate) fn show(store: &AccountStore, name: &str, out: &mut impl std::io::Wri
 			"catch_all": account.catch_all,
 		})
 	} else {
-		return super::exit::refused(format_args!("no such account: {name}"));
+		return crate::cli::exit::refused(format_args!("no such account: {name}"));
 	};
-	super::json_out::print(out, &view)
+	crate::cli::json_out::print(out, &view)
 }
 
 /// `account forward list --json`: `[{"address": ...}]`.
@@ -101,7 +101,7 @@ pub(crate) fn forwards(
 		.into_iter()
 		.map(|address| json!({ "address": address }))
 		.collect();
-	super::json_out::print(out, &Value::Array(rows))
+	crate::cli::json_out::print(out, &Value::Array(rows))
 }
 
 /// `account catch-all list --json`: `[{"domain": ...}]`.
@@ -115,7 +115,7 @@ pub(crate) fn catch_alls(
 		.into_iter()
 		.map(|domain| json!({ "domain": domain }))
 		.collect();
-	super::json_out::print(out, &Value::Array(rows))
+	crate::cli::json_out::print(out, &Value::Array(rows))
 }
 
 /// `account 2fa show --json`: `{"name": ..., "enrolled": bool}`.
@@ -125,8 +125,8 @@ pub(crate) fn two_factor(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Some(account) = store.dynamic_account(name) else {
-		return super::exit::refused(format_args!("no such account: {name}"));
+		return crate::cli::exit::refused(format_args!("no such account: {name}"));
 	};
 	let view = json!({ "name": name, "enrolled": account.totp_secret.is_some() });
-	super::json_out::print(out, &view)
+	crate::cli::json_out::print(out, &view)
 }
