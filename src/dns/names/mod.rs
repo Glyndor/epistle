@@ -1,9 +1,18 @@
-//! Name handling for the lockdown: the one comparable form of a DNS name,
-//! the names epistle serves, and record equality the way `--undo` needs it.
+//! The comparable form of a DNS name, the checks a name passes before a
+//! record may be written at it, and the names epistle serves.
+//!
+//! Every name epistle reads or writes goes through [`canonical_name`], and
+//! every name that reaches a provider API goes through [`is_valid_name`].
 
 use std::collections::BTreeMap;
 
 use crate::dns::provider::{DnsRecord, RecordKind};
+
+/// The longest DNS name, without the root dot (RFC 1035 section 2.3.4).
+pub const MAX_NAME_LEN: usize = crate::util::validation::MAX_DOMAIN;
+
+/// The longest label of a DNS name (RFC 1035 section 2.3.4).
+pub const MAX_LABEL_LEN: usize = crate::util::validation::MAX_LABEL;
 
 /// The comparable form of a DNS name: trimmed, without the trailing root
 /// dot, lowercase, and every non-ASCII label as its A-label (IDNA), so a
@@ -32,6 +41,72 @@ pub fn in_domain(name: &str, domain: &str) -> bool {
 		|| name
 			.strip_suffix(domain)
 			.is_some_and(|head| head.ends_with('.'))
+}
+
+/// Whether `name`, in [`canonical_name`] form, is a name epistle may
+/// write a record at: within the length caps, no empty label, and every
+/// label made of ASCII letters, digits, hyphens and underscores, except
+/// that the first label may be `*`. A provider hands epistle whatever the
+/// zone holds, and a record is written back under the name that was read,
+/// so a name with an escape sequence, a NUL or a space is reported and
+/// left alone, never written to.
+pub fn is_valid_name(name: &str) -> bool {
+	if name.is_empty() || name.len() > MAX_NAME_LEN {
+		return false;
+	}
+	name.split('.').enumerate().all(|(index, label)| {
+		!label.is_empty()
+			&& label.len() <= MAX_LABEL_LEN
+			&& ((index == 0 && label == "*")
+				|| label
+					.bytes()
+					.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+	})
+}
+
+/// `name` cut to at most [`MAX_NAME_LEN`] bytes (on a character boundary),
+/// with an ellipsis when it was cut, for a message about a name that is not
+/// valid.
+pub fn shortened(name: &str) -> String {
+	if name.len() <= MAX_NAME_LEN {
+		return name.to_string();
+	}
+	let mut end = MAX_NAME_LEN;
+	while !name.is_char_boundary(end) {
+		end -= 1;
+	}
+	format!("{}...", &name[..end])
+}
+
+/// An MX value split into its preference and its target. Providers list an
+/// MX as `priority target`, as the bare target, or (the ones that cut the
+/// trailing dot off the target) as a bare `priority` when the target is the
+/// root, which is how a null MX `0 .` comes back from them. The root
+/// target is the empty string.
+pub fn mx_parts(value: &str) -> Option<(Option<u16>, &str)> {
+	let mut parts = value.split_whitespace();
+	let (first, second) = (parts.next()?, parts.next());
+	if parts.next().is_some() {
+		return None;
+	}
+	Some(match second {
+		Some(target) => (Some(first.parse().ok()?), target),
+		None => match first.parse::<u16>() {
+			Ok(preference) => (Some(preference), ""),
+			Err(_) => (None, first),
+		},
+	})
+}
+
+/// The target of an MX value, canonical, with the null MX target `.` as
+/// the empty string.
+pub fn mx_target(value: &str) -> Option<String> {
+	let (_, target) = mx_parts(value)?;
+	Some(if matches!(target, "." | "") {
+		String::new()
+	} else {
+		canonical_name(target)
+	})
 }
 
 /// The names epistle serves, each with the role printed in the plan. The
@@ -87,62 +162,5 @@ impl ServedNames {
 	}
 }
 
-/// An MX value split into its preference and its target. Providers list an
-/// MX as `priority target`, as the bare target, or (the ones that cut the
-/// trailing dot off the target) as a bare `priority` when the target is the
-/// root, which is how a null MX `0 .` comes back from them. The root
-/// target is the empty string.
-fn mx_parts(value: &str) -> Option<(Option<u16>, &str)> {
-	let mut parts = value.split_whitespace();
-	let (first, second) = (parts.next()?, parts.next());
-	if parts.next().is_some() {
-		return None;
-	}
-	Some(match second {
-		Some(target) => (Some(first.parse().ok()?), target),
-		None => match first.parse::<u16>() {
-			Ok(preference) => (Some(preference), ""),
-			Err(_) => (None, first),
-		},
-	})
-}
-
-/// The target of an MX value, canonical, with the null MX target `.` as
-/// the empty string.
-pub(crate) fn mx_target(value: &str) -> Option<String> {
-	let (_, target) = mx_parts(value)?;
-	Some(if matches!(target, "." | "") {
-		String::new()
-	} else {
-		canonical_name(target)
-	})
-}
-
-/// Whether an MX value is the null MX (RFC 7505: preference 0, target `.`).
-/// A bare `.` (a listing without the preference) counts too.
-pub fn is_null_mx(value: &str) -> bool {
-	matches!(mx_parts(value), Some((None | Some(0), "." | "")))
-}
-
-/// Whether two records are the same record: same name, same kind and the
-/// same value. TXT values compare by their logical text (quoting and
-/// 255-octet splitting do not count), MX by preference and target, so a
-/// provider that lists `0 .` as a bare `.` still matches.
-pub fn same_record(a: &DnsRecord, b: &DnsRecord) -> bool {
-	if a.kind != b.kind || canonical_name(&a.name) != canonical_name(&b.name) {
-		return false;
-	}
-	match a.kind {
-		RecordKind::Txt => crate::dns::txt::same_txt_value(&a.value, &b.value),
-		RecordKind::Mx => {
-			(is_null_mx(&a.value) && is_null_mx(&b.value))
-				|| (mx_preference(&a.value) == mx_preference(&b.value)
-					&& mx_target(&a.value) == mx_target(&b.value))
-		}
-		_ => a.value.trim() == b.value.trim(),
-	}
-}
-
-fn mx_preference(value: &str) -> Option<u16> {
-	mx_parts(value)?.0
-}
+#[cfg(test)]
+mod tests;

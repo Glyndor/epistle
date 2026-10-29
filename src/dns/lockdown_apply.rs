@@ -155,7 +155,7 @@ pub async fn undo_journal(
 			}));
 		}
 	};
-	let cuts = super::cuts::Cuts::new(&canonical_name(zone), &existing);
+	let cuts = super::Cuts::new(&canonical_name(zone), &existing);
 	for (index, entry) in journal.entries.iter().enumerate().rev() {
 		let ours = &entry.record;
 		// A name delegated since the lockdown wrote it is the other
