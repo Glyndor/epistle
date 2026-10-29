@@ -3,10 +3,11 @@ use super::*;
 const NOW: u64 = 1_893_456_000; // 2030-01-01 UTC.
 
 fn certificate_at(dir: &Path, expiry_day: u8, modified: u64) {
-	let cert = issued_certificate(2030, 1, expiry_day);
+	let (cert, key) = issued_certificate(2030, 1, expiry_day);
 	fs::create_dir_all(dir.join("acme")).expect("ACME directory");
 	let path = cert_path(dir);
 	fs::write(&path, cert.pem()).expect("certificate file");
+	fs::write(key_path(dir), key.serialize_pem()).expect("key file");
 	fs::File::options()
 		.write(true)
 		.open(path)

@@ -21,8 +21,6 @@ use super::renew_request::{Backoff, Issuer, Outcome, cycle};
 use super::transport::HttpTransport;
 use crate::tls::ReloadableAcceptor;
 
-/// Assumed certificate lifetime (Let's Encrypt issues 90-day certs).
-const LIFETIME_DAYS: u64 = 90;
 /// How often the loop wakes: often enough to serve an operator's renewal
 /// request promptly; scheduled failures back off for much longer.
 const CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -83,13 +81,11 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 	}
 }
 
-/// What the certificate at the ACME path is.
+/// Whether the ACME pair is usable and what its leaf certificate is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CertificateState {
-	/// No file on disk.
-	Missing,
-	/// The file is there but could not be read or parsed.
-	Unreadable,
+	/// The certificate or key cannot be loaded, parsed, or used together.
+	Unusable,
 	/// A certificate an authority issued, with the second its
 	/// validity ends.
 	Issued(u64),
@@ -97,61 +93,39 @@ enum CertificateState {
 	SelfIssued,
 }
 
-/// Whether a certificate should be (re)issued now: absent, unreadable,
-/// self-issued, or within `renew_before_days` of its X.509 expiry.
+/// Whether a certificate should be (re)issued now: an unusable ACME pair,
+/// a self-issued certificate, or a certificate within `renew_before_days`
+/// of its X.509 expiry.
 ///
-/// A self-issued certificate is due however far its expiry is: no
-/// authority issues one, so it is a placeholder (the self-signed pair
-/// `init` used to write at the ACME path) and the only way to have a
-/// certificate the authority vouches for is to ask for one. If
-/// parsing fails, assume a 90-day lifetime from the file modification
-/// time.
+/// Pair usability uses the same TLS check as the served certificate selection.
+/// A self-issued certificate is due however far its expiry is: it is a
+/// placeholder rather than a certificate issued by an authority.
 pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> bool {
-	let path = cert_path(data_dir);
-	match certificate_state(&path) {
-		CertificateState::Missing => true,
-		CertificateState::SelfIssued => true,
+	match certificate_state(&cert_path(data_dir), &key_path(data_dir)) {
+		CertificateState::Unusable | CertificateState::SelfIssued => true,
 		CertificateState::Issued(expires) => {
 			let window = renew_before_days.saturating_mul(86_400);
 			now_secs >= expires.saturating_sub(window)
 		}
-		CertificateState::Unreadable => {
-			let Ok(meta) = fs::metadata(&path) else {
-				return true;
-			};
-			let Ok(modified) = meta.modified() else {
-				return true;
-			};
-			let issued = modified
-				.duration_since(UNIX_EPOCH)
-				.map(|d| d.as_secs())
-				.unwrap_or(0);
-			let renew_at = issued.saturating_add(
-				LIFETIME_DAYS
-					.saturating_sub(renew_before_days)
-					.saturating_mul(86_400),
-			);
-			now_secs >= renew_at
-		}
 	}
 }
 
-/// Read the certificate at the ACME path and say what it is.
-fn certificate_state(path: &Path) -> CertificateState {
+/// Check the ACME pair and classify its leaf certificate.
+fn certificate_state(path: &Path, key_path: &Path) -> CertificateState {
 	use rustls_pki_types::CertificateDer;
 	use rustls_pki_types::pem::PemObject;
 	use x509_parser::prelude::FromDer;
 
+	if !crate::tls::usable_pair(path, key_path) {
+		return CertificateState::Unusable;
+	}
+
 	// The leaf is first in the persisted ACME certificate chain.
 	let Ok(der) = CertificateDer::from_pem_file(path) else {
-		return if path.exists() {
-			CertificateState::Unreadable
-		} else {
-			CertificateState::Missing
-		};
+		return CertificateState::Unusable;
 	};
 	let Ok((_, cert)) = x509_parser::certificate::X509Certificate::from_der(der.as_ref()) else {
-		return CertificateState::Unreadable;
+		return CertificateState::Unusable;
 	};
 	// The issuer is the subject: the certificate signed itself.
 	// A certificate an authority issued names that authority as its

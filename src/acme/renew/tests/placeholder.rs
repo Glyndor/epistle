@@ -11,7 +11,7 @@ use super::*;
 
 /// A certificate that signed itself, the shape `init` used to write
 /// at the ACME path.
-fn self_issued_certificate() -> rcgen::Certificate {
+fn self_issued_certificate() -> (rcgen::Certificate, rcgen::KeyPair) {
 	let mut params = rcgen::CertificateParams::new(vec!["mail.example.org".into()])
 		.expect("certificate parameters");
 	params.distinguished_name.push(
@@ -19,7 +19,7 @@ fn self_issued_certificate() -> rcgen::Certificate {
 		rcgen::DnValue::Utf8String("mail.example.org".to_string()),
 	);
 	let key = rcgen::KeyPair::generate().expect("key");
-	params.self_signed(&key).expect("certificate")
+	(params.self_signed(&key).expect("certificate"), key)
 }
 
 /// A certificate nobody vouches for is due however far its expiry
@@ -29,8 +29,9 @@ fn self_issued_certificate() -> rcgen::Certificate {
 fn a_self_issued_certificate_is_due_however_far_its_expiry_is() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	fs::create_dir_all(dir.path().join("acme")).expect("ACME directory");
-	let certificate = self_issued_certificate();
+	let (certificate, key) = self_issued_certificate();
 	fs::write(cert_path(dir.path()), certificate.pem()).expect("certificate file");
+	fs::write(key_path(dir.path()), key.serialize_pem()).expect("key file");
 	assert!(
 		needs_renewal(dir.path(), 30, now_secs()),
 		"a certificate that is its own issuer is a placeholder; the renewal loop must ask \
@@ -45,8 +46,9 @@ fn a_self_issued_certificate_is_due_however_far_its_expiry_is() {
 fn a_self_issued_certificate_is_due_without_a_renewal_window() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	fs::create_dir_all(dir.path().join("acme")).expect("ACME directory");
-	let certificate = self_issued_certificate();
+	let (certificate, key) = self_issued_certificate();
 	fs::write(cert_path(dir.path()), certificate.pem()).expect("certificate file");
+	fs::write(key_path(dir.path()), key.serialize_pem()).expect("key file");
 	assert!(
 		needs_renewal(dir.path(), 0, now_secs()),
 		"a placeholder is due even with no renewal window"

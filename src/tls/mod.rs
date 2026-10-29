@@ -73,6 +73,15 @@ pub fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
+/// Whether both files load and rustls accepts the key for the certificate.
+pub(crate) fn usable_pair(cert_file: &Path, key_file: &Path) -> bool {
+	ensure_crypto_provider();
+	let (Ok(certs), Ok(key)) = (load_certs(cert_file), load_key(key_file)) else {
+		return false;
+	};
+	server_config(certs, key, None).is_ok()
+}
+
 /// Assemble a `ServerConfig`, enabling client-certificate verification against
 /// `client_ca` when one is configured.
 fn server_config(

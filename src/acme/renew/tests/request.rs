@@ -30,9 +30,10 @@ impl Issuer for Recorder {
 
 /// A certificate valid for another 300 days, so no renewal is due.
 fn fresh_certificate(dir: &Path) {
-	let cert = issued_certificate(2030, 10, 28);
+	let (cert, key) = issued_certificate(2030, 10, 28);
 	fs::create_dir_all(dir.join("acme")).expect("acme dir");
 	fs::write(cert_path(dir), cert.pem()).expect("write");
+	fs::write(key_path(dir), key.serialize_pem()).expect("key file");
 }
 
 #[tokio::test]
@@ -138,6 +139,17 @@ async fn scheduled_renewal_still_runs_without_a_request() {
 		Outcome::Issued,
 		"no certificate on disk means renewal is due"
 	);
+	assert_eq!(issuer.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn scheduled_renewal_issues_when_a_recent_certificates_key_is_missing() {
+	let dir = tempfile::tempdir().expect("directory");
+	fresh_certificate(dir.path());
+	fs::remove_file(key_path(dir.path())).expect("remove key");
+	let issuer = Recorder::default();
+	let outcome = cycle(&issuer, dir.path(), 30, NOW, &mut Backoff::default()).await;
+	assert_eq!(outcome, Outcome::Issued);
 	assert_eq!(issuer.calls.load(Ordering::SeqCst), 1);
 }
 
