@@ -31,7 +31,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 /// SCIM key without a domain, and each key whose `--ip-cidr` the container
 /// network cannot decide. `now` is epoch seconds.
 fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaReport {
-	let clause = super::super::client_address::hidden_clause(data_dir);
+	let clause = crate::cli::client::address::hidden_clause(data_dir);
 	let mut items = Vec::new();
 	for key in store.keys() {
 		let scopes = if key.scopes.is_empty() {

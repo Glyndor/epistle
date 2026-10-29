@@ -168,12 +168,12 @@ fn app_password_list_json() {
 		.expect("add");
 	let config = crate::config::Config::load(config.path()).expect("config");
 	let mut out = Vec::new();
-	let action = crate::cli::app_passwords::AppPasswordCli::List {
+	let action = crate::cli::app::passwords::AppPasswordCli::List {
 		account: None,
 		json: true,
 	};
 	assert_eq!(
-		crate::cli::app_passwords::run(&config, action, false, &mut out),
+		crate::cli::app::passwords::run(&config, action, false, &mut out),
 		ExitCode::SUCCESS
 	);
 	let value: Value = serde_json::from_slice(&out).expect("valid JSON");

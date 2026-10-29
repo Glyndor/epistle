@@ -10,11 +10,12 @@ use std::process::ExitCode;
 
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
-use super::{
-	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, attachments,
-	autoconfig, autodiscover, backup, ban, delivery, dkim, dns_records, domain, evidence, export,
-	import, init, learning, local, masked, mobileconfig, probe, queue, report_abuse, reports,
-	serve, srv, stack, status, style, suppression, tls_cli, verify, verify_dns, warmup,
+use crate::cli::{
+	Cli, Command, account, alias, antispam, api_keys, app::passwords as app_passwords, archive,
+	attachments, autoconfig, autodiscover, backup, ban, delivery, dkim, dns_records, domain,
+	evidence, export, import, init, learning, local, masked, mobileconfig, probe, queue,
+	report::abuse as report_abuse, reports, serve, srv, stack, status, style, suppression,
+	tls::cli as tls_cli, verify, verify::dns as verify_dns, warmup,
 };
 use crate::config::Config;
 
@@ -48,7 +49,7 @@ impl Cli {
 				}
 			}
 		}
-		match super::container_db::reexecute(&self.command) {
+		match crate::cli::container::db::reexecute(&self.command) {
 			Ok(Some(code)) => return code,
 			Ok(None) => {}
 			Err(error) => {
@@ -62,7 +63,7 @@ impl Cli {
 				cert,
 				key,
 				listen,
-			} => super::mta_sts_serve::run(policy_dir, cert, key, listen),
+			} => crate::cli::mta::sts_serve::run(policy_dir, cert, key, listen),
 			Command::Serve { config } => match Config::load(&config) {
 				Ok(config) => serve::run(config),
 				Err(error) => {
@@ -73,7 +74,7 @@ impl Cli {
 			Command::ConfigCheck { config, json } => {
 				let mut out = std::io::stdout().lock();
 				let mut err = style::stderr();
-				super::config_check::run(&config, json, &mut out, &mut err)
+				crate::cli::config::check::run(&config, json, &mut out, &mut err)
 			}
 			Command::Export {
 				config,
@@ -374,13 +375,13 @@ impl Cli {
 				action,
 				dry_run,
 				json,
-			} => super::storage_blobs::run(&config, action, dry_run, json),
+			} => crate::cli::storage::blobs::run(&config, action, dry_run, json),
 			Command::Webhook {
 				config,
 				action,
 				dry_run,
 				json,
-			} => super::webhook_admin::run(&config, action, dry_run, json),
+			} => crate::cli::webhook::admin::run(&config, action, dry_run, json),
 			Command::Alert {
 				config,
 				action,

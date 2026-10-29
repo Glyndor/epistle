@@ -60,7 +60,7 @@ struct Opened {
 /// descriptor, so a path swapped between the check and the read does not
 /// decide what is staged.
 fn read(path: &Path) -> Result<Opened, String> {
-	use crate::cli::regular_read::{is_not_regular, read_with_metadata};
+	use crate::cli::regular::read::{is_not_regular, read_with_metadata};
 	let (bytes, metadata) = read_with_metadata(path).map_err(|error| {
 		if is_not_regular(&error) {
 			format!("{} must be a regular file", path.display())

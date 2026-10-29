@@ -7,7 +7,7 @@
 //! so a read that waits is a failed assertion and not a hung suite.
 
 use super::*;
-use crate::cli::regular_read::{bounded, fifo_at};
+use crate::cli::regular::read::{bounded, fifo_at};
 
 fn answers(root: &std::path::Path) -> Answers {
 	let mut answers = crate::cli::init::compose::minimal_answers();

@@ -6,22 +6,15 @@ mod alert;
 mod alias;
 mod antispam;
 mod api_keys;
-mod app_passwords;
 mod archive;
 mod attachments;
 mod autoconfig;
 mod autodiscover;
 mod backup;
 mod ban;
-mod client_address;
 mod completions;
-mod compose_lock;
-mod config_check;
 pub mod config_edit;
-mod container_db;
 mod csv;
-mod db_harden;
-mod db_status;
 mod db_upgrade;
 mod delivery;
 mod disabled_domain;
@@ -44,15 +37,11 @@ mod local;
 mod masked;
 mod migrate;
 mod mobileconfig;
-mod mta_sts_serve;
-mod oauth_advice;
 mod pick;
 mod probe;
 mod prompt;
 mod queue;
-pub(crate) mod regular_read;
 mod relay;
-mod report_abuse;
 mod reports;
 mod resource;
 mod role_addresses;
@@ -62,19 +51,15 @@ mod srv;
 mod stack;
 mod staging;
 mod status;
-mod storage_blobs;
 mod style;
 mod subid;
 mod suppression;
 pub(crate) mod term;
-mod tls_cli;
 pub(crate) mod trace;
 mod ui;
 mod util;
 mod verify;
-mod verify_dns;
 mod warmup;
-mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
 /// deserialise the `epistle init --print-answers` output without
@@ -135,14 +120,6 @@ mod tests_e;
 #[cfg(test)]
 #[path = "cli_tests_decorated.rs"]
 mod cli_tests_decorated;
-
-#[cfg(test)]
-#[path = "mta_sts_serve_tests.rs"]
-mod mta_sts_serve_tests;
-
-#[cfg(test)]
-#[path = "command_cases.rs"]
-mod command_cases;
 
 #[cfg(test)]
 #[path = "cli_tests_config_defaults.rs"]
@@ -233,9 +210,33 @@ mod cli_account_log_id_tests;
 mod cli_confirmation_tests;
 
 #[cfg(test)]
-#[path = "oauth_keygen_tests.rs"]
-mod oauth_keygen_tests;
-
-#[cfg(test)]
 #[path = "cli_tests_service.rs"]
 mod tests_service;
+
+mod app;
+
+mod client;
+
+mod compose;
+
+mod config;
+
+mod container;
+
+mod db;
+
+mod mta;
+
+mod oauth;
+
+pub(crate) mod regular;
+
+mod report;
+
+mod storage;
+
+mod tls;
+
+mod webhook;
+
+mod dns_lockdown;

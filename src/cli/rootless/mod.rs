@@ -1,0 +1,146 @@
+//! Re-execute packaged administration commands under the persistent service account.
+
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, ExitStatus};
+
+use super::staging::Stage;
+
+pub(super) struct ServiceUser {
+	pub(super) uid: u32,
+	pub(super) gid: u32,
+	pub(super) home: PathBuf,
+}
+
+/// Run as root, re-execute as the service account with the paths the
+/// operator named staged for it (`stage`, see `super::staging`); `None`
+/// when this process is not root or the account does not exist.
+fn delegate(
+	euid: u32,
+	lookup: impl FnOnce() -> io::Result<Option<ServiceUser>>,
+	runtime_exists: impl FnOnce(&Path) -> bool,
+	exe: &Path,
+	args: &[OsString],
+	stage: impl FnOnce(&[OsString], &ServiceUser) -> io::Result<Stage>,
+	spawn: impl FnOnce(&mut Command) -> io::Result<ExitStatus>,
+) -> io::Result<Option<ExitCode>> {
+	if euid != 0 {
+		return Ok(None);
+	}
+	let Some(user) = lookup()? else {
+		return Ok(None);
+	};
+	let runtime = PathBuf::from(format!("/run/user/{}", user.uid));
+	if !runtime_exists(&runtime) {
+		return Err(io::Error::other(format!(
+			"{} does not exist; run `loginctl enable-linger glyndor-epistle`",
+			runtime.display()
+		)));
+	}
+	let stage = stage(args, &user)?;
+	let mut command = Command::new("runuser");
+	command
+		.args(["-u", "glyndor-epistle", "--"])
+		.arg(exe)
+		.args(stage.args());
+	if let Some(shown) = stage.shown_env() {
+		command.env(super::staging::SHOWN_ENV, shown);
+	}
+	command.env("XDG_RUNTIME_DIR", &runtime);
+	command.env(
+		"DBUS_SESSION_BUS_ADDRESS",
+		format!("unix:path={}/bus", runtime.display()),
+	);
+	command.env("HOME", &user.home).current_dir(&user.home);
+	let status = spawn(&mut command)?;
+	stage.finish(status.success())?;
+	Ok(Some(ExitCode::from(status.code().unwrap_or(1) as u8)))
+}
+
+/// `runuser -u glyndor-epistle -- <program>`, with the runtime directory,
+/// session bus and home the account's user manager and rootless Podman
+/// expect, for a root command that does part of its work as the account.
+pub(super) fn account_command(user: &ServiceUser, program: impl AsRef<std::ffi::OsStr>) -> Command {
+	let runtime = PathBuf::from(format!("/run/user/{}", user.uid));
+	let mut command = Command::new("runuser");
+	command
+		.args(["-u", "glyndor-epistle", "--"])
+		.arg(program)
+		.env(
+			"DBUS_SESSION_BUS_ADDRESS",
+			format!("unix:path={}/bus", runtime.display()),
+		)
+		.env("XDG_RUNTIME_DIR", runtime)
+		.env("HOME", &user.home)
+		.current_dir(&user.home);
+	command
+}
+
+pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
+	#[cfg(unix)]
+	{
+		// SAFETY: geteuid takes no arguments and cannot fail.
+		let euid = unsafe { libc::geteuid() };
+		delegate(
+			euid,
+			lookup_user,
+			Path::is_dir,
+			&std::env::current_exe()?,
+			&super::pick::effective_args(),
+			|args, user| {
+				Stage::prepare(args, &user.home, user.uid, &|file, _| {
+					std::os::unix::fs::fchown(file, Some(user.uid), Some(user.gid))
+				})
+			},
+			|command| command.status(),
+		)
+	}
+	#[cfg(not(unix))]
+	{
+		Ok(None)
+	}
+}
+
+#[cfg(unix)]
+pub(super) fn lookup_user() -> io::Result<Option<ServiceUser>> {
+	use std::ffi::CStr;
+	use std::os::unix::ffi::OsStrExt;
+
+	let mut buffer = vec![0 as libc::c_char; 1024];
+	loop {
+		// SAFETY: a zeroed passwd is valid storage for getpwnam_r's output.
+		let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+		let mut result = std::ptr::null_mut();
+		// SAFETY: all output storage outlives the call; result is checked before use.
+		let rc = unsafe {
+			libc::getpwnam_r(
+				c"glyndor-epistle".as_ptr(),
+				&mut passwd,
+				buffer.as_mut_ptr(),
+				buffer.len(),
+				&mut result,
+			)
+		};
+		if rc == libc::ERANGE && buffer.len() < 1 << 20 {
+			buffer.resize(buffer.len() * 2, 0);
+			continue;
+		}
+		if rc != 0 {
+			return Err(io::Error::from_raw_os_error(rc));
+		}
+		if result.is_null() {
+			return Ok(None);
+		}
+		// SAFETY: successful getpwnam_r supplies a NUL-terminated home within buffer.
+		let home = unsafe { CStr::from_ptr(passwd.pw_dir) };
+		return Ok(Some(ServiceUser {
+			uid: passwd.pw_uid,
+			gid: passwd.pw_gid,
+			home: PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())),
+		}));
+	}
+}
+
+#[cfg(test)]
+mod tests;

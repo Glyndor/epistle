@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use crate::cli::app_passwords::{AppPasswordCli, run};
+use crate::cli::app::passwords::{AppPasswordCli, run};
 use crate::config::Config;
 use crate::directory_store::{AppPassword, AppPasswordStore};
 

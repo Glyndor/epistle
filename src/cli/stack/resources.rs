@@ -214,7 +214,7 @@ pub(super) fn run(
 			// file is read once the lock is held, so neither loses the
 			// other's change.
 			let lock = crate::storage::locked::lock_path(compose);
-			let _held = match crate::cli::compose_lock::acquire(&lock) {
+			let _held = match crate::cli::compose::lock::acquire(&lock) {
 				Ok(held) => held,
 				Err(error) => return fail(error),
 			};

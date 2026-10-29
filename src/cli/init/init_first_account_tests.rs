@@ -63,7 +63,7 @@ fn store(dir: &Path) -> crate::directory_store::AccountStore {
 
 fn config_check(dir: &Path) -> String {
 	let (mut out, mut err) = (Vec::new(), Vec::new());
-	let code = crate::cli::config_check::run(
+	let code = crate::cli::config::check::run(
 		&dir.join("etc").join("mail.toml"),
 		false,
 		&mut out,

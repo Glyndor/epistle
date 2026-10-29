@@ -45,7 +45,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 2.1.1 Password length | Met | Length 12–64 enforced before hashing on every set/change path (`src/password::validate`, called by `src/api/v1/accounts.rs` and `src/cli/accounts.rs`); the 64 cap is the documented Argon2 DoS ceiling; no silent truncation. |
+| 2.1.1 Password length | Met | Length 12–64 enforced before hashing on every set/change path (`src/password::validate`, called by `src/api/v1/accounts.rs` and `src/cli/accounts/mod.rs`); the 64 cap is the documented Argon2 DoS ceiling; no silent truncation. |
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |

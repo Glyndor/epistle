@@ -163,7 +163,7 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	// not keep this command out of the configuration directory for as long
 	// as it lasts.
 	let lock = crate::storage::locked::lock_path(compose);
-	let _held = match crate::cli::compose_lock::acquire(&lock) {
+	let _held = match crate::cli::compose::lock::acquire(&lock) {
 		Ok(held) => held,
 		Err(error) => {
 			crate::cli::style::error(error);
@@ -264,7 +264,7 @@ impl execute::UpdateHost for Live<'_> {
 	}
 
 	fn harden_database(&mut self) -> Result<bool, String> {
-		crate::cli::db_harden::run(self.compose)
+		crate::cli::db::harden::run(self.compose)
 	}
 
 	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {

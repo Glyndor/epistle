@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use crate::cli::regular_read;
+use crate::cli::regular::read as regular_read;
 
 /// The bytes of the generated compose file, or `None` when the install has
 /// none. The reason a read failed, naming the path it could not read.
@@ -31,7 +31,7 @@ pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
 
 /// A named pipe at `path`, shared by the tests of every reader.
 #[cfg(all(test, unix))]
-pub(crate) use crate::cli::regular_read::fifo_at;
+pub(crate) use crate::cli::regular::read::fifo_at;
 
 #[cfg(all(test, unix))]
 #[path = "compose_read_tests.rs"]

@@ -361,7 +361,7 @@ fn address_is_free_or_ours(
 /// The `[[accounts]]` of a configuration file as name and addresses, read
 /// from the raw TOML so a file the full loader refuses still counts.
 fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
-	let Ok(text) = crate::cli::regular_read::read_to_string(config_path) else {
+	let Ok(text) = crate::cli::regular::read::read_to_string(config_path) else {
 		return Vec::new();
 	};
 	let Ok(table) = text.parse::<toml::Table>() else {
@@ -391,7 +391,7 @@ fn static_accounts_of(config_path: &Path) -> Vec<(String, Vec<String>)> {
 /// The addresses of the `[[alias]]` entries of a configuration file, read from
 /// the raw TOML so a file the full loader refuses still counts.
 fn static_aliases_of(config_path: &Path) -> Vec<String> {
-	let Ok(text) = crate::cli::regular_read::read_to_string(config_path) else {
+	let Ok(text) = crate::cli::regular::read::read_to_string(config_path) else {
 		return Vec::new();
 	};
 	let Ok(table) = text.parse::<toml::Table>() else {

@@ -147,7 +147,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
 	// OIDC discovery this fetches the JWKS and spawns the hourly refresh task.
-	let oauth_verifier = super::oauth_advice::build_and_say(&config).await?;
+	let oauth_verifier = crate::cli::oauth::advice::build_and_say(&config).await?;
 
 	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
 	// the renewal task that publishes key authorizations into it.

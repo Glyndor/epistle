@@ -3,9 +3,8 @@
 //! The full module used to live in a single `backup.rs`. The dump
 //! (and replay) of the database split out into `db_dump.rs` to keep
 //! this file under the per-file 500-code-line cap; the test
-//! modules are split into the same-named `*_tests_<topic>.rs`
-//! siblings and re-pulled in with `#[path]` so each compile unit
-//! stays small.
+//! modules live in each owner's `tests/` directory, with leaves by
+//! topic so each compile unit stays small.
 
 mod db_dump;
 mod keys_note;
@@ -593,41 +592,4 @@ pub(super) use db_dump::run_command_capturing_stdout;
 pub(crate) use db_dump::{BackupError, CommandSpec, split_url_password};
 
 #[cfg(test)]
-#[path = "helpers_tests.rs"]
-mod helpers;
-
-#[cfg(test)]
-#[path = "../backup_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "../backup_restore_tests.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "../backup_pg_tests.rs"]
-mod tests_pg;
-
-#[cfg(test)]
-#[path = "../backup_container_tests.rs"]
-mod tests_container;
-
-#[cfg(test)]
-#[path = "../backup_restore_run_tests.rs"]
-mod tests_restore_run;
-
-#[cfg(test)]
-#[path = "../backup_db_sql_tests.rs"]
-mod tests_db_sql;
-
-#[cfg(test)]
-#[path = "../backup_restore_guards_tests.rs"]
-mod tests_restore_guards;
-
-#[cfg(test)]
-#[path = "../backup_tests_paths.rs"]
-mod tests_paths;
-
-#[cfg(test)]
-#[path = "../backup_tests_long_paths.rs"]
-mod tests_long_paths;

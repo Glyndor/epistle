@@ -1,0 +1,149 @@
+//! `mail verify`: check on-disk data integrity before an upgrade. Walks every
+//! account's mailbox directories and reports any unreadable, malformed, or
+//! orphaned files without modifying anything. Exits non-zero if problems exist.
+
+use std::path::Path;
+use std::process::ExitCode;
+
+use crate::imap::mailbox::{self, Flag};
+use crate::storage::MessageCrypto;
+
+/// Run the integrity check over `data_dir`, writing a report to `out`. Message
+/// files are decoded through `crypto` so an encrypted store validates against the
+/// plaintext, not the envelope.
+pub(super) fn run(
+	data_dir: &Path,
+	crypto: &MessageCrypto,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let _warnings = crate::util::fs_walk::warning_scope();
+	let accounts_dir = data_dir.join("accounts");
+	let Ok(entries) = crate::util::fs_walk::read_dir(&accounts_dir) else {
+		if json {
+			let result = serde_json::json!({ "accounts": 0, "messages": 0, "problems": [] });
+			return super::json_out::print(out, &result);
+		}
+		let _ = writeln!(out, "no accounts directory at {}", accounts_dir.display());
+		return ExitCode::SUCCESS;
+	};
+
+	let mut accounts = 0u64;
+	let mut messages = 0u64;
+	let mut problems: Vec<String> = Vec::new();
+
+	let mut account_names: Vec<String> = entries
+		.flatten()
+		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+		.filter_map(|entry| entry.file_name().into_string().ok())
+		.collect();
+	account_names.sort();
+
+	for account in &account_names {
+		accounts += 1;
+		// `mailbox::list` already includes INBOX plus every folder.
+		for mailbox_name in mailbox::list(data_dir, account) {
+			let Some(dir) = mailbox::mailbox_dir(data_dir, account, &mailbox_name) else {
+				continue;
+			};
+			check_mailbox(
+				&dir,
+				account,
+				&mailbox_name,
+				crypto,
+				&mut messages,
+				&mut problems,
+			);
+		}
+	}
+
+	if json {
+		let result =
+			serde_json::json!({ "accounts": accounts, "messages": messages, "problems": problems });
+		if super::json_out::print(out, &result) != ExitCode::SUCCESS {
+			return ExitCode::FAILURE;
+		}
+	} else {
+		for problem in &problems {
+			let _ = writeln!(out, "problem: {problem}");
+		}
+		let _ = writeln!(
+			out,
+			"checked {accounts} accounts, {messages} messages: {} problems",
+			problems.len()
+		);
+	}
+	if problems.is_empty() {
+		ExitCode::SUCCESS
+	} else {
+		ExitCode::FAILURE
+	}
+}
+
+/// Validate every `.eml` and `.flags` file in one mailbox directory.
+fn check_mailbox(
+	dir: &Path,
+	account: &str,
+	mailbox: &str,
+	crypto: &MessageCrypto,
+	messages: &mut u64,
+	problems: &mut Vec<String>,
+) {
+	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
+		return;
+	};
+	let mut ids = std::collections::HashSet::new();
+	let mut flag_files = Vec::new();
+	for entry in entries.flatten() {
+		if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+			continue;
+		}
+		let path = entry.path();
+		let name = entry.file_name().to_string_lossy().into_owned();
+		let here = format!("{account}/{mailbox}/{name}");
+		if let Some(stem) = name.strip_suffix(".eml") {
+			if uuid::Uuid::parse_str(stem).is_err() {
+				problems.push(format!("{here}: filename is not a UUID"));
+				continue;
+			}
+			ids.insert(stem.to_string());
+			*messages += 1;
+			match crate::util::fs_walk::read(&path).and_then(|stored| crypto.decode(&stored)) {
+				Ok(data) if data.is_empty() => problems.push(format!("{here}: empty message")),
+				Ok(data) if !has_header_separator(&data) => {
+					problems.push(format!("{here}: no header/body separator"));
+				}
+				Ok(_) => {}
+				Err(error) => problems.push(format!("{here}: unreadable ({error})")),
+			}
+		} else if let Some(stem) = name.strip_suffix(".flags") {
+			flag_files.push((stem.to_string(), path, here));
+		}
+	}
+	// Flags must parse and reference an existing message in the same mailbox.
+	for (stem, path, here) in flag_files {
+		if !ids.contains(&stem) {
+			problems.push(format!("{here}: orphaned flags (no matching message)"));
+			continue;
+		}
+		match crate::util::fs_walk::read(&path) {
+			Ok(bytes) => {
+				if serde_json::from_slice::<Vec<Flag>>(&bytes).is_err() {
+					problems.push(format!("{here}: malformed flags file"));
+				}
+			}
+			Err(error) => problems.push(format!("{here}: unreadable flags ({error})")),
+		}
+	}
+}
+
+/// Whether the message has a header/body separator (a blank line). Accepts both
+/// CRLF and bare-LF forms defensively.
+fn has_header_separator(data: &[u8]) -> bool {
+	data.windows(4).any(|w| w == b"\r\n\r\n") || data.windows(2).any(|w| w == b"\n\n")
+}
+
+#[cfg(test)]
+mod tests;
+
+pub(super) mod dns;

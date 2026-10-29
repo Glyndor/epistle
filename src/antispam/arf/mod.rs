@@ -58,7 +58,7 @@ pub fn build(hostname: &str, report: &Report, now: std::time::SystemTime) -> Acc
 	// message is not authenticated, and a CRLF in either value would
 	// inject forged headers into our feedback report. Sanitize before the
 	// values reach any `format!`, matching what
-	// `src/cli/report_abuse.rs::build_report` does for the operator-driven
+	// `src/cli/report/abuse/mod.rs::build_report` does for the operator-driven
 	// path. `reported_domain` is derived from the sanitised
 	// `original_mail_from` so it cannot carry an injection either.
 	let original_mail_from = sanitize_header_value(report.original_mail_from);

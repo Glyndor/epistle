@@ -65,7 +65,7 @@ fn app_password_resource_list_parses() {
 		Command::AppPassword { action, .. } => {
 			assert!(matches!(
 				action,
-				crate::cli::app_passwords::AppPasswordCli::List { .. }
+				crate::cli::app::passwords::AppPasswordCli::List { .. }
 			));
 		}
 		other => panic!("expected Command::AppPassword, got {other:?}"),
@@ -86,7 +86,7 @@ fn app_password_resource_create_parses() {
 	.expect("app-password create parses");
 	match cli.command {
 		Command::AppPassword { action, .. } => match action {
-			crate::cli::app_passwords::AppPasswordCli::Create {
+			crate::cli::app::passwords::AppPasswordCli::Create {
 				account,
 				label,
 				expires_at,
@@ -126,7 +126,7 @@ fn app_password_resource_revoke_parses_yes() {
 	.expect("app-password revoke parses");
 	match cli.command {
 		Command::AppPassword { action, .. } => match action {
-			crate::cli::app_passwords::AppPasswordCli::Revoke {
+			crate::cli::app::passwords::AppPasswordCli::Revoke {
 				account,
 				label,
 				yes,

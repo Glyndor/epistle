@@ -1,5 +1,5 @@
 use super::*;
-use crate::cli::command_cases::CASES;
+use crate::cli::command::tests::cases::CASES;
 use clap::{CommandFactory, Parser};
 use std::collections::BTreeSet;
 
