@@ -5,5 +5,5 @@ mod evaluator;
 pub(crate) use evaluator::{MAX_DNS_MECHANISMS, MAX_VOID_LOOKUPS};
 mod record;
 
-pub use dns::{DnsFailure, DnsLookup, SystemDns, system_resolver};
+pub use dns::{DnsFailure, DnsLookup, SrvRecord, SystemDns, system_resolver};
 pub use evaluator::{SpfOutcome, check_host};
