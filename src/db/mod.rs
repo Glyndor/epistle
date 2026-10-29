@@ -369,5 +369,4 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
